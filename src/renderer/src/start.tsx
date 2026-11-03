@@ -57,7 +57,7 @@ export async function start(root: Root): Promise<void> {
       __variaRecovery: { flush: () => workbench.recovery.flush() },
       // The server file picker before any dialog opens it (A17: no menu item until its OK works; object-actions-smoke.mjs).
       __variaServerFiles: serverFilesTestHook(workbench.serverFiles, workbench.connections),
-      // Restore Database before its menu item ships with D1f's OK (A17; object-actions-smoke.mjs).
+      // Restore Database on the first live connection, without Object Explorer (object-actions-smoke.mjs).
       __variaRestore: restoreTestHook(workbench.restore, workbench.connections),
       // Live views on the synthetic source, charts and grids of them, the SSIS tree's views, and the window's visibility
       // (live-smoke.mjs, chart-smoke.mjs, live-grid-smoke.mjs, electron-smoke.mjs).

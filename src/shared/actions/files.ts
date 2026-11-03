@@ -104,6 +104,36 @@ export function serverPathChain(folder: string, separator: ServerPathSeparator):
 export const sameServerPath = (a: string, b: string, separator: ServerPathSeparator): boolean =>
   separator === '\\' ? a.toLowerCase() === b.toLowerCase() : a === b
 
+/**
+ * A full path as the file it names, for telling whether two spellings are one file (ServerPath.Key in C#, the same
+ * tests/fixtures/server-paths.json): empty and '.' segments dropped and '..' resolved; on Windows also forward slashes as
+ * backslashes, each segment's trailing dots and spaces dropped (as Win32 drops them), and upper case. Undefined when it is not
+ * a full path there, or on Windows names a stream (a colon past the drive).
+ */
+export function serverPathKey(path: string, separator: ServerPathSeparator): string | undefined {
+  const segments = (parts: readonly string[], linux: boolean) => {
+    const kept: string[] = []
+    for (const part of parts) {
+      if (part === '..') { kept.pop(); continue }
+      const segment = linux ? part : part.replace(/[. ]+$/, '')
+      if (segment && segment !== '.') kept.push(segment)
+    }
+    return kept
+  }
+  if (separator === '/') return path.startsWith('/') ? '/' + segments(path.split('/'), true).join('/') : undefined
+  const text = serverPathText(path, '\\')
+  let root: string, rest: string[]
+  if (/^[A-Za-z]:\\/.test(text)) [root, rest] = [text.slice(0, 3), text.slice(3).split('\\')]
+  else {
+    const share = text.startsWith('\\\\') ? text.slice(2).split('\\') : []
+    if (share.length < 2 || !share[0] || !share[1]) return undefined
+    ;[root, rest] = [`\\\\${share[0]}\\${share[1]}\\`, share.slice(2)]
+  }
+  const kept = segments(rest, false)
+  if (root.indexOf(':', 2) >= 0 || kept.some(segment => segment.includes(':'))) return undefined
+  return (root + kept.join('\\')).toUpperCase()
+}
+
 /** The folder a path lists on a server with this separator (ServerPath.Folder in C#, the same tests/fixtures/server-paths.json):
  *  ending with the separator, or undefined when it is not a full path there (a drive or share on Linux, / on Windows). */
 export function serverFolder(path: string, separator: ServerPathSeparator): string | undefined {

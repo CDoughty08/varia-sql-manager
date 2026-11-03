@@ -1,0 +1,77 @@
+{
+  "comment": "The steps a restore request runs, shared by RestoreRun.cs's RestoreSteps (RestoreRunChecks) and run.ts's plannedSteps (tests/restore-run.test.ts), so the Run panel's list, which the progress EVENTs index, is the backend's: main steps in order with their titles and details, then the compensations and cleanup that may follow (kind compensation or cleanup), which the panel lists only from the reply.",
+  "cases": [
+    {
+      "name": "over an existing database: Close existing connections, a tail-log backup left restoring, a striped full, a differential and two logs, RECOVERY",
+      "exists": true,
+      "userAccess": 0,
+      "restore": {
+        "sets": [
+          { "id": "00000001-0000-4000-8000-000000000000", "devices": ["B:\\Backup\\Sales_full1.bak", "B:\\Backup\\Sales_full2.bak"], "file": 1, "type": "full" },
+          { "id": "00000004-0000-4000-8000-000000000000", "devices": ["B:\\Backup\\Sales_diff.bak"], "file": 1, "type": "differential" },
+          { "id": "00000002-0000-4000-8000-000000000000", "devices": ["B:\\Backup\\Sales_log.trn"], "file": 1, "type": "log" },
+          { "id": "00000003-0000-4000-8000-000000000000", "devices": ["/var/opt/mssql/Sales_log.trn"], "file": 2, "type": "log" }
+        ],
+        "relocate": [], "replace": false, "keepReplication": false, "restrictedUser": false, "recovery": "recovery", "closeConnections": true,
+        "tailLog": { "file": "B:\\Backup\\Sales_LogBackup.bak", "noRecovery": true }
+      },
+      "steps": [
+        { "kind": "main", "title": "Close existing connections" },
+        { "kind": "main", "title": "Back up the tail of the log", "detail": "Sales_LogBackup.bak" },
+        { "kind": "main", "title": "Restore the full backup", "detail": "Sales_full1.bak (+1 files), position 1" },
+        { "kind": "main", "title": "Restore the differential backup", "detail": "Sales_diff.bak, position 1" },
+        { "kind": "main", "title": "Restore log backup 1 of 2", "detail": "Sales_log.trn, position 1" },
+        { "kind": "main", "title": "Restore log backup 2 of 2", "detail": "Sales_log.trn, position 2" },
+        { "kind": "main", "title": "Restore multi-user access" },
+        { "kind": "cleanup", "title": "Bring the database back online" },
+        { "kind": "compensation", "title": "Restore multi-user access" }
+      ]
+    },
+    {
+      "name": "a new database: the sets alone, then the cleanup that removes it",
+      "exists": false,
+      "userAccess": 0,
+      "restore": {
+        "sets": [
+          { "id": "00000001-0000-4000-8000-000000000000", "devices": ["/var/opt/mssql/backup/Sales.bak"], "file": 1, "type": "full" },
+          { "id": "00000002-0000-4000-8000-000000000000", "devices": ["/var/opt/mssql/backup/Sales.bak"], "file": 2, "type": "log" }
+        ],
+        "relocate": [{ "logical": "Sales", "physical": "/var/opt/mssql/data/Copy.mdf" }], "replace": true, "keepReplication": false, "restrictedUser": false, "recovery": "recovery", "closeConnections": true
+      },
+      "steps": [
+        { "kind": "main", "title": "Restore the full backup", "detail": "Sales.bak, position 1" },
+        { "kind": "main", "title": "Restore log backup", "detail": "Sales.bak, position 2" },
+        { "kind": "cleanup", "title": "Remove the partly restored database" }
+      ]
+    },
+    {
+      "name": "over a database in restricted access, left restoring: no multi-user step, and its restricted access given back if no RESTORE wrote",
+      "exists": true,
+      "userAccess": 2,
+      "restore": {
+        "sets": [{ "id": "00000001-0000-4000-8000-000000000000", "devices": ["C:\\B\\f.bak"], "file": 3, "type": "full" }],
+        "relocate": [], "replace": true, "keepReplication": false, "restrictedUser": false, "recovery": "norecovery", "closeConnections": true
+      },
+      "steps": [
+        { "kind": "main", "title": "Close existing connections" },
+        { "kind": "main", "title": "Restore the full backup", "detail": "f.bak, position 3" },
+        { "kind": "compensation", "title": "Restore restricted user access" }
+      ]
+    },
+    {
+      "name": "over a database in single-user access, restricting the restored one, with a tail-log backup left online",
+      "exists": true,
+      "userAccess": 1,
+      "restore": {
+        "sets": [{ "id": "00000001-0000-4000-8000-000000000000", "devices": ["C:\\B\\f.bak"], "file": 1, "type": "full" }],
+        "relocate": [], "replace": false, "keepReplication": false, "restrictedUser": true, "recovery": "recovery", "closeConnections": true,
+        "tailLog": { "file": "C:\\B\\tail.trn", "noRecovery": false }
+      },
+      "steps": [
+        { "kind": "main", "title": "Close existing connections" },
+        { "kind": "main", "title": "Back up the tail of the log", "detail": "tail.trn" },
+        { "kind": "main", "title": "Restore the full backup", "detail": "f.bak, position 1" }
+      ]
+    }
+  ]
+}

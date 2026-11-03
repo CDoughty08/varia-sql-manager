@@ -23,7 +23,10 @@ import { explorerStatics } from './explorer-tree.mjs'
  * folder's Nightly, Empty and Slow (which answers after 1.5 s), a share, and C:\Legacy\ as SQL Server 2016 answers a login
  * outside sysadmin (legacyEmpty); any other folder is PATH_NOT_FOUND. A check (`exists`) finds a name in those folders, the
  * type filter aside, and under C:\Legacy\ answers legacyEmpty.
- * Restore Database ('restoreDatabase') reads AppData's three backups (see restore()); its Script returns `restoreScript`.
+ * Restore Database ('restoreDatabase') reads AppData's three backups (see restore()); its Script returns `restoreScript`. Its run
+ * (restoreRun()) takes the backend's steps: with Close existing connections it reports the full backup's RESTORE at 40 % and
+ * waits until its Stop arrives, then answers as the backend does over a database that existed (left RESTORING); otherwise
+ * every step is done and the database online.
  * Attach Databases opens with the logins app_owner and sa and the default data folder, which holds Sales.mdf (whose second
  * data file it recorded in D:\Old\, not found, and whose log it finds), Sales_2.ndf and Hr.mdf (whose log in D:\Old\ is not
  * found); any other file is not a primary one. An attach that includes Hr fails at Hr and detaches what it attached before
@@ -268,6 +271,20 @@ GO
     stub.catalog = true
     return ok({ steps: titles.map(title => ({ status: 'done', title })), elapsedMs: 1 })
   }
+  /** Restore Database's run: RestoreRun.cs's step titles for the request; Close existing connections makes it a held run. */
+  function restoreRun({ restore: options, identity, requestId }, sender) {
+    const titles = { close: 'Close existing connections', tailLog: 'Back up the tail of the log', full: 'Restore the full backup', differential: 'Restore the differential backup', log: 'Restore log backup', multiUser: 'Restore multi-user access' }
+    const close = options.closeConnections && !!identity, logs = options.sets.filter(set => set.type === 'log').length
+    let log = 0
+    const steps = [...close ? [titles.close] : [], ...options.tailLog ? [titles.tailLog] : [], ...options.sets.map(set => set.type === 'log' ? titles.log + (logs > 1 ? ` ${++log} of ${logs}` : '') : titles[set.type]),
+      ...close && options.recovery === 'recovery' && !options.restrictedUser ? [titles.multiUser] : []]
+    if (!close) return ok({ steps: steps.map(title => ({ status: 'done', title })), messages: [], elapsedMs: 1, restored: { state: 0, userAccess: 0 } })
+    const first = steps.indexOf(options.sets[0].type === 'log' ? steps.find(title => title.startsWith(titles.log)) : titles[options.sets[0].type])
+    if (!sender.isDestroyed()) sender.send('varia:actions-progress', { requestId, step: first, percent: 40 })
+    return new Promise(resolve => stub.blocked.set(requestId, () => resolve(ok({ messages: [], elapsedMs: 1, restored: { state: 1, userAccess: 1 },
+      steps: steps.map((title, index) => ({ status: index < first ? 'done' : index === first ? 'cancelled' : 'skipped', title, ...index === first ? { progress: 40 } : {} })),
+      error: { code: 'CANCELLED', message: `The action was stopped at "${steps[first]}"; SQL Server cancelled that statement. Completed before Stop: ${steps.slice(0, first).join(', ')}.`, retryable: true } }))))
+  }
   /** New Database's OK: a wait until Stop for "Held" (SQL Server cancelled CREATE DATABASE), otherwise the database under Databases. */
   function createDatabase({ target, requestId }) {
     if (target.name === 'Held') return new Promise(resolve => stub.blocked.set(requestId, () => resolve(ok({ steps: [{ status: 'cancelled', title: 'Create the database' }], messages: [], elapsedMs: 1,
@@ -288,10 +305,11 @@ GO
     stub.logins = [...stub.logins, login.name].sort()
     return ok({ steps: steps.map(step => ({ status: 'done', ...step })), messages: [], elapsedMs: 1 })
   }
-  function execute(params) {
+  function execute(params, sender) {
     const { target } = params
     if (params.action === 'createDatabase') return createDatabase(params)
     if (params.action === 'createTable') return createTable(params)
+    if (params.action === 'restore') return restoreRun(params, sender)
     if (params.action === 'createLogin') return createLogin(params)
     if (params.action === 'attach') return attachExecute(params)
     if (params.action === 'takeOffline' || params.action === 'bringOnline') return databaseStateChange(params)
@@ -381,7 +399,7 @@ GO
           case 'takeOffline': return ok({ text: offlineScript(params.dropConnections), database: 'master', warnings: [] })
           default: return ok({ text: scriptText(params.target.name), database: params.target.database ?? 'master', warnings: [] })
         }
-      case 'actions.execute': return execute(params)
+      case 'actions.execute': return execute(params, _event.sender)
       case 'ssis.catalogSetup': return catalogSetup()
       case 'ssis.execute': return createCatalog(params)
       default: return { ok: false, error: 'Unsupported stub operation.' }

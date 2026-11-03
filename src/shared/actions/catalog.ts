@@ -1,4 +1,4 @@
-// Object Explorer actions: Select Top 1000 Rows, Rename, Delete, Properties, Take Offline, Bring Online and the Databases folder's Attach, which kinds, subtypes and folders offer each, the object
+// Object Explorer actions: Select Top 1000 Rows, Rename, Delete, Properties, Take Offline, Bring Online, the Databases folder's Attach and Restore Database, which kinds, subtypes and folders offer each, the object
 // dialogs and their pages, error codes and limits. It is the only declaration of what an action may touch: menus,
 // context keys, the palette and docs/object-actions.md read it, and the backend embeds actionsCatalogJson() as
 // Actions/actions-catalog.json (a vitest file snapshot keeps that copy in sync), so a stale tree cannot ask the backend
@@ -10,7 +10,7 @@ import type { ScriptDestination } from '../scripting/catalog.ts'
 import { compatibilityLevels, databaseOptionDefs, ownerNotOn, scopedConfigurationDefs, type DatabaseOptionDef } from './database.ts'
 import type { LongRunKind } from '../long-runs.ts'
 import { loginsCatalog } from './logins.ts'
-import { restoreCatalog } from './restore.ts'
+import { restoreCatalog, restoreMessages } from './restore.ts'
 
 // One entry per line, so later actions and dialogs append cleanly.
 export const objectActions = [
@@ -20,7 +20,8 @@ export const objectActions = [
   'properties',
   'attach',
   'takeOffline',
-  'bringOnline'
+  'bringOnline',
+  'restore'
 ] as const
 export type ObjectAction = typeof objectActions[number]
 /** `query` opens and runs a query, `inline` edits the tree row, `dialog` opens an object dialog, `create` makes a new
@@ -66,6 +67,13 @@ export interface ObjectActionSpec {
   readonly mnemonic: string
   /** Where the item is: Object Explorer's context menu unless it names a Tasks submenu. */
   readonly menu?: ActionMenuId
+  /** Offered on this Object Explorer folder (SSMS's Databases › Attach… and Restore Database…): the placement above is the folder's
+   *  context menu, and the action opens on the folder's server (Attach's request names it, `{ kind: 'server' }`). Rows offer it only
+   *  where `rows` places it and their kind's row enables it. */
+  readonly folder?: FolderId
+  /** With `folder`, its placement on the rows whose kind offers it too (SSMS's database Tasks › Restore › Database…), as a command of
+   *  its own that the palette leaves out: one context menu shows each command once (macOS's native menus answer by id). */
+  readonly rows?: { readonly command: `explorer.${string}`; readonly menu: ActionMenuId; readonly title: string; readonly group: string; readonly order: number; readonly mnemonic: string }
   readonly group: string
   readonly order: number
   readonly class: ActionClass
@@ -73,9 +81,6 @@ export interface ObjectActionSpec {
   readonly command: `explorer.${string}`
   /** Offered on SQL Server's own objects too (SSMS's Properties on master, model, msdb and tempdb). */
   readonly systemObjects?: boolean
-  /** Offered on this Object Explorer folder rather than on object rows (SSMS's Databases › Attach…): its target is the folder's
-   *  server, and its request names the server (`{ kind: 'server' }`). */
-  readonly folder?: FolderId
   /** The servers that offer it (critic A1). On another, the menu hides the item, and the backend refuses a request for it
    *  before opening a connection (it reads this list from actions-catalog.json). */
   readonly engines: readonly ServerEngine[]
@@ -106,15 +111,23 @@ const actionSpecData = {
   // Detach…, a separator, Take Offline and Bring Online, a separator: Detach… (D3b) goes alone in a group before 1_state.
   // Managed Instance cannot set OFFLINE or ONLINE (Learn, T-SQL differences), so they are box-only.
   takeOffline: { title: 'Take Database Offline', menuTitle: 'Take Offline', mnemonic: 't', menu: 'explorer.tasks', group: '1_state', order: 1, class: 'dialog', dialog: 'takeOffline', command: 'explorer.takeOffline', engines: ['box'] },
-  bringOnline: { title: 'Bring Database Online', menuTitle: 'Bring Online', mnemonic: 'o', menu: 'explorer.tasks', group: '1_state', order: 2, class: 'dialog', dialog: 'bringOnline', command: 'explorer.bringOnline', engines: ['box'] }
+  bringOnline: { title: 'Bring Database Online', menuTitle: 'Bring Online', mnemonic: 'o', menu: 'explorer.tasks', group: '1_state', order: 2, class: 'dialog', dialog: 'bringOnline', command: 'explorer.bringOnline', engines: ['box'] },
+  // SSMS: right-click Databases › Restore Database… (R), and a database's Tasks › Restore › Database… (D), both recalled. A document
+  // (src/renderer/src/restore), not an object dialog. Box editions only: Managed Instance restores from URL only. Its cleanup drops a
+  // partly restored database this request created, which a large one can take a while to do.
+  restore: {
+    title: 'Restore Database…', mnemonic: 'r', group: '0_new', order: 3, class: 'dialog', command: 'explorer.restoreDatabase', folder: 'databases',
+    rows: { command: 'explorer.tasks.restoreDatabase', menu: 'explorer.tasks.restore', title: 'Database…', group: '1_restore', order: 1, mnemonic: 'd' }, engines: ['box'], cleanupMs: 30_000, long: true
+  }
 } as const satisfies { readonly [A in ObjectAction]: ObjectActionSpec }
 export const objectActionSpecs: { readonly [A in ObjectAction]: ObjectActionSpec & { readonly command: typeof actionSpecData[A]['command'] } } = actionSpecData
-/** The action commands' ids, derived from the specs, so a new action declares its command in one place. */
-export type ActionCommandId = typeof actionSpecData[ObjectAction]['command']
+type RowCommandOf<S> = S extends { readonly rows: { readonly command: infer C } } ? C : never
+/** The action commands' ids, derived from the specs, so a new action declares its commands in one place. */
+export type ActionCommandId = typeof actionSpecData[ObjectAction]['command'] | RowCommandOf<typeof actionSpecData[ObjectAction]>
 
 // Server-scope actions: no object's row offers them, since what they make does not exist yet. A folder's menu and its
 // nodes' menus place them, the server is their describe's target, and OK runs them with the new object's name (New
-// Database; Attach and Restore Database follow in later PRs). One entry per line, so later actions append cleanly.
+// Database; Attach and Restore Database are folder actions, ObjectActionSpec.folder). One entry per line, so later actions append cleanly.
 export const serverActions = [
   'createDatabase'
 ] as const
@@ -197,9 +210,10 @@ export const actionKindSpecs: { readonly [K in NodeKind]?: ActionKindSpec } = {
   function: { row: editable, subtypes: { aggregate: { rename: 'enabled', delete: 'disabled' } } },
   // Properties opens for every database, SQL Server's own included; a snapshot's opens read-only. SQL Server's own databases
   // cannot be taken offline (Learn: not master or tempdb; Varia greys all four, as SSMS does), and a snapshot never can.
+  // Restoring SQL Server's own databases is greyed in wave 5 (critic A19, restoreMessages.systemDatabase); a snapshot cannot be restored over.
   database: {
-    row: { ...editable, properties: 'enabled', takeOffline: 'enabled', bringOnline: 'enabled' },
-    subtypes: { system: { ...locked, properties: 'enabled', takeOffline: 'disabled', bringOnline: 'disabled' }, snapshot: { rename: 'disabled', delete: 'enabled', properties: 'enabled' } }
+    row: { ...editable, properties: 'enabled', takeOffline: 'enabled', bringOnline: 'enabled', restore: 'enabled' },
+    subtypes: { system: { ...locked, properties: 'enabled', takeOffline: 'disabled', bringOnline: 'disabled', restore: 'disabled' }, snapshot: { rename: 'disabled', delete: 'enabled', properties: 'enabled' } }
   }
 }
 
@@ -289,17 +303,18 @@ export const offeredOnEngine = (engines: readonly ServerEngine[] | undefined, en
 /** What `actionMenuState` reads, for tests until the catalogue declares engines, overlays and database rules. */
 export interface ActionMenuSources {
   readonly kinds?: { readonly [K in NodeKind]?: ActionKindSpec }
-  readonly actions?: { readonly [A in ObjectAction]?: Pick<ObjectActionSpec, 'engines' | 'folder'> }
+  readonly actions?: { readonly [A in ObjectAction]?: Pick<ObjectActionSpec, 'engines' | 'folder' | 'rows'> }
   readonly rules?: readonly DatabaseActionRule[]
 }
 /**
  * Each action's state for a node: 'enabled', 'disabled' (greyed) or '' (not offered). The kind's row with its status
  * overlay, narrowed for a database by its runtime state, then hidden on a server whose engine the action does not serve.
- * A folder offers the actions declared on it (`ObjectActionSpec.folder`), on the engines they serve; rows never offer them.
+ * A folder offers the actions declared on it (`ObjectActionSpec.folder`), on the engines they serve; a row offers a folder's
+ * action only where the action places it on rows (`rows`).
  */
 export function actionMenuState(target: ActionTarget | undefined, sources: ActionMenuSources = {}): Readonly<Record<ObjectAction, ActionState>> {
   if (!target) return noActions
-  const specs: { readonly [A in ObjectAction]?: Pick<ObjectActionSpec, 'engines' | 'folder'> } = sources.actions ?? objectActionSpecs
+  const specs: { readonly [A in ObjectAction]?: Pick<ObjectActionSpec, 'engines' | 'folder' | 'rows'> } = sources.actions ?? objectActionSpecs
   if (target.kind === 'folder') {
     if (!target.folder || !objectActions.some(action => specs[action]?.folder === target.folder)) return noActions
     return Object.fromEntries(objectActions.map(action => [action, specs[action]?.folder === target.folder && offeredOnEngine(specs[action]?.engines, target.engine) ? 'enabled' : ''])) as Record<ObjectAction, ActionState>
@@ -308,7 +323,8 @@ export function actionMenuState(target: ActionTarget | undefined, sources: Actio
   const listed = actionRow(target.kind, target.subtype, status, sources.kinds)
   if (!listed) return noActions
   const row = target.kind === 'database' ? databaseActionState(listed, target.database, sources.rules).row : listed
-  return Object.fromEntries(objectActions.map(action => [action, specs[action]?.folder === undefined && offeredOnEngine(specs[action]?.engines, target.engine) ? row[action] ?? '' : ''])) as Record<ObjectAction, ActionState>
+  const onRows = (action: ObjectAction) => specs[action]?.folder === undefined || specs[action]?.rows !== undefined
+  return Object.fromEntries(objectActions.map(action => [action, onRows(action) && offeredOnEngine(specs[action]?.engines, target.engine) ? row[action] ?? '' : ''])) as Record<ObjectAction, ActionState>
 }
 /** Whether some row of the kind enables the action: what main checks before the backend re-derives the subtype. */
 export function actionOffered(kind: NodeKind, action: ObjectAction): boolean {
@@ -348,7 +364,8 @@ export interface ActionCommandEntry {
   readonly titleSetting?: { readonly setting: 'objectExplorer.selectTopRows'; readonly template: string }
   readonly keybindings?: readonly ActionKeybinding[]
   readonly menus: readonly [ActionMenuPlacement, ...ActionMenuPlacement[]]
-  /** Only a server action's menu-only command for its node place (ServerActionSpec.nodePlace) sets it. */
+  /** A menu-only command: a row placement (`rows`) or a server action's node place (ServerActionSpec.nodePlace); the palette offers
+   *  the action once, through its main command. */
   readonly palette?: false
 }
 const commandData: { readonly [A in ObjectAction]: Omit<ActionCommandEntry, 'title' | 'category' | 'precondition' | 'menus'> & { readonly documentTask: boolean } } = {
@@ -371,7 +388,12 @@ const commandData: { readonly [A in ObjectAction]: Omit<ActionCommandEntry, 'tit
   attach: { icon: 'plug', keywords: ['attach', 'mdf', 'ldf', 'files', 'detached'], documentTask: false, unavailableHint: 'Select the Databases folder of a connected SQL Server in Object Explorer.' },
   // No keys, as in SSMS.
   takeOffline: { icon: 'debug-disconnect', keywords: ['offline', 'database', 'state', 'tasks'], documentTask: false, unavailableHint: 'Select an online user database in Object Explorer.' },
-  bringOnline: { icon: 'plug', keywords: ['online', 'database', 'state', 'tasks'], documentTask: false, unavailableHint: 'Select an offline user database in Object Explorer.' }
+  bringOnline: { icon: 'plug', keywords: ['online', 'database', 'state', 'tasks'], documentTask: false, unavailableHint: 'Select an offline user database in Object Explorer.' },
+  // No key, as in SSMS. A restore is a long run (LongRunService), never a document task.
+  restore: {
+    icon: 'history', keywords: ['backup', 'recover', 'recovery', 'bak', 'tail', 'log'], documentTask: false,
+    unavailableHint: `Select the Databases folder or a user database on SQL Server. ${restoreMessages.systemDatabase}`
+  }
 }
 /**
  * The action commands, keyed by their command ids (explorer.selectTopRows keeps PR4's id). A long-running action (a
@@ -379,19 +401,20 @@ const commandData: { readonly [A in ObjectAction]: Omit<ActionCommandEntry, 'tit
  * window is refused with a message instead of waiting on it.
  */
 export function actionCommandEntries(): { readonly [K in ActionCommandId]: ActionCommandEntry } {
-  return Object.fromEntries(objectActions.map(action => {
+  return Object.fromEntries(objectActions.flatMap(action => {
     const spec: ObjectActionSpec = objectActionSpecs[action], { documentTask, ...data } = commandData[action], key = actionContextKey(action)
+    // The keys describe the selection, which a node's menu has just selected; the empty area's menu keeps it, so it opts out. A
+    // folder's action places itself on its folder, and on rows only through `rows`, so each placement names the nodes it is for.
     const placement: ActionMenuPlacement = {
       menu: spec.menu ?? 'explorer.context', group: spec.group, order: spec.order, ...spec.menuTitle ? { title: spec.menuTitle } : {}, mnemonic: spec.mnemonic,
-      // The keys describe the selection, which a node's menu has just selected; the empty area's menu keeps it, so it opts out.
-      when: `${key} != '' && explorerNode != 'background'`
+      when: spec.folder ? `${key} != '' && explorerNode == 'folder'` : `${key} != '' && explorerNode != 'background'`
     }
-    const entry: ActionCommandEntry = {
-      title: spec.title, category: 'Object Explorer', ...data,
-      precondition: `backendReady && ${key} == 'enabled'` + (documentTask ? ' && !documentBusy' : ''),
-      menus: [placement]
-    }
-    return [spec.command, entry]
+    const precondition = `backendReady && ${key} == 'enabled'` + (documentTask ? ' && !documentBusy' : '')
+    const entry: ActionCommandEntry = { title: spec.title, category: 'Object Explorer', ...data, precondition, menus: [placement] }
+    if (!spec.rows) return [[spec.command, entry]]
+    const { command, ...rows } = spec.rows
+    const row: ActionCommandEntry = { ...entry, palette: false, menus: [{ ...rows, when: `${key} != '' && explorerNode != 'folder' && explorerNode != 'background'` }] }
+    return [[spec.command, entry], [command, row]]
   })) as { readonly [K in ActionCommandId]: ActionCommandEntry }
 }
 
@@ -484,6 +507,37 @@ export function propertiesCommandEntries(): { readonly [K in PropertiesCommandId
     'databaseProperties.stop': {
       title: 'Stop', category: 'Database Properties', icon: 'debug-stop', keywords: ['cancel', 'apply'],
       precondition: 'activeDocumentIsProperties && propertiesApplying', unavailableHint: 'The changes are not being applied.'
+    }
+  }
+}
+
+/** The Restore Database document's header verbs (D1f): catalogue commands, so the palette offers them too. */
+export type RestoreCommandId = 'restoreDatabase.run' | 'restoreDatabase.stop' | 'restoreDatabase.refresh'
+export interface RestoreCommandEntry {
+  readonly title: string
+  readonly category: 'Restore Database'
+  readonly icon: 'history' | 'debug-stop' | 'refresh'
+  readonly keywords: readonly string[]
+  readonly precondition: string
+  readonly unavailableHint: string
+}
+/**
+ * Restore is SSMS's OK: it asks first where the facts call for it (owner decision 4), then runs, and the document stays open with
+ * the steps. Stop has no documentBusy: a restore never holds the document task (it is a long run, src/shared/long-runs.ts).
+ */
+export function restoreCommandEntries(): { readonly [K in RestoreCommandId]: RestoreCommandEntry } {
+  return {
+    'restoreDatabase.run': {
+      title: 'Restore', category: 'Restore Database', icon: 'history', keywords: ['ok', 'run', 'restore', 'recover', 'backup'],
+      precondition: 'activeDocumentIsRestore && restoreRunnable', unavailableHint: 'Choose what to restore, and where, on a connected server.'
+    },
+    'restoreDatabase.stop': {
+      title: 'Stop', category: 'Restore Database', icon: 'debug-stop', keywords: ['cancel', 'restore'],
+      precondition: 'activeDocumentIsRestore && restoreRunning', unavailableHint: 'No restore is running.'
+    },
+    'restoreDatabase.refresh': {
+      title: 'Refresh', category: 'Restore Database', icon: 'refresh', keywords: ['reload', 'read', 'backups'],
+      precondition: 'activeDocumentIsRestore && restoreRefreshable', unavailableHint: 'Wait for the restore to finish, on a connected server.'
     }
   }
 }
@@ -611,6 +665,9 @@ export const actionErrorRetryable = {
   // Restore Database: backup media that are not what a restore needs (a family missing or misformed, a damaged set: 3241,
   // 3242, 3183, 3189).
   MEDIA: false,
+  // A restore over a database it was not backed up from without WITH REPLACE (3154); over the database itself without its tail-log
+  // backup (3159); and backup sets that do not chain (RestoreChain, and SQL Server's 4305, 4326 and 3117).
+  BACKUP_MISMATCH: false, TAIL_LOG_NEEDED: false, RESTORE_SEQUENCE: false,
   DATABASE_UNAVAILABLE: true, TIMEOUT: true, CONNECTION_LOST: true, SQL_ERROR: true,
   // Stop cancelled the statement in SQL Server; the steps say what completed before it.
   CANCELLED: true,

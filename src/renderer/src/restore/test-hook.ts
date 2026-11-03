@@ -1,5 +1,5 @@
-// Test mode only (start.tsx): opens Restore Database on the first live connection, as D1f's menu item will. No menu item,
-// command or palette entry opens it until its OK restores (critic A17).
+// Test mode only (start.tsx): opens Restore Database on the first live connection without Object Explorer, so smoke suites
+// reach it at once; the Databases folder's Restore Database… and Tasks › Restore › Database… open it for the user (D1f).
 import type { ExternalStore } from '../core/types'
 import type { LiveConnection } from '../services/connections'
 import type { RestoreService } from './RestoreService'

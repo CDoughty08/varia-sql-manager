@@ -351,7 +351,14 @@ raises informational messages as they arrive only for a reader; SQL Server's mes
 `STATS`) becomes the running step's percent, and a long action's request sends droppable `{ type: 'action.progress', step,
 percent }` EVENTs (`step` is the step's index in the reply, 0 – 519; `percent` 0 – 100): each step's start at once as percent 0,
 then its percents at most every 250 ms (`progressEventMs`, on a Stopwatch), a percent held inside the interval going out when it
-ends or before the next step's start. 3211 lines are not among the 32 kept messages; the reply's steps carry the last percent each
+ends or before the next step's start. A Stop reaches a statement through `ActionService.StatementStop`, never SqlClient's token:
+once a statement has sent an informational message (a RESTORE's STATS), SqlClient's cancel from another thread waits until the
+statement ends (probed: a restore stopped at 5 % ran to 100 %), while from the reader's own thread it goes out at once, so the
+reader cancels at the next message (or, if none comes within a second, the Stop's thread after all), and the job's token is
+cancelled off the frame loop (`CancelAsync`), which would otherwise stop reading frames, PINGs included, until then. A
+statement whose Stop came before its reader reported the end is listed cancelled, never done: SqlClient now and then ends a
+cancelled statement's reader as if it had finished (query batches are handled the same way).
+3211 lines are not among the 32 kept messages; the reply's steps carry the last percent each
 reached (`progress`). Main checks each EVENT (`actionProgressEventSchema`); an invalid one is dropped, not a protocol failure,
 because failing the request would CANCEL a restore part way. It pushes `varia:actions-progress { requestId, step, percent }`
 (`actionProgressSchema`) only to the window that sent the request, at most 4 a second per request: a new step at once, and the
@@ -641,8 +648,18 @@ of the request too: 130 s around the backend's 120 s budget (`restoreLimits`), a
 their own gate, outside the object actions' read gates, so a read held past its budget by an unreachable share never delays
 another dialog's describe. `actions.script` with the `restore` action takes the plan (`restore: { sets, relocate, recovery,
 … }`, at most 1,024 sets and 1,000 moves), is written on no connection, and answers the script SMO's restore plan would
-write (at most 4,000,000 characters, checked as it is written); `actions.execute` refuses `restore` until the run arrives (D1f). docs/object-actions.md
-describes the planner and the limits.
+write (at most 4,000,000 characters, checked as it is written). `actions.execute` with `restore` (D1f) takes the same plan with
+`target: { kind: 'database', name }` and, over a database that exists, the `identity` the document read; it is a long action
+(the long gate, Stop, `action.progress` from `STATS`, the shutdown drain, a 30 s cleanup budget). Its preflight in the action's
+connection checks the identity, permission, the tail-log backup's conditions, the media's chain (`RestoreChain`), WITH REPLACE's
+case (`BACKUP_MISMATCH`), Close existing connections over a database that is not online (`DATABASE_UNAVAILABLE`) and the
+files it writes (`NAME_IN_USE`: another database's file, a file already on disk that is not the destination's, a standby or
+tail-log file over a database file), before anything changes; the reply adds `restored` (sys.databases, read once the steps are
+over) so the page names what a Stop or failure left: `{ state, userAccess }`, or `{ absent: true, filesLeft?, filesUnknown? }`
+when no database has the name (`filesLeft`, at most 16 paths, are files SQL Server left on disk after a cancelled RESTORE whose
+partly restored database Varia dropped; `filesUnknown` when their existence could not be checked), and no `restored` when
+the read failed.
+docs/object-actions.md describes the planner, the steps and the limits.
 
 ## Streams and credits
 

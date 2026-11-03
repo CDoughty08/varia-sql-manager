@@ -3,9 +3,9 @@ using Varia.Backend.Explorer;
 
 namespace Varia.Backend.Actions;
 
-/// <summary>Restore Database on the object-action path (D1e): its describe (RestoreDescribe) and its Script, which renders SSMS's
-/// text, reads nothing and runs nothing. actions.execute refuses a restore until D1f runs one (critic A17). Validation repeats
-/// src/shared/actions/restore-schema.ts against the catalogue's restore block, so C# holds no limits of its own.</summary>
+/// <summary>Restore Database on the object-action path: its describe (RestoreDescribe), its Script, which renders SSMS's text,
+/// reads nothing and runs nothing (D1e), and its run (RestoreRun, D1f). Validation repeats src/shared/actions/restore-schema.ts
+/// against the catalogue's restore block, so C# holds no limits of its own.</summary>
 internal sealed partial class ActionService
 {
     private RestoreCatalogJson Restore => catalog.Restore;
@@ -56,10 +56,9 @@ internal sealed partial class ActionService
     }
 
     /// <summary>Re-validates restoreRequestSchema: the destination by name, never SQL Server's own (critic A19), its identity when it
-    /// exists, and the restore's sets, moves and options with restoreOptionsProblems' rules. Only actions.script takes it in D1e.</summary>
-    private ObjectRefDto ValidateRestore(ActionArgs args, bool script)
+    /// exists, and the restore's sets, moves and options with restoreOptionsProblems' rules. Script and execute take the same request.</summary>
+    private ObjectRefDto ValidateRestore(ActionArgs args)
     {
-        if (!script) throw Invalid("restore runs in a later update; script it instead.");
         if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Design is not null || args.Databases is not null)
             throw Invalid("restore takes only its options.");
         var target = args.Target ?? throw Invalid("target.");

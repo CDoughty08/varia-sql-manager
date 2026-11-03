@@ -33,7 +33,7 @@ export interface Verb {
  * A verb as the header draws it, with its state and its key worked out. `pressed` is set for a command with a `toggled`
  * condition (Split View), whose button then says whether it is on (`aria-pressed`).
  */
-export interface HeaderVerb { readonly key: string; readonly label: string; readonly title: string; readonly icon?: IconId; readonly emphasis?: Verb['emphasis']; readonly disabled: boolean; readonly pressed?: boolean; readonly run: () => void }
+export interface HeaderVerb { readonly key: string; readonly command?: CommandId; readonly label: string; readonly title: string; readonly icon?: IconId; readonly emphasis?: Verb['emphasis']; readonly disabled: boolean; readonly pressed?: boolean; readonly run: () => void }
 export interface FrameSection extends SectionInfo {
   readonly content: ReactNode
   /** Its heading opens and closes it; a collapsed section's content is not rendered. */
@@ -79,7 +79,7 @@ export function DocumentHeader({ id, title, crumbs = [], subtitle, state, tools,
     {(tools || verbs.length > 0) && <div className="document-actions" role="group" aria-label={`${title} actions`}>
       {tools}
       {verbs.map((verb, index) => <button key={verb.key} type="button" className={index === primary ? 'document-verb primary' : verb.emphasis && verb.emphasis !== 'primary' ? `document-verb ${verb.emphasis}` : 'document-verb'}
-        title={verb.title} aria-pressed={verb.pressed} disabled={verb.disabled} onClick={verb.run}>
+        data-command={verb.command} title={verb.title} aria-pressed={verb.pressed} disabled={verb.disabled} onClick={verb.run}>
         {/* A verb with an icon holds its words apart, so a narrow document can show the icon alone (they stay its name). */}
         {verb.icon ? <><Icon name={verb.icon} /><span className="document-verb-label">{verb.label}</span></> : verb.label}
       </button>)}
@@ -301,7 +301,7 @@ export function headerVerbs(verbs: readonly Verb[], { platform, settings, enable
   return verbs.map((verb, index) => {
     const descriptor = commandDescriptor(verb.command), label = verb.label ?? commandTitle(verb.command, settings, menuTitle(verb.command, platform))
     return {
-      key: `${verb.command}-${index}`, label, title: verbTooltip(label, keyOf(verb.command)), icon: verb.icon ?? descriptor.icon, emphasis: verb.emphasis,
+      key: `${verb.command}-${index}`, command: verb.command, label, title: verbTooltip(label, keyOf(verb.command)), icon: verb.icon ?? descriptor.icon, emphasis: verb.emphasis,
       disabled: !enabled[index], ...(descriptor.toggled === undefined ? {} : { pressed: !!toggled[index] }), run: () => execute(verb.command, verb.args)
     }
   })

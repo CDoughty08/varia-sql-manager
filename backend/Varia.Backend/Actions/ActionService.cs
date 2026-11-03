@@ -82,8 +82,9 @@ internal sealed class ActionServiceOptions
     public TimeSpan AccessNoteBudget { get; set; } = TimeSpan.FromSeconds(5);
     /// <summary>Test seam: awaited before each main step with its title and the job's token.</summary>
     internal Func<string, CancellationToken, Task>? BeforeStep { get; set; }
-    /// <summary>Test seam: called after each main step that completed, with its title (a Stop that arrives just after the statement).</summary>
-    internal Action<string>? AfterStep { get; set; }
+    /// <summary>Test seam: awaited after each main step's statement ends, before it counts as done, with its title and the job's token: a
+    /// Stop there stands for one that reached SQL Server only as the statement finished.</summary>
+    internal Func<string, CancellationToken, Task>? AfterStep { get; set; }
     /// <summary>Test seam: awaited before each compensation or cleanup step that runs, with its title and the cleanup budget's token.</summary>
     internal Func<string, CancellationToken, Task>? BeforeCleanup { get; set; }
     /// <summary>Test seam: the newest database version Attach Databases takes the server to open, in place of master's.</summary>
@@ -270,7 +271,7 @@ internal sealed partial class ActionService : IDisposable
                 DatabaseAlter.Validate(catalog, args);
                 return target;
             case "restore":
-                return ValidateRestore(args, script);
+                return ValidateRestore(args);
             case "attach":
                 if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Design is not null || args.Identity is not null)
                     throw Invalid("attach takes only databases.");
@@ -396,6 +397,7 @@ internal sealed partial class ActionService : IDisposable
             {
                 "createTable" => ExecuteDesignerJobAsync(connection, args, target, band, progress, job),
                 "properties" => ExecutePropertiesJobAsync(connection, args, target, band, progress, job),
+                "restore" => ExecuteRestoreJobAsync(connection, args, target, profile.Linux, progress, job),
                 "createDatabase" => ExecuteNewDatabaseJobAsync(connection, args, profile, band, progress, job),
                 "attach" => ExecuteAttachJobAsync(connection, args, job),
                 "createLogin" => ExecuteNewLoginJobAsync(connection, args, job),
@@ -427,7 +429,13 @@ internal sealed partial class ActionService : IDisposable
         {
             token.ThrowIfCancellationRequested();
             if (budget is { } limit) source.CancelAfter(limit);
-            var jobSource = CancellationTokenSource.CreateLinkedTokenSource(source.Token);
+            // The job's token is cancelled off the canceller's thread (CancelAsync): SqlClient's cancel waits while a statement streams
+            // info messages (a RESTORE's STATS) until it ends, and a Stop's canceller is the backend's frame loop, which would stop
+            // reading every request, ping included, for as long. ReadAllAsync sends the cancel from the reader's own thread instead.
+            var jobSource = new CancellationTokenSource();
+            // Never disposed with this scope: a Stop or the budget may resume this method (and leave the scope) from an earlier
+            // callback of the same Cancel, and a disposed registration would then never cancel the job.
+            _ = source.Token.UnsafeRegister(static state => _ = ((CancellationTokenSource)state!).CancelAsync(), jobSource);
             var gate = own switch
             {
                 OwnGate.Browse => ActionGate.Browse,
@@ -799,6 +807,7 @@ internal sealed partial class ActionService : IDisposable
         ActionTemplate.DenyConnect => "Deny permission to connect",
         ActionTemplate.GrantConnect => "Grant permission to connect",
         ActionTemplate.DropUser => "Drop the database user",
+        ActionTemplate.DropRestoring => "Remove the partly restored database",
         ActionTemplate.AddServerRoleMember => "Add to a server role",
         ActionTemplate.SetOffline => "Take database offline",
         ActionTemplate.SetOfflineRollback => "Close connections and take database offline",
@@ -1246,19 +1255,97 @@ internal sealed partial class ActionService : IDisposable
         return await ReadAllAsync(command, token);
     }
 
+    /// <summary>Test seam: called with the command once its reader has reported the statement's end, before ReadAllAsync asks whether
+    /// its token fired meanwhile. Only the live checks set it, to Stop there as SqlClient's rare silent cancel looks, which no server
+    /// does on demand.</summary>
+    internal static Action<SqlCommand>? ReaderEnded { get; set; }
+
     /// <summary>Runs an action's statement and reads every result set's values (text). Always a reader, never ExecuteNonQueryAsync:
     /// SqlClient's async non-query path holds every info message until the statement ends (probed), which would hold a long step's
-    /// 3211 progress (ActionProgress) until it is done; the live progress check guards this.</summary>
+    /// 3211 progress (ActionProgress) until it is done; the live progress check guards this.
+    /// The token never reaches SqlClient: StatementStop sends the cancel (see there). A statement whose token fired before its reader
+    /// reported the end is stopped, never done: SqlClient now and then ends a cancelled statement's reader as if it had finished and
+    /// raises nothing (SqlService's batch loop meets the same), and the statement may also have finished just as Stop came; either
+    /// way the runner lists it cancelled, and a compensation's Confirm or the restore's reads of the server say what it left.</summary>
     internal static async Task<List<string?>> ReadAllAsync(SqlCommand command, CancellationToken token)
     {
-        var values = new List<string?>();
-        await using var reader = await command.ExecuteReaderAsync(token);
-        do
+        token.ThrowIfCancellationRequested();
+        var connection = command.Connection;
+        var stop = new StatementStop(command, token);
+        connection.InfoMessage += stop.OnMessage;
+        try
         {
-            while (await reader.ReadAsync(token))
-                for (var i = 0; i < reader.FieldCount; i++) values.Add(reader.IsDBNull(i) ? null : reader.GetString(i));
-        } while (await reader.NextResultAsync(token));
-        return values;
+            using var registration = token.UnsafeRegister(static state => ((StatementStop)state!).FromOtherThread(), stop);
+            var values = new List<string?>();
+            await using var reader = await command.ExecuteReaderAsync(CancellationToken.None);
+            do
+            {
+                while (await reader.ReadAsync(CancellationToken.None))
+                    for (var i = 0; i < reader.FieldCount; i++) values.Add(reader.IsDBNull(i) ? null : reader.GetString(i));
+            } while (await reader.NextResultAsync(CancellationToken.None));
+            ReaderEnded?.Invoke(command);
+            if (token.IsCancellationRequested) throw new OperationCanceledException(token);
+            return values;
+        }
+        finally { connection.InfoMessage -= stop.OnMessage; }
+    }
+
+    /// <summary>How a Stop reaches a running action statement. Once the statement has sent an info message (a RESTORE's STATS),
+    /// SqlClient's cancel from another thread waits until the statement ends (probed: a RESTORE stopped at 5 percent ran to
+    /// 100 and its attention went out only then), while from the reader's own thread, inside the message, it goes out at once;
+    /// and the two together deadlock (the other thread holds the connection, the reader the parser). So before any message
+    /// the Stop cancels from its own thread; after one, the reader cancels at the next message, and if none comes within
+    /// <see cref="Fallback"/>, the Stop's thread cancels after all (it may then wait until the statement ends, as before),
+    /// and the reader leaves it to that one. Either side cancels at most once. A statement a Stop cancelled ends in a
+    /// SqlException, or now and then in a reader SqlClient ends silently (ReadAllAsync then throws), which the runner reads as
+    /// cancelled because the token is.</summary>
+    internal sealed class StatementStop(SqlCommand command, CancellationToken token)
+    {
+        internal static TimeSpan Fallback { get; set; } = TimeSpan.FromSeconds(1);
+        private readonly object gate = new();
+        private bool streaming, sent;
+
+        public void OnMessage(object sender, SqlInfoMessageEventArgs e)
+        {
+            lock (gate)
+            {
+                streaming = true;
+                if (!token.IsCancellationRequested || sent) return;
+                sent = true;
+            }
+            Cancel();
+        }
+
+        public void FromOtherThread()
+        {
+            lock (gate)
+            {
+                if (sent) return;
+                if (streaming)
+                {
+                    _ = Task.Delay(Fallback).ContinueWith(static (_, state) => ((StatementStop)state!).Late(), this, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+                    return;
+                }
+                sent = true;
+            }
+            Cancel();
+        }
+
+        private void Late()
+        {
+            lock (gate)
+            {
+                if (sent) return;
+                sent = true;
+            }
+            Cancel();
+        }
+
+        private void Cancel()
+        {
+            try { command.Cancel(); }
+            catch (Exception error) when (error is InvalidOperationException or SqlException) { /* Best effort: the statement may have ended. */ }
+        }
     }
 
     /// <summary>The live checks' only way to see what Database Properties batches would run (see the other DryRunAsync), on one connection.</summary>

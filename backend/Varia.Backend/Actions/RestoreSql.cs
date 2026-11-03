@@ -6,10 +6,11 @@ using Varia.Backend.Scripting;
 
 namespace Varia.Backend.Actions;
 
-/// <summary>Restore Database's SQL (D1e): constant catalog reads of msdb's history and the server, and the media reads in form 4
-/// (spec D1 §3.2): RESTORE LABELONLY, HEADERONLY and FILELISTONLY with every device and position a parameter, one constant text per
-/// device count. <see cref="Script"/> renders a restore as SSMS's Script writes it (SMO's text, probed); D1f runs the same
-/// statements as form 4 executables, which <see cref="LintMedia"/> already checks.</summary>
+/// <summary>Restore Database's SQL: constant catalog reads of msdb's history and the server (D1e), the run's preflight (D1f), and
+/// form 4 (spec D1 §3.2): RESTORE LABELONLY, HEADERONLY and FILELISTONLY, and the run's BACKUP LOG, RESTORE DATABASE and RESTORE LOG,
+/// with every name, device, position, path and time a parameter, one constant text per shape (device and move counts, options),
+/// which <see cref="LintMedia"/> checks for every shape up to the limits. <see cref="Script"/> renders a restore as SSMS's Script
+/// writes it (SMO's text, probed); the run's statements are the same, with variables where Script has literals.</summary>
 internal static partial class RestoreSql
 {
     /// <summary>The databases msdb has backed up, by name (Learn: "only databases that have been backed up according to the msdb backup history").</summary>
@@ -41,11 +42,35 @@ internal static partial class RestoreSql
         + "CONVERT(bit, CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'CREATE ANY DATABASE') = 1 OR IS_SRVROLEMEMBER(N'dbcreator') = 1 OR IS_SRVROLEMEMBER(N'sysadmin') = 1 THEN 1 ELSE 0 END) AS can_restore;";
 
     /// <summary>The databases a restore can overwrite (Learn: all but master and tempdb; snapshots cannot be restored over), with
-    /// their sessions where VIEW SERVER STATE shows them.</summary>
+    /// their sessions where VIEW SERVER STATE shows them, and their backup family (a database of the same name from elsewhere is another).</summary>
     public const string Destinations = "SELECT TOP (@take) d.name AS name, d.database_id AS database_id, d.create_date AS create_date, d.state_desc AS state_desc, "
         + "d.recovery_model_desc AS recovery_model, CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 "
-        + "THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS s WHERE s.database_id = d.database_id) END AS sessions "
-        + "FROM sys.databases AS d WHERE d.database_id > 2 AND d.source_database_id IS NULL ORDER BY d.name;";
+        + "THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS s WHERE s.database_id = d.database_id) END AS sessions, CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 "
+        + "THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS s WHERE s.database_id = d.database_id AND s.open_transaction_count > 0) END AS with_transaction, rs.family_guid AS family_guid "
+        + "FROM sys.databases AS d LEFT JOIN sys.database_recovery_status AS rs ON rs.database_id = d.database_id WHERE d.database_id > 2 AND d.source_database_id IS NULL ORDER BY d.name;";
+
+    /// <summary>The run's preflight (D1f), in master on the action's own connection: the destination's row (identity, state, access,
+    /// recovery model, whether it is a snapshot, and its backup family), every database id there is now (a cleanup drops only a
+    /// database whose id is not among them, critic A11a), whether the login may create a database, whether it is in sysadmin, and
+    /// whether the server has sys.dm_os_file_exists (SQL Server 2017 on), which tells the preflight and the cleanup whether a file exists.</summary>
+    public const string Preflight = "SELECT d.database_id AS database_id, d.create_date AS create_date, d.state AS state, d.user_access AS user_access, d.recovery_model AS recovery_model, "
+        + "CONVERT(bit, CASE WHEN d.source_database_id IS NULL THEN 0 ELSE 1 END) AS is_snapshot, rs.family_guid AS family_guid "
+        + "FROM sys.databases AS d LEFT JOIN sys.database_recovery_status AS rs ON rs.database_id = d.database_id WHERE d.name = @db;\n"
+        + "SELECT TOP (@take) d.database_id AS database_id FROM sys.databases AS d ORDER BY d.database_id;\n"
+        + "SELECT CONVERT(bit, CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'CREATE ANY DATABASE') = 1 OR IS_SRVROLEMEMBER(N'dbcreator') = 1 OR IS_SRVROLEMEMBER(N'sysadmin') = 1 THEN 1 ELSE 0 END) AS can_restore, "
+        + "CONVERT(bit, ISNULL(IS_SRVROLEMEMBER(N'sysadmin'), 0)) AS sysadmin, (SELECT COUNT(*) FROM sys.system_objects AS o WHERE o.name = N'dm_os_file_exists') AS file_views;";
+
+    /// <summary>Which of the paths in @paths (a JSON array) exist as files, by their index in it (SQL Server 2017 on).</summary>
+    public const string FilesExist = "SELECT TOP (@take) CONVERT(int, j.[key]) AS item FROM OPENJSON(@paths) AS j CROSS APPLY sys.dm_os_file_exists(j.[value]) AS x "
+        + "WHERE x.file_exists = 1 ORDER BY CONVERT(int, j.[key]);";
+
+    /// <summary>A database's files, by id: the cleanup reads them before it drops a partly restored database, whose files SQL Server
+    /// may leave on disk after a cancelled RESTORE (probed on 2025), to say which are still there.</summary>
+    public const string FilesOf = "SELECT TOP (@take) f.physical_name AS physical_name FROM sys.master_files AS f WHERE f.database_id = @id ORDER BY f.file_id;";
+
+    /// <summary>The database a name has now: its id, state and access. The cleanup reads it before it drops a partly restored database,
+    /// and the run reads it last to report how the restore left the database (critic A12). A name is unique, so @take is 1.</summary>
+    public const string Restored = "SELECT TOP (@take) d.database_id AS database_id, d.state AS state, d.user_access AS user_access FROM sys.databases AS d WHERE d.name = @db ORDER BY d.database_id;";
 
     /// <summary>Every database's files, so a Restore As path another database holds is a problem before OK.</summary>
     public const string ServerFiles = "SELECT TOP (@take) d.name AS database_name, f.physical_name AS physical_name FROM sys.master_files AS f JOIN sys.databases AS d ON d.database_id = f.database_id "
@@ -59,11 +84,43 @@ internal static partial class RestoreSql
     /// <summary>The files of the set at @file on a media set of <paramref name="count"/> families.</summary>
     public static string FileList(int count) => "RESTORE FILELISTONLY FROM " + Devices(count) + " WITH FILE = @file, NOUNLOAD;";
 
+    /// <summary>The run's tail-log backup (SMO's option order): the destination's log to @tail under the name @tail_name, leaving the
+    /// database RESTORING with <paramref name="noRecovery"/>.</summary>
+    public static string TailLog(RestoreCatalogJson restore, bool noRecovery) =>
+        "BACKUP LOG @db TO DISK = @tail WITH NOFORMAT, NOINIT, NAME = @tail_name, NOSKIP, NOREWIND, NOUNLOAD, " + (noRecovery ? "NORECOVERY, " : "") + Stats(restore) + ";";
+
+    /// <summary>One set's RESTORE, as <see cref="Lines"/> writes it (SMO's keyword order) with variables: @d1… for its devices, @file
+    /// its position, @l1/@p1… its moves, @standby and @stopat. <paramref name="recovery"/> is the state this statement leaves: SMO
+    /// writes nothing for RECOVERY, the default.</summary>
+    public static string Restore(RestoreCatalogJson restore, bool log, int devices, int moves, bool restrictedUser, bool keepReplication, string recovery, bool replace, bool stopAt)
+    {
+        var with = new List<string>();
+        if (restrictedUser) with.Add("RESTRICTED_USER");
+        with.Add("FILE = @file");
+        for (var index = 1; index <= moves; index++)
+        {
+            var number = index.ToString(CultureInfo.InvariantCulture);
+            with.Add("MOVE @l" + number + " TO @p" + number);
+        }
+        if (keepReplication) with.Add("KEEP_REPLICATION");
+        if (recovery == "norecovery") with.Add("NORECOVERY");
+        else if (recovery == "standby") with.Add("STANDBY = @standby");
+        with.Add("NOUNLOAD");
+        if (replace) with.Add("REPLACE");
+        with.Add(Stats(restore));
+        if (stopAt) with.Add("STOPAT = @stopat");
+        return "RESTORE " + (log ? "LOG" : "DATABASE") + " @db FROM " + Devices(devices) + " WITH " + string.Join(", ", with) + ";";
+    }
+
+    /// <summary>The compensation for a tail-log backup taken WITH NORECOVERY when no RESTORE started (critic A11d): it brings the
+    /// database back online as it was.</summary>
+    public const string Recover = "RESTORE DATABASE @db WITH RECOVERY;";
+
     // --- Lint -----------------------------------------------------------------------------------------------------------
 
     private static readonly HashSet<string> Literals =
     [
-        "'InstanceDefaultDataPath'", "'InstanceDefaultLogPath'", "'InstanceDefaultBackupPath'", "N'CREATE ANY DATABASE'", "N'dbcreator'", "N'sysadmin'", "N'VIEW SERVER STATE'"
+        "'InstanceDefaultDataPath'", "'InstanceDefaultLogPath'", "'InstanceDefaultBackupPath'", "N'CREATE ANY DATABASE'", "N'dbcreator'", "N'sysadmin'", "N'VIEW SERVER STATE'", "N'dm_os_file_exists'"
     ];
     [GeneratedRegex(@"N?'(?:[^']|'')*'")]
     private static partial Regex LiteralPattern();
@@ -87,7 +144,7 @@ internal static partial class RestoreSql
         if (bare.Contains('#', StringComparison.Ordinal)) problems.Add("uses a temporary table");
         if (bare.Contains("--", StringComparison.Ordinal) || bare.Contains("/*", StringComparison.Ordinal)) problems.Add("has a comment");
         foreach (Match literal in LiteralPattern().Matches(text)) if (!Literals.Contains(literal.Value)) problems.Add("has the literal " + literal.Value);
-        foreach (Match used in Variable().Matches(text)) if (used.Value is not ("@take" or "@db" or "@set")) problems.Add("uses " + used.Value);
+        foreach (Match used in Variable().Matches(text)) if (used.Value is not ("@take" or "@db" or "@set" or "@paths" or "@id")) problems.Add("uses " + used.Value);
         var tops = Regex.Matches(text, @"SELECT TOP \(").Count;
         if (tops != Regex.Matches(text, @"SELECT TOP \(@take\) ").Count) problems.Add("takes other than @take");
         if (tops > 0 && Regex.Matches(text, @" ORDER BY ").Count < tops) problems.Add("has a TOP without ORDER BY");
@@ -135,7 +192,25 @@ internal static partial class RestoreSql
         yield return ("restore facts", LintCatalog(Facts));
         yield return ("restore destinations", LintCatalog(Destinations));
         yield return ("restore server files", LintCatalog(ServerFiles));
+        yield return ("restore preflight", LintCatalog(Preflight));
+        yield return ("restore restored", LintCatalog(Restored));
+        yield return ("restore files exist", LintCatalog(FilesExist));
+        yield return ("restore files of", LintCatalog(FilesOf));
         yield return ("restore label", LintMedia(Label));
+        yield return ("restore recover", LintMedia(Recover));
+        foreach (var noRecovery in new[] { false, true }) yield return ("restore tail log " + noRecovery, LintMedia(TailLog(restore, noRecovery)));
+        // Every shape a run can send: the device and move counts at their edges and limits, with every option; REPLACE only where asked.
+        var moveLimit = (int)restore.Limit("restoreMoves");
+        foreach (var devices in new[] { 1, 2, (int)restore.Limit("backupDevices") })
+            foreach (var moves in new[] { 0, 1, 2, moveLimit })
+                foreach (var log in new[] { false, true })
+                    foreach (var recovery in restore.RecoveryStates)
+                        for (var flags = 0; flags < 16; flags++)
+                        {
+                            bool restricted = (flags & 1) != 0, keep = (flags & 2) != 0, replace = (flags & 4) != 0, stopAt = (flags & 8) != 0;
+                            yield return ("restore " + (log ? "log" : "database") + " " + devices + "/" + moves + "/" + recovery + "/" + flags,
+                                LintMedia(Restore(restore, log, devices, moves, restricted, keep, recovery, replace, stopAt), replace));
+                        }
         for (var count = 1; count <= restore.Limit("backupDevices"); count++)
         {
             yield return ("restore header " + count, LintMedia(Header(count)));

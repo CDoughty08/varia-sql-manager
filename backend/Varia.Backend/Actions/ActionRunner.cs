@@ -16,6 +16,13 @@ internal sealed record StepContext(SqlTransaction? Transaction, CancellationToke
 internal sealed record RunStep(string Title, Func<StepContext, Task> Run, StepKind Kind = StepKind.Main, int? Undoes = null, Func<IReadOnlyList<string>, bool>? When = null,
     string? Detail = null, Func<StepContext, Task<bool>>? Confirm = null);
 
+/// <summary>Thrown by a compensation or cleanup step that finds, when it runs, that it has nothing to do (a restore's cleanup whose
+/// database is not the one it created): the runner neither lists it nor reports it.</summary>
+internal sealed class StepNotDueException : Exception
+{
+    public StepNotDueException() : base("The step is not due.") { }
+}
+
 /// <summary>A runner's answer: the steps as the reply lists them, the failure (null when every main step completed), and how many
 /// main steps completed (none once a transaction rolled back).</summary>
 internal sealed record RunOutcome(List<ActionStepDto> Steps, ActionError? Failure, int Done);
@@ -44,7 +51,8 @@ internal sealed partial class ActionService
     /// (New Login removes its password from it), never the runner's or ActionErrors' own sentences. After a failure or Stop, the compensation and cleanup
     /// steps that are due run in order under a fresh token bounded by <paramref name="cleanupBudget"/>, so a Stop's reply (which
     /// waits StopGrace plus that budget) still lists them. They are listed only when they run, marked compensates. With
-    /// <paramref name="progress"/>, each step's 3211 messages count for its index in the reply, and the step carries its last percent.</summary>
+    /// <paramref name="progress"/>, each step's 3211 messages count for its index in the reply, and the step carries its last percent. A
+    /// compensation or cleanup that finds it has nothing to do (StepNotDueException) is not listed.</summary>
     internal async Task<RunOutcome> RunStepsAsync(SqlConnection connection, IReadOnlyList<RunStep> plan, string? inUseAdvice, CancellationToken token, TimeSpan cleanupBudget,
         bool transaction = false, string commitTitle = "Commit", string? rolledBack = null, ActionProgress? progress = null, Func<string, string>? serverText = null)
     {
@@ -82,9 +90,9 @@ internal sealed partial class ActionService
                     token.ThrowIfCancellationRequested();
                     progress?.Begin(steps.Count);
                     await step.Run(new(open, token));
+                    if (Options.AfterStep is { } afterStep) await afterStep(step.Title, token);
                     Add("done", step);
                     completed++;
-                    Options.AfterStep?.Invoke(step.Title);
                 }
                 catch (Exception exception) when (token.IsCancellationRequested && exception is SqlException or OperationCanceledException)
                 {
@@ -138,6 +146,7 @@ internal sealed partial class ActionService
                 Add("done", step);
                 outcomes.Add("\"" + step.Title + "\" completed");
             }
+            catch (StepNotDueException) { }
             catch (Exception exception) when (budget.IsCancellationRequested && exception is SqlException or OperationCanceledException)
             {
                 Add("cancelled", step);

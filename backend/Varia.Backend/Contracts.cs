@@ -205,7 +205,8 @@ internal sealed record BackupSetDto(string Id, string Name, string Type, string 
     string? RecoveryModel = null, string? FirstForkGuid = null, string? ForkGuid = null, string? Problem = null, string? ForkPointLsn = null, string? FamilyGuid = null);
 /// <summary>One file of a backup set: Type data, log, filestream, fulltext or other.</summary>
 internal sealed record BackupFileDto(string Logical, string Physical, string Type, long SizeBytes, int FileId, string? Filegroup = null);
-internal sealed record RestoreDestinationDto(string Name, int Id, string Created, string State, string RecoveryModel, int? Sessions = null);
+/// <summary>A database a restore can overwrite: Sessions in it and WithTransaction of them with an open transaction (critic A7), with VIEW SERVER STATE.</summary>
+internal sealed record RestoreDestinationDto(string Name, int Id, string Created, string State, string RecoveryModel, int? Sessions = null, int? WithTransaction = null, string? FamilyGuid = null);
 internal sealed record RestoreServerFileDto(string Database, string Path);
 internal sealed record RestoreServerDto(string Separator, bool CanRestore, List<RestoreDestinationDto> Destinations, bool DestinationsTruncated, List<RestoreServerFileDto> Files, bool FilesTruncated,
     string? DataPath = null, string? LogPath = null, string? BackupPath = null);
@@ -382,7 +383,11 @@ internal sealed record ActionScriptResult(string? Text, string Database, List<st
 /// the step acts on (at most 128 characters, never a secret); Compensates: it undid an earlier step's change, or cleaned up,
 /// after a failure or Stop; Progress: percent done (0-100) of a long step. ActionSteps.Bound clips them all.</summary>
 internal sealed record ActionStepDto(string Status, string Title, string? Message = null, string? Detail = null, bool? Compensates = null, int? Progress = null);
-internal sealed record ActionExecuteResult(List<ActionStepDto> Steps, List<string> Messages, long ElapsedMs, ActionError? Error = null);
+/// <summary>A restore's destination after the run (schema.ts RestoredDatabase), read last (critic A12): sys.databases' state and user_access;
+/// or Absent when no database has the name, with the files a dropped partly restored database left on disk (FilesUnknown: whether
+/// they are could not be asked). The reply leaves it out when it could not be read.</summary>
+internal sealed record RestoredDatabaseDto(int? State, int? UserAccess, bool? Absent = null, List<string>? FilesLeft = null, bool? FilesUnknown = null);
+internal sealed record ActionExecuteResult(List<ActionStepDto> Steps, List<string> Messages, long ElapsedMs, ActionError? Error = null, RestoredDatabaseDto? Restored = null);
 
 /// <summary>ssis.describe (src/shared/ssis/schema.ts): a view of the SSIS catalogue and the tree object it describes.</summary>
 internal sealed record SsisDescribeArgs(string ConnectionId, string RequestId, string View, ObjectRefDto Target);

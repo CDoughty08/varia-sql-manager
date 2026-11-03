@@ -49,7 +49,7 @@ Press **F1** or **Ctrl+Shift+P** (**⌘Shift+P** on macOS) for the command palet
 
 ## Current limitations
 
-- SQLCMD mode, schema-aware IntelliSense, graphical execution plans, backup and restore, security management, and job management are not yet available.
+- SQLCMD mode, schema-aware IntelliSense, graphical execution plans, backup, security management, and job management are not yet available. Restore Database restores from backups already taken.
 - Results are held in memory and subject to size limits; truncation is indicated in the application. Results to Text and Results to File are not yet available, though grid results can be exported.
 - Review generated scripts before executing them. Some management and Integration Services operations are still limited; see the relevant documentation below.
 

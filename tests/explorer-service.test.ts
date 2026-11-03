@@ -1382,8 +1382,8 @@ describe('ExplorerService: selection, targets and context', () => {
       explorerHasSelection: true, explorerSelectionKind: 'folder', explorerSelectionFolder: 'databases', explorerSelectionFilterable: true, explorerSelectionFiltered: false,
       explorerSelectionInsertable: false, explorerSelectionStatus: '', explorerSelectionServerEngine: 'box', explorerSelectionServerLinux: false,
       ...scriptContextValues(scriptMenuState({ kind: 'folder' })), ...actionContextValues(actionMenuState({ kind: 'folder' })), ...ssisVerbContextValues(ssisVerbMenuState('folder')), explorerLoading: false,
-      // The Databases folder's own action (D1d), on a SQL Server box edition.
-      explorerActionAttach: 'enabled'
+      // The Databases folder's own actions (Attach D1d, Restore Database D1f), on a SQL Server box edition.
+      explorerActionAttach: 'enabled', explorerActionRestore: 'enabled'
     })
     expect(f.explorer.getSnapshot().selected).toBe(databases)
     f.explorer.select(f.find('Database Snapshots'))

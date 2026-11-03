@@ -180,7 +180,7 @@ internal static class DatabaseStateLiveChecks
             ActionExecuteResult? back = null;
             using (var late = new RequestContext(1, "actions.execute", RequestLane.Actions, 0))
             {
-                service.Actions.Options.AfterStep = title => { if (title == "Bring database online") late.Cancel(CancelReason.User); };
+                service.Actions.Options.AfterStep = (title, _) => { if (title == "Bring database online") late.Cancel(CancelReason.User); return Task.CompletedTask; };
                 try { back = await Execute(BringOnline(db), late); }
                 catch (OperationCanceledException) { }
                 finally { service.Actions.Options.AfterStep = null; }

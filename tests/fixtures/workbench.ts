@@ -58,6 +58,7 @@ import { ssisContribution } from '../../src/renderer/src/contributions/ssis'
 import { DatabasePropertiesService } from '../../src/renderer/src/properties/DatabasePropertiesService'
 import { NewDatabaseService } from '../../src/renderer/src/new-database/NewDatabaseService'
 import { RestoreService } from '../../src/renderer/src/restore/RestoreService'
+import { ActionProgressService } from '../../src/renderer/src/actions/ActionProgressService'
 import { ActivityMonitorService } from '../../src/renderer/src/activity/ActivityMonitorService'
 import { activityContribution } from '../../src/renderer/src/contributions/activity'
 import { documentOwner } from '../../src/renderer/src/live/LiveService'
@@ -324,7 +325,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const ssisProperties = new SsisPropertiesService({ api, documents, connections })
   const properties = new DatabasePropertiesService({ api, documents, files, connections, explorer, focusEditor, close: id => { void files.close(id) }, ...(options.timers ? { timers: options.timers } : {}) })
   const newDatabase = new NewDatabaseService({ api, documents, files, connections, explorer, longRuns, focusEditor, ...(options.timers ? { timers: options.timers } : {}) })
-  const restore = new RestoreService({ api, documents, files, connections, focusEditor, now: () => new Date(2026, 9, 30, 12, 0, 0), ...(options.timers ? { timers: options.timers } : {}) })
+  const actionProgress = new ActionProgressService(api)
+  const restore = new RestoreService({ api, documents, files, connections, longRuns, progress: actionProgress, explorer, transactions: queries, focusEditor, now: () => new Date(2026, 9, 30, 12, 0, 0), ...(options.timers ? { timers: options.timers } : {}) })
   // Activity Monitors subscribe through a stand-in for LiveService that records each view.
   const liveViews = fakeLiveViews()
   const activity = new ActivityMonitorService({ documents, connections, live: liveViews, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values })
@@ -353,6 +355,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     designer: designers.context,
     properties: properties.context,
     newDatabase: newDatabase.context,
+    restore: restore.context,
     notifications,
     activity: activity.context,
     ssis: operations.context,
@@ -416,6 +419,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     properties,
     newDatabase,
     restore,
+    actionProgress,
     notifications,
     activity,
     operations
@@ -453,6 +457,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   /** Connects a server as the Connect dialog would. */
   const connect = (info: ConnectionInfo) => connections.add(info, connectionOptions)
   const dispose = () => {
+    actionProgress.dispose()
     recovery.dispose()
     menus.dispose()
     quickInput.dispose()
@@ -513,6 +518,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     properties,
     newDatabase,
     restore,
+    actionProgress,
     activity,
     liveViews,
     operations,
