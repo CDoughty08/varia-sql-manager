@@ -239,10 +239,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-properties="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus())
   })
   const newDatabase = new NewDatabaseService({
-    api, documents, files, connections, explorer, longRuns, serverFiles, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
+    api, documents, files, connections, explorer, longRuns, serverFiles, focusEditor: () => focusLater(() => documents.focusActive()),
     // The database name, once the first read has drawn it; until then the document's first section in its list.
-    focus: id => nextFrame(() => {
-      if (modalOpen()) return
+    focus: id => focusLater(() => {
       const root = document.querySelector<HTMLElement>(`[data-new-database="${CSS.escape(id)}"]`)
       const name = root?.querySelector<HTMLElement>('[data-new-database-focus]:not(:disabled)')
       ;(name ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
