@@ -17,7 +17,8 @@ import { explorerStatics } from './explorer-tree.mjs'
  * Security › Logins lists AppUser (two sessions), CONTOSO\Ops (a Windows group), Held, Retired (disabled, its CONNECT SQL
  * denied), sa (the login the stub connects as) and SQL Server's own ##MS_PolicyTsqlExecutionLogin## (disabled). The
  * loginFacts describe answers their facts; Disable and Enable change what Logins lists, except Held's, which wait until
- * their Stop arrives; a login renamed to "Taken" is NAME_IN_USE.
+ * their Stop arrives; a login renamed to "Taken" is NAME_IN_USE. Locked (with the password policy) is locked out, AppUser enforces
+ * the policy and is not; the unlockLogin describe answers their lock-out state, and Unlock unlocks Locked.
  */
 export function actionsStubData() {
   return { statics: explorerStatics() }
@@ -32,9 +33,9 @@ export const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId i
 export function installActionsStub({ ipcMain }, { statics }) {
   const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], blocked: new Map(), catalog: false,
     logins: [
-      { name: '##MS_PolicyTsqlExecutionLogin##', type: 'S', subtype: 'system', disabled: true }, { name: 'AppUser', type: 'S', subtype: 'sql', sessions: 2 },
+      { name: '##MS_PolicyTsqlExecutionLogin##', type: 'S', subtype: 'system', disabled: true }, { name: 'AppUser', type: 'S', subtype: 'sql', sessions: 2, policy: true },
       { name: 'CONTOSO\\Ops', type: 'G', subtype: 'windowsGroup' }, { name: 'Held', type: 'S', subtype: 'sql' }, { name: 'Retired', type: 'S', subtype: 'sql', disabled: true, connectDenied: true },
-      { name: 'sa', type: 'S', subtype: 'sa', sysadmin: true }
+      { name: 'Locked', type: 'S', subtype: 'sql', policy: true, locked: true }, { name: 'sa', type: 'S', subtype: 'sa', sysadmin: true }
     ] }
   // The exported texts again: this function runs in main, where the module's own bindings do not exist.
   const caution = 'Caution: Changing any part of an object name could break scripts and stored procedures.'
@@ -62,8 +63,22 @@ export function installActionsStub({ ipcMain }, { statics }) {
     if (!login) return ok({ elapsedMs: 1, error: { code: 'NOT_FOUND', message: `The login ${target.name} no longer exists. Refresh Object Explorer.`, retryable: false } })
     return ok({ elapsedMs: 1, login: {
       principalId: login.subtype === 'sa' ? 1 : 300, type: login.type, subtype: login.subtype, disabled: !!login.disabled, sid: '01', created: '2026-01-02T03:04:05.000', connectDenied: !!login.connectDenied,
-      own: login.name === 'sa', sysadmin: !!login.sysadmin, sessions: login.sessions ?? 0, ownedDatabases: 0, ownedDatabaseNames: [], ownedServerObjects: 0, canAlter: true, canControlServer: true, nameInUse: false
+      own: login.name === 'sa', sysadmin: !!login.sysadmin, sessions: login.sessions ?? 0, ownedDatabases: 0, ownedDatabaseNames: [], ownedServerObjects: 0, canAlter: true, canControlServer: true, nameInUse: false,
+      ...login.type === 'S' ? { policyChecked: !!login.policy, expirationChecked: !!login.policy } : {}
     } })
+  }
+  /** The unlockLogin describe: the login's facts and its lock-out state (ActionSql.LoginLock). */
+  function unlockFacts(params) {
+    const facts = loginFacts(params), login = loginOf(params.target)
+    if (!login) return facts
+    return ok({ ...facts.value, lock: { locked: !!login.locked, badPasswords: login.locked ? 10 : 0, ...login.locked ? { lockoutTime: '2026-11-02T21:07:12.123' } : {}, mustChange: false, expired: false, daysUntilExpiration: 42 } })
+  }
+  /** Unlock keeping the password: its two statements and the commit, in one transaction. */
+  function unlock({ target }) {
+    const login = loginOf(target)
+    if (!login?.locked) return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NOT_SUPPORTED', message: 'The login is not locked out.', retryable: false } })
+    login.locked = false
+    return ok({ steps: ['Turn off the password policy', 'Turn the password policy and expiration back on', 'Commit'].map(title => ({ status: 'done', title })), messages: [], elapsedMs: 1 })
   }
   /** A login's Disable or Enable: Held's waits until its Stop arrives; the others change what Logins lists. */
   function loginState({ action, target, requestId }) {
@@ -149,6 +164,7 @@ export function installActionsStub({ ipcMain }, { statics }) {
     const { target } = params
     if (params.action === 'createTable') return createTable(params)
     if (params.action === 'disable' || params.action === 'enable') return loginState(params)
+    if (params.action === 'unlock') return unlock(params)
     if (params.action === 'rename' && target.kind === 'login') {
       if (params.newName === 'Taken') return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NAME_IN_USE', message: 'The name Taken is already used by another login or server role.', retryable: false } })
       const login = loginOf(target)
@@ -188,12 +204,14 @@ export function installActionsStub({ ipcMain }, { statics }) {
           case 'tableDesigner': return ok({ tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', caseSensitiveNames: false, accentSensitiveNames: true, canCreate: true }, elapsedMs: 1 })
           case 'databaseProperties': return properties(params)
           case 'loginFacts': return loginFacts(params)
+          case 'unlockLogin': return unlockFacts(params)
           default: return describe(params)
         }
       case 'actions.script':
         switch (params.action) {
           case 'properties': return ok({ text: propertiesScript, database: 'master', warnings: [] })
           case 'createTable': return ok({ text: designerScript(params.design.name), database: params.target.name, warnings: [] })
+          case 'unlock': return ok({ text: ['USE [master]', 'GO', 'SET XACT_ABORT ON;', 'BEGIN TRANSACTION;', `ALTER LOGIN [${params.target.name}] WITH CHECK_POLICY = OFF;`, `ALTER LOGIN [${params.target.name}] WITH CHECK_POLICY = ON, CHECK_EXPIRATION = ON;`, 'COMMIT TRANSACTION;', 'GO', ''].join(String.fromCharCode(13, 10)), database: 'master', warnings: [] })
           default: return ok({ text: scriptText(params.target.name), database: params.target.database ?? 'master', warnings: [] })
         }
       case 'actions.execute': return execute(params)

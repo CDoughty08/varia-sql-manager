@@ -10,13 +10,15 @@ import { trapFocus } from '../trap-focus'
 import { dialogEnter } from './dialog-keys'
 import type { DialogPhase, OpenObjectDialog } from './ObjectDialogService'
 import DeleteObjectPage from './pages/DeleteObjectPage'
+import UnlockLoginPage from './pages/UnlockLoginPage'
 
 /** A page of an object dialog: the open dialog's snapshot, and whether its controls may change now. */
 export interface PageProps { readonly open: OpenObjectDialog; readonly editable: boolean }
 /** Each modal dialog's pages, by page id (the definitions in definitions.ts hold the behaviour). Database Properties is a
  *  document instead (src/renderer/src/properties). */
 export const dialogPages: { readonly [D in ModalDialogId]: Readonly<Partial<Record<PageId, ComponentType<PageProps>>>> } = {
-  deleteObject: { general: DeleteObjectPage }
+  deleteObject: { general: DeleteObjectPage },
+  unlockLogin: { general: UnlockLoginPage }
 }
 
 const progressText: Readonly<Record<DialogPhase, string>> = {
@@ -149,6 +151,8 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
   const components: Partial<Record<PageId, ComponentType<PageProps>>> = dialogPages[open.dialog]
   const executing = open.phase === 'executing', busy = executing || open.phase === 'loading' || open.phase === 'scripting' || open.phase === 'confirming'
   const usable = !!open.model && open.phase !== 'loadFailed' && open.phase !== 'disconnected'
+  // The definition's reason OK cannot run (the page shows it): OK greys, Script stays.
+  const unavailable = usable && !!dialogs.unavailable(open)
   const nav = useRef<HTMLElement>(null), form = useRef<HTMLFormElement>(null)
   const tabs = useMediaQuery(narrowFrameQuery)
   const [visited, setVisited] = useState<ReadonlySet<PageId>>(() => new Set([open.page]))
@@ -207,7 +211,7 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
     </div>
     <div className="connection-footer">
       <span />
-      <button className="primary" type="submit" disabled={busy || open.phase === 'loadFailed' || open.phase === 'disconnected'}>OK</button>
+      <button className="primary" type="submit" disabled={busy || unavailable || open.phase === 'loadFailed' || open.phase === 'disconnected'}>OK</button>
       {executing ? <button type="button" onClick={() => dialogs.stop()}>Stop</button> : <button type="button" onClick={close}>{open.phase === 'disconnected' ? 'Close' : 'Cancel'}</button>}
     </div>
   </form></div>

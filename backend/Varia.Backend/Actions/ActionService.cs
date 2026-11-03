@@ -55,6 +55,9 @@ internal sealed class ActionServiceOptions
     public TimeSpan StopGrace { get; set; } = TimeSpan.FromSeconds(10);
     /// <summary>How long freeing a database waits for the sessions of the pools it cleared to end (critic A5).</summary>
     public TimeSpan FreeWait { get; set; } = TimeSpan.FromSeconds(1);
+    /// <summary>Test seam: how long a describe or script waits behind another session's lock before it answers BLOCKED
+    /// (actionLimits.readLockTimeoutMs), so a live check of that answer stays short.</summary>
+    internal int ReadLockTimeoutMs { get; set; } = 10_000;
     /// <summary>Test seam: awaited before each main step with its title and the job's token.</summary>
     internal Func<string, CancellationToken, Task>? BeforeStep { get; set; }
     /// <summary>Test seam: awaited before each compensation or cleanup step that runs, with its title and the cleanup budget's token.</summary>
@@ -177,16 +180,17 @@ internal sealed partial class ActionService : IDisposable
 
     /// <summary>Re-validates actionRequestSchema (actionScriptRequestSchema for a script): the action, ids, a target whose kind
     /// offers it, a new name of 1–128 UTF-16 units without U+0000 that differs from the old one, a login's Disable and Enable
-    /// with nothing but a target and the login's identity, the delete flags only for databases, Database Properties' changes (DatabaseAlter.Validate), and secrets nowhere but an execute of an action that
+    /// with nothing but a target and the login's identity, its Unlock with those and the keepPassword mode, the delete flags only for databases, Database Properties' changes (DatabaseAlter.Validate), and secrets nowhere but an execute of an action that
     /// takes them (critic A3).</summary>
     public ObjectRefDto Validate(ActionArgs args, bool script = false)
     {
         Ids(args.ConnectionId, args.RequestId);
         if (args.Secrets is not null && (script || !SecretActions.Contains(args.Action))) throw Invalid("this request takes no secrets.");
         if (args.Secrets is { } secrets) { Secret(secrets.Password, "password"); Secret(secrets.OldPassword, "oldPassword"); }
-        // The login a confirmation was about: only Disable and Enable read it first (D4c adds Delete).
-        if (args.LoginIdentity is { } read && (args.Action is not ("disable" or "enable") || read.Sid is null || !LoginSid().IsMatch(read.Sid)
+        // The login a confirmation or dialog was about: only Disable, Enable and Unlock read it first (D4c adds Delete).
+        if (args.LoginIdentity is { } read && (args.Action is not ("disable" or "enable" or "unlock") || read.Sid is null || !LoginSid().IsMatch(read.Sid)
             || read.Created is null || !DatabaseAlter.IdentityCreated().IsMatch(read.Created))) throw Invalid("loginIdentity.");
+        if (args.Mode is not null && args.Action != "unlock") throw Invalid("only unlock takes a mode.");
         switch (args.Action)
         {
             case "rename":
@@ -214,6 +218,14 @@ internal sealed partial class ActionService : IDisposable
                 var login = Target(args.Target, args.Action);
                 if (login.Kind != "login") throw Invalid("target.");
                 return login;
+            case "unlock":
+                if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Design is not null || args.Identity is not null)
+                    throw Invalid("unlock takes only a target, its mode and the login's identity.");
+                // No password crosses for Unlock: keeping the current one is its only mode (setting a new one is Login Properties').
+                if (args.Mode != "keepPassword") throw Invalid("mode.");
+                var locked = Target(args.Target, "unlock");
+                if (locked.Kind != "login") throw Invalid("target.");
+                return locked;
             case "createTable":
                 if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Identity is not null) throw Invalid("createTable takes only a design.");
                 var database = DatabaseTarget(args.Target);
@@ -244,6 +256,7 @@ internal sealed partial class ActionService : IDisposable
                 "tableDesigner" => DescribeDesignerJobAsync(connection, target, band, job),
                 "databaseProperties" => DescribePropertiesJobAsync(connection, target, band, job),
                 "loginFacts" => DescribeLoginJobAsync(connection, target, job),
+                "unlockLogin" => DescribeUnlockJobAsync(connection, target, job),
                 _ => DescribeJobAsync(connection, target, action, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error));
@@ -259,6 +272,7 @@ internal sealed partial class ActionService : IDisposable
             {
                 "createTable" => ScriptDesignerJobAsync(connection, args, target, band, job),
                 "properties" => ScriptPropertiesJobAsync(connection, args, target, band, job),
+                "unlock" => ScriptUnlockJobAsync(connection, args, target, band, job),
                 _ => ScriptJobAsync(connection, args, target, band, job)
             },
             error => new ActionScriptResult(null, database, [], error));
@@ -273,6 +287,7 @@ internal sealed partial class ActionService : IDisposable
             {
                 "createTable" => ExecuteDesignerJobAsync(connection, args, target, band, job),
                 "properties" => ExecutePropertiesJobAsync(connection, args, target, band, job),
+                "unlock" => ExecuteUnlockJobAsync(connection, args, target, band, job),
                 _ => ExecuteJobAsync(connection, args, target, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionExecuteResult([], [], watch.ElapsedMilliseconds, error));
@@ -340,7 +355,7 @@ internal sealed partial class ActionService : IDisposable
                     catch (SqlException error) when (!token.IsCancellationRequested) { return failed(ActionErrors.Create(catalog, "CONNECTION_LOST", "Could not connect to the server: " + error.Message)); }
                     try
                     {
-                        await RunAsync(connection, read ? ActionSql.ReadPrologue : ActionSql.ExecutePrologue, token);
+                        await RunAsync(connection, read ? ActionSql.ReadPrologueOf(Options.ReadLockTimeoutMs) : ActionSql.ExecutePrologue, token);
                         return await work(connection, profile, band, token);
                     }
                     catch (SqlException error) when (!token.IsCancellationRequested) { return failed(ActionErrors.FromSql(catalog, error, connection, ddl: !read, inUseAdvice: null)); }
@@ -400,7 +415,7 @@ internal sealed partial class ActionService : IDisposable
         if (target.Kind == "login")
         {
             // What the login owns only where it matters (Delete): the scans that count it would wait behind other principals' changes.
-            int? owned = action is "disable" or "enable" or "rename" ? null : take == 0 ? 0 : (int)catalog.Logins.Limit("ownedDatabases");
+            int? owned = action is "disable" or "enable" or "rename" or "unlock" ? null : take == 0 ? 0 : (int)catalog.Logins.Limit("ownedDatabases");
             var (facts, loginRow) = await LoginAsync(connection, target.Name!, newName, owned, token);
             if (facts is null) return (null, Error("NOT_FOUND", "The login " + display + " no longer exists. Refresh Object Explorer."));
             // The login by the name the catalog holds: the rules judged that principal, so the DDL names exactly it.
@@ -623,6 +638,9 @@ internal sealed partial class ActionService : IDisposable
         ActionTemplate.DenyConnect => "Deny permission to connect",
         ActionTemplate.GrantConnect => "Grant permission to connect",
         ActionTemplate.DropUser => "Drop the database user",
+        ActionTemplate.CheckPolicyOff => "Turn off the password policy",
+        ActionTemplate.CheckPolicyOn => "Turn the password policy back on",
+        ActionTemplate.CheckPolicyExpirationOn => "Turn the password policy and expiration back on",
         _ => "Drop the object"
     };
 

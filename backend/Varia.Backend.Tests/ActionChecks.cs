@@ -49,8 +49,8 @@ internal static class ActionChecks
             && Catalog.Limit("messageChars") == ActionErrors.MaxMessage && Catalog.Limit("newName") == ExplorerRefs.MaxIdentifier
             && Catalog.Limit("stopGraceMs") == (long)options.StopGrace.TotalMilliseconds, "the backend's limits are the catalogue's");
         check(Catalog.ErrorCodes.Count() == 15 && Catalog.Retryable("IN_USE") && Catalog.Retryable("AUTH_ENTRA") && !Catalog.Retryable("DEPENDENTS") && Catalog.Retryable("CANCELLED") && !Catalog.ErrorCodes.Contains("INVALID_NAME")
-            && Catalog.Dialogs.Keys.SequenceEqual(["deleteObject", "databaseProperties"]),
-            "the catalogue lists the action error codes and the Delete Object and Database Properties dialogs");
+            && Catalog.Dialogs.Keys.SequenceEqual(["deleteObject", "databaseProperties", "unlockLogin"]),
+            "the catalogue lists the action error codes and the Delete Object, Database Properties and Unlock Login dialogs");
         // A kind's status overlay is emitted as a second row for the same kind and subtype, with its status, and an action
         // may carry engines (src/shared/actions/catalog.ts); the catalogue must load both, as a later PR will embed them.
         using (var embedded = typeof(ActionsCatalog).Assembly.GetManifestResourceStream("Varia.Backend.Actions.actions-catalog.json")!)
@@ -71,7 +71,7 @@ internal static class ActionChecks
     {
         var results = ActionSql.Lint().ToList();
         var problems = results.SelectMany(result => result.Problems.Select(problem => result.Name + ": " + problem)).ToList();
-        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 6 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
+        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 7 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
         // The lint must catch what it is for: a name spliced into the text, a name parameter outside QUOTENAME, a metadata function.
         check(ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE ' + @p1;\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
             && ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE [dbo].[x]';\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
@@ -103,7 +103,10 @@ internal static class ActionChecks
                 new PlannedStatement(ActionTemplate.SetMultiUser, "master", [name]), new PlannedStatement(ActionTemplate.SetRestrictedUser, "master", [name]),
                 ActionSql.Detach(name, updateStatistics: true), new PlannedStatement(ActionTemplate.DisableLogin, "master", [name]),
                 new PlannedStatement(ActionTemplate.EnableLogin, "master", [name]), new PlannedStatement(ActionTemplate.DenyConnect, "master", [name]),
-                new PlannedStatement(ActionTemplate.GrantConnect, "master", [name]), new PlannedStatement(ActionTemplate.DropUser, name, [name])
+                new PlannedStatement(ActionTemplate.GrantConnect, "master", [name]), new PlannedStatement(ActionTemplate.DropUser, name, [name]),
+                // Unlock's (D4d), which its own script wraps in one transaction (UnlockChecks).
+                new PlannedStatement(ActionTemplate.CheckPolicyOff, "master", [name]), new PlannedStatement(ActionTemplate.CheckPolicyOn, "master", [name]),
+                new PlannedStatement(ActionTemplate.CheckPolicyExpirationOn, "master", [name])
             };
             foreach (var plan in plans)
             {

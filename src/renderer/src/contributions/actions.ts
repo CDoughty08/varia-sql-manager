@@ -3,7 +3,8 @@ import type { Workbench } from '../core/workbench'
 import { explorerNodeOf, type ExplorerMenuNode } from '../menus/targets'
 
 /**
- * Object Explorer's object actions (src/shared/actions/catalog.ts): Select Top 1000 Rows, Rename, Delete and Properties, and
+ * Object Explorer's object actions (src/shared/actions/catalog.ts): Select Top 1000 Rows, Rename, Delete and Properties, a
+ * login's Disable, Enable and Unlock…, and
  * Integration Services Catalogs › Create Catalog… (S9a). Each acts
  * on the node its menu was opened for, otherwise on the selected node (F2, Delete, the palette), on a live server. The
  * Database Properties document's verbs (Apply, Discard Changes, Refresh, Stop) come from the same catalogue.
@@ -40,6 +41,12 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
       when: args => actions.canRun('enable', nodeOf(args)),
       unavailableHint: args => actions.unavailableHint('enable', nodeOf(args)),
       run: async args => { const node = nodeOf(args); if (node) await actions.changeLoginState(node, 'enable') }
+    }),
+    // Unlock… (D4d): the modal reads the login's lock-out state; the listing cannot know it, so every SQL Server login offers it.
+    commands.register('explorer.unlock', {
+      when: args => actions.canRun('unlock', nodeOf(args)) && !dialogs.current,
+      unavailableHint: args => actions.unavailableHint('unlock', nodeOf(args)),
+      run: args => { const node = nodeOf(args); if (node) dialogs.open('unlockLogin', node) }
     }),
     commands.register('explorer.delete', {
       when: args => actions.canRun('delete', nodeOf(args)) && !dialogs.current,

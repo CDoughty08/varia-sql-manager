@@ -841,6 +841,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-dialog-options { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 0; padding: 0; border: 0; }
 .object-dialog-options .checkbox-label { display: flex; align-items: center; gap: 8px; }
 .object-dialog-delete .field-note { margin-top: 10px; }
+/* Unlock Login (D4d): the lock-out state as sentences, then How to unlock. */
+.unlock-login-state { margin: 4px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; user-select: text; }
+.unlock-login .object-dialog-options legend { padding: 0; margin-bottom: 4px; }
+.unlock-login .object-dialog-options .field-note { margin-left: 24px; }
 /* Create Catalog (S9a): SSMS's options and password, then what the server gets, step by step. */
 .create-catalog-dialog .property-section { display: flex; flex-direction: column; gap: 6px; }
 .create-catalog-dialog .checkbox-label { display: flex; align-items: center; gap: 8px; }

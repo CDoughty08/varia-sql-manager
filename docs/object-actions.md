@@ -16,6 +16,7 @@ and re-derives the subtype in the action's own connection before any DDL runs.
 | `properties` | Properties | `explorer.properties` | dialog (`databaseProperties`) | `explorer.context` | `9_properties` 1 | p | — | ⌘I | `explorerActionProperties` | SQL Server, Managed Instance |
 | `disable` | Disable | `explorer.disable` | inline | `explorer.context` | `6_state` 1 | b | — | — | `explorerActionDisable` | SQL Server, Managed Instance |
 | `enable` | Enable | `explorer.enable` | inline | `explorer.context` | `6_state` 1 | b | — | — | `explorerActionEnable` | SQL Server, Managed Instance |
+| `unlock` | Unlock… | `explorer.unlock` | dialog (`unlockLogin`) | `explorer.context` | `6_state` 2 | u | — | — | `explorerActionUnlock` | SQL Server, Managed Instance |
 
 "Runs on" is each action's `engines`: SQL Server is the box editions, Managed Instance is EngineEdition 8, and Azure SQL
 Database stands for the cloud editions. The backend refuses an action elsewhere with `NOT_SUPPORTED` before it opens a
@@ -32,26 +33,27 @@ is reserved on Windows and Linux.
 
 ✓ enabled, ○ shown greyed, – not offered.
 
-| Kind | Subtypes | Select Top 1000 Rows | Rename | Delete | Properties | Disable Login | Enable Login |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `login` | none | – | – | – | – | – | – |
-| `login` | `sa`, `sql`, `windowsUser`, `certificateMapped`, `asymmetricKeyMapped` | – | ✓ | – | – | ✓ | – |
-| `login` | `system` | – | ○ | – | – | ○ | – |
-| `login` | `windowsGroup` | – | ✓ | – | – | ○ | – |
-| `login` | `externalUser`, `externalGroup` | – | ○ | – | – | ✓ | – |
-| `database` | none | – | ✓ | ✓ | ✓ | – | – |
-| `database` | `system` | – | ○ | ○ | ✓ | – | – |
-| `database` | `snapshot` | – | ○ | ✓ | ✓ | – | – |
-| `table` | none, `graphNode`, `graphEdge` | ✓ | ✓ | ✓ | – | – | – |
-| `table` | `systemVersioned`, `history`, `updatableLedger`, `appendOnlyLedger`, `ledgerHistory`, `fileTable`, `external`, `system` | ✓ | ○ | ○ | – | – | – |
-| `table` | `droppedLedger` | – | ○ | ○ | – | – | – |
-| `view` | none | ✓ | ✓ | ✓ | – | – | – |
-| `view` | `system`, `ledger` | ✓ | ○ | ○ | – | – | – |
-| `view` | `droppedLedger` | – | ○ | ○ | – | – | – |
-| `procedure` | none, `sql`, `clr` | – | ✓ | ✓ | – | – | – |
-| `procedure` | `extended`, `replicationFilter`, `system` | – | ○ | ○ | – | – | – |
-| `function` | none, `inline`, `tableValued`, `clrTableValued`, `scalar`, `clrScalar` | – | ✓ | ✓ | – | – | – |
-| `function` | `aggregate` | – | ✓ | ○ | – | – | – |
+| Kind | Subtypes | Select Top 1000 Rows | Rename | Delete | Properties | Disable Login | Enable Login | Unlock Login… |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `login` | none | – | – | – | – | – | – | – |
+| `login` | `sa`, `sql` | – | ✓ | – | – | ✓ | – | ✓ |
+| `login` | `system` | – | ○ | – | – | ○ | – | ○ |
+| `login` | `windowsUser`, `certificateMapped`, `asymmetricKeyMapped` | – | ✓ | – | – | ✓ | – | – |
+| `login` | `windowsGroup` | – | ✓ | – | – | ○ | – | – |
+| `login` | `externalUser`, `externalGroup` | – | ○ | – | – | ✓ | – | – |
+| `database` | none | – | ✓ | ✓ | ✓ | – | – | – |
+| `database` | `system` | – | ○ | ○ | ✓ | – | – | – |
+| `database` | `snapshot` | – | ○ | ✓ | ✓ | – | – | – |
+| `table` | none, `graphNode`, `graphEdge` | ✓ | ✓ | ✓ | – | – | – | – |
+| `table` | `systemVersioned`, `history`, `updatableLedger`, `appendOnlyLedger`, `ledgerHistory`, `fileTable`, `external`, `system` | ✓ | ○ | ○ | – | – | – | – |
+| `table` | `droppedLedger` | – | ○ | ○ | – | – | – | – |
+| `view` | none | ✓ | ✓ | ✓ | – | – | – | – |
+| `view` | `system`, `ledger` | ✓ | ○ | ○ | – | – | – | – |
+| `view` | `droppedLedger` | – | ○ | ○ | – | – | – | – |
+| `procedure` | none, `sql`, `clr` | – | ✓ | ✓ | – | – | – | – |
+| `procedure` | `extended`, `replicationFilter`, `system` | – | ○ | ○ | – | – | – | – |
+| `function` | none, `inline`, `tableValued`, `clrTableValued`, `scalar`, `clrScalar` | – | ✓ | ✓ | – | – | – | – |
+| `function` | `aggregate` | – | ✓ | ○ | – | – | – | – |
 
 ## Menus, statuses, database states and servers
 
@@ -80,6 +82,7 @@ the Runs on column above says which, and the menu hides it elsewhere. Menus read
 | --- | --- | --- | --- | --- | --- |
 | `deleteObject` | Delete Object | Modal dialog | `delete` | General (`settings-gear`) | No |
 | `databaseProperties` | Database Properties - <name> | Document tab | `properties` | General (`settings-gear`), Files (`settings-gear`), Filegroups (`settings-gear`), Options (`settings-gear`) | No |
+| `unlockLogin` | Unlock Login - <name> | Modal dialog | `unlock` | General (`settings-gear`) | Yes |
 
 A modal dialog is for a confirmation (Delete Object). A property sheet opens as a document tab instead (U1 D2): its
 pages are sections in one scrolling column with a section list beside it, and a Script drawer under it.
@@ -329,8 +332,9 @@ names by a live dry run:
 Object Explorer gives each login a subtype from `sys.server_principals`: `sa` by principal_id 1 whatever its name, `system`
 for SQL Server's own logins (a name that starts and ends with `##`), else by type: `S` `sql`, `U` `windowsUser`, `G` `windowsGroup`, `C` `certificateMapped`, `K` `asymmetricKeyMapped`, `E` `externalUser`, `X` `externalGroup`.
 The backend's login preflight reads the facts an action needs in the action's own connection from catalog views only:
-never `LOGINPROPERTY`, which waits on a login another session is changing, and never a password hash, which no Varia
-statement may name. Delete, Unlock and Properties arrive in later versions; their rules are data already.
+never a password hash, which no Varia statement may name, and `LOGINPROPERTY`, which waits on a login another session
+is changing whatever the isolation level, only in Unlock's lock-out read below. Delete and Properties arrive in later
+versions; their rules are data already.
 
 ### Disable, Enable and Rename
 
@@ -368,6 +372,33 @@ refused by the backend as system objects, whatever the page asks: the preflight 
 collation finds by the name the catalog holds, and the statement names exactly that principal, so no other spelling
 (a trailing space, a fullwidth `＃`) reaches one of them. A greyed verb's reason (a Windows group's Disable, SQL
 Server's own logins) is its hint in the command palette.
+
+### Unlock
+
+SSMS unlocks a SQL Server login only on Login Properties › Status, and only with a new password. Varia adds Unlock… to a
+SQL Server login's menu (after Disable or Enable, access key U), a modal that keeps the current password, as Microsoft
+documents: it turns the password policy off, which unlocks the login, and back on, with password expiration when the login
+had it, in one transaction, so a failure or Stop rolls both back. This clears the login's password history, which the
+dialog says. Setting a new password instead, SSMS's way and then the dialog's default, arrives with Login Properties.
+
+Only `LOGINPROPERTY` knows whether a login is locked out, so the listing offers Unlock… on every SQL Server login and the
+dialog says. Its describe (`unlockLogin`) and its preflight read the login's facts and then its lock-out state with
+`ActionSql.LoginLock`, the only Varia statement that may call `LOGINPROPERTY`: of the login the preflight found, and only
+for `IsLocked`, `BadPasswordCount`, `LockoutTime`, `IsMustChange`, `IsExpired`, `DaysUntilExpiration`, which its own lint checks. Behind another session's open
+change to the login the describe gives up after the read lock timeout (`BLOCKED`); the preflight waits, as the statements
+after it would, until Stop. OK is greyed, with the reason on the page, for a login that does not enforce the password
+policy ("The login does not enforce the password policy, so it is never locked out."), one that must change its password at its next sign-in, whose policy SQL Server
+will not turn off (15128: "The login must change its password at its next sign-in, so its password policy cannot be turned off. Unlock it by setting a new password."), and one that is not locked out ("The login is not locked out."),
+which the preflight checks again before any statement. Script Action still writes the transaction for a login that is
+not locked out now. On success Object Explorer reloads the Logins folder and a notice says "Unlocked the login app_user.
+Its password history was cleared."
+
+| Step | As Script Action writes it |
+| --- | --- |
+| Turn off the password policy | `ALTER LOGIN [login] WITH CHECK_POLICY = OFF;` |
+| Turn the password policy back on | `ALTER LOGIN [login] WITH CHECK_POLICY = ON;` |
+| Turn the password policy and expiration back on | `ALTER LOGIN [login] WITH CHECK_POLICY = ON, CHECK_EXPIRATION = ON;` (when expiration was on) |
+| Commit | the batch is `SET XACT_ABORT ON; BEGIN TRANSACTION;`, both statements, then `COMMIT TRANSACTION;` |
 
 ✓ allowed, ○ shown greyed and refused, – not offered.
 

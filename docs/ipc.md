@@ -507,6 +507,22 @@ spelling of `##x##`) and refuses by `LoginRules` before any DDL, which then name
 the connection's own login, a SQL Server login's name with a backslash (`NOT_SUPPORTED`) and a name another login or
 server role holds (`NAME_IN_USE`). A login's `newName` in the `##…##` form is `INVALID_PARAMS` (zod and `Validate`).
 
+**Unlock Login** (D4d) uses them too. `actions.describe { …, dialog: 'unlockLogin', target: { kind: 'login', name } }` reads the
+login's facts as Disable's preflight does (`ActionSql.LoginAlter`, READ COMMITTED) and then its lock-out state with
+`ActionSql.LoginLock`, the only statement that may call `LOGINPROPERTY` (for `IsLocked`, `BadPasswordCount`, `LockoutTime`,
+`IsMustChange`, `IsExpired` and `DaysUntilExpiration` only, which its own lint and the catalogue's `logins.lockProperties`
+check), and answers `{ login, lock: { locked, badPasswords?, lockoutTime? (the server's clock, while locked), mustChange,
+expired, daysUntilExpiration? }, elapsedMs }`. `LOGINPROPERTY` waits for another session's open change to the login whatever
+the isolation level, so behind one the describe answers `BLOCKED` after the read lock timeout (10 s). `actions.script` and
+`actions.execute` take `{ action: 'unlock', connectionId, requestId, target: { kind: 'login', name }, mode: 'keepPassword',
+loginIdentity? }` (strict; no password crosses, and `mode` is the only one until Login Properties). The preflight applies the
+login rules and the identity, reads the lock-out state again, and refuses before any DDL a login that is not a SQL Server login
+enforcing the password policy, one that must change its password (SQL Server would answer 15128, `NOT_SUPPORTED`) and, for
+execute only, one that is not locked out (`NOT_SUPPORTED`). Execute then runs `ALTER LOGIN … WITH CHECK_POLICY = OFF` and
+`… = ON` (with `CHECK_EXPIRATION = ON` when the login had it) through runner v2's transaction mode: steps "Turn off the password
+policy", "Turn the password policy back on" (or "… and expiration back on") and "Commit", rolled back on a failure or Stop.
+Script answers the same statements as one `SET XACT_ABORT ON; BEGIN TRANSACTION; … COMMIT TRANSACTION;` batch in master.
+
 **Object action confirmations** (A13) are main's message boxes too, on one channel, `varia:confirm-action` (trusted senders
 only): the page sends `{ prompt, facts }`, a strict zod union (`actionPromptRequestSchema` in
 `src/shared/actions/prompts.ts`): `renameDatabase { database: 1–128, sessions?: 0–1,000,000, transactions, tabs (the same

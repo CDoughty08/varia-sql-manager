@@ -181,7 +181,8 @@ pages, limits, error codes, display formats, benchmarks).
   or the status bar's for a rename and a login's Disable and Enable), whose reply waits for SQL Server and lists the steps completed; and never logging
   names, SQL or values. Script never runs anything. Describe and script reads use `LOCK_TIMEOUT 10000` (the loginFacts
   describe, whose facts only advise, under READ UNCOMMITTED). Every lint refuses `LOGINPROPERTY` (it takes its own locks whatever
-  the isolation level) and any read of a password hash (`CatalogSql.SecretUses`). The test-only dry
+  the isolation level) and any read of a password hash (`CatalogSql.SecretUses`), except `ActionSql.LoginLock` (Unlock's
+  lock-out read, in the action's own connection), whose own lint allows only the lock-out properties `logins.ts` lists. The test-only dry
   run is an internal C# method, never a request field.
 - Table Designer types, properties, commands and limits live only in `src/shared/designer/catalog.ts`; after changing it,
   regenerate `docs/table-designer.md` and the backend's embedded `Designer/designer-catalog.json` with

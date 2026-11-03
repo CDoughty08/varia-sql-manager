@@ -8,11 +8,13 @@ namespace Varia.Backend.Actions;
 /// <summary>The statements an action runs: DROP TABLE, VIEW, PROCEDURE or FUNCTION, sp_rename, ALTER DATABASE … MODIFY NAME,
 /// SET SINGLE_USER, DROP DATABASE and msdb's backup history cleanup; and the shared templates later actions plan (critic
 /// A21): SET MULTI_USER and RESTRICTED_USER (which also restore a database's access after a failed or stopped step),
-/// sp_detach_db, ALTER LOGIN … DISABLE and ENABLE, DENY and GRANT CONNECT SQL, and DROP USER; and a login's rename (D4b).</summary>
+/// sp_detach_db, ALTER LOGIN … DISABLE and ENABLE, DENY and GRANT CONNECT SQL, and DROP USER; a login's rename (D4b); and the
+/// password policy turned off and back on, with or without expiration, which Unlock runs in one transaction (D4d).</summary>
 internal enum ActionTemplate
 {
     DropTable, DropView, DropProcedure, DropFunction, RenameObject, RenameDatabase, SetSingleUser, DropDatabase, DeleteBackupHistory,
-    SetMultiUser, SetRestrictedUser, DetachDatabase, DisableLogin, EnableLogin, DenyConnect, GrantConnect, DropUser, RenameLogin
+    SetMultiUser, SetRestrictedUser, DetachDatabase, DisableLogin, EnableLogin, DenyConnect, GrantConnect, DropUser, RenameLogin,
+    CheckPolicyOff, CheckPolicyOn, CheckPolicyExpirationOn
 }
 
 /// <summary>Where a step runs in the plan (critic A4): main steps in order; a compensation undoes the main step <c>Undoes</c>
@@ -39,6 +41,9 @@ internal static partial class ActionSql
         + "SET ANSI_WARNINGS ON; SET CONCAT_NULL_YIELDS_NULL ON; SET ARITHABORT ON; SET TRANSACTION ISOLATION LEVEL READ COMMITTED;";
     /// <summary>Describe and script requests only read, and give up behind another session's DDL after 10 s (BLOCKED).</summary>
     public const string ReadPrologue = Prologue + " SET LOCK_TIMEOUT 10000;";
+    /// <summary>The read prologue with another lock timeout: the live checks shorten it (ActionServiceOptions.ReadLockTimeoutMs).</summary>
+    public static string ReadPrologueOf(int lockTimeoutMs) =>
+        lockTimeoutMs == 10_000 ? ReadPrologue : Prologue + " SET LOCK_TIMEOUT " + Math.Max(0, lockTimeoutMs).ToString(CultureInfo.InvariantCulture) + ";";
     /// <summary>Execute requests restore the default after a describe on the same connection could have set it.</summary>
     public const string ExecutePrologue = Prologue + " SET LOCK_TIMEOUT -1;";
     /// <summary>A describe whose facts only advise (loginFacts) reads past other sessions' uncommitted changes rather than waiting.</summary>
@@ -118,6 +123,11 @@ internal static partial class ActionSql
             ActionTemplate.DropUser => "DROP USER " + Quote(names[0]),
             // SMO's text for a login's rename (probed for D4 §5.3), with no spaces around the equals sign.
             ActionTemplate.RenameLogin => "ALTER LOGIN " + Quote(names[0]) + " WITH NAME=" + Quote(names[1]),
+            // Learn's way to unlock without a password (D4 P12-P15): CHECK_POLICY = OFF unlocks and also turns expiration off, so
+            // the second statement turns back on what the login had.
+            ActionTemplate.CheckPolicyOff => "ALTER LOGIN " + Quote(names[0]) + " WITH CHECK_POLICY = OFF",
+            ActionTemplate.CheckPolicyOn => "ALTER LOGIN " + Quote(names[0]) + " WITH CHECK_POLICY = ON",
+            ActionTemplate.CheckPolicyExpirationOn => "ALTER LOGIN " + Quote(names[0]) + " WITH CHECK_POLICY = ON, CHECK_EXPIRATION = ON",
             _ => throw new InvalidOperationException("Unknown template " + plan.Template)
         };
     }
@@ -125,6 +135,16 @@ internal static partial class ActionSql
     /// <summary>SSMS's script of one statement: USE and GO around it (no USE before msdb's procedure, which names its database).</summary>
     public static string ScriptText(PlannedStatement plan) =>
         (plan.Template == ActionTemplate.DeleteBackupHistory ? "" : "USE " + Quote(plan.Database) + NL + "GO" + NL) + Statement(plan) + NL + "GO" + NL;
+
+    /// <summary>The script of statements Varia runs in one transaction (Unlock): one batch under XACT_ABORT, as New Login's
+    /// (critic A14), so a statement that fails when the script is run rolls back the ones before it, as Varia's run does.</summary>
+    public static string TransactionScriptText(IReadOnlyList<PlannedStatement> plans)
+    {
+        if (plans.Count == 0 || plans.Any(plan => plan.Database != plans[0].Database || plan.Template == ActionTemplate.DeleteBackupHistory))
+            throw new InvalidOperationException("A transaction's statements run in one database.");
+        return "USE " + Quote(plans[0].Database) + NL + "GO" + NL + "SET XACT_ABORT ON;" + NL + "BEGIN TRANSACTION;" + NL
+            + string.Concat(plans.Select(Checked).Select(plan => Statement(plan) + ";" + NL)) + "COMMIT TRANSACTION;" + NL + "GO" + NL;
+    }
 
     /// <summary>The batch that runs a statement: SQL Server builds it from parameters (@db, then @p1… in the plan's name order).
     /// <paramref name="dryRun"/> (the live checks only, never the wire) selects what would run instead of running it.</summary>
@@ -152,6 +172,9 @@ internal static partial class ActionSql
             ActionTemplate.GrantConnect => Run("DECLARE @stmt nvarchar(max) = N'GRANT CONNECT SQL TO ' + QUOTENAME(@p1);\n"),
             ActionTemplate.DropUser => Run("DECLARE @stmt nvarchar(max) = N'DROP USER ' + QUOTENAME(@p1);\n"),
             ActionTemplate.RenameLogin => Run("DECLARE @stmt nvarchar(max) = N'ALTER LOGIN ' + QUOTENAME(@p1) + N' WITH NAME=' + QUOTENAME(@p2);\n"),
+            ActionTemplate.CheckPolicyOff => Run("DECLARE @stmt nvarchar(max) = N'ALTER LOGIN ' + QUOTENAME(@p1) + N' WITH CHECK_POLICY = OFF';\n"),
+            ActionTemplate.CheckPolicyOn => Run("DECLARE @stmt nvarchar(max) = N'ALTER LOGIN ' + QUOTENAME(@p1) + N' WITH CHECK_POLICY = ON';\n"),
+            ActionTemplate.CheckPolicyExpirationOn => Run("DECLARE @stmt nvarchar(max) = N'ALTER LOGIN ' + QUOTENAME(@p1) + N' WITH CHECK_POLICY = ON, CHECK_EXPIRATION = ON';\n"),
             _ => throw new InvalidOperationException("Unknown template " + template)
         };
     }
@@ -261,6 +284,17 @@ internal static partial class ActionSql
         + "FROM sys.server_principals AS p LEFT JOIN sys.sql_logins AS l ON l.principal_id = p.principal_id "
         + "WHERE p.name = @name AND p.type IN ('S', 'U', 'G', 'C', 'K', 'E', 'X')";
 
+    /// <summary>A login's lock-out state (D4d): the only Varia statement that may call LOGINPROPERTY (critic A15), and only for
+    /// <see cref="LoginLockProperties"/>, of @name, the login the preflight found. Catalog views do not hold this state. LOGINPROPERTY
+    /// waits for another session's open change to that login whatever the isolation level (D4 P8; other logins' changes do not hold
+    /// it), so it runs only in an action's own connection: Unlock's describe gives up after the read lock timeout (BLOCKED), and its
+    /// execute waits until Stop, as the ALTER LOGIN after it would.</summary>
+    public const string LoginLock = "SELECT CONVERT(int, LOGINPROPERTY(@name, N'IsLocked')) AS is_locked, CONVERT(int, LOGINPROPERTY(@name, N'BadPasswordCount')) AS bad_passwords, "
+        + "CONVERT(datetime, LOGINPROPERTY(@name, N'LockoutTime')) AS lockout_time, CONVERT(int, LOGINPROPERTY(@name, N'IsMustChange')) AS must_change, "
+        + "CONVERT(int, LOGINPROPERTY(@name, N'IsExpired')) AS is_expired, CONVERT(int, LOGINPROPERTY(@name, N'DaysUntilExpiration')) AS days_until_expiration;";
+    /// <summary>The properties <see cref="LoginLock"/> may read. Never PasswordHash or PasswordHashAlgorithm, which every lint refuses.</summary>
+    public static readonly IReadOnlyList<string> LoginLockProperties = ["IsLocked", "BadPasswordCount", "LockoutTime", "IsMustChange", "IsExpired", "DaysUntilExpiration"];
+
     /// <summary>The sessions this backend's process (@pid) holds in a database, bounded by its own connections: the action keeps
     /// those its pooled connections were given, which a cleared pool leaves for a moment before the server ends them. Without VIEW
     /// SERVER STATE only this session is visible: none.</summary>
@@ -285,6 +319,8 @@ internal static partial class ActionSql
         "N' SET  MULTI_USER'", "N' SET  RESTRICTED_USER'", "N'ALTER LOGIN '", "N' DISABLE'", "N' ENABLE'", "N'DENY CONNECT SQL TO '", "N'GRANT CONNECT SQL TO '", "N'DROP USER '",
         // The login preflight (Login), a login's rename, and the service lookup (LoginService).
         "N'GRANT OR DENY'", "N'ALTER ANY LOGIN'", "N'CONTROL SERVER'", "'COSQ'", "N' WITH NAME='", "N'LOCALSYSTEM'", @"N'NT AUTHORITY\SYSTEM'",
+        // Unlock's password policy statements (D4d).
+        "N' WITH CHECK_POLICY = OFF'", "N' WITH CHECK_POLICY = ON'", "N' WITH CHECK_POLICY = ON, CHECK_EXPIRATION = ON'",
         // Database Properties' describe and preflight (DatabaseProperties.cs, ActionService.DatabasePropertiesPreflight).
         "N'contained database authentication'", "N'sysadmin'", "N'##%'", "N'SpaceUsed'", "N'@take int'", "N'MAXDOP'", "N'LEGACY_CARDINALITY_ESTIMATION'", "N'PARAMETER_SNIFFING'",
         "N'QUERY_OPTIMIZER_HOTFIXES'", "'FilestreamEffectiveLevel'", "'EngineEdition'", "'ProductMajorVersion'",
@@ -432,6 +468,22 @@ internal static partial class ActionSql
         return problems;
     }
 
+    /// <summary>A LOGINPROPERTY call LoginLock's lint accepts: of @name, with one property literal.</summary>
+    [GeneratedRegex(@"\bLOGINPROPERTY\(@name, N'(\w+)'\)")]
+    private static partial Regex LockPropertyCall();
+
+    /// <summary>Problems with the one statement that may call LOGINPROPERTY (<see cref="LoginLock"/>, critic A15): a call of any other
+    /// form or property (PasswordHash above all), and then whatever LintCatalog finds in the rest, LOGINPROPERTY included.</summary>
+    public static List<string> LintLoginLock(string text)
+    {
+        var problems = new List<string>();
+        foreach (Match call in LockPropertyCall().Matches(text))
+            if (!LoginLockProperties.Contains(call.Groups[1].Value)) problems.Add("reads the login property " + call.Groups[1].Value);
+        if (!LockPropertyCall().IsMatch(text)) problems.Add("reads no login property");
+        problems.AddRange(LintCatalog(LockPropertyCall().Replace(text, "NULL"), ExplorerCatalog.MaxBand, database: false));
+        return problems;
+    }
+
     private static IEnumerable<string> Undeclared(string text, HashSet<string> parameters)
     {
         var declared = Declared().Matches(text).Select(match => match.Groups[1].Value).ToHashSet(StringComparer.Ordinal);
@@ -455,6 +507,7 @@ internal static partial class ActionSql
         yield return ("database state", LintCatalog(DatabaseState, ExplorerCatalog.MaxBand, database: false));
         yield return ("login", LintCatalog(Login, ExplorerCatalog.MaxBand, database: false));
         yield return ("login alter", LintCatalog(LoginAlter, ExplorerCatalog.MaxBand, database: false));
+        yield return ("login lock", LintLoginLock(LoginLock));
         yield return ("login service", LintCatalog(LoginService, ExplorerCatalog.MaxBand, database: false));
         yield return ("own sessions", LintCatalog(OwnSessions, ExplorerCatalog.MaxBand, database: false));
         yield return ("module call", LintCatalog(ModuleCall, ExplorerCatalog.MaxBand, database: false));

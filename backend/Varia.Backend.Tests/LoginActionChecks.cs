@@ -34,12 +34,12 @@ internal static class LoginActionChecks
 
     private static void CatalogChecks(Action<bool, string> check)
     {
-        check(Catalog.Row("login", "sa") is { } sa && sa.Enabled.SequenceEqual(["rename", "disable"]) && sa.Disabled.Count == 0
-            && Catalog.Row("login", "sa", "disabled") is { Status: "disabled" } off && off.Enabled.SequenceEqual(["rename", "enable"])
-            && Catalog.Row("login", "system", "disabled") is { } system && system.Enabled.Count == 0 && system.Disabled.SequenceEqual(["rename", "enable"])
+        check(Catalog.Row("login", "sa") is { } sa && sa.Enabled.SequenceEqual(["rename", "disable", "unlock"]) && sa.Disabled.Count == 0
+            && Catalog.Row("login", "sa", "disabled") is { Status: "disabled" } off && off.Enabled.SequenceEqual(["rename", "enable", "unlock"])
+            && Catalog.Row("login", "system", "disabled") is { } system && system.Enabled.Count == 0 && system.Disabled.SequenceEqual(["rename", "enable", "unlock"])
             && Catalog.Row("login", "windowsGroup", "disabled") is { } group && group.Enabled.SequenceEqual(["rename"]) && group.Disabled.Count == 0
             && Catalog.Row("login", "sql", "noAccess") == Catalog.Row("login", "sql") && Catalog.Row("login", "")?.Enabled.Count == 0,
-            "a login's rows come from logins.ts: Disable and Rename by subtype, Enable in place of Disable while it is disabled, and a denied login keeps its row");
+            "a login's rows come from logins.ts: Disable, Unlock and Rename by subtype, Enable in place of Disable while it is disabled, and a denied login keeps its row");
         check(Catalog.Offered("login", "disable") && Catalog.Offered("login", "enable") && Catalog.Offered("login", "rename") && !Catalog.Offered("login", "delete") && !Catalog.Offered("login", "properties")
             && !Catalog.Offered("table", "disable") && Catalog.Serves("disable", "box") && Catalog.Serves("enable", "managedInstance") && !Catalog.Serves("disable", "cloud"),
             "Disable and Enable are offered on logins only, on SQL Server and Managed Instance");
@@ -178,9 +178,10 @@ internal static class LoginActionChecks
             && ActionService.ServiceOfName(@"NT SERVICE\") is null && ActionService.ServiceOfName(@"CONTOSO\svc") is null && ActionService.ServiceOfName("NT SERVICE") is null,
             "a per-service login names its service when sys.dm_server_services cannot be read");
         // The live checks rename their scratch login to a hostile name and add a taken one; a crashed run's must still be swept.
-        check(new[] { "VariaScratch_20261031010203_0a1b2c3d", "VariaScratch_20261031010203_0a1b2c3d_lt", "VariaScratch_20261031010203_0a1b2c3d_lr]' --", "##VariaScratch_20261031010203_0a1b2c3d_ls##", "VariaScratch_20261031010203_0a1b2c3d_lsx" }.All(ScratchDatabase.SweepableLogin)
+        check(new[] { "VariaScratch_20261031010203_0a1b2c3d", "VariaScratch_20261031010203_0a1b2c3d_lt", "VariaScratch_20261031010203_0a1b2c3d_lr]' --", "##VariaScratch_20261031010203_0a1b2c3d_ls##", "VariaScratch_20261031010203_0a1b2c3d_lsx",
+                "VariaScratch_20261031010203_0a1b2c3d_lk", "VariaScratch_20261031010203_0a1b2c3d_lp", "VariaScratch_20261031010203_0a1b2c3d_lm" }.All(ScratchDatabase.SweepableLogin)
             && !new[] { "VariaScratch_20261031010203_0a1b2c3d_x", "VariaScratch_2026_0a1b2c3d", "AppUser", "VariaScratch_20261031010203_0a1b2c3d_lr", "##VariaScratch_20261031010203_0a1b2c3d##",
-                "##VariaScratch_20261031010203_0a1b2c3d_ls", "##MS_PolicyEventProcessingLogin##" }.Any(ScratchDatabase.SweepableLogin),
+                "##VariaScratch_20261031010203_0a1b2c3d_ls", "##MS_PolicyEventProcessingLogin##", "VariaScratch_20261031010203_0a1b2c3d_lkx" }.Any(ScratchDatabase.SweepableLogin),
             "the scratch sweep drops the login action checks' scratch logins under every name they give them, and no other login");
     }
 

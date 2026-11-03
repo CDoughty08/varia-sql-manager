@@ -37,7 +37,8 @@ internal static class ActionErrors
         ["NOT_FOUND"] = [15225, 15007],
         // 5058: the option cannot be set in this database (SQL Server's own).
         // 15405, 15021 (a SQL login's name with a backslash, D4 P3) and 15099: changes to logins SQL Server refuses outright.
-        ["NOT_SUPPORTED"] = [5058, 15405, 15021, 15099],
+        // 15128: CHECK_POLICY = OFF while MUST_CHANGE is set (Unlock, D4d).
+        ["NOT_SUPPORTED"] = [5058, 15405, 15021, 15099, 15128],
         ["PERMISSION_DENIED"] = [229, 262, 297, 3701, 15247, 15151],
         ["DATABASE_UNAVAILABLE"] = [942, 952, 976, 978, 4060, 916],
         ["CONNECTION_LOST"] = [-1, 2, 53, 64, 121, 233, 10053, 10054, 10060]

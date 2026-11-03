@@ -88,8 +88,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     private static partial Regex Pattern();
     // _lt is the login actions' taken name, _lr]' -- the hostile name they rename the scratch login to and back, and ##…_ls## the
     // login in SQL Server's own name form that they prove is refused under other spellings, and _lsx the name a refused rename
-    // of it would have given it (D4b).
-    [GeneratedRegex(@"^(VariaScratch_\d{14}_[0-9a-f]{8}(_lt|_lr\]' --|_lsx)?|##VariaScratch_\d{14}_[0-9a-f]{8}_ls##)$")]
+    // of it would have given it (D4b). _lk, _lp and _lm are Unlock's logins with the password policy (D4d).
+    [GeneratedRegex(@"^(VariaScratch_\d{14}_[0-9a-f]{8}(_lt|_lr\]' --|_lsx|_lk|_lp|_lm)?|##VariaScratch_\d{14}_[0-9a-f]{8}_ls##)$")]
     private static partial Regex LoginPattern();
     /// <summary>Whether the sweep drops a stale SQL login of this name.</summary>
     internal static bool SweepableLogin(string name) => LoginPattern().IsMatch(name);

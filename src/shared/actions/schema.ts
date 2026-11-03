@@ -5,7 +5,7 @@ import { kindSpecs } from '../explorer/catalog.ts'
 import type { ObjectRef } from '../explorer/refs.ts'
 import { ident, objectRefSchema } from '../explorer/schema.ts'
 import { actionDescribeIds, actionDescribeSpecs, actionErrorCodes, actionLimits, actionOffered, dialogIds, dialogSpecs, objectActionSpecs, type ActionErrorCode, type ObjectAction } from './catalog.ts'
-import { isSystemLoginName, loginLimits, loginMessages, type LoginFacts } from './logins.ts'
+import { isSystemLoginName, loginLimits, loginMessages, unlockModes, type LoginFacts, type LoginLockFacts, type UnlockMode } from './logins.ts'
 import { optionDef, settableOptionKeys, settableScopedKeys, tokenProblem, type FileType, type Growth } from './database.ts'
 import { designerDescribeIds } from '../designer/catalog.ts'
 import { createTableSchema, type CreateTableRequest, type TableDesignerModel } from '../designer/schema.ts'
@@ -45,8 +45,13 @@ export interface PropertiesRequest {
 export interface LoginIdentity { readonly sid: string; readonly created: string }
 /** A login's Disable or Enable (D4b): ALTER LOGIN … DISABLE or ENABLE in master, of the login its facts were read from. */
 export interface LoginStateRequest { readonly action: 'disable' | 'enable'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly loginIdentity?: LoginIdentity }
+/**
+ * Unlock Login (D4d): turns the password policy off and on again in one transaction, which unlocks the login and keeps its
+ * password. No password crosses for it; the identity is the login Unlock…'s describe read.
+ */
+export interface UnlockRequest { readonly action: 'unlock'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly mode: UnlockMode; readonly loginIdentity?: LoginIdentity }
 /** One action: actions.script returns its script, actions.execute runs it. */
-export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | LoginStateRequest
+export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | LoginStateRequest | UnlockRequest
 export interface ActionCancelRequest { readonly requestIds: readonly string[] }
 
 export interface ActionError { readonly code: ActionErrorCode; readonly message: string; readonly retryable: boolean }
@@ -133,8 +138,10 @@ export interface DatabasePropertiesModel {
 }
 export interface ActionDescribeResult {
   readonly deleteTarget?: DeleteTarget; readonly elapsedMs: number; readonly error?: ActionError; readonly databaseProperties?: DatabasePropertiesModel; readonly tableDesigner?: TableDesignerModel
-  /** loginFacts: what the login preflight read, which the renderer checks against logins.ts' rules before it asks or runs. */
+  /** loginFacts and unlockLogin: what the login preflight read, which the renderer checks against logins.ts' rules before it asks or runs. */
   readonly login?: LoginFacts
+  /** unlockLogin: the login's lock-out state (ActionSql.LoginLock). */
+  readonly lock?: LoginLockFacts
 }
 export interface ActionScriptResult {
   /** Absent with `error`; at most `actionLimits.scriptChars` characters. */
@@ -175,7 +182,7 @@ export interface ActionExecuteResult {
 // database_id), so this only stops an obviously wrong request early.
 const systemSchemas: ReadonlySet<string> = new Set(['sys', 'INFORMATION_SCHEMA'])
 const systemDatabases: ReadonlySet<string> = new Set(['master', 'model', 'msdb', 'tempdb'])
-const verbs: Readonly<Record<ObjectAction, string>> = { selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties', disable: 'disabled', enable: 'enabled' }
+const verbs: Readonly<Record<ObjectAction, string>> = { selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties', disable: 'disabled', enable: 'enabled', unlock: 'unlocked' }
 const systemLogin = (ref: ObjectRef) => ref.kind === 'login' && isSystemLoginName(ref.name ?? '')
 /** Why `action` cannot act on `ref` whatever its subtype: a kind that never offers it, or one of SQL Server's own objects
  *  (unless the action serves them, as Properties does). */
@@ -227,13 +234,15 @@ const deleteSchema = z.object({ action: z.literal('delete'), connectionId: z.uui
 const identitySchema = z.object({ id: z.number().int().min(1).max(2_147_483_647), created: z.string().max(23).regex(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}$/) }).strict()
 const loginIdentitySchema = z.object({ sid: z.string().max(loginLimits.sidHex).regex(/^[0-9A-F]{2,172}$/), created: identitySchema.shape.created }).strict()
 const loginStateSchema = z.object({ action: z.enum(['disable', 'enable']), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, loginIdentity: loginIdentitySchema.optional() }).strict()
+const unlockSchema = z.object({ action: z.literal('unlock'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, mode: z.enum(unlockModes), loginIdentity: loginIdentitySchema.optional() }).strict()
 const propertiesSchema = z.object({ action: z.literal('properties'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), changes: changesSchema, identity: identitySchema.optional() }).strict()
 export const actionRequestSchema = z.discriminatedUnion('action', [
   renameSchema,
   deleteSchema,
   propertiesSchema,
   createTableSchema,
-  loginStateSchema
+  loginStateSchema,
+  unlockSchema
 ]).superRefine((request, context) => {
   // A new table is not an object row's action: its target is the database, SQL Server's own included.
   if (request.action !== 'createTable') targetIssues(context, request.target, request.action)

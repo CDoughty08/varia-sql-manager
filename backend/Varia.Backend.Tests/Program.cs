@@ -51,6 +51,7 @@ if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live"
         else if (lane == "--login-actions-live")
         {
             await LoginActionLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
+            await UnlockLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
             Console.WriteLine("Passed " + passed + " focused login action checks.");
         }
         else if (lane == "--explorer-status-live")
@@ -173,6 +174,7 @@ await ScriptingChecks.RunAsync(Check);
 await ActionChecks.RunAsync(Check);
 await SeamChecks.RunAsync(Check);
 await LoginActionChecks.RunAsync(Check);
+await UnlockChecks.RunAsync(Check);
 DatabasePropertiesChecks.Run(Check);
 DesignerChecks.Run(Check);
 await SsisChecks.RunAsync(Check);
@@ -520,6 +522,7 @@ try
     await SeamLiveChecks.RunAsync(Check, service, info, Live, json);
     await LoginListingLiveChecks.RunAsync(Check, service, info, json);
     await LoginActionLiveChecks.RunAsync(Check, service, info, Live, json);
+    await UnlockLiveChecks.RunAsync(Check, service, info, Live, json);
     await DatabasePropertiesLiveChecks.RunAsync(Check, service, info, json);
     await DesignerLiveChecks.RunAsync(Check, service, info, Live("master"), json);
     await SsisLiveChecks.RunAsync(Check, service, info, Live, json);

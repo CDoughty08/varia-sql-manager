@@ -48,6 +48,8 @@ export interface ObjectDialogServiceOptions {
   readonly files: DeliverScriptDeps['files']
   readonly focusEditor?: () => void
   readonly newId?: () => string
+  /** A success notice (Unlock Login's), as the object actions' toast; none without it. */
+  readonly notify?: (message: string) => void
 }
 
 export const dialogMessages = {
@@ -79,6 +81,10 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   }
 
   get current(): OpenObjectDialog | undefined { return this.getSnapshot().open }
+  /** Why OK cannot run for the open dialog's model (its definition's `unavailable`), or undefined. */
+  unavailable(open: OpenObjectDialog | undefined = this.current): string | undefined {
+    return open?.model ? definitionOf(open.dialog).unavailable?.(open.model) : undefined
+  }
 
   /** Opens `dialog` for an Object Explorer node and describes it; refused while another dialog is open. */
   open(dialog: ModalDialogId, node: ExplorerMenuNode): void {
@@ -131,6 +137,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     if (!open || open.phase === 'executing' || open.phase === 'scripting' || open.phase === 'loading' || open.phase === 'confirming') return
     if (open.phase === 'disconnected' || open.phase === 'loadFailed' || !open.model || !open.draft) { this.close(); return }
     const definition = definitionOf(open.dialog)
+    // The frame greys OK and the page says why; Enter must not run it either.
+    if (definition.unavailable?.(open.model)) return
     let built = definition.request(open.target, open.model, open.draft)
     if (!built) { this.close(); return }
     if ('problem' in built) { this.update(open, { error: error('NOT_SUPPORTED', built.problem) }); return }
@@ -151,7 +159,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const value: ActionExecuteResult | undefined = result.ok ? result.value : undefined
     if (value && !value.error) {
       this.publish({})
-      try { definition.afterSuccess({ refreshListing: () => this.refreshListing(open) }) } catch (failure) { onUnexpectedError(failure) }
+      const effects = { refreshListing: () => this.refreshListing(open), notify: (message: string) => this.options.notify?.(message) }
+      try { definition.afterSuccess(effects, { target: open.target, label: open.label }) } catch (failure) { onUnexpectedError(failure) }
       return
     }
     // Steps that completed before a failure or Stop changed the object (a database dropped, then its history step

@@ -590,16 +590,17 @@ try {
   const answer = response => application.evaluate((_electron, value) => { globalThis.loginAnswers.push(value) }, response)
   const promptCount = 0
   const notice = () => toastMessage(toasts(page).last())
-  expect(await menuOf(...logins, 'AppUser')).toEqual(['Script Login as', 'Copy Name', 'Disable', 'Rename', 'Refresh'])
+  // A SQL Server login offers Unlock… whatever its state (only its dialog reads whether it is locked out); other kinds do not.
+  expect(await menuOf(...logins, 'AppUser')).toEqual(['Script Login as', 'Copy Name', 'Disable', 'Unlock…', 'Rename', 'Refresh'])
   await closeMenu()
-  expect(await menuOf(...logins, 'Retired')).toEqual(['Script Login as', 'Copy Name', 'Enable', 'Rename', 'Refresh'])
+  expect(await menuOf(...logins, 'Retired')).toEqual(['Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Refresh'])
   await closeMenu()
   // A Windows group cannot be disabled (SQL Server refuses it), and SQL Server's own logins cannot be changed.
   expect(await menuOf(...logins, 'CONTOSO\\Ops')).toEqual(['Script Login as', 'Copy Name', 'Disable', 'Rename', 'Refresh'])
   expect(await disabled()).toEqual(['Disable'])
   await closeMenu()
-  expect(await menuOf(...logins, '##MS_PolicyTsqlExecutionLogin##')).toEqual(['Script Login as', 'Copy Name', 'Enable', 'Rename', 'Refresh'])
-  expect(await disabled()).toEqual(['Enable', 'Rename'])
+  expect(await menuOf(...logins, '##MS_PolicyTsqlExecutionLogin##')).toEqual(['Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Refresh'])
+  expect(await disabled()).toEqual(['Enable', 'Unlock…', 'Rename'])
   await closeMenu()
   // The palette says why a greyed login verb is greyed for the login selected, in its own words.
   await select(...logins, 'CONTOSO\\Ops')
@@ -617,10 +618,12 @@ try {
   expect((await prompts()).at(-1)).toEqual({ title: 'Disable Login', message: 'Disable the login AppUser?', buttons: ['Disable', 'Cancel'], defaultId: 0, cancelId: 1,
     detail: 'New connections will be refused. 2 sessions connected as this login stay connected until they end; Activity Monitor can end them.' })
   await expect(notice()).toHaveText('Disabled the login AppUser. Its 2 open sessions stay connected.')
-  expect((await stubCalls('actions.execute')).at(-1)).toEqual({ action: 'disable', connectionId: expect.any(String), requestId: expect.any(String), target: { kind: 'login', name: 'AppUser' } })
+  // Bound to the login whose facts the prompt was about (its SID and creation time).
+  expect((await stubCalls('actions.execute')).at(-1)).toEqual({ action: 'disable', connectionId: expect.any(String), requestId: expect.any(String), target: { kind: 'login', name: 'AppUser' },
+    loginIdentity: { sid: '01', created: '2026-01-02T03:04:05.000' } })
   await expect(async () => {
     if (await explorerMenu().count()) await closeMenu()
-    expect(await menuOf(...logins, 'AppUser')).toEqual(['Script Login as', 'Copy Name', 'Enable', 'Rename', 'Refresh'])
+    expect(await menuOf(...logins, 'AppUser')).toEqual(['Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Refresh'])
   }).toPass()
   // Enable runs at once; the notice says the login still may not connect while its CONNECT SQL is denied.
   await closeMenu()
@@ -645,6 +648,33 @@ try {
   await expect.poll(() => application.evaluate(() => globalThis.variaStub.cancels)).toContain(heldId)
   await expect(status).not.toContainText('Disabling')
   await expect(commandBanner()).toHaveCount(0)
+  // Unlock… (D4d): a modal over the login's lock-out state. Locked is locked out, and OK unlocks it keeping its password, bound
+  // to the login the dialog read; a notice says its password history was cleared. AppUser is not locked out: OK is greyed.
+  const unlockDialog = name => page.getByRole('dialog', { name: `Unlock Login - ${name}`, exact: true })
+  await menuOf(...logins, 'Locked')
+  await explorerMenu().getByRole('menuitem', { name: 'Unlock…', exact: true }).click(fast)
+  await expect(objectDialogProgress(unlockDialog('Locked'))).toHaveText('Ready')
+  const how = unlockDialog('Locked').getByRole('radiogroup', { name: 'How to unlock', exact: true })
+  await expect(how.getByRole('radio', { name: 'Keep the current password', exact: true })).toBeChecked()
+  await expect(unlockDialog('Locked')).toContainText('Locked out since 2026-11-02 21:07:12 (server time) after 10 failed sign-ins.')
+  await expect(how).toContainText("This clears the login's password history.")
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-unlock-dark.png') })
+  await unlockDialog('Locked').getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(unlockDialog('Locked')).toHaveCount(0)
+  await expect(notice()).toHaveText('Unlocked the login Locked. Its password history was cleared.')
+  expect((await stubCalls('actions.execute')).at(-1)).toEqual({ action: 'unlock', connectionId: expect.any(String), requestId: expect.any(String), target: { kind: 'login', name: 'Locked' },
+    mode: 'keepPassword', loginIdentity: { sid: '01', created: '2026-01-02T03:04:05.000' } })
+  const unlocks = (await stubCalls('actions.execute')).length
+  await menuOf(...logins, 'AppUser')
+  await explorerMenu().getByRole('menuitem', { name: 'Unlock…', exact: true }).click(fast)
+  await expect(objectDialogProgress(unlockDialog('AppUser'))).toHaveText('Ready')
+  await expect(unlockDialog('AppUser')).toContainText('This login is not locked out.')
+  await expect(unlockDialog('AppUser').getByRole('button', { name: 'OK', exact: true })).toBeDisabled()
+  await expect(unlockDialog('AppUser').getByRole('button', { name: 'Script', exact: true })).toBeEnabled()
+  await page.keyboard.press('Enter')
+  await unlockDialog('AppUser').getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(unlockDialog('AppUser')).toHaveCount(0)
+  expect((await stubCalls('actions.execute')).length).toBe(unlocks)
   // Rename: F2 on a login; a name in SQL Server's own form keeps the box with the reason, which Escape takes away with the box.
   await select(...logins, 'AppUser')
   await page.keyboard.press('F2')
@@ -673,7 +703,7 @@ try {
   await expect(commandBanner()).toHaveCount(0)
   await page.screenshot({ path: resolve('artifacts', 'object-actions-logins-dark.png') })
   await application.evaluate(({ dialog }) => { dialog.showMessageBox = globalThis.previousShowMessageBox })
-  console.log('Object action checks: a login\'s menu offers Disable or Enable by its state and greys what its kind refuses; Disable asks, Enable does not, the palette says why a group\'s Disable is greyed, the own login is refused first, Stop reaches a waiting Disable, and Rename refuses a ##…## name and a SQL login\'s backslash, the message leaving with the box.')
+  console.log('Object action checks: a login\'s menu offers Disable or Enable by its state and greys what its kind refuses; Disable asks, Enable does not, the palette says why a group\'s Disable is greyed, the own login is refused first, Stop reaches a waiting Disable, Unlock… unlocks a locked-out login keeping its password and greys OK for one that is not, and Rename refuses a ##…## name and a SQL login\'s backslash, the message leaving with the box.')
 
   // 6. A database: SSMS's two options (backup history checked, Close existing connections not), then a lost server
   // leaves only Close. Databases has just reloaded after Database Properties' Apply, so the press repeats until its row's menu opens.

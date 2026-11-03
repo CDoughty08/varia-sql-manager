@@ -7,7 +7,7 @@ import {
 } from './catalog.ts'
 import { actionPromptBox, actionPrompts, promptLimits, type ActionPromptRequest } from './prompts.ts'
 import { compatibilityLabel, compatibilityLevels, databaseOptionDefs, noScriptNotice, openConnectionsPrompt, ownerNotOn, scopedConfigurationDefs, type DatabaseOptionDef } from './database.ts'
-import { loginGreyedMessage, loginLimits, loginMessages, loginRules, loginSubtypes, loginTypeSubtypes, loginVerbs, ownLoginRefuses, saPrincipalId } from './logins.ts'
+import { loginGreyedMessage, loginLimits, loginLockProperties, loginMessages, loginRules, loginSubtypes, loginTypeSubtypes, loginVerbs, ownLoginRefuses, saPrincipalId } from './logins.ts'
 import { designerEngines } from '../designer/catalog.ts'
 
 const cell = (value: string) => value.replaceAll('|', '\\|')
@@ -326,8 +326,9 @@ function loginDocs(): string[] {
     `Object Explorer gives each login a subtype from \`sys.server_principals\`: \`sa\` by principal_id ${saPrincipalId} whatever its name, \`system\``,
     'for SQL Server\'s own logins (a name that starts and ends with `##`), else by type: ' + types.map(([type, subtype]) => `${code(type)} ${code(subtype)}`).join(', ') + '.',
     'The backend\'s login preflight reads the facts an action needs in the action\'s own connection from catalog views only:',
-    'never `LOGINPROPERTY`, which waits on a login another session is changing, and never a password hash, which no Varia',
-    'statement may name. Delete, Unlock and Properties arrive in later versions; their rules are data already.',
+    'never a password hash, which no Varia statement may name, and `LOGINPROPERTY`, which waits on a login another session',
+    'is changing whatever the isolation level, only in Unlock\'s lock-out read below. Delete and Properties arrive in later',
+    'versions; their rules are data already.',
     '',
     '### Disable, Enable and Rename',
     '',
@@ -365,6 +366,33 @@ function loginDocs(): string[] {
     'collation finds by the name the catalog holds, and the statement names exactly that principal, so no other spelling',
     '(a trailing space, a fullwidth `＃`) reaches one of them. A greyed verb\'s reason (a Windows group\'s Disable, SQL',
     'Server\'s own logins) is its hint in the command palette.',
+    '',
+    '### Unlock',
+    '',
+    'SSMS unlocks a SQL Server login only on Login Properties › Status, and only with a new password. Varia adds Unlock… to a',
+    'SQL Server login\'s menu (after Disable or Enable, access key U), a modal that keeps the current password, as Microsoft',
+    'documents: it turns the password policy off, which unlocks the login, and back on, with password expiration when the login',
+    'had it, in one transaction, so a failure or Stop rolls both back. This clears the login\'s password history, which the',
+    'dialog says. Setting a new password instead, SSMS\'s way and then the dialog\'s default, arrives with Login Properties.',
+    '',
+    'Only `LOGINPROPERTY` knows whether a login is locked out, so the listing offers Unlock… on every SQL Server login and the',
+    'dialog says. Its describe (`unlockLogin`) and its preflight read the login\'s facts and then its lock-out state with',
+    '`ActionSql.LoginLock`, the only Varia statement that may call `LOGINPROPERTY`: of the login the preflight found, and only',
+    'for ' + loginLockProperties.map(code).join(', ') + ', which its own lint checks. Behind another session\'s open',
+    'change to the login the describe gives up after the read lock timeout (`BLOCKED`); the preflight waits, as the statements',
+    'after it would, until Stop. OK is greyed, with the reason on the page, for a login that does not enforce the password',
+    `policy ("${loginMessages.unlockNoPolicy}"), one that must change its password at its next sign-in, whose policy SQL Server`,
+    `will not turn off (15128: "${loginMessages.unlockMustChange}"), and one that is not locked out ("${loginMessages.notLocked}"),`,
+    'which the preflight checks again before any statement. Script Action still writes the transaction for a login that is',
+    'not locked out now. On success Object Explorer reloads the Logins folder and a notice says "Unlocked the login app_user.',
+    'Its password history was cleared."',
+    '',
+    table(['Step', 'As Script Action writes it'], [
+      ['Turn off the password policy', '`ALTER LOGIN [login] WITH CHECK_POLICY = OFF;`'],
+      ['Turn the password policy back on', '`ALTER LOGIN [login] WITH CHECK_POLICY = ON;`'],
+      ['Turn the password policy and expiration back on', '`ALTER LOGIN [login] WITH CHECK_POLICY = ON, CHECK_EXPIRATION = ON;` (when expiration was on)'],
+      ['Commit', 'the batch is `SET XACT_ABORT ON; BEGIN TRANSACTION;`, both statements, then `COMMIT TRANSACTION;`']
+    ]),
     '',
     '✓ allowed, ○ shown greyed and refused, – not offered.',
     '',
