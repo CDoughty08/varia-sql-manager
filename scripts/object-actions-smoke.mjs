@@ -1227,15 +1227,9 @@ try {
   await expect(explorerTree(page).getByRole('treeitem', { name: /^AppData\b.*Offline/ })).toHaveCount(0)
   console.log('Object action checks: Tasks › Take Offline lists the sessions and open transactions, holds OK until Drop All Active Connections or Check Again, scripts SET OFFLINE, Stops a wait and stays open on Success; Bring Online runs as it opens.')
 
-  // A database row's menu item. Databases may have just reloaded (after Database Properties' Apply, or a Delete), so the press
-  // repeats until its row's menu opens.
-  const databaseItem = async (path, item) => {
-    await expect(async () => {
-      await (await revealExplorerRow(page, ...path)).click({ button: 'right', force: true })
-      await expect(explorerMenu()).toBeVisible({ timeout: 1000 })
-    }).toPass()
-    await explorerMenu().getByRole('menuitem', { name: item, exact: true }).click(fast)
-  }
+  // A database row's menu item. Databases may have just reloaded (after Database Properties' Apply, or a Delete), so the
+  // helper presses until its row's own menu opens.
+  const databaseItem = (path, item) => chooseExplorerMenuItem(page, path, item)
 
   // 6a. D3d: offline Archive's Delete Object says that its files stay on disk and counts the query window on it. Deleting it
   // drops it from Databases, a toast counts that window, and its Properties document turns orphan with only Close.
