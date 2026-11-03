@@ -2,7 +2,7 @@
 
 <!-- Generated from src/shared/actions/catalog.ts. Regenerate with: npx vitest run tests/object-actions-catalog.test.ts -u -->
 
-Object Explorer's actions on objects: Select Top 1000 Rows, Rename, Delete and Properties. Which kinds and subtypes offer each is
+Object Explorer's actions on objects: Select Top 1000 Rows, Rename, Delete and Properties, and the Databases folder's Attach. Which kinds, subtypes and folders offer each is
 data in `src/shared/actions/catalog.ts`; the backend embeds the same data as `backend/Varia.Backend/Actions/actions-catalog.json`
 and re-derives the subtype in the action's own connection before any DDL runs.
 
@@ -14,6 +14,7 @@ and re-derives the subtype in the action's own connection before any DDL runs.
 | `rename` | Rename | `explorer.rename` | inline | `explorer.context` | `7_edit` 1 | m | F2 | F2 | SQL Server, Managed Instance | `explorerActionRename` |
 | `delete` | Delete | `explorer.delete` | dialog (`deleteObject`) | `explorer.context` | `7_edit` 2 | e | Delete | ⌘⌫, Delete | SQL Server, Managed Instance | `explorerActionDelete` |
 | `properties` | Properties | `explorer.properties` | dialog (`databaseProperties`) | `explorer.context` | `9_properties` 1 | p | — | ⌘I | SQL Server, Managed Instance | `explorerActionProperties` |
+| `attach` | Attach… | `explorer.attachDatabase` | dialog (`attachDatabase`) | `explorer.context` | `0_new` 2 | a | — | — | SQL Server | `explorerActionAttach` |
 
 "Servers" is each action's `engines`: SQL Server is the box editions, Managed Instance is EngineEdition 8, and Azure SQL
 Database stands for the cloud editions. The backend refuses an action elsewhere with `NOT_SUPPORTED` before it opens a
@@ -46,6 +47,15 @@ is reserved on Windows and Linux.
 | `function` | none, `inline`, `tableValued`, `clrTableValued`, `scalar`, `clrScalar` | – | ✓ | ✓ | – |
 | `function` | `aggregate` | – | ✓ | ○ | – |
 
+## Folder actions
+
+These are offered on an Object Explorer folder instead of object rows; their target is the folder's server (`{ kind: 'server' }`),
+and the backend refuses any other target.
+
+| Action | Folder | Servers |
+| --- | --- | --- |
+| Attach Database… | `databases` | SQL Server |
+
 ## Menus, statuses, database states and servers
 
 An action's item goes in `explorer.context`, `explorer.tasks`, `explorer.tasks.restore`: Object Explorer's menu, or its Tasks submenus. Tasks (`explorer.tasks`) and Tasks › Restore (`explorer.tasks.restore`) stay hidden while nothing is placed in them, so they appear with their first action.
@@ -68,6 +78,7 @@ the Servers column above says which, and on another server the menu hides the it
 | `deleteObject` | Delete Object | Modal dialog | `delete` | General (`settings-gear`) | No |
 | `databaseProperties` | Database Properties - <name> | Document tab | `properties` | General (`settings-gear`), Files (`settings-gear`), Filegroups (`settings-gear`), Options (`settings-gear`) | No |
 | `newDatabase` | New Database | Document tab | `createDatabase` | General (`settings-gear`), Options (`settings-gear`), Filegroups (`settings-gear`) | No |
+| `attachDatabase` | Attach Databases | Modal dialog | `attach` | General (`settings-gear`) | No |
 
 A modal dialog is for a confirmation (Delete Object). A property sheet opens as a document tab instead (U1 D2): its
 pages are sections in one scrolling column with a section list beside it, and a Script drawer under it.
@@ -156,7 +167,7 @@ last resort.
 | `backup` | A backup |
 | `shrink` | A shrink |
 
-Create Catalog and New Database are the long runs so far; the others are reserved for the actions that will use them.
+Create Catalog, New Database and Attach Databases are the long runs so far; the others are reserved for the actions that will use them.
 
 A short state action (a rename; later a login's Disable and Enable) runs as a status-bar job instead: one per node,
 shown with Stop after `statusDelayMs`, naming its step when it has several ("Renaming Sales to Sales2: Closing
@@ -347,6 +358,46 @@ that does (from SQL Server 2017, through `sys.dm_os_file_exists`), FILESTREAM wh
 with the table designer's OPENJSON rules (`JsonBuilderLint`): every column a number or `nvarchar(max)`, text only inside
 `QUOTENAME` (or the quoted-literal form), and JSON columns only into the arrays it shreds again.
 
+## Attach Databases
+
+Databases › Attach… opens Attach Databases, a modal dialog, on SQL Server's box editions only (Managed Instance and Azure SQL
+Database have no attach). It opens with the server's logins for Owner and its default data folder; Add… opens the server
+file picker (Locate Database Files, Database Data Files(*.mdf)), then `actions.describe` with `attachDatabase` and `attach: { mdf }`
+reads the file with `DBCC CHECKPRIMARYFILE (@mdf, 0)`, `(@mdf, 2)` and `(@mdf, 3)`: whether it is a primary data file, its
+database's name and version, and the files it records (a log by status 0x40). The path is a bound parameter; nothing
+is built as text, and the result sets are read in the backend. Each recorded file on the server's own disks is checked as
+the picker checks a path (`sys.dm_os_file_exists`, or `xp_fileexist` on SQL Server 2016, which answers only sysadmin); a
+share or device path the file records is never probed, since SQL Server's service account would sign in to that host, so
+its existence is unknown until the user checks it or OK runs. The .mdf's own row takes the path that was added. A file
+that is in use (an attached database's) cannot be read, and the error says so. A database newer than the server (its
+version above master's, `DATABASEPROPERTYEX(N'master', 'Version')`, the catalog lint's one exception) is refused with
+`NOT_SUPPORTED`: SQL Server's own refusal, 948, is severity 20 and ends the session. Add's read waits on the file system,
+so it takes the picker's gate, not the describe gates.
+
+Each database row has Attach As (its database name by default), Owner (`<default>`: the attaching login), Status and
+Message; its details list Original File Name, File Type, Current File Path (typed, or chosen with "…", and checked again
+on Enter or when the field is left) and Message ("Not found"). OK is disabled while a data file is not found or a typed
+one is not yet checked, and while Add… reads a file or a path is checked. Remove takes a log file out: with every log file
+removed, SQL Server rebuilds the log (`FOR ATTACH_REBUILD_LOG`), which breaks the log backup chain, needs the database to
+have been shut down cleanly, and needs every data file.
+
+OK first checks, in the action's connection, that no database has the name, that the owner's login exists, that the login
+may create databases, that master's compatibility level is 130 or more (OPENJSON), and that the primary file is not newer
+than the server (its version read again). Then, per database, "Attach the
+database" (`CREATE DATABASE [name] ON ( FILENAME = N'…' ), … FOR ATTACH`, or `FOR ATTACH_REBUILD_LOG`), and with an owner
+"Set the database owner" (`ALTER AUTHORIZATION ON DATABASE::[name] TO [login]` in the database, as Database Properties
+writes it; SSMS uses the deprecated `sp_changedbowner`). SQL Server builds the CREATE DATABASE from two parameters:
+the name, through `QUOTENAME`, and one JSON array of paths, each quoted on the server (`REPLACE` of `'` in a binary collation), joined in order
+without `STRING_AGG` (SQL Server 2016), and the keyword chosen from two constant batches. When a later step fails or Stop
+ends one, "Detach the database again" (`sp_detach_db` with `@skipchecks = 'true'`) undoes each attach this OK made
+(and one Stop reached after SQL Server finished it, found by its name and primary file),
+newest first, so its row reads Rolled Back, as SSMS's does. Script Action writes the same statements and runs nothing.
+An attach is a long run: while it runs, closing the window, disconnecting its server and Restart SQL Backend are refused.
+
+Its labels (Databases to attach, MDF File Location, Database Name, Attach As, Owner, Status, Message, Add…, Remove,
+"<name>" database details, Original File Name, File Type, Current File Path, Not found) are SSMS's as recalled, not yet
+checked against SSMS 22.
+
 ## SQL
 
 DDL runs on its own unpooled connection (the program name plus " - Object Actions"), never Object Explorer's or
@@ -462,6 +513,7 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `DEPENDENTS` | No |
 | `NAME_IN_USE` | No |
 | `PATH_NOT_FOUND` | No |
+| `FILE_ACCESS` | Yes |
 | `DATABASE_UNAVAILABLE` | Yes |
 | `TIMEOUT` | Yes |
 | `CONNECTION_LOST` | Yes |
@@ -504,6 +556,8 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `browseEntries` | 2,000 | Entries the server file picker lists per folder; more set `truncated` |
 | `browseMs` | 10,000 | The backend's budget for one listing of the server file picker, in ms; then `TIMEOUT` (main's deadline is 15 s) |
 | `browsePerConnection` | 1 | Server file picker listings at once per server, under a gate of their own rather than the describe and script gates |
+| `attachDatabases` | 16 | Databases one Attach Databases OK attaches |
+| `attachFiles` | 1,000 | Files one database to attach lists (a primary file that records more is refused) |
 | `cleanupMs` | 10,000 | How long an action's compensation and cleanup steps may run after a failure or Stop, in ms, unless the action sets its own; a Stop's reply waits `stopGraceMs` plus this |
 | `progressEventMs` | 250 | How often a long step's progress (SQL Server's message 3211, from `STATS`) may reach main as a droppable `action.progress` EVENT, at most, in ms |
 | `progressPerSecond` | 4 | Progress updates main pushes to the window per request each second, at most; the first of each step always goes |

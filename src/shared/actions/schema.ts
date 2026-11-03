@@ -19,8 +19,13 @@ import { createTableSchema, type CreateTableRequest, type TableDesignerModel } f
 export const describeIds = [...dialogIds, ...designerDescribeIds, serverFilesDescribeId] as const
 export type DescribeId = typeof describeIds[number]
 
-/** `files` only with `serverFiles`, whose target is the server. */
-export interface ActionDescribeRequest { readonly connectionId: string; readonly requestId: string; readonly dialog: DescribeId; readonly target: ObjectRef; readonly files?: ServerFilesRequest }
+/** Attach Databases' Add: the primary data file (.mdf) the backend reads with DBCC CHECKPRIMARYFILE, its path bound as a parameter. */
+export interface AttachDescribeRequest { readonly mdf: string }
+/** `files` only with `serverFiles`, whose target is the server; `attach` only with `attachDatabase` (without it, the describe
+ *  answers the server's facts the dialog opens with). */
+export interface ActionDescribeRequest {
+  readonly connectionId: string; readonly requestId: string; readonly dialog: DescribeId; readonly target: ObjectRef; readonly files?: ServerFilesRequest; readonly attach?: AttachDescribeRequest
+}
 export interface RenameRequest { readonly action: 'rename'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly newName: string }
 /** `closeConnections` (SET SINGLE_USER WITH ROLLBACK IMMEDIATE first) and `deleteHistory` apply to databases only. */
 export interface DeleteRequest {
@@ -47,8 +52,16 @@ export interface PropertiesRequest {
 export interface CreateDatabaseRequest {
   readonly action: 'createDatabase'; readonly connectionId: string; readonly requestId: string; readonly target: { readonly kind: 'database'; readonly name: string }; readonly design: NewDatabaseDesign
 }
+/**
+ * One database Attach Databases attaches: Attach As, its owner (absent: the attaching login, SSMS's <default>), every file to
+ * attach as the server finds it (the primary data file first), and whether SQL Server rebuilds the log, which `files` then
+ * leaves out (FOR ATTACH_REBUILD_LOG).
+ */
+export interface AttachDatabaseSpec { readonly name: string; readonly owner?: string; readonly files: readonly string[]; readonly rebuildLog: boolean }
+/** Attach Databases' OK and Script: the server as the target, and at most `actionLimits.attachDatabases` databases. */
+export interface AttachRequest { readonly action: 'attach'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly databases: readonly AttachDatabaseSpec[] }
 /** One action: actions.script returns its script, actions.execute runs it. */
-export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | CreateDatabaseRequest
+export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | CreateDatabaseRequest | AttachRequest
 export interface ActionCancelRequest { readonly requestIds: readonly string[] }
 
 export interface ActionError { readonly code: ActionErrorCode; readonly message: string; readonly retryable: boolean }
@@ -133,10 +146,21 @@ export interface DatabasePropertiesModel {
   /** Why nothing can change: a snapshot, a database that is not online or not accessible, or Managed Instance. */
   readonly readOnlyReason?: string
 }
+/** What Attach Databases opens with: the logins its Owner lists (at most `actionLimits.logins`), the server's path separator,
+ *  and its default data folder, where Add's picker starts. */
+export interface AttachServerFacts { readonly logins: readonly string[]; readonly loginsTruncated: boolean; readonly separator: '\\' | '/'; readonly dataPath?: string }
+/** A file of a detached database, as its primary file records it (DBCC CHECKPRIMARYFILE option 3): its path then, its type
+ *  (a log by status 0x40), where it is now (the .mdf as added; the others where they were), and whether the server finds a
+ *  file there (absent: SQL Server 2016 does not tell a login outside sysadmin). */
+export interface AttachFileInfo { readonly original: string; readonly type: 'data' | 'log'; readonly current: string; readonly found?: boolean }
+/** Add's answer for one .mdf (DBCC CHECKPRIMARYFILE options 0, 2 and 3): its database's name and version, and its files. */
+export interface AttachDatabaseInfo { readonly mdf: string; readonly databaseName: string; readonly version?: number; readonly files: readonly AttachFileInfo[] }
+export interface AttachDescribeModel { readonly server: AttachServerFacts; readonly database?: AttachDatabaseInfo }
 export interface ActionDescribeResult {
   readonly deleteTarget?: DeleteTarget; readonly elapsedMs: number; readonly error?: ActionError; readonly databaseProperties?: DatabasePropertiesModel; readonly tableDesigner?: TableDesignerModel
   readonly serverFiles?: ServerFilesListing
   readonly newDatabase?: NewDatabaseModel
+  readonly attachDatabase?: AttachDescribeModel
 }
 export interface ActionScriptResult {
   /** Absent with `error`; at most `actionLimits.scriptChars` characters. */
@@ -174,10 +198,11 @@ export interface ActionExecuteResult {
 // database_id), so this only stops an obviously wrong request early.
 const systemSchemas: ReadonlySet<string> = new Set(['sys', 'INFORMATION_SCHEMA'])
 const systemDatabases: ReadonlySet<string> = new Set(['master', 'model', 'msdb', 'tempdb'])
-const verbs: Readonly<Record<ObjectAction, string>> = { selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties' }
+const verbs: Readonly<Record<ObjectAction, string>> = { selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties', attach: 'attached' }
 /** Why `action` cannot act on `ref` whatever its subtype: a kind that never offers it, or one of SQL Server's own objects
- *  (unless the action serves them, as Properties does). */
+ *  (unless the action serves them, as Properties does). A folder's action (Attach) acts on the server alone. */
 export function actionTargetProblems(ref: ObjectRef, action: ObjectAction): string[] {
+  if (objectActionSpecs[action].folder) return ref.kind === 'server' && Object.keys(ref).length === 1 ? [] : [`${objectActionSpecs[action].title.replace('…', '')} acts on a server.`]
   if (!actionOffered(ref.kind, action)) return [`A ${ref.kind} cannot be ${verbs[action]}.`]
   if (objectActionSpecs[action].systemObjects) return []
   if (ref.kind === 'database' ? systemDatabases.has(ref.name ?? '') : ref.schema !== undefined && systemSchemas.has(ref.schema)) return ['System objects cannot be changed.']
@@ -193,9 +218,13 @@ export const serverFilesRequestSchema = z.object({ purpose: z.enum(serverFilePur
   .refine(files => !(files.purpose === 'folder' && files.allFiles), 'A folder picker lists folders only.')
   .refine(files => !(files.exists && (files.path === undefined || files.allFiles !== undefined)), 'A check names one path, with no type filter.') satisfies z.ZodType<ServerFilesRequest>
 
-export const actionDescribeSchema = z.object({ connectionId: z.uuid(), requestId: z.uuid(), dialog: z.enum(describeIds), target: objectRefSchema, files: serverFilesRequestSchema.optional() }).strict()
+export const attachDescribeSchema = z.object({ mdf: serverPathSchema }).strict() satisfies z.ZodType<AttachDescribeRequest>
+export const actionDescribeSchema = z.object({
+  connectionId: z.uuid(), requestId: z.uuid(), dialog: z.enum(describeIds), target: objectRefSchema, files: serverFilesRequestSchema.optional(), attach: attachDescribeSchema.optional()
+}).strict()
   .superRefine((request, context) => {
     if ((request.dialog === serverFilesDescribeId) !== (request.files !== undefined)) issue(context, 'files', 'Only the server file picker lists files, and it needs what to list.')
+    if (request.attach !== undefined && request.dialog !== 'attachDatabase') issue(context, 'attach', 'Only Attach Databases reads a primary data file.')
     switch (request.dialog) {
       case serverFilesDescribeId:
         if (request.target.kind !== 'server') issue(context, 'target', 'The server file picker lists folders on the server.')
@@ -252,12 +281,26 @@ export const newDatabaseDesignSchema = z.object({
 const createDatabaseSchema = z.object({
   action: z.literal('createDatabase'), connectionId: z.uuid(), requestId: z.uuid(), target: z.object({ kind: z.literal('database'), name: ident }).strict(), design: newDatabaseDesignSchema
 }).strict()
+export const attachDatabaseSchema = z.object({
+  name: ident, owner: ident.optional(), files: z.array(serverPathSchema).min(1).max(actionLimits.attachFiles), rebuildLog: z.boolean()
+}).strict() satisfies z.ZodType<AttachDatabaseSpec>
+const attachSchema = z.object({
+  action: z.literal('attach'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, databases: z.array(attachDatabaseSchema).min(1).max(actionLimits.attachDatabases)
+}).strict()
+/** Why an attach's databases cannot run as listed (C#: ActionService.Validate's attach case): a name twice, or a file twice in one database. */
+export function attachProblems(databases: readonly AttachDatabaseSpec[]): string[] {
+  const problems: string[] = []
+  if (new Set(databases.map(database => database.name)).size !== databases.length) problems.push('Two databases cannot be attached as the same name.')
+  if (databases.some(database => new Set(database.files).size !== database.files.length)) problems.push('A database lists the same file twice.')
+  return problems
+}
 export const actionRequestSchema = z.discriminatedUnion('action', [
   renameSchema,
   deleteSchema,
   propertiesSchema,
   createTableSchema,
-  createDatabaseSchema
+  createDatabaseSchema,
+  attachSchema
 ]).superRefine((request, context) => {
   // A new table and a new database are not an object row's action: their target is the database they go in, or make.
   if (request.action !== 'createTable' && request.action !== 'createDatabase') targetIssues(context, request.target, request.action)
@@ -278,6 +321,9 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
       if (request.closeConnections && !exclusiveChange(request.changes)) issue(context, 'closeConnections', 'No change needs other connections closed.')
       break
     }
+    case 'attach':
+      for (const message of attachProblems(request.databases)) issue(context, 'databases', message)
+      break
   }
 }) satisfies z.ZodType<ActionRequest>
 /** actions.script: the same requests, never with `secrets` (critic A3). Script never needs a password, so none crosses for it

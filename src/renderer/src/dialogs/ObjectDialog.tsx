@@ -8,7 +8,9 @@ import Icon from '../Icon'
 import StepList from '../kit/StepList'
 import { trapFocus } from '../trap-focus'
 import { dialogEnter } from './dialog-keys'
+import { definitionOf } from './definitions'
 import type { DialogPhase, OpenObjectDialog } from './ObjectDialogService'
+import AttachDatabasePage from './pages/AttachDatabasePage'
 import DeleteObjectPage from './pages/DeleteObjectPage'
 
 /** A page of an object dialog: the open dialog's snapshot, and whether its controls may change now. */
@@ -16,7 +18,8 @@ export interface PageProps { readonly open: OpenObjectDialog; readonly editable:
 /** Each modal dialog's pages, by page id (the definitions in definitions.ts hold the behaviour). Database Properties is a
  *  document instead (src/renderer/src/properties). */
 export const dialogPages: { readonly [D in ModalDialogId]: Readonly<Partial<Record<PageId, ComponentType<PageProps>>>> } = {
-  deleteObject: { general: DeleteObjectPage }
+  deleteObject: { general: DeleteObjectPage },
+  attachDatabase: { general: AttachDatabasePage }
 }
 
 const progressText: Readonly<Record<DialogPhase, string>> = {
@@ -176,6 +179,8 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
   const title = open.title
   const progress = progressText[open.phase]
   const mounted = framePages(spec.pages, open.page, visited)
+  // Why OK cannot run what the page holds (Attach: a data file that is not found), beside OK, which it disables.
+  const blocked = usable && open.draft !== undefined ? definitionOf(open.dialog).blocked?.(open.model!, open.draft) : undefined
   return <div className="modal-backdrop"><form ref={form} className={'connection-modal object-dialog' + (spec.size === 'large' ? ' large' : '') + (tabs ? ' narrow' : '')} role="dialog" aria-modal="true" aria-labelledby="object-dialog-title" noValidate tabIndex={-1}
     onSubmit={event => { event.preventDefault(); void dialogs.ok() }} onKeyDown={keyDown}>
     <div className="connection-heading"><h2 id="object-dialog-title">{title}</h2>
@@ -206,8 +211,8 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
       </div>
     </div>
     <div className="connection-footer">
-      <span />
-      <button className="primary" type="submit" disabled={busy || open.phase === 'loadFailed' || open.phase === 'disconnected'}>OK</button>
+      {blocked ? <span className="object-dialog-blocked" id="object-dialog-blocked">{blocked}</span> : <span />}
+      <button className="primary" type="submit" disabled={busy || !!blocked || open.phase === 'loadFailed' || open.phase === 'disconnected'} aria-describedby={blocked ? 'object-dialog-blocked' : undefined}>OK</button>
       {executing ? <button type="button" onClick={() => dialogs.stop()}>Stop</button> : <button type="button" onClick={close}>{open.phase === 'disconnected' ? 'Close' : 'Cancel'}</button>}
     </div>
   </form></div>

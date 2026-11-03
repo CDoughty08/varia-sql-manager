@@ -29,9 +29,15 @@ internal static class ActionErrors
         ["NAME_IN_USE"] = [2714, 1801, 15335, 1828, 5170],
         // 15007: the login is not valid.
         ["NOT_FOUND"] = [15225, 15007],
-        // 5058: the option cannot be set in this database (SQL Server's own).
+        // 5058: the option cannot be set in this database. (948, a database from a newer SQL Server, is severity 20: it ends the
+        // session, so it is CONNECTION_LOST, and Attach refuses such a database itself before it runs anything.)
         ["NOT_SUPPORTED"] = [5058],
-        ["PERMISSION_DENIED"] = [229, 262, 297, 3701, 15247, 15151],
+        // 5133: a file's folder does not exist (attach).
+        ["PATH_NOT_FOUND"] = [5133],
+        // 5120 and 5123: SQL Server could not open a database file (missing, in use, or denied to its service account).
+        ["FILE_ACCESS"] = [5120, 5123],
+        // 2571: DBCC CHECKPRIMARYFILE (Attach's Add) outside sysadmin.
+        ["PERMISSION_DENIED"] = [229, 262, 297, 3701, 15247, 15151, 2571],
         ["DATABASE_UNAVAILABLE"] = [942, 952, 976, 978, 4060, 916],
         ["CONNECTION_LOST"] = [-1, 2, 53, 64, 121, 233, 10053, 10054, 10060]
     };

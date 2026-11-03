@@ -48,6 +48,7 @@ internal static class NewDatabaseChecks
             ("no design", Create(null)), ("a system database's name", Create(good, "Model")), ("an empty name", Create(good, "")), ("a 129-unit name", Create(good, new string('d', 129))),
             ("a database member", Create(good, target: new ObjectRefDto("database", "master", Name: "Sales"))), ("a schema member", Create(good, target: new ObjectRefDto("database", Schema: "dbo", Name: "Sales"))),
             ("a table target", Create(good, target: new ObjectRefDto("table", "master", "dbo", "T"))), ("a new name", Create(good) with { NewName = "x" }), ("delete options", Create(good) with { CloseConnections = false }),
+            ("Attach's databases", Create(good) with { Databases = [new AttachDatabaseDto("Sales", ["C:\\Data\\Sales.mdf"], false)] }),
             ("no log file", Create(good with { Files = [good.Files[0]] })), ("a log first", Create(good with { Files = [good.Files[1], good.Files[0]] })),
             ("two files named alike", Create(Design(good.Files[1] with { Name = "SALES_LOG", FileName = "x.ldf" }))),
             ("two files at one path", Create(Design(good.Files[1] with { Name = "other", FileName = "SALES_LOG.LDF" }))),

@@ -31,7 +31,7 @@ internal sealed class ActionsCatalog
         return Parse(stream);
     });
 
-    private sealed record ActionJson(string Action, string Class, string Title, List<string> Engines, long CleanupMs, bool? SystemObjects = null, string? Scope = null, bool? Long = null);
+    private sealed record ActionJson(string Action, string Class, string Title, List<string> Engines, long CleanupMs, bool? SystemObjects = null, string? Folder = null, string? Scope = null, bool? Long = null);
     private sealed record DialogJson(string Dialog, string Action, List<string> Pages);
     private sealed record ErrorJson(string Code, bool Retryable);
     private sealed record RowJson(string Kind, string Subtype, List<string> Enabled, List<string> Disabled, string? Status = null);
@@ -102,6 +102,9 @@ internal sealed class ActionsCatalog
 
     /// <summary>The action a dialog's OK runs (deleteObject: delete, databaseProperties: properties).</summary>
     public string ActionOf(string dialog) => dialogActions.TryGetValue(dialog, out var action) ? action : throw new InvalidOperationException("Unknown dialog " + dialog);
+
+    /// <summary>The Object Explorer folder a folder action (Attach: databases) is offered on, whose server is its target; null for an object row's action.</summary>
+    public string? FolderOf(string action) => actions.TryGetValue(action, out var row) ? row.Folder : throw new InvalidOperationException("Unknown object action " + action);
 
     /// <summary>Whether the action is a server action (New Database): no row offers it, and its describe's target is the server.</summary>
     public bool IsServerAction(string action) => serverActions.Contains(action);

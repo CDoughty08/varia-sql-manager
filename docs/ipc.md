@@ -329,7 +329,7 @@ the same connection; describe and script use `LOCK_TIMEOUT 10000`. A lost backen
 renderer reports as an unknown outcome ("Refresh Object Explorer to check"), since main never sends a request twice.
 Failures the user can act on are `result.error` values, not envelope codes: `NOT_FOUND`, `NOT_SUPPORTED` (also every
 action on Azure SQL Database, before any connection opens), `PERMISSION_DENIED`, `IN_USE`, `BLOCKED`, `DEPENDENTS`,
-`NAME_IN_USE`, `PATH_NOT_FOUND` (the server file picker), `DATABASE_UNAVAILABLE`, `TIMEOUT`, `CONNECTION_LOST`, `SQL_ERROR`, `CANCELLED` (Stop), `AUTH_KERBEROS`,
+`NAME_IN_USE`, `PATH_NOT_FOUND` (the server file picker), `FILE_ACCESS` (a database file SQL Server cannot open), `DATABASE_UNAVAILABLE`, `TIMEOUT`, `CONNECTION_LOST`, `SQL_ERROR`, `CANCELLED` (Stop), `AUTH_KERBEROS`,
 `AUTH_UNSUPPORTED` and `AUTH_ENTRA` (docs/object-actions.md). `actions.execute` answers `{ steps: { status: done | failed | skipped |
 cancelled, title, message?, detail?, compensates?, progress? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`: statements run
 in order and stop at the first failure. The backend's DryRun, which selects a statement instead of running it, exists only for
@@ -585,6 +585,25 @@ only once a file-system call returns (about 21 s for an unreachable share), so a
 until then, and the picker runs one listing at a time and cancels those it no longer needs. A missing folder, a file or
 another platform's path is `PATH_NOT_FOUND`; Azure SQL Database and Managed Instance are `NOT_SUPPORTED` before any
 connection opens.
+
+**Attach Databases** adds no method either. Its describe is `{ dialog: 'attachDatabase', target: { kind: 'server' },
+attach?: { mdf } }` (`attach` only with that dialog; `mdf` a server path as above): without `attach` it answers
+`{ attachDatabase: { server: { logins (≤ 1,024), loginsTruncated, separator, dataPath? } } }`, and with it also
+`database: { mdf, databaseName, version?, files: [{ original, type: 'data' | 'log', current, found? }] (≤ 1,000, by file
+id) }`, read with `DBCC CHECKPRIMARYFILE (@mdf, n)` (the path bound, never spliced) and each file checked as the picker's
+`exists` checks one (`found` absent where SQL Server 2016 will not say, and for a share or device path the file records,
+which is never probed). It runs on the picker's gate and the describe budget. A file that is not primary, or a database
+newer than master's version, is `NOT_SUPPORTED`; one SQL Server cannot open is `FILE_ACCESS` (5120, 5123), a login outside
+sysadmin `PERMISSION_DENIED` (2571). Its `actions.script` and `actions.execute` are `{ action: 'attach', target: { kind:
+'server' }, databases: [{ name, owner?, files: path[] (1 – 1,000, none twice), rebuildLog }] (1 – 16, no name twice) }`.
+Execute checks every database first (name free, owner's login present, CREATE ANY DATABASE, master at compatibility level
+130 or more, the primary file no newer than the server), then runs, per
+database, `Attach the database` (a builder batch: SQL Server builds `CREATE DATABASE … FOR ATTACH[_REBUILD_LOG]` from the
+name through `QUOTENAME` and one JSON array of paths, each quoted on the server) and, with an owner, `Set the database
+owner`; each step's `detail` is its database's name. After a failure or Stop, `Detach the database again` steps
+(`compensates: true`) detach, newest first, what this request attached (an attach Stop reached counts when a database of its
+name has its primary file), within the cleanup budget. Attach is a long run:
+the renderer registers it while the request is in flight.
 docs/object-actions.md lists the statements by version.
 
 ## Streams and credits

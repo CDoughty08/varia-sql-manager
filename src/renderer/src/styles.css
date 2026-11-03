@@ -830,6 +830,42 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-dialog-options { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 0; padding: 0; border: 0; }
 .object-dialog-options .checkbox-label { display: flex; align-items: center; gap: 8px; }
 .object-dialog-delete .field-note { margin-top: 10px; }
+.object-dialog-blocked { font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); color: var(--varia-descriptionForeground); overflow-wrap: anywhere; }
+/* Attach Databases: two grids with editable cells; a row is selected when anything in it has focus. */
+.attach-database { display: flex; flex-direction: column; gap: var(--varia-space-1); min-width: 0; }
+.attach-database > .object-dialog-caption:not(:first-child) { margin-top: var(--varia-space-2); }
+.attach-database-table { max-width: 100%; max-height: 220px; overflow: auto; }
+.attach-database-grid td:has(> .attach-database-cell), .attach-database-grid td:has(> .attach-database-path) { padding: 1px; }
+.attach-database-grid tr[data-selected] > td { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
+/* While the grid has focus its selected row (which Remove acts on) takes the active selection, as a focused list's does. */
+.attach-database-grid:focus-within tr[data-selected] > td { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); }
+.attach-database-grid .attach-col-path { width: 34%; }
+.attach-database-grid .attach-col-status { width: 12%; }
+.attach-database-grid .attach-col-type { width: 10%; }
+/* Inside the grids, so it outranks the modal's select height and Owner lines up with Attach As. */
+.attach-database-grid .attach-database-cell { box-sizing: border-box; width: 100%; min-width: 0; height: var(--varia-row); font-size: var(--varia-size-xs); }
+.attach-database-path { display: flex; gap: var(--varia-space-0); min-width: 0; }
+.attach-database-path > .attach-database-cell { flex: 1; }
+.attach-database-cell[aria-invalid="true"] { border-color: var(--varia-errorForeground); }
+/* A path keeps its file name: only the folder gives way (a fraction of a pixel taken from the name would cut it with an ellipsis), unless the name alone is too long. */
+.attach-path { display: flex; min-width: 0; }
+.attach-path-folder, .attach-path-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attach-path-folder { flex: 0 1000 auto; }
+.attach-path-name { flex: 0 0 auto; max-width: 100%; }
+.attach-database-status > [data-icon] { margin-right: var(--varia-space-1); vertical-align: text-bottom; }
+.attach-database-status[data-status="In progress"] > [data-icon] { color: var(--varia-focusBorder); }
+.attach-database-status[data-status="Success"] > [data-icon] { color: var(--varia-successForeground); }
+.attach-database-status[data-status="Error"] > [data-icon] { color: var(--varia-errorForeground); }
+.attach-database-grid:focus-within tr[data-selected] > .attach-database-status > [data-icon] { color: inherit; }
+@media (forced-colors: active) {
+  .attach-database-grid tr[data-selected] > td { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+  .attach-database-grid tr[data-selected] .attach-database-cell, .attach-database-grid tr[data-selected] .property-browse { forced-color-adjust: auto; }
+  .attach-database-cell[aria-invalid="true"] { outline: 2px dashed CanvasText; outline-offset: -2px; }
+}
+.attach-database-empty { color: var(--varia-descriptionForeground); }
+.attach-database-buttons { display: flex; justify-content: flex-end; gap: var(--varia-space-2); }
+.attach-database-buttons > button { min-width: 78px; border-color: var(--varia-button-border); }
+.attach-database-problem { display: flex; align-items: flex-start; gap: var(--varia-space-1); margin: 0; padding: var(--varia-space-1) var(--varia-space-2); border-radius: var(--varia-radius-sm); background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); overflow-wrap: anywhere; font-size: var(--varia-size-xs); }
 /* Create Catalog (S9a): SSMS's options and password, then what the server gets, step by step. */
 .create-catalog-dialog .property-section { display: flex; flex-direction: column; gap: 6px; }
 .create-catalog-dialog .checkbox-label { display: flex; align-items: center; gap: 8px; }

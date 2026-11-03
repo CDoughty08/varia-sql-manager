@@ -221,9 +221,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // A document focuses itself once drawn, unless a dialog, the palette or a menu has focus by then (focusWhenDrawn).
   const focusLater = (focus: () => void) => focusWhenDrawn(nextFrame, focus)
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => focusLater(() => documents.focusActive()) })
-  const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor: () => focusLater(() => documents.focusActive()) })
   const serverFiles = new ServerFilePickerService({ api, connections })
   const longRuns = new LongRunService({ api })
+  const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, serverFiles, longRuns, focusEditor: () => focusLater(() => documents.focusActive()) })
   const ssisCatalog = new CreateCatalogService({ api, connections, explorer, longRuns })
   const designers = new TableDesignerService({
     api, documents, files, connections, explorer,
