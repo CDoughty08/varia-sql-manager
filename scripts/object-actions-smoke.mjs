@@ -1534,6 +1534,7 @@ try {
   // Rename of a database (D3c): F2 reads the database first; another session is using it, so main's prompt asks (the test
   // answers Close Connections and Rename), and the rename closes connections. The tree, a query window on the database and its
   // Database Properties document follow the new name; renaming it back with no session asks nothing.
+  // Billing is a name no database in the stub has (New Database made Sales, and the stub refuses a name in use, as the backend does).
   await chooseExplorerMenuItem(page, appData, 'Properties')
   await expect(documentTab(page, 'Database Properties - AppData')).toHaveCount(1)
   await chooseExplorerMenuItem(page, appData, 'New Query')
@@ -1544,24 +1545,24 @@ try {
   await page.keyboard.press('F2')
   await expect(renameBox(page)).toBeFocused()
   await expect(renameBox(page)).toHaveValue('AppData')
-  await renameBox(page).fill('Sales')
+  await renameBox(page).fill('Billing')
   await page.keyboard.press('Enter')
-  await expect(explorerTree(page).getByRole('treeitem', { name: /^Sales\b/ })).toHaveCount(1)
+  await expect(explorerTree(page).getByRole('treeitem', { name: /^Billing\b/ })).toHaveCount(1)
   expect((await application.evaluate(() => globalThis.variaStub.prompts)).slice(asked)).toEqual([{ title: 'Rename Database', message: '1 connection is using AppData. Close it and rename the database?',
     buttons: ['Close Connections and Rename', 'Rename When Free', 'Cancel'], defaultId: 0, cancelId: 2 }])
   // The rename's describe, then Database Properties reading the database again under its new name.
   expect((await stubCalls('actions.describe')).filter(call => call.dialog === 'renameDatabase').at(-1)).toMatchObject({ target: { kind: 'database', name: 'AppData' } })
-  await expect.poll(async () => (await stubCalls('actions.describe')).at(-1)).toMatchObject({ dialog: 'databaseProperties', target: { kind: 'database', name: 'Sales' } })
+  await expect.poll(async () => (await stubCalls('actions.describe')).at(-1)).toMatchObject({ dialog: 'databaseProperties', target: { kind: 'database', name: 'Billing' } })
   expect((await stubCalls('actions.execute')).at(-1)).toEqual({ action: 'rename', connectionId: expect.any(String), requestId: expect.any(String), target: { kind: 'database', name: 'AppData' },
-    newName: 'Sales', closeConnections: true, identity: { id: 7, created: '2026-01-02T03:04:05.000' } })
+    newName: 'Billing', closeConnections: true, identity: { id: 7, created: '2026-01-02T03:04:05.000' } })
   await expect(explorerTree(page).getByRole('treeitem', { name: /^AppData\b/ })).toHaveCount(0)
-  await expect(queryDatabase(page)).toHaveValue('Sales')
-  await expect(documentTab(page, 'Database Properties - Sales')).toHaveCount(1)
+  await expect(queryDatabase(page)).toHaveValue('Billing')
+  await expect(documentTab(page, 'Database Properties - Billing')).toHaveCount(1)
   await expect(documentTab(page, 'Database Properties - AppData')).toHaveCount(0)
   await page.screenshot({ path: resolve('artifacts', 'object-actions-rename-database-dark.png') })
   // Back to AppData, which no other session uses: no prompt, and MODIFY NAME alone.
   await application.evaluate(() => { globalThis.variaStub.renameSessions = 0 })
-  await select('server-a', 'Databases', 'Sales')
+  await select('server-a', 'Databases', 'Billing')
   await page.keyboard.press('F2')
   await expect(renameBox(page)).toBeFocused()
   await renameBox(page).fill('AppData')
@@ -1569,7 +1570,7 @@ try {
   await expect(explorerTree(page).getByRole('treeitem', { name: /^AppData\b/ })).toHaveCount(1)
   await expect(documentTab(page, 'Database Properties - AppData')).toHaveCount(1)
   await expect(queryDatabase(page)).toHaveValue('AppData')
-  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'rename', target: { kind: 'database', name: 'Sales' }, newName: 'AppData', closeConnections: false })
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'rename', target: { kind: 'database', name: 'Billing' }, newName: 'AppData', closeConnections: false })
   expect((await application.evaluate(() => globalThis.variaStub.prompts)).length).toBe(asked + 1)
   await closeDocumentButton(page, 'Database Properties - AppData').click()
   await expect(documentTab(page, 'Database Properties - AppData')).toHaveCount(0)

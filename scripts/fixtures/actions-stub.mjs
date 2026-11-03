@@ -42,7 +42,9 @@ import { explorerStatics } from './explorer-tree.mjs'
  * Active Connections waits, as on a session that joined after the describe, until its Stop arrives.
  * Detach Database describes AppData with the same sessions and `detachFiles`; detached, it leaves Databases and the result
  * keeps its files, until AppData is put back in `databases` (as if it were attached again) and Databases is refreshed.
- * A database's rename (D3c) reads `renameSessions` other sessions (none at first) and renames it in the listings.
+ * A database's rename (D3c) reads `renameSessions` other sessions (none at first) and renames it in the listings; a name
+ * another database has (ignoring case, as SQL Server's default collation does) is refused with NAME_IN_USE, as the backend's
+ * preflight refuses it, so a suite cannot leave two databases of one name in the tree.
  */
 export function actionsStubData() {
   return { statics: explorerStatics(), serverFiles: stubServerFiles }
@@ -219,7 +221,10 @@ GO
   /** A database's rename: SINGLE_USER, MODIFY NAME and MULTI_USER when it closes connections, MODIFY NAME alone otherwise; the
    *  reply names the database under its new name, with the new create_date SQL Server gives it. */
   function renameDatabase(params) {
-    stub.databases = stub.databases.map(name => name === params.target.name ? params.newName : name)
+    const key = params.newName.toLowerCase()
+    if (stub.databases.some(name => name !== params.target.name && name.toLowerCase() === key))
+      return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NAME_IN_USE', message: `The name ${params.newName} is already in use by another database.`, retryable: false } })
+    stub.databases =stub.databases.map(name => name === params.target.name ? params.newName : name)
     const titles = params.closeConnections ? ['Close existing connections', 'Rename', 'Restore multi-user access'] : ['Rename']
     return ok({ steps: titles.map(title => ({ status: 'done', title })), messages: [`The database name '${params.newName}' has been set.`], elapsedMs: 1,
       identity: { id: 7, created: '2026-01-02T03:04:06.000' } })
