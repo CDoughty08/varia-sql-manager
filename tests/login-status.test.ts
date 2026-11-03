@@ -21,8 +21,8 @@ describe('Logins listing (D4a)', () => {
     expect(loginDetail('S ', { ...none, policyChecked: true, expirationChecked: true })).toBe('SQL Server authentication · Password policy enforced · Password expiration enforced')
     expect(loginDetail('G', { ...none, disabled: true, connectDenied: true })).toBe('Windows group · Disabled · Permission to connect denied')
     expect(loginDetail('U', none)).toBe('Windows user')
-    expect(loginDetail('C', { ...none, connectDenied: true })).toBe('Mapped to a certificate · Permission to connect denied')
-    expect(loginDetail('K', { ...none, disabled: true })).toBe('Mapped to an asymmetric key · Disabled')
+    expect(loginDetail('C', { ...none, connectDenied: true })).toBe('Mapped to certificate · Permission to connect denied')
+    expect(loginDetail('K', { ...none, disabled: true })).toBe('Mapped to asymmetric key · Disabled')
     expect(loginDetail('E', none)).toBe('Microsoft Entra user or application')
     expect(loginDetail('X', none)).toBe('Microsoft Entra group')
     // A server role is not a login: no kind of its own.

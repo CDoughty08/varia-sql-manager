@@ -278,8 +278,8 @@ enforced, and list it while another session holds an uncommitted `ALTER LOGIN â€
 | `S` | `sql` | SQL Server authentication |
 | `U` | `windowsUser` | Windows user |
 | `G` | `windowsGroup` | Windows group |
-| `C` | `certificateMapped` | Mapped to a certificate |
-| `K` | `asymmetricKeyMapped` | Mapped to an asymmetric key |
+| `C` | `certificateMapped` | Mapped to certificate |
+| `K` | `asymmetricKeyMapped` | Mapped to asymmetric key |
 | `E` | `externalUser` | Microsoft Entra user or application |
 | `X` | `externalGroup` | Microsoft Entra group |
 

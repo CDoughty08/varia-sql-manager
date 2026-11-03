@@ -48,7 +48,7 @@ export function loginStatusOf(disabled: boolean, connectDenied: boolean): 'disab
  *  policy, from catalog views only (sys.server_principals, sys.server_permissions and sys.sql_logins). */
 export const loginDetailWords = {
   types: {
-    S: 'SQL Server authentication', U: 'Windows user', G: 'Windows group', C: 'Mapped to a certificate', K: 'Mapped to an asymmetric key',
+    S: 'SQL Server authentication', U: 'Windows user', G: 'Windows group', C: 'Mapped to certificate', K: 'Mapped to asymmetric key',
     E: 'Microsoft Entra user or application', X: 'Microsoft Entra group'
   },
   disabled: 'Disabled',
