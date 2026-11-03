@@ -56,6 +56,7 @@ import { SsisPropertiesService } from '../../src/renderer/src/ssis/SsisPropertie
 import { ssisContribution } from '../../src/renderer/src/contributions/ssis'
 import { DatabasePropertiesService } from '../../src/renderer/src/properties/DatabasePropertiesService'
 import { NewDatabaseService } from '../../src/renderer/src/new-database/NewDatabaseService'
+import { RestoreService } from '../../src/renderer/src/restore/RestoreService'
 import { ActivityMonitorService } from '../../src/renderer/src/activity/ActivityMonitorService'
 import { activityContribution } from '../../src/renderer/src/contributions/activity'
 import { documentOwner } from '../../src/renderer/src/live/LiveService'
@@ -317,6 +318,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const ssisProperties = new SsisPropertiesService({ api, documents, connections })
   const properties = new DatabasePropertiesService({ api, documents, files, connections, explorer, focusEditor, ...(options.timers ? { timers: options.timers } : {}) })
   const newDatabase = new NewDatabaseService({ api, documents, files, connections, explorer, longRuns, focusEditor, ...(options.timers ? { timers: options.timers } : {}) })
+  const restore = new RestoreService({ api, documents, files, connections, focusEditor, now: () => new Date(2026, 9, 30, 12, 0, 0), ...(options.timers ? { timers: options.timers } : {}) })
   // Activity Monitors subscribe through a stand-in for LiveService that records each view.
   const liveViews = fakeLiveViews()
   const activity = new ActivityMonitorService({ documents, connections, live: liveViews, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values })
@@ -406,6 +408,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     ssisProperties,
     properties,
     newDatabase,
+    restore,
     notifications,
     activity,
     operations
@@ -466,6 +469,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     activity.dispose()
     properties.dispose()
     newDatabase.dispose()
+    restore.dispose()
     operations.dispose()
     bookmarks.dispose()
     editorDialogs.dispose()
@@ -501,6 +505,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     ssisProperties,
     properties,
     newDatabase,
+    restore,
     activity,
     liveViews,
     operations,

@@ -29,7 +29,7 @@ describe('server engines', () => {
     // New Database runs only on a SQL Server box: Managed Instance and Azure place files themselves.
     expect((['box', 'managedInstance', 'cloud'] as const).map(engine => actionServes('createDatabase', engine))).toEqual([true, false, false])
     const json = JSON.parse(actionsCatalogJson()) as { version: number; actions: { action: string; engines: string[]; cleanupMs: number }[]; limits: Record<string, number> }
-    expect(json.version).toBe(3)
+    expect(json.version).toBe(4)
     for (const row of json.actions) {
       expect(row.engines, row.action).toEqual([...catalogActionEngines(row.action as CatalogAction)])
       expect(row.cleanupMs, row.action).toBe(actionLimits.cleanupMs)

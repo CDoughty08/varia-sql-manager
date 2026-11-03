@@ -63,6 +63,7 @@ import { SsisPropertiesService } from '../ssis/SsisPropertiesService'
 import { ssisContribution } from '../contributions/ssis'
 import { DatabasePropertiesService } from '../properties/DatabasePropertiesService'
 import { NewDatabaseService } from '../new-database/NewDatabaseService'
+import { RestoreService } from '../restore/RestoreService'
 import { SsisOperationsService } from '../ssis/SsisOperationsService'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
@@ -157,6 +158,8 @@ export interface Workbench extends Disposable {
   readonly properties: DatabasePropertiesService
   /** New Database documents (D1b): their designs, OK as a long run, Script previews and frames. */
   readonly newDatabase: NewDatabaseService
+  /** Restore Database documents (D1e: read and Script; opened only by the test hook until D1f's OK restores). */
+  readonly restore: RestoreService
   /** The Activity Monitors: one per connection, each a live view of its server. */
   readonly activity: ActivityMonitorService
   /** Integration Services Operations (Active Operations, All Executions…): each connection's document, filters and Stop Operation. */
@@ -249,6 +252,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       const name = root?.querySelector<HTMLElement>('[data-new-database-focus]:not(:disabled)')
       ;(name ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
     })
+  })
+  const restore = new RestoreService({
+    api, documents, files, connections, focusEditor: () => focusLater(() => documents.focusActive()),
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-restore="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus())
   })
   const activity = new ActivityMonitorService({
     documents, connections, live, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values,
@@ -351,6 +358,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     ssisProperties,
     properties,
     newDatabase,
+    restore,
     activity,
     operations,
     theme,
@@ -388,6 +396,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       ssisProperties.dispose()
       properties.dispose()
       newDatabase.dispose()
+      restore.dispose()
       documents.dispose()
       backend.dispose()
       explorer.dispose()

@@ -10,6 +10,7 @@ import { actionPromptBox, actionPrompts, promptLimits, type ActionPromptRequest 
 import { compatibilityLabel, compatibilityLevels, databaseOptionDefs, noScriptNotice, openConnectionsPrompt, ownerNotOn, scopedConfigurationDefs, type DatabaseOptionDef } from './database.ts'
 import { loginGreyedMessage, loginLimits, loginMessages, loginRules, loginSubtypes, loginTypeSubtypes, loginVerbs, ownLoginRefuses, saPrincipalId } from './logins.ts'
 import { designerEngines } from '../designer/catalog.ts'
+import { backupSetTypes, backupSetTypeSpecs, plannedSetTypes, restoreDescribeId, restoreLimits, restoreMessages, restoreRecoveryLabels, restoreRecoveryStates, restoreSections, restoreSourceKinds, restoreSystemDatabases, timelineIntervals, timelineIntervalSpecs } from './restore.ts'
 
 const cell = (value: string) => value.replaceAll('|', '\\|')
 const row = (cells: readonly string[]) => '| ' + cells.map(cell).join(' | ') + ' |'
@@ -301,6 +302,7 @@ export function renderObjectActionsDocs(): string {
     ...databasePropertiesDocs(),
     ...newDatabaseDocs(),
     ...attachDocs(),
+    ...restoreDocs(),
     '## SQL',
     '',
     'DDL runs on its own unpooled connection (the program name plus " - Object Actions"), never Object Explorer\'s or',
@@ -368,6 +370,35 @@ export function renderObjectActionsDocs(): string {
   ].join('\n')
 }
 
+const ruleMarks = { allowed: '✓', greyed: '○', hidden: '–' } as const
+const verbDone = { disable: 'disabled', enable: 'enabled', unlock: 'unlocked', rename: 'renamed', delete: 'deleted' } as const
+/** Logins: subtypes, the protected-principal rules and the login limits (src/shared/actions/logins.ts). */
+function loginDocs(): string[] {
+  const types = Object.entries(loginTypeSubtypes)
+  return [
+    '## Logins',
+    '',
+    `Object Explorer gives each login a subtype from \`sys.server_principals\`: \`sa\` by principal_id ${saPrincipalId} whatever its name, \`system\``,
+    'for SQL Server\'s own logins (a name that starts and ends with `##`), else by type: ' + types.map(([type, subtype]) => `${code(type)} ${code(subtype)}`).join(', ') + '.',
+    'The login actions arrive in later versions; their rules are data already, and the backend\'s login preflight reads the',
+    'facts they need in the action\'s own connection from catalog views only: never `LOGINPROPERTY`, which waits on a login',
+    'another session is changing, and never a password hash, which no Varia statement may name.',
+    '',
+    '✓ allowed, ○ shown greyed and refused, – not offered.',
+    '',
+    table(['Subtype', ...loginVerbs.map(verb => verb.charAt(0).toUpperCase() + verb.slice(1)), 'Why greyed'], loginSubtypes.map(subtype => [code(subtype), ...loginVerbs.map(verb => ruleMarks[loginRules[subtype][verb]]),
+      [...new Set(loginVerbs.filter(verb => loginRules[subtype][verb] === 'greyed').map(verb => loginMessages[loginGreyedMessage(subtype, verb)]))].join(' ')])),
+    '',
+    `The login this connection uses, or a Windows group it gets in through, cannot be ${ownLoginRefuses.map(verb => verbDone[verb]).join(', ')}: "${loginMessages.own}"`,
+    `Without ALTER ANY LOGIN: "${loginMessages.alterAnyLogin}" For a sysadmin member without CONTROL SERVER: "${loginMessages.controlServer}"`,
+    '',
+    '### Login limits',
+    '',
+    table(['Limit', 'Value', 'Meaning'], (Object.keys(loginLimitNotes) as (keyof typeof loginLimits)[]).map(key => [code(key), loginLimits[key].toLocaleString('en-US'), loginLimitNotes[key]])),
+    ''
+  ]
+}
+
 /** The server file picker (`actions.describe` with `serverFiles`), which New Database, Attach and Restore will open from a "…" button. */
 function serverFilesDocs(): string[] {
   return [
@@ -396,35 +427,6 @@ function serverFilesDocs(): string[] {
     '',
     'The picker\'s titles, Files of type entries and field names (Select the file, Select the folder, Selected path, Files of',
     'type, File name, Folder name) are SSMS\'s as recalled, not yet checked against SSMS 22.',
-    ''
-  ]
-}
-
-const ruleMarks = { allowed: '✓', greyed: '○', hidden: '–' } as const
-const verbDone = { disable: 'disabled', enable: 'enabled', unlock: 'unlocked', rename: 'renamed', delete: 'deleted' } as const
-/** Logins: subtypes, the protected-principal rules and the login limits (src/shared/actions/logins.ts). */
-function loginDocs(): string[] {
-  const types = Object.entries(loginTypeSubtypes)
-  return [
-    '## Logins',
-    '',
-    `Object Explorer gives each login a subtype from \`sys.server_principals\`: \`sa\` by principal_id ${saPrincipalId} whatever its name, \`system\``,
-    'for SQL Server\'s own logins (a name that starts and ends with `##`), else by type: ' + types.map(([type, subtype]) => `${code(type)} ${code(subtype)}`).join(', ') + '.',
-    'The login actions arrive in later versions; their rules are data already, and the backend\'s login preflight reads the',
-    'facts they need in the action\'s own connection from catalog views only: never `LOGINPROPERTY`, which waits on a login',
-    'another session is changing, and never a password hash, which no Varia statement may name.',
-    '',
-    '✓ allowed, ○ shown greyed and refused, – not offered.',
-    '',
-    table(['Subtype', ...loginVerbs.map(verb => verb.charAt(0).toUpperCase() + verb.slice(1)), 'Why greyed'], loginSubtypes.map(subtype => [code(subtype), ...loginVerbs.map(verb => ruleMarks[loginRules[subtype][verb]]),
-      [...new Set(loginVerbs.filter(verb => loginRules[subtype][verb] === 'greyed').map(verb => loginMessages[loginGreyedMessage(subtype, verb)]))].join(' ')])),
-    '',
-    `The login this connection uses, or a Windows group it gets in through, cannot be ${ownLoginRefuses.map(verb => verbDone[verb]).join(', ')}: "${loginMessages.own}"`,
-    `Without ALTER ANY LOGIN: "${loginMessages.alterAnyLogin}" For a sysadmin member without CONTROL SERVER: "${loginMessages.controlServer}"`,
-    '',
-    '### Login limits',
-    '',
-    table(['Limit', 'Value', 'Meaning'], (Object.keys(loginLimitNotes) as (keyof typeof loginLimits)[]).map(key => [code(key), loginLimits[key].toLocaleString('en-US'), loginLimitNotes[key]])),
     ''
   ]
 }
@@ -607,6 +609,129 @@ function databasePropertiesDocs(): string[] {
     'choosing Yes only after an exclusive change made without closing connections; otherwise (Broker Enabled or Containment',
     'type with other sessions, which SSMS does not close connections for) it advises closing them first. Script never',
     'asks: it always writes WITH NO_WAIT, as SSMS does.',
+    ''
+  ]
+}
+
+const restoreLimitNotes: Readonly<Record<keyof typeof restoreLimits, string>> = {
+  mediaReadMs: 'The backend\'s budget for one restore describe, in ms (LABELONLY and HEADERONLY on a large striped set or a slow share); then `TIMEOUT`',
+  describeDeadlineMs: 'Main\'s deadline for a restore describe, in ms: the budget and time to answer',
+  mediaReadsPerConnection: 'Restore describes one connection runs at once, under their own gate outside the object actions\' read gates',
+  backupDevices: 'Backup files one describe or restore names (a media set\'s families)',
+  historyDatabases: 'Databases msdb\'s history lists; more set `historyTruncated`',
+  historySets: 'The newest backup sets one database\'s history, or the media, lists; more set `setsTruncated`',
+  planSets: 'Backup sets one restore runs: as many as the history lists (each RESTORE is a statement of its own)',
+  restoreMoves: 'Files one restore moves (64 devices and 2 × 1,000 MOVE parameters stay under SQL Server\'s 2,100)',
+  destinations: 'Destination names and other databases\' files read for Restore As collisions; more set a truncation flag',
+  serverFiles: 'Other databases\' files read for Restore As collisions',
+  setName: 'Characters of a backup set\'s name and user name (nvarchar(128))',
+  setId: 'Characters of a set id: a backup_set_uuid (history) or <media set>:<position> (devices)',
+  lsnDigits: 'Digits of an LSN, numeric(25, 0) sent as decimal text',
+  position: 'A backup set\'s position in its media set (RESTORE … WITH FILE)',
+  stats: 'STATS = n in the script, as SSMS asks SMO for',
+  scriptChars: 'Characters of a restore\'s script, checked as each statement is written (every RESTORE repeats the moves)'
+}
+
+/** Restore Database (D1e): the reads, the planner, the document and its script; the run comes with D1f. */
+function restoreDocs(): string[] {
+  return [
+    '## Restore Database',
+    '',
+    'Restore Database is a document tab ("Restore Database - <database>") with SSMS\'s pages as sections',
+    `(${restoreSections.map(section => section.title).join(', ')}), the Select backup devices and Backup Timeline sub-dialogs, and a Script`,
+    'drawer. Its OK, Stop, progress and the Tasks › Restore › Database… menu item come in a later update (D1f): until OK',
+    'restores, no menu item, command or palette entry opens it, only the smoke tests\' hook (`window.__variaRestore`, test',
+    `mode only), and the document says "${restoreMessages.runUnavailable}"`,
+    '',
+    `Its reads are \`actions.describe\` with ${code(restoreDescribeId)}, the server as its target and a \`restore\` member, one of`,
+    `${restoreSourceKinds.map(code).join(', ')}:`,
+    '',
+    table(['Source', 'Reads'], [
+      ['`history`', 'msdb\'s history: the databases it has backups of, and with `database` that database\'s newest sets with their media (disk files only)'],
+      ['`devices`', '`RESTORE LABELONLY` on each backup file, which groups them into media sets, then `RESTORE HEADERONLY` on each media set'],
+      ['`historyFiles`', 'One history set\'s files from msdb\'s `backupfile`'],
+      ['`mediaFiles`', '`RESTORE FILELISTONLY` on one media set at one position']
+    ]),
+    '',
+    'Every answer also carries the server\'s facts: its path separator, default data, log and backup folders, whether the',
+    'login may restore, the databases a restore could replace and the files other databases hold. SQL Server 2016 and 2017',
+    'have no default backup folder (`InstanceDefaultBackupPath` came with 2019), so their backup folder is the default data',
+    'folder; SSMS reads the registry\'s BackupDirectory instead, which Varia\'s constant reads cannot. Statements are constant',
+    '(`Actions/RestoreSql.cs`), with every name, path and position a parameter. A restore describe takes a gate of its own,',
+    `${restoreLimits.mediaReadsPerConnection} per connection and outside the object actions' read gates, because SQL Server ends a read of a file on an`,
+    'unreachable share only when the file call returns (about 21 s per file): a media read past its budget then still holds',
+    `its gate, and never one Database Properties or Delete Object waits for. Its budget is ${(restoreLimits.mediaReadMs / 1000).toLocaleString('en-US')} s, and main's deadline is ${(restoreLimits.describeDeadlineMs / 1000).toLocaleString('en-US')} s.`,
+    'A device SQL Server cannot open is `PATH_NOT_FOUND` when its operating system error says the file or path is not',
+    'there (2, 3, 53, 67, 123, 161), and `FILE_ACCESS` otherwise (access denied, a file another program holds); media a',
+    'restore cannot use (another program\'s, a damaged or incomplete set) is `MEDIA`. Azure SQL Database and Managed Instance',
+    'are refused before connecting (`NOT_SUPPORTED`).',
+    '',
+    '### Plan',
+    '',
+    `The planner (\`src/shared/actions/restore-plan.ts\`) chooses only ${plannedSetTypes.map(type => backupSetTypeSpecs[type].type.toLowerCase()).join(', ')} backups that are on disk and not damaged;`,
+    'the grid still lists the other kinds it reads, unchecked, with checkboxes disabled and the reason as their description:',
+    '',
+    table(['Set type', 'Component', 'Type', 'Planned'], backupSetTypes.map(type => [code(type), backupSetTypeSpecs[type].component, backupSetTypeSpecs[type].type, yesNo((plannedSetTypes as readonly string[]).includes(type))])),
+    '',
+    'It builds each plan backwards from its end, as SMO does. For the last backup taken, it starts from the newest backup',
+    'and goes back through the logs it continues to the latest differential (with its full) or full. For a point in time',
+    '(STOPAT, the server\'s local time) it takes the latest full and differential that finished by the point when one ends',
+    'there; otherwise the first log that finished at or after the point, back through sets that finished by it. A copy-only',
+    'log never joins a chain. A log continues a set only on its recovery fork: after a restore to a point in time, the next',
+    'log starts on the old fork and forks inside itself, so it continues only a set that ends by its fork point, and the',
+    'abandoned branch\'s logs never join a plan (`tests/fixtures/restore/smo-fork.json`, which the live checks record and',
+    'restore). Sets of another database (`family_guid`) never chain, and Source › Device lists one database the media hold',
+    'at a time (Source › Device › Database, the first one by default). SMO\'s `DatabaseRestorePlanner`, which SSMS uses,',
+    'chooses the same sets in every case but one: for a point between',
+    'the last log before a differential and that differential, SMO restores the differential, which no STOPAT can undo, so',
+    'the database comes back as at the differential. Varia restores the logs instead (`tests/fixtures/restore/smo-plans.json`',
+    'records both plans; the live checks restore each).',
+    '',
+    'The grid\'s checkboxes take clicks only while Manual Selection is checked; unchecking a set also unchecks every set',
+    `after it in the plan, as SSMS does, and unchecking Manual Selection brings the planner's plan back. Sets that do not chain say "${restoreMessages.invalidPlan}"`,
+    'A set the planner never uses keeps its checkbox disabled, with the reason as its description and the row\'s tooltip:',
+    `not on a disk file, "${restoreMessages.damaged}", "${restoreMessages.copyOnlyLog}" or "${restoreMessages.notPlanned}"`,
+    `A point in time the checked sets cannot stop at says "${restoreMessages.notReached}"`,
+    `Until the plan's full backup's files are read, Script waits: "${restoreMessages.filesNotRead}"`,
+    '',
+    `The Backup Timeline shows the backups over an interval (${timelineIntervals.map(interval => timelineIntervalSpecs[interval].label).join(', ')}; Day first) ending at the last`,
+    'backup: a large triangle for a full backup, a small one for a differential, a tick for a log, and a band where log',
+    'backups cover. Its point is a slider: the arrow keys move it a minute, Shift and an arrow or Page Up and Page Down an',
+    'hour, Home and End to the interval\'s ends. A point outside the covered band (other than a full or differential',
+    'backup\'s finish) leaves OK disabled. SSMS also allows a point after the last log backup, restoring the tail-log backup',
+    'it takes first; that comes with the run (D1f), so here such a point is refused.',
+    '',
+    '### Options and script',
+    '',
+    `Recovery state is one of ${restoreRecoveryStates.map(state => restoreRecoveryLabels[state]).join(', ')}. Restoring over the database the`,
+    'backups came from takes a tail-log backup first by default (BACKUP LOG … WITH NORECOVERY into the default backup folder,',
+    '`<database>_LogBackup_<yyyy-MM-dd_HH-mm-ss>.bak`); a copy under another name moves its files to the default data and',
+    'log folders under its own name, or to the folders Relocate all files to folder names. A Restore As path that another',
+    'database holds, or that two files share, is marked on the Files section: the Files section compares paths as the',
+    'server\'s platform does (exactly on Linux), while main and the backend refuse two files on one path ignoring case on',
+    'every platform, so on Linux two files whose paths differ only in case cannot restore together (a known limit).',
+    '',
+    'Script (`actions.script` with the `restore` action) is written from the request and the catalogue, on no connection, and',
+  `stops once it passes ${restoreLimits.scriptChars.toLocaleString('en-US')} characters ("The script is too large"). It writes what SMO's restore plan scripts for the same choices:`,
+    '`USE [master]`, `ALTER DATABASE … SET SINGLE_USER WITH ROLLBACK IMMEDIATE` when Close existing connections is checked',
+    'and the destination exists, the tail-log backup, one RESTORE per set (`FILE =`, `MOVE`, `REPLACE`, `KEEP_REPLICATION`, `RESTRICTED_USER`,',
+    '`NORECOVERY` or `STANDBY`, `STOPAT`, `NOUNLOAD`, `STATS = 5`), `SET MULTI_USER` after it, and `GO`. Live checks compare',
+    'the text with SMO\'s `Script()` for hostile names and paths; Varia writes two spaces after SET (`SET  SINGLE_USER`), as its',
+    'other database options do, where SMO writes one.',
+    '',
+    `SQL Server's own databases (${restoreSystemDatabases.join(', ')}) are refused as destinations, in any case (MSDB too): "${restoreMessages.systemDatabase}"`,
+    'Their backups can still be sources, restored under another name (msdb_copy), as SSMS allows.',
+    `Prompt before restoring each backup and Verify Backup Media are greyed ("${restoreMessages.notYetAvailable}").`,
+    '',
+    'The labels (General, Files and Options; Source, Device, Destination, Restore to, Timeline…, Backup sets to restore and',
+    'its columns, Manual Selection; Relocate all files to folder, Data file folder, Log file folder, Restore the database',
+    'files as, Restore As; the restore options, Tail-Log',
+    'backup, Server connections and Prompt; Select backup devices; Backup Timeline) are SSMS\'s as recalled, not yet checked',
+    'against SSMS 22.',
+    '',
+    '### Restore limits',
+    '',
+    table(['Limit', 'Value', 'Meaning'], (Object.keys(restoreLimitNotes) as (keyof typeof restoreLimits)[]).map(key => [code(key), restoreLimits[key].toLocaleString('en-US'), restoreLimitNotes[key]])),
     ''
   ]
 }

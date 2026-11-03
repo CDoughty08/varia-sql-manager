@@ -10,6 +10,7 @@ import type { ScriptDestination } from '../scripting/catalog.ts'
 import { compatibilityLevels, databaseOptionDefs, ownerNotOn, scopedConfigurationDefs, type DatabaseOptionDef } from './database.ts'
 import type { LongRunKind } from '../long-runs.ts'
 import { loginsCatalog } from './logins.ts'
+import { restoreCatalog } from './restore.ts'
 
 // One entry per line, so later actions and dialogs append cleanly.
 export const objectActions = [
@@ -546,9 +547,12 @@ export const actionErrorRetryable = {
   NOT_FOUND: false, NOT_SUPPORTED: false, PERMISSION_DENIED: true, IN_USE: true, BLOCKED: true, DEPENDENTS: false, NAME_IN_USE: false,
   // The server file picker's folder does not exist, or the server's account cannot see it.
   PATH_NOT_FOUND: false,
-  // SQL Server could not open a database file (5120, 5123): missing, used by another database, or denied to its service
-  // account; fixing the file and trying again can help.
+  // SQL Server could not open a database or backup file (5120, 5123, or 3201 with operating system error 5): missing, used by
+  // another database, or denied to its service account; fixing the file and trying again can help.
   FILE_ACCESS: true,
+  // Restore Database: backup media that are not what a restore needs (a family missing or misformed, a damaged set: 3241,
+  // 3242, 3183, 3189).
+  MEDIA: false,
   DATABASE_UNAVAILABLE: true, TIMEOUT: true, CONNECTION_LOST: true, SQL_ERROR: true,
   // Stop cancelled the statement in SQL Server; the steps say what completed before it.
   CANCELLED: true,
@@ -653,10 +657,11 @@ export function actionsCatalogJson(): string {
     `  "limits": ${line(actionLimits)},`,
     `  "logins": ${line(loginsCatalog())},`,
     `  "ownerNotOn": ${line(ownerNotOn)},`,
+    `  "restore": ${line(restoreCatalog())},`,
     `  "rows": ${block(rows)},`,
     `  "scopedConfigurations": ${block(scopedConfigurationDefs.map(optionJson))},`,
     `  "serverFiles": ${block(serverFilePurposes.map(purpose => ({ purpose, extensions: serverFilePurposeSpecs[purpose].extensions })))},`,
-    '  "version": 3',
+    '  "version": 4',
     '}',
     ''
   ].join('\n')
