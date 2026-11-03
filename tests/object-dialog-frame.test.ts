@@ -58,10 +58,13 @@ describe('object dialog frame', () => {
   })
   it('lists a run\'s steps with their state in words, and nothing before the run reports any', () => {
     expect(html(createElement(StepsPanel, { steps: [] }))).toBe('')
-    const panel = html(createElement(StepsPanel, { steps: [{ status: 'done', title: 'Close connections' }, { status: 'failed', title: 'Take database offline', message: 'Failed.' }, { status: 'skipped', title: 'Restore access' }] }))
+    const panel = html(createElement(StepsPanel, { steps: [{ status: 'done', title: 'Close connections' }, { status: 'failed', title: 'Take database offline', message: 'Msg 5070: Database state cannot be changed while other users are using the database' }, { status: 'skipped', title: 'Restore access' }] }))
     expect(panel).toContain('<section class="object-dialog-steps" aria-labelledby="object-dialog-steps"><div class="object-dialog-caption" id="object-dialog-steps">Steps</div>')
     expect([...panel.matchAll(/data-status="(\w+)"/g)].map(match => match[1])).toEqual(['done', 'failed', 'skipped'])
     expect(panel).toContain('<span class="visually-hidden">Failed: </span>Take database offline')
+    // Every step reads as its title (a done step has no message); the failure's text belongs to the message bar.
+    expect(panel).toContain('<span class="visually-hidden">Done: </span>Close connections')
+    expect(panel).not.toContain('Msg 5070')
   })
 })
 
@@ -113,6 +116,22 @@ describe('Take Database Offline and Bring Database Online page', () => {
     const phases = ['ready', 'failed', 'stopped', 'loading', 'scripting', 'confirming', 'executing', 'succeeded'] as const
     expect(phases.filter(phase => scriptAvailable(phase, true))).toEqual(['ready', 'failed', 'stopped'])
     expect(scriptAvailable('ready', false)).toBe(false)
+  })
+  it('keeps Stop and Cancel different buttons, so focus moved to Stop is not left on Cancel when a run ends', async () => {
+    // Focus moves to Stop as a run starts; were Cancel the same element, focus would stay there after New Login's
+    // PASSWORD_POLICY instead of returning to Password.
+    const { DialogButtons } = await import('../src/renderer/src/dialogs/ObjectDialog')
+    type Shown = { key: string | null; props: { children: string; disabled?: boolean } }
+    const buttons = (phase: Parameters<typeof DialogButtons>[0]['phase'], busy = false) => {
+      const element = DialogButtons({ phase, busy, blocked: undefined, closeRef: null, stopRef: null, onClose: () => {}, onStop: () => {} }) as unknown as Shown & { props: { children: Shown | (Shown | false)[] } }
+      const shown = Array.isArray(element.props.children) ? element.props.children.filter((child): child is Shown => !!child) : [element]
+      return shown.map(button => `${button.key} ${button.props.children}${button.props.disabled ? ' (disabled)' : ''}`)
+    }
+    expect(buttons('ready')).toEqual(['ok OK', 'cancel Cancel'])
+    expect(buttons('executing', true)).toEqual(['ok OK (disabled)', 'stop Stop'])
+    expect(buttons('failed')).toEqual(['ok OK', 'cancel Cancel'])
+    expect(buttons('disconnected')).toEqual(['ok OK (disabled)', 'cancel Close'])
+    expect(buttons('succeeded')).toEqual(['close Close'])
   })
   it('says after Stop that the count read before OK no longer holds', async () => {
     const { stoppedMessage } = await import('../src/renderer/src/dialogs/pages/DatabaseStatePage')

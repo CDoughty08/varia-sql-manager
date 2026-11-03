@@ -6,14 +6,15 @@ import { pathToFileURL } from 'node:url'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import {
   actionCommandEntries, actionContextKey, actionContextValues, actionErrorCodes, actionErrorRetryable, actionKindSpecs, actionLimits, actionMenuState, actionOffered, actionRow,
-  actionsCatalogJson, actionStatuses, databaseActionState, databaseStateOf, dialogIds, dialogSpecs, dialogTitle, isModalDialog, objectActions, objectActionSpecs, offeredOnEngine, overlayRow,
-  pageIds, propertiesCommandEntries, scriptActionTitles, unknownOutcomeMessage, type ActionCommandId, type DatabaseActionRule, type ModalDialogId, type PageId
+  actionsCatalogJson, actionStatuses, createActionSpecs, databaseActionState, databaseStateOf, dialogIds, dialogSpecs, dialogTitle, isCreateAction, isModalDialog, objectActions, objectActionSpecs, offeredOnEngine, overlayRow,
+  isServerAction, newDatabaseCommandEntries, pageIds, propertiesCommandEntries, serverActionCommandEntries, serverActions, serverActionSpecs, scriptActionTitles, unknownOutcomeMessage, type ActionCommandId, type DatabaseActionRule, type ModalDialogId, type PageId
 } from '../src/shared/actions/catalog'
 import { currentDatabaseRuntime } from '../src/shared/explorer/status'
 import { contextRecord } from '../src/shared/commands/context-keys'
 import { resolveMenu, type ResolvedMenuItem } from '../src/renderer/src/menus/resolve'
 import type { MenuEntry, MenuId } from '../src/shared/commands/menus'
 import { maxScriptCharacters } from '../src/main/validation'
+import { serverFilesDeadlineMs } from '../src/shared/ipc/methods'
 import { renderObjectActionsDocs } from '../src/shared/actions/docs'
 import { commandDescriptor, commandIds, isCommandId } from '../src/shared/commands/catalog'
 import { isIconId } from '../src/shared/icons'
@@ -25,10 +26,11 @@ import { kindSpecs, nodeKinds, type NodeKind, type NodeSubtype } from '../src/sh
 import { scriptDestinations } from '../src/shared/scripting/catalog'
 
 const every = (kind: NodeKind) => [undefined, ...kindSpecs[kind].subtypes ?? []] as (NodeSubtype | undefined)[]
-/** Select Top, Rename, Delete and Properties; a database's Tasks (Take Offline, Bring Online) are `tasks`. */
-const states = (kind: NodeKind, subtype?: NodeSubtype) => objectActions.slice(0, 4).map(action => actionMenuState({ kind, subtype })[action] || '-').join(' ')
-const tasks = (kind: NodeKind, subtype?: NodeSubtype) => (['detach', 'takeOffline', 'bringOnline'] as const).map(action => actionMenuState({ kind, subtype })[action] || '-').join(' ')
-const none = { selectTop: '', rename: '', delete: '', properties: '', takeOffline: '', bringOnline: '', detach: '' }
+/** The context menu's row actions (Select Top, Rename, Delete and Properties); a folder's actions (Attach, Restore Database) are not a
+ *  row's own items, and a database's Tasks (Detach…, Take Offline, Bring Online, and Restore › Database… and Files and Filegroups…, the restores' `rows`) are `tasks`. */
+const states = (kind: NodeKind, subtype?: NodeSubtype) => objectActions.filter(action => !objectActionSpecs[action].folder && !objectActionSpecs[action].menu).map(action => actionMenuState({ kind, subtype })[action] || '-').join(' ')
+const tasks = (kind: NodeKind, subtype?: NodeSubtype) => (['detach', 'takeOffline', 'bringOnline', 'restore', 'restoreFiles'] as const).map(action => actionMenuState({ kind, subtype })[action] || '-').join(' ')
+const none = { selectTop: '', rename: '', delete: '', properties: '', attach: '', takeOffline: '', bringOnline: '', detach: '', restore: '', restoreFiles: '' }
 const online = { state: 0, userAccess: 0, readOnly: false, standby: false }
 
 describe('object action catalogue', () => {
@@ -60,22 +62,31 @@ describe('object action catalogue', () => {
     // Properties opens for every database, SQL Server's own and snapshots included, as in SSMS.
     expect([states('database'), states('database', 'system'), states('database', 'snapshot')]).toEqual(['- enabled enabled enabled', '- disabled disabled enabled', '- disabled enabled enabled'])
     expect(nodeKinds.filter(kind => actionOffered(kind, 'properties'))).toEqual(['database'])
-    // Tasks › Detach…, Take Offline and Bring Online: user databases only; greyed on SQL Server's own (as SSMS), absent on a snapshot.
-    expect([tasks('database'), tasks('database', 'system'), tasks('database', 'snapshot')]).toEqual(['enabled enabled enabled', 'disabled disabled disabled', '- - -'])
+    // Tasks › Detach…, Take Offline, Bring Online and Restore › Database…: user databases only; greyed on SQL Server's own (as SSMS for
+    // Detach and the state changes; critic A19 for a restore, which takes T-SQL there), absent on a snapshot, which cannot be restored over.
+    expect([tasks('database'), tasks('database', 'system'), tasks('database', 'snapshot')]).toEqual(['enabled enabled enabled enabled enabled', 'disabled disabled disabled disabled disabled', '- - - - -'])
+    expect(actionMenuState({ kind: 'database', engine: 'managedInstance' })).toMatchObject({ restore: '', restoreFiles: '' })
+    for (const action of ['restore', 'restoreFiles'] as const) expect(nodeKinds.filter(kind => actionOffered(kind, action)), action).toEqual(['database'])
     for (const action of ['detach', 'takeOffline', 'bringOnline'] as const) expect(nodeKinds.filter(kind => actionOffered(kind, action)), action).toEqual(['database'])
     expect(actionOffered('database', 'rename') && actionOffered('function', 'delete') && !actionOffered('login', 'delete') && !actionOffered('procedure', 'selectTop')).toBe(true)
   })
   it('publishes one context key per action', () => {
-    expect(objectActions.map(actionContextKey)).toEqual(['explorerActionSelectTop', 'explorerActionRename', 'explorerActionDelete', 'explorerActionProperties', 'explorerActionTakeOffline', 'explorerActionBringOnline',
-      'explorerActionDetach'])
+    expect(objectActions.map(actionContextKey)).toEqual(['explorerActionSelectTop', 'explorerActionRename', 'explorerActionDelete', 'explorerActionProperties', 'explorerActionAttach', 'explorerActionTakeOffline', 'explorerActionBringOnline', 'explorerActionDetach', 'explorerActionRestore', 'explorerActionRestoreFiles'])
     expect(actionContextValues(actionMenuState({ kind: 'database', subtype: 'snapshot' }))).toEqual({
-      explorerActionSelectTop: '', explorerActionRename: 'disabled', explorerActionDelete: 'enabled', explorerActionProperties: 'enabled', explorerActionTakeOffline: '', explorerActionBringOnline: '',
-      explorerActionDetach: ''
+      explorerActionSelectTop: '', explorerActionRename: 'disabled', explorerActionDelete: 'enabled', explorerActionProperties: 'enabled', explorerActionAttach: '', explorerActionTakeOffline: '', explorerActionBringOnline: '', explorerActionDetach: '', explorerActionRestore: '',
+      explorerActionRestoreFiles: ''
     })
   })
-  it('generates the four commands, keeping explorer.selectTopRows, with valid keys, preconditions and placements', () => {
+  it('generates the action commands, keeping explorer.selectTopRows, with valid keys, preconditions and placements', () => {
     const entries = actionCommandEntries()
-    expect(Object.keys(entries)).toEqual(objectActions.map(action => objectActionSpecs[action].command))
+    // The restores' row placements (Tasks › Restore › Database… and Files and Filegroups…) are commands of their own, out of the palette:
+    // a context menu shows each command once.
+    expect(Object.keys(entries)).toEqual(['explorer.selectTopRows', 'explorer.rename', 'explorer.delete', 'explorer.properties', 'explorer.attachDatabase', 'explorer.takeOffline', 'explorer.bringOnline', 'explorer.detachDatabase', 'explorer.restoreDatabase', 'explorer.tasks.restoreDatabase',
+      'explorer.restoreFiles', 'explorer.tasks.restoreFiles'])
+    expect(entries['explorer.tasks.restoreDatabase']).toMatchObject({ title: 'Restore Database…', palette: false, precondition: entries['explorer.restoreDatabase'].precondition })
+    expect(entries['explorer.tasks.restoreFiles']).toMatchObject({ title: 'Restore Files and Filegroups…', palette: false, precondition: entries['explorer.restoreFiles'].precondition })
+    expect(entries['explorer.restoreFiles'].menus).toEqual([{ menu: 'explorer.context', group: '0_new', order: 4, mnemonic: 'e', when: "explorerActionRestoreFiles != '' && explorerNode == 'folder'" }])
+    expect(entries['explorer.tasks.restoreFiles'].menus).toEqual([{ menu: 'explorer.tasks.restore', group: '1_restore', order: 2, title: 'Files and Filegroups…', mnemonic: 'f', when: "explorerActionRestoreFiles != '' && explorerNode != 'folder' && explorerNode != 'background'" }])
     expect(Object.keys(entries)).toContain('explorer.selectTopRows')
     expect(new Set(commandIds).size).toBe(commandIds.length)
     for (const [id, entry] of Object.entries(entries)) {
@@ -139,7 +150,7 @@ describe('object action catalogue', () => {
     expect(ids.slice(at('explorer.refresh'))).toEqual(['explorer.refresh', '---', 'explorer.properties', 'ssis.folderProperties', 'ssis.projectProperties', 'ssis.packageProperties', 'ssis.environmentProperties'])
   })
   it('declares Delete Object and Database Properties with SSMS\'s titles, pages and Script button wording', () => {
-    expect(dialogIds).toEqual(['deleteObject', 'databaseProperties', 'takeOffline', 'bringOnline', 'detachDatabase'])
+    expect(dialogIds).toEqual(['deleteObject', 'databaseProperties', 'newDatabase', 'attachDatabase', 'newLogin', 'takeOffline', 'bringOnline', 'detachDatabase'])
     // Learn's Detach Database dialog, as a modal (wave 5 decisions): its title names the database.
     expect(dialogSpecs.detachDatabase).toEqual({ title: 'Detach Database', surface: 'modal', titleFormat: 'withName', size: 'compact', action: 'detach',
       pages: [{ id: 'general', title: 'General', icon: 'settings-gear' }], steps: true })
@@ -154,19 +165,25 @@ describe('object action catalogue', () => {
     expect(dialogSpecs.databaseProperties.pages.map(page => [page.id, page.title, page.icon])).toEqual([['general', 'General', 'settings-gear'], ['files', 'Files', 'settings-gear'],
       ['filegroups', 'Filegroups', 'settings-gear'], ['options', 'Options', 'settings-gear']])
     expect([dialogTitle('databaseProperties', 'AppData'), dialogTitle('deleteObject', 'dbo.Orders')]).toEqual(['Database Properties - AppData', 'Delete Object'])
-    for (const dialog of dialogIds) expect(objectActionSpecs[dialogSpecs[dialog].action].dialog).toBe(dialog)
-    // Delete Object is a confirmation, and Take Offline and Bring Online are small dialogs (wave 5 decisions 1), so they are
-    // modal; Database Properties opens as a document (U1 D2).
-    expect(dialogIds.filter(isModalDialog)).toEqual(['deleteObject', 'takeOffline', 'bringOnline', 'detachDatabase'])
+    expect(dialogSpecs.newLogin).toMatchObject({ title: 'Login - New', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'createLogin', steps: true })
+    expect(dialogSpecs.newLogin.pages.map(page => [page.id, page.title, page.keepMounted ?? false])).toEqual([['general', 'General', true], ['serverRoles', 'Server Roles', false], ['userMapping', 'User Mapping', true], ['status', 'Status', false]])
+    expect(dialogTitle('newLogin', 'ignored')).toBe('Login - New')
+    for (const dialog of dialogIds) {
+      const action = dialogSpecs[dialog].action
+      expect(isServerAction(action) ? serverActionSpecs[action].dialog : isCreateAction(action) ? createActionSpecs[action].dialog : objectActionSpecs[action].dialog).toBe(dialog)
+    }
+    // Delete Object is a confirmation, and Attach, New Login, Take Offline, Bring Online and Detach are dialogs (wave 5 decisions 1), so
+    // they are modal; Database Properties opens as a document (U1 D2).
+    expect(dialogIds.filter(isModalDialog)).toEqual(['deleteObject', 'attachDatabase', 'newLogin', 'takeOffline', 'bringOnline', 'detachDatabase'])
     expect(scriptDestinations.map(destination => scriptActionTitles[destination])).toEqual(['Script Action to New Query Window', 'Script Action to File', 'Script Action to Clipboard'])
     expect(unknownOutcomeMessage).toBe('The SQL backend stopped while the action ran, so whether it completed is unknown. Refresh Object Explorer to check.')
   })
   it('derives the action command, modal dialog and page ids from the catalogue, with registry icons on every page', () => {
-    expectTypeOf<ActionCommandId>().toEqualTypeOf<'explorer.selectTopRows' | 'explorer.rename' | 'explorer.delete' | 'explorer.properties' | 'explorer.takeOffline' | 'explorer.bringOnline'
-      | 'explorer.detachDatabase'>()
-    expectTypeOf<ModalDialogId>().toEqualTypeOf<'deleteObject' | 'takeOffline' | 'bringOnline' | 'detachDatabase'>()
-    expectTypeOf<PageId>().toEqualTypeOf<'general' | 'files' | 'filegroups' | 'options'>()
-    expect(pageIds).toEqual(['general', 'files', 'filegroups', 'options'])
+    expectTypeOf<ActionCommandId>().toEqualTypeOf<'explorer.selectTopRows' | 'explorer.rename' | 'explorer.delete' | 'explorer.properties' | 'explorer.attachDatabase' | 'explorer.takeOffline' | 'explorer.bringOnline' | 'explorer.detachDatabase' | 'explorer.restoreDatabase' | 'explorer.tasks.restoreDatabase'
+      | 'explorer.restoreFiles' | 'explorer.tasks.restoreFiles'>()
+    expectTypeOf<ModalDialogId>().toEqualTypeOf<'deleteObject' | 'attachDatabase' | 'newLogin' | 'takeOffline' | 'bringOnline' | 'detachDatabase'>()
+    expectTypeOf<PageId>().toEqualTypeOf<'general' | 'files' | 'filegroups' | 'options' | 'serverRoles' | 'userMapping' | 'status'>()
+    expect(pageIds).toEqual(['general', 'files', 'filegroups', 'options', 'serverRoles', 'userMapping', 'status'])
     for (const dialog of dialogIds) for (const page of dialogSpecs[dialog].pages) {
       expect(isIconId(page.icon), `${dialog}: ${page.id}`).toBe(true)
       expect(pageIds, dialog).toContain(page.id)
@@ -225,14 +242,49 @@ describe('object action catalogue', () => {
     expect(actionMenuState({ kind: 'database', subtype: 'system', database: { ...online, state: 6 } })).toMatchObject({ takeOffline: 'disabled', bringOnline: 'disabled' })
     for (const engine of ['managedInstance', 'cloud'] as const) expect(actionMenuState({ kind: 'database', engine }), engine).toMatchObject({ takeOffline: '', bringOnline: '' })
   })
+  it('keeps Take Offline and Bring Online alone in one Tasks group, as SSMS separates Detach… above them', () => {
+    // SSMS's Tasks (Learn's SSMS 17 and 19 screenshots): Detach…, a separator, Take Offline and Bring Online, a separator. So
+    // 1_state holds these two alone, first and second, and Detach… (D3b) needs a group of its own before it.
+    const state = commandIds.flatMap(id => (commandDescriptor(id).menus ?? []).filter(place => place.menu === 'explorer.tasks' && place.group === '1_state').map(place => [place.order, id]))
+    expect(state.sort(([a], [b]) => Number(a) - Number(b))).toEqual([[1, 'explorer.takeOffline'], [2, 'explorer.bringOnline']])
+  })
   it('offers an action with engines only on those servers, and everywhere when the engine is unknown', () => {
     expect(offeredOnEngine(undefined, 'cloud')).toBe(true)
     expect(offeredOnEngine(['box', 'managedInstance'], undefined)).toBe(true)
     expect(offeredOnEngine(['box', 'managedInstance'], 'managedInstance')).toBe(true)
     expect(offeredOnEngine(['box'], 'cloud')).toBe(false)
-    for (const engine of ['box', 'managedInstance'] as const) expect(actionMenuState({ kind: 'table', engine }), engine).toEqual(actionMenuState({ kind: 'table' }))
-    // Azure SQL Database: only Select Top 1000 Rows runs there (the catalogue's engines); the backend refuses the rest too.
-    expect(actionMenuState({ kind: 'table', engine: 'cloud' })).toEqual({ ...actionMenuState({ kind: 'table' }), rename: '', delete: '' })
+    const unknown = actionMenuState({ kind: 'table' })
+    for (const engine of ['box', 'managedInstance', 'cloud'] as const) {
+      expect(actionMenuState({ kind: 'table', engine }), engine).toEqual(Object.fromEntries(objectActions.map(action => [action, objectActionSpecs[action].engines.includes(engine) ? unknown[action] : ''])))
+    }
+    // The catalogue's engines (A1): Azure SQL Database, out of wave 5, offers only Select Top 1000 Rows, so the menu hides
+    // Rename and Delete there rather than offer what the backend refuses.
+    expect(actionMenuState({ kind: 'table', engine: 'box' })).toEqual(unknown)
+    expect(actionMenuState({ kind: 'table', engine: 'cloud' })).toEqual({ ...none, selectTop: 'enabled' })
+  })
+  it('offers the actions of a folder on that folder alone, on the engines they serve, and on rows only where they place themselves', () => {
+    const none = actionMenuState(undefined)
+    // SSMS: Databases › Attach…, on SQL Server's box editions only (decision 10: not on Managed Instance or Azure SQL Database).
+    expect(objectActionSpecs.attach).toMatchObject({ title: 'Attach Database…', menuTitle: 'Attach…', mnemonic: 'a', group: '0_new', order: 2, folder: 'databases', engines: ['box'], dialog: 'attachDatabase' })
+    // SSMS: Databases › Restore Database… (D1f), on SQL Server itself (critic A1: Managed Instance restores from URL only).
+    expect(actionMenuState({ kind: 'folder', folder: 'databases', engine: 'box' })).toEqual({ ...none, attach: 'enabled', restore: 'enabled', restoreFiles: 'enabled' })
+    expect(actionMenuState({ kind: 'folder', folder: 'databases' })).toEqual({ ...none, attach: 'enabled', restore: 'enabled', restoreFiles: 'enabled' })
+    for (const engine of ['managedInstance', 'cloud'] as const) expect(actionMenuState({ kind: 'folder', folder: 'databases', engine }), engine).toEqual(none)
+    for (const folder of ['tables', 'views', 'systemDatabases', 'logins'] as const) expect(actionMenuState({ kind: 'folder', folder, engine: 'box' }), folder).toEqual(none)
+    // A database row never offers Attach, whatever its engine; it offers Restore Database only through its own placement (`rows`:
+    // Tasks › Restore › Database…), on SQL Server itself, and not for SQL Server's own databases or a snapshot.
+    expect(actionMenuState({ kind: 'database', engine: 'box' }).attach).toBe('')
+    expect(actionMenuState({ kind: 'database', engine: 'box' }).restore).toBe('enabled')
+    expect(actionMenuState({ kind: 'database', engine: 'managedInstance' }).restore).toBe('')
+    expect([actionMenuState({ kind: 'database', subtype: 'system' }).restore, actionMenuState({ kind: 'database', subtype: 'snapshot' }).restore]).toEqual(['disabled', ''])
+    // A test folder action without `rows` stays off rows that would enable it.
+    expect(actionMenuState({ kind: 'database', engine: 'box' }, { actions: { restore: { folder: 'databases', engines: ['box'] } } }).restore).toBe('')
+    expect(actionMenuState({ kind: 'server', engine: 'box' }).attach).toBe('')
+    // A test folder action follows its own engines.
+    expect(actionMenuState({ kind: 'folder', folder: 'tables', engine: 'cloud' }, { actions: { attach: { folder: 'tables', engines: ['cloud'] } } }).attach).toBe('enabled')
+    expect(actionCommandEntries()['explorer.attachDatabase']).toMatchObject({ title: 'Attach Database…', icon: 'plug', precondition: "backendReady && explorerActionAttach == 'enabled'",
+      menus: [{ menu: 'explorer.context', group: '0_new', order: 2, title: 'Attach…', mnemonic: 'a', when: "explorerActionAttach != '' && explorerNode == 'folder'" }] })
+    expect(dialogSpecs.attachDatabase).toEqual({ title: 'Attach Databases', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'attach', pages: [{ id: 'general', title: 'General', icon: 'settings-gear' }] })
   })
   it('composes the menu state from the status overlay, the database rules and the engine gate, in that order', () => {
     // As later PRs may declare them: Delete for box servers only, an overlay for unavailable databases, and a rule.
@@ -269,30 +321,80 @@ describe('object action catalogue', () => {
     expect(currentDatabaseRuntime(undefined, undefined, { at: 5, row, complete: true })).toMatchObject({ state: 1 })
     expect(currentDatabaseRuntime(undefined, undefined)).toBeUndefined()
   })
-  it('declares the database node\'s Tasks and Tasks › Restore submenus, hidden while nothing is placed in them', () => {
+  it('offers New Database… first on the Databases folder and a database node of a SQL Server box, never on Azure or Managed Instance', () => {
+    expect(serverActions).toEqual(['createDatabase'])
+    expect(serverActionSpecs.createDatabase).toMatchObject({ title: 'New Database…', mnemonic: 'n', group: '0_new', order: 1, dialog: 'newDatabase', command: 'explorer.newDatabase',
+      engines: ['box'], folders: ['databases'], kinds: ['database'], nodePlace: { command: 'explorer.newDatabaseOnDatabase', group: '1_query', order: 1 }, longRun: 'newDatabase' })
+    expect(dialogSpecs.newDatabase).toMatchObject({ title: 'New Database', surface: 'document', titleFormat: 'plain', action: 'createDatabase' })
+    expect(dialogSpecs.newDatabase.pages.map(page => page.id)).toEqual(['general', 'options', 'filegroups'])
+    const entries = { ...serverActionCommandEntries(), ...newDatabaseCommandEntries() }
+    expect(Object.keys(entries)).toEqual(['explorer.newDatabase', 'explorer.newDatabaseOnDatabase', 'newDatabase.ok', 'newDatabase.cancel', 'newDatabase.stop'])
+    for (const [id, entry] of Object.entries(entries)) {
+      expect(isCommandId(id), id).toBe(true)
+      expect(commandDescriptor(id as never)).toEqual(entry)
+      expect(isIconId(entry.icon), id).toBe(true)
+      expect(whenProblems(entry.precondition, ['static', 'state']), id).toEqual([])
+      for (const placement of 'menus' in entry ? entry.menus : []) expect(whenProblems(placement.when, ['static', 'state', 'target']), id).toEqual([])
+    }
+    // Stop must stay available while OK runs; Cancel is not.
+    expect(entries['newDatabase.stop'].precondition).toBe('activeDocumentIsNewDatabase && newDatabaseCreating')
+    expect(entries['newDatabase.cancel'].precondition).toContain('!newDatabaseCreating')
+    const commands = { isEnabled: () => true, isToggled: () => false }, keybindings = { lookup: () => undefined }
+    const titles = (target: Record<string, unknown>, engine: 'box' | 'cloud' | 'managedInstance' = 'box', folder?: 'databases') => {
+      const state = contextRecord('win32', { backendReady: true, hasConnection: true, explorerHasSelection: true, explorerSelectionServerEngine: engine, ...actionContextValues(actionMenuState({ kind: 'folder', folder, engine })) })
+      return resolveMenu('explorer.context', { platform: 'win32', state, target: { explorerServerEngine: engine, explorerServerLost: false, ...target }, commands, keybindings })
+        .flatMap(item => item.kind === 'command' ? [item.title] : item.kind === 'separator' ? ['---'] : [])
+    }
+    expect(titles({ explorerNode: 'folder', explorerFolder: 'databases' })[0]).toBe('New Database…')
+    // SSMS's database menu opens with one group, New Database…, New Query, Script Database as (Microsoft Learn's SSMS 17 and 19
+    // screenshots): no separator after New Database…. The Databases folder keeps it in 0_new, where Attach… joins it. Each place is
+    // its own command, so a native macOS menu, which sees only command ids, shows it once; the palette offers only the first.
+    expect(titles({ explorerNode: 'database' }).slice(0, 2)).toEqual(['New Database…', 'New Query'])
+    expect(entries['explorer.newDatabase'].menus.map(placement => [placement.group, placement.order])).toEqual([['0_new', 1]])
+    expect(entries['explorer.newDatabaseOnDatabase'].menus.map(placement => [placement.group, placement.order])).toEqual([['1_query', 1]])
+    expect(entries['explorer.newDatabaseOnDatabase'].menus[0].when).not.toContain('explorerFolder')
+    expect(entries['explorer.newDatabase'].menus[0].when).not.toContain("explorerNode == 'database'")
+    expect(['palette' in entries['explorer.newDatabase'], entries['explorer.newDatabaseOnDatabase'].palette]).toEqual([false, false])
+    expect(entries['explorer.newDatabaseOnDatabase'].precondition).toBe(entries['explorer.newDatabase'].precondition)
+    expect(titles({ explorerNode: 'folder', explorerFolder: 'tables' })).not.toContain('New Database…')
+    expect(titles({ explorerNode: 'folder', explorerFolder: 'databases', explorerServerLost: true })).not.toContain('New Database…')
+    for (const engine of ['cloud', 'managedInstance'] as const) expect(titles({ explorerNode: 'folder', explorerFolder: 'databases' }, engine), engine).not.toContain('New Database…')
+    // No row offers it. Attach… (D1d), Restore Database… (D1f) and Restore Files and Filegroups… (D1g) follow it in 0_new, as in SSMS's
+    // Databases menu.
+    for (const kind of nodeKinds) expect(actionOffered(kind, 'createDatabase' as never), kind).toBe(false)
+    expect(titles({ explorerNode: 'folder', explorerFolder: 'databases' }, 'box', 'databases').slice(0, 5)).toEqual(['New Database…', 'Attach…', 'Restore Database…', 'Restore Files and Filegroups…', '---'])
+    expect(commandIds.filter(id => /attach|restore/i.test(id)).sort()).toEqual(['explorer.attachDatabase', 'explorer.restoreDatabase', 'explorer.restoreFiles', 'explorer.tasks.restoreDatabase', 'explorer.tasks.restoreFiles', 'restoreDatabase.refresh', 'restoreDatabase.run', 'restoreDatabase.stop'])
+    expect(renderObjectActionsDocs()).toContain('## New Database')
+  })
+  it('declares the database node\'s Tasks (Take Offline, Bring Online, Restore › Database… and Files and Filegroups…) and the Databases folder\'s Restore Database… and Restore Files and Filegroups…, hidden where they do not apply', () => {
     const commands = { isEnabled: () => true, isToggled: () => false }, keybindings = { lookup: () => undefined }
     const titles = (items: readonly ResolvedMenuItem[]): string[] => items.flatMap(item => item.kind === 'submenu' ? [item.title + ' >', ...titles(item.items).map(title => '  ' + title)] : item.kind === 'command' ? [item.title] : [])
     const resolve = (model?: (menu: MenuId) => readonly MenuEntry[], lost = false, subtype?: NodeSubtype) => {
       const state = contextRecord('win32', { backendReady: true, hasConnection: true, explorerHasSelection: true, explorerSelectionKind: 'database', ...actionContextValues(actionMenuState({ kind: 'database', subtype })) })
       return titles(resolveMenu('explorer.context', { platform: 'win32', state, target: { explorerNode: 'database', explorerServerLost: lost }, commands, keybindings, ...model ? { model } : {} }))
     }
-    // D3a and D3b: Tasks › Detach…, then Take Offline and Bring Online on a user database (SSMS's order, recalled); Restore stays
-    // hidden while empty.
-    const plain = resolve()
-    expect(plain.slice(plain.indexOf('Tasks >'), plain.indexOf('Tasks >') + 4)).toEqual(['Tasks >', '  Detach…', '  Take Offline', '  Bring Online'])
-    expect(plain.filter(title => title.startsWith('  '))).toEqual(['  Detach…', '  Take Offline', '  Bring Online'])
+    // D3a and D3b: Tasks › Detach…, then Take Offline and Bring Online on a user database (SSMS's order, recalled), then D1f's Restore › Database… and
+    // D1g's Files and Filegroups… after the state group; never Restore Database… or Restore Files and Filegroups… itself, which are the folder's.
+    const shown = resolve()
+    expect(shown.slice(shown.indexOf('Tasks >'), shown.indexOf('Tasks >') + 7)).toEqual(['Tasks >', '  Detach…', '  Take Offline', '  Bring Online', '  Restore >', '    Database…', '    Files and Filegroups…'])
+    expect(shown.filter(title => title.startsWith('  '))).toEqual(['  Detach…', '  Take Offline', '  Bring Online', '  Restore >', '    Database…', '    Files and Filegroups…'])
+    expect(shown).not.toContain('Restore Database…')
+    expect(shown).not.toContain('Restore Files and Filegroups…')
     // Detach… sits in a group of its own before the state group (L5 C2): a separator parts it from Take Offline.
     const tasksMenu = buildMenuModel('explorer.tasks', 'win32').map(entry => entry.kind === 'command' ? entry.id : entry.kind === 'separator' ? '---' : '')
     expect(tasksMenu.slice(0, 4)).toEqual(['explorer.detachDatabase', '---', 'explorer.takeOffline', 'explorer.bringOnline'])
     // A snapshot offers no task: Tasks hides as a submenu of nothing; on a lost server it hides too.
     expect(resolve(undefined, false, 'snapshot').some(title => title.startsWith('Tasks'))).toBe(false)
     expect(resolve(undefined, true).some(title => title.startsWith('Tasks'))).toBe(false)
-    // A later PR places Restore › Database… in it: Tasks › Restore › appears after the state group, not on a lost server's.
-    const item: MenuEntry = { kind: 'command', id: 'explorer.properties', nativeId: 'test.restoreDatabase', title: 'Database…', mnemonic: 'd', toggle: false }
-    const model = (menu: MenuId) => menu === 'explorer.tasks.restore' ? [item] : buildMenuModel(menu, 'win32')
-    const shown = resolve(model)
-    expect(shown.slice(shown.indexOf('Tasks >'), shown.indexOf('Tasks >') + 6)).toEqual(['Tasks >', '  Detach…', '  Take Offline', '  Bring Online', '  Restore >', '    Database…'])
-    expect(resolve(model, true).some(title => title.startsWith('Tasks'))).toBe(false)
+    // A submenu with nothing placed in it stays out: Restore hides, and Tasks keeps Detach… and the state group.
+    const model = (menu: MenuId) => menu === 'explorer.tasks.restore' ? [] as MenuEntry[] : buildMenuModel(menu, 'win32')
+    expect(resolve(model).filter(title => title.startsWith('  '))).toEqual(['  Detach…', '  Take Offline', '  Bring Online'])
+    // The Databases folder's Restore Database… (R) and Restore Files and Filegroups… (E), and no Tasks there.
+    const folderState = contextRecord('win32', { backendReady: true, hasConnection: true, explorerHasSelection: true, explorerSelectionKind: 'folder', ...actionContextValues(actionMenuState({ kind: 'folder', folder: 'databases' })) })
+    const folder = titles(resolveMenu('explorer.context', { platform: 'win32', state: folderState, target: { explorerNode: 'folder', explorerServerLost: false }, commands, keybindings }))
+    expect(folder).toContain('Restore Database…')
+    expect(folder).toContain('Restore Files and Filegroups…')
+    expect(folder.some(title => title.startsWith('Tasks'))).toBe(false)
     // docs/object-actions.md names them as the menus do (its generator loads in plain Node, without menus.ts).
     expect(renderObjectActionsDocs()).toContain(`${submenus['explorer.tasks'].title} (\`explorer.tasks\`) and ${submenus['explorer.tasks'].title} › ${submenus['explorer.tasks.restore'].title} (\`explorer.tasks.restore\`)`)
   })
@@ -301,15 +403,19 @@ describe('object action catalogue', () => {
       files: 1_024, filegroups: 256, logins: 1_024, collations: 8_192, statements: 512, scriptChars: 1_000_000, detachFiles: 256, filePath: 260 })
     // A scripted action always fits a query window, so Script Action to New Query Window can always run it.
     expect(actionLimits.scriptChars).toBeLessThanOrEqual(maxScriptCharacters)
-    expect(actionErrorCodes.filter(code => !actionErrorRetryable[code])).toEqual(['NOT_FOUND', 'NOT_SUPPORTED', 'DEPENDENTS', 'NAME_IN_USE'])
+    expect(actionErrorCodes.filter(code => !actionErrorRetryable[code])).toEqual(['NOT_FOUND', 'NOT_SUPPORTED', 'DEPENDENTS', 'NAME_IN_USE', 'PATH_NOT_FOUND', 'MEDIA', 'BACKUP_MISMATCH',
+      'TAIL_LOG_NEEDED', 'RESTORE_SEQUENCE'])
+    // The server file picker: a path fits sys.master_files.physical_name, and main's 15 s deadline outlasts the backend's budget.
+    expect([actionLimits.serverPath, actionLimits.browseEntries, actionLimits.browseMs]).toEqual([260, 2_000, 10_000])
+    expect(actionLimits.browseMs).toBeLessThan(serverFilesDeadlineMs)
   })
   it('lists only error codes the backend produces, so a renderer branch on one can be reached', () => {
-    const backend = ['ActionService.cs', 'ActionErrors.cs'].map(name => readFileSync(join('backend', 'Varia.Backend', 'Actions', name), 'utf8')).join('\n')
+    const backend = ['ActionService.cs', 'ActionErrors.cs', 'ServerFiles.cs', 'RestoreDescribe.cs'].map(name => readFileSync(join('backend', 'Varia.Backend', 'Actions', name), 'utf8')).join('\n')
     // Each code appears as a C# string literal: ActionErrors.Numbers, an Error(...) or Create(...) call, or (AUTH_*) the sign-in's codes.
     expect(actionErrorCodes.filter(code => !backend.includes(`"${code}"`))).toEqual([])
   })
   it('loads in plain Node 24, as the fake backend and scripts load the other catalogues', () => {
-    const files = ['catalog.ts', 'database.ts', 'schema.ts', 'docs.ts'].map(name => join('src', 'shared', 'actions', name))
+    const files = ['catalog.ts', 'database.ts', 'files.ts', 'schema.ts', 'docs.ts', 'restore.ts', 'restore-schema.ts', 'restore-plan.ts'].map(name => join('src', 'shared', 'actions', name))
     for (const file of files) expect(() => stripTypeScriptTypes(readFileSync(file, 'utf8'), { mode: 'strip' }), file).not.toThrow()
     const script = files.map(file => `await import(${JSON.stringify(pathToFileURL(file).href)})`).join(';')
     const result = spawnSync(process.execPath, ['--input-type=module', '--disable-warning=ExperimentalWarning', '-e', script], { encoding: 'utf8' })

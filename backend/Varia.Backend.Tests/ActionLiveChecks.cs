@@ -3,6 +3,7 @@ using System.Text.Json;
 using Varia.Backend.Actions;
 using Varia.Backend.Explorer;
 using Varia.Backend.Protocol;
+using Varia.Backend.Scripting;
 
 namespace Varia.Backend.Tests;
 
@@ -83,6 +84,8 @@ internal static class ActionLiveChecks
             {
                 // sp_detach_db's @skipchecks is true or false only (ActionSql.Checked); its name is the procedure's own argument.
                 var plan = template == ActionTemplate.DetachDatabase ? ActionSql.Detach(name, updateStatistics: true)
+                    // The restore cleanup's second name is a database id (Checked); its dry run selects the DROP without the RESTORING check.
+                    : template == ActionTemplate.DropRestoring ? ActionSql.DropRestoring(name, 1)
                     : new PlannedStatement(template, "master", Enumerable.Repeat(name, ActionSql.ParameterCount(template)).ToList());
                 var selected = await service.Actions.DryRunAsync(info.Id, plan, CancellationToken.None);
                 var expected = template switch
@@ -105,6 +108,175 @@ internal static class ActionLiveChecks
         }
         await using var scratch = ScratchDatabase.Bare((text, database) => Sql(text, database));
         await ScratchAsync(check, service, client, json, Sql, options, scratch);
+        await DeleteParityAsync(check, service, info, options, json, scratch);
+    }
+
+    /// <summary>Runs a statement in a query session of its own (or <paramref name="session"/>, which the caller closes).</summary>
+    private static async Task<SqlRun> Query(SqlService service, ConnectionInfo info, JsonSerializerOptions json, string text, string database = "master", string? session = null)
+    {
+        var id = session ?? Guid.NewGuid().ToString();
+        try
+        {
+            var result = (QueryResult)await service.DispatchAsync("query.execute", JsonSerializer.SerializeToElement(
+                new QueryArgs(info.Id, id, database, text, Guid.NewGuid().ToString(), 100_000, 300, StopOnError: true), json), json);
+            return new(result.Status, result.Error?.Message, [.. result.ResultSets.Select(set => LiveResultChecks.RowsOf(service.Results, set))]);
+        }
+        finally { if (session is null) await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(id), json), json); }
+    }
+
+    /// <summary>Delete parity (D3d), in the scratch databases _del, _delc and its snapshot _delcs. An offline database's Delete warns
+    /// that its files stay, runs no SINGLE_USER, drops it and leaves its files on disk (attached again and dropped afterwards, which
+    /// deletes them). A query tab's session with an open transaction is listed and counted. A DROP its snapshot fails (3709,
+    /// DEPENDENTS) after Close existing connections restores multi-user access, and restricted access for a restricted database. A
+    /// login without VIEW SERVER STATE deletes the database it owns (DeleteOwnedAsync). Also the focused lane --delete-live, which
+    /// requires the permission checks.</summary>
+    public static async Task DeleteParityAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, ConnectOptions options, JsonSerializerOptions json, ScratchDatabase scratch,
+        bool requirePermissionChecks = false)
+    {
+        var client = new Client(service, info.Id, json);
+        Task<SqlRun> Sql(string text, string database = "master", string? session = null) => Query(service, info, json, text, database, session);
+        async Task<SqlRun> Exec(string text, string database = "master")
+        {
+            var result = await Sql(text, database);
+            if (result.Status != "completed") throw new InvalidOperationException("Delete parity fixture failed: " + result.Error);
+            return result;
+        }
+        async Task<bool> Exists(string file) => (await Exec("DECLARE @r TABLE (e int, d int, p int); INSERT @r EXEC master.dbo.xp_fileexist " + Literal(file) + "; SELECT e FROM @r;")).Scalar == "1";
+        async Task<string?> Access(string name) => (await Exec("SELECT user_access_desc FROM sys.databases WHERE name = " + Literal(name) + ";")).Scalar;
+
+        // Offline: the warning, no SINGLE_USER (no session can be in it), and the files stay where they are. Deleting them
+        // afterwards needs xp_delete_files (SQL Server 2019 and later): an older server skips the check rather than leave them.
+        var offline = scratch.DeleteOffline;
+        var major = int.Parse((await Exec("SELECT CONVERT(int, SERVERPROPERTY('ProductMajorVersion'));")).Scalar!, System.Globalization.CultureInfo.InvariantCulture);
+        var files = major >= 15 ? await scratch.CreateDeleteOfflineAsync() : [];
+        await DeleteOwnedAsync(check, service, info, options, json, scratch, major, requirePermissionChecks);
+        if (major < 15) Console.WriteLine("Offline Delete checks skipped: deleting the files an offline database's DROP leaves needs SQL Server 2019 or later.");
+        else try
+        {
+            var described = await client.Describe(new ObjectRefDto("database", Name: offline));
+            var deleted = await client.Delete(new ObjectRefDto("database", Name: offline), close: true, history: true);
+            var gone = (await Exec("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(offline) + ";")).Scalar == "0";
+            var left = new List<bool>();
+            foreach (var file in files) left.Add(await Exists(file));
+            check(described.DeleteTarget is { CloseConnectionsNote: ActionService.OfflineCloseNote } target && target.Warnings.Contains(new ActionWarningDto(ActionService.OfflineWarning, false)) && Done(deleted)
+                && deleted.Steps.Select(step => step.Title).SequenceEqual(["Drop the database", "Delete backup and restore history"]) && gone && files.Count >= 2 && left.All(stays => stays),
+                "an offline database's Delete warns that its files stay, greys Close existing connections, runs no SINGLE_USER, drops it and leaves its " + files.Count + " files on disk (" + string.Join(", ", left) + ")");
+        }
+        finally
+        {
+            // The files the DROP left; while the database is still there (a failure above), disposal brings it online and drops it.
+            if ((await Sql("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(offline) + ";")).Scalar == "0")
+                foreach (var file in files) await Sql(ScratchDatabase.DeleteFileSql(file));
+        }
+        var cleaned = new List<bool>();
+        foreach (var file in files) cleaned.Add(await Exists(file));
+        check(cleaned.All(stays => !stays), "the files the offline database's DROP left are deleted afterwards (" + string.Join(", ", cleaned) + ")");
+
+        // A snapshot fails the DROP (3709) after SINGLE_USER: the database's access is restored, multi-user or restricted.
+        if (!await scratch.CreateDeleteCompensatedAsync())
+        {
+            Console.WriteLine("Delete compensation checks skipped: this server could not create a database snapshot.");
+            return;
+        }
+        var compensated = scratch.DeleteCompensated;
+        var database = new ObjectRefDto("database", Name: compensated);
+        var tab = Guid.NewGuid().ToString();
+        try
+        {
+            // A query tab in the database holding an open transaction: listed with it, and counted.
+            var spid = (await Sql("BEGIN TRANSACTION; SELECT @@SPID;", compensated, tab)).Scalar;
+            var described = await client.Describe(database);
+            var listed = described.DeleteTarget?.Blockers?.FirstOrDefault(blocker => blocker.SessionId.ToString(System.Globalization.CultureInfo.InvariantCulture) == spid);
+            check(described.DeleteTarget is { Sessions: >= 1, WithTransaction: >= 1, CloseConnectionsNote: null } target && listed is { OpenTransaction: true }
+                && target.Warnings.Contains(new ActionWarningDto(ActionService.SnapshotsWarning, true)) && target.Blockers!.Count <= 8,
+                "Delete Object lists a query tab's session in the database with its open transaction, counts it, and warns of the database's snapshot (session " + spid + "; listed "
+                + string.Join(", ", described.DeleteTarget?.Blockers?.Select(blocker => blocker.SessionId) ?? []) + "; " + described.DeleteTarget?.Sessions + " sessions, " + described.DeleteTarget?.WithTransaction + " with a transaction; " + described.Error?.Message + ")");
+        }
+        finally { await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(tab), json), json); }
+        // A query tab in master whose transaction wrote to the database: SINGLE_USER WITH ROLLBACK IMMEDIATE rolls it back too, so
+        // it is counted, listed with its transaction and named as a tab, though the session's own database is master.
+        await Exec("CREATE TABLE dbo.held (id int);", compensated);
+        var outside = Guid.NewGuid().ToString();
+        try
+        {
+            var spid = (await Sql("BEGIN TRANSACTION; INSERT INTO " + Bracket(compensated) + ".dbo.held VALUES (1); SELECT @@SPID;", "master", outside)).Scalar;
+            var described = await client.Describe(database);
+            var listed = described.DeleteTarget?.Blockers?.FirstOrDefault(blocker => blocker.SessionId.ToString(System.Globalization.CultureInfo.InvariantCulture) == spid);
+            check(described.DeleteTarget is { Sessions: >= 1, WithTransaction: >= 1 } target && listed is { OpenTransaction: true } && target.TransactionTabs is { } named && named.Contains(outside),
+                "Delete Object counts, lists and names a query tab in master holding a transaction in the database (session " + spid + "; listed "
+                + string.Join(", ", described.DeleteTarget?.Blockers?.Select(blocker => blocker.SessionId) ?? []) + "; " + described.DeleteTarget?.Sessions + " sessions, "
+                + described.DeleteTarget?.WithTransaction + " with a transaction; " + described.DeleteTarget?.TransactionTabs?.Count + " tabs named; " + described.Error?.Message + ")");
+        }
+        finally { await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(outside), json), json); }
+        var multi = await client.Delete(database, close: true);
+        var multiAccess = await Access(compensated);
+        check(multi is { Error.Code: "DEPENDENTS" } && multi.Steps.Select(step => (step.Status, step.Title, step.Compensates)).SequenceEqual([("done", "Close existing connections", (bool?)null),
+                ("failed", "Drop the database", null), ("done", "Restore multi-user access", true)])
+            && multi.Error.Message.EndsWith("Then \"Restore multi-user access\" completed.", StringComparison.Ordinal) && multiAccess == "MULTI_USER",
+            "a DROP its snapshot fails after Close existing connections restores multi-user access (" + multi.Error?.Message + "; " + multiAccess + ")");
+        await Exec("ALTER DATABASE " + Bracket(compensated) + " SET RESTRICTED_USER WITH ROLLBACK IMMEDIATE;");
+        var restricted = await client.Delete(database, close: true);
+        var restrictedAccess = await Access(compensated);
+        check(restricted is { Error.Code: "DEPENDENTS" } && restricted.Steps.Last() is { Status: "done", Title: "Restore restricted user access", Compensates: true } && restrictedAccess == "RESTRICTED_USER",
+            "and restricted access for a restricted database (" + restrictedAccess + ")");
+    }
+
+    /// <summary>Delete parity (D3d) for a login without VIEW SERVER STATE that owns a database (_delo), as a dbcreator owner of their
+    /// own database is: Delete Object describes it with its sessions unknown (the transaction DMVs would raise error 300), scripts its
+    /// DROP and deletes it. On SQL Server 2022 and later, VIEW SERVER STATE with VIEW SERVER PERFORMANCE STATE denied answers the same.</summary>
+    private static async Task DeleteOwnedAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, ConnectOptions options, JsonSerializerOptions json, ScratchDatabase scratch,
+        int major, bool required)
+    {
+        async Task<SqlRun> Exec(string text)
+        {
+            var result = await Query(service, info, json, text);
+            if (result.Status != "completed") throw new InvalidOperationException("Delete permission fixture failed: " + result.Error);
+            return result;
+        }
+        if (!await scratch.CreateLoginAsync())
+        {
+            if (required) throw new InvalidOperationException("Delete parity's permission checks require a SQL Server that accepts SQL logins.");
+            Console.WriteLine("Delete Object permission checks skipped: this server accepts Windows logins only.");
+            return;
+        }
+        var owned = await scratch.CreateDeleteOwnedAsync();
+        var login = Bracket(scratch.Login!);
+        string? limitedId = null;
+        try
+        {
+            var limited = (ConnectionInfo)await service.DispatchAsync("connections.connect", JsonSerializer.SerializeToElement(options with
+            {
+                Database = "master", Authentication = "sql", Username = scratch.Login, Password = scratch.Password
+            }, json), json);
+            limitedId = limited.Id;
+            var client = new Client(service, limited.Id, json);
+            var database = new ObjectRefDto("database", Name: owned);
+            static bool Unknown(ActionDescribeResult described) =>
+                described is { Error: null, DeleteTarget: { Sessions: null, WithTransaction: null, Blockers: null, BlockersTruncated: null, TransactionTabs: null } };
+            var described = await client.Describe(database);
+            var script = await client.Script(new ActionArgs("delete", limited.Id, Guid.NewGuid().ToString(), database, null, true, false));
+            check(Unknown(described) && described.DeleteTarget!.Owner == ScriptingErrors.Display(scratch.Login!) && script is { Error: null, Database: "master" }
+                && script.Text!.Contains("DROP DATABASE " + Bracket(owned), StringComparison.Ordinal),
+                "a login without VIEW SERVER STATE describes Delete Object on the database it owns, its sessions unknown, and scripts the DROP ("
+                + described.Error?.Code + " " + described.Error?.Message + "; " + script.Error?.Message + ")");
+            if (major >= 16)
+            {
+                await Exec("GRANT VIEW SERVER STATE TO " + login + ";\nDENY VIEW SERVER PERFORMANCE STATE TO " + login + ";");
+                var denied = await client.Describe(database);
+                await Exec("REVOKE VIEW SERVER PERFORMANCE STATE FROM " + login + ";\nREVOKE VIEW SERVER STATE FROM " + login + ";");
+                check(Unknown(denied), "and with VIEW SERVER STATE but VIEW SERVER PERFORMANCE STATE denied (" + denied.Error?.Code + " " + denied.Error?.Message + ")");
+            }
+            var deleted = await client.Delete(database);
+            var gone = (await Exec("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(owned) + ";")).Scalar == "0";
+            check(Done(deleted) && gone, "and deletes it (" + deleted.Error?.Code + " " + deleted.Error?.Message + ")");
+        }
+        finally
+        {
+            if (limitedId is not null) await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(limitedId), json), json);
+            // The login is this run's own: its sessions, if a pool kept one, are ours to end before the login is dropped.
+            await Query(service, info, json, "DECLARE @kill nvarchar(max) = N'';\nSELECT @kill += N'KILL ' + CONVERT(nvarchar(11), s.session_id) + N';' FROM sys.dm_exec_sessions AS s "
+                + "WHERE s.login_name = " + Literal(scratch.Login!) + ";\nEXEC (@kill);");
+        }
     }
 
     private static async Task ScratchAsync(Action<bool, string> check, SqlService service, Client client, JsonSerializerOptions json, Func<string, string, string?, Task<SqlRun>> sql,

@@ -124,8 +124,8 @@ describe('icon registry', () => {
   it('is the only way the renderer draws an icon', () => {
     // Icon.tsx renders the registry; codiconClass covers Monaco decorations and elements that are the glyph themselves.
     // The docking guides are drop-target diagrams, not icons; a live chart's legend swatches are samples of its lines, in
-    // their colors and dashes.
-    const own = new Set(['Icon.tsx']), diagrams = new Set(['docking-guides.ts', 'live/LiveChart.tsx'])
+    // their colors and dashes; the Backup Timeline draws backups and log coverage on a time axis.
+    const own = new Set(['Icon.tsx']), diagrams = new Set(['docking-guides.ts', 'live/LiveChart.tsx', 'restore/BackupTimeline.tsx'])
     const classes = sources.filter(({ file, code }) => !own.has(file) && /codicon-/.test(code)).map(({ file }) => file)
     expect(classes, 'use <Icon name> or codiconClass() from src/shared/icons.ts').toEqual([])
     const svgs = sources.filter(({ file, code }) => !own.has(file) && !diagrams.has(file) && /<svg\b|createElementNS\(/.test(code)).map(({ file }) => file)
@@ -145,5 +145,18 @@ describe('icon registry', () => {
     const result = spawnSync(process.execPath, ['--input-type=module', '--disable-warning=ExperimentalWarning', '-e', `await import(${JSON.stringify(pathToFileURL(file).href)})`], { encoding: 'utf8' })
     expect(result.stderr).toBe('')
     expect(result.status).toBe(0)
+  })
+})
+
+describe('smoke fixtures', () => {
+  // A stub's node with an icon id the registry lacks renders no icon, and the smoke run passes without noticing.
+  it('name only registered icons in the stub backends', () => {
+    const files = ['scripts/fixtures', 'tests/fixtures'].flatMap(dir => readdirSync(dir).filter(file => file.endsWith('.mjs')).map(file => join(dir, file)))
+    const named = files.flatMap(file => {
+      const code = readFileSync(file, 'utf8')
+      return [...code.matchAll(/\bobject\(\{[^}]*\}, [^,]+, '([^']+)'/g), ...code.matchAll(/\bicon: '([^']+)'/g)].map(match => ({ file: file.replace(/\\/g, '/'), icon: match[1] }))
+    })
+    expect(named.length).toBeGreaterThan(20)
+    expect(named.filter(({ icon }) => !isIconId(icon))).toEqual([])
   })
 })

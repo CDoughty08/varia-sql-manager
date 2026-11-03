@@ -83,7 +83,7 @@ internal static class DetachLiveChecks
         {
             var described = await Describe(db);
             var refused = await Execute(Detach(db, drop: true, statistics: false, identity: identity));
-            var forced = await service.Actions.ExecutePlanAsync(info.Id, Guid.NewGuid().ToString(), "detach", ActionService.Plan(Detach(db, true, false), Database(db), userAccess: 0), CancellationToken.None);
+            var forced = await service.Actions.ExecutePlanAsync(info.Id, Guid.NewGuid().ToString(), "detach", ActionService.Plan(Detach(db, true, false), Database(db), new ActionService.DeleteFacts(false, 0)), CancellationToken.None);
             check(described.DatabaseState?.Warnings is [{ Blocking: true }] && refused is { Error.Code: "NOT_SUPPORTED" } && refused.Steps.Count == 0
                 && forced.Error?.Code == "DEPENDENTS" && Steps(forced) == "done:Close existing connections, failed:Detach the database, done:Restore multi-user access"
                 && forced.Steps[^1].Compensates == true && await State() == "ONLINE MULTI_USER",
@@ -217,7 +217,7 @@ internal static class DetachLiveChecks
         identity = await Identity();
         var readOnlyRefused = await Execute(Detach(db, drop: true, statistics: true, identity: identity));
         scratch.Detaching(db, paths);
-        var readOnly = await service.Actions.ExecutePlanAsync(info.Id, Guid.NewGuid().ToString(), "detach", ActionService.Plan(Detach(db, true, true), Database(db), userAccess: 0), CancellationToken.None);
+        var readOnly = await service.Actions.ExecutePlanAsync(info.Id, Guid.NewGuid().ToString(), "detach", ActionService.Plan(Detach(db, true, true), Database(db), new ActionService.DeleteFacts(false, 0)), CancellationToken.None);
         var readOnlyGone = (await Sql("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(db) + ";")).Scalar == "0";
         if (readOnlyGone)
         {

@@ -21,7 +21,8 @@
     "check": "npm run typecheck && npm test && electron-vite build",
     "bench": "vitest run --config vitest.bench.config.ts",
     "bench:e2e": "node scripts/ipc-bench.mjs",
-    "bench:grid": "node scripts/grid-bench.mjs"
+    "bench:grid": "node scripts/grid-bench.mjs",
+    "package": "electron-builder --publish never"
   },
   "dependencies": {
     "dockview-react": "8.4.1",
@@ -41,6 +42,7 @@
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "5.2.0",
     "electron": "44.6.0",
+    "electron-builder": "26.8.1",
     "electron-vite": "5.0.0",
     "typescript": "7.0.2",
     "vite": "7.3.7",

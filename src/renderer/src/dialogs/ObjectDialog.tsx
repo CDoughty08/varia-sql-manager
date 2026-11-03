@@ -9,9 +9,12 @@ import StepList from '../kit/StepList'
 import { trapFocus } from '../trap-focus'
 import { dialogEnter } from './dialog-keys'
 import type { DialogPhase, OpenObjectDialog } from './ObjectDialogService'
+import AttachDatabasePage from './pages/AttachDatabasePage'
 import DatabaseStatePage from './pages/DatabaseStatePage'
 import DeleteObjectPage from './pages/DeleteObjectPage'
 import DetachDatabasePage from './pages/DetachDatabasePage'
+import { NewLoginGeneralPage, NewLoginServerRolesPage, NewLoginStatusPage } from './pages/NewLoginPages'
+import UserMappingPage from './pages/UserMappingPage'
 
 /** A page of an object dialog: the open dialog's snapshot, and whether its controls may change now. */
 export interface PageProps { readonly open: OpenObjectDialog; readonly editable: boolean }
@@ -19,6 +22,8 @@ export interface PageProps { readonly open: OpenObjectDialog; readonly editable:
  *  document instead (src/renderer/src/properties). */
 export const dialogPages: { readonly [D in ModalDialogId]: Readonly<Partial<Record<PageId, ComponentType<PageProps>>>> } = {
   deleteObject: { general: DeleteObjectPage },
+  attachDatabase: { general: AttachDatabasePage },
+  newLogin: { general: NewLoginGeneralPage, serverRoles: NewLoginServerRolesPage, userMapping: UserMappingPage, status: NewLoginStatusPage },
   takeOffline: { general: DatabaseStatePage },
   bringOnline: { general: DatabaseStatePage },
   detachDatabase: { general: DetachDatabasePage }
@@ -143,15 +148,15 @@ export function PageList({ pages, current, tabs, rendered, onPage, onKeyDown, na
     : <nav ref={navRef} className="object-dialog-pages" aria-label="Select a page" onKeyDown={onKeyDown}><div className="object-dialog-caption">Select a page</div>{buttons}</nav>
 }
 
-/** A run's steps under the message bar, for dialogs whose spec asks for them (`DialogSpec.steps`). A long list scrolls,
- *  and a new step scrolls it to the end, where the run is. */
+/** A run's steps under the message bar, for dialogs whose spec asks for them (`DialogSpec.steps`), each by its title (a
+ *  failed step's SQL Server text is in the message bar). A long list scrolls, and a new step scrolls it to the end, where the run is. */
 export function StepsPanel({ steps }: { readonly steps: readonly ActionStep[] }) {
   const panel = useRef<HTMLElement>(null)
   useEffect(() => { if (panel.current) panel.current.scrollTop = panel.current.scrollHeight }, [steps.length])
   if (!steps.length) return null
   return <section ref={panel} className="object-dialog-steps" aria-labelledby="object-dialog-steps">
     <div className="object-dialog-caption" id="object-dialog-steps">Steps</div>
-    <StepList labelledBy="object-dialog-steps" steps={steps.map(step => ({ state: step.status, text: step.title }))} />
+    <StepList labelledBy="object-dialog-steps" steps={steps.map(step => ({ state: step.status, text: step.detail ? `${step.title}: ${step.detail}` : step.title }))} />
   </section>
 }
 
@@ -178,6 +183,18 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
   useEffect(() => setVisited(seen => seen.has(open.page) ? seen : new Set([...seen, open.page])), [open.page])
   // The dialog takes focus as it opens, so Enter is OK and Escape is Cancel, as in SSMS.
   useEffect(() => { form.current?.focus() }, [])
+  // A run disables the page and the field that had focus, which drops focus to the body. When it ends, focus comes back: to the
+  // password after the server's policy refused it (it must be retyped), else to the dialog, so Enter and Escape work again.
+  const wasBusy = useRef(false)
+  useEffect(() => {
+    if (busy) { wasBusy.current = true; return }
+    if (!wasBusy.current) return
+    wasBusy.current = false
+    const active = document.activeElement
+    if (active && active !== document.body && form.current?.contains(active)) return
+    const password = open.error?.code === 'PASSWORD_POLICY' ? form.current?.querySelector<HTMLInputElement>('.object-dialog-page:not([hidden]) input[type="password"]:not(:disabled)') : null
+    if (password) { password.focus(); password.select() } else form.current?.focus()
+  }, [busy, open.error])
   const pageKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     const next = pageForKey(spec.pages, open.page, event.key, tabs)
     if (!next) return
@@ -219,6 +236,7 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
         <div className="object-dialog-toolbar"><ScriptButton disabled={!scriptAvailable(open.phase, usable)} onScript={destination => void dialogs.script(destination)} /></div>
         {open.error && <div className={'object-dialog-message' + (open.phase === 'stopped' ? ' info' : '')} role={open.phase === 'stopped' ? 'status' : 'alert'}>
           <Icon name={open.phase === 'stopped' ? 'info' : 'error'} /><span>{open.error.message}</span></div>}
+        {executing && open.refusal && <div className="object-dialog-message" role="alert"><Icon name="error" /><span>{open.refusal}</span></div>}
         {!open.error && open.notice && <div className="object-dialog-message info" role="status"><Icon name="info" /><span>{open.notice}</span></div>}
         {spec.steps && open.steps && <StepsPanel steps={open.steps} />}
         {mounted.map(({ page, shown }) => {
@@ -229,12 +247,33 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
       </div>
     </div>
     <div className="connection-footer">
-      <span className="object-dialog-footer-note" id="object-dialog-blocked">{!busy && blocked}</span>
-      {succeeded
-        ? <button ref={closeButton} className="primary" type="button" onClick={close}>Close</button>
-        : <><button className="primary" type="submit" aria-describedby={blocked && !busy ? 'object-dialog-blocked' : undefined}
-          disabled={busy || !!blocked || open.phase === 'loadFailed' || open.phase === 'disconnected'}>OK</button>
-          {executing ? <button ref={stopButton} type="button" onClick={() => dialogs.stop()}>Stop</button> : <button type="button" onClick={close}>{open.phase === 'disconnected' ? 'Close' : 'Cancel'}</button>}</>}
+      <span className="object-dialog-blocked" id="object-dialog-blocked">{!busy && blocked}</span>
+      <DialogButtons phase={open.phase} busy={busy} blocked={blocked} closeRef={closeButton} stopRef={stopButton} onClose={close} onStop={() => dialogs.stop()} />
     </div>
   </form></div>
+}
+
+interface DialogButtonsProps {
+  readonly phase: DialogPhase
+  readonly busy: boolean
+  readonly blocked: string | undefined
+  readonly closeRef: Ref<HTMLButtonElement>
+  readonly stopRef: Ref<HTMLButtonElement>
+  onClose(): void
+  onStop(): void
+}
+/**
+ * OK and Cancel, Stop while a run executes, or only Close once a dialog that stays open has succeeded. Stop and Cancel are
+ * different elements (their keys): focus the run moved to Stop then drops as Stop goes, and the run's end puts it back on the
+ * password the server's policy refused, or on the dialog, instead of staying on a reused button that now says Cancel.
+ */
+export function DialogButtons({ phase, busy, blocked, closeRef, stopRef, onClose, onStop }: DialogButtonsProps) {
+  if (phase === 'succeeded') return <button key="close" ref={closeRef} className="primary" type="button" onClick={onClose}>Close</button>
+  return <>
+    <button key="ok" className="primary" type="submit" aria-describedby={blocked && !busy ? 'object-dialog-blocked' : undefined}
+      disabled={busy || !!blocked || phase === 'loadFailed' || phase === 'disconnected'}>OK</button>
+    {phase === 'executing'
+      ? <button key="stop" ref={stopRef} type="button" onClick={onStop}>Stop</button>
+      : <button key="cancel" type="button" onClick={onClose}>{phase === 'disconnected' ? 'Close' : 'Cancel'}</button>}
+  </>
 }
