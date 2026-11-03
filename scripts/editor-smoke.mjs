@@ -64,6 +64,8 @@ const advancedItem = async name => {
 }
 const closeMenus = async () => { await page.keyboard.press('Escape'); await page.keyboard.press('Escape'); await expect(page.getByRole('menu')).toHaveCount(0) }
 const glyphs = () => page.locator('.monaco-editor ' + part.bookmarkGlyph)
+/** How many view lines Monaco draws: one per line, or more for a line that word wrap breaks. */
+const viewLines = () => page.locator('.monaco-editor .view-lines .view-line').count()
 
 try {
   await launch()
@@ -194,7 +196,10 @@ try {
   console.log('Editor checks: Ctrl+K Ctrl+S › Begin surrounds the selection with BEGIN … END.')
 
   // 8. Edit › Advanced › View White Space shows whitespace glyphs and is checked; Word Wrap is there too.
-  await setText('a b\tc')
+  // A line far wider than the editor: wrapped, it takes several view lines.
+  const longLine = 'a b\tc' + ' wrap'.repeat(400)
+  await setText(longLine)
+  await expect.poll(viewLines).toBe(1)
   await advanced('h')
   // Monaco draws the glyphs in its overlay layer: an SVG path per line, or .mwh characters.
   await expect(page.locator('.monaco-editor .view-overlays svg path, .monaco-editor .view-overlays .mwh').first()).toBeAttached()
@@ -202,8 +207,10 @@ try {
   await closeMenus()
   await textbox().focus()
   await advanced('w')
-  // An open menu shows the state it opened with, so it opens once main has saved the change.
   await expect.poll(async () => JSON.parse(await readFile(join(profile, 'settings.json'), 'utf8')).values).toMatchObject({ 'textEditor.sql.viewWhiteSpace': true, 'textEditor.sql.wordWrap': true })
+  // An open menu shows the state it opened with, so it opens once the editor wraps. The file alone is too early: main
+  // writes it before the page hears of the change, and Chromium runs the menu's key presses before that message.
+  await expect.poll(viewLines).toBeGreaterThan(1)
   await expect(await advancedItem('Word Wrap')).toHaveAttribute('aria-checked', 'true')
   await closeMenus()
   console.log('Editor checks: View White Space and Word Wrap are Edit › Advanced toggles, saved to settings.json.')
@@ -212,7 +219,11 @@ try {
   expect(failures).toEqual([])
   await close()
   await launch()
-  await textbox().focus()
+  // The page may start before main's settings arrive (SettingsService waits 1.5 s at most), so the menu opens once the
+  // editor shows them.
+  await setText(longLine)
+  await expect.poll(viewLines).toBeGreaterThan(1)
+  await expect(page.locator('.monaco-editor .view-overlays svg path, .monaco-editor .view-overlays .mwh').first()).toBeAttached()
   await expect(await advancedItem('View White Space')).toHaveAttribute('aria-checked', 'true')
   await expect(menu('Advanced').getByRole('menuitemcheckbox', { name: 'Word Wrap', exact: true })).toHaveAttribute('aria-checked', 'true')
   await closeMenus()
