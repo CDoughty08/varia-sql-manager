@@ -187,6 +187,15 @@ describe('smoke selectors', () => {
     const bare = [...source.matchAll(/hasText: \/\^\d+\$\/ \}\) \}\)\.locator\(gridPart\.cell\)\.nth\(\d+\)\.click\(\)/g)].map(match => `${file}:${source.slice(0, match.index).split('\n').length}`)
     expect(bare).toEqual([])
   })
+  it('waits for a database the object actions select only through expectSelectedExplorerRow', () => {
+    // The tree scrolls a database it selects after a reload into view, which can leave server-a outside the rendered rows,
+    // where explorerRow cannot match the path (a Windows CI run lost Attach's SalesCopy this way).
+    const file = 'scripts/object-actions-smoke.mjs'
+    const source = readFileSync(file, 'utf8')
+    expect(source).toMatch(/\bexpectSelectedExplorerRow\(page, 'server-a', 'Databases', 'SalesCopy'\)/)
+    const bare = [...source.matchAll(/await expect\(await explorerRow\(page, [^\n]*\)\)\.toHaveAttribute\('aria-selected', 'true'\)/g)].map(match => `${file}:${source.slice(0, match.index).split('\n').length}`)
+    expect(bare).toEqual([])
+  })
   it('opens and reads Object Explorer menus in the object actions suite only through the explorer-tree.mjs helpers', () => {
     // A forced click on a menu item whose menu has closed lands on the tree below and selects another row, so nothing runs
     // (a Windows run lost Delete so, after the right-click's scroll closed AppData's menu); the helpers press until the
