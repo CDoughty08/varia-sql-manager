@@ -245,11 +245,32 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
     </div>
     <div className="connection-footer">
       <span className="object-dialog-blocked" id="object-dialog-blocked">{!busy && blocked}</span>
-      {succeeded
-        ? <button ref={closeButton} className="primary" type="button" onClick={close}>Close</button>
-        : <><button className="primary" type="submit" aria-describedby={blocked && !busy ? 'object-dialog-blocked' : undefined}
-          disabled={busy || !!blocked || open.phase === 'loadFailed' || open.phase === 'disconnected'}>OK</button>
-          {executing ? <button ref={stopButton} type="button" onClick={() => dialogs.stop()}>Stop</button> : <button type="button" onClick={close}>{open.phase === 'disconnected' ? 'Close' : 'Cancel'}</button>}</>}
+      <DialogButtons phase={open.phase} busy={busy} blocked={blocked} closeRef={closeButton} stopRef={stopButton} onClose={close} onStop={() => dialogs.stop()} />
     </div>
   </form></div>
+}
+
+interface DialogButtonsProps {
+  readonly phase: DialogPhase
+  readonly busy: boolean
+  readonly blocked: string | undefined
+  readonly closeRef: Ref<HTMLButtonElement>
+  readonly stopRef: Ref<HTMLButtonElement>
+  onClose(): void
+  onStop(): void
+}
+/**
+ * OK and Cancel, Stop while a run executes, or only Close once a dialog that stays open has succeeded. Stop and Cancel are
+ * different elements (their keys): focus the run moved to Stop then drops as Stop goes, and the run's end puts it back on the
+ * password the server's policy refused, or on the dialog, instead of staying on a reused button that now says Cancel.
+ */
+export function DialogButtons({ phase, busy, blocked, closeRef, stopRef, onClose, onStop }: DialogButtonsProps) {
+  if (phase === 'succeeded') return <button key="close" ref={closeRef} className="primary" type="button" onClick={onClose}>Close</button>
+  return <>
+    <button key="ok" className="primary" type="submit" aria-describedby={blocked && !busy ? 'object-dialog-blocked' : undefined}
+      disabled={busy || !!blocked || phase === 'loadFailed' || phase === 'disconnected'}>OK</button>
+    {phase === 'executing'
+      ? <button key="stop" ref={stopRef} type="button" onClick={onStop}>Stop</button>
+      : <button key="cancel" type="button" onClick={onClose}>{phase === 'disconnected' ? 'Close' : 'Cancel'}</button>}
+  </>
 }

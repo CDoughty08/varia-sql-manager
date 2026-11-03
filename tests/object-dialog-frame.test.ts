@@ -117,6 +117,22 @@ describe('Take Database Offline and Bring Database Online page', () => {
     expect(phases.filter(phase => scriptAvailable(phase, true))).toEqual(['ready', 'failed', 'stopped'])
     expect(scriptAvailable('ready', false)).toBe(false)
   })
+  it('keeps Stop and Cancel different buttons, so focus moved to Stop is not left on Cancel when a run ends', async () => {
+    // Focus moves to Stop as a run starts; were Cancel the same element, focus would stay there after New Login's
+    // PASSWORD_POLICY instead of returning to Password.
+    const { DialogButtons } = await import('../src/renderer/src/dialogs/ObjectDialog')
+    type Shown = { key: string | null; props: { children: string; disabled?: boolean } }
+    const buttons = (phase: Parameters<typeof DialogButtons>[0]['phase'], busy = false) => {
+      const element = DialogButtons({ phase, busy, blocked: undefined, closeRef: null, stopRef: null, onClose: () => {}, onStop: () => {} }) as unknown as Shown & { props: { children: Shown | (Shown | false)[] } }
+      const shown = Array.isArray(element.props.children) ? element.props.children.filter((child): child is Shown => !!child) : [element]
+      return shown.map(button => `${button.key} ${button.props.children}${button.props.disabled ? ' (disabled)' : ''}`)
+    }
+    expect(buttons('ready')).toEqual(['ok OK', 'cancel Cancel'])
+    expect(buttons('executing', true)).toEqual(['ok OK (disabled)', 'stop Stop'])
+    expect(buttons('failed')).toEqual(['ok OK', 'cancel Cancel'])
+    expect(buttons('disconnected')).toEqual(['ok OK (disabled)', 'cancel Close'])
+    expect(buttons('succeeded')).toEqual(['close Close'])
+  })
   it('says after Stop that the count read before OK no longer holds', async () => {
     const { stoppedMessage } = await import('../src/renderer/src/dialogs/pages/DatabaseStatePage')
     expect(stoppedMessage).toBe('Stopped. Check Again to see who is connected now.')
