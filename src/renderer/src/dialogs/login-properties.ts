@@ -9,6 +9,8 @@ import {
 } from '../../../shared/actions/logins.ts'
 import { displayText, type ObjectRef } from '../../../shared/explorer/refs.ts'
 import { emptySecrets, mappable, mappedUser, type MappingDraft, type NewLoginDraft, type SecretState } from './new-login'
+import { initialSecurables, permissionChoices } from './securables'
+import { securablesMessages } from '../../../shared/actions/securables.ts'
 
 /** What the loginProperties describe answers: New Login's lists, the login's facts (its identity among them), its lock-out state (a
  *  SQL Server login only) and the rest the describe read. `users` grows, and gains each user's roles, as User Mapping reads databases. */
@@ -47,7 +49,8 @@ export function initialLoginPropertiesDraft(model: LoginPropertiesModel, target:
     checkPolicy: login.policyChecked ?? false, checkExpiration: login.expirationChecked ?? false, mustChange: lock?.mustChange ?? false,
     serverRoles: properties.serverRoles.filter(role => role !== publicRole), connect: login.connectDenied ? 'deny' : 'grant', enabled: !login.disabled,
     mappings: properties.users.map(user => ({ database: user.database, map: true, user: user.user, defaultSchema: user.defaultSchema ?? '', roles: [], rolesKnown: false })),
-    specifyOld: login.own && !login.canAlter && !lock?.locked, locked: lock?.locked ?? false
+    specifyOld: login.own && !login.canAlter && !lock?.locked, locked: lock?.locked ?? false,
+    ...initialSecurables(properties.permissions)
   }
 }
 
@@ -135,7 +138,7 @@ export function loginMappingChanges(model: LoginPropertiesModel, draft: LoginPro
 /**
  * What differs from the describe, as OK and Script send it: General's defaults and password policy, the password (a typed one, with
  * the old one, or with UNLOCK when Login is locked out was cleared and MUST_CHANGE while User must change is checked), Status, the
- * server roles added and dropped, and User Mapping's changes.
+ * server roles added and dropped, User Mapping's changes, and Securables' permissions (permissionChoices).
  */
 export function loginPropertiesChanges(model: LoginPropertiesModel, draft: LoginPropertiesDraft, secrets: SecretState = emptySecrets): LoginChanges {
   const { login, properties } = model, sql = sqlLogin(model), enabled = loginPropertiesEnabled(model, draft, secrets)
@@ -143,7 +146,7 @@ export function loginPropertiesChanges(model: LoginPropertiesModel, draft: Login
   const listed = new Set(model.serverRoles.map(role => role.name)), chosen = new Set(draft.serverRoles), current = new Set(properties.serverRoles)
   const rolesAdd = sorted(draft.serverRoles.filter(role => role !== publicRole && listed.has(role) && !current.has(role)))
   const rolesDrop = sorted(properties.serverRoles.filter(role => role !== publicRole && !chosen.has(role)))
-  const mappings = loginMappingChanges(model, draft)
+  const mappings = loginMappingChanges(model, draft), permissions = permissionChoices(model, draft)
   const connect = draft.connect !== (login.connectDenied ? 'deny' : 'grant') ? draft.connect : undefined
   const typed = sql && secrets.password === 'set'
   return {
@@ -156,7 +159,7 @@ export function loginPropertiesChanges(model: LoginPropertiesModel, draft: Login
         oldPassword: draft.specifyOld, unlock: !draft.specifyOld && !!model.lock?.locked && !draft.locked, mustChange: enabled.mustChange && draft.mustChange
       }
     } : {}),
-    ...(rolesAdd.length ? { rolesAdd } : {}), ...(rolesDrop.length ? { rolesDrop } : {}), ...(mappings.length ? { mappings } : {}),
+    ...(rolesAdd.length ? { rolesAdd } : {}), ...(rolesDrop.length ? { rolesDrop } : {}), ...(mappings.length ? { mappings } : {}), ...(permissions.length ? { permissions } : {}),
     ...(connect ? { connect } : {}), ...(draft.enabled !== !login.disabled ? { enabled: draft.enabled } : {})
   }
 }
@@ -179,6 +182,7 @@ export function loginPropertiesProblem(model: LoginPropertiesModel, draft: Login
   if (changes.defaultDatabase !== undefined && !model.databases.some(database => database.name === changes.defaultDatabase)) return newLoginMessages.defaultDatabase
   if (changes.defaultLanguage !== undefined && !model.languages.some(language => language.name === changes.defaultLanguage)) return newLoginMessages.defaultLanguage
   if ((changes.mappings?.length ?? 0) > loginLimits.mappings) return userMappingMessages.mappingsLimit
+  if ((changes.permissions?.length ?? 0) > loginLimits.permissions) return securablesMessages.permissionsLimit(loginLimits.permissions)
   if (loginPropertiesStatements(changes) > actionLimits.statements) return tooManyStatementsMessage(actionLimits.statements)
   return undefined
 }

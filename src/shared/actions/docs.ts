@@ -12,6 +12,7 @@ import {
   newLoginMessages, ownLoginRefuses, passwordScriptHeader, saPrincipalId, tooManyStatementsMessage, unlockChoiceText, unlockHandOffLabel
 } from './logins.ts'
 import { designerEngines } from '../designer/catalog.ts'
+import { addObjectsText, loginEffectiveDescribe, objectTypeOrder, permissionChange, permissionStates, reservedPermissions, securableSpecs, securableTypes, securablesMessages, type PermissionState } from './securables.ts'
 
 const cell = (value: string) => value.replaceAll('|', '\\|')
 const row = (cells: readonly string[]) => '| ' + cells.map(cell).join(' | ') + ' |'
@@ -62,6 +63,9 @@ const loginLimitNotes: Readonly<Record<keyof typeof loginLimits, string>> = {
   certificates: 'Certificates listed',
   asymmetricKeys: 'Asymmetric keys listed',
   permissions: 'Server permissions per request',
+  securableObjects: 'Objects Add Objects lists per securable type',
+  explicitPermissions: 'Explicit server permissions Login Properties reads',
+  effectivePermissions: 'Effective permissions the Effective tab lists',
   sidHex: 'Characters of a SID as hexadecimal text',
   stepTitle: 'Characters in a step\'s title',
   stepDetail: 'Characters in a step\'s detail',
@@ -499,7 +503,8 @@ function loginDocs(): string[] {
     table(['Limit', 'Value', 'Meaning'], (Object.keys(loginLimitNotes) as (keyof typeof loginLimits)[]).map(key => [code(key), loginLimits[key].toLocaleString('en-US'), loginLimitNotes[key]])),
     '',
     ...newLoginDocs(),
-    ...loginPropertiesDocs()
+    ...loginPropertiesDocs(),
+    ...securablesDocs()
   ]
 }
 
@@ -510,7 +515,7 @@ function newLoginDocs(): string[] {
     '### New Login',
     '',
     `Security › New › Login…, and New Login… on the Logins folder and on a login, open "${spec.title}", a modal dialog with the pages`,
-    `${spec.pages.map(page => page.title).join(', ')} (Securables follows once its OK works). Its action is \`createLogin\`, on`,
+    `${spec.pages.map(page => page.title).join(', ')} (Securables: see [Securables](#securables)). Its action is \`createLogin\`, on`,
     `${createActionSpecs.createLogin.engines.map(engine => engineNames[engine]).join(', ')} (Managed Instance follows); its target is the server.`,
     '',
     '- **General**: Login name; Windows authentication (DOMAIN\\name) or SQL Server authentication (the default when the server',
@@ -669,6 +674,67 @@ function loginPropertiesDocs(): string[] {
     `("${loginMessages.ownStatus}"; "${loginMessages.ownMustChange}"), a`,
     `Windows group disabled ("${loginMessages.windowsGroupDisable}"), and a password or policy change on a login that is not a SQL`,
     `Server login ("${loginMessages.propertiesNotSql}"). After OK the Logins folder and each changed database's Users folder reload.`,
+    ''
+  ]
+}
+
+const permissionVerbText = { grant: 'GRANT', withGrant: 'GRANT … WITH GRANT OPTION', deny: 'DENY', revoke: 'REVOKE', revokeGrantOption: 'REVOKE GRANT OPTION FOR … CASCADE' } as const
+const stateText = (state: PermissionState | undefined) => state === undefined ? 'none' : state === 'withGrant' ? 'With Grant' : state === 'grant' ? 'Grant' : 'Deny'
+
+/** The Securables page (D2d) of New Login and Login Properties: its types, how a checkbox becomes a statement, its reads and limits. */
+function securablesDocs(): string[] {
+  const states = [undefined, ...permissionStates]
+  const changes = states.flatMap(before => states.map(after => [before, after, permissionChange(before, after)] as const))
+    .filter(([, , change]) => change !== undefined)
+    .map(([before, after, change]) => [stateText(before), stateText(after), permissionVerbText[change!.state] + (change!.cascade ? ' … CASCADE' : '')])
+  return [
+    '### Securables',
+    '',
+    'New Login and Login Properties share SSMS\'s Securables page: the server-level securables the login has permissions on, and the',
+    `permissions of the selected one. "${addObjectsText.title}" (Search…) asks "${addObjectsText.prompt}": ${addObjectsText.specific} (${addObjectsText.selectTypes},`,
+    `then ${addObjectsText.selectObjects}, which lists the objects of the chosen types that the describe read), ${addObjectsText.all} (every listed object of`,
+    `the chosen types) or ${addObjectsText.server('<server>')}. The types, in ${addObjectsText.selectTypes}' order (${objectTypeOrder.map(type => securableSpecs[type].plural).join(', ')}):`,
+    '',
+    table(['Type', 'Class', 'ON clause', 'Permissions'], securableTypes.map(type => {
+      const spec = securableSpecs[type]
+      return [spec.label, `${spec.sqlClass} (${spec.classId})`, spec.on ? code(spec.on.trim() + '<name>') : '', spec.permissions.join(', ')]
+    })),
+    '',
+    'The page offers those of a type\'s permissions that the server\'s `sys.fn_builtin_permissions` lists too, so an older server never',
+    `sees a newer one, and a permission keyword reaches SQL only from this table. ${securableTypes.flatMap(type => (reservedPermissions[type] ?? []).map(permission => code(permission))).join(', ')}`,
+    `on the server shows greyed with the Status page's choice ("${securablesMessages.reserved}"), and the Securables page never sends it.`,
+    'Fixed server roles and public are not securables (SQL Server answers 15151), so Add Objects lists only user-defined server roles.',
+    `It lists at most ${loginLimits.securableObjects.toLocaleString('en-US')} objects per type, by name ("${securablesMessages.objectsTruncated(loginLimits.securableObjects)}").`,
+    'Remove takes a securable off the list and drops its unsent changes; it revokes nothing (clear its boxes to revoke).',
+    '',
+    'Below the list, "Permissions for <securable>:" has two tabs. **Explicit** is the grid Permission, Grantor, Grant, With Grant, Deny:',
+    'Grant and Deny exclude each other, With Grant implies Grant, and clearing Grant clears With Grant. Its keys are the grid\'s: arrows,',
+    'Home/End, Page Up/Down, and Space toggles the box under focus; in the securables list, Delete removes the selected row. **Effective**',
+    `(Login Properties only; "${securablesMessages.effectiveNewLogin}") lists what the login may do on the securable: \`actions.describe\``,
+    `with dialog \`${loginEffectiveDescribe}\`, the login as target and the securable as \`securable\`, reads \`sys.fn_my_permissions\` under`,
+    '`EXECUTE AS LOGIN` (then `REVERT`) on the describe\'s own unpooled connection, which closes after it, so the context cannot outlive the',
+    `read. EXECUTE AS needs IMPERSONATE on the login: without it SQL Server answers 15406, 15517 or 15151, and the tab says "${securablesMessages.effectiveDenied}"`,
+    `(\`PERMISSION_DENIED\`; \`NOT_FOUND\` when the login is gone). At most ${loginLimits.effectivePermissions.toLocaleString('en-US')} are listed. Selecting another securable cancels a read still running.`,
+    '',
+    `Login Properties reads the login's explicit permissions from \`sys.server_permissions\` (at most ${loginLimits.explicitPermissions.toLocaleString('en-US')}; "${securablesMessages.explicitTruncated(loginLimits.explicitPermissions)}"),`,
+    'a deny over a grant and a grant with grant option over a plain one, with the first such row\'s grantor (a permission on a login is',
+    'recorded with that login as its grantor). SQL Server\'s own logins (`##…##`) never change, so their describe reads none, the Effective read refuses them, and the page',
+    'is hidden, as SSMS hides it.',
+    '',
+    'OK and Script send one statement per changed permission, as SMO\'s SecurableUtils writes it, from what the describe read to what the',
+    'boxes ask for:',
+    '',
+    table(['Read', 'Asked for', 'Statement'], changes),
+    '',
+    'SQL Server refuses to deny or revoke a permission granted WITH GRANT OPTION without CASCADE (4611), so those cascade, as SMO\'s do.',
+    'New Login sends only GRANT, GRANT … WITH GRANT OPTION and DENY. The statements run after User Mapping\'s, SSMS\'s last step, by type',
+    `in the table's order, then by securable name and permission (at most ${loginLimits.permissions.toLocaleString('en-US')} per request:`,
+    `"${securablesMessages.permissionsLimit(loginLimits.permissions)}"). Each is one batch in master from constant keyword text, in which SQL Server`,
+    'builds the statement: the verb, permission and ON clause come only from the catalogue, the login and the securable go in as',
+    'nvarchar(128) parameters through `QUOTENAME` (`PermissionSql.Executable`, checked by `ActionSql.LintExecutable`\'s builder form and',
+    '`PermissionSql.LintExecutable` for every type, permission and form). Login Properties binds each to the login it read, as its other',
+    'statements. The steps read "Grant a permission", "Deny a permission", "Revoke a permission" and "Revoke a grant option", with the',
+    'permission and its securable; a failure or Stop keeps what completed, and New Login\'s message then adds "Not every permission was set."',
     ''
   ]
 }

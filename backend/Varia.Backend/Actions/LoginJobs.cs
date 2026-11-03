@@ -30,7 +30,7 @@ internal sealed partial class ActionService
     private static bool SameMembers(ActionArgs args) => args.NewName is null && args.CloseConnections is null && args.DeleteHistory is null && args.Changes is null && args.Design is null
         && args.Identity is null;
     /// <summary>Whether a request carries New Login's members, which only createLogin takes.</summary>
-    private static bool LoginMembers(ActionArgs args) => args.Login is not null || args.ServerRoles is not null || args.Status is not null || args.Mappings is not null;
+    private static bool LoginMembers(ActionArgs args) => args.Login is not null || args.ServerRoles is not null || args.Status is not null || args.Mappings is not null || args.Permissions is not null;
 
     /// <summary>A database ref (kind database, a name, no other member), which User Mapping's read takes.</summary>
     private ObjectRefDto MappedDatabase(ObjectRefDto? target)
@@ -48,9 +48,9 @@ internal sealed partial class ActionService
     /// <summary>Re-validates createLoginSchema (src/shared/actions/schema.ts) and, on execute, actionExecuteRequestSchema's secrets:
     /// a Windows login named DOMAIN\name without password options, or a SQL Server login without a backslash, with the options in
     /// SQL Server's chain; names of at most 128 UTF-16 units without U+0000; distinct server roles other than public; mappings of
-    /// distinct databases, each with a user, an optional default schema and distinct roles other than public; at most
-    /// actionLimits.statements statements in all; a Status; and the password exactly for a SQL Server login (blank only with the
-    /// password policy on). Messages name members, never values.</summary>
+    /// distinct databases, each with a user, an optional default schema and distinct roles other than public; permissions as
+    /// PermissionSql.Problem takes them for a new login (grant, withGrant or deny); at most actionLimits.statements statements in all; a
+    /// Status; and the password exactly for a SQL Server login (blank only with the password policy on). Messages name members, never values.</summary>
     private ObjectRefDto ValidateCreateLogin(ActionArgs args, bool script)
     {
         if (!SameMembers(args)) throw Invalid("createLogin takes a login, server roles and a status only.");
@@ -83,7 +83,8 @@ internal sealed partial class ActionService
                 || mapping.RolesAdd is not { } added || added.Count > catalog.Logins.Limit("roles") || added.Any(role => !ExplorerRefs.Ident(role) || role == "public")
                 || added.Distinct(StringComparer.Ordinal).Count() != added.Count)
                 throw Invalid("mappings.");
-        if (LoginSql.Statements(status, roles, mappings) > catalog.Limit("statements")) throw Invalid("mappings: too many statements.");
+        if (PermissionSql.Problem(catalog.Logins.Securables, args.Permissions, create: true, catalog.Logins.Limit("permissions")) is { } problem) throw Invalid(problem);
+        if (LoginSql.Statements(status, roles, mappings, args.Permissions?.Count ?? 0) > catalog.Limit("statements")) throw Invalid("mappings: too many statements.");
         if (script) return target;
         if (login.Auth == "sql" ? args.Secrets is not { Password: not null, OldPassword: null } : args.Secrets is not null) throw Invalid("secrets.");
         if (login.Auth == "sql" && args.Secrets!.Password!.Length == 0 && login.CheckPolicy != true) throw Invalid("secrets.password.");
@@ -115,8 +116,10 @@ internal sealed partial class ActionService
         var serverRoles = new List<NewLoginServerRoleDto>();
         if (await reader.NextResultAsync(token))
             while (await reader.ReadAsync(token)) serverRoles.Add(new(reader.GetString(0), reader.GetBoolean(1)));
+        await reader.DisposeAsync();
+        var securables = await SecurablesAsync(connection, token);
         var model = new NewLoginModelDto(new(band, profile.Linux, windowsOnly, canCreate), [.. listed.Take(databases)], listed.Count > databases, names,
-            [.. serverRoles.Take(roles)], serverRoles.Count > roles);
+            [.. serverRoles.Take(roles)], serverRoles.Count > roles, securables);
         return new(null, 0, NewLogin: model);
     }
 
@@ -218,7 +221,7 @@ internal sealed partial class ActionService
         if (!Serves(args.Action, served.ServerEngine)) return Task.FromResult(new ActionScriptResult(null, "master", [], ActionErrors.Create(catalog, "NOT_SUPPORTED", EngineMessage(served.ServerEngine))));
         ActionScriptResult Script(IReadOnlySet<string> missing)
         {
-            var text = LoginSql.ScriptText(args.Login!, args.ServerRoles!, args.Status!, args.Mappings!, missing, catalog.Logins.ScriptHeader);
+            var text = LoginSql.ScriptText(args.Login!, args.ServerRoles!, args.Status!, args.Mappings!, missing, catalog.Logins.ScriptHeader, PermissionStatements(args.Login!.Name, args.Permissions));
             return text.Length > ScriptLimit(args.Action) ? new(null, "master", [], Error("SQL_ERROR", "The script is too large.")) : new(text, "master", []);
         }
         if (!args.Mappings!.Any(mapping => mapping.DefaultSchema is not null)) return Task.FromResult(Script(new HashSet<string>()));
@@ -256,6 +259,8 @@ internal sealed partial class ActionService
         var steps = new List<RunStep> { new(CreateLoginStep, context => CreateLoginAsync(connection, login, secrets?.Password, dryRun: false, context.Token)) };
         steps.AddRange(LoginSql.After(login, args.ServerRoles!, args.Status!).Concat(LoginSql.Mappings(login, args.Mappings!, missing)).Select(ActionSql.Checked).Select(statement =>
             new RunStep(StepTitle(statement.Template), context => RunStatementAsync(connection, statement, dryRun: false, context.Token), Detail: StepDetail(statement))));
+        // The Securables page's statements last, as SSMS runs them (D2 §0).
+        steps.AddRange(PermissionSteps(args.Permissions, (permission, context) => PermissionAsync(connection, login.Name, permission, dryRun: false, context.Token)));
         var (done, failure, _) = await RunStepsAsync(connection, steps, null, token, CleanupBudget(args.Action), serverText: Scrubbed);
         if (failure is not null && done is [{ Status: "cancelled" }, ..])
         {
@@ -281,8 +286,8 @@ internal sealed partial class ActionService
         ([steps[0] with { Status = "done" }, .. steps.Skip(1)], failure with { Message = "The action was stopped as \"" + CreateLoginStep + "\" completed; nothing after it ran." });
 
     /// <summary>A failure or Stop after CREATE LOGIN: the message starts with the login's real state (whether it can connect or is
-    /// enabled against the Status chosen, whether a server role is missing, and whether a database is not mapped as chosen), so a clip
-    /// cuts the list of completed steps, never that.</summary>
+    /// enabled against the Status chosen, whether a server role is missing, whether a database is not mapped as chosen, and whether a
+    /// permission is not set), so a clip cuts the list of completed steps, never that.</summary>
     internal static ActionError PartlyCreated(ActionError failure, LoginStatusDto status, IReadOnlyList<ActionStepDto> steps)
     {
         bool Done(string title) => steps.Any(step => step.Title == title && step.Status == "done");
@@ -292,6 +297,7 @@ internal sealed partial class ActionService
         if (steps.Any(step => step.Title == StepTitle(ActionTemplate.AddServerRoleMember) && step.Status != "done")) state += " " + LoginRolesMessage;
         var mapping = new[] { ActionTemplate.CreateUserForLogin, ActionTemplate.AlterUserSchema, ActionTemplate.CreateSchemaFor, ActionTemplate.AddRoleMember }.Select(StepTitle).ToHashSet(StringComparer.Ordinal);
         if (steps.Any(step => mapping.Contains(step.Title) && step.Status != "done")) state += " " + LoginMappingsMessage;
+        if (steps.Any(step => PermissionSql.IsStep(step.Title) && step.Status != "done")) state += " " + LoginPermissionsMessage;
         return failure with { Message = ScriptingErrors.Clip(state + " " + failure.Message, ActionErrors.MaxMessage) };
     }
 

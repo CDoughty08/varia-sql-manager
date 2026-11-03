@@ -118,7 +118,7 @@ describe('Login Properties drafts', () => {
     const of = model()
     expect(draftOf(of)).toEqual({
       auth: 'sql', name: 'app_login', defaultDatabase: 'master', defaultLanguage: 'us_english', checkPolicy: true, checkExpiration: true, mustChange: false, serverRoles: ['bulkadmin'],
-      connect: 'grant', enabled: true, specifyOld: false, locked: true,
+      connect: 'grant', enabled: true, specifyOld: false, locked: true, securables: [], permissions: [],
       mappings: [{ database: 'AppData', map: true, user: 'app', defaultSchema: 'dbo', roles: [], rolesKnown: false }, { database: 'Owned', map: true, user: 'dbo', defaultSchema: 'dbo', roles: [], rolesKnown: false }]
     })
     expect(loginPropertiesRequest(appLogin, of, draftOf(of))).toBeUndefined()

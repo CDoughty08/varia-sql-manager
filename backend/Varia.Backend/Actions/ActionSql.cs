@@ -504,6 +504,8 @@ internal static partial class ActionSql
         "N' SET  MULTI_USER'", "N' SET  RESTRICTED_USER'", "N'ALTER LOGIN '", "N' DISABLE'", "N' ENABLE'", "N'DENY CONNECT SQL TO '", "N'GRANT CONNECT SQL TO '", "N'DROP USER '",
         // New Login's server roles (Actions/LoginSql), and its describe's and preflight's server facts.
         "N'ALTER SERVER ROLE '", "N' ADD MEMBER '", "'IsIntegratedSecurityOnly'",
+        // The Securables page's list of securables names the server (PermissionSql.Describe).
+        "'ServerName'",
         // Its User Mapping's statements, and its describe's guest CONNECT state (LoginSql.DatabaseRoles).
         "N'CREATE USER '", "N' FOR LOGIN '", "N'ALTER USER '", "N' WITH DEFAULT_SCHEMA='", "N'CREATE SCHEMA '", "N' AUTHORIZATION '", "N'ALTER ROLE '",
         // The login preflight (Login), a login's rename, and the service lookup (LoginService).
@@ -741,6 +743,8 @@ internal static partial class ActionSql
         yield return ("login sid", LintCatalog(LoginSql.LoginSid, ExplorerCatalog.MaxBand, database: false));
         yield return ("login properties mapped user", LintCatalog(LoginSql.PropertiesMappedUser, ExplorerCatalog.MaxBand, database: true));
         yield return ("login database user", LintCatalog(LoginSql.DatabaseUser, ExplorerCatalog.MaxBand, database: true));
+        // The Securables page (D2d): every permission statement its builder can write, and its three reads.
+        foreach (var item in PermissionSql.Lint(ActionsCatalog.Current.Logins.Securables)) yield return item;
     }
 }
 

@@ -910,6 +910,17 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .user-mapping-row[data-selected] .user-mapping-browse { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: HighlightText; }
   .user-mapping-row[data-selected][data-unavailable] .user-mapping-text, .user-mapping-row[data-selected] .user-mapping-text[data-unread] { color: HighlightText; }
 }
+/* Securables (D2d): User Mapping's grid styles for "Securables:" (Name, Type) and the Explicit tab (Permission, Grantor and three
+   boxes); Search… and Remove under the upper grid; the Explicit and Effective tabs as the Activity Monitor's pane tabs. */
+.securables-grid .user-mapping-head, .securables-grid .user-mapping-row { grid-template-columns: minmax(160px, 2fr) minmax(110px, 1fr); }
+.securables-permissions .user-mapping-head, .securables-permissions .user-mapping-row { grid-template-columns: minmax(170px, 2fr) minmax(90px, 1fr) 64px 84px 60px; }
+.securables-box { justify-content: center; }
+.securables-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.securables-tabs { border: 1px solid var(--varia-panel-border); border-bottom: 0; }
+.securables-panel { display: flex; flex-direction: column; gap: 6px; min-height: 120px; }
+.securables-effective { margin: 0; padding: 6px 10px; max-height: 200px; overflow: auto; list-style: none; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); }
+.securables-choices, .securables-types { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.securables-choices .checkbox-label, .securables-types .checkbox-label { display: flex; align-items: center; gap: 8px; }
 /* D3d: the sessions a database's DROP meets, a disclosure whose grid scrolls within its own height so the options below stay
    in view; the notes under Close existing connections line up with its label, and a greyed option's label greys with it. */
 .object-dialog-sessions { margin: var(--varia-space-2) 0 0; }

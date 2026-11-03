@@ -5,7 +5,7 @@
 // for later dialogs (Backup and Restore): a dialog id, its surface and pages in
 // src/shared/actions/catalog.ts, a describe in the backend, a definition here, and its pages or sections. No React here,
 // so the services and their tests stay in Node.
-import type { DialogId, ModalDialogId } from '../../../shared/actions/catalog.ts'
+import type { DialogId, ModalDialogId, PageId } from '../../../shared/actions/catalog.ts'
 import {
   loginDeleteText, loginMessages, loginPropertiesMessages, loginRefusal, mappedUserKept, unlockHandOffLabel, unlockRefusal, type LoginDatabaseRoles, type LoginFacts, type LoginLockFacts, type LoginMessageId, type NewLoginModel,
   type UnlockChoice
@@ -106,6 +106,8 @@ export interface ObjectDialogDefinition<Model, Draft> {
   readonly afterPartial?: (effects: DialogEffects, request: BuiltRequest) => void
   /** Why OK is greyed (the protected-principal rules' refusal of a login), shown on the page; Script still works. */
   readonly blocked?: (model: Model) => string | undefined
+  /** Pages the dialog leaves out of "Select a page" for this model (Login Properties' Securables for SQL Server's own logins). */
+  readonly hiddenPages?: (model: Model) => readonly PageId[]
   /** Folders other than the object's listing that a reply's done steps changed (the Users folders of the databases a login's Delete
    *  dropped users in), which the dialog reconciles where they are loaded, after a success or a partial failure. */
   readonly changedFolders?: (model: Model, steps: readonly ActionStep[]) => ChangedFolders | undefined
@@ -292,6 +294,8 @@ export const loginPropertiesDefinition: ObjectDialogDefinition<LoginPropertiesMo
   fileName: draft => (draft.name || 'Login') + '.sql',
   // SQL Server's own logins open, as in SSMS, but never change; every page says why.
   blocked: model => model.login.subtype === 'system' ? loginMessages.system : undefined,
+  // SSMS sets a system login's SecurablePermissions to null, which hides the page; the describe reads none for it either.
+  hiddenPages: model => model.login.subtype === 'system' ? ['securables'] : [],
   confirm: loginStatusConfirm,
   rolesLogin: target => target.name,
   lookedUp: withDatabaseRoles,

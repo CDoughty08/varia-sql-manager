@@ -36,7 +36,9 @@ export async function explorerRow(page, ...path) {
  * rows around its viewport and re-windows on its scroll event, which Chromium dispatches with a frame: in a short window
  * an earlier step's scroll can leave the row outside, and a window that draws few frames (a hidden or occluded one) can
  * keep a stale window for long. So the scan sends the scroll event too, from the current position and then from the top,
- * half a viewport at a time, and the tree's geometry and rendered rows are logged first.
+ * half a viewport at a time, and the tree's geometry and rendered rows are logged first. A row deeper than the window is
+ * tall can never show with its server row, so the scan also remembers each row it has seen by its offset in the tree, and
+ * matches the path over every row seen so far, the target among those rendered now.
  */
 export async function revealExplorerRow(page, ...path) {
   const found = await explorerRow(page, ...path, { timeout: 2000 }).catch(() => null)
@@ -45,10 +47,26 @@ export async function revealExplorerRow(page, ...path) {
   const state = () => tree.evaluate(element => ({ top: element.scrollTop, height: element.clientHeight, scrollHeight: element.scrollHeight }))
   const before = await state()
   console.log(`Object Explorer row ${label} was not rendered (scrollTop ${before.top}, height ${before.height}, scroll height ${before.scrollHeight}; rows: ${(await explorerLines(page)).join(' | ')}); scrolling to it.`)
+  const seen = new Map()
+  const rendered = () => tree.evaluate((element, part) => {
+    const box = element.getBoundingClientRect()
+    return [...element.querySelectorAll('[role="treeitem"]')].map(row => ({ id: row.id, level: Number(row.getAttribute('aria-level')), offset: Math.round(row.getBoundingClientRect().top - box.top + element.scrollTop),
+      label: row.querySelector(part.explorerLabel)?.textContent ?? row.querySelector(part.explorerText)?.textContent ?? '' }))
+  }, part)
+  const matchSeen = async () => {
+    const rows = await rendered(), now = new Set(rows.map(row => row.id)), stack = []
+    for (const row of rows) seen.set(row.offset, row)
+    for (const row of [...seen.values()].sort((a, b) => a.offset - b.offset)) {
+      stack.length = row.level - 1
+      stack[row.level - 1] = row.label
+      if (row.level === path.length && now.has(row.id) && path.every((name, index) => stack[index] === name)) return page.locator('#' + row.id)
+    }
+    return null
+  }
   const step = Math.max(22, Math.floor(before.height / 2))
   for (let index = -1, top = before.top; top < before.scrollHeight; top = ++index * step) {
     await tree.evaluate((element, top) => { element.scrollTop = top; element.dispatchEvent(new Event('scroll')) }, top)
-    const row = await explorerRow(page, ...path, { timeout: 2000 }).catch(() => null)
+    const row = await explorerRow(page, ...path, { timeout: 2000 }).catch(() => null) ?? (index >= 0 ? await matchSeen() : null)
     if (row) return row
   }
   const after = await state()

@@ -7,8 +7,10 @@ import {
   type NewLoginModel, type UserMappingChoice
 } from '../../../shared/actions/logins.ts'
 import type { CreateLoginRequest } from '../../../shared/actions/schema.ts'
+import { securablesMessages } from '../../../shared/actions/securables.ts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
 import type { ExplorerMenuNode } from '../menus/targets'
+import { permissionChoices, type SecurablesDraft } from './securables'
 
 /** What the dialog knows of its password fields: never their values. */
 export interface SecretState {
@@ -25,8 +27,9 @@ export const emptySecrets: SecretState = { password: 'empty', matches: true, wel
  *  of being cut silently to a password the user never typed in full. */
 export const passwordFieldLength = loginLimits.password + 1
 
-/** The pages' state. The password options keep what the user checked; a greyed one counts as unchecked (`newLoginEnabled`). */
-export interface NewLoginDraft {
+/** The pages' state. The password options keep what the user checked; a greyed one counts as unchecked (`newLoginEnabled`).
+ *  Securables' part is SecurablesDraft (securables.ts). */
+export interface NewLoginDraft extends SecurablesDraft {
   readonly auth: NewLoginAuth
   readonly name: string
   readonly defaultDatabase: string
@@ -64,7 +67,7 @@ export interface MappingDraft {
 export function initialNewLoginDraft(model: NewLoginModel): NewLoginDraft {
   return {
     auth: model.server.linux ? 'sql' : 'windows', name: '', defaultDatabase: 'master', checkPolicy: true, checkExpiration: true, mustChange: true,
-    serverRoles: [], connect: 'grant', enabled: true, mappings: []
+    serverRoles: [], connect: 'grant', enabled: true, mappings: [], securables: [], permissions: []
   }
 }
 
@@ -143,7 +146,7 @@ export function newLoginTarget(node: ExplorerMenuNode): ObjectRef | undefined {
 
 /** The request OK and Script send, without secrets (only OK attaches the password), or the problem the page shows. Server roles
  *  go in the describe's order, those it no longer lists left out; mappings as userMappings builds them, within loginLimits.mappings
- *  and actionLimits.statements. */
+ *  and actionLimits.statements; Securables' permissions (only when there are some) as permissionChoices builds them. */
 export function newLoginRequest(target: ObjectRef, model: NewLoginModel, draft: NewLoginDraft, secrets: SecretState = emptySecrets): Omit<CreateLoginRequest, 'connectionId' | 'requestId'> | { readonly problem: string } {
   const login = newLoginGeneral(draft)
   const problem = newLoginProblem(login, { empty: secrets.password === 'empty', matches: secrets.matches, wellFormed: secrets.wellFormed, tooLong: secrets.tooLong }, model)
@@ -152,6 +155,8 @@ export function newLoginRequest(target: ObjectRef, model: NewLoginModel, draft: 
   const serverRoles = model.serverRoles.filter(role => role.name !== publicRole && chosen.has(role.name)).map(role => role.name)
   const mappings = userMappings(model, draft), status = { connect: draft.connect, enabled: draft.enabled }
   if (mappings.length > loginLimits.mappings) return { problem: userMappingMessages.mappingsLimit }
-  if (newLoginStatements({ serverRoles, status, mappings }) > actionLimits.statements) return { problem: tooManyStatementsMessage(actionLimits.statements) }
-  return { action: 'createLogin', target, login, serverRoles, mappings, status }
+  const permissions = permissionChoices(model, draft)
+  if (permissions.length > loginLimits.permissions) return { problem: securablesMessages.permissionsLimit(loginLimits.permissions) }
+  if (newLoginStatements({ serverRoles, status, mappings, permissions }) > actionLimits.statements) return { problem: tooManyStatementsMessage(actionLimits.statements) }
+  return { action: 'createLogin', target, login, serverRoles, mappings, status, ...(permissions.length ? { permissions } : {}) }
 }

@@ -406,6 +406,7 @@ export const pageIds = [
   'options',
   'serverRoles',
   'userMapping',
+  'securables',
   'status'
 ] as const
 export type PageId = typeof pageIds[number]
@@ -451,11 +452,10 @@ const dialogSpecData = {
     pages: [page('general', 'General'), page('files', 'Files'), page('filegroups', 'Filegroups'), page('options', 'Options')]
   },
   // SSMS's "Login - New" is modal, and the password must never live in a document's view state. General keeps its password
-  // fields mounted across page switches, and User Mapping its grid (a cell being edited, the scroll position). Securables (D2d)
-  // joins once its OK works (critic A17).
+  // fields mounted across page switches, and User Mapping and Securables their grids (a cell being edited, the scroll position).
   newLogin: {
     title: 'Login - New', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'createLogin', steps: true,
-    pages: [page('general', 'General', { keepMounted: true }), page('serverRoles', 'Server Roles'), page('userMapping', 'User Mapping', { keepMounted: true }), page('status', 'Status')]
+    pages: [page('general', 'General', { keepMounted: true }), page('serverRoles', 'Server Roles'), page('userMapping', 'User Mapping', { keepMounted: true }), page('securables', 'Securables', { keepMounted: true }), page('status', 'Status')]
   },
   // Varia's own dialog (D4d); its run lists the transaction's steps when it fails or is stopped.
   unlockLogin: { title: 'Unlock Login', surface: 'modal', titleFormat: 'withName', size: 'compact', action: 'unlock', pages: [page('general', 'General')], steps: true },
@@ -463,7 +463,7 @@ const dialogSpecData = {
   // by one, as SSMS's do, and list what completed when one fails.
   loginProperties: {
     title: 'Login Properties', surface: 'modal', titleFormat: 'withName', size: 'large', action: 'loginProperties', steps: true,
-    pages: [page('general', 'General', { keepMounted: true }), page('serverRoles', 'Server Roles'), page('userMapping', 'User Mapping', { keepMounted: true }), page('status', 'Status')]
+    pages: [page('general', 'General', { keepMounted: true }), page('serverRoles', 'Server Roles'), page('userMapping', 'User Mapping', { keepMounted: true }), page('securables', 'Securables', { keepMounted: true }), page('status', 'Status')]
   }
 } as const satisfies { readonly [D in DialogId]: DialogSpec }
 export const dialogSpecs: { readonly [D in DialogId]: DialogSpec } = dialogSpecData

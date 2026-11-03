@@ -2,6 +2,7 @@
 // the backend's login preflight (ActionSql.Login) reads. The one place these live (critic A18): Object Explorer's login
 // subtypes, the menus' greying and the backend's refusals all come from here, the backend through actions-catalog.json.
 // Erasable TypeScript (no enums), so Node's type stripping can load it too.
+import { securablesCatalog, type ExplicitPermission, type PermissionChoice, type SecurablesModel } from './securables.ts'
 
 // One entry per line, so later subtypes append cleanly.
 export const loginSubtypes = [
@@ -153,6 +154,9 @@ export const loginLimits = {
   roles: 256, schemas: 1_024, mappings: 256,
   /** Per request; 1,024 are listed. */
   credentials: 16, certificates: 1_024, asymmetricKeys: 1_024, permissions: 512,
+  /** The Securables page (D2d): objects Add Objects lists per type, explicit permissions Login Properties reads, and effective
+   *  permissions the Effective tab lists (each one more is read, so a truncation shows). */
+  securableObjects: 1_024, explicitPermissions: 1_024, effectivePermissions: 256,
   /** A SID as hexadecimal text (CONVERT(varchar(172), sid, 2)). */
   sidHex: 172,
   /** An action step's title and detail (ActionStep). */
@@ -312,6 +316,7 @@ export function loginsCatalog() {
     saPrincipalId,
     rolesDescribe: loginDatabaseRolesDescribe,
     scriptHeader: passwordScriptHeader,
+    securables: securablesCatalog(),
     typeSubtypes: loginTypeSubtypes
   }
 }
@@ -363,6 +368,8 @@ export interface NewLoginModel {
   readonly languages: readonly NewLoginLanguage[]
   readonly serverRoles: readonly NewLoginServerRole[]
   readonly serverRolesTruncated: boolean
+  /** The Securables page's lists (D2d). */
+  readonly securables: SecurablesModel
 }
 /** A Windows login's name: DOMAIN\name, one backslash with text on both sides (the server answers 15407 otherwise). */
 export const windowsLoginName = /^[^\\]+\\[^\\]+$/
@@ -438,13 +445,16 @@ export interface UserMappingChoice {
 }
 /** The most statements a mapping plans: CREATE USER, the default schema's ALTER USER and CREATE SCHEMA, and one per role. */
 export const mappingStatements = (mapping: Pick<UserMappingChoice, 'defaultSchema' | 'rolesAdd'>): number => 1 + (mapping.defaultSchema === undefined ? 0 : 2) + mapping.rolesAdd.length
-/** The most statements New Login plans: CREATE LOGIN, Deny, Disable, each server role, and each mapping's. Bounded by
- *  actionLimits.statements (src/shared/actions/catalog.ts), which the request schema, the page and C# all check. */
-export function newLoginStatements(request: { readonly serverRoles: readonly string[]; readonly status: LoginStatusChoice; readonly mappings: readonly Pick<UserMappingChoice, 'defaultSchema' | 'rolesAdd'>[] }): number {
+/** The most statements New Login plans: CREATE LOGIN, Deny, Disable, each server role, each mapping's, and one per permission
+ *  (D2d). Bounded by actionLimits.statements (src/shared/actions/catalog.ts), which the request schema, the page and C# all check. */
+export function newLoginStatements(request: {
+  readonly serverRoles: readonly string[]; readonly status: LoginStatusChoice; readonly mappings: readonly Pick<UserMappingChoice, 'defaultSchema' | 'rolesAdd'>[]; readonly permissions?: readonly unknown[]
+}): number {
   return 1 + (request.status.connect === 'deny' ? 1 : 0) + (request.status.enabled ? 0 : 1) + request.serverRoles.length + request.mappings.reduce((sum, mapping) => sum + mappingStatements(mapping), 0)
+    + (request.permissions?.length ?? 0)
 }
 /** Why a plan is too long (the limit is actionLimits.statements; catalog.ts imports this file, so the number is passed in). */
-export const tooManyStatementsMessage = (limit: number) => `This login would need more than ${limit.toLocaleString('en-US')} statements. Map fewer databases, or apply the rest afterwards.`
+export const tooManyStatementsMessage = (limit: number) => `This login would need more than ${limit.toLocaleString('en-US')} statements. Map fewer databases or change fewer permissions, or apply the rest afterwards.`
 
 // --- Login Properties (D2c) ---------------------------------------------------------------------------------------------
 
@@ -477,6 +487,8 @@ export interface LoginChanges {
   readonly rolesAdd?: readonly string[]
   readonly rolesDrop?: readonly string[]
   readonly mappings?: readonly LoginMappingChange[]
+  /** The Securables page's statements (D2d), each against the state the describe read. */
+  readonly permissions?: readonly PermissionChoice[]
   readonly connect?: 'grant' | 'deny'
   readonly enabled?: boolean
 }
@@ -493,14 +505,18 @@ export interface LoginPropertiesFacts {
   readonly serverRolesTruncated: boolean
   readonly users: readonly LoginMappedUser[]
   readonly read: readonly string[]
+  /** The login's explicit server-level permissions (D2d; none read for SQL Server's own logins), at most loginLimits.explicitPermissions. */
+  readonly permissions: readonly ExplicitPermission[]
+  readonly permissionsTruncated: boolean
 }
-/** The most statements Login Properties plans: the options, the password, Connect, Enabled, each server role, and per database its
- *  DROP USER, or its CREATE USER or rename, the default schema's two and one per role. C#: LoginSql.PropertiesStatements. */
+/** The most statements Login Properties plans: the options, the password, Connect, Enabled, each server role, per database its
+ *  DROP USER, or its CREATE USER or rename, the default schema's two and one per role, and one per permission. C#: LoginSql.PropertiesStatements. */
 export function loginPropertiesStatements(changes: LoginChanges): number {
   const options = changes.defaultDatabase !== undefined || changes.defaultLanguage !== undefined || changes.checkPolicy !== undefined || changes.checkExpiration !== undefined
   return (options ? 1 : 0) + (changes.password ? 1 : 0) + (changes.connect ? 1 : 0) + (changes.enabled === undefined ? 0 : 1) + (changes.rolesAdd?.length ?? 0) + (changes.rolesDrop?.length ?? 0)
     + (changes.mappings ?? []).reduce((sum, mapping) => sum + (mapping.change === 'unmap' ? 1
       : (mapping.change === 'map' || mapping.newName !== undefined ? 1 : 0) + (mapping.defaultSchema === undefined ? 0 : 2) + (mapping.rolesAdd?.length ?? 0) + (mapping.rolesDrop?.length ?? 0)), 0)
+    + (changes.permissions?.length ?? 0)
 }
 /** Why Login Properties cannot apply these changes to the login its describe read, or undefined: SQL Server's own logins, Deny,
  *  Disable or MUST_CHANGE of the login this connection uses, Disable of a Windows group, and a password or policy for a login that is

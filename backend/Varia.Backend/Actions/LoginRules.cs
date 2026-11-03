@@ -4,7 +4,7 @@ namespace Varia.Backend.Actions;
 internal sealed record LoginRuleJson(string Subtype, string Disable, string Enable, string Unlock, string Rename, string Delete, Dictionary<string, string> Greyed);
 /// <summary>The logins block of actions-catalog.json (src/shared/actions/logins.ts loginsCatalog()).</summary>
 internal sealed record LoginRulesJson(Dictionary<string, long> Limits, List<string> LockProperties, Dictionary<string, string> Messages, List<string> OwnRefuses, string RolesDescribe,
-    List<LoginRuleJson> Rules, int SaPrincipalId, string ScriptHeader, Dictionary<string, string> TypeSubtypes, LoginDetailJson Detail, List<string> NoBackslash);
+    List<LoginRuleJson> Rules, int SaPrincipalId, string ScriptHeader, Dictionary<string, string> TypeSubtypes, LoginDetailJson Detail, List<string> NoBackslash, SecurablesJson Securables);
 /// <summary>The words of a Logins folder row's detail (logins.ts loginDetailWords): its kind by type letter, then its state and
 /// password policy.</summary>
 internal sealed record LoginDetailJson(Dictionary<string, string> Types, string Disabled, string ConnectDenied, string PolicyChecked, string ExpirationChecked);
@@ -29,9 +29,12 @@ internal sealed class LoginRules
         // ActionSql.LoginLock reads exactly the properties logins.ts allows (critic A15).
         if (json.LockProperties is null || !json.LockProperties.SequenceEqual(ActionSql.LoginLockProperties, StringComparer.Ordinal))
             throw new InvalidOperationException("The login lock-out properties differ from the catalogue's.");
+        Securables = new SecurableCatalog(json.Securables ?? throw new InvalidOperationException("The login catalogue has no securables."));
     }
 
     public IReadOnlyCollection<string> Subtypes => rules.Keys;
+    /// <summary>The Securables page's classes and permissions (src/shared/actions/securables.ts, D2d).</summary>
+    public SecurableCatalog Securables { get; }
     /// <summary>The LOGINPROPERTY properties logins.ts allows ActionSql.LoginLock to read.</summary>
     public IReadOnlyList<string> LockProperties => json.LockProperties;
     /// <summary>sys.server_principals.type letters the Logins folder lists.</summary>

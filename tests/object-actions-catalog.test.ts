@@ -186,7 +186,7 @@ describe('object action catalogue', () => {
     expect(dialogSpecs.unlockLogin).toEqual({ title: 'Unlock Login', surface: 'modal', titleFormat: 'withName', size: 'compact', action: 'unlock', pages: [{ id: 'general', title: 'General', icon: 'settings-gear' }], steps: true })
     expect([dialogTitle('databaseProperties', 'AppData'), dialogTitle('deleteObject', 'dbo.Orders'), dialogTitle('unlockLogin', 'Locked')]).toEqual(['Database Properties - AppData', 'Delete Object', 'Unlock Login - Locked'])
     expect(dialogSpecs.newLogin).toMatchObject({ title: 'Login - New', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'createLogin', steps: true })
-    expect(dialogSpecs.newLogin.pages.map(page => [page.id, page.title, page.keepMounted ?? false])).toEqual([['general', 'General', true], ['serverRoles', 'Server Roles', false], ['userMapping', 'User Mapping', true], ['status', 'Status', false]])
+    expect(dialogSpecs.newLogin.pages.map(page => [page.id, page.title, page.keepMounted ?? false])).toEqual([['general', 'General', true], ['serverRoles', 'Server Roles', false], ['userMapping', 'User Mapping', true], ['securables', 'Securables', true], ['status', 'Status', false]])
     expect(dialogTitle('newLogin', 'ignored')).toBe('Login - New')
     // Login Properties (D2c): New Login's pages on a login, opened by a login's Properties; its OK runs loginProperties, not properties.
     expect(dialogSpecs.loginProperties).toMatchObject({ title: 'Login Properties', surface: 'modal', titleFormat: 'withName', size: 'large', action: 'loginProperties', steps: true })
@@ -209,8 +209,8 @@ describe('object action catalogue', () => {
   it('derives the action command, modal dialog and page ids from the catalogue, with registry icons on every page', () => {
     expectTypeOf<ActionCommandId>().toEqualTypeOf<'explorer.selectTopRows' | 'explorer.rename' | 'explorer.delete' | 'explorer.properties' | 'explorer.disable' | 'explorer.enable' | 'explorer.unlock'>()
     expectTypeOf<ModalDialogId>().toEqualTypeOf<'deleteObject' | 'newLogin' | 'unlockLogin' | 'loginProperties'>()
-    expectTypeOf<PageId>().toEqualTypeOf<'general' | 'files' | 'filegroups' | 'options' | 'serverRoles' | 'userMapping' | 'status'>()
-    expect(pageIds).toEqual(['general', 'files', 'filegroups', 'options', 'serverRoles', 'userMapping', 'status'])
+    expectTypeOf<PageId>().toEqualTypeOf<'general' | 'files' | 'filegroups' | 'options' | 'serverRoles' | 'userMapping' | 'securables' | 'status'>()
+    expect(pageIds).toEqual(['general', 'files', 'filegroups', 'options', 'serverRoles', 'userMapping', 'securables', 'status'])
     for (const dialog of dialogIds) for (const page of dialogSpecs[dialog].pages) {
       expect(isIconId(page.icon), `${dialog}: ${page.id}`).toBe(true)
       expect(pageIds, dialog).toContain(page.id)

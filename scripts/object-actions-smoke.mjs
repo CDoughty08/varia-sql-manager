@@ -21,7 +21,8 @@ const mac = process.platform === 'darwin'
 let application
 let page
 const failures = []
-const watchdog = setTimeout(() => { console.error('Object actions suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 300000)
+// Ten minutes: the login sections (New Login, Login Properties and their Securables pages) alone take minutes on Windows runners.
+const watchdog = setTimeout(() => { console.error('Object actions suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 600000)
 
 const fast = { force: true }
 const menuNamed = name => page.getByRole('menu', { name, exact: true })
@@ -588,7 +589,7 @@ try {
   await page.getByRole('menuitem', { name: 'Login…', exact: true }).click(fast)
   await expect(loginDialog()).toBeVisible()
   await expect(objectDialogProgress(loginDialog())).toHaveText('Ready')
-  expect(await loginDialog().getByRole('navigation', { name: 'Select a page', exact: true }).getByRole('button').allTextContents()).toEqual(['General', 'Server Roles', 'User Mapping', 'Status'])
+  expect(await loginDialog().getByRole('navigation', { name: 'Select a page', exact: true }).getByRole('button').allTextContents()).toEqual(['General', 'Server Roles', 'User Mapping', 'Securables', 'Status'])
   // A Windows server: Windows authentication, so the password fields are greyed until SQL Server authentication is chosen.
   await expect(loginDialog().getByRole('radio', { name: 'Windows authentication', exact: true })).toBeChecked()
   await expect(passwordField(loginDialog(), 'Password')).toBeDisabled()
@@ -605,7 +606,7 @@ try {
   // fields line up with Login name.
   await resizeWindow(application, page, 1024, 768)
   await zoom(1.5)
-  await expect(objectDialogTabs(loginDialog())).toHaveCount(4)
+  await expect(objectDialogTabs(loginDialog())).toHaveCount(5)
   const loginPage = objectDialogPage(loginDialog())
   const loginOk = loginDialog().getByRole('button', { name: 'OK', exact: true })
   const narrowLogin = async () => {
@@ -711,6 +712,46 @@ try {
   await expect(loginDialog()).toBeVisible()
   await page.keyboard.press(' ')
   await expect(mappingGrid.getByRole('checkbox', { name: 'Map master', exact: true })).not.toBeChecked()
+  // Securables (D2d): Search… opens Add Objects; The server adds the server's row, whose CONNECT SQL shows the Status page's choice,
+  // greyed; Specific objects… goes through Select Object Types and Select Objects. The Explicit grid's boxes and keys set what OK
+  // grants or denies, and Effective waits for the login to exist.
+  await loginDialog().getByRole('button', { name: 'Securables', exact: true }).click()
+  const securablesGrid = loginDialog().getByRole('grid', { name: 'Securables:', exact: true })
+  await expect(securablesGrid.getByRole('gridcell')).toHaveCount(0)
+  await expect(loginDialog().getByRole('tab', { name: 'Effective', exact: true })).toBeDisabled()
+  await loginDialog().getByRole('button', { name: 'Search…', exact: true }).click()
+  const addObjects = page.getByRole('dialog', { name: 'Add Objects', exact: true })
+  await expect(addObjects.getByRole('radiogroup', { name: 'What objects do you want to add?', exact: true }).getByRole('radio')).toHaveCount(3)
+  await addObjects.getByRole('radio', { name: "The server 'STUB-SQL'", exact: true }).check()
+  await addObjects.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(addObjects).toHaveCount(0)
+  await expect(securablesGrid.getByRole('gridcell')).toHaveText(['STUB-SQL', 'Server'])
+  const explicitGrid = loginDialog().getByRole('grid', { name: 'Explicit permissions', exact: true })
+  await expect(explicitGrid.getByRole('columnheader')).toHaveText(['Permission', 'Grantor', 'Grant', 'With Grant', 'Deny'])
+  await expect(explicitGrid.getByRole('checkbox', { name: 'Grant CONNECT SQL', exact: true })).toBeChecked()
+  await expect(explicitGrid.getByRole('checkbox', { name: 'Grant CONNECT SQL', exact: true })).toBeDisabled()
+  await explicitGrid.getByRole('checkbox', { name: 'Grant VIEW SERVER STATE', exact: true }).check()
+  await loginDialog().getByRole('button', { name: 'Search…', exact: true }).click()
+  await expect(addObjects.getByRole('radio', { name: 'Specific objects…', exact: true })).toBeChecked()
+  await addObjects.getByRole('button', { name: 'OK', exact: true }).click()
+  const selectTypes = page.getByRole('dialog', { name: 'Select Object Types', exact: true })
+  expect(await selectTypes.getByRole('group', { name: 'Select the types of objects:', exact: true }).getByRole('checkbox').evaluateAll(boxes => boxes.map(box => box.labels[0].textContent))).toEqual(['Endpoints', 'Logins', 'Servers', 'Availability Groups', 'Server roles'])
+  await expect(selectTypes.getByRole('button', { name: 'OK', exact: true })).toBeDisabled()
+  await selectTypes.getByRole('checkbox', { name: 'Logins', exact: true }).check()
+  await selectTypes.getByRole('button', { name: 'OK', exact: true }).click()
+  const selectObjects = page.getByRole('dialog', { name: 'Select Objects', exact: true })
+  await selectObjects.getByRole('listbox', { name: 'Matching objects:', exact: true }).selectOption('login:Held')
+  await selectObjects.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(selectObjects).toHaveCount(0)
+  await expect(securablesGrid.getByRole('gridcell')).toHaveText(['STUB-SQL', 'Server', 'Held', 'Login'])
+  // The server stays selected; Down selects Held, whose Explicit grid takes End (the Deny column) and Space.
+  await securablesGrid.focus()
+  await page.keyboard.press('ArrowDown')
+  await expect(loginDialog().getByText('Permissions for Held:', { exact: true })).toBeVisible()
+  await explicitGrid.focus()
+  await page.keyboard.press('End')
+  await page.keyboard.press(' ')
+  await expect(explicitGrid.getByRole('checkbox', { name: 'Deny ALTER', exact: true })).toBeChecked()
   await loginDialog().getByRole('button', { name: 'General', exact: true }).click()
   expect(await passwordField(loginDialog(), 'Password').evaluate(input => [input.type, input.value.length])).toEqual(['password', typed.length])
   await loginDialog().getByRole('button', { name: 'Script options', exact: true }).click()
@@ -726,6 +767,8 @@ try {
   expect(loginScripts.every(call => !Object.hasOwn(call, 'secrets')) && !JSON.stringify(loginScripts).includes(typed)).toBe(true)
   expect(loginScripts[0]).toMatchObject({ login: { auth: 'sql', name: 'app_reader', checkPolicy: false, checkExpiration: false, mustChange: false }, serverRoles: ['dbcreator'],
     mappings: [{ database: 'AppData', user: 'app_reader', defaultSchema: 'sales', rolesAdd: ['db_datareader'] }] })
+  const newPermissions = [{ securable: { type: 'server' }, permission: 'VIEW SERVER STATE', state: 'grant' }, { securable: { type: 'login', name: 'Held' }, permission: 'ALTER', state: 'deny' }]
+  expect(loginScripts[0].permissions).toEqual(newPermissions)
   expect((await stubCalls('actions.describe')).filter(call => call.dialog === 'loginDatabaseRoles').map(call => call.target.name), 'each database\'s roles are read once').toEqual(['AppData', 'master'])
   expect(await stubCalls('actions.execute').then(calls => calls.filter(call => call.action === 'createLogin'))).toEqual([])
   // The server's password policy refuses "Weak": the dialog stays open, says why, and keeps the password typed.
@@ -742,13 +785,14 @@ try {
   await loginDialog().getByRole('button', { name: 'Stop', exact: true }).click()
   await expect(objectDialogProgress(loginDialog())).toHaveText('Stopped')
   await expect(loginDialog().getByRole('status').filter({ hasText: 'The action was stopped at "Create the login"' })).toBeVisible()
-  await expect(loginDialog().getByRole('list', { name: 'Steps', exact: true }).getByRole('listitem')).toHaveCount(5)
+  await expect(loginDialog().getByRole('list', { name: 'Steps', exact: true }).getByRole('listitem')).toHaveCount(7)
+  await expect(loginDialog().getByRole('list', { name: 'Steps', exact: true }).getByRole('listitem').last()).toContainText('Deny a permission')
   // A password the policy takes: the dialog closes, and Logins lists the login and selects it.
   for (const label of ['Password', 'Confirm password']) await passwordField(loginDialog(), label).fill(typed)
   await loginDialog().getByRole('button', { name: 'OK', exact: true }).click()
   await expect(loginDialog()).toHaveCount(0)
   expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'createLogin', target: { kind: 'server' }, secrets: { password: typed }, serverRoles: ['dbcreator'], status: { connect: 'grant', enabled: true },
-    mappings: [{ database: 'AppData', user: 'app_reader', defaultSchema: 'sales', rolesAdd: ['db_datareader'] }] })
+    mappings: [{ database: 'AppData', user: 'app_reader', defaultSchema: 'sales', rolesAdd: ['db_datareader'] }], permissions: newPermissions })
   await expect(explorerTree(page).getByRole('treeitem', { name: 'app_reader', selected: true })).toBeVisible()
   expect(await menuOf('server-a', 'Security', 'Logins')).toContain('New Login…')
   await explorerMenu().getByRole('menuitem', { name: 'New Login…', exact: true }).click(fast)
@@ -798,16 +842,16 @@ try {
   const promptCount = 0
   const notice = () => toastMessage(toasts(page).last())
   // A SQL Server login offers Unlock… whatever its state (only its dialog reads whether it is locked out); other kinds do not. Every
-  // login offers Properties (Login Properties, D2c), SQL Server's own too, as in SSMS.
-  expect(await menuOf(...logins, 'AppUser')).toEqual(['Script Login as', 'Copy Name', 'Disable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
+  // login offers New Login… first and Properties last (Login Properties, D2c), SQL Server's own too, as in SSMS.
+  expect(await menuOf(...logins, 'AppUser')).toEqual(['New Login…', 'Script Login as', 'Copy Name', 'Disable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await closeMenu()
-  expect(await menuOf(...logins, 'Retired')).toEqual(['Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
+  expect(await menuOf(...logins, 'Retired')).toEqual(['New Login…', 'Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await closeMenu()
   // A Windows group cannot be disabled (SQL Server refuses it), and SQL Server's own logins cannot be changed.
-  expect(await menuOf(...logins, 'CONTOSO\\Ops')).toEqual(['Script Login as', 'Copy Name', 'Disable', 'Rename', 'Delete', 'Refresh', 'Properties'])
+  expect(await menuOf(...logins, 'CONTOSO\\Ops')).toEqual(['New Login…', 'Script Login as', 'Copy Name', 'Disable', 'Rename', 'Delete', 'Refresh', 'Properties'])
   expect(await disabled()).toEqual(['Disable'])
   await closeMenu()
-  expect(await menuOf(...logins, '##MS_PolicyTsqlExecutionLogin##')).toEqual(['Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
+  expect(await menuOf(...logins, '##MS_PolicyTsqlExecutionLogin##')).toEqual(['New Login…', 'Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
   expect(await disabled()).toEqual(['Enable', 'Unlock…', 'Rename', 'Delete'])
   await closeMenu()
   // The palette says why a greyed login verb is greyed for the login selected, in its own words.
@@ -831,7 +875,7 @@ try {
     loginIdentity: { sid: '01', created: '2026-01-02T03:04:05.000' } })
   await expect(async () => {
     if (await explorerMenu().count()) await closeMenu()
-    expect(await menuOf(...logins, 'AppUser')).toEqual(['Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
+    expect(await menuOf(...logins, 'AppUser')).toEqual(['New Login…', 'Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
   }).toPass()
   // Enable runs at once; the notice says the login still may not connect while its CONNECT SQL is denied.
   await closeMenu()
@@ -938,7 +982,7 @@ try {
   await menuOf(...logins, 'Retired')
   await explorerMenu().getByRole('menuitem', { name: 'Properties', exact: true }).click(fast)
   await expect(objectDialogProgress(propertiesDialog('Retired'))).toHaveText('Ready')
-  expect(await propertiesDialog('Retired').getByRole('navigation', { name: 'Select a page', exact: true }).getByRole('button').allTextContents()).toEqual(['General', 'Server Roles', 'User Mapping', 'Status'])
+  expect(await propertiesDialog('Retired').getByRole('navigation', { name: 'Select a page', exact: true }).getByRole('button').allTextContents()).toEqual(['General', 'Server Roles', 'User Mapping', 'Securables', 'Status'])
   await expect(propertiesDialog('Retired').getByRole('textbox', { name: 'Login name', exact: true })).toHaveValue('Retired')
   await expect(passwordField(propertiesDialog('Retired'), 'Password')).toHaveValue('')
   await expect(propertiesDialog('Retired').getByRole('checkbox', { name: 'Specify old password', exact: true })).not.toBeChecked()
@@ -999,11 +1043,58 @@ try {
   await expect(propertiesDialog('CONTOSO\\Ops').getByRole('radiogroup', { name: 'Permission to connect to database engine', exact: true }).getByRole('radio', { name: 'Deny', exact: true })).toBeEnabled()
   await propertiesDialog('CONTOSO\\Ops').getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(propertiesDialog('CONTOSO\\Ops')).toHaveCount(0)
+  // Securables (D2d) on Login Properties: AppUser's explicit permissions with their grantor, by type then name. Effective reads what
+  // the login may do on the selected securable, once per securable; clearing With Grant on IMPERSONATE sends REVOKE GRANT OPTION FOR.
+  await menuOf(...logins, 'AppUser')
+  await explorerMenu().getByRole('menuitem', { name: 'Properties', exact: true }).click(fast)
+  const appUser = propertiesDialog('AppUser')
+  await expect(objectDialogProgress(appUser)).toHaveText('Ready')
+  await appUser.getByRole('button', { name: 'Securables', exact: true }).click()
+  const ownSecurables = appUser.getByRole('grid', { name: 'Securables:', exact: true })
+  await expect(ownSecurables.getByRole('gridcell')).toHaveText(['STUB-SQL', 'Server', 'Held', 'Login'])
+  const ownExplicit = appUser.getByRole('grid', { name: 'Explicit permissions', exact: true })
+  await expect(ownExplicit.getByRole('checkbox', { name: 'Grant VIEW SERVER STATE', exact: true })).toBeChecked()
+  expect(await ownExplicit.getByRole('row').filter({ hasText: 'VIEW SERVER STATE' }).getByRole('gridcell').allTextContents()).toEqual(['VIEW SERVER STATE', 'sa', '', '', ''])
+  await appUser.getByRole('tab', { name: 'Effective', exact: true }).click()
+  const effectiveList = appUser.getByRole('list', { name: 'Effective permissions', exact: true })
+  await expect(effectiveList.getByRole('listitem')).toHaveText(['CONNECT SQL', 'VIEW SERVER STATE'])
+  await ownSecurables.getByRole('row').filter({ hasText: 'Held' }).click()
+  await expect(effectiveList.getByRole('listitem')).toHaveText(['IMPERSONATE'])
+  expect((await stubCalls('actions.describe')).filter(call => call.dialog === 'loginEffectivePermissions').map(call => [call.target.name, call.securable]))
+    .toEqual([['AppUser', { type: 'server' }], ['AppUser', { type: 'login', name: 'Held' }]])
+  await appUser.getByRole('tab', { name: 'Explicit', exact: true }).click()
+  await expect(ownExplicit.getByRole('checkbox', { name: 'With Grant IMPERSONATE', exact: true })).toBeChecked()
+  await ownExplicit.getByRole('checkbox', { name: 'With Grant IMPERSONATE', exact: true }).uncheck()
+  await expect(ownExplicit.getByRole('checkbox', { name: 'Grant IMPERSONATE', exact: true })).toBeChecked()
+  const revokeOption = { permissions: [{ securable: { type: 'login', name: 'Held' }, permission: 'IMPERSONATE', state: 'revokeGrantOption' }] }
+  await appUser.getByRole('button', { name: 'Script', exact: true }).click()
+  await expect.poll(async () => (await stubCalls('actions.script')).at(-1)?.target?.name).toBe('AppUser')
+  expect((await stubCalls('actions.script')).at(-1)).toMatchObject({ action: 'loginProperties', loginChanges: revokeOption })
+  await appUser.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(appUser).toHaveCount(0)
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'loginProperties', target: { kind: 'login', name: 'AppUser' }, loginChanges: revokeOption })
+  // Held refuses EXECUTE AS LOGIN: the Effective tab says so as a value, with Retry.
+  await menuOf(...logins, 'Held')
+  await explorerMenu().getByRole('menuitem', { name: 'Properties', exact: true }).click(fast)
+  const heldDialog = propertiesDialog('Held')
+  await expect(objectDialogProgress(heldDialog)).toHaveText('Ready')
+  await heldDialog.getByRole('button', { name: 'Securables', exact: true }).click()
+  await heldDialog.getByRole('button', { name: 'Search…', exact: true }).click()
+  await addObjects.getByRole('radio', { name: "The server 'STUB-SQL'", exact: true }).check()
+  await addObjects.getByRole('button', { name: 'OK', exact: true }).click()
+  await heldDialog.getByRole('tab', { name: 'Effective', exact: true }).click()
+  await expect(heldDialog.getByRole('alert')).toContainText("You don't have permission to view effective permissions.")
+  await expect(heldDialog.getByRole('button', { name: 'Retry', exact: true })).toBeVisible()
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-login-securables-dark.png') })
+  await heldDialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(heldDialog).toHaveCount(0)
   // SQL Server's own login: every page says why it cannot change, its controls are greyed, and so is OK.
   await menuOf(...logins, '##MS_PolicyTsqlExecutionLogin##')
   await explorerMenu().getByRole('menuitem', { name: 'Properties', exact: true }).click(fast)
   const systemDialog = propertiesDialog('##MS_PolicyTsqlExecutionLogin##')
   await expect(objectDialogProgress(systemDialog)).toHaveText('Ready')
+  // SSMS hides Securables for SQL Server's own logins (D2 §4), and so does Varia.
+  expect(await systemDialog.getByRole('navigation', { name: 'Select a page', exact: true }).getByRole('button').allTextContents()).toEqual(['General', 'Server Roles', 'User Mapping', 'Status'])
   for (const pageName of ['General', 'Server Roles', 'User Mapping', 'Status']) {
     await systemDialog.getByRole('button', { name: pageName, exact: true }).click()
     await expect(systemDialog.getByRole('list', { name: 'Notes', exact: true })).toContainText('This login belongs to SQL Server and cannot be changed.')
@@ -1050,12 +1141,17 @@ try {
   // Logins may still be reloading after the rename, so the press repeats until sa's menu opens.
   await expect(async () => {
     if (await explorerMenu().count()) await closeMenu()
-    expect(await menuOf(...logins, 'sa')).toEqual(['Script Login as', 'Copy Name', 'Disable', 'Rename', 'Delete', 'Refresh', 'Properties'])
-  }).toPass()
+    expect(await menuOf(...logins, 'sa')).toEqual(['New Login…', 'Script Login as', 'Copy Name', 'Disable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
+  }).toPass({ timeout: 30000 })
   expect(await disabled()).toEqual(['Delete'])
   await closeMenu()
-  await menuOf(...logins, 'AppOwner')
-  await explorerMenu().getByRole('menuitem', { name: 'Delete', exact: true }).click(fast)
+  // AppOwner may lie further from the server row than the tree renders at once, so revealing it scrolls; in a window that
+  // draws few frames the scroll can land after its menu opens and close it, so the press repeats until Delete is clicked.
+  await expect(async () => {
+    if (await explorerMenu().count()) await closeMenu()
+    await menuOf(...logins, 'AppOwner')
+    await explorerMenu().getByRole('menuitem', { name: 'Delete', exact: true }).click({ ...fast, timeout: 5000 })
+  }).toPass({ timeout: 45000 })
   await expect(objectDialogProgress(dialog())).toHaveText('Ready')
   await expect(dialog().getByRole('grid').locator('tbody td')).toHaveText(['AppOwner', 'Login', '', '', ''])
   const sessionsWarning = '2 sessions are connected as this login; the DROP fails until they end. Activity Monitor can end them.'

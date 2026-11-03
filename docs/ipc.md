@@ -616,6 +616,19 @@ refuses `secrets`. Its steps run one by one without a transaction (critic A24); 
 "The login was changed only in part", and 15151 is `PERMISSION_DENIED` with "Check the old password." when the password step
 failed with an old one.
 
+**Securables** (D2d) adds to both. New Login's describe also answers `newLogin.securables: { server, permissions: { server,
+endpoint, login, serverRole, availabilityGroup }, objects: { endpoint, login, serverRole, availabilityGroup } (≤ 1,024 names each),
+truncated }`, the permissions being the catalogue's (`src/shared/actions/securables.ts`) that the server's `sys.fn_builtin_permissions`
+lists. Login Properties' `loginProperties` adds `permissions` (≤ 1,024 `{ securable: { type, name? }, permission, state: 'grant' |
+'withGrant' | 'deny', grantor }`, none for SQL Server's own logins) and `permissionsTruncated`. `createLogin` takes an optional
+`permissions` and `loginChanges` an optional `permissions`: at most 512 `{ securable: { type, name? (1–128, exactly when the type
+is not server) }, permission (one of its type's in the catalogue, never CONNECT SQL), state, cascade? }`, each securable's
+permission once; `state` is `grant`, `withGrant` or `deny` for a new login, and also `revoke` or `revokeGrantOption` for Login
+Properties, and `cascade: true` goes only with `deny` or `revoke`. Each counts as one statement against the 512. The Effective tab
+is `actions.describe { …, dialog: 'loginEffectivePermissions', target: { kind: 'login', name }, securable: { type, name? } }` (no
+other describe takes `securable`; never a `##…##` login, whose page is hidden), answering `{ effectivePermissions: { permissions (≤ 256), truncated } }`, `PERMISSION_DENIED`
+when SQL Server refuses EXECUTE AS LOGIN (15406, 15517, 15151) and `NOT_FOUND` when the login is gone.
+
 ## Streams and credits
 
 `results.read { resultId: u32 ≥ 1, firstRow: 0 … 2⁵³ − 1, maxRows: 1 … 65,536 }` sends a DATA frame for every sealed page

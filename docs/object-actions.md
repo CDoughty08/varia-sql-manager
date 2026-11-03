@@ -90,9 +90,9 @@ the Runs on column above says which, and the menu hides it elsewhere. Menus read
 | --- | --- | --- | --- | --- | --- |
 | `deleteObject` | Delete Object | Modal dialog | `delete` | General (`settings-gear`) | Yes |
 | `databaseProperties` | Database Properties - <name> | Document tab | `properties` | General (`settings-gear`), Files (`settings-gear`), Filegroups (`settings-gear`), Options (`settings-gear`) | No |
-| `newLogin` | Login - New | Modal dialog | `createLogin` | General (`settings-gear`, kept mounted), Server Roles (`settings-gear`), User Mapping (`settings-gear`, kept mounted), Status (`settings-gear`) | Yes |
+| `newLogin` | Login - New | Modal dialog | `createLogin` | General (`settings-gear`, kept mounted), Server Roles (`settings-gear`), User Mapping (`settings-gear`, kept mounted), Securables (`settings-gear`, kept mounted), Status (`settings-gear`) | Yes |
 | `unlockLogin` | Unlock Login - <name> | Modal dialog | `unlock` | General (`settings-gear`) | Yes |
-| `loginProperties` | Login Properties - <name> | Modal dialog | `loginProperties` | General (`settings-gear`, kept mounted), Server Roles (`settings-gear`), User Mapping (`settings-gear`, kept mounted), Status (`settings-gear`) | Yes |
+| `loginProperties` | Login Properties - <name> | Modal dialog | `loginProperties` | General (`settings-gear`, kept mounted), Server Roles (`settings-gear`), User Mapping (`settings-gear`, kept mounted), Securables (`settings-gear`, kept mounted), Status (`settings-gear`) | Yes |
 
 A modal dialog is for a confirmation (Delete Object). A property sheet opens as a document tab instead (U1 D2): its
 pages are sections in one scrolling column with a section list beside it, and a Script drawer under it.
@@ -524,6 +524,9 @@ Without ALTER ANY LOGIN: "You do not have permission to change logins (ALTER ANY
 | `certificates` | 1,024 | Certificates listed |
 | `asymmetricKeys` | 1,024 | Asymmetric keys listed |
 | `permissions` | 512 | Server permissions per request |
+| `securableObjects` | 1,024 | Objects Add Objects lists per securable type |
+| `explicitPermissions` | 1,024 | Explicit server permissions Login Properties reads |
+| `effectivePermissions` | 256 | Effective permissions the Effective tab lists |
 | `sidHex` | 172 | Characters of a SID as hexadecimal text |
 | `stepTitle` | 64 | Characters in a step's title |
 | `stepDetail` | 128 | Characters in a step's detail |
@@ -537,7 +540,7 @@ Without ALTER ANY LOGIN: "You do not have permission to change logins (ALTER ANY
 ### New Login
 
 Security › New › Login…, and New Login… on the Logins folder and on a login, open "Login - New", a modal dialog with the pages
-General, Server Roles, User Mapping, Status (Securables follows once its OK works). Its action is `createLogin`, on
+General, Server Roles, User Mapping, Securables, Status (Securables: see [Securables](#securables)). Its action is `createLogin`, on
 SQL Server (Managed Instance follows); its target is the server.
 
 - **General**: Login name; Windows authentication (DOMAIN\name) or SQL Server authentication (the default when the server
@@ -583,7 +586,7 @@ OK runs SSMS's statements in SSMS's order, one by one: `CREATE LOGIN`, `DENY CON
 (Disabled), then `ALTER SERVER ROLE … ADD MEMBER` per role by name, then per mapped database by name, in it: `CREATE USER … FOR
 LOGIN`, `ALTER USER … WITH DEFAULT_SCHEMA=` when one is chosen, `CREATE SCHEMA … AUTHORIZATION` the user when the database
 lacks it, and `ALTER ROLE … ADD MEMBER` per role by name (at most 512 statements in all, or OK and Script refuse:
-"This login would need more than 512 statements. Map fewer databases, or apply the rest afterwards."). They do not share a transaction (critic A24, owner decision
+"This login would need more than 512 statements. Map fewer databases or change fewer permissions, or apply the rest afterwards."). They do not share a transaction (critic A24, owner decision
 6): on SQL Server 2025 an open transaction holding `CREATE LOGIN` keeps out every SQL Server login whose security token is not
 cached (one that has not signed in since the server started) until it ends, and one holding a server role membership change
 keeps out every SQL Server login, so one statement waiting for a lock would lock users out. A live check signs in four such
@@ -620,7 +623,7 @@ D2a does not merge until it has run once on a disposable server and its result i
 ### Login Properties
 
 Properties on any login (SQL Server's own and sa included, as in SSMS) opens "Login Properties - <name>", a modal dialog with New Login's pages
-General, Server Roles, User Mapping, Status on the existing login. Its action is `loginProperties` (a kind action of logins), on
+General, Server Roles, User Mapping, Securables, Status on the existing login. Its action is `loginProperties` (a kind action of logins), on
 SQL Server, Managed Instance (its ALTER LOGIN on Managed Instance is unverified). SQL Server's own logins open but OK
 is greyed: "This login belongs to SQL Server and cannot be changed."
 
@@ -689,6 +692,70 @@ Refused before anything runs: the login this connection uses denied, disabled or
 ("This is the login this connection uses. Denying it permission to connect or disabling it would lock this connection out. Connect with another login to change its status."; "This is the login this connection uses. Requiring a new password at its next sign-in would refuse this connection's new sessions. Connect with another login to require it."), a
 Windows group disabled ("A Windows group cannot be disabled. Deny it permission to connect on Login Properties › Status instead."), and a password or policy change on a login that is not a SQL
 Server login ("Only a SQL Server login has a password and a password policy."). After OK the Logins folder and each changed database's Users folder reload.
+
+### Securables
+
+New Login and Login Properties share SSMS's Securables page: the server-level securables the login has permissions on, and the
+permissions of the selected one. "Add Objects" (Search…) asks "What objects do you want to add?": Specific objects… (Select Object Types,
+then Select Objects, which lists the objects of the chosen types that the describe read), All objects of the types… (every listed object of
+the chosen types) or The server '<server>'. The types, in Select Object Types' order (Endpoints, Logins, Servers, Availability Groups, Server roles):
+
+| Type | Class | ON clause | Permissions |
+| --- | --- | --- | --- |
+| Server | SERVER (100) |  | ADMINISTER BULK OPERATIONS, ALTER ANY AVAILABILITY GROUP, ALTER ANY CONNECTION, ALTER ANY CREDENTIAL, ALTER ANY DATABASE, ALTER ANY ENDPOINT, ALTER ANY EVENT NOTIFICATION, ALTER ANY EVENT SESSION, ALTER ANY EVENT SESSION ADD EVENT, ALTER ANY EVENT SESSION ADD TARGET, ALTER ANY EVENT SESSION DISABLE, ALTER ANY EVENT SESSION DROP EVENT, ALTER ANY EVENT SESSION DROP TARGET, ALTER ANY EVENT SESSION ENABLE, ALTER ANY EVENT SESSION OPTION, ALTER ANY LINKED SERVER, ALTER ANY LOGIN, ALTER ANY SERVER AUDIT, ALTER ANY SERVER ROLE, ALTER RESOURCES, ALTER SERVER STATE, ALTER SETTINGS, ALTER TRACE, AUTHENTICATE SERVER, CONNECT ANY DATABASE, CONNECT SQL, CONTROL SERVER, CREATE ANY DATABASE, CREATE ANY EVENT SESSION, CREATE AVAILABILITY GROUP, CREATE DDL EVENT NOTIFICATION, CREATE ENDPOINT, CREATE LOGIN, CREATE SERVER ROLE, CREATE TRACE EVENT NOTIFICATION, DROP ANY EVENT SESSION, EXTERNAL ACCESS ASSEMBLY, IMPERSONATE ANY LOGIN, SELECT ALL USER SECURABLES, SHUTDOWN, UNSAFE ASSEMBLY, VIEW ANY CRYPTOGRAPHICALLY SECURED DEFINITION, VIEW ANY DATABASE, VIEW ANY DEFINITION, VIEW ANY ERROR LOG, VIEW ANY PERFORMANCE DEFINITION, VIEW ANY SECURITY DEFINITION, VIEW SERVER PERFORMANCE STATE, VIEW SERVER SECURITY AUDIT, VIEW SERVER SECURITY STATE, VIEW SERVER STATE |
+| Endpoint | ENDPOINT (105) | `ON ENDPOINT::<name>` | ALTER, CONNECT, CONTROL, TAKE OWNERSHIP, VIEW DEFINITION |
+| Login | LOGIN (101) | `ON LOGIN::<name>` | ALTER, CONTROL, IMPERSONATE, VIEW DEFINITION |
+| Server Role | SERVER ROLE (101) | `ON SERVER ROLE::<name>` | ALTER, CONTROL, TAKE OWNERSHIP, VIEW DEFINITION |
+| Availability Group | AVAILABILITY GROUP (108) | `ON AVAILABILITY GROUP::<name>` | ALTER, CONTROL, TAKE OWNERSHIP, VIEW DEFINITION |
+
+The page offers those of a type's permissions that the server's `sys.fn_builtin_permissions` lists too, so an older server never
+sees a newer one, and a permission keyword reaches SQL only from this table. `CONNECT SQL`
+on the server shows greyed with the Status page's choice ("Set on the Status page (Permission to connect to database engine)."), and the Securables page never sends it.
+Fixed server roles and public are not securables (SQL Server answers 15151), so Add Objects lists only user-defined server roles.
+It lists at most 1,024 objects per type, by name ("Only the first 1,024 objects of each type are listed.").
+Remove takes a securable off the list and drops its unsent changes; it revokes nothing (clear its boxes to revoke).
+
+Below the list, "Permissions for <securable>:" has two tabs. **Explicit** is the grid Permission, Grantor, Grant, With Grant, Deny:
+Grant and Deny exclude each other, With Grant implies Grant, and clearing Grant clears With Grant. Its keys are the grid's: arrows,
+Home/End, Page Up/Down, and Space toggles the box under focus; in the securables list, Delete removes the selected row. **Effective**
+(Login Properties only; "Effective permissions show once the login exists.") lists what the login may do on the securable: `actions.describe`
+with dialog `loginEffectivePermissions`, the login as target and the securable as `securable`, reads `sys.fn_my_permissions` under
+`EXECUTE AS LOGIN` (then `REVERT`) on the describe's own unpooled connection, which closes after it, so the context cannot outlive the
+read. EXECUTE AS needs IMPERSONATE on the login: without it SQL Server answers 15406, 15517 or 15151, and the tab says "You don't have permission to view effective permissions."
+(`PERMISSION_DENIED`; `NOT_FOUND` when the login is gone). At most 256 are listed. Selecting another securable cancels a read still running.
+
+Login Properties reads the login's explicit permissions from `sys.server_permissions` (at most 1,024; "Only the first 1,024 explicit permissions are listed; OK changes only those shown."),
+a deny over a grant and a grant with grant option over a plain one, with the first such row's grantor (a permission on a login is
+recorded with that login as its grantor). SQL Server's own logins (`##…##`) never change, so their describe reads none, the Effective read refuses them, and the page
+is hidden, as SSMS hides it.
+
+OK and Script send one statement per changed permission, as SMO's SecurableUtils writes it, from what the describe read to what the
+boxes ask for:
+
+| Read | Asked for | Statement |
+| --- | --- | --- |
+| none | Grant | GRANT |
+| none | With Grant | GRANT … WITH GRANT OPTION |
+| none | Deny | DENY |
+| Grant | none | REVOKE |
+| Grant | With Grant | GRANT … WITH GRANT OPTION |
+| Grant | Deny | DENY |
+| With Grant | none | REVOKE … CASCADE |
+| With Grant | Grant | REVOKE GRANT OPTION FOR … CASCADE |
+| With Grant | Deny | DENY … CASCADE |
+| Deny | none | REVOKE |
+| Deny | Grant | GRANT |
+| Deny | With Grant | GRANT … WITH GRANT OPTION |
+
+SQL Server refuses to deny or revoke a permission granted WITH GRANT OPTION without CASCADE (4611), so those cascade, as SMO's do.
+New Login sends only GRANT, GRANT … WITH GRANT OPTION and DENY. The statements run after User Mapping's, SSMS's last step, by type
+in the table's order, then by securable name and permission (at most 512 per request:
+"At most 512 permissions can change at once. Apply some, then the rest."). Each is one batch in master from constant keyword text, in which SQL Server
+builds the statement: the verb, permission and ON clause come only from the catalogue, the login and the securable go in as
+nvarchar(128) parameters through `QUOTENAME` (`PermissionSql.Executable`, checked by `ActionSql.LintExecutable`'s builder form and
+`PermissionSql.LintExecutable` for every type, permission and form). Login Properties binds each to the login it read, as its other
+statements. The steps read "Grant a permission", "Deny a permission", "Revoke a permission" and "Revoke a grant option", with the
+permission and its securable; a failure or Stop keeps what completed, and New Login's message then adds "Not every permission was set."
 
 ## Errors
 

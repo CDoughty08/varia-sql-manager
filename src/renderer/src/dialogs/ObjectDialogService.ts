@@ -2,6 +2,7 @@ import { actionLimits, dialogSpecs, dialogTitle, isModalDialog, unknownOutcomeMe
 import { noScriptNotice } from '../../../shared/actions/database.ts'
 import { loginDatabaseRolesDescribe, loginLimits, type LoginDatabaseRoles, type NewLoginModel } from '../../../shared/actions/logins.ts'
 import { actionPrompts, promptTabFacts } from '../../../shared/actions/prompts.ts'
+import { loginEffectiveDescribe, securableKey, type EffectivePermissions, type SecurableRef } from '../../../shared/actions/securables.ts'
 import type { ActionError, ActionExecuteResult, ActionRequest, ActionStep, DeleteTarget } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import type { FolderId } from '../../../shared/explorer/catalog.ts'
@@ -51,6 +52,8 @@ export interface OpenObjectDialog {
   readonly refusal?: string
   /** User Mapping's reads of the databases selected so far (`loadDatabaseRoles`), by database name. */
   readonly databaseRoles?: ReadonlyMap<string, DatabaseRolesLookup>
+  /** Securables' Effective tab reads (Login Properties, `loadEffective`), by securableKey. */
+  readonly effective?: ReadonlyMap<string, EffectiveLookup>
   /** Delete Object on a database: Varia's query tabs whose session holds an open transaction there (A7), named as `promptTabFacts` bounds them. */
   readonly tabsWithTransactions?: readonly string[]
   readonly moreTabsWithTransactions?: number
@@ -62,6 +65,8 @@ export interface OpenObjectDialog {
 }
 /** One database's roles, guest state and schemas, as User Mapping reads them when its row is selected. */
 export type DatabaseRolesLookup = { readonly state: 'loading' } | { readonly state: 'ready'; readonly value: LoginDatabaseRoles } | { readonly state: 'failed'; readonly error: ActionError }
+/** One securable's effective permissions for the login, as the Effective tab reads them when it shows that securable. */
+export type EffectiveLookup = { readonly state: 'loading' } | { readonly state: 'ready'; readonly value: EffectivePermissions } | { readonly state: 'failed'; readonly error: ActionError }
 /** A database an action removed (D3 §8): the server as connected to, so its Properties documents can say where it was. */
 export interface DatabaseGone { readonly connectionId: string; readonly server: string; readonly database: string }
 export interface ObjectDialogSnapshot { readonly open?: OpenObjectDialog }
@@ -117,6 +122,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   private request?: { readonly id: string; readonly dialog: number }
   /** User Mapping's read in flight, apart from `request`: OK and Script run while it reads, and Stop never cancels it. */
   private lookup?: { readonly id: string; readonly dialog: number; readonly database: string }
+  /** The Effective tab's read in flight, apart from both: it never waits for User Mapping's, nor cancels it. */
+  private effectiveLookup?: { readonly id: string; readonly dialog: number; readonly key: string }
   private disposed = false
   /** The open dialog's password fields (New Login's Password and Confirm password): never published, cleared when the dialog
    *  closes, opens anew, succeeds or loses its server, and on dispose. Only ok() reads them. */
@@ -233,6 +240,44 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   private cancelLookup(): void {
     if (this.lookup) this.cancel([this.lookup.id])
     this.lookup = undefined
+    if (this.effectiveLookup) this.cancel([this.effectiveLookup.id])
+    this.effectiveLookup = undefined
+  }
+
+  /**
+   * Securables' Effective tab shows a securable (Login Properties only): reads what the login may do there, as the login, once per
+   * dialog (again after a failure, and after a partial run's reload, which forgets them all). A read still running for another
+   * securable is cancelled and forgotten, so moving through the grid never queues reads.
+   */
+  loadEffective(securable: SecurableRef): void {
+    const open = this.current
+    if (open?.dialog !== 'loginProperties' || !open.model || open.phase === 'loadFailed' || open.phase === 'disconnected' || open.target.name === undefined) return
+    const key = securableKey(securable), known = open.effective?.get(key)
+    if (known && known.state !== 'failed') return
+    const stale = this.effectiveLookup
+    let lookups = new Map(open.effective ?? [])
+    if (stale) {
+      this.effectiveLookup = undefined
+      this.cancel([stale.id])
+      if (stale.dialog === open.id) lookups.delete(stale.key)
+    }
+    const requestId = this.newId()
+    this.effectiveLookup = { id: requestId, dialog: open.id, key }
+    lookups = lookups.set(key, { state: 'loading' })
+    this.update(open, { effective: lookups })
+    void this.readEffective(open, securable, key, requestId)
+  }
+  private async readEffective(open: OpenObjectDialog, securable: SecurableRef, key: string, requestId: string): Promise<void> {
+    const result = await this.call(() => this.options.api.describeObject({
+      connectionId: open.connectionId, requestId, dialog: loginEffectiveDescribe, target: open.target, securable: securable.type === 'server' ? { type: 'server' } : { type: securable.type, name: securable.name! }
+    }))
+    if (this.effectiveLookup?.id !== requestId) return
+    this.effectiveLookup = undefined
+    const current = this.current
+    if (this.disposed || current?.id !== open.id || current.phase === 'disconnected') return
+    const value = result.ok ? result.value.effectivePermissions : undefined
+    const failure = !result.ok ? error('SQL_ERROR', result.error) : result.value.error ?? (value ? undefined : error('NOT_FOUND', 'The effective permissions could not be read.'))
+    this.update(current, { effective: new Map(current.effective ?? []).set(key, failure || !value ? { state: 'failed', error: failure! } : { state: 'ready', value }) })
   }
 
   /** For tests: whether the secret slot holds a value, which only an open dialog's password fields put there. */
@@ -434,7 +479,9 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
       const again = current.model && current.draft ? definition.readAgain?.(current.model, current.draft) ?? [] : []
       const roles = new Map(current.databaseRoles ?? [])
       for (const database of again) roles.delete(database)
-      this.update(current, { model, ...(again.length ? { databaseRoles: roles } : {}) })
+      // What the login may do changed with the steps that completed, so the Effective tab reads each securable again.
+      if (this.effectiveLookup?.dialog === open.id) { this.cancel([this.effectiveLookup.id]); this.effectiveLookup = undefined }
+      this.update(current, { model, effective: undefined, ...(again.length ? { databaseRoles: roles } : {}) })
       for (const database of again) {
         const now = this.current
         // A database the user selected meanwhile is read by that selection; one left out while it reads stays unread until selected.

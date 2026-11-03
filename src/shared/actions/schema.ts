@@ -13,19 +13,27 @@ import {
   windowsLoginName, type LoginChanges, type LoginDatabaseRoles, type LoginFacts, type LoginLockFacts, type LoginMappings, type LoginPropertiesFacts, type LoginSecrets, type LoginStatusChoice, type NewLoginGeneral,
   type NewLoginModel, type UnlockMode, type UserMappingChoice
 } from './logins.ts'
+import {
+  loginEffectiveDescribe, permissionVerbs, reservedPermission, securableKey, securableSpecs, securableTypes, type EffectivePermissions, type PermissionChoice, type SecurableRef
+} from './securables.ts'
 import { wellFormed } from '../ssis/schema.ts'
 import { optionDef, settableOptionKeys, settableScopedKeys, tokenProblem, type FileType, type Growth } from './database.ts'
 import { designerDescribeIds } from '../designer/catalog.ts'
 import { createTableSchema, type CreateTableRequest, type TableDesignerModel } from '../designer/schema.ts'
 
 /** What actions.describe describes: an object dialog (PR17's catalogue), a designer (src/shared/designer/catalog.ts), one
- *  database's roles and schemas for New Login's User Mapping page (logins.ts loginDatabaseRolesDescribe), or an object's
+ *  database's roles and schemas for New Login's User Mapping page (logins.ts loginDatabaseRolesDescribe), a login's effective
+ *  permissions on one securable for Login Properties' Securables page (securables.ts loginEffectiveDescribe), or an object's
  *  facts without a dialog (the login actions' loginFacts). */
-export const describeIds = [...dialogIds, ...designerDescribeIds, loginDatabaseRolesDescribe, ...actionDescribeIds] as const
+export const describeIds = [...dialogIds, ...designerDescribeIds, loginDatabaseRolesDescribe, loginEffectiveDescribe, ...actionDescribeIds] as const
 export type DescribeId = typeof describeIds[number]
 
-/** `login`: the login whose user User Mapping's read of a database (loginDatabaseRoles) reads too (Login Properties, D2c); no other describe takes it. */
-export interface ActionDescribeRequest { readonly connectionId: string; readonly requestId: string; readonly dialog: DescribeId; readonly target: ObjectRef; readonly login?: string }
+/** `login`: the login whose user User Mapping's read of a database (loginDatabaseRoles) reads too (Login Properties, D2c); no other
+ *  describe takes it. `securable`: the securable whose effective permissions the Effective tab reads (loginEffectivePermissions, D2d),
+ *  which needs it; no other describe takes it. */
+export interface ActionDescribeRequest {
+  readonly connectionId: string; readonly requestId: string; readonly dialog: DescribeId; readonly target: ObjectRef; readonly login?: string; readonly securable?: SecurableRef
+}
 export interface RenameRequest { readonly action: 'rename'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly newName: string }
 /**
  * `closeConnections` (SET SINGLE_USER WITH ROLLBACK IMMEDIATE first) and `deleteHistory` apply to databases only; `dropMappedUsers`
@@ -62,6 +70,8 @@ export interface CreateLoginRequest {
   readonly login: NewLoginGeneral
   readonly serverRoles: readonly string[]
   readonly mappings: readonly UserMappingChoice[]
+  /** The Securables page's grants and denials (D2d): GRANT, WITH GRANT OPTION or DENY only, as nothing exists yet to revoke. */
+  readonly permissions?: readonly PermissionChoice[]
   readonly status: LoginStatusChoice
   readonly secrets?: LoginSecrets
 }
@@ -200,8 +210,10 @@ export interface ActionDescribeResult {
   readonly login?: LoginFacts
   /** unlockLogin and loginProperties: the login's lock-out state (ActionSql.LoginLock; a SQL Server login's only, for loginProperties). */
   readonly lock?: LoginLockFacts
-  /** loginProperties (with newLogin's lists and login): the login's defaults, server roles and mapped users. */
+  /** loginProperties (with newLogin's lists and login): the login's defaults, server roles, mapped users and explicit permissions. */
   readonly loginProperties?: LoginPropertiesFacts
+  /** loginEffectivePermissions (D2d): what the login may do on the securable asked for. */
+  readonly effectivePermissions?: EffectivePermissions
 }
 export interface ActionScriptResult {
   /** Absent with `error`; at most `actionLimits.scriptChars` characters. */
@@ -279,9 +291,13 @@ export function actionTargetProblems(ref: ObjectRef, action: ObjectAction): stri
 const issue = (context: z.RefinementCtx, path: string, message: string) => context.addIssue({ code: 'custom', path: [path], message })
 const targetIssues = (context: z.RefinementCtx, target: ObjectRef, action: ObjectAction) => { for (const message of actionTargetProblems(target, action)) issue(context, 'target', message) }
 
-export const actionDescribeSchema = z.object({ connectionId: z.uuid(), requestId: z.uuid(), dialog: z.enum(describeIds), target: objectRefSchema, login: ident.optional() }).strict()
+/** A securable: a type of the catalogue, and a name exactly when it is not the server. */
+export const securableSchema = z.object({ type: z.enum(securableTypes), name: ident.optional() }).strict()
+  .refine(ref => (ref.type === 'server') === (ref.name === undefined), 'The server has no name; every other securable has one.') satisfies z.ZodType<SecurableRef>
+export const actionDescribeSchema = z.object({ connectionId: z.uuid(), requestId: z.uuid(), dialog: z.enum(describeIds), target: objectRefSchema, login: ident.optional(), securable: securableSchema.optional() }).strict()
   .superRefine((request, context) => {
     if (request.login !== undefined && request.dialog !== loginDatabaseRolesDescribe) issue(context, 'login', 'Only User Mapping\'s read of a database names a login.')
+    if ((request.securable !== undefined) !== (request.dialog === loginEffectiveDescribe)) issue(context, 'securable', 'Exactly the Effective tab\'s read names a securable.')
     switch (request.dialog) {
       // A new table goes in any database, SQL Server's own included, as in SSMS.
       case 'tableDesigner':
@@ -293,6 +309,12 @@ export const actionDescribeSchema = z.object({ connectionId: z.uuid(), requestId
       // Any database, SQL Server's own included: a login may be mapped to master or msdb, as in SSMS.
       case loginDatabaseRolesDescribe:
         if (request.target.kind !== 'database' || request.target.parent) issue(context, 'target', 'User Mapping reads a database.')
+        break
+      // A login Login Properties may open on, but not SQL Server's own: their Securables page is hidden and reads nothing.
+      case loginEffectiveDescribe:
+        if (request.target.kind !== 'login') issue(context, 'target', 'Effective permissions are a login\'s.')
+        else if (systemLogin(request.target)) issue(context, 'target', 'SQL Server\'s own logins have no Securables page.')
+        else for (const message of dialogTargetProblems(request.target, 'loginProperties', 'loginProperties')) issue(context, 'target', message)
         break
       case 'loginFacts':
         if (request.target.kind !== actionDescribeSpecs.loginFacts.kind) issue(context, 'target', 'Login facts describe a login.')
@@ -338,9 +360,19 @@ const newLoginGeneralSchema = z.object({
   mustChange: z.boolean().optional()
 }).strict() satisfies z.ZodType<NewLoginGeneral>
 const userMappingSchema = z.object({ database: ident, user: ident, defaultSchema: ident.optional(), rolesAdd: z.array(ident).max(loginLimits.roles) }).strict() satisfies z.ZodType<UserMappingChoice>
+/** One permission statement: a permission of the securable's class (from the catalogue, never free text) that the Status page does
+ *  not own, and CASCADE only with DENY or REVOKE (REVOKE GRANT OPTION FOR always cascades). */
+const permissionChoiceSchema = z.object({ securable: securableSchema, permission: z.string().max(128), state: z.enum(permissionVerbs), cascade: z.literal(true).optional() }).strict()
+  .superRefine((choice, context) => {
+    if (!securableSpecs[choice.securable.type].permissions.includes(choice.permission)) issue(context, 'permission', 'Not a permission of this securable.')
+    else if (reservedPermission(choice.securable.type, choice.permission)) issue(context, 'permission', 'The Status page sets this permission.')
+    if (choice.cascade && choice.state !== 'deny' && choice.state !== 'revoke') issue(context, 'cascade', 'Only DENY and REVOKE take CASCADE.')
+  }) satisfies z.ZodType<PermissionChoice>
+const permissionChoices = z.array(permissionChoiceSchema).max(loginLimits.permissions)
+const distinctPermissions = (choices: readonly PermissionChoice[] | undefined) => new Set((choices ?? []).map(choice => securableKey(choice.securable) + '\n' + choice.permission)).size === (choices ?? []).length
 const createLoginSchema = z.object({
   action: z.literal('createLogin'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, login: newLoginGeneralSchema,
-  serverRoles: z.array(ident).max(loginLimits.serverRoles), mappings: z.array(userMappingSchema).max(loginLimits.mappings), status: z.object({ connect: z.enum(['grant', 'deny']), enabled: z.boolean() }).strict(), secrets: loginSecretsSchema.optional()
+  serverRoles: z.array(ident).max(loginLimits.serverRoles), mappings: z.array(userMappingSchema).max(loginLimits.mappings), permissions: permissionChoices.optional(), status: z.object({ connect: z.enum(['grant', 'deny']), enabled: z.boolean() }).strict(), secrets: loginSecretsSchema.optional()
 }).strict()
 const roleNames = (limit: number) => z.array(ident).max(limit)
 const loginMappingChangeSchema = z.object({
@@ -350,7 +382,7 @@ const loginChangesSchema = z.object({
   defaultDatabase: ident.optional(), defaultLanguage: ident.optional(), checkPolicy: z.boolean().optional(), checkExpiration: z.boolean().optional(),
   password: z.object({ oldPassword: z.boolean(), unlock: z.boolean(), mustChange: z.boolean() }).strict().optional(),
   rolesAdd: roleNames(loginLimits.serverRoles).optional(), rolesDrop: roleNames(loginLimits.serverRoles).optional(), mappings: z.array(loginMappingChangeSchema).max(loginLimits.mappings).optional(),
-  connect: z.enum(['grant', 'deny']).optional(), enabled: z.boolean().optional()
+  permissions: permissionChoices.optional(), connect: z.enum(['grant', 'deny']).optional(), enabled: z.boolean().optional()
 }).strict() satisfies z.ZodType<LoginChanges>
 const loginPropertiesSchema = z.object({
   action: z.literal('loginProperties'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, loginIdentity: loginIdentitySchema.optional(), loginChanges: loginChangesSchema,
@@ -370,6 +402,7 @@ function loginPropertiesIssues(request: z.infer<typeof loginPropertiesSchema>, c
   if (!roles.every(distinct)) issue(context, 'loginChanges', 'Duplicate role.')
   if (overlap(changes.rolesAdd, changes.rolesDrop) || (changes.mappings ?? []).some(mapping => overlap(mapping.rolesAdd, mapping.rolesDrop))) issue(context, 'loginChanges', 'A role is both added and dropped.')
   if (!distinct((changes.mappings ?? []).map(mapping => mapping.database))) issue(context, 'loginChanges', 'A database changes twice.')
+  if (!distinctPermissions(changes.permissions)) issue(context, 'loginChanges', 'A permission changes twice.')
   for (const mapping of changes.mappings ?? []) {
     const valid = mapping.change === 'unmap' ? mapping.newName === undefined && mapping.defaultSchema === undefined && mapping.rolesAdd === undefined && mapping.rolesDrop === undefined
       : mapping.change === 'map' ? mapping.newName === undefined && mapping.rolesDrop === undefined
@@ -403,6 +436,9 @@ function createLoginIssues(request: z.infer<typeof createLoginSchema>, context: 
     if (mapping.rolesAdd.includes(publicRole)) issue(context, 'mappings', 'Every database user is a member of public.')
     if (new Set(mapping.rolesAdd).size !== mapping.rolesAdd.length) issue(context, 'mappings', 'Duplicate database role.')
   }
+  // A new login has nothing to revoke, and no grant option for a DENY to cascade from.
+  if (request.permissions?.some(choice => choice.cascade || (choice.state !== 'grant' && choice.state !== 'withGrant' && choice.state !== 'deny'))) issue(context, 'permissions', 'A new login is only granted or denied permissions.')
+  if (!distinctPermissions(request.permissions)) issue(context, 'permissions', 'A permission is chosen twice.')
   if (newLoginStatements(request) > actionLimits.statements) issue(context, 'mappings', tooManyStatementsMessage(actionLimits.statements))
 }
 export const actionRequestSchema = z.discriminatedUnion('action', [

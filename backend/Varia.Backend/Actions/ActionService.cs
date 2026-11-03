@@ -177,6 +177,9 @@ internal sealed partial class ActionService : IDisposable
         Ids(args.ConnectionId, args.RequestId);
         // Login Properties' User Mapping reads one database for the login it shows (D2c): its user there and that user's roles.
         if (args.Login is not null && (args.Dialog != catalog.Logins.RolesDescribe || !ExplorerRefs.Ident(args.Login))) throw Invalid("login.");
+        // Its Securables page's Effective tab reads one securable as the login (D2d), and only it names one.
+        if ((args.Securable is not null) != (args.Dialog is not null && args.Dialog == catalog.Logins.Securables.EffectiveDescribe)) throw Invalid("securable.");
+        if (args.Securable is not null) return EffectiveTarget(args);
         // User Mapping reads any database, SQL Server's own included: a login may be mapped to master or msdb.
         if (args.Dialog is not null && args.Dialog == catalog.Logins.RolesDescribe) return MappedDatabase(args.Target);
         if (args.Dialog is not null && designer.Describes.Contains(args.Dialog)) return DatabaseTarget(args.Target);
@@ -284,6 +287,7 @@ internal sealed partial class ActionService : IDisposable
         var target = Validate(args);
         var watch = Stopwatch.StartNew();
         var action = designer.Describes.Contains(args.Dialog) ? designer.Requests.Single() : args.Dialog == catalog.Logins.RolesDescribe ? (args.Login is null ? "createLogin" : "loginProperties")
+            : args.Dialog == catalog.Logins.Securables.EffectiveDescribe ? "loginProperties"
             : catalog.Describes.TryGetValue(args.Dialog, out var describe) ? describe.Action : catalog.ActionOf(args.Dialog);
         return RunAsync(args.ConnectionId, args.RequestId, action, read: true, Options.DescribeBudget, token,
             async (connection, profile, band, job) => await (args.Dialog switch
@@ -292,6 +296,7 @@ internal sealed partial class ActionService : IDisposable
                 "databaseProperties" => DescribePropertiesJobAsync(connection, target, band, job),
                 "newLogin" => DescribeNewLoginJobAsync(connection, profile, band, job),
                 _ when args.Dialog == catalog.Logins.RolesDescribe => DescribeDatabaseRolesJobAsync(connection, target, job, args.Login),
+                _ when args.Dialog == catalog.Logins.Securables.EffectiveDescribe => DescribeEffectiveJobAsync(connection, target, args.Securable!, job),
                 "loginProperties" => DescribeLoginPropertiesJobAsync(connection, profile, target, band, job),
                 "loginFacts" => DescribeLoginJobAsync(connection, target, job),
                 "unlockLogin" => DescribeUnlockJobAsync(connection, target, job),

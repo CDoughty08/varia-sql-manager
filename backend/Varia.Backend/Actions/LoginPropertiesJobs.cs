@@ -62,6 +62,7 @@ internal sealed partial class ActionService
             };
             if (!valid) throw Invalid("loginChanges.mappings.");
         }
+        if (PermissionSql.Problem(catalog.Logins.Securables, changes.Permissions, create: false, catalog.Logins.Limit("permissions")) is { } problem) throw Invalid("loginChanges." + problem);
         var statements = LoginSql.PropertiesStatements(changes);
         if (statements == 0) throw Invalid("loginChanges: nothing changes.");
         if (statements > catalog.Limit("statements")) throw Invalid("loginChanges: too many statements.");
@@ -106,8 +107,10 @@ internal sealed partial class ActionService
         var (users, _, databases, _) = await ScanAsync(connection, SidBytes(facts), LoginSql.PropertiesMappedUser, (int)catalog.Logins.Limit("databases"), ScanBudget, token,
             (database, _, _, reader) => new LoginMappedUserDto(database, reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1), reader.GetBoolean(2)));
         var read = databases.Where(database => database.Checked).Select(database => database.Name).ToList();
+        // SQL Server's own logins never change here, so their Securables page reads nothing (SSMS's SecurablePermissions = null).
+        var (permissions, permissionsTruncated) = facts.Subtype == "system" ? (new List<ExplicitPermissionDto>(), false) : await ExplicitPermissionsAsync(connection, facts.PrincipalId, token);
         return new(null, 0, NewLogin: model, Login: facts, Lock: state,
-            LoginProperties: new(defaultDatabase, language, [.. roles.Take(limit)], roles.Count > limit, users, read));
+            LoginProperties: new(defaultDatabase, language, [.. roles.Take(limit)], roles.Count > limit, users, read, permissions, permissionsTruncated));
     }
 
     /// <summary>The user mapped to a login in one database and that user's roles (LoginSql.DatabaseUser, through ActionSql.MappedUserCall),
@@ -212,7 +215,7 @@ internal sealed partial class ActionService
         var changes = args.LoginChanges!;
         var (missing, error) = await PropertiesMappingPreflightAsync(connection, changes, null, refuse: false, token);
         if (error is not null) return new(null, "master", [], error);
-        var text = LoginSql.PropertiesScriptText(target.Name!, changes, missing, catalog.Logins.ScriptHeader);
+        var text = LoginSql.PropertiesScriptText(target.Name!, changes, missing, catalog.Logins.ScriptHeader, PermissionStatements(target.Name!, changes.Permissions));
         if (text.Length > ScriptLimit(args.Action)) return new(null, "master", [], Error("SQL_ERROR", "The script is too large."));
         return new(text, "master", LoginPropertiesWarnings(changes));
     }
@@ -251,6 +254,9 @@ internal sealed partial class ActionService
                 open => AlterLoginPasswordAsync(connection, login, password, secrets?.Password, secrets?.OldPassword, dryRun: false, context.Token, open), context.Token)));
         steps.AddRange(LoginSql.PropertiesServerPlan(login, changes, bound).Concat(LoginSql.PropertiesMappingPlan(login, changes, missing, bound)).Select(ActionSql.Checked).Select(statement =>
             new RunStep(StepTitle(statement.Template), context => RunPlannedBoundAsync(connection, statement, context.Token), Detail: StepDetail(statement))));
+        // The Securables page's statements last, each bound to the login like the server statements before them.
+        steps.AddRange(PermissionSteps(changes.Permissions, (permission, context) =>
+            RunBoundAsync(connection, bound, self, self, open => PermissionAsync(connection, login, permission, dryRun: false, context.Token, open), context.Token)));
         var (done, failure, _) = await RunStepsAsync(connection, steps, null, token, CleanupBudget(args.Action), serverText: Scrubbed);
         // The connections that sign in as this login keep working: their later sessions use the new password, never the old one.
         if (secrets?.Password is { } changed && done.Any(step => step.Title == LoginPasswordStep && step.Status == "done"))

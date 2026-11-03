@@ -23,7 +23,7 @@ void Check(bool condition, string name)
     passed++;
 }
 // Focused SQL Server lanes: their scratch and permission checks are required, never an offline-only or skipped success.
-if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--seams-live" or "--logins-live" or "--new-login-live" or "--login-actions-live" or "--login-delete-live" or "--login-properties-live" or "--delete-live")])
+if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--seams-live" or "--logins-live" or "--new-login-live" or "--login-actions-live" or "--login-delete-live" or "--login-properties-live" or "--securables-live" or "--delete-live")])
 {
     var focusedServer = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SERVER");
     if (string.IsNullOrWhiteSpace(focusedServer)) throw new Exception(lane + " requires VARIA_TEST_SQL_SERVER.");
@@ -79,6 +79,11 @@ if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live"
         {
             await LoginPropertiesLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json, required: true);
             Console.WriteLine("Passed " + passed + " focused Login Properties checks.");
+        }
+        else if (lane == "--securables-live")
+        {
+            await SecurablesLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json, required: true);
+            Console.WriteLine("Passed " + passed + " focused Securables checks.");
         }
         else if (lane == "--new-login-live")
         {
@@ -209,6 +214,7 @@ await LoginActionChecks.RunAsync(Check);
 await LoginDeleteChecks.RunAsync(Check);
 await UnlockChecks.RunAsync(Check);
 LoginPropertiesChecks.Run(Check);
+SecurablesChecks.Run(Check);
 DatabasePropertiesChecks.Run(Check);
 DesignerChecks.Run(Check);
 await SsisChecks.RunAsync(Check);
@@ -566,6 +572,7 @@ try
     await LoginDeleteLiveChecks.RunAsync(Check, service, info, Live, json);
     await UnlockLiveChecks.RunAsync(Check, service, info, Live, json);
     await LoginPropertiesLiveChecks.RunAsync(Check, service, info, Live, json);
+    await SecurablesLiveChecks.RunAsync(Check, service, info, Live, json);
     await DatabasePropertiesLiveChecks.RunAsync(Check, service, info, json);
     await DesignerLiveChecks.RunAsync(Check, service, info, Live("master"), json);
     await SsisLiveChecks.RunAsync(Check, service, info, Live, json);
