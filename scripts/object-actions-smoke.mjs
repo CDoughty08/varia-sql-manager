@@ -686,17 +686,14 @@ try {
   const newDatabase = () => documentFrame(page, 'New Database')
   const newVerb = name => documentVerb(newDatabase(), 'New Database', name)
   const newFiles = () => newDatabase().getByRole('table', { name: 'Database files', exact: true })
-  const databasesMenu = async () => {
-    await expect(async () => {
-      await (await revealExplorerRow(page, 'server-a', 'Databases')).click({ button: 'right', force: true })
-      await expect(explorerMenu()).toBeVisible({ timeout: 1000 })
-    }).toPass()
-  }
-  await databasesMenu()
-  expect((await labels())[0]).toBe('New Database…')
+  const databases = ['server-a', 'Databases']
+  // Databases may still be reloading, moving the rows under the press: the helpers press until the folder's own menu opens.
+  const databasesMenu = async () => (await explorerMenuItems(page, ...databases)).names
+  const chooseNewDatabase = () => chooseExplorerMenuItem(page, databases, 'New Database…')
+  expect((await databasesMenu())[0]).toBe('New Database…')
   await closeMenu()
   expect((await menuOf(...appData))[0]).toBe('New Database…')
-  await explorerMenu().getByRole('menuitem', { name: 'New Database…', exact: true }).click(fast)
+  await chooseExplorerMenuItem(page, appData, 'New Database…')
   await expect(newDatabase()).toBeVisible()
   await expect(documentTab(page, 'New Database')).toHaveAttribute('aria-selected', 'true')
   await expect(documentCrumbs(newDatabase())).toHaveText(['server-a', 'Databases'])
@@ -771,8 +768,7 @@ try {
   ])
   await expect(await explorerRow(page, 'server-a', 'Databases', 'Sales')).toHaveAttribute('aria-selected', 'true')
   // Stop while CREATE DATABASE runs: the tab stays and says what happened; Cancel then closes it.
-  await databasesMenu()
-  await explorerMenu().getByRole('menuitem', { name: 'New Database…', exact: true }).click(fast)
+  await chooseNewDatabase()
   await expect(databaseName).toBeFocused()
   await databaseName.fill('Held')
   // Enter outside the grids is OK, as in SSMS's dialog.
@@ -785,11 +781,9 @@ try {
   await newVerb('Cancel').click()
   await expect(newDatabase()).toHaveCount(0)
   // A second New Database is numbered; Ctrl+S is its OK, and Escape cancels the first.
-  await databasesMenu()
-  await explorerMenu().getByRole('menuitem', { name: 'New Database…', exact: true }).click(fast)
+  await chooseNewDatabase()
   await expect(databaseName).toBeFocused()
-  await databasesMenu()
-  await explorerMenu().getByRole('menuitem', { name: 'New Database…', exact: true }).click(fast)
+  await chooseNewDatabase()
   const secondDatabase = documentFrame(page, 'New Database (2)')
   await expect(documentTab(page, 'New Database (2)')).toHaveAttribute('aria-selected', 'true')
   const secondName = secondDatabase.getByLabel('Database name', { exact: true })
