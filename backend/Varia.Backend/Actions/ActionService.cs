@@ -61,6 +61,8 @@ internal sealed class ActionServiceOptions
     public TimeSpan StopGrace { get; set; } = TimeSpan.FromSeconds(10);
     /// <summary>How long freeing a database waits for the sessions of the pools it cleared to end (critic A5).</summary>
     public TimeSpan FreeWait { get; set; } = TimeSpan.FromSeconds(1);
+    /// <summary>How long a login's mapped-user scan reads databases (null: loginLimits.scanMs); the live checks shorten it.</summary>
+    internal TimeSpan? ScanBudget { get; set; }
     /// <summary>Test seam: awaited before each main step with its title and the job's token.</summary>
     internal Func<string, CancellationToken, Task>? BeforeStep { get; set; }
     /// <summary>Test seam: awaited before each compensation or cleanup step that runs, with its title and the cleanup budget's token.</summary>
@@ -183,16 +185,18 @@ internal sealed partial class ActionService : IDisposable
 
     /// <summary>Re-validates actionRequestSchema (actionScriptRequestSchema for a script): the action, ids, a target whose kind
     /// offers it, a new name of 1–128 UTF-16 units without U+0000 that differs from the old one, a login's Disable and Enable
-    /// with nothing but a target and the login's identity, the delete flags only for databases, Database Properties' changes (DatabaseAlter.Validate), and secrets nowhere but an execute of an action that
-    /// takes them (critic A3).</summary>
+    /// with nothing but a target and the login's identity, the delete flags only for databases and the login's identity and
+    /// dropMappedUsers only for a login's Delete, Database Properties' changes (DatabaseAlter.Validate), and secrets nowhere but an
+    /// execute of an action that takes them (critic A3).</summary>
     public ObjectRefDto Validate(ActionArgs args, bool script = false)
     {
         Ids(args.ConnectionId, args.RequestId);
         if (args.Secrets is not null && (script || !SecretActions.Contains(args.Action))) throw Invalid("this request takes no secrets.");
         if (args.Secrets is { } secrets) { Secret(secrets.Password, "password"); Secret(secrets.OldPassword, "oldPassword"); }
-        // The login a confirmation was about: only Disable and Enable read it first (D4c adds Delete).
-        if (args.LoginIdentity is { } read && (args.Action is not ("disable" or "enable") || read.Sid is null || !LoginSid().IsMatch(read.Sid)
+        // The login a confirmation or Delete Object was about: Disable, Enable and Delete read it first.
+        if (args.LoginIdentity is { } read && (args.Action is not ("disable" or "enable" or "delete") || read.Sid is null || !LoginSid().IsMatch(read.Sid)
             || read.Created is null || !DatabaseAlter.IdentityCreated().IsMatch(read.Created))) throw Invalid("loginIdentity.");
+        if (args.DropMappedUsers is not null && args.Action != "delete") throw Invalid("only a login's delete drops mapped users.");
         switch (args.Action)
         {
             case "rename":
@@ -208,6 +212,7 @@ internal sealed partial class ActionService : IDisposable
                 if (args.CloseConnections is not { } close || args.DeleteHistory is not { } history) throw Invalid("closeConnections and deleteHistory are required.");
                 var deleted = Target(args.Target, "delete");
                 if (deleted.Kind != "database" && (close || history)) throw Invalid("only a database has connections to close and backup history to delete.");
+                if (deleted.Kind != "login" && (args.DropMappedUsers is not null || args.LoginIdentity is not null)) throw Invalid("only a login has mapped users and an identity to check.");
                 return deleted;
             case "properties":
                 if (args.Design is not null) throw Invalid("properties takes no design.");
@@ -409,9 +414,9 @@ internal sealed partial class ActionService : IDisposable
         ScriptPreflight.Row? row = null;
         if (target.Kind == "login")
         {
-            // What the login owns only where it matters (Delete): the scans that count it would wait behind other principals' changes.
-            int? owned = action is "disable" or "enable" or "rename" ? null : take == 0 ? 0 : (int)catalog.Logins.Limit("ownedDatabases");
-            var (facts, loginRow) = await LoginAsync(connection, target.Name!, newName, owned, token);
+            // The login's own rows only: the scans that count what it owns would wait behind other principals' changes. Delete reads
+            // those past them afterwards (LoginDeleteFactsAsync).
+            var (facts, loginRow) = await LoginAsync(connection, target.Name!, newName, null, token);
             if (facts is null) return (null, Error("NOT_FOUND", "The login " + display + " no longer exists. Refresh Object Explorer."));
             // The login by the name the catalog holds: the rules judged that principal, so the DDL names exactly it.
             return (new ActionSubject(target with { Name = loginRow!.Text("name") }, display, title, facts.Subtype, loginRow, warnings, false, facts), null);
@@ -620,8 +625,9 @@ internal sealed partial class ActionService : IDisposable
 
     /// <summary>The statements an action runs, in order. A database's Delete that closes connections first undoes SINGLE_USER when
     /// its DROP did not complete (D3 §8): the compensation restores the access <paramref name="facts"/> read (multi or restricted).
-    /// An offline database has no sessions to close, so its Delete runs no SINGLE_USER.</summary>
-    public static List<PlannedStatement> Plan(ActionArgs args, ObjectRefDto target, DeleteFacts? facts = null)
+    /// An offline database has no sessions to close, so its Delete runs no SINGLE_USER. A login's Delete with dropMappedUsers drops
+    /// the mapped <paramref name="users"/> it may (not those Kept) first, each in its database, then the login (D4 §5.4).</summary>
+    public static List<PlannedStatement> Plan(ActionArgs args, ObjectRefDto target, DeleteFacts? facts = null, IReadOnlyList<MappedUserDto>? users = null)
     {
         // A login's statements run in master, as SMO scripts them.
         if (target.Kind == "login")
@@ -630,6 +636,8 @@ internal sealed partial class ActionService : IDisposable
                 "rename" => [new(ActionTemplate.RenameLogin, "master", [target.Name!, args.NewName!])],
                 "disable" => [new(ActionTemplate.DisableLogin, "master", [target.Name!])],
                 "enable" => [new(ActionTemplate.EnableLogin, "master", [target.Name!])],
+                "delete" => [.. (args.DropMappedUsers == true ? users ?? [] : []).Where(user => !Kept(user)).Select(user => new PlannedStatement(ActionTemplate.DropUser, user.Database, [user.User])),
+                    new(ActionTemplate.DropLogin, "master", [target.Name!])],
                 _ => throw new InvalidOperationException("No plan for a login's " + args.Action + ".")
             };
         if (args.Action == "rename")
@@ -665,8 +673,14 @@ internal sealed partial class ActionService : IDisposable
         ActionTemplate.DenyConnect => "Deny permission to connect",
         ActionTemplate.GrantConnect => "Grant permission to connect",
         ActionTemplate.DropUser => "Drop the database user",
+        ActionTemplate.DropLogin => "Drop the login",
         _ => "Drop the object"
     };
+
+    /// <summary>The name a step acts on where its title alone does not say it: a database user's database and name (a login's Delete
+    /// drops one per database, "AppData: app_user", which the dialog pairs with its list).</summary>
+    internal static string? StepDetail(PlannedStatement statement) =>
+        statement.Template == ActionTemplate.DropUser ? ScriptingErrors.Display(statement.Database) + ": " + ScriptingErrors.Display(statement.Names[0]) : null;
 
     /// <summary>The templates whose statement needs its database (the first name) free of Varia's own idle sessions (critic A5).</summary>
     private static bool NeedsFreeDatabase(ActionTemplate template) => template is ActionTemplate.SetSingleUser or ActionTemplate.DropDatabase or ActionTemplate.RenameDatabase
@@ -682,7 +696,7 @@ internal sealed partial class ActionService : IDisposable
             if (statement.Kind == StepKind.Main && NeedsFreeDatabase(statement.Template) && freed.Add(statement.Names[0]))
                 await FreeDatabaseAsync(connection, connectionId, statement.Names[0], context.Token);
             await RunStatementAsync(connection, statement, dryRun: false, context.Token, context.Transaction);
-        }, statement.Kind, statement.Undoes, statement.When)).ToList();
+        }, statement.Kind, statement.Undoes, statement.When, StepDetail(statement))).ToList();
         return await RunStepsAsync(connection, steps, inUseAdvice, token, CleanupBudget(action));
     }
 
@@ -743,6 +757,7 @@ internal sealed partial class ActionService : IDisposable
 
     private async Task<ActionDescribeResult> DescribeJobAsync(SqlConnection connection, string connectionId, string engine, ObjectRefDto target, string action, int band, CancellationToken token)
     {
+        if (target.Kind == "login") return await DescribeLoginDeleteAsync(connection, target, token);
         var (subject, error) = await ResolveAsync(connection, target, action, null, band, (int)catalog.Limit("dependents") + 1, token);
         if (subject is null) return new(null, 0, error);
         var row = subject.Row;
@@ -851,6 +866,7 @@ internal sealed partial class ActionService : IDisposable
 
     private async Task<ActionScriptResult> ScriptJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, CancellationToken token)
     {
+        if (target.Kind == "login" && args.Action == "delete") return await ScriptLoginDeleteAsync(connection, args, target, token);
         var database = ScriptDatabase(target);
         var (subject, error) = await ResolveAsync(connection, target, args.Action, args.NewName, band, (int)catalog.Limit("dependents") + 1, token);
         if (subject is null) return new(null, database, [], error);
@@ -866,6 +882,7 @@ internal sealed partial class ActionService : IDisposable
 
     private async Task<ActionExecuteResult> ExecuteJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, CancellationToken token)
     {
+        if (target.Kind == "login" && args.Action == "delete") return await ExecuteLoginDeleteAsync(connection, args, target, band, token);
         var messages = CollectMessages(connection);
         var (subject, error) = await ResolveAsync(connection, target, args.Action, args.NewName, band, 0, token);
         if (subject is null) return new([], [], 0, error);

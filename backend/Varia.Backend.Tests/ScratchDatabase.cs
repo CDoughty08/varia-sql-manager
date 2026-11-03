@@ -79,6 +79,10 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string DeleteSnapshot => Name + "_delcs";
     /// <summary>Delete parity (D3d): a database the low-privilege login owns, which it describes, scripts and deletes without VIEW SERVER STATE.</summary>
     public string DeleteOwned => Name + "_delo";
+    /// <summary>A login's Delete (D4c): the database whose mapped users a Delete drops or leaves orphaned, and the one whose user owns
+    /// a schema, which a Delete keeps (the login owns it first, so its DROP is refused).</summary>
+    public string LoginDeleteUsers => Name + "_ldu";
+    public string LoginDeleteKept => Name + "_ldk";
     /// <summary>Held in memory only, never printed.</summary>
     public string Password { get; }
     public bool HasSnapshot { get; private set; }
@@ -90,13 +94,15 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
     // _live the live tables', _ssis the fake SSIS catalog, _ssisref the restored catalog backup and _ssiscc Create Catalog's
     // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _seam and _seamt are the wave 5 seam checks';
-    // _del, _delc, _delcs and _delo Delete parity's (D3d): an offline database, a database with its snapshot, and the login's own.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_del|_delc|_delcs|_delo)?$")]
+    // _del, _delc, _delcs and _delo Delete parity's (D3d): an offline database, a database with its snapshot, and the login's own;
+    // _ldu and _ldk a login's Delete's (D4c): its mapped users' databases.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_del|_delc|_delcs|_delo|_ldu|_ldk)?$")]
     private static partial Regex Pattern();
     // _lt is the login actions' taken name, _lr]' -- the hostile name they rename the scratch login to and back, and ##…_ls## the
     // login in SQL Server's own name form that they prove is refused under other spellings, and _lsx the name a refused rename
-    // of it would have given it (D4b).
-    [GeneratedRegex(@"^(VariaScratch_\d{14}_[0-9a-f]{8}(_lt|_lr\]' --|_lsx)?|##VariaScratch_\d{14}_[0-9a-f]{8}_ls##)$")]
+    // of it would have given it (D4b); _ld]' -- the login a Delete drops with its users, _ld2 the one whose Delete leaves its user
+    // orphaned, and _ld3 the login that deletes without VIEW SERVER STATE (D4c).
+    [GeneratedRegex(@"^(VariaScratch_\d{14}_[0-9a-f]{8}(_lt|_lr\]' --|_lsx|_ld\]' --|_ld2|_ld3)?|##VariaScratch_\d{14}_[0-9a-f]{8}_ls##)$")]
     private static partial Regex LoginPattern();
     /// <summary>Whether the sweep drops a stale SQL login of this name.</summary>
     internal static bool SweepableLogin(string name) => LoginPattern().IsMatch(name);
@@ -423,6 +429,13 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         await CreateMarkedAsync(DeleteOwned);
         await Exec("ALTER AUTHORIZATION ON DATABASE::" + Bracket(DeleteOwned) + " TO " + Bracket(Login!) + ";");
         return DeleteOwned;
+    }
+
+    /// <summary>For a bare scratch name, a login's Delete's two databases (D4c), marked like the rest.</summary>
+    public async Task CreateLoginDeleteAsync()
+    {
+        await CreateMarkedAsync(LoginDeleteUsers);
+        await CreateMarkedAsync(LoginDeleteKept);
     }
 
     /// <summary>For a bare scratch name, Delete parity's compensation database (D3d) and a snapshot of it, which fails its DROP

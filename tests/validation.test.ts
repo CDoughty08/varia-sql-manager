@@ -103,7 +103,7 @@ describe('IPC validation', () => {
     expect(validateRequest('actions.describe', describe)).toEqual(describe)
     for (const [method, value] of [
       ['actions.execute', { ...rename, newName: ' o]1 ' }], ['actions.execute', { ...rename, newName: 'x'.repeat(129) }], ['actions.execute', { ...rename, closeConnections: false }],
-      ['actions.execute', { ...remove, closeConnections: true }], ['actions.execute', { ...remove, target: { kind: 'login', name: 'sa' } }], ['actions.execute', { ...remove, action: 'drop' }],
+      ['actions.execute', { ...remove, closeConnections: true }], ['actions.execute', { ...remove, target: { kind: 'login', name: '##MS_PolicyTsqlExecutionLogin##' } }], ['actions.execute', { ...remove, dropMappedUsers: true }], ['actions.execute', { ...remove, action: 'drop' }],
       ['actions.script', { ...rename, target: { kind: 'database', name: 'master' } }], ['actions.describe', { ...describe, dialog: 'loginProperties' }], ['actions.describe', { ...describe, dialog: 'databaseProperties' }],
       ['actions.describe', { ...describe, extra: 1 }], ['actions.execute', { ...properties, changes: {} }], ['actions.execute', { ...properties, changes: { options: { autoClose: 'yes' } } }],
       ['actions.execute', { ...properties, closeConnections: true }], ['actions.script', { ...properties, target }]

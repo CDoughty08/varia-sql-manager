@@ -34,15 +34,15 @@ internal static class LoginActionChecks
 
     private static void CatalogChecks(Action<bool, string> check)
     {
-        check(Catalog.Row("login", "sa") is { } sa && sa.Enabled.SequenceEqual(["rename", "disable"]) && sa.Disabled.Count == 0
-            && Catalog.Row("login", "sa", "disabled") is { Status: "disabled" } off && off.Enabled.SequenceEqual(["rename", "enable"])
-            && Catalog.Row("login", "system", "disabled") is { } system && system.Enabled.Count == 0 && system.Disabled.SequenceEqual(["rename", "enable"])
-            && Catalog.Row("login", "windowsGroup", "disabled") is { } group && group.Enabled.SequenceEqual(["rename"]) && group.Disabled.Count == 0
+        check(Catalog.Row("login", "sa") is { } sa && sa.Enabled.SequenceEqual(["rename", "disable"]) && sa.Disabled.SequenceEqual(["delete"])
+            && Catalog.Row("login", "sa", "disabled") is { Status: "disabled" } off && off.Enabled.SequenceEqual(["rename", "enable"]) && off.Disabled.SequenceEqual(["delete"])
+            && Catalog.Row("login", "system", "disabled") is { } system && system.Enabled.Count == 0 && system.Disabled.SequenceEqual(["rename", "delete", "enable"])
+            && Catalog.Row("login", "windowsGroup", "disabled") is { } group && group.Enabled.SequenceEqual(["rename", "delete"]) && group.Disabled.Count == 0
             && Catalog.Row("login", "sql", "noAccess") == Catalog.Row("login", "sql") && Catalog.Row("login", "")?.Enabled.Count == 0,
-            "a login's rows come from logins.ts: Disable and Rename by subtype, Enable in place of Disable while it is disabled, and a denied login keeps its row");
-        check(Catalog.Offered("login", "disable") && Catalog.Offered("login", "enable") && Catalog.Offered("login", "rename") && !Catalog.Offered("login", "delete") && !Catalog.Offered("login", "properties")
+            "a login's rows come from logins.ts: Disable, Rename and Delete (greyed for sa) by subtype, Enable in place of Disable while it is disabled, and a denied login keeps its row");
+        check(Catalog.Offered("login", "disable") && Catalog.Offered("login", "enable") && Catalog.Offered("login", "rename") && Catalog.Offered("login", "delete") && !Catalog.Offered("login", "properties")
             && !Catalog.Offered("table", "disable") && Catalog.Serves("disable", "box") && Catalog.Serves("enable", "managedInstance") && !Catalog.Serves("disable", "cloud"),
-            "Disable and Enable are offered on logins only, on SQL Server and Managed Instance");
+            "Disable, Enable and Delete are offered on logins, Disable and Enable on logins only, on SQL Server and Managed Instance");
         check(Catalog.Describes.TryGetValue("loginFacts", out var describe) && describe == ("login", "disable") && !Catalog.Dialogs.ContainsKey("loginFacts"),
             "loginFacts is a describe without a dialog, for logins, under Disable's target rules");
         check(LoginRules.SystemName("##MS_PolicyTsqlExecutionLogin##") && !LoginRules.SystemName("##") && !LoginRules.SystemName("##x") && !LoginRules.SystemName("AppUser"),
@@ -122,12 +122,16 @@ internal static class LoginActionChecks
             ("history on a disable", State("disable", AppUser) with { DeleteHistory = false }), ("changes on an enable", State("enable", AppUser) with { Changes = new() }),
             ("an identity on a disable", State("disable", AppUser) with { Identity = new(1, "2026-01-01T00:00:00.000") }), ("a table's disable", State("disable", table)),
             ("a database's enable", State("enable", new ObjectRefDto("database", Name: "AppData"))), ("SQL Server's own login's disable", State("disable", system)),
-            ("SQL Server's own login's rename", Rename(system, "x")), ("a login's delete", new ActionArgs("delete", Id(), Id(), AppUser, null, false, false)),
+            ("SQL Server's own login's rename", Rename(system, "x")), ("a login's delete that closes connections", new ActionArgs("delete", Id(), Id(), AppUser, null, true, false)),
+            ("a login's delete that deletes backup history", new ActionArgs("delete", Id(), Id(), AppUser, null, false, true)), ("SQL Server's own login's delete", new ActionArgs("delete", Id(), Id(), system, null, false, false)),
+            ("mapped users on a table's delete", new ActionArgs("delete", Id(), Id(), table, null, false, false, DropMappedUsers: false)),
+            ("a login identity on a table's delete", new ActionArgs("delete", Id(), Id(), table, null, false, false, LoginIdentity: Identity)),
+            ("mapped users on a disable", State("disable", AppUser) with { DropMappedUsers = true }), ("mapped users on a rename", Rename(AppUser, "x") with { DropMappedUsers = false }),
+            ("a login's delete with a short SID", new ActionArgs("delete", Id(), Id(), AppUser, null, false, false, LoginIdentity: Identity with { Sid = "0" })),
             ("a login without a name", State("disable", new ObjectRefDto("login"))), ("secrets on a disable", State("disable", AppUser) with { Secrets = new("x", null) }),
             ("SQL Server's own login with a trailing space", State("disable", system with { Name = system.Name + " " })), ("a rename of one with trailing spaces", Rename(system with { Name = system.Name + "  " }, "x")),
             ("a login's rename to SQL Server's own form", Rename(AppUser, "##AppUser##")), ("one with a trailing space", Rename(AppUser, "##AppUser## ")),
             ("a login identity on a rename", Rename(AppUser, "x") with { LoginIdentity = Identity }),
-            ("a login identity on a delete", new ActionArgs("delete", Id(), Id(), AppUser, null, false, false) with { LoginIdentity = Identity }),
             ("a short SID", State("disable", AppUser) with { LoginIdentity = Identity with { Sid = "0" } }), ("a long SID", State("disable", AppUser) with { LoginIdentity = Identity with { Sid = new string('0', 172) + "F" } }),
             ("a lower-case SID", State("disable", AppUser) with { LoginIdentity = Identity with { Sid = "0a" } }), ("a SID with a line break", State("enable", AppUser) with { LoginIdentity = Identity with { Sid = "01\n" } }),
             ("no SID", State("disable", AppUser) with { LoginIdentity = Identity with { Sid = null! } }), ("a created without milliseconds", State("disable", AppUser) with { LoginIdentity = Identity with { Created = "2026-01-02T03:04:05" } }),
@@ -138,8 +142,11 @@ internal static class LoginActionChecks
         check(Refused(State("disable", AppUser)) == "accepted" && Refused(State("enable", new ObjectRefDto("login", Name: @"CONTOSO\Ops"))) == "accepted"
             && Refused(State("disable", AppUser) with { LoginIdentity = Identity }) == "accepted" && Refused(State("enable", AppUser) with { LoginIdentity = Identity with { Sid = new string('0', 171) + "F" } }) == "accepted"
             && Refused(Rename(AppUser, "App]User")) == "accepted" && Refused(Rename(new ObjectRefDto("login", Name: "sa"), @"a\b")) == "accepted"
-            && Refused(Rename(new ObjectRefDto("database", Name: "AppData"), "##AppData##")) == "accepted",
-            "a login's Disable, Enable (with the identity of the login it read) and Rename are accepted, a backslash left to the preflight, which knows the login's type");
+            && Refused(Rename(new ObjectRefDto("database", Name: "AppData"), "##AppData##")) == "accepted"
+            && Refused(new ActionArgs("delete", Id(), Id(), AppUser, null, false, false)) == "accepted"
+            && Refused(new ActionArgs("delete", Id(), Id(), AppUser, null, false, false, LoginIdentity: Identity, DropMappedUsers: true)) == "accepted"
+            && Refused(new ActionArgs("delete", Id(), Id(), new ObjectRefDto("login", Name: "sa"), null, false, false)) == "accepted",
+            "a login's Disable, Enable and Delete (with the identity of the login it read, Delete with or without its mapped users) and Rename are accepted, a backslash and sa's Delete left to the preflight, which knows the login's type");
         check(DescribeRefused("loginFacts", AppUser) == "accepted" && DescribeRefused("loginFacts", table) == "INVALID_PARAMS" && DescribeRefused("loginFacts", system) == "INVALID_PARAMS"
             && DescribeRefused("loginFacts", new ObjectRefDto("database", Name: "AppData")) == "INVALID_PARAMS" && DescribeRefused("loginfacts", AppUser) == "INVALID_PARAMS"
             && DescribeRefused("loginFacts", system with { Name = system.Name + " " }) == "INVALID_PARAMS",
@@ -178,9 +185,11 @@ internal static class LoginActionChecks
             && ActionService.ServiceOfName(@"NT SERVICE\") is null && ActionService.ServiceOfName(@"CONTOSO\svc") is null && ActionService.ServiceOfName("NT SERVICE") is null,
             "a per-service login names its service when sys.dm_server_services cannot be read");
         // The live checks rename their scratch login to a hostile name and add a taken one; a crashed run's must still be swept.
-        check(new[] { "VariaScratch_20261031010203_0a1b2c3d", "VariaScratch_20261031010203_0a1b2c3d_lt", "VariaScratch_20261031010203_0a1b2c3d_lr]' --", "##VariaScratch_20261031010203_0a1b2c3d_ls##", "VariaScratch_20261031010203_0a1b2c3d_lsx" }.All(ScratchDatabase.SweepableLogin)
+        check(new[] { "VariaScratch_20261031010203_0a1b2c3d", "VariaScratch_20261031010203_0a1b2c3d_lt", "VariaScratch_20261031010203_0a1b2c3d_lr]' --", "##VariaScratch_20261031010203_0a1b2c3d_ls##", "VariaScratch_20261031010203_0a1b2c3d_lsx",
+            "VariaScratch_20261031010203_0a1b2c3d_ld]' --", "VariaScratch_20261031010203_0a1b2c3d_ld2", "VariaScratch_20261031010203_0a1b2c3d_ld3" }.All(ScratchDatabase.SweepableLogin)
             && !new[] { "VariaScratch_20261031010203_0a1b2c3d_x", "VariaScratch_2026_0a1b2c3d", "AppUser", "VariaScratch_20261031010203_0a1b2c3d_lr", "##VariaScratch_20261031010203_0a1b2c3d##",
-                "##VariaScratch_20261031010203_0a1b2c3d_ls", "##MS_PolicyEventProcessingLogin##" }.Any(ScratchDatabase.SweepableLogin),
+                "##VariaScratch_20261031010203_0a1b2c3d_ls", "##MS_PolicyEventProcessingLogin##",
+                "VariaScratch_20261031010203_0a1b2c3d_ld", "VariaScratch_20261031010203_0a1b2c3d_ldu" }.Any(ScratchDatabase.SweepableLogin),
             "the scratch sweep drops the login action checks' scratch logins under every name they give them, and no other login");
     }
 

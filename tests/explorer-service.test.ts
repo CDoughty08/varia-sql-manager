@@ -1895,3 +1895,19 @@ describe('ExplorerService: Filter loaded objects, server rows and freshness', ()
     expect(f.explorer.listingFreshness(tables)).toEqual({ label: 'Tables', updatedAt: loaded + 120_000 })
   })
 })
+
+describe('ExplorerService: loaded folders', () => {
+  it('finds the loaded folders of a kind under named databases, which a login\'s Delete reloads (D4c)', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const id = cid('server-a')
+    expect(f.explorer.loadedFolders(id, 'tables', ['AppData'])).toEqual([])
+    const tables = await f.open('Databases', 'AppData', 'Tables')
+    expect(f.explorer.loadedFolders(id, 'tables', ['AppData', 'Other'])).toEqual([tables])
+    expect(f.explorer.loadedFolders(id, 'tables', ['Other'])).toEqual([])
+    // Views is shown but was never opened: it reads the server when it is.
+    expect(f.explorer.loadedFolders(id, 'views', ['AppData'])).toEqual([])
+    expect(f.explorer.loadedFolders(cid('server-b'), 'tables', ['AppData'])).toEqual([])
+  })
+})

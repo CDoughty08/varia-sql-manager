@@ -5,7 +5,7 @@ import { kindSpecs } from '../explorer/catalog.ts'
 import type { ObjectRef } from '../explorer/refs.ts'
 import { ident, objectRefSchema } from '../explorer/schema.ts'
 import { actionDescribeIds, actionDescribeSpecs, actionErrorCodes, actionLimits, actionOffered, dialogIds, dialogSpecs, objectActionSpecs, type ActionErrorCode, type ObjectAction } from './catalog.ts'
-import { isSystemLoginName, loginLimits, loginMessages, type LoginFacts } from './logins.ts'
+import { isSystemLoginName, loginLimits, loginMessages, type LoginFacts, type LoginMappings } from './logins.ts'
 import { optionDef, settableOptionKeys, settableScopedKeys, tokenProblem, type FileType, type Growth } from './database.ts'
 import { designerDescribeIds } from '../designer/catalog.ts'
 import { createTableSchema, type CreateTableRequest, type TableDesignerModel } from '../designer/schema.ts'
@@ -17,9 +17,13 @@ export type DescribeId = typeof describeIds[number]
 
 export interface ActionDescribeRequest { readonly connectionId: string; readonly requestId: string; readonly dialog: DescribeId; readonly target: ObjectRef }
 export interface RenameRequest { readonly action: 'rename'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly newName: string }
-/** `closeConnections` (SET SINGLE_USER WITH ROLLBACK IMMEDIATE first) and `deleteHistory` apply to databases only. */
+/**
+ * `closeConnections` (SET SINGLE_USER WITH ROLLBACK IMMEDIATE first) and `deleteHistory` apply to databases only; `dropMappedUsers`
+ * (DROP USER in each database first, D4c) and `loginIdentity` (the login Delete Object read) to logins only.
+ */
 export interface DeleteRequest {
   readonly action: 'delete'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly closeConnections: boolean; readonly deleteHistory: boolean
+  readonly dropMappedUsers?: boolean; readonly loginIdentity?: LoginIdentity
 }
 /** Database Properties' changes, only what differs from the describe: options and scoped configurations by key, as tokens. */
 export interface DatabaseChanges {
@@ -73,6 +77,9 @@ export interface DeleteTarget {
   readonly closeConnectionsNote?: string
   /** Varia's query tabs (their session ids) whose session holds an open transaction in the database or while in it, whatever database the tab is in (A7). */
   readonly transactionTabs?: readonly string[]
+  /** A login (D4c): its facts with what it owns (the warnings say what blocks the DROP), and the database users mapped to it. */
+  readonly login?: LoginFacts
+  readonly mappings?: LoginMappings
 }
 /** A session in a database that Delete Object lists; program and host are clipped to `actionLimits.blockerChars`. */
 export interface DatabaseBlocker {
@@ -179,6 +186,9 @@ export interface ActionStep {
 /** The title of a database Delete's DROP step (ActionService.StepTitle in the backend; tests/delete-database.test.ts keeps them equal):
  *  a reply in which it is 'done' removed the database, even when a later step failed. */
 export const dropDatabaseStepTitle = 'Drop the database'
+/** The title of a login Delete's step per mapped user (ActionService.StepTitle; tests/delete-login.test.ts keeps them equal): its
+ *  `detail` is "database: user", and a done one changed that database's Users folder. */
+export const dropUserStepTitle = 'Drop the database user'
 export interface ActionExecuteResult {
   /** One per statement, in order: the first failure stops the rest, which are 'skipped'. */
   readonly steps: readonly ActionStep[]
@@ -242,10 +252,13 @@ export const plannedStatements = (changes: DatabaseChanges) => Object.keys(chang
 
 // One schema per action, one per line, so later actions append cleanly.
 const renameSchema = z.object({ action: z.literal('rename'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, newName: ident }).strict()
-const deleteSchema = z.object({ action: z.literal('delete'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), deleteHistory: z.boolean() }).strict()
 // create_date as the backend writes it (yyyy-MM-ddTHH:mm:ss.fff); without the m flag, $ refuses a final line break too.
 const identitySchema = z.object({ id: z.number().int().min(1).max(2_147_483_647), created: z.string().max(23).regex(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}$/) }).strict()
 const loginIdentitySchema = z.object({ sid: z.string().max(loginLimits.sidHex).regex(/^[0-9A-F]{2,172}$/), created: identitySchema.shape.created }).strict()
+const deleteSchema = z.object({
+  action: z.literal('delete'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), deleteHistory: z.boolean(),
+  dropMappedUsers: z.boolean().optional(), loginIdentity: loginIdentitySchema.optional()
+}).strict()
 const loginStateSchema = z.object({ action: z.enum(['disable', 'enable']), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, loginIdentity: loginIdentitySchema.optional() }).strict()
 const propertiesSchema = z.object({ action: z.literal('properties'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), changes: changesSchema, identity: identitySchema.optional() }).strict()
 export const actionRequestSchema = z.discriminatedUnion('action', [
@@ -264,6 +277,7 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
       break
     case 'delete':
       if (kindSpecs[request.target.kind].scope !== 'database' && (request.closeConnections || request.deleteHistory)) issue(context, 'closeConnections', 'Only a database has connections to close and backup history to delete.')
+      if (request.target.kind !== 'login' && (request.dropMappedUsers !== undefined || request.loginIdentity !== undefined)) issue(context, 'dropMappedUsers', 'Only a login has mapped users and an identity to check.')
       break
     case 'properties': {
       const count = plannedStatements(request.changes)

@@ -7,7 +7,7 @@ import {
 } from './catalog.ts'
 import { actionPromptBox, actionPrompts, promptLimits, type ActionPromptRequest } from './prompts.ts'
 import { compatibilityLabel, compatibilityLevels, databaseOptionDefs, noScriptNotice, openConnectionsPrompt, ownerNotOn, scopedConfigurationDefs, type DatabaseOptionDef } from './database.ts'
-import { loginGreyedMessage, loginLimits, loginMessages, loginRules, loginSubtypes, loginTypeSubtypes, loginVerbs, ownLoginRefuses, saPrincipalId } from './logins.ts'
+import { loginDeleteText, loginGreyedMessage, loginLimits, loginMessages, loginRules, loginSubtypes, loginTypeSubtypes, loginVerbs, ownLoginRefuses, saPrincipalId } from './logins.ts'
 import { designerEngines } from '../designer/catalog.ts'
 
 const cell = (value: string) => value.replaceAll('|', '\\|')
@@ -65,6 +65,7 @@ const loginLimitNotes: Readonly<Record<keyof typeof loginLimits, string>> = {
   ownedDatabases: 'Databases a login owns that the login preflight names',
   mappedUsers: 'Mapped database users Delete Login lists',
   scanDatabases: 'Databases the mapped-user scan reads',
+  scanMs: 'How long the mapped-user scan reads databases before it counts the rest as not checked, in ms',
   serviceNames: 'Service accounts the service lookup reads',
   serviceName: 'Characters of the service name the login facts carry'
 }
@@ -381,6 +382,38 @@ function loginDocs(): string[] {
       ['Disable', 'Disable the login', '`ALTER LOGIN [login] DISABLE`'],
       ['Enable', 'Enable the login', '`ALTER LOGIN [login] ENABLE`'],
       ['Rename', 'Rename', '`ALTER LOGIN [login] WITH NAME=[new]`']
+    ]),
+    '',
+    '### Delete',
+    '',
+    'Delete opens Delete Object, as for a table, with the login\'s row (Object Type Login). Its describe reads the login\'s',
+    'facts past other sessions\' open changes (READ UNCOMMITTED: they only advise), then the database users mapped to its SID:',
+    'one read per online database (no snapshots) the connection can enter and see the users of (VIEW DEFINITION), each under',
+    `the lock timeout, at most ${loginLimits.scanDatabases.toLocaleString('en-US')} databases within ${(loginLimits.scanMs / 1000).toLocaleString('en-US')} s. A database it does not reach (offline, restoring,`,
+    'not accessible, a failed read, or past the bound or budget) counts as not checked, and the page says how many. The page',
+    `lists at most ${loginLimits.mappedUsers.toLocaleString('en-US')} users, each as "database: user" ("…and n more" after them), and marks one a Delete keeps`,
+    '(it owns a schema or role, whose DROP USER fails, or its database is read-only).',
+    '',
+    `SSMS deletes the login and says afterwards that its users are left orphaned; Varia says it first: "${loginDeleteText.orphanNote}"`,
+    `It offers "${loginDeleteText.dropOption}" (unchecked, greyed when no listed user can be dropped or more`,
+    'are mapped than it lists). With it, Delete drops each user it may in its database, then the login in master; the steps',
+    'name each user. The statements are not one transaction (DROP USER in several databases would hold all of them until the',
+    'end), and every partial outcome is coherent: a user dropped and the login kept. After a user was dropped, the loaded',
+    'Users folders of those databases reload.',
+    '',
+    'The warnings name what SQL Server refuses the DROP for: the sessions connected as the login (15434; Activity Monitor can',
+    'end them), the databases it owns (15174), its SQL Server Agent jobs (15170) and the server roles and endpoints it owns',
+    '(15141); the service that runs as a Windows login is named too. OK still runs, and the backend refuses any of these',
+    'before a statement runs. A Windows group\'s members sign in under their own SIDs, so a group counts no sessions. The',
+    'protected-principal rules grey OK with their reason (sa, the login this connection uses, SQL Server\'s own logins, the',
+    'permissions); Script Action still works and runs nothing. Varia\'s other connections that sign in as the login are',
+    'named, as they cannot reconnect once it is deleted. The request names the login it read (its SID and creation time),',
+    'and the execute reads the login again under READ COMMITTED: a login that took the name since is refused. When a',
+    'session the preflight could not count (without VIEW SERVER STATE) fails the DROP, `IN_USE` says to end it first.',
+    '',
+    table(['Action', 'Step', 'As Script Action writes it'], [
+      ['Delete, with the users', 'Drop the database user (one per user)', '`DROP USER [user]`, in its database'],
+      ['Delete', 'Drop the login', '`DROP LOGIN [login]`, in master']
     ]),
     '',
     'SQL Server\'s errors for logins map to the codes below; without ALTER ANY LOGIN, `PERMISSION_DENIED` also says what',

@@ -3,8 +3,10 @@ import { noScriptNotice } from '../../../shared/actions/database.ts'
 import { promptTabFacts } from '../../../shared/actions/prompts.ts'
 import type { ActionError, ActionExecuteResult, ActionRequest, ActionStep, DeleteTarget } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
+import type { FolderId } from '../../../shared/explorer/catalog.ts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
 import type { ScriptDestination } from '../../../shared/scripting/catalog.ts'
+import { otherLoginConnections } from '../actions/ObjectActionService'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
 import type { Disposable, ExternalStore } from '../core/types'
@@ -42,6 +44,8 @@ export interface OpenObjectDialog {
   /** Delete Object on a database: Varia's query tabs whose session holds an open transaction there (A7), named as `promptTabFacts` bounds them. */
   readonly tabsWithTransactions?: readonly string[]
   readonly moreTabsWithTransactions?: number
+  /** Delete Object on a login: Varia's other connections that sign in as it (critic D4-3), by their labels. */
+  readonly loginConnections?: readonly string[]
 }
 /** A database an action removed (D3 §8): the server as connected to, so its Properties documents can say where it was. */
 export interface DatabaseGone { readonly connectionId: string; readonly server: string; readonly database: string }
@@ -49,7 +53,11 @@ export interface ObjectDialogSnapshot { readonly open?: OpenObjectDialog }
 export interface ObjectDialogServiceOptions {
   readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText' | 'confirmOpenConnections'>
   readonly connections: ExternalStore<readonly LiveConnection[]>
-  readonly explorer: { listingFolderOf(nodeId: number): number | undefined; reconcile(nodeId: number): void }
+  readonly explorer: {
+    listingFolderOf(nodeId: number): number | undefined; reconcile(nodeId: number): void
+    /** The loaded folders of a kind under these databases (ExplorerService.loadedFolders), which an action's other changes reload. */
+    loadedFolders?(connectionId: string, folder: FolderId, databases: readonly string[]): readonly number[]
+  }
   readonly documents: DeliverScriptDeps['documents']
   readonly files: DeliverScriptDeps['files']
   readonly focusEditor?: () => void
@@ -145,6 +153,9 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     let built = definition.request(open.target, open.model, open.draft)
     if (!built) { this.close(); return }
     if ('problem' in built) { this.update(open, { error: error('NOT_SUPPORTED', built.problem) }); return }
+    // OK is greyed then; Enter still reaches here, and nothing is sent.
+    const blocked = definition.blocked?.(open.model)
+    if (blocked) { this.update(open, { error: error('NOT_SUPPORTED', blocked) }); return }
     const confirmation = definition.confirm?.(open.model, built)
     if (confirmation) {
       // Main's message box; a failure or a dialog that closed meanwhile counts as No, and No sends nothing.
@@ -167,11 +178,12 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     if (value && !value.error) {
       this.publish({})
       try { definition.afterSuccess({ refreshListing: () => this.refreshListing(open) }) } catch (failure) { onUnexpectedError(failure) }
+      this.reconcileChanged(open, open.model, value.steps)
       return
     }
     // Steps that completed before a failure or Stop changed the object (a database dropped, then its history step
     // stopped), so the listing shows what is there now.
-    if (value?.steps.some(step => step.status === 'done')) this.refreshListing(open)
+    if (value?.steps.some(step => step.status === 'done')) { this.refreshListing(open); this.reconcileChanged(open, open.model, value.steps) }
     // Stop: the backend answers once SQL Server has ended the statement, saying what completed before it.
     if (value?.error?.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: value.error, steps: value.steps }); return }
     if (!result.ok && result.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: error('CANCELLED', dialogMessages.stopped) }); return }
@@ -219,6 +231,18 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     if (failure || !model) { this.update(open, { phase: 'loadFailed', error: failure ?? error('NOT_FOUND', 'The object could not be read.') }); return }
     this.update(open, { phase: 'ready', model, draft: definition.initialDraft(model, open.target) })
     if (open.dialog === 'deleteObject' && open.target.kind === 'database') this.nameTabTransactions(open, (model as DeleteTarget).transactionTabs ?? [])
+    if (open.dialog === 'deleteObject' && open.target.kind === 'login') {
+      const labels = otherLoginConnections(this.options.connections.getSnapshot(), open.connectionId, open.target.name)
+      if (labels.length) this.update(open, { loginConnections: labels })
+    }
+  }
+  /** Reloads the loaded folders a reply's done steps changed besides the listing (definition.changedFolders). */
+  private reconcileChanged(open: OpenObjectDialog, model: DialogModel | undefined, steps: readonly ActionStep[]): void {
+    try {
+      const changed = model && definitionOf(open.dialog).changedFolders?.(model, steps)
+      if (!changed) return
+      for (const folder of this.options.explorer.loadedFolders?.(open.connectionId, changed.folder, changed.databases) ?? []) this.options.explorer.reconcile(folder)
+    } catch (failure) { onUnexpectedError(failure) }
   }
   /** Names Varia's query tabs whose session the describe found holding an open transaction in the database (A7). */
   private nameTabTransactions(open: OpenObjectDialog, ids: readonly string[]): void {

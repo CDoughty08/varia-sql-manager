@@ -8,11 +8,11 @@ namespace Varia.Backend.Actions;
 /// <summary>The statements an action runs: DROP TABLE, VIEW, PROCEDURE or FUNCTION, sp_rename, ALTER DATABASE … MODIFY NAME,
 /// SET SINGLE_USER, DROP DATABASE and msdb's backup history cleanup; and the shared templates later actions plan (critic
 /// A21): SET MULTI_USER and RESTRICTED_USER (which also restore a database's access after a failed or stopped step),
-/// sp_detach_db, ALTER LOGIN … DISABLE and ENABLE, DENY and GRANT CONNECT SQL, and DROP USER; and a login's rename (D4b).</summary>
+/// sp_detach_db, ALTER LOGIN … DISABLE and ENABLE, DENY and GRANT CONNECT SQL, and DROP USER; a login's rename (D4b); and DROP LOGIN (D4c).</summary>
 internal enum ActionTemplate
 {
     DropTable, DropView, DropProcedure, DropFunction, RenameObject, RenameDatabase, SetSingleUser, DropDatabase, DeleteBackupHistory,
-    SetMultiUser, SetRestrictedUser, DetachDatabase, DisableLogin, EnableLogin, DenyConnect, GrantConnect, DropUser, RenameLogin
+    SetMultiUser, SetRestrictedUser, DetachDatabase, DisableLogin, EnableLogin, DenyConnect, GrantConnect, DropUser, RenameLogin, DropLogin
 }
 
 /// <summary>Where a step runs in the plan (critic A4): main steps in order; a compensation undoes the main step <c>Undoes</c>
@@ -118,6 +118,7 @@ internal static partial class ActionSql
             ActionTemplate.DropUser => "DROP USER " + Quote(names[0]),
             // SMO's text for a login's rename (probed for D4 §5.3), with no spaces around the equals sign.
             ActionTemplate.RenameLogin => "ALTER LOGIN " + Quote(names[0]) + " WITH NAME=" + Quote(names[1]),
+            ActionTemplate.DropLogin => "DROP LOGIN " + Quote(names[0]),
             _ => throw new InvalidOperationException("Unknown template " + plan.Template)
         };
     }
@@ -152,6 +153,7 @@ internal static partial class ActionSql
             ActionTemplate.GrantConnect => Run("DECLARE @stmt nvarchar(max) = N'GRANT CONNECT SQL TO ' + QUOTENAME(@p1);\n"),
             ActionTemplate.DropUser => Run("DECLARE @stmt nvarchar(max) = N'DROP USER ' + QUOTENAME(@p1);\n"),
             ActionTemplate.RenameLogin => Run("DECLARE @stmt nvarchar(max) = N'ALTER LOGIN ' + QUOTENAME(@p1) + N' WITH NAME=' + QUOTENAME(@p2);\n"),
+            ActionTemplate.DropLogin => Run("DECLARE @stmt nvarchar(max) = N'DROP LOGIN ' + QUOTENAME(@p1);\n"),
             _ => throw new InvalidOperationException("Unknown template " + template)
         };
     }
@@ -289,6 +291,30 @@ internal static partial class ActionSql
     public const string LoginService = "SELECT TOP (@take) s.servicename AS service_name FROM sys.dm_server_services AS s "
         + @"WHERE UPPER(s.service_account) = UPPER(@name) OR (UPPER(s.service_account) = N'LOCALSYSTEM' AND UPPER(@name) = N'NT AUTHORITY\SYSTEM') "
         + "ORDER BY s.servicename;";
+    /// <summary>The databases the mapped-user scan reads (D4 §5.4), in master: at most @take online databases this login can open
+    /// (HAS_DBACCESS) and whose users it can see (VIEW DEFINITION: without it sys.database_principals hides other users), by name,
+    /// with whether each is read-only (no DROP USER runs there), and on every row how many databases the server has in all, so the
+    /// ones left out (offline, restoring, not accessible or readable, past @take) count as not checked. Snapshots are
+    /// read-only copies of a database the scan reads, so they are neither read nor counted.</summary>
+    public const string LoginDatabases = "SELECT TOP (@take) d.name AS database_name, d.is_read_only AS is_read_only, "
+        + "(SELECT COUNT(*) FROM sys.databases AS a WHERE a.source_database_id IS NULL) AS total "
+        + "FROM sys.databases AS d WHERE d.state = 0 AND d.source_database_id IS NULL AND HAS_DBACCESS(d.name) = 1 "
+        + "AND ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'VIEW DEFINITION'), 0) = 1 ORDER BY d.name;";
+
+    /// <summary>Inside one database (through <see cref="MappedUserCall"/>): at most @take users mapped to the login's SID, by name,
+    /// with how many schemas and roles each owns (DROP USER fails on them, 15138 and 15421). dbo, guest, INFORMATION_SCHEMA and sys
+    /// (principal_id 1 to 4) are never dropped: a login that owns the database is dbo there, and that ownership blocks its DROP anyway.</summary>
+    public const string MappedUser = "SELECT TOP (@take) u.name AS user_name, (SELECT COUNT(*) FROM sys.schemas AS s WHERE s.principal_id = u.principal_id) AS owned_schemas, "
+        + "(SELECT COUNT(*) FROM sys.database_principals AS r WHERE r.owning_principal_id = u.principal_id) AS owned_roles "
+        + "FROM sys.database_principals AS u WHERE u.sid = @sid AND u.type IN ('S', 'U', 'G', 'C', 'K', 'E', 'X') AND u.principal_id > 4 ORDER BY u.name;";
+    /// <summary>Runs <see cref="MappedUser"/> (@stmt) in a database, which reaches T-SQL only through QUOTENAME.</summary>
+    public const string MappedUserCall = "DECLARE @module nvarchar(300) = QUOTENAME(@db) + N'.sys.sp_executesql';\n"
+        + "EXEC @module @stmt, N'@sid varbinary(85), @take int', @sid = @sid, @take = @take;";
+
+    /// <summary>The SQL Server Agent jobs a login owns (DROP LOGIN fails on them, 15170). A login that cannot read msdb's job table
+    /// gets no answer, never a failed describe.</summary>
+    public const string LoginJobs = "SELECT COUNT(*) AS jobs FROM msdb.dbo.sysjobs AS j WHERE j.owner_sid = @sid;";
+
     /// <summary>Delete Object's counts of a database's sessions (D3 §8): those using it (UsesDatabase) and those with an open transaction
     /// there (HoldsTransaction), never this one. Only with VIEW SERVER STATE (InTransaction): without it the describe counts none (unknown).</summary>
     public const string DatabaseUse = "SELECT (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.session_id <> @@SPID AND " + UsesDatabase + ") AS sessions, "
@@ -318,6 +344,8 @@ internal static partial class ActionSql
         "N' SET  MULTI_USER'", "N' SET  RESTRICTED_USER'", "N'ALTER LOGIN '", "N' DISABLE'", "N' ENABLE'", "N'DENY CONNECT SQL TO '", "N'GRANT CONNECT SQL TO '", "N'DROP USER '",
         // The login preflight (Login), a login's rename, and the service lookup (LoginService).
         "N'GRANT OR DENY'", "N'ALTER ANY LOGIN'", "N'CONTROL SERVER'", "'COSQ'", "N' WITH NAME='", "N'LOCALSYSTEM'", @"N'NT AUTHORITY\SYSTEM'",
+        // A login's Delete (D4c): DROP LOGIN and the mapped-user scan's call (MappedUserCall).
+        "N'DROP LOGIN '", "N'@sid varbinary(85), @take int'", "N'VIEW DEFINITION'",
         // Database Properties' describe and preflight (DatabaseProperties.cs, ActionService.DatabasePropertiesPreflight).
         "N'contained database authentication'", "N'sysadmin'", "N'##%'", "N'SpaceUsed'", "N'@take int'", "N'MAXDOP'", "N'LEGACY_CARDINALITY_ESTIMATION'", "N'PARAMETER_SNIFFING'",
         "N'QUERY_OPTIMIZER_HOTFIXES'", "'FilestreamEffectiveLevel'", "'EngineEdition'", "'ProductMajorVersion'",
@@ -489,6 +517,10 @@ internal static partial class ActionSql
         yield return ("login", LintCatalog(Login, ExplorerCatalog.MaxBand, database: false));
         yield return ("login alter", LintCatalog(LoginAlter, ExplorerCatalog.MaxBand, database: false));
         yield return ("login service", LintCatalog(LoginService, ExplorerCatalog.MaxBand, database: false));
+        yield return ("login databases", LintCatalog(LoginDatabases, ExplorerCatalog.MaxBand, database: false));
+        yield return ("mapped user", LintCatalog(MappedUser, ExplorerCatalog.MaxBand, database: true));
+        yield return ("mapped user call", LintCatalog(MappedUserCall, ExplorerCatalog.MaxBand, database: false));
+        yield return ("login jobs", LintCatalog(LoginJobs, ExplorerCatalog.MaxBand, database: false));
         yield return ("own sessions", LintCatalog(OwnSessions, ExplorerCatalog.MaxBand, database: false));
         yield return ("database use", LintCatalog(DatabaseUse, ExplorerCatalog.MaxBand, database: false));
         yield return ("database sessions", LintCatalog(DatabaseSessions, ExplorerCatalog.MaxBand, database: false));

@@ -41,7 +41,7 @@ internal static class ActionChecks
         check(Catalog.Allows("table", "", "delete") && Catalog.Allows("table", "graphEdge", "rename") && !Catalog.Allows("table", "system", "rename") && !Catalog.Allows("table", "systemVersioned", "delete")
             && !Catalog.Allows("procedure", "extended", "delete") && !Catalog.Allows("database", "system", "rename") && Catalog.Allows("database", "snapshot", "delete")
             && !Catalog.Allows("database", "snapshot", "rename") && Catalog.Allows("function", "aggregate", "rename") && !Catalog.Allows("function", "aggregate", "delete")
-            && !Catalog.Offered("login", "delete") && Catalog.Offered("view", "selectTop"), "the catalogue's rows decide what each subtype allows");
+            && Catalog.Offered("login", "delete") && Catalog.Offered("view", "selectTop"), "the catalogue's rows decide what each subtype allows");
         var options = new ActionServiceOptions();
         check(Catalog.Limit("readPerConnection") == options.ReadPerConnection && Catalog.Limit("readTotal") == options.ReadTotal && Catalog.Limit("executePerConnection") == options.ExecutePerConnection
             && Catalog.Limit("executeTotal") == options.ExecuteTotal && Catalog.Limit("registered") == options.MaxRegistered && Catalog.Limit("describeMs") == (long)options.DescribeBudget.TotalMilliseconds
@@ -71,7 +71,7 @@ internal static class ActionChecks
     {
         var results = ActionSql.Lint().ToList();
         var problems = results.SelectMany(result => result.Problems.Select(problem => result.Name + ": " + problem)).ToList();
-        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 9 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
+        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 13 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
         // The transaction DMVs raise error 300 without VIEW SERVER STATE whatever guards them, so the statements every action runs never
         // read them; only the describe's counts and lists do, after Database's guarded count shows the permission.
         check(new[] { ActionSql.Database, ActionSql.DatabaseState, ActionSql.Login, ActionSql.OwnSessions }.All(statement => !statement.Contains("dm_tran_", StringComparison.Ordinal))
@@ -217,8 +217,9 @@ internal static class ActionChecks
             catch (RequestException error) { return error.Code; }
         }
         check(DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "databaseProperties", table)) == "INVALID_PARAMS"
-            && DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "deleteObject", new ObjectRefDto("login", Name: "sa"))) == "INVALID_PARAMS"
-            && DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "deleteObject", table)) == "accepted", "describe refuses unknown dialogs and kinds the dialog does not serve");
+            && DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "deleteObject", new ObjectRefDto("login", Name: "##MS_PolicyTsqlExecutionLogin##"))) == "INVALID_PARAMS"
+            && DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "deleteObject", new ObjectRefDto("login", Name: "sa"))) == "accepted"
+            && DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "deleteObject", table)) == "accepted", "describe refuses unknown dialogs and kinds the dialog does not serve, and SQL Server's own logins (sa's Delete Object opens to say why OK is greyed)");
         var sql = new SqlService();
         check(sql.LaneOf("actions.execute") == RequestLane.Actions && sql.LaneOf("actions.describe") == RequestLane.Metadata && sql.LaneOf("actions.script") == RequestLane.Metadata
             && new[] { "actions.describe", "actions.script", "actions.execute" }.All(SqlService.MethodNames.Contains), "DDL runs on the actions lane, never holding a metadata slot; HELLO lists the three methods");

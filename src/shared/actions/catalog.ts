@@ -99,9 +99,9 @@ const all: ActionRow = { selectTop: 'enabled', rename: 'enabled', delete: 'enabl
 const selectOnly: ActionRow = { selectTop: 'enabled', rename: 'disabled', delete: 'disabled' }
 const editable: ActionRow = { rename: 'enabled', delete: 'enabled' }
 const locked: ActionRow = { rename: 'disabled', delete: 'disabled' }
-/** The login verbs whose rows this catalogue declares from logins.ts' rules; Delete (D4c), Unlock (D4d) and Properties (D2c)
- *  join as they arrive. Enable is not here: only a disabled login's overlay offers it. */
-export const loginRowVerbs = ['disable', 'rename'] as const satisfies readonly ObjectAction[]
+/** The login verbs whose rows this catalogue declares from logins.ts' rules; Unlock (D4d) and Properties (D2c) join as they
+ *  arrive. Enable is not here: only a disabled login's overlay offers it. */
+export const loginRowVerbs = ['disable', 'rename', 'delete'] as const satisfies readonly ObjectAction[]
 const ruleState = (rule: LoginRule): 'enabled' | 'disabled' | undefined => rule === 'allowed' ? 'enabled' : rule === 'greyed' ? 'disabled' : undefined
 const loginRow = (subtype: LoginSubtype): ActionRow => Object.fromEntries(loginRowVerbs.flatMap(verb => { const state = ruleState(loginRules[subtype][verb]); return state ? [[verb, state]] : [] }))
 /** A disabled login offers Enable, as its subtype's rule says, in place of Disable. A login whose CONNECT SQL is denied keeps
@@ -275,7 +275,7 @@ const commandData: { readonly [A in ObjectAction]: Omit<ActionCommandEntry, 'tit
   rename: { icon: 'edit', keywords: ['name'], documentTask: false, unavailableHint: 'Select a table, view, stored procedure, function, user database, or login.', keybindings: [{ key: 'f2', when: explorerKeyWhen }] },
   // ⌘⌫ deletes in macOS's Finder; the forward Delete key works there too.
   delete: {
-    icon: 'close', keywords: ['drop', 'remove'], documentTask: false, unavailableHint: 'Select a table, view, stored procedure, function, user database, or database snapshot.',
+    icon: 'close', keywords: ['drop', 'remove'], documentTask: false, unavailableHint: 'Select a table, view, stored procedure, function, user database, database snapshot, or login.',
     keybindings: [{ win: 'delete', linux: 'delete', mac: 'mod+backspace', when: explorerKeyWhen }, { mac: 'delete', when: explorerKeyWhen }]
   },
   // ⌘I is Finder's Get Info. Alt+Enter is reserved on Windows and Linux, and SSMS 22's binding is unverified, so there is no key there.
@@ -388,7 +388,8 @@ const page = (id: PageId, title: string, options: { readonly icon?: IconId; read
  *  later Database Properties pages (Change Tracking, Permissions, Extended Properties, Mirroring, Transaction Log
  *  Shipping, Query Store) are listed once they exist. */
 const dialogSpecData = {
-  deleteObject: { title: 'Delete Object', surface: 'modal', titleFormat: 'plain', size: 'compact', action: 'delete', pages: [page('general', 'General')] },
+  // Its steps: a login's Delete drops each mapped user, then the login (D4c); a database's closes connections, drops it and its history.
+  deleteObject: { title: 'Delete Object', surface: 'modal', titleFormat: 'plain', size: 'compact', action: 'delete', pages: [page('general', 'General')], steps: true },
   databaseProperties: {
     title: 'Database Properties', surface: 'document', titleFormat: 'withName', size: 'large', action: 'properties',
     pages: [page('general', 'General'), page('files', 'Files'), page('filegroups', 'Filegroups'), page('options', 'Options')]

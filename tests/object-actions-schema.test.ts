@@ -24,7 +24,8 @@ describe('object action request schemas', () => {
   it('refuses U+0000, 129 units, the same name, an empty one, delete options on a table, and kinds or objects that never offer the action', () => {
     for (const [name, request] of [
       ['U+0000', rename({ newName: 'a\u0000b' })], ['129 units', rename({ newName: 'x'.repeat(129) })], ['the same name', rename({ newName: 'Orders' })], ['empty', rename({ newName: '' })],
-      ['close connections on a table', remove({ closeConnections: true })], ['history on a table', remove({ deleteHistory: true })], ['a login\'s delete', remove({ target: { kind: 'login', name: 'AppUser' } })],
+      ['close connections on a table', remove({ closeConnections: true })], ['history on a table', remove({ deleteHistory: true })], ['a login\'s delete flags', remove({ target: { kind: 'login', name: 'AppUser' }, closeConnections: true })], ['mapped users on a table', remove({ dropMappedUsers: false })],
+      ['a login identity on a table', remove({ loginIdentity: { sid: '01', created: '2026-01-02T03:04:05.000' } })], ['SQL Server\'s own login\'s delete', remove({ target: { kind: 'login', name: '##MS_PolicyTsqlExecutionLogin##' } })],
       ['a system database', rename({ target: { kind: 'database', name: 'master' } })], ['a system view', remove({ target: { kind: 'view', database: 'AppData', schema: 'sys', name: 'objects' } })],
       ['a synonym', remove({ target: { kind: 'synonym', database: 'AppData', schema: 'dbo', name: 's' } })], ['an unknown action', rename({ action: 'drop' })],
       ['a new name on a delete', remove({ newName: 'x' })], ['delete flags on a rename', rename({ closeConnections: false })], ['delete flags missing', { ...remove(), deleteHistory: undefined }],
@@ -41,7 +42,9 @@ describe('object action request schemas', () => {
     expect(actionDescribeSchema.safeParse({ ...request, dialog: 'databaseProperties', target: { kind: 'database', name: 'master' } }).success).toBe(true)
     expect(actionDescribeSchema.safeParse({ ...request, dialog: 'databaseProperties' }).success).toBe(false)
     expect(actionDescribeSchema.safeParse({ ...request, dialog: 'deleteObject', target: { kind: 'database', name: 'master' } }).success).toBe(false)
-    expect(actionDescribeSchema.safeParse({ ...request, target: { kind: 'login', name: 'sa' } }).success).toBe(false)
+    // A login's Delete Object (D4c); sa's is greyed by its subtype, which only the backend's preflight derives.
+    expect(actionDescribeSchema.safeParse({ ...request, target: { kind: 'login', name: 'sa' } }).success).toBe(true)
+    expect(actionDescribeSchema.safeParse({ ...request, target: { kind: 'login', name: '##MS_PolicyTsqlExecutionLogin##' } }).success).toBe(false)
     expect(actionDescribeSchema.safeParse({ ...request, extra: true }).success).toBe(false)
   })
   it('takes a login\'s Disable and Enable with only a target and the login\'s identity, and refuses SQL Server\'s own logins and other kinds', () => {
@@ -56,7 +59,7 @@ describe('object action request schemas', () => {
     expect([{ ...identity, sid: '0' }, { ...identity, sid: '0'.repeat(172) + 'F' }, { ...identity, sid: '0a' }, { ...identity, sid: '01\n' }, { ...identity, created: '2026-01-02 03:04:05' },
       { ...identity, created: '2026-01-02T03:04:05.000\n' }, { sid: '01' }, { ...identity, id: 1 }].map(loginIdentity => valid(state('disable', { loginIdentity })))).toEqual(Array(8).fill(false))
     expect([valid(rename({ target: login, newName: 'x', loginIdentity: identity })), valid({ action: 'delete', ...ids(), target: login, closeConnections: false, deleteHistory: false, loginIdentity: identity })])
-      .toEqual([false, false])
+      .toEqual([false, true])
     // A backslash is left to the preflight, which knows whether the login is a SQL Server or a Windows login.
     expect(valid(rename({ target: { kind: 'login', name: 'sa' }, newName: 'a\\b' }))).toBe(true)
     const system = { kind: 'login', name: '##MS_PolicyTsqlExecutionLogin##' } as const

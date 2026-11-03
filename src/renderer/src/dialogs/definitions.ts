@@ -6,7 +6,9 @@
 // src/shared/actions/catalog.ts, a describe in the backend, a definition here, and its pages or sections. No React here,
 // so the services and their tests stay in Node.
 import type { DialogId } from '../../../shared/actions/catalog.ts'
-import { dropDatabaseStepTitle, type ActionDescribeResult, type ActionError, type ActionRequest, type ActionStep, type DatabasePropertiesModel, type DeleteTarget } from '../../../shared/actions/schema.ts'
+import { loginDeleteText, loginMessages, loginRefusal, mappedUserKept } from '../../../shared/actions/logins.ts'
+import { dropDatabaseStepTitle, dropUserStepTitle, type ActionDescribeResult, type ActionError, type ActionRequest, type ActionStep, type DatabasePropertiesModel, type DeleteTarget } from '../../../shared/actions/schema.ts'
+import type { FolderId } from '../../../shared/explorer/catalog.ts'
 import { displayText, type ObjectRef } from '../../../shared/explorer/refs.ts'
 import { afterDatabaseFailure, databaseConfirm, databaseRequest, initialDatabaseDraft, type DatabaseDraft, type DatabaseRequest } from './database-properties'
 
@@ -39,10 +41,28 @@ export interface ObjectDialogDefinition<Model, Draft> {
   /** The model after OK failed, when the failure shows part of it is stale (the same model otherwise). */
   readonly afterFailure?: (model: Model, failure: ActionError) => Model
   readonly afterSuccess: (effects: DialogEffects) => void
+  /** Why OK is greyed (the protected-principal rules' refusal of a login), shown on the page; Script still works. */
+  readonly blocked?: (model: Model) => string | undefined
+  /** Folders other than the object's listing that a reply's done steps changed (the Users folders of the databases a login's Delete
+   *  dropped users in), which the dialog reconciles where they are loaded, after a success or a partial failure. */
+  readonly changedFolders?: (model: Model, steps: readonly ActionStep[]) => ChangedFolders | undefined
 }
+/** A folder kind and the databases whose folder of that kind changed. */
+export interface ChangedFolders { readonly folder: FolderId; readonly databases: readonly string[] }
 
-/** Delete Object's checkboxes; they apply to databases only. */
-export interface DeleteDraft { readonly deleteHistory: boolean; readonly closeConnections: boolean }
+/** Delete Object's checkboxes: the first two apply to databases only, the last to logins only. */
+export interface DeleteDraft { readonly deleteHistory: boolean; readonly closeConnections: boolean; readonly dropMappedUsers: boolean }
+/** The mapped users a login's Delete may drop: those it lists that are not kept (they own a schema or role, or their database is read-only). */
+export const droppableUsers = (model: DeleteTarget) => (model.mappings?.users ?? []).filter(user => !mappedUserKept(user))
+/** Whether Delete Object offers to drop the mapped users: some it may drop, and no more mapped than it lists (the backend refuses those). */
+export const canDropMappedUsers = (model: DeleteTarget): boolean => droppableUsers(model).length > 0 && (model.mappings?.mapped ?? 0) <= (model.mappings?.users.length ?? 0)
+/** Why the option is greyed though users are mapped: more are mapped than the dialog lists. */
+export const dropMappedUsersNote = (model: DeleteTarget): string | undefined => (model.mappings?.mapped ?? 0) > (model.mappings?.users.length ?? 0) ? loginDeleteText.tooMany : undefined
+/** Why Delete Object greys OK for a login: the protected-principal rules (logins.ts) over the facts it read (own, sa, system, permissions). */
+export const loginDeleteRefusal = (model: DeleteTarget): string | undefined => {
+  const refused = model.login && loginRefusal(model.login, 'delete')
+  return refused ? loginMessages[refused] : undefined
+}
 /** Whether Delete Object can close the database's connections: not for a snapshot, nor where the describe says why not (Managed Instance cannot set SINGLE_USER; an offline database has none). */
 export const canCloseConnections = (model: DeleteTarget): boolean => !model.isSnapshot && !model.closeConnectionsNote
 const count = (value: number, one: string, many: string) => `${value.toLocaleString('en-US')} ${value === 1 ? one : many}`
@@ -67,13 +87,26 @@ export const deleteObjectDefinition: ObjectDialogDefinition<DeleteTarget, Delete
   dialog: 'deleteObject',
   modelOf: result => result.deleteTarget,
   // SSMS: Delete backup and restore history is checked (greyed for a snapshot); Close existing connections is not.
-  initialDraft: (model, target) => ({ deleteHistory: target.kind === 'database' && !model.isSnapshot, closeConnections: false }),
+  // SSMS deletes a login and leaves its users orphaned; Varia offers to delete them too, unchecked (D4 owner question 3).
+  initialDraft: (model, target) => ({ deleteHistory: target.kind === 'database' && !model.isSnapshot, closeConnections: false, dropMappedUsers: false }),
   request: (target, model, draft) => {
     const database = target.kind === 'database'
-    return { action: 'delete', target, closeConnections: database && canCloseConnections(model) && draft.closeConnections, deleteHistory: database && !model.isSnapshot && draft.deleteHistory }
+    const request = { action: 'delete', target, closeConnections: database && canCloseConnections(model) && draft.closeConnections, deleteHistory: database && !model.isSnapshot && draft.deleteHistory } as const
+    // The login the dialog read: the backend refuses one that has taken the name since, whose facts the dialog never showed.
+    return target.kind === 'login' && model.login
+      ? { ...request, dropMappedUsers: canDropMappedUsers(model) && draft.dropMappedUsers, loginIdentity: { sid: model.login.sid, created: model.login.created } }
+      : request
   },
   removesDatabase: (target, steps, succeeded) => target.kind === 'database' && (succeeded || steps.some(step => step.status === 'done' && !step.compensates && step.title === dropDatabaseStepTitle)),
-  afterSuccess: effects => effects.refreshListing()
+  afterSuccess: effects => effects.refreshListing(),
+  blocked: model => loginDeleteRefusal(model),
+  // Once a user was dropped, the Users folders of every database the dialog listed a droppable user in: a step's detail is clipped
+  // display text, so it is not matched back to its database, and reconciling an unchanged folder changes nothing.
+  changedFolders: (model, steps) => {
+    if (!steps.some(step => step.status === 'done' && step.title === dropUserStepTitle)) return undefined
+    const databases = [...new Set(droppableUsers(model).map(user => user.database))]
+    return databases.length ? { folder: 'users', databases } : undefined
+  }
 }
 
 const isProperties = (request: BuiltRequest): request is DatabaseRequest => request.action === 'properties'

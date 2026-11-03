@@ -856,6 +856,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-dialog-options .field-note { margin: 0 0 0 var(--varia-space-5); }
 .object-dialog-options .checkbox-label:has(input:disabled) { color: var(--varia-disabledForeground); }
 @media (forced-colors: active) { .object-dialog-options .checkbox-label:has(input:disabled) { color: GrayText; } }
+/* D4c: the database users mapped to a login, "database: user" with why one is kept, in a list that scrolls within its own
+   height so the note and the option below stay in view. */
+.object-dialog-mapped { margin: var(--varia-space-2) 0 0; }
+.object-dialog-mapped-list { max-height: calc(var(--varia-space-6) * 4); overflow: auto; margin: var(--varia-space-1) 0 0; padding: 0; list-style: none; font-size: var(--varia-size-xs); overflow-wrap: anywhere; }
+.object-dialog-mapped-list > li { padding: var(--varia-space-0) 0; }
+.object-dialog-kept { color: var(--varia-descriptionForeground); }
 /* Create Catalog (S9a): SSMS's options and password, then what the server gets, step by step. */
 .create-catalog-dialog .property-section { display: flex; flex-direction: column; gap: 6px; }
 .create-catalog-dialog .checkbox-label { display: flex; align-items: center; gap: 8px; }

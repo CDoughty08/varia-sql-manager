@@ -20,6 +20,9 @@ internal static class ActionErrors
     /// <summary>What a login action's PERMISSION_DENIED adds (D4 P4, P7): SQL Server's 15151 also says the login may not exist,
     /// which the preflight has just ruled out.</summary>
     public const string LoginPermissionAdvice = "Changing a login needs ALTER ANY LOGIN, and CONTROL SERVER for a member of sysadmin.";
+    /// <summary>A login's Delete when a session connected as it fails the DROP (15434): the sessions a preflight could not see
+    /// (without VIEW SERVER STATE), or one that signed in after it (D4c).</summary>
+    public const string LoginSessionsAdvice = "End the login's sessions first; Activity Monitor can end them.";
     /// <summary>SQL Server error numbers by the code they map to (Lost also covers severity 20 and above), one mapping per line.</summary>
     public static readonly IReadOnlyDictionary<string, int[]> Numbers = new Dictionary<string, int[]>(StringComparer.Ordinal)
     {

@@ -465,6 +465,8 @@ export const connectOutcome = dialog => dialog.locator(part.connectOutcome)
 export const objectDialogConnection = dialog => dialog.getByRole('region', { name: 'Connection', exact: true })
 export const objectDialogProgress = dialog => dialog.getByRole('region', { name: 'Progress', exact: true }).getByRole('status')
 export const objectDialogWarnings = dialog => dialog.getByRole('list', { name: 'Warnings', exact: true }).getByRole('listitem')
+/** Delete Object's list of the database users mapped to a login (D4c): one item per user, then "…and n more". */
+export const objectDialogMappedUsers = dialog => dialog.getByRole('list', { name: 'Database users mapped to this login', exact: true }).getByRole('listitem')
 /** Delete Object's grid of the sessions using a database (D3d): its body rows, and the disclosure that shows it. */
 export const objectDialogSessions = dialog => dialog.getByRole('table', { name: 'Sessions using the database', exact: true }).locator('tbody').getByRole('row')
 export const objectDialogSessionsToggle = dialog => dialog.getByRole('button', { name: /^Sessions using / })

@@ -140,6 +140,9 @@ export const loginLimits = {
   /** An action step's title and detail (ActionStep). */
   stepTitle: 64, stepDetail: 128,
   ownedDatabases: 100, mappedUsers: 100, scanDatabases: 4_096, serviceNames: 4,
+  /** How long the mapped-user scan (D4c's, which Login Properties reuses) reads databases before it counts the rest as not
+   *  checked, inside the describe's 40 s. */
+  scanMs: 20_000,
   /** sys.dm_server_services.servicename, as the login facts carry it. */
   serviceName: 256
 } as const
@@ -163,6 +166,9 @@ export interface LoginFacts {
   /** The login this connection uses, or a Windows group it gets in through (sys.login_token). */
   readonly own: boolean
   readonly sysadmin: boolean
+  /** User sessions signed in as this login (sys.dm_exec_sessions.security_id). A Windows group's members sign in under their own SIDs,
+   *  so a group counts none of them (critic D4-6): harmless: a group cannot be disabled, and its DROP is not
+   *  refused for its members' sessions (15434; unverified). */
   readonly sessions?: number
   /** The service that runs as this Windows login (sys.dm_server_services, guarded; or an NT SERVICE\ name), read by the
    *  loginFacts describe only; at most loginLimits.serviceName characters. */
@@ -171,6 +177,8 @@ export interface LoginFacts {
   /** At most loginLimits.ownedDatabases, by name. */
   readonly ownedDatabaseNames: readonly string[]
   readonly ownedServerObjects?: number
+  /** The SQL Server Agent jobs it owns (Delete Object's describe only); absent when msdb could not be read. */
+  readonly ownedJobs?: number
   readonly canAlter: boolean
   readonly canControlServer: boolean
   readonly nameInUse: boolean
@@ -186,6 +194,35 @@ export function loginRefusal(facts: Pick<LoginFacts, 'subtype' | 'own' | 'sysadm
   if (facts.sysadmin && !facts.canControlServer) return 'controlServer'
   return undefined
 }
+
+/** A database user mapped to a login (D4c): its database and name, the schemas and roles it owns, and whether its database is
+ *  read-only. C#: MappedUserDto. */
+export interface MappedUser { readonly database: string; readonly user: string; readonly ownedSchemas: number; readonly ownedRoles: number; readonly readOnly: boolean }
+/** The mapped-user scan's answer: at most loginLimits.mappedUsers users, how many it found in all, and how many databases it read
+ *  and did not (offline, not accessible or readable, a failed read, or past its bound or budget). C#: LoginMappingsDto. */
+export interface LoginMappings { readonly users: readonly MappedUser[]; readonly mapped: number; readonly checked: number; readonly notChecked: number }
+/** Whether a Delete that drops the mapped users keeps this one: DROP USER fails while it owns a schema (15138) or a role (15421),
+ *  and cannot run in a read-only database. C#: ActionService.Kept. */
+export const mappedUserKept = (user: MappedUser): boolean => user.ownedSchemas > 0 || user.ownedRoles > 0 || user.readOnly
+
+const counted = (value: number, one: string, many: string) => `${value.toLocaleString('en-US')} ${value === 1 ? one : many}`
+/** What Delete Object says about a login (D4c). The note is SSMS's, which shows it once the login is gone; Varia shows it before OK
+ *  and offers to delete the users too. */
+export const loginDeleteText = {
+  mappedHeading: 'Database users mapped to this login',
+  noneMapped: 'No database user is mapped to this login.',
+  orphanNote: 'Deleting a login does not delete the database users mapped to it. They are left orphaned: they keep their permissions but no login can use them.',
+  dropOption: 'Also delete the database users mapped to this login',
+  dropHint: 'Users that own schemas are kept. Transfer the schemas first, then delete them in each database.',
+  more: (count: number) => `…and ${count.toLocaleString('en-US')} more`,
+  notChecked: (count: number) => `${count === 1 ? '1 database was' : `${count.toLocaleString('en-US')} databases were`} not checked (offline or not accessible).`,
+  /** The backend refuses to drop more users than it lists (C#: ActionService.TooManyMappedUsers). */
+  tooMany: `More than ${loginLimits.mappedUsers.toLocaleString('en-US')} users are mapped. Delete them in each database first, or delete the login without them.`,
+  kept: (user: MappedUser) => user.readOnly ? 'kept: the database is read-only'
+    : `kept: owns ${[user.ownedSchemas ? counted(user.ownedSchemas, 'schema', 'schemas') : '', user.ownedRoles ? counted(user.ownedRoles, 'role', 'roles') : ''].filter(Boolean).join(' and ')}`,
+  /** What Varia's other connections that sign in as the login cannot do once it is gone (critic D4-3). */
+  connections: 'cannot reconnect once it is deleted'
+} as const
 
 /** The subtypes whose names SQL Server authenticates itself, so a backslash is never part of one. */
 export const noBackslashSubtypes: readonly LoginSubtype[] = ['sa', 'sql']

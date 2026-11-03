@@ -503,6 +503,18 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const node = this.nodes.get(nodeId), parent = node?.parent ? this.nodes.get(node.parent) : undefined
     return parent?.kind === 'folder' && this.attached(parent) ? parent.id : undefined
   }
+  /**
+   * The loaded folders of a kind under these databases on a connection (the Users folders a login's Delete dropped users from),
+   * which a reconcile reloads where they are shown. Folders never loaded are left alone: they read the server when opened.
+   */
+  loadedFolders(connectionId: string, folder: FolderId, databases: readonly string[]): number[] {
+    const names: ReadonlySet<string> = new Set(databases)
+    const found: number[] = []
+    for (const node of this.nodes.values())
+      if (node.connectionId === connectionId && node.folder === folder && node.ref.type === 'folder' && node.ref.owner.kind === 'database' && names.has(node.ref.owner.name ?? '')
+        && node.children !== undefined && !node.lost && this.attached(node)) found.push(node.id)
+    return found
+  }
   /** The folder's filter; filters are kept per connection until it disconnects. */
   filter(folderNodeId: number): ExplorerFilter | undefined {
     const node = this.nodes.get(folderNodeId)

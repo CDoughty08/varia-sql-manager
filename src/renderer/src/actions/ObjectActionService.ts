@@ -102,6 +102,17 @@ export function clipUnits(text: string, max: number): string {
   for (const character of text) { if (out.length + character.length > max - 1) break; out += character }
   return out + '…'
 }
+/**
+ * Varia's other live connections to a connection's server that sign in as `login`, by their labels (critic D4-3): renderer data
+ * only, compared without case as SQL Server compares names by default. At most `promptLimits.connections`. Disable's and Rename's
+ * warnings and Delete Object's (D4c) name them.
+ */
+export function otherLoginConnections(all: readonly LiveConnection[], connectionId: string, login: string | undefined): string[] {
+  const server = all.find(connection => connection.id === connectionId)?.server
+  const labels = all.filter(connection => connection.id !== connectionId && !connection.lost && sameText(connection.server, server) && sameText(connection.login, login))
+    .map(connection => clipUnits(connectionLabel(connection), promptLimits.connectionName))
+  return [...new Set(labels)].slice(0, promptLimits.connections)
+}
 const maxNewName = 400
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 const objectOf = (node: Pick<ExplorerMenuNode, 'ref'>): ObjectRef | undefined => node.ref.type === 'object' ? node.ref.object : undefined
@@ -278,16 +289,7 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
     return answer.value === 'disable' && !this.disposed && this.isLive(node.connectionId)
   }
 
-  /**
-   * Varia's other live connections to the node's server that sign in as `login`, by their labels (critic D4-3): renderer
-   * data only, compared without case as SQL Server compares names by default. At most `promptLimits.connections`.
-   */
-  private loginConnections(connectionId: string, login: string | undefined): string[] {
-    const all = this.options.connections.getSnapshot(), server = all.find(connection => connection.id === connectionId)?.server
-    const labels = all.filter(connection => connection.id !== connectionId && !connection.lost && sameText(connection.server, server) && sameText(connection.login, login))
-      .map(connection => clipUnits(connectionLabel(connection), promptLimits.connectionName))
-    return [...new Set(labels)].slice(0, promptLimits.connections)
-  }
+  private loginConnections(connectionId: string, login: string | undefined): string[] { return otherLoginConnections(this.options.connections.getSnapshot(), connectionId, login) }
 
   /**
    * A state job's outcome: the backend's reply when the action ran, or undefined after reporting why not. A dropped job
