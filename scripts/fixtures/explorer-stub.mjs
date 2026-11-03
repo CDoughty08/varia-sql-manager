@@ -67,7 +67,7 @@ export function installExplorerStub({ ipcMain }, { statics }) {
           const name = index === 0 ? 'Orders' : `table${index}`
           return object({ kind: 'table', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'table')
         })
-      case 'views': return paged(params, owner, stub.views, index => object({ kind: 'view', database: owner.name, schema: 'dbo', name: `view${index}` }, `dbo.view${index}`, 'eye'))
+      case 'views': return paged(params, owner, stub.views, index => object({ kind: 'view', database: owner.name, schema: 'dbo', name: `view${index}` }, `dbo.view${index}`, 'view'))
       case 'columns': {
         const parent = { kind: owner.kind, schema: owner.schema, name: owner.name }
         const column = (name, sublabel, icon) => object({ kind: 'column', database: owner.database, parent, name }, name, icon, { sublabel, hasChildren: false })

@@ -200,6 +200,8 @@ export interface DocumentFrameViewProps extends Omit<HeaderProps, 'verbs'> {
   readonly script?: Omit<ScriptDrawerProps, 'id' | 'open' | 'size' | 'onToggle' | 'onResize'>
   /** Marks the document for focus facts and menus (`data-designer`, say); the frame adds `data-document-frame`. */
   readonly attributes?: Readonly<Record<`data-${string}`, string>>
+  /** The document's own keys, as a dialog's (New Database's Enter and Escape). It leaves a key a control already handled (`defaultPrevented`). */
+  readonly onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void
 }
 
 /**
@@ -209,9 +211,9 @@ export interface DocumentFrameViewProps extends Omit<HeaderProps, 'verbs'> {
  * service, and every change goes back through `onFrame`.
  */
 export function DocumentFrameView(props: DocumentFrameViewProps) {
-  const { id, title, crumbs, subtitle, state, tools, verbs, facts = [], banner, sections, children, hint, frame, onFrame, script, attributes } = props
+  const { id, title, crumbs, subtitle, state, tools, verbs, facts = [], banner, sections, children, hint, frame, onFrame, script, attributes, onKeyDown } = props
   const change = onFrame ?? (() => {})
-  return <div className="document-frame" role="region" aria-labelledby={`${id}-title`} data-document-frame={id} {...attributes}>
+  return <div className="document-frame" role="region" aria-labelledby={`${id}-title`} data-document-frame={id} {...attributes} onKeyDown={onKeyDown}>
     <DocumentHeader id={id} title={title} crumbs={crumbs} subtitle={subtitle} state={state} tools={tools} verbs={verbs} />
     {facts.length > 0 && <FactLine facts={facts} />}
     {banner && <div className="document-banner">{banner}</div>}

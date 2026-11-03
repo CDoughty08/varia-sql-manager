@@ -36,10 +36,17 @@ describe('fuzzy matching', () => {
     expect(palette('use')[0]).toBe('Query: Change Database…')
     expect(palette('run')[0]).toBe('Query: Execute')
     // A category match is no better than the same words in a title, so an available command wins the tie.
+    // Only the palette's own commands: a menu-only twin (New Database… on a database's menu) shares its command's label.
     const explorerCommands = commandIds.filter(id => commandDescriptor(id).palette !== false).map(paletteLabel).filter(label => label.startsWith('Object Explorer: '))
+    expect(palette('new database').filter(label => label === 'Object Explorer: New Database…')).toHaveLength(1)
     expect(palette('object explorer', explorerCommands)).toEqual(['View: Show Object Explorer', ...palette('object explorer').filter(label => label !== 'View: Show Object Explorer')])
     expect(palette('object explorer', explorerCommands).slice(1).sort()).toEqual(explorerCommands.filter(label => palette('object explorer').includes(label)).sort())
     expect(palette('exe').slice(0, 2)).toEqual(['Query: Execute', 'Query: Cancel Executing Query'])
+    // "cancel" finds Cancel Executing Query whether or not a query runs; a document's own Cancel comes first only where it is available.
+    const paletteLabels = commandIds.filter(id => commandDescriptor(id).palette !== false).map(paletteLabel)
+    expect(palette('cancel')[0]).toBe('Query: Cancel Executing Query')
+    expect(palette('cancel', paletteLabels)[0]).toBe('Query: Cancel Executing Query')
+    expect(palette('cancel', paletteLabels.filter(label => label !== 'New Database: Cancel New Database'))[0]).toBe('New Database: Cancel New Database')
     // The word in the title outranks the same word in the category, and in another command's title. Reconnect is
     // unavailable until a connection is lost, so it ranks below the commands that tie with it.
     expect(palette('connect', ['Connection: Reconnect…']).slice(0, 2)).toEqual(['Connection: Connect to Server…', 'Query: Change Connection…'])

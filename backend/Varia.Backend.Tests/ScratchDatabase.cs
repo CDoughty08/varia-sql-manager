@@ -71,12 +71,20 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string? Login { get; private set; }
     /// <summary>Where the live table checks read a message log and a snapshot table (created on demand).</summary>
     public string Live => Name + "_live";
+    /// <summary>The server file picker's database, whose backup file (on Linux) the backup folder's listing must show.</summary>
+    public string Files => Name + "_files";
     /// <summary>Where the wave 5 seam checks run runner v2's compensation, the shared templates and the pre-move (created on demand).</summary>
     public string Seam => Name + "_seam";
     /// <summary>The name the seam checks' rename collides with (created on demand, with <see cref="Seam"/>).</summary>
     public string SeamTaken => Name + "_seamt";
-    /// <summary>The server file picker's database, whose backup file (on Linux) the backup folder's listing must show.</summary>
-    public string Files => Name + "_files";
+    /// <summary>Where the New Login checks (D2a) run Create Catalog's master key batch under the Extended Events check (created on demand).</summary>
+    public string LoginsDatabase => Name + "_lgn";
+    /// <summary>A SQL login the New Login checks create, `tag` being 1 to 8 lowercase letters or digits; dropped on disposal once owned.</summary>
+    public string LoginNamed(string tag) => Name + "_l" + tag;
+    /// <summary>The New Login checks' Extended Events session (critic A16), dropped on disposal once owned.</summary>
+    public string XeSession => Name + "_xe";
+    private readonly List<string> ownedLogins = [];
+    private bool ownsXeSession;
     /// <summary>Restore Database's source (D1e): FULL recovery, its backups in real files in the backup folder (<see cref="RestoreFile"/>),
     /// which disposal deletes before its backup history.</summary>
     public string RestoreSource => Name + "_rst";
@@ -85,8 +93,27 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     /// <summary>Restore Database's forked source: FULL recovery, restored in place to a point in time between its log backups, so
     /// the next log forks; its backups are files like <see cref="RestoreSource"/>'s, deleted before its history.</summary>
     public string RestoreFork => Name + "_rstf";
+    /// <summary>New Database's database (D1b), which OK itself creates; the checks mark it at once and adopt it.</summary>
+    public string NewDatabase => Name + "_nd";
     /// <summary>Where the action progress checks back up with STATS and hold a lock (D1c; created on demand).</summary>
     public string Progress => Name + "_ap";
+    /// <summary>Attach Databases' database: three files the attach checks detach and attach again (created on demand, by
+    /// CreateAttachAsync). A run that crashes while it is detached leaves its files; the next dispose of the same run attaches
+    /// them again to drop them, but the sweep cannot see a detached database.</summary>
+    public string Attach => Name + "_at";
+    /// <summary>The hostile name the attach checks attach <see cref="Attach"/>'s files as.</summary>
+    public string AttachAs => Name + "_at']";
+    /// <summary>The name of the attach checks' second database, whose file is missing (never created, unless an attach goes wrong).</summary>
+    public string AttachMissing => Name + "_at2";
+    private string[]? attachFiles;
+    /// <summary>Where the Take Offline and Bring Online checks take a database offline and back (created on demand).</summary>
+    public string DatabaseState => Name + "_dbs";
+    /// <summary>Delete parity (D3d): an offline database Delete drops (its files stay), and one whose snapshot fails its DROP.</summary>
+    public string DeleteOffline => Name + "_del";
+    public string DeleteCompensated => Name + "_delc";
+    public string DeleteSnapshot => Name + "_delcs";
+    /// <summary>Delete parity (D3d): a database the low-privilege login owns, which it describes, scripts and deletes without VIEW SERVER STATE.</summary>
+    public string DeleteOwned => Name + "_delo";
     /// <summary>Held in memory only, never printed.</summary>
     public string Password { get; }
     public bool HasSnapshot { get; private set; }
@@ -97,13 +124,26 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // _act and _actr are the object-action checks' database and the name they rename it to (PR17), so a run that crashes
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
     // _live the live tables', _ssis the fake SSIS catalog, _ssisref the restored catalog backup and _ssiscc Create Catalog's
-    // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _seam and _seamt are the wave 5 seam checks', _files the server file picker's, _rst Restore Database's source, _rstf its forked source and _rstr where their plans are restored, and _ap the action progress checks'.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_files|_rst|_rstr|_rstf|_ap)?$")]
+    // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _files is the server file picker's; _seam and _seamt are the wave 5 seam checks'; _nd is New Database's; _ap the action progress checks';
+    // _at, _at'] and _at2 Attach Databases'; _rst Restore Database's source, _rstf its forked source and _rstr where their plans are restored; _lgn New Login's; _dbs Take Offline's and
+    // Bring Online's (a crashed run can leave it offline, which the sweep drops by state); and _del, _delc, _delcs and _delo Delete parity's (D3d): an offline
+    // database, a database with its snapshot, and the login's own.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_files|_seam|_seamt|_nd|_ap|_at|_at'\]|_at2|_rst|_rstr|_rstf|_lgn|_dbs|_del|_delc|_delcs|_delo)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^[a-z0-9]{1,8}\.(bak|trn)$")]
     private static partial Regex PartPattern();
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}$")]
+    // A run's own login, and New Login's (_l and a tag).
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_l[a-z0-9]{1,8})?$")]
     private static partial Regex LoginPattern();
+    // New Login's Extended Events session; its name's UTC timestamp dates it, as sys.server_event_sessions has no creation date.
+    [GeneratedRegex(@"^VariaScratch_(\d{14})_[0-9a-f]{8}_xe$")]
+    private static partial Regex XePattern();
+
+    /// <summary>Whether the sweep drops a stale SQL login of this name.</summary>
+    internal static bool SweepableLogin(string name) => LoginPattern().IsMatch(name);
+    /// <summary>Whether an Extended Events session of this name is a run's of the checks, created before `before` (UTC).</summary>
+    internal static bool StaleXeSession(string name, DateTime before) => XePattern().Match(name) is { Success: true } match
+        && DateTime.TryParseExact(match.Groups[1].Value, "yyyyMMddHHmmss", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var created) && created < before;
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}_job$")]
     private static partial Regex JobPattern();
 
@@ -127,6 +167,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     /// same server add and drop scratch databases at any moment, so a count of every database is not this run's to check.</summary>
     public static string Lasting(SqlRun run) =>
         string.Join("\n", (run.Sets.Count > 0 ? run.Sets[0] : []).Select(row => row[0] ?? "").Where(name => !IsScratchName(name)));
+
+    /// <summary>A throwaway password for a scratch login, never printed.</summary>
+    internal static string Throwaway() => RandomPassword();
 
     private static string RandomPassword()
     {
@@ -182,6 +225,14 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
             {
                 log("Dropping stale scratch login " + row[0]);
                 await run("DROP LOGIN " + Bracket(row[0]!) + ";", "master");
+            }
+        // New Login's Extended Events sessions (CI only, VARIA_TEST_SQL_XE=1), by the age in their names.
+        var sessions = await run("SELECT s.name FROM sys.server_event_sessions AS s WHERE s.name LIKE N'VariaScratch[_]%';", "master");
+        foreach (var row in sessions.Status == "completed" && sessions.Sets.Count > 0 ? sessions.Sets[0] : [])
+            if (StaleXeSession(row[0]!, DateTime.UtcNow.AddHours(-6)))
+            {
+                log("Dropping stale scratch event session " + row[0]);
+                await run(DropXeSql(row[0]!), "master");
             }
     }
 
@@ -282,7 +333,7 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     private static string Bracket(string value) => "[" + value.Replace("]", "]]") + "]";
 
     private static Task<SqlRun> Drop(Func<string, string, Task<SqlRun>> run, string name, bool online) => run(
-        (online ? "" : "ALTER DATABASE " + Bracket(name) + " SET ONLINE;\n")
+        (online ? "" : "IF EXISTS (SELECT 1 FROM sys.databases WHERE name = " + Quote(name) + " AND state = 6) ALTER DATABASE " + Bracket(name) + " SET ONLINE;\n")
         + "IF EXISTS (SELECT 1 FROM sys.databases WHERE name = " + Quote(name) + " AND source_database_id IS NULL AND state = 0) ALTER DATABASE " + Bracket(name) + " SET SINGLE_USER WITH ROLLBACK IMMEDIATE;\n"
         + "IF DB_ID(" + Quote(name) + ") IS NOT NULL DROP DATABASE " + Bracket(name) + ";", "master");
 
@@ -386,17 +437,42 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     /// <summary>Creates the empty, marked live tables database.</summary>
     public Task<string> CreateLiveAsync() => CreateMarkedAsync(Live);
 
+    /// <summary>Creates the empty, marked server file picker database.</summary>
+    public Task<string> CreateFilesAsync() => CreateMarkedAsync(Files);
     /// <summary>Creates the empty, marked seam database and the one whose name its rename collides with.</summary>
     public async Task<string> CreateSeamAsync()
     {
         await CreateMarkedAsync(SeamTaken);
         return await CreateMarkedAsync(Seam);
     }
-    /// <summary>Creates the empty, marked server file picker database.</summary>
-    public Task<string> CreateFilesAsync() => CreateMarkedAsync(Files);
 
     /// <summary>Creates the empty, marked action progress database.</summary>
     public Task<string> CreateProgressAsync() => CreateMarkedAsync(Progress);
+
+    /// <summary>Creates the marked <see cref="Attach"/> database with a primary data file and a second data file in
+    /// <paramref name="dataFolder"/> and its log in <paramref name="logFolder"/> (each ending with the server's separator), named
+    /// after it; returns the three paths. Dispose attaches them again if they are left detached, so dropping deletes them.</summary>
+    public async Task<string[]> CreateAttachAsync(string dataFolder, string logFolder)
+    {
+        string[] files = [dataFolder + Attach + ".mdf", dataFolder + Attach + "_2.ndf", logFolder + Attach + "_log.ldf"];
+        created.Add(Attach);
+        created.Add(AttachAs);
+        created.Add(AttachMissing);
+        attachFiles = files;
+        await Exec("CREATE DATABASE " + Bracket(Attach) + " ON PRIMARY (NAME = " + Quote(Attach) + ", FILENAME = " + Quote(files[0]) + "), (NAME = " + Quote(Attach + "_2") + ", FILENAME = " + Quote(files[1])
+            + ") LOG ON (NAME = " + Quote(Attach + "_log") + ", FILENAME = " + Quote(files[2]) + ");\nALTER DATABASE " + Bracket(Attach) + " SET RECOVERY SIMPLE;");
+        await Exec("EXEC sys.sp_addextendedproperty @name = N'varia.scratch', @value = 1;", Attach);
+        return files;
+    }
+
+    /// <summary>The attach checks' own SQL for <see cref="Attach"/>'s files: detach the database of <paramref name="name"/>.</summary>
+    public Task<SqlRun> DetachAsync(string name) => Exec("EXEC master.dbo.sp_detach_db @dbname = " + Quote(name) + ", @skipchecks = 'true';");
+
+    /// <summary>The files <see cref="Attach"/> has now (a rebuilt log has a name of SQL Server's choosing), which Dispose attaches.</summary>
+    public void AttachFilesAre(string[] files) => attachFiles = files;
+
+    /// <summary>Creates the empty, marked database the Take Offline and Bring Online checks change the state of.</summary>
+    public Task<string> CreateDatabaseStateAsync() => CreateMarkedAsync(DatabaseState);
 
     /// <summary>Creates the empty, marked table designer database.</summary>
     public Task<string> CreateDesignerAsync() => CreateMarkedAsync(Designer);
@@ -431,6 +507,38 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         Login = Name;
         await Exec("CREATE LOGIN " + Bracket(Login) + " WITH PASSWORD = " + Quote(Password) + ", CHECK_POLICY = OFF, DEFAULT_DATABASE = [master];");
         loginCreated = true;
+        return true;
+    }
+
+    /// <summary>For a bare scratch name, Delete parity's offline database (D3d): marked, then taken offline; its files' physical
+    /// names, which the check deletes (<see cref="DeleteFileSql"/>) once Delete has dropped it and left them.</summary>
+    public async Task<List<string>> CreateDeleteOfflineAsync()
+    {
+        await CreateMarkedAsync(DeleteOffline);
+        var files = await Exec("SELECT physical_name FROM sys.master_files WHERE database_id = DB_ID(" + Quote(DeleteOffline) + ") ORDER BY file_id;");
+        await Exec("ALTER DATABASE " + Bracket(DeleteOffline) + " SET OFFLINE WITH ROLLBACK IMMEDIATE;");
+        return [.. files.Sets[0].Select(row => row[0]!)];
+    }
+
+    /// <summary>Deletes a file the server left (sysadmin, SQL Server 2019 and later): an offline-dropped scratch database's, whose
+    /// ACL Windows authentication leaves to the dropping login, so attaching it again fails. Only for paths this run created.</summary>
+    public static string DeleteFileSql(string file) => "EXEC master.sys.xp_delete_files " + Quote(file) + ";";
+
+    /// <summary>For a bare scratch name with its login (<see cref="CreateLoginAsync"/>), Delete parity's database that the login owns (D3d).</summary>
+    public async Task<string> CreateDeleteOwnedAsync()
+    {
+        await CreateMarkedAsync(DeleteOwned);
+        await Exec("ALTER AUTHORIZATION ON DATABASE::" + Bracket(DeleteOwned) + " TO " + Bracket(Login!) + ";");
+        return DeleteOwned;
+    }
+
+    /// <summary>For a bare scratch name, Delete parity's compensation database (D3d) and a snapshot of it, which fails its DROP
+    /// (3709) and which disposal drops first; false when this server cannot create a snapshot.</summary>
+    public async Task<bool> CreateDeleteCompensatedAsync()
+    {
+        await CreateMarkedAsync(DeleteCompensated);
+        if (!await CreateSnapshotAsync(DeleteCompensated, DeleteSnapshot)) return false;
+        created.Insert(0, DeleteSnapshot);
         return true;
     }
 
@@ -491,10 +599,35 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     /// <summary>A scratch database something else creates (the backend's Create Catalog dry run), dropped with the rest.</summary>
     public void Adopt(string name) { if (!created.Contains(name)) created.Add(name); }
 
-    /// <summary>Drops the snapshot first, brings the offline database online so its files are deleted, then drops the rest and the login.</summary>
+    /// <summary>Stops and drops an Extended Events session by name, if it exists.</summary>
+    internal static string DropXeSql(string name) =>
+        "IF EXISTS (SELECT 1 FROM sys.dm_xe_sessions WHERE name = " + Quote(name) + ") ALTER EVENT SESSION " + Bracket(name) + " ON SERVER STATE = STOP;\n"
+        + "IF EXISTS (SELECT 1 FROM sys.server_event_sessions WHERE name = " + Quote(name) + ") DROP EVENT SESSION " + Bracket(name) + " ON SERVER;";
+
+    /// <summary>New Login's database for the Extended Events check's master key batch.</summary>
+    public Task<string> CreateLoginsDatabaseAsync() => CreateMarkedAsync(LoginsDatabase);
+    /// <summary>Records a login the checks are about to create (by <see cref="LoginNamed"/>), so disposal drops it.</summary>
+    public string OwnLogin(string tag)
+    {
+        var name = LoginNamed(tag);
+        if (!ownedLogins.Contains(name)) ownedLogins.Add(name);
+        return name;
+    }
+    /// <summary>Records that the checks are about to create <see cref="XeSession"/>, so disposal stops and drops it.</summary>
+    public string OwnXeSession() { ownsXeSession = true; return XeSession; }
+
+    /// <summary>Drops the Extended Events session and the New Login checks' logins, then the snapshot first, brings the offline
+    /// database online so its files are deleted, then drops the rest and the login.</summary>
     public async ValueTask DisposeAsync()
     {
-        foreach (var name in created) await Drop(run, name, name != Offline);
+        if (ownsXeSession) await run(DropXeSql(XeSession), "master");
+        foreach (var login in ownedLogins) await run("IF EXISTS (SELECT 1 FROM sys.server_principals WHERE name = " + Quote(login) + ") DROP LOGIN " + Bracket(login) + ";", "master");
+        // Attach's files left detached are attached again under their own name, so the drop below deletes them.
+        if (attachFiles is { } files)
+            await run("IF DB_ID(" + Quote(Attach) + ") IS NULL AND DB_ID(" + Quote(AttachAs) + ") IS NULL AND DB_ID(" + Quote(AttachMissing) + ") IS NULL CREATE DATABASE " + Bracket(Attach) + " ON "
+                + string.Join(", ", files.Select(file => "(FILENAME = " + Quote(file) + ")")) + " FOR ATTACH;", "master");
+        // A failed state check can leave _dbs offline; SET ONLINE first lets the DROP delete its files.
+        foreach (var name in created) await Drop(run, name, name != Offline && name != DatabaseState && name != DeleteOffline);
         // The restoring database's backup file (Linux) goes, then its history.
         if (restoringBackup is not null) await restoringBackup.ForgetAsync(run);
         // Restore Database's source files go, then its history; a file left behind keeps the history for the stale sweep.

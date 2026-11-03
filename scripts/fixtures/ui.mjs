@@ -172,6 +172,8 @@ export const part = {
   objectDialogPage: '.object-dialog-page:not([hidden])',
   objectDialogSteps: '.object-dialog-steps',
   objectDialogCaption: '.object-dialog-caption',
+  // Attach Databases: a path cell's file name, which stays visible while its folder gives way
+  attachPathName: '.attach-path-name',
   stepList: '.step-list',
   stepListText: '.step-list-text',
   optionsDescription: '.options-description',
@@ -472,9 +474,14 @@ export const connectOutcome = dialog => dialog.locator(part.connectOutcome)
 export const objectDialogConnection = dialog => dialog.getByRole('region', { name: 'Connection', exact: true })
 export const objectDialogProgress = dialog => dialog.getByRole('region', { name: 'Progress', exact: true }).getByRole('status')
 export const objectDialogWarnings = dialog => dialog.getByRole('list', { name: 'Warnings', exact: true }).getByRole('listitem')
+/** Delete Object's grid of the sessions using a database (D3d): its body rows, and the disclosure that shows it. */
+export const objectDialogSessions = dialog => dialog.getByRole('table', { name: 'Sessions using the database', exact: true }).locator('tbody').getByRole('row')
+export const objectDialogSessionsToggle = dialog => dialog.getByRole('button', { name: /^Sessions using / })
 /** An object dialog's page tabs, where the dialog is narrow ("Select a page" is then a tablist), and the page it shows. */
 export const objectDialogTabs = dialog => dialog.getByRole('tablist', { name: 'Select a page', exact: true }).getByRole('tab')
 export const objectDialogPage = dialog => dialog.locator(part.objectDialogPage)
+/** A masked password input by its label (New Login's Password and Confirm password): password inputs have no textbox role. */
+export const passwordField = (scope, label) => scope.locator('input[type="password"]').and(scope.getByLabel(label, { exact: true }))
 /**
  * For layout checks: puts a Steps panel of `count` done steps, marked up as StepsPanel draws one, above the dialog's page
  * (no modal dialog has steps yet), and returns a function that removes it. Remove it before the dialog renders again.
@@ -494,6 +501,20 @@ export async function addObjectDialogSteps(dialog, count) {
     .map(([key, selector]) => [key, key === 'main' || key === 'page' ? selector : selector.slice(1)]))])
   return () => dialog.evaluate(form => form.querySelector('[data-smoke-steps]')?.remove())
 }
+/**
+ * Whether an Attach Databases path cell shows its whole file name: its box is as wide as its text is laid out (scrollWidth
+ * rounds, and a box a fraction of a pixel narrower already draws an ellipsis) and inside the cell's content box.
+ */
+export const attachFileNameShown = cell => cell.evaluate((td, selector) => {
+  const name = td.querySelector(selector)
+  if (!name) return false
+  const range = document.createRange()
+  range.selectNodeContents(name)
+  const text = range.getBoundingClientRect().width, own = name.getBoundingClientRect(), box = td.getBoundingClientRect()
+  return own.width > 0 && own.width >= text - 0.01 && own.right <= box.right - parseFloat(getComputedStyle(td).paddingRight) + 0.01
+}, part.attachPathName)
+/** Whether a text input shows the end of its value (an Attach Databases path's file name) rather than its start. */
+export const inputShowsEnd = input => input.evaluate(element => element.scrollLeft + element.clientWidth >= element.scrollWidth - 1)
 /** The Options dialog's page heading (Query Execution › SQL Server › General), notes, form and description pane. */
 export const optionsHeading = dialog => dialog.getByRole('heading', { level: 3 })
 export const optionsNotes = dialog => dialog.locator(part.optionsNote)

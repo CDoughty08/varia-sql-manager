@@ -69,6 +69,7 @@ import { copyText, exportText } from './backend/text-writer.mjs'
 import { parseDirective, shapes } from './backend/shapes.mjs'
 import { backendMethods } from '../../src/shared/ipc/methods.ts'
 import { folderSpecs, kindSpecs, staticChildren } from '../../src/shared/explorer/catalog.ts'
+import { loginDetail, loginStatusOf, loginSubtypeOf } from '../../src/shared/actions/logins.ts'
 import { liveProbes } from '../../src/shared/live/catalog.ts'
 import { pendingProbes } from '../../src/shared/activity/catalog.ts'
 import { openStatuses, operationKindSpecs, operationStatuses, operationTiles, operationTypes } from '../../src/shared/ssis/catalog.ts'
@@ -316,7 +317,7 @@ const explorerRows = {
     explorerObject({ kind: 'column', database: owner.database, parent: { kind: owner.kind, schema: owner.schema, name: owner.name }, name: 'Id' }, 'Id', { sublabel: '(PK, int, not null)', icon: 'key' }),
     explorerObject({ kind: 'column', database: owner.database, parent: { kind: owner.kind, schema: owner.schema, name: owner.name }, name: 'CustomerName' }, 'CustomerName', { sublabel: '(nvarchar(100), null)' })
   ],
-  logins: () => [explorerObject({ kind: 'login', name: 'sa' }, 'sa')],
+  logins: () => fixtureLogins.map(fixtureLogin),
   serverRoles: () => serverRoles.map(name => explorerObject({ kind: 'serverRole', name }, name)),
   cryptographicProviders: () => [explorerObject({ kind: 'cryptographicProvider', name: 'Test EKM Provider' }, 'Test EKM Provider')],
   audits: () => [explorerObject({ kind: 'audit', name: 'LoginAudit' }, 'LoginAudit')],
@@ -343,6 +344,24 @@ function catalogFingerprints() {
   const views = ['folders', 'projects', 'packages', 'environments', 'variables', 'references', 'parameters', 'properties']
   const more = { folders: extra('ssisFolders') ? 1 : 0, projects: extra('ssisProjects') ? 1 : 0 }
   return views.flatMap(view => [{ id: view + 'Count', value: 1 + (more[view] ?? 0) }, { id: view + 'Checksum', value: 100 + 7 * (more[view] ?? 0) }])
+}
+// The Logins folder (D4): a login of each kind the login menus tell apart, in SQL Server's name order: [name, principal_id,
+// type, what sys.server_principals, sys.server_permissions and sys.sql_logins say of it].
+const fixtureLogins = [
+  ['##MS_PolicyTsqlExecutionLogin##', 257, 'S', { disabled: true, policyChecked: true }],
+  ['AppUser', 300, 'S', { policyChecked: true, expirationChecked: true }],
+  ['CONTOSO\\Ops', 301, 'G', {}],
+  ['Denied', 302, 'S', { connectDenied: true, policyChecked: true }],
+  ['Locked', 303, 'S', { policyChecked: true, expirationChecked: true }],
+  ['NT SERVICE\\SQLSERVERAGENT', 304, 'U', {}],
+  ['Retired', 305, 'S', { disabled: true, connectDenied: true, policyChecked: true }],
+  ['sa', 1, 'S', { disabled: true, policyChecked: true }]
+]
+/** A login row as the backend lists it (ExplorerQueries' logins listing). */
+function fixtureLogin([name, principalId, type, state]) {
+  const facts = { disabled: false, connectDenied: false, policyChecked: false, expirationChecked: false, ...state }
+  const status = loginStatusOf(facts.disabled, facts.connectDenied)
+  return explorerObject({ kind: 'login', name }, name, { subtype: loginSubtypeOf(principalId, type, name), detail: loginDetail(type, facts), ...status ? { status } : {}, ...facts.connectDenied ? { connectDenied: true } : {} })
 }
 function explorerObject(object, label, fields = {}) { return { ref: { type: 'object', object }, label, icon: kindSpecs[object.kind].icon, hasChildren: false, ...fields } }
 async function explorerChildren({ node, subtype }) {

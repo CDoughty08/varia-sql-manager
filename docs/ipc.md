@@ -145,7 +145,7 @@ The backend transcodes REQUEST params to a `JsonElement` and results from System
 STJ records with `UnmappedMemberHandling.Disallow` keep rejecting unknown members. JSON integers beyond ±(2⁵³ − 1)
 become float64, which TypeScript accepts. Requests that carry a password or a sensitive value (`connections.connect`,
 `.databases`, `.preview`, `ssis.execute`, which carries Create Catalog's encryption password, and `actions.execute`, whose
-`secrets` will carry New Login's and Login Properties' passwords; `actions.script` refuses `secrets` in main's schema and in
+`secrets` carries New Login's password (and will carry Login Properties'); `actions.script` refuses `secrets` in main's schema and in
 the backend) are encoded into buffers that are zeroed after use on both sides; the
 JavaScript and .NET strings they came from cannot be zeroed. Main zeroes the methods whose `methodPolicies` entry is
 `sensitive`, the backend those in `SqlService.SensitiveMethods` (`IRequestDispatcher.Sensitive`), and
@@ -306,7 +306,8 @@ are not envelope errors but `result.error` values with their own codes, so each 
 A database row also carries its runtime state as `sys.databases` lists it, `database: { state: int, userAccess: int,
 readOnly: bool, standby: bool }` (`state_desc` and `user_access_desc` as their numbers), so menus can narrow a database's
 actions by it; a newer live status sample wins (`currentDatabaseRuntime`), but one cut at its row cap only for the
-databases it has rows for. `connections.connect` answers `linux: bool`
+databases it has rows for. A login row carries `connectDenied: true` when CONNECT SQL is denied to it; its `status` stays
+`disabled` when it is disabled too, so the row can show both. `connections.connect` answers `linux: bool`
 when the server's profile was read (SQL Server on Linux or in a Linux container), for the `explorerServerLinux` context key;
 `engineEdition` gives `explorerServerEngine` (`box`, `managedInstance` for edition 8, `cloud` for Azure SQL Database).
 
@@ -329,11 +330,17 @@ the same connection; describe and script use `LOCK_TIMEOUT 10000`. A lost backen
 renderer reports as an unknown outcome ("Refresh Object Explorer to check"), since main never sends a request twice.
 Failures the user can act on are `result.error` values, not envelope codes: `NOT_FOUND`, `NOT_SUPPORTED` (also every
 action on Azure SQL Database, before any connection opens), `PERMISSION_DENIED`, `IN_USE`, `BLOCKED`, `DEPENDENTS`,
-`NAME_IN_USE`, `PATH_NOT_FOUND` (the server file picker and backup files), `FILE_ACCESS` (a backup file SQL Server's service account may not read), `MEDIA` (backup media a restore cannot use), `DATABASE_UNAVAILABLE`, `TIMEOUT`, `CONNECTION_LOST`, `SQL_ERROR`, `CANCELLED` (Stop), `AUTH_KERBEROS`,
+`NAME_IN_USE`, `PATH_NOT_FOUND` (the server file picker and backup files), `FILE_ACCESS` (a database or backup file SQL Server cannot open, or its service account may not read), `MEDIA` (backup media a restore cannot use), `DATABASE_UNAVAILABLE`, `TIMEOUT`, `CONNECTION_LOST`, `SQL_ERROR`, `CANCELLED` (Stop), `AUTH_KERBEROS`,
 `AUTH_UNSUPPORTED` and `AUTH_ENTRA` (docs/object-actions.md). `actions.execute` answers `{ steps: { status: done | failed | skipped |
 cancelled, title, message?, detail?, compensates?, progress? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`: statements run
 in order and stop at the first failure. The backend's DryRun, which selects a statement instead of running it, exists only for
-the .NET checks and is not reachable from the wire.
+the .NET checks and is not reachable from the wire. Delete Object's `actions.describe` answers `deleteTarget { name, type, owner?,
+warnings: { text, blocking }[], dependentsTruncated, isSnapshot?, sessions?, withTransaction?, blockers?: { sessionId, program?,
+host?, openTransaction }[], blockersTruncated?, closeConnectionsNote?, transactionTabs? }`: for a database, the session count
+(sessions in it or with a transaction in it, from any database), those with an open transaction, the sessions listed (at
+most 8, never the backend's own pooled sessions; program and host at most 128 characters) and `transactionTabs` (the
+session ids of Varia's query tabs holding an open transaction there, at most 1,000) need VIEW SERVER STATE, and
+`closeConnectionsNote` says why Close existing connections is unavailable (Managed Instance, an offline database).
 
 **Action progress** (D1c). A long action (the catalogue's `long`: a restore, a verify, a backup) runs its DDL under the long
 gate (1 per Varia connection, 2 in all; the next waits up to 30 s, then `BUSY` "Another restore or backup is running on this
@@ -510,6 +517,24 @@ metadata lane. A script is at most 1,000,000 characters (`scriptChars`, main's q
 main's message box on its own channel, `varia:confirm-open-connections` (no payload, trusted senders only), answering
 `true` only for Yes.
 
+**Take Offline and Bring Online** (D3a) use the same three methods too, with no new method. `actions.describe { connectionId,
+requestId, dialog: 'takeOffline' | 'bringOnline', target: { kind: 'database', name } }` (a user database) answers `{ databaseState:
+{ name, identity: { id, created }, state, userAccess, readOnly, standby, sessions?, withTransaction?, sessionList: [{ sessionId,
+login?, program?, host?, openTransactions }] (≤ 8, names clipped to 128), sessionsTruncated, warnings }, elapsedMs }`, read in
+master after Take Offline's describe has closed the backend's own idle pooled connections in the database (as execute does
+before SET OFFLINE): the counts and the list then include every session left, this backend's query windows too, and are
+absent without VIEW SERVER STATE. It answers an `error` value instead where the action cannot run: `NOT_SUPPORTED` with the menu's reason in a
+state the catalogue's database rules grey it in (docs/object-actions.md), or for a snapshot; `PERMISSION_DENIED` without ALTER ANY
+DATABASE, dbcreator, ownership, or (while it is online) ALTER on the database (`HAS_PERMS_BY_NAME` on the database answers 0 to
+a login with no user in it, to sysadmin while another session holds it SINGLE_USER, and on a database that is not online). `actions.script` and `actions.execute` take `{ action: 'takeOffline', connectionId, requestId, target,
+dropConnections, identity? }` or `{ action: 'bringOnline', connectionId, requestId, target, identity? }` (`identity` as for
+Database Properties; `dropConnections` is Drop All Active Connections, `WITH ROLLBACK IMMEDIATE`, and only Take Offline takes it).
+Execute repeats the describe's refusals and runs one step, `Take database offline`, `Close connections and take database
+offline` or `Bring database online`; without `dropConnections`, SET OFFLINE waits for other sessions until Stop. Bring Online
+adds a message when the database is still SINGLE_USER or RESTRICTED_USER, read under a 5 s budget of its own after SET ONLINE
+completed (left out if it cannot be read, so a late Stop never turns the success into `CANCELLED`). SQL Server's error 5011 (no ALTER on the database)
+answers `PERMISSION_DENIED`.
+
 **Object action confirmations** (A13) are main's message boxes too, on one channel, `varia:confirm-action` (trusted senders
 only): the page sends `{ prompt, facts }`, a strict zod union (`actionPromptRequestSchema` in
 `src/shared/actions/prompts.ts`): `renameDatabase { database: 1–128, sessions?: 0–1,000,000, transactions, tabs (the same
@@ -548,6 +573,31 @@ with no steps). The design reaches SQL Server only as one `nvarchar(max)` JSON p
 with OPENJSON (master needs compatibility level 130, else `NOT_SUPPORTED`). The largest design is far below the 4 MiB
 request body.
 
+**New Database** (D1b) uses the same three methods, again with no new method. `actions.describe { connectionId, requestId,
+dialog: 'newDatabase', target: { kind: 'server' } }` (only a server target; SQL Server only, `NOT_SUPPORTED` on Azure SQL
+Database and Managed Instance) answers `{ newDatabase: { model (model as `databaseProperties` describes it), dataPath, logPath,
+serverCollation, canCreate, masterLevel, linux }, elapsedMs }`, read in master. `actions.script` and `actions.execute` take
+`{ action: 'createDatabase', connectionId, requestId, target: { kind: 'database', name }, design: { owner?, files: [{ name,
+type: 'rows' | 'log' | 'filestream', filegroup?, sizeMb?, growth, path, fileName }] (2 to 256), filegroups: [{ name, type:
+'rows' | 'filestream' | 'memoryOptimized', readOnly?, isDefault?, autogrowAllFiles? }] (PRIMARY first, 1 to 256), collation?,
+containment: 'NONE' | 'PARTIAL', ledger?, options, scoped } }`, strict at every level (the design is read as the action's own
+type, so a table design's members are refused) and checked by `newDatabaseProblems` in main and `NewDatabaseValidator` in
+the backend: sizes are whole MB (data 1 – 16,777,215, 2,147,483,647 pages; log 1 – 2,097,152), growth 1 – 2,097,152 MB or
+1 – 100 %, a maximum no smaller than the size and, in MB, no smaller than the growth (SQL Server's 5169), file names the
+server's platform allows (no `\` on Linux either, which SQL Server there reads as a separator), distinct names and paths, every filegroup with a file, and
+options only those Database Properties sets but collation and containment, which CREATE DATABASE writes. Script answers
+CREATE DATABASE as SSMS lays it out, then Database Properties' ALTER statements, with `database: 'master'` and, as warnings,
+what OK would refuse; it runs nothing. Execute refuses those first (`NAME_IN_USE` for a database or file that exists,
+`PATH_NOT_FOUND` for a missing folder from SQL Server 2017, `NOT_FOUND` for an owner or collation, `PERMISSION_DENIED`
+without CREATE DATABASE), then runs "Create the database", each option's step, the filegroup steps and "Set the owner"; it
+never compensates, so a later failure leaves the database created and says so. The design reaches SQL Server only as one
+JSON parameter; a constant builder (`CreateDatabaseSql`, checked by its own `Lint` with the table designer's OPENJSON rules in
+`JsonBuilderLint`) shreds it with OPENJSON, quotes names with `QUOTENAME` and file names and paths on the server (`REPLACE`
+under a binary collation), writes sizes as typed numbers with a unit (KB up to 2,097,151 MB, since SQL Server reads a size as
+an int, and MB above), takes the collation only as
+`sys.fn_helpcollations()` names it, and runs the statement through `QUOTENAME(@db) + N'.sys.sp_executesql'` in master. It
+is a long run (`LongRunService`, kind `newDatabase`).
+
 The **server file picker** (Locate Backup File, Locate Database Files, Locate Folder) is `actions.describe` too, again with
 no new method: `{ connectionId, requestId, dialog: 'serverFiles', target: { kind: 'server' }, files: { purpose: 'backup' |
 'database' | 'log' | 'folder', path?, allFiles?, exists? } }` (`files` only with that dialog, `allFiles` never with `folder`,
@@ -565,6 +615,25 @@ only once a file-system call returns (about 21 s for an unreachable share), so a
 until then, and the picker runs one listing at a time and cancels those it no longer needs. A missing folder, a file or
 another platform's path is `PATH_NOT_FOUND`; Azure SQL Database and Managed Instance are `NOT_SUPPORTED` before any
 connection opens.
+
+**Attach Databases** adds no method either. Its describe is `{ dialog: 'attachDatabase', target: { kind: 'server' },
+attach?: { mdf } }` (`attach` only with that dialog; `mdf` a server path as above): without `attach` it answers
+`{ attachDatabase: { server: { logins (≤ 1,024), loginsTruncated, separator, dataPath? } } }`, and with it also
+`database: { mdf, databaseName, version?, files: [{ original, type: 'data' | 'log', current, found? }] (≤ 1,000, by file
+id) }`, read with `DBCC CHECKPRIMARYFILE (@mdf, n)` (the path bound, never spliced) and each file checked as the picker's
+`exists` checks one (`found` absent where SQL Server 2016 will not say, and for a share or device path the file records,
+which is never probed). It runs on the picker's gate and the describe budget. A file that is not primary, or a database
+newer than master's version, is `NOT_SUPPORTED`; one SQL Server cannot open is `FILE_ACCESS` (5120, 5123), a login outside
+sysadmin `PERMISSION_DENIED` (2571). Its `actions.script` and `actions.execute` are `{ action: 'attach', target: { kind:
+'server' }, databases: [{ name, owner?, files: path[] (1 – 1,000, none twice), rebuildLog }] (1 – 16, no name twice) }`.
+Execute checks every database first (name free, owner's login present, CREATE ANY DATABASE, master at compatibility level
+130 or more, the primary file no newer than the server), then runs, per
+database, `Attach the database` (a builder batch: SQL Server builds `CREATE DATABASE … FOR ATTACH[_REBUILD_LOG]` from the
+name through `QUOTENAME` and one JSON array of paths, each quoted on the server) and, with an owner, `Set the database
+owner`; each step's `detail` is its database's name. After a failure or Stop, `Detach the database again` steps
+(`compensates: true`) detach, newest first, what this request attached (an attach Stop reached counts when a database of its
+name has its primary file), within the cleanup budget. Attach is a long run:
+the renderer registers it while the request is in flight.
 docs/object-actions.md lists the statements by version.
 
 Restore Database reads through `actions.describe` as well, with no new method: `{ connectionId, requestId, dialog:

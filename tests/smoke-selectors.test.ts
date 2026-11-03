@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { execFile } from 'node:child_process'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -156,6 +157,15 @@ describe('smoke selectors', () => {
     expect(factKeys).toEqual(['server', 'login', 'database', 'time', 'rows'])
     expect(facts).toEqual(['query-status-server', 'query-status-login', 'query-status-database', 'query-status-time', 'query-status-rows'])
   })
+  it('compiles every suite, bench and fixture', async () => {
+    // Nothing else loads the suites before an Electron run: a merge that declares one helper twice in a suite's scope stops
+    // that whole suite with a SyntaxError, which only the smoke gate would otherwise report.
+    const check = (file: string) => new Promise<string>(done => execFile(process.execPath, ['--check', file], (error, _stdout, stderr) => done(error ? `${file}: ${stderr.split('\n').find(line => /Error/.test(line)) ?? error.message}` : '')))
+    expect(suites.length).toBeGreaterThan(20)
+    expect((await Promise.all(suites.map(check))).filter(Boolean)).toEqual([])
+    const clash = 'tests/fixtures/smoke-selectors/duplicate-declaration.mjs'
+    expect(await check(clash)).toMatch(/SyntaxError: Identifier 'row' has already been declared/)
+  }, 60000)
   it('keeps Varia\'s class names out of the suites, the benches and their fixtures', () => {
     expect(suites.flatMap(classSelectors)).toEqual([])
   })
@@ -175,6 +185,18 @@ describe('smoke selectors', () => {
     const source = readFileSync(file, 'utf8')
     expect(source).toMatch(/\bselectOperation\('107'\)/)
     const bare = [...source.matchAll(/hasText: \/\^\d+\$\/ \}\) \}\)\.locator\(gridPart\.cell\)\.nth\(\d+\)\.click\(\)/g)].map(match => `${file}:${source.slice(0, match.index).split('\n').length}`)
+    expect(bare).toEqual([])
+  })
+  it('opens and reads Object Explorer menus in the object actions suite only through the explorer-tree.mjs helpers', () => {
+    // A forced click on a menu item whose menu has closed lands on the tree below and selects another row, so nothing runs
+    // (a Windows run lost Delete so, after the right-click's scroll closed AppData's menu); the helpers press until the
+    // row's own menu opens, and press its item again only when a press missed it. A read of a menu that has closed finds
+    // no items (a PR #78 run read none so), so items are read only through explorerMenuItems, which then opens it again.
+    const file = 'scripts/object-actions-smoke.mjs'
+    const source = readFileSync(file, 'utf8')
+    expect(source).toMatch(/\bchooseExplorerMenuItem\(page, appData, 'Delete'\)/)
+    expect(source).toMatch(/\bexplorerMenuItems\(page, \.\.\.path\)/)
+    const bare = [...source.matchAll(/button: 'right'|\.click\(\{[^}]*\bforce\b|\.click\(fast\)|\bmenuItemNames\(/g)].map(match => `${file}:${source.slice(0, match.index).split('\n').length}`)
     expect(bare).toEqual([])
   })
 

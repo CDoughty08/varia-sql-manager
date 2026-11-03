@@ -8,7 +8,7 @@ import type { SpawnSpec } from './connection'
  *  VARIA_LOCALE: scripts date their headers in it, as SSMS does, and macOS GUI launches have no LANG to read. */
 export function backendSpawnSpec(options: { packaged: boolean; root: string; resourcesPath: string; platform: NodeJS.Platform; smokeTest: boolean; env?: NodeJS.ProcessEnv; locale?: string }): SpawnSpec {
   const o = { ...options, env: options.locale ? { ...options.env ?? process.env, VARIA_LOCALE: options.locale } : options.env }
-  if (o.packaged) return { command: join(o.resourcesPath, 'backend', o.platform === 'win32' ? 'Varia.Backend.exe' : 'Varia.Backend'), args: [], cwd: o.root, env: withoutTestHooks(o.env), packaged: true }
+  if (o.packaged) return { command: join(o.resourcesPath, 'backend', o.platform === 'win32' ? 'Varia.Backend.exe' : 'Varia.Backend'), args: [], cwd: o.resourcesPath, env: withoutTestHooks(o.env), packaged: true }
   const fake = o.smokeTest ? o.env?.VARIA_TEST_BACKEND : undefined
   if (fake) {
     const node = o.env?.VARIA_TEST_NODE
