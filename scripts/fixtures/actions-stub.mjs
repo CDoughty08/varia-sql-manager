@@ -12,13 +12,19 @@ import { explorerStatics } from './explorer-tree.mjs'
  * The table designer describes any database (schemas dbo and sales); its script is `designerScript`; saving a table named
  * "Taken" is NAME_IN_USE, one named "Held" waits until its Stop arrives, and any other in dbo appears under Tables.
  * Integration Services Catalogs is empty until Create Catalog runs (CLR off, the startup box unchecked); then it lists SSISDB
- * and its setup answers CATALOG_EXISTS. Create Catalog with the password "Weak" fails at the master key and removes what
+ * and its setup answers CATALOG_EXISTS. New Database reads model as Database Properties reads AppData, with the default data folder
+ * for data and logs; its Script is `newDatabaseScript`; OK on a database named "Held" waits until its Stop arrives, and any other
+ * appears under Databases. Create Catalog with the password "Weak" fails at the master key and removes what
  * it made; "Held" waits until its Stop arrives and answers as the backend does before the restore.
  * The server file picker ('serverFiles') lists `stubServerFiles`: drive C:\, the default data and backup folders, the backup
  * folder's Nightly, Empty and Slow (which answers after 1.5 s), a share, and C:\Legacy\ as SQL Server 2016 answers a login
  * outside sysadmin (legacyEmpty); any other folder is PATH_NOT_FOUND. A check (`exists`) finds a name in those folders, the
  * type filter aside, and under C:\Legacy\ answers legacyEmpty.
  * Restore Database ('restoreDatabase') reads AppData's three backups (see restore()); its Script returns `restoreScript`.
+ * Attach Databases opens with the logins app_owner and sa and the default data folder, which holds Sales.mdf (whose second
+ * data file it recorded in D:\Old\, not found, and whose log it finds), Sales_2.ndf and Hr.mdf (whose log in D:\Old\ is not
+ * found); any other file is not a primary one. An attach that includes Hr fails at Hr and detaches what it attached before
+ * (Rolled Back); otherwise each database appears under Databases.
  */
 export function actionsStubData() {
   return { statics: explorerStatics(), serverFiles: stubServerFiles }
@@ -28,6 +34,7 @@ const dataFolder = String.raw`C:\Program Files\Microsoft SQL Server\MSSQL17.MSSQ
 const stubFile = (name, sizeBytes) => ({ name, directory: false, sizeBytes, modified: '2026-10-12T14:03:05' })
 export const stubServerFiles = {
   backupFolder,
+  dataFolder,
   roots: [{ path: 'C:\\', kind: 'drive', freeMb: 217_088 }, { path: dataFolder, kind: 'folder', defaults: ['data', 'log'] }, { path: backupFolder, kind: 'folder', defaults: ['backup'] }],
   /** Folders by lower-case path. */
   folders: {
@@ -37,7 +44,8 @@ export const stubServerFiles = {
     [(backupFolder + 'Nightly\\').toLowerCase()]: [stubFile('Sales.bak', 4 * 1024 * 1024)],
     [(backupFolder + 'Empty\\').toLowerCase()]: [],
     [(backupFolder + 'Slow\\').toLowerCase()]: [stubFile('Old.bak', 1024)],
-    [dataFolder.toLowerCase()]: [stubFile('master.mdf', 4 * 1024 * 1024), stubFile('mastlog.ldf', 1024 * 1024)],
+    [dataFolder.toLowerCase()]: [stubFile('master.mdf', 4 * 1024 * 1024), stubFile('mastlog.ldf', 1024 * 1024), stubFile('Sales.mdf', 8 * 1024 * 1024), stubFile('Sales_2.ndf', 8 * 1024 * 1024),
+      stubFile('Sales_log.ldf', 1024 * 1024), stubFile('Hr.mdf', 8 * 1024 * 1024)],
     '\\\\files\\share\\': [stubFile('Shared.bak', 8 * 1024 * 1024)],
     'c:\\legacy\\': []
   }
@@ -47,23 +55,33 @@ export const dependentsMessage = "Could not drop object 'dbo.Lines' because it i
 export const scriptText = name => `USE [AppData]\r\nGO\r\nDROP TABLE [dbo].[${name}]\r\nGO\r\n`
 export const propertiesScript = 'USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET AUTO_CLOSE ON WITH NO_WAIT\r\nGO\r\nALTER DATABASE [AppData] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n'
 export const restoreScript = "USE [master]\r\nRESTORE DATABASE [AppData] FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
+export const newDatabaseScript = name => `CREATE DATABASE [${name}]
+ CONTAINMENT = NONE
+ ON PRIMARY
+GO
+`
 export const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
 
 /** Installs the stub; pass it to `application.evaluate` with `actionsStubData()`. Runs in main, so it is self-contained. */
 export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
-  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], blocked: new Map(), catalog: false }
+  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], databases: ['AppData'], blocked: new Map(), catalog: false }
   // The exported texts again: this function runs in main, where the module's own bindings do not exist.
   const caution = 'Caution: Changing any part of an object name could break scripts and stored procedures.'
   const dependentsMessage = "Could not drop object 'dbo.Lines' because it is referenced by a FOREIGN KEY constraint."
   const scriptText = name => `USE [AppData]\r\nGO\r\nDROP TABLE [dbo].[${name}]\r\nGO\r\n`
   const propertiesScript = 'USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET AUTO_CLOSE ON WITH NO_WAIT\r\nGO\r\nALTER DATABASE [AppData] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n'
+  const newDatabaseScript = name => `CREATE DATABASE [${name}]
+ CONTAINMENT = NONE
+ ON PRIMARY
+GO
+`
   const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
   const restoreScript = "USE [master]\r\nRESTORE DATABASE [AppData] FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
   const ok = value => ({ ok: true, value })
   const folders = (owner, ids) => ids.map(folder => ({ ref: { type: 'folder', owner, folder }, label: statics.labels[folder], icon: 'folder', hasChildren: true }))
   const object = (value, label, icon, extra = {}) => ({ ref: { type: 'object', object: value }, label, icon, hasChildren: true, ...extra })
   const lists = {
-    databases: () => [object({ kind: 'database', name: 'AppData' }, 'AppData', 'database')],
+    databases: () => stub.databases.map(name => object({ kind: 'database', name }, name, 'database')),
     systemDatabases: () => [object({ kind: 'database', name: 'master' }, 'master', 'database', { subtype: 'system' })],
     tables: owner => stub.tables.map(name => object({ kind: 'table', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'table')),
     views: owner => [object({ kind: 'view', database: owner.name, schema: 'dbo', name: 'OrderSummary' }, 'dbo.OrderSummary', 'eye')],
@@ -144,6 +162,38 @@ export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
     if (design.schema === 'dbo') stub.tables = [...stub.tables, design.name]
     return ok({ steps: titles.map(title => ({ status: 'done', title })), messages: [], elapsedMs: 1 })
   }
+  /** Attach Databases' describe: the server's facts, and with an .mdf its database (see the header). */
+  function attachDescribe({ attach }) {
+    const server = { logins: ['app_owner', 'sa'], loginsTruncated: false, separator: '\\', dataPath: serverFiles.dataFolder }
+    if (!attach) return ok({ attachDatabase: { server }, elapsedMs: 1 })
+    const at = name => serverFiles.dataFolder + name
+    const databases = {
+      'sales.mdf': { databaseName: 'Sales', version: 957, files: [{ original: at('Sales.mdf'), type: 'data', current: attach.mdf, found: true },
+        { original: String.raw`D:\Old\Sales_2.ndf`, type: 'data', current: String.raw`D:\Old\Sales_2.ndf`, found: false }, { original: at('Sales_log.ldf'), type: 'log', current: at('Sales_log.ldf'), found: true }] },
+      'hr.mdf': { databaseName: 'Hr', version: 957, files: [{ original: at('Hr.mdf'), type: 'data', current: attach.mdf, found: true },
+        { original: String.raw`D:\Old\Hr_log.ldf`, type: 'log', current: String.raw`D:\Old\Hr_log.ldf`, found: false }] }
+    }
+    const database = databases[attach.mdf.slice(attach.mdf.lastIndexOf('\\') + 1).toLowerCase()]
+    if (!database) return ok({ elapsedMs: 1, error: { code: 'NOT_SUPPORTED', message: `${attach.mdf} is not the primary data file of a database.`, retryable: false } })
+    return ok({ attachDatabase: { server, database: { mdf: attach.mdf, ...database } }, elapsedMs: 1 })
+  }
+  /** Attach's OK, with the backend's steps: a database whose files include Hr.mdf fails, and what was attached before it is detached again. */
+  function attachExecute({ databases }) {
+    const steps = []
+    for (const [index, database] of databases.entries()) {
+      if (database.files.some(file => file.toLowerCase().endsWith('\\hr.mdf'))) {
+        const message = String.raw`Msg 5120: Unable to open the physical file "D:\Old\Hr_log.ldf". Operating system error 2: "The system cannot find the file specified.".`
+        steps.push({ status: 'failed', title: 'Attach the database', detail: database.name, message })
+        for (const later of databases.slice(index + 1)) steps.push({ status: 'skipped', title: 'Attach the database', detail: later.name })
+        for (const earlier of databases.slice(0, index).reverse()) steps.push({ status: 'done', title: 'Detach the database again', detail: earlier.name, compensates: true })
+        return ok({ steps, messages: [], elapsedMs: 1, error: { code: 'FILE_ACCESS', message, retryable: true } })
+      }
+      steps.push({ status: 'done', title: 'Attach the database', detail: database.name })
+      if (database.owner) steps.push({ status: 'done', title: 'Set the database owner', detail: database.name })
+    }
+    stub.databases = [...stub.databases, ...databases.map(database => database.name)]
+    return ok({ steps, messages: [], elapsedMs: 1 })
+  }
   /** Create Catalog's dialog read: a 2025 server without the catalog, CLR off; or the catalog's refusal once it exists. */
   function catalogSetup() {
     if (stub.catalog) return ok({ elapsedMs: 1, error: { code: 'CATALOG_EXISTS', message: 'There already exists a catalog (SSISDB), and only one catalog is supported on a server.', retryable: false } })
@@ -164,9 +214,18 @@ export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
     stub.catalog = true
     return ok({ steps: titles.map(title => ({ status: 'done', title })), elapsedMs: 1 })
   }
+  /** New Database's OK: a wait until Stop for "Held" (SQL Server cancelled CREATE DATABASE), otherwise the database under Databases. */
+  function createDatabase({ target, requestId }) {
+    if (target.name === 'Held') return new Promise(resolve => stub.blocked.set(requestId, () => resolve(ok({ steps: [{ status: 'cancelled', title: 'Create the database' }], messages: [], elapsedMs: 1,
+      error: { code: 'CANCELLED', message: 'The action was stopped at "Create the database"; SQL Server cancelled that statement.', retryable: true } }))))
+    stub.databases = [...stub.databases, target.name]
+    return ok({ steps: [{ status: 'done', title: 'Create the database' }], messages: [], elapsedMs: 1 })
+  }
   function execute(params) {
     const { target } = params
+    if (params.action === 'createDatabase') return createDatabase(params)
     if (params.action === 'createTable') return createTable(params)
+    if (params.action === 'attach') return attachExecute(params)
     if (params.action === 'properties') return ok({ steps: Object.keys(params.changes.options ?? {}).map(key => ({ status: 'done', title: 'Set ' + key })), messages: [], elapsedMs: 1 })
     if (params.action === 'rename') {
       if (params.newName === 'Taken') return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NAME_IN_USE', message: 'The name Taken is already in use in this schema.', retryable: false } })
@@ -210,7 +269,7 @@ export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
       case 'system.health': return ok({ protocolVersion: 2, runtime: 'stub', platform: process.platform, smoVersion: 'stub', sqlClientVersion: 'stub' })
       case 'connections.connect': return ok({ id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.00.4135', productVersion: '16.0.4135.4', login: 'sa', engineEdition: 3, generation: 1 })
       case 'connections.disconnect': return ok({ disconnected: true })
-      case 'databases.list': return ok([{ name: 'master', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }])
+      case 'databases.list': return ok([{ name: 'master', isSystem: true, isSnapshot: false }, ...stub.databases.map(name => ({ name, isSystem: false, isSnapshot: false }))])
       case 'explorer.children': return children(params)
       case 'tables.columns': return ok({ columns: [{ name: 'OrderId', dataType: 'int' }, { name: 'Total', dataType: 'money' }], truncated: false })
       case 'query.execute': return ok({
@@ -223,8 +282,13 @@ export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
         switch (params.dialog) {
           case 'tableDesigner': return ok({ tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', caseSensitiveNames: false, accentSensitiveNames: true, canCreate: true }, elapsedMs: 1 })
           case 'databaseProperties': return properties(params)
+          case 'newDatabase': {
+            const folder = serverFiles.roots[1].path
+            return ok({ newDatabase: { model: properties({ target: { name: 'model' } }).value.databaseProperties, dataPath: folder, logPath: folder, serverCollation: 'Latin1_General_CI_AS', canCreate: true, masterLevel: 160, linux: false }, elapsedMs: 1 })
+          }
           case 'serverFiles': return listServerFiles(params)
           case 'restoreDatabase': return restore(params)
+          case 'attachDatabase': return attachDescribe(params)
           default: return describe(params)
         }
       case 'actions.script':
@@ -232,6 +296,9 @@ export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
           case 'properties': return ok({ text: propertiesScript, database: 'master', warnings: [] })
           case 'createTable': return ok({ text: designerScript(params.design.name), database: params.target.name, warnings: [] })
           case 'restore': return ok({ text: restoreScript, database: 'master', warnings: [] })
+          case 'createDatabase': return ok({ text: newDatabaseScript(params.target.name), database: 'master', warnings: [] })
+          case 'attach': return ok({ text: params.databases.map(database => `USE [master]\r\nGO\r\nCREATE DATABASE [${database.name}] ON ${database.files.map(file => `( FILENAME = N'${file}' )`).join(', ')}`
+            + ` FOR ATTACH${database.rebuildLog ? '_REBUILD_LOG' : ''}\r\nGO\r\n`).join(''), database: 'master', warnings: [] })
           default: return ok({ text: scriptText(params.target.name), database: params.target.database ?? 'master', warnings: [] })
         }
       case 'actions.execute': return execute(params)

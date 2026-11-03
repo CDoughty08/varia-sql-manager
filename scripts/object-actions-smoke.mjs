@@ -5,8 +5,8 @@ import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from
 import { resizeWindow } from './fixtures/window-resize.mjs'
 import { actionsStubData, caution, dependentsMessage, installActionsStub, propertiesScript, restoreScript, scriptText, stubServerFiles } from './fixtures/actions-stub.mjs'
 import {
-  addObjectDialogSteps, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, errorBanner,
-  explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
+  addObjectDialogSteps, attachFileNameShown, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, errorBanner,
+  explorerLabel, fieldHint, frameSection, inputShowsEnd, menuItemNames, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
   renameBox, scriptActions, scriptDrawer, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toolbarButton, unsavedMark,
   warningBanner as warningBannerOf
 } from './fixtures/ui.mjs'
@@ -99,10 +99,10 @@ try {
   await closeMenu()
   expect(await menuOf(...appData, 'Programmability', 'Stored Procedures', 'dbo.ShipOrder')).toEqual(['Modify', 'Script Stored Procedure as', 'Copy Name', 'Rename', 'Delete', 'Refresh'])
   await closeMenu()
-  expect(await menuOf(...appData)).toEqual(['New Query', 'Script Database as', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
+  expect(await menuOf(...appData)).toEqual(['New Database…', 'New Query', 'Script Database as', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await closeMenu()
   // SSMS offers Properties on its own databases too: only Rename and Delete are greyed.
-  expect(await menuOf('server-a', 'Databases', 'System Databases', 'master')).toEqual(['New Query', 'Script Database as', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
+  expect(await menuOf('server-a', 'Databases', 'System Databases', 'master')).toEqual(['New Database…', 'New Query', 'Script Database as', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
   expect(await disabled()).toEqual(['Rename', 'Delete'])
   await closeMenu()
   await select('server-a', 'Databases', 'System Databases', 'master')
@@ -692,7 +692,248 @@ try {
   await expect(explorerTree(page)).toBeFocused()
   console.log('Object action checks: the server file picker opens the default backup folder, keeps Tab in reach of its tree, expands a folder and chooses a file by keyboard, shows the selection under forced colours, goes to typed shares and folders, shows empty, 2016 and slow folders, lists All Files, asks the server about typed names it does not list, and Escape returns focus; Locate Folder names its tree for folders.')
 
-  // 5b. Restore Database (D1e), which only its test hook opens until its OK restores (critic A17): AppData's history plans
+  // 5b. New Database… (D1b): first on the Databases folder's menu and offered on a database's; a document whose logical and file
+  // names follow the database's name, a files grid with Add and Remove, Change Autogrowth over it, Locate Folder for a path,
+  // the Script drawer, OK that closes the tab and selects the new database, and Stop while CREATE DATABASE runs.
+  const newDatabase = () => documentFrame(page, 'New Database')
+  const newVerb = name => documentVerb(newDatabase(), 'New Database', name)
+  const newFiles = () => newDatabase().getByRole('table', { name: 'Database files', exact: true })
+  const databasesMenu = async () => {
+    await expect(async () => {
+      await (await revealExplorerRow(page, 'server-a', 'Databases')).click({ button: 'right', force: true })
+      await expect(explorerMenu()).toBeVisible({ timeout: 1000 })
+    }).toPass()
+  }
+  await databasesMenu()
+  expect((await labels())[0]).toBe('New Database…')
+  await closeMenu()
+  expect((await menuOf(...appData))[0]).toBe('New Database…')
+  await explorerMenu().getByRole('menuitem', { name: 'New Database…', exact: true }).click(fast)
+  await expect(newDatabase()).toBeVisible()
+  await expect(documentTab(page, 'New Database')).toHaveAttribute('aria-selected', 'true')
+  await expect(documentCrumbs(newDatabase())).toHaveText(['server-a', 'Databases'])
+  const databaseName = newDatabase().getByLabel('Database name', { exact: true })
+  await expect(databaseName).toBeFocused()
+  await expect(newVerb('OK')).toBeDisabled()
+  await databaseName.fill('Sales')
+  await expect(newFiles().getByLabel('Logical Name of Sales', { exact: true })).toHaveValue('Sales')
+  await expect(newFiles().getByLabel('Logical Name of Sales_log', { exact: true })).toHaveValue('Sales_log')
+  await expect(newFiles().getByLabel('File Name of Sales', { exact: true })).toHaveAttribute('placeholder', 'Sales.mdf')
+  await expect(newFiles().getByLabel('Path of Sales', { exact: true })).toHaveValue(String.raw`C:\Program Files\Microsoft SQL Server\MSSQL17.MSSQLSERVER\MSSQL\DATA`)
+  await expect(newVerb('OK')).toBeEnabled()
+  // Add puts a ROWS file in PRIMARY, which needs a name before OK, with the caret in its name; Remove, named after the row it
+  // takes, leaves the caret on the row before. The primary data file and the only log file cannot be removed.
+  await newDatabase().getByRole('button', { name: 'Add', exact: true }).click()
+  await expect(newFiles().getByRole('row')).toHaveCount(4)
+  await expect(newDatabase().getByText('3 of 256 files · paths are on the server server-a', { exact: true })).toBeVisible()
+  await expect(newVerb('OK')).toBeDisabled()
+  await expect(newFiles().getByLabel('Logical Name of File 3', { exact: true })).toBeFocused()
+  await newFiles().getByLabel('Logical Name of File 3', { exact: true }).fill('Sales2')
+  await expect(newFiles().getByLabel('File Name of Sales2', { exact: true })).toHaveAttribute('placeholder', 'Sales2.ndf')
+  // Forced colours drop the selection's fill, so the row Remove takes is outlined.
+  await page.emulateMedia({ forcedColors: 'active' })
+  const selectedOutline = await newFiles().getByRole('row').nth(3).evaluate(row => getComputedStyle(row).outlineStyle)
+  await page.emulateMedia({ forcedColors: null })
+  expect(selectedOutline, 'forced colours: the selected file row is outlined').toBe('solid')
+  await newDatabase().getByRole('button', { name: 'Remove Sales2', exact: true }).click()
+  await expect(newFiles().getByRole('row')).toHaveCount(3)
+  await expect(newFiles().getByLabel('Logical Name of Sales_log', { exact: true })).toBeFocused()
+  await expect(newDatabase().getByRole('button', { name: 'Remove', exact: true })).toBeDisabled()
+  await newFiles().getByLabel('Logical Name of Sales', { exact: true }).focus()
+  await expect(newDatabase().getByRole('button', { name: 'Remove', exact: true })).toBeDisabled()
+  // Each filegroup list's buttons say which list they act on.
+  await expect(newDatabase().getByRole('group', { name: 'Rows', exact: true }).getByRole('button', { name: 'Add Filegroup to Rows', exact: true })).toBeEnabled()
+  await expect(newDatabase().getByRole('button', { name: 'Remove from Memory Optimized Data', exact: true })).toBeDisabled()
+  // At 1024 x 768 a name and a path stay readable: the grid scrolls rather than squeezing them.
+  const sizeBeforeNarrow = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getSize())
+  await resizeWindow(application, page, 1024, 768)
+  const readable = await Promise.all(['Logical Name of Sales', 'Path of Sales', 'File Name of Sales'].map(label => newFiles().getByLabel(label, { exact: true })
+    .evaluate(input => Math.round(input.getBoundingClientRect().width / parseFloat(getComputedStyle(input).fontSize)))))
+  await resizeWindow(application, page, ...sizeBeforeNarrow)
+  // In font sizes (about two characters each): 16, 24 and 20 characters at least.
+  expect(readable[0], 'Logical Name at 1024 x 768').toBeGreaterThanOrEqual(8)
+  expect(readable[1], 'Path at 1024 x 768').toBeGreaterThanOrEqual(12)
+  expect(readable[2], 'File Name at 1024 x 768').toBeGreaterThanOrEqual(10)
+  // Change Autogrowth over the document: percent growth, and the cell says so.
+  await newFiles().getByRole('button', { name: 'Change Autogrowth of Sales', exact: true }).click()
+  const autogrowth = page.getByRole('dialog', { name: 'Change Autogrowth for Sales', exact: true })
+  await expect(autogrowth).toBeVisible()
+  await autogrowth.getByLabel('In Percent', { exact: true }).check()
+  await autogrowth.getByLabel('File growth in percent', { exact: true }).fill('10')
+  await autogrowth.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(autogrowth).toHaveCount(0)
+  await expect(newFiles().getByRole('row').nth(1)).toContainText('By 10 percent, Unlimited')
+  // The path's "…" opens Locate Folder on the server; Escape leaves the path as it was.
+  const locateFolder = () => page.getByRole('dialog', { name: 'Locate Folder - server-a', exact: true })
+  await newFiles().getByRole('button', { name: 'Browse for the path of Sales', exact: true }).click()
+  await expect(locateFolder()).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(locateFolder()).toHaveCount(0)
+  // The Script drawer previews what OK runs.
+  await scriptToggle(newDatabase()).click()
+  await expect(drawerText(newDatabase())).toContainText('CREATE DATABASE [Sales]')
+  await expect.poll(async () => (await stubCalls('actions.script')).at(-1)).toMatchObject({ action: 'createDatabase', target: { kind: 'database', name: 'Sales' } })
+  await page.screenshot({ path: resolve('artifacts', 'new-database-dark.png') })
+  await newVerb('OK').click()
+  await expect(newDatabase()).toHaveCount(0)
+  const created = (await stubCalls('actions.execute')).at(-1)
+  expect(created).toMatchObject({ action: 'createDatabase', target: { kind: 'database', name: 'Sales' }, design: { containment: 'NONE', options: {}, scoped: {} } })
+  expect(created.design.files.map(file => [file.name, file.fileName, file.growth])).toEqual([
+    ['Sales', 'Sales.mdf', { enabled: true, unit: 'percent', by: 10 }], ['Sales_log', 'Sales_log.ldf', { enabled: true, unit: 'percent', by: 10, maxMb: 2097152 }]
+  ])
+  await expect(await explorerRow(page, 'server-a', 'Databases', 'Sales')).toHaveAttribute('aria-selected', 'true')
+  // Stop while CREATE DATABASE runs: the tab stays and says what happened; Cancel then closes it.
+  await databasesMenu()
+  await explorerMenu().getByRole('menuitem', { name: 'New Database…', exact: true }).click(fast)
+  await expect(databaseName).toBeFocused()
+  await databaseName.fill('Held')
+  // Enter outside the grids is OK, as in SSMS's dialog.
+  await databaseName.press('Enter')
+  await expect(newVerb('Stop')).toBeVisible()
+  await expect(newDatabase().getByRole('status').filter({ hasText: 'Creating the database…' })).toBeVisible()
+  await newVerb('Stop').click()
+  await expect(newDatabase().getByRole('status').filter({ hasText: 'SQL Server cancelled that statement' })).toBeVisible()
+  await expect(newVerb('OK')).toBeEnabled()
+  await newVerb('Cancel').click()
+  await expect(newDatabase()).toHaveCount(0)
+  // A second New Database is numbered; Ctrl+S is its OK, and Escape cancels the first.
+  await databasesMenu()
+  await explorerMenu().getByRole('menuitem', { name: 'New Database…', exact: true }).click(fast)
+  await expect(databaseName).toBeFocused()
+  await databasesMenu()
+  await explorerMenu().getByRole('menuitem', { name: 'New Database…', exact: true }).click(fast)
+  const secondDatabase = documentFrame(page, 'New Database (2)')
+  await expect(documentTab(page, 'New Database (2)')).toHaveAttribute('aria-selected', 'true')
+  const secondName = secondDatabase.getByLabel('Database name', { exact: true })
+  await expect(secondName).toBeFocused()
+  await secondName.fill('Sales3')
+  await page.keyboard.press('Control+S')
+  await expect(secondDatabase).toHaveCount(0)
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'createDatabase', target: { kind: 'database', name: 'Sales3' } })
+  await documentTab(page, 'New Database').click()
+  await expect(newDatabase()).toBeVisible()
+  await databaseName.focus()
+  await page.keyboard.press('Escape')
+  await expect(newDatabase()).toHaveCount(0)
+  console.log('Object action checks: New Database… comes first on Databases, names files after the database, adds and removes files with the caret kept and buttons named, keeps names and paths readable at 1024 x 768, changes autogrowth, browses the server for a path, scripts, creates and selects the database, stops a create, numbers a second tab, and takes Enter, Ctrl+S and Escape.')
+
+  // 5c. Attach Databases (D1d) on the Databases folder: Add… reads an .mdf chosen in Locate Database Files, a data file that
+  // is not found blocks OK until its path is corrected, Script sends the rows, a log file can be removed (the log is then
+  // rebuilt), a database that fails rolls the first back, and OK attaches it and selects it in the folder.
+  const attachDialog = () => page.getByRole('dialog', { name: 'Attach Databases', exact: true })
+  const attachOk = () => attachDialog().getByRole('button', { name: 'OK', exact: true })
+  const databasesGrid = () => attachDialog().getByRole('table', { name: 'Databases to attach:', exact: true })
+  const databaseRow = index => databasesGrid().getByRole('row').nth(index + 1)
+  const detailsGrid = name => attachDialog().getByRole('table', { name: `"${name}" database details:`, exact: true })
+  const dataPicker = () => page.getByRole('dialog', { name: 'Locate Database Files - server-a', exact: true })
+  const salesMdf = stubServerFiles.dataFolder + 'Sales.mdf'
+  const addButton = () => attachDialog().getByRole('button', { name: 'Add…', exact: true })
+  /** Add… through Locate Database Files: typing the file name and Enter, double-clicking it, or Escape (nothing added). */
+  async function addDatabase(file, how = 'enter') {
+    await addButton().click()
+    await expect(dataPicker().getByLabel('Selected path', { exact: true })).toHaveValue(stubServerFiles.dataFolder)
+    await expect(dataPicker().getByRole('treeitem', { name: file, exact: true })).toBeVisible()
+    if (how === 'double') await dataPicker().getByRole('treeitem', { name: file, exact: true }).dblclick()
+    else if (how === 'escape') await dataPicker().getByLabel('File name', { exact: true }).press('Escape')
+    else {
+      await dataPicker().getByLabel('File name', { exact: true }).fill(file)
+      await dataPicker().getByLabel('File name', { exact: true }).press('Enter')
+    }
+    await expect(dataPicker()).toHaveCount(0)
+    // Focus comes back to Add…, which stays enabled while the file is read, so it never falls out of the modal.
+    await expect(addButton()).toBeFocused()
+  }
+  const openAttach = async () => {
+    expect(await menuOf('server-a', 'Databases')).toEqual(['New Database…', 'Attach…', 'Filter Settings…', 'Refresh'])
+    await explorerMenu().getByRole('menuitem', { name: 'Attach…', exact: true }).click(fast)
+    await expect(objectDialogProgress(attachDialog())).toHaveText('Ready')
+  }
+  await openAttach()
+  await expect(attachDialog().getByText('Add a primary data file (.mdf) to attach its database.', { exact: true })).toBeVisible()
+  expect((await stubCalls('actions.describe')).filter(call => call.dialog === 'attachDatabase').map(call => [call.target, call.attach])).toEqual([[{ kind: 'server' }, undefined]])
+  // Escape in the picker returns to Add…, and Escape there closes the dialog.
+  await addDatabase('Sales.mdf', 'escape')
+  await page.keyboard.press('Escape')
+  await expect(attachDialog()).toHaveCount(0)
+  await openAttach()
+  await addDatabase('Sales.mdf', 'double')
+  // Only .mdf files are listed; the database's name comes from the file, and Attach As starts as it.
+  await expect(databaseRow(0).getByRole('cell')).toHaveText([salesMdf, 'Sales', '', /<default>/, '', ''])
+  await expect(attachDialog().getByLabel('Attach As for ' + salesMdf, { exact: true })).toHaveValue('Sales')
+  await expect(attachDialog().getByLabel('Owner for ' + salesMdf, { exact: true })).toHaveValue('')
+  await expect(detailsGrid('Sales').getByRole('row')).toHaveCount(4)
+  await expect(detailsGrid('Sales').getByRole('row').nth(2).getByRole('cell')).toHaveText(['D:\\Old\\Sales_2.ndf', 'Data', /…/, 'Not found'])
+  await expect(attachOk()).toBeDisabled()
+  await expect(attachDialog().getByText('A data file of Sales is not found. Correct its Current File Path, or remove the database.', { exact: true })).toBeVisible()
+  // Paths keep their file names in view: Sales.mdf and Sales_log.ldf share a long folder, which gives way instead.
+  await expect.poll(() => attachFileNameShown(databaseRow(0).getByRole('cell').first())).toBe(true)
+  await expect.poll(() => attachFileNameShown(detailsGrid('Sales').getByRole('row').nth(1).getByRole('cell').first())).toBe(true)
+  await expect.poll(() => attachFileNameShown(detailsGrid('Sales').getByRole('row').nth(3).getByRole('cell').first())).toBe(true)
+  await expect.poll(() => inputShowsEnd(attachDialog().getByLabel('Current File Path for ' + stubServerFiles.dataFolder + 'Sales_log.ldf', { exact: true }))).toBe(true)
+  // Owner lines up with Attach As: both take the row height.
+  const cellHeights = await Promise.all(['Attach As for ', 'Owner for '].map(async label => (await attachDialog().getByLabel(label + salesMdf, { exact: true }).boundingBox())?.height))
+  expect(cellHeights[0]).toBeGreaterThan(0)
+  expect(cellHeights[1]).toBe(cellHeights[0])
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-attach-dark.png') })
+  // A corrected Current File Path waits for its check (OK stays disabled and says why); Enter asks the server whether the file is there.
+  const secondFile = attachDialog().getByLabel('Current File Path for D:\\Old\\Sales_2.ndf', { exact: true })
+  await secondFile.fill(stubServerFiles.dataFolder + 'Sales_2.ndf')
+  await expect(attachOk()).toBeDisabled()
+  await expect(attachDialog().getByText('Press Enter in a Current File Path of Sales, or leave it, to check the file.', { exact: true })).toBeVisible()
+  await secondFile.press('Enter')
+  await expect(detailsGrid('Sales').getByRole('row').nth(2).getByRole('cell').nth(3)).toHaveText('')
+  await expect(attachOk()).toBeEnabled()
+  await expect(secondFile).toBeFocused()
+  expect((await stubCalls('actions.describe')).filter(call => call.files?.exists).at(-1)?.files).toEqual({ purpose: 'database', path: stubServerFiles.dataFolder + 'Sales_2.ndf', exists: true })
+  await attachDialog().getByLabel('Owner for ' + salesMdf, { exact: true }).selectOption('app_owner')
+  await attachDialog().getByRole('button', { name: 'Script', exact: true }).click()
+  const salesFiles = ['Sales.mdf', 'Sales_2.ndf', 'Sales_log.ldf'].map(name => stubServerFiles.dataFolder + name)
+  await expect.poll(async () => (await stubCalls('actions.script')).filter(call => call.action === 'attach').map(call => call.databases))
+    .toEqual([[{ name: 'Sales', owner: 'app_owner', files: salesFiles, rebuildLog: false }]])
+  await expect(attachDialog()).toBeVisible()
+  // A second database whose log is not found: removing the log rebuilds it, and OK fails at Hr, so Sales is rolled back.
+  await addDatabase('Hr.mdf')
+  await expect(databasesGrid().getByRole('row')).toHaveCount(3)
+  await expect(detailsGrid('Hr').getByRole('row')).toHaveCount(3)
+  // Under forced colours the selected row (Hr, which Remove acts on) is Highlight, and a file that is not found keeps a mark.
+  await page.emulateMedia({ forcedColors: 'active' })
+  const cellBackground = row => row.getByRole('cell').first().evaluate(cell => getComputedStyle(cell).backgroundColor)
+  await expect.poll(async () => await cellBackground(databaseRow(1)) !== await cellBackground(databaseRow(0))).toBe(true)
+  expect(await attachDialog().getByLabel('Current File Path for D:\\Old\\Hr_log.ldf', { exact: true }).evaluate(input => getComputedStyle(input).outlineStyle)).toBe('dashed')
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-attach-forced.png') })
+  await page.emulateMedia({ forcedColors: 'none' })
+  await attachDialog().getByLabel('Current File Path for D:\\Old\\Hr_log.ldf', { exact: true }).focus()
+  await page.keyboard.press('Tab')
+  await page.keyboard.press('Tab')
+  await expect(attachDialog().getByRole('button', { name: 'Remove the selected log file', exact: true })).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(detailsGrid('Hr').getByRole('row')).toHaveCount(2)
+  // The removed row's place is taken, and so is focus: it never drops out of the modal.
+  await expect(attachDialog().getByLabel('Current File Path for ' + stubServerFiles.dataFolder + 'Hr.mdf', { exact: true })).toBeFocused()
+  await expect(attachDialog().getByText(/^No log file is listed, so SQL Server will rebuild the log \(FOR ATTACH_REBUILD_LOG\)\./)).toBeVisible()
+  await attachOk().click()
+  await expect(objectDialogProgress(attachDialog())).toHaveText('Error')
+  await expect(databaseRow(0).getByRole('cell').nth(4)).toHaveText('Rolled Back')
+  await expect(databaseRow(1).getByRole('cell').nth(4)).toHaveText('Error')
+  await expect(databaseRow(1).getByRole('cell').nth(5)).toHaveText(/^Msg 5120: Unable to open the physical file/)
+  // The whole Rolled Back explanation is shown (it wraps), not only a tooltip.
+  await expect(databaseRow(0).getByRole('cell').nth(5)).toHaveText('The attach succeeded but was rolled back because another database failed to attach.')
+  expect(await databaseRow(0).getByRole('cell').nth(5).evaluate(cell => cell.scrollWidth <= cell.clientWidth && cell.scrollHeight <= cell.clientHeight)).toBe(true)
+  expect((await stubCalls('actions.execute')).filter(call => call.action === 'attach').at(-1)?.databases).toEqual([
+    { name: 'Sales', owner: 'app_owner', files: salesFiles, rebuildLog: false }, { name: 'Hr', files: [stubServerFiles.dataFolder + 'Hr.mdf'], rebuildLog: true }])
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-attach-failed-dark.png') })
+  await attachDialog().getByLabel('Attach As for ' + stubServerFiles.dataFolder + 'Hr.mdf', { exact: true }).focus()
+  await attachDialog().getByRole('button', { name: 'Remove the selected database', exact: true }).click()
+  await expect(databasesGrid().getByRole('row')).toHaveCount(2)
+  await expect(attachDialog().getByLabel('Attach As for ' + salesMdf, { exact: true })).toBeFocused()
+  // New Database (5b) made a Sales already, so this one is attached as SalesCopy.
+  await attachDialog().getByLabel('Attach As for ' + salesMdf, { exact: true }).fill('SalesCopy')
+  await attachOk().click()
+  await expect(attachDialog()).toHaveCount(0)
+  expect((await stubCalls('actions.execute')).filter(call => call.action === 'attach').at(-1)?.databases).toEqual([{ name: 'SalesCopy', owner: 'app_owner', files: salesFiles, rebuildLog: false }])
+  await expect(await explorerRow(page, 'server-a', 'Databases', 'SalesCopy')).toHaveAttribute('aria-selected', 'true')
+  console.log('Object action checks: Attach Databases reads an .mdf chosen in Locate Database Files (Enter, double-click or Escape, focus back on Add…), keeps file names in view, blocks OK while a data file is not found or a typed one unchecked, checks a corrected path on Enter, marks the selection under forced colours, keeps focus in the dialog after Remove, scripts its rows, rebuilds a removed log, shows a rolled-back attach per row, and selects the attached database.')
+  // 5d. Restore Database (D1e), which only its test hook opens until its OK restores (critic A17): AppData's history plans
   // the full, differential and log backups; the grid's checkboxes wait for Manual Selection; master is a source but never a
   // destination; the Backup Timeline draws its marks whole and moves its slider by keys; Script previews the plan; Prompt
   // before restoring each backup is greyed (critic A22).

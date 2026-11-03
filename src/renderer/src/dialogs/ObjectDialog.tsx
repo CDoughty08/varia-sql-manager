@@ -8,7 +8,9 @@ import Icon from '../Icon'
 import StepList from '../kit/StepList'
 import { trapFocus } from '../trap-focus'
 import { dialogEnter } from './dialog-keys'
+import { definitionOf } from './definitions'
 import type { DialogPhase, OpenObjectDialog } from './ObjectDialogService'
+import AttachDatabasePage from './pages/AttachDatabasePage'
 import DeleteObjectPage from './pages/DeleteObjectPage'
 
 /** A page of an object dialog: the open dialog's snapshot, and whether its controls may change now. */
@@ -16,7 +18,8 @@ export interface PageProps { readonly open: OpenObjectDialog; readonly editable:
 /** Each modal dialog's pages, by page id (the definitions in definitions.ts hold the behaviour). Database Properties is a
  *  document instead (src/renderer/src/properties). */
 export const dialogPages: { readonly [D in ModalDialogId]: Readonly<Partial<Record<PageId, ComponentType<PageProps>>>> } = {
-  deleteObject: { general: DeleteObjectPage }
+  deleteObject: { general: DeleteObjectPage },
+  attachDatabase: { general: AttachDatabasePage }
 }
 
 const progressText: Readonly<Record<DialogPhase, string>> = {
@@ -131,15 +134,15 @@ export function PageList({ pages, current, tabs, rendered, onPage, onKeyDown, na
     : <nav ref={navRef} className="object-dialog-pages" aria-label="Select a page" onKeyDown={onKeyDown}><div className="object-dialog-caption">Select a page</div>{buttons}</nav>
 }
 
-/** A run's steps under the message bar, for dialogs whose spec asks for them (`DialogSpec.steps`). A long list scrolls,
- *  and a new step scrolls it to the end, where the run is. */
+/** A run's steps under the message bar, for dialogs whose spec asks for them (`DialogSpec.steps`), each by its title (a
+ *  failed step's SQL Server text is in the message bar). A long list scrolls, and a new step scrolls it to the end, where the run is. */
 export function StepsPanel({ steps }: { readonly steps: readonly ActionStep[] }) {
   const panel = useRef<HTMLElement>(null)
   useEffect(() => { if (panel.current) panel.current.scrollTop = panel.current.scrollHeight }, [steps.length])
   if (!steps.length) return null
   return <section ref={panel} className="object-dialog-steps" aria-labelledby="object-dialog-steps">
     <div className="object-dialog-caption" id="object-dialog-steps">Steps</div>
-    <StepList labelledBy="object-dialog-steps" steps={steps.map(step => ({ state: step.status, text: step.message ?? step.title }))} />
+    <StepList labelledBy="object-dialog-steps" steps={steps.map(step => ({ state: step.status, text: step.title }))} />
   </section>
 }
 
@@ -176,6 +179,8 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
   const title = open.title
   const progress = progressText[open.phase]
   const mounted = framePages(spec.pages, open.page, visited)
+  // Why OK cannot run what the page holds (Attach: a data file that is not found), beside OK, which it disables.
+  const blocked = usable && open.draft !== undefined ? definitionOf(open.dialog).blocked?.(open.model!, open.draft) : undefined
   return <div className="modal-backdrop"><form ref={form} className={'connection-modal object-dialog' + (spec.size === 'large' ? ' large' : '') + (tabs ? ' narrow' : '')} role="dialog" aria-modal="true" aria-labelledby="object-dialog-title" noValidate tabIndex={-1}
     onSubmit={event => { event.preventDefault(); void dialogs.ok() }} onKeyDown={keyDown}>
     <div className="connection-heading"><h2 id="object-dialog-title">{title}</h2>
@@ -206,8 +211,8 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
       </div>
     </div>
     <div className="connection-footer">
-      <span />
-      <button className="primary" type="submit" disabled={busy || open.phase === 'loadFailed' || open.phase === 'disconnected'}>OK</button>
+      {blocked ? <span className="object-dialog-blocked" id="object-dialog-blocked">{blocked}</span> : <span />}
+      <button className="primary" type="submit" disabled={busy || !!blocked || open.phase === 'loadFailed' || open.phase === 'disconnected'} aria-describedby={blocked ? 'object-dialog-blocked' : undefined}>OK</button>
       {executing ? <button type="button" onClick={() => dialogs.stop()}>Stop</button> : <button type="button" onClick={close}>{open.phase === 'disconnected' ? 'Close' : 'Cancel'}</button>}
     </div>
   </form></div>

@@ -37,11 +37,16 @@ await import(${JSON.stringify(core)})`
     expect(result.stderr).toBe('')
     expect(result.status).toBe(0)
   })
-  it('keeps the method policies loadable by the fake backend: erasable, with type-only imports', () => {
+  it('keeps the method policies loadable by the fake backend: erasable, with type-only imports or a shared catalogue by its .ts name', () => {
     const file = join('src', 'shared', 'ipc', 'methods.ts')
     const source = readFileSync(file, 'utf8')
     expect(() => stripTypeScriptTypes(source, { mode: 'strip' })).not.toThrow()
-    for (const statement of source.match(/^import\b.*$/gm) ?? []) expect(statement).toMatch(/^import type /)
+    // A value import (the actions catalogue's long-action drain, D1c) names its .ts file, so Node's own loader finds it.
+    for (const statement of source.match(/^import\b.*$/gm) ?? []) expect(statement).toMatch(/^import type |^import \{[^}]+\} from '\.\.\/[a-z-]+\/[a-z-]+\.ts'$/)
+    const script = `const { methodPolicies } = await import(${JSON.stringify(pathToFileURL(file).href)}); if (methodPolicies['actions.execute'].drainMs({ action: 'delete' }) !== 0) process.exit(2)`
+    const result = spawnSync(process.execPath, ['--input-type=module', '--disable-warning=ExperimentalWarning', '-e', script], { encoding: 'utf8' })
+    expect(result.stderr).toBe('')
+    expect(result.status).toBe(0)
   })
   it('honours the backend test seams only in unpackaged smoke runs', () => {
     const main = readFileSync(join('src', 'main', 'index.ts'), 'utf8')

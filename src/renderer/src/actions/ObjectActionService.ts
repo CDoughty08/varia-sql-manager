@@ -1,4 +1,4 @@
-import { actionLimits, actionMenuState, unknownOutcomeMessage, type ActionState, type ActionTarget, type ObjectAction } from '../../../shared/actions/catalog.ts'
+import { actionLimits, actionMenuState, objectActionSpecs, unknownOutcomeMessage, type ActionState, type ActionTarget, type ObjectAction } from '../../../shared/actions/catalog.ts'
 import type { ActionExecuteResult } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import { displayText, type ExplorerNodeRef, type ObjectRef } from '../../../shared/explorer/refs.ts'
@@ -98,8 +98,10 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
   /** Each action's state for a node: what the context keys say for the selection. */
   state(target: ActionTarget | undefined): Readonly<Record<ObjectAction, ActionState>> { return actionMenuState(target) }
   /** Whether `action` is enabled for the node now: its kind and subtype offer it, and its server is live. */
+  /** Whether `action` can run on `node` now: an object's on its row, a folder's (Attach) on its folder. */
   canRun(action: ObjectAction, node: ExplorerMenuNode | undefined): node is ExplorerMenuNode {
-    return !!node && !node.lost && node.ref.type === 'object' && actionMenuState(node)[action] === 'enabled' && this.isLive(node.connectionId)
+    const folder = objectActionSpecs[action].folder
+    return !!node && !node.lost && (folder ? node.ref.type === 'folder' && node.ref.folder === folder : node.ref.type === 'object') && actionMenuState(node)[action] === 'enabled' && this.isLive(node.connectionId)
   }
 
   /** SSMS's Select Top N Rows: the columns, one per line, in a new unmarked query on the object's database, run at once. */
