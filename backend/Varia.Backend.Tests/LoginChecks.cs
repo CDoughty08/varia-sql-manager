@@ -139,6 +139,11 @@ internal static class LoginChecks
         var failed = ActionErrors.FromSql(ActionsCatalog.Current, echoed, null, ddl: true, inUseAdvice: null, serverText: text => LoginSql.Scrub(text, new("Long-Pw-Z9q")));
         check(failed.Message == "Password validation failed for '<password>'." && ActionErrors.FromSql(ActionsCatalog.Current, echoed, null, ddl: true, inUseAdvice: null).Message.Contains("Long-Pw-Z9q", StringComparison.Ordinal),
             "a failure's SQL Server text goes through New Login's scrubber before it becomes the reply: " + failed.Message);
+        // SQL Server on Linux applies its own policy, whose refusals (33062 to 33064) carry no password: CI's 'zq' answered 33062 there.
+        const string linuxShort = "Password validation failed. The password does not meet SQL Server password policy requirements because it is too short. The password must be at least 8 characters.";
+        var linux = ActionErrors.FromSql(ActionsCatalog.Current, ConnectionFailureChecks.Sql(33062, 2, 16, "server", linuxShort), null, ddl: true, inUseAdvice: null, serverText: text => LoginSql.Scrub(text, new("zq")));
+        check(linux is { Code: "PASSWORD_POLICY", Retryable: true } && linux.Message == linuxShort,
+            "SQL Server on Linux's password policy refusal (33062) answers PASSWORD_POLICY, retryable, with SQL Server's text: " + linux.Code + " " + linux.Message);
     }
 
     /// <summary>The reply after CREATE LOGIN completed and something after it did not: the login's real state comes first.</summary>
