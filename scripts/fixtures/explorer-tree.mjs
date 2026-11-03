@@ -130,15 +130,39 @@ export async function explorerMenuItems(page, ...path) {
 }
 
 /**
- * Chooses item `name` (a menuitem's accessible name) from the context menu of the row at a path (openExplorerMenu). The
+ * Opens the submenus `submenus` (menuitem names, outermost first) of the context menu of the row at a path
+ * (openExplorerMenu) and returns the innermost, once it shows. A press on a submenu only opens it, so a press that missed
+ * (its menu closed meanwhile and it landed on the tree) is safe to repeat: the row's menu then opens again.
+ */
+export async function openExplorerSubmenu(page, path, submenus) {
+  let menu
+  await expect(async () => {
+    menu = await openExplorerMenu(page, ...path)
+    for (const name of submenus) {
+      const parent = menu.getByRole('menuitem', { name, exact: true })
+      await parent.click({ force: true, timeout: 2000 })
+      await expect(parent).toHaveAttribute('aria-expanded', 'true', { timeout: 1000 })
+      menu = page.getByRole('menu', { name, exact: true })
+      await expect(menu).toBeVisible({ timeout: 1000 })
+    }
+  }).toPass({ timeout: process.platform === 'win32' ? 60000 : 30000, intervals: [100, 250, 500] })
+  return menu
+}
+
+/**
+ * Chooses item `name` (a menuitem's accessible name) from the context menu of the row at a path (openExplorerMenu), or,
+ * when `name` is a list, from the submenus it names first (['New', 'Login…'] is New › Login…, openExplorerSubmenu). The
  * click is forced, so it goes where the item was even if the menu closed meanwhile: it then lands on the tree below,
  * selects another row and runs nothing (a Windows run lost Delete so). The press is therefore checked where it landed:
  * only a press that missed the item opens the menu again; once one reaches it, what it runs is the caller's to check.
  */
 export async function chooseExplorerMenuItem(page, path, name) {
+  const names = [name].flat(), submenus = names.slice(0, -1)
+  name = names.join(' › ')
   let presses = 0
   await expect(async () => {
-    const item = (await openExplorerMenu(page, ...path)).getByRole('menuitem', { name, exact: true })
+    const menu = submenus.length ? await openExplorerSubmenu(page, path, submenus) : await openExplorerMenu(page, ...path)
+    const item = menu.getByRole('menuitem', { name: names.at(-1), exact: true })
     // The item by its command, not its element: a menu that renders again keeps the item's id.
     await item.evaluate(element => {
       const id = element.getAttribute('data-item-id')
