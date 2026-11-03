@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Varia.Backend.Activity;
 
 namespace Varia.Backend;
@@ -187,12 +188,112 @@ internal sealed record ScriptError(string Code, string Message, bool Retryable);
 internal sealed record ScriptResult(string? Text, string Database, List<string> Warnings, int Commands, long ElapsedMs, ScriptError? Error = null);
 
 /// <summary>actions.describe: what an object dialog shows (deleteObject: Delete Object's row; databaseProperties: Database Properties' pages),
-/// or what the table designer needs of a database (tableDesigner).</summary>
-internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target);
+/// what the table designer needs of a database (tableDesigner), the server's folders (serverFiles, the server as Target, with Files),
+/// what Restore Database restores from (restoreDatabase, the server as Target, with Restore), or Attach Databases' server facts and,
+/// with Attach, one primary data file's database (attachDatabase, the server as Target).</summary>
+internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target, ServerFilesArgsDto? Files = null, RestoreSourceDto? Restore = null,
+    AttachDescribeArgsDto? Attach = null);
+/// <summary>Restore Database's describe (src/shared/actions/restore.ts RestoreSource): Kind history (Database, optional), devices
+/// (Devices, 1–64 server paths), historyFiles (SetId, a backup_set_uuid) or mediaFiles (Devices and File, the set's position).</summary>
+internal sealed record RestoreSourceDto(string Kind, string? Database = null, List<string>? Devices = null, string? SetId = null, int? File = null);
+/// <summary>One backup set (restore.ts BackupSetRow): Type full, differential, log, file, fileDifferential, partial or partialDifferential;
+/// LSNs as decimal text; dates as the server's local yyyy-MM-ddTHH:mm:ss; Devices the media set's disk files in family order; ForkPointLsn
+/// where the recovery fork changed inside the set (FirstForkGuid ≠ ForkGuid); FamilyGuid the database's family across restores.</summary>
+internal sealed record BackupSetDto(string Id, string Name, string Type, string Server, string Database, int Position, string FirstLsn, string LastLsn, string CheckpointLsn,
+    string DatabaseBackupLsn, string Start, string Finish, long SizeBytes, string UserName, bool CopyOnly, bool Damaged, List<string> Devices, string? Expiration = null,
+    string? RecoveryModel = null, string? FirstForkGuid = null, string? ForkGuid = null, string? Problem = null, string? ForkPointLsn = null, string? FamilyGuid = null);
+/// <summary>One file of a backup set: Type data, log, filestream, fulltext or other.</summary>
+internal sealed record BackupFileDto(string Logical, string Physical, string Type, long SizeBytes, int FileId, string? Filegroup = null);
+internal sealed record RestoreDestinationDto(string Name, int Id, string Created, string State, string RecoveryModel, int? Sessions = null);
+internal sealed record RestoreServerFileDto(string Database, string Path);
+internal sealed record RestoreServerDto(string Separator, bool CanRestore, List<RestoreDestinationDto> Destinations, bool DestinationsTruncated, List<RestoreServerFileDto> Files, bool FilesTruncated,
+    string? DataPath = null, string? LogPath = null, string? BackupPath = null);
+internal sealed record RestoreModelDto(RestoreServerDto? Server = null, List<string>? HistoryDatabases = null, bool? HistoryTruncated = null, List<BackupSetDto>? Sets = null,
+    bool? SetsTruncated = null, List<BackupFileDto>? Files = null, bool? FilesTruncated = null);
+/// <summary>A restore (restore.ts RestoreOptions): the sets in order, the moves, and the options SSMS's pages set. Recovery is
+/// recovery, norecovery or standby (with StandbyFile); StopAt the server's local yyyy-MM-ddTHH:mm:ss on the last log.</summary>
+internal sealed record RestoreOptionsDto(List<RestorePlanSetDto> Sets, List<RestoreMoveDto> Relocate, bool Replace, bool KeepReplication, bool RestrictedUser, string Recovery,
+    bool CloseConnections, string? StopAt = null, string? StandbyFile = null, RestoreTailLogDto? TailLog = null);
+internal sealed record RestorePlanSetDto(string Id, List<string> Devices, int File, string Type, string? Name = null);
+internal sealed record RestoreMoveDto(string Logical, string Physical);
+internal sealed record RestoreTailLogDto(string File, bool NoRecovery);
+/// <summary>Attach Databases' Add: the primary data file to read (a server path of at most 260 UTF-16 units).</summary>
+internal sealed record AttachDescribeArgsDto(string Mdf);
+/// <summary>One database to attach (src/shared/actions/schema.ts AttachDatabaseSpec): Attach As, the owner's login (null: the
+/// attaching login), its files in order (the primary data file first), and whether SQL Server rebuilds the log.</summary>
+internal sealed record AttachDatabaseDto(string Name, List<string> Files, bool RebuildLog, string? Owner = null);
+/// <summary>The server facts Attach Databases opens with (the Owner list, the path separator, the default data folder) and, for
+/// an Add, the primary file's database: its name, version and files as DBCC CHECKPRIMARYFILE records them.</summary>
+internal sealed record AttachServerDto(List<string> Logins, bool LoginsTruncated, string Separator, string? DataPath = null);
+/// <summary>Type data or log; Current is where the file is now (the .mdf as added); Found null when SQL Server 2016 will not tell.</summary>
+internal sealed record AttachFileDto(string Original, string Type, string Current, bool? Found = null);
+internal sealed record AttachDatabaseInfoDto(string Mdf, string DatabaseName, List<AttachFileDto> Files, int? Version = null);
+internal sealed record AttachDescribeDto(AttachServerDto Server, AttachDatabaseInfoDto? Database = null);
+/// <summary>The server file picker's request (src/shared/actions/files.ts): Purpose backup, database, log or folder; Path the folder
+/// to list (at most 260 UTF-16 units; absent for the drives and default folders); AllFiles lists every file, not the purpose's;
+/// Exists asks whether Path itself (a file or a folder) exists rather than listing it.</summary>
+internal sealed record ServerFilesArgsDto(string Purpose, string? Path = null, bool? AllFiles = null, bool? Exists = null);
+/// <summary>A drive or default folder: Kind drive or folder, Defaults data, log and backup.</summary>
+internal sealed record ServerRootDto(string Path, string Kind, List<string>? Defaults = null, long? FreeMb = null);
+/// <summary>Modified is the server's local time as yyyy-MM-ddTHH:mm:ss.</summary>
+internal sealed record ServerFileEntryDto(string Name, bool Directory, long? SizeBytes = null, string? Modified = null);
+/// <summary>One listing: Separator \ or /, Path the folder listed (ending with it), Roots only without a path, Notice legacyEmpty.
+/// For Exists, Path is the path checked and Entries its own entry when it exists (none when it does not, or with legacyEmpty when
+/// SQL Server 2016 will not tell a login outside sysadmin).</summary>
+internal sealed record ServerFilesDto(string Separator, string? Path, List<ServerRootDto> Roots, List<ServerFileEntryDto> Entries, bool Truncated, string? Notice = null);
 /// <summary>actions.script and actions.execute: rename takes NewName, delete the two database options, properties
-/// CloseConnections and Changes, takeOffline DropConnections, createTable (Target the database) Design; Validate refuses the rest.</summary>
+/// CloseConnections and Changes, createTable (Target the database) and createDatabase (Target the new database) Design, restore
+/// (Target the destination database) Restore and Identity, attach (Target the server) Databases, createLogin (Target the server)
+/// Login, ServerRoles, Status and, on execute only, Secrets, takeOffline DropConnections; Validate refuses the rest.</summary>
 internal sealed record ActionArgs(string Action, string ConnectionId, string RequestId, ObjectRefDto Target, string? NewName = null, bool? CloseConnections = null, bool? DeleteHistory = null,
-    DatabaseChangesDto? Changes = null, TableDesignDto? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null, bool? DropConnections = null);
+    DatabaseChangesDto? Changes = null, ActionDesign? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null, RestoreOptionsDto? Restore = null,
+    List<AttachDatabaseDto>? Databases = null, NewLoginDto? Login = null, List<string>? ServerRoles = null, LoginStatusDto? Status = null,
+    bool? DropConnections = null);
+/// <summary>New Login's General page (src/shared/actions/logins.ts NewLoginGeneral): Auth windows or sql; the password policy
+/// options exactly for sql, in SQL Server's chain (MustChange needs CheckExpiration, which needs CheckPolicy).</summary>
+internal sealed record NewLoginDto(string Auth, string Name, string DefaultDatabase, string? DefaultLanguage = null, bool? CheckPolicy = null, bool? CheckExpiration = null, bool? MustChange = null);
+/// <summary>New Login's Status page: Connect grant or deny; Enabled.</summary>
+internal sealed record LoginStatusDto(string Connect, bool Enabled);
+/// <summary>An action's design, whose shape is the action's: the table designer's (TableDesignDto) or New Database's
+/// (NewDatabaseDesignDto). STJ reads an object's members in no fixed order, so the member stays JSON until the action's validator
+/// reads it with the request's own strict options (unknown members refused, as everywhere).</summary>
+[JsonConverter(typeof(ActionDesignConverter))]
+internal sealed class ActionDesign
+{
+    /// <summary>The protocol's options (Program.cs), for designs the checks build in C#.</summary>
+    internal static readonly JsonSerializerOptions Strict = new(JsonSerializerDefaults.Web) { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull, UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow };
+    private readonly JsonElement element;
+    private readonly JsonSerializerOptions options;
+
+    public ActionDesign(JsonElement element, JsonSerializerOptions? options = null)
+    {
+        this.element = element.Clone();
+        this.options = options ?? Strict;
+    }
+
+    /// <summary>The design as <typeparamref name="T"/>; INVALID_PARAMS when it is not one (a member another design has, a wrong type).</summary>
+    public T? As<T>() where T : class
+    {
+        try { return element.ValueKind == JsonValueKind.Null ? null : element.Deserialize<T>(options); }
+        catch (JsonException) { throw new RequestException("INVALID_PARAMS", "Invalid object action request: design."); }
+    }
+
+    internal void WriteTo(Utf8JsonWriter writer) => element.WriteTo(writer);
+    public static implicit operator ActionDesign?(TableDesignDto? design) => design is null ? null : new(JsonSerializer.SerializeToElement(design, Strict));
+    public static implicit operator ActionDesign?(NewDatabaseDesignDto? design) => design is null ? null : new(JsonSerializer.SerializeToElement(design, Strict));
+}
+
+internal sealed class ActionDesignConverter : JsonConverter<ActionDesign>
+{
+    public override ActionDesign Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        using var document = JsonDocument.ParseValue(ref reader);
+        return new ActionDesign(document.RootElement, options);
+    }
+
+    public override void Write(Utf8JsonWriter writer, ActionDesign value, JsonSerializerOptions options) => value.WriteTo(writer);
+}
+
 /// <summary>Passwords an action needs (New Login and Login Properties, later): only actions.execute carries them, which is
 /// sensitive as a whole (its frame is zeroed once read); Validate refuses them on actions.script and on every other action.
 /// Never logged, echoed or persisted; ActionService.Validate bounds them. The record never prints them, so neither does an ActionArgs.</summary>
@@ -235,7 +336,27 @@ internal sealed record DatabaseSessionDto(int SessionId, string? Login, string? 
 internal sealed record DatabaseStateDto(string Name, DatabaseIdentityDto Identity, int State, int UserAccess, bool ReadOnly, bool Standby, int? Sessions, int? WithTransaction,
     List<DatabaseSessionDto> SessionList, bool SessionsTruncated, List<ActionWarningDto> Warnings);
 internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long ElapsedMs, ActionError? Error = null, DatabasePropertiesDto? DatabaseProperties = null,
-    TableDesignerModelDto? TableDesigner = null, DatabaseStateDto? DatabaseState = null);
+    TableDesignerModelDto? TableDesigner = null, ServerFilesDto? ServerFiles = null, RestoreModelDto? Restore = null, NewDatabaseModelDto? NewDatabase = null,
+    AttachDescribeDto? AttachDatabase = null, NewLoginModelDto? NewLogin = null, DatabaseStateDto? DatabaseState = null);
+/// <summary>New Database's file (src/shared/actions/new-database.ts): Type rows, log or filestream; Filegroup none for a log; SizeMb none
+/// for a container; Path the folder and FileName the file (a container's folder) in it.</summary>
+internal sealed record NewDatabaseFileDto(string Name, string Type, GrowthDto Growth, string Path, string FileName, string? Filegroup = null, long? SizeMb = null);
+/// <summary>Type rows, filestream or memoryOptimized; PRIMARY first.</summary>
+internal sealed record NewDatabaseFilegroupDto(string Name, string Type, bool? ReadOnly = null, bool? IsDefault = null, bool? AutogrowAllFiles = null);
+/// <summary>New Database's design: Containment NONE or PARTIAL; Options and Scoped only what differs from model, as tokens.</summary>
+internal sealed record NewDatabaseDesignDto(List<NewDatabaseFileDto> Files, List<NewDatabaseFilegroupDto> Filegroups, string Containment, Dictionary<string, string> Options,
+    Dictionary<string, string> Scoped, string? Owner = null, string? Collation = null, bool? Ledger = null);
+/// <summary>What New Database reads: model as Database Properties reads it, the default folders, the server's collation, whether the
+/// login may create a database (CREATE ANY DATABASE), master's compatibility level and whether the server runs on Linux.</summary>
+internal sealed record NewDatabaseModelDto(DatabasePropertiesDto Model, string DataPath, string LogPath, string ServerCollation, bool CanCreate, int MasterLevel, bool Linux);
+/// <summary>New Login's describe (src/shared/actions/logins.ts NewLoginModel): the server's facts, then the databases, languages and
+/// server roles its lists offer, each bounded by loginLimits (a truncation flag says more exist).</summary>
+internal sealed record NewLoginModelDto(NewLoginServerDto Server, List<NewLoginDatabaseDto> Databases, bool DatabasesTruncated, List<NewLoginLanguageDto> Languages,
+    List<NewLoginServerRoleDto> ServerRoles, bool ServerRolesTruncated);
+internal sealed record NewLoginServerDto(int Level, bool Linux, bool WindowsOnly, bool CanCreate);
+internal sealed record NewLoginDatabaseDto(string Name, int State, bool Accessible);
+internal sealed record NewLoginLanguageDto(string Name, string Alias);
+internal sealed record NewLoginServerRoleDto(string Name, bool Fixed);
 /// <summary>The table designer's new table (src/shared/designer/schema.ts): columns in order and the primary key as column indexes in key order.</summary>
 internal sealed record TableDesignDto(string Schema, string Name, List<DesignColumnDto> Columns, List<int> PrimaryKey);
 internal sealed record DesignColumnDto(string Name, DesignTypeDto Type, bool AllowNulls, DesignIdentityDto? Identity = null);

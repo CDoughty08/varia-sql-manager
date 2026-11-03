@@ -241,6 +241,18 @@ describe('ExplorerService: loading', () => {
     expect(f.calls().at(-1)).toMatchObject({ node: { type: 'object', object: { kind: 'database', name: 'master' } }, subtype: 'system' })
     expect(f.calls().at(-2)).not.toHaveProperty('subtype')
   })
+  it('finds the Databases folder above a system database, whose own listing folder is System Databases', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const system = await f.open('Databases', 'System Databases')
+    const databases = f.find('Databases'), master = f.find('master', system)
+    expect(f.explorer.listingFolderOf(master)).toBe(system)
+    expect(f.explorer.databasesFolderOf(master)).toBe(databases)
+    expect(f.explorer.databasesFolderOf(f.find('AppData', databases))).toBe(databases)
+    expect(f.explorer.databasesFolderOf(databases)).toBe(databases)
+    expect(f.explorer.databasesFolderOf(f.find('Security'))).toBeUndefined()
+  })
   it('shows a loading row only when the first page takes longer than 150 ms', async () => {
     const f = fixture()
     f.connect()
@@ -1345,7 +1357,9 @@ describe('ExplorerService: selection, targets and context', () => {
     expect(f.explorer.context.getSnapshot()).toEqual({
       explorerHasSelection: true, explorerSelectionKind: 'folder', explorerSelectionFolder: 'databases', explorerSelectionFilterable: true, explorerSelectionFiltered: false,
       explorerSelectionInsertable: false, explorerSelectionStatus: '', explorerSelectionServerEngine: 'box', explorerSelectionServerLinux: false,
-      ...scriptContextValues(scriptMenuState({ kind: 'folder' })), ...actionContextValues(actionMenuState({ kind: 'folder' })), ...ssisVerbContextValues(ssisVerbMenuState('folder')), explorerLoading: false
+      ...scriptContextValues(scriptMenuState({ kind: 'folder' })), ...actionContextValues(actionMenuState({ kind: 'folder' })), ...ssisVerbContextValues(ssisVerbMenuState('folder')), explorerLoading: false,
+      // The Databases folder's own action (D1d), on a SQL Server box edition.
+      explorerActionAttach: 'enabled'
     })
     expect(f.explorer.getSnapshot().selected).toBe(databases)
     f.explorer.select(f.find('Database Snapshots'))

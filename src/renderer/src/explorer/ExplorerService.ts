@@ -527,6 +527,21 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const node = this.nodes.get(nodeId), parent = node?.parent ? this.nodes.get(node.parent) : undefined
     return parent?.kind === 'folder' && this.attached(parent) ? parent.id : undefined
   }
+  /** The tree's node for an owner's folder (a server's Logins folder), once it has been listed; undefined otherwise. A dialog that
+   *  made an object reloads it to show and select the object. */
+  folderNode(connectionId: string, owner: ObjectRef, folder: FolderId): number | undefined {
+    const key = refKey(connectionId, { type: 'folder', owner, folder })
+    for (const node of this.nodes.values()) if (node.kind === 'folder' && node.connectionId === connectionId && !node.lost && refKey(node.connectionId, node.ref) === key && this.attached(node)) return node.id
+    return undefined
+  }
+  /** The server's Databases folder above a node: a database under System Databases or Database Snapshots too, whose own
+   *  listing folder is not where a new database appears (New Database reloads this one). */
+  databasesFolderOf(nodeId: number): number | undefined {
+    for (let node = this.nodes.get(nodeId); node; node = node.parent ? this.nodes.get(node.parent) : undefined) {
+      if (node.kind === 'folder' && node.folder === 'databases') return this.attached(node) ? node.id : undefined
+    }
+    return undefined
+  }
   /** The folder's filter; filters are kept per connection until it disconnects. */
   filter(folderNodeId: number): ExplorerFilter | undefined {
     const node = this.nodes.get(folderNodeId)

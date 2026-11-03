@@ -8,13 +8,14 @@ namespace Varia.Backend.Actions;
 /// <summary>The statements an action runs: DROP TABLE, VIEW, PROCEDURE or FUNCTION, sp_rename, ALTER DATABASE … MODIFY NAME,
 /// SET SINGLE_USER, DROP DATABASE and msdb's backup history cleanup; and the shared templates later actions plan (critic
 /// A21): SET MULTI_USER and RESTRICTED_USER (which also restore a database's access after a failed or stopped step),
-/// sp_detach_db, ALTER LOGIN … DISABLE and ENABLE, DENY and GRANT CONNECT SQL, and DROP USER; then Take Offline's SET OFFLINE (plain,
-/// or WITH ROLLBACK IMMEDIATE) and Bring Online's SET ONLINE.</summary>
+/// sp_detach_db, ALTER LOGIN … DISABLE and ENABLE, DENY and GRANT CONNECT SQL, and DROP USER; New Login's ALTER SERVER ROLE …
+/// ADD MEMBER (its CREATE LOGIN is LoginSql's builder, which takes the password); then Take Offline's SET OFFLINE (plain, or
+/// WITH ROLLBACK IMMEDIATE) and Bring Online's SET ONLINE.</summary>
 internal enum ActionTemplate
 {
     DropTable, DropView, DropProcedure, DropFunction, RenameObject, RenameDatabase, SetSingleUser, DropDatabase, DeleteBackupHistory,
     SetMultiUser, SetRestrictedUser, DetachDatabase, DisableLogin, EnableLogin, DenyConnect, GrantConnect, DropUser,
-    SetOffline, SetOfflineRollback, SetOnline
+    AddServerRoleMember, SetOffline, SetOfflineRollback, SetOnline
 }
 
 /// <summary>Where a step runs in the plan (critic A4): main steps in order; a compensation undoes the main step <c>Undoes</c>
@@ -56,7 +57,8 @@ internal static partial class ActionSql
 
     public static int ParameterCount(ActionTemplate template) => template switch
     {
-        ActionTemplate.DropTable or ActionTemplate.DropView or ActionTemplate.DropProcedure or ActionTemplate.DropFunction or ActionTemplate.RenameDatabase or ActionTemplate.DetachDatabase => 2,
+        ActionTemplate.DropTable or ActionTemplate.DropView or ActionTemplate.DropProcedure or ActionTemplate.DropFunction or ActionTemplate.RenameDatabase or ActionTemplate.DetachDatabase
+            or ActionTemplate.AddServerRoleMember => 2,
         ActionTemplate.RenameObject => 3,
         _ => 1
     };
@@ -115,6 +117,8 @@ internal static partial class ActionSql
             ActionTemplate.DenyConnect => "DENY CONNECT SQL TO " + Quote(names[0]),
             ActionTemplate.GrantConnect => "GRANT CONNECT SQL TO " + Quote(names[0]),
             ActionTemplate.DropUser => "DROP USER " + Quote(names[0]),
+            // The role, then the member, as SMO writes it (captured by D2).
+            ActionTemplate.AddServerRoleMember => "ALTER SERVER ROLE " + Quote(names[0]) + " ADD MEMBER " + Quote(names[1]),
             // SMO's capture of SSMS's Take Offline and Bring Online (probed by D3).
             ActionTemplate.SetOffline => "ALTER DATABASE " + Quote(names[0]) + " SET  OFFLINE",
             ActionTemplate.SetOfflineRollback => "ALTER DATABASE " + Quote(names[0]) + " SET  OFFLINE WITH ROLLBACK IMMEDIATE",
@@ -152,6 +156,7 @@ internal static partial class ActionSql
             ActionTemplate.DenyConnect => Run("DECLARE @stmt nvarchar(max) = N'DENY CONNECT SQL TO ' + QUOTENAME(@p1);\n"),
             ActionTemplate.GrantConnect => Run("DECLARE @stmt nvarchar(max) = N'GRANT CONNECT SQL TO ' + QUOTENAME(@p1);\n"),
             ActionTemplate.DropUser => Run("DECLARE @stmt nvarchar(max) = N'DROP USER ' + QUOTENAME(@p1);\n"),
+            ActionTemplate.AddServerRoleMember => Run("DECLARE @stmt nvarchar(max) = N'ALTER SERVER ROLE ' + QUOTENAME(@p1) + N' ADD MEMBER ' + QUOTENAME(@p2);\n"),
             ActionTemplate.SetOffline => Run("DECLARE @stmt nvarchar(max) = N'ALTER DATABASE ' + QUOTENAME(@p1) + N' SET  OFFLINE';\n"),
             ActionTemplate.SetOfflineRollback => Run("DECLARE @stmt nvarchar(max) = N'ALTER DATABASE ' + QUOTENAME(@p1) + N' SET  OFFLINE WITH ROLLBACK IMMEDIATE';\n"),
             ActionTemplate.SetOnline => Run("DECLARE @stmt nvarchar(max) = N'ALTER DATABASE ' + QUOTENAME(@p1) + N' SET  ONLINE';\n"),
@@ -290,6 +295,8 @@ internal static partial class ActionSql
         "N' SET  OFFLINE'", "N' SET  OFFLINE WITH ROLLBACK IMMEDIATE'", "N' SET  ONLINE'",
         // The shared templates (critic A21).
         "N' SET  MULTI_USER'", "N' SET  RESTRICTED_USER'", "N'ALTER LOGIN '", "N' DISABLE'", "N' ENABLE'", "N'DENY CONNECT SQL TO '", "N'GRANT CONNECT SQL TO '", "N'DROP USER '",
+        // New Login's server roles (Actions/LoginSql), and its describe's and preflight's server facts.
+        "N'ALTER SERVER ROLE '", "N' ADD MEMBER '", "'IsIntegratedSecurityOnly'",
         // The login preflight (Login).
         "N'GRANT OR DENY'", "N'ALTER ANY LOGIN'", "N'CONTROL SERVER'", "'COSQ'",
         // Take Offline's and Bring Online's permission (Database's can_alter_state).
@@ -298,7 +305,9 @@ internal static partial class ActionSql
         "N'contained database authentication'", "N'sysadmin'", "N'##%'", "N'SpaceUsed'", "N'@take int'", "N'MAXDOP'", "N'LEGACY_CARDINALITY_ESTIMATION'", "N'PARAMETER_SNIFFING'",
         "N'QUERY_OPTIMIZER_HOTFIXES'", "'FilestreamEffectiveLevel'", "'EngineEdition'", "'ProductMajorVersion'",
         // The table designer's master facts and its describe's collation probes (Designer/DesignerSql).
-        "N'CREATE TABLE'", "N'a'", "N'A'", "N'e'"
+        "N'CREATE TABLE'", "N'a'", "N'A'", "N'e'",
+        // New Database's facts (CreateDatabaseSql.Facts) and Attach Databases' facts and preflight (AttachSql).
+        "'InstanceDefaultDataPath'", "'InstanceDefaultLogPath'", "'Collation'", "N'CREATE ANY DATABASE'", "N'CREATE DATABASE'", "N'dm_os_file_exists'"
     ];
     [GeneratedRegex(@"N?'(?:[^']|'')*'")]
     private static partial Regex LiteralPattern();
@@ -324,6 +333,10 @@ internal static partial class ActionSql
     private static partial Regex BuilderUse();
     /// <summary>The one metadata function the catalog statements use, for the owner of a database a Windows group's member made.</summary>
     private const string OwnerFallback = "SUSER_SNAME(d.owner_sid)";
+    /// <summary>The other: master's database version, the newest an attach can open (Attach Databases compares a primary file's
+    /// with it, since SQL Server's own refusal, 948, is severity 20 and ends the session). Its literals are constant, and master
+    /// takes no lock a waiting attach or restore holds.</summary>
+    public const string MasterVersion = "CONVERT(int, DATABASEPROPERTYEX(N'master', 'Version'))";
 
     /// <summary>LOGINPROPERTY and password hashes, which no batch may name (critic A15), as every catalog lint refuses them.</summary>
     private static IEnumerable<string> SecretUses(string text) => CatalogSql.SecretUses(text);
@@ -368,14 +381,6 @@ internal static partial class ActionSql
 
     [GeneratedRegex(@"^N'[A-Za-z0-9_ ():=;,]*'$")]
     private static partial Regex DesignKeywordLiteral();
-    /// <summary>A JSON text column of an OPENJSON WITH clause (not AS JSON): a value from the request.</summary>
-    [GeneratedRegex(@"(\[?\w+\]?) nvarchar\(max\)(?! AS JSON)")]
-    private static partial Regex JsonText();
-    /// <summary>An OPENJSON WITH clause's columns (its alias is one lowercase letter).</summary>
-    [GeneratedRegex(@"OPENJSON\([^)]*\) WITH \((.*?)\) AS [a-z](?=[ ;\n])")]
-    private static partial Regex WithClause();
-    [GeneratedRegex(@"\b\w+\.(\[?\w+\]?)")]
-    private static partial Regex Qualified();
     /// <summary>A row of the builders' constant type table: (id, N'keyword', form, lob).</summary>
     [GeneratedRegex(@"\(\d+, (N'[^']*'), \d, [01]\)")]
     private static partial Regex TypeRow();
@@ -386,9 +391,10 @@ internal static partial class ActionSql
 
     /// <summary>Problems with one of the table designer's builder batches (Designer/DesignerSql.Builder), which has SQL Server
     /// shred one JSON parameter and compose the statement: a format hole, no quoting guard, @db outside QUOTENAME, @design
-    /// outside ISJSON or OPENJSON, a JSON text value used anywhere but inside QUOTENAME, a JSON array or element used
-    /// anywhere but OPENJSON (or an index's CONVERT to int), an undeclared variable, and a literal that is neither one of the
-    /// rules' messages nor keyword text (a type keyword must be one of the catalogue's).</summary>
+    /// outside ISJSON or OPENJSON, the OPENJSON rules of <see cref="JsonBuilderLint"/> (a JSON text value used anywhere but inside
+    /// QUOTENAME, a JSON array or element used anywhere but OPENJSON or an index's CONVERT to int, a column of another type), an
+    /// undeclared variable, and a literal that is neither one of the rules' messages nor keyword text (a type keyword must be one of
+    /// the catalogue's).</summary>
     public static List<string> LintExecutable(string text, DesignBuilderRules rules)
     {
         var problems = new List<string>();
@@ -398,22 +404,8 @@ internal static partial class ActionSql
         if (Variable().Matches(text.Replace("QUOTENAME(@db)", "", StringComparison.Ordinal)).Any(used => used.Value == "@db")) problems.Add("uses @db outside QUOTENAME");
         if (Variable().Matches(text.Replace("ISJSON(@design)", "", StringComparison.Ordinal).Replace("OPENJSON(@design)", "", StringComparison.Ordinal)).Any(used => used.Value == "@design"))
             problems.Add("uses @design outside ISJSON or OPENJSON");
-        // JSON text (a name) reaches the statement only as QUOTENAME(alias.column).
-        var texts = WithClause().Matches(text).SelectMany(clause => JsonText().Matches(clause.Groups[1].Value)).Select(match => match.Groups[1].Value.Trim('[', ']')).ToHashSet(StringComparer.Ordinal);
-        foreach (Match used in Qualified().Matches(text))
-        {
-            var column = used.Groups[1].Value.Trim('[', ']');
-            if (texts.Contains(column) && !(text[..used.Index].EndsWith("QUOTENAME(", StringComparison.Ordinal) && text[(used.Index + used.Length)..].StartsWith(')')))
-                problems.Add("uses the JSON text " + used.Value + " outside QUOTENAME");
-            if (column == "value" && !(text[..used.Index].EndsWith("OPENJSON(", StringComparison.Ordinal) || text[..used.Index].EndsWith("CONVERT(int, ", StringComparison.Ordinal)))
-                problems.Add("uses " + used.Value + " outside OPENJSON or an index's CONVERT");
-        }
-        foreach (var json in new[] { "@columns", "@key" })
-        {
-            var rest = text.Replace("OPENJSON(" + json + ")", "", StringComparison.Ordinal).Replace(json + " = d.", "", StringComparison.Ordinal).Replace(json + " IS NULL", "", StringComparison.Ordinal)
-                .Replace(json + " nvarchar(max)", "", StringComparison.Ordinal);
-            if (Variable().Matches(rest).Any(used => used.Value == json)) problems.Add("uses " + json + " outside OPENJSON");
-        }
+        // JSON text (a name) reaches the statement only as QUOTENAME(alias.column), the arrays only through OPENJSON.
+        problems.AddRange(JsonBuilderLint.Problems(text, ["@columns", "@key"]));
         var declared = Declaration().Matches(text).SelectMany(match => DeclaredName().Matches(match.Groups[1].Value).Select(name => name.Groups[1].Value)).ToHashSet(StringComparer.Ordinal);
         foreach (Match used in Variable().Matches(text)) if (used.Value is not ("@db" or "@design") && !declared.Contains(used.Value)) problems.Add("uses the undeclared " + used.Value);
         foreach (Match literal in LiteralPattern().Matches(text))
@@ -428,13 +420,13 @@ internal static partial class ActionSql
     public static List<string> LintCatalog(string text, int band, bool database)
     {
         var problems = new List<string>();
-        var stripped = text.Replace(OwnerFallback, "", StringComparison.Ordinal);
+        var stripped = text.Replace(OwnerFallback, "", StringComparison.Ordinal).Replace(MasterVersion, "", StringComparison.Ordinal);
         foreach (var builtin in CatalogSql.Builtins) if (stripped.Contains(builtin, StringComparison.OrdinalIgnoreCase)) problems.Add("uses " + builtin);
         problems.AddRange(CatalogSql.SecretUses(text));
         if (stripped.Contains("DB_NAME(", StringComparison.OrdinalIgnoreCase) || stripped.Contains("OBJECT_ID(", StringComparison.OrdinalIgnoreCase)) problems.Add("uses a metadata function");
         if (database && text.Contains("HAS_DBACCESS(", StringComparison.OrdinalIgnoreCase)) problems.Add("uses HAS_DBACCESS inside a database");
         foreach (var (token, since) in CatalogSql.Gates) if (band < since && text.Contains(token, StringComparison.Ordinal)) problems.Add("uses " + token + " below band " + since);
-        foreach (Match literal in LiteralPattern().Matches(text))
+        foreach (Match literal in LiteralPattern().Matches(stripped))
             if (!Literals.Contains(literal.Value) && !TypeLetters().IsMatch(literal.Value)) problems.Add("has the literal " + literal.Value);
         if (database && text.Contains("@db", StringComparison.Ordinal)) problems.Add("names @db inside a statement");
         if (Placeholder().IsMatch(text)) problems.Add("uses a DDL name parameter");
@@ -477,6 +469,13 @@ internal static partial class ActionSql
         yield return ("properties call", LintCatalog(DatabaseProperties.InsideCall, ExplorerCatalog.MaxBand, database: false));
         yield return ("properties preflight", LintCatalog(ActionService.DatabasePropertiesPreflight, ExplorerCatalog.MaxBand, database: false));
         foreach (var item in DatabaseAlter.Lint(ActionsCatalog.Current)) yield return item;
+        // New Database: its facts for every band, and its builder (form 5), run and dry run.
+        foreach (var item in CreateDatabaseSql.LintAll()) yield return item;
+        foreach (var item in AttachSql.LintAll()) yield return item;
+        // New Login: its describe and preflight in master, and every CREATE LOGIN its builder can write, run and dry run.
+        yield return ("new login describe", LintCatalog(LoginSql.Describe, ExplorerCatalog.MaxBand, database: false));
+        yield return ("new login preflight", LintCatalog(LoginSql.Preflight, ExplorerCatalog.MaxBand, database: false));
+        foreach (var item in LoginSql.Lint()) yield return item;
     }
 }
 
