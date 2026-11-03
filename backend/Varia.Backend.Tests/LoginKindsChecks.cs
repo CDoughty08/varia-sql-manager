@@ -29,6 +29,7 @@ internal static class LoginKindsChecks
         Rules(check);
         Properties(check);
         Errors(check);
+        await FailuresAsync(check);
         await EnginesAsync(check);
     }
 
@@ -51,12 +52,23 @@ internal static class LoginKindsChecks
             && LoginSql.LintExecutable(certificate.Replace("N' FROM CERTIFICATE '", "N' FROM CERTIFICATE [x]'", StringComparison.Ordinal)).Count > 0
             && LoginSql.LintExecutable(LoginSql.CreateExecutable(Entra("e")).Replace("N' FROM EXTERNAL PROVIDER WITH DEFAULT_DATABASE='", "N' FROM EXTERNAL PROVIDER WITH OBJECT_ID='", StringComparison.Ordinal)).Count > 0,
             "the CREATE LOGIN lint refuses a certificate outside QUOTENAME, a name in a fragment, and a clause the builder never writes (OBJECT_ID)");
-        // Script: every kind without a password is SSMS's GO form, never the placeholder header.
-        var text = LoginSql.ScriptText(Certificate("c", "cert") with { Credentials = ["vault"] }, [], new("deny", true), [], new HashSet<string>(), Catalog.Logins.ScriptHeader);
-        check(text == "USE [master]" + NL + "GO" + NL + "CREATE LOGIN [c] FROM CERTIFICATE [cert]" + NL + "GO" + NL + "DENY CONNECT SQL TO [c]" + NL + "GO" + NL
-                + "ALTER LOGIN [c] ADD CREDENTIAL [vault]" + NL + "GO" + NL
-            && LoginSql.ScriptText(ManagedSql("m"), [], new("grant", true), [], new HashSet<string>(), Catalog.Logins.ScriptHeader).Contains(Catalog.Logins.ScriptHeader, StringComparison.Ordinal),
-            "a certificate login's script is SSMS's GO form, its credential after Deny; Managed Instance's SQL Server login keeps the placeholder header");
+        // Script: a certificate, key or Entra login with statements after CREATE LOGIN is one XACT_ABORT batch without the placeholder
+        // header, so a CREATE that fails where the certificate, key or Entra is missing runs nothing after it; alone, it is SSMS's GO form.
+        static string Script(NewLoginDto login, LoginStatusDto status, List<UserMappingDto>? mappings = null) =>
+            LoginSql.ScriptText(login, [], status, mappings ?? [], new HashSet<string>(), Catalog.Logins.ScriptHeader);
+        var text = Script(Certificate("c", "cert") with { Credentials = ["vault"] }, new("deny", true));
+        check(text == "USE [master]" + NL + "GO" + NL + "SET XACT_ABORT ON;" + NL + "BEGIN TRANSACTION;" + NL + "CREATE LOGIN [c] FROM CERTIFICATE [cert];" + NL + "DENY CONNECT SQL TO [c];" + NL
+                + "ALTER LOGIN [c] ADD CREDENTIAL [vault];" + NL + "COMMIT TRANSACTION;" + NL + "GO" + NL
+            && Script(ManagedSql("m"), new("grant", true)).Contains(Catalog.Logins.ScriptHeader, StringComparison.Ordinal),
+            "a certificate login's script with statements after CREATE LOGIN is one XACT_ABORT transaction, its credential after Deny; Managed Instance's SQL Server login keeps the placeholder header");
+        var mappedKey = Script(Key("k", "key"), new("grant", true), [new("App]Data", "k", null, ["db_owner"])]);
+        var entraDisabled = Script(Entra("e@example.com"), new("grant", false));
+        check(SqlScript.Parse(mappedKey).Count == 2 && mappedKey.Contains("EXEC [App]]Data].sys.sp_executesql N'CREATE USER [k] FOR LOGIN [k]';", StringComparison.Ordinal)
+            && SqlScript.Parse(entraDisabled).Count == 2 && entraDisabled.Contains("ALTER LOGIN [e@example.com] DISABLE;" + NL + "COMMIT TRANSACTION;", StringComparison.Ordinal)
+            && !mappedKey.Contains(Catalog.Logins.ScriptHeader, StringComparison.Ordinal) && !entraDisabled.Contains(Catalog.Logins.ScriptHeader, StringComparison.Ordinal)
+            && Script(Certificate("c", "cert"), new("grant", true)) == "USE [master]" + NL + "GO" + NL + "CREATE LOGIN [c] FROM CERTIFICATE [cert]" + NL + "GO" + NL
+            && SqlScript.Parse(Script(LoginChecks.Windows("D\\u"), new("deny", false))).Count == 4,
+            "a key login's mapped users and an Entra login's Disable run in that one batch (users through the database's sp_executesql); CREATE LOGIN alone, and a Windows login, keep SSMS's GO form");
     }
 
     private static void Credentials(Action<bool, string> check)
@@ -181,6 +193,42 @@ internal static class LoginKindsChecks
         check(ActionErrors.CodeOf(Sql(15404), null) == "NOT_FOUND" && ActionErrors.CodeOf(Sql(15259), null) == "NOT_SUPPORTED" && ActionErrors.CodeOf(Sql(37525), null) == "NOT_SUPPORTED"
             && ActionErrors.CodeOf(Sql(15151), null) == "PERMISSION_DENIED",
             "Check Names' missing account (15404) is NOT_FOUND, a certificate user's default schema (15259) and Entra without Arc (37525) NOT_SUPPORTED, a missing certificate or credential (15151) PERMISSION_DENIED");
+    }
+
+    /// <summary>Check Names' 15404 by the Windows error xp_logininfo names (probed on SQL Server 2025), and its 229; then a 15151 from a
+    /// step that names a credential, certificate or key, which is NOT_FOUND with what to check, while any other step's stays as it was.</summary>
+    private static async Task FailuresAsync(Action<bool, string> check)
+    {
+        using var service = new ActionService(new LoginChecks.Host(3));
+        var missing = service.CheckNamesFailure(15404, "Could not obtain information about Windows NT group/user 'NOSUCHDOMAIN\\nobody', error code 0x534.");
+        var unreachable = service.CheckNamesFailure(15404, "Could not obtain information about Windows NT group/user 'NT SERVICE\\MSSQLSERVER', error code 0x54b.");
+        var bare = service.CheckNamesFailure(15404, "Could not obtain information about Windows NT group/user 'ann', error code 0xffff0002.");
+        var denied = service.CheckNamesFailure(229, "The EXECUTE permission was denied on the object 'xp_logininfo', database 'mssqlsystemresource', schema 'sys'.");
+        check(missing is { Code: "NOT_FOUND" } && missing.Message == Catalog.Logins.CheckNamesNotFound
+            && unreachable is { Code: "SQL_ERROR" } && unreachable.Message == Catalog.Logins.CheckNamesLookupFailed && bare.Message == Catalog.Logins.CheckNamesLookupFailed
+            && denied is { Code: "PERMISSION_DENIED" } && denied.Message == Catalog.Logins.CheckNamesPermission
+            && !Catalog.Logins.CheckNamesLookupFailed.Contains("could not find", StringComparison.OrdinalIgnoreCase),
+            "Check Names says an account is missing only for Windows' 0x534; any other 15404 (a domain it could not reach, 0x54b) says the server could not look it up");
+        static SqlException Sql(int number, string message) => ConnectionFailureChecks.Sql(number, 1, 16, "server", message);
+        async Task<ActionError?> Step(string? advice, SqlException thrown)
+        {
+            try { await service.NamingAsync(null, () => throw thrown, advice, text => text.Replace("secret", "<password>", StringComparison.Ordinal), CancellationToken.None); return null; }
+            catch (StepRefusedException refusal) { return refusal.Error; }
+            catch (SqlException) { return new ActionError("RETHROWN", "", false); }
+        }
+        var credential = await Step(ActionService.NamedAdvice(ActionTemplate.AddLoginCredential), Sql(15151, "Cannot find the credential 'Vault', because it does not exist or you do not have permission. secret"));
+        var certificate = await Step(ActionService.CertificateAdvice, Sql(15151, "Cannot find the certificate 'cert', because it does not exist or you do not have permission."));
+        var other = await Step(ActionService.NamedAdvice(ActionTemplate.AddServerRoleMember), Sql(15151, "Cannot find the login 'x', because it does not exist or you do not have permission."));
+        var otherNumber = await Step(ActionService.CredentialAdvice, Sql(15247, "User does not have permission to perform this action."));
+        check(credential is { Code: "NOT_FOUND" } && credential.Message == "Cannot find the credential 'Vault', because it does not exist or you do not have permission. <password> " + ActionService.CredentialAdvice
+            && ActionService.NamedAdvice(ActionTemplate.DropLoginCredential) == ActionService.CredentialAdvice
+            && certificate is { Code: "NOT_FOUND" } && certificate.Message.EndsWith(" " + ActionService.CertificateAdvice, StringComparison.Ordinal)
+            && !credential.Message.Contains(ActionErrors.LoginPermissionAdvice, StringComparison.Ordinal)
+            && other?.Code == "RETHROWN" && otherNumber?.Code == "RETHROWN",
+            "a 15151 on a credential, certificate or key step is NOT_FOUND with SQL Server's scrubbed text and what to check, never the login permission advice; other steps and numbers are left to the runner");
+        var partly = ActionService.PartlyChanged(credential!, [new("done", ActionService.LoginOptionsStep), new("failed", ActionService.StepTitle(ActionTemplate.AddLoginCredential))], oldPassword: false);
+        check(partly.Message.StartsWith(ActionService.LoginChangedMessage + " Cannot find the credential", StringComparison.Ordinal) && partly.Message.EndsWith(ActionService.CredentialAdvice, StringComparison.Ordinal),
+            "Login Properties adds no login permission advice to a credential that went");
     }
 
     private static async Task EnginesAsync(Action<bool, string> check)

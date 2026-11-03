@@ -598,8 +598,9 @@ asymmetric keys (≤ 1,024 each), credentials `{ name, provider? }` (≤ 1,024),
 rolesTruncated, guest, schemas (≤ 1,024), schemasTruncated } }`, or `NOT_FOUND` and `DATABASE_UNAVAILABLE` (offline, closed or
 read-only) values.
 With `dialog: 'windowsPrincipal'` and `target: { kind: 'login', name }` (a `DOMAIN\name`, nothing else; D2e Check Names) it answers
-`{ windowsPrincipal: { accountName, access, type? ('user' | 'group'), via? } }` from xp_logininfo, or `NOT_FOUND` (15404) and
-`PERMISSION_DENIED` (229) values; off SQL Server it is `NOT_SUPPORTED` before any connection.
+`{ windowsPrincipal: { accountName (the name as typed: xp_logininfo echoes it), access, type? ('user' | 'group'), via? } }` from
+xp_logininfo, or `NOT_FOUND` (15404 with Windows' 0x534), `SQL_ERROR` (any other 15404: the server could not look the account up)
+and `PERMISSION_DENIED` (229) values; off SQL Server it is `NOT_SUPPORTED` before any connection.
 `actions.script` and `actions.execute` take `{ action: 'createLogin', login, serverRoles, status, mappings }`, where `login` is
 `{ auth, name, defaultDatabase?, defaultLanguage?, checkPolicy?, checkExpiration?, mustChange?, certificate?, asymmetricKey?,
 credentials? }`: `auth` is `windows`, `sql`, `entra`, `certificate` or `asymmetricKey` (D2e), the defaults exactly for the first

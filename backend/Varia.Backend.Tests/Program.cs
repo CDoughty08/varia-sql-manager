@@ -82,7 +82,7 @@ if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live"
         }
         else if (lane == "--login-kinds-live")
         {
-            await LoginKindsLiveChecks.RunAsync(Check, focusedService, focusedInfo, json, required: true);
+            await LoginKindsLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json, required: true);
             Console.WriteLine("Passed " + passed + " focused New Login kind checks.");
         }
         else if (lane == "--new-login-live")
@@ -572,7 +572,7 @@ try
     await LoginDeleteLiveChecks.RunAsync(Check, service, info, Live, json);
     await UnlockLiveChecks.RunAsync(Check, service, info, Live, json);
     await LoginPropertiesLiveChecks.RunAsync(Check, service, info, Live, json);
-    await LoginKindsLiveChecks.RunAsync(Check, service, info, json);
+    await LoginKindsLiveChecks.RunAsync(Check, service, info, Live, json);
     await DatabasePropertiesLiveChecks.RunAsync(Check, service, info, json);
     await DesignerLiveChecks.RunAsync(Check, service, info, Live("master"), json);
     await SsisLiveChecks.RunAsync(Check, service, info, Live, json);

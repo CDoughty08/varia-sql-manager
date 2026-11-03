@@ -185,21 +185,25 @@ internal static partial class LoginSql
     /// <summary>Script Action's text (D2 §5.6, critic A14). A SQL Server login's script is one batch in one XACT_ABORT transaction
     /// under the placeholder header: unedited, it fails to parse and runs nothing, so no later statement can give a role to an
     /// existing login of that name or map a user to it; a mapped database's statement runs there as EXEC [db].sys.sp_executesql
-    /// N'…' (one batch cannot USE a database for a later statement only). A Windows login's script is SSMS's: a GO after each
-    /// statement, and USE [db] before each mapped database's.</summary>
+    /// N'…' (one batch cannot USE a database for a later statement only). A certificate, asymmetric key or Microsoft Entra login whose
+    /// CREATE LOGIN has statements after it takes the same form without the header (D2e review): its CREATE fails wherever master lacks
+    /// that certificate or key or the server lacks Microsoft Entra, and a later GO batch would then deny, disable, map a credential, give
+    /// a role or map a user to an existing login of that name. A Windows login's script, and one with CREATE LOGIN alone, is SSMS's: a
+    /// GO after each statement, and USE [db] before each mapped database's.</summary>
     public static string ScriptText(NewLoginDto login, IReadOnlyList<string> roles, LoginStatusDto status, IReadOnlyList<UserMappingDto> mappings, IReadOnlySet<string> missingSchemas, string header)
     {
         var server = new List<string> { CreateStatement(login, null) };
         server.AddRange(After(login, roles, status).Select(ActionSql.Checked).Select(ActionSql.Statement));
         var mapped = Mappings(login, mappings, missingSchemas).Select(ActionSql.Checked).ToList();
         var text = new StringBuilder("USE [master]").Append(NL).Append("GO").Append(NL);
-        if (!Sql(login))
+        if (!Sql(login) && (login.Auth == "windows" || server.Count + mapped.Count == 1))
         {
             foreach (var statement in server) text.Append(statement).Append(NL).Append("GO").Append(NL);
             foreach (var statement in mapped) text.Append(ActionSql.ScriptText(statement));
             return text.ToString();
         }
-        text.Append(header).Append(NL).Append("SET XACT_ABORT ON;").Append(NL).Append("BEGIN TRANSACTION;").Append(NL);
+        if (Sql(login)) text.Append(header).Append(NL);
+        text.Append("SET XACT_ABORT ON;").Append(NL).Append("BEGIN TRANSACTION;").Append(NL);
         foreach (var statement in server) text.Append(statement).Append(';').Append(NL);
         foreach (var statement in mapped) text.Append(InDatabase(statement)).Append(';').Append(NL);
         return text.Append("COMMIT TRANSACTION;").Append(NL).Append("GO").Append(NL).ToString();

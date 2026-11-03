@@ -268,7 +268,8 @@ internal sealed partial class ActionService
             steps.Add(new(LoginPasswordStep, context => RunBoundAsync(connection, bound, self, self,
                 open => AlterLoginPasswordAsync(connection, login, password, secrets?.Password, secrets?.OldPassword, dryRun: false, context.Token, open), context.Token)));
         steps.AddRange(LoginSql.PropertiesServerPlan(login, changes, bound).Concat(LoginSql.PropertiesMappingPlan(login, changes, missing, bound)).Select(ActionSql.Checked).Select(statement =>
-            new RunStep(StepTitle(statement.Template), context => RunPlannedBoundAsync(connection, statement, context.Token), Detail: StepDetail(statement))));
+            new RunStep(StepTitle(statement.Template), context => NamingAsync(connection, () => RunPlannedBoundAsync(connection, statement, context.Token), NamedAdvice(statement.Template), Scrubbed,
+                context.Token), Detail: StepDetail(statement))));
         var (done, failure, _) = await RunStepsAsync(connection, steps, null, token, CleanupBudget(args.Action), serverText: Scrubbed);
         // The connections that sign in as this login keep working: their later sessions use the new password, never the old one.
         if (secrets?.Password is { } changed && done.Any(step => step.Title == LoginPasswordStep && step.Status == "done"))

@@ -37,7 +37,7 @@ describe('New Login draft and request', () => {
   it('starts from SSMS\'s defaults: Windows authentication, or SQL Server authentication on Linux; master; the three options; Grant; Enabled', () => {
     expect(initialNewLoginDraft(model())).toEqual({
       auth: 'windows', name: '', defaultDatabase: 'master', checkPolicy: true, checkExpiration: true, mustChange: true, serverRoles: [], connect: 'grant', enabled: true, mappings: [],
-      certificate: 'AppSigning', asymmetricKey: 'AppKey', mapCredential: false, credential: 'AzureBlob', credentials: []
+      certificate: '', asymmetricKey: '', mapCredential: false, credential: 'AzureBlob', credentials: []
     })
     expect(initialNewLoginDraft(model({ linux: true })).auth).toBe('sql')
   })

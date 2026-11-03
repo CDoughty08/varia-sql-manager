@@ -68,13 +68,14 @@ export interface MappingDraft {
 /**
  * SSMS's New Login defaults (its LoginPrototypeData): Windows authentication, or SQL Server authentication when the server runs
  * on Linux or is a Managed Instance (which has no Windows logins); master; the three password options on; no server role but public;
- * Grant; Enabled; the first certificate, key and credential listed chosen, none mapped.
+ * Grant; Enabled; no certificate or key chosen (master lists SQL Server's own ##MS_…## certificates first, which a login must not
+ * take by default), the first credential listed chosen, none mapped.
  */
 export function initialNewLoginDraft(model: NewLoginModel): NewLoginDraft {
   return {
     auth: model.server.linux || !newLoginAuthOffered(model.server, 'windows') ? 'sql' : 'windows', name: '', defaultDatabase: 'master', checkPolicy: true, checkExpiration: true, mustChange: true,
     serverRoles: [], connect: 'grant', enabled: true, mappings: [],
-    certificate: model.certificates[0] ?? '', asymmetricKey: model.asymmetricKeys[0] ?? '', mapCredential: false, credential: model.credentials[0]?.name ?? '', credentials: []
+    certificate: '', asymmetricKey: '', mapCredential: false, credential: model.credentials[0]?.name ?? '', credentials: []
   }
 }
 /** The kinds the General page offers on this server, in SSMS's order (newLoginAuthOffered). */

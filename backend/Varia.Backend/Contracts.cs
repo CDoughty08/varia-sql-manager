@@ -292,7 +292,7 @@ internal sealed record DatabasePropertiesDto(DatabaseGeneralDto General, Diction
 internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long ElapsedMs, ActionError? Error = null, DatabasePropertiesDto? DatabaseProperties = null,
     TableDesignerModelDto? TableDesigner = null, NewLoginModelDto? NewLogin = null, LoginDatabaseRolesDto? LoginDatabaseRoles = null, LoginFactsDto? Login = null, LoginLockFactsDto? Lock = null,
     LoginPropertiesDto? LoginProperties = null, WindowsPrincipalDto? WindowsPrincipal = null);
-/// <summary>Check Names (the windowsPrincipal describe, D2e; logins.ts WindowsPrincipal): the account as xp_logininfo names it, whether a
+/// <summary>Check Names (the windowsPrincipal describe, D2e; logins.ts WindowsPrincipal): the account as typed (xp_logininfo echoes it), whether a
 /// login gives it access (no row: the server found the account but none does), its type (user or group) and the path of its access.</summary>
 internal sealed record WindowsPrincipalDto(string AccountName, bool Access, string? Type = null, string? Via = null);
 /// <summary>What Login Properties reads of the login besides its facts and New Login's lists (src/shared/actions/logins.ts

@@ -104,7 +104,7 @@ describe('the other kinds in main\'s schemas', () => {
     const rules = catalogJson().logins.newLogin
     expect(rules).toMatchObject({ entraBand: entraBoxBand, policyEngines: [...newLoginPolicyEngines], credentialAuths: [...credentialAuths], defaultsAuths: [...defaultsAuths] })
     expect(rules.authEngines).toEqual({ windows: ['box'], sql: ['box', 'managedInstance'], entra: ['box', 'managedInstance'], certificate: ['box'], asymmetricKey: ['box'] })
-    expect(catalogJson().logins.checkNames).toEqual({ describe: windowsPrincipalDescribe, permission: checkNamesText.permission, notFound: checkNamesText.notFound })
+    expect(catalogJson().logins.checkNames).toEqual({ describe: windowsPrincipalDescribe, permission: checkNamesText.permission, notFound: checkNamesText.notFound, lookupFailed: checkNamesText.lookupFailed })
     expect(catalogJson().actions.find(row => row.action === 'createLogin')?.engines).toEqual(['box', 'managedInstance'])
   })
 })
@@ -128,21 +128,29 @@ describe('New Login\'s kinds per server', () => {
     const mi = managed()
     expect(newLoginEnabled(draft(mi, { auth: 'sql' }), mi.server)).toMatchObject({ password: true, policy: false, checkPolicy: false, checkExpiration: false, mustChange: false })
     expect(newLoginHints(draft(mi, { auth: 'sql' }), mi.server)).toEqual([newLoginMessages.policyManagedInstance, newLoginMessages.passwordScript])
+    // A blank password: Managed Instance has no Enforce password policy to point to; SQL Server says it needs it.
+    expect(problem(mi, { auth: 'sql' }, { ...set, password: 'empty' })).toBe(newLoginMessages.passwordRequired)
+    expect(problem(of, { auth: 'sql', checkPolicy: false }, { ...set, password: 'empty' })).toBe(newLoginMessages.blankWithoutPolicy)
   })
   it('sends each kind with its own fields: certificate and key without defaults, Entra with them, Managed Instance\'s SQL Server login without options', () => {
     const of = model()
-    expect(built(of, { auth: 'certificate', defaultLanguage: 'us_english' })).toMatchObject({ login: { auth: 'certificate', name: 'app', certificate: 'AppSigning' } })
-    expect((built(of, { auth: 'certificate' }) as { login: NewLoginGeneral }).login).toEqual({ auth: 'certificate', name: 'app', certificate: 'AppSigning' })
-    expect((built(of, { auth: 'asymmetricKey' }) as { login: NewLoginGeneral }).login).toEqual({ auth: 'asymmetricKey', name: 'app', asymmetricKey: 'AppKey' })
+    expect(built(of, { auth: 'certificate', certificate: 'AppSigning', defaultLanguage: 'us_english' })).toMatchObject({ login: { auth: 'certificate', name: 'app', certificate: 'AppSigning' } })
+    expect((built(of, { auth: 'certificate', certificate: 'AppSigning' }) as { login: NewLoginGeneral }).login).toEqual({ auth: 'certificate', name: 'app', certificate: 'AppSigning' })
+    expect((built(of, { auth: 'asymmetricKey', asymmetricKey: 'AppKey' }) as { login: NewLoginGeneral }).login).toEqual({ auth: 'asymmetricKey', name: 'app', asymmetricKey: 'AppKey' })
     expect((built(of, { auth: 'entra', name: 'ann@contoso.com', defaultLanguage: 'us_english' }) as { login: NewLoginGeneral }).login)
       .toEqual({ auth: 'entra', name: 'ann@contoso.com', defaultDatabase: 'master', defaultLanguage: 'us_english' })
     const mi = managed()
     expect((built(mi, { auth: 'sql' }, set) as { login: NewLoginGeneral }).login).toEqual({ auth: 'sql', name: 'app', defaultDatabase: 'master' })
-    for (const value of [built(of, { auth: 'certificate' }), built(of, { auth: 'entra', name: 'e' }), built(mi, { auth: 'sql' }, set)]) expect(scripts({ ...value, ...ids() })).toBe(true)
+    for (const value of [built(of, { auth: 'certificate', certificate: 'AppSigning' }), built(of, { auth: 'entra', name: 'e' }), built(mi, { auth: 'sql' }, set)]) expect(scripts({ ...value, ...ids() })).toBe(true)
   })
   it('says what is missing for a kind: its certificate or key, one the lists no longer hold, a kind the server does not offer', () => {
     const of = model()
     expect(problem(of, { auth: 'certificate', certificate: '' })).toBe(newLoginMessages.certificate)
+    // Nothing is chosen until the user picks one: master lists SQL Server's own signing certificates first, which no login should take by default.
+    const own = model({}, { certificates: ['##MS_AgentSigningCertificate##', '##MS_SchemaSigningCertificateX##', 'AppSigning'] })
+    expect(initialNewLoginDraft(own)).toMatchObject({ certificate: '', asymmetricKey: '' })
+    expect(problem(own, { auth: 'certificate' })).toBe(newLoginMessages.certificate)
+    expect(problem(of, { auth: 'asymmetricKey' })).toBe(newLoginMessages.asymmetricKey)
     expect(problem(of, { auth: 'certificate', certificate: 'Gone' })).toBe(newLoginMessages.certificate)
     expect(problem(of, { auth: 'asymmetricKey', asymmetricKey: 'Gone' })).toBe(newLoginMessages.asymmetricKey)
     expect(problem(model({ level: 15 }), { auth: 'entra' })).toBe(newLoginMessages.authNotOffered)
@@ -182,7 +190,7 @@ describe('New Login\'s kinds per server', () => {
   })
   it('sends no default schema for a certificate or key login\'s users, and its User Mapping keeps Default Schema closed', () => {
     const of = model()
-    const mapped = (auth: NewLoginDraft['auth']) => { let value = draft(of, { auth }); value = { ...value, ...setMapped(value, 'AppData', true) }; return { ...value, ...setMappingSchema(value, 'AppData', 'dbo') } }
+    const mapped = (auth: NewLoginDraft['auth']) => { let value = draft(of, { auth, certificate: 'AppSigning' }); value = { ...value, ...setMapped(value, 'AppData', true) }; return { ...value, ...setMappingSchema(value, 'AppData', 'dbo') } }
     expect(signingAuth('certificate') && signingAuth('asymmetricKey') && !signingAuth('entra')).toBe(true)
     expect(built(of, mapped('certificate'))).toMatchObject({ mappings: [{ database: 'AppData', user: 'app', rolesAdd: [] }] })
     expect((built(of, mapped('certificate')) as unknown as { mappings: { defaultSchema?: string }[] }).mappings[0]).not.toHaveProperty('defaultSchema')
@@ -292,9 +300,9 @@ describe('Check Names in the object dialog service', () => {
     expect(dialogs.current?.checkNames).toEqual({ name: 'contoso\\ann', state: 'checking' })
     expect(api.describeObject.mock.calls[1][0]).toMatchObject({ dialog: windowsPrincipalDescribe, target: { kind: 'login', name: 'contoso\\ann' } })
     expect(actionDescribeSchema.safeParse({ ...api.describeObject.mock.calls[1][0], ...ids() }).success).toBe(true)
-    check.resolve({ ok: true, value: { elapsedMs: 1, windowsPrincipal: { accountName: 'CONTOSO\\Ann', access: true, type: 'user' } } as ActionDescribeResult })
+    check.resolve({ ok: true, value: { elapsedMs: 1, windowsPrincipal: { accountName: 'contoso\\ann', access: true, type: 'user' } } as ActionDescribeResult })
     await settle()
-    expect(dialogs.current?.checkNames).toEqual({ name: 'contoso\\ann', state: 'ready', value: { accountName: 'CONTOSO\\Ann', access: true, type: 'user' } })
+    expect(dialogs.current?.checkNames).toEqual({ name: 'contoso\\ann', state: 'ready', value: { accountName: 'contoso\\ann', access: true, type: 'user' } })
   })
   it('refuses a name that is not DOMAIN\\name without a request, cancels a check still running, and answers failures as values', async () => {
     const { dialogs, api, check, node, settle } = setup()

@@ -23,7 +23,8 @@ import { explorerStatics } from './explorer-tree.mjs'
  * master); its Script is `newLoginScript`; OK with the password "Weak" answers PASSWORD_POLICY at "Create the login", "Held"
  * waits until its Stop arrives, and anything else adds the login. D2e: master has one certificate (AppSigning) and no asymmetric
  * key; the server has two credentials (AzureBlob, and Vault of the EKM provider EkmProv), each mapped after Deny and Disable; Check
- * Names (windowsPrincipal) finds CONTOSO\Ann (a user, any case) and CONTOSO\Ops (a group), and answers NOT_FOUND for any other.
+ * Names (windowsPrincipal) finds CONTOSO\Ann (a user, any case) and CONTOSO\Ops (a group), each named as typed (xp_logininfo
+ * echoes @acctname), and answers NOT_FOUND for any other.
  * Security › Logins lists AppUser (two sessions), CONTOSO\Ops (a Windows group), Held, Locked, Retired (disabled, its CONNECT SQL
  * denied), sa (the login the stub connects as) and SQL Server's own ##MS_PolicyTsqlExecutionLogin## (disabled). The
  * loginFacts describe answers their facts; Disable and Enable change what Logins lists, except Held's, which wait until
@@ -155,11 +156,11 @@ export function installActionsStub({ ipcMain }, { statics }) {
     serverRoles: [{ name: 'dbcreator', fixed: true }, { name: 'public', fixed: true }, { name: 'sysadmin', fixed: true }], serverRolesTruncated: false,
     certificates: ['AppSigning'], certificatesTruncated: false, asymmetricKeys: [], asymmetricKeysTruncated: false,
     credentials: [{ name: 'AzureBlob' }, { name: 'Vault', provider: 'EkmProv' }], credentialsTruncated: false })
-  /** Check Names (D2e): xp_logininfo's answer for the two accounts the stub knows, NOT_FOUND for any other. */
+  /** Check Names (D2e): xp_logininfo's answer for the two accounts the stub knows, the name as typed, NOT_FOUND for any other. */
   function windowsPrincipal({ target }) {
     const name = target.name.toLowerCase()
-    if (name === 'contoso\\ann') return ok({ windowsPrincipal: { accountName: 'CONTOSO\\Ann', access: true, type: 'user', via: 'CONTOSO\\Ann' }, elapsedMs: 1 })
-    if (name === 'contoso\\ops') return ok({ windowsPrincipal: { accountName: 'CONTOSO\\Ops', access: true, type: 'group', via: 'CONTOSO\\Ops' }, elapsedMs: 1 })
+    if (name === 'contoso\\ann') return ok({ windowsPrincipal: { accountName: target.name, access: true, type: 'user', via: target.name }, elapsedMs: 1 })
+    if (name === 'contoso\\ops') return ok({ windowsPrincipal: { accountName: target.name, access: true, type: 'group', via: target.name }, elapsedMs: 1 })
     return ok({ elapsedMs: 1, error: { code: 'NOT_FOUND', message: 'The server could not find this Windows account. Check the name, typed as DOMAIN\\name.', retryable: false } })
   }
   /** Login Properties' describe (ActionService.DescribeLoginPropertiesJobAsync): New Login's lists, the login's facts and a SQL

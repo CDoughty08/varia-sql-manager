@@ -10,8 +10,8 @@ internal sealed record LoginRulesJson(Dictionary<string, long> Limits, List<stri
 /// credentialAuths, defaultsAuths), with the messages a refusal answers.</summary>
 internal sealed record NewLoginRulesJson(Dictionary<string, List<string>> AuthEngines, int EntraBand, List<string> PolicyEngines, List<string> CredentialAuths, List<string> DefaultsAuths,
     Dictionary<string, string> Messages);
-/// <summary>Check Names (logins.ts windowsPrincipalDescribe and checkNamesText): its describe id and the messages of its two refusals.</summary>
-internal sealed record CheckNamesJson(string Describe, string Permission, string NotFound);
+/// <summary>Check Names (logins.ts windowsPrincipalDescribe and checkNamesText): its describe id and the messages of its three refusals.</summary>
+internal sealed record CheckNamesJson(string Describe, string Permission, string NotFound, string LookupFailed);
 /// <summary>The words of a Logins folder row's detail (logins.ts loginDetailWords): its kind by type letter, then its state and
 /// password policy.</summary>
 internal sealed record LoginDetailJson(Dictionary<string, string> Types, string Disabled, string ConnectDenied, string PolicyChecked, string ExpirationChecked);
@@ -62,9 +62,11 @@ internal sealed class LoginRules
 
     /// <summary>Check Names' describe id (logins.ts windowsPrincipalDescribe).</summary>
     public string CheckNamesDescribe => json.CheckNames.Describe;
-    /// <summary>What Check Names answers when xp_logininfo is refused (229) or finds no account (15404).</summary>
+    /// <summary>What Check Names answers when xp_logininfo is refused (229), finds no account (15404 with Windows' 0x534), or could not
+    /// look it up (15404 with any other Windows error).</summary>
     public string CheckNamesPermission => json.CheckNames.Permission;
     public string CheckNamesNotFound => json.CheckNames.NotFound;
+    public string CheckNamesLookupFailed => json.CheckNames.LookupFailed;
 
     public IReadOnlyCollection<string> Subtypes => rules.Keys;
     /// <summary>The LOGINPROPERTY properties logins.ts allows ActionSql.LoginLock to read.</summary>

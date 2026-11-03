@@ -1,4 +1,5 @@
 using System.Data;
+using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 using Varia.Backend.Explorer;
 using Varia.Backend.Scripting;
@@ -26,6 +27,28 @@ internal sealed partial class ActionService
     internal const string LoginRolesMessage = "Not every server role was added.";
     /// <summary>Joined when a User Mapping statement (a user, its default schema or schema, a database role) did not complete.</summary>
     internal const string LoginMappingsMessage = "Not every database was mapped as chosen.";
+    /// <summary>What a 15151 on a statement that names a credential, certificate or asymmetric key adds (D2e): SQL Server's text says
+    /// the object does not exist or may not be used, and the dialog listed it, so it most likely went since; Learn's ALTER LOGIN and
+    /// CREATE LOGIN need ALTER ANY CREDENTIAL besides ALTER ANY LOGIN for a credential.</summary>
+    internal const string CredentialAdvice = "Check that the credential still exists. Mapping or removing a credential also needs ALTER ANY CREDENTIAL.";
+    internal const string CertificateAdvice = "Check that the certificate still exists in master.";
+    internal const string AsymmetricKeyAdvice = "Check that the asymmetric key still exists in master.";
+    /// <summary>The advice for a statement that names a credential, or null.</summary>
+    internal static string? NamedAdvice(ActionTemplate template) => template is ActionTemplate.AddLoginCredential or ActionTemplate.DropLoginCredential ? CredentialAdvice : null;
+
+    /// <summary>Runs a step whose statement names a credential, certificate or asymmetric key (<paramref name="advice"/>; null runs it as
+    /// it is): its 15151 is NOT_FOUND with SQL Server's text and what to check, never PERMISSION_DENIED with the login permission advice,
+    /// which does not fit a sysadmin whose credential went. The step fails with it (StepRefusedException); a bound step's transaction
+    /// rolls back first.</summary>
+    internal async Task NamingAsync(SqlConnection? connection, Func<Task> run, string? advice, Func<string, string>? serverText, CancellationToken token)
+    {
+        try { await run(); }
+        catch (SqlException error) when (advice is not null && error.Number == 15151 && !token.IsCancellationRequested)
+        {
+            var value = ActionErrors.FromSql(catalog, error, connection, ddl: true, null, serverText);
+            throw new StepRefusedException(value.Code == "PERMISSION_DENIED" ? Error("NOT_FOUND", value.Message + " " + advice) : value);
+        }
+    }
     /// <summary>User Mapping's steps, whose detail names their database.</summary>
     private static bool MappingStep(ActionTemplate template) => template is ActionTemplate.CreateUserForLogin or ActionTemplate.AlterUserSchema or ActionTemplate.CreateSchemaFor or ActionTemplate.AddRoleMember
         or ActionTemplate.RenameUser or ActionTemplate.DropRoleMember;
@@ -52,9 +75,10 @@ internal sealed partial class ActionService
         return target;
     }
 
-    /// <summary>Check Names (D2 §6): xp_logininfo on the describe's own connection. Its first row gives the account's name, type and
-    /// access path; no row means the server found the account but no login lets it in. 15404 (no such account) and 229 (no EXECUTE on
-    /// xp_logininfo) are values with Varia's own words, which name no account. DescribeAsync refuses it off SQL Server before connecting.</summary>
+    /// <summary>Check Names (D2 §6): xp_logininfo on the describe's own connection. Its first row gives the account's name (the text
+    /// typed: xp_logininfo echoes @acctname, probed), type and access path; no row means the server found the account but no login lets
+    /// it in. 15404 and 229 (no EXECUTE on xp_logininfo) are values with Varia's own words, which name no account
+    /// (<see cref="CheckNamesFailure"/>). DescribeAsync refuses it off SQL Server before connecting.</summary>
     private async Task<ActionDescribeResult> DescribeWindowsPrincipalJobAsync(SqlConnection connection, ObjectRefDto target, CancellationToken token)
     {
         await using var command = connection.CreateCommand();
@@ -72,9 +96,20 @@ internal sealed partial class ActionService
         }
         catch (SqlException error) when (error.Number is 15404 or 229)
         {
-            return new(null, 0, error.Number == 15404 ? Error("NOT_FOUND", catalog.Logins.CheckNamesNotFound) : Error("PERMISSION_DENIED", catalog.Logins.CheckNamesPermission));
+            return new(null, 0, CheckNamesFailure(error.Number, error.Message));
         }
     }
+
+    /// <summary>Check Names' answer to xp_logininfo's 229 (PERMISSION_DENIED) or 15404, whose text ends with the Windows error of the
+    /// lookup: 0x534 (ERROR_NONE_MAPPED) means no such account (NOT_FOUND); any other code (0x54b, a domain it could not reach, probed for
+    /// an account that has a login) means the server could not look it up, which says nothing of the account (SQL_ERROR).</summary>
+    internal ActionError CheckNamesFailure(int number, string message) =>
+        number == 229 ? Error("PERMISSION_DENIED", catalog.Logins.CheckNamesPermission)
+        : NoneMapped().IsMatch(message) ? Error("NOT_FOUND", catalog.Logins.CheckNamesNotFound)
+        : Error("SQL_ERROR", catalog.Logins.CheckNamesLookupFailed);
+
+    [GeneratedRegex(@"\b0x0*534\b", RegexOptions.IgnoreCase)]
+    private static partial Regex NoneMapped();
 
     /// <summary>The server ref New Login names as its target, with no other member.</summary>
     private static ObjectRefDto ServerTarget(ObjectRefDto? target) =>
@@ -327,9 +362,14 @@ internal sealed partial class ActionService
         if (refused is not null) return new([], [], 0, refused);
         var secrets = args.Secrets;
         string Scrubbed(string text) => LoginSql.Scrub(text, secrets);
-        var steps = new List<RunStep> { new(CreateLoginStep, context => CreateLoginAsync(connection, login, secrets?.Password, dryRun: false, context.Token)) };
+        var source = login.Auth switch { "certificate" => CertificateAdvice, "asymmetricKey" => AsymmetricKeyAdvice, _ => null };
+        var steps = new List<RunStep>
+        {
+            new(CreateLoginStep, context => NamingAsync(connection, () => CreateLoginAsync(connection, login, secrets?.Password, dryRun: false, context.Token), source, Scrubbed, context.Token))
+        };
         steps.AddRange(LoginSql.After(login, args.ServerRoles!, args.Status!).Concat(LoginSql.Mappings(login, args.Mappings!, missing)).Select(ActionSql.Checked).Select(statement =>
-            new RunStep(StepTitle(statement.Template), context => RunStatementAsync(connection, statement, dryRun: false, context.Token), Detail: StepDetail(statement))));
+            new RunStep(StepTitle(statement.Template), context => NamingAsync(connection, () => RunStatementAsync(connection, statement, dryRun: false, context.Token), NamedAdvice(statement.Template),
+                Scrubbed, context.Token), Detail: StepDetail(statement))));
         var (done, failure, _) = await RunStepsAsync(connection, steps, null, token, CleanupBudget(args.Action), serverText: Scrubbed);
         if (failure is not null && done is [{ Status: "cancelled" }, ..])
         {

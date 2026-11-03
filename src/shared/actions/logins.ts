@@ -322,7 +322,7 @@ export function loginsCatalog() {
       authEngines: newLoginAuthEngines, entraBand: entraBoxBand, policyEngines: newLoginPolicyEngines, credentialAuths, defaultsAuths,
       messages: Object.fromEntries((['authNotOffered', 'entraVersion', 'policyManagedInstance', 'policyRequired'] as const).map(id => [id, newLoginMessages[id]]))
     },
-    checkNames: { describe: windowsPrincipalDescribe, permission: checkNamesText.permission, notFound: checkNamesText.notFound },
+    checkNames: { describe: windowsPrincipalDescribe, permission: checkNamesText.permission, notFound: checkNamesText.notFound, lookupFailed: checkNamesText.lookupFailed },
     scriptHeader: passwordScriptHeader,
     typeSubtypes: loginTypeSubtypes
   }
@@ -447,6 +447,8 @@ export const newLoginMessages = {
   tooLong: `A password can have at most ${loginLimits.password} characters.`,
   broken: 'The password holds a broken character (half of a surrogate pair), which SQL Server would not receive as typed. Retype the password.',
   blankWithoutPolicy: 'Enter a password. A blank password needs Enforce password policy, so the server can refuse it.',
+  /** Managed Instance's General has no policy options to turn on, and the backend refuses a blank password without them. */
+  passwordRequired: 'Enter a password.',
   defaultDatabase: 'Choose a default database from the list.',
   defaultLanguage: 'Choose a default language from the list.',
   windowsOnly: 'This server accepts Windows authentication only. The login can\'t connect until SQL Server and Windows Authentication mode is turned on.',
@@ -478,9 +480,10 @@ export const newLoginMessages = {
 /** Check Names (D2 §6, the Search… button's SubDialog "Select User or Group"): the describe id that asks the server about a Windows
  *  account through xp_logininfo (target `{ kind: 'login', name: DOMAIN\name }`), and what it answers. */
 export const windowsPrincipalDescribe = 'windowsPrincipal'
-/** xp_logininfo's answer: the account name as the server gives it, `user` or `group`, and the path its access comes through (a group,
- *  or the account itself). No row means the server found the account but no login gives it access (probed: a missing account answers
- *  15404, NOT_FOUND), so `access` is false and the type unknown. */
+/** xp_logininfo's answer: the account name as typed (its `account name` column echoes @acctname, probed, and CREATE LOGIN stores the
+ *  text typed too), `user` or `group`, and the path its access comes through (a group, or the account itself). No row means the server
+ *  found the account but no login gives it access, so `access` is false and the type unknown. A missing account answers 15404 with
+ *  Windows' 0x534 (NOT_FOUND, `notFound`); any other code (0x54b, a domain it could not reach, probed) is `lookupFailed`. */
 export interface WindowsPrincipal {
   readonly accountName: string
   readonly access: boolean
@@ -502,6 +505,8 @@ export const checkNamesText = {
   /** xp_logininfo needs sysadmin, or EXECUTE granted on it in master (Learn); the server answers 229 otherwise. */
   permission: 'Check Names needs permission to run xp_logininfo. Type the name as DOMAIN\\name; the server checks it when you press OK.',
   notFound: 'The server could not find this Windows account. Check the name, typed as DOMAIN\\name.',
+  /** 15404 with a Windows error other than 0x534 (no such account): its domain could not be reached, for one (0x54b, probed). */
+  lookupFailed: 'The server could not look up this Windows account, as when its domain cannot be reached. Check the name, typed as DOMAIN\\name; the server checks it again when you press OK.',
   changed: 'The name changed since it was checked. Check Names again.'
 } as const
 /** The Script Action header for a script with a password placeholder (D2 §5.6, A14): run unedited, the batch fails to parse. */
@@ -528,7 +533,7 @@ export function newLoginProblem(login: NewLoginGeneral, password: { readonly emp
     if (password.tooLong) return newLoginMessages.tooLong
     if (!password.matches) return newLoginMessages.mismatch
     if (password.wellFormed === false) return newLoginMessages.broken
-    if (password.empty && !login.checkPolicy) return newLoginMessages.blankWithoutPolicy
+    if (password.empty && !login.checkPolicy) return model?.server && !newLoginPolicyEngines.includes(model.server.engine) ? newLoginMessages.passwordRequired : newLoginMessages.blankWithoutPolicy
   }
   return undefined
 }

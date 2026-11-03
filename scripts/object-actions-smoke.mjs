@@ -778,15 +778,17 @@ try {
   console.log('Object action checks: New Login opens from Security › New and Logins with SSMS\'s pages and defaults, greys the password rows\' labels under Windows authentication, scrolls General in the narrow frame with its fields aligned, keeps its masked password across pages, maps a database (Select Schema, a role, keys) but never an offline one, scripts PASSWORD=<password> to the clipboard and a query window without sending the password, keeps the dialog on PASSWORD_POLICY with focus back on Password, Stops, and selects the new login.')
 
   // 8b. New Login's other kinds (D2e): the General page offers the five kinds SQL Server 2022 takes; Search… opens Select User or
-  // Group, whose Check Names asks the server (NOT_FOUND as a value, then the account the server names, which OK puts in Login
-  // name); Map to Credential adds credentials to Mapped Credentials (Credential, Provider) and Remove takes one out; Mapped to
+  // Group, whose Check Names asks the server (NOT_FOUND as a value, then the account as typed, as xp_logininfo echoes it, which OK
+  // puts in Login name); Map to Credential adds credentials to Mapped Credentials (Credential, Provider) and Remove takes one out; Mapped to
   // certificate enables its list, greys the defaults and Search…, and User Mapping keeps Default Schema closed; Script and OK send
   // the certificate and credentials, no defaults, no default schema and no secrets.
   expect(await menuOf('server-a', 'Security', 'Logins')).toContain('New Login…')
   await explorerMenu().getByRole('menuitem', { name: 'New Login…', exact: true }).click(fast)
   await expect(objectDialogProgress(loginDialog())).toHaveText('Ready')
-  await expect(loginDialog().getByRole('radiogroup', { name: 'Authentication', exact: true }).getByRole('radio'))
-    .toHaveAccessibleName(['Windows authentication', 'SQL Server authentication', 'Microsoft Entra authentication', 'Mapped to certificate', 'Mapped to asymmetric key'])
+  const authRadios = loginDialog().getByRole('radiogroup', { name: 'Authentication', exact: true }).getByRole('radio')
+  const authNames = ['Windows authentication', 'SQL Server authentication', 'Microsoft Entra authentication', 'Mapped to certificate', 'Mapped to asymmetric key']
+  await expect(authRadios).toHaveCount(authNames.length)
+  for (const [index, name] of authNames.entries()) await expect(authRadios.nth(index)).toHaveAccessibleName(name)
   await loginDialog().getByRole('button', { name: 'Search…', exact: true }).click()
   const checkNames = page.getByRole('dialog', { name: 'Select User or Group', exact: true })
   const objectName = checkNames.getByRole('textbox', { name: 'Enter the object name', exact: true })
@@ -798,12 +800,12 @@ try {
   await expect(checkNames.getByRole('alert')).toHaveCount(0)
   await checkNames.getByRole('button', { name: 'Check Names', exact: true }).click()
   await expect(checkNames.getByRole('list', { name: 'Check Names', exact: true })).toContainText('The server found this account.')
-  await expect(checkNames.getByRole('list', { name: 'Check Names', exact: true })).toContainText('CONTOSO\\Ann · Windows user')
+  await expect(checkNames.getByRole('list', { name: 'Check Names', exact: true })).toContainText('contoso\\ann · Windows user')
   expect((await stubCalls('actions.describe')).filter(call => call.dialog === 'windowsPrincipal').map(call => call.target)).toEqual([{ kind: 'login', name: 'CONTOSO\\nobody' }, { kind: 'login', name: 'contoso\\ann' }])
   await page.screenshot({ path: resolve('artifacts', 'object-actions-check-names-dark.png') })
   await checkNames.getByRole('button', { name: 'OK', exact: true }).click()
   await expect(checkNames).toHaveCount(0)
-  await expect(loginDialog().getByRole('textbox', { name: 'Login name', exact: true })).toHaveValue('CONTOSO\\Ann')
+  await expect(loginDialog().getByRole('textbox', { name: 'Login name', exact: true })).toHaveValue('contoso\\ann')
   // Map to Credential: its list and Add wait for the box; a credential mapped already greys Add.
   const credentialList = loginDialog().getByRole('combobox', { name: 'Credential to map', exact: true })
   const addCredentialButton = loginDialog().getByRole('button', { name: 'Add', exact: true })
@@ -820,10 +822,13 @@ try {
   await mappedCredentials.getByRole('row', { name: 'Vault EkmProv' }).click()
   await loginDialog().getByRole('button', { name: 'Remove', exact: true }).click()
   await expect(mappedCredentials.getByRole('row')).toHaveText(['CredentialProvider', 'AzureBlob'])
-  // Mapped to certificate: its list (master's), no defaults, no Search…, and the note that such a login cannot connect.
+  // Mapped to certificate: its list (master's), nothing chosen until the user picks one, no defaults, no Search…, and the note
+  // that such a login cannot connect.
   await loginDialog().getByRole('radio', { name: 'Mapped to certificate', exact: true }).check()
-  await expect(loginDialog().getByRole('combobox', { name: 'Certificate name', exact: true })).toHaveValue('AppSigning')
-  await expect(loginDialog().getByRole('combobox', { name: 'Certificate name', exact: true })).toBeEnabled()
+  const certificateList = loginDialog().getByRole('combobox', { name: 'Certificate name', exact: true })
+  await expect(certificateList).toHaveValue('')
+  await expect(certificateList).toBeEnabled()
+  await certificateList.selectOption('AppSigning')
   await expect(loginDialog().getByRole('combobox', { name: 'Asymmetric key name', exact: true })).toBeDisabled()
   await expect(loginDialog().getByRole('combobox', { name: 'Default database', exact: true })).toBeDisabled()
   await expect(loginDialog().getByRole('button', { name: 'Search…', exact: true })).toBeDisabled()

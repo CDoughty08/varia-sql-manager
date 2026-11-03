@@ -582,6 +582,10 @@ General lists the kinds the server offers (`newLoginAuthEngines` in logins.ts, w
   The SSMS 22 label of this radio is unverified.
 - **Mapped to certificate** and **Mapped to asymmetric key** choose one of master's certificates or asymmetric keys (Certificate
   name, Asymmetric key name; at most 1,024 each, SQL Server's own `##MS_…##` ones included, as SSMS lists them).
+  Neither list chooses one until the user does: by name, master lists SQL Server's own signing certificates first, which no login
+  should take by default, so OK waits for the choice ("Choose a certificate from the list."). A certificate or key that is gone when OK
+  runs fails CREATE LOGIN with 15151, which is `NOT_FOUND` with SQL Server's text and "Check that the certificate still exists in
+  master." (or the asymmetric key); nothing is created.
   Such a login has no Default database or Default language (SMO writes neither, and `FROM CERTIFICATE … WITH DEFAULT_DATABASE` is a
   syntax error, 102), so both are greyed, and it cannot connect ("A login mapped to a certificate or an asymmetric key cannot connect to SQL Server: it is used for code signing."). Its users have no default schema
   (SQL Server answers 15259, probed), so User Mapping keeps Default Schema blank and closed ("A user mapped to a certificate or an asymmetric key has no default schema.").
@@ -589,17 +593,22 @@ General lists the kinds the server offers (`newLoginAuthEngines` in logins.ts, w
   to **Mapped Credentials** (Credential, Provider: the EKM provider of a credential that has one); **Remove** takes the selected row
   out (the grid is one tab stop: arrows select, Delete removes). At most 16 credentials are mapped at once. OK maps each with
   `ALTER LOGIN … ADD CREDENTIAL` after Deny and Disable and before the server roles, in the grid's order; a credential that fails
-  leaves the login created, and the message says "Not every credential was mapped.". Map to Credential is greyed for Microsoft Entra logins
+  leaves the login created, and the message says "Not every credential was mapped.". A credential that is gone (15151, "does not exist or
+  you do not have permission") is `NOT_FOUND` with "Check that the credential still exists. Mapping or removing a credential also
+  needs ALTER ANY CREDENTIAL.", in New Login and Login Properties alike. Map to Credential is greyed for Microsoft Entra logins
   ("A Microsoft Entra login cannot be mapped to a credential here."): Managed Instance's ALTER LOGIN for them takes no credential, and SQL Server's is unverified.
 - **Managed Instance**: New Login opens on SQL Server authentication, offers SQL Server and Microsoft Entra logins only, and hides
-  the password policy options, which its CREATE LOGIN does not take ("Azure SQL Managed Instance takes no password policy options when it creates a login. Set them in Login Properties afterwards."). The backend refuses
+  the password policy options, which its CREATE LOGIN does not take ("Azure SQL Managed Instance takes no password policy options when it creates a login. Set them in Login Properties afterwards."); a blank password
+  there is refused with "Enter a password.", which names no option the page lacks. The backend refuses
   the other kinds, and the policy options, there before it connects (`NOT_SUPPORTED`), and on SQL Server it refuses a SQL Server login
   without them.
 - **Search…** (Windows authentication) opens "Select User or Group": "Enter the object name" and **Check Names**, which asks the server
   (`actions.describe` with dialog `windowsPrincipal` and the target `{ kind: 'login', name }`, on the describe's read connection:
-  `EXEC master.sys.xp_logininfo @acctname = @name;`). It answers the account as the server names it, user or group, and the group
-  its access comes through; a missing account is `NOT_FOUND` (15404: "The server could not find this Windows account. Check the name, typed as DOMAIN\name."), and a login that may not run
-  xp_logininfo gets "Check Names needs permission to run xp_logininfo. Type the name as DOMAIN\name; the server checks it when you press OK." (229, `PERMISSION_DENIED`). OK puts the account name into Login name. SSMS opens
+  `EXEC master.sys.xp_logininfo @acctname = @name;`). It answers whether the server found the account, user or group, and the group
+  its access comes through. The name stays as typed: xp_logininfo echoes @acctname (probed), and CREATE LOGIN stores the text typed.
+  A missing account (15404 with Windows' 0x534) is `NOT_FOUND` ("The server could not find this Windows account. Check the name, typed as DOMAIN\name."); any other 15404 (0x54b when the
+  account's domain cannot be reached, probed for an account that has a login) is `SQL_ERROR` ("The server could not look up this Windows account, as when its domain cannot be reached. Check the name, typed as DOMAIN\name; the server checks it again when you press OK."); a
+  login that may not run xp_logininfo gets "Check Names needs permission to run xp_logininfo. Type the name as DOMAIN\name; the server checks it when you press OK." (229, `PERMISSION_DENIED`). OK puts the name into Login name. SSMS opens
   Windows' own Object Picker, which a sandboxed renderer cannot reach and macOS and Linux lack: Check Names works the same on every
   client and resolves the name as `CREATE LOGIN … FROM WINDOWS` will. It is not offered on Managed Instance.
 
@@ -616,8 +625,11 @@ Varia's own sentences never hold it.
 
 Script Action never carries or writes the password: a SQL Server login's script is one batch in one `SET XACT_ABORT ON` transaction
 under the comment "/* Varia leaves passwords out of scripts. Replace <password> with the login's password, as an N'…' literal, before you run this script. */", with `PASSWORD=<password>` unquoted, so an unedited script fails to parse and runs
-nothing (no later statement can give a role to an existing login of that name). A Windows login's script is SSMS's, one statement
-per batch. Each mapped database's statements run there through `EXEC [database].sys.sp_executesql N'…'` inside that transaction
+nothing (no later statement can give a role to an existing login of that name). A certificate, asymmetric key or Microsoft Entra
+login's script with statements after CREATE LOGIN is the same one-batch transaction without the header: its CREATE fails where
+master lacks that certificate or key or the server lacks Microsoft Entra, and nothing after it may then deny, disable, map a
+credential, give a role or map a user to an existing login of that name (a live check runs such a script against one). A Windows
+login's script, and CREATE LOGIN alone, is SSMS's, one statement per batch. Each mapped database's statements run there through `EXEC [database].sys.sp_executesql N'…'` inside that transaction
 (a Windows login's script uses `USE [database]` and `GO` as SSMS does); Script reads the server only when a Default Schema is
 chosen, to learn whether the database has it (SSMS's CREATE SCHEMA), and never refuses a name.
 
