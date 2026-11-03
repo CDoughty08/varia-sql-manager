@@ -26,11 +26,18 @@ function Find-Controls($window, $type) {
   $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $type)
   return $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
 }
-function Find-Button($window, $name) {
-  foreach ($button in (Find-Controls $window ([System.Windows.Automation.ControlType]::Button))) {
-    if ($button.Current.Name -match $name) { return $button }
-  }
-  throw "Installer button not found: $name"
+function Find-Button($process, $name) {
+  $deadline = (Get-Date).AddSeconds(30)
+  do {
+    $window = Wait-Window $process
+    $buttons = @(Find-Controls $window ([System.Windows.Automation.ControlType]::Button))
+    foreach ($button in $buttons) {
+      if ($button.Current.Name.Replace('&', '') -match $name) { return $button }
+    }
+    Start-Sleep -Milliseconds 250
+  } while ((Get-Date) -lt $deadline)
+  $names = @($buttons | ForEach-Object { $_.Current.Name }) -join ', '
+  throw "Installer button not found: $name; available buttons: $names"
 }
 function Invoke-Button($button) {
   $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
@@ -45,7 +52,7 @@ foreach ($flag in @('', '--updated', '--silent-extra')) {
   try {
     $window = Wait-Window $process
     if (Test-Path -LiteralPath $exe) { throw "Installer wrote application files before confirmation ($flag)." }
-    $next = Find-Button $window '^Next'
+    $next = Find-Button $process '^Next'
     if (-not $flag) {
       Invoke-Button $next
       $deadline = (Get-Date).AddSeconds(15)
@@ -55,7 +62,7 @@ foreach ($flag in @('', '--updated', '--silent-extra')) {
       } while ($radios.Count -lt 2 -and (Get-Date) -lt $deadline)
       $names = @($radios | ForEach-Object { $_.Current.Name })
       if (-not ($names -match 'all users') -or -not ($names -match 'Only for.*me')) { throw "Missing user and all-users choices: $names" }
-      Invoke-Button (Find-Button $window '^Next')
+      Invoke-Button (Find-Button $process '^Next')
       $deadline = (Get-Date).AddSeconds(15)
       do {
         Start-Sleep -Milliseconds 250
