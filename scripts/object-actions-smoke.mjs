@@ -1,12 +1,12 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
+import { chooseExplorerMenuItem, expandExplorerPath, explorerMenuItems, explorerRow, explorerTree, openExplorerMenu, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { resizeWindow } from './fixtures/window-resize.mjs'
 import { actionsStubData, caution, dependentsMessage, installActionsStub, propertiesScript, scriptText, stubServerFiles } from './fixtures/actions-stub.mjs'
 import {
   addObjectDialogSteps, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, errorBanner,
-  explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
+  explorerLabel, fieldHint, frameSection, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
   renameBox, scriptActions, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toolbarButton, unsavedMark,
   warningBanner as warningBannerOf
 } from './fixtures/ui.mjs'
@@ -23,12 +23,9 @@ let page
 const failures = []
 const watchdog = setTimeout(() => { console.error('Object actions suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 300000)
 
-const fast = { force: true }
 const menuNamed = name => page.getByRole('menu', { name, exact: true })
 const explorerMenu = () => menuNamed('Object Explorer')
 const openMenus = () => openMenusOf(page)
-const labels = () => menuItemNames(explorerMenu())
-const disabled = () => menuItemNames(explorerMenu(), { disabled: true })
 const dialog = () => page.getByRole('dialog', { name: 'Delete Object', exact: true })
 const commandBanner = () => errorBanner(page)
 const warningBanner = () => warningBannerOf(page)
@@ -48,11 +45,9 @@ async function connect(server) {
   await connectDialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(connectDialog).toHaveCount(0, { timeout: 30000 })
 }
-/** Right-clicks a row and returns its menu's item labels. */
+/** Opens a row's menu (explorerMenuItems) and returns its item labels; the menu stays open. */
 async function menuOf(...path) {
-  await (await revealExplorerRow(page, ...path)).click({ button: 'right', force: true })
-  await expect(explorerMenu()).toBeVisible()
-  return labels()
+  return (await explorerMenuItems(page, ...path)).names
 }
 async function closeMenu() {
   await page.keyboard.press('Escape')
@@ -102,8 +97,9 @@ try {
   expect(await menuOf(...appData)).toEqual(['New Database…', 'New Query', 'Script Database as', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await closeMenu()
   // SSMS offers Properties on its own databases too: only Rename and Delete are greyed.
-  expect(await menuOf('server-a', 'Databases', 'System Databases', 'master')).toEqual(['New Database…', 'New Query', 'Script Database as', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
-  expect(await disabled()).toEqual(['Rename', 'Delete'])
+  expect(await explorerMenuItems(page, 'server-a', 'Databases', 'System Databases', 'master')).toEqual({
+    names: ['New Database…', 'New Query', 'Script Database as', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'], disabled: ['Rename', 'Delete']
+  })
   await closeMenu()
   await select('server-a', 'Databases', 'System Databases', 'master')
   await page.keyboard.press('F2')
@@ -114,8 +110,7 @@ try {
 
   // 2. Select Top 1000 Rows on a view lists its columns and runs on its database.
   const before = await tabs().count()
-  await (await revealExplorerRow(page, ...appData, 'Views', 'dbo.OrderSummary')).click({ button: 'right', force: true })
-  await explorerMenu().getByRole('menuitem', { name: 'Select Top 1000 Rows', exact: true }).click(fast)
+  await chooseExplorerMenuItem(page, [...appData, 'Views', 'dbo.OrderSummary'], 'Select Top 1000 Rows')
   const selectTop = ['/****** Script for SelectTopNRows command from Varia SQL Manager ******/', 'SELECT TOP (1000) [OrderId]', '      ,[Total]', '  FROM [AppData].[dbo].[OrderSummary]'].join(process.platform === 'win32' ? '\r\n' : '\n')
   // New queries take the platform's line ending, as SSMS's do.
   await expect.poll(async () => (await stubCalls('query.execute')).at(-1)?.sql).toBe(selectTop)
@@ -242,8 +237,7 @@ try {
   await expect(dialog()).toHaveCount(0)
   await expect(explorerTree(page)).toBeFocused()
   // OK deletes dbo.Orders2: the dialog closes, Tables reloads without it, and the tree has focus.
-  await (await explorerRow(page, ...tablesPath, 'dbo.Orders2')).click({ button: 'right', force: true })
-  await explorerMenu().getByRole('menuitem', { name: 'Delete', exact: true }).click(fast)
+  await chooseExplorerMenuItem(page, [...tablesPath, 'dbo.Orders2'], 'Delete')
   await expect(objectDialogProgress(dialog())).toHaveText('Ready')
   await dialog().getByRole('button', { name: 'OK', exact: true }).click()
   await expect(dialog()).toHaveCount(0)
@@ -294,12 +288,9 @@ try {
   const verb = name => documentVerb(properties(), 'AppData', name)
   const sectionList = () => sectionListOf(properties())
   const fact = label => propertyFact(properties(), label)
-  // Tables has just reloaded after the Delete, which can re-render the tree under the press, so it repeats until its row's menu opens.
-  await expect(async () => {
-    await (await revealExplorerRow(page, ...appData)).click({ button: 'right', force: true })
-    await expect(explorerMenu()).toBeVisible({ timeout: 1000 })
-  }).toPass()
-  await explorerMenu().getByRole('menuitem', { name: 'Properties', exact: true }).click(fast)
+  // Tables has just reloaded after the Delete, which can move the rows under the press: chooseExplorerMenuItem presses
+  // until AppData's own menu opens.
+  await chooseExplorerMenuItem(page, appData, 'Properties')
   await expect(properties()).toBeVisible()
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await expect(tabs()).toHaveCount(tabCount + 1)
@@ -501,14 +492,11 @@ try {
   // exists the dialog says so; a failure lists its steps with the removal; Stop waits for the answer and says Stopped.
   const catalogs = ['server-a', 'Integration Services Catalogs']
   const createDialog = () => page.getByRole('dialog', { name: 'Create Catalog', exact: true })
-  // Databases may still be reloading after Database Properties' OK, moving the rows below it, so the press repeats until the
-  // folder's own menu opens.
+  // Databases may still be reloading after Database Properties' OK, moving the rows below it: openExplorerMenu presses
+  // until the folder's own menu opens.
   const openCreate = async () => {
-    await expect(async () => {
-      if (await explorerMenu().count()) await closeMenu()
-      expect(await menuOf(...catalogs)).toEqual(['Create Catalog…', 'Refresh'])
-    }).toPass()
-    await explorerMenu().getByRole('menuitem', { name: 'Create Catalog…', exact: true }).click(fast)
+    expect(await menuOf(...catalogs)).toEqual(['Create Catalog…', 'Refresh'])
+    await chooseExplorerMenuItem(page, catalogs, 'Create Catalog…')
     await expect(createDialog()).toBeVisible()
   }
   await openCreate()
@@ -698,17 +686,14 @@ try {
   const newDatabase = () => documentFrame(page, 'New Database')
   const newVerb = name => documentVerb(newDatabase(), 'New Database', name)
   const newFiles = () => newDatabase().getByRole('table', { name: 'Database files', exact: true })
-  const databasesMenu = async () => {
-    await expect(async () => {
-      await (await revealExplorerRow(page, 'server-a', 'Databases')).click({ button: 'right', force: true })
-      await expect(explorerMenu()).toBeVisible({ timeout: 1000 })
-    }).toPass()
-  }
-  await databasesMenu()
-  expect((await labels())[0]).toBe('New Database…')
+  const databases = ['server-a', 'Databases']
+  // Databases may still be reloading, moving the rows under the press: the helpers press until the folder's own menu opens.
+  const databasesMenu = async () => (await explorerMenuItems(page, ...databases)).names
+  const chooseNewDatabase = () => chooseExplorerMenuItem(page, databases, 'New Database…')
+  expect((await databasesMenu())[0]).toBe('New Database…')
   await closeMenu()
   expect((await menuOf(...appData))[0]).toBe('New Database…')
-  await explorerMenu().getByRole('menuitem', { name: 'New Database…', exact: true }).click(fast)
+  await chooseExplorerMenuItem(page, appData, 'New Database…')
   await expect(newDatabase()).toBeVisible()
   await expect(documentTab(page, 'New Database')).toHaveAttribute('aria-selected', 'true')
   await expect(documentCrumbs(newDatabase())).toHaveText(['server-a', 'Databases'])
@@ -783,8 +768,7 @@ try {
   ])
   await expect(await explorerRow(page, 'server-a', 'Databases', 'Sales')).toHaveAttribute('aria-selected', 'true')
   // Stop while CREATE DATABASE runs: the tab stays and says what happened; Cancel then closes it.
-  await databasesMenu()
-  await explorerMenu().getByRole('menuitem', { name: 'New Database…', exact: true }).click(fast)
+  await chooseNewDatabase()
   await expect(databaseName).toBeFocused()
   await databaseName.fill('Held')
   // Enter outside the grids is OK, as in SSMS's dialog.
@@ -797,11 +781,9 @@ try {
   await newVerb('Cancel').click()
   await expect(newDatabase()).toHaveCount(0)
   // A second New Database is numbered; Ctrl+S is its OK, and Escape cancels the first.
-  await databasesMenu()
-  await explorerMenu().getByRole('menuitem', { name: 'New Database…', exact: true }).click(fast)
+  await chooseNewDatabase()
   await expect(databaseName).toBeFocused()
-  await databasesMenu()
-  await explorerMenu().getByRole('menuitem', { name: 'New Database…', exact: true }).click(fast)
+  await chooseNewDatabase()
   const secondDatabase = documentFrame(page, 'New Database (2)')
   await expect(documentTab(page, 'New Database (2)')).toHaveAttribute('aria-selected', 'true')
   const secondName = secondDatabase.getByLabel('Database name', { exact: true })
@@ -818,12 +800,13 @@ try {
   console.log('Object action checks: New Database… comes first on Databases, names files after the database, adds and removes files with the caret kept and buttons named, keeps names and paths readable at 1024 x 768, changes autogrowth, browses the server for a path, scripts, creates and selects the database, stops a create, numbers a second tab, and takes Enter, Ctrl+S and Escape.')
 
   // 6. A database: SSMS's two options (backup history checked, Close existing connections not), then a lost server
-  // leaves only Close. Databases has just reloaded after Database Properties' Apply, so the press repeats until its row's menu opens.
-  await expect(async () => {
-    await (await revealExplorerRow(page, ...appData)).click({ button: 'right', force: true })
-    await expect(explorerMenu()).toBeVisible({ timeout: 1000 })
-  }).toPass()
-  await explorerMenu().getByRole('menuitem', { name: 'Delete', exact: true }).click(fast)
+  // leaves only Close. The tree is scrolled down to Integration Services Catalogs, so the right-click scrolls AppData into
+  // view first. Chromium sends that scroll's event with a later frame, which must not close the menu: on a Windows run it
+  // did, and the forced click on Delete selected the row under the closed menu instead.
+  await openExplorerMenu(page, ...appData)
+  await explorerTree(page).evaluate(tree => { tree.dispatchEvent(new Event('scroll')) })
+  await expect(explorerMenu()).toBeVisible()
+  await chooseExplorerMenuItem(page, appData, 'Delete')
   await expect(objectDialogProgress(dialog())).toHaveText('Ready')
   await expect(dialog().getByLabel('Delete backup and restore history information for databases', { exact: true })).toBeChecked()
   await expect(dialog().getByLabel('Close existing connections', { exact: true })).not.toBeChecked()
