@@ -327,7 +327,7 @@ export const commandCatalog = {
   'explorer.collapseAll': { title: 'Collapse All', category: 'Object Explorer', icon: 'collapse-all', precondition: 'hasConnection', unavailableHint: noServer },
   'explorer.newQuery': {
     title: 'New Query', category: 'Object Explorer', icon: 'new-file', precondition: '!documentBusy', unavailableHint: 'Select a server or database in Object Explorer.',
-    menus: [{ menu: 'explorer.context', group: '1_query', order: 1, mnemonic: 'q', when: "(explorerNode == 'server' && !explorerServerLost) || explorerNode == 'database'" }]
+    menus: [{ menu: 'explorer.context', group: '1_query', order: 2, mnemonic: 'q', when: "(explorerNode == 'server' && !explorerServerLost) || explorerNode == 'database'" }]
   },
   // Select Top 1000 Rows, Rename and Delete: generated from src/shared/actions/catalog.ts. Each acts on its menu's node,
   // else the selection; explorer.selectTopRows keeps PR4's id.
@@ -357,7 +357,7 @@ export const commandCatalog = {
   'explorer.modify': {
     title: 'Modify', category: 'Object Explorer', icon: 'edit', precondition: "backendReady && explorerSelectionModifiable && explorerScriptAlter == 'enabled' && !documentBusy",
     unavailableHint: 'Select a stored procedure, function, or trigger.',
-    menus: [{ menu: 'explorer.context', group: '1_query', order: 3, mnemonic: 'y', when: "explorerSelectionModifiable && explorerNode != 'background'" }]
+    menus: [{ menu: 'explorer.context', group: '1_query', order: 4, mnemonic: 'y', when: "explorerSelectionModifiable && explorerNode != 'background'" }]
   },
   'explorer.cancelScripting': { title: 'Cancel Scripting', category: 'Object Explorer', icon: 'debug-stop', keywords: ['script', 'stop'], precondition: 'scriptingRunning', unavailableHint: 'Nothing is being scripted.' },
   'explorer.copyName': {
@@ -503,7 +503,7 @@ export const commandCatalog = {
     menus: [
       // 'm', not 'a': View › Search already has 'a' (tests/command-catalog.test.ts).
       { menu: 'view', group: '2_monitor', order: 1, mnemonic: 'm' },
-      { menu: 'explorer.context', group: '1_query', order: 4, mnemonic: 't', when: "explorerNode == 'server' && !explorerServerLost" }
+      { menu: 'explorer.context', group: '1_query', order: 5, mnemonic: 't', when: "explorerNode == 'server' && !explorerServerLost" }
     ]
   },
   // The monitor's header verbs and keys act on the active monitor. Pause stops collecting (no SQL), as SSMS's does.

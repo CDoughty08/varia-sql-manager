@@ -57,7 +57,8 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
       when: args => catalogs(nodeOf(args)) && !dialogs.current && !ssisCatalog.current,
       run: args => { const node = nodeOf(args); if (catalogs(node)) ssisCatalog.open(node) }
     }),
-    commands.register('explorer.newDatabase', {
+    // A database's menu places New Database… as a command of its own (ServerActionSpec.nodePlace); both open the same document.
+    ...(['explorer.newDatabase', 'explorer.newDatabaseOnDatabase'] as const).map(id => commands.register(id, {
       when: args => databases(nodeOf(args)),
       run: args => {
         const node = nodeOf(args)
@@ -66,7 +67,7 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
         // The menu returned focus to the tree; the document's name field mounts once the server was read.
         documents.focusActive()
       }
-    }),
+    })),
     commands.register('newDatabase.ok', onNew(id => newDatabase.canCreate(id), id => newDatabase.create(id))),
     commands.register('newDatabase.cancel', onNew(id => newDatabase.get(id)?.phase !== 'creating', id => documents.close(id))),
     commands.register('newDatabase.stop', onNew(id => newDatabase.get(id)?.phase === 'creating', id => newDatabase.stop(id))),

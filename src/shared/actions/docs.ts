@@ -403,8 +403,9 @@ function newDatabaseDocs(): string[] {
     '`explorerAction*` key gates it: its item reads the node it is on, and its describe\'s target is the server.',
     '',
     table(['Action', 'Menu title', 'Command', 'Document', 'On', 'Group', 'Mnemonic', 'Servers', 'Long run'], serverActions.map(action => {
-      const spec = serverActionSpecs[action]
-      return [code(action), spec.title, code(spec.command), code(spec.dialog), places(spec), `${code(spec.group)} ${spec.order}`, spec.mnemonic,
+      const spec = serverActionSpecs[action], { nodePlace } = spec
+      const group = `${code(spec.group)} ${spec.order}` + (nodePlace ? `; on a node, ${code(nodePlace.group)} ${nodePlace.order}, as the menu-only ${code(nodePlace.command)}` : '')
+      return [code(action), spec.title, code(spec.command), code(spec.dialog), places(spec), group, spec.mnemonic,
         spec.engines.map(engine => engineNames[engine]).join(', '), code(spec.longRun)]
     })),
     '',

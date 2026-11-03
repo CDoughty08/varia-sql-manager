@@ -56,7 +56,7 @@ export interface ObjectActionSpec {
  *  actions are a follow-up. */
 const onServers: readonly ServerEngine[] = ['box', 'managedInstance']
 const actionSpecData = {
-  selectTop: { title: 'Select Top 1000 Rows', mnemonic: 'w', group: '1_query', order: 2, class: 'query', command: 'explorer.selectTopRows', engines: serverEngines },
+  selectTop: { title: 'Select Top 1000 Rows', mnemonic: 'w', group: '1_query', order: 3, class: 'query', command: 'explorer.selectTopRows', engines: serverEngines },
   rename: { title: 'Rename', mnemonic: 'm', group: '7_edit', order: 1, class: 'inline', command: 'explorer.rename', engines: onServers },
   // SSMS underlines D, which Disconnect has in Varia's one Object Explorer menu (access keys are unique per menu).
   delete: { title: 'Delete', mnemonic: 'e', group: '7_edit', order: 2, class: 'dialog', dialog: 'deleteObject', command: 'explorer.delete', engines: onServers },
@@ -87,9 +87,15 @@ export interface ServerActionSpec {
   readonly command: `explorer.${string}`
   /** The servers it runs on (critic A1); elsewhere the menu hides it and the backend refuses it. */
   readonly engines: readonly ServerEngine[]
-  /** The folders whose menu offers it, and the node kinds whose menu does (SSMS offers New Database on a database too). */
+  /** The folders whose menu offers it (in `group` at `order`), and the node kinds whose menu does (SSMS offers New Database on a database too). */
   readonly folders: readonly FolderId[]
   readonly kinds: readonly NodeKind[]
+  /**
+   * Where a node of `kinds` places it instead, when SSMS groups it with the node's own items there. The catalogue places a
+   * command once per menu (macOS's native context menus show a command wherever it is placed, since main sees no target),
+   * so this place is a menu-only command of its own that runs the same; the palette offers only `command`.
+   */
+  readonly nodePlace?: { readonly command: `explorer.${string}`; readonly group: string; readonly order: number }
   /** It registers with the long-run registry while OK runs, never with the document task. */
   readonly longRun: LongRunKind
   /** As ObjectActionSpec.cleanupMs. */
@@ -97,14 +103,17 @@ export interface ServerActionSpec {
 }
 const serverActionSpecData = {
   // SSMS 22's Databases menu: New Database…, Attach…, Restore Database…, Restore Files and Filegroups…; its access key for New
-  // Database is recalled as N. Azure SQL Managed Instance creates databases without files, so it is a follow-up.
+  // Database is recalled as N. On a database SSMS's first group is New Database…, New Query and Script Database as (Microsoft
+  // Learn's SSMS 17 and 19 screenshots), so there it joins New Query's group, first. Azure SQL Managed Instance creates
+  // databases without files, so it is a follow-up.
   createDatabase: {
     title: 'New Database…', mnemonic: 'n', group: '0_new', order: 1, dialog: 'newDatabase', command: 'explorer.newDatabase', engines: ['box'], folders: ['databases'], kinds: ['database'],
-    longRun: 'newDatabase'
+    nodePlace: { command: 'explorer.newDatabaseOnDatabase', group: '1_query', order: 1 }, longRun: 'newDatabase'
   }
 } as const satisfies { readonly [A in ServerAction]: ServerActionSpec }
 export const serverActionSpecs: { readonly [A in ServerAction]: ServerActionSpec & { readonly command: typeof serverActionSpecData[A]['command'] } } = serverActionSpecData
-export type ServerActionCommandId = typeof serverActionSpecData[ServerAction]['command']
+type NodePlaceCommands = { readonly [A in ServerAction]: typeof serverActionSpecData[A] extends { readonly nodePlace: { readonly command: infer C } } ? C : never }[ServerAction]
+export type ServerActionCommandId = typeof serverActionSpecData[ServerAction]['command'] | NodePlaceCommands
 export const isServerAction = (action: string): action is ServerAction => (serverActions as readonly string[]).includes(action)
 /** An action's servers, from whichever list declares it. */
 export const catalogActionEngines = (action: CatalogAction): readonly ServerEngine[] => isServerAction(action) ? serverActionSpecs[action].engines : objectActionSpecs[action].engines
@@ -275,6 +284,8 @@ export interface ActionCommandEntry {
   readonly titleSetting?: { readonly setting: 'objectExplorer.selectTopRows'; readonly template: string }
   readonly keybindings?: readonly ActionKeybinding[]
   readonly menus: readonly [ActionMenuPlacement, ...ActionMenuPlacement[]]
+  /** Only a server action's menu-only command for its node place (ServerActionSpec.nodePlace) sets it. */
+  readonly palette?: false
 }
 const commandData: { readonly [A in ObjectAction]: Omit<ActionCommandEntry, 'title' | 'category' | 'precondition' | 'menus'> & { readonly documentTask: boolean } } = {
   selectTop: {
@@ -321,20 +332,22 @@ const serverCommandData: { readonly [A in ServerAction]: Pick<ActionCommandEntry
 }
 /**
  * The server actions' commands. The menu offers one on its folders and node kinds, on a server it serves that is not lost;
- * the palette, on a selection of the same kind. Like a long-running object action, none holds the document task.
+ * the palette, on a selection of the same kind. Like a long-running object action, none holds the document task. An action
+ * with a node place has a second, menu-only command for it, with the same title, precondition and handler.
  */
 export function serverActionCommandEntries(): { readonly [K in ServerActionCommandId]: ActionCommandEntry } {
-  return Object.fromEntries(serverActions.map(action => {
-    const spec: ServerActionSpec = serverActionSpecs[action]
+  return Object.fromEntries(serverActions.flatMap(action => {
+    const spec: ServerActionSpec = serverActionSpecs[action], { nodePlace } = spec
     const engines = (key: string) => anyOf(spec.engines.map(engine => `${key} == '${engine}'`))
-    const menuPlaces = anyOf([...spec.folders.map(folder => `explorerNode == 'folder' && explorerFolder == '${folder}'`), ...spec.kinds.map(kind => `explorerNode == '${kind}'`)])
+    const folderPlaces = spec.folders.map(folder => `explorerNode == 'folder' && explorerFolder == '${folder}'`), kindPlaces = spec.kinds.map(kind => `explorerNode == '${kind}'`)
     const selectionPlaces = anyOf([...spec.folders.map(folder => `explorerSelectionFolder == '${folder}'`), ...spec.kinds.map(kind => `explorerSelectionKind == '${kind}'`)])
-    const entry: ActionCommandEntry = {
+    const entry = (group: string, order: number, places: readonly string[]): ActionCommandEntry => ({
       title: spec.title, category: 'Object Explorer', ...serverCommandData[action],
       precondition: `backendReady && ${selectionPlaces} && ${engines('explorerSelectionServerEngine')}`,
-      menus: [{ menu: 'explorer.context', group: spec.group, order: spec.order, mnemonic: spec.mnemonic, when: `${menuPlaces} && !explorerServerLost && ${engines('explorerServerEngine')}` }]
-    }
-    return [spec.command, entry]
+      menus: [{ menu: 'explorer.context', group, order, mnemonic: spec.mnemonic, when: `${anyOf(places)} && !explorerServerLost && ${engines('explorerServerEngine')}` }]
+    })
+    if (!nodePlace) return [[spec.command, entry(spec.group, spec.order, [...folderPlaces, ...kindPlaces])]]
+    return [[spec.command, entry(spec.group, spec.order, folderPlaces)], [nodePlace.command, { ...entry(nodePlace.group, nodePlace.order, kindPlaces), palette: false }]]
   })) as { readonly [K in ServerActionCommandId]: ActionCommandEntry }
 }
 

@@ -246,11 +246,11 @@ describe('object action catalogue', () => {
   it('offers New Database… first on the Databases folder and a database node of a SQL Server box, never on Azure or Managed Instance', () => {
     expect(serverActions).toEqual(['createDatabase'])
     expect(serverActionSpecs.createDatabase).toMatchObject({ title: 'New Database…', mnemonic: 'n', group: '0_new', order: 1, dialog: 'newDatabase', command: 'explorer.newDatabase',
-      engines: ['box'], folders: ['databases'], kinds: ['database'], longRun: 'newDatabase' })
+      engines: ['box'], folders: ['databases'], kinds: ['database'], nodePlace: { command: 'explorer.newDatabaseOnDatabase', group: '1_query', order: 1 }, longRun: 'newDatabase' })
     expect(dialogSpecs.newDatabase).toMatchObject({ title: 'New Database', surface: 'document', titleFormat: 'plain', action: 'createDatabase' })
     expect(dialogSpecs.newDatabase.pages.map(page => page.id)).toEqual(['general', 'options', 'filegroups'])
     const entries = { ...serverActionCommandEntries(), ...newDatabaseCommandEntries() }
-    expect(Object.keys(entries)).toEqual(['explorer.newDatabase', 'newDatabase.ok', 'newDatabase.cancel', 'newDatabase.stop'])
+    expect(Object.keys(entries)).toEqual(['explorer.newDatabase', 'explorer.newDatabaseOnDatabase', 'newDatabase.ok', 'newDatabase.cancel', 'newDatabase.stop'])
     for (const [id, entry] of Object.entries(entries)) {
       expect(isCommandId(id), id).toBe(true)
       expect(commandDescriptor(id as never)).toEqual(entry)
@@ -268,7 +268,16 @@ describe('object action catalogue', () => {
         .flatMap(item => item.kind === 'command' ? [item.title] : item.kind === 'separator' ? ['---'] : [])
     }
     expect(titles({ explorerNode: 'folder', explorerFolder: 'databases' })[0]).toBe('New Database…')
-    expect(titles({ explorerNode: 'database' })[0]).toBe('New Database…')
+    // SSMS's database menu opens with one group, New Database…, New Query, Script Database as (Microsoft Learn's SSMS 17 and 19
+    // screenshots): no separator after New Database…. The Databases folder keeps it in 0_new, where Attach… joins it. Each place is
+    // its own command, so a native macOS menu, which sees only command ids, shows it once; the palette offers only the first.
+    expect(titles({ explorerNode: 'database' }).slice(0, 2)).toEqual(['New Database…', 'New Query'])
+    expect(entries['explorer.newDatabase'].menus.map(placement => [placement.group, placement.order])).toEqual([['0_new', 1]])
+    expect(entries['explorer.newDatabaseOnDatabase'].menus.map(placement => [placement.group, placement.order])).toEqual([['1_query', 1]])
+    expect(entries['explorer.newDatabaseOnDatabase'].menus[0].when).not.toContain('explorerFolder')
+    expect(entries['explorer.newDatabase'].menus[0].when).not.toContain("explorerNode == 'database'")
+    expect(['palette' in entries['explorer.newDatabase'], entries['explorer.newDatabaseOnDatabase'].palette]).toEqual([false, false])
+    expect(entries['explorer.newDatabaseOnDatabase'].precondition).toBe(entries['explorer.newDatabase'].precondition)
     expect(titles({ explorerNode: 'folder', explorerFolder: 'tables' })).not.toContain('New Database…')
     expect(titles({ explorerNode: 'folder', explorerFolder: 'databases', explorerServerLost: true })).not.toContain('New Database…')
     for (const engine of ['cloud', 'managedInstance'] as const) expect(titles({ explorerNode: 'folder', explorerFolder: 'databases' }, engine), engine).not.toContain('New Database…')
