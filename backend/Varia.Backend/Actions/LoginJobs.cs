@@ -25,7 +25,8 @@ internal sealed partial class ActionService
     /// <summary>Joined when a User Mapping statement (a user, its default schema or schema, a database role) did not complete.</summary>
     internal const string LoginMappingsMessage = "Not every database was mapped as chosen.";
     /// <summary>User Mapping's steps, whose detail names their database.</summary>
-    private static bool MappingStep(ActionTemplate template) => template is ActionTemplate.CreateUserForLogin or ActionTemplate.AlterUserSchema or ActionTemplate.CreateSchemaFor or ActionTemplate.AddRoleMember;
+    private static bool MappingStep(ActionTemplate template) => template is ActionTemplate.CreateUserForLogin or ActionTemplate.AlterUserSchema or ActionTemplate.CreateSchemaFor or ActionTemplate.AddRoleMember
+        or ActionTemplate.RenameUser or ActionTemplate.DropRoleMember;
     private static bool SameMembers(ActionArgs args) => args.NewName is null && args.CloseConnections is null && args.DeleteHistory is null && args.Changes is null && args.Design is null
         && args.Identity is null;
     /// <summary>Whether a request carries New Login's members, which only createLogin takes.</summary>
@@ -120,8 +121,9 @@ internal sealed partial class ActionService
     }
 
     /// <summary>User Mapping's read of one database (the loginDatabaseRoles describe): its state in master, then its roles, guest's
-    /// CONNECT and its schemas inside it, through the database's own module (ActionSql.ModuleCall).</summary>
-    private async Task<ActionDescribeResult> DescribeDatabaseRolesJobAsync(SqlConnection connection, ObjectRefDto target, CancellationToken token)
+    /// CONNECT and its schemas inside it, through the database's own module (ActionSql.ModuleCall). With <paramref name="login"/>
+    /// (Login Properties, D2c), also the user mapped to that login there and the roles it is a member of.</summary>
+    private async Task<ActionDescribeResult> DescribeDatabaseRolesJobAsync(SqlConnection connection, ObjectRefDto target, CancellationToken token, string? login = null)
     {
         var database = target.Name!;
         if (await DatabaseUnavailableAsync(connection, database, token) is { } unavailable) return new(null, 0, unavailable);
@@ -135,7 +137,12 @@ internal sealed partial class ActionService
         if (await reader.NextResultAsync(token) && await reader.ReadAsync(token)) guest = reader.GetBoolean(0);
         var names = new List<string>();
         if (await reader.NextResultAsync(token)) while (await reader.ReadAsync(token)) names.Add(reader.GetString(0));
-        return new(null, 0, LoginDatabaseRoles: new([.. listed.Take(roles)], listed.Count > roles, guest, [.. names.Take(schemas)], names.Count > schemas));
+        await reader.DisposeAsync();
+        var model = new LoginDatabaseRolesDto([.. listed.Take(roles)], listed.Count > roles, guest, [.. names.Take(schemas)], names.Count > schemas);
+        if (login is null) return new(null, 0, LoginDatabaseRoles: model);
+        var (user, memberOf, error) = await DatabaseUserAsync(connection, database, login, roles + 1, token);
+        if (error is not null) return new(null, 0, error);
+        return new(null, 0, LoginDatabaseRoles: model with { User = user, MemberOf = [.. memberOf.Take(roles)] });
     }
 
     /// <summary>A command that runs <paramref name="statement"/> inside <paramref name="database"/> (ActionSql.ModuleCall), with

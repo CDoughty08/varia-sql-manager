@@ -34,15 +34,15 @@ internal static class LoginActionChecks
 
     private static void CatalogChecks(Action<bool, string> check)
     {
-        check(Catalog.Row("login", "sa") is { } sa && sa.Enabled.SequenceEqual(["rename", "disable", "unlock"]) && sa.Disabled.SequenceEqual(["delete"])
-            && Catalog.Row("login", "sa", "disabled") is { Status: "disabled" } off && off.Enabled.SequenceEqual(["rename", "enable", "unlock"]) && off.Disabled.SequenceEqual(["delete"])
-            && Catalog.Row("login", "system", "disabled") is { } system && system.Enabled.Count == 0 && system.Disabled.SequenceEqual(["rename", "delete", "enable", "unlock"])
-            && Catalog.Row("login", "windowsGroup", "disabled") is { } group && group.Enabled.SequenceEqual(["rename", "delete"]) && group.Disabled.Count == 0
+        check(Catalog.Row("login", "sa") is { } sa && sa.Enabled.SequenceEqual(["rename", "properties", "disable", "unlock"]) && sa.Disabled.SequenceEqual(["delete"])
+            && Catalog.Row("login", "sa", "disabled") is { Status: "disabled" } off && off.Enabled.SequenceEqual(["rename", "properties", "enable", "unlock"]) && off.Disabled.SequenceEqual(["delete"])
+            && Catalog.Row("login", "system", "disabled") is { } system && system.Enabled.SequenceEqual(["properties"]) && system.Disabled.SequenceEqual(["rename", "delete", "enable", "unlock"])
+            && Catalog.Row("login", "windowsGroup", "disabled") is { } group && group.Enabled.SequenceEqual(["rename", "delete", "properties"]) && group.Disabled.Count == 0
             && Catalog.Row("login", "sql", "noAccess") == Catalog.Row("login", "sql") && Catalog.Row("login", "")?.Enabled.Count == 0,
-            "a login's rows come from logins.ts: Disable, Unlock, Rename and Delete (greyed for sa) by subtype, Enable in place of Disable while it is disabled, and a denied login keeps its row");
-        check(Catalog.Offered("login", "disable") && Catalog.Offered("login", "enable") && Catalog.Offered("login", "rename") && Catalog.Offered("login", "delete") && !Catalog.Offered("login", "properties")
+            "a login's rows come from logins.ts: Disable, Unlock, Rename and Delete (greyed for sa) by subtype, Enable in place of Disable while it is disabled, Properties (D2c) on every login, and a denied login keeps its row");
+        check(Catalog.Offered("login", "disable") && Catalog.Offered("login", "enable") && Catalog.Offered("login", "rename") && Catalog.Offered("login", "delete") && Catalog.Offered("login", "properties")
             && !Catalog.Offered("table", "disable") && Catalog.Serves("disable", "box") && Catalog.Serves("enable", "managedInstance") && !Catalog.Serves("disable", "cloud"),
-            "Disable, Enable and Delete are offered on logins, Disable and Enable on logins only, on SQL Server and Managed Instance");
+            "Disable, Enable, Delete and Properties are offered on logins, Disable and Enable on logins only, on SQL Server and Managed Instance");
         check(Catalog.Describes.TryGetValue("loginFacts", out var describe) && describe == ("login", "disable") && !Catalog.Dialogs.ContainsKey("loginFacts"),
             "loginFacts is a describe without a dialog, for logins, under Disable's target rules");
         check(LoginRules.SystemName("##MS_PolicyTsqlExecutionLogin##") && !LoginRules.SystemName("##") && !LoginRules.SystemName("##x") && !LoginRules.SystemName("AppUser"),
@@ -166,7 +166,7 @@ internal static class LoginActionChecks
             ("the own login's disable", Facts("sql", own: true), State("disable", AppUser), "NOT_SUPPORTED", "This is the login this connection uses. Connect with another login to change it."),
             ("the own login's rename", Facts("sql", own: true), Rename(AppUser, "x"), "NOT_SUPPORTED", null),
             ("the own login's enable", Facts("sql", own: true), State("enable", AppUser), null, null),
-            ("a group's disable", Facts("windowsGroup", "G"), State("disable", AppUser), "NOT_SUPPORTED", "A Windows group cannot be disabled. Deny it permission to connect (DENY CONNECT SQL) instead."),
+            ("a group's disable", Facts("windowsGroup", "G"), State("disable", AppUser), "NOT_SUPPORTED", "A Windows group cannot be disabled. Deny it permission to connect on Login Properties › Status instead."),
             ("an Entra rename", Facts("externalUser", "E"), Rename(AppUser, "x"), "NOT_SUPPORTED", "A Microsoft Entra login cannot be renamed."),
             ("SQL Server's own login's enable", Facts("system"), State("enable", AppUser), "NOT_SUPPORTED", "This login belongs to SQL Server and cannot be changed."),
             ("no ALTER ANY LOGIN", Facts("sql", canAlter: false), State("disable", AppUser), "PERMISSION_DENIED", "You do not have permission to change logins (ALTER ANY LOGIN)."),

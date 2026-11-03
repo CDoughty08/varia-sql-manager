@@ -37,8 +37,8 @@ internal static class LoginChecks
     {
         var results = LoginSql.Lint().ToList();
         var problems = results.SelectMany(result => result.Problems.Select(problem => result.Name + ": " + problem)).ToList();
-        check(problems.Count == 0 && results.Count == LoginSql.Corpus().Count() * 2 && LoginSql.Corpus().Count() == 10,
-            "every CREATE LOGIN the builder writes (Windows, four SQL password option chains, with and without a language; run and dry run) passes its lint: " + string.Join("; ", problems.Take(5)));
+        check(problems.Count == 0 && results.Count == (LoginSql.Corpus().Count() + LoginSql.OptionsCorpus().Count() + LoginSql.PasswordCorpus().Count()) * 2 && LoginSql.Corpus().Count() == 10,
+            "every CREATE LOGIN the builder writes (Windows, four SQL password option chains, with and without a language; run and dry run), and every ALTER LOGIN of Login Properties (D2c), passes its lint: " + string.Join("; ", problems.Take(5)));
         var sql = LoginSql.CreateExecutable(Sql("x"));
         var windows = LoginSql.CreateExecutable(Windows("D\\x"));
         var mutations = new (string Name, string Text)[]

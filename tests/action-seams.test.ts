@@ -5,7 +5,7 @@ import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { requestSchemas, resultSchemas, validateResult } from '../src/main/validation'
 import { methodPolicies } from '../src/shared/ipc/methods'
-import { actionLimits, actionServes, actionsCatalogJson, createActionSpecs, isCreateAction, objectActions, objectActionSpecs, type CreateAction, type DialogAction } from '../src/shared/actions/catalog'
+import { actionLimits, actionServes, actionsCatalogJson, createActionSpecs, isCreateAction, isKindDialogAction, kindDialogActionSpecs, objectActions, objectActionSpecs, type DialogAction } from '../src/shared/actions/catalog'
 import { actionExecuteResultSchema, actionScriptRequestSchema, actionStepSchema } from '../src/shared/actions/schema'
 import {
   loginLimits, loginMessages, loginRefusal, loginRules, loginsCatalog, loginSubtypeOf, loginSubtypes, loginVerbs, type LoginFacts, type LoginSubtype, type LoginVerb
@@ -27,12 +27,15 @@ describe('server engines', () => {
     const json = JSON.parse(actionsCatalogJson()) as { version: number; actions: { action: string; engines: string[]; cleanupMs: number }[]; limits: Record<string, number> }
     expect(json.version).toBe(3)
     for (const row of json.actions) {
-      const spec = isCreateAction(row.action as DialogAction) ? createActionSpecs[row.action as CreateAction] : objectActionSpecs[row.action as keyof typeof objectActionSpecs]
+      const action = row.action as DialogAction
+      const spec = isCreateAction(action) ? createActionSpecs[action] : isKindDialogAction(action) ? kindDialogActionSpecs[action] : objectActionSpecs[action]
       expect(row.engines, row.action).toEqual([...spec.engines])
       expect(row.cleanupMs, row.action).toBe(actionLimits.cleanupMs)
     }
     // New Login (D2a) runs on SQL Server only until D2e.
     expect(json.actions.filter(row => isCreateAction(row.action as DialogAction)).map(row => [row.action, row.engines])).toEqual([['createLogin', ['box']]])
+    // Login Properties (D2c) is the dialog a login's Properties opens: the backend reads its kind and verb to check its target.
+    expect(json.actions.filter(row => isKindDialogAction(row.action as DialogAction))).toMatchObject([{ action: 'loginProperties', class: 'dialog', kind: 'login', verb: 'properties', engines: ['box', 'managedInstance'] }])
     expect(json.limits.cleanupMs).toBe(10_000)
     expect(designerEngines).toEqual(['box', 'managedInstance'])
     expect(JSON.parse(designerCatalogJson()).engines).toEqual(['box', 'managedInstance'])

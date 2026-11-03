@@ -81,6 +81,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string MappingOffline => Name + "_lgmo";
     /// <summary>The User Mapping checks' read-only database, which a mapping must not reach either (created on demand).</summary>
     public string MappingReadOnly => Name + "_lgmr";
+    /// <summary>Where the Login Properties checks (D2c) map, rename and unmap their login's user (created on demand).</summary>
+    public string LoginPropertiesDatabase => Name + "_lpr";
     /// <summary>A SQL login the New Login checks create, `tag` being 1 to 8 lowercase letters or digits; dropped on disposal once owned.</summary>
     public string LoginNamed(string tag) => Name + "_l" + tag;
     /// <summary>The New Login checks' Extended Events session (critic A16), dropped on disposal once owned.</summary>
@@ -110,15 +112,15 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _seam and _seamt are the wave 5 seam checks';
     // _del, _delc, _delcs and _delo Delete parity's (D3d): an offline database, a database with its snapshot, and the login's own;
     // _ldu and _ldk a login's Delete's (D4c): its mapped users' databases; _lgn is New Login's, _lgm, _lgmo (offline) and
-    // _lgmr (read-only) its User Mapping's.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_del|_delc|_delcs|_delo|_ldu|_ldk|_lgn|_lgm|_lgmo|_lgmr)?$")]
+    // _lgmr (read-only) its User Mapping's; _lpr Login Properties'.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_del|_delc|_delcs|_delo|_ldu|_ldk|_lgn|_lgm|_lgmo|_lgmr|_lpr)?$")]
     private static partial Regex Pattern();
     // New Login's logins are _l and a tag of 1 to 8 lowercase letters or digits (_lt, _lsx, _ld2 and _ld3 among them);
     // _lt is the login actions' taken name, _lr]' -- the hostile name they rename the scratch login to and back, and ##…_ls## the
     // login in SQL Server's own name form that they prove is refused under other spellings, and _lsx the name a refused rename
     // of it would have given it (D4b); _ld]' -- the login a Delete drops with its users, _ld2 the one whose Delete leaves its user
     // orphaned, and _ld3 the login that deletes without VIEW SERVER STATE (D4c); _lk, _lp and _lm are Unlock's logins with the
-    // password policy (D4d).
+    // password policy (D4d); _lpa and _lpl Login Properties' (D2c).
     [GeneratedRegex(@"^(VariaScratch_\d{14}_[0-9a-f]{8}(_l[a-z0-9]{1,8}|_lr\]' --|_ld\]' --)?|##VariaScratch_\d{14}_[0-9a-f]{8}_ls##)$")]
     private static partial Regex LoginPattern();
     // New Login's Extended Events session; its name's UTC timestamp dates it, as sys.server_event_sessions has no creation date.
@@ -517,6 +519,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
 
     /// <summary>New Login's database for the Extended Events check's master key batch.</summary>
     public Task<string> CreateLoginsDatabaseAsync() => CreateMarkedAsync(LoginsDatabase);
+    /// <summary>Login Properties' database.</summary>
+    public Task<string> CreateLoginPropertiesDatabaseAsync() => CreateMarkedAsync(LoginPropertiesDatabase);
     /// <summary>User Mapping's database, its offline one and its read-only one.</summary>
     public async Task<(string Online, string Offline, string ReadOnly)> CreateMappingDatabasesAsync()
     {

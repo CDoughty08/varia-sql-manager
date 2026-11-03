@@ -3,13 +3,13 @@ import { kindSpecs, nodeKinds, serverEngines, type NodeSubtype } from '../explor
 import { longRunKinds, longRunLimits, longRunSubjects } from '../long-runs.ts'
 import {
   actionCommandEntries, actionContextKey, actionErrorCodes, actionErrorRetryable, actionKindSpecs, actionLimits, actionMenus, actionRow, actionStatuses, databaseActionRules, databaseStateIds,
-  createActionSpecs, createActions, dialogIds, dialogSpecs, objectActions, objectActionSpecs, scriptActionTitles, unknownOutcomeMessage
+  createActionSpecs, createActions, dialogIds, dialogSpecs, kindDialogActionSpecs, objectActions, objectActionSpecs, scriptActionTitles, unknownOutcomeMessage
 } from './catalog.ts'
 import { actionPromptBox, actionPrompts, promptLimits, type ActionPromptRequest } from './prompts.ts'
 import { compatibilityLabel, compatibilityLevels, databaseOptionDefs, noScriptNotice, openConnectionsPrompt, ownerNotOn, scopedConfigurationDefs, type DatabaseOptionDef } from './database.ts'
 import {
-  loginDatabaseRolesDescribe, loginDeleteText, loginGreyedMessage, loginLimits, loginLockProperties, loginMessages, loginRules, loginSubtypes, loginTypeSubtypes, loginVerbs, newLoginMessages,
-  ownLoginRefuses, passwordScriptHeader, saPrincipalId, tooManyStatementsMessage
+  loginDatabaseRolesDescribe, loginDeleteText, loginGreyedMessage, loginLimits, loginLockProperties, loginMessages, loginPropertiesMessages, loginRules, loginSubtypes, loginTypeSubtypes, loginVerbs,
+  newLoginMessages, ownLoginRefuses, passwordScriptHeader, saPrincipalId, tooManyStatementsMessage, unlockChoiceText, unlockHandOffLabel
 } from './logins.ts'
 import { designerEngines } from '../designer/catalog.ts'
 
@@ -367,8 +367,7 @@ function loginDocs(): string[] {
     'for SQL Server\'s own logins (a name that starts and ends with `##`), else by type: ' + types.map(([type, subtype]) => `${code(type)} ${code(subtype)}`).join(', ') + '.',
     'The backend\'s login preflight reads the facts an action needs in the action\'s own connection from catalog views only:',
     'never a password hash, which no Varia statement may name, and `LOGINPROPERTY`, which waits on a login another session',
-    'is changing whatever the isolation level, only in Unlock\'s lock-out read below. Delete and Properties arrive in later',
-    'versions; their rules are data already.',
+    'is changing whatever the isolation level, only in the lock-out read of Unlock and Login Properties below.',
     '',
     '### Disable, Enable and Rename',
     '',
@@ -455,12 +454,13 @@ function loginDocs(): string[] {
     '### Unlock',
     '',
     'SSMS unlocks a SQL Server login only on Login Properties › Status, and only with a new password. Varia adds Unlock… to a',
-    'SQL Server login\'s menu (after Disable or Enable, access key U), a modal that keeps the current password, as Microsoft',
-    'documents: it turns the password policy off, which unlocks the login, and back on, with password expiration when the login',
-    'had it, in one transaction, so a failure or Stop rolls both back. This clears the login\'s password history, which the',
-    'dialog says, and nothing is chosen when it opens: OK (and Enter) waits until Keep the current password is, so clearing the',
-    'history is never the default. Setting a new password instead, SSMS\'s way and then the dialog\'s default, arrives with',
-    'Login Properties.',
+    'SQL Server login\'s menu (after Disable or Enable, access key U), a modal with two choices (owner decision 9).',
+    `"${unlockChoiceText.setPassword}", SSMS's way, is the default: OK, named "${unlockHandOffLabel}", closes the dialog and opens`,
+    'Login Properties on the same login with Login is locked out cleared, where a new password unlocks it (`UNLOCK`). It sends',
+    `nothing itself, so its Script says "${noScriptNotice}" It also unlocks a login that must change its password.`,
+    `"${unlockChoiceText.keepPassword}" keeps the current password, as Microsoft documents: it turns the password policy off, which`,
+    'unlocks the login, and back on, with password expiration when the login had it, in one transaction, so a failure or Stop rolls',
+    'both back. This clears the login\'s password history, which the dialog says; only the user chooses it.',
     '',
     'Only `LOGINPROPERTY` knows whether a login is locked out, so the listing offers Unlock… on every SQL Server login and the',
     'dialog says. Its describe (`unlockLogin`) and its preflight read the login\'s facts and then its lock-out state with',
@@ -498,7 +498,8 @@ function loginDocs(): string[] {
     '',
     table(['Limit', 'Value', 'Meaning'], (Object.keys(loginLimitNotes) as (keyof typeof loginLimits)[]).map(key => [code(key), loginLimits[key].toLocaleString('en-US'), loginLimitNotes[key]])),
     '',
-    ...newLoginDocs()
+    ...newLoginDocs(),
+    ...loginPropertiesDocs()
   ]
 }
 
@@ -587,6 +588,63 @@ function newLoginDocs(): string[] {
     'recorded that half\'s own RPC (its constant batch text, or SQL Server\'s notice that it hid the statement), polled for on the',
     'ring buffer rather than awaited for a fixed time. Developers\' servers never run it (owner decision 14). It has not run yet:',
     'D2a does not merge until it has run once on a disposable server and its result is recorded here (critic A16).',
+    ''
+  ]
+}
+
+/** Login Properties (D2c): its describe, pages, password path, Script and how it runs. */
+function loginPropertiesDocs(): string[] {
+  const spec = dialogSpecs.loginProperties
+  return [
+    '### Login Properties',
+    '',
+    `Properties on any login (SQL Server's own and sa included, as in SSMS) opens "${spec.title} - <name>", a modal dialog with New Login's pages`,
+    `${spec.pages.map(page => page.title).join(', ')} on the existing login. Its action is \`loginProperties\` (a kind action of logins), on`,
+    `${kindDialogActionSpecs.loginProperties.engines.map(engine => engineNames[engine]).join(', ')} (its ALTER LOGIN on Managed Instance is unverified). SQL Server's own logins open but OK`,
+    `is greyed: "${loginMessages.system}"`,
+    '',
+    'Its describe (`actions.describe` with dialog `loginProperties`) reads, in master on the describe\'s connection: the login\'s facts',
+    '(as Disable reads them), its default database and language and the server roles it is a member of, a SQL Server login\'s',
+    'lock-out state through `ActionSql.LoginLock` (as Unlock reads it), New Login\'s lists, and the users mapped to its SID through',
+    `Delete's per-database scan (at most ${loginLimits.scanDatabases.toLocaleString('en-US')} databases within ${(loginLimits.scanMs / 1000).toLocaleString('en-US')} s). A database the scan did not read shows "${loginPropertiesMessages.notRead}" in`,
+    `User and cannot be mapped until it is selected ("${loginPropertiesMessages.notReadHint}"): selecting a database reads it with the`,
+    `login (\`${loginDatabaseRolesDescribe}\` with \`login\`), answering the user mapped to it there and that user's database roles.`,
+    '',
+    `- **General**: Login name and its authentication read-only; Password and Confirm password blank ("${loginPropertiesMessages.keepPassword}"`,
+    '  SSMS fills them with a fake value); Specify old password and Old password (checked already when the login is this connection\'s',
+    '  and the connection cannot alter any login, since SQL Server then asks for it); the policy options; User must change password',
+    '  at next login only once a new password is typed; Default database and Default language (no `<default>`: SMO\'s ALTER for it is',
+    '  unverified).',
+    '- **Server Roles**: the login\'s memberships checked; public checked and greyed.',
+    '- **User Mapping**: New Login\'s grid with the mapped users filled in. Unchecking Map unmaps (DROP USER; Script and the steps',
+    `  warn "${loginPropertiesMessages.dropsUser('user', 'database')}"), a new user name renames, and the database owner's dbo cannot change`,
+    `  ("${loginPropertiesMessages.owner}").`,
+    `- **Status**: Permission to connect to database engine, Login (Enabled, Disabled) and "${loginPropertiesMessages.locked}", checked while the`,
+    `  login is locked out and enabled then only to clear it, which needs a new password ("${loginPropertiesMessages.unlockNeedsPassword}").`,
+    '',
+    'OK and Script send only what differs from the describe, bound to the login it read (its SID and creation time; a login',
+    'recreated since is `NOT_FOUND`). The passwords join only OK\'s request, as in New Login (masked, never in the snapshot, cleared',
+    'with the dialog): the new one as `@password`, the old one as `@old_password` when Specify old password is checked, each one',
+    'nvarchar parameter read once and quoted by a binary-collation REPLACE, which the lint pins. T-SQL takes either `OLD_PASSWORD`',
+    'or `UNLOCK` and `MUST_CHANGE`, never both. Script never carries a password: with a password change it is one `SET XACT_ABORT ON`',
+    `batch under "${passwordScriptHeader}", \`PASSWORD=<password>\` (and \`OLD_PASSWORD=<old password>\`) unquoted, so it`,
+    'runs nothing unedited; without one it is SSMS\'s form, a `GO` after each statement.',
+    '',
+    'OK runs SSMS\'s statements in SSMS\'s order, one by one and without a transaction, as New Login does (critic A24): the options\'',
+    '`ALTER LOGIN` (only the changed clauses), the password\'s `ALTER LOGIN`, `GRANT` or `DENY CONNECT SQL`, `ENABLE` or `DISABLE`, each',
+    'server role by name, then per changed database by name: `DROP USER` (in a batch that checks the user is still the one mapped to',
+    'the login\'s SID), or `CREATE USER … FOR LOGIN` or `ALTER USER … WITH NAME`, then its default schema (and `CREATE SCHEMA` when the',
+    'database lacks it) and each database role. Before any of them the preflight refuses a changed database that is gone, offline,',
+    'closed or read-only, a user that is no longer the one mapped, a name in use and a missing role. A failure or Stop after a step',
+    'leaves what completed; the message starts "The login was changed only in part: its steps run one by one, as in SSMS, and list',
+    'what completed.", and the dialog reads the login again. SQL Server answers a wrong old password, and a missing permission,',
+    `with 15151 (\`PERMISSION_DENIED\`): the message adds "${loginPropertiesMessages.oldPasswordAdvice}" when the password step failed with an old`,
+    'password, else what changing a login needs. Permissions are left to SQL Server, since a login may change its own password',
+    '(with the old one) and defaults. SQL Server refuses DROP USER for a user that owns a schema (15138), as in SSMS.',
+    '',
+    `Refused before anything runs: the login this connection uses denied or disabled ("${loginMessages.ownStatus}"), a`,
+    `Windows group disabled ("${loginMessages.windowsGroupDisable}"), and a password or policy change on a login that is not a SQL`,
+    `Server login ("${loginMessages.propertiesNotSql}"). After OK the Logins folder and each changed database's Users folder reload.`,
     ''
   ]
 }

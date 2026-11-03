@@ -22,17 +22,19 @@ internal static partial class LoginSql
     /// <summary>Script Action's stand-in: unquoted, so a script run unedited fails to parse (102) and creates nothing.</summary>
     public const string Placeholder = "<password>";
 
-    /// <summary>The keyword text a CREATE LOGIN batch is built from: every literal it holds besides the guard messages and the
-    /// password's own delimiters. Each matches <see cref="KeywordLiteral"/>: no quote, bracket, comment or line break.</summary>
-    internal static readonly IReadOnlySet<string> Fragments = new HashSet<string>(StringComparer.Ordinal)
+    /// <summary>The keyword text a CREATE LOGIN or ALTER LOGIN batch is built from: every literal it holds besides the guard
+    /// messages and the passwords' own delimiters. Each matches <see cref="KeywordLiteral"/>: no quote, bracket, comment or line
+    /// break. Login Properties' options (D2c) each come as " WITH " or ", " before one of SMO's clauses.</summary>
+    internal static readonly IReadOnlySet<string> Fragments = new HashSet<string>(new[]
     {
         "N'CREATE LOGIN '", "N' FROM WINDOWS WITH DEFAULT_DATABASE='", "N' MUST_CHANGE'", "N', DEFAULT_DATABASE='", "N', DEFAULT_LANGUAGE='",
-        "N', CHECK_EXPIRATION=ON, CHECK_POLICY=ON'", "N', CHECK_EXPIRATION=OFF, CHECK_POLICY=ON'", "N', CHECK_EXPIRATION=OFF, CHECK_POLICY=OFF'"
-    };
+        "N', CHECK_EXPIRATION=ON, CHECK_POLICY=ON'", "N', CHECK_EXPIRATION=OFF, CHECK_POLICY=ON'", "N', CHECK_EXPIRATION=OFF, CHECK_POLICY=OFF'",
+        "N'ALTER LOGIN '", "N' UNLOCK'"
+    }.Concat(OptionKeywords.SelectMany(keyword => new[] { "N' WITH " + keyword + "'", "N', " + keyword + "'" })), StringComparer.Ordinal);
     /// <summary>The guard messages and the module suffix, the batch's only other literals.</summary>
     internal static readonly IReadOnlySet<string> Messages = new HashSet<string>(StringComparer.Ordinal)
     {
-        "N'The password is missing.'", "N'A name could not be quoted.'", "N'.sys.sp_executesql'"
+        "N'The password is missing.'", "N'The old password is missing.'", "N'A name could not be quoted.'", "N'.sys.sp_executesql'"
     };
 
     // --- Catalog statements -----------------------------------------------------------------------------------------------
@@ -241,11 +243,13 @@ internal static partial class LoginSql
         return count;
     }
 
-    /// <summary>Problems with one CREATE LOGIN batch (D2 §5.5's LoginBuilderRules; empty when it passes): a format hole, a secret
-    /// use any lint refuses (critic A15), no quoting guard; @password other than exactly twice (its NULL guard first, then once
-    /// through the binary-collation REPLACE), so no inner batch receives it and nothing returns it; a name outside QUOTENAME or @db
-    /// outside the module; a literal that is neither keyword text from <see cref="Fragments"/> nor a guard message; not exactly
-    /// one EXEC @module @stmt (or the dry run's SELECT); and a banned word (SID, HASHED, ROLLBACK, DROP, xp_, EXEC ( …).</summary>
+    /// <summary>Problems with one CREATE LOGIN or ALTER LOGIN batch (D2 §5.5's LoginBuilderRules; empty when it passes): a format
+    /// hole, a secret use any lint refuses (critic A15), no quoting guard; @password other than exactly twice (its NULL guard first,
+    /// then once through the binary-collation REPLACE), so no inner batch receives it and nothing returns it; @old_password (Login
+    /// Properties, D2c) other than exactly twice (its NULL guard right after the password's, then once through the same REPLACE
+    /// right after the password's), or without @password; a name outside QUOTENAME or @db outside the module; a literal that is
+    /// neither keyword text from <see cref="Fragments"/> nor a guard message; not exactly one EXEC @module @stmt (or the dry run's
+    /// SELECT); and a banned word (SID, HASHED, ROLLBACK, DROP, xp_, EXEC ( …).</summary>
     public static List<string> LintExecutable(string text)
     {
         var problems = new List<string>();
@@ -259,11 +263,21 @@ internal static partial class LoginSql
             if (Count(text, PasswordExpression) != 1) problems.Add("does not quote @password exactly once through the binary-collation REPLACE");
             if (uses != 2) problems.Add("uses @password " + uses + " times");
         }
-        // What @password's own forms leave; a @password still in it is reported once, here.
-        var rest = text.Replace(PasswordGuard, "", StringComparison.Ordinal).Replace(PasswordExpression, "", StringComparison.Ordinal);
+        var old = Count(text, "@old_password");
+        if (old > 0)
+        {
+            if (!text.StartsWith(PasswordGuard + OldPasswordGuard, StringComparison.Ordinal)) problems.Add("does not check @old_password for NULL right after @password");
+            if (Count(text, PasswordExpression + " + " + OldPasswordExpression) != 1 || Count(text, OldPasswordExpression) != 1)
+                problems.Add("does not quote @old_password exactly once, right after the password, through the binary-collation REPLACE");
+            if (old != 2) problems.Add("uses @old_password " + old + " times");
+        }
+        // What the passwords' own forms leave; a @password or @old_password still in it is reported once, here.
+        var rest = text.Replace(PasswordGuard, "", StringComparison.Ordinal).Replace(OldPasswordGuard, "", StringComparison.Ordinal)
+            .Replace(PasswordExpression, "", StringComparison.Ordinal).Replace(OldPasswordExpression, "", StringComparison.Ordinal);
         if (rest.Contains("@password", StringComparison.Ordinal)) problems.Add("uses @password outside its guard and REPLACE");
+        if (rest.Contains("@old_password", StringComparison.Ordinal)) problems.Add("uses @old_password outside its guard and REPLACE");
         foreach (Match used in Variable().Matches(NameUse().Replace(rest, "")))
-            if (used.Value is not ("@stmt" or "@module" or "@password")) problems.Add("uses " + used.Value + " outside QUOTENAME");
+            if (used.Value is not ("@stmt" or "@module" or "@password" or "@old_password")) problems.Add("uses " + used.Value + " outside QUOTENAME");
         var runs = Count(text, "EXEC @module @stmt;") + Count(text, "SELECT @stmt AS stmt;");
         if (runs != 1 || Exec().Matches(text).Count != Count(text, "EXEC @module @stmt;")) problems.Add("does not run exactly one EXEC @module @stmt");
         if (Banned().IsMatch(text)) problems.Add("has a banned word: " + Banned().Match(text).Value);
@@ -272,13 +286,14 @@ internal static partial class LoginSql
         return problems;
     }
 
-    /// <summary>Every CREATE LOGIN the builder can write (each auth, password option chain and language, run and dry run), with
-    /// its lint problems (ActionSql.Lint).</summary>
+    /// <summary>Every CREATE LOGIN the builder can write (each auth, password option chain and language, run and dry run), and every
+    /// ALTER LOGIN of Login Properties' options and password, with its lint problems (ActionSql.Lint).</summary>
     public static IEnumerable<(string Name, List<string> Problems)> Lint()
     {
         foreach (var login in Corpus())
             foreach (var dry in new[] { false, true })
                 yield return ("create login " + Shape(login) + (dry ? " (dry run)" : ""), LintExecutable(CreateExecutable(login, dry)));
+        foreach (var item in PropertiesLint()) yield return item;
     }
 
     /// <summary>One login per shape the builder distinguishes.</summary>

@@ -33,6 +33,11 @@ import { explorerStatics } from './explorer-tree.mjs'
  * Logins; its script is `loginDeleteScript`.
  * Locked (with the password policy) is locked out, AppUser enforces the policy and is not; the unlockLogin describe answers
  * their lock-out state, and Unlock unlocks Locked.
+ * Login Properties (D2c) describes any login with New Login's lists, its facts, a SQL Server login's lock-out state, master and
+ * us_english as its defaults (or the language it was given), sa's sysadmin membership and its users (AppData read, Sales not);
+ * User Mapping's read with a login answers that login's user and db_datareader; its Script is `loginPropertiesScript`; OK with the
+ * password "Weak" answers PASSWORD_POLICY at "Change the password", and otherwise applies the language and Status and clears
+ * Locked's lock-out with UNLOCK.
  */
 export function actionsStubData() {
   return { statics: explorerStatics() }
@@ -52,6 +57,8 @@ export const databaseRoles = database => ({ roles: ['db_datareader', 'db_owner',
 export const offlineWarning = 'This database is offline. Deleting it removes it from the server but leaves its files on disk.'
 /** A login's Delete script as the backend writes it: each droppable user's DROP in its database, then DROP LOGIN in master. */
 export const loginDeleteScript = (name, users = []) => [...users.map(([database, user]) => `USE [${database}]\r\nGO\r\nDROP USER [${user}]\r\nGO\r\n`), `USE [master]\r\nGO\r\nDROP LOGIN [${name}]\r\nGO\r\n`].join('')
+/** Login Properties' script as the backend writes it for a change of the default language alone (SSMS's form: GO after each statement). */
+export const loginPropertiesScript = (name, language) => `USE [master]\r\nGO\r\nALTER LOGIN [${name}] WITH DEFAULT_LANGUAGE=[${language}]\r\nGO\r\n`
 
 /** Installs the stub; pass it to `application.evaluate` with `actionsStubData()`. Runs in main, so it is self-contained. */
 export function installActionsStub({ ipcMain }, { statics }) {
@@ -77,6 +84,7 @@ export function installActionsStub({ ipcMain }, { statics }) {
   const databaseRoles = database => ({ roles: ['db_datareader', 'db_owner', 'public', 'Readers', longRole], rolesTruncated: false, guest: database === 'master', schemas: ['dbo', 'sales'], schemasTruncated: false })
   const offlineWarning = 'This database is offline. Deleting it removes it from the server but leaves its files on disk.'
   const loginDeleteScript = (name, users = []) => [...users.map(([database, user]) => `USE [${database}]\r\nGO\r\nDROP USER [${user}]\r\nGO\r\n`), `USE [master]\r\nGO\r\nDROP LOGIN [${name}]\r\nGO\r\n`].join('')
+  const loginPropertiesScript = (name, language) => `USE [master]\r\nGO\r\nALTER LOGIN [${name}] WITH DEFAULT_LANGUAGE=[${language}]\r\nGO\r\n`
   const ok = value => ({ ok: true, value })
   const folders = (owner, ids) => ids.map(folder => ({ ref: { type: 'folder', owner, folder }, label: statics.labels[folder], icon: 'folder', hasChildren: true }))
   const object = (value, label, icon, extra = {}) => ({ ref: { type: 'object', object: value }, label, icon, hasChildren: true, ...extra })
@@ -135,6 +143,46 @@ export function installActionsStub({ ipcMain }, { statics }) {
     const facts = loginFacts(params), login = loginOf(params.target)
     if (!login) return facts
     return ok({ ...facts.value, lock: { locked: !!login.locked, badPasswords: login.locked ? 10 : 0, ...login.locked ? { lockoutTime: '2026-11-02T21:07:12.123' } : {}, mustChange: false, expired: false, daysUntilExpiration: 42 } })
+  }
+  /** New Login's describe: a Windows server's databases (offline Archive, read-only Ledger, eight Warehouses), languages and roles. */
+  const newLoginModel = () => ({ server: { level: 16, linux: false, windowsOnly: false, canCreate: true },
+    databases: [{ name: 'AppData', state: 0, accessible: true, readOnly: false }, { name: 'Archive', state: 6, accessible: false, readOnly: false }, { name: 'Ledger', state: 0, accessible: true, readOnly: true },
+      { name: 'master', state: 0, accessible: true, readOnly: false }, { name: longDatabase, state: 0, accessible: true, readOnly: false },
+      ...Array.from({ length: 8 }, (_, index) => ({ name: `Warehouse0${index + 1}`, state: 0, accessible: true, readOnly: false }))], databasesTruncated: false,
+    languages: [{ name: 'Deutsch', alias: 'German' }, { name: 'us_english', alias: 'English' }],
+    serverRoles: [{ name: 'dbcreator', fixed: true }, { name: 'public', fixed: true }, { name: 'sysadmin', fixed: true }], serverRolesTruncated: false })
+  /** Login Properties' describe (ActionService.DescribeLoginPropertiesJobAsync): New Login's lists, the login's facts and a SQL
+   *  Server login's lock-out state, its defaults and server roles, and the users the scan read (AppData's; Sales was not read). */
+  function loginProperties(params) {
+    const facts = unlockFacts(params), login = loginOf(params.target)
+    if (!login) return facts
+    const { lock, ...rest } = facts.value
+    const users = (login.users ?? []).filter(([database]) => database === 'AppData').map(([database, user]) => ({ database, user, defaultSchema: 'dbo', owner: false }))
+    return ok({ ...rest, ...login.type === 'S' ? { lock } : {}, newLogin: newLoginModel(),
+      loginProperties: { defaultDatabase: 'master', defaultLanguage: login.language ?? 'us_english', serverRoles: login.sysadmin ? ['sysadmin'] : [], serverRolesTruncated: false, users,
+        read: ['AppData', 'Ledger', 'master', longDatabase] } })
+  }
+  /** Login Properties' OK: "Weak" fails at the password; otherwise each change is a step, in the backend's order. */
+  function changeLogin({ target, loginChanges: changes, secrets }) {
+    const login = loginOf(target)
+    if (!login) return ok({ steps: [], messages: [], elapsedMs: 1, error: notFound(target) })
+    const options = ['defaultDatabase', 'defaultLanguage', 'checkPolicy', 'checkExpiration'].some(key => changes[key] !== undefined)
+    const roles = [...changes.rolesAdd ?? [], ...changes.rolesDrop ?? []].sort()
+    const steps = [...options ? [{ title: "Change the login's options" }] : [], ...changes.password ? [{ title: 'Change the password' }] : [],
+      ...changes.connect ? [{ title: changes.connect === 'deny' ? 'Deny permission to connect' : 'Grant permission to connect' }] : [],
+      ...changes.enabled === undefined ? [] : [{ title: changes.enabled ? 'Enable the login' : 'Disable the login' }],
+      ...roles.map(detail => ({ title: (changes.rolesAdd ?? []).includes(detail) ? 'Add to a server role' : 'Remove from a server role', detail }))]
+    if (secrets?.password === 'Weak') {
+      const failed = steps.findIndex(step => step.title === 'Change the password')
+      const partly = failed > 0 ? 'The login was changed only in part: its steps run one by one, as in SSMS, and list what completed. ' : ''
+      return ok({ steps: steps.map((step, index) => ({ status: index < failed ? 'done' : index === failed ? 'failed' : 'skipped', ...step, ...index === failed ? { message: passwordPolicyMessage } : {} })),
+        messages: [], elapsedMs: 1, error: { code: 'PASSWORD_POLICY', message: partly + passwordPolicyMessage, retryable: true } })
+    }
+    if (changes.defaultLanguage) login.language = changes.defaultLanguage
+    if (changes.password?.unlock) login.locked = false
+    if (changes.enabled !== undefined) login.disabled = !changes.enabled
+    if (changes.connect) login.connectDenied = changes.connect === 'deny'
+    return ok({ steps: steps.map(step => ({ status: 'done', ...step })), messages: [], elapsedMs: 1 })
   }
   /** Unlock keeping the password: its two statements and the commit, in one transaction. */
   function unlock({ target }) {
@@ -251,6 +299,7 @@ export function installActionsStub({ ipcMain }, { statics }) {
     if (params.action === 'createLogin') return createLogin(params)
     if (params.action === 'disable' || params.action === 'enable') return loginState(params)
     if (params.action === 'unlock') return unlock(params)
+    if (params.action === 'loginProperties') return changeLogin(params)
     if (params.action === 'rename' && target.kind === 'login') {
       if (params.newName === 'Taken') return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NAME_IN_USE', message: 'The name Taken is already used by another login or server role.', retryable: false } })
       const login = loginOf(target)
@@ -294,13 +343,14 @@ export function installActionsStub({ ipcMain }, { statics }) {
         switch (params.dialog) {
           case 'tableDesigner': return ok({ tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', caseSensitiveNames: false, accentSensitiveNames: true, canCreate: true }, elapsedMs: 1 })
           case 'databaseProperties': return properties(params)
-          case 'loginDatabaseRoles': return ok({ loginDatabaseRoles: databaseRoles(params.target.name), elapsedMs: 1 })
-          case 'newLogin': return ok({ newLogin: { server: { level: 16, linux: false, windowsOnly: false, canCreate: true },
-            databases: [{ name: 'AppData', state: 0, accessible: true, readOnly: false }, { name: 'Archive', state: 6, accessible: false, readOnly: false }, { name: 'Ledger', state: 0, accessible: true, readOnly: true },
-              { name: 'master', state: 0, accessible: true, readOnly: false }, { name: longDatabase, state: 0, accessible: true, readOnly: false },
-              ...Array.from({ length: 8 }, (_, index) => ({ name: `Warehouse0${index + 1}`, state: 0, accessible: true, readOnly: false }))], databasesTruncated: false,
-            languages: [{ name: 'Deutsch', alias: 'German' }, { name: 'us_english', alias: 'English' }],
-            serverRoles: [{ name: 'dbcreator', fixed: true }, { name: 'public', fixed: true }, { name: 'sysadmin', fixed: true }], serverRolesTruncated: false }, elapsedMs: 1 })
+          case 'loginDatabaseRoles': {
+            // With a login (Login Properties): its user there, in db_datareader, or none.
+            const mapped = params.login === undefined ? undefined : (loginOf({ name: params.login })?.users ?? []).find(([database]) => database === params.target.name)
+            const user = params.login === undefined ? {} : mapped ? { user: { name: mapped[1], defaultSchema: 'dbo', owner: false }, memberOf: ['db_datareader'] } : { memberOf: [] }
+            return ok({ loginDatabaseRoles: { ...databaseRoles(params.target.name), ...user }, elapsedMs: 1 })
+          }
+          case 'newLogin': return ok({ newLogin: newLoginModel(), elapsedMs: 1 })
+          case 'loginProperties': return loginProperties(params)
           case 'loginFacts': return loginFacts(params)
           case 'unlockLogin': return unlockFacts(params)
           default: return params.target.kind === 'login' ? describeLogin(params) : describe(params)
@@ -310,6 +360,7 @@ export function installActionsStub({ ipcMain }, { statics }) {
           case 'properties': return ok({ text: propertiesScript, database: 'master', warnings: [] })
           case 'createTable': return ok({ text: designerScript(params.design.name), database: params.target.name, warnings: [] })
           case 'createLogin': return ok({ text: newLoginScript(params.login.name), database: 'master', warnings: [] })
+          case 'loginProperties': return ok({ text: loginPropertiesScript(params.target.name, params.loginChanges.defaultLanguage ?? 'us_english'), database: 'master', warnings: [] })
           case 'unlock': return ok({ text: ['USE [master]', 'GO', 'SET XACT_ABORT ON;', 'BEGIN TRANSACTION;', `ALTER LOGIN [${params.target.name}] WITH CHECK_POLICY = OFF;`, `ALTER LOGIN [${params.target.name}] WITH CHECK_POLICY = ON, CHECK_EXPIRATION = ON;`, 'COMMIT TRANSACTION;', 'GO', ''].join(String.fromCharCode(13, 10)), database: 'master', warnings: [] })
           default: {
             const login = params.target.kind === 'login' ? loginOf(params.target) : undefined

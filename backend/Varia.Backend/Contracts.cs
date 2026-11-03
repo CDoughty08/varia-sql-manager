@@ -189,17 +189,18 @@ internal sealed record ScriptResult(string? Text, string Database, List<string> 
 
 /// <summary>actions.describe: what an object dialog shows (deleteObject: Delete Object's row; databaseProperties: Database Properties' pages),
 /// what the table designer needs of a database (tableDesigner), one database's roles and schemas for User Mapping (loginDatabaseRoles),
-/// or a login's facts (loginFacts, before Disable).</summary>
-internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target);
+/// or a login's facts (loginFacts, before Disable). Login names the login whose user loginDatabaseRoles reads too (Login Properties'
+/// User Mapping, D2c); no other describe takes it.</summary>
+internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target, string? Login = null);
 /// <summary>actions.script and actions.execute: rename takes NewName, delete the two database options, properties
 /// CloseConnections and Changes, createTable (Target the database) Design, createLogin (Target the server) Login, ServerRoles,
 /// Mappings, Status and, on execute only, Secrets; a login's disable and enable take only LoginIdentity, its unlock Mode
 /// (keepPassword; the request's `mode`) and LoginIdentity, and its delete LoginIdentity and DropMappedUsers (D4c: also drop the
-/// database users mapped to it). Validate refuses the rest.</summary>
+/// database users mapped to it); loginProperties (D2c) LoginIdentity, LoginChanges and, on execute only, Secrets. Validate refuses the rest.</summary>
 internal sealed record ActionArgs(string Action, string ConnectionId, string RequestId, ObjectRefDto Target, string? NewName = null, bool? CloseConnections = null, bool? DeleteHistory = null,
     DatabaseChangesDto? Changes = null, TableDesignDto? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null, NewLoginDto? Login = null,
     List<string>? ServerRoles = null, LoginStatusDto? Status = null, List<UserMappingDto>? Mappings = null, LoginIdentityDto? LoginIdentity = null, bool? DropMappedUsers = null,
-    string? Mode = null);
+    string? Mode = null, LoginChangesDto? LoginChanges = null);
 /// <summary>New Login's General page (src/shared/actions/logins.ts NewLoginGeneral): Auth windows or sql; the password policy
 /// options exactly for sql, in SQL Server's chain (MustChange needs CheckExpiration, which needs CheckPolicy).</summary>
 internal sealed record NewLoginDto(string Auth, string Name, string DefaultDatabase, string? DefaultLanguage = null, bool? CheckPolicy = null, bool? CheckExpiration = null, bool? MustChange = null);
@@ -222,6 +223,21 @@ internal sealed record LoginSecretsDto(string? Password = null, string? OldPassw
         return true;
     }
 }
+/// <summary>Login Properties' changes (src/shared/actions/logins.ts LoginChanges, D2c): only what differs from its describe. The
+/// options are General's (CheckPolicy and CheckExpiration for a SQL Server login only); Password says a new password is set (the
+/// value travels in Secrets) with the old one, or with UNLOCK and MUST_CHANGE; RolesAdd and RolesDrop are server roles; Mappings
+/// are User Mapping's changed databases; Connect is grant or deny.</summary>
+internal sealed record LoginChangesDto(string? DefaultDatabase = null, string? DefaultLanguage = null, bool? CheckPolicy = null, bool? CheckExpiration = null,
+    LoginPasswordChangeDto? Password = null, List<string>? RolesAdd = null, List<string>? RolesDrop = null, List<LoginMappingChangeDto>? Mappings = null, string? Connect = null,
+    bool? Enabled = null);
+/// <summary>A new password: OldPassword when the user gave the old one (then neither Unlock nor MustChange: T-SQL's grammar takes
+/// one or the others), Unlock to clear a lock-out, MustChange to require a change at the next sign-in.</summary>
+internal sealed record LoginPasswordChangeDto(bool OldPassword, bool Unlock, bool MustChange);
+/// <summary>One database's User Mapping change: map (CREATE USER for the login, User the new user), unmap (DROP USER User, the user
+/// the describe read) or update (User the user the describe read, NewName to rename it); DefaultSchema, RolesAdd and RolesDrop for
+/// map and update.</summary>
+internal sealed record LoginMappingChangeDto(string Database, string Change, string User, string? NewName = null, string? DefaultSchema = null, List<string>? RolesAdd = null,
+    List<string>? RolesDrop = null);
 /// <summary>Which database Database Properties read (database_id and create_date as the describe writes it): its preflight
 /// refuses a database that has taken the name since, after a rename, a drop or a restore.</summary>
 internal sealed record DatabaseIdentityDto(int Id, string Created);
@@ -271,10 +287,21 @@ internal sealed record DatabasePropertiesDto(DatabaseGeneralDto General, Diction
     List<string> Collations, List<string> Logins, List<DatabaseFileDto> Files, bool FilesTruncated, List<DatabaseFilegroupDto> Filegroups, bool FilegroupsTruncated,
     DatabaseServerFactsDto Server, int? Sessions = null, string? ReadOnlyReason = null);
 internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long ElapsedMs, ActionError? Error = null, DatabasePropertiesDto? DatabaseProperties = null,
-    TableDesignerModelDto? TableDesigner = null, NewLoginModelDto? NewLogin = null, LoginDatabaseRolesDto? LoginDatabaseRoles = null, LoginFactsDto? Login = null, LoginLockFactsDto? Lock = null);
+    TableDesignerModelDto? TableDesigner = null, NewLoginModelDto? NewLogin = null, LoginDatabaseRolesDto? LoginDatabaseRoles = null, LoginFactsDto? Login = null, LoginLockFactsDto? Lock = null,
+    LoginPropertiesDto? LoginProperties = null);
+/// <summary>What Login Properties reads of the login besides its facts and New Login's lists (src/shared/actions/logins.ts
+/// LoginPropertiesFacts): its default database and language, the server roles it is a member of (at most loginLimits.serverRoles),
+/// the database users mapped to it in the databases the scan read (Read, by name; a database it did not read shows "Not read").</summary>
+internal sealed record LoginPropertiesDto(string DefaultDatabase, string? DefaultLanguage, List<string> ServerRoles, bool ServerRolesTruncated, List<LoginMappedUserDto> Users, List<string> Read);
+/// <summary>A user mapped to the login in one database: its name and default schema, and whether it is dbo (the login owns the database).</summary>
+internal sealed record LoginMappedUserDto(string Database, string User, string? DefaultSchema, bool Owner);
+/// <summary>The user mapped to a login in one database, as User Mapping's read with a login finds it.</summary>
+internal sealed record LoginDatabaseUserDto(string Name, string? DefaultSchema, bool Owner);
 /// <summary>User Mapping's read of one database (src/shared/actions/logins.ts LoginDatabaseRoles): its roles and schemas by name, each
-/// bounded by loginLimits, and whether guest has CONNECT there.</summary>
-internal sealed record LoginDatabaseRolesDto(List<string> Roles, bool RolesTruncated, bool Guest, List<string> Schemas, bool SchemasTruncated);
+/// bounded by loginLimits, and whether guest has CONNECT there. With a login (Login Properties): User, the user mapped to it there
+/// (none when absent), and MemberOf, the roles that user is a member of (empty without a user).</summary>
+internal sealed record LoginDatabaseRolesDto(List<string> Roles, bool RolesTruncated, bool Guest, List<string> Schemas, bool SchemasTruncated, LoginDatabaseUserDto? User = null,
+    List<string>? MemberOf = null);
 /// <summary>New Login's describe (src/shared/actions/logins.ts NewLoginModel): the server's facts, then the databases, languages and
 /// server roles its lists offer, each bounded by loginLimits (a truncation flag says more exist).</summary>
 internal sealed record NewLoginModelDto(NewLoginServerDto Server, List<NewLoginDatabaseDto> Databases, bool DatabasesTruncated, List<NewLoginLanguageDto> Languages,

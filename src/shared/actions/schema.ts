@@ -4,10 +4,14 @@ import { z } from 'zod'
 import { kindSpecs } from '../explorer/catalog.ts'
 import type { ObjectRef } from '../explorer/refs.ts'
 import { ident, objectRefSchema } from '../explorer/schema.ts'
-import { actionDescribeIds, actionDescribeSpecs, actionErrorCodes, actionLimits, actionOffered, dialogIds, dialogSpecs, isCreateAction, objectActionSpecs, type ActionErrorCode, type ObjectAction } from './catalog.ts'
 import {
-  isSystemLoginName, loginDatabaseRolesDescribe, loginLimits, loginMessages, newLoginAuths, newLoginStatements, publicRole, tooManyStatementsMessage, unlockModes, windowsLoginName, type LoginDatabaseRoles, type LoginFacts,
-  type LoginLockFacts, type LoginMappings, type LoginSecrets, type LoginStatusChoice, type NewLoginGeneral, type NewLoginModel, type UnlockMode, type UserMappingChoice
+  actionDescribeIds, actionDescribeSpecs, actionDialog, actionErrorCodes, actionLimits, actionOffered, actionVerb, dialogIds, dialogSpecs, isCreateAction, isKindDialogAction, kindDialogActionSpecs, objectActionSpecs,
+  type ActionErrorCode, type DialogAction, type DialogId, type ObjectAction
+} from './catalog.ts'
+import {
+  isSystemLoginName, loginDatabaseRolesDescribe, loginLimits, loginMappingChanges, loginMessages, loginPropertiesStatements, newLoginAuths, newLoginStatements, publicRole, tooManyStatementsMessage, unlockModes,
+  windowsLoginName, type LoginChanges, type LoginDatabaseRoles, type LoginFacts, type LoginLockFacts, type LoginMappings, type LoginPropertiesFacts, type LoginSecrets, type LoginStatusChoice, type NewLoginGeneral,
+  type NewLoginModel, type UnlockMode, type UserMappingChoice
 } from './logins.ts'
 import { wellFormed } from '../ssis/schema.ts'
 import { optionDef, settableOptionKeys, settableScopedKeys, tokenProblem, type FileType, type Growth } from './database.ts'
@@ -20,7 +24,8 @@ import { createTableSchema, type CreateTableRequest, type TableDesignerModel } f
 export const describeIds = [...dialogIds, ...designerDescribeIds, loginDatabaseRolesDescribe, ...actionDescribeIds] as const
 export type DescribeId = typeof describeIds[number]
 
-export interface ActionDescribeRequest { readonly connectionId: string; readonly requestId: string; readonly dialog: DescribeId; readonly target: ObjectRef }
+/** `login`: the login whose user User Mapping's read of a database (loginDatabaseRoles) reads too (Login Properties, D2c); no other describe takes it. */
+export interface ActionDescribeRequest { readonly connectionId: string; readonly requestId: string; readonly dialog: DescribeId; readonly target: ObjectRef; readonly login?: string }
 export interface RenameRequest { readonly action: 'rename'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly newName: string }
 /**
  * `closeConnections` (SET SINGLE_USER WITH ROLLBACK IMMEDIATE first) and `deleteHistory` apply to databases only; `dropMappedUsers`
@@ -72,8 +77,17 @@ export interface LoginStateRequest { readonly action: 'disable' | 'enable'; read
  * password. No password crosses for it; the identity is the login Unlock…'s describe read.
  */
 export interface UnlockRequest { readonly action: 'unlock'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly mode: UnlockMode; readonly loginIdentity?: LoginIdentity }
+/**
+ * Login Properties (D2c): only what differs from its describe (`loginChanges`; C#'s Changes and Identity are Database Properties'),
+ * the login it read (`loginIdentity`, required on actions.execute), and on actions.execute only the new password and, with Specify
+ * old password, the old one.
+ */
+export interface LoginPropertiesRequest {
+  readonly action: 'loginProperties'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef
+  readonly loginIdentity?: LoginIdentity; readonly loginChanges: LoginChanges; readonly secrets?: LoginSecrets
+}
 /** One action: actions.script returns its script, actions.execute runs it. */
-export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | CreateLoginRequest | LoginStateRequest | UnlockRequest
+export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | CreateLoginRequest | LoginStateRequest | UnlockRequest | LoginPropertiesRequest
 export interface ActionCancelRequest { readonly requestIds: readonly string[] }
 
 export interface ActionError { readonly code: ActionErrorCode; readonly message: string; readonly retryable: boolean }
@@ -184,8 +198,10 @@ export interface ActionDescribeResult {
   readonly loginDatabaseRoles?: LoginDatabaseRoles
   /** loginFacts and unlockLogin: what the login preflight read, which the renderer checks against logins.ts' rules before it asks or runs. */
   readonly login?: LoginFacts
-  /** unlockLogin: the login's lock-out state (ActionSql.LoginLock). */
+  /** unlockLogin and loginProperties: the login's lock-out state (ActionSql.LoginLock; a SQL Server login's only, for loginProperties). */
   readonly lock?: LoginLockFacts
+  /** loginProperties (with newLogin's lists and login): the login's defaults, server roles and mapped users. */
+  readonly loginProperties?: LoginPropertiesFacts
 }
 export interface ActionScriptResult {
   /** Absent with `error`; at most `actionLimits.scriptChars` characters. */
@@ -236,6 +252,15 @@ const systemDatabases: ReadonlySet<string> = new Set(['master', 'model', 'msdb',
 /** A server ref: what a create action on a server object (a login) names as its target. */
 const isServer = (ref: ObjectRef) => ref.kind === 'server' && Object.keys(ref).length === 1
 const verbs: Readonly<Record<ObjectAction, string>> = { selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties', disable: 'disabled', enable: 'enabled', unlock: 'unlocked' }
+/** Why a dialog cannot open on `ref`, or run its action there: a kind dialog action (Login Properties) on another kind, or a verb's
+ *  own dialog (Database Properties) on a kind with its own; then the verb's target rules. */
+export function dialogTargetProblems(ref: ObjectRef, action: DialogAction, dialog?: DialogId): string[] {
+  const verb = actionVerb(action)
+  if (!verb) return []
+  if (isKindDialogAction(action) ? ref.kind !== kindDialogActionSpecs[action].kind : actionOffered(ref.kind, verb) && actionDialog(ref.kind, verb) !== (dialog ?? objectActionSpecs[verb].dialog))
+    return [`A ${ref.kind} has its own ${objectActionSpecs[verb].title}.`]
+  return actionTargetProblems(ref, verb)
+}
 const systemLogin = (ref: ObjectRef) => ref.kind === 'login' && isSystemLoginName(ref.name ?? '')
 /** Why `action` cannot act on `ref` whatever its subtype: a kind that never offers it, or one of SQL Server's own objects
  *  (unless the action serves them, as Properties does). */
@@ -251,8 +276,9 @@ export function actionTargetProblems(ref: ObjectRef, action: ObjectAction): stri
 const issue = (context: z.RefinementCtx, path: string, message: string) => context.addIssue({ code: 'custom', path: [path], message })
 const targetIssues = (context: z.RefinementCtx, target: ObjectRef, action: ObjectAction) => { for (const message of actionTargetProblems(target, action)) issue(context, 'target', message) }
 
-export const actionDescribeSchema = z.object({ connectionId: z.uuid(), requestId: z.uuid(), dialog: z.enum(describeIds), target: objectRefSchema }).strict()
+export const actionDescribeSchema = z.object({ connectionId: z.uuid(), requestId: z.uuid(), dialog: z.enum(describeIds), target: objectRefSchema, login: ident.optional() }).strict()
   .superRefine((request, context) => {
+    if (request.login !== undefined && request.dialog !== loginDatabaseRolesDescribe) issue(context, 'login', 'Only User Mapping\'s read of a database names a login.')
     switch (request.dialog) {
       // A new table goes in any database, SQL Server's own included, as in SSMS.
       case 'tableDesigner':
@@ -270,7 +296,7 @@ export const actionDescribeSchema = z.object({ connectionId: z.uuid(), requestId
         targetIssues(context, request.target, actionDescribeSpecs.loginFacts.action)
         break
       default:
-        targetIssues(context, request.target, dialogSpecs[request.dialog].action as ObjectAction)
+        for (const message of dialogTargetProblems(request.target, dialogSpecs[request.dialog].action, request.dialog)) issue(context, 'target', message)
     }
   }) satisfies z.ZodType<ActionDescribeRequest>
 
@@ -313,6 +339,44 @@ const createLoginSchema = z.object({
   action: z.literal('createLogin'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, login: newLoginGeneralSchema,
   serverRoles: z.array(ident).max(loginLimits.serverRoles), mappings: z.array(userMappingSchema).max(loginLimits.mappings), status: z.object({ connect: z.enum(['grant', 'deny']), enabled: z.boolean() }).strict(), secrets: loginSecretsSchema.optional()
 }).strict()
+const roleNames = (limit: number) => z.array(ident).max(limit)
+const loginMappingChangeSchema = z.object({
+  database: ident, change: z.enum(loginMappingChanges), user: ident, newName: ident.optional(), defaultSchema: ident.optional(), rolesAdd: roleNames(loginLimits.roles).optional(), rolesDrop: roleNames(loginLimits.roles).optional()
+}).strict()
+const loginChangesSchema = z.object({
+  defaultDatabase: ident.optional(), defaultLanguage: ident.optional(), checkPolicy: z.boolean().optional(), checkExpiration: z.boolean().optional(),
+  password: z.object({ oldPassword: z.boolean(), unlock: z.boolean(), mustChange: z.boolean() }).strict().optional(),
+  rolesAdd: roleNames(loginLimits.serverRoles).optional(), rolesDrop: roleNames(loginLimits.serverRoles).optional(), mappings: z.array(loginMappingChangeSchema).max(loginLimits.mappings).optional(),
+  connect: z.enum(['grant', 'deny']).optional(), enabled: z.boolean().optional()
+}).strict() satisfies z.ZodType<LoginChanges>
+const loginPropertiesSchema = z.object({
+  action: z.literal('loginProperties'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, loginIdentity: loginIdentitySchema.optional(), loginChanges: loginChangesSchema,
+  secrets: loginSecretsSchema.optional()
+}).strict()
+const distinct = (values: readonly string[] | undefined) => !values || new Set(values).size === values.length
+const overlap = (a: readonly string[] | undefined, b: readonly string[] | undefined) => !!a && !!b && a.some(value => b.includes(value))
+/** Login Properties' rules beyond the shapes (C#: ActionService.ValidateLoginProperties): the policy chain where both are sent, the old
+ *  password without UNLOCK and MUST_CHANGE, roles that are distinct, not public and never both added and dropped, each database once
+ *  with a change of its kind, and between one and actionLimits.statements statements. */
+function loginPropertiesIssues(request: z.infer<typeof loginPropertiesSchema>, context: z.RefinementCtx): void {
+  const changes = request.loginChanges
+  if (changes.checkExpiration === true && changes.checkPolicy === false) issue(context, 'loginChanges', 'Enforce password expiration needs Enforce password policy.')
+  if (changes.password?.oldPassword && (changes.password.unlock || changes.password.mustChange)) issue(context, 'loginChanges', 'The old password goes without UNLOCK and MUST_CHANGE.')
+  const roles = [changes.rolesAdd, changes.rolesDrop, ...(changes.mappings ?? []).flatMap(mapping => [mapping.rolesAdd, mapping.rolesDrop])]
+  if (roles.some(list => list?.includes(publicRole))) issue(context, 'loginChanges', 'Every login and user is a member of public.')
+  if (!roles.every(distinct)) issue(context, 'loginChanges', 'Duplicate role.')
+  if (overlap(changes.rolesAdd, changes.rolesDrop) || (changes.mappings ?? []).some(mapping => overlap(mapping.rolesAdd, mapping.rolesDrop))) issue(context, 'loginChanges', 'A role is both added and dropped.')
+  if (!distinct((changes.mappings ?? []).map(mapping => mapping.database))) issue(context, 'loginChanges', 'A database changes twice.')
+  for (const mapping of changes.mappings ?? []) {
+    const valid = mapping.change === 'unmap' ? mapping.newName === undefined && mapping.defaultSchema === undefined && mapping.rolesAdd === undefined && mapping.rolesDrop === undefined
+      : mapping.change === 'map' ? mapping.newName === undefined && mapping.rolesDrop === undefined
+        : mapping.newName !== mapping.user && (mapping.newName !== undefined || mapping.defaultSchema !== undefined || !!mapping.rolesAdd?.length || !!mapping.rolesDrop?.length)
+    if (!valid) issue(context, 'loginChanges', `A ${mapping.change} change of a database carries what it does not take.`)
+  }
+  const count = loginPropertiesStatements(changes)
+  if (count === 0) issue(context, 'loginChanges', 'There is nothing to change.')
+  if (count > actionLimits.statements) issue(context, 'loginChanges', tooManyStatementsMessage(actionLimits.statements))
+}
 /** New Login's rules beyond the shapes: the server as its target, the auth's own fields and SQL Server's policy chain, the
  *  login name's backslash rule, roles that are unique and not public, each database mapped once with unique roles other than
  *  public, and a plan of at most actionLimits.statements statements. */
@@ -345,10 +409,11 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
   createTableSchema,
   createLoginSchema,
   loginStateSchema,
-  unlockSchema
+  unlockSchema,
+  loginPropertiesSchema
 ]).superRefine((request, context) => {
   // A new table or login is not an object row's action: its target is the database (SQL Server's own included) or the server.
-  if (request.action !== 'createTable' && !isCreateAction(request.action)) targetIssues(context, request.target, request.action as ObjectAction)
+  if (request.action !== 'createTable' && !isCreateAction(request.action)) for (const message of dialogTargetProblems(request.target, request.action)) issue(context, 'target', message)
   switch (request.action) {
     case 'rename':
       if (request.newName === request.target.name) issue(context, 'newName', 'The new name is the current name.')
@@ -368,6 +433,9 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
     case 'createLogin':
       createLoginIssues(request, context)
       break
+    case 'loginProperties':
+      loginPropertiesIssues(request, context)
+      break
   }
 }) satisfies z.ZodType<ActionRequest>
 /** actions.execute: the same requests, with the secrets each needs and no others: New Login's password exactly for a SQL
@@ -376,6 +444,14 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
  *  principal; Script runs nothing and may leave it out. C# Validate refuses the same. */
 export const actionExecuteRequestSchema = actionRequestSchema.superRefine((request, context) => {
   if (request.action === 'delete' && request.target.kind === 'login' && request.loginIdentity === undefined) issue(context, 'loginIdentity', "A login's Delete needs the identity of the login it read.")
+  if (request.action === 'loginProperties') {
+    // A new password exactly when the changes set one, never blank (blank keeps the current one); the old one exactly with Specify old password.
+    const password = request.loginChanges.password
+    if (request.loginIdentity === undefined) issue(context, 'loginIdentity', "Login Properties needs the identity of the login it read.")
+    if (password ? !request.secrets?.password : request.secrets !== undefined) issue(context, 'secrets', 'The new password goes exactly with a password change.')
+    if (password && (password.oldPassword ? request.secrets?.oldPassword === undefined : request.secrets?.oldPassword !== undefined)) issue(context, 'secrets', 'The old password goes exactly with Specify old password.')
+    return
+  }
   if (request.action !== 'createLogin') return
   if (request.login.auth === 'sql' && request.secrets?.password === undefined) issue(context, 'secrets', 'A SQL Server login needs a password.')
   if (request.login.auth !== 'sql' && request.secrets !== undefined) issue(context, 'secrets', 'Only a SQL Server login takes a password.')

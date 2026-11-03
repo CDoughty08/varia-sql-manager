@@ -88,8 +88,9 @@ export interface ObjectDialogServiceOptions {
   readonly notify?: (message: string) => void
 }
 
-/** A password field of an object dialog. Their values live only in the service's secret slot, never in its snapshot. */
-export type SecretField = 'password' | 'confirm'
+/** A password field of an object dialog. Their values live only in the service's secret slot, never in its snapshot. The old
+ *  password is Login Properties' (Specify old password). */
+export type SecretField = 'password' | 'confirm' | 'oldPassword'
 
 export const dialogMessages = {
   disconnected: 'The server was disconnected.',
@@ -119,6 +120,10 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   private readonly secrets = new Map<SecretField, string>()
   /** The error showProblem put up, so an edit that resolves it can take it down. */
   private problem?: ActionError
+  /** The tree node the open dialog was opened for, which a hand-off (Unlock's Set a new password…) opens the next dialog on. */
+  private node?: ExplorerMenuNode
+  /** What a hand-off sets over the next dialog's first draft (Login Properties: Login is locked out cleared), by that dialog's id. */
+  private patch?: { readonly dialog: number; readonly value: Readonly<Record<string, unknown>> }
 
   constructor(private readonly options: ObjectDialogServiceOptions) {
     super({})
@@ -132,8 +137,9 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     return open?.model ? definitionOf(open.dialog).unavailable?.(open.model, open.draft) : undefined
   }
 
-  /** Opens `dialog` for an Object Explorer node and describes it; refused while another dialog is open. */
-  open(dialog: ModalDialogId, node: ExplorerMenuNode): void {
+  /** Opens `dialog` for an Object Explorer node and describes it; refused while another dialog is open. `patch` goes over its first
+   *  draft (a hand-off's). */
+  open(dialog: ModalDialogId, node: ExplorerMenuNode, patch?: Readonly<Record<string, unknown>>): void {
     if (this.disposed) return
     if (!isModalDialog(dialog)) throw new Error('That dialog opens as a document.')
     if (this.current) throw new Error('Close the open dialog first.')
@@ -147,6 +153,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
       ...(connection.login ? { login: connection.login } : {}), page: dialogSpecs[dialog].pages[0].id, phase: 'loading', ...(definition.secrets ? { secretState: emptySecrets } : {})
     }
     this.secrets.clear()
+    this.node = node
+    this.patch = patch ? { dialog: open.id, value: patch } : undefined
     this.publish({ open })
     void this.describe(open)
   }
@@ -200,15 +208,24 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     this.update(open, { databaseRoles: lookups })
     void this.readDatabaseRoles(open, database, requestId)
   }
+  /** Reads one database for User Mapping; Login Properties' read names its login, whose user and roles there it reads too, and the
+   *  definition takes them into its model and draft (`lookedUp`). */
   private async readDatabaseRoles(open: OpenObjectDialog, database: string, requestId: string): Promise<void> {
-    const result = await this.call(() => this.options.api.describeObject({ connectionId: open.connectionId, requestId, dialog: loginDatabaseRolesDescribe, target: { kind: 'database', name: database } }))
+    const definition = definitionOf(open.dialog), login = definition.rolesLogin?.(open.target)
+    const result = await this.call(() => this.options.api.describeObject({
+      connectionId: open.connectionId, requestId, dialog: loginDatabaseRolesDescribe, target: { kind: 'database', name: database }, ...(login !== undefined ? { login } : {})
+    }))
     if (this.lookup?.id !== requestId) return
     this.lookup = undefined
     const current = this.current
     if (this.disposed || current?.id !== open.id || current.phase === 'disconnected') return
     const value = result.ok ? result.value.loginDatabaseRoles : undefined
     const failure = !result.ok ? error('SQL_ERROR', result.error) : result.value.error ?? (value ? undefined : error('NOT_FOUND', 'The database could not be read.'))
-    this.update(current, { databaseRoles: new Map(current.databaseRoles ?? []).set(database, failure || !value ? { state: 'failed', error: failure! } : { state: 'ready', value }) })
+    const looked = !failure && value && current.model && current.draft && definition.lookedUp ? definition.lookedUp(current.model, current.draft, database, value) : undefined
+    this.update(current, {
+      databaseRoles: new Map(current.databaseRoles ?? []).set(database, failure || !value ? { state: 'failed', error: failure! } : { state: 'ready', value }),
+      ...(looked ? { model: looked.model, draft: looked.draft } : {})
+    })
   }
   private cancelLookup(): void {
     if (this.lookup) this.cancel([this.lookup.id])
@@ -247,6 +264,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const definition = definitionOf(open.dialog)
     // The frame greys OK and the page says why; Enter must not run it either.
     if (definition.unavailable?.(open.model, open.draft)) return
+    const handOff = definition.handOff?.(open.model, open.draft)
+    if (handOff) { this.handOver(handOff); return }
     let built = definition.request(open.target, open.model, open.draft, open.secretState ?? emptySecrets)
     if (!built) { this.close(); return }
     if ('problem' in built) { this.showProblem(open, built.problem); return }
@@ -269,9 +288,11 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const run = definition.longRun ? this.options.longRuns?.begin({ kind: definition.longRun, connectionId: open.connectionId, server: open.server, refused: refusal => this.update(open, { refusal }) }) : undefined
     let result: ApiResult<ActionExecuteResult>
     try {
-      // The password joins only this request, read from the slot as it is sent; the request object is not kept.
+      // The passwords join only this request, read from the slot as it is sent; the request object is not kept.
+      const attach = !!definition.secrets?.(draft, sent), old = attach && !!definition.oldPassword?.(sent)
       result = await this.call(() => this.options.api.executeObjectAction({
-        ...sent, ...(definition.secrets?.(draft) ? { secrets: { password: this.secrets.get('password') ?? '' } } : {}), connectionId: open.connectionId, requestId
+        ...sent, ...(attach ? { secrets: { password: this.secrets.get('password') ?? '', ...(old ? { oldPassword: this.secrets.get('oldPassword') ?? '' } : {}) } } : {}),
+        connectionId: open.connectionId, requestId
       } as ActionRequest))
     } finally { run?.dispose(); this.update(open, { refusal: undefined }) }
     if (!this.end(open, requestId)) return
@@ -315,6 +336,13 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     this.cancel([request.id])
   }
 
+  /** A hand-off: this dialog closes and the next opens on the same node, with the patch over its first draft. */
+  private handOver(next: { readonly dialog: ModalDialogId; readonly patch: Readonly<Record<string, unknown>> }): void {
+    const node = this.node
+    if (!node || !this.close()) return
+    try { this.open(next.dialog, node, next.patch) } catch (failure) { onUnexpectedError(failure) }
+  }
+
   /** Cancel or Escape. Refused while an action runs (Stop first); returns whether the dialog closed. */
   close(): boolean {
     const open = this.current
@@ -346,7 +374,9 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const definition = definitionOf(open.dialog)
     const model = result.ok ? definition.modelOf(result.value) : undefined
     if (failure || !model) { this.update(open, { phase: 'loadFailed', error: failure ?? error('NOT_FOUND', 'The object could not be read.') }); return }
-    this.update(open, { phase: 'ready', model, draft: definition.initialDraft(model, open.target) })
+    const patch = this.patch?.dialog === open.id ? this.patch.value : undefined
+    this.patch = undefined
+    this.update(open, { phase: 'ready', model, draft: { ...definition.initialDraft(model, open.target), ...patch } as DialogDraft })
     if (open.dialog === 'deleteObject' && open.target.kind === 'database') this.nameTabTransactions(open, (model as DeleteTarget).transactionTabs ?? [])
     if (open.dialog === 'deleteObject' && open.target.kind === 'login') {
       const labels = otherLoginConnections(this.options.connections.getSnapshot(), open.connectionId, open.target.name)

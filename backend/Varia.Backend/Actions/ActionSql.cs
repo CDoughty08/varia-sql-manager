@@ -12,14 +12,15 @@ namespace Varia.Backend.Actions;
 /// ADD MEMBER and its User Mapping's CREATE USER … FOR LOGIN, ALTER USER … WITH DEFAULT_SCHEMA, CREATE SCHEMA … AUTHORIZATION and
 /// ALTER ROLE … ADD MEMBER, each in the mapped database (its CREATE LOGIN is LoginSql's builder, which takes the password); a login's
 /// rename (D4b); the password policy turned off and back on, with or without expiration, which Unlock runs in one transaction
-/// (D4d); and a login's Delete (D4c): DROP USER of a mapped user and DROP LOGIN, each bound to the principal it was planned for
-/// (<see cref="PrincipalBinding"/>).</summary>
+/// (D4d); a login's Delete (D4c): DROP USER of a mapped user and DROP LOGIN, each bound to the principal it was planned for
+/// (<see cref="PrincipalBinding"/>); and what Login Properties (D2c) adds: ALTER SERVER ROLE … DROP MEMBER, ALTER USER … WITH NAME
+/// and ALTER ROLE … DROP MEMBER.</summary>
 internal enum ActionTemplate
 {
     DropTable, DropView, DropProcedure, DropFunction, RenameObject, RenameDatabase, SetSingleUser, DropDatabase, DeleteBackupHistory,
     SetMultiUser, SetRestrictedUser, DetachDatabase, DisableLogin, EnableLogin, DenyConnect, GrantConnect, DropUser,
     AddServerRoleMember, CreateUserForLogin, AlterUserSchema, CreateSchemaFor, AddRoleMember, RenameLogin, DropLogin, DropMappedUser,
-    CheckPolicyOff, CheckPolicyOn, CheckPolicyExpirationOn
+    CheckPolicyOff, CheckPolicyOn, CheckPolicyExpirationOn, DropServerRoleMember, RenameUser, DropRoleMember
 }
 
 /// <summary>The principal a guarded DROP was planned for (D4c): its SID, and for a login its principal_id and create_date. SQL Server
@@ -74,7 +75,7 @@ internal static partial class ActionSql
     {
         ActionTemplate.DropTable or ActionTemplate.DropView or ActionTemplate.DropProcedure or ActionTemplate.DropFunction or ActionTemplate.RenameDatabase or ActionTemplate.DetachDatabase
             or ActionTemplate.AddServerRoleMember or ActionTemplate.CreateUserForLogin or ActionTemplate.AlterUserSchema or ActionTemplate.CreateSchemaFor or ActionTemplate.AddRoleMember
-            or ActionTemplate.RenameLogin => 2,
+            or ActionTemplate.RenameLogin or ActionTemplate.DropServerRoleMember or ActionTemplate.RenameUser or ActionTemplate.DropRoleMember => 2,
         ActionTemplate.RenameObject => 3,
         _ => 1
     };
@@ -153,6 +154,10 @@ internal static partial class ActionSql
             ActionTemplate.CheckPolicyOff => "ALTER LOGIN " + Quote(names[0]) + " WITH CHECK_POLICY = OFF",
             ActionTemplate.CheckPolicyOn => "ALTER LOGIN " + Quote(names[0]) + " WITH CHECK_POLICY = ON",
             ActionTemplate.CheckPolicyExpirationOn => "ALTER LOGIN " + Quote(names[0]) + " WITH CHECK_POLICY = ON, CHECK_EXPIRATION = ON",
+            // Login Properties (D2c), as SMO writes them (D2 §4): the role, then the member; the user, then its new name.
+            ActionTemplate.DropServerRoleMember => "ALTER SERVER ROLE " + Quote(names[0]) + " DROP MEMBER " + Quote(names[1]),
+            ActionTemplate.RenameUser => "ALTER USER " + Quote(names[0]) + " WITH NAME=" + Quote(names[1]),
+            ActionTemplate.DropRoleMember => "ALTER ROLE " + Quote(names[0]) + " DROP MEMBER " + Quote(names[1]),
             _ => throw new InvalidOperationException("Unknown template " + plan.Template)
         };
     }
@@ -212,6 +217,9 @@ internal static partial class ActionSql
             ActionTemplate.CheckPolicyOff => Run("DECLARE @stmt nvarchar(max) = N'ALTER LOGIN ' + QUOTENAME(@p1) + N' WITH CHECK_POLICY = OFF';\n"),
             ActionTemplate.CheckPolicyOn => Run("DECLARE @stmt nvarchar(max) = N'ALTER LOGIN ' + QUOTENAME(@p1) + N' WITH CHECK_POLICY = ON';\n"),
             ActionTemplate.CheckPolicyExpirationOn => Run("DECLARE @stmt nvarchar(max) = N'ALTER LOGIN ' + QUOTENAME(@p1) + N' WITH CHECK_POLICY = ON, CHECK_EXPIRATION = ON';\n"),
+            ActionTemplate.DropServerRoleMember => Run("DECLARE @stmt nvarchar(max) = N'ALTER SERVER ROLE ' + QUOTENAME(@p1) + N' DROP MEMBER ' + QUOTENAME(@p2);\n"),
+            ActionTemplate.RenameUser => Run("DECLARE @stmt nvarchar(max) = N'ALTER USER ' + QUOTENAME(@p1) + N' WITH NAME=' + QUOTENAME(@p2);\n"),
+            ActionTemplate.DropRoleMember => Run("DECLARE @stmt nvarchar(max) = N'ALTER ROLE ' + QUOTENAME(@p1) + N' DROP MEMBER ' + QUOTENAME(@p2);\n"),
             _ => throw new InvalidOperationException("Unknown template " + template)
         };
     }
@@ -467,6 +475,8 @@ internal static partial class ActionSql
         UserCheck, UserRecheck, UserParameters, LoginCheck, LoginRecheck, LoginParameters,
         // Unlock's password policy statements (D4d).
         "N' WITH CHECK_POLICY = OFF'", "N' WITH CHECK_POLICY = ON'", "N' WITH CHECK_POLICY = ON, CHECK_EXPIRATION = ON'",
+        // Login Properties' server role and database role removals (D2c); its user rename is a login rename's N' WITH NAME='.
+        "N' DROP MEMBER '",
         // Database Properties' describe and preflight (DatabaseProperties.cs, ActionService.DatabasePropertiesPreflight).
         "N'contained database authentication'", "N'sysadmin'", "N'##%'", "N'SpaceUsed'", "N'@take int'", "N'MAXDOP'", "N'LEGACY_CARDINALITY_ESTIMATION'", "N'PARAMETER_SNIFFING'",
         "N'QUERY_OPTIMIZER_HOTFIXES'", "'FilestreamEffectiveLevel'", "'EngineEdition'", "'ProductMajorVersion'",
@@ -683,6 +693,11 @@ internal static partial class ActionSql
         yield return ("login database roles", LintCatalog(LoginSql.DatabaseRoles, ExplorerCatalog.MaxBand, database: true));
         yield return ("login mapping preflight", LintCatalog(LoginSql.MappingPreflight, ExplorerCatalog.MaxBand, database: true));
         foreach (var item in LoginSql.Lint()) yield return item;
+        // Login Properties (D2c): its read of the login in master, a login's SID by name, and the users mapped to it inside a database.
+        yield return ("login properties read", LintCatalog(LoginSql.PropertiesRead, ExplorerCatalog.MaxBand, database: false));
+        yield return ("login sid", LintCatalog(LoginSql.LoginSid, ExplorerCatalog.MaxBand, database: false));
+        yield return ("login properties mapped user", LintCatalog(LoginSql.PropertiesMappedUser, ExplorerCatalog.MaxBand, database: true));
+        yield return ("login database user", LintCatalog(LoginSql.DatabaseUser, ExplorerCatalog.MaxBand, database: true));
     }
 }
 

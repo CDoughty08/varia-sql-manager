@@ -31,7 +31,8 @@ internal sealed class ActionsCatalog
         return Parse(stream);
     });
 
-    private sealed record ActionJson(string Action, string Class, string Title, List<string> Engines, long CleanupMs, bool? SystemObjects = null);
+    /// <summary>Kind and Verb: a dialog action that serves one kind through an object action's verb (loginProperties: a login's Properties).</summary>
+    private sealed record ActionJson(string Action, string Class, string Title, List<string> Engines, long CleanupMs, bool? SystemObjects = null, string? Kind = null, string? Verb = null);
     private sealed record DescribeJson(string Describe, string Kind, string Action);
     private sealed record DialogJson(string Dialog, string Action, List<string> Pages);
     private sealed record ErrorJson(string Code, bool Retryable);
@@ -97,6 +98,16 @@ internal sealed class ActionsCatalog
 
     /// <summary>The action a dialog's OK runs (deleteObject: delete, databaseProperties: properties).</summary>
     public string ActionOf(string dialog) => dialogActions.TryGetValue(dialog, out var action) ? action : throw new InvalidOperationException("Unknown dialog " + dialog);
+
+    /// <summary>The object action whose rows decide where an action runs: itself, or for a kind's own dialog action (loginProperties)
+    /// the verb it serves (properties).</summary>
+    public string VerbOf(string action) => actions.TryGetValue(action, out var row) && row.Verb is { } verb ? verb : action;
+
+    /// <summary>The kind a kind's own dialog action serves (loginProperties: login), or null for an action of every kind that offers it.</summary>
+    public string? KindOf(string action) => actions.TryGetValue(action, out var row) ? row.Kind : null;
+
+    /// <summary>The kind's own dialog action for a verb (login, properties: loginProperties), or null when the verb's own dialog serves it.</summary>
+    public string? KindActionOf(string kind, string verb) => actions.Values.FirstOrDefault(row => row.Kind == kind && row.Verb == verb)?.Action;
 
     /// <summary>Whether the action also serves SQL Server's own objects (Properties on master, model, msdb and tempdb).</summary>
     public bool ServesSystemObjects(string action) => systemActions.Contains(action);

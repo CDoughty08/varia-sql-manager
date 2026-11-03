@@ -22,7 +22,9 @@ export interface PageProps { readonly open: OpenObjectDialog; readonly editable:
 export const dialogPages: { readonly [D in ModalDialogId]: Readonly<Partial<Record<PageId, ComponentType<PageProps>>>> } = {
   deleteObject: { general: DeleteObjectPage },
   newLogin: { general: NewLoginGeneralPage, serverRoles: NewLoginServerRolesPage, userMapping: UserMappingPage, status: NewLoginStatusPage },
-  unlockLogin: { general: UnlockLoginPage }
+  unlockLogin: { general: UnlockLoginPage },
+  // Login Properties (D2c) shows New Login's pages on the login, each in its properties form.
+  loginProperties: { general: NewLoginGeneralPage, serverRoles: NewLoginServerRolesPage, userMapping: UserMappingPage, status: NewLoginStatusPage }
 }
 
 const progressText: Readonly<Record<DialogPhase, string>> = {
@@ -159,6 +161,8 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
   const blocked = !!open.model && !!definitionOf(open.dialog).blocked?.(open.model)
   // The definition's reason OK cannot run (the page shows it): OK greys, Script stays.
   const unavailable = usable && !!dialogs.unavailable(open)
+  // Unlock's Set a new password… hands over to Login Properties, and OK says so.
+  const okLabel = (open.draft && definitionOf(open.dialog).okLabel?.(open.draft)) || 'OK'
   const nav = useRef<HTMLElement>(null), form = useRef<HTMLFormElement>(null)
   const tabs = useMediaQuery(narrowFrameQuery)
   const [visited, setVisited] = useState<ReadonlySet<PageId>>(() => new Set([open.page]))
@@ -230,7 +234,7 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
     </div>
     <div className="connection-footer">
       <span />
-      <button className="primary" type="submit" disabled={busy || blocked || unavailable || open.phase === 'loadFailed' || open.phase === 'disconnected'}>OK</button>
+      <button className="primary" type="submit" disabled={busy || blocked || unavailable || open.phase === 'loadFailed' || open.phase === 'disconnected'}>{okLabel}</button>
       {executing ? <button type="button" onClick={() => dialogs.stop()}>Stop</button> : <button type="button" onClick={close}>{open.phase === 'disconnected' ? 'Close' : 'Cancel'}</button>}
     </div>
   </form></div>

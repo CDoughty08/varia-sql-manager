@@ -106,6 +106,20 @@ internal sealed class LoginRules
     public static string? UnlockRefusal(LoginFactsDto facts, LoginLockFactsDto state, bool script = false) =>
         facts.Type.Trim() != "S" || facts.PolicyChecked != true ? "unlockNoPolicy" : state.MustChange ? "unlockMustChange" : !script && !state.Locked ? "notLocked" : null;
 
+    /// <summary>The message id that refuses Login Properties' changes for a login the preflight read, or null (logins.ts
+    /// loginPropertiesRefusal): SQL Server's own logins, which it shows but never changes; Deny or Disable of the login this connection
+    /// uses, which would lock Varia out (owner decision 7); Disable of a Windows group (15151 by design); and a password or password
+    /// policy for a login SQL Server does not authenticate itself. Permissions are SQL Server's to answer: a login may change its own
+    /// password (with the old one), default database and language.</summary>
+    public static string? PropertiesRefusal(LoginFactsDto facts, LoginChangesDto changes)
+    {
+        if (facts.Subtype == "system") return "system";
+        if (facts.Own && (changes.Enabled == false || changes.Connect == "deny")) return "ownStatus";
+        if (facts.Subtype == "windowsGroup" && changes.Enabled == false) return "windowsGroupDisable";
+        if (facts.Type.Trim() != "S" && (changes.Password is not null || changes.CheckPolicy is not null || changes.CheckExpiration is not null)) return "propertiesNotSql";
+        return null;
+    }
+
     /// <summary>The message id that refuses a login's new name, or null: SQL Server's own form for every subtype, then a backslash
     /// in the name of a login SQL Server authenticates itself (logins.ts loginNameRefusal; SQL Server would answer 15021).</summary>
     public string? NameRefusal(string subtype, string newName) =>

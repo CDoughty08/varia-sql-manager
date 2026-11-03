@@ -104,8 +104,8 @@ export const ownLoginRefuses: readonly LoginVerb[] = ['disable', 'rename', 'dele
 export const loginMessages = {
   system: 'This login belongs to SQL Server and cannot be changed.',
   saDelete: 'The sa login cannot be deleted.',
-  // Login Properties › Status (D2c) is where SSMS denies it; name it there once Varia has that page.
-  windowsGroupDisable: 'A Windows group cannot be disabled. Deny it permission to connect (DENY CONNECT SQL) instead.',
+  // Login Properties › Status (D2c) is where SSMS denies it.
+  windowsGroupDisable: 'A Windows group cannot be disabled. Deny it permission to connect on Login Properties › Status instead.',
   externalRename: 'A Microsoft Entra login cannot be renamed.',
   notOffered: 'This kind of login does not offer this action.',
   own: 'This is the login this connection uses. Connect with another login to change it.',
@@ -125,7 +125,12 @@ export const loginMessages = {
   notLocked: 'The login is not locked out.',
   // Unlock's plan turns back on the policy and expiration its preflight read; it reads them again in its transaction and stops
   // there when another session changed them meanwhile, rather than undo that change.
-  unlockChanged: "The login's password policy changed while Unlock ran, so nothing was changed. Try again."
+  unlockChanged: "The login's password policy changed while Unlock ran, so nothing was changed. Try again.",
+  // Login Properties (D2c): the login this connection uses may change its own password and defaults, but Deny or Disable would
+  // lock Varia out (owner decision 7).
+  ownStatus: 'This is the login this connection uses. Denying it permission to connect or disabling it would lock this connection out. Connect with another login to change its status.',
+  // Only SQL Server authenticates a SQL Server login's password; a request for another kind is refused before anything runs.
+  propertiesNotSql: 'Only a SQL Server login has a password and a password policy.'
 } as const
 export type LoginMessageId = keyof typeof loginMessages
 /** The message a subtype's greyed verb answers with. */
@@ -413,6 +418,9 @@ export interface LoginDatabaseRoles {
   readonly guest: boolean
   readonly schemas: readonly string[]
   readonly schemasTruncated: boolean
+  /** Login Properties (D2c), whose read names its login: the user mapped to it there (absent when none) and that user's roles. */
+  readonly user?: LoginDatabaseUser
+  readonly memberOf?: readonly string[]
 }
 /**
  * One mapped database of New Login: CREATE USER [user] FOR LOGIN, then ALTER USER … WITH DEFAULT_SCHEMA when a default schema is
@@ -436,6 +444,100 @@ export function newLoginStatements(request: { readonly serverRoles: readonly str
 /** Why a plan is too long (the limit is actionLimits.statements; catalog.ts imports this file, so the number is passed in). */
 export const tooManyStatementsMessage = (limit: number) => `This login would need more than ${limit.toLocaleString('en-US')} statements. Map fewer databases, or apply the rest afterwards.`
 /** User Mapping's own notes, in Varia's words. They name databases only as the page shows them. */
+// --- Login Properties (D2c) ---------------------------------------------------------------------------------------------
+
+/** A new password (the value travels in LoginSecrets): with the old one (`oldPassword`; then neither UNLOCK nor MUST_CHANGE, as
+ *  T-SQL's grammar takes one or the others), or with UNLOCK to clear a lock-out and MUST_CHANGE to require a change at the next sign-in. */
+export interface LoginPasswordChange { readonly oldPassword: boolean; readonly unlock: boolean; readonly mustChange: boolean }
+export const loginMappingChanges = ['map', 'unmap', 'update'] as const
+export type LoginMappingChangeKind = typeof loginMappingChanges[number]
+/**
+ * One database whose User Mapping changed: `map` (CREATE USER `user` FOR LOGIN), `unmap` (DROP USER `user`, the user the describe
+ * read, and nothing else) or `update` (`user` the user the describe read, `newName` to rename it); a default schema and roles to
+ * add or drop for map and update (drop for update only).
+ */
+export interface LoginMappingChange {
+  readonly database: string
+  readonly change: LoginMappingChangeKind
+  readonly user: string
+  readonly newName?: string
+  readonly defaultSchema?: string
+  readonly rolesAdd?: readonly string[]
+  readonly rolesDrop?: readonly string[]
+}
+/** Login Properties' changes: only what differs from its describe, so an unchanged dialog sends nothing. C#: LoginChangesDto. */
+export interface LoginChanges {
+  readonly defaultDatabase?: string
+  readonly defaultLanguage?: string
+  readonly checkPolicy?: boolean
+  readonly checkExpiration?: boolean
+  readonly password?: LoginPasswordChange
+  readonly rolesAdd?: readonly string[]
+  readonly rolesDrop?: readonly string[]
+  readonly mappings?: readonly LoginMappingChange[]
+  readonly connect?: 'grant' | 'deny'
+  readonly enabled?: boolean
+}
+/** A user mapped to the login in one database, as the describe's scan read it: `owner` when it is dbo (the login owns the database). */
+export interface LoginMappedUser { readonly database: string; readonly user: string; readonly defaultSchema?: string; readonly owner: boolean }
+/** The user mapped to a login in one database, as User Mapping's read with a login finds it. */
+export interface LoginDatabaseUser { readonly name: string; readonly defaultSchema?: string; readonly owner: boolean }
+/** What Login Properties reads of the login besides its facts, lock-out state and New Login's lists. `read`: the databases whose users
+ *  the scan read (by name); a database it did not read shows "Not read" until its row is selected. C#: LoginPropertiesDto. */
+export interface LoginPropertiesFacts {
+  readonly defaultDatabase: string
+  readonly defaultLanguage?: string
+  readonly serverRoles: readonly string[]
+  readonly serverRolesTruncated: boolean
+  readonly users: readonly LoginMappedUser[]
+  readonly read: readonly string[]
+}
+/** The most statements Login Properties plans: the options, the password, Connect, Enabled, each server role, and per database its
+ *  DROP USER, or its CREATE USER or rename, the default schema's two and one per role. C#: LoginSql.PropertiesStatements. */
+export function loginPropertiesStatements(changes: LoginChanges): number {
+  const options = changes.defaultDatabase !== undefined || changes.defaultLanguage !== undefined || changes.checkPolicy !== undefined || changes.checkExpiration !== undefined
+  return (options ? 1 : 0) + (changes.password ? 1 : 0) + (changes.connect ? 1 : 0) + (changes.enabled === undefined ? 0 : 1) + (changes.rolesAdd?.length ?? 0) + (changes.rolesDrop?.length ?? 0)
+    + (changes.mappings ?? []).reduce((sum, mapping) => sum + (mapping.change === 'unmap' ? 1
+      : (mapping.change === 'map' || mapping.newName !== undefined ? 1 : 0) + (mapping.defaultSchema === undefined ? 0 : 2) + (mapping.rolesAdd?.length ?? 0) + (mapping.rolesDrop?.length ?? 0)), 0)
+}
+/** Why Login Properties cannot apply these changes to the login its describe read, or undefined: SQL Server's own logins, Deny or
+ *  Disable of the login this connection uses, Disable of a Windows group, and a password or policy for a login that is not a SQL Server
+ *  login. Permissions are the server's to answer: a login may change its own password (with the old one) and defaults. C#:
+ *  LoginRules.PropertiesRefusal. */
+export function loginPropertiesRefusal(facts: Pick<LoginFacts, 'subtype' | 'own' | 'type'>, changes: LoginChanges): LoginMessageId | undefined {
+  if (facts.subtype === 'system') return 'system'
+  if (facts.own && (changes.enabled === false || changes.connect === 'deny')) return 'ownStatus'
+  if (facts.subtype === 'windowsGroup' && changes.enabled === false) return 'windowsGroupDisable'
+  if (facts.type !== 'S' && (changes.password || changes.checkPolicy !== undefined || changes.checkExpiration !== undefined)) return 'propertiesNotSql'
+  return undefined
+}
+/** Login Properties' own words, in Varia's where SSMS's are unverified. They name fields, never values. */
+export const loginPropertiesMessages = {
+  /** SSMS fills the password fields with a fake value; Varia leaves them blank (D2 §4). */
+  keepPassword: 'Leave blank to keep the current password.',
+  /** SSMS's ResetPasswordWhileUnlocking: only a new password unlocks a login here. */
+  unlockNeedsPassword: 'Type a new password to unlock the login.',
+  mustChangeHint: 'Type a new password to require a change at next login.',
+  /** Set when the connection's own login lacks ALTER ANY LOGIN: SQL Server then asks for the old password. */
+  ownPassword: 'You are changing the password of the login this connection uses: SQL Server asks for the old password unless you can alter any login.',
+  /** SQL Server answers a wrong old password with 15151; ActionService.LoginOldPasswordAdvice. */
+  oldPasswordAdvice: 'Check the old password.',
+  notRead: 'Not read',
+  /** A database whose users the describe did not read in its budget: they are read when its row is selected. */
+  notReadHint: 'This database was not read yet. Select it to read its user and roles.',
+  owner: 'The login owns this database, so its user is dbo, which cannot be unmapped or renamed here.',
+  /** The steps preview's and Script's warning per unmapped database (ActionService.LoginPropertiesWarnings). */
+  dropsUser: (user: string, database: string) => `Drops the user [${user.replaceAll(']', ']]')}] in [${database.replaceAll(']', ']]')}].`,
+  locked: 'Login is locked out'
+} as const
+/** Unlock…'s choices (D4 §5.5, owner decision 9): a new password, SSMS's way, which hands over to Login Properties with "Login is locked
+ *  out" cleared and sends nothing itself (the default); or keeping the current one (the `unlock` action's keepPassword mode). */
+export const unlockChoices = ['setPassword', 'keepPassword'] as const
+export type UnlockChoice = typeof unlockChoices[number]
+export const unlockChoiceText: { readonly [C in UnlockChoice]: string } = { setPassword: 'Set a new password…', keepPassword: 'Keep the current password' }
+/** Unlock…'s OK while "Set a new password…" is chosen. */
+export const unlockHandOffLabel = 'Continue in Login Properties…'
+
 export const userMappingMessages = {
   rolesLoading: 'Reading the database roles…',
   notMapped: 'Check Map to choose roles for this database.',

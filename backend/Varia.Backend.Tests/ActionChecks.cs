@@ -49,8 +49,12 @@ internal static class ActionChecks
             && Catalog.Limit("messageChars") == ActionErrors.MaxMessage && Catalog.Limit("newName") == ExplorerRefs.MaxIdentifier
             && Catalog.Limit("stopGraceMs") == (long)options.StopGrace.TotalMilliseconds, "the backend's limits are the catalogue's");
         check(Catalog.ErrorCodes.Count() == 16 && Catalog.Retryable("PASSWORD_POLICY") && Catalog.Retryable("IN_USE") && Catalog.Retryable("AUTH_ENTRA") && !Catalog.Retryable("DEPENDENTS") && Catalog.Retryable("CANCELLED") && !Catalog.ErrorCodes.Contains("INVALID_NAME")
-            && Catalog.Dialogs.Keys.SequenceEqual(["deleteObject", "databaseProperties", "newLogin", "unlockLogin"]),
-            "the catalogue lists the action error codes and the Delete Object, Database Properties, New Login and Unlock Login dialogs");
+            && Catalog.Dialogs.Keys.SequenceEqual(["deleteObject", "databaseProperties", "newLogin", "unlockLogin", "loginProperties"]),
+            "the catalogue lists the action error codes and the Delete Object, Database Properties, New Login, Unlock Login and Login Properties dialogs");
+        // A login's Properties opens Login Properties (D2c): the backend checks that action's target as the login kind and the properties verb.
+        check(Catalog.KindOf("loginProperties") == "login" && Catalog.VerbOf("loginProperties") == "properties" && Catalog.KindActionOf("login", "properties") == "loginProperties"
+            && Catalog.KindActionOf("database", "properties") is null && Catalog.VerbOf("properties") == "properties" && Catalog.KindOf("properties") is null
+            && Catalog.Allows("login", "system", "properties") && Catalog.Allows("login", "windowsGroup", "properties"), "Login Properties is the login kind's properties action, on every login");
         // A kind's status overlay is emitted as a second row for the same kind and subtype, with its status, and an action
         // may carry engines (src/shared/actions/catalog.ts); the catalogue must load both, as a later PR will embed them.
         using (var embedded = typeof(ActionsCatalog).Assembly.GetManifestResourceStream("Varia.Backend.Actions.actions-catalog.json")!)
@@ -71,7 +75,7 @@ internal static class ActionChecks
     {
         var results = ActionSql.Lint().ToList();
         var problems = results.SelectMany(result => result.Problems.Select(problem => result.Name + ": " + problem)).ToList();
-        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 14 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2 + 2 + 2 + LoginSql.Corpus().Count() * 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
+        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 14 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2 + 2 + 2 + (LoginSql.Corpus().Count() + LoginSql.OptionsCorpus().Count() + LoginSql.PasswordCorpus().Count()) * 2 + 4, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
         // The transaction DMVs raise error 300 without VIEW SERVER STATE whatever guards them, so the statements every action runs never
         // read them; only the describe's counts and lists do, after Database's guarded count shows the permission.
         check(new[] { ActionSql.Database, ActionSql.DatabaseState, ActionSql.Login, ActionSql.OwnSessions }.All(statement => !statement.Contains("dm_tran_", StringComparison.Ordinal))

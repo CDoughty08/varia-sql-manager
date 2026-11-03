@@ -539,7 +539,8 @@ check), and answers `{ login, lock: { locked, badPasswords?, lockoutTime? (the s
 expired, daysUntilExpiration? }, elapsedMs }`. `LOGINPROPERTY` waits for another session's open change to the login whatever
 the isolation level, so behind one the describe answers `BLOCKED` after the read lock timeout (10 s). `actions.script` and
 `actions.execute` take `{ action: 'unlock', connectionId, requestId, target: { kind: 'login', name }, mode: 'keepPassword',
-loginIdentity? }` (strict; no password crosses, and `mode` is the only one until Login Properties). The preflight applies the
+loginIdentity? }` (strict; no password crosses: Unlock's other choice, Set a new password…, sends nothing itself and opens Login
+Properties, whose `loginProperties` request carries the new password with `unlock: true`). The preflight applies the
 login rules and the identity, reads the lock-out state again, and refuses before any DDL a login that is not a SQL Server login
 enforcing the password policy, one that must change its password (SQL Server would answer 15128, `NOT_SUPPORTED`) and, for
 execute only, one that is not locked out (`NOT_SUPPORTED`). Execute then runs `ALTER LOGIN … WITH CHECK_POLICY = OFF` and
@@ -597,6 +598,23 @@ read-only) values.
 `actions.script` and `actions.execute` take `{ action: 'createLogin', login, serverRoles, status, mappings }`, where
 `mappings` is at most 256 `{ database, user, defaultSchema?, rolesAdd (≤ 256, never public) }`, one per database, and the
 whole plan at most 512 statements; only execute carries `secrets`. The backend re-validates all of it.
+
+**Login Properties** (D2c) too. `actions.describe { …, dialog: 'loginProperties', target: { kind: 'login', name } }` answers
+`{ login, lock? (a SQL Server login's, as unlockLogin's), newLogin (New Login's lists), loginProperties: { defaultDatabase,
+defaultLanguage, serverRoles (≤ 256), serverRolesTruncated, users: [{ database, user, defaultSchema?, owner }], read } }`, where
+`read` names the databases Delete's per-database scan read within its budget (the others are "Not read" on User Mapping).
+`loginDatabaseRoles` takes an optional `login` (a name, ≤ 128; no other describe takes it), and then also answers that login's
+`user? { name, defaultSchema?, owner }` there and the database roles it is a member of (`memberOf`). `actions.script` and
+`actions.execute` take `{ action: 'loginProperties', connectionId, requestId, target: { kind: 'login', name }, loginIdentity?,
+loginChanges, secrets? }` (strict), where `loginChanges` holds only what changed: `defaultDatabase?`, `defaultLanguage?`,
+`checkPolicy?`, `checkExpiration?`, `password? { oldPassword, unlock, mustChange }` (the old password never with UNLOCK or
+MUST_CHANGE), `rolesAdd?`/`rolesDrop?` (≤ 256 server roles each, distinct, never public, never both), `mappings?` (≤ 256
+`{ database, change: 'map' | 'unmap' | 'update', user, newName?, defaultSchema?, rolesAdd?, rolesDrop? }`, one per database),
+`connect? ('grant' | 'deny')` and `enabled?`; between 1 and 512 statements. Execute needs `loginIdentity` and carries
+`secrets: { password, oldPassword? }` exactly when `password` is set (`oldPassword` exactly when `password.oldPassword`); script
+refuses `secrets`. Its steps run one by one without a transaction (critic A24); after a completed step a failure's message starts
+"The login was changed only in part", and 15151 is `PERMISSION_DENIED` with "Check the old password." when the password step
+failed with an old one.
 
 ## Streams and credits
 

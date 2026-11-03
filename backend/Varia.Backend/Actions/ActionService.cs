@@ -146,8 +146,12 @@ internal sealed partial class ActionService : IDisposable
         if (target is null) throw Invalid("target.");
         try { ExplorerRefs.Object(target, explorer); }
         catch (RequestException) { throw Invalid("target."); }
-        if (!catalog.Offered(target.Kind, action)) throw Invalid("this object does not offer " + action + ".");
-        if (catalog.ServesSystemObjects(action)) return target;
+        // A kind's own dialog action (loginProperties) runs where its verb is offered, on its kind only; the verb's own dialog
+        // (Database Properties) never serves that kind.
+        var verb = catalog.VerbOf(action);
+        if (catalog.KindOf(action) is { } kind ? target.Kind != kind : catalog.KindActionOf(target.Kind, verb) is not null) throw Invalid("target.");
+        if (!catalog.Offered(target.Kind, verb)) throw Invalid("this object does not offer " + action + ".");
+        if (catalog.ServesSystemObjects(verb)) return target;
         // SQL Server's own logins by name, as the Logins folder tells them; the preflight re-derives the subtype.
         if (target.Kind == "login" && LoginRules.SystemName(target.Name!)) throw Invalid("system objects cannot be changed.");
         if (target.Kind == "database" ? SystemDatabases.Contains(target.Name!) : target.Schema is { } schema && SystemSchemas.Contains(schema)) throw Invalid("system objects cannot be changed.");
@@ -166,6 +170,8 @@ internal sealed partial class ActionService : IDisposable
     public ObjectRefDto Validate(ActionDescribeArgs args)
     {
         Ids(args.ConnectionId, args.RequestId);
+        // Login Properties' User Mapping reads one database for the login it shows (D2c): its user there and that user's roles.
+        if (args.Login is not null && (args.Dialog != catalog.Logins.RolesDescribe || !ExplorerRefs.Ident(args.Login))) throw Invalid("login.");
         // User Mapping reads any database, SQL Server's own included: a login may be mapped to master or msdb.
         if (args.Dialog is not null && args.Dialog == catalog.Logins.RolesDescribe) return MappedDatabase(args.Target);
         if (args.Dialog is not null && designer.Describes.Contains(args.Dialog)) return DatabaseTarget(args.Target);
@@ -201,8 +207,9 @@ internal sealed partial class ActionService : IDisposable
         if (args.Secrets is not null && (script || !SecretActions.Contains(args.Action))) throw Invalid("this request takes no secrets.");
         if (args.Secrets is { } secrets) { Secret(secrets.Password, "password"); Secret(secrets.OldPassword, "oldPassword"); }
         if (args.Action != "createLogin" && LoginMembers(args)) throw Invalid(args.Action + " takes no login, server roles, mappings or status.");
-        // The login a confirmation or dialog was about: Disable, Enable, Unlock and Delete read it first.
-        if (args.LoginIdentity is { } read && (args.Action is not ("disable" or "enable" or "unlock" or "delete") || read.Sid is null || !LoginSid().IsMatch(read.Sid)
+        if (args.LoginChanges is not null && args.Action != "loginProperties") throw Invalid(args.Action + " takes no loginChanges.");
+        // The login a confirmation or dialog was about: Disable, Enable, Unlock, Delete and Login Properties read it first.
+        if (args.LoginIdentity is { } read && (args.Action is not ("disable" or "enable" or "unlock" or "delete" or "loginProperties") || read.Sid is null || !LoginSid().IsMatch(read.Sid)
             || read.Created is null || !DatabaseAlter.IdentityCreated().IsMatch(read.Created))) throw Invalid("loginIdentity.");
         if (args.DropMappedUsers is not null && args.Action != "delete") throw Invalid("only a login's delete drops mapped users.");
         if (args.Mode is not null && args.Action != "unlock") throw Invalid("only unlock takes a mode.");
@@ -251,6 +258,8 @@ internal sealed partial class ActionService : IDisposable
                 return database;
             case "createLogin":
                 return ValidateCreateLogin(args, script);
+            case "loginProperties":
+                return ValidateLoginProperties(args, script);
             default:
                 throw Invalid("action.");
         }
@@ -269,7 +278,7 @@ internal sealed partial class ActionService : IDisposable
     {
         var target = Validate(args);
         var watch = Stopwatch.StartNew();
-        var action = designer.Describes.Contains(args.Dialog) ? designer.Requests.Single() : args.Dialog == catalog.Logins.RolesDescribe ? "createLogin"
+        var action = designer.Describes.Contains(args.Dialog) ? designer.Requests.Single() : args.Dialog == catalog.Logins.RolesDescribe ? (args.Login is null ? "createLogin" : "loginProperties")
             : catalog.Describes.TryGetValue(args.Dialog, out var describe) ? describe.Action : catalog.ActionOf(args.Dialog);
         return RunAsync(args.ConnectionId, args.RequestId, action, read: true, Options.DescribeBudget, token,
             async (connection, profile, band, job) => await (args.Dialog switch
@@ -277,7 +286,8 @@ internal sealed partial class ActionService : IDisposable
                 "tableDesigner" => DescribeDesignerJobAsync(connection, target, band, job),
                 "databaseProperties" => DescribePropertiesJobAsync(connection, target, band, job),
                 "newLogin" => DescribeNewLoginJobAsync(connection, profile, band, job),
-                _ when args.Dialog == catalog.Logins.RolesDescribe => DescribeDatabaseRolesJobAsync(connection, target, job),
+                _ when args.Dialog == catalog.Logins.RolesDescribe => DescribeDatabaseRolesJobAsync(connection, target, job, args.Login),
+                "loginProperties" => DescribeLoginPropertiesJobAsync(connection, profile, target, band, job),
                 "loginFacts" => DescribeLoginJobAsync(connection, target, job),
                 "unlockLogin" => DescribeUnlockJobAsync(connection, target, job),
                 _ => DescribeJobAsync(connection, args.ConnectionId, profile.Explorer(explorer).ServerEngine, target, action, band, job)
@@ -297,6 +307,7 @@ internal sealed partial class ActionService : IDisposable
                 "createTable" => ScriptDesignerJobAsync(connection, args, target, band, job),
                 "properties" => ScriptPropertiesJobAsync(connection, args, target, band, job),
                 "unlock" => ScriptUnlockJobAsync(connection, args, target, band, job),
+                "loginProperties" => ScriptLoginPropertiesJobAsync(connection, args, target, job),
                 _ => ScriptJobAsync(connection, args, target, band, job)
             },
             error => new ActionScriptResult(null, database, [], error));
@@ -317,6 +328,7 @@ internal sealed partial class ActionService : IDisposable
                 "properties" => ExecutePropertiesJobAsync(connection, args, target, band, job),
                 "createLogin" => ExecuteNewLoginJobAsync(connection, args, job),
                 "unlock" => ExecuteUnlockJobAsync(connection, args, target, band, job),
+                "loginProperties" => ExecuteLoginPropertiesJobAsync(connection, args, target, job),
                 _ => ExecuteJobAsync(connection, args, target, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionExecuteResult([], [], watch.ElapsedMilliseconds, error));
@@ -621,8 +633,7 @@ internal sealed partial class ActionService : IDisposable
     /// facts the user never saw (a confirmation's warnings were about the one it read).</summary>
     internal ActionError? LoginRefusal(LoginFactsDto login, ActionArgs args)
     {
-        if (args.LoginIdentity is { } read && (!string.Equals(read.Sid, login.Sid, StringComparison.Ordinal) || !string.Equals(read.Created, login.Created, StringComparison.Ordinal)))
-            return Error("NOT_FOUND", "The login " + ScriptingErrors.Display(args.Target.Name!) + " is not the one that was read: it was renamed, dropped or replaced since. Refresh Object Explorer and try again.");
+        if (IdentityRefusal(login, args) is { } changed) return changed;
         if (catalog.Logins.Refusal(login, args.Action) is { } refused)
             return Error(refused is "alterAnyLogin" or "controlServer" ? "PERMISSION_DENIED" : "NOT_SUPPORTED", catalog.Logins.Message(refused));
         if (args.Action != "rename") return null;
@@ -630,6 +641,12 @@ internal sealed partial class ActionService : IDisposable
         if (login.NameInUse) return Error("NAME_IN_USE", "The name " + ScriptingErrors.Display(args.NewName!) + " is already used by another login or server role.");
         return null;
     }
+
+    /// <summary>A login the request's identity does not describe: the name now belongs to another principal, whose facts the user never saw.</summary>
+    private ActionError? IdentityRefusal(LoginFactsDto login, ActionArgs args) =>
+        args.LoginIdentity is { } read && (!string.Equals(read.Sid, login.Sid, StringComparison.Ordinal) || !string.Equals(read.Created, login.Created, StringComparison.Ordinal))
+            ? Error("NOT_FOUND", "The login " + ScriptingErrors.Display(args.Target.Name!) + " is not the one that was read: it was renamed, dropped or replaced since. Refresh Object Explorer and try again.")
+            : null;
 
     /// <summary>sys.databases state of an offline database.</summary>
     internal const int OfflineState = 6;
@@ -714,6 +731,9 @@ internal sealed partial class ActionService : IDisposable
         ActionTemplate.CheckPolicyOff => "Turn off the password policy",
         ActionTemplate.CheckPolicyOn => "Turn the password policy back on",
         ActionTemplate.CheckPolicyExpirationOn => "Turn the password policy and expiration back on",
+        ActionTemplate.DropServerRoleMember => "Remove from a server role",
+        ActionTemplate.RenameUser => "Rename a user",
+        ActionTemplate.DropRoleMember => "Remove from a database role",
         _ => "Drop the object"
     };
 
@@ -723,8 +743,8 @@ internal sealed partial class ActionService : IDisposable
     internal static string? StepDetail(PlannedStatement statement) => statement.Template switch
     {
         ActionTemplate.DropUser or ActionTemplate.DropMappedUser => ScriptingErrors.Display(statement.Names[0]) + " in " + ScriptingErrors.Display(statement.Database),
-        ActionTemplate.AddServerRoleMember => statement.Names[0],
-        ActionTemplate.AddRoleMember => statement.Names[0] + " in " + statement.Database,
+        ActionTemplate.AddServerRoleMember or ActionTemplate.DropServerRoleMember => statement.Names[0],
+        ActionTemplate.AddRoleMember or ActionTemplate.DropRoleMember => statement.Names[0] + " in " + statement.Database,
         _ when MappingStep(statement.Template) => statement.Database,
         _ => null
     };
