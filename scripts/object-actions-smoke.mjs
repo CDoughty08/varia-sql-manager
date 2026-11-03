@@ -1,7 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { chooseExplorerMenuItem, expandExplorerPath, explorerMenuItems, explorerRow, explorerTree, openExplorerMenu, revealExplorerRow } from './fixtures/explorer-tree.mjs'
+import { chooseExplorerMenuItem, expandExplorerPath, explorerMenuItems, explorerRow, explorerSubmenuItems, explorerTree, openExplorerMenu, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { resizeWindow } from './fixtures/window-resize.mjs'
 import { actionsStubData, caution, dependentsMessage, installActionsStub, offlineScript, propertiesScript, restoreScript, scriptText, stubServerFiles, stubSessions } from './fixtures/actions-stub.mjs'
 import {
@@ -1152,17 +1152,10 @@ try {
     await expect(label).toHaveCount(1)
     return label.evaluate(element => element.scrollWidth <= element.clientWidth)
   }
-  /** Tasks › an item on AppData; Databases may be reloading, so the press repeats until the row's menu opens. */
+  /** Tasks › an item on AppData; Databases may be reloading, so the helpers press until the row's own menu opens. */
   const task = async (name, states) => {
-    await expect(async () => {
-      if (await openMenus().count()) await closeMenu()
-      await (await revealExplorerRow(page, ...appData)).click({ button: 'right', force: true })
-      await expect(explorerMenu()).toBeVisible({ timeout: 1000 })
-      await explorerMenu().getByRole('menuitem', { name: 'Tasks', exact: true }).click(fast)
-      await expect(menuNamed('Tasks')).toBeVisible({ timeout: 1000 })
-    }).toPass()
-    expect(await menuItemNames(menuNamed('Tasks'), { disabled: true }), 'greyed Tasks items').toEqual(states)
-    await menuNamed('Tasks').getByRole('menuitem', { name, exact: true }).click(fast)
+    expect((await explorerSubmenuItems(page, appData, ['Tasks'])).disabled, 'greyed Tasks items').toEqual(states)
+    await chooseExplorerMenuItem(page, appData, ['Tasks', name])
   }
   await task('Take Offline', ['Bring Online'])
   await expect(offlineDialog()).toBeVisible()
