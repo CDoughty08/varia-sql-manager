@@ -1020,12 +1020,8 @@ try {
   const typed = 'Typed-Z9q-' + Date.now().toString(36)
   // Logins listed first: OK reloads that folder and selects the new login (a folder Object Explorer has not listed stays so).
   await expandExplorerPath(page, 'server-a', 'Security', 'Logins')
-  await expect(async () => {
-    if (await explorerMenu().count()) await closeMenu()
-    expect(await menuOf('server-a', 'Security')).toContain('New')
-  }).toPass()
-  await explorerMenu().getByRole('menuitem', { name: 'New', exact: true }).click(fast)
-  await page.getByRole('menuitem', { name: 'Login…', exact: true }).click(fast)
+  expect(await menuOf('server-a', 'Security')).toContain('New')
+  await chooseExplorerMenuItem(page, ['server-a', 'Security'], ['New', 'Login…'])
   await expect(loginDialog()).toBeVisible()
   await expect(objectDialogProgress(loginDialog())).toHaveText('Ready')
   expect(await loginDialog().getByRole('navigation', { name: 'Select a page', exact: true }).getByRole('button').allTextContents()).toEqual(['General', 'Server Roles', 'Status'])
@@ -1114,7 +1110,7 @@ try {
   expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'createLogin', target: { kind: 'server' }, secrets: { password: typed }, serverRoles: ['dbcreator'], status: { connect: 'grant', enabled: true } })
   await expect(explorerTree(page).getByRole('treeitem', { name: 'app_reader', selected: true })).toBeVisible()
   expect(await menuOf('server-a', 'Security', 'Logins')).toContain('New Login…')
-  await explorerMenu().getByRole('menuitem', { name: 'New Login…', exact: true }).click(fast)
+  await chooseExplorerMenuItem(page, ['server-a', 'Security', 'Logins'], 'New Login…')
   await expect(loginDialog()).toBeVisible()
   await expect(loginDialog().getByRole('textbox', { name: 'Login name', exact: true })).toHaveValue('')
   // Enter in Confirm password is OK; when the policy refuses the password, focus returns to Password (running disabled the
