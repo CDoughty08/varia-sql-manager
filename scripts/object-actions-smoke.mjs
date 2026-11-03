@@ -1,7 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { chooseExplorerMenuItem, expandExplorerPath, explorerMenuItems, explorerRow, explorerSubmenuItems, explorerTree, openExplorerMenu, revealExplorerRow } from './fixtures/explorer-tree.mjs'
+import { chooseExplorerMenuItem, expandExplorerPath, explorerMenuItems, explorerRow, expectSelectedExplorerRow, explorerSubmenuItems, explorerTree, openExplorerMenu, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { resizeWindow } from './fixtures/window-resize.mjs'
 import { actionsStubData, caution, dependentsMessage, detachFiles, detachScript, installActionsStub, longDatabase, longRole, offlineScript, offlineWarning, propertiesScript, restoreFilesScript, restoreScript, scriptText, stubServerFiles, stubSessions } from './fixtures/actions-stub.mjs'
 import {
@@ -767,7 +767,7 @@ try {
   expect(created.design.files.map(file => [file.name, file.fileName, file.growth])).toEqual([
     ['Sales', 'Sales.mdf', { enabled: true, unit: 'percent', by: 10 }], ['Sales_log', 'Sales_log.ldf', { enabled: true, unit: 'percent', by: 10, maxMb: 2097152 }]
   ])
-  await expect(await explorerRow(page, 'server-a', 'Databases', 'Sales')).toHaveAttribute('aria-selected', 'true')
+  await expectSelectedExplorerRow(page, 'server-a', 'Databases', 'Sales')
   // Stop while CREATE DATABASE runs: the tab stays and says what happened; Cancel then closes it.
   await chooseNewDatabase()
   await expect(databaseName).toBeFocused()
@@ -914,7 +914,7 @@ try {
   await attachOk().click()
   await expect(attachDialog()).toHaveCount(0)
   expect((await stubCalls('actions.execute')).filter(call => call.action === 'attach').at(-1)?.databases).toEqual([{ name: 'SalesCopy', owner: 'app_owner', files: salesFiles, rebuildLog: false }])
-  await expect(await explorerRow(page, 'server-a', 'Databases', 'SalesCopy')).toHaveAttribute('aria-selected', 'true')
+  await expectSelectedExplorerRow(page, 'server-a', 'Databases', 'SalesCopy')
   console.log('Object action checks: Attach Databases reads an .mdf chosen in Locate Database Files (Enter, double-click or Escape, focus back on Add…), keeps file names in view, blocks OK while a data file is not found or a typed one unchecked, checks a corrected path on Enter, marks the selection under forced colours, keeps focus in the dialog after Remove, scripts its rows, rebuilds a removed log, shows a rolled-back attach per row, and selects the attached database.')
   // 5d. Restore Database (D1e, run by D1f): AppData's history plans
   // the full, differential and log backups; the grid's checkboxes wait for Manual Selection; master is a source but never a
