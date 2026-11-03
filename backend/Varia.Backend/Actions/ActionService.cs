@@ -1255,10 +1255,18 @@ internal sealed partial class ActionService : IDisposable
         return await ReadAllAsync(command, token);
     }
 
+    /// <summary>Test seam: called with the command once its reader has reported the statement's end, before ReadAllAsync asks whether
+    /// its token fired meanwhile. Only the live checks set it, to Stop there as SqlClient's rare silent cancel looks, which no server
+    /// does on demand.</summary>
+    internal static Action<SqlCommand>? ReaderEnded { get; set; }
+
     /// <summary>Runs an action's statement and reads every result set's values (text). Always a reader, never ExecuteNonQueryAsync:
     /// SqlClient's async non-query path holds every info message until the statement ends (probed), which would hold a long step's
     /// 3211 progress (ActionProgress) until it is done; the live progress check guards this.
-    /// The token never reaches SqlClient: StatementStop sends the cancel (see there).</summary>
+    /// The token never reaches SqlClient: StatementStop sends the cancel (see there). A statement whose token fired before its reader
+    /// reported the end is stopped, never done: SqlClient now and then ends a cancelled statement's reader as if it had finished and
+    /// raises nothing (SqlService's batch loop meets the same), and the statement may also have finished just as Stop came; either
+    /// way the runner lists it cancelled, and a compensation's Confirm or the restore's reads of the server say what it left.</summary>
     internal static async Task<List<string?>> ReadAllAsync(SqlCommand command, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
@@ -1275,6 +1283,8 @@ internal sealed partial class ActionService : IDisposable
                 while (await reader.ReadAsync(CancellationToken.None))
                     for (var i = 0; i < reader.FieldCount; i++) values.Add(reader.IsDBNull(i) ? null : reader.GetString(i));
             } while (await reader.NextResultAsync(CancellationToken.None));
+            ReaderEnded?.Invoke(command);
+            if (token.IsCancellationRequested) throw new OperationCanceledException(token);
             return values;
         }
         finally { connection.InfoMessage -= stop.OnMessage; }
@@ -1287,7 +1297,8 @@ internal sealed partial class ActionService : IDisposable
     /// the Stop cancels from its own thread; after one, the reader cancels at the next message, and if none comes within
     /// <see cref="Fallback"/>, the Stop's thread cancels after all (it may then wait until the statement ends, as before),
     /// and the reader leaves it to that one. Either side cancels at most once. A statement a Stop cancelled ends in a
-    /// SqlException, which the runner reads as cancelled because the token is.</summary>
+    /// SqlException, or now and then in a reader SqlClient ends silently (ReadAllAsync then throws), which the runner reads as
+    /// cancelled because the token is.</summary>
     internal sealed class StatementStop(SqlCommand command, CancellationToken token)
     {
         internal static TimeSpan Fallback { get; set; } = TimeSpan.FromSeconds(1);

@@ -355,7 +355,9 @@ ends or before the next step's start. A Stop reaches a statement through `Action
 once a statement has sent an informational message (a RESTORE's STATS), SqlClient's cancel from another thread waits until the
 statement ends (probed: a restore stopped at 5 % ran to 100 %), while from the reader's own thread it goes out at once, so the
 reader cancels at the next message (or, if none comes within a second, the Stop's thread after all), and the job's token is
-cancelled off the frame loop (`CancelAsync`), which would otherwise stop reading frames, PINGs included, until then.
+cancelled off the frame loop (`CancelAsync`), which would otherwise stop reading frames, PINGs included, until then. A
+statement whose Stop came before its reader reported the end is listed cancelled, never done: SqlClient now and then ends a
+cancelled statement's reader as if it had finished (query batches are handled the same way).
 3211 lines are not among the 32 kept messages; the reply's steps carry the last percent each
 reached (`progress`). Main checks each EVENT (`actionProgressEventSchema`); an invalid one is dropped, not a protocol failure,
 because failing the request would CANCEL a restore part way. It pushes `varia:actions-progress { requestId, step, percent }`

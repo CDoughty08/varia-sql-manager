@@ -18,7 +18,8 @@ namespace Varia.Backend.Tests;
 /// finished first, else the check is inconclusive.</summary>
 internal static class RestoreRunLiveChecks
 {
-    /// <summary>Runner v2's after-steps: one that finds it has nothing to do (StepNotDueException) is not listed, and the rest still run.</summary>
+    /// <summary>Runner v2's after-steps: one that finds it has nothing to do (StepNotDueException) is not listed, and the rest still run;
+    /// and a statement whose Stop came before its reader reported the end is cancelled, not done (SqlClient's silent cancel).</summary>
     public static async Task RunnerAsync(Action<bool, string> check, SqlService service, ConnectionInfo info)
     {
         IReadOnlyList<RunStep> Plan(SqlConnection connection) =>
@@ -39,6 +40,32 @@ internal static class RestoreRunLiveChecks
         check(result is { Error.Code: "SQL_ERROR", Steps: [{ Status: "failed", Title: "Fail" }, { Status: "done", Title: "Due", Compensates: true }] }
             && !result.Error.Message.Contains("Not due", StringComparison.Ordinal),
             "a cleanup step that finds it has nothing to do is neither listed nor reported, and the steps after it still run: " + string.Join(", ", result.Steps.Select(step => step.Title + " " + step.Status)));
+
+        // SqlClient now and then ends a cancelled statement's reader as if the statement had finished and raises nothing (main's
+        // SqlService fix): a Stop made before the reader reported the end leaves the step cancelled, never done. Stopped through the
+        // seam just as the reader ends, which is how that silent cancel looks; a step listed done here would claim a statement SQL
+        // Server may have stopped where the attention found it.
+        IReadOnlyList<RunStep> Silent(SqlConnection connection) =>
+        [
+            new("Read", async context =>
+            {
+                await using var command = new SqlCommand("SELECT N'silent';", connection) { CommandTimeout = 0 };
+                await ActionService.ReadAllAsync(command, context.Token);
+            }),
+            new("After", async context =>
+            {
+                await using var command = new SqlCommand("SELECT N'after';", connection) { CommandTimeout = 0 };
+                await ActionService.ReadAllAsync(command, context.Token);
+            })
+        ];
+        using var stop = new CancellationTokenSource();
+        ActionService.ReaderEnded = command => { if (command.CommandText == "SELECT N'silent';") stop.Cancel(); };
+        ActionExecuteResult silent;
+        try { silent = await service.Actions.ExecuteStepsAsync(info.Id, Guid.NewGuid().ToString(), "restore", Silent, null, stop.Token); }
+        finally { ActionService.ReaderEnded = null; }
+        check(silent is { Error.Code: "CANCELLED", Steps: [{ Status: "cancelled", Title: "Read" }, { Status: "skipped", Title: "After" }] },
+            "a statement whose Stop came before its reader reported the end is listed cancelled, not done, and the next step is skipped: "
+            + silent.Error?.Code + " " + string.Join(", ", silent.Steps.Select(step => step.Title + " " + step.Status)));
     }
 
     public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json, Func<string, string, Task<SqlRun>> sql,
