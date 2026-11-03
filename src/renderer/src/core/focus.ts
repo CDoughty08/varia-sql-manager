@@ -1,11 +1,8 @@
 import type { DocumentService } from '../services/documents'
-import { modalOpen } from './modal'
+import { modalOpen, transientSurfaces as transient } from './modal'
 
 /** Where focus was before a menu or the quick input took it, and how to return there; the DOM version is `domFocusAdapter`. */
 export interface FocusAdapter { capture(): unknown; restore(target: unknown): void }
-
-/** Transient surfaces that take focus only while open: focus is never returned to them. */
-const transient = '.quick-input, .menu-layer, .title-bar-menus'
 
 /**
  * Returns focus to the element that had it before the quick input or a menu opened, so the chosen command (Undo, Find,
