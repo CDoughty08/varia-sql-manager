@@ -1,7 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
+import { chooseExplorerMenuItem, expandExplorerPath, explorerRow, explorerTree, openExplorerMenu, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { resizeWindow } from './fixtures/window-resize.mjs'
 import { actionsStubData, caution, dependentsMessage, installActionsStub, propertiesScript, scriptText, stubServerFiles } from './fixtures/actions-stub.mjs'
 import {
@@ -23,7 +23,6 @@ let page
 const failures = []
 const watchdog = setTimeout(() => { console.error('Object actions suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 300000)
 
-const fast = { force: true }
 const menuNamed = name => page.getByRole('menu', { name, exact: true })
 const explorerMenu = () => menuNamed('Object Explorer')
 const openMenus = () => openMenusOf(page)
@@ -48,10 +47,9 @@ async function connect(server) {
   await connectDialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(connectDialog).toHaveCount(0, { timeout: 30000 })
 }
-/** Right-clicks a row and returns its menu's item labels. */
+/** Opens a row's menu (openExplorerMenu) and returns its item labels. */
 async function menuOf(...path) {
-  await (await revealExplorerRow(page, ...path)).click({ button: 'right', force: true })
-  await expect(explorerMenu()).toBeVisible()
+  await openExplorerMenu(page, ...path)
   return labels()
 }
 async function closeMenu() {
@@ -114,8 +112,7 @@ try {
 
   // 2. Select Top 1000 Rows on a view lists its columns and runs on its database.
   const before = await tabs().count()
-  await (await revealExplorerRow(page, ...appData, 'Views', 'dbo.OrderSummary')).click({ button: 'right', force: true })
-  await explorerMenu().getByRole('menuitem', { name: 'Select Top 1000 Rows', exact: true }).click(fast)
+  await chooseExplorerMenuItem(page, [...appData, 'Views', 'dbo.OrderSummary'], 'Select Top 1000 Rows')
   const selectTop = ['/****** Script for SelectTopNRows command from Varia SQL Manager ******/', 'SELECT TOP (1000) [OrderId]', '      ,[Total]', '  FROM [AppData].[dbo].[OrderSummary]'].join(process.platform === 'win32' ? '\r\n' : '\n')
   // New queries take the platform's line ending, as SSMS's do.
   await expect.poll(async () => (await stubCalls('query.execute')).at(-1)?.sql).toBe(selectTop)
@@ -242,8 +239,7 @@ try {
   await expect(dialog()).toHaveCount(0)
   await expect(explorerTree(page)).toBeFocused()
   // OK deletes dbo.Orders2: the dialog closes, Tables reloads without it, and the tree has focus.
-  await (await explorerRow(page, ...tablesPath, 'dbo.Orders2')).click({ button: 'right', force: true })
-  await explorerMenu().getByRole('menuitem', { name: 'Delete', exact: true }).click(fast)
+  await chooseExplorerMenuItem(page, [...tablesPath, 'dbo.Orders2'], 'Delete')
   await expect(objectDialogProgress(dialog())).toHaveText('Ready')
   await dialog().getByRole('button', { name: 'OK', exact: true }).click()
   await expect(dialog()).toHaveCount(0)
@@ -294,12 +290,9 @@ try {
   const verb = name => documentVerb(properties(), 'AppData', name)
   const sectionList = () => sectionListOf(properties())
   const fact = label => propertyFact(properties(), label)
-  // Tables has just reloaded after the Delete, which can re-render the tree under the press, so it repeats until its row's menu opens.
-  await expect(async () => {
-    await (await revealExplorerRow(page, ...appData)).click({ button: 'right', force: true })
-    await expect(explorerMenu()).toBeVisible({ timeout: 1000 })
-  }).toPass()
-  await explorerMenu().getByRole('menuitem', { name: 'Properties', exact: true }).click(fast)
+  // Tables has just reloaded after the Delete, which can move the rows under the press: chooseExplorerMenuItem presses
+  // until AppData's own menu opens.
+  await chooseExplorerMenuItem(page, appData, 'Properties')
   await expect(properties()).toBeVisible()
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await expect(tabs()).toHaveCount(tabCount + 1)
@@ -501,14 +494,11 @@ try {
   // exists the dialog says so; a failure lists its steps with the removal; Stop waits for the answer and says Stopped.
   const catalogs = ['server-a', 'Integration Services Catalogs']
   const createDialog = () => page.getByRole('dialog', { name: 'Create Catalog', exact: true })
-  // Databases may still be reloading after Database Properties' OK, moving the rows below it, so the press repeats until the
-  // folder's own menu opens.
+  // Databases may still be reloading after Database Properties' OK, moving the rows below it: openExplorerMenu presses
+  // until the folder's own menu opens.
   const openCreate = async () => {
-    await expect(async () => {
-      if (await explorerMenu().count()) await closeMenu()
-      expect(await menuOf(...catalogs)).toEqual(['Create Catalog…', 'Refresh'])
-    }).toPass()
-    await explorerMenu().getByRole('menuitem', { name: 'Create Catalog…', exact: true }).click(fast)
+    expect(await menuOf(...catalogs)).toEqual(['Create Catalog…', 'Refresh'])
+    await chooseExplorerMenuItem(page, catalogs, 'Create Catalog…')
     await expect(createDialog()).toBeVisible()
   }
   await openCreate()
@@ -693,12 +683,13 @@ try {
   console.log('Object action checks: the server file picker opens the default backup folder, keeps Tab in reach of its tree, expands a folder and chooses a file by keyboard, shows the selection under forced colours, goes to typed shares and folders, shows empty, 2016 and slow folders, lists All Files, asks the server about typed names it does not list, and Escape returns focus; Locate Folder names its tree for folders.')
 
   // 6. A database: SSMS's two options (backup history checked, Close existing connections not), then a lost server
-  // leaves only Close. Databases has just reloaded after Database Properties' Apply, so the press repeats until its row's menu opens.
-  await expect(async () => {
-    await (await revealExplorerRow(page, ...appData)).click({ button: 'right', force: true })
-    await expect(explorerMenu()).toBeVisible({ timeout: 1000 })
-  }).toPass()
-  await explorerMenu().getByRole('menuitem', { name: 'Delete', exact: true }).click(fast)
+  // leaves only Close. The tree is scrolled down to Integration Services Catalogs, so the right-click scrolls AppData into
+  // view first. Chromium sends that scroll's event with a later frame, which must not close the menu: on a Windows run it
+  // did, and the forced click on Delete selected the row under the closed menu instead.
+  await openExplorerMenu(page, ...appData)
+  await explorerTree(page).evaluate(tree => { tree.dispatchEvent(new Event('scroll')) })
+  await expect(explorerMenu()).toBeVisible()
+  await chooseExplorerMenuItem(page, appData, 'Delete')
   await expect(objectDialogProgress(dialog())).toHaveText('Ready')
   await expect(dialog().getByLabel('Delete backup and restore history information for databases', { exact: true })).toBeChecked()
   await expect(dialog().getByLabel('Close existing connections', { exact: true })).not.toBeChecked()

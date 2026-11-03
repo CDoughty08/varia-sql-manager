@@ -177,6 +177,16 @@ describe('smoke selectors', () => {
     const bare = [...source.matchAll(/hasText: \/\^\d+\$\/ \}\) \}\)\.locator\(gridPart\.cell\)\.nth\(\d+\)\.click\(\)/g)].map(match => `${file}:${source.slice(0, match.index).split('\n').length}`)
     expect(bare).toEqual([])
   })
+  it('opens Object Explorer menus in the object actions suite only through openExplorerMenu and chooseExplorerMenuItem', () => {
+    // A forced click on a menu item whose menu has closed lands on the tree below and selects another row, so nothing runs
+    // (a Windows run lost Delete so, after the right-click's scroll closed AppData's menu); the helpers press until the
+    // row's own menu opens, and press its item again only when a press missed it.
+    const file = 'scripts/object-actions-smoke.mjs'
+    const source = readFileSync(file, 'utf8')
+    expect(source).toMatch(/\bchooseExplorerMenuItem\(page, appData, 'Delete'\)/)
+    const bare = [...source.matchAll(/button: 'right'|\.click\(\{[^}]*\bforce\b|\.click\(fast\)/g)].map(match => `${file}:${source.slice(0, match.index).split('\n').length}`)
+    expect(bare).toEqual([])
+  })
 
   it('waits in the benches for the backend each launch starts', () => {
     // backendReady's default runtime is the Release backend's .NET, which the fake backend (VARIA_TEST_BACKEND, runtime
