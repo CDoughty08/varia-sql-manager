@@ -1,12 +1,12 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
+import { chooseExplorerMenuItem, expandExplorerPath, explorerMenuItems, explorerRow, explorerSubmenuItems, explorerTree, openExplorerMenu, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { resizeWindow } from './fixtures/window-resize.mjs'
 import { actionsStubData, caution, dependentsMessage, installActionsStub, offlineScript, offlineWarning, propertiesScript, restoreScript, scriptText, stubServerFiles, stubSessions } from './fixtures/actions-stub.mjs'
 import {
   addObjectDialogSteps, attachFileNameShown, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, editorTextbox,
-  errorBanner, explorerLabel, fieldHint, frameSection, inputShowsEnd, menuItemNames, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogSessions, objectDialogSessionsToggle, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part,
+  errorBanner, explorerLabel, fieldHint, frameSection, inputShowsEnd, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogSessions, objectDialogSessionsToggle, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part,
   passwordField, propertyFact, propertyRow, renameBox, scriptActions, scriptDrawer, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toastMessage, toasts, toolbarButton, unsavedMark,
   warningBanner as warningBannerOf
 } from './fixtures/ui.mjs'
@@ -23,12 +23,9 @@ let page
 const failures = []
 const watchdog = setTimeout(() => { console.error('Object actions suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 300000)
 
-const fast = { force: true }
 const menuNamed = name => page.getByRole('menu', { name, exact: true })
 const explorerMenu = () => menuNamed('Object Explorer')
 const openMenus = () => openMenusOf(page)
-const labels = () => menuItemNames(explorerMenu())
-const disabled = () => menuItemNames(explorerMenu(), { disabled: true })
 const dialog = () => page.getByRole('dialog', { name: 'Delete Object', exact: true })
 const commandBanner = () => errorBanner(page)
 const warningBanner = () => warningBannerOf(page)
@@ -48,11 +45,9 @@ async function connect(server) {
   await connectDialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(connectDialog).toHaveCount(0, { timeout: 30000 })
 }
-/** Right-clicks a row and returns its menu's item labels. */
+/** Opens a row's menu (explorerMenuItems) and returns its item labels; the menu stays open. */
 async function menuOf(...path) {
-  await (await revealExplorerRow(page, ...path)).click({ button: 'right', force: true })
-  await expect(explorerMenu()).toBeVisible()
-  return labels()
+  return (await explorerMenuItems(page, ...path)).names
 }
 async function closeMenu() {
   await page.keyboard.press('Escape')
@@ -102,9 +97,10 @@ try {
   expect(await menuOf(...appData)).toEqual(['New Database…', 'New Query', 'Script Database as', 'Tasks', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await closeMenu()
   // SSMS offers Properties on its own databases too: only Rename, Delete and Tasks' Take Offline and Bring Online are greyed.
-  expect(await menuOf('server-a', 'Databases', 'System Databases', 'master')).toEqual(['New Database…', 'New Query', 'Script Database as', 'Tasks', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
   // Tasks holds only Take Offline and Bring Online so far, both greyed there, so the submenu is greyed too.
-  expect(await disabled()).toEqual(['Tasks', 'Rename', 'Delete'])
+  expect(await explorerMenuItems(page, 'server-a', 'Databases', 'System Databases', 'master')).toEqual({
+    names: ['New Database…', 'New Query', 'Script Database as', 'Tasks', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'], disabled: ['Tasks', 'Rename', 'Delete']
+  })
   await closeMenu()
   await select('server-a', 'Databases', 'System Databases', 'master')
   await page.keyboard.press('F2')
@@ -115,8 +111,7 @@ try {
 
   // 2. Select Top 1000 Rows on a view lists its columns and runs on its database.
   const before = await tabs().count()
-  await (await revealExplorerRow(page, ...appData, 'Views', 'dbo.OrderSummary')).click({ button: 'right', force: true })
-  await explorerMenu().getByRole('menuitem', { name: 'Select Top 1000 Rows', exact: true }).click(fast)
+  await chooseExplorerMenuItem(page, [...appData, 'Views', 'dbo.OrderSummary'], 'Select Top 1000 Rows')
   const selectTop = ['/****** Script for SelectTopNRows command from Varia SQL Manager ******/', 'SELECT TOP (1000) [OrderId]', '      ,[Total]', '  FROM [AppData].[dbo].[OrderSummary]'].join(process.platform === 'win32' ? '\r\n' : '\n')
   // New queries take the platform's line ending, as SSMS's do.
   await expect.poll(async () => (await stubCalls('query.execute')).at(-1)?.sql).toBe(selectTop)
@@ -243,8 +238,7 @@ try {
   await expect(dialog()).toHaveCount(0)
   await expect(explorerTree(page)).toBeFocused()
   // OK deletes dbo.Orders2: the dialog closes, Tables reloads without it, and the tree has focus.
-  await (await explorerRow(page, ...tablesPath, 'dbo.Orders2')).click({ button: 'right', force: true })
-  await explorerMenu().getByRole('menuitem', { name: 'Delete', exact: true }).click(fast)
+  await chooseExplorerMenuItem(page, [...tablesPath, 'dbo.Orders2'], 'Delete')
   await expect(objectDialogProgress(dialog())).toHaveText('Ready')
   await dialog().getByRole('button', { name: 'OK', exact: true }).click()
   await expect(dialog()).toHaveCount(0)
@@ -295,12 +289,9 @@ try {
   const verb = name => documentVerb(properties(), 'AppData', name)
   const sectionList = () => sectionListOf(properties())
   const fact = label => propertyFact(properties(), label)
-  // Tables has just reloaded after the Delete, which can re-render the tree under the press, so it repeats until its row's menu opens.
-  await expect(async () => {
-    await (await revealExplorerRow(page, ...appData)).click({ button: 'right', force: true })
-    await expect(explorerMenu()).toBeVisible({ timeout: 1000 })
-  }).toPass()
-  await explorerMenu().getByRole('menuitem', { name: 'Properties', exact: true }).click(fast)
+  // Tables has just reloaded after the Delete, which can move the rows under the press: chooseExplorerMenuItem presses
+  // until AppData's own menu opens.
+  await chooseExplorerMenuItem(page, appData, 'Properties')
   await expect(properties()).toBeVisible()
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await expect(tabs()).toHaveCount(tabCount + 1)
@@ -502,14 +493,11 @@ try {
   // exists the dialog says so; a failure lists its steps with the removal; Stop waits for the answer and says Stopped.
   const catalogs = ['server-a', 'Integration Services Catalogs']
   const createDialog = () => page.getByRole('dialog', { name: 'Create Catalog', exact: true })
-  // Databases may still be reloading after Database Properties' OK, moving the rows below it, so the press repeats until the
-  // folder's own menu opens.
+  // Databases may still be reloading after Database Properties' OK, moving the rows below it: openExplorerMenu presses
+  // until the folder's own menu opens.
   const openCreate = async () => {
-    await expect(async () => {
-      if (await explorerMenu().count()) await closeMenu()
-      expect(await menuOf(...catalogs)).toEqual(['Create Catalog…', 'Refresh'])
-    }).toPass()
-    await explorerMenu().getByRole('menuitem', { name: 'Create Catalog…', exact: true }).click(fast)
+    expect(await menuOf(...catalogs)).toEqual(['Create Catalog…', 'Refresh'])
+    await chooseExplorerMenuItem(page, catalogs, 'Create Catalog…')
     await expect(createDialog()).toBeVisible()
   }
   await openCreate()
@@ -699,17 +687,14 @@ try {
   const newDatabase = () => documentFrame(page, 'New Database')
   const newVerb = name => documentVerb(newDatabase(), 'New Database', name)
   const newFiles = () => newDatabase().getByRole('table', { name: 'Database files', exact: true })
-  const databasesMenu = async () => {
-    await expect(async () => {
-      await (await revealExplorerRow(page, 'server-a', 'Databases')).click({ button: 'right', force: true })
-      await expect(explorerMenu()).toBeVisible({ timeout: 1000 })
-    }).toPass()
-  }
-  await databasesMenu()
-  expect((await labels())[0]).toBe('New Database…')
+  const databases = ['server-a', 'Databases']
+  // Databases may still be reloading, moving the rows under the press: the helpers press until the folder's own menu opens.
+  const databasesMenu = async () => (await explorerMenuItems(page, ...databases)).names
+  const chooseNewDatabase = () => chooseExplorerMenuItem(page, databases, 'New Database…')
+  expect((await databasesMenu())[0]).toBe('New Database…')
   await closeMenu()
   expect((await menuOf(...appData))[0]).toBe('New Database…')
-  await explorerMenu().getByRole('menuitem', { name: 'New Database…', exact: true }).click(fast)
+  await chooseExplorerMenuItem(page, appData, 'New Database…')
   await expect(newDatabase()).toBeVisible()
   await expect(documentTab(page, 'New Database')).toHaveAttribute('aria-selected', 'true')
   await expect(documentCrumbs(newDatabase())).toHaveText(['server-a', 'Databases'])
@@ -784,8 +769,7 @@ try {
   ])
   await expect(await explorerRow(page, 'server-a', 'Databases', 'Sales')).toHaveAttribute('aria-selected', 'true')
   // Stop while CREATE DATABASE runs: the tab stays and says what happened; Cancel then closes it.
-  await databasesMenu()
-  await explorerMenu().getByRole('menuitem', { name: 'New Database…', exact: true }).click(fast)
+  await chooseNewDatabase()
   await expect(databaseName).toBeFocused()
   await databaseName.fill('Held')
   // Enter outside the grids is OK, as in SSMS's dialog.
@@ -798,11 +782,9 @@ try {
   await newVerb('Cancel').click()
   await expect(newDatabase()).toHaveCount(0)
   // A second New Database is numbered; Ctrl+S is its OK, and Escape cancels the first.
-  await databasesMenu()
-  await explorerMenu().getByRole('menuitem', { name: 'New Database…', exact: true }).click(fast)
+  await chooseNewDatabase()
   await expect(databaseName).toBeFocused()
-  await databasesMenu()
-  await explorerMenu().getByRole('menuitem', { name: 'New Database…', exact: true }).click(fast)
+  await chooseNewDatabase()
   const secondDatabase = documentFrame(page, 'New Database (2)')
   await expect(documentTab(page, 'New Database (2)')).toHaveAttribute('aria-selected', 'true')
   const secondName = secondDatabase.getByLabel('Database name', { exact: true })
@@ -845,8 +827,8 @@ try {
     await expect(addButton()).toBeFocused()
   }
   const openAttach = async () => {
-    expect(await menuOf('server-a', 'Databases')).toEqual(['New Database…', 'Attach…', 'Filter Settings…', 'Refresh'])
-    await explorerMenu().getByRole('menuitem', { name: 'Attach…', exact: true }).click(fast)
+    expect(await databasesMenu()).toEqual(['New Database…', 'Attach…', 'Filter Settings…', 'Refresh'])
+    await chooseExplorerMenuItem(page, databases, 'Attach…')
     await expect(objectDialogProgress(attachDialog())).toHaveText('Ready')
   }
   await openAttach()
@@ -1039,12 +1021,8 @@ try {
   const typed = 'Typed-Z9q-' + Date.now().toString(36)
   // Logins listed first: OK reloads that folder and selects the new login (a folder Object Explorer has not listed stays so).
   await expandExplorerPath(page, 'server-a', 'Security', 'Logins')
-  await expect(async () => {
-    if (await explorerMenu().count()) await closeMenu()
-    expect(await menuOf('server-a', 'Security')).toContain('New')
-  }).toPass()
-  await explorerMenu().getByRole('menuitem', { name: 'New', exact: true }).click(fast)
-  await page.getByRole('menuitem', { name: 'Login…', exact: true }).click(fast)
+  expect(await menuOf('server-a', 'Security')).toContain('New')
+  await chooseExplorerMenuItem(page, ['server-a', 'Security'], ['New', 'Login…'])
   await expect(loginDialog()).toBeVisible()
   await expect(objectDialogProgress(loginDialog())).toHaveText('Ready')
   expect(await loginDialog().getByRole('navigation', { name: 'Select a page', exact: true }).getByRole('button').allTextContents()).toEqual(['General', 'Server Roles', 'Status'])
@@ -1133,7 +1111,7 @@ try {
   expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'createLogin', target: { kind: 'server' }, secrets: { password: typed }, serverRoles: ['dbcreator'], status: { connect: 'grant', enabled: true } })
   await expect(explorerTree(page).getByRole('treeitem', { name: 'app_reader', selected: true })).toBeVisible()
   expect(await menuOf('server-a', 'Security', 'Logins')).toContain('New Login…')
-  await explorerMenu().getByRole('menuitem', { name: 'New Login…', exact: true }).click(fast)
+  await chooseExplorerMenuItem(page, ['server-a', 'Security', 'Logins'], 'New Login…')
   await expect(loginDialog()).toBeVisible()
   await expect(loginDialog().getByRole('textbox', { name: 'Login name', exact: true })).toHaveValue('')
   // Enter in Confirm password is OK; when the policy refuses the password, focus returns to Password (running disabled the
@@ -1174,17 +1152,10 @@ try {
     await expect(label).toHaveCount(1)
     return label.evaluate(element => element.scrollWidth <= element.clientWidth)
   }
-  /** Tasks › an item on AppData; Databases may be reloading, so the press repeats until the row's menu opens. */
+  /** Tasks › an item on AppData; Databases may be reloading, so the helpers press until the row's own menu opens. */
   const task = async (name, states) => {
-    await expect(async () => {
-      if (await openMenus().count()) await closeMenu()
-      await (await revealExplorerRow(page, ...appData)).click({ button: 'right', force: true })
-      await expect(explorerMenu()).toBeVisible({ timeout: 1000 })
-      await explorerMenu().getByRole('menuitem', { name: 'Tasks', exact: true }).click(fast)
-      await expect(menuNamed('Tasks')).toBeVisible({ timeout: 1000 })
-    }).toPass()
-    expect(await menuItemNames(menuNamed('Tasks'), { disabled: true }), 'greyed Tasks items').toEqual(states)
-    await menuNamed('Tasks').getByRole('menuitem', { name, exact: true }).click(fast)
+    expect((await explorerSubmenuItems(page, appData, ['Tasks'])).disabled, 'greyed Tasks items').toEqual(states)
+    await chooseExplorerMenuItem(page, appData, ['Tasks', name])
   }
   await task('Take Offline', ['Bring Online'])
   await expect(offlineDialog()).toBeVisible()
@@ -1256,15 +1227,9 @@ try {
   await expect(explorerTree(page).getByRole('treeitem', { name: /^AppData\b.*Offline/ })).toHaveCount(0)
   console.log('Object action checks: Tasks › Take Offline lists the sessions and open transactions, holds OK until Drop All Active Connections or Check Again, scripts SET OFFLINE, Stops a wait and stays open on Success; Bring Online runs as it opens.')
 
-  // A database row's menu item. Databases may have just reloaded (after Database Properties' Apply, or a Delete), so the press
-  // repeats until its row's menu opens.
-  const databaseItem = async (path, item) => {
-    await expect(async () => {
-      await (await revealExplorerRow(page, ...path)).click({ button: 'right', force: true })
-      await expect(explorerMenu()).toBeVisible({ timeout: 1000 })
-    }).toPass()
-    await explorerMenu().getByRole('menuitem', { name: item, exact: true }).click(fast)
-  }
+  // A database row's menu item. Databases may have just reloaded (after Database Properties' Apply, or a Delete), so the
+  // helper presses until its row's own menu opens.
+  const databaseItem = (path, item) => chooseExplorerMenuItem(page, path, item)
 
   // 6a. D3d: offline Archive's Delete Object says that its files stay on disk and counts the query window on it. Deleting it
   // drops it from Databases, a toast counts that window, and its Properties document turns orphan with only Close.
@@ -1304,8 +1269,13 @@ try {
   console.log('Object action checks: an offline database\'s Delete Object warns that its files stay, and deleting it leaves a toast for its query window and an orphaned Properties document with Close.')
 
   // 6. A database: SSMS's two options (backup history checked, Close existing connections not), the sessions using it and
-  // how many hold a transaction that closing them rolls back, then a lost server leaves only Close.
-  await databaseItem(appData, 'Delete')
+  // how many hold a transaction that closing them rolls back, then a lost server leaves only Close. The right-click can
+  // scroll AppData into view first. Chromium sends that scroll's event with a later frame, which must not close the menu:
+  // on a Windows run it did, and the forced click on Delete selected the row under the closed menu instead.
+  await openExplorerMenu(page, ...appData)
+  await explorerTree(page).evaluate(tree => { tree.dispatchEvent(new Event('scroll')) })
+  await expect(explorerMenu()).toBeVisible()
+  await chooseExplorerMenuItem(page, appData, 'Delete')
   await expect(objectDialogProgress(dialog())).toHaveText('Ready')
   await expect(historyOption()).toBeChecked()
   await expect(closeOption()).not.toBeChecked()
