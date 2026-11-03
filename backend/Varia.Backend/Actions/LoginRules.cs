@@ -30,6 +30,7 @@ internal sealed class LoginRules
         if (json.LockProperties is null || !json.LockProperties.SequenceEqual(ActionSql.LoginLockProperties, StringComparer.Ordinal))
             throw new InvalidOperationException("The login lock-out properties differ from the catalogue's.");
         Securables = new SecurableCatalog(json.Securables ?? throw new InvalidOperationException("The login catalogue has no securables."));
+        if (Securables.EffectiveUnavailableSubtypes.Any(subtype => !rules.ContainsKey(subtype))) throw new InvalidOperationException("The Effective tab names an unknown login subtype.");
     }
 
     public IReadOnlyCollection<string> Subtypes => rules.Keys;
@@ -119,10 +120,15 @@ internal sealed class LoginRules
         if (facts.Subtype == "system") return "system";
         if (facts.Own && (changes.Enabled == false || changes.Connect == "deny")) return "ownStatus";
         if (facts.Own && changes.Password is { MustChange: true }) return "ownMustChange";
+        if (changes.Permissions is { Count: > 0 } && PermissionsProtected(facts)) return "permissionsProtected";
         if (facts.Subtype == "windowsGroup" && changes.Enabled == false) return "windowsGroupDisable";
         if (facts.Type.Trim() != "S" && (changes.Password is not null || changes.CheckPolicy is not null || changes.CheckExpiration is not null)) return "propertiesNotSql";
         return null;
     }
+
+    /// <summary>Whether SQL Server refuses every permission statement for the login (4624, sent as an informational message while it changes
+    /// nothing): sa, or the login this connection uses itself, not a group it gets in through (logins.ts permissionsProtected).</summary>
+    public static bool PermissionsProtected(LoginFactsDto facts) => facts.Subtype == "sa" || facts.Own && facts.Subtype is not ("windowsGroup" or "externalGroup");
 
     /// <summary>The message id that refuses a login's new name, or null: SQL Server's own form for every subtype, then a backslash
     /// in the name of a login SQL Server authenticates itself (logins.ts loginNameRefusal; SQL Server would answer 15021).</summary>

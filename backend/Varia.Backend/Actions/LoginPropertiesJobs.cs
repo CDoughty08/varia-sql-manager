@@ -217,13 +217,18 @@ internal sealed partial class ActionService
         if (error is not null) return new(null, "master", [], error);
         var text = LoginSql.PropertiesScriptText(target.Name!, changes, missing, catalog.Logins.ScriptHeader, PermissionStatements(target.Name!, changes.Permissions));
         if (text.Length > ScriptLimit(args.Action)) return new(null, "master", [], Error("SQL_ERROR", "The script is too large."));
-        return new(text, "master", LoginPropertiesWarnings(changes));
+        return new(text, "master", LoginPropertiesWarnings(target.Name!, changes));
     }
 
-    /// <summary>The steps preview's and Script's warnings: each DROP USER, which removes the user's permissions in its database (D2 §4).</summary>
-    internal static List<string> LoginPropertiesWarnings(LoginChangesDto changes) =>
+    /// <summary>The steps preview's and Script's warnings: each DROP USER, which removes the user's permissions in its database (D2 §4),
+    /// then each permission statement with CASCADE, which also revokes the permission from every principal the login granted it to
+    /// (securables.ts securablesMessages.cascades), in the order they run.</summary>
+    internal List<string> LoginPropertiesWarnings(string login, LoginChangesDto changes) =>
         [.. LoginSql.Ordered((changes.Mappings ?? []).Where(mapping => mapping.Change == "unmap").Select(mapping => mapping.Database))
-            .Select(database => "Drops the user " + ActionSql.Quote(changes.Mappings!.First(mapping => mapping.Database == database).User) + " in " + ActionSql.Quote(database) + ".")];
+            .Select(database => "Drops the user " + ActionSql.Quote(changes.Mappings!.First(mapping => mapping.Database == database).User) + " in " + ActionSql.Quote(database) + "."),
+         .. PermissionSql.Ordered(catalog.Logins.Securables, changes.Permissions ?? []).Where(permission => permission.State == "revokeGrantOption" || permission.Cascade == true)
+            .Select(permission => "CASCADE also revokes " + permission.Permission + (permission.Securable.Name is { } name ? " on " + ActionSql.Quote(name) : "") + " from every principal "
+                + ActionSql.Quote(login) + " granted it to.")];
 
     /// <summary>OK: the preflight (the login, the identity the dialog read and the rules; then each changed database's), then the
     /// statements one by one in SSMS's order. What SQL Server says is scrubbed of both passwords. SQL Server answers a wrong old
@@ -256,7 +261,7 @@ internal sealed partial class ActionService
             new RunStep(StepTitle(statement.Template), context => RunPlannedBoundAsync(connection, statement, context.Token), Detail: StepDetail(statement))));
         // The Securables page's statements last, each bound to the login like the server statements before them.
         steps.AddRange(PermissionSteps(changes.Permissions, (permission, context) =>
-            RunBoundAsync(connection, bound, self, self, open => PermissionAsync(connection, login, permission, dryRun: false, context.Token, open), context.Token)));
+            RunBoundAsync(connection, bound, self, self, open => SetPermissionAsync(connection, login, facts.PrincipalId, permission, context.Token, open), context.Token)));
         var (done, failure, _) = await RunStepsAsync(connection, steps, null, token, CleanupBudget(args.Action), serverText: Scrubbed);
         // The connections that sign in as this login keep working: their later sessions use the new password, never the old one.
         if (secrets?.Password is { } changed && done.Any(step => step.Title == LoginPasswordStep && step.Status == "done"))

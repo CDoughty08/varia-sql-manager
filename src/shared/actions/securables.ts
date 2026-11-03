@@ -2,6 +2,7 @@
 // permissions each class takes, how a checkbox change becomes GRANT, DENY or REVOKE, and the page's words. The one place they live:
 // the page, zod and C# (through actions-catalog.json) read them here, so a permission keyword reaches SQL only from this catalogue.
 // Erasable TypeScript (no enums), so Node's type stripping can load it too.
+import type { LoginSubtype } from './logins.ts'
 
 /** The securables a login's Securables page lists: SQL Server's server-level classes (sys.server_permissions' class 100, 105, 101 and
  *  108). One entry per line, so later classes append cleanly. */
@@ -127,30 +128,41 @@ export const permissionChecked = (state: PermissionState | undefined, column: Pe
   column === 'grant' ? state === 'grant' || state === 'withGrant' : state === column
 
 /** The login's explicit permissions by securable and permission, as the Explicit tab shows them: a deny over any grant, a grant with
- *  grant option over a plain one (sys.server_permissions keeps a row per grantor), with the first such row's grantor. */
+ *  grant option over a plain one (sys.server_permissions keeps a row per grantor), with every grantor of its rows, so a grant another
+ *  principal also made shows (SQL Server revokes only the issuing grantor's row; the backend checks what remains). */
 export function explicitStates(rows: readonly ExplicitPermission[]): ReadonlyMap<string, ReadonlyMap<string, { readonly state: PermissionState; readonly grantor: string }>> {
   const rank = { grant: 0, withGrant: 1, deny: 2 } as const
-  const states = new Map<string, Map<string, { state: PermissionState; grantor: string }>>()
+  const found = new Map<string, Map<string, { state: PermissionState; grantors: string[] }>>()
   for (const row of rows) {
-    const key = securableKey(row.securable), of = states.get(key) ?? new Map<string, { state: PermissionState; grantor: string }>()
-    const current = of.get(row.permission)
-    if (!current || rank[row.state] > rank[current.state]) of.set(row.permission, { state: row.state, grantor: row.grantor })
-    states.set(key, of)
+    const key = securableKey(row.securable), of = found.get(key) ?? new Map<string, { state: PermissionState; grantors: string[] }>()
+    const current = of.get(row.permission) ?? { state: row.state, grantors: [] }
+    if (rank[row.state] > rank[current.state]) current.state = row.state
+    if (!current.grantors.includes(row.grantor)) current.grantors.push(row.grantor)
+    of.set(row.permission, current)
+    found.set(key, of)
   }
-  return states
+  return new Map([...found].map(([key, of]) => [key, new Map([...of].map(([permission, { state, grantors }]) => [permission, { state, grantor: grantors.join(', ') }]))]))
 }
 
 /** The Securables page's words, Varia's where SSMS's are unverified. They name securables only as the page shows them. */
 export const securablesMessages = {
   /** The Status page owns CONNECT SQL. */
   reserved: 'Set on the Status page (Permission to connect to database engine).',
-  noSecurable: 'Select a securable above to see its permissions, or add one with Search….',
+  noSecurable: 'Select a securable above to see its permissions. Search… adds one.',
   noPermissions: 'This server lists no permissions of this type that Varia can set.',
   effectiveLoading: 'Reading the effective permissions…',
   /** SQL Server answers EXECUTE AS LOGIN without IMPERSONATE with 15406 or 15517. */
   effectiveDenied: 'You don\'t have permission to view effective permissions.',
   effectiveNewLogin: 'Effective permissions show once the login exists.',
   effectiveNone: 'The login has no permissions on this securable.',
+  /** EXECUTE AS LOGIN refuses a group and a login mapped to a certificate or an asymmetric key (15406): effectiveUnavailableSubtypes. */
+  effectiveUnavailable: 'SQL Server cannot impersonate a group, or a login mapped to a certificate or an asymmetric key, so it cannot show this login\'s effective permissions.',
+  /**
+   * The page's and Script's warning per change that carries CASCADE (permissionCascades): SQL Server then also revokes the permission
+   * from every principal the login granted it to (ActionService.LoginPropertiesWarnings writes the same words).
+   */
+  cascades: (permission: string, login: string, securable?: string) =>
+    `CASCADE also revokes ${permission}${securable === undefined ? '' : ` on [${securable.replaceAll(']', ']]')}]`} from every principal [${login.replaceAll(']', ']]')}] granted it to.`,
   addNone: 'Choose at least one object type.',
   noObjects: 'This server has no objects of these types that this login can see.',
   objectsTruncated: (count: number) => `Only the first ${count.toLocaleString('en-US')} objects of each type are listed.`,
@@ -159,6 +171,12 @@ export const securablesMessages = {
   securablesLimit: (count: number) => `At most ${count.toLocaleString('en-US')} securables can be listed at once.`,
   permissionsLimit: (count: number) => `At most ${count.toLocaleString('en-US')} permissions can change at once. Apply some, then the rest.`
 } as const
+/** Whether a permission statement carries CASCADE: REVOKE GRANT OPTION FOR always, DENY and REVOKE of a grantable permission. */
+export const permissionCascades = (choice: Pick<PermissionChoice, 'state' | 'cascade'>) => choice.state === 'revokeGrantOption' || choice.cascade === true
+/** Login subtypes SQL Server cannot impersonate (EXECUTE AS LOGIN answers 15406 for a group, a certificate or an asymmetric key), so the
+ *  Effective tab says why instead of reading, and the backend refuses the read. */
+export const effectiveUnavailableSubtypes: readonly LoginSubtype[] = ['windowsGroup', 'certificateMapped', 'asymmetricKeyMapped', 'externalGroup']
+
 /** Add Objects' three choices (SSMS's, recalled) and the dialogs they open. */
 export const addObjectsChoices = ['specific', 'all', 'server'] as const
 export type AddObjectsChoice = typeof addObjectsChoices[number]
@@ -179,6 +197,8 @@ export function securablesCatalog() {
   return {
     effectiveDescribe: loginEffectiveDescribe,
     effectiveDenied: securablesMessages.effectiveDenied,
+    effectiveUnavailable: securablesMessages.effectiveUnavailable,
+    effectiveUnavailableSubtypes,
     reserved: securableTypes.flatMap(type => (reservedPermissions[type] ?? []).map(permission => ({ type, permission }))),
     types: securableTypes.map(type => ({ type, ...securableSpecs[type] }))
   }

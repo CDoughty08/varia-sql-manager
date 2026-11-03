@@ -1,14 +1,15 @@
 // The Securables page (D2d): its catalogue (src/shared/actions/securables.ts), the permission statements in main's schemas, the draft
 // helpers and what OK sends (src/renderer/src/dialogs/securables.ts), the Effective tab's read through the object dialog service, and
 // the page as it renders on New Login and Login Properties.
+import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { actionLimits, dialogSpecs } from '../src/shared/actions/catalog'
-import { loginLimits, loginsCatalog, newLoginStatements, tooManyStatementsMessage, type NewLoginModel } from '../src/shared/actions/logins'
+import { loginLimits, loginMessages, loginPropertiesRefusal, loginsCatalog, newLoginStatements, permissionsProtected, tooManyStatementsMessage, type NewLoginModel } from '../src/shared/actions/logins'
 import { actionDescribeSchema, actionExecuteRequestSchema, actionScriptRequestSchema, type ActionDescribeResult } from '../src/shared/actions/schema'
 import {
-  explicitStates, loginEffectiveDescribe, objectTypeOrder, permissionChange, permissionChecked, permissionStates, reservedPermission, securablesCatalog, securableSpecs, securablesMessages,
+  effectiveUnavailableSubtypes, explicitStates, loginEffectiveDescribe, objectTypeOrder, permissionCascades, permissionChange, permissionChecked, permissionStates, reservedPermission, securablesCatalog, securableSpecs, securablesMessages,
   securableTypes, toggledPermission, type ExplicitPermission, type PermissionState
 } from '../src/shared/actions/securables'
 import type { ApiResult, VariaApi } from '../src/shared/contracts'
@@ -94,10 +95,39 @@ describe('Securables catalogue', () => {
     expect(['grant', 'withGrant', 'deny'].map(column => permissionChecked('withGrant', column as 'grant'))).toEqual([true, true, false])
     expect(['grant', 'withGrant', 'deny'].map(column => permissionChecked('deny', column as 'grant'))).toEqual([false, false, true])
   })
-  it('shows a deny over any grant and a grant option over a plain grant, as sys.server_permissions keeps a row per grantor', () => {
-    const states = explicitStates([viewServerState, { ...viewServerState, state: 'withGrant', grantor: 'admin' }, impersonate, { ...impersonate, state: 'deny', grantor: 'other' }])
-    expect(states.get('server:')?.get('VIEW SERVER STATE')).toEqual({ state: 'withGrant', grantor: 'admin' })
-    expect(states.get('login:sa')?.get('IMPERSONATE')).toEqual({ state: 'deny', grantor: 'other' })
+  it('shows a deny over any grant and a grant option over a plain grant, as sys.server_permissions keeps a row per grantor, with every grantor', () => {
+    const states = explicitStates([viewServerState, { ...viewServerState, state: 'withGrant', grantor: 'admin' }, impersonate, { ...impersonate, state: 'deny', grantor: 'other' }, { ...impersonate, grantor: 'other' }])
+    // SQL Server revokes only the issuing grantor's row, so the page names each grantor whose grant stays after one REVOKE.
+    expect(states.get('server:')?.get('VIEW SERVER STATE')).toEqual({ state: 'withGrant', grantor: 'sa, admin' })
+    expect(states.get('login:sa')?.get('IMPERSONATE')).toEqual({ state: 'deny', grantor: 'sa, other' })
+  })
+  it('warns of each change that cascades, in the backend\'s words, and knows which logins SQL Server cannot impersonate', () => {
+    expect(permissionCascades({ state: 'revokeGrantOption' })).toBe(true)
+    expect(permissionCascades({ state: 'deny', cascade: true })).toBe(true)
+    expect(permissionCascades({ state: 'revoke' })).toBe(false)
+    expect(permissionCascades({ state: 'deny' })).toBe(false)
+    expect(securablesMessages.cascades('VIEW SERVER STATE', 'l]x')).toBe('CASCADE also revokes VIEW SERVER STATE from every principal [l]]x] granted it to.')
+    expect(securablesMessages.cascades('ALTER', 'l', 't]1')).toBe('CASCADE also revokes ALTER on [t]]1] from every principal [l] granted it to.')
+    const jobs = readFileSync('backend/Varia.Backend/Actions/LoginPropertiesJobs.cs', 'utf8')
+    expect(jobs).toContain('"CASCADE also revokes " + permission.Permission + (permission.Securable.Name is { } name ? " on " + ActionSql.Quote(name) : "") + " from every principal "')
+    expect(jobs).toContain('ActionSql.Quote(login) + " granted it to."')
+    expect(effectiveUnavailableSubtypes).toEqual(['windowsGroup', 'certificateMapped', 'asymmetricKeyMapped', 'externalGroup'])
+    expect(securablesCatalog()).toMatchObject({ effectiveUnavailable: securablesMessages.effectiveUnavailable, effectiveUnavailableSubtypes })
+    // The words never end in a button's ellipsis followed by a full stop.
+    expect(Object.values(securablesMessages).filter(text => typeof text === 'string' && text.includes('….'))).toEqual([])
+  })
+  it('leaves the permissions of sa and of the login this connection uses to show only, as SQL Server changes none of them (4624)', () => {
+    const permissions = [{ securable: serverRef, permission: 'SHUTDOWN', state: 'grant' as const }]
+    expect(permissionsProtected({ subtype: 'sa', own: false })).toBe(true)
+    expect(permissionsProtected({ subtype: 'sql', own: true })).toBe(true)
+    expect(permissionsProtected({ subtype: 'windowsUser', own: true })).toBe(true)
+    // A group the connection gets in through is another principal to SQL Server.
+    expect(permissionsProtected({ subtype: 'windowsGroup', own: true })).toBe(false)
+    expect(permissionsProtected({ subtype: 'sql', own: false })).toBe(false)
+    expect(loginPropertiesRefusal({ type: 'S', subtype: 'sa', own: false }, { permissions })).toBe('permissionsProtected')
+    expect(loginPropertiesRefusal({ type: 'S', subtype: 'sa', own: false }, { defaultLanguage: 'Deutsch' })).toBeUndefined()
+    expect(loginPropertiesRefusal({ type: 'G', subtype: 'windowsGroup', own: true }, { permissions })).toBeUndefined()
+    expect(readFileSync('backend/Varia.Backend/Actions/LoginRules.cs', 'utf8')).toContain('facts.Subtype == "sa" || facts.Own && facts.Subtype is not ("windowsGroup" or "externalGroup")')
   })
 })
 
@@ -320,15 +350,39 @@ describe('Securables page', () => {
     expect(html).toMatch(/Permissions for <bdi>DEV-SQL<\/bdi>:/)
     expect(html).toMatch(/role="columnheader">Permission<.*role="columnheader">Grantor<.*>Grant<.*>With Grant<.*>Deny</)
     expect(html).toMatch(/aria-label="Grant VIEW SERVER STATE" checked=""/)
-    expect(html).toMatch(/aria-label="Grant CONNECT SQL" disabled="" checked=""/)
+    expect(html).toMatch(/aria-label="Grant CONNECT SQL" aria-describedby="securables-reserved-note" disabled="" checked=""/)
     expect(html).toMatch(/role="tab"[^>]*>Explicit</)
     expect(html).not.toMatch(/role="tab"[^>]*disabled=""[^>]*>Effective</)
+    // Each cell carries its column; CONNECT SQL's greyed cells and boxes point assistive technology at the reason.
+    expect(html).toMatch(/role="gridcell" aria-colindex="1" aria-describedby="securables-reserved-note"><span class="user-mapping-text" title="CONNECT SQL">/)
+    expect(html).toMatch(/aria-colindex="5" aria-selected="false" aria-describedby="securables-reserved-note"/)
+    expect(html).toContain(`<span id="securables-reserved-note" hidden="">${securablesMessages.reserved}</span>`)
+    expect(html).not.toMatch(/aria-label="Grant VIEW SERVER STATE" aria-describedby/)
+    expect(html).not.toContain('aria-label="Warnings"')
   })
-  it('greys the Effective tab on New Login and says how to start', () => {
+  it('greys the Effective tab on New Login and says how to start, with no securable named', () => {
     const model = newModel(), html = render(opened('newLogin', model, newDraft()))
     expect(html).toMatch(/role="tab"[^>]*disabled=""[^>]*>Effective</)
-    expect(html).toContain(securablesMessages.noSecurable.replace('…', '…'))
+    expect(html).toContain(securablesMessages.noSecurable)
     expect(html).toMatch(/<button type="button">Search…<\/button>/)
+    expect(html).toContain('id="securables-permissions-label">Permissions:</p>')
+    expect(html).not.toContain('Permissions for')
+  })
+  it('warns of each change that cascades to what the login granted onward', () => {
+    const model = explicit([viewServerState, impersonate]), draft = draftOf(model)
+    const cleared = { ...draft, ...setPermission(model, draft, { type: 'login', name: 'sa' }, 'IMPERSONATE', undefined) }
+    const html = render(opened('loginProperties', model, cleared))
+    expect(html).toContain(`aria-label="Warnings"><li>`)
+    expect(html).toContain(securablesMessages.cascades('IMPERSONATE', 'app_login', 'sa'))
+  })
+  it('shows sa\'s and the own login\'s permissions greyed, with why', () => {
+    for (const login of [{ subtype: 'sa' as const, principalId: 1 }, { own: true }]) {
+      const describe = loginPropertiesDescribe({ login, properties: { permissions: [viewServerState] } }), model = loginPropertiesModelOf(describe)!
+      const html = render(opened('loginProperties', model, draftOf(model)))
+      expect(html).toContain(loginMessages.permissionsProtected)
+      expect(html).toMatch(/aria-label="Grant VIEW SERVER STATE" disabled="" checked=""/)
+      expect(html).toMatch(/<button type="button">Search…<\/button>/)
+    }
   })
   it('shows the Effective tab\'s answer, its failure with Retry, and a truncation', () => {
     const model = explicit([viewServerState]), draft = draftOf(model)
@@ -336,6 +390,9 @@ describe('Securables page', () => {
     expect(note).toContain(securablesMessages.explicitTruncated(loginLimits.explicitPermissions))
     const list = (lookup: Parameters<typeof EffectiveList>[0]['lookup']) => renderToStaticMarkup(createElement(EffectiveList, { lookup, onRetry: vi.fn() }))
     expect(list({ state: 'loading' })).toContain(securablesMessages.effectiveLoading)
+    // A login SQL Server cannot impersonate: the reason, never a read or a Retry that cannot succeed.
+    const unavailable = renderToStaticMarkup(createElement(EffectiveList, { lookup: undefined, unavailable: securablesMessages.effectiveUnavailable, onRetry: vi.fn() }))
+    expect(unavailable).toBe(`<p class="field-note">${securablesMessages.effectiveUnavailable.replace('\'', '&#x27;')}</p>`)
     expect(list({ state: 'ready', value: { permissions: ['CONNECT SQL', 'VIEW ANY DATABASE'], truncated: true } })).toContain(`aria-label="Effective permissions"><li>CONNECT SQL</li><li>VIEW ANY DATABASE</li></ul>`)
     expect(list({ state: 'ready', value: { permissions: ['CONNECT SQL'], truncated: true } })).toContain(securablesMessages.effectiveTruncated(loginLimits.effectivePermissions))
     expect(list({ state: 'ready', value: { permissions: [], truncated: false } })).toContain(securablesMessages.effectiveNone)

@@ -24,6 +24,71 @@ internal static class SecurablesChecks
         ScriptText(check);
         Validation(check);
         Partial(check);
+        PostCondition(check);
+        Protected(check);
+    }
+
+    /// <summary>Review of D2d: SQL Server runs a REVOKE that removes only its own grantor's row, or a statement for sa, the principal running
+    /// it or the securable's owner, without an error. What remains decides whether the step did what the boxes asked.</summary>
+    private static void PostCondition(Action<bool, string> check)
+    {
+        var none = Array.Empty<(string, string)>();
+        static (string, string)[] Rows(params (string State, string Grantor)[] rows) => rows;
+        var met = new (string Name, PermissionDto Permission, (string, string)[] Rows)[]
+        {
+            ("a grant", Server("SHUTDOWN", "grant"), Rows(("G", "sa"))),
+            ("a grant beside another's grant option", Server("SHUTDOWN", "grant"), Rows(("W", "b"), ("G", "sa"))),
+            ("a grant option", Server("SHUTDOWN", "withGrant"), Rows(("W", "sa"), ("G", "b"))),
+            ("a deny over another's grant", Server("SHUTDOWN", "deny", true), Rows(("D", "sa"), ("W", "b"))),
+            ("a revoke", Server("SHUTDOWN", "revoke"), none),
+            ("a grant option revoked", On("login", "t", "ALTER", "revokeGrantOption"), Rows(("G", "t")))
+        };
+        const string Tail = ": SQL Server's GRANT, DENY and REVOKE change only what their own grantor recorded. This permission was not changed.";
+        const string Ignored = ": it changes no permission for sa, for the login this connection uses or for the securable's owner. This permission was not changed.";
+        var unmet = new (string Name, PermissionDto Permission, (string, string)[] Rows, string Message)[]
+        {
+            ("a revoke that left another grantor's grant", Server("VIEW SERVER STATE", "revoke"), Rows(("G", "b]x")), "VIEW SERVER STATE is still granted by b]x" + Tail),
+            ("a revoke that left another grantor's deny", Server("SHUTDOWN", "revoke"), Rows(("D", "b"), ("G", "c")), "SHUTDOWN is still denied by b" + Tail),
+            ("a grant option revoked that other grantors hold", On("login", "t", "ALTER", "revokeGrantOption"), Rows(("W", "b"), ("W", "c"), ("G", "t")),
+                "ALTER on t is still granted with grant option by b, c" + Tail),
+            ("a grant under other grantors' denials", Server("SHUTDOWN", "grant"), Rows(("D", "a"), ("D", "b"), ("D", "c"), ("D", "d"), ("G", "sa")),
+                "SHUTDOWN is still denied by a, b, c and others" + Tail),
+            ("a deny SQL Server ignored", Server("SHUTDOWN", "deny"), none, "SQL Server did not set SHUTDOWN" + Ignored),
+            ("a grant SQL Server ignored", On("login", "t", "VIEW DEFINITION", "grant"), none, "SQL Server did not set VIEW DEFINITION on t" + Ignored)
+        };
+        var wrong = met.Where(item => PermissionSql.Unmet(item.Permission, item.Rows) is not null).Select(item => item.Name)
+            .Concat(unmet.Where(item => PermissionSql.Unmet(item.Permission, item.Rows) != item.Message).Select(item => item.Name + ": " + PermissionSql.Unmet(item.Permission, item.Rows))).ToList();
+        check(wrong.Count == 0 && PermissionSql.Collapsed(Rows(("G", "a"), ("W", "b"))) == "withGrant" && PermissionSql.Collapsed(none) is null,
+            "a permission step fails as a value when what SQL Server left is not what the boxes asked for, naming the grantors in the way: " + string.Join(", ", wrong));
+        check(PermissionSql.Remaining.Contains("sp.grantee_principal_id = @principal AND sp.class = @class AND sp.permission_name = @permission", StringComparison.Ordinal)
+            && PermissionSql.Remaining.Contains("ORDER BY CASE sp.state WHEN 'D' THEN 0 WHEN 'W' THEN 1 ELSE 2 END", StringComparison.Ordinal)
+            && PermissionSql.Lint(Securables).Single(item => item.Name == "remaining permission").Problems.Count == 0 && ActionService.ProtectedPrincipalMessage == 4624,
+            "the post-condition reads one permission's rows of the login, denials first, through linted constant SQL, and 4624 is SQL Server's refusal");
+    }
+
+    /// <summary>SQL Server changes no permission of sa or of the login a connection uses (4624), so Login Properties refuses them before
+    /// anything runs (logins.ts permissionsProtected), and the Effective tab never reads a login SQL Server cannot impersonate.</summary>
+    private static void Protected(Action<bool, string> check)
+    {
+        static LoginFactsDto Facts(string subtype = "sql", string type = "S", bool own = false) =>
+            new(9, type, subtype, false, "01", "2026-01-01T00:00:00.000", null, null, false, own, false, 0, 0, [], 0, true, true, false);
+        var permission = new LoginChangesDto(Permissions: [Server("SHUTDOWN", "grant")]);
+        var cases = new (string Name, LoginFactsDto Facts, LoginChangesDto Changes, string? Id)[]
+        {
+            ("sa's permissions", Facts("sa"), permission, "permissionsProtected"),
+            ("the own login's permissions", Facts(own: true), permission, "permissionsProtected"),
+            ("the own Windows login's permissions", Facts("windowsUser", "U", own: true), permission, "permissionsProtected"),
+            ("a group the connection gets in through", Facts("windowsGroup", "G", own: true), permission, null),
+            ("another login's permissions", Facts(), permission, null),
+            ("sa's default database", Facts("sa"), new("master"), null),
+            ("sa with an empty list", Facts("sa"), new(Permissions: []), null)
+        };
+        var wrong = cases.Where(item => LoginRules.PropertiesRefusal(item.Facts, item.Changes) != item.Id).Select(item => item.Name).ToList();
+        check(wrong.Count == 0 && Catalog.Logins.Message("permissionsProtected").Contains("sa", StringComparison.Ordinal),
+            "Login Properties refuses permissions for sa and for the login this connection uses, which SQL Server would leave unchanged: " + string.Join(", ", wrong));
+        check(Securables.EffectiveUnavailableSubtypes.SequenceEqual(["windowsGroup", "certificateMapped", "asymmetricKeyMapped", "externalGroup"])
+            && Securables.EffectiveUnavailable.StartsWith("SQL Server cannot impersonate a group", StringComparison.Ordinal),
+            "the Effective tab's read refuses the login subtypes SQL Server cannot impersonate, with the catalogue's words");
     }
 
     private static void CatalogRead(Action<bool, string> check)
@@ -42,7 +107,7 @@ internal static class SecurablesChecks
             try { _ = new SecurableCatalog(json); return null; }
             catch (InvalidOperationException error) { return error.Message; }
         }
-        var good = new SecurablesJson("e", "d", [new("server", "CONNECT SQL")], [new("server", "Server", "Servers", "SERVER", 100, ["CONNECT SQL"]), new("login", "Login", "Logins", "LOGIN", 101, ["ALTER"], " ON LOGIN::")]);
+        var good = new SecurablesJson("e", "d", "u", ["windowsGroup"], [new("server", "CONNECT SQL")], [new("server", "Server", "Servers", "SERVER", 100, ["CONNECT SQL"]), new("login", "Login", "Logins", "LOGIN", 101, ["ALTER"], " ON LOGIN::")]);
         check(Refused(good) is null
             && Refused(good with { Types = [good.Types[0] with { Permissions = ["CONNECT SQL", "ALTER'; DROP LOGIN sa; --"] }, good.Types[1]] }) is not null
             && Refused(good with { Types = [good.Types[0], good.Types[1] with { On = " ON LOGIN::[x]; --" }] }) is not null
@@ -91,8 +156,8 @@ internal static class SecurablesChecks
     {
         var results = PermissionSql.Lint(Securables).ToList();
         var problems = results.SelectMany(result => result.Problems.Select(problem => result.Name + ": " + problem)).ToList();
-        check(problems.Count == 0 && results.Count == Securables.Types.Count * PermissionSql.Forms.Count * 2 + 3 && PermissionSql.Forms.Count == 7,
-            "every permission batch the builder can write, for every type, permission and form, run and dry run, and the three reads pass the lint (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
+        check(problems.Count == 0 && results.Count == Securables.Types.Count * PermissionSql.Forms.Count * 2 + 4 && PermissionSql.Forms.Count == 7,
+            "every permission batch the builder can write, for every type, permission and form, run and dry run, and the four reads pass the lint (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
         var good = PermissionSql.Executable(Securables, On("login", "x", "IMPERSONATE", "deny", true));
         var mutants = new (string Name, string Text, string Type)[]
         {

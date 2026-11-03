@@ -133,7 +133,10 @@ export const loginMessages = {
   // SQL Server then refuses the login's new sign-ins (18488) until its password changes, which Varia's pools cannot do.
   ownMustChange: "This is the login this connection uses. Requiring a new password at its next sign-in would refuse this connection's new sessions. Connect with another login to require it.",
   // Only SQL Server authenticates a SQL Server login's password; a request for another kind is refused before anything runs.
-  propertiesNotSql: 'Only a SQL Server login has a password and a password policy.'
+  propertiesNotSql: 'Only a SQL Server login has a password and a password policy.',
+  // SQL Server grants, denies and revokes nothing for sa or for the principal that runs the statement (4624, an informational message
+  // it sends while changing nothing), so Login Properties' Securables page only shows their permissions.
+  permissionsProtected: 'SQL Server does not grant, deny or revoke permissions for sa or for the login this connection uses, so they are shown here but cannot change.'
 } as const
 export type LoginMessageId = keyof typeof loginMessages
 /** The message a subtype's greyed verb answers with. */
@@ -522,10 +525,15 @@ export function loginPropertiesStatements(changes: LoginChanges): number {
  *  Disable or MUST_CHANGE of the login this connection uses, Disable of a Windows group, and a password or policy for a login that is
  *  not a SQL Server login. Permissions are the server's to answer: a login may change its own password (with the old one) and defaults. C#:
  *  LoginRules.PropertiesRefusal. */
+/** Whether SQL Server refuses every permission statement for the login (4624): sa, or the login this connection uses itself (not a
+ *  group it gets in through, which SQL Server treats as another principal). C#: LoginRules.PermissionsProtected. */
+export const permissionsProtected = (facts: Pick<LoginFacts, 'subtype' | 'own'>) =>
+  facts.subtype === 'sa' || (facts.own && facts.subtype !== 'windowsGroup' && facts.subtype !== 'externalGroup')
 export function loginPropertiesRefusal(facts: Pick<LoginFacts, 'subtype' | 'own' | 'type'>, changes: LoginChanges): LoginMessageId | undefined {
   if (facts.subtype === 'system') return 'system'
   if (facts.own && (changes.enabled === false || changes.connect === 'deny')) return 'ownStatus'
   if (facts.own && changes.password?.mustChange) return 'ownMustChange'
+  if (changes.permissions?.length && permissionsProtected(facts)) return 'permissionsProtected'
   if (facts.subtype === 'windowsGroup' && changes.enabled === false) return 'windowsGroupDisable'
   if (facts.type !== 'S' && (changes.password || changes.checkPolicy !== undefined || changes.checkExpiration !== undefined)) return 'propertiesNotSql'
   return undefined

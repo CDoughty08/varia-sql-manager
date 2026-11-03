@@ -140,6 +140,48 @@ internal static class SecurablesLiveChecks
                     && cascaded.Error is null && await Permissions(holder) == "101|" + target + "|IMPERSONATE|D",
                 "DENY over a grant option needs CASCADE, which the page sends; REVOKE removes a grant: " + bare.Error?.Code + " " + Steps(cascaded) + " " + cascaded.Error?.Message);
 
+            // Review of D2d: Script warns of each change with CASCADE, which also revokes what the login granted onward.
+            var cascadeScript = await actions.ScriptAsync(Change(Server("VIEW ANY DATABASE", "revokeGrantOption"), OnTarget("IMPERSONATE", "revoke", true)), CancellationToken.None);
+            check(cascadeScript.Error is null && cascadeScript.Warnings.SequenceEqual(["CASCADE also revokes VIEW ANY DATABASE from every principal " + Bracket(holder) + " granted it to.",
+                    "CASCADE also revokes IMPERSONATE on " + Bracket(target) + " from every principal " + Bracket(holder) + " granted it to."]),
+                "Script warns of each permission that cascades to the principals the login granted it to: " + string.Join(" | ", cascadeScript.Warnings));
+
+            // Review of D2d: SQL Server's REVOKE removes only the row of its own grantor, without an error, so a grant the holder made to the
+            // second login stays; the step fails as a value, rolled back, naming that grantor, and the grant is still there.
+            var otherGrant = await Sql("GRANT VIEW SERVER STATE TO " + Bracket(holder) + " WITH GRANT OPTION;\nEXECUTE AS LOGIN = " + Literal(holder) + ";\nGRANT VIEW SERVER STATE TO " + Bracket(target) + ";\nREVERT;");
+            var targetProperties = await actions.DescribeAsync(new ActionDescribeArgs(info.Id, Guid.NewGuid().ToString(), "loginProperties", new("login", Name: target)), CancellationToken.None);
+            var targetIdentity = targetProperties.Login is { } targetFacts ? new LoginIdentityDto(targetFacts.Sid, targetFacts.Created) : null;
+            ActionArgs ChangeTarget(params PermissionDto[] permissions) =>
+                new("loginProperties", info.Id, Guid.NewGuid().ToString(), new("login", Name: target), LoginIdentity: targetIdentity, LoginChanges: new(Permissions: [.. permissions]));
+            var revokeOther = await actions.ExecuteAsync(ChangeTarget(Server("VIEW SERVER STATE", "revoke")), CancellationToken.None);
+            var kept = await Permissions(target);
+            check(otherGrant.Status == "completed" && targetProperties.LoginProperties?.Permissions.Contains(new ExplicitPermissionDto(new("server"), "VIEW SERVER STATE", "grant", holder)) == true
+                    && revokeOther is { Error.Code: "NOT_SUPPORTED" } && Steps(revokeOther) == "failed:Revoke a permission/VIEW SERVER STATE"
+                    && revokeOther.Error.Message.StartsWith("VIEW SERVER STATE is still granted by " + holder + ":", StringComparison.Ordinal) && kept.Contains("100||VIEW SERVER STATE|G", StringComparison.Ordinal),
+                "a REVOKE that leaves another grantor's grant fails as a value naming that grantor, and the grant is still there: " + otherGrant.Error + " " + Steps(revokeOther) + " " + revokeOther.Error?.Message + " " + kept);
+
+            // A grant to a securable's owner (a login owns itself) is a no-op SQL Server does not report: the step fails as a value.
+            var toOwner = await actions.ExecuteAsync(ChangeTarget(OnTarget("VIEW DEFINITION", "grant")), CancellationToken.None);
+            check(toOwner is { Error.Code: "NOT_SUPPORTED" } && Steps(toOwner) == "failed:Grant a permission/VIEW DEFINITION on " + target && !(await Permissions(target)).Contains("VIEW DEFINITION", StringComparison.Ordinal)
+                    && toOwner.Error.Message.StartsWith("SQL Server did not set VIEW DEFINITION on " + target + ":", StringComparison.Ordinal),
+                "a grant SQL Server leaves undone without a message (to the securable's owner) fails as a value: " + Steps(toOwner) + " " + toOwner.Error?.Message);
+
+            // On a connection signed in as the holder, a grant to itself is refused only by 4624 at class 0: the step fails with SQL Server's words,
+            // and Login Properties refuses the own login's permissions before anything runs.
+            var asHolder = await Call<ConnectionInfo>("connections.connect", live("master") with { Authentication = "sql", Username = holder, Password = password, Database = "master" });
+            try
+            {
+                var self = await actions.ProbePermissionStepAsync(asHolder.Id, holder, properties.Login!.PrincipalId, Server("VIEW SERVER STATE", "withGrant"), CancellationToken.None);
+                var ownProperties = await actions.DescribeAsync(new ActionDescribeArgs(asHolder.Id, Guid.NewGuid().ToString(), "loginProperties", new("login", Name: holder)), CancellationToken.None);
+                var ownChange = await actions.ExecuteAsync(new ActionArgs("loginProperties", asHolder.Id, Guid.NewGuid().ToString(), new("login", Name: holder),
+                    LoginIdentity: ownProperties.Login is { } ownFacts ? new(ownFacts.Sid, ownFacts.Created) : null, LoginChanges: new(Permissions: [Server("ALTER TRACE", "grant")])), CancellationToken.None);
+                check(self is not null && self.StartsWith("VIEW SERVER STATE: Cannot grant, deny, or revoke permissions to sa, dbo, entity owner", StringComparison.Ordinal)
+                        && ownProperties.Login?.Own == true && ownChange is { Error.Code: "NOT_SUPPORTED", Steps.Count: 0 } && ownChange.Error.Message == actions.Catalog.Logins.Message("permissionsProtected")
+                        && !(await Permissions(holder)).Contains("ALTER TRACE", StringComparison.Ordinal),
+                    "SQL Server's 4624 fails a permission step as a value, and Login Properties refuses the own login's permissions before anything runs: " + self + " " + ownChange.Error?.Message);
+            }
+            finally { await Call<object>("connections.disconnect", new ConnectionArgs(asHolder.Id)); }
+
             // A connection without IMPERSONATE on the login (the run's low-privilege login, which may only see it) gets the Effective tab's words.
             var see = await Sql("GRANT VIEW DEFINITION ON LOGIN::" + Bracket(holder) + " TO " + Bracket(scratch.Login!) + ";");
             var low = await Call<ConnectionInfo>("connections.connect", live("master") with { Authentication = "sql", Username = scratch.Login, Password = scratch.Password, Database = "master" });
@@ -157,6 +199,9 @@ internal static class SecurablesLiveChecks
         {
             // SQL Server records a grant ON LOGIN::x as granted by x, so x drops only once the grants it made are gone: the low-privilege
             // login's view of the holder first (that login drops last, with the scratch name), then the holder, then the second login.
+            // The holder granted VIEW SERVER STATE to the second login: revoking the holder's grant option with CASCADE removes that grant too.
+            await Sql("IF SUSER_ID(" + Literal(holder) + ") IS NOT NULL AND EXISTS (SELECT 1 FROM sys.server_permissions WHERE grantee_principal_id = SUSER_ID(" + Literal(holder)
+                + ") AND class = 100 AND permission_name = N'VIEW SERVER STATE') REVOKE VIEW SERVER STATE FROM " + Bracket(holder) + " CASCADE;");
             if (scratch.Login is { } lowLogin) await Sql("IF SUSER_ID(" + Literal(holder) + ") IS NOT NULL AND SUSER_ID(" + Literal(lowLogin) + ") IS NOT NULL REVOKE VIEW DEFINITION ON LOGIN::" + Bracket(holder) + " FROM " + Bracket(lowLogin) + " CASCADE;");
             dropped = await Sql("IF SUSER_ID(" + Literal(holder) + ") IS NOT NULL DROP LOGIN " + Bracket(holder) + ";\nIF SUSER_ID(" + Literal(target) + ") IS NOT NULL DROP LOGIN " + Bracket(target) + ";");
         }

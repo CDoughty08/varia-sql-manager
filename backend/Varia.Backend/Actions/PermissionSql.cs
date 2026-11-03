@@ -11,7 +11,8 @@ namespace Varia.Backend.Actions;
 internal sealed record SecurableTypeJson(string Type, string Label, string Plural, string SqlClass, int ClassId, List<string> Permissions, string? On = null);
 internal sealed record ReservedPermissionJson(string Type, string Permission);
 /// <summary>The securables block of the logins catalogue (securables.ts securablesCatalog()).</summary>
-internal sealed record SecurablesJson(string EffectiveDescribe, string EffectiveDenied, List<ReservedPermissionJson> Reserved, List<SecurableTypeJson> Types);
+internal sealed record SecurablesJson(string EffectiveDescribe, string EffectiveDenied, string EffectiveUnavailable, List<string> EffectiveUnavailableSubtypes, List<ReservedPermissionJson> Reserved,
+    List<SecurableTypeJson> Types);
 
 /// <summary>The Securables page's catalogue as C# reads it: C# holds no permission keyword of its own, and refuses a catalogue whose
 /// keywords could carry anything but upper-case words.</summary>
@@ -27,6 +28,8 @@ internal sealed partial class SecurableCatalog
         reserved = json.Reserved.Select(row => (row.Type, row.Permission)).ToHashSet();
         EffectiveDescribe = json.EffectiveDescribe;
         EffectiveDenied = json.EffectiveDenied;
+        EffectiveUnavailable = json.EffectiveUnavailable;
+        EffectiveUnavailableSubtypes = json.EffectiveUnavailableSubtypes;
         if (!types.TryGetValue("server", out var server) || server.On is not null || json.Types.Any(type => type.Type != "server" && (type.On is null || !OnClause().IsMatch(type.On))))
             throw new InvalidOperationException("The securable types' ON clauses are not the catalogue's form.");
         if (json.Types.Any(type => type.Permissions.Count == 0 || type.Permissions.Any(permission => !Keyword().IsMatch(permission)) || !Keyword().IsMatch(type.SqlClass)))
@@ -44,6 +47,10 @@ internal sealed partial class SecurableCatalog
     public string EffectiveDescribe { get; }
     /// <summary>What the Effective tab says when SQL Server refuses EXECUTE AS LOGIN.</summary>
     public string EffectiveDenied { get; }
+    /// <summary>What the Effective tab says for a login SQL Server cannot impersonate (a group, or one mapped to a certificate or an
+    /// asymmetric key: EXECUTE AS LOGIN answers 15406), and those subtypes (securables.ts effectiveUnavailableSubtypes).</summary>
+    public string EffectiveUnavailable { get; }
+    public IReadOnlyList<string> EffectiveUnavailableSubtypes { get; }
 
     public SecurableTypeJson? Type(string? type) => type is not null && types.TryGetValue(type, out var found) ? found : null;
     /// <summary>The type's place in the catalogue: the plan's order (the server first).</summary>
@@ -194,6 +201,67 @@ internal static partial class PermissionSql
         + "SELECT TOP (@take) f.permission_name AS permission_name FROM sys.fn_my_permissions(@securable, @class) AS f ORDER BY f.permission_name;\n"
         + "END TRY\nBEGIN CATCH\nREVERT;\nTHROW;\nEND CATCH;\nREVERT;";
 
+    /// <summary>What remains of one permission after its statement ran, in its transaction (Login Properties' post-condition): the rows of
+    /// sys.server_permissions for the login (@principal), the class (@class), the securable (@securable, NULL for the server; a login and
+    /// a server role share class 101 and their names) and the permission, with their grantor, denials first, at most @take.</summary>
+    public const string Remaining = "SELECT TOP (@take) sp.state AS state, g.name AS grantor FROM sys.server_permissions AS sp "
+        + "LEFT JOIN sys.server_principals AS g ON g.principal_id = sp.grantor_principal_id "
+        + "LEFT JOIN sys.endpoints AS e ON sp.class = 105 AND e.endpoint_id = sp.major_id "
+        + "LEFT JOIN sys.server_principals AS s ON sp.class = 101 AND s.principal_id = sp.major_id "
+        + "LEFT JOIN sys.availability_replicas AS ar ON sp.class = 108 AND ar.replica_metadata_id = sp.major_id "
+        + "LEFT JOIN sys.availability_groups AS ag ON ag.group_id = ar.group_id "
+        + "WHERE sp.grantee_principal_id = @principal AND sp.class = @class AND sp.permission_name = @permission AND sp.state IN ('G', 'W', 'D') "
+        + "AND (sp.class = 100 OR CASE sp.class WHEN 105 THEN e.name WHEN 101 THEN s.name WHEN 108 THEN ag.name END = @securable) "
+        + "ORDER BY CASE sp.state WHEN 'D' THEN 0 WHEN 'W' THEN 1 ELSE 2 END, g.name;";
+    /// <summary>How many rows <see cref="Remaining"/> reads: the first decides the state (denials first), the rest name grantors.</summary>
+    public const int RemainingRows = 8;
+
+    /// <summary>The state SQL Server's rows add up to, as the Explicit tab shows it (securables.ts explicitStates): a denial over any
+    /// grant, a grant option over a plain grant; null for none.</summary>
+    public static string? Collapsed(IEnumerable<(string State, string Grantor)> rows)
+    {
+        var states = rows.Select(row => row.State).ToHashSet(StringComparer.Ordinal);
+        return states.Contains("D") ? "deny" : states.Contains("W") ? "withGrant" : states.Contains("G") ? "grant" : null;
+    }
+
+    /// <summary>
+    /// Why a permission statement that SQL Server ran without an error did not do what the page asked, or null (review of D2d). SQL Server
+    /// changes only the rows recorded under the statement's own grantor: a REVOKE leaves another grantor's grant, a GRANT another's
+    /// denial, and a statement for sa, the principal that runs it or the securable's owner changes nothing at all (4624, informational).
+    /// The page asked for: grant, a grant (with or without its option; no denial left); withGrant, a grant option; deny, a denial;
+    /// revoke, nothing; revokeGrantOption, a plain grant.
+    /// </summary>
+    public static string? Unmet(PermissionDto permission, IReadOnlyList<(string State, string Grantor)> rows)
+    {
+        var state = Collapsed(rows);
+        var met = permission.State switch
+        {
+            "grant" => state is "grant" or "withGrant",
+            "withGrant" => state == "withGrant",
+            "deny" => state == "deny",
+            "revoke" => state is null,
+            "revokeGrantOption" => state == "grant",
+            _ => false
+        };
+        if (met) return null;
+        // The rows in the way: a denial that a grant could not replace, a grant option a REVOKE GRANT OPTION FOR left, or anything a REVOKE left.
+        var blocking = permission.State switch
+        {
+            "grant" or "withGrant" => rows.Where(row => row.State == "D"),
+            "revokeGrantOption" => rows.Where(row => row.State is "W" or "D"),
+            "revoke" => rows,
+            _ => []
+        };
+        var detail = StepDetail(permission);
+        var first = blocking.FirstOrDefault();
+        if (first.State is null)
+            return "SQL Server did not set " + detail + ": it changes no permission for sa, for the login this connection uses or for the securable's owner. This permission was not changed.";
+        var grantors = blocking.Where(row => row.State == first.State).Select(row => row.Grantor).Distinct(StringComparer.Ordinal).ToList();
+        var named = string.Join(", ", grantors.Take(3).Select(ScriptingErrors.Display)) + (grantors.Count > 3 ? " and others" : "");
+        var word = first.State switch { "D" => "denied", "W" => "granted with grant option", _ => "granted" };
+        return detail + " is still " + word + " by " + named + ": SQL Server's GRANT, DENY and REVOKE change only what their own grantor recorded. This permission was not changed.";
+    }
+
     // --- Lint ---------------------------------------------------------------------------------------------------------------
 
     [GeneratedRegex(@"N'(?:[^']|'')*'")]
@@ -232,7 +300,7 @@ internal static partial class PermissionSql
     }
 
     /// <summary>Every permission batch the builder can write: per type, each of its permissions with each statement form (CASCADE where it
-    /// may go), run and dry run, one entry per type, form and run with every permission's problems; and the three reads.</summary>
+    /// may go), run and dry run, one entry per type, form and run with every permission's problems; and the four reads.</summary>
     public static IEnumerable<(string Name, List<string> Problems)> Lint(SecurableCatalog catalog)
     {
         foreach (var type in catalog.Types)
@@ -250,6 +318,7 @@ internal static partial class PermissionSql
         yield return ("securables describe", ActionSql.LintCatalog(Describe, ExplorerCatalog.MaxBand, database: false));
         yield return ("explicit permissions", ActionSql.LintCatalog(Explicit, ExplorerCatalog.MaxBand, database: false));
         yield return ("effective permissions", ActionSql.LintCatalog(Effective, ExplorerCatalog.MaxBand, database: false));
+        yield return ("remaining permission", ActionSql.LintCatalog(Remaining, ExplorerCatalog.MaxBand, database: false));
     }
 
     /// <summary>Each statement form: the five states, and DENY and REVOKE with CASCADE.</summary>

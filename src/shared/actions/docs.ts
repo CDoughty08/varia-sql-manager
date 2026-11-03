@@ -12,7 +12,10 @@ import {
   newLoginMessages, ownLoginRefuses, passwordScriptHeader, saPrincipalId, tooManyStatementsMessage, unlockChoiceText, unlockHandOffLabel
 } from './logins.ts'
 import { designerEngines } from '../designer/catalog.ts'
-import { addObjectsText, loginEffectiveDescribe, objectTypeOrder, permissionChange, permissionStates, reservedPermissions, securableSpecs, securableTypes, securablesMessages, type PermissionState } from './securables.ts'
+import {
+  addObjectsText, effectiveUnavailableSubtypes, loginEffectiveDescribe, objectTypeOrder, permissionChange, permissionStates, reservedPermissions, securableSpecs, securableTypes, securablesMessages,
+  type PermissionState
+} from './securables.ts'
 
 const cell = (value: string) => value.replaceAll('|', '\\|')
 const row = (cells: readonly string[]) => '| ' + cells.map(cell).join(' | ') + ' |'
@@ -707,17 +710,20 @@ function securablesDocs(): string[] {
     `It lists at most ${loginLimits.securableObjects.toLocaleString('en-US')} objects per type, by name ("${securablesMessages.objectsTruncated(loginLimits.securableObjects)}").`,
     'Remove takes a securable off the list and drops its unsent changes; it revokes nothing (clear its boxes to revoke).',
     '',
-    'Below the list, "Permissions for <securable>:" has two tabs. **Explicit** is the grid Permission, Grantor, Grant, With Grant, Deny:',
+    'Below the list, "Permissions for <securable>:" ("Permissions:" while none is selected) has two tabs. **Explicit** is the grid Permission, Grantor, Grant, With Grant, Deny:',
     'Grant and Deny exclude each other, With Grant implies Grant, and clearing Grant clears With Grant. Its keys are the grid\'s: arrows,',
     'Home/End, Page Up/Down, and Space toggles the box under focus; in the securables list, Delete removes the selected row. **Effective**',
     `(Login Properties only; "${securablesMessages.effectiveNewLogin}") lists what the login may do on the securable: \`actions.describe\``,
     `with dialog \`${loginEffectiveDescribe}\`, the login as target and the securable as \`securable\`, reads \`sys.fn_my_permissions\` under`,
     '`EXECUTE AS LOGIN` (then `REVERT`) on the describe\'s own unpooled connection, which closes after it, so the context cannot outlive the',
     `read. EXECUTE AS needs IMPERSONATE on the login: without it SQL Server answers 15406, 15517 or 15151, and the tab says "${securablesMessages.effectiveDenied}"`,
-    `(\`PERMISSION_DENIED\`; \`NOT_FOUND\` when the login is gone). At most ${loginLimits.effectivePermissions.toLocaleString('en-US')} are listed. Selecting another securable cancels a read still running.`,
+    `(\`PERMISSION_DENIED\`; \`NOT_FOUND\` when the login is gone). At most ${loginLimits.effectivePermissions.toLocaleString('en-US')} are listed. Selecting another securable cancels a read still running,`,
+    'and a partial run\'s reload, which forgets every answer, reads the shown securable again. SQL Server cannot impersonate a group, or a',
+    `login mapped to a certificate or an asymmetric key (${effectiveUnavailableSubtypes.map(code).join(', ')}; 15406 even for a sysadmin): for those the tab says`,
+    `"${securablesMessages.effectiveUnavailable}" and reads nothing, and the backend refuses the read (\`NOT_SUPPORTED\`).`,
     '',
     `Login Properties reads the login's explicit permissions from \`sys.server_permissions\` (at most ${loginLimits.explicitPermissions.toLocaleString('en-US')}; "${securablesMessages.explicitTruncated(loginLimits.explicitPermissions)}"),`,
-    'a deny over a grant and a grant with grant option over a plain one, with the first such row\'s grantor (a permission on a login is',
+    'a deny over a grant and a grant with grant option over a plain one, with every grantor of its rows (a permission on a login is',
     'recorded with that login as its grantor). SQL Server\'s own logins (`##…##`) never change, so their describe reads none, the Effective read refuses them, and the page',
     'is hidden, as SSMS hides it.',
     '',
@@ -735,6 +741,15 @@ function securablesDocs(): string[] {
     '`PermissionSql.LintExecutable` for every type, permission and form). Login Properties binds each to the login it read, as its other',
     'statements. The steps read "Grant a permission", "Deny a permission", "Revoke a permission" and "Revoke a grant option", with the',
     'permission and its securable; a failure or Stop keeps what completed, and New Login\'s message then adds "Not every permission was set."',
+    '',
+    'SQL Server changes only the rows recorded under a statement\'s own grantor, and says nothing when that leaves the permission as it',
+    'was: a REVOKE leaves a grant another principal made, a GRANT leaves another grantor\'s DENY, and a statement for sa, for the principal',
+    'that runs it or for the securable\'s owner changes nothing (4624, an informational message, or no message at all). So each of Login',
+    'Properties\' permission steps reads `sys.server_permissions` again in its own transaction (`PermissionSql.Remaining`) and fails as a',
+    'value, rolled back, when what remains is not what the boxes asked for (`PermissionSql.Unmet`, which names the grantor in the way) or',
+    `SQL Server sent 4624. For sa and for the login this connection uses the boxes only show the permissions ("${loginMessages.permissionsProtected}"),`,
+    'and the preflight refuses a request that carries any (`permissionsProtected`). A change with CASCADE also revokes the permission from',
+    `every principal the login granted it to; the page and Script warn of each ("${securablesMessages.cascades('<permission>', '<login>')}").`,
     ''
   ]
 }

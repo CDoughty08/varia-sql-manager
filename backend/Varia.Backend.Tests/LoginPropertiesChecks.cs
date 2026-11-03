@@ -187,9 +187,12 @@ internal static class LoginPropertiesChecks
                 failures.Add(fragment[..1]);
         }
         check(failures.Count == 0, "Login Properties' script quotes hostile 128-unit names in every statement and stays two batches: " + string.Join(", ", failures));
-        check(ActionService.LoginPropertiesWarnings(new(Mappings: [new("Sales", "unmap", "a]b"), new("AppData", "unmap", "app"), new("Hr", "update", "x", "y")]))
-                .SequenceEqual(["Drops the user [app] in [AppData].", "Drops the user [a]]b] in [Sales]."]),
-            "Script and the steps preview warn of each DROP USER, by database name");
+        using var service = new ActionService(new ActionChecks.FakeHost());
+        check(service.LoginPropertiesWarnings("l]x", new(Mappings: [new("Sales", "unmap", "a]b"), new("AppData", "unmap", "app"), new("Hr", "update", "x", "y")],
+                Permissions: [new(new("login", "t]1"), "ALTER", "deny", true), new(new("server"), "SHUTDOWN", "revoke"), new(new("server"), "VIEW SERVER STATE", "revokeGrantOption"), new(new("server"), "ALTER TRACE", "revoke", true)]))
+                .SequenceEqual(["Drops the user [app] in [AppData].", "Drops the user [a]]b] in [Sales].", "CASCADE also revokes ALTER TRACE from every principal [l]]x] granted it to.",
+                    "CASCADE also revokes VIEW SERVER STATE from every principal [l]]x] granted it to.", "CASCADE also revokes ALTER on [t]]1] from every principal [l]]x] granted it to."]),
+            "Script and the steps preview warn of each DROP USER, by database name, then of each permission that cascades to the principals the login granted it to");
     }
 
     private static void Validation(Action<bool, string> check)

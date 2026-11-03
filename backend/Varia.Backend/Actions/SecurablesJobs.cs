@@ -83,6 +83,10 @@ internal sealed partial class ActionService
     /// that is a value with the catalogue's words. A login that no longer exists is NOT_FOUND.</summary>
     private async Task<ActionDescribeResult> DescribeEffectiveJobAsync(SqlConnection connection, ObjectRefDto target, SecurableRefDto securable, CancellationToken token)
     {
+        // SQL Server cannot impersonate a group, nor a login mapped to a certificate or an asymmetric key (15406 for anyone, sysadmin too).
+        var (known, _) = await LoginAsync(connection, target.Name!, null, null, token);
+        if (known is null) return new(null, 0, Error("NOT_FOUND", "The login " + Display(target) + " no longer exists. Refresh Object Explorer."));
+        if (catalog.Logins.Securables.EffectiveUnavailableSubtypes.Contains(known.Subtype)) return new(null, 0, Error("NOT_SUPPORTED", catalog.Logins.Securables.EffectiveUnavailable));
         var take = (int)catalog.Logins.Limit("effectivePermissions");
         var spec = catalog.Logins.Securables.Type(securable.Type)!;
         await using var command = connection.CreateCommand();
@@ -138,6 +142,60 @@ internal sealed partial class ActionService
         Add(command, "@p1", SqlDbType.NVarChar, 128, login);
         if (permission.Securable.Name is { } name) Add(command, "@p2", SqlDbType.NVarChar, 128, name);
         return await ReadValuesAsync(command, token);
+    }
+
+    /// <summary>
+    /// Login Properties' permission step, in the transaction <see cref="RunBoundAsync"/> opened: the statement, then its post-condition
+    /// (review of D2d). SQL Server answers a GRANT, DENY or REVOKE for sa, for the principal that runs it or for the securable's owner
+    /// with informational message 4624 and changes nothing, and a REVOKE removes only the issuing grantor's row, silently leaving another
+    /// grantor's grant. Either way the step fails as a value (rolling back with the transaction) instead of being reported done.
+    /// </summary>
+    private async Task SetPermissionAsync(SqlConnection connection, string login, int principalId, PermissionDto permission, CancellationToken token, SqlTransaction transaction)
+    {
+        string? refused = null;
+        void Listen(object? sender, SqlInfoMessageEventArgs e) { foreach (SqlError item in e.Errors) if (item.Number == ProtectedPrincipalMessage) refused ??= item.Message; }
+        connection.InfoMessage += Listen;
+        try { await PermissionAsync(connection, login, permission, dryRun: false, token, transaction); }
+        finally { connection.InfoMessage -= Listen; }
+        if (refused is not null) throw new StepRefusedException(Error("NOT_SUPPORTED", ScriptingErrors.Clip(PermissionSql.StepDetail(permission) + ": " + refused, ActionErrors.MaxMessage)));
+        var spec = catalog.Logins.Securables.Type(permission.Securable.Type)!;
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = PermissionSql.Remaining;
+        command.CommandTimeout = 0;
+        Add(command, "@principal", SqlDbType.Int, 0, principalId);
+        Add(command, "@class", SqlDbType.Int, 0, spec.ClassId);
+        Add(command, "@permission", SqlDbType.NVarChar, 128, permission.Permission);
+        Add(command, "@securable", SqlDbType.NVarChar, 128, permission.Securable.Name);
+        Add(command, "@take", SqlDbType.Int, 0, PermissionSql.RemainingRows);
+        var rows = new List<(string State, string Grantor)>();
+        await using (var reader = await command.ExecuteReaderAsync(token))
+            while (await reader.ReadAsync(token)) rows.Add((reader.GetString(0).Trim(), reader.IsDBNull(1) ? "" : reader.GetString(1)));
+        if (PermissionSql.Unmet(permission, rows) is { } unmet) throw new StepRefusedException(Error("NOT_SUPPORTED", ScriptingErrors.Clip(unmet, ActionErrors.MaxMessage)));
+    }
+
+    /// <summary>"Cannot grant, deny, or revoke permissions to sa, dbo, entity owner, information_schema, sys, or yourself.", sent at class 0.</summary>
+    internal const int ProtectedPrincipalMessage = 4624;
+
+    /// <summary>The live checks' only way to run Login Properties' permission step on a connection of their choosing (one signed in as
+    /// the grantee, which SQL Server answers with 4624) without the preflight that refuses it first: in a transaction that is always
+    /// rolled back; the step's refusal message, or null. Not reachable from the wire.</summary>
+    internal async Task<string?> ProbePermissionStepAsync(string connectionId, string login, int principalId, PermissionDto permission, CancellationToken token)
+    {
+        await using var connection = host.Connection(connectionId);
+        await host.OpenAsync(connection, token);
+        var open = (SqlTransaction)await connection.BeginTransactionAsync(token);
+        try
+        {
+            await SetPermissionAsync(connection, login, principalId, permission, token, open);
+            return null;
+        }
+        catch (StepRefusedException refused) { return refused.Error.Message; }
+        finally
+        {
+            if (open.Connection is not null) await open.RollbackAsync(CancellationToken.None);
+            await open.DisposeAsync();
+        }
     }
 
     /// <summary>The live checks' only way to see the statement SQL Server would build for a permission (see DryRunCreateLoginAsync). Not

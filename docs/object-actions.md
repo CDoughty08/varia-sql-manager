@@ -715,17 +715,20 @@ Fixed server roles and public are not securables (SQL Server answers 15151), so 
 It lists at most 1,024 objects per type, by name ("Only the first 1,024 objects of each type are listed.").
 Remove takes a securable off the list and drops its unsent changes; it revokes nothing (clear its boxes to revoke).
 
-Below the list, "Permissions for <securable>:" has two tabs. **Explicit** is the grid Permission, Grantor, Grant, With Grant, Deny:
+Below the list, "Permissions for <securable>:" ("Permissions:" while none is selected) has two tabs. **Explicit** is the grid Permission, Grantor, Grant, With Grant, Deny:
 Grant and Deny exclude each other, With Grant implies Grant, and clearing Grant clears With Grant. Its keys are the grid's: arrows,
 Home/End, Page Up/Down, and Space toggles the box under focus; in the securables list, Delete removes the selected row. **Effective**
 (Login Properties only; "Effective permissions show once the login exists.") lists what the login may do on the securable: `actions.describe`
 with dialog `loginEffectivePermissions`, the login as target and the securable as `securable`, reads `sys.fn_my_permissions` under
 `EXECUTE AS LOGIN` (then `REVERT`) on the describe's own unpooled connection, which closes after it, so the context cannot outlive the
 read. EXECUTE AS needs IMPERSONATE on the login: without it SQL Server answers 15406, 15517 or 15151, and the tab says "You don't have permission to view effective permissions."
-(`PERMISSION_DENIED`; `NOT_FOUND` when the login is gone). At most 256 are listed. Selecting another securable cancels a read still running.
+(`PERMISSION_DENIED`; `NOT_FOUND` when the login is gone). At most 256 are listed. Selecting another securable cancels a read still running,
+and a partial run's reload, which forgets every answer, reads the shown securable again. SQL Server cannot impersonate a group, or a
+login mapped to a certificate or an asymmetric key (`windowsGroup`, `certificateMapped`, `asymmetricKeyMapped`, `externalGroup`; 15406 even for a sysadmin): for those the tab says
+"SQL Server cannot impersonate a group, or a login mapped to a certificate or an asymmetric key, so it cannot show this login's effective permissions." and reads nothing, and the backend refuses the read (`NOT_SUPPORTED`).
 
 Login Properties reads the login's explicit permissions from `sys.server_permissions` (at most 1,024; "Only the first 1,024 explicit permissions are listed; OK changes only those shown."),
-a deny over a grant and a grant with grant option over a plain one, with the first such row's grantor (a permission on a login is
+a deny over a grant and a grant with grant option over a plain one, with every grantor of its rows (a permission on a login is
 recorded with that login as its grantor). SQL Server's own logins (`##…##`) never change, so their describe reads none, the Effective read refuses them, and the page
 is hidden, as SSMS hides it.
 
@@ -756,6 +759,15 @@ nvarchar(128) parameters through `QUOTENAME` (`PermissionSql.Executable`, checke
 `PermissionSql.LintExecutable` for every type, permission and form). Login Properties binds each to the login it read, as its other
 statements. The steps read "Grant a permission", "Deny a permission", "Revoke a permission" and "Revoke a grant option", with the
 permission and its securable; a failure or Stop keeps what completed, and New Login's message then adds "Not every permission was set."
+
+SQL Server changes only the rows recorded under a statement's own grantor, and says nothing when that leaves the permission as it
+was: a REVOKE leaves a grant another principal made, a GRANT leaves another grantor's DENY, and a statement for sa, for the principal
+that runs it or for the securable's owner changes nothing (4624, an informational message, or no message at all). So each of Login
+Properties' permission steps reads `sys.server_permissions` again in its own transaction (`PermissionSql.Remaining`) and fails as a
+value, rolled back, when what remains is not what the boxes asked for (`PermissionSql.Unmet`, which names the grantor in the way) or
+SQL Server sent 4624. For sa and for the login this connection uses the boxes only show the permissions ("SQL Server does not grant, deny or revoke permissions for sa or for the login this connection uses, so they are shown here but cannot change."),
+and the preflight refuses a request that carries any (`permissionsProtected`). A change with CASCADE also revokes the permission from
+every principal the login granted it to; the page and Script warn of each ("CASCADE also revokes <permission> from every principal [<login>] granted it to.").
 
 ## Errors
 

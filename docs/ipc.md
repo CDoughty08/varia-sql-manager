@@ -627,7 +627,10 @@ permission once; `state` is `grant`, `withGrant` or `deny` for a new login, and 
 Properties, and `cascade: true` goes only with `deny` or `revoke`. Each counts as one statement against the 512. The Effective tab
 is `actions.describe { …, dialog: 'loginEffectivePermissions', target: { kind: 'login', name }, securable: { type, name? } }` (no
 other describe takes `securable`; never a `##…##` login, whose page is hidden), answering `{ effectivePermissions: { permissions (≤ 256), truncated } }`, `PERMISSION_DENIED`
-when SQL Server refuses EXECUTE AS LOGIN (15406, 15517, 15151) and `NOT_FOUND` when the login is gone.
+when SQL Server refuses EXECUTE AS LOGIN (15406, 15517, 15151), `NOT_SUPPORTED` for a login SQL Server cannot impersonate (a group, or one
+mapped to a certificate or an asymmetric key) and `NOT_FOUND` when the login is gone. A Login Properties permission step that SQL Server
+runs without changing what was asked (another grantor's row left in place, or 4624 for sa, the connection's own login or the securable's
+owner) fails as `NOT_SUPPORTED`, and a request with permissions for sa or the connection's own login is refused before anything runs.
 
 ## Streams and credits
 

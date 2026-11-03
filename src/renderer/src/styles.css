@@ -916,6 +916,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .securables-permissions .user-mapping-head, .securables-permissions .user-mapping-row { grid-template-columns: minmax(170px, 2fr) minmax(90px, 1fr) 64px 84px 60px; }
 .securables-box { justify-content: center; }
 .securables-actions { display: flex; justify-content: flex-end; gap: 8px; }
+/* Framed like the dialogs' other action rows, so they read as buttons beside the bordered grid. */
+.securables-actions button { border-color: var(--varia-button-border); }
 .securables-tabs { border: 1px solid var(--varia-panel-border); border-bottom: 0; }
 .securables-panel { display: flex; flex-direction: column; gap: 6px; min-height: 120px; }
 .securables-effective { margin: 0; padding: 6px 10px; max-height: 200px; overflow: auto; list-style: none; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); }
