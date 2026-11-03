@@ -826,8 +826,8 @@ try {
     await expect(addButton()).toBeFocused()
   }
   const openAttach = async () => {
-    expect(await menuOf('server-a', 'Databases')).toEqual(['New Database…', 'Attach…', 'Filter Settings…', 'Refresh'])
-    await explorerMenu().getByRole('menuitem', { name: 'Attach…', exact: true }).click(fast)
+    expect(await databasesMenu()).toEqual(['New Database…', 'Attach…', 'Filter Settings…', 'Refresh'])
+    await chooseExplorerMenuItem(page, databases, 'Attach…')
     await expect(objectDialogProgress(attachDialog())).toHaveText('Ready')
   }
   await openAttach()
