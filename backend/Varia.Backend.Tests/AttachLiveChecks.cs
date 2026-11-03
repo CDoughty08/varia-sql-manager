@@ -69,11 +69,12 @@ internal static class AttachLiveChecks
             && server.DataPath is { } path && Same(path, dataFolder) && (facts[4] is null || server.Logins.Contains(facts[4]!) || server.LoginsTruncated),
             "Attach Databases opens with the server's logins, its separator and its default data folder: " + Said(opened));
         var read = await Describe(mdf, info.Id);
+        // In the order the primary file records them (file_id): CREATE DATABASE gives the log file_id 2, so the second data file is third.
         check(read is { Error: null, AttachDatabase.Database: { } database } && database.DatabaseName == scratch.Attach && database.Mdf == mdf && database.Version > 0
             && database.Files.Count == 3 && database.Files[0] is { Type: "data", Found: true } first && first.Current == mdf && Same(first.Original, mdf)
-            && database.Files[1] is { Type: "data", Found: true } second && Same(second.Current, ndf) && Same(second.Original, ndf)
-            && database.Files[2] is { Type: "log", Found: true } log && Same(log.Current, ldf),
-            "Add reads a detached .mdf with DBCC CHECKPRIMARYFILE: its database's name and version, and its data and log files, each found where the database recorded it: " + Said(read));
+            && database.Files[1] is { Type: "log", Found: true } log && Same(log.Current, ldf) && Same(log.Original, ldf)
+            && database.Files[2] is { Type: "data", Found: true } second && Same(second.Current, ndf) && Same(second.Original, ndf),
+            "Add reads a detached .mdf with DBCC CHECKPRIMARYFILE: its database's name and version, and its data and log files in file_id order, each found where the database recorded it: " + Said(read));
         var (legacy, legacyError) = await service.Actions.ReadPrimaryAsync(info.Id, mdf, legacy: true, CancellationToken.None);
         var notPrimary = await Describe(ndf, info.Id);
         var gone = await Describe(missing, info.Id);
