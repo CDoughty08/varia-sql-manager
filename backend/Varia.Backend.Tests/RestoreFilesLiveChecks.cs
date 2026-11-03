@@ -9,10 +9,11 @@ namespace Varia.Backend.Tests;
 /// Database's: a marked scratch database in FULL recovery with a filegroup and file named to break out of brackets, strings and
 /// comments, and a second filegroup FG3; a full backup and a log backup in real files (deleted in finally, then the history).
 /// Refusals before any statement (STANDBY online, SQL Server's 4302; a log file; a name the backup set lacks; a database that is not
-/// the one read; a log backup file already there). A FILE restore through actions.execute, rolled forward through the log and ended
+/// the one read; a log backup file already there; a PRIMARY file or filegroup of the online database; a plan a later log backup is missing
+/// from). A FILE restore through actions.execute, rolled forward through the log and ended
 /// by Varia's copy-only log backup, comes back online with the rows written after the last log backup. A FILEGROUP (bound as a
 /// variable) restored WITH NORECOVERY leaves its file restoring, which the reply names, until a tail-log backup restored WITH
-/// RECOVERY brings it online. Under SIMPLE a read-write filegroup's file is refused before anything (Learn's rule), and a read-only
+/// RECOVERY brings it online. A log backup taken during a run stops it at Back up the log, naming that backup. Under SIMPLE a read-write filegroup's file is refused before anything (Learn's rule), and a read-only
 /// filegroup restores.</summary>
 internal static class RestoreFilesLiveChecks
 {
@@ -74,6 +75,15 @@ internal static class RestoreFilesLiveChecks
             "a file restore refuses before any statement STANDBY on an online database (SQL Server's 4302 comes only after the files are restored), a log file, a name the set lacks, "
             + "a database that is not the one read, and a log backup file already there: " + string.Join(" | ", new[] { standby, logName, unknown, stale, existing }.Select(Show)));
 
+        // A PRIMARY file restores only offline: on this online FULL database it would put the whole database in RESTORING and lose the
+        // log since log1 (4303, then 927, probed on 2025), so it is refused before any statement, by file with REPLACE and by filegroup.
+        var primary = listed.FirstOrDefault(item => item.Filegroup == "PRIMARY" && item.Type == "data")?.Logical ?? throw new InvalidOperationException("No PRIMARY data file.");
+        var primaryFile = await Wire(new([full, log1], [primary], [], [], true, false, "recovery", null, null), identity);
+        var primaryGroup = await Wire(new([full, log1], [], ["PRIMARY"], [], false, false, "norecovery", null, null), identity);
+        check(primaryFile is { Error.Code: "NOT_SUPPORTED", Steps: [] } && primaryFile.Error.Message == restore.Message("primaryOnline") && primaryGroup is { Error.Code: "NOT_SUPPORTED", Steps: [] }
+            && await FileState(primary) == "0" && await State() == "0/0" && await Rows() == "3",
+            "a file restore refuses a PRIMARY file (with REPLACE) and the PRIMARY filegroup of an online database before any statement: " + Show(primaryFile) + " | " + Show(primaryGroup));
+
         // FILE, rolled forward through the log, then Varia's copy-only log backup restored WITH RECOVERY: online with the row written
         // after the last log backup.
         var backup = new RestoreLogBackupDto(scratch.RestoreFile("lb1.bak", db));
@@ -100,6 +110,39 @@ internal static class RestoreFilesLiveChecks
             && restoring == "1" && await FileState(file) == "0" && await Rows() == "4" && await FileState("f3") == "0",
             "a FILEGROUP (bound as a variable) restored WITH NORECOVERY through two logs leaves its file RESTORING, named in the reply, until a tail-log backup restored WITH RECOVERY brings it online: "
             + Show(left) + " (file state " + restoring + ")");
+
+        // The plan must reach the log chain (spec D1 §8): the tail backup just taken is a regular log backup the plans below lack, so
+        // they are refused before any statement, naming it, and the file stays online.
+        var behind = await Wire(Options([full, log1, log2], [file], [], backup: new(scratch.RestoreFile("lb3.bak", db))));
+        var noLogs = await Wire(Options([full], [file], [], "norecovery"));
+        check(behind is { Error.Code: "RESTORE_SEQUENCE", Steps: [] } && behind.Error.Message.StartsWith(restore.Message("logChainAhead"), StringComparison.Ordinal) && behind.Error.Message.Contains(tail, StringComparison.Ordinal)
+            && noLogs is { Error.Code: "RESTORE_SEQUENCE", Steps: [] } && await FileState(file) == "0" && await State() == "0/0" && await Rows() == "4",
+            "a file restore whose plan misses a log backup taken after its last set is refused before any statement, naming the newest log backup: " + Show(behind) + " | " + Show(noLogs));
+
+        // A log backup taken during the run, before Back up the log: the copy-only backup would not continue the restored files (4305),
+        // so that step fails naming it, and the file is left restoring until that backup and a later one are restored.
+        history = await Describe(new("history", db));
+        var tailSet = Planned("tail");
+        var mid = scratch.RestoreFile("mid.trn", db);
+        service.Actions.Options.BeforeStep = async (title, _) =>
+        {
+            if (title == restore.Step("logBackup")) await Step("BACKUP LOG " + B(db) + " TO DISK = " + Q(mid) + " WITH FORMAT, INIT, NAME = N'mid';");
+        };
+        ActionExecuteResult during;
+        try { during = await Wire(Options([full, log1, log2, tailSet], [file], [], backup: new(scratch.RestoreFile("lb4.bak", db)))); }
+        finally { service.Actions.Options.BeforeStep = null; }
+        var duringState = await FileState(file);
+        var tail2 = scratch.RestoreFile("tail2.trn", db);
+        await Step("RESTORE LOG " + B(db) + " FROM DISK = " + Q(mid) + " WITH NORECOVERY;");
+        await Step("BACKUP LOG " + B(db) + " TO DISK = " + Q(tail2) + " WITH FORMAT, INIT, NAME = N'tail2';");
+        await Step("RESTORE LOG " + B(db) + " FROM DISK = " + Q(tail2) + " WITH RECOVERY;");
+        check(during is { Error.Code: "RESTORE_SEQUENCE", Restored: { State: 0, FilesRestoring: [var waiting] } } && waiting == file
+            && during.Error.Message.StartsWith(restore.Message("logBackedUpDuring"), StringComparison.Ordinal) && during.Error.Message.Contains(mid, StringComparison.Ordinal)
+            && during.Steps.Select(step => (step.Status, step.Title)).SequenceEqual([("done", restore.Step("files")), ("done", restore.Step("log") + " 1 of 3"), ("done", restore.Step("log") + " 2 of 3"),
+                ("done", restore.Step("log") + " 3 of 3"), ("failed", restore.Step("logBackup")), ("skipped", restore.Step("logBackupRestore"))])
+            && duringState == "1" && await FileState(file) == "0" && await Rows() == "4",
+            "a log backup taken during a file restore stops it at Back up the log, naming that backup, with the file left restoring until it and a later log backup are restored: "
+            + Show(during) + " (file state " + duringState + ")");
 
         // Script: SMO's Restore { Action = Files } and { Action = Log }, and its copy-only Backup, script the statements actions.script writes,
         // for a hostile database, file, filegroup and paths, a move, REPLACE, RESTRICTED_USER and each recovery state.

@@ -123,9 +123,9 @@ internal static class RestoreFilesChecks
             new("Sales", "C:\\D\\Sales.mdf", "D", "PRIMARY", true), new("Sales_2", "C:\\D\\Sales_2.ndf", "D", "FG2", true), new("Sales_3", "C:\\D\\Sales_3.ndf", "D", "FG2", true),
             new("Sales_fs", "C:\\D\\fs", "S", "FS", true), new("Sales_log", "C:\\D\\Sales_log.ldf", "L", null, true), new("Old", "C:\\D\\Old.ndf", "D", "FG3", false)
         };
-        string Outcome(List<string> files, List<string> filegroups, List<RestoreMoveDto>? moves = null)
+        string Outcome(List<string> files, List<string> filegroups, List<RestoreMoveDto>? moves = null, bool primaryRefused = false)
         {
-            var (restored, error) = service.RestoredFiles(listed, new([Set("1:1", "file", 1, "C:\\B\\f.bak")], files, filegroups, moves ?? [], false, false, "recovery"));
+            var (restored, error) = service.RestoredFiles(listed, new([Set("1:1", "file", 1, "C:\\B\\f.bak")], files, filegroups, moves ?? [], false, false, "recovery"), primaryRefused);
             return error is not null ? error.Code : string.Join(",", restored!.Select(file => file.Logical));
         }
         check(Outcome(["Sales_2"], []) == "Sales_2" && Outcome(["sales_2"], ["fg2"]) == "Sales_2,Sales_3" && Outcome([], ["FG2", "FS"]) == "Sales_2,Sales_3,Sales_fs"
@@ -133,6 +133,11 @@ internal static class RestoreFilesChecks
             && Outcome(["Sales_2"], [], [new("Sales_2", "E:\\x.ndf")]) == "Sales_2" && Outcome(["Sales_2"], [], [new("Sales", "E:\\x.mdf")]) == "NOT_FOUND",
             "a file restore restores the named files and the named filegroups' files (names as the server compares them), refuses a log file, a name the set lacks, a file a file backup does not hold, "
             + "and a move of a file it does not restore");
+        // A PRIMARY file restores only offline, which loses an online or offline database's log tail (probed on 2025): refused there,
+        // by file and through its filegroup, and only there.
+        check(Outcome(["Sales"], [], primaryRefused: true) == "NOT_SUPPORTED" && Outcome([], ["primary"], primaryRefused: true) == "NOT_SUPPORTED"
+            && Outcome(["Sales_2"], ["FG2"], primaryRefused: true) == "Sales_2,Sales_3" && Outcome(["Sales"], []) == "Sales" && Outcome([], ["PRIMARY"]) == "Sales",
+            "a file restore refuses a file of the PRIMARY filegroup on an online or offline database, named or through its filegroup, and restores it on a restoring one");
     }
 
     private static BackupSetDto Header(string type, string first, string last, string checkpoint = "0") =>
@@ -151,6 +156,10 @@ internal static class RestoreFilesChecks
             && RestoreChain.Problem(Restore, Sets("file", "log"), [file, log with { FirstLsn = "250" }], files: true) is { Code: "RESTORE_SEQUENCE" }
             && RestoreChain.Problem(Restore, Sets("file", "log"), [file, log with { CopyOnly = true }], files: true) is { Code: "RESTORE_SEQUENCE" },
             "a file restore's chain is a full or file backup then logs that continue it: a file backup heads only a file restore's chain, and a differential, a gap or a copy-only log is refused");
+        // The plan reaches the log chain when its last set ends at or after where the next log backup starts (a copy-only log after the
+        // last regular one ends past it); no chain (SIMPLE, no full backup yet, not online) asks nothing.
+        check(RestoreChain.Reaches("300", 300m) && RestoreChain.Reaches("400", 300m) && RestoreChain.Reaches("200", null) && !RestoreChain.Reaches("200", 300m) && !RestoreChain.Reaches(null, 1m),
+            "a file restore's plan reaches the database's log chain only when its last set ends at or after the chain's next LSN");
     }
 
     /// <summary>RestoreFilesSteps against tests/fixtures/restore/files-steps.json, which files.ts's plannedFileSteps is held to as well.</summary>

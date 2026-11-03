@@ -594,9 +594,11 @@ restoreFiles: { sets, files, filegroups, relocate, replace, restrictedUser, reco
 or file backup then its logs, at most 1,024 sets; at most 256 files and 256 filegroups, at least one of them; 1,000 moves; and at
 most 2,100 parameters in its RESTORE DATABASE; the identity is required, since the database must exist). It is a long action as
 Restore Database is; its preflight adds the files variant of the chain, that the backups are the database's own, that each file
-and filegroup is in the set and held by it (`NOT_FOUND`), SIMPLE's read-only rule, STANDBY over an online database and a log
-backup under SIMPLE (`NOT_SUPPORTED`), a log backup of a database that is not online (`DATABASE_UNAVAILABLE`), and a log
-backup file already on the server (`NAME_IN_USE`). Its `restored` adds `filesRestoring` (logical names, at most 16): the database's files left
+and filegroup is in the set and held by it (`NOT_FOUND`), SIMPLE's read-only rule, STANDBY over an online database, a log
+backup under SIMPLE and a PRIMARY file of an online or offline database (`NOT_SUPPORTED`), a plan that does not reach the
+database's log chain (`RESTORE_SEQUENCE`: a log backup taken after its last set, named from msdb where it can be read), a log
+backup of a database that is not online (`DATABASE_UNAVAILABLE`), and a log backup file already on the server (`NAME_IN_USE`).
+Its "Back up the log" step reads the log chain again and fails with `RESTORE_SEQUENCE` when a log backup was taken during the run. Its `restored` adds `filesRestoring` (logical names, at most 16): the database's files left
 RESTORING.
 docs/object-actions.md describes the planner, the steps and the limits.
 

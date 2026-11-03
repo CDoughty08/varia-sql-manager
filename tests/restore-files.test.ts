@@ -8,8 +8,8 @@ import type { ActionDescribeResult, ActionExecuteResult, ActionScriptResult } fr
 import type { ApiResult } from '../src/shared/contracts'
 import { setScriptOpen } from '../src/renderer/src/kit/document-frame'
 import {
-  filesConfirmLines, filesGridRows, filesMoveRows, filesProblems, filesRestoringText, filesRunNote, filesSectionSummaries, filesSetCells, filesSetColumns, filesStopQuestion, logBackupPossible,
-  plannedFileSteps, restoreFilesRequest, toggleFile
+  filesConfirmLines, filesDestinationNote, filesGridRows, filesMoveRows, filesProblems, filesRestoringText, filesRowLabel, filesRunNote, filesSectionSummaries, filesSetCells, filesSetColumns, filesStopQuestion,
+  logBackupPossible, plannedFileSteps, primaryRefused, restoreFilesRequest, stateLabel, toggleFile
 } from '../src/renderer/src/restore/files'
 import { restoredText } from '../src/renderer/src/restore/run'
 import { restoreTestHook } from '../src/renderer/src/restore/test-hook'
@@ -134,10 +134,19 @@ describe('Restore Files and Filegroups as a document', () => {
     expect(rows.map(item => [item.set.name, item.name ?? '', item.checked, item.log])).toEqual([
       ['fg2', 'Sales_2', false, false], ['fg2', 'Sales_3', false, false], ['full', 'Sales', false, false], ['full', 'Sales_2', false, false], ['full', 'Sales_3', false, false], ['log2', '', false, true]
     ])
-    expect(filesSetColumns).toEqual(['Restore', 'Name', 'File Type', 'Type', 'Server', 'File Logical Name', 'Database', 'Start Date', 'Finish Date', 'Size', 'User Name'])
+    expect(filesSetColumns(false)).toEqual(['Restore', 'Name', 'File Type', 'Type', 'Server', 'File Logical Name', 'Database', 'Start Date', 'Finish Date', 'Size', 'User Name'])
     expect(filesSetCells(rows[0])).toEqual(['fg2', 'Rows Data', 'File Full', 'SQLHOST', 'Sales_2', 'Sales', '2026-10-29 21:07:00', '2026-10-29 21:07:00', '2.00 MB', 'CONTOSO\\dba'])
     expect(filesProblems(draft(), state().facts).general).toEqual([restoreMessages.noFiles])
     expect(restoreFilesRequest(draft(), state().facts, { connectionId: conn, requestId: uuid(9) })).toEqual({ problem: restoreMessages.noFiles })
+    expect(rows.map(filesRowLabel)).toEqual(['Restore Sales_2 from fg2 (2026-10-29 21:07:00)', 'Restore Sales_3 from fg2 (2026-10-29 21:07:00)', 'Restore Sales from full (2026-10-29 21:05:00)',
+      'Restore Sales_2 from full (2026-10-29 21:05:00)', 'Restore Sales_3 from full (2026-10-29 21:05:00)', 'Restore log2 (2026-10-29 21:08:00)'])
+    // A PRIMARY file restores only offline, which loses an online database's log tail: its row says why it cannot be checked.
+    expect(rows.map(item => item.blocked)).toEqual([undefined, undefined, restoreMessages.primaryOnline, undefined, undefined, undefined])
+    // The To database note says the state in sentence case.
+    expect(filesDestinationNote(sales)).toBe('Online, FULL recovery model.')
+    expect(filesDestinationNote({ state: 'RESTORING', recoveryModel: 'FULL' })).toBe('Restoring, FULL recovery model.')
+    expect([stateLabel('OFFLINE'), stateLabel('RECOVERY_PENDING'), stateLabel('SUSPECT')]).toEqual(['Offline', 'Recovery pending', 'Suspect'])
+    expect(filesDestinationNote(undefined)).toBeUndefined()
   })
   it('restores the checked files from one backup set and its logs, starting again from another set\'s row, and scripts the request through actions.script', async () => {
     const { restore, id, state, draft, check, request, scripts } = await opened()
@@ -149,13 +158,16 @@ describe('Restore Files and Filegroups as a document', () => {
       action: 'restoreFiles', target: { kind: 'database', name: 'Sales' }, identity: { id: 7, created: '2026-01-01T00:00:00.000' },
       restoreFiles: { sets: [{ id: uuid(2), type: 'file', devices: ['B:\\Backup\\Sales_FG2.bak'], file: 1, name: 'fg2' }, { id: uuid(4), type: 'log', file: 2 }], files: ['Sales_2'], filegroups: [], relocate: [], recovery: 'recovery', logBackup: { file: draft().files!.logBackupFile } }
     })
-    // A row of the full backup: one restore restores from one backup set, so only it stays checked, with the logs after the full.
+    // The PRIMARY file is never checked while Sales is online. A row of the full backup: one restore restores from one backup set,
+    // so only it stays checked, with the logs after the full.
     check(uuid(1), 'Sales')
+    expect(draft().files).toMatchObject({ set: uuid(2), chosen: ['Sales_2'] })
+    check(uuid(1), 'Sales_2')
     check(uuid(1), 'Sales_3')
     const second = request() as RestoreFilesRequest
     expect(second.restoreFiles.sets.map(set => set.id)).toEqual([uuid(1), uuid(3), uuid(4)])
-    expect(second.restoreFiles.files).toEqual(['Sales', 'Sales_3'])
-    check(uuid(1), 'Sales', false)
+    expect(second.restoreFiles.files).toEqual(['Sales_2', 'Sales_3'])
+    check(uuid(1), 'Sales_2', false)
     expect((request() as RestoreFilesRequest).restoreFiles.files).toEqual(['Sales_3'])
     // A typed Restore As moves the file; one onto another database's file is refused.
     restore.updateDraft(id, { restoreAs: { Sales_3: 'E:\\DATA\\Sales_3.ndf' } })
@@ -178,6 +190,14 @@ describe('Restore Files and Filegroups as a document', () => {
     expect(draft().files!.set).toBeUndefined()
     const rows = filesGridRows(draft(), state().facts)
     expect(rows.map(item => [item.set.name, item.name ?? '', item.logicalName])).toEqual([['fg2', 'FG2', 'Sales_2, Sales_3'], ['full', 'PRIMARY', 'Sales'], ['full', 'FG2', 'Sales_2, Sales_3'], ['log2', '', '']])
+    // Each row shows the filegroup its checkbox names, first; PRIMARY's cannot be checked online.
+    expect(filesSetColumns(true)).toEqual(['Restore', 'Filegroup', 'Name', 'File Type', 'Type', 'Server', 'File Logical Name', 'Database', 'Start Date', 'Finish Date', 'Size', 'User Name'])
+    expect(rows.map(item => filesSetCells(item, true)[0])).toEqual(['FG2', 'PRIMARY', 'FG2', ''])
+    expect(filesSetCells(rows[0], true).slice(1)).toEqual(filesSetCells(rows[0]))
+    expect(rows.map(filesRowLabel).slice(0, 2)).toEqual(['Restore FG2 from fg2 (2026-10-29 21:07:00)', 'Restore PRIMARY from full (2026-10-29 21:05:00)'])
+    expect(rows[1].blocked).toBe(restoreMessages.primaryOnline)
+    check(uuid(1), 'PRIMARY')
+    expect(draft().files!.chosen).toEqual([])
     check(uuid(2), 'FG2')
     expect((request() as RestoreFilesRequest).restoreFiles).toMatchObject({ files: [], filegroups: ['FG2'] })
     expect(filesMoveRows(draft(), state().facts).map(item => item.file.logical)).toEqual(['Sales_2', 'Sales_3'])
@@ -204,6 +224,24 @@ describe('Restore Files and Filegroups as a document', () => {
     expect(filesProblems(draft(), state().facts).general[0]).toBe('The database Gone is not on the server: files restore only into an existing database.')
     restore.updateDraft(id, { destination: 'msdb' })
     expect(filesProblems(draft(), state().facts).general).toContain(restoreMessages.systemDatabase.replace('{database}', 'msdb'))
+  })
+  it('restores PRIMARY files only into a database already restoring, and lets a PRIMARY file chosen there be cleared once it is online', async () => {
+    const restoring: RestoreServerFacts = { ...server, destinations: [{ ...sales, state: 'RESTORING' }, ...server.destinations.slice(1)] }
+    const { state, draft, check, request } = await opened('Sales', { facts: restoring })
+    expect(primaryRefused(draft(), state().facts)).toBe(false)
+    expect(filesGridRows(draft(), state().facts).every(item => !item.blocked)).toBe(true)
+    check(uuid(1), 'Sales')
+    expect((request() as RestoreFilesRequest).restoreFiles).toMatchObject({ files: ['Sales'], sets: [{ id: uuid(1) }, { id: uuid(3) }, { id: uuid(4) }] })
+    expect(draft().files!.logBackup).toBe(false)
+    // The same choice against the database online (or offline) is refused, and the checked row stays clearable.
+    const online = { ...state().facts, server }
+    expect(primaryRefused(draft(), online)).toBe(true)
+    expect(filesProblems(draft(), online).general).toEqual([restoreMessages.primaryOnline])
+    expect(restoreFilesRequest(draft(), online, { connectionId: conn, requestId: uuid(9) })).toEqual({ problem: restoreMessages.primaryOnline })
+    const row = filesGridRows(draft(), online).find(item => item.name === 'Sales' && item.set.id === uuid(1))!
+    expect(row).toMatchObject({ checked: true, blocked: restoreMessages.primaryOnline })
+    expect(toggleFile(draft(), online, uuid(1), 'Sales', false)).toMatchObject({ files: { chosen: [] } })
+    expect(primaryRefused(draft(), { ...online, server: { ...server, destinations: [{ ...sales, state: 'OFFLINE' }] } })).toBe(true)
   })
   it('opens on the first user database msdb has backups of from the Databases folder, on SQL Server only (the smoke suite opens it from the real menus)', async () => {
     const fixture = await opened(undefined)

@@ -478,8 +478,9 @@ to restore: the files of the newest 16 full and file backups (msdb's `backupfile
 another; files a file backup does not hold (`absent`: `is_present` 0) and log files are not listed), then the log backups
 that continue the backup set of the checked rows, checked with them and never alone (copy-only and damaged logs never
 chain). One restore restores from one backup set: checking a row of another set starts again from it. Options has Restore
-as filegroup (the rows become filegroups, named with FILEGROUP =), Overwrite the existing database (WITH REPLACE),
-Prompt before restoring each backup (greyed), Restrict access to the restored database (WITH RESTRICTED_USER), Restore the
+as filegroup (the rows become filegroups, named with FILEGROUP =, and a Filegroup column first shows each row's name),
+Overwrite the existing database (WITH REPLACE), Prompt before restoring each backup (greyed, with a note saying why, as every
+greyed option has), Restrict access to the restored database (WITH RESTRICTED_USER), Restore the
 database files as (Original File Name, File Type and Restore As, for the restored files, where they are unless typed), the
 Recovery state with SSMS's long labels ("Leave the database ready for use by rolling back the uncommitted transactions. Additional transaction logs cannot be restored. (RESTORE WITH RECOVERY)"…) and Rollback undo file, and Varia's own
 Log backup group.
@@ -493,12 +494,28 @@ taken: under the full or bulk-logged recovery model, restored files stay restori
 is greyed while the database is online: SQL Server refuses it on an online file restore (4302), and only after the files
 are restored, so the preflight refuses it first.
 
+A file of the PRIMARY filegroup restores only offline: on an online database it puts the whole database in RESTORING, and
+with WITH REPLACE it restores the log file too, so the changes since the last log backup are lost and the database cannot
+recover (probed on 2025: 4303, then 927 for a tail-log backup). Varia greys PRIMARY's rows while the database is online or
+offline, with the reason under the grid ("A file of the PRIMARY filegroup restores only offline, which takes the whole database out of use and, without a tail-log backup, loses the changes since the last log backup: restore the database with Restore Database, which backs up the tail of the log first."), and the preflight refuses them (`NOT_SUPPORTED`);
+they restore only into a database already restoring. Restore Database restores PRIMARY with its tail-log backup first.
+
+Under the full or bulk-logged recovery model the plan must reach the database's log chain: its last set must end at or
+after `sys.database_recovery_status.last_log_backup_lsn`, where the next log backup starts (a copy-only log backup leaves it).
+A regular log backup taken after the plan's last set (a maintenance job, media not added under From device, or one taken
+after the document read msdb) would leave the restored files waiting for it, and Varia's copy-only backup would not continue
+them (4305). The preflight refuses such a plan before any statement (`RESTORE_SEQUENCE`, "The log has been backed up since the last backup set this restore plans, and restored files roll forward only through every log backup: Refresh to read the backup history again, or add the files of the newer log backups under From device."),
+naming the newest log backup from msdb (when it finished and its file) where the login may read msdb. Back up the log reads
+the chain again before it runs: a log backup taken during the restore fails that step with the same naming
+("The log was backed up during the restore, so a log backup taken now would not continue the restored files: restore that log backup, then back up the log and restore it WITH RECOVERY to bring the files online."), before the doomed backup and restore.
+
 The request (`restoreFiles`) names the sets (a full or file backup, then logs), the files and filegroups (each at most
 256), the moves, the options and the log backup. A file restore takes no STOPAT and no differential, and its
 database must exist, so its identity is required. The backend's preflight checks the identity and that it is no snapshot;
 the log backup (not under SIMPLE, and only online); STANDBY online; the chain on the media (`RestoreChain`, files variant);
 that the backups are the database's own (its backup family, else its name; `BACKUP_MISMATCH`, "These backups are of another database: files restore only from the database's own backups.");
-that each file and filegroup is in the set, held by it and no log file; under SIMPLE, Learn's rule
+that the plan reaches the log chain; that each file and filegroup is in the set, held by it, no log file and, online or
+offline, not of PRIMARY; under SIMPLE, Learn's rule
 ("Under the simple recovery model, the file must belong to a read-only filegroup.", `NOT_SUPPORTED`, from `sys.master_files.is_read_only`); and the files it writes, as Restore
 Database's does, with the log backup file new. The steps, each its own statement with every name a parameter
 (`FILE = @f1`, `FILEGROUP = @g1`; live checks restore hostile names):
@@ -507,7 +524,7 @@ Database's does, with the log backup file new. The steps, each its own statement
 | --- | --- |
 | Restore the files | `RESTORE DATABASE … FILE = … FILEGROUP = … FROM … WITH FILE =`, the moves, `NORECOVERY` (or the recovery state when it is the last statement), `REPLACE`, `RESTRICTED_USER`, `STATS = 5` |
 | Restore log backup (n of m) | One `RESTORE LOG` per log backup after the set |
-| Back up the log | The log backup is on: `BACKUP LOG … TO DISK = … WITH COPY_ONLY, NOFORMAT, NOINIT, NAME = …` |
+| Back up the log | The log backup is on: the log chain read again, then `BACKUP LOG … TO DISK = … WITH COPY_ONLY, NOFORMAT, NOINIT, NAME = …` |
 | Restore the log backup | Then `RESTORE LOG` from that new file WITH RECOVERY, which brings the restored files online |
 
 A file restore has no compensation or cleanup, and Varia never drops the database; Stop asks first ("Stopping leaves the

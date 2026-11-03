@@ -65,8 +65,13 @@ internal static class RestoreChain
     }
 
     /// <summary>An LSN's decimal text (numeric(25, 0) fits decimal), or 0.</summary>
-    private static decimal Lsn(string? text) => decimal.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var value) ? value : 0;
+    internal static decimal Lsn(string? text) => decimal.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var value) ? value : 0;
     private static bool SameFamily(BackupSetDto a, BackupSetDto b) => a.FamilyGuid is null || b.FamilyGuid is null || a.FamilyGuid == b.FamilyGuid;
+
+    /// <summary>Whether a plan whose last set ends at <paramref name="lastLsn"/> reaches the database's log chain, which the next log backup
+    /// starts at (<paramref name="chain"/>, sys.database_recovery_status.last_log_backup_lsn; null when there is none): a log backup the plan
+    /// lacks would leave restored files waiting for it, and a log backup taken after the plan would not continue it (4305).</summary>
+    internal static bool Reaches(string? lastLsn, decimal? chain) => chain is not { } next || Lsn(lastLsn) >= next;
 
     /// <summary>restore-plan.ts continues: the log starts at or before the set's last LSN and ends after it, in its family and on
     /// its recovery fork, and a log that forks inside itself continues only a set that ends by the fork point.</summary>

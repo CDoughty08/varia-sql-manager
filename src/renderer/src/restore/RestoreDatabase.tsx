@@ -270,6 +270,12 @@ function RunPanel({ state, run, service }: { readonly state: RestoreState; reado
   const restoring = outcome && state.mode === 'files' ? filesRestoringText(run.database, run.restored) : undefined
   const left = outcome ? [restoredText(run.database, run.restored, run.steps), restoring].filter(Boolean).join(' ') || undefined : undefined
   const again = service.canRun(state.id) ? [{ label: 'Restore again', run: () => void service.run(state.id) }] : []
+  // A restore that runs at once (no confirm bar) replaces the verb that had focus with Stop, and Restore again goes with the panel it
+  // was in: the panel's title takes focus once drawn, so it never drops to the page. Focus elsewhere in the window stays where it is.
+  useEffect(() => {
+    const active = document.activeElement
+    if (!active || active === document.body || !active.isConnected) focusAfter(state.id, 'run')
+  }, [state.id])
   return <section className="restore-run" aria-labelledby={titleId} data-run={run.phase}>
     <div className="restore-run-head">
       <Icon name={outcome ? outcomeIcons[outcome] : 'loading'} spin={!outcome} className={outcome ? `restore-run-${outcome}` : undefined} />

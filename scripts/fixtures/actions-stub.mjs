@@ -51,7 +51,7 @@ export const dependentsMessage = "Could not drop object 'dbo.Lines' because it i
 export const scriptText = name => `USE [AppData]\r\nGO\r\nDROP TABLE [dbo].[${name}]\r\nGO\r\n`
 export const propertiesScript = 'USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET AUTO_CLOSE ON WITH NO_WAIT\r\nGO\r\nALTER DATABASE [AppData] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n'
 export const restoreScript = "USE [master]\r\nRESTORE DATABASE [AppData] FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
-export const restoreFilesScript = "USE [master]\r\nRESTORE DATABASE [AppData] FILE = N'AppData' FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NORECOVERY,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
+export const restoreFilesScript = "USE [master]\r\nRESTORE DATABASE [AppData] FILE = N'AppData_2' FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NORECOVERY,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
 export const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
 
 /** Installs the stub; pass it to `application.evaluate` with `actionsStubData()`. Runs in main, so it is self-contained. */
@@ -64,7 +64,7 @@ export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
   const propertiesScript = 'USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET AUTO_CLOSE ON WITH NO_WAIT\r\nGO\r\nALTER DATABASE [AppData] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n'
   const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
   const restoreScript = "USE [master]\r\nRESTORE DATABASE [AppData] FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
-  const restoreFilesScript = "USE [master]\r\nRESTORE DATABASE [AppData] FILE = N'AppData' FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NORECOVERY,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
+  const restoreFilesScript = "USE [master]\r\nRESTORE DATABASE [AppData] FILE = N'AppData_2' FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NORECOVERY,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
   const ok = value => ({ ok: true, value })
   const folders = (owner, ids) => ids.map(folder => ({ ref: { type: 'folder', owner, folder }, label: statics.labels[folder], icon: 'folder', hasChildren: true }))
   const object = (value, label, icon, extra = {}) => ({ ref: { type: 'object', object: value }, label, icon, hasChildren: true, ...extra })
@@ -119,7 +119,8 @@ export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
       ...(target.kind === 'database' ? { isSnapshot: false } : {}) }, elapsedMs: 1 })
   }
   /** Restore Database's reads (D1e): AppData's history (a full, a differential and a log backup in the default backup
-   *  folder, all on 2026-10-29), its files, and the server's facts; master is a destination too, and greyed. */
+   *  folder, all on 2026-10-29), its files (PRIMARY's, the log, and AppData_2 in Archive, which Restore Files and Filegroups
+   *  can restore online), and the server's facts; master is a destination too, and greyed. */
   function restore({ restore: source }) {
     const data = serverFiles.roots.find(root => root.defaults?.includes('data')).path, backup = serverFiles.backupFolder
     const set = (id, name, type, position, firstLsn, lastLsn, checkpointLsn, databaseBackupLsn, finish, device) => ({ id, name, type, server: 'server-a', database: 'AppData', position, firstLsn, lastLsn,
@@ -131,9 +132,10 @@ export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
     ]
     const server = { separator: '\\', dataPath: data, logPath: data, backupPath: backup, canRestore: true, destinationsTruncated: false, filesTruncated: false,
       destinations: [{ name: 'AppData', id: 5, created: '2026-10-01T09:00:00.000', state: 'ONLINE', recoveryModel: 'FULL', sessions: 1 }, { name: 'master', id: 1, created: '2003-04-08T09:13:36.390', state: 'ONLINE', recoveryModel: 'SIMPLE' }],
-      files: [{ database: 'AppData', path: data + 'AppData.mdf' }, { database: 'AppData', path: data + 'AppData_log.ldf' }] }
+      files: [{ database: 'AppData', path: data + 'AppData.mdf' }, { database: 'AppData', path: data + 'AppData_log.ldf' }, { database: 'AppData', path: data + 'AppData_2.ndf' }] }
     const files = [{ logical: 'AppData', physical: data + 'AppData.mdf', type: 'data', filegroup: 'PRIMARY', sizeBytes: 8 * 1024 * 1024, fileId: 1 },
-      { logical: 'AppData_log', physical: data + 'AppData_log.ldf', type: 'log', sizeBytes: 8 * 1024 * 1024, fileId: 2 }]
+      { logical: 'AppData_log', physical: data + 'AppData_log.ldf', type: 'log', sizeBytes: 8 * 1024 * 1024, fileId: 2 },
+      { logical: 'AppData_2', physical: data + 'AppData_2.ndf', type: 'data', filegroup: 'Archive', sizeBytes: 8 * 1024 * 1024, fileId: 3 }]
     switch (source.kind) {
       case 'history': return ok({ restore: { server, historyDatabases: ['AppData', 'master'], ...source.database === 'AppData' ? { sets, setsTruncated: false } : source.database ? { sets: [], setsTruncated: false } : { historyTruncated: false } }, elapsedMs: 1 })
       case 'historyFiles': case 'mediaFiles': return ok({ restore: { files, filesTruncated: false }, elapsedMs: 1 })

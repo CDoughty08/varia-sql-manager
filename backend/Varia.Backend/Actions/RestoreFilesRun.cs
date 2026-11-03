@@ -10,11 +10,13 @@ namespace Varia.Backend.Actions;
 /// <summary>Restore Files and Filegroups (actions.script and actions.execute 'restoreFiles', D1g): some files of an existing database,
 /// restored from one full or file backup and rolled forward through the log backups after it. A long action like Restore Database: the
 /// long gate, Stop and STATS progress. Its preflight, in the action's own connection, checks the database is the one the document read,
-/// the chain on the media (RestoreChain, files variant), that the backups are the database's own, that each named file or filegroup is
-/// in the backup set and no log file, Learn's rule that under SIMPLE only a read-only filegroup's files restore, and every file it writes.
+/// the chain on the media (RestoreChain, files variant), that the backups are the database's own, that under FULL or BULK_LOGGED the plan
+/// reaches the database's log chain (spec D1 §8), that each named file or filegroup is in the backup set, no log file and, on an online or
+/// offline database, not of PRIMARY (an offline restore that loses the log's tail), Learn's rule that under SIMPLE only a read-only
+/// filegroup's files restore, and every file it writes.
 /// The steps: "Restore the files" (RESTORE DATABASE … FILE = @f1, FILEGROUP = @g1 …), one "Restore log backup n of m" per log, and, when
 /// asked, Varia's "Back up the log" (COPY_ONLY) and "Restore the log backup", which an online file restore under FULL or BULK_LOGGED
-/// needs to bring its files online (probed on 2025). It never drops anything: a stopped or failed file restore leaves the files it
+/// needs to bring its files online (probed on 2025); Back up the log first checks that no log backup was taken during the run. It never drops anything: a stopped or failed file restore leaves the files it
 /// reached RESTORING, and the reply names them (restored.filesRestoring). Nothing here logs a name, path or statement.</summary>
 internal sealed partial class ActionService
 {
@@ -77,10 +79,10 @@ internal sealed partial class ActionService
     {
         var messages = CollectMessages(connection, progress);
         var database = target.Name!;
-        var (facts, refused) = await RestoreFilesPreflightAsync(connection, args, database, linux, token);
+        var (facts, reach, refused) = await RestoreFilesPreflightAsync(connection, args, database, linux, token);
         if (facts is null) return new([], [], 0, refused);
         var options = args.RestoreFiles!;
-        var (steps, failure, _) = await RunStepsAsync(connection, RestoreFilesSteps(connection, database, options), null, token, CleanupBudget(args.Action), progress: progress);
+        var (steps, failure, _) = await RunStepsAsync(connection, RestoreFilesSteps(connection, database, options, facts.Id, reach), null, token, CleanupBudget(args.Action), progress: progress);
         // How the run left the database and which of its files are still RESTORING, read once the steps are over, with a token of its own.
         RestoredDatabaseDto? restored = null;
         if (connection.State == ConnectionState.Open)
@@ -118,55 +120,64 @@ internal sealed partial class ActionService
         return files;
     }
 
-    /// <summary>The preflight (D1g) in the action's connection (master), before any statement. Nothing here changes the database.</summary>
-    private async Task<(RestoreFacts? Facts, ActionError? Error)> RestoreFilesPreflightAsync(SqlConnection connection, ActionArgs args, string database, bool linux, CancellationToken token)
+    /// <summary>The preflight (D1g) in the action's connection (master), before any statement. Nothing here changes the database. Reach is
+    /// the plan's last LSN where the database keeps a log chain, which Back up the log checks again before it runs.</summary>
+    private async Task<(RestoreFacts? Facts, string? Reach, ActionError? Error)> RestoreFilesPreflightAsync(SqlConnection connection, ActionArgs args, string database, bool linux, CancellationToken token)
     {
         var display = ScriptingErrors.Display(database);
         var options = args.RestoreFiles!;
         var (row, ids, _, sysadmin, views) = await ReadPreflightAsync(connection, database, token);
-        if (IdentityProblem(row, args.Identity!, database) is { } changed) return (null, changed);
-        if (row!.Bool("is_snapshot")) return (null, Error("NOT_SUPPORTED", "A database snapshot's files cannot be restored."));
+        if (IdentityProblem(row, args.Identity!, database) is { } changed) return (null, null, changed);
+        if (row!.Bool("is_snapshot")) return (null, null, Error("NOT_SUPPORTED", "A database snapshot's files cannot be restored."));
         // sys.databases.recovery_model: 1 FULL, 2 BULK_LOGGED, 3 SIMPLE.
         var simple = row.Int("recovery_model") == 3;
         if (options.LogBackup is not null)
         {
-            if (simple) return (null, Error("NOT_SUPPORTED", "The database " + display + " uses the SIMPLE recovery model, which has no log to back up. Clear Back up the log."));
-            if (row.Int("state") != 0) return (null, Error("DATABASE_UNAVAILABLE", "The database " + display + " is not online, so its log cannot be backed up. Clear Back up the log."));
+            if (simple) return (null, null, Error("NOT_SUPPORTED", "The database " + display + " uses the SIMPLE recovery model, which has no log to back up. Clear Back up the log."));
+            if (row.Int("state") != 0) return (null, null, Error("DATABASE_UNAVAILABLE", "The database " + display + " is not online, so its log cannot be backed up. Clear Back up the log."));
         }
         // SQL Server refuses STANDBY on an online database's file restore only at the log, after the files are restored (4302, probed on 2025).
-        if (options.Recovery == "standby" && row.Int("state") == 0) return (null, Error("NOT_SUPPORTED", Restore.Message("standbyOnline")));
+        if (options.Recovery == "standby" && row.Int("state") == 0) return (null, null, Error("NOT_SUPPORTED", Restore.Message("standbyOnline")));
         var (chain, media) = await RestoreChain.ReadAsync(connection, catalog, options.Sets, token, files: true);
-        if (chain is null) return (null, media);
+        if (chain is null) return (null, null, media);
         // Files restore only from the database's own backups: by its backup family where both are known, else by name.
         var family = row.Raw("family_guid") is Guid guid ? guid.ToString("D") : null;
         var own = chain.Family is not null && family is not null ? string.Equals(chain.Family, family, StringComparison.OrdinalIgnoreCase) : string.Equals(chain.Database, database, StringComparison.OrdinalIgnoreCase);
-        if (!own) return (null, Error("BACKUP_MISMATCH", Restore.Message("otherDatabase")));
+        if (!own) return (null, null, Error("BACKUP_MISMATCH", Restore.Message("otherDatabase")));
+        // Under FULL or BULK_LOGGED the plan must reach the log chain (spec D1 §8): a log backup taken after its last set, outside the
+        // plan, would leave the restored files waiting for it, and Varia's log backup, which starts where the chain is, would not continue
+        // them (4305), after the files are restored.
+        var next = row.Raw("last_log_backup_lsn") is decimal lsn ? lsn : (decimal?)null;
+        var tracked = !simple && next is not null;
+        if (tracked && !RestoreChain.Reaches(chain.Sets[^1].LastLsn, next))
+            return (null, null, Error("RESTORE_SEQUENCE", Restore.Message("logChainAhead") + await NewestLogBackupAsync(connection, database, row.Int("database_id"), token)));
 
         var (listed, unread) = await FileListAsync(connection, options.Sets[0], token);
-        if (listed is null) return (null, unread);
-        var (restored, problem) = RestoredFiles(listed, options);
-        if (problem is not null) return (null, problem);
+        if (listed is null) return (null, null, unread);
+        // A PRIMARY file restores only offline: on an online or offline database (sys.databases.state 0 or 6) that loses the log's tail.
+        var (restored, problem) = RestoredFiles(listed, options, primaryRefused: row.Int("state") is 0 or 6);
+        if (problem is not null) return (null, null, problem);
         if (simple)
         {
             var readOnly = (await DatabaseFilesAsync(connection, row.Int("database_id"), token)).ToDictionary(file => file.Name, file => file.ReadOnly, StringComparer.OrdinalIgnoreCase);
             if (restored!.FirstOrDefault(file => !readOnly.GetValueOrDefault(file.Logical)) is { } writable)
-                return (null, Error("NOT_SUPPORTED", Restore.Message("simpleReadOnly") + " " + ScriptingErrors.Display(writable.Logical) + " belongs to a read-write filegroup of " + display + ", which uses the SIMPLE recovery model."));
+                return (null, null, Error("NOT_SUPPORTED", Restore.Message("simpleReadOnly") + " " + ScriptingErrors.Display(writable.Logical) + " belongs to a read-write filegroup of " + display + ", which uses the SIMPLE recovery model."));
         }
         var facts = new RestoreFacts(true, row.Int("database_id"), row.Int("user_access"), ids, views, sysadmin);
         var written = new List<(string Path, string What)>();
         if (options.Recovery == "standby" && options.StandbyFile is { } standby) written.Add((standby, "standby file"));
         if (options.LogBackup is { } backup) written.Add((backup.File, "log backup file"));
-        if (await WrittenProblemAsync(connection, database, restored!, options.Relocate, written, facts, linux, token) is { } paths) return (null, paths);
+        if (await WrittenProblemAsync(connection, database, restored!, options.Relocate, written, facts, linux, token) is { } paths) return (null, null, paths);
         // The log backup goes to a new file, so it is the file's first backup set, as Script writes it (FILE = 1).
         if (options.LogBackup is { } fresh && await ExistingAsync(connection, [fresh.File], facts, token) is { Count: > 0 })
-            return (null, Error("NAME_IN_USE", "The log backup file " + ScriptingErrors.Display(fresh.File) + " is already on the server. Choose a new file for the log backup."));
-        return (facts, null);
+            return (null, null, Error("NAME_IN_USE", "The log backup file " + ScriptingErrors.Display(fresh.File) + " is already on the server. Choose a new file for the log backup."));
+        return (facts, tracked ? chain.Sets[^1].LastLsn : null, null);
     }
 
     /// <summary>The backup set's files the request restores: each named file, and every file of each named filegroup, all in the set;
     /// or why not: a name the set does not have, a file it does not hold (a file backup of other files), a log file, or a move of a
-    /// file that is not restored.</summary>
-    internal (List<ListedFile>? Files, ActionError? Error) RestoredFiles(IReadOnlyList<ListedFile> listed, RestoreFilesOptionsDto options)
+    /// file that is not restored; with <paramref name="primaryRefused"/> (an online or offline database), a file of the PRIMARY filegroup.</summary>
+    internal (List<ListedFile>? Files, ActionError? Error) RestoredFiles(IReadOnlyList<ListedFile> listed, RestoreFilesOptionsDto options, bool primaryRefused = false)
     {
         var restored = new List<ListedFile>();
         foreach (var name in options.Files)
@@ -183,14 +194,17 @@ internal sealed partial class ActionService
             if (files.Count == 0) return (null, Error("NOT_FOUND", "The backup set holds no file of the filegroup " + ScriptingErrors.Display(name) + ". Read the backups again."));
             restored.AddRange(files.Where(file => !restored.Contains(file)));
         }
+        // The PRIMARY filegroup's name is fixed (it cannot be renamed), and FILELISTONLY names it so.
+        if (primaryRefused && restored.Any(file => string.Equals(file.Filegroup, "PRIMARY", StringComparison.OrdinalIgnoreCase))) return (null, Error("NOT_SUPPORTED", Restore.Message("primaryOnline")));
         if (options.Relocate.FirstOrDefault(move => !restored.Any(file => string.Equals(file.Logical, move.Logical, StringComparison.OrdinalIgnoreCase))) is { } stray)
             return (null, Error("NOT_FOUND", ScriptingErrors.Display(stray.Logical) + " is not among the files restored, so it cannot be moved."));
         return (restored, null);
     }
 
     /// <summary>The file restore's steps in Script's order (RestoreSql.FilesLines). No compensation or cleanup: nothing here can be undone
-    /// but by another restore, and the database existed, so Varia never drops it (owner decision 5).</summary>
-    internal List<RunStep> RestoreFilesSteps(SqlConnection connection, string database, RestoreFilesOptionsDto options)
+    /// but by another restore, and the database existed, so Varia never drops it (owner decision 5). With <paramref name="reach"/> (the
+    /// plan's last LSN where the database keeps a log chain), Back up the log first checks that no log backup was taken during the run.</summary>
+    internal List<RunStep> RestoreFilesSteps(SqlConnection connection, string database, RestoreFilesOptionsDto options, int databaseId = 0, string? reach = null)
     {
         var steps = new List<RunStep>();
         var last = options.LogBackup is null ? options.Sets.Count - 1 : -1;
@@ -230,7 +244,14 @@ internal sealed partial class ActionService
                 Add(command, "@tail", SqlDbType.NVarChar, 260, backup.File);
                 Add(command, "@tail_name", SqlDbType.NVarChar, 128, name);
             }
-            steps.Add(new(Restore.Step("logBackup"), context => RunMediaAsync(connection, RestoreSql.LogBackup(Restore), Bind, context.Token), Detail: FileName(backup.File)));
+            steps.Add(new(Restore.Step("logBackup"), async context =>
+            {
+                // A log backup taken since the preflight moved the chain past the plan: a copy-only backup would start there and not
+                // continue the restored files (4305), so the run stops here and says which backup they need.
+                if (reach is not null && !RestoreChain.Reaches(reach, await LastLogBackupAsync(connection, databaseId, context.Token)))
+                    throw new StepRefusedException(Error("RESTORE_SEQUENCE", Restore.Message("logBackedUpDuring") + await NewestLogBackupAsync(connection, database, databaseId, context.Token)));
+                await RunMediaAsync(connection, RestoreSql.LogBackup(Restore), Bind, context.Token);
+            }, Detail: FileName(backup.File)));
             steps.Add(new(Restore.Step("logBackupRestore"), async context =>
             {
                 // The new file's backup set: its first, unless the server could not say the file was new (2016 without sysadmin), when it
@@ -246,6 +267,45 @@ internal sealed partial class ActionService
             }, Detail: FileName(backup.File)));
         }
         return steps;
+    }
+
+    /// <summary>Where the database's log chain is now (RestoreSql.LastLogBackup), or null.</summary>
+    private static async Task<decimal?> LastLogBackupAsync(SqlConnection connection, int id, CancellationToken token)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = RestoreSql.LastLogBackup;
+        command.CommandTimeout = 0;
+        Add(command, "@id", SqlDbType.Int, 0, id);
+        Add(command, "@take", SqlDbType.Int, 0, 1);
+        await using var reader = await command.ExecuteReaderAsync(token);
+        return await reader.ReadAsync(token) && !reader.IsDBNull(0) ? reader.GetDecimal(0) : null;
+    }
+
+    /// <summary>A sentence naming the log backup that moved the chain (RestoreSql.NewestLogBackup): when it finished and its first file,
+    /// or nothing when msdb has no record of it or is closed to the login.</summary>
+    private static async Task<string> NewestLogBackupAsync(SqlConnection connection, string database, int id, CancellationToken token)
+    {
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = RestoreSql.NewestLogBackup;
+            command.CommandTimeout = 0;
+            Add(command, "@db", SqlDbType.NVarChar, 128, database);
+            Add(command, "@id", SqlDbType.Int, 0, id);
+            Add(command, "@take", SqlDbType.Int, 0, 64);
+            await using var reader = await command.ExecuteReaderAsync(token);
+            DateTime? finished = null;
+            var devices = new List<string>();
+            while (await reader.ReadAsync(token))
+            {
+                finished ??= reader.IsDBNull(0) ? null : reader.GetDateTime(0);
+                if (!reader.IsDBNull(1)) devices.Add(reader.GetString(1));
+            }
+            if (devices.Count == 0) return "";
+            return " The newest log backup" + (finished is { } at ? ", finished " + at.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) + "," : "") + " is in "
+                + ScriptingErrors.Display(devices[0]) + (devices.Count > 1 ? " (+" + (devices.Count - 1).ToString(CultureInfo.InvariantCulture) + " files)" : "") + ".";
+        }
+        catch (SqlException) when (!token.IsCancellationRequested) { return ""; }
     }
 
     /// <summary>The statement of the file restore's set at <paramref name="index"/>: the files' RESTORE DATABASE with the moves and REPLACE

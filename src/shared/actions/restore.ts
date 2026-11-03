@@ -95,7 +95,16 @@ export const restoreMessages = {
    *  after it (probed on 2025: the files stay RESTORING after every earlier log, "Additional roll forward past LSN … is required"). */
   filesStayRestoring: 'Under the full or bulk-logged recovery model, restored files stay restoring until a log backup taken after they are restored is restored.',
   /** Restore Files and Filegroups: SQL Server refuses STANDBY on an online database's file restore (4302, probed on 2025), only once the files are restored. */
-  standbyOnline: 'RESTORE WITH STANDBY conflicts with an online restore: choose another recovery state while the database is online.'
+  standbyOnline: 'RESTORE WITH STANDBY conflicts with an online restore: choose another recovery state while the database is online.',
+  /** Restore Files and Filegroups: a PRIMARY file restores only offline, which puts the whole database in RESTORING; with no tail-log
+   *  backup its log since the last log backup is lost and it cannot recover (probed on 2025: 4303, then 927), so Varia refuses it on an
+   *  online or offline database and leaves it to Restore Database, which backs up the tail of the log first. */
+  primaryOnline: 'A file of the PRIMARY filegroup restores only offline, which takes the whole database out of use and, without a tail-log backup, loses the changes since the last log backup: restore the database with Restore Database, which backs up the tail of the log first.',
+  /** Restore Files and Filegroups' preflight: the database's log was backed up after the plan's last set (sys.database_recovery_status),
+   *  so the restored files would wait for a log backup the plan lacks, and Varia's log backup would not continue them (4305). */
+  logChainAhead: 'The log has been backed up since the last backup set this restore plans, and restored files roll forward only through every log backup: Refresh to read the backup history again, or add the files of the newer log backups under From device.',
+  /** Restore Files and Filegroups' run: a log backup was taken between the restore's steps and Back up the log. */
+  logBackedUpDuring: 'The log was backed up during the restore, so a log backup taken now would not continue the restored files: restore that log backup, then back up the log and restore it WITH RECOVERY to bring the files online.'
 } as const
 
 /** A backup set's kind, from msdb's type letter or HEADERONLY's BackupType. Only full, differential and log sets are planned. */
@@ -382,7 +391,7 @@ export function restoreCatalog() {
       systemDatabase: restoreMessages.systemDatabase, notDisk: restoreMessages.notDisk, noSets: restoreMessages.noSets, invalidPlan: restoreMessages.invalidPlan,
       damaged: restoreMessages.damaged, copyOnlyLog: restoreMessages.copyOnlyLog, finishedAtStop: restoreMessages.finishedAtStop,
       simpleReadOnly: restoreMessages.simpleReadOnly, otherDatabase: restoreMessages.otherDatabase, filesStayRestoring: restoreMessages.filesStayRestoring,
-      standbyOnline: restoreMessages.standbyOnline
+      standbyOnline: restoreMessages.standbyOnline, primaryOnline: restoreMessages.primaryOnline, logChainAhead: restoreMessages.logChainAhead, logBackedUpDuring: restoreMessages.logBackedUpDuring
     },
     steps: restoreStepTitles
   }

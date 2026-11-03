@@ -50,11 +50,11 @@ internal static partial class RestoreSql
         + "FROM sys.databases AS d LEFT JOIN sys.database_recovery_status AS rs ON rs.database_id = d.database_id WHERE d.database_id > 2 AND d.source_database_id IS NULL ORDER BY d.name;";
 
     /// <summary>The run's preflight (D1f), in master on the action's own connection: the destination's row (identity, state, access,
-    /// recovery model, whether it is a snapshot, and its backup family), every database id there is now (a cleanup drops only a
+    /// recovery model, whether it is a snapshot, its backup family, and where its log chain is), every database id there is now (a cleanup drops only a
     /// database whose id is not among them, critic A11a), whether the login may create a database, whether it is in sysadmin, and
     /// whether the server has sys.dm_os_file_exists (SQL Server 2017 on), which tells the preflight and the cleanup whether a file exists.</summary>
     public const string Preflight = "SELECT d.database_id AS database_id, d.create_date AS create_date, d.state AS state, d.user_access AS user_access, d.recovery_model AS recovery_model, "
-        + "CONVERT(bit, CASE WHEN d.source_database_id IS NULL THEN 0 ELSE 1 END) AS is_snapshot, rs.family_guid AS family_guid "
+        + "CONVERT(bit, CASE WHEN d.source_database_id IS NULL THEN 0 ELSE 1 END) AS is_snapshot, rs.family_guid AS family_guid, rs.last_log_backup_lsn AS last_log_backup_lsn "
         + "FROM sys.databases AS d LEFT JOIN sys.database_recovery_status AS rs ON rs.database_id = d.database_id WHERE d.name = @db;\n"
         + "SELECT TOP (@take) d.database_id AS database_id FROM sys.databases AS d ORDER BY d.database_id;\n"
         + "SELECT CONVERT(bit, CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'CREATE ANY DATABASE') = 1 OR IS_SRVROLEMEMBER(N'dbcreator') = 1 OR IS_SRVROLEMEMBER(N'sysadmin') = 1 THEN 1 ELSE 0 END) AS can_restore, "
@@ -120,6 +120,16 @@ internal static partial class RestoreSql
 
     /// <summary>A database's files by id, with whether each is read-only and its state: a file restore's preflight under SIMPLE reads
     /// which are read-only (Learn: only a read-only filegroup's files restore under SIMPLE), and its report the files still RESTORING (state 1).</summary>
+    /// <summary>Where a database's log chain is: the LSN its next log backup starts at (sys.database_recovery_status; null under SIMPLE,
+    /// before the first full backup, and while the database is not online). A copy-only log backup leaves it (probed on 2025).</summary>
+    public const string LastLogBackup = "SELECT TOP (@take) rs.last_log_backup_lsn AS last_log_backup_lsn FROM sys.database_recovery_status AS rs WHERE rs.database_id = @id ORDER BY rs.database_id;";
+
+    /// <summary>The log backup that moved the chain there, as msdb records it: when it finished and its disk families, so a refusal can
+    /// name the backup a file restore lacks. msdb may be closed to the login: the read is then left out.</summary>
+    public const string NewestLogBackup = "SELECT TOP (@take) bs.backup_finish_date AS finish_date, mf.physical_device_name AS device FROM msdb.dbo.backupset AS bs "
+        + "JOIN msdb.dbo.backupmediafamily AS mf ON mf.media_set_id = bs.media_set_id JOIN sys.database_recovery_status AS rs ON rs.database_id = @id AND rs.last_log_backup_lsn = bs.last_lsn "
+        + "WHERE bs.database_name = @db AND bs.is_copy_only = 0 AND mf.mirror = 0 ORDER BY bs.backup_set_id DESC, mf.family_sequence_number;";
+
     public const string DatabaseFiles = "SELECT TOP (@take) f.name AS name, f.is_read_only AS is_read_only, f.state AS state FROM sys.master_files AS f WHERE f.database_id = @id ORDER BY f.file_id;";
 
     /// <summary>A file restore's RESTORE DATABASE: FILE = @f1… for its files and FILEGROUP = @g1… for its filegroups (Learn's
@@ -219,6 +229,8 @@ internal static partial class RestoreSql
         yield return ("restore files exist", LintCatalog(FilesExist));
         yield return ("restore files of", LintCatalog(FilesOf));
         yield return ("restore database files", LintCatalog(DatabaseFiles));
+        yield return ("restore last log backup", LintCatalog(LastLogBackup));
+        yield return ("restore newest log backup", LintCatalog(NewestLogBackup));
         yield return ("restore files log backup", LintMedia(LogBackup(restore)));
         // Every file restore shape: FILE and FILEGROUP counts at their edges and limits, the device and move counts, every recovery state
         // and option; REPLACE only where asked.

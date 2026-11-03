@@ -46,6 +46,24 @@ export function logBackupPossible(draft: RestoreDraft, facts: RestoreFacts): boo
 }
 /** Whether STANDBY is offered: SQL Server refuses it on an online database's file restore (4302, probed on 2025). */
 export const standbyPossible = (draft: RestoreDraft, facts: RestoreFacts): boolean => !online(draft, facts)
+/**
+ * Whether the PRIMARY filegroup's files are refused (restoreMessages.primaryOnline): they restore only offline, which on an online or
+ * offline database loses the log since the last log backup (probed on 2025), so they restore only into a database already restoring.
+ */
+export function primaryRefused(draft: RestoreDraft, facts: RestoreFacts): boolean {
+  const state = filesDestination(draft, facts)?.state
+  return state === 'ONLINE' || state === 'OFFLINE'
+}
+const primary = (file: BackupFileRow) => file.filegroup?.toUpperCase() === 'PRIMARY'
+/** A database state as the To database note says it: SQL Server's state_desc in sentence case (RECOVERY_PENDING, Recovery pending). */
+export function stateLabel(state: string): string {
+  const words = state.replace(/_/g, ' ').toLowerCase()
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+/** The note under To database: the destination's state and recovery model. */
+export function filesDestinationNote(destination: { readonly state: string; readonly recoveryModel: string } | undefined): string | undefined {
+  return destination ? `${stateLabel(destination.state)}, ${destination.recoveryModel} recovery model.` : undefined
+}
 
 /** The sets whose files the document reads: the newest full and file backups of the source, at most restoreLimits.fileSets. */
 export function filesBaseSets(draft: RestoreDraft, facts: RestoreFacts): BackupSetRow[] {
@@ -72,21 +90,24 @@ export interface FilesGridRow {
   readonly checked: boolean
   /** A log row: checked with the files, and never by itself (restoreMessages.logsFollow). */
   readonly log: boolean
+  /** Why the row cannot be checked (restoreMessages.primaryOnline), for a base set's row; one checked before can still be cleared. */
+  readonly blocked?: string
 }
 const fileTypes: Readonly<Record<BackupFileRow['type'], string>> = { data: 'Rows Data', log: 'Log', filestream: 'FILESTREAM Data', fulltext: 'Full-text', other: 'Other' }
 
 /** The grid's rows: newest base set first, each with its files (or filegroups), then the logs that follow the chosen set. */
 export function filesGridRows(draft: RestoreDraft, facts: RestoreFacts): FilesGridRow[] {
-  const files = draft.files, base = filesBase(draft, facts), rows: FilesGridRow[] = []
+  const files = draft.files, base = filesBase(draft, facts), rows: FilesGridRow[] = [], refused = primaryRefused(draft, facts)
   for (const set of filesBaseSets(draft, facts)) {
     const listed = restorableFiles(facts, set)
     const names = files?.asFilegroup ? [...new Set(listed.map(file => file.filegroup ?? ''))].filter(Boolean) : listed.map(file => file.logical)
     for (const name of names) {
       const members = files?.asFilegroup ? listed.filter(file => file.filegroup === name) : listed.filter(file => file.logical === name)
       const kinds = [...new Set(members.map(file => fileTypes[file.type]))]
+      const blocked = refused && members.some(primary)
       rows.push({
         key: `${set.id}\u0000${name}`, set, name, fileType: kinds.join(', '), logicalName: members.map(file => file.logical).join(', '),
-        checked: files?.set === set.id && files.chosen.includes(name), log: false
+        checked: files?.set === set.id && files.chosen.includes(name), log: false, ...blocked ? { blocked: restoreMessages.primaryOnline } : {}
       })
     }
   }
@@ -94,18 +115,33 @@ export function filesGridRows(draft: RestoreDraft, facts: RestoreFacts): FilesGr
   if (base) for (const log of fileRestoreLogs(sourceSets(draft, facts), base)) rows.push({ key: log.id, set: log, fileType: 'Log', logicalName: '', checked: any, log: true })
   return rows
 }
-/** A grid checkbox: checking a row of another set starts again from that set, as one restore restores from one backup set. */
+/** A grid checkbox: checking a row of another set starts again from that set, as one restore restores from one backup set; a
+ *  blocked row (a PRIMARY file while the database is online or offline) is never checked. */
 export function toggleFile(draft: RestoreDraft, facts: RestoreFacts, set: string, name: string, checked: boolean): Partial<RestoreDraft> {
+  if (checked && filesGridRows(draft, facts).some(row => row.set.id === set && row.name === name && row.blocked)) return {}
   const files = draft.files!, same = (files.set ?? filesBase(draft, facts)?.id) === set
   const chosen = checked ? (same ? [...new Set([...files.chosen, name])] : [name]) : same ? files.chosen.filter(item => item !== name) : files.chosen
   return { files: { ...files, set, chosen } }
 }
-/** SSMS's grid columns (spec D1 §8, Learn's list), in order. */
-export const filesSetColumns = ['Restore', 'Name', 'File Type', 'Type', 'Server', 'File Logical Name', 'Database', 'Start Date', 'Finish Date', 'Size', 'User Name'] as const
-export function filesSetCells(row: FilesGridRow): string[] {
+/** SSMS's grid columns (spec D1 §8, Learn's list), in order. Under Restore as filegroup a row is a filegroup, so Varia shows its name
+ *  first (Filegroup), the name its checkbox has. */
+const setColumns = ['Restore', 'Name', 'File Type', 'Type', 'Server', 'File Logical Name', 'Database', 'Start Date', 'Finish Date', 'Size', 'User Name'] as const
+export function filesSetColumns(asFilegroup: boolean): readonly string[] {
+  return asFilegroup ? ['Restore', 'Filegroup', ...setColumns.slice(1)] : setColumns
+}
+/** The columns whose text wraps; the others stay on one line. */
+export const filesWrappedColumns: ReadonlySet<string> = new Set(['Filegroup', 'Name', 'File Logical Name', 'Database'])
+/** A row's cells after Restore, as filesSetColumns(asFilegroup) names them. */
+export function filesSetCells(row: FilesGridRow, asFilegroup = false): string[] {
   const set = row.set, spec = backupSetTypeSpecs[set.type]
   const size = set.sizeBytes >= 1024 * 1024 ? `${(set.sizeBytes / 1024 / 1024).toFixed(2)} MB` : `${Math.max(1, Math.round(set.sizeBytes / 1024))} KB`
-  return [set.name, row.fileType, `${spec.component} ${spec.type}`, set.server, row.logicalName, set.database, set.start.replace('T', ' '), set.finish.replace('T', ' '), size, set.userName]
+  return [...asFilegroup ? [row.log ? '' : row.name ?? ''] : [], set.name, row.fileType, `${spec.component} ${spec.type}`, set.server, row.logicalName, set.database,
+    set.start.replace('T', ' '), set.finish.replace('T', ' '), size, set.userName]
+}
+/** A row checkbox's accessible name: the file or filegroup it restores, from which set, and when that set finished. */
+export function filesRowLabel(row: FilesGridRow): string {
+  const spec = backupSetTypeSpecs[row.set.type], finished = row.set.finish.replace('T', ' ')
+  return row.log ? `Restore ${row.set.name || 'log backup'} (${finished})` : `Restore ${row.name} from ${row.set.name || `${spec.component} ${spec.type}`} (${finished})`
 }
 
 /** The files the restore writes: the checked ones, or every file of the checked filegroups, of the chosen set. */
@@ -156,6 +192,7 @@ export function filesProblems(draft: RestoreDraft, facts: RestoreFacts): FilesPr
   else if (facts.sets.length > 0 && !draft.files?.chosen.length) general.push(restoreMessages.noFiles)
   const base = filesBase(draft, facts)
   if (base && draft.files?.set === base.id && !facts.setFiles?.[base.id]) general.push(restoreMessages.filesNotRead)
+  if (primaryRefused(draft, facts) && restoredFiles(draft, facts).some(primary)) general.push(restoreMessages.primaryOnline)
   const chosen = draft.files?.chosen.length ?? 0
   if (chosen > restoreLimits.restoreFiles) general.push(`A restore names at most ${restoreLimits.restoreFiles} files or filegroups.`)
   if (base && 1 + fileRestoreLogs(sourceSets(draft, facts), base).length > restoreLimits.planSets) general.push(`A restore runs at most ${restoreLimits.planSets} backup sets.`)

@@ -882,9 +882,11 @@ try {
   console.log('Object action checks: Restore Database opens from the Databases folder and from Tasks › Restore › Database…, asks before closing connections (Restore disabled meanwhile, Cancel last, the default and in focus, Escape answering and focus back on Restore), shows the steps and the RESTORE\'s percent while the sections summarise, asks before Stop over a database that existed (Keep restoring last and in focus, focus back on Stop), names what Stop left as a status with focus on the panel title, and runs at once to Restored without the confirm\'s fact.')
 
   // 5d. Restore Files and Filegroups (D1g): the Databases folder's item and a database's Tasks › Restore › Files and Filegroups…
-  // open it on AppData. The grid lists the full backup's data file and, once it is checked, checks the log after it, which
-  // cannot be unchecked; Varia's log backup is on for an online FULL database and STANDBY greyed (SQL Server refuses it online);
-  // Script shows actions.script's text for the restoreFiles request, and Restore runs at once to Restored with its four steps.
+  // open it on AppData. The grid lists the full backup's data files, the PRIMARY one greyed online with its reason shown and
+  // read as its description, and Restore as filegroup shows each row's filegroup first; once a file is checked, so is the log
+  // after it, which cannot be unchecked. Varia's log backup is on for an online FULL database and STANDBY greyed (SQL Server
+  // refuses it online), its reason shown and read; the options' labels take the fields' body size. Script shows actions.script's
+  // text for the restoreFiles request, and Restore runs at once to Restored with its four steps, focus on the Run panel's title.
   const filesTitle = 'Restore Files and Filegroups - AppData'
   await expect(async () => {
     await (await revealExplorerRow(page, 'server-a', 'Databases')).click({ button: 'right', force: true })
@@ -907,31 +909,51 @@ try {
   await expect(filesSection('Files')).toHaveCount(0)
   await expect(filesSection('General').getByRole('combobox', { name: 'To database:', exact: true })).toHaveValue('AppData')
   const backupSetsGrid = filesSection('General').getByRole('region', { name: 'Select the backup sets to restore:', exact: true })
-  await expect(backupSetsGrid.getByRole('row')).toHaveCount(3)
+  await expect(backupSetsGrid.getByRole('row')).toHaveCount(4)
   const logBox = backupSetsGrid.getByRole('checkbox', { name: 'Restore AppData-Log (2026-10-29 13:00:00)', exact: true })
   await expect(logBox).toBeDisabled()
   await expect(logBox).not.toBeChecked()
+  const primaryBox = backupSetsGrid.getByRole('checkbox', { name: 'Restore AppData from AppData-Full (2026-10-29 08:00:00)', exact: true })
+  await expect(primaryBox).toBeDisabled()
+  await expect(primaryBox).toHaveAccessibleDescription(/^A file of the PRIMARY filegroup restores only offline/)
+  await expect(filesSection('General').getByText(/^A file of the PRIMARY filegroup restores only offline/)).toBeVisible()
   await expect(documentVerb(filesFrame, filesTitle, 'Restore')).toBeDisabled()
-  await backupSetsGrid.getByRole('checkbox', { name: 'Restore AppData from AppData-Full (2026-10-29 08:00:00)', exact: true }).check()
+  // Restore as filegroup: each row shows the filegroup its checkbox names, in its own first column.
+  const asFilegroup = filesSection('Options').getByRole('checkbox', { name: 'Restore as filegroup', exact: true })
+  await asFilegroup.check()
+  await expect(backupSetsGrid.getByRole('columnheader', { name: 'Filegroup', exact: true })).toBeVisible()
+  await expect(backupSetsGrid.getByRole('row').filter({ has: page.getByRole('checkbox', { name: 'Restore Archive from AppData-Full (2026-10-29 08:00:00)', exact: true }) }).getByRole('cell').nth(1)).toHaveText('Archive')
+  await asFilegroup.uncheck()
+  await expect(backupSetsGrid.getByRole('columnheader', { name: 'Filegroup', exact: true })).toHaveCount(0)
+  await backupSetsGrid.getByRole('checkbox', { name: 'Restore AppData_2 from AppData-Full (2026-10-29 08:00:00)', exact: true }).check()
   await expect(logBox).toBeChecked()
   await expect(filesSection('Options').getByRole('checkbox', { name: 'Back up the log and restore it to bring the files online (WITH COPY_ONLY)', exact: true })).toBeChecked()
-  await expect(filesSection('Options').getByRole('radio', { name: /\(RESTORE WITH STANDBY\)$/ })).toBeDisabled()
+  const standbyRadio = filesSection('Options').getByRole('radio', { name: /\(RESTORE WITH STANDBY\)$/ })
+  await expect(standbyRadio).toBeDisabled()
+  await expect(standbyRadio).toHaveAccessibleDescription(/^RESTORE WITH STANDBY conflicts with an online restore/)
+  await expect(filesSection('Options').getByRole('checkbox', { name: 'Prompt before restoring each backup', exact: true })).toHaveAccessibleDescription('Not yet available')
   await expect(filesSection('Options').getByRole('radio', { name: /\(RESTORE WITH RECOVERY\)$/ })).toBeChecked()
-  await expect(filesSection('Options').getByRole('table', { name: 'Restore the database files as', exact: true }).getByRole('textbox', { name: 'Restore AppData as', exact: true })).toBeVisible()
+  // The options' labels and the grid's title take the fields' body size (the metric token), not the page's 16 px.
+  const bodySize = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--varia-size-md').trim())
+  expect(await standbyRadio.evaluate(radio => getComputedStyle(radio.closest('label')).fontSize)).toBe(bodySize)
+  expect(await backupSetsGrid.evaluate(grid => getComputedStyle(document.getElementById(grid.getAttribute('aria-labelledby'))).fontSize)).toBe(bodySize)
+  await expect(filesSection('Options').getByRole('table', { name: 'Restore the database files as', exact: true }).getByRole('textbox', { name: 'Restore AppData_2 as', exact: true })).toBeVisible()
   await scriptToggle(filesFrame).click()
   await expect(drawerText(filesFrame)).toHaveValue(restoreFilesScript.replaceAll('\r\n', '\n'))
   expect((await stubCalls('actions.script')).at(-1)).toMatchObject({ action: 'restoreFiles', target: { kind: 'database', name: 'AppData' }, identity: { id: 5 },
-    restoreFiles: { files: ['AppData'], filegroups: [], recovery: 'recovery', sets: [{ type: 'full', file: 1 }, { type: 'log', file: 1 }], logBackup: { file: expect.stringMatching(/AppData_LogBackup_.*\.bak$/) } } })
+    restoreFiles: { files: ['AppData_2'], filegroups: [], recovery: 'recovery', sets: [{ type: 'full', file: 1 }, { type: 'log', file: 1 }], logBackup: { file: expect.stringMatching(/AppData_LogBackup_.*\.bak$/) } } })
   await page.screenshot({ path: resolve('artifacts', 'object-actions-restore-files.png') })
   await scriptToggle(filesFrame).click()
   await documentVerb(filesFrame, filesTitle, 'Restore').click()
   const filesDone = filesFrame.getByRole('region', { name: 'Restored AppData', exact: true })
   await expect(filesDone).toContainText('AppData is online.')
   await expect(filesDone.getByRole('listitem')).toHaveText([/^Done: Restore the files/, /^Done: Restore log backup/, /^Done: Back up the log/, /^Done: Restore the log backup/])
+  // Restore ran at once (no confirm bar) and took the verb that had focus away: the Run panel's title has it.
+  await expect(filesDone.getByRole('heading', { name: 'Restored AppData', exact: true })).toBeFocused()
   expect((await stubCalls('actions.execute')).filter(call => call.action === 'restoreFiles')).toHaveLength(1)
   await closeDocumentButton(page, filesTitle).click()
   await expect(documentTab(page, filesTitle)).toHaveCount(0)
-  console.log('Object action checks: Restore Files and Filegroups opens from the Databases folder and from Tasks › Restore › Files and Filegroups…, lists the full backup\'s files in Select the backup sets to restore with the log after it checked once a file is, offers the log backup with STANDBY greyed online, scripts the restoreFiles request, and runs to Restored with its four steps.')
+  console.log('Object action checks: Restore Files and Filegroups opens from the Databases folder and from Tasks › Restore › Files and Filegroups…, lists the full backup\'s files in Select the backup sets to restore (PRIMARY\'s greyed online with its reason, each filegroup named under Restore as filegroup) with the log after it checked once a file is, offers the log backup with STANDBY greyed online and its reason read, draws the options at the body size, scripts the restoreFiles request, and runs to Restored with its four steps and focus on the Run panel.')
 
   // 6. A database: SSMS's two options (backup history checked, Close existing connections not), then a lost server
   // leaves only Close. Databases has just reloaded after Database Properties' Apply, so the press repeats until its row's menu opens.
