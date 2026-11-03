@@ -45,7 +45,7 @@ export default function DeleteObjectPage({ open, editable }: PageProps) {
       {model.warnings.map((warning, index) => <li key={index}><Icon name="warning" /><span>{warning.text}</span></li>)}
       {model.dependentsTruncated && <li><Icon name="warning" /><span>More objects depend on it than are listed.</span></li>}
     </ul>}
-    {model && blockers.length > 0 && <section className="object-dialog-sessions" aria-labelledby="delete-object-sessions-toggle">
+    {model && blockers.length > 0 && <section className="object-dialog-delete-sessions" aria-labelledby="delete-object-sessions-toggle">
       <button type="button" id="delete-object-sessions-toggle" className="object-dialog-disclosure" aria-expanded={sessionsOpen} aria-controls="delete-object-sessions"
         onClick={() => setSessionsOpen(!sessionsOpen)}><Icon name={sessionsOpen ? 'chevron-down' : 'chevron-right'} /><span>Sessions using <bdi>{displayText(model.name)}</bdi> ({listed.toLocaleString('en-US')})</span></button>
       {sessionsOpen && <div className="object-dialog-sessions-body" id="delete-object-sessions">

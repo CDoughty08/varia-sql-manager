@@ -2,6 +2,7 @@ import type { ExplorerNode as WireNode, VariaApi } from '../../../shared/contrac
 import { cloudEngineEditions, explorerLimits, filterProperties, folderSpecs, kindSpecs, nodeStatuses, parentKinds, serverEngineOf, type FolderId, type NodeKind, type NodeStatus, type ServerEngine } from '../../../shared/explorer/catalog.ts'
 import { displayText, insertTextFor, refKey, type ExplorerFilter, type ExplorerNodeRef, type ExplorerTarget, type ObjectRef, type ParentRef } from '../../../shared/explorer/refs.ts'
 import { explorerFilterSchema } from '../../../shared/explorer/schema.ts'
+import { currentDatabaseRuntime, type DatabaseRuntime, type DatabaseStatusRow } from '../../../shared/explorer/status.ts'
 import { actionContextValues, actionMenuState, type ActionContextValues } from '../../../shared/actions/catalog.ts'
 import { scriptContextValues, scriptMenuState, type ScriptContextValues } from '../../../shared/scripting/catalog.ts'
 import { ssisVerbContextValues, ssisVerbMenuState, type SsisVerbContextValues } from '../../../shared/ssis/catalog.ts'
@@ -71,6 +72,12 @@ export interface ExplorerServiceOptions {
   /** The wall clock (epoch ms) a listing's freshness is stamped with. */
   readonly now?: () => number
 }
+/** Where a database's live runtime state comes from (ExplorerStatusService): a peek at its last sample, and a signal when
+ *  the samples change. */
+export interface DatabaseRuntimeSource {
+  databaseRuntime(connectionId: string, database: string): { readonly at: number; readonly row: DatabaseStatusRow | undefined; readonly complete: boolean } | undefined
+  subscribe(listener: () => void): () => void
+}
 
 /**
  * How a first page replaces the children: `keep` reuses static folders (and their state); `reconcile` keeps every child
@@ -129,10 +136,11 @@ const objectOf = (ref: ExplorerNodeRef): ObjectRef => ref.type === 'object' ? re
 const isParentKind = (kind: string): kind is ParentRef['kind'] => (parentKinds as readonly string[]).includes(kind)
 const sameParent = (a: ParentRef, b: ObjectRef) => a.kind === b.kind && a.schema === b.schema && a.name === b.name
 
-/** What a node is, and the server it is on: the engine and platform its connection's profile reported at connect. */
-const targetOf = (node: TreeNode, connection: Pick<LiveConnection, 'engineEdition' | 'linux'> | undefined): ExplorerTarget => ({
+/** What a node is, and the server it is on: the engine and platform its connection's profile reported at connect. A database's
+ *  runtime state is the one it has now (`runtime`: the listing's, or a newer live sample's). */
+const targetOf = (node: TreeNode, connection: Pick<LiveConnection, 'engineEdition' | 'linux'> | undefined, runtime: DatabaseRuntime | undefined): ExplorerTarget => ({
   connectionId: node.connectionId, ref: node.ref, kind: node.kind, ...(node.folder ? { folder: node.folder } : {}), ...(node.subtype ? { subtype: node.subtype } : {}), label: node.label,
-  ...(node.status ? { status: node.status } : {}), ...(node.database ? { database: node.database, listedAt: node.listedAt } : {}),
+  ...(node.status ? { status: node.status } : {}), ...(runtime ? { database: runtime } : {}), ...(node.listedAt !== undefined ? { listedAt: node.listedAt } : {}),
   engine: serverEngineOf(connection?.engineEdition), linux: !!connection?.linux
 })
 
@@ -205,6 +213,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private filtered = ''
   private focusTaken = 0
   private readonly now: () => number
+  private status?: DatabaseRuntimeSource
   /** The child `reconcile` selects when a page of its folder brings it. */
   private pendingSelect?: { readonly folder: number; readonly key: string; readonly name: string | undefined }
   private readonly unsubscribe: () => void
@@ -396,13 +405,28 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   /** The selected node as a command target; synthetic rows have none. */
   target(): ExplorerTarget | undefined {
     const node = this.selectedNode()
-    return node && targetOf(node, this.connectionOf(node.connectionId))
+    return node && this.targetOf(node)
+  }
+  /**
+   * Narrows database menus by the live status samples too (D3a): a database a sample newer than its listing shows offline
+   * greys Take Offline at once, before any listing. The context keys follow the samples; nothing subscribes for them but this.
+   */
+  useStatus(source: DatabaseRuntimeSource): Disposable {
+    this.status = source
+    const stop = source.subscribe(() => this.guard(() => this.updateContext()))
+    this.updateContext()
+    return { dispose: () => { stop(); if (this.status === source) { this.status = undefined; this.updateContext() } } }
+  }
+  private targetOf(node: TreeNode): ExplorerTarget {
+    const name = node.kind === 'database' && node.ref.type === 'object' ? node.ref.object.name : undefined
+    const runtime = name === undefined ? node.database : currentDatabaseRuntime(node.database, node.listedAt, this.status?.databaseRuntime(node.connectionId, name))
+    return targetOf(node, this.connectionOf(node.connectionId), runtime)
   }
   /** A row's node (a synthetic row's owner) as a context menu's target, with its id; undefined for a removed node. */
   menuNode(rowId: number | undefined): ExplorerMenuNode | undefined {
     const node = rowId === undefined ? undefined : this.nodes.get(rowOwner(rowId))
     return node && this.attached(node)
-      ? { ...targetOf(node, this.connectionOf(node.connectionId)), id: node.id, lost: node.lost, ...(node.filtered ? { filtered: true } : {}), ...(node.kind === 'folder' && this.insertable(node) ? { insertable: true } : {}) }
+      ? { ...this.targetOf(node), id: node.id, lost: node.lost, ...(node.filtered ? { filtered: true } : {}), ...(node.kind === 'folder' && this.insertable(node) ? { insertable: true } : {}) }
       : undefined
   }
   private connectionOf(connectionId: string): LiveConnection | undefined {
@@ -502,6 +526,21 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   listingFolderOf(nodeId: number): number | undefined {
     const node = this.nodes.get(nodeId), parent = node?.parent ? this.nodes.get(node.parent) : undefined
     return parent?.kind === 'folder' && this.attached(parent) ? parent.id : undefined
+  }
+  /** The tree's node for an owner's folder (a server's Logins folder), once it has been listed; undefined otherwise. A dialog that
+   *  made an object reloads it to show and select the object. */
+  folderNode(connectionId: string, owner: ObjectRef, folder: FolderId): number | undefined {
+    const key = refKey(connectionId, { type: 'folder', owner, folder })
+    for (const node of this.nodes.values()) if (node.kind === 'folder' && node.connectionId === connectionId && !node.lost && refKey(node.connectionId, node.ref) === key && this.attached(node)) return node.id
+    return undefined
+  }
+  /** The server's Databases folder above a node: a database under System Databases or Database Snapshots too, whose own
+   *  listing folder is not where a new database appears (New Database reloads this one). */
+  databasesFolderOf(nodeId: number): number | undefined {
+    for (let node = this.nodes.get(nodeId); node; node = node.parent ? this.nodes.get(node.parent) : undefined) {
+      if (node.kind === 'folder' && node.folder === 'databases') return this.attached(node) ? node.id : undefined
+    }
+    return undefined
   }
   /** The folder's filter; filters are kept per connection until it disconnects. */
   filter(folderNodeId: number): ExplorerFilter | undefined {
@@ -1344,7 +1383,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (this.disposed) return
     const node = this.selectedNode()
     const folder = node?.folder ? folderSpecs[node.folder] : undefined
-    const target = node && targetOf(node, this.connectionOf(node.connectionId))
+    const target = node && this.targetOf(node)
     const next: ExplorerContextState = {
       explorerHasSelection: !!node,
       explorerSelectionKind: node?.kind ?? '',

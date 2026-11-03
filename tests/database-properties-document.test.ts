@@ -9,6 +9,7 @@ import { setOption } from '../src/renderer/src/dialogs/database-properties'
 import { selectSection, setScriptOpen } from '../src/renderer/src/kit/document-frame'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { previewDelayMs, propertiesMessages } from '../src/renderer/src/properties/DatabasePropertiesService'
+import { databaseStatusPill, shownModel } from '../src/renderer/src/properties/fields'
 import type { ConnectionService } from '../src/renderer/src/services/connections'
 import { databaseModel } from './fixtures/database-properties'
 import { deferred } from './fixtures/documents'
@@ -545,6 +546,55 @@ describe('Database Properties as a document', () => {
     execute.resolve(done)
     await closing
     expect(documents.get(id)).toBeUndefined()
+  })
+  it('follows Take Offline and Bring Online: a clean document reads the database again, one with changes keeps them until it is back', async () => {
+    const { properties, id, state, edit, api, dialogs, connections } = opened()
+    await settled()
+    const identity = { id: 7, created: '2026-01-02T03:04:05.678' }
+    api.describeObject.mockImplementation(async params => ({ ok: true, value: (params.dialog === 'databaseProperties'
+      ? { databaseProperties: databaseModel({ readOnlyReason: 'The database is offline.' }), elapsedMs: 1 }
+      : { databaseState: { name: 'AppData', identity, state: params.dialog === 'takeOffline' ? 0 : 6, userAccess: 0, readOnly: false, standby: false, sessions: 0, withTransaction: 0, sessionList: [], sessionsTruncated: false, warnings: [] }, elapsedMs: 1 }) as ActionDescribeResult }))
+    api.executeObjectAction.mockResolvedValue({ ok: true, value: { steps: [{ status: 'done', title: 'Take database offline' }], messages: [], elapsedMs: 1 } })
+    // Taken offline through the dialog: the clean document reads the database again (now read-only, as its describe says).
+    dialogs.open('takeOffline', node())
+    await settled()
+    await dialogs.ok()
+    await settled()
+    expect(dialogs.current?.phase).toBe('succeeded')
+    expect(api.describeObject.mock.calls.filter(([params]) => params.dialog === 'databaseProperties')).toHaveLength(2)
+    expect(state()).toMatchObject({ phase: 'ready', model: { readOnlyReason: 'The database is offline.' } })
+    expect(state().offline).toBeUndefined()
+    dialogs.close()
+    // A document with changes keeps them, marked offline (its status reads Offline, as its banner says); other databases and
+    // other servers are not touched.
+    api.describeObject.mockImplementation(async params => ({ ok: true, value: { databaseProperties: { ...databaseModel(), general: { ...databaseModel().general, name: params.target.name ?? '' } }, elapsedMs: 1 } as ActionDescribeResult }))
+    properties.refresh(id)
+    await settled()
+    edit('recoveryModel', 'SIMPLE')
+    properties.databaseStateChanged('c1', 'AppData', true)
+    expect(state()).toMatchObject({ changed: true, offline: true })
+    expect(databaseStatusPill(shownModel(state().model!, state().offline))).toEqual({ tone: 'critical', label: 'Offline' })
+    expect(databaseStatusPill(shownModel(state().model!, undefined))).toEqual({ tone: 'success', label: 'Normal' })
+    expect(propertiesMessages.offline).toBe('The database was taken offline. Bring it online before you apply these changes, or discard them.')
+    // Apply is not held back by the mark: the database can come online another way (a query, another tool), and Apply's
+    // preflight refuses one that is still offline.
+    expect(properties.canApply(id)).toBe(true)
+    connectionsAdd(connections, 'c2', 'c2.example')
+    properties.databaseStateChanged('c1', 'Sales', false)
+    properties.databaseStateChanged('c2', 'AppData', false)
+    expect(state().offline).toBe(true)
+    // Bring Online through another connection to the same server clears it.
+    connectionsAdd(connections, 'c3', 'c1.example')
+    properties.databaseStateChanged('c3', 'AppData', false)
+    expect(state()).toMatchObject({ changed: true })
+    expect(state().offline).toBeUndefined()
+    expect(properties.canApply(id)).toBe(true)
+    // Discard Changes reads nothing by itself; a Refresh then clears the mark too.
+    properties.databaseStateChanged('c1', 'AppData', true)
+    properties.discard(id)
+    properties.refresh(id)
+    await settled()
+    expect(state().offline).toBeUndefined()
   })
   it('opens read-only for a database that cannot change, with nothing to apply', async () => {
     const { properties, id } = opened(databaseModel({ readOnlyReason: 'The database is a snapshot, so its properties cannot change.' }))

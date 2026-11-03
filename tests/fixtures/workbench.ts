@@ -56,6 +56,8 @@ import { TableDesignerService } from '../../src/renderer/src/designer/TableDesig
 import { SsisPropertiesService } from '../../src/renderer/src/ssis/SsisPropertiesService'
 import { ssisContribution } from '../../src/renderer/src/contributions/ssis'
 import { DatabasePropertiesService } from '../../src/renderer/src/properties/DatabasePropertiesService'
+import { NewDatabaseService } from '../../src/renderer/src/new-database/NewDatabaseService'
+import { RestoreService } from '../../src/renderer/src/restore/RestoreService'
 import { ActivityMonitorService } from '../../src/renderer/src/activity/ActivityMonitorService'
 import { activityContribution } from '../../src/renderer/src/contributions/activity'
 import { documentOwner } from '../../src/renderer/src/live/LiveService'
@@ -224,6 +226,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     saveResults: vi.fn<VariaApi['saveResults']>(async () => ({ ok: true, value: null })),
     cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(async () => ({ ok: true, value: { cancelled: true } })),
     onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}),
+    onActionProgress: vi.fn<VariaApi['onActionProgress']>(() => () => {}),
     cancel: vi.fn<VariaApi['cancel']>(async () => ({ ok: true, value: { cancelled: true } })),
     openSqlFiles: vi.fn<VariaApi['openSqlFiles']>(async () => ({ ok: true, value: [] })),
     releaseSqlFile: vi.fn<VariaApi['releaseSqlFile']>(async () => ({ ok: true, value: undefined })),
@@ -261,7 +264,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     describeObject: vi.fn<VariaApi['describeObject']>(async params => ({
       ok: true, value: { deleteTarget: { name: [params.target.schema, params.target.name].filter(Boolean).join('.'), type: kindSpecs[params.target.kind].title, owner: 'dbo', warnings: [], dependentsTruncated: false }, elapsedMs: 1 }
     })),
-    scriptObjectAction: vi.fn<VariaApi['scriptObjectAction']>(async params => ({ ok: true, value: { text: `-- ${params.action} ${params.target.name}`, database: params.action === 'createTable' ? params.target.name : params.target.database ?? 'master', warnings: [] } })),
+    scriptObjectAction: vi.fn<VariaApi['scriptObjectAction']>(async params => ({ ok: true, value: { text: `-- ${params.action} ${params.target.name}`, database: params.action === 'createTable' ? params.target.name : params.action === 'createDatabase' ? 'master' : params.target.database ?? 'master', warnings: [] } })),
     executeObjectAction: vi.fn<VariaApi['executeObjectAction']>(async () => ({ ok: true, value: { steps: [{ status: 'done', title: 'Drop the object' }], messages: [], elapsedMs: 1 } })),
     cancelObjectActions: vi.fn<VariaApi['cancelObjectActions']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
     // Create Catalog: a server without a catalog and with CLR off; creating it succeeds.
@@ -309,8 +312,10 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const scriptingOptions = { getSnapshot: () => ({ options: scriptingOptionsFrom(settings.getSnapshot().values) }), subscribe: settings.subscribe }
   const focusEditor = vi.fn()
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
+  // As the workbench wires it: Database Properties documents follow a database a dialog took offline or brought online, or deleted.
   const dialogs = new ObjectDialogService({
     api, connections, explorer, documents, files, focusEditor,
+    databaseState: (connectionId, database, offline) => properties.databaseStateChanged(connectionId, database, offline),
     databaseGone: gone => databaseGone(gone), tabNames: ids => queries.tabNames(ids)
   })
   const longRuns = new LongRunService({ api })
@@ -318,6 +323,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const designers = new TableDesignerService({ api, documents, files, connections, explorer })
   const ssisProperties = new SsisPropertiesService({ api, documents, connections })
   const properties = new DatabasePropertiesService({ api, documents, files, connections, explorer, focusEditor, close: id => { void files.close(id) }, ...(options.timers ? { timers: options.timers } : {}) })
+  const newDatabase = new NewDatabaseService({ api, documents, files, connections, explorer, longRuns, focusEditor, ...(options.timers ? { timers: options.timers } : {}) })
+  const restore = new RestoreService({ api, documents, files, connections, focusEditor, now: () => new Date(2026, 9, 30, 12, 0, 0), ...(options.timers ? { timers: options.timers } : {}) })
   // Activity Monitors subscribe through a stand-in for LiveService that records each view.
   const liveViews = fakeLiveViews()
   const activity = new ActivityMonitorService({ documents, connections, live: liveViews, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values })
@@ -345,6 +352,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     recovery,
     designer: designers.context,
     properties: properties.context,
+    newDatabase: newDatabase.context,
     notifications,
     activity: activity.context,
     ssis: operations.context,
@@ -406,6 +414,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     designers,
     ssisProperties,
     properties,
+    newDatabase,
+    restore,
     notifications,
     activity,
     operations
@@ -465,6 +475,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     ssisProperties.dispose()
     activity.dispose()
     properties.dispose()
+    newDatabase.dispose()
+    restore.dispose()
     operations.dispose()
     bookmarks.dispose()
     editorDialogs.dispose()
@@ -499,6 +511,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     designers,
     ssisProperties,
     properties,
+    newDatabase,
+    restore,
     activity,
     liveViews,
     operations,

@@ -51,6 +51,11 @@ export interface PropertiesState {
   readonly stale: boolean
   /** Varia deleted the database (D3 §8): the document is an orphan, read-only with no Refresh, until it is closed. */
   readonly gone?: boolean
+  /** Take Offline took the database offline while the document held changes, which it keeps: the banner and the status say so
+   *  until the database is read again. Apply still runs, and its preflight refuses a database that is not online, so one brought
+   *  online elsewhere (a query, another connection) never leaves the changes stuck. A document without changes reads the
+   *  database again instead (its readOnlyReason says it). */
+  readonly offline?: boolean
   readonly error?: ActionError
   /** An info line: the changes applied, a script delivered. */
   readonly notice?: string
@@ -95,7 +100,9 @@ export const propertiesMessages = {
   /** Apply ran, but reading the database again failed: said before the read's error, so the Apply is never taken for a failure. */
   appliedUnread: 'The changes were applied, but the database could not be read again:',
   applying: 'The changes are being applied. Stop them, or wait for them to finish.',
-  readFailed: 'The database could not be read.'
+  readFailed: 'The database could not be read.',
+  /** Take Offline took the database offline while the document held changes. */
+  offline: 'The database was taken offline. Bring it online before you apply these changes, or discard them.'
 } as const
 /** How long the Script preview waits after the last edit before it asks the backend, so typing sends one request. */
 export const previewDelayMs = 300
@@ -239,7 +246,7 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
     }
     const current = this.get(id)!
     this.patch(id, {
-      phase: 'ready', model, draft: definition.initialDraft(model, current.target), changed: false, stale: false, revision: current.revision + 1, error: undefined,
+      phase: 'ready', model, draft: definition.initialDraft(model, current.target), changed: false, stale: false, offline: undefined, revision: current.revision + 1, error: undefined,
       ...notice ? { notice } : {}, script: { state: 'idle', message: noScriptNotice }, scriptRevision: undefined
     })
     this.options.documents.setDirty(id, false)
@@ -284,6 +291,19 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
   private revive(id: string): void {
     this.patch(id, { gone: undefined, error: undefined })
     if (this.canRefresh(id)) this.refresh(id)
+  }
+  /**
+   * A dialog took a database offline or brought it online on a connection (D3a): each of its documents on that server, through
+   * any connection, reads it again when nothing would be lost (the describe of an offline database says so, read-only), and one
+   * with changes keeps them, marked offline until the database is online again or read again.
+   */
+  databaseStateChanged(connectionId: string, database: string, offline: boolean): void {
+    const server = this.options.connections.getSnapshot().find(connection => connection.id === connectionId)?.server
+    for (const state of Object.values(this.getSnapshot().documents)) {
+      if (state.target.name !== database || (this.connectionOf(state.id) !== connectionId && (server === undefined || !this.follows(state.id, server)))) continue
+      if (!state.changed && this.canRefresh(state.id)) { this.patch(state.id, { offline: undefined }); this.refresh(state.id) }
+      else if (!!state.offline !== offline) this.patch(state.id, { offline: offline || undefined })
+    }
   }
   /** Apply (and File › Save, the close prompt's Save): one at a time per document; resolves true once the changes ran. */
   apply(id: string): Promise<boolean> {

@@ -134,7 +134,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// <param name="hooks">Adds debug.results.synthesize (VARIA_BACKEND_TEST_HOOKS=1, set by main only for smoke tests).</param>
     /// <param name="publish">Sends a global EVENT and says whether it was queued; result memory usage is reported through it
     /// at most once a second.</param>
-    public SqlService(ResultStore? store = null, bool hooks = false, Func<object, bool>? publish = null)
+    /// <param name="actionsCatalog">The object actions' catalogue; the checks pass one that marks an action long (D1c) before D1f does.</param>
+    public SqlService(ResultStore? store = null, bool hooks = false, Func<object, bool>? publish = null, ActionsCatalog? actionsCatalog = null)
     {
         this.store = store ?? ResultStore.FromSystem();
         jobs = new ResultJobs(this.store);
@@ -150,7 +151,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         };
         explorer = new ExplorerService(this);
         scripting = new ScriptingService(this);
-        actions = new ActionService(this);
+        actions = new ActionService(this, catalog: actionsCatalog);
         ssis = new SsisService(this);
         ssisActions = new SsisActionService(this, ssis);
         live = new LiveService(this);
@@ -203,6 +204,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     IReadOnlySet<int> ILiveHost.OwnSessions(string connectionId) => ownSessions.Sessions(connectionId, ServerOf);
     /// <summary>Varia's own session ids (the checks record and read them).</summary>
     internal OwnSessionLedger OwnSessions => ownSessions;
+    /// <summary>The ids the pooled connections were given (the checks record a stale one, as a cleared pool leaves it).</summary>
+    internal OwnSessionLedger PoolSessionLedger => poolSessions;
 
     /// <summary>Own: under one of Varia's own program names (a pool's, Object Actions'), which the Activity Monitor trusts; a plain
     /// pooled connection is recorded only for freeing a database.</summary>
@@ -325,7 +328,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "scripting.script" => await scripting.ScriptAsync(Read<ScriptArgs>(parameters, json), Token(context)),
         "actions.describe" => await actions.DescribeAsync(Read<ActionDescribeArgs>(parameters, json), Token(context)),
         "actions.script" => await actions.ScriptAsync(Read<ActionArgs>(parameters, json), Token(context)),
-        "actions.execute" => await actions.ExecuteAsync(Read<ActionArgs>(parameters, json), Token(context)),
+        // A long step's 3211 progress goes out as droppable action.progress EVENTs on the request (ActionProgress).
+        "actions.execute" => await actions.ExecuteAsync(Read<ActionArgs>(parameters, json), Token(context), context is null ? null : value => context.SendEvent(value, droppable: true)),
         "entra.cache.clear" => ClearEntra(Read<EntraCacheArgs>(parameters, json)),
         "ssis.describe" => await ssis.DescribeAsync(Read<SsisDescribeArgs>(parameters, json), Token(context)),
         "ssis.execute" => await ssisActions.ExecuteAsync(Read<SsisExecuteArgs>(parameters, json), Token(context)),
@@ -1583,7 +1587,14 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         ssisActions.CancelAll();
         live.CancelAll();
     }
-    public void DrainCommitted() => ssisActions.DrainCommitted();
+    /// <summary>Waits, side by side, for a Create Catalog past its restore and for long object actions (a restore) with their cleanup,
+    /// each within its own bound, which main's drainMs for the pending request covers.</summary>
+    public void DrainCommitted()
+    {
+        var restores = Task.Run(actions.DrainLong);
+        ssisActions.DrainCommitted();
+        restores.Wait();
+    }
     public void Dispose()
     {
         memoryTimer?.Dispose();
