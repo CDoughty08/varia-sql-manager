@@ -530,7 +530,7 @@ state the catalogue's database rules grey it in (docs/object-actions.md), or for
 DATABASE, dbcreator, ownership, or (while it is online) ALTER on the database (`HAS_PERMS_BY_NAME` on the database answers 0 to
 a login with no user in it, to sysadmin while another session holds it SINGLE_USER, and on a database that is not online). `actions.script` and `actions.execute` take `{ action: 'takeOffline', connectionId, requestId, target,
 dropConnections, identity? }` or `{ action: 'bringOnline', connectionId, requestId, target, identity? }` (`identity` as for
-Database Properties; `dropConnections` is Drop All Active Connections, `WITH ROLLBACK IMMEDIATE`, and only Take Offline takes it).
+Database Properties; `dropConnections` is Drop All Active Connections, `WITH ROLLBACK IMMEDIATE`, and only Take Offline and Detach take it).
 Execute repeats the describe's refusals and runs one step, `Take database offline`, `Close connections and take database
 offline` or `Bring database online`; without `dropConnections`, SET OFFLINE waits for other sessions until Stop. Bring Online
 adds a message when the database is still SINGLE_USER or RESTRICTED_USER, read under a 5 s budget of its own after SET ONLINE
