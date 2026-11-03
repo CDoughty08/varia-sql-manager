@@ -36,7 +36,9 @@ describe('fuzzy matching', () => {
     expect(palette('use')[0]).toBe('Query: Change Database…')
     expect(palette('run')[0]).toBe('Query: Execute')
     // A category match is no better than the same words in a title, so an available command wins the tie.
-    const explorerCommands = commandIds.map(paletteLabel).filter(label => label.startsWith('Object Explorer: '))
+    // Only the palette's own commands: a menu-only twin (New Database… on a database's menu) shares its command's label.
+    const explorerCommands = commandIds.filter(id => commandDescriptor(id).palette !== false).map(paletteLabel).filter(label => label.startsWith('Object Explorer: '))
+    expect(palette('new database').filter(label => label === 'Object Explorer: New Database…')).toHaveLength(1)
     expect(palette('object explorer', explorerCommands)).toEqual(['View: Show Object Explorer', ...palette('object explorer').filter(label => label !== 'View: Show Object Explorer')])
     expect(palette('object explorer', explorerCommands).slice(1).sort()).toEqual(explorerCommands.filter(label => palette('object explorer').includes(label)).sort())
     expect(palette('exe').slice(0, 2)).toEqual(['Query: Execute', 'Query: Cancel Executing Query'])
