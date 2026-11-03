@@ -77,6 +77,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string SeamTaken => Name + "_seamt";
     /// <summary>New Database's database (D1b), which OK itself creates; the checks mark it at once and adopt it.</summary>
     public string NewDatabase => Name + "_nd";
+    /// <summary>Where the action progress checks back up with STATS and hold a lock (D1c; created on demand).</summary>
+    public string Progress => Name + "_ap";
     /// <summary>Held in memory only, never printed.</summary>
     public string Password { get; }
     public bool HasSnapshot { get; private set; }
@@ -87,8 +89,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // _act and _actr are the object-action checks' database and the name they rename it to (PR17), so a run that crashes
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
     // _live the live tables', _ssis the fake SSIS catalog, _ssisref the restored catalog backup and _ssiscc Create Catalog's
-    // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _files is the server file picker's; _seam and _seamt are the wave 5 seam checks'; _nd is New Database's.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_files|_seam|_seamt|_nd)?$")]
+    // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _files is the server file picker's; _seam and _seamt are the wave 5 seam checks'; _nd is New Database's; _ap the action progress checks'.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_files|_seam|_seamt|_nd|_ap)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}$")]
     private static partial Regex LoginPattern();
@@ -358,6 +360,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         await CreateMarkedAsync(SeamTaken);
         return await CreateMarkedAsync(Seam);
     }
+
+    /// <summary>Creates the empty, marked action progress database.</summary>
+    public Task<string> CreateProgressAsync() => CreateMarkedAsync(Progress);
 
     /// <summary>Creates the empty, marked table designer database.</summary>
     public Task<string> CreateDesignerAsync() => CreateMarkedAsync(Designer);

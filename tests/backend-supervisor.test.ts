@@ -500,6 +500,18 @@ describe('BackendSupervisor results', () => {
   })
 })
 
+describe('BackendSupervisor action progress', () => {
+  it('passes valid action.progress EVENTs on and drops the others without failing the action', async () => {
+    const value = supervisor('action-progress')
+    const progress: unknown[] = []
+    const params = { requestId: crypto.randomUUID(), connectionId: crypto.randomUUID(), action: 'delete', target: {} } as never
+    // Failing on an invalid EVENT would CANCEL the request, which for a restore means stopping it part way.
+    const result = await value.request('actions.execute', params, { onActionProgress: event => { progress.push(event) } })
+    expect(result).toEqual({ steps: [{ status: 'done', title: 'Back up', progress: 50 }] })
+    expect(progress).toEqual([{ type: 'action.progress', step: 0, percent: 5 }, { type: 'action.progress', step: 1, percent: 50 }])
+  })
+})
+
 describe('BackendSupervisor live subscriptions', () => {
   const subscription = (o: { probes?: string[]; args?: Record<string, number> } = {}) => ({
     subscriptionId: crypto.randomUUID(), connectionId: crypto.randomUUID(), source: 'debug.synthetic' as const,

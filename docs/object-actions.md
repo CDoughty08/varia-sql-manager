@@ -162,6 +162,29 @@ A short state action (a rename; later a login's Disable and Enable) runs as a st
 shown with Stop after `statusDelayMs`, naming its step when it has several ("Renaming Sales to Sales2: Closing
 connections…").
 
+### Long actions and progress
+
+An action marked long in the catalogue (a restore, a verify or a backup) takes the long gate instead of the execute gate:
+1 per Varia connection and 2 in all. Another waits up to `gateWaitMs`, then answers `BUSY`
+("Another restore or backup is running on this connection.", or "Restores or backups are already running on other
+connections." when long actions elsewhere hold every slot), so a long run never blocks a rename or a delete.
+Its steps run through a data reader, never `ExecuteNonQuery`, because SqlClient raises informational messages as they
+arrive only for a reader: SQL Server's message 3211 ("n percent processed.", from `STATS`) becomes a droppable
+`action.progress` EVENT `{step, percent}` at most every 250 ms, and is never one of the 32 messages the reply keeps.
+Each step's start goes out at once as percent 0, and a percent the interval held back goes out when the interval ends (or
+before the next step's start), so a step's last percent is not lost and a finished step never looks stuck while the next waits.
+Main checks each EVENT and pushes `varia:actions-progress {requestId, step, percent}` only to the window that sent the request, at most 4 a
+second: a new step at once, and the latest percent held inside the interval when it ends (`actionProgressRelay`); an
+invalid EVENT is dropped, never a reason to stop the run. The page keeps
+the latest percent per request (`ActionProgressService`) and draws it under the running step of its `StepList`; the
+reply's steps carry the last percent each step reached as `progress`.
+
+When the backend's generation is closed (a quit, a reload, Restart SQL Backend), it stops its long actions itself and
+runs their cleanup steps within their budgets; main lets that generation run `stopGraceMs` plus the action's cleanup budget plus 5 s
+before it kills it (`actionDrainMs`, methodPolicies' `drainMs`).
+
+No action is long yet; the restore, verify and backup actions that will be are still to come.
+
 ## Database Properties
 
 Database Properties opens as a document tab, one per database and connection (Properties on a database whose
@@ -456,9 +479,9 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `scriptMs` | 25,000 | The backend's budget for building a script, in ms; then `TIMEOUT` |
 | `readLockTimeoutMs` | 10,000 | `LOCK_TIMEOUT` while reading for a dialog or a script, in ms; then `BLOCKED`. DDL itself waits without one |
 | `gateWaitMs` | 30,000 | How long a request waits for its gate before the backend answers `BUSY`, in ms |
-| `readPerConnection` | 2 | Describe and script requests at once per server |
+| `readPerConnection` | 2 | Describe and script requests at once per connection |
 | `readTotal` | 4 | Describe and script requests at once in total |
-| `executePerConnection` | 1 | Actions running at once per server |
+| `executePerConnection` | 1 | Actions running at once per connection; long actions take the long gate instead |
 | `executeTotal` | 2 | Actions running at once in total |
 | `registered` | 128 | Requests the backend tracks; more fail with `BUSY` |
 | `cancelIds` | 16 | Request ids per cancellation |
@@ -482,6 +505,11 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `browseMs` | 10,000 | The backend's budget for one listing of the server file picker, in ms; then `TIMEOUT` (main's deadline is 15 s) |
 | `browsePerConnection` | 1 | Server file picker listings at once per server, under a gate of their own rather than the describe and script gates |
 | `cleanupMs` | 10,000 | How long an action's compensation and cleanup steps may run after a failure or Stop, in ms, unless the action sets its own; a Stop's reply waits `stopGraceMs` plus this |
+| `progressEventMs` | 250 | How often a long step's progress (SQL Server's message 3211, from `STATS`) may reach main as a droppable `action.progress` EVENT, at most, in ms |
+| `progressPerSecond` | 4 | Progress updates main pushes to the window per request each second, at most; the first of each step always goes |
+| `longPerConnection` | 1 | Long actions (a restore or backup) running at once per connection; another waits `gateWaitMs`, then `BUSY` |
+| `longTotal` | 2 | Long actions running at once in total |
+| `drainMarginMs` | 5,000 | What main adds to a long action's Stop wait (`stopGraceMs` plus its cleanup budget) when it lets a closing backend finish, in ms |
 | `newDatabaseFiles` | 256 | Files one New Database request may create |
 | `newDatabaseFilegroups` | 256 | Filegroups one New Database request may create, PRIMARY included |
 | `dataFileMb` | 16,777,215 | A data file's initial and maximum size in New Database, in MB (2,147,483,647 pages, SQL Server's ceiling for a file, just under 16 TB) |

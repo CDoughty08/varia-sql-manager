@@ -31,7 +31,7 @@ internal sealed class ActionsCatalog
         return Parse(stream);
     });
 
-    private sealed record ActionJson(string Action, string Class, string Title, List<string> Engines, long CleanupMs, bool? SystemObjects = null, string? Scope = null);
+    private sealed record ActionJson(string Action, string Class, string Title, List<string> Engines, long CleanupMs, bool? SystemObjects = null, string? Scope = null, bool? Long = null);
     private sealed record DialogJson(string Dialog, string Action, List<string> Pages);
     private sealed record ErrorJson(string Code, bool Retryable);
     private sealed record RowJson(string Kind, string Subtype, List<string> Enabled, List<string> Disabled, string? Status = null);
@@ -92,6 +92,10 @@ internal sealed class ActionsCatalog
 
     /// <summary>Whether the action runs on a server of this engine (ExplorerProfile.ServerEngine).</summary>
     public bool Serves(string action, string engine) => actions.TryGetValue(action, out var row) ? row.Engines.Contains(engine) : throw new InvalidOperationException("Unknown object action " + action);
+
+    /// <summary>Whether the action is a long job (restore, verify, backup): its DDL takes the long gate, reports 3211 progress and
+    /// is waited for when the backend shuts down. The table designer's createTable is not a catalogue action, so never long.</summary>
+    public bool IsLong(string action) => actions.TryGetValue(action, out var row) && row.Long == true;
 
     /// <summary>How long the action's compensation and cleanup steps may run after a failure or Stop.</summary>
     public TimeSpan CleanupBudget(string action) => TimeSpan.FromMilliseconds(actions.TryGetValue(action, out var row) ? row.CleanupMs : Limit("cleanupMs"));

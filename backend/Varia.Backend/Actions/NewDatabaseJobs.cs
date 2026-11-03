@@ -115,16 +115,16 @@ internal sealed partial class ActionService
         return new(text, "master", warnings);
     }
 
-    private async Task<ActionExecuteResult> ExecuteNewDatabaseJobAsync(SqlConnection connection, ActionArgs args, ServerProfile profile, int band, CancellationToken token)
+    private async Task<ActionExecuteResult> ExecuteNewDatabaseJobAsync(SqlConnection connection, ActionArgs args, ServerProfile profile, int band, ActionProgress progress, CancellationToken token)
     {
-        var messages = CollectMessages(connection);
+        var messages = CollectMessages(connection, progress);
         var (plan, alters, error, _) = await PlanNewDatabaseAsync(connection, args, profile, band, execute: true, token);
         if (plan is null) return new([], [], 0, error);
         var design = CreateDatabaseSql.DesignJson(plan, profile.Linux);
         var work = new List<RunStep> { new(CreateDatabaseTitle, context => RunCreateAsync(connection, design, dryRun: false, context.Token)) };
         work.AddRange(alters!.Select(statement => new RunStep(statement.Title, context => RunAlterAsync(connection, statement, dryRun: false, context.Token),
             Detail: statement.Filegroup ? ScriptingErrors.Display(statement.Name!) : null)));
-        var (steps, failure, _) = await RunStepsAsync(connection, work, null, token, CleanupBudget(args.Action));
+        var (steps, failure, _) = await RunStepsAsync(connection, work, null, token, CleanupBudget(args.Action), progress: progress);
         return new(steps, messages.Collected(), 0, failure);
     }
 
@@ -135,14 +135,7 @@ internal sealed partial class ActionService
         command.CommandTimeout = 0;
         Add(command, "@db", SqlDbType.NVarChar, 128, "master");
         Add(command, "@design", SqlDbType.NVarChar, -1, design);
-        var values = new List<string?>();
-        await using var reader = await command.ExecuteReaderAsync(token);
-        do
-        {
-            while (await reader.ReadAsync(token))
-                for (var i = 0; i < reader.FieldCount; i++) values.Add(reader.IsDBNull(i) ? null : reader.GetString(i));
-        } while (await reader.NextResultAsync(token));
-        return values;
+        return await ReadAllAsync(command, token);
     }
 
     /// <summary>The live checks' only way to see what New Database's builder composes for a plan (see the other DryRunAsync).</summary>
