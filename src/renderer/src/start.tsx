@@ -27,6 +27,7 @@ import Tile from './kit/Tile'
 import { LiveChart } from './live/LiveChart'
 import { liveTestHooks } from './live/test-hooks'
 import { mountTestGrid } from './live/test-grid'
+import { serverFilesTestHook } from './server-files/test-hook'
 import 'dockview-react/dist/styles/dockview.css'
 import './styles.css'
 
@@ -53,6 +54,8 @@ export async function start(root: Root): Promise<void> {
       },
       // AutoRecover's save now, rather than in five minutes (files-smoke.mjs).
       __variaRecovery: { flush: () => workbench.recovery.flush() },
+      // The server file picker before any dialog opens it (A17: no menu item until its OK works; object-actions-smoke.mjs).
+      __variaServerFiles: serverFilesTestHook(workbench.serverFiles, workbench.connections),
       // Live views on the synthetic source, charts and grids of them, the SSIS tree's views, and the window's visibility
       // (live-smoke.mjs, chart-smoke.mjs, live-grid-smoke.mjs, electron-smoke.mjs).
       __variaLive: liveTestHooks(workbench.live, workbench.documents, workbench.panes, (handle, probe, table, state) => mountTestGrid(workbench, handle, probe, table, state), container => {

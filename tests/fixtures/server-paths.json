@@ -1,0 +1,51 @@
+{
+  "comment": "Server path rules shared by src/shared/actions/files.ts (tests/server-files.test.ts) and Actions/ServerFiles.cs (ServerFilesChecks): which paths a request may carry, and the folder each one lists on a Windows or Linux server (null: not a full path there).",
+  "valid": [
+    "C:\\",
+    "c:/Backups",
+    "D:\\Program Files\\Microsoft SQL Server\\MSSQL17.MSSQLSERVER\\MSSQL\\Backup",
+    "\\\\fileserver\\share",
+    "\\\\fileserver\\share\\sql backups\\nightly\\",
+    "//fileserver/share/x",
+    "/",
+    "/var/opt/mssql/data/",
+    "C:\\O'Brien's ]] -- backups\\",
+    "C:\\データ\\😀\\",
+    "C:\\a b\\ ",
+    "C:\\..\\x\\.\\y"
+  ],
+  "invalid": [
+    "",
+    "Backups",
+    "backups\\x.bak",
+    ".\\x",
+    "C:",
+    "C:x",
+    "\\\\fileserver",
+    "\\\\fileserver\\",
+    "\\x",
+    "C:\\a*b",
+    "C:\\a?b",
+    "C:\\a\"b",
+    "C:\\a<b",
+    "C:\\a>b",
+    "C:\\a|b",
+    "C:\\a\u0000b",
+    "C:\\a\tb",
+    "C:\\a\r\nb",
+    "/var/\u001f"
+  ],
+  "lengths": { "max": 260 },
+  "folders": [
+    { "path": "C:\\", "linux": false, "folder": "C:\\" },
+    { "path": "c:/Backups", "linux": false, "folder": "c:\\Backups\\" },
+    { "path": "\\\\fileserver\\share", "linux": false, "folder": "\\\\fileserver\\share\\" },
+    { "path": "//fileserver/share/x", "linux": false, "folder": "\\\\fileserver\\share\\x\\" },
+    { "path": "/var/opt/mssql/data", "linux": false, "folder": null },
+    { "path": "/", "linux": true, "folder": "/" },
+    { "path": "/var/opt/mssql/data", "linux": true, "folder": "/var/opt/mssql/data/" },
+    { "path": "/var/opt/mssql/data/", "linux": true, "folder": "/var/opt/mssql/data/" },
+    { "path": "C:\\Backups", "linux": true, "folder": null },
+    { "path": "\\\\fileserver\\share", "linux": true, "folder": null }
+  ]
+}

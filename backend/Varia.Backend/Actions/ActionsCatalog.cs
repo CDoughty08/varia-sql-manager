@@ -35,8 +35,9 @@ internal sealed class ActionsCatalog
     private sealed record DialogJson(string Dialog, string Action, List<string> Pages);
     private sealed record ErrorJson(string Code, bool Retryable);
     private sealed record RowJson(string Kind, string Subtype, List<string> Enabled, List<string> Disabled, string? Status = null);
+    private sealed record ServerFilesJson(string Purpose, List<string> Extensions);
     private sealed record CatalogJson(int Version, List<ActionJson> Actions, List<int> CompatibilityLevels, List<OptionJson> DatabaseOptions, List<DialogJson> Dialogs, List<ErrorJson> Errors,
-        Dictionary<string, long> Limits, LoginRulesJson Logins, List<string> OwnerNotOn, List<RowJson> Rows, List<OptionJson> ScopedConfigurations);
+        Dictionary<string, long> Limits, LoginRulesJson Logins, List<string> OwnerNotOn, List<RowJson> Rows, List<OptionJson> ScopedConfigurations, List<ServerFilesJson> ServerFiles);
 
     private readonly Dictionary<(string Kind, string Subtype, string Status), ActionRow> rows;
     private readonly Dictionary<string, bool> errors;
@@ -60,6 +61,7 @@ internal sealed class ActionsCatalog
         ScopedConfigurations = json.ScopedConfigurations.ToDictionary(row => row.Key, StringComparer.Ordinal);
         CompatibilityLevels = json.CompatibilityLevels;
         OwnerNotOn = json.OwnerNotOn;
+        ServerFilePurposes = json.ServerFiles.ToDictionary(row => row.Purpose, row => (IReadOnlyList<string>)row.Extensions, StringComparer.Ordinal);
     }
 
     public static ActionsCatalog Current => Embedded.Value;
@@ -80,6 +82,9 @@ internal sealed class ActionsCatalog
     public IReadOnlyList<int> CompatibilityLevels { get; }
     /// <summary>System databases whose owner SQL Server keeps.</summary>
     public IReadOnlyList<string> OwnerNotOn { get; }
+    /// <summary>The server file picker's purposes and the lower-case extensions each one's type filter keeps (none: folders only).</summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<string>> ServerFilePurposes { get; }
+
     /// <summary>Login subtypes, protected-principal rules and login limits (src/shared/actions/logins.ts).</summary>
     public LoginRules Logins { get; }
 

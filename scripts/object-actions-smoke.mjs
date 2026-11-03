@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { resizeWindow } from './fixtures/window-resize.mjs'
-import { actionsStubData, caution, dependentsMessage, installActionsStub, propertiesScript, scriptText } from './fixtures/actions-stub.mjs'
+import { actionsStubData, caution, dependentsMessage, installActionsStub, propertiesScript, scriptText, stubServerFiles } from './fixtures/actions-stub.mjs'
 import {
   addObjectDialogSteps, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, errorBanner,
   explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
@@ -569,6 +569,128 @@ try {
   await createDialog().getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(createDialog()).toHaveCount(0)
   console.log('Object action checks: Create Catalog asks for CLR first, checks the passwords, sends the password only in its request, lists SSISDB after, refuses a second catalog, shows a failure\'s steps and Stops.')
+
+  // 5b. The server file picker, through its test hook until New Database, Attach and Restore open it from "…" (A17): the
+  // default backup folder opens, the keyboard expands a folder and chooses a file, a typed share and folder are listed,
+  // a slow folder is busy, and Escape returns focus to where it was.
+  const picker = () => page.getByRole('dialog', { name: 'Locate Backup File - server-a', exact: true })
+  const pickerTree = () => picker().getByRole('tree', { name: 'Select the file', exact: true })
+  const item = name => pickerTree().getByRole('treeitem', { name, exact: true })
+  const fileName = () => picker().getByLabel('File name', { exact: true })
+  const answers = () => page.evaluate(() => window.__variaServerFiles.answers())
+  await explorerTree(page).focus()
+  expect(await page.evaluate(() => window.__variaServerFiles.pick('backup'))).toBe(true)
+  await expect(pickerTree()).toBeFocused()
+  await expect(item('Nightly')).toBeVisible()
+  await expect(picker().getByText("Paths are on the server server-a; SQL Server's service account must be able to read them.", { exact: true })).toBeVisible()
+  await expect(picker().getByRole('status')).toHaveText(/^5 items · listed in \d+ ms · type a path or a UNC name to go there$/)
+  await expect(item(stubServerFiles.backupFolder)).toHaveAttribute('aria-selected', 'true')
+  await expect(item(stubServerFiles.backupFolder)).toHaveAttribute('aria-description', 'default backup folder')
+  await expect(item('C:\\')).toHaveAttribute('aria-description', '212 GB free')
+  await expect(item('AppData.bak')).toHaveAttribute('aria-description', '15 MB, modified 2026-10-12 14:03')
+  await expect(item('readme.txt')).toHaveCount(0)
+  await expect(picker().getByLabel('Files of type', { exact: true })).toHaveText(/Backup Files\(\*\.bak;\*\.trn\)/)
+  expect((await stubCalls('actions.describe')).filter(call => call.dialog === 'serverFiles').map(call => call.files)).toEqual([{ purpose: 'backup' }, { purpose: 'backup', path: stubServerFiles.backupFolder }])
+  // A default folder shows its own name beside its tag; its full path stays its accessible name.
+  await expect(item(stubServerFiles.backupFolder).getByText('Backup', { exact: true })).toBeVisible()
+  // Tab from the last control and Shift+Tab from the first field come back to the tree, which the trap counts as a stop.
+  await picker().getByRole('button', { name: 'Cancel', exact: true }).focus()
+  await page.keyboard.press('Tab')
+  await expect(pickerTree()).toBeFocused()
+  await picker().getByLabel('Selected path', { exact: true }).focus()
+  await page.keyboard.press('Shift+Tab')
+  await expect(pickerTree()).toBeFocused()
+  // Folders come first, by name: Empty, Nightly, Slow, then the files.
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+  await expect(item('Nightly')).toHaveAttribute('aria-selected', 'true')
+  await page.keyboard.press('Enter')
+  await expect(item('Nightly')).toHaveAttribute('aria-expanded', 'true')
+  await expect(picker()).toBeVisible()
+  await page.keyboard.press('ArrowRight')
+  await expect(item('Sales.bak')).toHaveAttribute('aria-selected', 'true')
+  await expect(fileName()).toHaveValue('Sales.bak')
+  await expect(picker().getByLabel('Selected path', { exact: true })).toHaveValue(stubServerFiles.backupFolder + 'Nightly\\')
+  // Under forced colours the selected row is Highlight, as Object Explorer's is; the others are not.
+  await page.emulateMedia({ forcedColors: 'active' })
+  const highlight = await page.evaluate(() => {
+    const probe = document.createElement('div')
+    probe.style.cssText = 'background: Highlight; forced-color-adjust: none'
+    document.body.append(probe)
+    const color = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return color
+  })
+  const forcedBackgrounds = await Promise.all(['Sales.bak', 'Nightly'].map(name => item(name).evaluate(row => getComputedStyle(row).backgroundColor)))
+  await page.emulateMedia({ forcedColors: null })
+  expect(forcedBackgrounds[0]).toBe(highlight)
+  expect(forcedBackgrounds[1]).not.toBe(highlight)
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-server-files-dark.png') })
+  await page.keyboard.press('Enter')
+  await expect(picker()).toHaveCount(0)
+  await expect.poll(answers).toEqual([stubServerFiles.backupFolder + 'Nightly\\Sales.bak'])
+  await expect(explorerTree(page)).toBeFocused()
+
+  expect(await page.evaluate(() => window.__variaServerFiles.pick('backup'))).toBe(true)
+  await expect(item('Nightly')).toBeVisible()
+  await fileName().fill('//files/share/')
+  await fileName().press('Enter')
+  await expect(item('\\\\files\\share\\')).toHaveAttribute('aria-expanded', 'true')
+  await expect(item('Shared.bak')).toBeVisible()
+  await expect(fileName()).toHaveValue('')
+  await fileName().fill('C:\\Missing\\x.bak')
+  await fileName().press('Enter')
+  await expect(picker().getByRole('alert')).toHaveText('The folder C:\\Missing\\ does not exist, or SQL Server\'s service account cannot see it.')
+  await fileName().fill(stubServerFiles.backupFolder + 'Empty\\')
+  await fileName().press('Enter')
+  await expect(pickerTree().getByText('This folder is empty, or the server\'s account cannot list it.', { exact: true })).toBeVisible()
+  await fileName().fill('C:\\Legacy\\')
+  await fileName().press('Enter')
+  await expect(pickerTree().getByText('SQL Server 2016 lists folders only to members of sysadmin. Type the path instead.', { exact: true })).toBeVisible()
+  // Slow answers after 1.5 s: after 300 ms its row and the tree are busy, with a spinner, until it lists.
+  await fileName().fill(stubServerFiles.backupFolder + 'Slow\\')
+  await fileName().press('Enter')
+  await expect(pickerTree()).toHaveAttribute('aria-busy', 'true')
+  await expect(item('Slow')).toHaveAttribute('aria-busy', 'true')
+  await expect(item('Old.bak')).toBeVisible()
+  await expect(pickerTree()).not.toHaveAttribute('aria-busy', 'true')
+  await picker().getByLabel('Files of type', { exact: true }).selectOption({ label: 'All Files(*.*)' })
+  await expect(item('readme.txt')).toBeVisible()
+  await expect(item('Old.bak')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(picker()).toHaveCount(0)
+  await expect.poll(answers).toEqual([stubServerFiles.backupFolder + 'Nightly\\Sales.bak', null])
+  await expect(explorerTree(page)).toBeFocused()
+
+  // A typed name the listing does not show is asked about, and refused only when the server says it does not exist; under
+  // C:\Legacy\ SQL Server 2016 cannot say, so the name is taken as typed.
+  expect(await page.evaluate(() => window.__variaServerFiles.pick('backup'))).toBe(true)
+  await expect(item('Nightly')).toBeVisible()
+  await fileName().fill('nothing.bak')
+  await fileName().press('Enter')
+  await expect(picker().getByRole('alert')).toHaveText(stubServerFiles.backupFolder + 'nothing.bak does not exist, or SQL Server\'s service account cannot see it.')
+  await fileName().fill('readme.txt')
+  await fileName().press('Enter')
+  await expect(picker()).toHaveCount(0)
+  expect((await stubCalls('actions.describe')).filter(call => call.files?.exists).map(call => call.files.path)).toEqual([stubServerFiles.backupFolder + 'nothing.bak', stubServerFiles.backupFolder + 'readme.txt'])
+  expect(await page.evaluate(() => window.__variaServerFiles.pick('backup', 'C:\\Legacy\\Old.bak'))).toBe(true)
+  await expect(fileName()).toHaveValue('Old.bak')
+  await fileName().press('Enter')
+  await expect(picker()).toHaveCount(0)
+  await expect.poll(answers).toEqual([stubServerFiles.backupFolder + 'Nightly\\Sales.bak', null, stubServerFiles.backupFolder + 'readme.txt', 'C:\\Legacy\\Old.bak'])
+
+  // Locate Folder: "Select the folder", no Modified column, and a folder of files has no subfolders.
+  const folderPicker = () => page.getByRole('dialog', { name: 'Locate Folder - server-a', exact: true })
+  expect(await page.evaluate(() => window.__variaServerFiles.pick('folder'))).toBe(true)
+  const folderTree = folderPicker().getByRole('tree', { name: 'Select the folder', exact: true })
+  await expect(folderTree).toBeFocused()
+  await expect(folderTree.getByText('This folder has no subfolders, or the server\'s account cannot list it.', { exact: true })).toBeVisible()
+  await expect(folderPicker().getByText('Modified', { exact: true })).toHaveCount(0)
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-server-files-folder.png') })
+  await page.keyboard.press('Escape')
+  await expect(folderPicker()).toHaveCount(0)
+  await expect(explorerTree(page)).toBeFocused()
+  console.log('Object action checks: the server file picker opens the default backup folder, keeps Tab in reach of its tree, expands a folder and chooses a file by keyboard, shows the selection under forced colours, goes to typed shares and folders, shows empty, 2016 and slow folders, lists All Files, asks the server about typed names it does not list, and Escape returns focus; Locate Folder names its tree for folders.')
 
   // 6. A database: SSMS's two options (backup history checked, Close existing connections not), then a lost server
   // leaves only Close. Databases has just reloaded after Database Properties' Apply, so the press repeats until its row's menu opens.
