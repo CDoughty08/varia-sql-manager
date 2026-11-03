@@ -136,10 +136,13 @@ internal static class RestoreRunLiveChecks
             "the cleanup's DROP refuses a database that is not RESTORING, so an online one stays: " + Show(guarded));
 
         // The tail-log backup's compensation (critic A11d): Close existing connections and a tail-log backup WITH NORECOVERY, then a
-        // RESTORE SQL Server refuses before it writes (a folder that does not exist): Varia brings the database back online and back
-        // to multi-user access, and nothing else changed.
+        // RESTORE SQL Server refuses before it writes: Varia brings the database back online and back to multi-user access, and nothing
+        // else changed. The data file goes under the target's data file (restored above), where no platform can make a folder or a file;
+        // a folder that does not exist would not do, as SQL Server on Linux creates it and the restore succeeds.
         var sourceRows = await Rows(db);
-        var nowhere = new List<RestoreMoveDto> { new(db, relocated[0].Physical[..(relocated[0].Physical.LastIndexOfAny(['\\', '/']) + 1)] + "VariaMissing_" + Guid.NewGuid().ToString("N") + relocated[0].Physical[relocated[0].Physical.LastIndexOfAny(['\\', '/'])] + "x.mdf") };
+        var slash = relocated[0].Physical[relocated[0].Physical.LastIndexOfAny(['\\', '/'])];
+        var underFile = relocated[0].Physical + slash + "VariaMissing_" + Guid.NewGuid().ToString("N") + slash + "x.mdf";
+        var nowhere = new List<RestoreMoveDto> { new(db, underFile) };
         var compensated = await Wire(db, Options(last, nowhere, close: true, tail: new(scratch.RestoreFile("tail1.bak"), true)), await Identity(db));
         check(compensated is { Error: { } error, Restored: { State: 0, UserAccess: 0 } } && error.Code != "CANCELLED"
             && compensated.Steps.Select(step => (step.Status, step.Title, step.Compensates)).SequenceEqual([("done", restore.Step("close"), (bool?)null), ("done", restore.Step("tailLog"), null),
