@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { validateRequest } from '../src/main/validation'
-import { restoreLimits, restoreMessages, restoreStepTitles, type BackupFileRow, type BackupSetRow, type RestoreModel, type RestoreServerFacts } from '../src/shared/actions/restore'
+import { restoreDevicePickerTitles, restoreFilesRecoveryLabels, restoreLimits, restoreMessages, restoreStepTitles, type BackupFileRow, type BackupSetRow, type RestoreModel, type RestoreServerFacts } from '../src/shared/actions/restore'
 import { fileBaseSets, fileRestoreLogs } from '../src/shared/actions/restore-plan'
 import { restoreFilesOptionsProblems, restoreFilesOptionsSchema, restoreFilesParameters, type RestoreFilesRequest } from '../src/shared/actions/restore-schema'
 import type { ActionDescribeResult, ActionExecuteResult, ActionScriptResult } from '../src/shared/actions/schema'
@@ -13,6 +15,7 @@ import {
 } from '../src/renderer/src/restore/files'
 import { restoredText } from '../src/renderer/src/restore/run'
 import { restoreTestHook } from '../src/renderer/src/restore/test-hook'
+import { FilesGeneralSection } from '../src/renderer/src/restore/RestoreFiles'
 import { connectionInfo, workbenchFixture } from './fixtures/workbench'
 
 const cleanups: (() => void)[] = []
@@ -88,6 +91,17 @@ describe('Restore Files and Filegroups, pure', () => {
       expect(planned.every(step => step.set)).toBe(true)
     }
   })
+  it('labels Recovery state and the backup device picker as Learn gives this dialog, not as Restore Database words them', () => {
+    // Learn's Restore Files and Filegroups (current procedure and the 2008 R2 Options page reference): "don't" and "Roll back … rollback
+    // operation", which match its "Rollback undo file"; Restore Database's old Options page says "do not" and "Undo … undo actions".
+    expect(restoreFilesRecoveryLabels).toEqual({
+      recovery: 'Leave the database ready for use by rolling back the uncommitted transactions. Additional transaction logs cannot be restored. (RESTORE WITH RECOVERY)',
+      norecovery: "Leave the database non-operational, and don't roll back the uncommitted transactions. Additional transaction logs can be restored. (RESTORE WITH NORECOVERY)",
+      standby: 'Leave the database in read-only mode. Roll back the uncommitted transactions, but save the rollback operation in a file so the recovery effects can be undone. (RESTORE WITH STANDBY)'
+    })
+    // Learn's step 6 names the device picker Specify backup devices here; Restore Database keeps Select backup devices.
+    expect(restoreDevicePickerTitles).toEqual({ database: 'Select backup devices', files: 'Specify backup devices' })
+  })
   it('restores files from the newest full and file backups, rolled forward through the logs that continue the chosen one', () => {
     expect(fileBaseSets(history, restoreLimits.fileSets).map(set => set.name)).toEqual(['fg2', 'full'])
     expect(fileBaseSets(history, 1).map(set => set.name)).toEqual(['fg2'])
@@ -147,6 +161,13 @@ describe('Restore Files and Filegroups as a document', () => {
     expect(filesDestinationNote({ state: 'RESTORING', recoveryModel: 'FULL' })).toBe('Restoring, FULL recovery model.')
     expect([stateLabel('OFFLINE'), stateLabel('RECOVERY_PENDING'), stateLabel('SUSPECT')]).toEqual(['Offline', 'Recovery pending', 'Suspect'])
     expect(filesDestinationNote(undefined)).toBeUndefined()
+  })
+  it('names the From device browse button Specify backup devices, as Learn names the picker in this dialog', async () => {
+    const { state, restore, id } = await opened()
+    restore.updateDraft(id, { source: 'device', devices: ['B:\\Backup\\Sales_full.bak'] })
+    const html = renderToStaticMarkup(createElement(FilesGeneralSection, { state: state(), draft: state().draft!, facts: state().facts, service: restore, problems: [], browse: async () => undefined }))
+    expect(html).toContain('aria-label="Specify backup devices" title="Specify backup devices"')
+    expect(html).not.toContain('Select backup devices')
   })
   it('restores the checked files from one backup set and its logs, starting again from another set\'s row, and scripts the request through actions.script', async () => {
     const { restore, id, state, draft, check, request, scripts } = await opened()

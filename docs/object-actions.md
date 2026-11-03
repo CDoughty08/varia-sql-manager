@@ -636,7 +636,8 @@ Restore Files and Filegroups (D1g) restores some files of an existing database: 
 Filegroups… (E) and a user database's Tasks › Restore › Files and Filegroups… (F) open the same document in its files mode
 ("Restore Files and Filegroups - <database>"), with SSMS's pages as sections (General, Options), and the same
 describes, Script drawer, verbs, Run panel, Stop and long run as Restore Database. General has To database (the server's
-user databases), Source for restore (From database, whose backups msdb has, or From device), and Select the backup sets
+user databases), Source for restore (From database, whose backups msdb has, or From device, whose … opens Restore Database's
+Select backup devices titled Specify backup devices, Learn's name for it in this dialog), and Select the backup sets
 to restore: the files of the newest 16 full and file backups (msdb's `backupfile` or FILELISTONLY, read one describe after
 another; files a file backup does not hold (`absent`: `is_present` 0) and log files are not listed), then the log backups
 that continue the backup set of the checked rows, checked with them and never alone (copy-only and damaged logs never

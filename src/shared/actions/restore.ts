@@ -137,11 +137,13 @@ export const timelineIntervalSpecs: { readonly [I in TimelineInterval]: { readon
   hour: { label: 'Hour', ms: 3_600_000 }, sixHours: { label: 'Six Hours', ms: 21_600_000 }, day: { label: 'Day', ms: 86_400_000 }, week: { label: 'Week', ms: 604_800_000 }
 }
 
-/** Restore Files and Filegroups' Recovery state choices: SSMS's long labels (spec D1 §8, recalled from the dialog's Options page). */
+/** Restore Files and Filegroups' Recovery state choices: SSMS's long labels, as Learn gives this dialog's Options page (Restore Files and
+ *  Filegroups, both its current procedure and the 2008 R2 reference). They differ from Restore Database's old wording ("do not",
+ *  "Undo … undo actions"), which matches this dialog's "Rollback undo file". */
 export const restoreFilesRecoveryLabels: { readonly [R in RestoreRecovery]: string } = {
   recovery: 'Leave the database ready for use by rolling back the uncommitted transactions. Additional transaction logs cannot be restored. (RESTORE WITH RECOVERY)',
-  norecovery: 'Leave the database non-operational, and do not roll back the uncommitted transactions. Additional transaction logs can be restored. (RESTORE WITH NORECOVERY)',
-  standby: 'Leave the database in read-only mode. Undo uncommitted transactions, but save the undo actions in a standby file so that recovery effects can be reverted. (RESTORE WITH STANDBY)'
+  norecovery: "Leave the database non-operational, and don't roll back the uncommitted transactions. Additional transaction logs can be restored. (RESTORE WITH NORECOVERY)",
+  standby: 'Leave the database in read-only mode. Roll back the uncommitted transactions, but save the rollback operation in a file so the recovery effects can be undone. (RESTORE WITH STANDBY)'
 }
 
 /** The document's sections, SSMS's pages. */
@@ -154,6 +156,9 @@ export const restoreFilesSections = [{ id: 'general', title: 'General' }, { id: 
 export type RestoreMode = 'database' | 'files'
 /** The documents' titles before a database is chosen, and their tabs' "<title> - <database>". */
 export const restoreModeTitles: { readonly [M in RestoreMode]: string } = { database: 'Restore Database', files: 'Restore Files and Filegroups' }
+/** The backup device picker's title (and its "…" button's name) per document: Learn's Restore Database procedure names it Select
+ *  backup devices, and its Restore Files and Filegroups procedure (step 6) Specify backup devices. One sub-dialog, two names. */
+export const restoreDevicePickerTitles: { readonly [M in RestoreMode]: string } = { database: 'Select backup devices', files: 'Specify backup devices' }
 
 // --- Describe -----------------------------------------------------------------------------------------------------------
 

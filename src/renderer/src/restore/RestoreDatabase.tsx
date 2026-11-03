@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  isRestoreSystemDatabase, restoreFilesSections, restoreLimits, restoreMessages, restoreModeTitles, restoreRecoveryLabels, restoreRecoveryStates, restoreSections, restoreTargetProblem, type RestoreRecovery
+  isRestoreSystemDatabase, restoreFilesSections, restoreLimits, restoreMessages, restoreDevicePickerTitles, restoreModeTitles, restoreRecoveryLabels, restoreRecoveryStates, restoreSections, restoreTargetProblem, type RestoreRecovery
 } from '../../../shared/actions/restore.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import type { CommandId } from '../../../shared/commands/catalog.ts'
@@ -62,7 +62,7 @@ function GeneralSection({ state, draft, facts, service, problems }: SectionProps
           <PropertyField id={deviceId} label="Device:">
             <span className="property-input-action">
               <input id={deviceId} className="property-input" type="text" readOnly value={draft.devices.join(', ')} title={draft.devices.join('\n')} />
-              <button type="button" className="property-browse" aria-label="Select backup devices" title="Select backup devices" onClick={() => service.openDialog(state.id, 'devices')}>…</button>
+              <button type="button" className="property-browse" aria-label={restoreDevicePickerTitles.database} title={restoreDevicePickerTitles.database} onClick={() => service.openDialog(state.id, 'devices')}>…</button>
             </span>
           </PropertyField>
           {onMedia.length > 0 && <PropertyField id={mediaDatabaseId} label="Database:" note={mediaNote}>
@@ -175,13 +175,14 @@ function OptionsSection({ state, draft, facts, service, problems, browse }: Sect
   </div>
 }
 
-/** Select backup devices: File media only, the files in the order added (SSMS's sub-dialog, recalled). */
+/** Select backup devices (Specify backup devices in Restore Files and Filegroups, restoreDevicePickerTitles): File media only, the files in the order
+ *  added (SSMS's sub-dialog, recalled). */
 function SelectBackupDevices({ state, draft, service, browse }: Pick<SectionProps, 'state' | 'draft' | 'service' | 'browse'>) {
   const [devices, setDevices] = useState<readonly string[]>(draft.devices)
   const [chosen, setChosen] = useState<string>('')
   const listId = fieldId(state.id, 'media'), typeId = fieldId(state.id, 'mediaType')
   const add = () => void browse('backup').then(path => { if (path && !devices.includes(path)) { setDevices([...devices, path]); setChosen(path) } })
-  return <SubDialog title="Select backup devices" okDisabled={devices.length === 0} onCancel={() => service.openDialog(state.id, undefined)}
+  return <SubDialog title={restoreDevicePickerTitles[state.mode]} okDisabled={devices.length === 0} onCancel={() => service.openDialog(state.id, undefined)}
     onOk={() => { service.openDialog(state.id, undefined); service.updateDraft(state.id, { source: 'device', devices }) }} initialFocus={listId} className="restore-devices">
     <div className="property-row"><label htmlFor={typeId}>Backup media type:</label><select id={typeId} value="file" onChange={() => {}}><option value="file">File</option></select></div>
     <label htmlFor={listId}>Backup media:</label>

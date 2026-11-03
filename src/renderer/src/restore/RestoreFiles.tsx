@@ -1,6 +1,6 @@
 // Restore Files and Filegroups' two sections (D1g), SSMS's General and Options pages (spec D1 §8, labels recalled): the
 // document frame, the Run panel and the Script drawer are Restore Database's (RestoreDatabase.tsx, mode 'files').
-import { isRestoreSystemDatabase, restoreFilesRecoveryLabels, restoreLimits, restoreMessages, restoreRecoveryStates, type RestoreRecovery } from '../../../shared/actions/restore.ts'
+import { isRestoreSystemDatabase, restoreDevicePickerTitles, restoreFilesRecoveryLabels, restoreLimits, restoreMessages, restoreRecoveryStates, type RestoreRecovery } from '../../../shared/actions/restore.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import PropertyField, { fieldAria } from '../kit/PropertyField'
 import Segmented from '../kit/Segmented'
@@ -44,7 +44,7 @@ export function FilesGeneralSection({ state, draft, facts, service, problems }: 
       <PropertyField id={deviceId} label="Device:">
         <span className="property-input-action">
           <input id={deviceId} className="property-input" type="text" readOnly value={draft.devices.join(', ')} title={draft.devices.join('\n')} />
-          <button type="button" className="property-browse" aria-label="Select backup devices" title="Select backup devices" onClick={() => service.openDialog(state.id, 'devices')}>…</button>
+          <button type="button" className="property-browse" aria-label={restoreDevicePickerTitles.files} title={restoreDevicePickerTitles.files} onClick={() => service.openDialog(state.id, 'devices')}>…</button>
         </span>
       </PropertyField>
       {onMedia.length > 1 && <PropertyField id={mediaDatabaseId} label="Database:">
