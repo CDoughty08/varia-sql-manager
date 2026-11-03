@@ -351,7 +351,14 @@ raises informational messages as they arrive only for a reader; SQL Server's mes
 `STATS`) becomes the running step's percent, and a long action's request sends droppable `{ type: 'action.progress', step,
 percent }` EVENTs (`step` is the step's index in the reply, 0 – 519; `percent` 0 – 100): each step's start at once as percent 0,
 then its percents at most every 250 ms (`progressEventMs`, on a Stopwatch), a percent held inside the interval going out when it
-ends or before the next step's start. 3211 lines are not among the 32 kept messages; the reply's steps carry the last percent each
+ends or before the next step's start. A Stop reaches a statement through `ActionService.StatementStop`, never SqlClient's token:
+once a statement has sent an informational message (a RESTORE's STATS), SqlClient's cancel from another thread waits until the
+statement ends (probed: a restore stopped at 5 % ran to 100 %), while from the reader's own thread it goes out at once, so the
+reader cancels at the next message (or, if none comes within a second, the Stop's thread after all), and the job's token is
+cancelled off the frame loop (`CancelAsync`), which would otherwise stop reading frames, PINGs included, until then. A
+statement whose Stop came before its reader reported the end is listed cancelled, never done: SqlClient now and then ends a
+cancelled statement's reader as if it had finished (query batches are handled the same way).
+3211 lines are not among the 32 kept messages; the reply's steps carry the last percent each
 reached (`progress`). Main checks each EVENT (`actionProgressEventSchema`); an invalid one is dropped, not a protocol failure,
 because failing the request would CANCEL a restore part way. It pushes `varia:actions-progress { requestId, step, percent }`
 (`actionProgressSchema`) only to the window that sent the request, at most 4 a second per request: a new step at once, and the
@@ -641,8 +648,30 @@ of the request too: 130 s around the backend's 120 s budget (`restoreLimits`), a
 their own gate, outside the object actions' read gates, so a read held past its budget by an unreachable share never delays
 another dialog's describe. `actions.script` with the `restore` action takes the plan (`restore: { sets, relocate, recovery,
 … }`, at most 1,024 sets and 1,000 moves), is written on no connection, and answers the script SMO's restore plan would
-write (at most 4,000,000 characters, checked as it is written); `actions.execute` refuses `restore` until the run arrives (D1f). docs/object-actions.md
-describes the planner and the limits.
+write (at most 4,000,000 characters, checked as it is written). `actions.execute` with `restore` (D1f) takes the same plan with
+`target: { kind: 'database', name }` and, over a database that exists, the `identity` the document read; it is a long action
+(the long gate, Stop, `action.progress` from `STATS`, the shutdown drain, a 30 s cleanup budget). Its preflight in the action's
+connection checks the identity, permission, the tail-log backup's conditions, the media's chain (`RestoreChain`), WITH REPLACE's
+case (`BACKUP_MISMATCH`), Close existing connections over a database that is not online (`DATABASE_UNAVAILABLE`) and the
+files it writes (`NAME_IN_USE`: another database's file, a file already on disk that is not the destination's, a standby or
+tail-log file over a database file), before anything changes; the reply adds `restored` (sys.databases, read once the steps are
+over) so the page names what a Stop or failure left: `{ state, userAccess }`, or `{ absent: true, filesLeft?, filesUnknown? }`
+when no database has the name (`filesLeft`, at most 16 paths, are files SQL Server left on disk after a cancelled RESTORE whose
+partly restored database Varia dropped; `filesUnknown` when their existence could not be checked), and no `restored` when
+the read failed.
+Restore Files and Filegroups (D1g) uses the same describes, where a set's file may carry `absent: true` (a file backup does not
+hold it), and the action `restoreFiles` in `actions.script` and `actions.execute`: `{ target: { kind: 'database', name }, identity,
+restoreFiles: { sets, files, filegroups, relocate, replace, restrictedUser, recovery, standbyFile?, logBackup?: { file } } }` (a full
+or file backup then its logs, at most 1,024 sets; at most 256 files and 256 filegroups, at least one of them; 1,000 moves; and at
+most 2,100 parameters in its RESTORE DATABASE; the identity is required, since the database must exist). It is a long action as
+Restore Database is; its preflight adds the files variant of the chain, that the backups are the database's own, that each file
+and filegroup is in the set and held by it (`NOT_FOUND`), SIMPLE's read-only rule, STANDBY over an online database, a log
+backup under SIMPLE and a PRIMARY file of an online or offline database (`NOT_SUPPORTED`), a plan that does not reach the
+database's log chain (`RESTORE_SEQUENCE`: a log backup taken after its last set, named from msdb where it can be read), a log
+backup of a database that is not online (`DATABASE_UNAVAILABLE`), and a log backup file already on the server (`NAME_IN_USE`).
+Its "Back up the log" step reads the log chain again and fails with `RESTORE_SEQUENCE` when a log backup was taken during the run. Its `restored` adds `filesRestoring` (logical names, at most 16): the database's files left
+RESTORING.
+docs/object-actions.md describes the planner, the steps and the limits.
 
 ## Streams and credits
 
@@ -1779,7 +1808,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Recent Files | 50 entries in `recent-files.json` (≤ 256 KiB); 1 – 24 shown; names ≤ 260 characters; menu paths ≤ 60 | zod and main |
 | AutoRecover | 64 records and 256 MiB in `AutoRecover/`, 32 MiB each, read or written; text ≤ the kind's limit (5,000,000 characters for a query, 4,194,304 for a value); names ≤ 512, servers ≤ 256, databases ≤ 128, paths ≤ 4,096 characters; 256 ids a discard; every 1 – 60 minutes, kept 1 – 90 days | zod, renderer and main |
 | Server file picker | paths 1 – 260 UTF-16 code units, no U+0000 – U+001F or `*?"<>|`, absolute; ≤ 2,000 entries a folder (`truncated`), 10 s a listing (15 s deadline) | zod and backend |
-| Restore Database | 1 – 64 backup files, each a server path as above; ≤ 1,024 databases and 1,024 sets a history or media read (`…Truncated`); ≤ 256 sets and 1,000 moves a restore; set names ≤ 128, ids ≤ 36 characters, LSNs ≤ 25 digits, positions 1 – 32,767; 120 s a read (130 s deadline) | zod and backend |
+| Restore Database | 1 – 64 backup files, each a server path as above; ≤ 1,024 databases and 1,024 sets a history or media read (`…Truncated`); ≤ 256 sets and 1,000 moves a restore; a file restore ≤ 1,024 sets, 256 files and 256 filegroups, 2,100 parameters; set names ≤ 128, ids ≤ 36 characters, LSNs ≤ 25 digits, positions 1 – 32,767; 120 s a read (130 s deadline) | zod and backend |
 | Object Explorer requests | node names 1 – 128 UTF-16 code units, or a kind's own bound up to 260 (`maxName`, only for a kind without folders or rows of its own); other identity names, SSIS folders and projects included, 1 – 128; no U+0000; pages of 1 – 2,000 nodes; cursors ≤ 1,650 characters; 1 – 256 ids a cancel | zod and backend |
 | SSIS requests | folder, project, environment and other names 1 – 128 UTF-16 code units, package names 1 – 260, no U+0000; 1 – 64 ids a cancel; describe lists ≤ 2,048 rows, values ≤ 4,000 characters, answers ≤ about 4,000,000 bytes; revisions 64 lowercase hex characters, only for a write verb that takes one; Stop Operation ids 1 – 2^53 − 1; Create Catalog passwords 1 – 128 UTF-16 code units, no U+0000, no lone surrogate, and the server paths it reads ≤ 1,024 characters; error messages ≤ 2,048. `ssis.operations` args: kinds 1 – 4 and statuses 1 – 9, distinct; folder, project and caller 1 – 128, package 1 – 260; windowHours 1 – 8,760; limit 1 – 10,000 (100 – 10,000 in Tools › Options): a window of at most 10,000 rows, at most 20,000 (2 × limit) read a sample and as many open ones with a baseline, at most 256 open ids read again a sample | zod and backend |
 | Backend concurrency | 288 requests in flight; 8 metadata slots; 1,000 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads; SSIS reads 2 per connection and 4 in all, 256 registered; SSIS writes 1 per connection and 2 in all, 64 registered | backend |

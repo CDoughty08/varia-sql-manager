@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { serverFilePurposeSpecs, serverFileTypesLabel } from '../src/shared/actions/catalog'
 import {
-  folderPath, sameServerPath, serverFolder, serverPathChain, serverPathProblem, serverPathRoot, splitServerPath, type ServerFileEntry, type ServerFilesListing, type ServerRoot
+  folderPath, sameServerPath, serverFolder, serverPathChain, serverPathKey, serverPathProblem, serverPathRoot, splitServerPath, type ServerFileEntry, type ServerFilesListing, type ServerRoot
 } from '../src/shared/actions/files'
 import type { ActionDescribeRequest, ActionDescribeResult } from '../src/shared/actions/schema'
 import type { ApiResult, VariaApi } from '../src/shared/contracts'
@@ -14,13 +14,15 @@ import { ConnectionService } from '../src/renderer/src/services/connections'
 import { deferred } from './fixtures/documents'
 import { connectionInfo, connectionOptions } from './fixtures/workbench'
 
-const fixture = JSON.parse(readFileSync('tests/fixtures/server-paths.json', 'utf8')) as { valid: string[]; invalid: string[]; folders: { path: string; linux: boolean; folder: string | null }[] }
+const fixture = JSON.parse(readFileSync('tests/fixtures/server-paths.json', 'utf8')) as { valid: string[]; invalid: string[]; folders: { path: string; linux: boolean; folder: string | null }[]; keys: { path: string; linux: boolean; key: string | null }[] }
 
 describe('server paths', () => {
   it('follows tests/fixtures/server-paths.json, which ServerFilesChecks holds C# to', () => {
     expect(fixture.valid.filter(path => serverPathProblem(path))).toEqual([])
     expect(fixture.invalid.filter(path => !serverPathProblem(path))).toEqual([])
     expect(fixture.folders.filter(item => (serverFolder(item.path, item.linux ? '/' : '\\') ?? null) !== item.folder)).toEqual([])
+    // The key a restore compares files by: one file however its path is spelled ('.', '..', doubled separators, case and trailing dots on Windows).
+    expect(fixture.keys.filter(item => (serverPathKey(item.path, item.linux ? '/' : '\\') ?? null) !== item.key)).toEqual([])
     expect([serverPathProblem('C:\\' + 'x'.repeat(257)), serverPathProblem('C:\\' + 'x'.repeat(258))]).toEqual([undefined, 'A path is at most 260 characters.'])
     expect([serverPathProblem('C:\\a\uD800b'), serverPathProblem('C:\\a\uD83D\uDE00')]).toEqual(['The path holds a broken character (half of a surrogate pair).', undefined])
   })

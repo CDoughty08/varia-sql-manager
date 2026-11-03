@@ -153,9 +153,9 @@ internal static class ActionProgressChecks
             && catalog.Limit("progressEventMs") == (long)options.ProgressInterval.TotalMilliseconds && options.LongPerConnection == 1 && options.LongTotal == 2,
             "the long gate and the progress interval come from the catalogue's limits");
         var marked = WithLong("delete", 30_000);
-        check(catalog.Actions.All(action => !catalog.IsLong(action)) && marked.IsLong("delete") && !marked.IsLong("rename") && !marked.IsLong("createTable")
+        check(catalog.Actions.Where(catalog.IsLong).SequenceEqual(["restore", "restoreFiles"]) && marked.IsLong("delete") && !marked.IsLong("rename") && !marked.IsLong("createTable")
             && marked.CleanupBudget("delete") == TimeSpan.FromSeconds(30),
-            "an action is long only when the catalogue marks it (none yet; D1f marks the restores and the backup)");
+            "an action is long only when the catalogue marks it (Restore Database, D1f; Restore Files and Filegroups, D1g; later the backup)");
     }
 
     private static async Task RunnerAsync(Action<bool, string> check)

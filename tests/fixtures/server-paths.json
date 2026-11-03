@@ -1,5 +1,5 @@
 {
-  "comment": "Server path rules shared by src/shared/actions/files.ts (tests/server-files.test.ts) and Actions/ServerFiles.cs (ServerFilesChecks): which paths a request may carry, and the folder each one lists on a Windows or Linux server (null: not a full path there).",
+  "comment": "Server path rules shared by src/shared/actions/files.ts (tests/server-files.test.ts) and Actions/ServerFiles.cs (ServerFilesChecks): which paths a request may carry, the folder each one lists on a Windows or Linux server (null: not a full path there), and the key Restore Database compares each one by when it checks which file a path names (null: not a file path there).",
   "valid": [
     "C:\\",
     "c:/Backups",
@@ -47,5 +47,26 @@
     { "path": "/var/opt/mssql/data/", "linux": true, "folder": "/var/opt/mssql/data/" },
     { "path": "C:\\Backups", "linux": true, "folder": null },
     { "path": "\\\\fileserver\\share", "linux": true, "folder": null }
+  ],
+  "keys": [
+    { "path": "C:\\DATA\\Sales.mdf", "linux": false, "key": "C:\\DATA\\SALES.MDF" },
+    { "path": "c:/data/sales.mdf", "linux": false, "key": "C:\\DATA\\SALES.MDF" },
+    { "path": "C:\\DATA\\.\\Sales.mdf", "linux": false, "key": "C:\\DATA\\SALES.MDF" },
+    { "path": "C:\\DATA\\\\Sales.mdf", "linux": false, "key": "C:\\DATA\\SALES.MDF" },
+    { "path": "C:\\DATA\\x\\..\\Sales.mdf", "linux": false, "key": "C:\\DATA\\SALES.MDF" },
+    { "path": "C:\\..\\DATA\\Sales.mdf", "linux": false, "key": "C:\\DATA\\SALES.MDF" },
+    { "path": "C:\\DATA. \\Sales.mdf. ", "linux": false, "key": "C:\\DATA\\SALES.MDF" },
+    { "path": "C:\\DATA\\...\\Sales.mdf", "linux": false, "key": "C:\\DATA\\SALES.MDF" },
+    { "path": "\\\\files\\share\\a\\.\\b.bak", "linux": false, "key": "\\\\FILES\\SHARE\\A\\B.BAK" },
+    { "path": "//files/share/../b.bak", "linux": false, "key": "\\\\FILES\\SHARE\\B.BAK" },
+    { "path": "C:\\DATA\\Sales.mdf::$DATA", "linux": false, "key": null },
+    { "path": "C:\\DATA\\Sales.mdf:alt", "linux": false, "key": null },
+    { "path": "/var/opt/mssql/data/Sales.mdf", "linux": false, "key": null },
+    { "path": "/var/opt/mssql/data/Sales.mdf", "linux": true, "key": "/var/opt/mssql/data/Sales.mdf" },
+    { "path": "/var/opt/mssql//data/./Sales.mdf", "linux": true, "key": "/var/opt/mssql/data/Sales.mdf" },
+    { "path": "/var/opt/mssql/x/../data/Sales.mdf", "linux": true, "key": "/var/opt/mssql/data/Sales.mdf" },
+    { "path": "/../var/Sales.mdf", "linux": true, "key": "/var/Sales.mdf" },
+    { "path": "/var/opt/mssql/data/sales.mdf.", "linux": true, "key": "/var/opt/mssql/data/sales.mdf." },
+    { "path": "C:\\DATA\\Sales.mdf", "linux": true, "key": null }
   ]
 }

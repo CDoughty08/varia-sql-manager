@@ -506,6 +506,10 @@ explorer.context, for a database
   &Tasks >
     &Take Offline
     Bring &Online
+    ---
+    &Restore >
+      &Database…
+      &Files and Filegroups…
   ---
   Copy N&ame
   ---

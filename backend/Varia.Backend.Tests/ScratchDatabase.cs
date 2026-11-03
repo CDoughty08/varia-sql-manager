@@ -95,6 +95,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string RestoreFork => Name + "_rstf";
     /// <summary>New Database's database (D1b), which OK itself creates; the checks mark it at once and adopt it.</summary>
     public string NewDatabase => Name + "_nd";
+    /// <summary>Restore Files and Filegroups' database (D1g): FULL recovery, then SIMPLE, with a second filegroup and a third, its
+    /// backups files like <see cref="RestoreSource"/>'s, deleted before its history.</summary>
+    public string RestoreFiles => Name + "_rfl";
     /// <summary>Where the action progress checks back up with STATS and hold a lock (D1c; created on demand).</summary>
     public string Progress => Name + "_ap";
     /// <summary>Attach Databases' database: three files the attach checks detach and attach again (created on demand, by
@@ -125,10 +128,10 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
     // _live the live tables', _ssis the fake SSIS catalog, _ssisref the restored catalog backup and _ssiscc Create Catalog's
     // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _files is the server file picker's; _seam and _seamt are the wave 5 seam checks'; _nd is New Database's; _ap the action progress checks';
-    // _at, _at'] and _at2 Attach Databases'; _rst Restore Database's source, _rstf its forked source and _rstr where their plans are restored; _lgn New Login's; _dbs Take Offline's and
+    // _at, _at'] and _at2 Attach Databases'; _rst Restore Database's source, _rstf its forked source and _rstr where their plans are restored; _rfl Restore Files and Filegroups' database; _lgn New Login's; _dbs Take Offline's and
     // Bring Online's (a crashed run can leave it offline, which the sweep drops by state); and _del, _delc, _delcs and _delo Delete parity's (D3d): an offline
     // database, a database with its snapshot, and the login's own.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_files|_seam|_seamt|_nd|_ap|_at|_at'\]|_at2|_rst|_rstr|_rstf|_lgn|_dbs|_del|_delc|_delcs|_delo)?$")]
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_files|_seam|_seamt|_nd|_ap|_at|_at'\]|_at2|_rst|_rstr|_rstf|_rfl|_lgn|_dbs|_del|_delc|_delcs|_delo)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^[a-z0-9]{1,8}\.(bak|trn)$")]
     private static partial Regex PartPattern();
@@ -586,11 +589,29 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         return RestoreFork;
     }
 
-    /// <summary>A file for one of <see cref="RestoreSource"/>'s backups, or <see cref="RestoreFork"/>'s (<see cref="Backup.PartIn"/>), which disposal deletes.</summary>
+    /// <summary>Creates the marked Restore Files and Filegroups database in FULL recovery with a filegroup named <paramref name="group"/>
+    /// holding one file named <paramref name="file"/> and a filegroup FG3 holding f3, both in the default data folder (dropped with the
+    /// database), and returns the folder its backups go to.</summary>
+    public async Task<string> CreateRestoreFilesAsync(string group, string file)
+    {
+        await CreateMarkedAsync(RestoreFiles);
+        var b = Bracket(RestoreFiles);
+        var row = (await Exec(Backup.FactsSql)).Sets[0][0];
+        restoreTarget ??= (row[1] ?? throw new InvalidOperationException("Scratch setup failed: the server reported no backup folder."), int.Parse(row[2]!, CultureInfo.InvariantCulture));
+        var data = (await Exec("SELECT CONVERT(nvarchar(4000), SERVERPROPERTY('InstanceDefaultDataPath'));")).Scalar ?? throw new InvalidOperationException("Scratch setup failed: the server reported no data folder.");
+        var separator = data.StartsWith('/') ? "/" : "\\";
+        var folder = data.TrimEnd(separator[0]) + separator;
+        await Exec("ALTER DATABASE " + b + " SET RECOVERY FULL;\nALTER DATABASE " + b + " ADD FILEGROUP " + Bracket(group) + ";\nALTER DATABASE " + b + " ADD FILE (NAME = " + Quote(file)
+            + ", FILENAME = " + Quote(folder + RestoreFiles + "_f2.ndf") + ") TO FILEGROUP " + Bracket(group) + ";\nALTER DATABASE " + b + " ADD FILEGROUP [FG3];\nALTER DATABASE " + b
+            + " ADD FILE (NAME = N'f3', FILENAME = " + Quote(folder + RestoreFiles + "_f3.ndf") + ") TO FILEGROUP [FG3];");
+        return restoreTarget.Value.Folder;
+    }
+
+    /// <summary>A file for one of <see cref="RestoreSource"/>'s backups, <see cref="RestoreFork"/>'s or <see cref="RestoreFiles"/>' (<see cref="Backup.PartIn"/>), which disposal deletes.</summary>
     public string RestoreFile(string part, string? database = null)
     {
         var (folder, _) = restoreTarget ?? throw new InvalidOperationException("Create the restore source first.");
-        if (database is not null && database != RestoreSource && database != RestoreFork) throw new InvalidOperationException("Only the restore sources' backups get a file.");
+        if (database is not null && database != RestoreSource && database != RestoreFork && database != RestoreFiles) throw new InvalidOperationException("Only the restore sources' backups get a file.");
         var file = Backup.PartIn(folder, database ?? RestoreSource, part);
         if (!restoreFiles.Contains(file)) restoreFiles.Add(file);
         return file;
@@ -639,6 +660,7 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
             {
                 await run(HistorySql(RestoreSource), "msdb");
                 if (created.Contains(RestoreFork)) await run(HistorySql(RestoreFork), "msdb");
+                if (created.Contains(RestoreFiles)) await run(HistorySql(RestoreFiles), "msdb");
             }
         }
         if (loginCreated) await run("DROP LOGIN " + Bracket(Login!) + ";", "master");

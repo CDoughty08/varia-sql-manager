@@ -10,12 +10,13 @@ namespace Varia.Backend.Actions;
 /// A21): SET MULTI_USER and RESTRICTED_USER (which also restore a database's access after a failed or stopped step),
 /// sp_detach_db, ALTER LOGIN … DISABLE and ENABLE, DENY and GRANT CONNECT SQL, and DROP USER; New Login's ALTER SERVER ROLE …
 /// ADD MEMBER (its CREATE LOGIN is LoginSql's builder, which takes the password); then Take Offline's SET OFFLINE (plain, or
-/// WITH ROLLBACK IMMEDIATE) and Bring Online's SET ONLINE.</summary>
+/// WITH ROLLBACK IMMEDIATE) and Bring Online's SET ONLINE; and Restore Database's cleanup, which drops only the RESTORING database
+/// the restore created (critic A11a).</summary>
 internal enum ActionTemplate
 {
     DropTable, DropView, DropProcedure, DropFunction, RenameObject, RenameDatabase, SetSingleUser, DropDatabase, DeleteBackupHistory,
     SetMultiUser, SetRestrictedUser, DetachDatabase, DisableLogin, EnableLogin, DenyConnect, GrantConnect, DropUser,
-    AddServerRoleMember, SetOffline, SetOfflineRollback, SetOnline
+    AddServerRoleMember, SetOffline, SetOfflineRollback, SetOnline, DropRestoring
 }
 
 /// <summary>Where a step runs in the plan (critic A4): main steps in order; a compensation undoes the main step <c>Undoes</c>
@@ -26,7 +27,8 @@ internal enum StepKind { Main, Compensation, Cleanup }
 
 /// <summary>One statement of an action: its template, the database it runs in, and the names it takes, verbatim (a
 /// schema-scoped object's schema and name, then a new name; a database's name, then a new name; sp_detach_db's @skipchecks
-/// as true or false, from <see cref="ActionSql.Detach"/>). Kind, Undoes and When place it in runner v2 (StepKind).</summary>
+/// as true or false, from <see cref="ActionSql.Detach"/>; a partly restored database's name and its database_id as decimal digits,
+/// from <see cref="ActionSql.DropRestoring"/>). Kind, Undoes and When place it in runner v2 (StepKind).</summary>
 internal sealed record PlannedStatement(ActionTemplate Template, string Database, IReadOnlyList<string> Names, StepKind Kind = StepKind.Main, int? Undoes = null,
     Func<IReadOnlyList<string>, bool>? When = null);
 
@@ -58,7 +60,7 @@ internal static partial class ActionSql
     public static int ParameterCount(ActionTemplate template) => template switch
     {
         ActionTemplate.DropTable or ActionTemplate.DropView or ActionTemplate.DropProcedure or ActionTemplate.DropFunction or ActionTemplate.RenameDatabase or ActionTemplate.DetachDatabase
-            or ActionTemplate.AddServerRoleMember => 2,
+            or ActionTemplate.AddServerRoleMember or ActionTemplate.DropRestoring => 2,
         ActionTemplate.RenameObject => 3,
         _ => 1
     };
@@ -87,12 +89,20 @@ internal static partial class ActionSql
     public static PlannedStatement Detach(string database, bool updateStatistics, StepKind kind = StepKind.Main, int? undoes = null) =>
         new(ActionTemplate.DetachDatabase, "master", [database, updateStatistics ? "false" : "true"], kind, undoes);
 
-    /// <summary>The plan, or a throw when its names do not fit its template: the wrong count, or an @skipchecks that is not
-    /// true or false. Every statement passes it before it runs or is scripted.</summary>
+    /// <summary>Restore Database's cleanup (critic A11a): drop the database named <paramref name="database"/> only while it is still the
+    /// RESTORING database with <paramref name="id"/>, which the restore created (its id was absent at the preflight). The batch checks
+    /// both itself, right before the DROP, so a database that took the name or left RESTORING since is never dropped.</summary>
+    public static PlannedStatement DropRestoring(string database, int id, StepKind kind = StepKind.Cleanup) =>
+        new(ActionTemplate.DropRestoring, "master", [database, id.ToString(CultureInfo.InvariantCulture)], kind);
+
+    /// <summary>The plan, or a throw when its names do not fit its template: the wrong count, an @skipchecks that is not true or
+    /// false, or a database id that is not a positive int in decimal digits. Every statement passes it before it runs or is scripted.</summary>
     public static PlannedStatement Checked(PlannedStatement plan)
     {
         if (plan.Names.Count != ParameterCount(plan.Template)) throw new InvalidOperationException("The plan has the wrong number of names for " + plan.Template + ".");
         if (plan.Template == ActionTemplate.DetachDatabase && plan.Names[1] is not ("true" or "false")) throw new InvalidOperationException("@skipchecks is true or false.");
+        if (plan.Template == ActionTemplate.DropRestoring && !(plan.Names[1].Length is > 0 and <= 10 && plan.Names[1].All(char.IsAsciiDigit) && plan.Names[1][0] != '0'
+            && long.Parse(plan.Names[1], CultureInfo.InvariantCulture) <= int.MaxValue)) throw new InvalidOperationException("A database id is a positive int.");
         return plan;
     }
 
@@ -123,6 +133,7 @@ internal static partial class ActionSql
             ActionTemplate.SetOffline => "ALTER DATABASE " + Quote(names[0]) + " SET  OFFLINE",
             ActionTemplate.SetOfflineRollback => "ALTER DATABASE " + Quote(names[0]) + " SET  OFFLINE WITH ROLLBACK IMMEDIATE",
             ActionTemplate.SetOnline => "ALTER DATABASE " + Quote(names[0]) + " SET  ONLINE",
+            ActionTemplate.DropRestoring => "DROP DATABASE " + Quote(Checked(plan).Names[0]),
             _ => throw new InvalidOperationException("Unknown template " + plan.Template)
         };
     }
@@ -160,9 +171,16 @@ internal static partial class ActionSql
             ActionTemplate.SetOffline => Run("DECLARE @stmt nvarchar(max) = N'ALTER DATABASE ' + QUOTENAME(@p1) + N' SET  OFFLINE';\n"),
             ActionTemplate.SetOfflineRollback => Run("DECLARE @stmt nvarchar(max) = N'ALTER DATABASE ' + QUOTENAME(@p1) + N' SET  OFFLINE WITH ROLLBACK IMMEDIATE';\n"),
             ActionTemplate.SetOnline => Run("DECLARE @stmt nvarchar(max) = N'ALTER DATABASE ' + QUOTENAME(@p1) + N' SET  ONLINE';\n"),
+            // The name is compared, never run, and the id converted: neither reaches the statement except through QUOTENAME. The dry
+            // run (live checks) selects the statement without the check, which no scratch database is in the state to pass.
+            ActionTemplate.DropRestoring => Run("DECLARE @stmt nvarchar(max) = N'DROP DATABASE ' + QUOTENAME(@p1);\n"
+                + (dryRun ? "" : "IF NOT EXISTS (SELECT 1 FROM sys.databases AS d WHERE d.name = @p1 AND d.state = 1 AND d.database_id = CONVERT(int, @p2)) THROW 50000, " + NotRestoring + ", 1;\n")),
             _ => throw new InvalidOperationException("Unknown template " + template)
         };
     }
+
+    /// <summary>Why the cleanup left a database alone: it is no longer the RESTORING database this restore created.</summary>
+    internal const string NotRestoring = "N'The database is not the RESTORING database this restore created, so it was not removed.'";
 
     // --- Catalog statements ---------------------------------------------------------------------------------------------
 
@@ -334,6 +352,8 @@ internal static partial class ActionSql
         "N'GRANT OR DENY'", "N'ALTER ANY LOGIN'", "N'CONTROL SERVER'", "'COSQ'",
         // Take Offline's and Bring Online's permission (Database's can_alter_state).
         "N'SERVER ROLE'", "N'dbcreator'",
+        // Restore Database's cleanup (DropRestoring).
+        NotRestoring,
         // Database Properties' describe and preflight (DatabaseProperties.cs, ActionService.DatabasePropertiesPreflight).
         "N'contained database authentication'", "N'sysadmin'", "N'##%'", "N'SpaceUsed'", "N'@take int'", "N'MAXDOP'", "N'LEGACY_CARDINALITY_ESTIMATION'", "N'PARAMETER_SNIFFING'",
         "N'QUERY_OPTIMIZER_HOTFIXES'", "'FilestreamEffectiveLevel'", "'EngineEdition'", "'ProductMajorVersion'",
@@ -354,7 +374,7 @@ internal static partial class ActionSql
     private static partial Regex NamedArgument();
     [GeneratedRegex(@"@p\d+")]
     private static partial Regex Placeholder();
-    [GeneratedRegex(@"QUOTENAME\(@p\d+\)|(?<=EXEC [^;]*= )@p\d+(?=[,;])|(?<=SELECT )@p\d+(?= AS )|, @p\d+(?= AS )")]
+    [GeneratedRegex(@"QUOTENAME\(@p\d+\)|(?<=EXEC [^;]*= )@p\d+(?=[,;])|(?<=SELECT )@p\d+(?= AS )|, @p\d+(?= AS )|(?<=WHERE d\.name = )@p1(?= AND d\.state = 1 AND )|(?<=d\.database_id = )CONVERT\(int, @p2\)(?=\) THROW )")]
     private static partial Regex QuotedPlaceholder();
     /// <summary>Builder batches' keyword text: letters, digits, underscores, spaces and the punctuation SMO's forms use. No quote,
     /// bracket, comment or line break can be written with it, and it comes only from an embedded catalogue.</summary>

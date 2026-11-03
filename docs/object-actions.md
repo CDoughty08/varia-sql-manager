@@ -18,6 +18,8 @@ and re-derives the subtype in the action's own connection before any DDL runs.
 | `attach` | Attach… | `explorer.attachDatabase` | dialog (`attachDatabase`) | `explorer.context` | `0_new` 2 | a | — | — | SQL Server | `explorerActionAttach` |
 | `takeOffline` | Take Offline | `explorer.takeOffline` | dialog (`takeOffline`) | `explorer.tasks` | `1_state` 1 | t | — | — | SQL Server | `explorerActionTakeOffline` |
 | `bringOnline` | Bring Online | `explorer.bringOnline` | dialog (`bringOnline`) | `explorer.tasks` | `1_state` 2 | o | — | — | SQL Server | `explorerActionBringOnline` |
+| `restore` | Restore Database… | `explorer.restoreDatabase` | dialog | `explorer.context` | `0_new` 3 | r | — | — | SQL Server | `explorerActionRestore` |
+| `restoreFiles` | Restore Files and Filegroups… | `explorer.restoreFiles` | dialog | `explorer.context` | `0_new` 4 | e | — | — | SQL Server | `explorerActionRestoreFiles` |
 
 "Servers" is each action's `engines`: SQL Server is the box editions, Managed Instance is EngineEdition 8, and Azure SQL
 Database stands for the cloud editions. The backend refuses an action elsewhere with `NOT_SUPPORTED` before it opens a
@@ -65,6 +67,8 @@ and the backend refuses any other target.
 | Action | Folder | Servers |
 | --- | --- | --- |
 | Attach Database… | `databases` | SQL Server |
+| Restore Database… | `databases` | SQL Server |
+| Restore Files and Filegroups… | `databases` | SQL Server |
 
 ## Menus, statuses, database states and servers
 
@@ -266,7 +270,7 @@ When the backend's generation is closed (a quit, a reload, Restart SQL Backend),
 runs their cleanup steps within their budgets; main lets that generation run `stopGraceMs` plus the action's cleanup budget plus 5 s
 before it kills it (`actionDrainMs`, methodPolicies' `drainMs`).
 
-No action is long yet; the restore, verify and backup actions that will be are still to come.
+Long actions: Restore Database…, Restore Files and Filegroups….
 
 ## Database Properties
 
@@ -474,9 +478,9 @@ checked against SSMS 22.
 
 Restore Database is a document tab ("Restore Database - <database>") with SSMS's pages as sections
 (General, Files, Options), the Select backup devices and Backup Timeline sub-dialogs, and a Script
-drawer. Its OK, Stop, progress and the Tasks › Restore › Database… menu item come in a later update (D1f): until OK
-restores, no menu item, command or palette entry opens it, only the smoke tests' hook (`window.__variaRestore`, test
-mode only), and the document says "Restoring runs in a later update. Script shows what it will run."
+drawer. The Databases folder's Restore Database… (R) and a user database's Tasks › Restore › Database… (D) open it, on
+SQL Server itself (not Azure SQL Database or Managed Instance); from a database, that database is the source. Its header
+verbs are Refresh and Restore, and Stop while it runs (catalogue commands, so the palette offers them too).
 
 Its reads are `actions.describe` with `restoreDatabase`, the server as its target and a `restore` member, one of
 `history`, `devices`, `historyFiles`, `mediaFiles`:
@@ -542,7 +546,7 @@ backup: a large triangle for a full backup, a small one for a differential, a ti
 backups cover. Its point is a slider: the arrow keys move it a minute, Shift and an arrow or Page Up and Page Down an
 hour, Home and End to the interval's ends. A point outside the covered band (other than a full or differential
 backup's finish) leaves OK disabled. SSMS also allows a point after the last log backup, restoring the tail-log backup
-it takes first; that comes with the run (D1f), so here such a point is refused.
+it takes first; Varia refuses such a point (a known gap: restore to the last backup taken, or past it in T-SQL).
 
 ### Options and script
 
@@ -562,6 +566,60 @@ and the destination exists, the tail-log backup, one RESTORE per set (`FILE =`, 
 the text with SMO's `Script()` for hostile names and paths; Varia writes two spaces after SET (`SET  SINGLE_USER`), as its
 other database options do, where SMO writes one.
 
+### Run
+
+Restore (SSMS's OK) reads the server again, then asks in the document when a fact calls for it, Restore first and Cancel
+last, the default (focused, drawn as the default, and Escape's answer; Restore is disabled while the bar asks):
+REPLACE over an existing database (which is left restoring if the run stops or fails part way, and whose contents are
+lost outright when it is not the database the backups are of: another name, or the same name with another recovery
+family, from another server or an earlier database of that name), a tail-log backup that could be taken but is off, and
+Close existing connections, with the sessions it ends, those with open transactions it rolls back, and Varia's own
+query windows in the database that are running or may hold one. Only an online database has connections to close, so
+the option is disabled, and not sent, for any other. SSMS asks none of these. It then runs `actions.execute`
+with the same request Script takes, as a long run (closing the tab or the window, Disconnect of the server and Restart
+SQL Backend are refused until it ends: Stop it first) on the long gate, and the Run panel lists its steps with the running
+RESTORE's STATS percent (`action.progress`), an overall percent (the sets done and the running set's percent, each set
+alike) and the time. Answering the bar moves focus to the Run panel's title (Restore, Stop) or back to the verb (Cancel,
+Keep restoring).
+
+The backend first checks what the request names, on the action's own connection: the destination's identity (an
+existing database must be the one the document read), a snapshot or a database without RESTORING rights, whether the
+tail-log backup can be taken, Close existing connections over a database that is not online (`DATABASE_UNAVAILABLE`),
+each set's header on the media (`RESTORE HEADERONLY`: its type, family, and that it continues the set before it;
+`RestoreChain`), REPLACE over another database's backups (`BACKUP_MISMATCH`), and the files the restore writes
+(`NAME_IN_USE`): the first set's `RESTORE FILELISTONLY` with the Restore As paths gives each file's path, which must be no
+other database's file and, unless it is a file of the destination, no file already on the server; a standby file or
+tail-log backup must be no database's file and have no database file's extension. Paths compare by a key
+(`ServerPath.Key`, `serverPathKey` in the renderer, both checked against `tests/fixtures/server-paths.json`): `.` and
+empty segments dropped, `..` resolved, and on Windows `/` as `\`, trailing dots and spaces trimmed, and case ignored.
+Files on disk are seen through `sys.dm_os_file_exists` (SQL Server 2017 and later) or `xp_fileexist` (2016, sysadmin
+only; otherwise not checked). Then the steps, each its own statement with every name, path and number a parameter
+(`RestoreSql`):
+
+| Step | When |
+| --- | --- |
+| Close existing connections | Close existing connections is checked and the destination exists (`SET SINGLE_USER WITH ROLLBACK IMMEDIATE`, after Varia's own pooled sessions in it are cleared) |
+| Back up the tail of the log | The tail-log backup is on (`BACKUP LOG … TO DISK = … WITH NORECOVERY` when Leave source database in the restoring state is checked) |
+| Restore the full backup, Restore the differential backup, Restore log backup (n of m) | One RESTORE per set of the plan, NORECOVERY on all but the last |
+| Restore multi-user access | After a RECOVERY restore that closed connections, unless Restrict access is checked |
+| Bring the database back online | Cleanup: the tail-log backup left the database restoring (it ended, or a Stop came as it finished), no RESTORE has written to it, and it is still RESTORING with the id the preflight read (`RESTORE DATABASE … WITH RECOVERY`) |
+| Restore multi-user access | Compensation: connections were closed and no RESTORE has written to the database (its access as it was: multi-user or restricted) |
+| Remove the partly restored database | Cleanup: the destination did not exist, and a RESTORE left it RESTORING; dropped only when its name, state 1 and an id absent at the preflight all match, which the DROP's own batch checks again. Its files are read first, and checked on disk after the DROP |
+
+After a failure or Stop the compensations and the cleanup run in order under a fresh 30 s budget, and are listed only
+when they run. Varia never drops a database that existed (owner decision 5). Stop cancels the running statement in SQL
+Server; over a database that existed it asks first ("Stopping leaves <database> restoring and unusable until a restore
+finishes", Stop first and Keep restoring last, the default). A refusal SQL Server makes while it plans a RESTORE (3101, 3154, 3159, 3201, 4305…)
+has not written to the database, so the compensations still run. The reply lists the steps, and the database's state and
+access as the run left it (`restored`: `sys.databases` read last; the access comes from the backup), or `absent` when no
+database has the name, or nothing when it could not be read (the panel then says to check Object Explorer). A Stop that
+came as the last RESTORE WITH RECOVERY reached 100 % and left the database online says it was restored. SQL Server leaves
+the files of a cancelled RESTORE on disk even when the partly restored database is dropped: `restored.filesLeft` names
+them (at most 16), the error and the cleanup step say to delete them or restore to other paths, and the
+next restore to those paths is refused until then. A Stop or an unknown outcome shows as a status in the warning tone, a
+failure as an error. The Databases folder is reconciled once the run ends, and Restore again keeps the choices. A run
+whose backend or server is lost, or whose reply main stopped waiting for, says that how far it got is not known.
+
 SQL Server's own databases (master, model, msdb, tempdb) are refused as destinations, in any case (MSDB too): "Restore system databases with T-SQL; it needs single-user mode or a stopped Agent."
 Their backups can still be sources, restored under another name (msdb_copy), as SSMS allows.
 Prompt before restoring each backup and Verify Backup Media are greyed ("Not yet available").
@@ -571,6 +629,73 @@ its columns, Manual Selection; Relocate all files to folder, Data file folder, L
 files as, Restore As; the restore options, Tail-Log
 backup, Server connections and Prompt; Select backup devices; Backup Timeline) are SSMS's as recalled, not yet checked
 against SSMS 22.
+
+### Restore Files and Filegroups
+
+Restore Files and Filegroups (D1g) restores some files of an existing database: the Databases folder's Restore Files and
+Filegroups… (E) and a user database's Tasks › Restore › Files and Filegroups… (F) open the same document in its files mode
+("Restore Files and Filegroups - <database>"), with SSMS's pages as sections (General, Options), and the same
+describes, Script drawer, verbs, Run panel, Stop and long run as Restore Database. General has To database (the server's
+user databases), Source for restore (From database, whose backups msdb has, or From device, whose … opens Restore Database's
+Select backup devices titled Specify backup devices, Learn's name for it in this dialog), and Select the backup sets
+to restore: the files of the newest 16 full and file backups (msdb's `backupfile` or FILELISTONLY, read one describe after
+another; files a file backup does not hold (`absent`: `is_present` 0) and log files are not listed), then the log backups
+that continue the backup set of the checked rows, checked with them and never alone (copy-only and damaged logs never
+chain). One restore restores from one backup set: checking a row of another set starts again from it. Options has Restore
+as filegroup (the rows become filegroups, named with FILEGROUP =, and a Filegroup column first shows each row's name),
+Overwrite the existing database (WITH REPLACE), Prompt before restoring each backup (greyed, with a note saying why, as every
+greyed option has), Restrict access to the restored database (WITH RESTRICTED_USER), Restore the
+database files as (Original File Name, File Type and Restore As, for the restored files, where they are unless typed), the
+Recovery state with SSMS's long labels ("Leave the database ready for use by rolling back the uncommitted transactions. Additional transaction logs cannot be restored. (RESTORE WITH RECOVERY)"…) and Rollback undo file, and Varia's own
+Log backup group.
+
+Under the full or bulk-logged recovery model an online file restore ends only with a log backup taken after it (probed on
+2025: the files stay RESTORING after every earlier log, "Additional roll forward past LSN … is required"). SSMS's dialog
+has no such step and leaves the person to take and restore one; Varia offers "Back up the log and restore it to bring the
+files online (WITH COPY_ONLY)", checked by default for an online database in the full or bulk-logged recovery model WITH
+RECOVERY, to a new file named as SSMS names a tail-log backup. Unchecked there, Restore asks first ("No log backup is
+taken: under the full or bulk-logged recovery model, restored files stay restoring until a log backup taken after they are restored is restored."), as it does for WITH REPLACE. STANDBY
+is greyed while the database is online: SQL Server refuses it on an online file restore (4302), and only after the files
+are restored, so the preflight refuses it first.
+
+A file of the PRIMARY filegroup restores only offline: on an online database it puts the whole database in RESTORING, and
+with WITH REPLACE it restores the log file too, so the changes since the last log backup are lost and the database cannot
+recover (probed on 2025: 4303, then 927 for a tail-log backup). Varia greys PRIMARY's rows while the database is online or
+offline, with the reason under the grid ("A file of the PRIMARY filegroup restores only offline, which takes the whole database out of use and, without a tail-log backup, loses the changes since the last log backup: restore the database with Restore Database, which backs up the tail of the log first."), and the preflight refuses them (`NOT_SUPPORTED`);
+they restore only into a database already restoring. Restore Database restores PRIMARY with its tail-log backup first.
+
+Under the full or bulk-logged recovery model the plan must reach the database's log chain: its last set must end at or
+after `sys.database_recovery_status.last_log_backup_lsn`, where the next log backup starts (a copy-only log backup leaves it).
+A regular log backup taken after the plan's last set (a maintenance job, media not added under From device, or one taken
+after the document read msdb) would leave the restored files waiting for it, and Varia's copy-only backup would not continue
+them (4305). The preflight refuses such a plan before any statement (`RESTORE_SEQUENCE`, "The log has been backed up since the last backup set this restore plans, and restored files roll forward only through every log backup: Refresh to read the backup history again, or add the files of the newer log backups under From device."),
+naming the newest log backup from msdb (when it finished and its file) where the login may read msdb. Back up the log reads
+the chain again before it runs: a log backup taken during the restore fails that step with the same naming
+("The log was backed up during the restore, so a log backup taken now would not continue the restored files: restore that log backup, then back up the log and restore it WITH RECOVERY to bring the files online."), before the doomed backup and restore.
+
+The request (`restoreFiles`) names the sets (a full or file backup, then logs), the files and filegroups (each at most
+256), the moves, the options and the log backup. A file restore takes no STOPAT and no differential, and its
+database must exist, so its identity is required. The backend's preflight checks the identity and that it is no snapshot;
+the log backup (not under SIMPLE, and only online); STANDBY online; the chain on the media (`RestoreChain`, files variant);
+that the backups are the database's own (its backup family, else its name; `BACKUP_MISMATCH`, "These backups are of another database: files restore only from the database's own backups.");
+that the plan reaches the log chain; that each file and filegroup is in the set, held by it, no log file and, online or
+offline, not of PRIMARY; under SIMPLE, Learn's rule
+("Under the simple recovery model, the file must belong to a read-only filegroup.", `NOT_SUPPORTED`, from `sys.master_files.is_read_only`); and the files it writes, as Restore
+Database's does, with the log backup file new. The steps, each its own statement with every name a parameter
+(`FILE = @f1`, `FILEGROUP = @g1`; live checks restore hostile names):
+
+| Step | When |
+| --- | --- |
+| Restore the files | `RESTORE DATABASE … FILE = … FILEGROUP = … FROM … WITH FILE =`, the moves, `NORECOVERY` (or the recovery state when it is the last statement), `REPLACE`, `RESTRICTED_USER`, `STATS = 5` |
+| Restore log backup (n of m) | One `RESTORE LOG` per log backup after the set |
+| Back up the log | The log backup is on: the log chain read again, then `BACKUP LOG … TO DISK = … WITH COPY_ONLY, NOFORMAT, NOINIT, NAME = …` |
+| Restore the log backup | Then `RESTORE LOG` from that new file WITH RECOVERY, which brings the restored files online |
+
+A file restore has no compensation or cleanup, and Varia never drops the database; Stop asks first ("Stopping leaves the
+files being restored in <database> restoring…"). The reply names the files still RESTORING (`restored.filesRestoring`, by
+logical name, at most 16), and the Run panel says so. Script writes the statements SMO's `Restore { Action = Files }` writes,
+with `STATS = 5` as Restore Database's (SMO scripted 10 as the spec captured it), and the log backup's two statements
+after the logs.
 
 ### Restore limits
 
@@ -591,7 +716,11 @@ against SSMS 22.
 | `lsnDigits` | 25 | Digits of an LSN, numeric(25, 0) sent as decimal text |
 | `position` | 32,767 | A backup set's position in its media set (RESTORE … WITH FILE) |
 | `stats` | 5 | STATS = n in the script, as SSMS asks SMO for |
+| `databases` | 32,767 | Database ids a run's preflight reads (SQL Server's most): its cleanup drops only a database whose id was not among them |
 | `scriptChars` | 4,000,000 | Characters of a restore's script, checked as each statement is written (every RESTORE repeats the moves) |
+| `restoreFiles` | 256 | Files (FILE), and filegroups (FILEGROUP), one file restore names: form 4's `@f1`…`@f256` and `@g1`…`@g256` |
+| `fileSets` | 16 | The newest full and file backups whose files Restore Files and Filegroups reads, one describe each |
+| `parameters` | 2,100 | SQL Server's parameters per statement: a file restore's files, filegroups, devices and moves (two each), with its own three, stay under them |
 
 ## SQL
 
@@ -774,6 +903,9 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `PATH_NOT_FOUND` | No |
 | `FILE_ACCESS` | Yes |
 | `MEDIA` | No |
+| `BACKUP_MISMATCH` | No |
+| `TAIL_LOG_NEEDED` | No |
+| `RESTORE_SEQUENCE` | No |
 | `DATABASE_UNAVAILABLE` | Yes |
 | `TIMEOUT` | Yes |
 | `CONNECTION_LOST` | Yes |

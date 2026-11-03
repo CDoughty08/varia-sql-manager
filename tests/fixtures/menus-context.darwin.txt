@@ -129,6 +129,8 @@ explorer.context, for a server whose connection was lost
   Rem&ove  +++-
 explorer.context, for the Databases folder
   &Attach…  -+++
+  &Restore Database…  -+++
+  R&estore Files and Filegroups…  -+++
   ---
   F&ilter Settings…  -+++
   ---
@@ -157,6 +159,10 @@ explorer.context, for a database
   &Tasks >
     &Take Offline  -+++
     Bring &Online  -+++
+    ---
+    &Restore >
+      &Database…  -+++
+      &Files and Filegroups…  -+++
   ---
   Copy N&ame  -+++
   ---

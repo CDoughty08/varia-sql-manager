@@ -54,7 +54,7 @@ internal static partial class RestoreDescribe
                     await using var reader = await command.ExecuteReaderAsync(token);
                     while (await reader.ReadAsync(token))
                         files.Add(new(reader.GetString(0), Text(reader, 1), FileType(Text(reader, 2)), reader.IsDBNull(4) ? 0 : Long(reader.GetValue(4)), reader.IsDBNull(5) ? 0 : Convert.ToInt32(reader.GetValue(5), CultureInfo.InvariantCulture),
-                            reader.IsDBNull(3) ? null : reader.GetString(3)));
+                            reader.IsDBNull(3) ? null : reader.GetString(3), Absent(reader, 6)));
                     return (new(Files: Clip(files, take), FilesTruncated: files.Count > take), null);
                 }
                 case "mediaFiles":
@@ -66,10 +66,10 @@ internal static partial class RestoreDescribe
                     Add(command, "@file", SqlDbType.Int, 0, source.File!.Value);
                     await using var reader = await command.ExecuteReaderAsync(token);
                     int Column(string name) => reader.GetOrdinal(name);
-                    var (logical, physical, type, group, size, id) = (Column("LogicalName"), Column("PhysicalName"), Column("Type"), Column("FileGroupName"), Column("Size"), Column("FileId"));
+                    var (logical, physical, type, group, size, id, present) = (Column("LogicalName"), Column("PhysicalName"), Column("Type"), Column("FileGroupName"), Column("Size"), Column("FileId"), Column("IsPresent"));
                     while (await reader.ReadAsync(token))
                         files.Add(new(reader.GetString(logical), Text(reader, physical), FileType(Text(reader, type)), reader.IsDBNull(size) ? 0 : Long(reader.GetValue(size)),
-                            reader.IsDBNull(id) ? 0 : Convert.ToInt32(reader.GetValue(id), CultureInfo.InvariantCulture), reader.IsDBNull(group) ? null : reader.GetString(group)));
+                            reader.IsDBNull(id) ? 0 : Convert.ToInt32(reader.GetValue(id), CultureInfo.InvariantCulture), reader.IsDBNull(group) ? null : reader.GetString(group), Absent(reader, present)));
                     return (new(Files: Clip(files, take), FilesTruncated: files.Count > take), null);
                 }
                 default:
@@ -123,6 +123,8 @@ internal static partial class RestoreDescribe
         for (var index = 0; index < devices.Count; index++) Add(command, "@d" + (index + 1).ToString(CultureInfo.InvariantCulture), SqlDbType.NVarChar, 260, devices[index]);
     }
 
+    /// <summary>True for a file the set does not hold (is_present or IsPresent 0: a file backup lists every file of the database), else null.</summary>
+    private static bool? Absent(SqlDataReader reader, int ordinal) => !reader.IsDBNull(ordinal) && !Convert.ToBoolean(reader.GetValue(ordinal), CultureInfo.InvariantCulture) ? true : null;
     private static string Text(SqlDataReader reader, int ordinal) => reader.IsDBNull(ordinal) ? "" : Convert.ToString(reader.GetValue(ordinal), CultureInfo.InvariantCulture) ?? "";
     private static long Long(object value) => value switch
     {
@@ -180,7 +182,8 @@ internal static partial class RestoreDescribe
             Add(command, "@take", SqlDbType.Int, 0, takeDestinations + 1);
             await using var reader = await command.ExecuteReaderAsync(token);
             while (await reader.ReadAsync(token))
-                destinations.Add(new(reader.GetString(0), reader.GetInt32(1), DatabaseProperties.Iso(reader.GetValue(2)), Text(reader, 3), Text(reader, 4), reader.IsDBNull(5) ? null : reader.GetInt32(5)));
+                destinations.Add(new(reader.GetString(0), reader.GetInt32(1), DatabaseProperties.Iso(reader.GetValue(2)), Text(reader, 3), Text(reader, 4), reader.IsDBNull(5) ? null : reader.GetInt32(5),
+                    reader.IsDBNull(6) ? null : reader.GetInt32(6), reader.IsDBNull(7) ? null : reader.GetGuid(7).ToString("D")));
         }
         var takeFiles = (int)restore.Limit("serverFiles");
         var files = new List<RestoreServerFileDto>();
@@ -233,6 +236,36 @@ internal static partial class RestoreDescribe
         return (sets, truncated);
     }
 
+    /// <summary>HEADERONLY on one media set's devices: its full, differential and log sets (snapshots and kinds Varia does not
+    /// list are passed over), each with the id <paramref name="mediaSet"/>:position. The describe lists them, and the run
+    /// re-reads the sets it restores (RestoreChain) right before any statement.</summary>
+    internal static async Task<List<BackupSetDto>> HeadersAsync(SqlConnection connection, List<string> paths, string mediaSet, string? problem, CancellationToken token)
+    {
+        var sets = new List<BackupSetDto>();
+        await using var command = Command(connection, RestoreSql.Header(paths.Count));
+        AddDevices(command, paths);
+        await using var reader = await command.ExecuteReaderAsync(token);
+        int Column(string name) => reader.GetOrdinal(name);
+        var c = (Name: Column("BackupName"), Type: Column("BackupType"), Server: Column("ServerName"), Database: Column("DatabaseName"), Position: Column("Position"), First: Column("FirstLSN"),
+            Last: Column("LastLSN"), Checkpoint: Column("CheckpointLSN"), Base: Column("DatabaseBackupLSN"), Start: Column("BackupStartDate"), Finish: Column("BackupFinishDate"),
+            Size: Column("BackupSize"), User: Column("UserName"), Expiration: Column("ExpirationDate"), CopyOnly: Column("IsCopyOnly"), Damaged: Column("IsDamaged"),
+            Model: Column("RecoveryModel"), FirstFork: Column("FirstRecoveryForkID"), Fork: Column("RecoveryForkID"), Snapshot: Column("IsSnapshot"), ForkPoint: Column("ForkPointLSN"),
+            Family: Column("FamilyGUID"));
+        while (await reader.ReadAsync(token))
+        {
+            if (SetType(Text(reader, c.Type)) is not { } type || (!reader.IsDBNull(c.Snapshot) && Convert.ToBoolean(reader.GetValue(c.Snapshot), CultureInfo.InvariantCulture))) continue;
+            var position = Convert.ToInt32(reader.GetValue(c.Position), CultureInfo.InvariantCulture);
+            sets.Add(new(mediaSet + ":" + position.ToString(CultureInfo.InvariantCulture), Text(reader, c.Name), type, Text(reader, c.Server), Text(reader, c.Database),
+                position, Lsn(reader, c.First), Lsn(reader, c.Last), Lsn(reader, c.Checkpoint), Lsn(reader, c.Base), reader.IsDBNull(c.Start) ? "" : Time(reader.GetValue(c.Start)),
+                reader.IsDBNull(c.Finish) ? "" : Time(reader.GetValue(c.Finish)), reader.IsDBNull(c.Size) ? 0 : Long(reader.GetValue(c.Size)), Text(reader, c.User),
+                !reader.IsDBNull(c.CopyOnly) && Convert.ToBoolean(reader.GetValue(c.CopyOnly), CultureInfo.InvariantCulture),
+                !reader.IsDBNull(c.Damaged) && Convert.ToBoolean(reader.GetValue(c.Damaged), CultureInfo.InvariantCulture), paths,
+                reader.IsDBNull(c.Expiration) ? null : Time(reader.GetValue(c.Expiration)), reader.IsDBNull(c.Model) ? null : Text(reader, c.Model),
+                ForkId(reader, c.FirstFork), ForkId(reader, c.Fork), problem, reader.IsDBNull(c.ForkPoint) ? null : Lsn(reader, c.ForkPoint), ForkId(reader, c.Family)));
+        }
+        return sets;
+    }
+
     internal static string Striped(int families) => "This backup set is striped across " + families.ToString(CultureInfo.InvariantCulture) + " files; add the missing ones.";
 
     /// <summary>The sets on the devices: LABELONLY on each groups them into media sets (in the order first given, families in
@@ -261,33 +294,11 @@ internal static partial class RestoreDescribe
             var (_, families, members) = groups[index];
             var paths = members.Values.ToList();
             var problem = paths.Count < families ? Striped(families) : null;
-            await using var command = Command(connection, RestoreSql.Header(paths.Count));
-            AddDevices(command, paths);
-            SqlDataReader reader;
-            try { reader = await command.ExecuteReaderAsync(token); }
+            List<BackupSetDto> read;
+            try { read = await HeadersAsync(connection, paths, (index + 1).ToString(CultureInfo.InvariantCulture), problem, token); }
             // Families missing: SQL Server may refuse the media set; it then says only what the planner would.
             catch (SqlException) when (problem is not null && !token.IsCancellationRequested) { continue; }
-            await using (reader)
-            {
-                int Column(string name) => reader.GetOrdinal(name);
-                var c = (Name: Column("BackupName"), Type: Column("BackupType"), Server: Column("ServerName"), Database: Column("DatabaseName"), Position: Column("Position"), First: Column("FirstLSN"),
-                    Last: Column("LastLSN"), Checkpoint: Column("CheckpointLSN"), Base: Column("DatabaseBackupLSN"), Start: Column("BackupStartDate"), Finish: Column("BackupFinishDate"),
-                    Size: Column("BackupSize"), User: Column("UserName"), Expiration: Column("ExpirationDate"), CopyOnly: Column("IsCopyOnly"), Damaged: Column("IsDamaged"),
-                    Model: Column("RecoveryModel"), FirstFork: Column("FirstRecoveryForkID"), Fork: Column("RecoveryForkID"), Snapshot: Column("IsSnapshot"), ForkPoint: Column("ForkPointLSN"),
-                    Family: Column("FamilyGUID"));
-                while (await reader.ReadAsync(token))
-                {
-                    if (SetType(Text(reader, c.Type)) is not { } type || (!reader.IsDBNull(c.Snapshot) && Convert.ToBoolean(reader.GetValue(c.Snapshot), CultureInfo.InvariantCulture))) continue;
-                    var position = Convert.ToInt32(reader.GetValue(c.Position), CultureInfo.InvariantCulture);
-                    sets.Add(new((index + 1).ToString(CultureInfo.InvariantCulture) + ":" + position.ToString(CultureInfo.InvariantCulture), Text(reader, c.Name), type, Text(reader, c.Server), Text(reader, c.Database),
-                        position, Lsn(reader, c.First), Lsn(reader, c.Last), Lsn(reader, c.Checkpoint), Lsn(reader, c.Base), reader.IsDBNull(c.Start) ? "" : Time(reader.GetValue(c.Start)),
-                        reader.IsDBNull(c.Finish) ? "" : Time(reader.GetValue(c.Finish)), reader.IsDBNull(c.Size) ? 0 : Long(reader.GetValue(c.Size)), Text(reader, c.User),
-                        !reader.IsDBNull(c.CopyOnly) && Convert.ToBoolean(reader.GetValue(c.CopyOnly), CultureInfo.InvariantCulture),
-                        !reader.IsDBNull(c.Damaged) && Convert.ToBoolean(reader.GetValue(c.Damaged), CultureInfo.InvariantCulture), paths,
-                        reader.IsDBNull(c.Expiration) ? null : Time(reader.GetValue(c.Expiration)), reader.IsDBNull(c.Model) ? null : Text(reader, c.Model),
-                        ForkId(reader, c.FirstFork), ForkId(reader, c.Fork), problem, reader.IsDBNull(c.ForkPoint) ? null : Lsn(reader, c.ForkPoint), ForkId(reader, c.Family)));
-                }
-            }
+            sets.AddRange(read);
         }
         return (Clip(sets, take), sets.Count > take);
     }

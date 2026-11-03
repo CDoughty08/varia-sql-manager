@@ -204,8 +204,9 @@ internal sealed record BackupSetDto(string Id, string Name, string Type, string 
     string DatabaseBackupLsn, string Start, string Finish, long SizeBytes, string UserName, bool CopyOnly, bool Damaged, List<string> Devices, string? Expiration = null,
     string? RecoveryModel = null, string? FirstForkGuid = null, string? ForkGuid = null, string? Problem = null, string? ForkPointLsn = null, string? FamilyGuid = null);
 /// <summary>One file of a backup set: Type data, log, filestream, fulltext or other.</summary>
-internal sealed record BackupFileDto(string Logical, string Physical, string Type, long SizeBytes, int FileId, string? Filegroup = null);
-internal sealed record RestoreDestinationDto(string Name, int Id, string Created, string State, string RecoveryModel, int? Sessions = null);
+internal sealed record BackupFileDto(string Logical, string Physical, string Type, long SizeBytes, int FileId, string? Filegroup = null, bool? Absent = null);
+/// <summary>A database a restore can overwrite: Sessions in it and WithTransaction of them with an open transaction (critic A7), with VIEW SERVER STATE.</summary>
+internal sealed record RestoreDestinationDto(string Name, int Id, string Created, string State, string RecoveryModel, int? Sessions = null, int? WithTransaction = null, string? FamilyGuid = null);
 internal sealed record RestoreServerFileDto(string Database, string Path);
 internal sealed record RestoreServerDto(string Separator, bool CanRestore, List<RestoreDestinationDto> Destinations, bool DestinationsTruncated, List<RestoreServerFileDto> Files, bool FilesTruncated,
     string? DataPath = null, string? LogPath = null, string? BackupPath = null);
@@ -230,6 +231,11 @@ internal sealed record AttachServerDto(List<string> Logins, bool LoginsTruncated
 internal sealed record AttachFileDto(string Original, string Type, string Current, bool? Found = null);
 internal sealed record AttachDatabaseInfoDto(string Mdf, string DatabaseName, List<AttachFileDto> Files, int? Version = null);
 internal sealed record AttachDescribeDto(AttachServerDto Server, AttachDatabaseInfoDto? Database = null);
+/// <summary>A file restore (restore.ts RestoreFilesOptions, D1g): the sets (a full or file backup, then logs), the files (FILE) and filegroups
+/// (FILEGROUP) to restore, the moves, SSMS's options, and LogBackup: a COPY_ONLY log backup to a new file after the sets, restored WITH RECOVERY.</summary>
+internal sealed record RestoreFilesOptionsDto(List<RestorePlanSetDto> Sets, List<string> Files, List<string> Filegroups, List<RestoreMoveDto> Relocate, bool Replace, bool RestrictedUser,
+    string Recovery, string? StandbyFile = null, RestoreLogBackupDto? LogBackup = null);
+internal sealed record RestoreLogBackupDto(string File);
 /// <summary>The server file picker's request (src/shared/actions/files.ts): Purpose backup, database, log or folder; Path the folder
 /// to list (at most 260 UTF-16 units; absent for the drives and default folders); AllFiles lists every file, not the purpose's;
 /// Exists asks whether Path itself (a file or a folder) exists rather than listing it.</summary>
@@ -244,12 +250,13 @@ internal sealed record ServerFileEntryDto(string Name, bool Directory, long? Siz
 internal sealed record ServerFilesDto(string Separator, string? Path, List<ServerRootDto> Roots, List<ServerFileEntryDto> Entries, bool Truncated, string? Notice = null);
 /// <summary>actions.script and actions.execute: rename takes NewName, delete the two database options, properties
 /// CloseConnections and Changes, createTable (Target the database) and createDatabase (Target the new database) Design, restore
-/// (Target the destination database) Restore and Identity, attach (Target the server) Databases, createLogin (Target the server)
-/// Login, ServerRoles, Status and, on execute only, Secrets, takeOffline DropConnections; Validate refuses the rest.</summary>
+/// (Target the destination database) Restore and Identity, restoreFiles (Target the database) RestoreFiles and Identity, attach (Target
+/// the server) Databases, createLogin (Target the server) Login, ServerRoles, Status and, on execute only, Secrets, takeOffline
+/// DropConnections; Validate refuses the rest.</summary>
 internal sealed record ActionArgs(string Action, string ConnectionId, string RequestId, ObjectRefDto Target, string? NewName = null, bool? CloseConnections = null, bool? DeleteHistory = null,
     DatabaseChangesDto? Changes = null, ActionDesign? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null, RestoreOptionsDto? Restore = null,
     List<AttachDatabaseDto>? Databases = null, NewLoginDto? Login = null, List<string>? ServerRoles = null, LoginStatusDto? Status = null,
-    bool? DropConnections = null);
+    bool? DropConnections = null, RestoreFilesOptionsDto? RestoreFiles = null);
 /// <summary>New Login's General page (src/shared/actions/logins.ts NewLoginGeneral): Auth windows or sql; the password policy
 /// options exactly for sql, in SQL Server's chain (MustChange needs CheckExpiration, which needs CheckPolicy).</summary>
 internal sealed record NewLoginDto(string Auth, string Name, string DefaultDatabase, string? DefaultLanguage = null, bool? CheckPolicy = null, bool? CheckExpiration = null, bool? MustChange = null);
@@ -382,7 +389,12 @@ internal sealed record ActionScriptResult(string? Text, string Database, List<st
 /// the step acts on (at most 128 characters, never a secret); Compensates: it undid an earlier step's change, or cleaned up,
 /// after a failure or Stop; Progress: percent done (0-100) of a long step. ActionSteps.Bound clips them all.</summary>
 internal sealed record ActionStepDto(string Status, string Title, string? Message = null, string? Detail = null, bool? Compensates = null, int? Progress = null);
-internal sealed record ActionExecuteResult(List<ActionStepDto> Steps, List<string> Messages, long ElapsedMs, ActionError? Error = null);
+/// <summary>A restore's destination after the run (schema.ts RestoredDatabase), read last (critic A12): sys.databases' state and user_access;
+/// or Absent when no database has the name, with the files a dropped partly restored database left on disk (FilesUnknown: whether
+/// they are could not be asked). The reply leaves it out when it could not be read. After a file restore, FilesRestoring names the database's files
+/// still RESTORING (sys.master_files.state 1), by logical name.</summary>
+internal sealed record RestoredDatabaseDto(int? State, int? UserAccess, bool? Absent = null, List<string>? FilesLeft = null, bool? FilesUnknown = null, List<string>? FilesRestoring = null);
+internal sealed record ActionExecuteResult(List<ActionStepDto> Steps, List<string> Messages, long ElapsedMs, ActionError? Error = null, RestoredDatabaseDto? Restored = null);
 
 /// <summary>ssis.describe (src/shared/ssis/schema.ts): a view of the SSIS catalogue and the tree object it describes.</summary>
 internal sealed record SsisDescribeArgs(string ConnectionId, string RequestId, string View, ObjectRefDto Target);

@@ -1413,6 +1413,35 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
    stop), the Select backup devices list and the Backup Timeline. The timeline draws in CSS pixels; its marks take chart
    series colours from the page (ChartView's keys) and, under forced colours, system colours from here, with shapes that
    tell them apart either way. */
+/* Restore Database's run (D1f): the confirm bar, the Run panel at the top of the document, and the sections' summaries while it runs. */
+.restore-confirm { display: flex; align-items: flex-start; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-3); border-radius: var(--varia-radius-sm); background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.restore-confirm > .codicon, .restore-confirm > .icon { margin-top: 2px; }
+.restore-confirm-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.restore-confirm-text > p { margin: 0; }
+.restore-confirm-text > p + p { margin-top: var(--varia-space-1); }
+.restore-confirm button { flex: none; color: inherit; border-color: currentColor; }
+.restore-confirm button.danger, .restore-confirm button.danger:hover:not(:disabled) { color: var(--varia-errorForeground); font-weight: 600; }
+/* The bar's buttons read danger first, safe last (as SSIS's Stop Operation bar), and the safe one is the default: filled and
+   ringed whether or not focus is visible, so Enter's answer shows before any key is pressed. */
+.restore-confirm button.default { background: var(--varia-editor-background); border-color: var(--varia-button-border); box-shadow: 0 0 0 1px currentColor; }
+@media (forced-colors: active) { .restore-confirm button.default { outline: 2px solid Highlight; outline-offset: 1px; } }
+.restore-run { display: grid; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.restore-run-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1) var(--varia-space-2); }
+.restore-run-title { flex: 1 1 0; min-width: 0; margin: 0; font-size: var(--varia-size-md); font-weight: 600; overflow-wrap: anywhere; }
+.restore-run-elapsed { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; }
+.restore-run-overall { display: flex; align-items: center; gap: var(--varia-space-2); margin-left: auto; font-variant-numeric: tabular-nums; }
+.restore-run-overall > .step-list-progress { display: block; width: 180px; }
+.restore-run-overall .step-list-fill { display: block; }
+.restore-run-done { color: var(--varia-successForeground); }
+.restore-run-failed { color: var(--varia-errorForeground); }
+.restore-run-stopped, .restore-run-unknown { color: var(--varia-warningForeground); }
+.restore-run-warning { align-items: flex-start; }
+.restore-run-warning > .codicon, .restore-run-warning > .icon { margin-top: 2px; color: var(--varia-warningForeground); }
+.restore-run-outcome-body { display: grid; gap: var(--varia-space-1); min-width: 0; }
+.restore-run-outcome-body > p { margin: 0; }
+.restore-run-outcome { display: flex; align-items: center; gap: var(--varia-space-1); margin: 0; overflow-wrap: anywhere; }
+.restore-run > .inline-error { padding: 0; }
+.restore-summary { margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); overflow-wrap: anywhere; }
 .restore-problems { list-style: none; margin: 0 0 var(--varia-space-2); padding: 0; font-size: var(--varia-size-xs); color: var(--varia-errorForeground); }
 .restore-problems li { display: flex; align-items: center; gap: var(--varia-space-1); }
 .restore-source-choice { margin-bottom: var(--varia-space-2); }
@@ -1440,6 +1469,15 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .restore-timeline-mode { display: flex; flex-direction: column; gap: var(--varia-space-1); margin: 0 0 var(--varia-space-2); padding: 0; border: 0; }
 .restore-timeline-mode > legend { margin-bottom: var(--varia-space-1); padding: 0; font-size: var(--varia-size-xs); }
 .restore-timeline-mode .checkbox-label { display: flex; align-items: center; gap: var(--varia-space-2); }
+.restore-recovery { display: flex; flex-direction: column; gap: var(--varia-space-1); margin: var(--varia-space-2) 0; padding: 0; border: 0; min-width: 0; }
+.restore-recovery > legend { padding: 0; }
+.restore-recovery .checkbox-label { display: flex; align-items: flex-start; gap: var(--varia-space-2); overflow-wrap: anywhere; }
+.restore-recovery .checkbox-label > input { flex: none; margin-top: 2px; }
+/* The options' labels and the grid's title take the fields' body size (they would inherit the page's 16 px). */
+.restore-grid-title, .restore-files > .checkbox-label, .restore-options > .checkbox-label, .restore-plan-row > .checkbox-label, .restore-recovery .checkbox-label { font-size: var(--varia-size-md); line-height: var(--varia-line-md); }
+/* A greyed option looks greyed; the note under it says why. */
+.restore-files .checkbox-label:has(> input:disabled), .restore-options .checkbox-label:has(> input:disabled), .restore-plan-row > .checkbox-label:has(> input:disabled) { color: var(--varia-disabledForeground); }
+@media (forced-colors: active) { .restore-files .checkbox-label:has(> input:disabled), .restore-options .checkbox-label:has(> input:disabled), .restore-plan-row > .checkbox-label:has(> input:disabled) { color: GrayText; } }
 .restore-timeline-box { margin-top: var(--varia-space-3); min-width: 0; }
 .restore-timeline-track { display: block; cursor: pointer; }
 .restore-timeline-track:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }

@@ -8,7 +8,7 @@ using Varia.Backend.Protocol;
 
 namespace Varia.Backend.Tests;
 
-/// <summary>Live Restore Database checks (D1e): the describe's server facts and a missing device as a value; with
+/// <summary>Live Restore Database checks (D1e; the run's are RestoreRunLiveChecks, D1f, and Restore Files and Filegroups' RestoreFilesLiveChecks, D1g): the describe's server facts and a missing device as a value; with
 /// VARIA_TEST_SQL_SCRATCH=1, a marked scratch source in FULL recovery with a full backup striped across two files, two logs in one
 /// file, a differential and a third log, all in real files in the backup folder (deleted in finally, then the history). Its sets as
 /// msdb's history and as the media's headers read them, a missing stripe, each set's files, and SMO's DatabaseRestorePlanner on
@@ -63,6 +63,7 @@ internal static class RestoreLiveChecks
         var noSet = await Describe(new("historyFiles", SetId: Guid.NewGuid().ToString("D")));
         check(missing is { Error.Code: "PATH_NOT_FOUND", Restore: null } && noSet is { Error: null, Restore.Files: [] },
             "a backup file that does not exist is PATH_NOT_FOUND as a value, and an unknown history set has no files: " + Show(missing));
+        await RestoreRunLiveChecks.RunnerAsync(check, service, info);
 
         if (Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SCRATCH") != "1")
         {
@@ -333,6 +334,12 @@ internal static class RestoreLiveChecks
         var abandoned = await Restored(RestoreSql.Statements(ActionsCatalog.Current.Restore, target, ForkOptions(["full", "log1", "log2", "log3"], null), exists: false));
         check(forkOutcomes.SequenceEqual(["4 rows", "3 rows"]) && !abandoned.EndsWith(" rows", StringComparison.Ordinal),
             "the planner's plan over the fork restores every row, and to the point after the restore its rows, where the abandoned branch's plan fails (" + abandoned + "): " + string.Join(", ", forkOutcomes));
+
+        // The run (D1f) on the same source and target.
+        await RestoreRunLiveChecks.RunAsync(check, service, info, json, (text, database) => Sql(text, database), scratch, sets, relocated);
+
+        // Restore Files and Filegroups (D1g), on a database of its own.
+        await RestoreFilesLiveChecks.RunAsync(check, service, info, json, (text, database) => Sql(text, database), scratch);
     }
 
     /// <summary>The history and media sets with this run's names, server, user, folders and times replaced, so the fixture holds

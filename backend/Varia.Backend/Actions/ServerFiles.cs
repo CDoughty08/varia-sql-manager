@@ -45,6 +45,38 @@ internal static partial class ServerPath
         Valid(path, max) && (char.IsAsciiLetter(path![0]) || path[0] == '/' && (path.Length == 1 || path[1] is not ('/' or '\\')));
 
     public static bool Same(string a, string b, bool linux) => string.Equals(a, b, linux ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>A full path as the file it names, for telling whether two spellings are one file (src/shared/actions/files.ts
+    /// serverPathKey, the same tests/fixtures/server-paths.json): empty and '.' segments dropped and '..' resolved; on Windows also
+    /// forward slashes as backslashes, each segment's trailing dots and spaces dropped (as Win32 drops them), and upper case. Null
+    /// when it is not a full path there, or on Windows names a stream (a colon past the drive). Short (8.3) names and other shares
+    /// of the same disk are not resolved: the restore's preflight asks SQL Server whether such a file exists.</summary>
+    public static string? Key(string path, bool linux)
+    {
+        if (linux) return path.StartsWith('/') ? "/" + string.Join('/', Segments(path.Split('/'), linux: true)) : null;
+        var text = path.Replace('/', '\\');
+        string root;
+        string[] rest;
+        if (text.Length >= 3 && char.IsAsciiLetter(text[0]) && text[1] == ':' && text[2] == '\\') (root, rest) = (text[..3], text[3..].Split('\\'));
+        else if (text.StartsWith(@"\\", StringComparison.Ordinal) && text[2..].Split('\\') is [{ Length: > 0 } host, { Length: > 0 } share, .. var more])
+            (root, rest) = (@"\\" + host + "\\" + share + "\\", more);
+        else return null;
+        var segments = Segments(rest, linux: false);
+        if (root.IndexOf(':', 2) >= 0 || segments.Any(segment => segment.Contains(':', StringComparison.Ordinal))) return null;
+        return (root + string.Join('\\', segments)).ToUpperInvariant();
+    }
+
+    private static List<string> Segments(IEnumerable<string> parts, bool linux)
+    {
+        var segments = new List<string>();
+        foreach (var part in parts)
+        {
+            if (part == "..") { if (segments.Count > 0) segments.RemoveAt(segments.Count - 1); continue; }
+            var segment = linux ? part : part.TrimEnd('.', ' ');
+            if (segment.Length > 0 && segment != ".") segments.Add(segment);
+        }
+        return segments;
+    }
 }
 
 /// <summary>The server file picker's listing (actions.describe 'serverFiles'), on the object actions' connection under the read

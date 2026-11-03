@@ -23,7 +23,11 @@ import { explorerStatics } from './explorer-tree.mjs'
  * folder's Nightly, Empty and Slow (which answers after 1.5 s), a share, and C:\Legacy\ as SQL Server 2016 answers a login
  * outside sysadmin (legacyEmpty); any other folder is PATH_NOT_FOUND. A check (`exists`) finds a name in those folders, the
  * type filter aside, and under C:\Legacy\ answers legacyEmpty.
- * Restore Database ('restoreDatabase') reads AppData's three backups (see restore()); its Script returns `restoreScript`.
+ * Restore Database ('restoreDatabase') reads AppData's three backups (see restore()); its Script returns `restoreScript`. Its run
+ * (restoreRun()) takes the backend's steps: with Close existing connections it reports the full backup's RESTORE at 40 % and
+ * waits until its Stop arrives, then answers as the backend does over a database that existed (left RESTORING); otherwise
+ * every step is done and the database online. Restore Files and Filegroups (the same reads, action 'restoreFiles') scripts
+ * `restoreFilesScript` and runs RestoreFilesRun.cs's steps at once, each done, leaving the database online.
  * Attach Databases opens with the logins app_owner and sa and the default data folder, which holds Sales.mdf (whose second
  * data file it recorded in D:\Old\, not found, and whose log it finds), Sales_2.ndf and Hr.mdf (whose log in D:\Old\ is not
  * found); any other file is not a primary one. An attach that includes Hr fails at Hr and detaches what it attached before
@@ -71,6 +75,7 @@ GO
 `
 export const offlineScript = drop => `USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET  OFFLINE${drop ? ' WITH ROLLBACK IMMEDIATE' : ''}\r\nGO\r\n`
 export const stubSessions = [{ sessionId: 61, login: 'app', program: 'Contoso Orders', host: 'web1', openTransactions: 1 }, { sessionId: 62, login: 'report', program: 'Reports', host: 'web2', openTransactions: 0 }]
+export const restoreFilesScript = "USE [master]\r\nRESTORE DATABASE [AppData] FILE = N'AppData_2' FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NORECOVERY,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
 export const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
 /** The backend's warning for an offline database (ActionService.OfflineWarning). */
 export const offlineWarning = 'This database is offline. Deleting it removes it from the server but leaves its files on disk.'
@@ -97,6 +102,7 @@ GO
   const newLoginScript = name => `USE [master]\r\nGO\r\nSET XACT_ABORT ON;\r\nBEGIN TRANSACTION;\r\nCREATE LOGIN [${name}] WITH PASSWORD=<password>, DEFAULT_DATABASE=[master], CHECK_EXPIRATION=OFF, CHECK_POLICY=OFF;\r\nCOMMIT TRANSACTION;\r\nGO\r\n`
   const passwordPolicyMessage = 'Password validation failed. The password does not meet the operating system policy requirements because it is not complex enough.'
   const restoreScript = "USE [master]\r\nRESTORE DATABASE [AppData] FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
+  const restoreFilesScript = "USE [master]\r\nRESTORE DATABASE [AppData] FILE = N'AppData_2' FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NORECOVERY,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
   const ok = value => ({ ok: true, value })
   const folders = (owner, ids) => ids.map(folder => ({ ref: { type: 'folder', owner, folder }, label: statics.labels[folder], icon: 'folder', hasChildren: true }))
   const object = (value, label, icon, extra = {}) => ({ ref: { type: 'object', object: value }, label, icon, hasChildren: true, ...extra })
@@ -185,7 +191,8 @@ GO
       ...(target.kind === 'database' ? { isSnapshot: false, ...sessionsOf(target.name) } : {}) }, elapsedMs: 1 })
   }
   /** Restore Database's reads (D1e): AppData's history (a full, a differential and a log backup in the default backup
-   *  folder, all on 2026-10-29), its files, and the server's facts; master is a destination too, and greyed. */
+   *  folder, all on 2026-10-29), its files (PRIMARY's, the log, and AppData_2 in Archive, which Restore Files and Filegroups
+   *  can restore online), and the server's facts; master is a destination too, and greyed. */
   function restore({ restore: source }) {
     const data = serverFiles.roots.find(root => root.defaults?.includes('data')).path, backup = serverFiles.backupFolder
     const set = (id, name, type, position, firstLsn, lastLsn, checkpointLsn, databaseBackupLsn, finish, device) => ({ id, name, type, server: 'server-a', database: 'AppData', position, firstLsn, lastLsn,
@@ -197,9 +204,10 @@ GO
     ]
     const server = { separator: '\\', dataPath: data, logPath: data, backupPath: backup, canRestore: true, destinationsTruncated: false, filesTruncated: false,
       destinations: [{ name: 'AppData', id: 5, created: '2026-10-01T09:00:00.000', state: 'ONLINE', recoveryModel: 'FULL', sessions: 1 }, { name: 'master', id: 1, created: '2003-04-08T09:13:36.390', state: 'ONLINE', recoveryModel: 'SIMPLE' }],
-      files: [{ database: 'AppData', path: data + 'AppData.mdf' }, { database: 'AppData', path: data + 'AppData_log.ldf' }] }
+      files: [{ database: 'AppData', path: data + 'AppData.mdf' }, { database: 'AppData', path: data + 'AppData_log.ldf' }, { database: 'AppData', path: data + 'AppData_2.ndf' }] }
     const files = [{ logical: 'AppData', physical: data + 'AppData.mdf', type: 'data', filegroup: 'PRIMARY', sizeBytes: 8 * 1024 * 1024, fileId: 1 },
-      { logical: 'AppData_log', physical: data + 'AppData_log.ldf', type: 'log', sizeBytes: 8 * 1024 * 1024, fileId: 2 }]
+      { logical: 'AppData_log', physical: data + 'AppData_log.ldf', type: 'log', sizeBytes: 8 * 1024 * 1024, fileId: 2 },
+      { logical: 'AppData_2', physical: data + 'AppData_2.ndf', type: 'data', filegroup: 'Archive', sizeBytes: 8 * 1024 * 1024, fileId: 3 }]
     switch (source.kind) {
       case 'history': return ok({ restore: { server, historyDatabases: ['AppData', 'master'], ...source.database === 'AppData' ? { sets, setsTruncated: false } : source.database ? { sets: [], setsTruncated: false } : { historyTruncated: false } }, elapsedMs: 1 })
       case 'historyFiles': case 'mediaFiles': return ok({ restore: { files, filesTruncated: false }, elapsedMs: 1 })
@@ -268,6 +276,20 @@ GO
     stub.catalog = true
     return ok({ steps: titles.map(title => ({ status: 'done', title })), elapsedMs: 1 })
   }
+  /** Restore Database's run: RestoreRun.cs's step titles for the request; Close existing connections makes it a held run. */
+  function restoreRun({ restore: options, identity, requestId }, sender) {
+    const titles = { close: 'Close existing connections', tailLog: 'Back up the tail of the log', full: 'Restore the full backup', differential: 'Restore the differential backup', log: 'Restore log backup', multiUser: 'Restore multi-user access' }
+    const close = options.closeConnections && !!identity, logs = options.sets.filter(set => set.type === 'log').length
+    let log = 0
+    const steps = [...close ? [titles.close] : [], ...options.tailLog ? [titles.tailLog] : [], ...options.sets.map(set => set.type === 'log' ? titles.log + (logs > 1 ? ` ${++log} of ${logs}` : '') : titles[set.type]),
+      ...close && options.recovery === 'recovery' && !options.restrictedUser ? [titles.multiUser] : []]
+    if (!close) return ok({ steps: steps.map(title => ({ status: 'done', title })), messages: [], elapsedMs: 1, restored: { state: 0, userAccess: 0 } })
+    const first = steps.indexOf(options.sets[0].type === 'log' ? steps.find(title => title.startsWith(titles.log)) : titles[options.sets[0].type])
+    if (!sender.isDestroyed()) sender.send('varia:actions-progress', { requestId, step: first, percent: 40 })
+    return new Promise(resolve => stub.blocked.set(requestId, () => resolve(ok({ messages: [], elapsedMs: 1, restored: { state: 1, userAccess: 1 },
+      steps: steps.map((title, index) => ({ status: index < first ? 'done' : index === first ? 'cancelled' : 'skipped', title, ...index === first ? { progress: 40 } : {} })),
+      error: { code: 'CANCELLED', message: `The action was stopped at "${steps[first]}"; SQL Server cancelled that statement. Completed before Stop: ${steps.slice(0, first).join(', ')}.`, retryable: true } }))))
+  }
   /** New Database's OK: a wait until Stop for "Held" (SQL Server cancelled CREATE DATABASE), otherwise the database under Databases. */
   function createDatabase({ target, requestId }) {
     if (target.name === 'Held') return new Promise(resolve => stub.blocked.set(requestId, () => resolve(ok({ steps: [{ status: 'cancelled', title: 'Create the database' }], messages: [], elapsedMs: 1,
@@ -288,10 +310,19 @@ GO
     stub.logins = [...stub.logins, login.name].sort()
     return ok({ steps: steps.map(step => ({ status: 'done', ...step })), messages: [], elapsedMs: 1 })
   }
-  function execute(params) {
+  /** Restore Files and Filegroups' run: RestoreFilesRun.cs's step titles for the request, each done, the database online. */
+  function restoreFilesRun({ restoreFiles: options }) {
+    const logs = options.sets.length - 1
+    const steps = [...options.sets.map((set, index) => index === 0 ? 'Restore the files' : 'Restore log backup' + (logs > 1 ? ` ${index} of ${logs}` : '')),
+      ...options.logBackup ? ['Back up the log', 'Restore the log backup'] : []]
+    return ok({ steps: steps.map(title => ({ status: 'done', title })), messages: [], elapsedMs: 1, restored: { state: 0, userAccess: 0 } })
+  }
+  function execute(params, sender) {
     const { target } = params
     if (params.action === 'createDatabase') return createDatabase(params)
+    if (params.action === 'restoreFiles') return restoreFilesRun(params)
     if (params.action === 'createTable') return createTable(params)
+    if (params.action === 'restore') return restoreRun(params, sender)
     if (params.action === 'createLogin') return createLogin(params)
     if (params.action === 'attach') return attachExecute(params)
     if (params.action === 'takeOffline' || params.action === 'bringOnline') return databaseStateChange(params)
@@ -379,9 +410,10 @@ GO
           case 'attach': return ok({ text: params.databases.map(database => `USE [master]\r\nGO\r\nCREATE DATABASE [${database.name}] ON ${database.files.map(file => `( FILENAME = N'${file}' )`).join(', ')}`
             + ` FOR ATTACH${database.rebuildLog ? '_REBUILD_LOG' : ''}\r\nGO\r\n`).join(''), database: 'master', warnings: [] })
           case 'takeOffline': return ok({ text: offlineScript(params.dropConnections), database: 'master', warnings: [] })
+          case 'restoreFiles': return ok({ text: restoreFilesScript, database: 'master', warnings: [] })
           default: return ok({ text: scriptText(params.target.name), database: params.target.database ?? 'master', warnings: [] })
         }
-      case 'actions.execute': return execute(params)
+      case 'actions.execute': return execute(params, _event.sender)
       case 'ssis.catalogSetup': return catalogSetup()
       case 'ssis.execute': return createCatalog(params)
       default: return { ok: false, error: 'Unsupported stub operation.' }

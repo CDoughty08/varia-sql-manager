@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { actionDrainMs, actionLimits, objectActionSpecs, objectActions } from '../src/shared/actions/catalog'
-import { actionProgressEventSchema, actionProgressSchema, type ActionProgress } from '../src/shared/actions/schema'
+import { actionProgressEventSchema, actionProgressSchema, actionStepLimit, type ActionProgress } from '../src/shared/actions/schema'
 import { methodPolicies } from '../src/shared/ipc/methods'
 import { actionProgressRelay } from '../src/main/action-progress'
 import { ActionProgressService, stepProgress } from '../src/renderer/src/actions/ActionProgressService'
@@ -8,7 +8,7 @@ import { ActionProgressService, stepProgress } from '../src/renderer/src/actions
 describe('action progress schemas', () => {
   it('accept a step and a whole percent, and nothing else', () => {
     expect(actionProgressEventSchema.parse({ type: 'action.progress', step: 0, percent: 100 })).toEqual({ type: 'action.progress', step: 0, percent: 100 })
-    for (const bad of [{ step: -1, percent: 5 }, { step: actionLimits.statements + 8, percent: 5 }, { step: 0, percent: 101 }, { step: 0, percent: 2.5 }, { step: 0, percent: 5, message: 'x' }])
+    for (const bad of [{ step: -1, percent: 5 }, { step: actionStepLimit, percent: 5 }, { step: 0, percent: 101 }, { step: 0, percent: 2.5 }, { step: 0, percent: 5, message: 'x' }])
       expect(actionProgressEventSchema.safeParse({ type: 'action.progress', ...bad }).success).toBe(false)
     expect(actionProgressEventSchema.safeParse({ type: 'progress', step: 0, percent: 5 }).success).toBe(false)
     const requestId = crypto.randomUUID()

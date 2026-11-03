@@ -6,8 +6,9 @@ using Varia.Backend.Explorer;
 namespace Varia.Backend.Tests;
 
 /// <summary>Offline checks of Restore Database's read side and Script (D1e): the catalogue's restore block, the lint over every
-/// catalog and media read (and what it must catch), validation parity with restore-schema.ts, actions.execute refusing a restore
-/// until D1f, SMO's script text for the probed plans, hostile names and paths in it, and the engines it runs on.</summary>
+/// catalog and media read and every run statement (and what it must catch), validation parity with restore-schema.ts for script
+/// and execute alike, SMO's script text for the probed plans, hostile names and paths in it, and the engines it runs on. The run's
+/// own offline checks are RestoreRunChecks (D1f).</summary>
 internal static class RestoreChecks
 {
     private static readonly ActionsCatalog Catalog = ActionsCatalog.Current;
@@ -22,19 +23,27 @@ internal static class RestoreChecks
     public static async Task RunAsync(Action<bool, string> check)
     {
         var options = new ActionServiceOptions();
-        check(Restore.Describe == "restoreDatabase" && Restore.Requests.SequenceEqual(["restore"]) && Restore.Engines.SequenceEqual(["box"])
+        check(Restore.Describe == "restoreDatabase" && Restore.Requests.SequenceEqual(["restore", "restoreFiles"]) && Restore.Engines.SequenceEqual(["box"])
             && Restore.SystemDatabases.SequenceEqual(["master", "model", "msdb", "tempdb"]) && Restore.Limit("mediaReadMs") == (long)options.RestoreDescribeBudget.TotalMilliseconds
             && Restore.Limit("backupDevices") == 64 && Restore.Limit("restoreMoves") == 1_000 && Restore.Limit("stats") == 5 && Restore.Limit("planSets") == Restore.Limit("historySets")
             && Restore.Limit("scriptChars") == 4_000_000 && Restore.Limit("mediaReadsPerConnection") == options.RestorePerConnection && options.RestorePerConnection == 2
-            && !Catalog.Actions.Contains("restore") && !Catalog.Dialogs.ContainsKey("restoreDatabase") && Catalog.Retryable("MEDIA") == false && Catalog.Retryable("FILE_ACCESS") == true,
-            "the restore block is restore.ts': describe restoreDatabase, action restore on SQL Server itself only, SQL Server's own databases, the 120 s media budget the service uses, "
-            + "64 devices, 1000 moves, as many sets as the history lists, a 4,000,000-character script, two media reads per connection; restore is no object action (no menu item or command, critic A17), MEDIA is not retryable, and FILE_ACCESS (shared with Attach) is once the file is fixed");
+            && Catalog.Actions.Contains("restore") && Catalog.IsLong("restore") && Catalog.CleanupBudget("restore") == TimeSpan.FromSeconds(30) && !Catalog.Dialogs.ContainsKey("restoreDatabase")
+            && Catalog.Actions.Contains("restoreFiles") && Catalog.IsLong("restoreFiles") && Restore.FilesSetTypes.SequenceEqual(["full", "file", "log"])
+            && Restore.Limit("restoreFiles") == 256 && Restore.Limit("fileSets") == 16 && Restore.Limit("parameters") == 2_100
+            && Restore.Limit("databases") == 32_767 && new[] { "MEDIA", "BACKUP_MISMATCH", "TAIL_LOG_NEEDED", "RESTORE_SEQUENCE" }.All(code => Catalog.Retryable(code) == false) && Catalog.Retryable("FILE_ACCESS"),
+            "the restore block is restore.ts': describe restoreDatabase, actions restore and restoreFiles on SQL Server itself only, SQL Server's own databases, the 120 s media budget the service uses, "
+            + "64 devices, 1000 moves, as many sets as the history lists, a 4,000,000-character script, two media reads per connection; restore is a long object action (its menu items and command, D1f) "
+            + "whose cleanup has 30 s, a document rather than a dialog, its media and sequence errors are not retryable, and FILE_ACCESS (shared with Attach) is once the file is fixed; "
+            + "restoreFiles is long too, with 256 files and 256 filegroups under SQL Server's 2,100 parameters, from a full or file backup then logs");
         // 64 devices and two parameters per move stay under SQL Server's 2,100 parameters, with room for @db, @file, @standby, @stopat and the tail's two.
         check(Restore.Limit("backupDevices") + 2 * Restore.Limit("restoreMoves") + 6 <= 2_100, "a restore statement's parameters stay under SQL Server's 2,100");
 
         var lint = RestoreSql.Lint(Restore).ToList();
         var problems = lint.SelectMany(item => item.Problems.Select(problem => item.Name + ": " + problem)).ToList();
-        check(lint.Count == 7 + 2 * 64 && problems.Count == 0, "every restore catalog read and every media read up to 64 devices passes its lint: " + string.Join("; ", problems.Take(5)));
+        // 13 catalog reads (the run's file and log chain reads among them), LABELONLY, RECOVERY, two tail-log backups, the run's RESTOREs (3 device counts × 4 move counts × DATABASE or LOG ×
+        // 3 recovery states × 16 option sets), a file restore's copy-only log backup and its RESTOREs (8 FILE and FILEGROUP counts × 2 device counts × 3 move counts ×
+        // 3 recovery states × 4 option sets), and HEADERONLY and FILELISTONLY per device count.
+        check(lint.Count == 13 + 1 + 1 + 2 + 3 * 4 * 2 * 3 * 16 + 1 + 8 * 2 * 3 * 3 * 4 + 2 * 64 && problems.Count == 0, "every restore catalog read, media read and run statement passes its lint (" + lint.Count + "): " + string.Join("; ", problems.Take(5)));
         check(RestoreSql.Header(3) == "RESTORE HEADERONLY FROM DISK = @d1, DISK = @d2, DISK = @d3 WITH NOUNLOAD;" && RestoreSql.FileList(1) == "RESTORE FILELISTONLY FROM DISK = @d1 WITH FILE = @file, NOUNLOAD;"
             && RestoreSql.Label == "RESTORE LABELONLY FROM DISK = @d1 WITH NOUNLOAD;", "media reads take every device and the position as parameters, one text per device count");
         var mediaRefused = new[]
@@ -57,12 +66,14 @@ internal static class RestoreChecks
 
         CheckScripts(check);
         CheckMediaErrors(check);
+        RestoreRunChecks.Run(check);
+        RestoreFilesChecks.Run(check);
         await ValidationAsync(check);
         await GatesAsync(check);
     }
 
     /// <summary>A SqlException carrying SQL Server's errors with their numbers and messages, as a failed media read raises them.</summary>
-    private static SqlException Sql(params (int Number, string Message)[] errors)
+    internal static SqlException Sql(params (int Number, string Message)[] errors)
     {
         var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
         var constructor = typeof(SqlError).GetConstructor(flags, [typeof(int), typeof(byte), typeof(byte), typeof(string), typeof(string), typeof(string), typeof(int), typeof(Exception)])
@@ -270,8 +281,11 @@ internal static class RestoreChecks
             && Refused(() => service.Validate(Script(good, "msdb_copy"), script: true)) == "accepted"
             && Refused(() => service.Validate(Script(Options([chain[0], .. Enumerable.Range(1, 1_023).Select(index => Set("1:" + (index + 1), "log", index + 1, path))])), script: true)) == "accepted",
             "Validate refuses what restoreRequestSchema refuses, SQL Server's own databases in any case with critic A19's reason, and accepts hostile names, msdb_copy and a 1,024-set plan: " + string.Join(", ", scriptAccepted));
-        check(Refused(() => service.Validate(Script(good))).StartsWith("INVALID_PARAMS", StringComparison.Ordinal),
-            "actions.execute refuses a restore until D1f runs one (critic A17)");
+        var executeAccepted = scriptInvalid.Where(item => !Refused(() => service.Validate(item.Args)).StartsWith("INVALID_PARAMS", StringComparison.Ordinal)).Select(item => item.Name).ToList();
+        check(executeAccepted.Count == 0 && Refused(() => service.Validate(Script(good))) == "accepted"
+            && Refused(() => service.Validate(Script(good, "MSDB"))).Contains(Restore.Message("systemDatabase"), StringComparison.Ordinal)
+            && Refused(() => service.Validate(Script(good) with { Secrets = new("x") })).StartsWith("INVALID_PARAMS", StringComparison.Ordinal),
+            "actions.execute takes the restore request Script takes (D1f, critic A17), refuses what it refuses, and never takes secrets: " + string.Join(", ", executeAccepted));
 
         var cloudHost = new FakeHost(5);
         using var cloud = new ActionService(cloudHost);

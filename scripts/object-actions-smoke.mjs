@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { chooseExplorerMenuItem, expandExplorerPath, explorerMenuItems, explorerRow, expectSelectedExplorerRow, explorerSubmenuItems, explorerTree, openExplorerMenu, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { resizeWindow } from './fixtures/window-resize.mjs'
-import { actionsStubData, caution, dependentsMessage, installActionsStub, offlineScript, offlineWarning, propertiesScript, restoreScript, scriptText, stubServerFiles, stubSessions } from './fixtures/actions-stub.mjs'
+import { actionsStubData, caution, dependentsMessage, installActionsStub, offlineScript, offlineWarning, propertiesScript, restoreFilesScript, restoreScript, scriptText, stubServerFiles, stubSessions } from './fixtures/actions-stub.mjs'
 import {
   addObjectDialogSteps, attachFileNameShown, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, editorTextbox,
   errorBanner, explorerLabel, fieldHint, frameSection, inputShowsEnd, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogSessions, objectDialogSessionsToggle, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part,
@@ -96,8 +96,8 @@ try {
   await closeMenu()
   expect(await menuOf(...appData)).toEqual(['New Database…', 'New Query', 'Script Database as', 'Tasks', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await closeMenu()
-  // SSMS offers Properties on its own databases too: only Rename, Delete and Tasks' Take Offline and Bring Online are greyed.
-  // Tasks holds only Take Offline and Bring Online so far, both greyed there, so the submenu is greyed too.
+  // SSMS offers Properties on its own databases too: only Rename, Delete and Tasks' items are greyed. Tasks holds Take Offline,
+  // Bring Online and Restore › Database… so far, all greyed there (system databases restore with T-SQL), so the submenu is greyed too.
   expect(await explorerMenuItems(page, 'server-a', 'Databases', 'System Databases', 'master')).toEqual({
     names: ['New Database…', 'New Query', 'Script Database as', 'Tasks', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'], disabled: ['Tasks', 'Rename', 'Delete']
   })
@@ -827,7 +827,7 @@ try {
     await expect(addButton()).toBeFocused()
   }
   const openAttach = async () => {
-    expect(await databasesMenu()).toEqual(['New Database…', 'Attach…', 'Filter Settings…', 'Refresh'])
+    expect(await databasesMenu()).toEqual(['New Database…', 'Attach…', 'Restore Database…', 'Restore Files and Filegroups…', 'Filter Settings…', 'Refresh'])
     await chooseExplorerMenuItem(page, databases, 'Attach…')
     await expect(objectDialogProgress(attachDialog())).toHaveText('Ready')
   }
@@ -916,7 +916,7 @@ try {
   expect((await stubCalls('actions.execute')).filter(call => call.action === 'attach').at(-1)?.databases).toEqual([{ name: 'SalesCopy', owner: 'app_owner', files: salesFiles, rebuildLog: false }])
   await expectSelectedExplorerRow(page, 'server-a', 'Databases', 'SalesCopy')
   console.log('Object action checks: Attach Databases reads an .mdf chosen in Locate Database Files (Enter, double-click or Escape, focus back on Add…), keeps file names in view, blocks OK while a data file is not found or a typed one unchecked, checks a corrected path on Enter, marks the selection under forced colours, keeps focus in the dialog after Remove, scripts its rows, rebuilds a removed log, shows a rolled-back attach per row, and selects the attached database.')
-  // 5d. Restore Database (D1e), which only its test hook opens until its OK restores (critic A17): AppData's history plans
+  // 5d. Restore Database (D1e, run by D1f): AppData's history plans
   // the full, differential and log backups; the grid's checkboxes wait for Manual Selection; master is a source but never a
   // destination; the Backup Timeline draws its marks whole and moves its slider by keys; Script previews the plan; Prompt
   // before restoring each backup is greyed (critic A22).
@@ -1009,9 +1009,154 @@ try {
   expect((await devicesDialog.getByRole('listbox', { name: 'Backup media:', exact: true }).boundingBox()).height).toBeGreaterThanOrEqual(150)
   await devicesDialog.getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(devicesDialog).toHaveCount(0)
+  // The tab names the destination, as the frame's title does.
+  await expect(documentTab(page, 'Restore Database - master')).toBeVisible()
+  await closeDocumentButton(page, 'Restore Database - master').click()
+  await expect(documentTab(page, 'Restore Database - master')).toHaveCount(0)
+  console.log('Object action checks: Restore Database (test hook) plans the history\'s backups, takes grid clicks only under Manual Selection, refuses master only as the destination, greys Prompt with its reason, draws the Backup Timeline\'s marks whole (and under forced colours) and moves its point by keys, scripts the plan, and lists backup media eight rows tall.')
+
+  // 5c. Restore Database runs (D1f). The Databases folder's Restore Database… opens it on the history's first database, and a
+  // database's Tasks › Restore › Database… on that database. Close existing connections makes Restore ask first, Cancel in
+  // focus, drawn as the default and last, Escape answering it and focus going back to Restore, which is disabled while the bar
+  // asks (owner decision 4); the Run panel lists the backend's steps with the full backup's RESTORE at 40 % (about 13 % of
+  // three sets) while the sections say their choices in a line; Stop over a database that existed asks first (Keep restoring
+  // in focus and last, focus back on Stop), and the outcome, a status rather than an error, names the state SQL Server left
+  // (critic A12). Without the confirm's fact it runs at once, and ends restored.
+  await chooseExplorerMenuItem(page, databases, 'Restore Database…')
+  await expect(documentTab(page, 'Restore Database - AppData')).toBeVisible()
+  await expect(restoreSection('General').getByRole('checkbox', { checked: true })).toHaveCount(3)
   await closeDocumentButton(page, 'Restore Database - AppData').click()
   await expect(documentTab(page, 'Restore Database - AppData')).toHaveCount(0)
-  console.log('Object action checks: Restore Database (test hook) plans the history\'s backups, takes grid clicks only under Manual Selection, refuses master only as the destination, greys Prompt with its reason, draws the Backup Timeline\'s marks whole (and under forced colours) and moves its point by keys, scripts the plan, and lists backup media eight rows tall.')
+  await chooseExplorerMenuItem(page, appData, ['Tasks', 'Restore', 'Database…'])
+  await expect(documentTab(page, 'Restore Database - AppData')).toBeVisible()
+  await expect(restoreSection('General').getByRole('checkbox', { checked: true })).toHaveCount(3)
+  const runFrame = restoreFrame('AppData')
+  const restoreVerb = name => documentVerb(runFrame, 'Restore Database - AppData', name)
+  const restoreRuns = async () => (await stubCalls('actions.execute')).filter(call => call.action === 'restore')
+  const stubCancels = () => application.evaluate(() => globalThis.variaStub.cancels.length)
+  await restoreSection('Options').getByRole('checkbox', { name: 'Close existing connections to destination database', exact: true }).check()
+  await restoreVerb('Restore').click()
+  const runConfirm = runFrame.getByRole('alertdialog', { name: 'Restore Database', exact: true })
+  await expect(runConfirm).toContainText('Closing existing connections ends 1 session in AppData, and rolls back any open transaction.')
+  await expect(runConfirm.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
+  // Danger first, the safe default last and drawn as the default whether or not focus shows (its ring is a box shadow).
+  expect(await runConfirm.getByRole('button').allTextContents()).toEqual(['Restore', 'Cancel'])
+  expect(await runConfirm.getByRole('button', { name: 'Cancel', exact: true }).evaluate(button => getComputedStyle(button).boxShadow)).not.toBe('none')
+  await expect(restoreVerb('Restore')).toBeDisabled()
+  await page.keyboard.press('Escape')
+  await expect(runConfirm).toHaveCount(0)
+  await expect(restoreVerb('Restore')).toBeFocused()
+  expect(await restoreRuns()).toHaveLength(0)
+  await restoreVerb('Restore').click()
+  await runConfirm.getByRole('button', { name: 'Restore', exact: true }).click()
+  const runPanel = runFrame.getByRole('region', { name: 'Restoring AppData', exact: true })
+  await expect(runPanel.getByRole('progressbar', { name: 'Restoring AppData', exact: true })).toHaveAttribute('aria-valuenow', '13')
+  const runStatuses = panel => panel.getByRole('listitem').evaluateAll(items => items.map(item => item.dataset.status))
+  await expect.poll(() => runStatuses(runPanel)).toEqual(['done', 'done', 'running', 'pending', 'pending', 'pending'])
+  await expect(runPanel.getByRole('listitem').nth(2)).toContainText('Restore the full backup (AppData.bak, position 1)')
+  await expect(documentState(runFrame)).toContainText('Restoring · about 13 %')
+  await expect(restoreSection('General').getByRole('checkbox')).toHaveCount(0)
+  expect((await restoreRuns()).at(-1)).toMatchObject({ target: { kind: 'database', name: 'AppData' }, identity: { id: 5 },
+    restore: { closeConnections: true, replace: false, recovery: 'recovery', tailLog: { noRecovery: true }, sets: [{ type: 'full', file: 1 }, { type: 'differential', file: 2 }, { type: 'log', file: 1 }] } })
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-restore-run.png') })
+  const cancelsBefore = await stubCancels()
+  await restoreVerb('Stop').click()
+  const stopConfirm = runFrame.getByRole('alertdialog', { name: 'Stop the restore', exact: true })
+  await expect(stopConfirm).toContainText('Stop the restore? Stopping leaves AppData restoring and unusable until a restore finishes.')
+  await expect(stopConfirm.getByRole('button', { name: 'Keep restoring', exact: true })).toBeFocused()
+  expect(await stopConfirm.getByRole('button').allTextContents()).toEqual(['Stop', 'Keep restoring'])
+  await page.keyboard.press('Escape')
+  await expect(stopConfirm).toHaveCount(0)
+  await expect(runPanel).toBeVisible()
+  await expect(restoreVerb('Stop')).toBeFocused()
+  expect(await stubCancels()).toBe(cancelsBefore)
+  await restoreVerb('Stop').click()
+  await stopConfirm.getByRole('button', { name: 'Stop', exact: true }).click()
+  const stoppedPanel = runFrame.getByRole('region', { name: 'Stopped restoring AppData', exact: true })
+  await expect(stoppedPanel.getByRole('heading', { name: 'Stopped restoring AppData', exact: true })).toBeFocused()
+  await expect(stoppedPanel.getByRole('status')).toContainText('AppData is restoring, in single-user mode, and cannot be used until a restore finishes.')
+  await expect(stoppedPanel.getByRole('alert')).toHaveCount(0)
+  await expect.poll(() => runStatuses(stoppedPanel)).toEqual(['done', 'done', 'cancelled', 'skipped', 'skipped', 'skipped'])
+  await expect(stoppedPanel.getByRole('listitem').nth(2)).toContainText('40 %')
+  await expect(stoppedPanel.getByRole('button', { name: 'Restore again', exact: true })).toBeEnabled()
+  await expect(documentState(runFrame)).toContainText('Stopped')
+  expect(await stubCancels()).toBe(cancelsBefore + 1)
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-restore-stop.png') })
+  await restoreSection('Options').getByRole('checkbox', { name: 'Close existing connections to destination database', exact: true }).uncheck()
+  await restoreVerb('Restore').click()
+  const restoredPanel = runFrame.getByRole('region', { name: 'Restored AppData', exact: true })
+  await expect(restoredPanel).toContainText('AppData is online.')
+  await expect.poll(() => runStatuses(restoredPanel)).toEqual(['done', 'done', 'done', 'done'])
+  await expect(runConfirm).toHaveCount(0)
+  await expect(documentState(runFrame)).toContainText('Restored')
+  expect(await restoreRuns()).toHaveLength(2)
+  await closeDocumentButton(page, 'Restore Database - AppData').click()
+  await expect(documentTab(page, 'Restore Database - AppData')).toHaveCount(0)
+  console.log('Object action checks: Restore Database opens from the Databases folder and from Tasks › Restore › Database…, asks before closing connections (Restore disabled meanwhile, Cancel last, the default and in focus, Escape answering and focus back on Restore), shows the steps and the RESTORE\'s percent while the sections summarise, asks before Stop over a database that existed (Keep restoring last and in focus, focus back on Stop), names what Stop left as a status with focus on the panel title, and runs at once to Restored without the confirm\'s fact.')
+
+  // 5d. Restore Files and Filegroups (D1g): the Databases folder's item and a database's Tasks › Restore › Files and Filegroups…
+  // open it on AppData. The grid lists the full backup's data files, the PRIMARY one greyed online with its reason shown and
+  // read as its description, and Restore as filegroup shows each row's filegroup first; once a file is checked, so is the log
+  // after it, which cannot be unchecked. Varia's log backup is on for an online FULL database and STANDBY greyed (SQL Server
+  // refuses it online), its reason shown and read; the options' labels take the fields' body size. Script shows actions.script's
+  // text for the restoreFiles request, and Restore runs at once to Restored with its four steps, focus on the Run panel's title.
+  const filesTitle = 'Restore Files and Filegroups - AppData'
+  await chooseExplorerMenuItem(page, databases, 'Restore Files and Filegroups…')
+  await expect(documentTab(page, filesTitle)).toBeVisible()
+  await closeDocumentButton(page, filesTitle).click()
+  await expect(documentTab(page, filesTitle)).toHaveCount(0)
+  await chooseExplorerMenuItem(page, appData, ['Tasks', 'Restore', 'Files and Filegroups…'])
+  await expect(documentTab(page, filesTitle)).toBeVisible()
+  const filesFrame = documentFrame(page, filesTitle)
+  const filesSection = title => frameSection(filesFrame, title)
+  await expect(filesSection('Files')).toHaveCount(0)
+  await expect(filesSection('General').getByRole('combobox', { name: 'To database:', exact: true })).toHaveValue('AppData')
+  const backupSetsGrid = filesSection('General').getByRole('region', { name: 'Select the backup sets to restore:', exact: true })
+  await expect(backupSetsGrid.getByRole('row')).toHaveCount(4)
+  const logBox = backupSetsGrid.getByRole('checkbox', { name: 'Restore AppData-Log (2026-10-29 13:00:00)', exact: true })
+  await expect(logBox).toBeDisabled()
+  await expect(logBox).not.toBeChecked()
+  const primaryBox = backupSetsGrid.getByRole('checkbox', { name: 'Restore AppData from AppData-Full (2026-10-29 08:00:00)', exact: true })
+  await expect(primaryBox).toBeDisabled()
+  await expect(primaryBox).toHaveAccessibleDescription(/^A file of the PRIMARY filegroup restores only offline/)
+  await expect(filesSection('General').getByText(/^A file of the PRIMARY filegroup restores only offline/)).toBeVisible()
+  await expect(documentVerb(filesFrame, filesTitle, 'Restore')).toBeDisabled()
+  // Restore as filegroup: each row shows the filegroup its checkbox names, in its own first column.
+  const asFilegroup = filesSection('Options').getByRole('checkbox', { name: 'Restore as filegroup', exact: true })
+  await asFilegroup.check()
+  await expect(backupSetsGrid.getByRole('columnheader', { name: 'Filegroup', exact: true })).toBeVisible()
+  await expect(backupSetsGrid.getByRole('row').filter({ has: page.getByRole('checkbox', { name: 'Restore Archive from AppData-Full (2026-10-29 08:00:00)', exact: true }) }).getByRole('cell').nth(1)).toHaveText('Archive')
+  await asFilegroup.uncheck()
+  await expect(backupSetsGrid.getByRole('columnheader', { name: 'Filegroup', exact: true })).toHaveCount(0)
+  await backupSetsGrid.getByRole('checkbox', { name: 'Restore AppData_2 from AppData-Full (2026-10-29 08:00:00)', exact: true }).check()
+  await expect(logBox).toBeChecked()
+  await expect(filesSection('Options').getByRole('checkbox', { name: 'Back up the log and restore it to bring the files online (WITH COPY_ONLY)', exact: true })).toBeChecked()
+  const standbyRadio = filesSection('Options').getByRole('radio', { name: /\(RESTORE WITH STANDBY\)$/ })
+  await expect(standbyRadio).toBeDisabled()
+  await expect(standbyRadio).toHaveAccessibleDescription(/^RESTORE WITH STANDBY conflicts with an online restore/)
+  await expect(filesSection('Options').getByRole('checkbox', { name: 'Prompt before restoring each backup', exact: true })).toHaveAccessibleDescription('Not yet available')
+  await expect(filesSection('Options').getByRole('radio', { name: /\(RESTORE WITH RECOVERY\)$/ })).toBeChecked()
+  // The options' labels and the grid's title take the fields' body size (the metric token), not the page's 16 px.
+  const bodySize = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--varia-size-md').trim())
+  expect(await standbyRadio.evaluate(radio => getComputedStyle(radio.closest('label')).fontSize)).toBe(bodySize)
+  expect(await backupSetsGrid.evaluate(grid => getComputedStyle(document.getElementById(grid.getAttribute('aria-labelledby'))).fontSize)).toBe(bodySize)
+  await expect(filesSection('Options').getByRole('table', { name: 'Restore the database files as', exact: true }).getByRole('textbox', { name: 'Restore AppData_2 as', exact: true })).toBeVisible()
+  await scriptToggle(filesFrame).click()
+  await expect(drawerText(filesFrame)).toHaveValue(restoreFilesScript.replaceAll('\r\n', '\n'))
+  expect((await stubCalls('actions.script')).at(-1)).toMatchObject({ action: 'restoreFiles', target: { kind: 'database', name: 'AppData' }, identity: { id: 5 },
+    restoreFiles: { files: ['AppData_2'], filegroups: [], recovery: 'recovery', sets: [{ type: 'full', file: 1 }, { type: 'log', file: 1 }], logBackup: { file: expect.stringMatching(/AppData_LogBackup_.*\.bak$/) } } })
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-restore-files.png') })
+  await scriptToggle(filesFrame).click()
+  await documentVerb(filesFrame, filesTitle, 'Restore').click()
+  const filesDone = filesFrame.getByRole('region', { name: 'Restored AppData', exact: true })
+  await expect(filesDone).toContainText('AppData is online.')
+  await expect(filesDone.getByRole('listitem')).toHaveText([/^Done: Restore the files/, /^Done: Restore log backup/, /^Done: Back up the log/, /^Done: Restore the log backup/])
+  // Restore ran at once (no confirm bar) and took the verb that had focus away: the Run panel's title has it.
+  await expect(filesDone.getByRole('heading', { name: 'Restored AppData', exact: true })).toBeFocused()
+  expect((await stubCalls('actions.execute')).filter(call => call.action === 'restoreFiles')).toHaveLength(1)
+  await closeDocumentButton(page, filesTitle).click()
+  await expect(documentTab(page, filesTitle)).toHaveCount(0)
+  console.log('Object action checks: Restore Files and Filegroups opens from the Databases folder and from Tasks › Restore › Files and Filegroups…, lists the full backup\'s files in Select the backup sets to restore (PRIMARY\'s greyed online with its reason, each filegroup named under Restore as filegroup) with the log after it checked once a file is, offers the log backup with STANDBY greyed online and its reason read, draws the options at the body size, scripts the restoreFiles request, and runs to Restored with its four steps and focus on the Run panel.')
 
   // 8. New Login (D2a): Security › New › Login… opens "Login - New" with SSMS's pages and defaults; the password fields are masked
   // and keep what was typed across pages; Script (clipboard and a query window, so AutoRecover too) never carries the password,

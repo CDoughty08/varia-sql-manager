@@ -38,6 +38,13 @@ internal static class ServerFilesChecks
             var folder = ServerPath.Folder(path, item.GetProperty("linux").GetBoolean());
             if (folder != expected) wrong.Add(path + " lists " + (folder ?? "nothing"));
         }
+        foreach (var item in root.GetProperty("keys").EnumerateArray())
+        {
+            var path = item.GetProperty("path").GetString()!;
+            var expected = item.GetProperty("key").ValueKind == JsonValueKind.Null ? null : item.GetProperty("key").GetString();
+            var key = ServerPath.Key(path, item.GetProperty("linux").GetBoolean());
+            if (key != expected) wrong.Add(path + " keys as " + (key ?? "nothing"));
+        }
         check(wrong.Count == 0 && ServerPath.Valid("C:\\" + new string('x', 257), 260) && !ServerPath.Valid("C:\\" + new string('x', 258), 260)
             && !ServerPath.Valid("C:\\a\uD800b", 260) && !ServerPath.Valid("C:\\a\uDC00", 260) && ServerPath.Valid("C:\\a\uD83D\uDE00", 260) && !ServerPath.Valid(null, 260),
             "server paths follow tests/fixtures/server-paths.json, as zod does: 1–260 UTF-16 units, well formed, no control or wildcard characters, a drive, a share or /: " + string.Join("; ", wrong.Take(5)));

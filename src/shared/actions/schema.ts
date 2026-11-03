@@ -15,8 +15,8 @@ import { containmentTypes, newDatabaseOptionKeys, newDatabaseProblems, newDataba
 import { serverPathProblem, type ServerFilesListing, type ServerFilesRequest } from './files.ts'
 import { designerDescribeIds } from '../designer/catalog.ts'
 import { createTableSchema, type CreateTableRequest, type TableDesignerModel } from '../designer/schema.ts'
-import { restoreDescribeId, type RestoreModel, type RestoreSource } from './restore.ts'
-import { restoreRequestSchema, restoreSourceSchema, type RestoreRequest } from './restore-schema.ts'
+import { restoreDescribeId, restoreLimits, type RestoreModel, type RestoreSource } from './restore.ts'
+import { restoreFilesRequestSchema, restoreRequestSchema, restoreSourceSchema, type RestoreFilesRequest, type RestoreRequest } from './restore-schema.ts'
 
 /** What actions.describe describes: an object dialog (PR17's catalogue), a designer (src/shared/designer/catalog.ts), the
  *  server's folders for the server file picker, or what Restore Database restores from (src/shared/actions/restore.ts). */
@@ -86,9 +86,10 @@ export interface CreateLoginRequest {
 }
 /** One action: actions.script returns its script, actions.execute runs it. */
 export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | CreateDatabaseRequest | AttachRequest | CreateLoginRequest | TakeOfflineRequest | BringOnlineRequest
-/** actions.script also scripts a restore, which actions.execute runs from D1f (critic A17). */
-export type ActionScriptRequest = ActionRequest | RestoreRequest
-export type { RestoreRequest } from './restore-schema.ts'
+/** actions.script and actions.execute also take a restore and a file restore, whose requests have shapes of their own (restore-schema.ts). */
+export type ActionScriptRequest = ActionRequest | RestoreRequest | RestoreFilesRequest
+export type ActionExecuteRequest = ActionRequest | RestoreRequest | RestoreFilesRequest
+export type { RestoreFilesRequest, RestoreRequest } from './restore-schema.ts'
 export interface ActionCancelRequest { readonly requestIds: readonly string[] }
 
 export interface ActionError { readonly code: ActionErrorCode; readonly message: string; readonly retryable: boolean }
@@ -262,6 +263,16 @@ export interface ActionStep {
   readonly compensates?: boolean
   readonly progress?: number
 }
+/**
+ * A restored database as the run left it, read after the last step (critic A12): sys.databases' state and user_access (the access
+ * comes from the backup, not from the SINGLE_USER Varia set); or `absent` when no database has the name, with the files a dropped
+ * partly restored database left on disk (`filesUnknown`: whether they are could not be asked). A reply leaves it out when the
+ * database could not be read, so the page never infers a state.
+ */
+export type RestoredDatabase = { readonly state: number; readonly userAccess: number; readonly absent?: undefined; readonly filesRestoring?: readonly string[] }
+  | { readonly absent: true; readonly filesLeft?: readonly string[]; readonly filesUnknown?: true }
+/** The most leftover files, or files still restoring after a file restore (`filesRestoring`, by logical name), a reply names (ActionService.MaxFilesLeft). */
+export const restoredFilesLimit = 16
 /** The title of a database Delete's DROP step (ActionService.StepTitle in the backend; tests/delete-database.test.ts keeps them equal):
  *  a reply in which it is 'done' removed the database, even when a later step failed. */
 export const dropDatabaseStepTitle = 'Drop the database'
@@ -272,13 +283,15 @@ export interface ActionExecuteResult {
   readonly messages: readonly string[]
   readonly elapsedMs: number
   readonly error?: ActionError
+  /** A restore's destination after the run. */
+  readonly restored?: RestoredDatabase
 }
 
 // Objects in these schemas, and these databases, are SQL Server's own; the backend re-checks by catalog (is_ms_shipped,
 // database_id), so this only stops an obviously wrong request early.
 const systemSchemas: ReadonlySet<string> = new Set(['sys', 'INFORMATION_SCHEMA'])
 const systemDatabases: ReadonlySet<string> = new Set(['master', 'model', 'msdb', 'tempdb'])
-const verbs: Readonly<Record<ObjectAction, string>> = { selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties', attach: 'attached', takeOffline: 'taken offline', bringOnline: 'brought online' }
+const verbs: Readonly<Record<ObjectAction, string>> = { selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties', attach: 'attached', takeOffline: 'taken offline', bringOnline: 'brought online', restore: 'restored', restoreFiles: 'restored' }
 /** A server ref: what a create action on a server object (a login) names as its target. */
 const isServer = (ref: ObjectRef) => ref.kind === 'server' && Object.keys(ref).length === 1
 /** Why `action` cannot act on `ref` whatever its subtype: a kind that never offers it, or one of SQL Server's own objects
@@ -456,18 +469,19 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
       break
   }
 }) satisfies z.ZodType<ActionRequest>
-/** actions.execute: the same requests, with the secrets each needs and no others: New Login's password exactly for a SQL
- *  Server login (blank only with the password policy on, which lets the server decide), and none for a Windows login. */
-export const actionExecuteRequestSchema = actionRequestSchema.superRefine((request, context) => {
+/** actions.execute: the same requests, a restore (critic A17: it runs from D1f, with the menu items that open it), or a file restore (D1g), with
+ *  the secrets each needs and no others: New Login's password exactly for a SQL Server login (blank only with the password policy on, which
+ *  lets the server decide), and none for a Windows login. */
+export const actionExecuteRequestSchema = z.union([actionRequestSchema, restoreRequestSchema, restoreFilesRequestSchema]).superRefine((request, context) => {
   if (request.action !== 'createLogin') return
   if (request.login.auth === 'sql' && request.secrets?.password === undefined) issue(context, 'secrets', 'A SQL Server login needs a password.')
   if (request.login.auth !== 'sql' && request.secrets !== undefined) issue(context, 'secrets', 'Only a SQL Server login takes a password.')
   if (request.login.auth === 'sql' && request.secrets?.password === '' && !request.login.checkPolicy) issue(context, 'secrets', 'A blank password needs Enforce password policy.')
-}) satisfies z.ZodType<ActionRequest>
+}) satisfies z.ZodType<ActionExecuteRequest>
 /** actions.script: the same requests, never with `secrets` (critic A3). Script never needs a password, so none crosses for it
  *  even once an action (New Login) accepts one on actions.execute; C# Validate refuses Secrets on every script too. */
 export const actionScriptRequestSchema = z.custom<unknown>(value => !(typeof value === 'object' && value !== null && Object.hasOwn(value, 'secrets')), 'Script never carries secrets.')
-  .pipe(z.union([actionRequestSchema, restoreRequestSchema]))
+  .pipe(z.union([actionRequestSchema, restoreRequestSchema, restoreFilesRequestSchema]))
 
 /** The bounds of a step (C#: ActionSteps.Bound clips to them). */
 export const actionStepSchema = z.object({
@@ -475,15 +489,20 @@ export const actionStepSchema = z.object({
   detail: z.string().max(loginLimits.stepDetail).optional(), compensates: z.boolean().optional(), progress: z.number().int().min(0).max(100).optional()
 }).strict() satisfies z.ZodType<ActionStep>
 const actionErrorSchema = z.object({ code: z.enum(actionErrorCodes), message: z.string().max(actionLimits.messageChars), retryable: z.boolean() }).strict() satisfies z.ZodType<ActionError>
-/** actions.execute's answer, which main checks before the renderer sees it: one step per planned statement, the commit, and
- *  compensation and cleanup steps, at most statements + 8; bounded messages. */
+/** The most steps a reply lists: one per planned statement (a restore plans one per backup set), the commit, and compensation and cleanup steps. */
+export const actionStepLimit = Math.max(actionLimits.statements, restoreLimits.planSets) + 8
+/** actions.execute's answer, which main checks before the renderer sees it: at most actionStepLimit steps; bounded messages. */
 export const actionExecuteResultSchema = z.object({
-  steps: z.array(actionStepSchema).max(actionLimits.statements + 8), messages: z.array(z.string().max(actionLimits.infoMessageChars)).max(actionLimits.infoMessages),
-  elapsedMs: z.number().int().min(0), error: actionErrorSchema.optional()
+  steps: z.array(actionStepSchema).max(actionStepLimit), messages: z.array(z.string().max(actionLimits.infoMessageChars)).max(actionLimits.infoMessages),
+  elapsedMs: z.number().int().min(0), error: actionErrorSchema.optional(),
+  restored: z.union([
+    z.object({ state: z.number().int().min(0).max(255), userAccess: z.number().int().min(0).max(255), filesRestoring: z.array(z.string().max(128)).max(restoredFilesLimit).optional() }).strict(),
+    z.object({ absent: z.literal(true), filesLeft: z.array(z.string().max(actionLimits.serverPath)).max(restoredFilesLimit).optional(), filesUnknown: z.literal(true).optional() }).strict()
+  ]).optional()
 }).strict() satisfies z.ZodType<ActionExecuteResult>
 
 /** The index a step takes in the reply, or the percent a long step reports. */
-const stepIndex = z.number().int().min(0).max(actionLimits.statements + 7)
+const stepIndex = z.number().int().min(0).max(actionStepLimit - 1)
 const percent = z.number().int().min(0).max(100)
 /** An actions.execute EVENT body (D1c): a long step's progress from SQL Server's STATS messages, droppable, the latest wins. Main
  *  drops the request's other EVENTs (the body is not one of these) without failing the request. */
