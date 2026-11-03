@@ -36,6 +36,36 @@ export function loginSubtypeOf(principalId: number, type: string, name: string):
   return byType
 }
 
+/**
+ * A login row's status in Object Explorer (D4a): `disabled` when the login is disabled, else `noAccess` when CONNECT SQL is
+ * denied to it. They were one status before; they stay apart because they are lifted apart (ENABLE leaves a DENY CONNECT
+ * SQL in place, D4 P18). A login with both is `disabled`, and its detail names both.
+ */
+export function loginStatusOf(disabled: boolean, connectDenied: boolean): 'disabled' | 'noAccess' | undefined {
+  return disabled ? 'disabled' : connectDenied ? 'noAccess' : undefined
+}
+/** The words of a login row's detail (its tooltip): its kind by sys.server_principals.type, then its state and password
+ *  policy, from catalog views only (sys.server_principals, sys.server_permissions and sys.sql_logins). */
+export const loginDetailWords = {
+  types: {
+    S: 'SQL Server authentication', U: 'Windows user', G: 'Windows group', C: 'Mapped to certificate', K: 'Mapped to asymmetric key',
+    E: 'Microsoft Entra user or application', X: 'Microsoft Entra group'
+  },
+  disabled: 'Disabled',
+  connectDenied: 'Permission to connect denied',
+  policyChecked: 'Password policy enforced',
+  expirationChecked: 'Password expiration enforced'
+} as const satisfies { readonly types: { readonly [T in LoginType]: string }; readonly disabled: string; readonly connectDenied: string; readonly policyChecked: string; readonly expirationChecked: string }
+/** What a login row's listing reads besides its name. */
+export interface LoginListingFacts { readonly disabled: boolean; readonly connectDenied: boolean; readonly policyChecked: boolean; readonly expirationChecked: boolean }
+/** A login row's detail: its kind, then Disabled and Permission to connect denied (both when both apply), then the password
+ *  policy flags, joined with " · " (C#: LoginRules.Detail, from actions-catalog.json). */
+export function loginDetail(type: string, facts: LoginListingFacts): string {
+  const words = loginDetailWords
+  return [(words.types as Readonly<Record<string, string>>)[type.trim()], facts.disabled && words.disabled, facts.connectDenied && words.connectDenied,
+    facts.policyChecked && words.policyChecked, facts.expirationChecked && words.expirationChecked].filter((part): part is string => !!part).join(' · ')
+}
+
 /** The verbs a login's rules decide (D4b-d, and Properties' Status page in D2c). */
 export const loginVerbs = ['disable', 'enable', 'unlock', 'rename', 'delete'] as const
 export type LoginVerb = typeof loginVerbs[number]
@@ -142,11 +172,101 @@ export function loginRefusal(facts: Pick<LoginFacts, 'subtype' | 'own' | 'sysadm
 /** The rules as actions-catalog.json carries them, so C# needs no rules of its own. */
 export function loginsCatalog() {
   return {
+    detail: loginDetailWords,
     limits: loginLimits,
     messages: loginMessages,
     ownRefuses: ownLoginRefuses,
     rules: loginSubtypes.map(subtype => ({ subtype, ...loginRules[subtype], greyed: Object.fromEntries(loginVerbs.filter(verb => loginRules[subtype][verb] === 'greyed').map(verb => [verb, loginGreyedMessage(subtype, verb)])) })),
     saPrincipalId,
+    scriptHeader: passwordScriptHeader,
     typeSubtypes: loginTypeSubtypes
   }
+}
+
+// --- New Login (D2a) ---------------------------------------------------------------------------------------------------
+
+/** How a new login authenticates. D2a offers SSMS's first two; certificate, asymmetric key and Microsoft Entra come with D2e. */
+export const newLoginAuths = ['windows', 'sql'] as const
+export type NewLoginAuth = typeof newLoginAuths[number]
+/** New Login's General page as the request carries it. The SQL Server authentication options are present exactly for `sql`,
+ *  and follow SQL Server's chain: MUST_CHANGE needs CHECK_EXPIRATION (15099), which needs CHECK_POLICY (15122). */
+export interface NewLoginGeneral {
+  readonly auth: NewLoginAuth
+  /** Used verbatim, at most 128 UTF-16 units; a Windows login is DOMAIN\name, a SQL login has no backslash (15006). */
+  readonly name: string
+  readonly defaultDatabase: string
+  /** Absent: the server's default language (no DEFAULT_LANGUAGE clause). */
+  readonly defaultLanguage?: string
+  readonly checkPolicy?: boolean
+  readonly checkExpiration?: boolean
+  readonly mustChange?: boolean
+}
+/** The Status page: Permission to connect to database engine (Grant or Deny) and Login (Enabled or Disabled). */
+export interface LoginStatusChoice { readonly connect: 'grant' | 'deny'; readonly enabled: boolean }
+/** Passwords, only ever on actions.execute (sensitive as a whole); at most loginLimits.password UTF-16 units, no U+0000, well formed. */
+export interface LoginSecrets { readonly password?: string; readonly oldPassword?: string }
+
+/** A database as New Login's Default database list shows it. */
+export interface NewLoginDatabase { readonly name: string; readonly state: number; readonly accessible: boolean }
+/** A language from sys.syslanguages: SSMS lists names; the alias is secondary text. */
+export interface NewLoginLanguage { readonly name: string; readonly alias: string }
+/** A server role from sys.server_principals (type R): fixed roles, SQL Server 2022's ##MS_…## roles, and user-defined ones. */
+export interface NewLoginServerRole { readonly name: string; readonly fixed: boolean }
+/** What New Login's describe reads in master (the newLogin describe id, target the server). */
+export interface NewLoginModel {
+  readonly server: {
+    /** The version band (13 = SQL Server 2016 … 17 = 2025). */
+    readonly level: number
+    readonly linux: boolean
+    /** SERVERPROPERTY('IsIntegratedSecurityOnly'): Windows Authentication mode only. */
+    readonly windowsOnly: boolean
+    /** HAS_PERMS_BY_NAME ALTER ANY LOGIN; advisory, the server decides on OK. */
+    readonly canCreate: boolean
+  }
+  readonly databases: readonly NewLoginDatabase[]
+  readonly databasesTruncated: boolean
+  readonly languages: readonly NewLoginLanguage[]
+  readonly serverRoles: readonly NewLoginServerRole[]
+  readonly serverRolesTruncated: boolean
+}
+/** A Windows login's name: DOMAIN\name, one backslash with text on both sides (the server answers 15407 otherwise). */
+export const windowsLoginName = /^[^\\]+\\[^\\]+$/
+/** Every login is a member of public, so it is shown checked and greyed, and never requested. */
+export const publicRole = 'public'
+
+/** New Login's messages in Varia's words where SSMS's exact text is unverified. They name fields, never values. */
+export const newLoginMessages = {
+  nameRequired: 'Enter a login name.',
+  sqlBackslash: 'A SQL Server login name cannot contain a backslash.',
+  windowsName: 'Enter a Windows login as DOMAIN\\name.',
+  mismatch: 'Password and confirm password do not match.',
+  tooLong: `A password can have at most ${loginLimits.password} characters.`,
+  broken: 'The password holds a broken character (half of a surrogate pair), which SQL Server would not receive as typed. Retype the password.',
+  blankWithoutPolicy: 'Enter a password. A blank password needs Enforce password policy, so the server can refuse it.',
+  defaultDatabase: 'Choose a default database from the list.',
+  defaultLanguage: 'Choose a default language from the list.',
+  windowsOnly: 'This server accepts Windows authentication only. The login can\'t connect until SQL Server and Windows Authentication mode is turned on.',
+  canCreate: 'You may not have permission to create logins (ALTER ANY LOGIN). The server checks when you press OK.',
+  passwordsMatch: 'Passwords match.',
+  policyServer: 'The server checks its password policy on OK.',
+  passwordScript: 'Sent only with OK; Script shows PASSWORD=<password>.'
+} as const
+/** The Script Action header for a script with a password placeholder (D2 §5.6, A14): run unedited, the batch fails to parse. */
+export const passwordScriptHeader = '/* Varia leaves passwords out of scripts. Replace <password> with the login\'s password, as an N\'…\' literal, before you run this script. */'
+
+/** Why a New Login request cannot be sent, or undefined: the problems the page shows before anything is sent. `password` is
+ *  only its length and whether it equals the confirmation, so no value leaves the secret slot. */
+export function newLoginProblem(login: NewLoginGeneral, password: { readonly empty: boolean; readonly matches: boolean; readonly wellFormed?: boolean; readonly tooLong?: boolean } | undefined, model?: Pick<NewLoginModel, 'databases' | 'languages'>): string | undefined {
+  if (!login.name) return newLoginMessages.nameRequired
+  if (login.auth === 'sql' && login.name.includes('\\')) return newLoginMessages.sqlBackslash
+  if (login.auth === 'windows' && !windowsLoginName.test(login.name)) return newLoginMessages.windowsName
+  if (model && !model.databases.some(database => database.name === login.defaultDatabase)) return newLoginMessages.defaultDatabase
+  if (model && login.defaultLanguage !== undefined && !model.languages.some(language => language.name === login.defaultLanguage)) return newLoginMessages.defaultLanguage
+  if (login.auth === 'sql' && password) {
+    if (password.tooLong) return newLoginMessages.tooLong
+    if (!password.matches) return newLoginMessages.mismatch
+    if (password.wellFormed === false) return newLoginMessages.broken
+    if (password.empty && !login.checkPolicy) return newLoginMessages.blankWithoutPolicy
+  }
+  return undefined
 }

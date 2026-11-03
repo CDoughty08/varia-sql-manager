@@ -54,6 +54,9 @@ jobs:
       VARIA_TEST_SQL_PASSWORD: 'Varia_Dev_Pw1!'
       # Live tests may create and drop a uniquely named scratch database (graph tables cannot be temporary).
       VARIA_TEST_SQL_SCRATCH: '1'
+      # Only this disposable container records New Login's and Create Catalog's batches in an Extended Events session, to prove
+      # neither password reaches any recorded field (wave 5 decision 14); a developer's server runs it only when its owner asks.
+      VARIA_TEST_SQL_XE: '1'
     steps:
       - uses: actions/checkout@v7
         with:

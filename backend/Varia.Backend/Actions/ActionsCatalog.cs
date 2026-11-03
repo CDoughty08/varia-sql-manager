@@ -40,19 +40,25 @@ internal sealed class ActionsCatalog
         return Parse(stream);
     });
 
-    private sealed record ActionJson(string Action, string Class, string Title, List<string> Engines, long CleanupMs, bool? SystemObjects = null, bool? Long = null);
+    private sealed record ActionJson(string Action, string Class, string Title, List<string> Engines, long CleanupMs, bool? SystemObjects = null, string? Folder = null, string? Scope = null, bool? Long = null);
     private sealed record DialogJson(string Dialog, string Action, List<string> Pages);
     private sealed record ErrorJson(string Code, bool Retryable);
     private sealed record RowJson(string Kind, string Subtype, List<string> Enabled, List<string> Disabled, string? Status = null);
+    /// <summary>A database rule (src/shared/actions/catalog.ts DatabaseActionRule): states and access by name, as databaseStates names them.</summary>
+    private sealed record DatabaseRuleJson(string Action, string Reason, List<string>? States = null, List<string>? Access = null, bool? ReadOnly = null, bool? Hide = null);
     private sealed record ServerFilesJson(string Purpose, List<string> Extensions);
-    private sealed record CatalogJson(int Version, List<ActionJson> Actions, List<int> CompatibilityLevels, List<OptionJson> DatabaseOptions, List<DialogJson> Dialogs, List<ErrorJson> Errors,
-        Dictionary<string, long> Limits, LoginRulesJson Logins, List<string> OwnerNotOn, RestoreCatalogJson Restore, List<RowJson> Rows, List<OptionJson> ScopedConfigurations, List<ServerFilesJson> ServerFiles);
+    private sealed record CatalogJson(int Version, List<ActionJson> Actions, List<int> CompatibilityLevels, List<OptionJson> DatabaseOptions, List<DatabaseRuleJson> DatabaseRules,
+        Dictionary<string, string> DatabaseStates, List<DialogJson> Dialogs, List<ErrorJson> Errors, Dictionary<string, long> Limits, LoginRulesJson Logins, List<string> OwnerNotOn,
+        RestoreCatalogJson Restore, List<RowJson> Rows, List<OptionJson> ScopedConfigurations, List<ServerFilesJson> ServerFiles);
 
     private readonly Dictionary<(string Kind, string Subtype, string Status), ActionRow> rows;
     private readonly Dictionary<string, bool> errors;
     private readonly Dictionary<string, string> dialogActions;
     private readonly HashSet<string> systemActions;
+    private readonly HashSet<string> serverActions;
     private readonly Dictionary<string, ActionJson> actions;
+    private readonly List<DatabaseRuleJson> databaseRules;
+    private readonly Dictionary<int, string> databaseStates;
 
     private ActionsCatalog(CatalogJson json)
     {
@@ -64,6 +70,7 @@ internal sealed class ActionsCatalog
         Logins = new LoginRules(json.Logins);
         Restore = json.Restore;
         systemActions = json.Actions.Where(row => row.SystemObjects == true).Select(row => row.Action).ToHashSet(StringComparer.Ordinal);
+        serverActions = json.Actions.Where(row => row.Scope == "server").Select(row => row.Action).ToHashSet(StringComparer.Ordinal);
         Dialogs = json.Dialogs.ToDictionary(row => row.Dialog, row => (IReadOnlyList<string>)row.Pages, StringComparer.Ordinal);
         dialogActions = json.Dialogs.ToDictionary(row => row.Dialog, row => row.Action, StringComparer.Ordinal);
         Limits = json.Limits;
@@ -71,6 +78,8 @@ internal sealed class ActionsCatalog
         ScopedConfigurations = json.ScopedConfigurations.ToDictionary(row => row.Key, StringComparer.Ordinal);
         CompatibilityLevels = json.CompatibilityLevels;
         OwnerNotOn = json.OwnerNotOn;
+        databaseRules = json.DatabaseRules;
+        databaseStates = json.DatabaseStates.ToDictionary(pair => int.Parse(pair.Key, System.Globalization.CultureInfo.InvariantCulture), pair => pair.Value);
         ServerFilePurposes = json.ServerFiles.ToDictionary(row => row.Purpose, row => (IReadOnlyList<string>)row.Extensions, StringComparer.Ordinal);
     }
 
@@ -92,6 +101,9 @@ internal sealed class ActionsCatalog
     public IReadOnlyList<int> CompatibilityLevels { get; }
     /// <summary>System databases whose owner SQL Server keeps.</summary>
     public IReadOnlyList<string> OwnerNotOn { get; }
+    /// <summary>The server file picker's purposes and the lower-case extensions each one's type filter keeps (none: folders only).</summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<string>> ServerFilePurposes { get; }
+
     /// <summary>Login subtypes, protected-principal rules and login limits (src/shared/actions/logins.ts).</summary>
     public LoginRules Logins { get; }
     /// <summary>Restore Database's describe id, request action, engines, limits, system databases and messages (src/shared/actions/restore.ts).</summary>
@@ -107,11 +119,14 @@ internal sealed class ActionsCatalog
     /// <summary>How long the action's compensation and cleanup steps may run after a failure or Stop.</summary>
     public TimeSpan CleanupBudget(string action) => TimeSpan.FromMilliseconds(actions.TryGetValue(action, out var row) ? row.CleanupMs : Limit("cleanupMs"));
 
-    /// <summary>The server file picker's purposes and the lower-case extensions each one's type filter keeps (none: folders only).</summary>
-    public IReadOnlyDictionary<string, IReadOnlyList<string>> ServerFilePurposes { get; }
-
     /// <summary>The action a dialog's OK runs (deleteObject: delete, databaseProperties: properties).</summary>
     public string ActionOf(string dialog) => dialogActions.TryGetValue(dialog, out var action) ? action : throw new InvalidOperationException("Unknown dialog " + dialog);
+
+    /// <summary>The Object Explorer folder a folder action (Attach: databases) is offered on, whose server is its target; null for an object row's action.</summary>
+    public string? FolderOf(string action) => actions.TryGetValue(action, out var row) ? row.Folder : throw new InvalidOperationException("Unknown object action " + action);
+
+    /// <summary>Whether the action is a server action (New Database): no row offers it, and its describe's target is the server.</summary>
+    public bool IsServerAction(string action) => serverActions.Contains(action);
 
     /// <summary>Whether the action also serves SQL Server's own objects (Properties on master, model, msdb and tempdb).</summary>
     public bool ServesSystemObjects(string action) => systemActions.Contains(action);
@@ -128,6 +143,22 @@ internal sealed class ActionsCatalog
     /// <summary>Whether the derived subtype's row enables the action now. It reads the row without a status: the preflights
     /// that derive a status (a disabled login) arrive with the actions that need them.</summary>
     public bool Allows(string kind, string subtype, string action) => (Row(kind, subtype) ?? Row(kind, "")) is { } row && row.Enabled.Contains(action);
+
+    /// <summary>sys.databases.state by the catalogue's name ('other' for a value it does not know).</summary>
+    public string DatabaseStateOf(int state) => databaseStates.TryGetValue(state, out var name) ? name : "other";
+
+    /// <summary>sys.databases.user_access by name.</summary>
+    public static string DatabaseAccessOf(int userAccess) => userAccess == 1 ? "single" : userAccess == 2 ? "restricted" : "multi";
+
+    /// <summary>Why the database rules grey or hide an action for a database in this runtime state (the first rule that applies,
+    /// as the menu derives it in databaseActionState), or null when none does.</summary>
+    public string? DatabaseRefusal(string action, int state, int userAccess, bool readOnly, bool standby)
+    {
+        var stateName = DatabaseStateOf(state);
+        var access = DatabaseAccessOf(userAccess);
+        return databaseRules.FirstOrDefault(rule => rule.Action == action
+            && (rule.States?.Contains(stateName) == true || rule.Access?.Contains(access) == true || rule.ReadOnly == true && (readOnly || standby)))?.Reason;
+    }
 
     public bool Retryable(string code) => errors.TryGetValue(code, out var retryable) ? retryable : throw new InvalidOperationException("Unknown object action error " + code);
 

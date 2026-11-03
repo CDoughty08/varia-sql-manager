@@ -53,7 +53,9 @@ function fakeBackend() {
     /** AppData's row fields (a sublabel, no chevron when offline), table subtypes and other row fields by name. */
     appData: {} as Partial<ExplorerNode>, subtypes: {} as Record<string, NodeSubtype>, tableFields: {} as Record<string, Partial<ExplorerNode>>,
     /** Locked cannot be opened while this holds; `leafTables` lists tables without a chevron. */
-    lockedDenied: true, leafTables: false
+    lockedDenied: true, leafTables: false,
+    /** sa's row fields in Logins. */
+    sa: {} as Partial<ExplorerNode>
   }
   const sent: Sent[] = []
   const holds: ((params: ExplorerChildrenParams) => boolean)[] = []
@@ -82,7 +84,7 @@ function fakeBackend() {
       }
       case 'systemDatabases': return ok(['master', 'model'].map(name => object({ kind: 'database', name }, name, { subtype: 'system' })))
       case 'serverSecurity': return ok([folder(owner, 'logins'), folder(owner, 'audits')])
-      case 'logins': return ok([object({ kind: 'login', name: 'sa' }, 'sa')])
+      case 'logins': return ok([object({ kind: 'login', name: 'sa' }, 'sa', state.sa)])
       case 'audits': return state.auditsDenied ? failure('PERMISSION_DENIED', 'You do not have permission to view Audits.') : ok([object({ kind: 'audit', name: 'LoginAudit' }, 'LoginAudit', { hasChildren: false })])
       case 'tables': {
         const offset = params.cursor ? Number(params.cursor.split('.')[2]) : 0
@@ -240,6 +242,18 @@ describe('ExplorerService: loading', () => {
     await f.open('Databases', 'System Databases', 'master')
     expect(f.calls().at(-1)).toMatchObject({ node: { type: 'object', object: { kind: 'database', name: 'master' } }, subtype: 'system' })
     expect(f.calls().at(-2)).not.toHaveProperty('subtype')
+  })
+  it('finds the Databases folder above a system database, whose own listing folder is System Databases', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const system = await f.open('Databases', 'System Databases')
+    const databases = f.find('Databases'), master = f.find('master', system)
+    expect(f.explorer.listingFolderOf(master)).toBe(system)
+    expect(f.explorer.databasesFolderOf(master)).toBe(databases)
+    expect(f.explorer.databasesFolderOf(f.find('AppData', databases))).toBe(databases)
+    expect(f.explorer.databasesFolderOf(databases)).toBe(databases)
+    expect(f.explorer.databasesFolderOf(f.find('Security'))).toBeUndefined()
   })
   it('shows a loading row only when the first page takes longer than 150 ms', async () => {
     const f = fixture()
@@ -880,6 +894,28 @@ describe('ExplorerService: reconcile', () => {
     await settle()
     expect(f.labels()).toContain('      Tables')
   })
+  it('keeps a login\'s denial of CONNECT SQL beside its status, from the first page and through reconciles', async () => {
+    const f = fixture()
+    f.state.sa = { status: 'disabled', connectDenied: true }
+    f.connect()
+    await settle()
+    await f.open('Security')
+    const logins = await f.open('Logins')
+    const sa = f.find('sa')!
+    expect(f.explorer.node(sa)).toMatchObject({ status: 'disabled', connectDenied: true })
+    const rev = f.explorer.node(sa)!.rev
+    // GRANT CONNECT SQL: still disabled, no longer denied, and the row is drawn again.
+    f.state.sa = { status: 'disabled' }
+    f.explorer.reconcile(logins)
+    await settle()
+    expect(f.find('sa')).toBe(sa)
+    expect(f.explorer.node(sa)!.connectDenied).toBeUndefined()
+    expect(f.explorer.node(sa)!.rev).toBeGreaterThan(rev)
+    f.state.sa = { status: 'noAccess', connectDenied: true }
+    f.explorer.reconcile(logins)
+    await settle()
+    expect(f.explorer.node(sa)).toMatchObject({ status: 'noAccess', connectDenied: true })
+  })
   it('drops the error of a row it keeps and loads it again: at once when expanded, else when next expanded', async () => {
     // After DDL (Database Properties set MULTI_USER, say) on the listing folder, with the row expanded.
     const f = fixture()
@@ -1345,7 +1381,9 @@ describe('ExplorerService: selection, targets and context', () => {
     expect(f.explorer.context.getSnapshot()).toEqual({
       explorerHasSelection: true, explorerSelectionKind: 'folder', explorerSelectionFolder: 'databases', explorerSelectionFilterable: true, explorerSelectionFiltered: false,
       explorerSelectionInsertable: false, explorerSelectionStatus: '', explorerSelectionServerEngine: 'box', explorerSelectionServerLinux: false,
-      ...scriptContextValues(scriptMenuState({ kind: 'folder' })), ...actionContextValues(actionMenuState({ kind: 'folder', folder: 'databases' })), ...ssisVerbContextValues(ssisVerbMenuState('folder')), explorerLoading: false
+      ...scriptContextValues(scriptMenuState({ kind: 'folder' })), ...actionContextValues(actionMenuState({ kind: 'folder' })), ...ssisVerbContextValues(ssisVerbMenuState('folder')), explorerLoading: false,
+      // The Databases folder's own actions (Attach D1d, Restore Database D1f), on a SQL Server box edition.
+      explorerActionAttach: 'enabled', explorerActionRestore: 'enabled'
     })
     expect(f.explorer.getSnapshot().selected).toBe(databases)
     f.explorer.select(f.find('Database Snapshots'))
@@ -1464,6 +1502,32 @@ describe('ExplorerService: selection, targets and context', () => {
     await settle()
     expect(f.explorer.menuNode(f.find('server-b.example'))).toMatchObject({ engine: 'cloud', linux: false })
     expect(f.explorer.menuNode(f.find('server-c.example'))).toMatchObject({ engine: 'box', linux: false })
+  })
+  it('narrows a database\'s Tasks by a live status sample newer than its listing', async () => {
+    const f = fixture()
+    f.connect('server-a')
+    await settle()
+    await f.open('Databases')
+    const appData = f.find('AppData')
+    // A live sample newer than the listing overlays it (D3a): Take Offline greys at once when the status probe sees the
+    // database offline, and an older sample changes nothing. Its signal updates the context keys; disposing drops it.
+    f.explorer.select(appData)
+    const listedAt = f.wall.now
+    let sample: { at: number, row: { name: string, state: number, userAccess: number, readOnly: boolean, standby: boolean } | undefined, complete: boolean } | undefined
+    const listeners = new Set<() => void>()
+    const status = f.explorer.useStatus({ databaseRuntime: (connectionId, database) => connectionId === cid('server-a') && database === 'AppData' ? sample : undefined, subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener) } })
+    expect(f.explorer.context.getSnapshot()).toMatchObject({ explorerActionTakeOffline: 'enabled', explorerActionBringOnline: 'enabled' })
+    sample = { at: listedAt + 1, row: { name: 'AppData', state: 6, userAccess: 0, readOnly: false, standby: false }, complete: true }
+    listeners.forEach(listener => listener())
+    expect(f.explorer.context.getSnapshot()).toMatchObject({ explorerActionTakeOffline: 'disabled', explorerActionBringOnline: 'enabled' })
+    expect(f.explorer.target()).toMatchObject({ database: { state: 6 } })
+    expect(f.explorer.menuNode(appData)).toMatchObject({ database: { state: 6 } })
+    sample = { at: listedAt + 2, row: undefined, complete: true }
+    listeners.forEach(listener => listener())
+    expect(f.explorer.context.getSnapshot()).toMatchObject({ explorerActionTakeOffline: 'enabled', explorerActionBringOnline: 'disabled' })
+    status.dispose()
+    expect(listeners.size).toBe(0)
+    expect(f.explorer.context.getSnapshot()).toMatchObject({ explorerActionTakeOffline: 'enabled', explorerActionBringOnline: 'enabled' })
   })
   it('gives quoted insert text, a fully loaded Columns folder\'s list, and a server\'s name to copy', async () => {
     const f = fixture()

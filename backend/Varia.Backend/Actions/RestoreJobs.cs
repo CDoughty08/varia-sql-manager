@@ -59,7 +59,8 @@ internal sealed partial class ActionService
     /// exists, and the restore's sets, moves and options with restoreOptionsProblems' rules. Script and execute take the same request.</summary>
     private ObjectRefDto ValidateRestore(ActionArgs args)
     {
-        if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Design is not null) throw Invalid("restore takes only its options.");
+        if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Design is not null || args.Databases is not null)
+            throw Invalid("restore takes only its options.");
         var target = args.Target ?? throw Invalid("target.");
         if (target.Kind != "database" || target.Database is not null || target.Schema is not null || target.Parent is not null || !ExplorerRefs.Ident(target.Name)) throw Invalid("target.");
         // In any case: a case-insensitive server, the default, takes MSDB for msdb.

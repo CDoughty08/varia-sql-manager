@@ -24,7 +24,8 @@ internal sealed partial class ActionService
     /// (a full or file backup, then logs), the files and filegroups, the moves and the options, with restoreFilesOptionsProblems' rules.</summary>
     private ObjectRefDto ValidateRestoreFiles(ActionArgs args)
     {
-        if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Design is not null || args.Restore is not null)
+        if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Design is not null || args.Restore is not null
+            || args.Databases is not null)
             throw Invalid("restoreFiles takes only its options.");
         var target = args.Target ?? throw Invalid("target.");
         if (target.Kind != "database" || target.Database is not null || target.Schema is not null || target.Parent is not null || !ExplorerRefs.Ident(target.Name)) throw Invalid("target.");

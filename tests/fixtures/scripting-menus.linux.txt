@@ -504,6 +504,9 @@ explorer.context, for a database
       C&lipboard
   ---
   &Tasks >
+    &Take Offline
+    Bring &Online
+    ---
     &Restore >
       &Database…
       &Files and Filegroups…

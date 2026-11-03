@@ -1,0 +1,18 @@
+appId: com.varia.sqlmanager
+productName: Varia SQL Manager
+directories:
+  output: dist
+files:
+  - out/**/*
+extraResources:
+  - from: artifacts/release-backend
+    to: backend
+artifactName: Varia-SQL-Manager-${version}-${os}-${arch}.${ext}
+win:
+  target: nsis
+mac:
+  target: dmg
+  identity: null
+linux:
+  target: AppImage
+  category: Development

@@ -30,11 +30,11 @@ internal static class RestoreChecks
             && Catalog.Actions.Contains("restore") && Catalog.IsLong("restore") && Catalog.CleanupBudget("restore") == TimeSpan.FromSeconds(30) && !Catalog.Dialogs.ContainsKey("restoreDatabase")
             && Catalog.Actions.Contains("restoreFiles") && Catalog.IsLong("restoreFiles") && Restore.FilesSetTypes.SequenceEqual(["full", "file", "log"])
             && Restore.Limit("restoreFiles") == 256 && Restore.Limit("fileSets") == 16 && Restore.Limit("parameters") == 2_100
-            && Restore.Limit("databases") == 32_767 && new[] { "MEDIA", "FILE_ACCESS", "BACKUP_MISMATCH", "TAIL_LOG_NEEDED", "RESTORE_SEQUENCE" }.All(code => Catalog.Retryable(code) == false),
+            && Restore.Limit("databases") == 32_767 && new[] { "MEDIA", "BACKUP_MISMATCH", "TAIL_LOG_NEEDED", "RESTORE_SEQUENCE" }.All(code => Catalog.Retryable(code) == false) && Catalog.Retryable("FILE_ACCESS"),
             "the restore block is restore.ts': describe restoreDatabase, actions restore and restoreFiles on SQL Server itself only, SQL Server's own databases, the 120 s media budget the service uses, "
             + "64 devices, 1000 moves, as many sets as the history lists, a 4,000,000-character script, two media reads per connection; restore is a long object action (its menu items and command, D1f) "
-            + "whose cleanup has 30 s, a document rather than a dialog, and its media and sequence errors are not retryable; restoreFiles is long too, with 256 files and 256 filegroups "
-            + "under SQL Server's 2,100 parameters, from a full or file backup then logs");
+            + "whose cleanup has 30 s, a document rather than a dialog, its media and sequence errors are not retryable, and FILE_ACCESS (shared with Attach) is once the file is fixed; "
+            + "restoreFiles is long too, with 256 files and 256 filegroups under SQL Server's 2,100 parameters, from a full or file backup then logs");
         // 64 devices and two parameters per move stay under SQL Server's 2,100 parameters, with room for @db, @file, @standby, @stopat and the tail's two.
         check(Restore.Limit("backupDevices") + 2 * Restore.Limit("restoreMoves") + 6 <= 2_100, "a restore statement's parameters stay under SQL Server's 2,100");
 
@@ -240,7 +240,7 @@ internal static class RestoreChecks
             ("a wildcard device", Describe(new("devices", Devices: ["C:\\*.bak"]))), ("a set id that is no uuid", Describe(new("historyFiles", SetId: "1:1"))),
             ("an upper-case uuid", Describe(new("historyFiles", SetId: "ABCDEF00-0000-0000-0000-000000000000"))), ("position 0", Describe(new("mediaFiles", Devices: [path], File: 0))),
             ("position 32768", Describe(new("mediaFiles", Devices: [path], File: 32_768))), ("a history name with U+0000", Describe(new("history", "a\0b"))), ("a 129-unit name", Describe(new("history", new string('x', 129)))),
-            ("history with a position", Describe(new("history", File: 1)))
+            ("history with a position", Describe(new("history", File: 1))), ("Attach's primary file too", Describe(new("history")) with { Attach = new("/var/opt/mssql/data/Sales.mdf") })
         };
         var describeAccepted = describeInvalid.Where(item => !Refused(() => service.Validate(item.Args)).StartsWith("INVALID_PARAMS", StringComparison.Ordinal)).Select(item => item.Name).ToList();
         check(describeAccepted.Count == 0 && Refused(() => service.Validate(Describe(new("history")))) == "accepted" && Refused(() => service.Validate(Describe(new("history", "a]b'c")))) == "accepted"
@@ -267,7 +267,10 @@ internal static class RestoreChecks
             ("a relative tail", Script(Options(chain, tail: new("t.bak", true)))), ("a 1001st move", Script(Options(chain, moves: [.. Enumerable.Range(0, 1001).Select(index => new RestoreMoveDto("f" + index, "C:\\f" + index + ".mdf"))]))),
             ("1025 sets", Script(Options([chain[0], .. Enumerable.Range(1, 1_024).Select(index => Set("1:" + (index + 1), "log", index + 1, path))]))), ("a tail set id", Script(Options([chain[0], chain[1] with { Id = "tail" }]))),
             ("a bad identity", Script(good, identity: new(0, "2026-10-29T21:05:43.000"))), ("a new name too", Script(good) with { NewName = "x" }),
-            ("restore options on a rename", Script(good, action: "rename") with { NewName = "x" }), ("a schema target", Script(good) with { Target = new ObjectRefDto("database", "x", Name: "Sales") })
+            ("restore options on a rename", Script(good, action: "rename") with { NewName = "x" }), ("a schema target", Script(good) with { Target = new ObjectRefDto("database", "x", Name: "Sales") }),
+            // Attach Databases' member (D1d): each action takes only its own, as zod's strict schemas do.
+            ("Attach's databases too", Script(good) with { Databases = [new("Sales", ["/var/opt/mssql/data/Sales.mdf"], false)] }),
+            ("restore options on an attach", Script(good, action: "attach") with { Target = server, Databases = [new("Sales", ["/var/opt/mssql/data/Sales.mdf"], false)] })
         };
         var scriptAccepted = scriptInvalid.Where(item => !Refused(() => service.Validate(item.Args, script: true)).StartsWith("INVALID_PARAMS", StringComparison.Ordinal)).Select(item => item.Name).ToList();
         check(scriptAccepted.Count == 0 && Refused(() => service.Validate(Script(good), script: true)) == "accepted"

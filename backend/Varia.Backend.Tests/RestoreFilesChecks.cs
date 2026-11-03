@@ -95,6 +95,8 @@ internal static class RestoreFilesChecks
             ("too many parameters", Args(Options([chain[0] with { Devices = [.. Enumerable.Repeat(path, 64)] }], [.. many.Take(256)], [.. many.Take(256)], [.. Enumerable.Range(0, 800).Select(index => new RestoreMoveDto("m" + index, "C:\\m" + index + ".ndf"))]))),
             ("restore options too", Args(good) with { Restore = new([Set("1:1", "full", 1, path)], [], false, false, false, "recovery", false) }),
             ("file restore options on a restore", new ActionArgs("restore", Id(), Id(), new ObjectRefDto("database", Name: "Sales"), RestoreFiles: good)),
+            ("Attach's databases too", Args(good) with { Databases = [new("Sales", ["/var/opt/mssql/data/Sales.mdf"], false)] }),
+            ("New Login's members too", Args(good) with { Login = new("sql", "x", "master") }), ("Take Offline's dropConnections too", Args(good) with { DropConnections = true }),
             ("a new name too", Args(good) with { NewName = "x" }), ("a schema target", Args(good) with { Target = new ObjectRefDto("database", "x", Name: "Sales") })
         };
         var accepted = invalid.Where(item => !Refused(item.Args).StartsWith("INVALID_PARAMS", StringComparison.Ordinal) || !Refused(item.Args, script: true).StartsWith("INVALID_PARAMS", StringComparison.Ordinal))

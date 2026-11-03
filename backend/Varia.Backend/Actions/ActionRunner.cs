@@ -9,9 +9,12 @@ namespace Varia.Backend.Actions;
 internal sealed record StepContext(SqlTransaction? Transaction, CancellationToken Token);
 
 /// <summary>One step of runner v2 (critic A4). Undoes: for a compensation, the index among the main steps of the step whose change
-/// it undoes. When: whether a compensation or cleanup is due, from the main steps' statuses. Detail: a name it acts on, never a secret.</summary>
+/// it undoes. When: whether a compensation or cleanup is due, from the main steps' statuses. Detail: a name it acts on, never a secret.
+/// Confirm: for a compensation whose main step was cancelled, whether that step's change happened all the same (Stop can reach a
+/// statement SQL Server has finished before its answer is read), asked on the server under the cleanup budget; without it, a
+/// compensation runs only after its main step completed.</summary>
 internal sealed record RunStep(string Title, Func<StepContext, Task> Run, StepKind Kind = StepKind.Main, int? Undoes = null, Func<IReadOnlyList<string>, bool>? When = null,
-    string? Detail = null);
+    string? Detail = null, Func<StepContext, Task<bool>>? Confirm = null);
 
 /// <summary>Thrown by a compensation or cleanup step that finds, when it runs, that it has nothing to do (a restore's cleanup whose
 /// database is not the one it created): the runner neither lists it nor reports it.</summary>
@@ -51,13 +54,14 @@ internal sealed partial class ActionService
     /// 'skipped'; Stop cancels the running statement, and earlier steps stay 'done'. In transaction mode the main steps run in one
     /// transaction followed by <paramref name="commitTitle"/>'s commit (which Stop no longer reaches), and a failure or Stop
     /// rolls it back (within StopGrace, else closing the unpooled connection ends the session, which rolls it back);
-    /// <paramref name="rolledBack"/> then joins the failure's message. After a failure or Stop, the compensation and cleanup
+    /// <paramref name="rolledBack"/> then joins the failure's message. <paramref name="serverText"/> rewrites the text of SQL Server's errors
+    /// (New Login removes its password from it), never the runner's or ActionErrors' own sentences. After a failure or Stop, the compensation and cleanup
     /// steps that are due run in order under a fresh token bounded by <paramref name="cleanupBudget"/>, so a Stop's reply (which
     /// waits StopGrace plus that budget) still lists them. They are listed only when they run, marked compensates. With
     /// <paramref name="progress"/>, each step's 3211 messages count for its index in the reply, and the step carries its last percent. A
     /// compensation or cleanup that finds it has nothing to do (StepNotDueException) is not listed.</summary>
     internal async Task<RunOutcome> RunStepsAsync(SqlConnection connection, IReadOnlyList<RunStep> plan, string? inUseAdvice, CancellationToken token, TimeSpan cleanupBudget,
-        bool transaction = false, string commitTitle = "Commit", string? rolledBack = null, ActionProgress? progress = null)
+        bool transaction = false, string commitTitle = "Commit", string? rolledBack = null, ActionProgress? progress = null, Func<string, string>? serverText = null)
     {
         var mains = plan.Where(step => step.Kind == StepKind.Main).ToList();
         var after = plan.Where(step => step.Kind != StepKind.Main).ToList();
@@ -112,7 +116,7 @@ internal sealed partial class ActionService
                 }
                 catch (SqlException sql)
                 {
-                    var value = ActionErrors.FromSql(catalog, sql, connection, ddl: true, inUseAdvice);
+                    var value = ActionErrors.FromSql(catalog, sql, connection, ddl: true, inUseAdvice, serverText);
                     Add("failed", step, value.Message);
                     var done = Done();
                     failure = done.Count == 0 ? value : value with { Message = ScriptingErrors.Clip(value.Message + " Completed before the failure: " + string.Join(", ", done) + ".", ActionErrors.MaxMessage) };
@@ -140,12 +144,15 @@ internal sealed partial class ActionService
         using var budget = new CancellationTokenSource(cleanupBudget);
         foreach (var step in after)
         {
-            var due = (step.Kind != StepKind.Compensation || statuses[step.Undoes!.Value] == "done") && (step.When?.Invoke(statuses) ?? true);
+            var undone = step.Kind == StepKind.Compensation ? statuses[step.Undoes!.Value] : null;
+            var confirm = undone == "cancelled" && step.Confirm is not null;
+            var due = (step.Kind != StepKind.Compensation || undone == "done" || confirm) && (step.When?.Invoke(statuses) ?? true);
             if (!due) continue;
             try
             {
                 budget.Token.ThrowIfCancellationRequested();
                 if (connection.State != ConnectionState.Open) throw new InvalidOperationException("The connection is closed.");
+                if (confirm && !await step.Confirm!(new(null, budget.Token))) continue;
                 if (Options.BeforeCleanup is { } before) await before(step.Title, budget.Token);
                 progress?.Begin(steps.Count);
                 await step.Run(new(null, budget.Token));
@@ -160,7 +167,7 @@ internal sealed partial class ActionService
             }
             catch (SqlException sql)
             {
-                Add("failed", step, ActionErrors.FromSql(catalog, sql, connection, ddl: true, null).Message);
+                Add("failed", step, ActionErrors.FromSql(catalog, sql, connection, ddl: true, null, serverText).Message);
                 outcomes.Add("\"" + step.Title + "\" failed");
             }
             // The failure or Stop broke the connection (a severe error closes it): the step could not run.

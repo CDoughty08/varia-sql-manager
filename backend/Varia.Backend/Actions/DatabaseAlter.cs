@@ -7,8 +7,9 @@ using Varia.Backend.Scripting;
 namespace Varia.Backend.Actions;
 
 /// <summary>Database Properties' statements: SMO's ALTER DATABASE … SET forms, COMPATIBILITY_LEVEL, COLLATE,
-/// AUTO_CREATE_STATISTICS, FILESTREAM, the scoped configurations, SSMS's SetSnapshotIsolation and the owner.</summary>
-internal enum AlterTemplate { Set, Compat, Collate, AutoCreateStats, Filestream, Scoped, SnapshotIsolation, Owner }
+/// AUTO_CREATE_STATISTICS, FILESTREAM, the scoped configurations, SSMS's SetSnapshotIsolation and the owner; and a filegroup's MODIFY
+/// FILEGROUP DEFAULT, READ_ONLY and AUTOGROW_ALL_FILES (New Database, later the Filegroups page).</summary>
+internal enum AlterTemplate { Set, Compat, Collate, AutoCreateStats, Filestream, Scoped, SnapshotIsolation, Owner, FilegroupDefault, FilegroupReadOnly, FilegroupAutogrowAll }
 
 /// <summary>One planned statement: its template, the database it changes, the option key and token it writes (from the
 /// embedded catalogue only), a range-checked number, a name (a collation or a login, verbatim), whether the SET options
@@ -17,13 +18,15 @@ internal sealed record AlterStatement(AlterTemplate Template, string Database, s
 {
     /// <summary>Where it runs: ALTER DATABASE in master, scoped configurations and the owner in the database (SMO's USE [db]).</summary>
     public bool InDatabase => Template is AlterTemplate.Scoped or AlterTemplate.Owner;
+    /// <summary>A filegroup change: its Name is the filegroup's, and it has no option.</summary>
+    public bool Filegroup => Template is AlterTemplate.FilegroupDefault or AlterTemplate.FilegroupReadOnly or AlterTemplate.FilegroupAutogrowAll;
 }
 
-/// <summary>A piece of a statement: constant keyword text, the database's name, a number, the collation or the login.</summary>
+/// <summary>A piece of a statement: constant keyword text, the database's name, a number, the collation, the login or a filegroup.</summary>
 internal readonly record struct AlterPart(char Kind, string Text = "")
 {
     public static AlterPart Literal(string text) => new('L', text);
-    public static readonly AlterPart Database = new('D'), Number = new('N'), Collation = new('C'), Login = new('O');
+    public static readonly AlterPart Database = new('D'), Number = new('N'), Collation = new('C'), Login = new('O'), Filegroup = new('G');
 }
 
 /// <summary>Validates, plans and renders Database Properties' changes (spec PR-B §3.7 and §4.2). Every statement is a
@@ -44,6 +47,9 @@ internal static partial class DatabaseAlter
     [GeneratedRegex(@"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}\z")]
     private static partial Regex IdentityCreated();
 
+    /// <summary>Whether a request's identity is one a describe wrote: a database_id and create_date as DatabaseProperties.Iso writes it.</summary>
+    internal static bool IdentityValid(DatabaseIdentityDto identity) => identity.Id >= 1 && identity.Created is not null && IdentityCreated().IsMatch(identity.Created);
+
     /// <summary>The catalogue entry of an option or scoped configuration key, or null.</summary>
     public static OptionJson? Option(ActionsCatalog catalog, string key) =>
         catalog.DatabaseOptions.TryGetValue(key, out var option) ? option : catalog.ScopedConfigurations.GetValueOrDefault(key);
@@ -61,10 +67,10 @@ internal static partial class DatabaseAlter
     /// SSMS closes connections for. Messages never echo values.</summary>
     public static void Validate(ActionsCatalog catalog, ActionArgs args)
     {
-        if (args.NewName is not null || args.DeleteHistory is not null) throw Invalid("properties takes no new name or delete options.");
+        if (args.NewName is not null || args.DeleteHistory is not null || args.DropConnections is not null) throw Invalid("properties takes no new name or delete options.");
         if (args.CloseConnections is not { } close || args.Changes is not { } changes) throw Invalid("closeConnections and changes are required.");
         if (args.Target.Kind != "database") throw Invalid("only a database has properties.");
-        if (args.Identity is { } identity && (identity.Id < 1 || identity.Created is null || !IdentityCreated().IsMatch(identity.Created))) throw Invalid("identity.");
+        if (args.Identity is { } identity && !IdentityValid(identity)) throw Invalid("identity.");
         if (changes.Owner is not null && !ExplorerRefs.Ident(changes.Owner)) throw Invalid("owner.");
         void Check(Dictionary<string, string>? values, IReadOnlyDictionary<string, OptionJson> options, string what)
         {
@@ -161,7 +167,7 @@ internal static partial class DatabaseAlter
     /// <summary>The statement as parts. Keyword text comes only from the catalogue; a token it does not list throws.</summary>
     public static List<AlterPart> Parts(ActionsCatalog catalog, AlterStatement statement)
     {
-        var option = statement.Template == AlterTemplate.Owner ? null : Option(catalog, statement.Key) ?? throw new InvalidOperationException("Unknown option " + statement.Key);
+        var option = statement.Template == AlterTemplate.Owner || statement.Filegroup ? null : Option(catalog, statement.Key) ?? throw new InvalidOperationException("Unknown option " + statement.Key);
         var sql = option?.Sql;
         string Token(Dictionary<string, string>? tokens) => tokens is not null && statement.Token is { } token && tokens.TryGetValue(token, out var text) ? text : throw new InvalidOperationException("Unknown token");
         var alter = AlterPart.Literal("ALTER DATABASE ");
@@ -185,6 +191,10 @@ internal static partial class DatabaseAlter
                     ? [AlterPart.Literal("ALTER DATABASE SCOPED CONFIGURATION " + (sql!.Secondary == true ? "FOR SECONDARY " : "") + "SET " + sql.Name + " = " + (sql.Tokens is null ? token : Token(sql.Tokens)) + ";")]
                     : throw new InvalidOperationException("Unknown token"),
             AlterTemplate.Owner => [AlterPart.Literal("ALTER AUTHORIZATION ON DATABASE::"), AlterPart.Database, AlterPart.Literal(" TO "), AlterPart.Login],
+            // READ_ONLY rather than SMO's READONLY, which SQL Server documents as deprecated.
+            AlterTemplate.FilegroupDefault => [alter, AlterPart.Database, AlterPart.Literal(" MODIFY FILEGROUP "), AlterPart.Filegroup, AlterPart.Literal(" DEFAULT")],
+            AlterTemplate.FilegroupReadOnly => [alter, AlterPart.Database, AlterPart.Literal(" MODIFY FILEGROUP "), AlterPart.Filegroup, AlterPart.Literal(" READ_ONLY")],
+            AlterTemplate.FilegroupAutogrowAll => [alter, AlterPart.Database, AlterPart.Literal(" MODIFY FILEGROUP "), AlterPart.Filegroup, AlterPart.Literal(" AUTOGROW_ALL_FILES")],
             _ => throw new InvalidOperationException("Unknown template " + statement.Template)
         };
     }
@@ -201,16 +211,16 @@ internal static partial class DatabaseAlter
         'D' => ScriptFormatter.Quote(statement.Database),
         'N' => statement.Number!.Value.ToString(CultureInfo.InvariantCulture),
         'C' => statement.Name!,
-        'O' => ScriptFormatter.Quote(statement.Name!),
+        'O' or 'G' => ScriptFormatter.Quote(statement.Name!),
         _ => throw new InvalidOperationException("Unknown part")
     }));
 
     /// <summary>SSMS's script: SMO's Database.Alter batches under USE [master], the scoped configurations under USE [db],
-    /// SetSnapshotIsolation's statement where it stands, and SetOwner's USE [db] and ALTER AUTHORIZATION; GO after each.</summary>
-    public static string ScriptText(ActionsCatalog catalog, IReadOnlyList<AlterStatement> plan)
+    /// SetSnapshotIsolation's statement where it stands, and SetOwner's USE [db] and ALTER AUTHORIZATION; GO after each.
+    /// <paramref name="context"/> is the database the script is in already (New Database's: master, where its CREATE runs).</summary>
+    public static string ScriptText(ActionsCatalog catalog, IReadOnlyList<AlterStatement> plan, string? context = null)
     {
         var text = new StringBuilder();
-        string? context = null;
         void Use(string database) { text.Append("USE ").Append(ScriptFormatter.Quote(database)).Append(NL).Append("GO").Append(NL); context = database; }
         foreach (var statement in plan)
         {
@@ -245,7 +255,7 @@ internal static partial class DatabaseAlter
             'D' => "QUOTENAME(@p1)",
             'N' => "CONVERT(nvarchar(20), @n1)",
             'C' => "@c",
-            'O' => "QUOTENAME(@p2)",
+            'O' or 'G' => "QUOTENAME(@p2)",
             _ => throw new InvalidOperationException("Unknown part")
         }))).Append(";\n").Append(ActionSql.Guard);
         text.Append(dryRun ? "SELECT @stmt AS stmt;" : "DECLARE @module nvarchar(300) = QUOTENAME(@db) + N'.sys.sp_executesql';\nEXEC @module @stmt;");
@@ -299,6 +309,7 @@ internal static partial class DatabaseAlter
         }
         foreach (var fragment in AutoCreateFragments) yield return new(AlterTemplate.AutoCreateStats, database, "autoCreateStatistics", fragment);
         yield return new(AlterTemplate.Owner, database, "owner", Name: name);
+        foreach (var template in new[] { AlterTemplate.FilegroupDefault, AlterTemplate.FilegroupReadOnly, AlterTemplate.FilegroupAutogrowAll }) yield return new(template, database, "filegroup", Name: name);
     }
 
     /// <summary>Every batch of the corpus, run and dry run, with its lint problems (DatabasePropertiesChecks).</summary>

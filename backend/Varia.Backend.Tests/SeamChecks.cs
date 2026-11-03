@@ -118,7 +118,7 @@ internal static class SeamChecks
         check(Refused(withSecret, script: false) == "INVALID_PARAMS" && Refused(withSecret, script: true) == "INVALID_PARAMS"
             && Refused(Delete(Table) with { Secrets = new(null, secret) }, script: false) == "INVALID_PARAMS" && Refused(Rename(Table, "x"), script: true) == "accepted",
             "secrets are refused on every action that takes none and on every script, without echoing them");
-        // An action that takes secrets (createLogin, D2a) gets their bounds before its own case: past them, the switch answers "action.".
+        // An action that takes secrets (createLogin, D2a) gets their bounds before its own case: past them, createLogin's own validation answers, here "target." (a login is not its target).
         string Bounded(LoginSecretsDto secrets)
         {
             try { service.Validate(new ActionArgs("createLogin", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new("login", Name: "x"), Secrets: secrets)); return "accepted"; }
@@ -128,7 +128,7 @@ internal static class SeamChecks
         check(Bounded(new(longest + "q")).EndsWith("secrets.password.", StringComparison.Ordinal) && Bounded(new("Pa\0ss")).EndsWith("secrets.password.", StringComparison.Ordinal)
             && Bounded(new("Pa\uD800ss")).EndsWith("secrets.password.", StringComparison.Ordinal) && Bounded(new("Pass\uDC00")).EndsWith("secrets.password.", StringComparison.Ordinal)
             && Bounded(new("Zq9x", longest + "q")).EndsWith("secrets.oldPassword.", StringComparison.Ordinal)
-            && Bounded(new(longest, longest)).EndsWith("action.", StringComparison.Ordinal) && Bounded(new("Pa😀ss")).EndsWith("action.", StringComparison.Ordinal),
+            && Bounded(new(longest, longest)).EndsWith("target.", StringComparison.Ordinal) && Bounded(new("Pa😀ss")).EndsWith("target.", StringComparison.Ordinal),
             "every action that takes secrets gets a password and old password of at most 128 UTF-16 units, without U+0000 or an unpaired surrogate, refused without echoing it");
         var printed = (Rename(Table, "x") with { Secrets = new("Pa'ss-" + "Z9q", "Ol'd-" + "Z9q") }).ToString();
         check(!printed.Contains("Z9q", StringComparison.Ordinal) && printed.Contains("Password = <redacted>, OldPassword = <redacted>", StringComparison.Ordinal)
