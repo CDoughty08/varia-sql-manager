@@ -254,8 +254,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     })
   })
   const restore = new RestoreService({
-    api, documents, files, connections, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
-    focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-restore="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus() })
+    api, documents, files, connections, focusEditor: () => focusLater(() => documents.focusActive()),
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-restore="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus())
   })
   const activity = new ActivityMonitorService({
     documents, connections, live, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values,
