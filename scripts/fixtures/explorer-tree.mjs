@@ -113,7 +113,10 @@ export async function expandExplorerPath(page, ...path) {
   // Room for a lost click, the 2 s that notice it and a second click, on slow Linux runners too (CI ran out at 5 s).
   const timeout = options.timeout ?? (process.platform === 'win32' ? 15000 : 10000)
   for (let length = 1; length <= path.length; length++) {
-    const row = await explorerRow(page, ...path.slice(0, length), options)
+    // An earlier step can leave the tree scrolled far from the server, so each row is found through revealExplorerRow; a row
+    // whose folder is still loading is not there yet, so the search repeats.
+    let row
+    await expect(async () => { row = await revealExplorerRow(page, ...path.slice(0, length)) }).toPass({ timeout, intervals: [250, 500, 1000] })
     if (await row.getAttribute('aria-expanded') !== 'false') {
       await expect(row).toHaveAttribute('aria-expanded', 'true', options)
       continue
