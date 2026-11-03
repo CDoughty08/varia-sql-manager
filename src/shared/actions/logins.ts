@@ -36,6 +36,36 @@ export function loginSubtypeOf(principalId: number, type: string, name: string):
   return byType
 }
 
+/**
+ * A login row's status in Object Explorer (D4a): `disabled` when the login is disabled, else `noAccess` when CONNECT SQL is
+ * denied to it. They were one status before; they stay apart because they are lifted apart (ENABLE leaves a DENY CONNECT
+ * SQL in place, D4 P18). A login with both is `disabled`, and its detail names both.
+ */
+export function loginStatusOf(disabled: boolean, connectDenied: boolean): 'disabled' | 'noAccess' | undefined {
+  return disabled ? 'disabled' : connectDenied ? 'noAccess' : undefined
+}
+/** The words of a login row's detail (its tooltip): its kind by sys.server_principals.type, then its state and password
+ *  policy, from catalog views only (sys.server_principals, sys.server_permissions and sys.sql_logins). */
+export const loginDetailWords = {
+  types: {
+    S: 'SQL Server authentication', U: 'Windows user', G: 'Windows group', C: 'Mapped to certificate', K: 'Mapped to asymmetric key',
+    E: 'Microsoft Entra user or application', X: 'Microsoft Entra group'
+  },
+  disabled: 'Disabled',
+  connectDenied: 'Permission to connect denied',
+  policyChecked: 'Password policy enforced',
+  expirationChecked: 'Password expiration enforced'
+} as const satisfies { readonly types: { readonly [T in LoginType]: string }; readonly disabled: string; readonly connectDenied: string; readonly policyChecked: string; readonly expirationChecked: string }
+/** What a login row's listing reads besides its name. */
+export interface LoginListingFacts { readonly disabled: boolean; readonly connectDenied: boolean; readonly policyChecked: boolean; readonly expirationChecked: boolean }
+/** A login row's detail: its kind, then Disabled and Permission to connect denied (both when both apply), then the password
+ *  policy flags, joined with " · " (C#: LoginRules.Detail, from actions-catalog.json). */
+export function loginDetail(type: string, facts: LoginListingFacts): string {
+  const words = loginDetailWords
+  return [(words.types as Readonly<Record<string, string>>)[type.trim()], facts.disabled && words.disabled, facts.connectDenied && words.connectDenied,
+    facts.policyChecked && words.policyChecked, facts.expirationChecked && words.expirationChecked].filter((part): part is string => !!part).join(' · ')
+}
+
 /** The verbs a login's rules decide (D4b-d, and Properties' Status page in D2c). */
 export const loginVerbs = ['disable', 'enable', 'unlock', 'rename', 'delete'] as const
 export type LoginVerb = typeof loginVerbs[number]
@@ -142,6 +172,7 @@ export function loginRefusal(facts: Pick<LoginFacts, 'subtype' | 'own' | 'sysadm
 /** The rules as actions-catalog.json carries them, so C# needs no rules of its own. */
 export function loginsCatalog() {
   return {
+    detail: loginDetailWords,
     limits: loginLimits,
     messages: loginMessages,
     ownRefuses: ownLoginRefuses,

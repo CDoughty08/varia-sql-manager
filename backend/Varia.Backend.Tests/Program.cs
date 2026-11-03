@@ -23,7 +23,7 @@ void Check(bool condition, string name)
     passed++;
 }
 // Focused SQL Server lanes: their scratch and permission checks are required, never an offline-only or skipped success.
-if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--server-files-live" or "--seams-live" or "--new-database-live" or "--action-progress-live" or "--attach-live" or "--restore-live" or "--logins-live" or "--database-state-live" or "--delete-live")])
+if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--server-files-live" or "--seams-live" or "--new-database-live" or "--action-progress-live" or "--attach-live" or "--restore-live" or "--logins-live" or "--login-listing-live" or "--database-state-live" or "--delete-live")])
 {
     var focusedServer = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SERVER");
     if (string.IsNullOrWhiteSpace(focusedServer)) throw new Exception(lane + " requires VARIA_TEST_SQL_SERVER.");
@@ -73,6 +73,11 @@ if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live"
         {
             await LoginLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json, required: true);
             Console.WriteLine("Passed " + passed + " focused New Login checks.");
+        }
+        else if (lane == "--login-listing-live")
+        {
+            await LoginListingLiveChecks.RunAsync(Check, focusedService, focusedInfo, json);
+            Console.WriteLine("Passed " + passed + " focused Logins listing checks.");
         }
         else if (lane == "--explorer-status-live")
         {
@@ -601,6 +606,7 @@ try
     await AttachLiveChecks.RunAsync(Check, service, info, Live, json);
     await RestoreLiveChecks.RunAsync(Check, service, info, json);
     await LoginLiveChecks.RunAsync(Check, service, info, Live, json);
+    await LoginListingLiveChecks.RunAsync(Check, service, info, json);
     await DatabasePropertiesLiveChecks.RunAsync(Check, service, info, json);
     await DesignerLiveChecks.RunAsync(Check, service, info, Live("master"), json);
     await NewDatabaseLiveChecks.RunAsync(Check, service, info, json);

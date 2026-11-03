@@ -216,7 +216,8 @@ export interface ResultsCopyParams { resultId: number; parts: readonly CopyPart[
  *  if the backend dies before it does. */
 export interface ResultsExportParams { resultId: number; path: string; format: ResultsFormat; headers: boolean; nullText: 'empty' | 'NULL'; temporaryId: string }
 /** One Object Explorer node. Labels are SSMS's text (≤ 300), sublabels the "(…)" part (≤ 200), detail tooltip-only facts
- *  (≤ 512); `created` is server local time, `yyyy-MM-ddTHH:mm:ss`; `database`, a database node's runtime state as listed. */
+ *  (≤ 512); `created` is server local time, `yyyy-MM-ddTHH:mm:ss`; `database`, a database node's runtime state as listed;
+ *  `connectDenied`, a login denied CONNECT SQL (its status says `disabled` when it is disabled too). */
 export interface ExplorerNode {
   readonly ref: ExplorerNodeRef
   readonly label: string
@@ -228,6 +229,7 @@ export interface ExplorerNode {
   readonly status?: NodeStatus
   readonly created?: string
   readonly database?: DatabaseRuntime
+  readonly connectDenied?: boolean
 }
 // AUTH_KERBEROS and AUTH_UNSUPPORTED: a pool connection off Windows could not sign in with Kerberos (an expired ticket: run kinit, then Retry).
 // AUTH_ENTRA: a pool connection's Microsoft Entra sign-in expired or was revoked (connect again to sign in).

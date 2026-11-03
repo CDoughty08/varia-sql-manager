@@ -306,7 +306,8 @@ are not envelope errors but `result.error` values with their own codes, so each 
 A database row also carries its runtime state as `sys.databases` lists it, `database: { state: int, userAccess: int,
 readOnly: bool, standby: bool }` (`state_desc` and `user_access_desc` as their numbers), so menus can narrow a database's
 actions by it; a newer live status sample wins (`currentDatabaseRuntime`), but one cut at its row cap only for the
-databases it has rows for. `connections.connect` answers `linux: bool`
+databases it has rows for. A login row carries `connectDenied: true` when CONNECT SQL is denied to it; its `status` stays
+`disabled` when it is disabled too, so the row can show both. `connections.connect` answers `linux: bool`
 when the server's profile was read (SQL Server on Linux or in a Linux container), for the `explorerServerLinux` context key;
 `engineEdition` gives `explorerServerEngine` (`box`, `managedInstance` for edition 8, `cloud` for Azure SQL Database).
 

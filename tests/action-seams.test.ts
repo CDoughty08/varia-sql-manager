@@ -124,7 +124,8 @@ describe('password hashes', () => {
         if (/sql_logins/i.test(line) && /(?<!\(\s*)\*/.test(line) && !comment && !lint) offending.push(`${name}:${index + 1} (*)`)
         if (!/password_?hash|LOGINPROPERTY/i.test(line)) return
         const list = line.includes('"LOGINPROPERTY(", "password_hash", "PasswordHash"')
-        const docs = name === 'src/shared/actions/docs.ts' && !/password_?hash/i.test(line)
+        // Generated docs may name LOGINPROPERTY to say why it is not used; never a password hash.
+        const docs = (name === 'src/shared/actions/docs.ts' || name === 'src/shared/explorer/docs.ts') && !/password_?hash/i.test(line)
         if (!comment && !list && !docs && !lint) offending.push(`${name}:${index + 1}`)
       })
     }

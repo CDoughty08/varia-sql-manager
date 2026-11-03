@@ -154,6 +154,17 @@ internal static class ExplorerQueries
         new(kind, context.Database, Name: name, Parent: new ParentRefDto(context.Owner.Kind, context.Owner.Schema!, context.Owner.Name!));
 
     private static string? Owner(string? name) => name is null ? null : "Owner " + name;
+
+    /// <summary>A login as src/shared/actions/logins.ts describes it: the subtype the menus grey by (and the preflight re-derives),
+    /// disabled or denied permission to connect (noAccess) as two statuses, a denial also as ConnectDenied (so a login that is both
+    /// shows both), and its kind, state and password policy in words.</summary>
+    private static ExplorerNode Login(Row row)
+    {
+        var rules = Actions.ActionsCatalog.Current.Logins;
+        var (disabled, denied) = (row.B(0), row.B(1));
+        var detail = rules.Detail(row.Code(4), disabled, denied, row.B(5), row.B(6));
+        return ServerObject(row, "login", rules.SubtypeOf(row.I(3), row.Code(4), row.Key(0)), detail.Length == 0 ? null : detail, rules.StatusOf(disabled, denied), row.D(2)) with { ConnectDenied = denied ? true : null };
+    }
     private static string? Disabled(bool disabled) => disabled ? "disabled" : null;
 
     // --- Server scope -----------------------------------------------------------------------------------------------
@@ -336,11 +347,11 @@ internal static class ExplorerQueries
         Databases("userDatabases", "d.database_id > 4 AND d.is_distributor = 0 AND d.source_database_id IS NULL", null),
         Databases("systemDatabases", "(d.database_id <= 4 OR d.is_distributor = 1)", "system"),
         Databases("databaseSnapshots", "d.source_database_id IS NOT NULL", "snapshot"),
-        ServerList("logins", "login", "sys.server_principals AS p", "p.name",
+        // Catalog views only: LOGINPROPERTY would wait for another session's ALTER LOGIN whatever the isolation level (D4 P8).
+        ServerList("logins", "login", "sys.server_principals AS p LEFT JOIN sys.sql_logins AS l ON l.principal_id = p.principal_id", "p.name",
             "p.is_disabled, CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.server_permissions AS sp WHERE sp.grantee_principal_id = p.principal_id AND sp.type = 'COSQ' AND sp.state = 'D') THEN 1 ELSE 0 END), p.create_date, "
-                + "p.principal_id, p.type",
-            // The subtype the login rules (src/shared/actions/logins.ts) give it, which the menus grey by and the preflight re-derives.
-            row => ServerObject(row, "login", Actions.ActionsCatalog.Current.Logins.SubtypeOf(row.I(3), row.Code(4), row.Key(0)), status: Disabled(row.B(0) || row.B(1)), created: row.D(2)), "p.type IN ('S', 'U', 'G', 'C', 'K', 'E', 'X')", new(Name: "p.name", Created: "p.create_date")),
+                + "p.principal_id, p.type, l.is_policy_checked, l.is_expiration_checked",
+            row => Login(row), "p.type IN ('S', 'U', 'G', 'C', 'K', 'E', 'X')", new(Name: "p.name", Created: "p.create_date")),
         ServerList("serverRoles", "serverRole", "sys.server_principals AS p", "p.name", "p.is_fixed_role, p.create_date",
             row => ServerObject(row, "serverRole", detail: row.B(0) ? "Fixed server role" : null, created: row.D(1)), "p.type = 'R'"),
         ServerList("credentials", "credential", "sys.credentials AS c", "c.name", "c.create_date", row => ServerObject(row, "credential", created: row.D(0))),
