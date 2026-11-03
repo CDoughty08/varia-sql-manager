@@ -125,6 +125,10 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// error partway through its rows on demand (those are resource errors such as 701 or 1105), and that path must still
     /// end the set as incomplete and go on with the batch.</summary>
     internal Func<Exception?>? RowFault { get; set; }
+    /// <summary>Called when a batch's reader has reported the batch's end, just before the script asks whether its token
+    /// fired meanwhile. Only the live checks set it, to cancel there as SqlClient's rare silent cancel does (see the batch
+    /// loop), which no server does on demand.</summary>
+    internal Action? ReaderEnded { get; set; }
     /// <summary>Called with each statement a commit or a state read is about to send in a tab's session; an exception it
     /// returns is thrown there. Only the live checks set it, to raise the fatal transport error managed SNI can report before
     /// Connection.State changes, which no server raises on demand.</summary>
@@ -974,6 +978,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                     using var stop = token.Register(Attention, command);
                     command.StatementCompleted += (_, e) => { if (e.RecordCount >= 0) messages.Add(e.RecordCount == 1 ? "(1 row affected)" : "(" + e.RecordCount + " rows affected)"); };
                     SqlDataReader? reader = null;
+                    // The token fired before the reader reported the batch's end.
+                    var cutShort = false;
                     try
                     {
                         // Sequential access streams each value once, in column order, so a huge value is never materialised
@@ -1091,6 +1097,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                                 }
                             }
                         }
+                        ReaderEnded?.Invoke();
+                        cutShort = token.IsCancellationRequested;
                         if (reader.RecordsAffected >= 0) recordsAffected = Math.Max(0, recordsAffected) + reader.RecordsAffected;
                     }
                     catch (Exception error)
@@ -1115,6 +1123,12 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                     {
                         if (reader is not null) await reader.DisposeAsync();
                     }
+                    // Now and then (about once in 600 of the live check's timed WAITFORs under load) SqlClient ends a cancelled
+                    // batch's reader as if the batch had finished and raises no "Operation cancelled", though SQL Server
+                    // stopped the batch where the attention found it (after 1 s of a 5 s WAITFOR). A batch whose token fired
+                    // before its end was stopped, not finished: the script times out or is cancelled, as when SqlClient
+                    // does raise it, and the batch does not count as completed.
+                    if (cutShort) throw new OperationCanceledException(token);
                     database = connection.Database;
                     var failed = Raised() != raisedBefore;
                     // SSMS runs the remaining batches after one that raised an error; stopOnError (SQLCMD's :on error exit) does not.

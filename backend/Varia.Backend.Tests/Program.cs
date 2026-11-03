@@ -504,6 +504,20 @@ try
     // RAISERROR WITH NOWAIT flushes the buffered error to the client before the batch waits.
     result = await Run("SELECT 1/0; RAISERROR ('flush', 0, 1) WITH NOWAIT;\nWAITFOR DELAY '00:00:05';", timeout: 1);
     Check(result.Status == "timedOut" && result.Error?.Message.Contains("Msg 8134") == true, "errors raised before a timeout are still reported");
+    // Now and then SqlClient ends a cancelled batch's reader as if the batch had finished, raising nothing (1 of 24 tabs above
+    // reported completedWithErrors after 1 s of its WAITFOR). Cancelling just as the reader ends stands in for it.
+    {
+        var tab = Guid.NewGuid().ToString();
+        var stoppedId = Guid.NewGuid().ToString();
+        service.ReaderEnded = () => Call<object>("query.cancel", new CancelArgs(stoppedId)).GetAwaiter().GetResult();
+        try { result = await Run("SELECT 1/0; RAISERROR ('flush', 0, 1) WITH NOWAIT;", tab, query: stoppedId); }
+        finally { service.ReaderEnded = null; }
+        var probe = await Run("SELECT 'in step';", tab);
+        await Call<object>("query.session.close", new SessionArgs(tab));
+        Check(result.Status == "cancelled" && result.Error?.Code == "CANCELLED" && result.CompletedBatches == 0 && result.Error.Message.Contains("Msg 8134")
+            && probe.Status == "completed" && RowsOf(probe.ResultSets[0]).SingleOrDefault()?[0] == "in step",
+            "a batch whose token fired before its reader ended is reported stopped, not finished, and its session stays in step: " + result.Status + " " + result.CompletedBatches);
+    }
     result = await Run("SELECT 1;", database: "VariaDatabaseThatDoesNotExist");
     Check(result.Status == "failed" && result.Error?.Message.Contains("Msg 911") == true && result.Error.BatchNumber == 0, "a missing target database fails before any batch runs");
     result = await Run("SELECT DB_NAME();");

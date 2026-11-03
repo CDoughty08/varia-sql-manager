@@ -1360,6 +1360,27 @@ try {
   await textbox().focus()
   // The tab switch above built the grid afresh, so this tag marks the scroller to find once the pane shows again.
   await scroller().evaluate(element => { element.dataset.moved = 'early' })
+  // The dock lays the shown pane out on an animation frame, which a hidden window (the smoke tests') under xvfb can hold
+  // back for a second or more (a Linux CI run measured the scroll bar below the window and clicked nothing). The frames are
+  // held back here as there, so these steps wait for that layout wherever they run.
+  await page.evaluate(() => {
+    const request = window.requestAnimationFrame, cancel = window.cancelAnimationFrame, held = new Map()
+    // Ids of their own, so a frame asked for before this can still be cancelled.
+    let next = 1e9
+    window.requestAnimationFrame = callback => {
+      const id = next++
+      held.set(id, setTimeout(() => held.set(id, -request(time => { held.delete(id); callback(time) })), 1000))
+      return id
+    }
+    window.cancelAnimationFrame = id => {
+      const handle = held.get(id)
+      if (handle === undefined) cancel(id)
+      else if (handle < 0) cancel(-handle)
+      else clearTimeout(handle)
+      held.delete(id)
+    }
+    window.__variaHeldFrames = () => { window.requestAnimationFrame = request; window.cancelAnimationFrame = cancel }
+  })
   const early = await page.evaluate(({ parts }) => new Promise(resolve => {
     const press = () => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'r', code: 'KeyR', ctrlKey: true, bubbles: true, cancelable: true }))
     // The pane shows again in a later task; a mutation observer runs right after the move, before the grid's next frame. The
@@ -1397,11 +1418,21 @@ try {
   }), { parts: gridPart })
   expect(early).toEqual({ dropped: 0, inGrid: true, moved: 'early' })
   await expect.poll(scrollTop).toBe(keptTop)
+  // The grid paints the press on its next frame: until then the kept cell is still the active one, and a row near the top
+  // would pass for the pressed one.
+  await expect.poll(async () => { const cell = await active(); return cell.row !== kept.row || cell.column !== kept.column }).toBe(true)
   const [earlyFirst, earlyLast] = await visibleRows()
   const earlyRow = (await active()).row
   expect(earlyRow >= earlyFirst - 1 && earlyRow <= earlyLast && earlyFirst > 1, `pressed row ${earlyRow}, rows ${earlyFirst} to ${earlyLast} shown`).toBe(true)
-  // A press on the grid's scroll bar leaves the focus on the grid, so the arrow keys move a cell screen readers hear.
-  const bar = await scroller().evaluate(element => { const box = element.getBoundingClientRect(); return { x: box.left + element.clientWidth + (element.offsetWidth - element.clientWidth) / 2, y: box.top + element.clientHeight * 0.75, width: element.offsetWidth - element.clientWidth } })
+  // A press on the grid's scroll bar leaves the focus on the grid, so the arrow keys move a cell screen readers hear. The
+  // bar is pressed where it shows once the dock has laid the pane out (a classic bar; an overlay one takes no width).
+  const scrollBar = () => scroller().evaluate(element => {
+    const box = element.getBoundingClientRect(), width = element.offsetWidth - element.clientWidth
+    const x = box.left + element.clientWidth + width / 2, y = box.top + element.clientHeight * 0.75
+    return { x, y, width, shown: width === 0 || document.elementFromPoint(x, y) === element }
+  })
+  await expect.poll(async () => (await scrollBar()).shown).toBe(true)
+  const bar = await scrollBar()
   if (bar.width > 0) {
     await textbox().focus()
     await page.mouse.click(bar.x, bar.y)
@@ -1410,6 +1441,7 @@ try {
     await expect.poll(async () => (await active()).resolved).toBe(true)
     await expect(grid()).toBeFocused()
   }
+  await page.evaluate(() => window.__variaHeldFrames())
   console.log('Results checks: F6 goes to the results and back; Ctrl+R and tab switches keep scroll, selection and column widths.')
 
   // 11 (continued). A backend crash makes the shown results unavailable, without a page error.
