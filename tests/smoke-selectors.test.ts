@@ -187,6 +187,14 @@ describe('smoke selectors', () => {
     const bare = [...source.matchAll(/hasText: \/\^\d+\$\/ \}\) \}\)\.locator\(gridPart\.cell\)\.nth\(\d+\)\.click\(\)/g)].map(match => `${file}:${source.slice(0, match.index).split('\n').length}`)
     expect(bare).toEqual([])
   })
+  it('expands an Object Explorer path through revealExplorerRow, wherever the tree is scrolled', () => {
+    // After Restore Database's section the tree sat scrolled down, server-a outside the rendered rows, and expandExplorerPath's
+    // explorerRow could not match server-a › Security (a Windows CI run).
+    const source = readFileSync('scripts/fixtures/explorer-tree.mjs', 'utf8')
+    const body = source.slice(source.indexOf('export async function expandExplorerPath'), source.indexOf('\n}\n', source.indexOf('export async function expandExplorerPath')))
+    expect(body).toMatch(/revealExplorerRow\(page, \.\.\.path\.slice\(0, length\)\)/)
+    expect(body).not.toMatch(/\bexplorerRow\(page/)
+  })
   it('waits for a database the object actions select only through expectSelectedExplorerRow', () => {
     // The tree scrolls a database it selects after a reload into view, which can leave server-a outside the rendered rows,
     // where explorerRow cannot match the path (a Windows CI run lost Attach's SalesCopy this way).
