@@ -4,7 +4,7 @@ namespace Varia.Backend.Actions;
 internal sealed record LoginRuleJson(string Subtype, string Disable, string Enable, string Unlock, string Rename, string Delete, Dictionary<string, string> Greyed);
 /// <summary>The logins block of actions-catalog.json (src/shared/actions/logins.ts loginsCatalog()).</summary>
 internal sealed record LoginRulesJson(Dictionary<string, long> Limits, Dictionary<string, string> Messages, List<string> OwnRefuses, List<LoginRuleJson> Rules, int SaPrincipalId,
-    Dictionary<string, string> TypeSubtypes);
+    string ScriptHeader, Dictionary<string, string> TypeSubtypes);
 
 /// <summary>Login subtypes and the protected-principal rules (D4 §4) as logins.ts declares them: Object Explorer's login
 /// subtype, and the refusal the login preflight answers for a verb. C# holds no rules of its own.</summary>
@@ -64,6 +64,9 @@ internal sealed class LoginRules
     }
 
     public string Message(string id) => json.Messages.TryGetValue(id, out var text) ? text : throw new InvalidOperationException("Unknown login message " + id);
+
+    /// <summary>The comment above a script whose password is the <password> placeholder (New Login's Script Action).</summary>
+    public string ScriptHeader => json.ScriptHeader;
 
     public long Limit(string key) => json.Limits.TryGetValue(key, out var value) ? value : throw new InvalidOperationException("Unknown login limit " + key);
 }

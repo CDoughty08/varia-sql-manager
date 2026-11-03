@@ -25,8 +25,8 @@ export function installScriptingStub({ ipcMain }, { statics }) {
   const lists = {
     databases: () => [object({ kind: 'database', name: 'AppData' }, 'AppData', 'database')],
     tables: owner => ['Orders', 'Slow', 'Warned'].map(name => object({ kind: 'table', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'table')),
-    views: owner => [object({ kind: 'view', database: owner.name, schema: 'dbo', name: 'OrderSummary' }, 'dbo.OrderSummary', 'eye')],
-    storedProcedures: owner => ['ShipOrder', 'Secret'].map(name => object({ kind: 'procedure', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'symbol-method', { subtype: 'sql' })),
+    views: owner => [object({ kind: 'view', database: owner.name, schema: 'dbo', name: 'OrderSummary' }, 'dbo.OrderSummary', 'view')],
+    storedProcedures: owner => ['ShipOrder', 'Secret'].map(name => object({ kind: 'procedure', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'procedure', { subtype: 'sql' })),
     logins: () => [object({ kind: 'login', name: 'sa' }, 'sa', 'login', { hasChildren: false })]
   }
   function children({ node }) {

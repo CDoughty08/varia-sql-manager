@@ -23,7 +23,7 @@ void Check(bool condition, string name)
     passed++;
 }
 // Focused SQL Server lanes: their scratch and permission checks are required, never an offline-only or skipped success.
-if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--server-files-live" or "--seams-live" or "--new-database-live" or "--action-progress-live" or "--attach-live" or "--restore-live")])
+if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--server-files-live" or "--seams-live" or "--new-database-live" or "--action-progress-live" or "--attach-live" or "--restore-live" or "--logins-live")])
 {
     var focusedServer = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SERVER");
     if (string.IsNullOrWhiteSpace(focusedServer)) throw new Exception(lane + " requires VARIA_TEST_SQL_SERVER.");
@@ -47,6 +47,11 @@ if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live"
         {
             await ActionProgressLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
             Console.WriteLine("Passed " + passed + " focused action progress checks.");
+        }
+        else if (lane == "--logins-live")
+        {
+            await LoginLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json, required: true);
+            Console.WriteLine("Passed " + passed + " focused New Login checks.");
         }
         else if (lane == "--explorer-status-live")
         {
@@ -191,6 +196,7 @@ await SeamChecks.RunAsync(Check);
 await ActionProgressChecks.RunAsync(Check);
 await AttachChecks.RunAsync(Check);
 await RestoreChecks.RunAsync(Check);
+await LoginChecks.RunAsync(Check);
 DatabasePropertiesChecks.Run(Check);
 DesignerChecks.Run(Check);
 NewDatabaseChecks.Run(Check);
@@ -233,6 +239,12 @@ Check(new[] { "", "_ro", "_off", "_su", "_rs", "_rv", "_rvs", "_snap", "_rt", "_
     && !new[] { "VariaScratch_x_job", "VariaScratch_cleanup_job", "VariaScratch_nightly_job", "VariaScratch_20261018120000_0123abcd", "VariaScratch_20261018120000_0123ABCD_job",
         "VariaScratch_20261018120000_0123abcd_job2", "VariaScratch_20261018120000_0123abcd_x_job", "xVariaScratch_20261018120000_0123abcd_job" }.Any(ScratchDatabase.IsScratchJob),
     "the sweep finds every scratch database a crashed run can leave, the object actions' _act and _actr, Database Properties' _dbp, the table designer's _tbd and _tbd.], the live tables' _live, the SSIS checks' _ssis, _ssisref and _ssiscc, the server file picker's _files, the wave 5 seam checks' _seam and _seamt, New Database's _nd, the action progress checks' _ap, Attach Databases' _at, _at'] and _at2, Restore Database's _rst and _rstr, and Object Explorer status's _rs, _rv and _rvs included, and nothing else (never SSISDB); only an Agent job named as a run names its own (VariaScratch_<14 digits>_<8 hex>_job) can be swept");
+Check(ScratchDatabase.Sweepable("VariaScratch_20261018120000_0123abcd_lgn") && new[] { "VariaScratch_20261018120000_0123abcd", "VariaScratch_20261018120000_0123abcd_lnew", "VariaScratch_20261018120000_0123abcd_l1" }.All(ScratchDatabase.SweepableLogin)
+    && !new[] { "VariaScratch_20261018120000_0123abcd_l", "VariaScratch_20261018120000_0123abcd_lNEW", "VariaScratch_20261018120000_0123abcd_l123456789", "VariaScratch_20261018120000_0123abcd_x", "sa", "VariaScratch_x_lnew" }.Any(ScratchDatabase.SweepableLogin)
+    && ScratchDatabase.StaleXeSession("VariaScratch_20261018120000_0123abcd_xe", new DateTime(2026, 10, 18, 18, 0, 1, DateTimeKind.Utc))
+    && !ScratchDatabase.StaleXeSession("VariaScratch_20261018120000_0123abcd_xe", new DateTime(2026, 10, 18, 11, 0, 0, DateTimeKind.Utc))
+    && !new[] { "VariaScratch_20261018120000_0123abcd", "VariaScratch_20261318120000_0123abcd_xe", "system_health", "VariaScratch_20261018120000_0123abcd_xe2" }.Any(name => ScratchDatabase.StaleXeSession(name, DateTime.MaxValue)),
+    "the sweep finds New Login's _lgn database, the logins it names with _l and a tag of up to 8 lowercase letters or digits, and its Extended Events session once its name's UTC time is old enough, and nothing else (never system_health)");
 {
     // SQL Server on Linux cannot back up to /dev/null (error 3634 in DiskChangeFileSize), so its RESTORING database backs up to one file; Windows keeps NUL.
     const string rs = "VariaScratch_20261018120000_0123abcd_rs";
@@ -566,6 +578,7 @@ try
     await ActionProgressLiveChecks.RunAsync(Check, service, info, Live, json);
     await AttachLiveChecks.RunAsync(Check, service, info, Live, json);
     await RestoreLiveChecks.RunAsync(Check, service, info, json);
+    await LoginLiveChecks.RunAsync(Check, service, info, Live, json);
     await DatabasePropertiesLiveChecks.RunAsync(Check, service, info, json);
     await DesignerLiveChecks.RunAsync(Check, service, info, Live("master"), json);
     await NewDatabaseLiveChecks.RunAsync(Check, service, info, json);

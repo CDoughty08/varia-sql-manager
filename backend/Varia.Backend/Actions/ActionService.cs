@@ -204,6 +204,8 @@ internal sealed partial class ActionService : IDisposable
         }
         if (args.Dialog is not null && designer.Describes.Contains(args.Dialog)) return DatabaseTarget(args.Target);
         if (args.Dialog is null || !catalog.Dialogs.ContainsKey(args.Dialog)) throw Invalid("dialog.");
+        // New Login opens on the server: its action makes a login rather than acting on a row.
+        if (args.Dialog == "newLogin") return ServerTarget(args.Target);
         // A server action's document (New Database) describes the server it makes something on.
         if (catalog.IsServerAction(catalog.ActionOf(args.Dialog)))
         {
@@ -215,7 +217,7 @@ internal sealed partial class ActionService : IDisposable
         return Target(args.Target, catalog.ActionOf(args.Dialog));
     }
 
-    /// <summary>The actions whose actions.execute may carry passwords (New Login and Login Properties, later PRs); none is in the switch yet.</summary>
+    /// <summary>The actions whose actions.execute may carry passwords: New Login, and Login Properties (D2c).</summary>
     private static readonly HashSet<string> SecretActions = new(["createLogin", "loginProperties"], StringComparer.Ordinal);
 
     /// <summary>A password of at most loginLimits.password UTF-16 units, without U+0000 or an unpaired surrogate, here for every
@@ -234,6 +236,7 @@ internal sealed partial class ActionService : IDisposable
         Ids(args.ConnectionId, args.RequestId);
         if (args.Secrets is not null && (script || !SecretActions.Contains(args.Action))) throw Invalid("this request takes no secrets.");
         if (args.Secrets is { } secrets) { Secret(secrets.Password, "password"); Secret(secrets.OldPassword, "oldPassword"); }
+        if (args.Action != "createLogin" && LoginMembers(args)) throw Invalid(args.Action + " takes no login, server roles or status.");
         if (args.Restore is not null && args.Action != "restore") throw Invalid("only a restore takes restore options.");
         switch (args.Action)
         {
@@ -269,6 +272,8 @@ internal sealed partial class ActionService : IDisposable
                 var database = DatabaseTarget(args.Target);
                 TableDesignValidator.Validate(designer, args.Design?.As<TableDesignDto>());
                 return database;
+            case "createLogin":
+                return ValidateCreateLogin(args, script);
             case "createDatabase":
                 if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Identity is not null || args.Databases is not null)
                     throw Invalid("createDatabase takes only a design.");
@@ -322,6 +327,7 @@ internal sealed partial class ActionService : IDisposable
             {
                 "tableDesigner" => DescribeDesignerJobAsync(connection, target, band, job),
                 "databaseProperties" => DescribePropertiesJobAsync(connection, target, band, job),
+                "newLogin" => DescribeNewLoginJobAsync(connection, profile, band, job),
                 "newDatabase" => DescribeNewDatabaseJobAsync(connection, profile, band, job),
                 AttachDialog => DescribeAttachJobAsync(connection, args.Attach, profile.Linux, job),
                 _ => DescribeJobAsync(connection, target, band, job)
@@ -332,6 +338,7 @@ internal sealed partial class ActionService : IDisposable
     public Task<ActionScriptResult> ScriptAsync(ActionArgs args, CancellationToken token)
     {
         var target = Validate(args, script: true);
+        if (args.Action == "createLogin") return Task.FromResult(ScriptNewLogin(args));
         // Restore's Script reads nothing: it is written from the request and the catalogue, on no connection and under no gate.
         if (args.Action == "restore")
         {
@@ -367,6 +374,7 @@ internal sealed partial class ActionService : IDisposable
                 "properties" => ExecutePropertiesJobAsync(connection, args, target, band, progress, job),
                 "createDatabase" => ExecuteNewDatabaseJobAsync(connection, args, profile, band, progress, job),
                 "attach" => ExecuteAttachJobAsync(connection, args, job),
+                "createLogin" => ExecuteNewLoginJobAsync(connection, args, job),
                 _ => ExecuteJobAsync(connection, args, target, band, progress, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionExecuteResult([], [], watch.ElapsedMilliseconds, error));
@@ -716,6 +724,7 @@ internal sealed partial class ActionService : IDisposable
         ActionTemplate.DenyConnect => "Deny permission to connect",
         ActionTemplate.GrantConnect => "Grant permission to connect",
         ActionTemplate.DropUser => "Drop the database user",
+        ActionTemplate.AddServerRoleMember => "Add to a server role",
         _ => "Drop the object"
     };
 

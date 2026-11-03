@@ -8,11 +8,13 @@ namespace Varia.Backend.Actions;
 /// <summary>The statements an action runs: DROP TABLE, VIEW, PROCEDURE or FUNCTION, sp_rename, ALTER DATABASE … MODIFY NAME,
 /// SET SINGLE_USER, DROP DATABASE and msdb's backup history cleanup; and the shared templates later actions plan (critic
 /// A21): SET MULTI_USER and RESTRICTED_USER (which also restore a database's access after a failed or stopped step),
-/// sp_detach_db, ALTER LOGIN … DISABLE and ENABLE, DENY and GRANT CONNECT SQL, and DROP USER.</summary>
+/// sp_detach_db, ALTER LOGIN … DISABLE and ENABLE, DENY and GRANT CONNECT SQL, and DROP USER; and New Login's ALTER SERVER ROLE …
+/// ADD MEMBER (its CREATE LOGIN is LoginSql's builder, which takes the password).</summary>
 internal enum ActionTemplate
 {
     DropTable, DropView, DropProcedure, DropFunction, RenameObject, RenameDatabase, SetSingleUser, DropDatabase, DeleteBackupHistory,
-    SetMultiUser, SetRestrictedUser, DetachDatabase, DisableLogin, EnableLogin, DenyConnect, GrantConnect, DropUser
+    SetMultiUser, SetRestrictedUser, DetachDatabase, DisableLogin, EnableLogin, DenyConnect, GrantConnect, DropUser,
+    AddServerRoleMember
 }
 
 /// <summary>Where a step runs in the plan (critic A4): main steps in order; a compensation undoes the main step <c>Undoes</c>
@@ -54,7 +56,8 @@ internal static partial class ActionSql
 
     public static int ParameterCount(ActionTemplate template) => template switch
     {
-        ActionTemplate.DropTable or ActionTemplate.DropView or ActionTemplate.DropProcedure or ActionTemplate.DropFunction or ActionTemplate.RenameDatabase or ActionTemplate.DetachDatabase => 2,
+        ActionTemplate.DropTable or ActionTemplate.DropView or ActionTemplate.DropProcedure or ActionTemplate.DropFunction or ActionTemplate.RenameDatabase or ActionTemplate.DetachDatabase
+            or ActionTemplate.AddServerRoleMember => 2,
         ActionTemplate.RenameObject => 3,
         _ => 1
     };
@@ -113,6 +116,8 @@ internal static partial class ActionSql
             ActionTemplate.DenyConnect => "DENY CONNECT SQL TO " + Quote(names[0]),
             ActionTemplate.GrantConnect => "GRANT CONNECT SQL TO " + Quote(names[0]),
             ActionTemplate.DropUser => "DROP USER " + Quote(names[0]),
+            // The role, then the member, as SMO writes it (captured by D2).
+            ActionTemplate.AddServerRoleMember => "ALTER SERVER ROLE " + Quote(names[0]) + " ADD MEMBER " + Quote(names[1]),
             _ => throw new InvalidOperationException("Unknown template " + plan.Template)
         };
     }
@@ -146,6 +151,7 @@ internal static partial class ActionSql
             ActionTemplate.DenyConnect => Run("DECLARE @stmt nvarchar(max) = N'DENY CONNECT SQL TO ' + QUOTENAME(@p1);\n"),
             ActionTemplate.GrantConnect => Run("DECLARE @stmt nvarchar(max) = N'GRANT CONNECT SQL TO ' + QUOTENAME(@p1);\n"),
             ActionTemplate.DropUser => Run("DECLARE @stmt nvarchar(max) = N'DROP USER ' + QUOTENAME(@p1);\n"),
+            ActionTemplate.AddServerRoleMember => Run("DECLARE @stmt nvarchar(max) = N'ALTER SERVER ROLE ' + QUOTENAME(@p1) + N' ADD MEMBER ' + QUOTENAME(@p2);\n"),
             _ => throw new InvalidOperationException("Unknown template " + template)
         };
     }
@@ -259,6 +265,8 @@ internal static partial class ActionSql
         "N' MODIFY NAME = '", "N' SET  SINGLE_USER WITH ROLLBACK IMMEDIATE'",
         // The shared templates (critic A21).
         "N' SET  MULTI_USER'", "N' SET  RESTRICTED_USER'", "N'ALTER LOGIN '", "N' DISABLE'", "N' ENABLE'", "N'DENY CONNECT SQL TO '", "N'GRANT CONNECT SQL TO '", "N'DROP USER '",
+        // New Login's server roles (Actions/LoginSql), and its describe's and preflight's server facts.
+        "N'ALTER SERVER ROLE '", "N' ADD MEMBER '", "'IsIntegratedSecurityOnly'",
         // The login preflight (Login).
         "N'GRANT OR DENY'", "N'ALTER ANY LOGIN'", "N'CONTROL SERVER'", "'COSQ'",
         // Database Properties' describe and preflight (DatabaseProperties.cs, ActionService.DatabasePropertiesPreflight).
@@ -430,6 +438,10 @@ internal static partial class ActionSql
         // New Database: its facts for every band, and its builder (form 5), run and dry run.
         foreach (var item in CreateDatabaseSql.LintAll()) yield return item;
         foreach (var item in AttachSql.LintAll()) yield return item;
+        // New Login: its describe and preflight in master, and every CREATE LOGIN its builder can write, run and dry run.
+        yield return ("new login describe", LintCatalog(LoginSql.Describe, ExplorerCatalog.MaxBand, database: false));
+        yield return ("new login preflight", LintCatalog(LoginSql.Preflight, ExplorerCatalog.MaxBand, database: false));
+        foreach (var item in LoginSql.Lint()) yield return item;
     }
 }
 

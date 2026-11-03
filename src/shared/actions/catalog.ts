@@ -21,13 +21,34 @@ export const objectActions = [
   'attach'
 ] as const
 export type ObjectAction = typeof objectActions[number]
-/** `query` opens and runs a query, `inline` edits the tree row, `dialog` opens an object dialog. */
-export type ActionClass = 'query' | 'inline' | 'dialog'
+/** `query` opens and runs a query, `inline` edits the tree row, `dialog` opens an object dialog, `create` makes a new
+ *  object from a dialog opened on a folder (New Login). */
+export type ActionClass = 'query' | 'inline' | 'dialog' | 'create'
+/**
+ * Actions that make an object rather than act on one: their dialog opens on a folder (or on a sibling), their target is
+ * the object's owner (the server for a login), and no tree row offers them, so they have no ActionRow or context key. Each
+ * has its own command in src/shared/commands/catalog.ts. One entry per line, so later ones (New Database) append cleanly.
+ */
+export const createActions = [
+  'createLogin'
+] as const
+export type CreateAction = typeof createActions[number]
+/** Every action a dialog's OK can run. */
+export type DialogAction = ObjectAction | CreateAction
+export interface CreateActionSpec {
+  readonly title: string
+  readonly dialog: DialogId
+  /** The servers it runs on (critic A1): the backend refuses it elsewhere before opening a connection. */
+  readonly engines: readonly ServerEngine[]
+  /** As ObjectActionSpec.cleanupMs. */
+  readonly cleanupMs?: number
+}
 export const dialogIds = [
   'deleteObject',
   'databaseProperties',
   'newDatabase',
-  'attachDatabase'
+  'attachDatabase',
+  'newLogin'
 ] as const
 export type DialogId = typeof dialogIds[number]
 /** The menus an action can be placed in: Object Explorer's context menu and its Tasks submenus (src/shared/commands/menus.ts). */
@@ -89,8 +110,9 @@ export const serverActions = [
   'createDatabase'
 ] as const
 export type ServerAction = typeof serverActions[number]
-/** Every action actions.execute runs from this catalogue (the table designer's createTable is the designer catalogue's). */
-export type CatalogAction = ObjectAction | ServerAction
+/** Every action actions.execute runs from this catalogue (the table designer's createTable is the designer catalogue's): the
+ *  object actions, the server actions and the create actions (New Login). */
+export type CatalogAction = ObjectAction | ServerAction | CreateAction
 export interface ServerActionSpec {
   /** The palette's and the menu's title. */
   readonly title: string
@@ -131,7 +153,8 @@ type NodePlaceCommands = { readonly [A in ServerAction]: typeof serverActionSpec
 export type ServerActionCommandId = typeof serverActionSpecData[ServerAction]['command'] | NodePlaceCommands
 export const isServerAction = (action: string): action is ServerAction => (serverActions as readonly string[]).includes(action)
 /** An action's servers, from whichever list declares it. */
-export const catalogActionEngines = (action: CatalogAction): readonly ServerEngine[] => isServerAction(action) ? serverActionSpecs[action].engines : objectActionSpecs[action].engines
+export const catalogActionEngines = (action: CatalogAction): readonly ServerEngine[] =>
+  isServerAction(action) ? serverActionSpecs[action].engines : isCreateAction(action) ? createActionSpecs[action].engines : objectActionSpecs[action].engines
 
 /** '' = not offered (hidden); 'disabled' = shown greyed, as SSMS shows Rename and Delete on system objects. */
 export type ActionState = '' | 'disabled' | 'enabled'
@@ -448,7 +471,9 @@ export const pageIds = [
   'general',
   'files',
   'filegroups',
-  'options'
+  'options',
+  'serverRoles',
+  'status'
 ] as const
 export type PageId = typeof pageIds[number]
 export interface DialogPageSpec {
@@ -473,7 +498,8 @@ export interface DialogSpec {
   /** 'withName': SSMS's "Database Properties - AppData". */
   readonly titleFormat: 'plain' | 'withName'
   readonly size: 'compact' | 'large'
-  /** The action OK runs and Script scripts; its catalogue row (or, for a server action, its folders) decides where the dialog opens. */
+  /** The action OK runs and Script scripts; its catalogue row (or, for a server action, its folders, and for a create action
+   *  its own commands) decides where the dialog opens. */
   readonly action: CatalogAction
   readonly pages: readonly DialogPageSpec[]
   /** A modal dialog whose run has several steps lists them under its message bar once the run reports them. */
@@ -498,7 +524,13 @@ const dialogSpecData = {
   },
   // SSMS's Attach Databases: one General page with the databases to attach and the selected one's files. Each row's Status
   // says how its run went, so the dialog lists no separate steps.
-  attachDatabase: { title: 'Attach Databases', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'attach', pages: [page('general', 'General')] }
+  attachDatabase: { title: 'Attach Databases', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'attach', pages: [page('general', 'General')] },
+  // SSMS's "Login - New" is modal, and the password must never live in a document's view state. General keeps its password
+  // fields mounted across page switches. User Mapping (D2b) and Securables (D2d) join once their OK works (critic A17).
+  newLogin: {
+    title: 'Login - New', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'createLogin', steps: true,
+    pages: [page('general', 'General', { keepMounted: true }), page('serverRoles', 'Server Roles'), page('status', 'Status')]
+  }
 } as const satisfies { readonly [D in DialogId]: DialogSpec }
 export const dialogSpecs: { readonly [D in DialogId]: DialogSpec } = dialogSpecData
 /** The dialogs that open over the workbench (ObjectDialogService), derived from their surface; the others are documents. */
@@ -560,7 +592,9 @@ export const actionErrorRetryable = {
   AUTH_KERBEROS: true, AUTH_UNSUPPORTED: true,
   // The action's connection could not get a Microsoft Entra token: a sign-in that expired (connect again) or a failure
   // that may pass.
-  AUTH_ENTRA: true
+  AUTH_ENTRA: true,
+  // The server's password policy refused the password (15114-15118, or 33062-33064 on Linux): another password can pass.
+  PASSWORD_POLICY: true
 } as const satisfies Record<string, boolean>
 export type ActionErrorCode = keyof typeof actionErrorRetryable
 export const actionErrorCodes = Object.keys(actionErrorRetryable) as ActionErrorCode[]
@@ -599,6 +633,12 @@ export const actionLimits = {
   newDatabaseFiles: 256, newDatabaseFilegroups: 256, dataFileMb: 16_777_215, logFileMb: 2_097_152, growthMb: 2_097_152, growthPercent: 100
 } as const
 
+/** The create actions. New Login runs on SQL Server only until D2e adds Managed Instance (no FROM WINDOWS there, and
+ *  SSMS hides the password policy options). */
+export const createActionSpecs: { readonly [A in CreateAction]: CreateActionSpec } = {
+  createLogin: { title: 'New Login', dialog: 'newLogin', engines: ['box'] }
+}
+export const isCreateAction = (action: string): action is CreateAction => (createActions as readonly string[]).includes(action)
 /** Whether an action runs on a server of this engine. */
 export const actionServes = (action: CatalogAction, engine: ServerEngine): boolean => catalogActionEngines(action).includes(engine)
 
@@ -647,9 +687,13 @@ export function actionsCatalogJson(): string {
     const spec: ServerActionSpec = serverActionSpecs[action]
     return { action, class: 'dialog', title: spec.title, engines: spec.engines, cleanupMs: spec.cleanupMs ?? actionLimits.cleanupMs, scope: 'server' }
   }
+  const createJson = (action: CreateAction) => {
+    const spec = createActionSpecs[action]
+    return { action, class: 'create', title: spec.title, engines: spec.engines, cleanupMs: spec.cleanupMs ?? actionLimits.cleanupMs }
+  }
   return [
     '{',
-    `  "actions": ${block([...objectActions.map(actionJson), ...serverActions.map(serverActionJson)])},`,
+    `  "actions": ${block([...objectActions.map(actionJson), ...serverActions.map(serverActionJson), ...createActions.map(createJson)])},`,
     `  "compatibilityLevels": ${line(compatibilityLevels)},`,
     `  "databaseOptions": ${block(databaseOptionDefs.map(optionJson))},`,
     `  "dialogs": ${block(dialogIds.map(dialog => ({ dialog, action: dialogSpecs[dialog].action, pages: dialogSpecs[dialog].pages.map(page => page.id) })))},`,

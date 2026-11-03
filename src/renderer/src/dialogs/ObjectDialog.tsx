@@ -12,6 +12,7 @@ import { definitionOf } from './definitions'
 import type { DialogPhase, OpenObjectDialog } from './ObjectDialogService'
 import AttachDatabasePage from './pages/AttachDatabasePage'
 import DeleteObjectPage from './pages/DeleteObjectPage'
+import { NewLoginGeneralPage, NewLoginServerRolesPage, NewLoginStatusPage } from './pages/NewLoginPages'
 
 /** A page of an object dialog: the open dialog's snapshot, and whether its controls may change now. */
 export interface PageProps { readonly open: OpenObjectDialog; readonly editable: boolean }
@@ -19,7 +20,8 @@ export interface PageProps { readonly open: OpenObjectDialog; readonly editable:
  *  document instead (src/renderer/src/properties). */
 export const dialogPages: { readonly [D in ModalDialogId]: Readonly<Partial<Record<PageId, ComponentType<PageProps>>>> } = {
   deleteObject: { general: DeleteObjectPage },
-  attachDatabase: { general: AttachDatabasePage }
+  attachDatabase: { general: AttachDatabasePage },
+  newLogin: { general: NewLoginGeneralPage, serverRoles: NewLoginServerRolesPage, status: NewLoginStatusPage }
 }
 
 const progressText: Readonly<Record<DialogPhase, string>> = {
@@ -142,7 +144,7 @@ export function StepsPanel({ steps }: { readonly steps: readonly ActionStep[] })
   if (!steps.length) return null
   return <section ref={panel} className="object-dialog-steps" aria-labelledby="object-dialog-steps">
     <div className="object-dialog-caption" id="object-dialog-steps">Steps</div>
-    <StepList labelledBy="object-dialog-steps" steps={steps.map(step => ({ state: step.status, text: step.title }))} />
+    <StepList labelledBy="object-dialog-steps" steps={steps.map(step => ({ state: step.status, text: step.detail ? `${step.title}: ${step.detail}` : step.title }))} />
   </section>
 }
 
@@ -158,6 +160,18 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
   useEffect(() => setVisited(seen => seen.has(open.page) ? seen : new Set([...seen, open.page])), [open.page])
   // The dialog takes focus as it opens, so Enter is OK and Escape is Cancel, as in SSMS.
   useEffect(() => { form.current?.focus() }, [])
+  // A run disables the page and the field that had focus, which drops focus to the body. When it ends, focus comes back: to the
+  // password after the server's policy refused it (it must be retyped), else to the dialog, so Enter and Escape work again.
+  const wasBusy = useRef(false)
+  useEffect(() => {
+    if (busy) { wasBusy.current = true; return }
+    if (!wasBusy.current) return
+    wasBusy.current = false
+    const active = document.activeElement
+    if (active && active !== document.body && form.current?.contains(active)) return
+    const password = open.error?.code === 'PASSWORD_POLICY' ? form.current?.querySelector<HTMLInputElement>('.object-dialog-page:not([hidden]) input[type="password"]:not(:disabled)') : null
+    if (password) { password.focus(); password.select() } else form.current?.focus()
+  }, [busy, open.error])
   const pageKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     const next = pageForKey(spec.pages, open.page, event.key, tabs)
     if (!next) return
@@ -201,6 +215,7 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
         <div className="object-dialog-toolbar"><ScriptButton disabled={busy || !usable} onScript={destination => void dialogs.script(destination)} /></div>
         {open.error && <div className={'object-dialog-message' + (open.phase === 'stopped' ? ' info' : '')} role={open.phase === 'stopped' ? 'status' : 'alert'}>
           <Icon name={open.phase === 'stopped' ? 'info' : 'error'} /><span>{open.error.message}</span></div>}
+        {executing && open.refusal && <div className="object-dialog-message" role="alert"><Icon name="error" /><span>{open.refusal}</span></div>}
         {!open.error && open.notice && <div className="object-dialog-message info" role="status"><Icon name="info" /><span>{open.notice}</span></div>}
         {spec.steps && open.steps && <StepsPanel steps={open.steps} />}
         {mounted.map(({ page, shown }) => {

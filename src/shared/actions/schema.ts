@@ -5,9 +5,11 @@ import { kindSpecs } from '../explorer/catalog.ts'
 import type { ObjectRef } from '../explorer/refs.ts'
 import { ident, objectRefSchema } from '../explorer/schema.ts'
 import {
-  actionErrorCodes, actionLimits, actionOffered, dialogIds, dialogSpecs, isServerAction, objectActionSpecs, serverFilePurposes, serverFilesDescribeId, type ActionErrorCode, type ObjectAction
+  actionErrorCodes, actionLimits, actionOffered, dialogIds, dialogSpecs, isCreateAction, isServerAction, objectActionSpecs, serverFilePurposes, serverFilesDescribeId, type ActionErrorCode,
+  type ObjectAction
 } from './catalog.ts'
-import { loginLimits } from './logins.ts'
+import { loginLimits, newLoginAuths, publicRole, windowsLoginName, type LoginSecrets, type LoginStatusChoice, type NewLoginGeneral, type NewLoginModel } from './logins.ts'
+import { wellFormed } from '../ssis/schema.ts'
 import { collationPattern, optionDef, settableOptionKeys, settableScopedKeys, tokenProblem, type FileType, type Growth } from './database.ts'
 import { containmentTypes, newDatabaseOptionKeys, newDatabaseProblems, newDatabaseScopedKeys, type NewDatabaseDesign, type NewDatabaseModel } from './new-database.ts'
 import { serverPathProblem, type ServerFilesListing, type ServerFilesRequest } from './files.ts'
@@ -63,8 +65,20 @@ export interface CreateDatabaseRequest {
 export interface AttachDatabaseSpec { readonly name: string; readonly owner?: string; readonly files: readonly string[]; readonly rebuildLog: boolean }
 /** Attach Databases' OK and Script: the server as the target, and at most `actionLimits.attachDatabases` databases. */
 export interface AttachRequest { readonly action: 'attach'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly databases: readonly AttachDatabaseSpec[] }
+/**
+ * New Login's OK and Script (D2a): the General page, the server roles to join (public never: every login is a member), and
+ * the Status page. `secrets` carries the password of a SQL login on actions.execute only; the script schema refuses it.
+ * The target is the server.
+ */
+export interface CreateLoginRequest {
+  readonly action: 'createLogin'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef
+  readonly login: NewLoginGeneral
+  readonly serverRoles: readonly string[]
+  readonly status: LoginStatusChoice
+  readonly secrets?: LoginSecrets
+}
 /** One action: actions.script returns its script, actions.execute runs it. */
-export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | CreateDatabaseRequest | AttachRequest
+export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | CreateDatabaseRequest | AttachRequest | CreateLoginRequest
 /** actions.script also scripts a restore, which actions.execute runs from D1f (critic A17). */
 export type ActionScriptRequest = ActionRequest | RestoreRequest
 export type { RestoreRequest } from './restore-schema.ts'
@@ -168,6 +182,7 @@ export interface ActionDescribeResult {
   readonly restore?: RestoreModel
   readonly newDatabase?: NewDatabaseModel
   readonly attachDatabase?: AttachDescribeModel
+  readonly newLogin?: NewLoginModel
 }
 export interface ActionScriptResult {
   /** Absent with `error`; at most `actionLimits.scriptChars` characters. */
@@ -206,6 +221,8 @@ export interface ActionExecuteResult {
 const systemSchemas: ReadonlySet<string> = new Set(['sys', 'INFORMATION_SCHEMA'])
 const systemDatabases: ReadonlySet<string> = new Set(['master', 'model', 'msdb', 'tempdb'])
 const verbs: Readonly<Record<ObjectAction, string>> = { selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties', attach: 'attached' }
+/** A server ref: what a create action on a server object (a login) names as its target. */
+const isServer = (ref: ObjectRef) => ref.kind === 'server' && Object.keys(ref).length === 1
 /** Why `action` cannot act on `ref` whatever its subtype: a kind that never offers it, or one of SQL Server's own objects
  *  (unless the action serves them, as Properties does). A folder's action (Attach) acts on the server alone. */
 export function actionTargetProblems(ref: ObjectRef, action: ObjectAction): string[] {
@@ -245,11 +262,14 @@ export const actionDescribeSchema = z.object({
       case 'tableDesigner':
         if (request.target.kind !== 'database' || request.target.parent) issue(context, 'target', 'The table designer opens on a database.')
         break
+      case 'newLogin':
+        if (!isServer(request.target)) issue(context, 'target', 'New Login opens on a server.')
+        break
       default: {
         // A server action's document describes the server it makes something on.
         const action = dialogSpecs[request.dialog].action
         if (isServerAction(action)) { if (request.target.kind !== 'server') issue(context, 'target', 'New Database describes the server.') }
-        else targetIssues(context, request.target, action)
+        else targetIssues(context, request.target, action as ObjectAction)
       }
     }
   }) satisfies z.ZodType<ActionDescribeRequest>
@@ -306,16 +326,49 @@ export function attachProblems(databases: readonly AttachDatabaseSpec[]): string
   if (databases.some(database => new Set(database.files).size !== database.files.length)) problems.push('A database lists the same file twice.')
   return problems
 }
+/** A password: at most loginLimits.password UTF-16 code units (as C# counts them), no NUL, well formed. A quote is fine
+ *  (SQL Server's builder doubles it); blank is allowed where the server's policy decides (newLoginProblem). */
+export const loginPassword = z.string().refine(value => value.length <= loginLimits.password, `At most ${loginLimits.password} UTF-16 code units.`)
+  .refine(value => !value.includes('\0'), 'The password cannot contain a NUL character.').refine(wellFormed, 'The password holds a broken character (half of a surrogate pair).')
+const loginSecretsSchema = z.object({ password: loginPassword.optional(), oldPassword: loginPassword.optional() }).strict() satisfies z.ZodType<LoginSecrets>
+const newLoginGeneralSchema = z.object({
+  auth: z.enum(newLoginAuths), name: ident, defaultDatabase: ident, defaultLanguage: ident.optional(), checkPolicy: z.boolean().optional(), checkExpiration: z.boolean().optional(),
+  mustChange: z.boolean().optional()
+}).strict() satisfies z.ZodType<NewLoginGeneral>
+const createLoginSchema = z.object({
+  action: z.literal('createLogin'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, login: newLoginGeneralSchema,
+  serverRoles: z.array(ident).max(loginLimits.serverRoles), status: z.object({ connect: z.enum(['grant', 'deny']), enabled: z.boolean() }).strict(), secrets: loginSecretsSchema.optional()
+}).strict()
+/** New Login's rules beyond the shapes: the server as its target, the auth's own fields and SQL Server's policy chain, the
+ *  login name's backslash rule, and roles that are unique and not public. */
+function createLoginIssues(request: z.infer<typeof createLoginSchema>, context: z.RefinementCtx): void {
+  const { login } = request
+  if (!isServer(request.target)) issue(context, 'target', 'A login is created on a server.')
+  if (login.auth === 'sql') {
+    if (login.checkPolicy === undefined || login.checkExpiration === undefined || login.mustChange === undefined) issue(context, 'login', 'A SQL Server login states its password policy options.')
+    if (login.checkExpiration && !login.checkPolicy) issue(context, 'login', 'Enforce password expiration needs Enforce password policy.')
+    if (login.mustChange && !login.checkExpiration) issue(context, 'login', 'User must change password at next login needs Enforce password expiration.')
+    if (login.name.includes('\\')) issue(context, 'login', 'A SQL Server login name cannot contain a backslash.')
+  } else {
+    if (login.checkPolicy !== undefined || login.checkExpiration !== undefined || login.mustChange !== undefined) issue(context, 'login', 'Only a SQL Server login has password policy options.')
+    if (!windowsLoginName.test(login.name)) issue(context, 'login', 'A Windows login is named DOMAIN\\name.')
+  }
+  if (request.secrets?.oldPassword !== undefined) issue(context, 'secrets', 'A new login has no old password.')
+  if (request.serverRoles.includes(publicRole)) issue(context, 'serverRoles', 'Every login is a member of public.')
+  if (new Set(request.serverRoles).size !== request.serverRoles.length) issue(context, 'serverRoles', 'Duplicate server role.')
+}
 export const actionRequestSchema = z.discriminatedUnion('action', [
   renameSchema,
   deleteSchema,
   propertiesSchema,
   createTableSchema,
   createDatabaseSchema,
-  attachSchema
+  attachSchema,
+  createLoginSchema
 ]).superRefine((request, context) => {
-  // A new table and a new database are not an object row's action: their target is the database they go in, or make.
-  if (request.action !== 'createTable' && request.action !== 'createDatabase') targetIssues(context, request.target, request.action)
+  // A new table, database or login is not an object row's action: its target is the database it goes in (SQL Server's own
+  // included), the database it makes, or the server.
+  if (request.action !== 'createTable' && request.action !== 'createDatabase' && !isCreateAction(request.action)) targetIssues(context, request.target, request.action)
   switch (request.action) {
     case 'createDatabase':
       for (const problem of newDatabaseProblems(request.target.name, request.design)) issue(context, problem.field === 'name' ? 'target' : 'design', problem.message)
@@ -336,7 +389,18 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
     case 'attach':
       for (const message of attachProblems(request.databases)) issue(context, 'databases', message)
       break
+    case 'createLogin':
+      createLoginIssues(request, context)
+      break
   }
+}) satisfies z.ZodType<ActionRequest>
+/** actions.execute: the same requests, with the secrets each needs and no others: New Login's password exactly for a SQL
+ *  Server login (blank only with the password policy on, which lets the server decide), and none for a Windows login. */
+export const actionExecuteRequestSchema = actionRequestSchema.superRefine((request, context) => {
+  if (request.action !== 'createLogin') return
+  if (request.login.auth === 'sql' && request.secrets?.password === undefined) issue(context, 'secrets', 'A SQL Server login needs a password.')
+  if (request.login.auth !== 'sql' && request.secrets !== undefined) issue(context, 'secrets', 'Only a SQL Server login takes a password.')
+  if (request.login.auth === 'sql' && request.secrets?.password === '' && !request.login.checkPolicy) issue(context, 'secrets', 'A blank password needs Enforce password policy.')
 }) satisfies z.ZodType<ActionRequest>
 /** actions.script: the same requests, never with `secrets` (critic A3). Script never needs a password, so none crosses for it
  *  even once an action (New Login) accepts one on actions.execute; C# Validate refuses Secrets on every script too. */

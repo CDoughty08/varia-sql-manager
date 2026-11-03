@@ -48,9 +48,9 @@ internal static class ActionChecks
             && Catalog.Limit("scriptMs") == (long)options.ScriptBudget.TotalMilliseconds && Catalog.Limit("gateWaitMs") == (long)options.GateWait.TotalMilliseconds
             && Catalog.Limit("messageChars") == ActionErrors.MaxMessage && Catalog.Limit("newName") == ExplorerRefs.MaxIdentifier
             && Catalog.Limit("stopGraceMs") == (long)options.StopGrace.TotalMilliseconds, "the backend's limits are the catalogue's");
-        check(Catalog.ErrorCodes.Count() == 18 && Catalog.ErrorCodes.Contains("FILE_ACCESS") && Catalog.Retryable("FILE_ACCESS") && !Catalog.Retryable("MEDIA") && Catalog.Retryable("IN_USE") && Catalog.Retryable("AUTH_ENTRA") && !Catalog.Retryable("DEPENDENTS") && Catalog.Retryable("CANCELLED") && !Catalog.ErrorCodes.Contains("INVALID_NAME")
-            && Catalog.Dialogs.Keys.SequenceEqual(["deleteObject", "databaseProperties", "newDatabase", "attachDatabase"]) && Catalog.IsServerAction("createDatabase") && !Catalog.IsServerAction("properties"),
-            "the catalogue lists the action error codes (a file SQL Server cannot open, FILE_ACCESS, retryable once fixed; restore's MEDIA not) and the Delete Object, Database Properties, New Database and Attach Databases dialogs, New Database's createDatabase a server action");
+        check(Catalog.ErrorCodes.Count() == 19 && Catalog.ErrorCodes.Contains("FILE_ACCESS") && Catalog.Retryable("FILE_ACCESS") && !Catalog.Retryable("MEDIA") && Catalog.Retryable("PASSWORD_POLICY") && Catalog.Retryable("IN_USE") && Catalog.Retryable("AUTH_ENTRA") && !Catalog.Retryable("DEPENDENTS") && Catalog.Retryable("CANCELLED") && !Catalog.ErrorCodes.Contains("INVALID_NAME")
+            && Catalog.Dialogs.Keys.SequenceEqual(["deleteObject", "databaseProperties", "newDatabase", "attachDatabase", "newLogin"]) && Catalog.IsServerAction("createDatabase") && !Catalog.IsServerAction("properties"),
+            "the catalogue lists the action error codes (a file SQL Server cannot open, FILE_ACCESS, retryable once fixed; restore's MEDIA not; New Login's PASSWORD_POLICY retryable) and the Delete Object, Database Properties, New Database, Attach Databases and New Login dialogs, New Database's createDatabase a server action");
         // A kind's status overlay is emitted as a second row for the same kind and subtype, with its status, and an action
         // may carry engines (src/shared/actions/catalog.ts); the catalogue must load both, as a later PR will embed them.
         using (var embedded = typeof(ActionsCatalog).Assembly.GetManifestResourceStream("Varia.Backend.Actions.actions-catalog.json")!)
@@ -71,7 +71,7 @@ internal static class ActionChecks
     {
         var results = ActionSql.Lint().ToList();
         var problems = results.SelectMany(result => result.Problems.Select(problem => result.Name + ": " + problem)).ToList();
-        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 4 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2 + 2 + 6 + AttachSql.LintAll().Count(), "every executable and catalog statement passes the lint at every band, New Database's and Attach's builders and facts included (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
+        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 4 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2 + 2 + 6 + AttachSql.LintAll().Count() + 2 + LoginSql.Corpus().Count() * 2, "every executable and catalog statement passes the lint at every band, New Database's, Attach's and New Login's builders and facts included (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
         // The lint must catch what it is for: a name spliced into the text, a name parameter outside QUOTENAME, a metadata function.
         check(ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE ' + @p1;\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
             && ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE [dbo].[x]';\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
@@ -153,7 +153,11 @@ internal static class ActionChecks
             [2714] = "NAME_IN_USE", [1801] = "NAME_IN_USE", [15335] = "NAME_IN_USE", [15225] = "NOT_FOUND", [229] = "PERMISSION_DENIED", [262] = "PERMISSION_DENIED",
             [297] = "PERMISSION_DENIED", [3701] = "PERMISSION_DENIED", [15247] = "PERMISSION_DENIED", [15151] = "PERMISSION_DENIED", [208] = "SQL_ERROR",
             // Database Properties (PR-B), and the file and filegroup numbers PR-B2's DDL will meet.
-            [924] = "IN_USE", [5042] = "DEPENDENTS", [1828] = "NAME_IN_USE", [5170] = "NAME_IN_USE", [15007] = "NOT_FOUND", [5058] = "NOT_SUPPORTED"
+            [924] = "IN_USE", [5042] = "DEPENDENTS", [1828] = "NAME_IN_USE", [5170] = "NAME_IN_USE", [15007] = "NOT_FOUND", [5058] = "NOT_SUPPORTED",
+            // New Login's password policy: Windows' (15114 to 15118) and SQL Server's own, which SQL Server on Linux applies (33062 too
+            // short, 33063 too long, 33064 not complex enough; probed on SQL Server 2022 CU27 on Linux, where CI's 'zq' answered 33062).
+            [15114] = "PASSWORD_POLICY", [15116] = "PASSWORD_POLICY", [15118] = "PASSWORD_POLICY", [33062] = "PASSWORD_POLICY", [33063] = "PASSWORD_POLICY",
+            [33064] = "PASSWORD_POLICY"
         };
         var wrong = expected.Where(pair => ActionErrors.CodeOf(Sql(pair.Key), null) != pair.Value).Select(pair => pair.Key).ToList();
         check(wrong.Count == 0 && ActionErrors.CodeOf(Sql(50000, 20), null) == "CONNECTION_LOST" && ActionErrors.Numbers.Keys.All(Catalog.ErrorCodes.Contains),

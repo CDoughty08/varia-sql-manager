@@ -243,10 +243,16 @@ internal sealed record ServerFileEntryDto(string Name, bool Directory, long? Siz
 internal sealed record ServerFilesDto(string Separator, string? Path, List<ServerRootDto> Roots, List<ServerFileEntryDto> Entries, bool Truncated, string? Notice = null);
 /// <summary>actions.script and actions.execute: rename takes NewName, delete the two database options, properties
 /// CloseConnections and Changes, createTable (Target the database) and createDatabase (Target the new database) Design, restore
-/// (Target the destination database) Restore and Identity, attach (Target the server) Databases; Validate refuses the rest.</summary>
+/// (Target the destination database) Restore and Identity, attach (Target the server) Databases, createLogin (Target the server)
+/// Login, ServerRoles, Status and, on execute only, Secrets; Validate refuses the rest.</summary>
 internal sealed record ActionArgs(string Action, string ConnectionId, string RequestId, ObjectRefDto Target, string? NewName = null, bool? CloseConnections = null, bool? DeleteHistory = null,
     DatabaseChangesDto? Changes = null, ActionDesign? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null, RestoreOptionsDto? Restore = null,
-    List<AttachDatabaseDto>? Databases = null);
+    List<AttachDatabaseDto>? Databases = null, NewLoginDto? Login = null, List<string>? ServerRoles = null, LoginStatusDto? Status = null);
+/// <summary>New Login's General page (src/shared/actions/logins.ts NewLoginGeneral): Auth windows or sql; the password policy
+/// options exactly for sql, in SQL Server's chain (MustChange needs CheckExpiration, which needs CheckPolicy).</summary>
+internal sealed record NewLoginDto(string Auth, string Name, string DefaultDatabase, string? DefaultLanguage = null, bool? CheckPolicy = null, bool? CheckExpiration = null, bool? MustChange = null);
+/// <summary>New Login's Status page: Connect grant or deny; Enabled.</summary>
+internal sealed record LoginStatusDto(string Connect, bool Enabled);
 /// <summary>An action's design, whose shape is the action's: the table designer's (TableDesignDto) or New Database's
 /// (NewDatabaseDesignDto). STJ reads an object's members in no fixed order, so the member stays JSON until the action's validator
 /// reads it with the request's own strict options (unknown members refused, as everywhere).</summary>
@@ -323,7 +329,7 @@ internal sealed record DatabasePropertiesDto(DatabaseGeneralDto General, Diction
     DatabaseServerFactsDto Server, int? Sessions = null, string? ReadOnlyReason = null);
 internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long ElapsedMs, ActionError? Error = null, DatabasePropertiesDto? DatabaseProperties = null,
     TableDesignerModelDto? TableDesigner = null, ServerFilesDto? ServerFiles = null, RestoreModelDto? Restore = null, NewDatabaseModelDto? NewDatabase = null,
-    AttachDescribeDto? AttachDatabase = null);
+    AttachDescribeDto? AttachDatabase = null, NewLoginModelDto? NewLogin = null);
 /// <summary>New Database's file (src/shared/actions/new-database.ts): Type rows, log or filestream; Filegroup none for a log; SizeMb none
 /// for a container; Path the folder and FileName the file (a container's folder) in it.</summary>
 internal sealed record NewDatabaseFileDto(string Name, string Type, GrowthDto Growth, string Path, string FileName, string? Filegroup = null, long? SizeMb = null);
@@ -335,6 +341,14 @@ internal sealed record NewDatabaseDesignDto(List<NewDatabaseFileDto> Files, List
 /// <summary>What New Database reads: model as Database Properties reads it, the default folders, the server's collation, whether the
 /// login may create a database (CREATE ANY DATABASE), master's compatibility level and whether the server runs on Linux.</summary>
 internal sealed record NewDatabaseModelDto(DatabasePropertiesDto Model, string DataPath, string LogPath, string ServerCollation, bool CanCreate, int MasterLevel, bool Linux);
+/// <summary>New Login's describe (src/shared/actions/logins.ts NewLoginModel): the server's facts, then the databases, languages and
+/// server roles its lists offer, each bounded by loginLimits (a truncation flag says more exist).</summary>
+internal sealed record NewLoginModelDto(NewLoginServerDto Server, List<NewLoginDatabaseDto> Databases, bool DatabasesTruncated, List<NewLoginLanguageDto> Languages,
+    List<NewLoginServerRoleDto> ServerRoles, bool ServerRolesTruncated);
+internal sealed record NewLoginServerDto(int Level, bool Linux, bool WindowsOnly, bool CanCreate);
+internal sealed record NewLoginDatabaseDto(string Name, int State, bool Accessible);
+internal sealed record NewLoginLanguageDto(string Name, string Alias);
+internal sealed record NewLoginServerRoleDto(string Name, bool Fixed);
 /// <summary>The table designer's new table (src/shared/designer/schema.ts): columns in order and the primary key as column indexes in key order.</summary>
 internal sealed record TableDesignDto(string Schema, string Name, List<DesignColumnDto> Columns, List<int> PrimaryKey);
 internal sealed record DesignColumnDto(string Name, DesignTypeDto Type, bool AllowNulls, DesignIdentityDto? Identity = null);

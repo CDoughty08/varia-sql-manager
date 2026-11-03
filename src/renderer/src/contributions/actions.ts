@@ -2,10 +2,11 @@ import { actionServes } from '../../../shared/actions/catalog.ts'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { explorerNodeOf, type ExplorerMenuNode } from '../menus/targets'
+import { newLoginTarget } from '../dialogs/new-login'
 
 /**
  * Object Explorer's object actions (src/shared/actions/catalog.ts): Select Top 1000 Rows, Rename, Delete and Properties, and
- * Integration Services Catalogs › Create Catalog… (S9a). Each acts
+ * Integration Services Catalogs › Create Catalog… (S9a), and Security › New › Login… (D2a). Each acts
  * on the node its menu was opened for, otherwise on the selected node (F2, Delete, the palette), on a live server. The
  * Database Properties document's verbs (Apply, Discard Changes, Refresh, Stop) come from the same catalogue. Databases ›
  * Attach… (D1d) opens on the folder.
@@ -20,6 +21,9 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
   const nodeOf = (args?: CommandArgs): ExplorerMenuNode | undefined => args?.target ? explorerNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
   // Integration Services Catalogs on a live server; the dialog itself says when the server cannot have a catalog.
   const catalogs = (node: ExplorerMenuNode | undefined): node is ExplorerMenuNode => !!node && !node.lost && node.folder === 'integrationServicesCatalogs'
+    && connections.getSnapshot().some(connection => connection.id === node.connectionId && !connection.lost)
+  // New Login: a live SQL Server's Security or Logins folder, or a login on it.
+  const loginsOf = (node: ExplorerMenuNode | undefined): node is ExplorerMenuNode => !!node && !node.lost && !!newLoginTarget(node)
     && connections.getSnapshot().some(connection => connection.id === node.connectionId && !connection.lost)
   // New Database… on the Databases folder or a database of a live SQL Server box (the menu hides it on Azure and Managed Instance).
   const databases = (node: ExplorerMenuNode | undefined): node is ExplorerMenuNode => !!node && !node.lost && !!node.engine && actionServes('createDatabase', node.engine)
@@ -62,6 +66,10 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
       when: args => catalogs(nodeOf(args)) && !dialogs.current && !ssisCatalog.current,
       run: args => { const node = nodeOf(args); if (catalogs(node)) ssisCatalog.open(node) }
     }),
+    ...(['explorer.newLogin', 'explorer.newLoginOnSecurity'] as const).map(id => commands.register(id, {
+      when: args => loginsOf(nodeOf(args)) && !dialogs.current && !ssisCatalog.current,
+      run: args => { const node = nodeOf(args); if (loginsOf(node)) dialogs.open('newLogin', node) }
+    })),
     // A database's menu places New Database… as a command of its own (ServerActionSpec.nodePlace); both open the same document.
     ...(['explorer.newDatabase', 'explorer.newDatabaseOnDatabase'] as const).map(id => commands.register(id, {
       when: args => databases(nodeOf(args)),

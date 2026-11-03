@@ -77,6 +77,14 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string Seam => Name + "_seam";
     /// <summary>The name the seam checks' rename collides with (created on demand, with <see cref="Seam"/>).</summary>
     public string SeamTaken => Name + "_seamt";
+    /// <summary>Where the New Login checks (D2a) run Create Catalog's master key batch under the Extended Events check (created on demand).</summary>
+    public string LoginsDatabase => Name + "_lgn";
+    /// <summary>A SQL login the New Login checks create, `tag` being 1 to 8 lowercase letters or digits; dropped on disposal once owned.</summary>
+    public string LoginNamed(string tag) => Name + "_l" + tag;
+    /// <summary>The New Login checks' Extended Events session (critic A16), dropped on disposal once owned.</summary>
+    public string XeSession => Name + "_xe";
+    private readonly List<string> ownedLogins = [];
+    private bool ownsXeSession;
     /// <summary>Restore Database's source (D1e): FULL recovery, its backups in real files in the backup folder (<see cref="RestoreFile"/>),
     /// which disposal deletes before its backup history.</summary>
     public string RestoreSource => Name + "_rst";
@@ -109,13 +117,23 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
     // _live the live tables', _ssis the fake SSIS catalog, _ssisref the restored catalog backup and _ssiscc Create Catalog's
     // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _files is the server file picker's; _seam and _seamt are the wave 5 seam checks'; _nd is New Database's; _ap the action progress checks';
-    // _at, _at'] and _at2 Attach Databases'; and _rst Restore Database's source, _rstf its forked source and _rstr where their plans are restored.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_files|_seam|_seamt|_nd|_ap|_at|_at'\]|_at2|_rst|_rstr|_rstf)?$")]
+    // _at, _at'] and _at2 Attach Databases'; _rst Restore Database's source, _rstf its forked source and _rstr where their plans are restored; and _lgn New Login's.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_files|_seam|_seamt|_nd|_ap|_at|_at'\]|_at2|_rst|_rstr|_rstf|_lgn)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^[a-z0-9]{1,8}\.(bak|trn)$")]
     private static partial Regex PartPattern();
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}$")]
+    // A run's own login, and New Login's (_l and a tag).
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_l[a-z0-9]{1,8})?$")]
     private static partial Regex LoginPattern();
+    // New Login's Extended Events session; its name's UTC timestamp dates it, as sys.server_event_sessions has no creation date.
+    [GeneratedRegex(@"^VariaScratch_(\d{14})_[0-9a-f]{8}_xe$")]
+    private static partial Regex XePattern();
+
+    /// <summary>Whether the sweep drops a stale SQL login of this name.</summary>
+    internal static bool SweepableLogin(string name) => LoginPattern().IsMatch(name);
+    /// <summary>Whether an Extended Events session of this name is a run's of the checks, created before `before` (UTC).</summary>
+    internal static bool StaleXeSession(string name, DateTime before) => XePattern().Match(name) is { Success: true } match
+        && DateTime.TryParseExact(match.Groups[1].Value, "yyyyMMddHHmmss", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var created) && created < before;
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}_job$")]
     private static partial Regex JobPattern();
 
@@ -139,6 +157,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     /// same server add and drop scratch databases at any moment, so a count of every database is not this run's to check.</summary>
     public static string Lasting(SqlRun run) =>
         string.Join("\n", (run.Sets.Count > 0 ? run.Sets[0] : []).Select(row => row[0] ?? "").Where(name => !IsScratchName(name)));
+
+    /// <summary>A throwaway password for a scratch login, never printed.</summary>
+    internal static string Throwaway() => RandomPassword();
 
     private static string RandomPassword()
     {
@@ -194,6 +215,14 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
             {
                 log("Dropping stale scratch login " + row[0]);
                 await run("DROP LOGIN " + Bracket(row[0]!) + ";", "master");
+            }
+        // New Login's Extended Events sessions (CI only, VARIA_TEST_SQL_XE=1), by the age in their names.
+        var sessions = await run("SELECT s.name FROM sys.server_event_sessions AS s WHERE s.name LIKE N'VariaScratch[_]%';", "master");
+        foreach (var row in sessions.Status == "completed" && sessions.Sets.Count > 0 ? sessions.Sets[0] : [])
+            if (StaleXeSession(row[0]!, DateTime.UtcNow.AddHours(-6)))
+            {
+                log("Dropping stale scratch event session " + row[0]);
+                await run(DropXeSql(row[0]!), "master");
             }
     }
 
@@ -525,9 +554,29 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     /// <summary>A scratch database something else creates (the backend's Create Catalog dry run), dropped with the rest.</summary>
     public void Adopt(string name) { if (!created.Contains(name)) created.Add(name); }
 
-    /// <summary>Drops the snapshot first, brings the offline database online so its files are deleted, then drops the rest and the login.</summary>
+    /// <summary>Stops and drops an Extended Events session by name, if it exists.</summary>
+    internal static string DropXeSql(string name) =>
+        "IF EXISTS (SELECT 1 FROM sys.dm_xe_sessions WHERE name = " + Quote(name) + ") ALTER EVENT SESSION " + Bracket(name) + " ON SERVER STATE = STOP;\n"
+        + "IF EXISTS (SELECT 1 FROM sys.server_event_sessions WHERE name = " + Quote(name) + ") DROP EVENT SESSION " + Bracket(name) + " ON SERVER;";
+
+    /// <summary>New Login's database for the Extended Events check's master key batch.</summary>
+    public Task<string> CreateLoginsDatabaseAsync() => CreateMarkedAsync(LoginsDatabase);
+    /// <summary>Records a login the checks are about to create (by <see cref="LoginNamed"/>), so disposal drops it.</summary>
+    public string OwnLogin(string tag)
+    {
+        var name = LoginNamed(tag);
+        if (!ownedLogins.Contains(name)) ownedLogins.Add(name);
+        return name;
+    }
+    /// <summary>Records that the checks are about to create <see cref="XeSession"/>, so disposal stops and drops it.</summary>
+    public string OwnXeSession() { ownsXeSession = true; return XeSession; }
+
+    /// <summary>Drops the Extended Events session and the New Login checks' logins, then the snapshot first, brings the offline
+    /// database online so its files are deleted, then drops the rest and the login.</summary>
     public async ValueTask DisposeAsync()
     {
+        if (ownsXeSession) await run(DropXeSql(XeSession), "master");
+        foreach (var login in ownedLogins) await run("IF EXISTS (SELECT 1 FROM sys.server_principals WHERE name = " + Quote(login) + ") DROP LOGIN " + Bracket(login) + ";", "master");
         // Attach's files left detached are attached again under their own name, so the drop below deletes them.
         if (attachFiles is { } files)
             await run("IF DB_ID(" + Quote(Attach) + ") IS NULL AND DB_ID(" + Quote(AttachAs) + ") IS NULL AND DB_ID(" + Quote(AttachMissing) + ") IS NULL CREATE DATABASE " + Bracket(Attach) + " ON "

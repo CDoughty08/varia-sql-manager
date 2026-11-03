@@ -25,13 +25,19 @@ internal static class ActionErrors
         ["IN_USE"] = [3702, 5030, 5061, 5070, 924],
         // 3726 a foreign key, 3729 a schema-bound module, 15336 sp_rename on an object schema binding holds, 5042 a non-empty file or filegroup.
         ["DEPENDENTS"] = [3726, 3729, 15336, 5042],
-        // 1828 and 5170: a logical file name or a physical file is taken.
-        ["NAME_IN_USE"] = [2714, 1801, 15335, 1828, 5170],
-        // 15007: the login is not valid.
-        ["NOT_FOUND"] = [15225, 15007],
+        // 1828 and 5170: a logical file name or a physical file is taken; 15025 a login, 15023 a user.
+        ["NAME_IN_USE"] = [2714, 1801, 15335, 1828, 5170, 15025, 15023],
+        // 15007: the login is not valid; 15010 a default database, 15033 a language and 15401 a Windows account that does not exist.
+        ["NOT_FOUND"] = [15225, 15007, 15010, 15033, 15401],
         // 5058: the option cannot be set in this database. (948, a database from a newer SQL Server, is severity 20: it ends the
-        // session, so it is CONNECTION_LOST, and Attach refuses such a database itself before it runs anything.)
-        ["NOT_SUPPORTED"] = [5058],
+        // session, so it is CONNECTION_LOST, and Attach refuses such a database itself before it runs anything.) New Login (probed
+        // by D2): 15099 MUST_CHANGE without CHECK_EXPIRATION, 15122 CHECK_EXPIRATION without CHECK_POLICY, 15006 a backslash in a
+        // SQL login, 15407 not DOMAIN\name, 37525 Microsoft Entra not set up on the server.
+        ["NOT_SUPPORTED"] = [5058, 15099, 15122, 15006, 15407, 37525],
+        // The password policy: 15114 too recent, 15115 not usable now, 15116 too short, 15117 too long, 15118 not complex enough
+        // (Windows' policy); SQL Server's own policy, which SQL Server on Linux applies, answers 33062 too short, 33063 too long and
+        // 33064 not complex enough (a password that contains the login name too).
+        ["PASSWORD_POLICY"] = [15114, 15115, 15116, 15117, 15118, 33062, 33063, 33064],
         // 5133: a file's folder does not exist (attach).
         ["PATH_NOT_FOUND"] = [5133],
         // 5120 and 5123: SQL Server could not open a database or backup file (missing, in use, or denied to its service account).
@@ -57,12 +63,14 @@ internal static class ActionErrors
     }
 
     /// <summary>A failure as a value: SQL Server's message, with advice where one helps. <paramref name="ddl"/>: the
-    /// connection broke while DDL may have run; <paramref name="inUseAdvice"/>: what to do when other connections use the database.</summary>
-    public static ActionError FromSql(ActionsCatalog catalog, SqlException error, SqlConnection? connection, bool ddl, string? inUseAdvice)
+    /// connection broke while DDL may have run; <paramref name="inUseAdvice"/>: what to do when other connections use the database;
+    /// <paramref name="serverText"/>: applied to SQL Server's own text only (New Login's scrubber).</summary>
+    public static ActionError FromSql(ActionsCatalog catalog, SqlException error, SqlConnection? connection, bool ddl, string? inUseAdvice, Func<string, string>? serverText = null)
     {
         var code = CodeOf(error, connection);
         var text = string.Join(" ", error.Errors.Cast<SqlError>().Where(item => item.Class > 10).Select(item => item.Message).Distinct());
         if (text.Length == 0) text = error.Message;
+        if (serverText is not null) text = serverText(text);
         var message = code switch
         {
             "CONNECTION_LOST" => ddl ? "The connection to the server was lost while the action ran, so whether it completed is unknown. Refresh Object Explorer to check." : "The connection to the server was lost. Try again.",

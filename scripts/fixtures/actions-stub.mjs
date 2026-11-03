@@ -25,6 +25,9 @@ import { explorerStatics } from './explorer-tree.mjs'
  * data file it recorded in D:\Old\, not found, and whose log it finds), Sales_2.ndf and Hr.mdf (whose log in D:\Old\ is not
  * found); any other file is not a primary one. An attach that includes Hr fails at Hr and detaches what it attached before
  * (Rolled Back); otherwise each database appears under Databases.
+ * Security › Logins lists sa and every login New Login made. New Login describes a Windows server (master and AppData, two
+ * languages, three server roles); its Script is `newLoginScript`; OK with the password "Weak" answers PASSWORD_POLICY at
+ * "Create the login", "Held" waits until its Stop arrives, and anything else adds the login.
  */
 export function actionsStubData() {
   return { statics: explorerStatics(), serverFiles: stubServerFiles }
@@ -61,10 +64,12 @@ export const newDatabaseScript = name => `CREATE DATABASE [${name}]
 GO
 `
 export const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
+export const newLoginScript = name => `USE [master]\r\nGO\r\nSET XACT_ABORT ON;\r\nBEGIN TRANSACTION;\r\nCREATE LOGIN [${name}] WITH PASSWORD=<password>, DEFAULT_DATABASE=[master], CHECK_EXPIRATION=OFF, CHECK_POLICY=OFF;\r\nCOMMIT TRANSACTION;\r\nGO\r\n`
+export const passwordPolicyMessage = 'Password validation failed. The password does not meet the operating system policy requirements because it is not complex enough.'
 
 /** Installs the stub; pass it to `application.evaluate` with `actionsStubData()`. Runs in main, so it is self-contained. */
 export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
-  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], databases: ['AppData'], blocked: new Map(), catalog: false }
+  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], databases: ['AppData'], logins: ['sa'], blocked: new Map(), catalog: false }
   // The exported texts again: this function runs in main, where the module's own bindings do not exist.
   const caution = 'Caution: Changing any part of an object name could break scripts and stored procedures.'
   const dependentsMessage = "Could not drop object 'dbo.Lines' because it is referenced by a FOREIGN KEY constraint."
@@ -76,6 +81,8 @@ export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
 GO
 `
   const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
+  const newLoginScript = name => `USE [master]\r\nGO\r\nSET XACT_ABORT ON;\r\nBEGIN TRANSACTION;\r\nCREATE LOGIN [${name}] WITH PASSWORD=<password>, DEFAULT_DATABASE=[master], CHECK_EXPIRATION=OFF, CHECK_POLICY=OFF;\r\nCOMMIT TRANSACTION;\r\nGO\r\n`
+  const passwordPolicyMessage = 'Password validation failed. The password does not meet the operating system policy requirements because it is not complex enough.'
   const restoreScript = "USE [master]\r\nRESTORE DATABASE [AppData] FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
   const ok = value => ({ ok: true, value })
   const folders = (owner, ids) => ids.map(folder => ({ ref: { type: 'folder', owner, folder }, label: statics.labels[folder], icon: 'folder', hasChildren: true }))
@@ -84,9 +91,10 @@ GO
     databases: () => stub.databases.map(name => object({ kind: 'database', name }, name, 'database')),
     systemDatabases: () => [object({ kind: 'database', name: 'master' }, 'master', 'database', { subtype: 'system' })],
     tables: owner => stub.tables.map(name => object({ kind: 'table', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'table')),
-    views: owner => [object({ kind: 'view', database: owner.name, schema: 'dbo', name: 'OrderSummary' }, 'dbo.OrderSummary', 'eye')],
-    storedProcedures: owner => [object({ kind: 'procedure', database: owner.name, schema: 'dbo', name: 'ShipOrder' }, 'dbo.ShipOrder', 'symbol-method', { subtype: 'sql' })],
-    integrationServicesCatalogs: () => stub.catalog ? [object({ kind: 'ssisCatalog', name: 'SSISDB' }, 'SSISDB', 'svg:database')] : []
+    views: owner => [object({ kind: 'view', database: owner.name, schema: 'dbo', name: 'OrderSummary' }, 'dbo.OrderSummary', 'view')],
+    storedProcedures: owner => [object({ kind: 'procedure', database: owner.name, schema: 'dbo', name: 'ShipOrder' }, 'dbo.ShipOrder', 'procedure', { subtype: 'sql' })],
+    integrationServicesCatalogs: () => stub.catalog ? [object({ kind: 'ssisCatalog', name: 'SSISDB' }, 'SSISDB', 'database')] : [],
+    logins: () => stub.logins.map(name => object({ kind: 'login', name }, name, 'login', { hasChildren: false, subtype: 'sql' }))
   }
   function children({ node }) {
     if (node.type === 'object') {
@@ -221,10 +229,24 @@ GO
     stub.databases = [...stub.databases, target.name]
     return ok({ steps: [{ status: 'done', title: 'Create the database' }], messages: [], elapsedMs: 1 })
   }
+  /** New Login: "Weak" answers PASSWORD_POLICY, "Held" waits for Stop, anything else adds the login to Logins. The steps are
+   * the backend's, in SSMS's order: CREATE LOGIN, then Deny and Disable as Status chose, then each server role. */
+  function createLogin({ login, secrets, serverRoles, status, requestId }) {
+    const steps = [{ title: 'Create the login' }, ...status?.connect === 'deny' ? [{ title: 'Deny permission to connect' }] : [], ...status?.enabled === false ? [{ title: 'Disable the login' }] : [],
+      ...serverRoles.map(detail => ({ title: 'Add to a server role', detail }))]
+    const after = steps.slice(1).map(step => ({ status: 'skipped', ...step }))
+    if (secrets?.password === 'Weak') return ok({ steps: [{ status: 'failed', ...steps[0], message: passwordPolicyMessage }, ...after], messages: [], elapsedMs: 1,
+      error: { code: 'PASSWORD_POLICY', message: passwordPolicyMessage, retryable: true } })
+    if (secrets?.password === 'Held') return new Promise(resolve => stub.blocked.set(requestId, () => resolve(ok({ steps: [{ status: 'cancelled', ...steps[0] }, ...after], messages: [], elapsedMs: 1,
+      error: { code: 'CANCELLED', message: 'The action was stopped at "Create the login"; SQL Server cancelled that statement.', retryable: true } }))))
+    stub.logins = [...stub.logins, login.name].sort()
+    return ok({ steps: steps.map(step => ({ status: 'done', ...step })), messages: [], elapsedMs: 1 })
+  }
   function execute(params) {
     const { target } = params
     if (params.action === 'createDatabase') return createDatabase(params)
     if (params.action === 'createTable') return createTable(params)
+    if (params.action === 'createLogin') return createLogin(params)
     if (params.action === 'attach') return attachExecute(params)
     if (params.action === 'properties') return ok({ steps: Object.keys(params.changes.options ?? {}).map(key => ({ status: 'done', title: 'Set ' + key })), messages: [], elapsedMs: 1 })
     if (params.action === 'rename') {
@@ -282,6 +304,10 @@ GO
         switch (params.dialog) {
           case 'tableDesigner': return ok({ tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', caseSensitiveNames: false, accentSensitiveNames: true, canCreate: true }, elapsedMs: 1 })
           case 'databaseProperties': return properties(params)
+          case 'newLogin': return ok({ newLogin: { server: { level: 16, linux: false, windowsOnly: false, canCreate: true },
+            databases: [{ name: 'AppData', state: 0, accessible: true }, { name: 'master', state: 0, accessible: true }], databasesTruncated: false,
+            languages: [{ name: 'Deutsch', alias: 'German' }, { name: 'us_english', alias: 'English' }],
+            serverRoles: [{ name: 'dbcreator', fixed: true }, { name: 'public', fixed: true }, { name: 'sysadmin', fixed: true }], serverRolesTruncated: false }, elapsedMs: 1 })
           case 'newDatabase': {
             const folder = serverFiles.roots[1].path
             return ok({ newDatabase: { model: properties({ target: { name: 'model' } }).value.databaseProperties, dataPath: folder, logPath: folder, serverCollation: 'Latin1_General_CI_AS', canCreate: true, masterLevel: 160, linux: false }, elapsedMs: 1 })
@@ -295,6 +321,7 @@ GO
         switch (params.action) {
           case 'properties': return ok({ text: propertiesScript, database: 'master', warnings: [] })
           case 'createTable': return ok({ text: designerScript(params.design.name), database: params.target.name, warnings: [] })
+          case 'createLogin': return ok({ text: newLoginScript(params.login.name), database: 'master', warnings: [] })
           case 'restore': return ok({ text: restoreScript, database: 'master', warnings: [] })
           case 'createDatabase': return ok({ text: newDatabaseScript(params.target.name), database: 'master', warnings: [] })
           case 'attach': return ok({ text: params.databases.map(database => `USE [master]\r\nGO\r\nCREATE DATABASE [${database.name}] ON ${database.files.map(file => `( FILENAME = N'${file}' )`).join(', ')}`

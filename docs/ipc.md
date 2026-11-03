@@ -145,7 +145,7 @@ The backend transcodes REQUEST params to a `JsonElement` and results from System
 STJ records with `UnmappedMemberHandling.Disallow` keep rejecting unknown members. JSON integers beyond ±(2⁵³ − 1)
 become float64, which TypeScript accepts. Requests that carry a password or a sensitive value (`connections.connect`,
 `.databases`, `.preview`, `ssis.execute`, which carries Create Catalog's encryption password, and `actions.execute`, whose
-`secrets` will carry New Login's and Login Properties' passwords; `actions.script` refuses `secrets` in main's schema and in
+`secrets` carries New Login's password (and will carry Login Properties'); `actions.script` refuses `secrets` in main's schema and in
 the backend) are encoded into buffers that are zeroed after use on both sides; the
 JavaScript and .NET strings they came from cannot be zeroed. Main zeroes the methods whose `methodPolicies` entry is
 `sensitive`, the backend those in `SqlService.SensitiveMethods` (`IRequestDispatcher.Sensitive`), and

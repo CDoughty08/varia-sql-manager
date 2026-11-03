@@ -25,7 +25,8 @@ const kinds = (rules: ResolvedRule[], platform: Platform = 'win32') => findConfl
  */
 const explorerSelections: Partial<ContextKeys>[] = [
   ...nodeKinds.flatMap(kind => [undefined, ...kindSpecs[kind].subtypes ?? []].flatMap(subtype => [undefined, ...actionStatuses(kind)].flatMap(status => serverEngines.map((engine): Partial<ContextKeys> => ({
-    ...noExplorerContext, explorerNode: kind, explorerHasSelection: true, explorerSelectionKind: kind, explorerNodeStatus: status ?? '', explorerSelectionStatus: status ?? '',
+    // An object node's menu has no folder (src/renderer/src/menus/targets.ts), so a folder's items never show on it.
+    ...noExplorerContext, explorerNode: kind, explorerFolder: '', explorerHasSelection: true, explorerSelectionKind: kind, explorerNodeStatus: status ?? '', explorerSelectionStatus: status ?? '',
     explorerServerEngine: engine, explorerSelectionServerEngine: engine, ...actionContextValues(actionMenuState({ kind, subtype, status, engine })), ...ssisVerbContextValues(ssisVerbMenuState(kind))
   }))))),
   ...serverEngines.map((engine): Partial<ContextKeys> => ({ ...noExplorerContext, explorerNode: 'folder', explorerHasSelection: true, explorerSelectionKind: 'folder', explorerServerEngine: engine, explorerSelectionServerEngine: engine })),
@@ -49,8 +50,8 @@ function showTogether(menu: MenuId, ...clauses: (string | undefined)[]): boolean
 describe('command catalogue', () => {
   it('is the renderer\'s command id type', () => {
     expectTypeOf<CommandId>().toEqualTypeOf<RendererCommandId>()
-    // 110 commands (Create Catalog among them), Object Explorer's four object actions (Select Top keeps PR4's id), New Table and the table designer's seven, then Script As's 30 generated ones (three keep the table menu's CREATE ids) and its palette pick, Modify, and Cancel, the two notification commands, the Database Properties document's four verbs, New Database (with its database menu's own command) and its document's three verbs, Attach Database, Filter Loaded Objects, the SSIS Catalog's four Properties verbs and their documents' Refresh, the Activity Monitor's nine, and Integration Services Operations' nine.
-    expect(commandIds).toHaveLength(190)
+    // 110 commands (Create Catalog among them), Object Explorer's four object actions (Select Top keeps PR4's id), New Table and the table designer's seven, then Script As's 30 generated ones (three keep the table menu's CREATE ids) and its palette pick, Modify, and Cancel, the two notification commands, the Database Properties document's four verbs, New Database (with its database menu's own command) and its document's three verbs, Attach Database, Filter Loaded Objects, the SSIS Catalog's four Properties verbs and their documents' Refresh, the Activity Monitor's nine, Integration Services Operations' nine, and New Login's two (its Logins menu item and palette entry, and Security › New › Login…).
+    expect(commandIds).toHaveLength(192)
     expect(commandIds.filter(id => id.startsWith('explorer.script') && id.includes('To'))).toEqual([...scriptCommandIds])
   })
   it('has a handler for every command once all contributions have run', () => {

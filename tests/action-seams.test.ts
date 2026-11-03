@@ -34,6 +34,8 @@ describe('server engines', () => {
       expect(row.engines, row.action).toEqual([...catalogActionEngines(row.action as CatalogAction)])
       expect(row.cleanupMs, row.action).toBe(actionLimits.cleanupMs)
     }
+    // New Login (D2a) runs on SQL Server only until D2e.
+    expect(json.actions.filter(row => row.action === 'createLogin').map(row => [row.action, row.engines])).toEqual([['createLogin', ['box']]])
     expect(json.limits.cleanupMs).toBe(10_000)
     expect(designerEngines).toEqual(['box', 'managedInstance'])
     expect(JSON.parse(designerCatalogJson()).engines).toEqual(['box', 'managedInstance'])
