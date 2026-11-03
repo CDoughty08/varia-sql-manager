@@ -361,7 +361,11 @@ export interface NewDatabaseCommandEntry {
   readonly precondition: string
   readonly unavailableHint: string
 }
-/** OK creates the database and closes the document; Cancel closes it; Stop cancels a running OK in SQL Server. */
+/**
+ * OK creates the database and closes the document; Cancel closes it; Stop cancels a running OK in SQL Server. The header
+ * shows SSMS's OK and Cancel, while the palette's titles say what they do: a bare "Cancel", the shorter label, would rank
+ * above Cancel Executing Query wherever both are unavailable.
+ */
 export function newDatabaseCommandEntries(): { readonly [K in NewDatabaseCommandId]: NewDatabaseCommandEntry } {
   return {
     'newDatabase.ok': {
@@ -369,7 +373,7 @@ export function newDatabaseCommandEntries(): { readonly [K in NewDatabaseCommand
       precondition: 'activeDocumentIsNewDatabase && newDatabaseCreatable', unavailableHint: 'Fill in the New Database document on a connected server first.'
     },
     'newDatabase.cancel': {
-      title: 'Cancel', category: 'New Database', icon: 'close', keywords: ['close', 'discard'],
+      title: 'Cancel New Database', category: 'New Database', icon: 'close', keywords: ['close', 'discard'],
       precondition: 'activeDocumentIsNewDatabase && !newDatabaseCreating', unavailableHint: 'Stop the database being created first.'
     },
     'newDatabase.stop': {

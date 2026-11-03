@@ -327,7 +327,7 @@ export default function NewDatabase({ documentId }: { documentId: string }) {
   const args = { tabId: state.id }
   const verbs: Verb[] = state.phase === 'creating'
     ? [{ command: 'newDatabase.stop', args, emphasis: 'danger' }]
-    : [{ command: 'newDatabase.cancel', args }, { command: 'newDatabase.ok', args, label: 'OK', emphasis: 'primary' }]
+    : [{ command: 'newDatabase.cancel', args, label: 'Cancel' }, { command: 'newDatabase.ok', args, label: 'OK', emphasis: 'primary' }]
   const phaseLabel = state.phase === 'loading' ? 'Reading the server…' : state.phase === 'creating' ? 'Creating the database…' : undefined
   const content = (page: PageId) => {
     if (!state.model) return state.phase === 'loading' ? <Skeleton rows={4} label="Reading the server" /> : <p className="field-note">{state.phase === 'loadFailed' ? 'Nothing to show: the server could not be read.' : ''}</p>

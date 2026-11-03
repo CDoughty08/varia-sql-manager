@@ -206,7 +206,7 @@ keys it uses are listed below.
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
 | Create Database | `newDatabase.ok` | — | — | — | `activeDocumentIsNewDatabase && newDatabaseCreatable` | — |
-| Cancel | `newDatabase.cancel` | — | — | — | `activeDocumentIsNewDatabase && !newDatabaseCreating` | — |
+| Cancel New Database | `newDatabase.cancel` | — | — | — | `activeDocumentIsNewDatabase && !newDatabaseCreating` | — |
 | Stop | `newDatabase.stop` | — | — | — | `activeDocumentIsNewDatabase && newDatabaseCreating` | — |
 
 ### Integration Services
