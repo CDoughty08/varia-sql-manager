@@ -118,11 +118,16 @@ export async function openExplorerMenu(page, ...path) {
  * opening and the read (a PR #78 run read none so): it opens again.
  */
 export async function explorerMenuItems(page, ...path) {
+  return itemsWhileOpen(() => openExplorerMenu(page, ...path), path.join(' › '))
+}
+
+/** The items of a menu `open` opens (and returns), read while it is open, as explorerMenuItems reads them. */
+async function itemsWhileOpen(open, title) {
   let items
   await expect(async () => {
-    const menu = await openExplorerMenu(page, ...path)
+    const menu = await open()
     const [names, disabled] = await Promise.all([menuItemNames(menu), menuItemNames(menu, { disabled: true })])
-    expect(names.length, `items of the menu of ${path.join(' › ')}`).toBeGreaterThan(0)
+    expect(names.length, `items of the menu of ${title}`).toBeGreaterThan(0)
     await expect(menu).toBeVisible({ timeout: 1000 })
     items = { names, disabled }
   }).toPass({ timeout: process.platform === 'win32' ? 60000 : 30000, intervals: [100, 250, 500] })
@@ -147,6 +152,14 @@ export async function openExplorerSubmenu(page, path, submenus) {
     }
   }).toPass({ timeout: process.platform === 'win32' ? 60000 : 30000, intervals: [100, 250, 500] })
   return menu
+}
+
+/**
+ * The item names, and those greyed, of a submenu of the row's context menu (openExplorerSubmenu), read while it is open as
+ * explorerMenuItems reads the row's menu: an empty read opens them again. The menus stay open.
+ */
+export async function explorerSubmenuItems(page, path, submenus) {
+  return itemsWhileOpen(() => openExplorerSubmenu(page, path, submenus), [...path, ...submenus].join(' › '))
 }
 
 /**
