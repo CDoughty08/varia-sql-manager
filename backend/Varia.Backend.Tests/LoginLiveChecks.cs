@@ -347,8 +347,9 @@ internal static class LoginLiveChecks
     }
 
     /// <summary>What shows that the A16 session recorded New Login's CREATE LOGIN batch (its password guard) and Create Catalog's
-    /// master key batch: either as text or as UTF-16 bytes, or SQL Server's notice that it replaced an event's text for security.</summary>
-    internal const string XeLoginMarker = "@password IS NULL THROW", XeKeyMarker = "CREATE MASTER KEY ENCRYPTION BY PASSWORD", XeMasked = "for security reasons";
+    /// master key batch: either as text or as UTF-16 bytes, or SQL Server's notice that it replaced an event's text for security, or
+    /// the mask SQL Server 2022 records in place of a statement that holds a password ("*password" and dashes, seen on SQL Server 2022 on Linux).</summary>
+    internal const string XeLoginMarker = "@password IS NULL THROW", XeKeyMarker = "CREATE MASTER KEY ENCRYPTION BY PASSWORD", XeMasked = "for security reasons", XeMaskedStatement = "*password--";
 
     /// <summary>Critic A16: an Extended Events session records RPCs, batches and statements (their text, batch text, data stream and
     /// output parameters) while New Login creates a login and Create Catalog's master key batch runs, each with a throwaway password.
@@ -361,8 +362,8 @@ internal static class LoginLiveChecks
             "the Extended Events check's markers are in New Login's and Create Catalog's password batches");
         var session = scratch.OwnXeSession();
         var definition = "CREATE EVENT SESSION [" + session + "] ON SERVER "
-            + string.Join(", ", XeEvents.Select(item => "ADD EVENT sqlserver." + item.Event + "(SET " + string.Join(", ", item.Fields.Select(field => field + " = (1)")) + ") "
-                + "(ACTION (sqlserver.client_app_name, sqlserver.sql_text) "
+            + string.Join(", ", XeEvents.Select(item => "ADD EVENT sqlserver." + item.Event + "(SET " + string.Join(", ", item.Fields.Select(field => field + " = (1)")) + " "
+                + "ACTION (sqlserver.client_app_name, sqlserver.sql_text) "
                 + "WHERE ([sqlserver].[is_system] = (0) AND [sqlserver].[like_i_sql_unicode_string]([sqlserver].[client_app_name], N'%Object Actions%')))"))
             + " ADD TARGET package0.ring_buffer (SET max_memory = (16384)) WITH (MAX_DISPATCH_LATENCY = 1 SECONDS, EVENT_RETENTION_MODE = NO_EVENT_LOSS);\n"
             + "ALTER EVENT SESSION [" + session + "] ON SERVER STATE = START;";
@@ -400,7 +401,7 @@ internal static class LoginLiveChecks
                 string.Join("\n", item.Descendants("value").Select(value => value.Value))))];
         static bool Seen(List<(string Name, DateTime At, string Text)> events, DateTime from, DateTime to, string marker) => events.Any(item => item.Name == "rpc_completed"
             && item.At >= from && item.At <= to && (item.Text.Contains(marker, StringComparison.Ordinal) || item.Text.Contains(Convert.ToHexString(Encoding.Unicode.GetBytes(marker)), StringComparison.OrdinalIgnoreCase)
-                || item.Text.Contains(XeMasked, StringComparison.Ordinal)));
+                || item.Text.Contains(XeMasked, StringComparison.Ordinal) || item.Text.Contains(XeMaskedStatement, StringComparison.Ordinal)));
         var data = "";
         bool login = false, key = false;
         var waited = Stopwatch.StartNew();

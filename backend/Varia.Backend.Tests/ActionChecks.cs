@@ -206,7 +206,11 @@ internal static class ActionChecks
             // Database Properties (PR-B), and the file and filegroup numbers PR-B2's DDL will meet.
             [924] = "IN_USE", [5042] = "DEPENDENTS", [3709] = "DEPENDENTS", [1828] = "NAME_IN_USE", [5170] = "NAME_IN_USE", [15007] = "NOT_FOUND", [5058] = "NOT_SUPPORTED",
             // Take Offline and Bring Online (D3a).
-            [5011] = "PERMISSION_DENIED"
+            [5011] = "PERMISSION_DENIED",
+            // New Login's password policy: Windows' (15114 to 15118) and SQL Server's own, which SQL Server on Linux applies (33062 too
+            // short, 33063 too long, 33064 not complex enough; probed on SQL Server 2022 CU27 on Linux, where CI's 'zq' answered 33062).
+            [15114] = "PASSWORD_POLICY", [15116] = "PASSWORD_POLICY", [15118] = "PASSWORD_POLICY", [33062] = "PASSWORD_POLICY", [33063] = "PASSWORD_POLICY",
+            [33064] = "PASSWORD_POLICY"
         };
         var wrong = expected.Where(pair => ActionErrors.CodeOf(Sql(pair.Key), null) != pair.Value).Select(pair => pair.Key).ToList();
         check(wrong.Count == 0 && ActionErrors.CodeOf(Sql(50000, 20), null) == "CONNECTION_LOST" && ActionErrors.Numbers.Keys.All(Catalog.ErrorCodes.Contains),
