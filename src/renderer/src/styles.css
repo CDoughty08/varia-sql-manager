@@ -167,6 +167,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .explorer-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 /* Object Explorer's search box (SearchPanel's pane layout): the tab's search, compact, its hits in a band above the tree. */
 .object-search.object-search-pane { flex: 0 1 auto; height: auto; max-height: 50%; border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
+/* Sized by its splitter, the band keeps its share of the pane (an inline height) and the tree below takes the rest. */
+.object-search.object-search-pane[data-sized] { flex: none; max-height: none; }
+.object-search-splitter { flex: none; height: 4px; margin-bottom: -1px; cursor: row-resize; touch-action: none; }
+.object-search-splitter:hover, .object-search-splitter:focus-visible { background: var(--varia-sash-hoverBorder); outline: none; }
 .object-search-pane .object-search-query { gap: var(--varia-space-1); padding: var(--varia-space-2) var(--varia-space-2) var(--varia-space-1); }
 .object-search-pane .object-search-field { max-width: none; }
 .object-search-pane .object-search-field .icon-button { width: 20px; height: 20px; }
@@ -1444,6 +1448,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .document-verb[aria-pressed="true"]:focus-visible { outline-color: CanvasText; }
   .document-script-splitter { background: CanvasText; forced-color-adjust: none; }
   .document-script-splitter:hover, .document-script-splitter:focus-visible { background: Highlight; outline: 2px solid Highlight; }
+  .object-search-splitter { background: CanvasText; forced-color-adjust: none; }
+  .object-search-splitter:hover, .object-search-splitter:focus-visible { background: Highlight; outline: 2px solid Highlight; }
 }
 /* What a document says under its header: its last action's progress or outcome, an inline error, or a note (an SSIS
    document that cannot read again, or whose lists stop short). */
