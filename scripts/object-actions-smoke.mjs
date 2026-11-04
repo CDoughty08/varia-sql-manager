@@ -530,7 +530,8 @@ try {
   expect(await stubCalls('ssis.execute')).toEqual([expect.objectContaining({ action: { verb: 'createCatalog', password: secret, enableClr: true, startupProcedure: true } })])
   await expect(explorerTree(page)).toBeFocused()
   await expandExplorerPath(page, ...catalogs)
-  await expect(await explorerRow(page, ...catalogs, 'SSISDB')).toBeVisible()
+  // On a 1024x768 display the new catalog is below the tree's viewport, where only revealExplorerRow finds it.
+  await expect(await revealExplorerRow(page, ...catalogs, 'SSISDB')).toBeVisible()
   // The dialog's form leaves nothing behind in the page once it closes.
   expect(await page.evaluate(marker => document.documentElement.outerHTML.includes(marker), 'w0rd')).toBe(false)
   await openCreate()

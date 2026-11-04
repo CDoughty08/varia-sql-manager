@@ -14,7 +14,6 @@ const mac = process.platform === 'darwin'
 let profile, application, page
 const failures = []
 const watchdog = setTimeout(() => { console.error('Options suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 420000)
-const fast = { force: true }
 
 const settingsFile = () => join(profile, 'settings.json')
 const stored = () => readFile(settingsFile(), 'utf8').then(JSON.parse, () => null)
@@ -65,7 +64,7 @@ async function openOptions() {
 }
 /** Shows a page by clicking each node of its path; a category shows its first page. */
 async function showPage(...path) {
-  for (const name of path) await node(name).click(fast)
+  for (const name of path) await node(name).click()
   await expect(heading()).toContainText(path.join(' › '))
 }
 const searchKey = mac ? 'Meta+e' : 'Control+e'
@@ -95,7 +94,7 @@ try {
   await expect(heading()).toHaveText('Environment › General')
   await expect(node('General').first()).toHaveAttribute('aria-selected', 'true')
   await expect(optionsNotes(dialog()).first()).toHaveText('Color theme: View › Theme')
-  for (const name of ['Text Editor', 'Transact-SQL', 'Query Execution', 'Query Results', 'SQL Server Object Explorer']) await node(name).click(fast)
+  for (const name of ['Text Editor', 'Transact-SQL', 'Query Execution', 'Query Results', 'SQL Server Object Explorer']) await node(name).click()
   expect(await treeNames()).toEqual([
     'Environment', '  General', '  AutoRecover', '  Documents', '  Fonts and Colors', '  Keyboard', '  Live Data', 'Text Editor', '  General', '  Editor Tab and Status Bar', '  Transact-SQL', '    General', '    Tabs', 'Query Execution', '  SQL Server', '    General', '    Advanced',
     'Query Results', '  SQL Server', '    Results to Grid', 'SQL Server Object Explorer', '  Commands', '  Scripting', 'Activity Monitor',
@@ -103,11 +102,11 @@ try {
   ])
   await expect(heading()).toHaveText('SQL Server Object Explorer › Commands')
   // The SSIS page (S2) is a page of its own at the top level: the tree probe's switch, and its interval, which follows it.
-  await node('SQL Server Integration Services').click(fast)
+  await node('SQL Server Integration Services').click()
   await expect(heading()).toHaveText('SQL Server Integration Services')
   await expect(field('Update the SSIS Catalog in Object Explorer as it changes')).toBeChecked()
   await expect(field('Check the catalog for changes every')).toHaveValue('30')
-  await node('Commands').click(fast)
+  await node('Commands').click()
   await expect(heading()).toHaveText('SQL Server Object Explorer › Commands')
   // The tree's keys: Up and Down show the page they reach, Left goes to the parent, Home to the first node.
   await node('Scripting').focus()
@@ -119,15 +118,15 @@ try {
   await expect(node('Environment')).toBeFocused()
   await expect(heading()).toHaveText('Environment › General')
   // The Keyboard page explains that shortcuts follow SSMS's and cannot be changed yet.
-  await node('Keyboard').click(fast)
+  await node('Keyboard').click()
   await expect(optionsNotes(dialog())).toContainText('cannot be changed yet')
   // Fonts and Colors says where colors are set, above its Size row and while that row is focused.
-  await node('Fonts and Colors').click(fast)
+  await node('Fonts and Colors').click()
   await field('Size').focus()
   await expect(optionsNotes(dialog())).toHaveText('Colors come from the color theme (View › Theme).')
   await expect(optionsDescription(dialog())).toContainText('Size')
   // Environment › AutoRecover has SSMS's defaults (on, every 5 minutes, kept 7 days); off greys both numbers.
-  await node('AutoRecover').click(fast)
+  await node('AutoRecover').click()
   await expect(field('Save AutoRecover information')).toBeChecked()
   await expect(field('Save AutoRecover information every')).toHaveValue('5')
   await expect(field('Keep AutoRecover information for')).toHaveValue('7')
@@ -137,7 +136,7 @@ try {
   await field('Save AutoRecover information').check()
   await expect(field('Keep AutoRecover information for')).toBeEnabled()
   // Environment › Live Data (Varia's own page): hidden views pause after 2 s and stop after 5 min; off greys both delays.
-  await node('Live Data').click(fast)
+  await node('Live Data').click()
   await expect(field('Pause live views that are hidden')).toBeChecked()
   await expect(field('Pause after hidden for')).toHaveValue('2')
   await expect(field('Stop after hidden for')).toHaveValue('5')
@@ -172,13 +171,13 @@ try {
   // The dialog opens on the page last shown.
   await expect(heading()).toHaveText('Query Execution › SQL Server › General')
   await field('Execution time-out').fill('7')
-  await node('Advanced').click(fast)
+  await node('Advanced').click()
   await field('Stop the script at the first batch that raises an error').check()
   await field('Stop the script at the first batch that raises an error').focus()
   await expect(optionsDescription(dialog())).toContainText('Not in SSMS.')
   await showPage('Text Editor', 'Transact-SQL')
   await field('Word wrap').check()
-  await node('Tabs').click(fast)
+  await node('Tabs').click()
   await field('Tab size').fill('2')
   await field('Indent size').fill('2')
   // SSMS's default is Keep tabs; with Insert spaces, Tab inserts an indent's two columns as spaces.
@@ -205,10 +204,10 @@ try {
   await page.keyboard.insertText(' -- ' + 'wrapped '.repeat(60))
   await expect.poll(() => page.locator('.monaco-editor .view-line').count()).toBeGreaterThan(1)
   // F5 on a connected query sends Options' time-out and stop-on-error.
-  await toolbarButton(page, 'Connect').click(fast)
+  await toolbarButton(page, 'Connect').click()
   await page.getByLabel('Server Name', { exact: true }).fill('server-a')
   await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click(fast)
+  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await textbox().focus()
   await page.keyboard.press('Control+A')
@@ -221,14 +220,14 @@ try {
     const orders = await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders')
     await orders.click({ button: 'right', force: true })
     const explorerMenu = page.getByRole('menu', { name: 'Object Explorer', exact: true })
-    await explorerMenu.getByRole('menuitem', { name: 'Select Top 50 Rows', exact: true }).click(fast)
+    await explorerMenu.getByRole('menuitem', { name: 'Select Top 50 Rows', exact: true }).click()
     await expect.poll(async () => (await calls('query.execute')).at(-1)?.sql).toContain('SELECT TOP (50) [Id]')
   }
   console.log('Options checks: one OK saves five pages\' changes as overrides only; Tab, word wrap, F5\'s time-out and stop-on-error, and Select Top 50 Rows follow them.')
 
   // 4. OK refuses an out-of-range value, shows why and focuses the field; Cancel discards a draft that spans two pages.
   await openOptions()
-  await node('Query Execution').click(fast)
+  await node('Query Execution').click()
   await field('Execution time-out').fill('99999')
   await showPage('Text Editor', 'Transact-SQL', 'Tabs')
   await expect(heading()).toHaveText('Text Editor › Transact-SQL › Tabs')
@@ -249,8 +248,8 @@ try {
   await resizeContent(application, page, 1024, 768)
   await expect.poll(() => page.evaluate(() => innerWidth)).toBe(1024)
   await openOptions()
-  await node('SQL Server Object Explorer').click(fast)
-  await node('Scripting').click(fast)
+  await node('SQL Server Object Explorer').click()
+  await node('Scripting').click()
   expect(await layout()).toEqual({ inside: true, overflow: false })
   await page.screenshot({ path: resolve('artifacts', 'options-dark.png') })
   // A form page: checkboxes, number fields with their units, and radio buttons.
@@ -292,7 +291,7 @@ try {
   expect((await readdir(profile)).filter(name => /^settings\.json\.invalid-[0-9a-f-]{36}\.json$/.test(name))).toHaveLength(1)
   expect(await stored()).toEqual({ version: 1, values: { 'queryExecution.executionTimeout': 30 } })
   await openOptions()
-  await node('Query Execution').click(fast)
+  await node('Query Execution').click()
   await expect(field('Execution time-out')).toHaveValue('30')
   await page.keyboard.press('Escape')
   await page.reload()
@@ -309,8 +308,8 @@ try {
   await writeFile(join(profile, 'scripting-options.json'), legacy)
   await launch()
   await openOptions()
-  await node('SQL Server Object Explorer').click(fast)
-  await node('Scripting').click(fast)
+  await node('SQL Server Object Explorer').click()
+  await node('Scripting').click()
   await expect(field('Script USE <database>')).toHaveValue('false')
   await page.keyboard.press('Escape')
   expect(await stored()).toEqual({ version: 1, values: { 'objectExplorer.scripting.scriptUseDatabase': false } })

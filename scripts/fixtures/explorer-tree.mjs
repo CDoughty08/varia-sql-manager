@@ -52,6 +52,35 @@ export async function explorerRow(page, ...path) {
  * event too and waits until the rendered rows cover the viewport. The tree's geometry and rendered rows are logged first.
  */
 export async function revealExplorerRow(page, ...path) {
+  return settledInView(await findExplorerRow(page, path))
+}
+
+/**
+ * Returns the row once the tree holds still and the row is fully in view. A menu closes on scroll, and a tree still being
+ * laid out (a banner just dismissed above it) clamps its scroll as it grows, so the suite waits for its size and scroll to
+ * stay the same for three frames; then a row out of view is scrolled in here, where Playwright's press would otherwise.
+ */
+async function settledInView(row) {
+  await row.evaluate(async element => {
+    const tree = element.closest('[role="tree"]'), shape = () => `${tree.clientHeight} ${tree.scrollTop} ${tree.scrollHeight}`
+    for (let last = '', same = 0, frames = 0; tree && same < 3 && frames < 120; frames++) {
+      await new Promise(resolve => requestAnimationFrame(() => resolve()))
+      const now = shape()
+      same = now === last ? same + 1 : 0
+      last = now
+    }
+  })
+  await row.evaluate(element => new Promise(resolve => {
+    const tree = element.closest('[role="tree"]'), box = element.getBoundingClientRect(), view = tree?.getBoundingClientRect()
+    if (!tree || (box.top >= view.top && box.bottom <= view.bottom)) { resolve(); return }
+    tree.addEventListener('scroll', () => requestAnimationFrame(() => resolve()), { once: true })
+    setTimeout(resolve, 3000)
+    element.scrollIntoView({ block: 'center' })
+  }))
+  return row
+}
+
+async function findExplorerRow(page, path) {
   const found = await explorerRow(page, ...path, { timeout: 2000 }).catch(() => null)
   if (found) return found
   const tree = explorerTree(page), label = path.join(' › ')

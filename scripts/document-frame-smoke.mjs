@@ -46,6 +46,17 @@ const columnFocused = () => column().evaluate(element => element === document.ac
 const scrollTop = () => column().evaluate(element => element.scrollTop)
 const sectionTop = name => frameSection(frame, name).evaluate(element => element.offsetTop)
 const atEnd = () => column().evaluate(element => element.scrollTop + element.clientHeight >= element.scrollHeight - 1)
+/**
+ * Presses a scrolling key in the column and returns once its scroll has started and stopped: Chromium animates keyboard
+ * scrolling on Linux, and a scroll still running would move the column under the next read or press.
+ */
+async function keyScroll(key) {
+  const before = await scrollTop()
+  await page.keyboard.press(key)
+  await expect.poll(scrollTop, `${key} scrolls the column`).not.toBe(before)
+  let last
+  await expect.poll(async () => { const now = await scrollTop(), same = now === last; last = now; return same }, `${key} finishes scrolling`).toBe(true)
+}
 /** Scrolls the column to its start, its end, or a section's heading (by the section's title). */
 const scrollColumn = async target => {
   const top = target === 'start' ? 0 : target === 'end' ? Number.MAX_SAFE_INTEGER : await sectionTop(target)
@@ -108,17 +119,13 @@ try {
   expect(await columnFocused(), 'Tab from the list reaches the column').toBe(true)
   await headingAtTop('Files')
   const filesTop = await sectionTop('Files'), filegroupsTop = await sectionTop('Filegroups')
-  await page.keyboard.press('PageDown')
-  await expect.poll(scrollTop, 'PageDown shows the middle of Files').toBeGreaterThan(filesTop + 100)
+  await keyScroll('PageDown')
+  expect(await scrollTop(), 'PageDown shows the middle of Files').toBeGreaterThan(filesTop + 100)
   expect(await scrollTop()).toBeLessThan(filegroupsTop)
-  for (let press = 0; press < 40 && !await atEnd(); press++) {
-    const before = await scrollTop()
-    await page.keyboard.press('PageDown')
-    await expect.poll(scrollTop).toBeGreaterThan(before)
-  }
-  await expect.poll(atEnd, 'PageDown reaches the end of the column').toBe(true)
-  await page.keyboard.press('PageUp')
-  await expect.poll(atEnd, 'PageUp pages back').toBe(false)
+  for (let press = 0; press < 40 && !await atEnd(); press++) await keyScroll('PageDown')
+  expect(await atEnd(), 'PageDown reaches the end of the column').toBe(true)
+  await keyScroll('PageUp')
+  expect(await atEnd(), 'PageUp pages back').toBe(false)
 
   await item('files').focus()
   await page.keyboard.press('End')
