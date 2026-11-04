@@ -32,5 +32,15 @@ export const objectExplorerSettings = [
     min: 1, max: 2_147_483_647, default: 1000, keywords: ['select top', 'rows'],
     description: 'How many rows Select Top Rows reads, and the number its menu item shows.'
   },
+  {
+    key: 'objectExplorer.search.indexOnConnect', page: 'objectExplorer.commands', group: 'Search Objects', label: 'Index objects when a server connects', type: 'boolean', default: true, varia: true,
+    keywords: ['search', 'index', 'objects', 'find', 'definitions'],
+    description: 'Reads the names of every table, view, procedure, function, synonym, sequence, trigger and type you may see in each database, one database at a time on a session of its own, so Search Objects finds them whether or not Object Explorer has loaded them. The index stays in memory and is dropped when the server disconnects. While it is False, Search Objects indexes a server the first time you search it.'
+  },
+  {
+    key: 'objectExplorer.search.definitions', page: 'objectExplorer.commands', group: 'Search Objects', label: 'Index module definitions', type: 'boolean', default: true, varia: true,
+    keywords: ['search', 'index', 'definitions', 'procedures', 'text'],
+    description: 'Also keeps the text of procedures, functions, views and triggers you may VIEW DEFINITION of, so Search Objects can find text inside them (up to 1,000,000 characters of each, and 64 Mi characters in all). Applies to the next build.'
+  },
   ...scriptingSettingEntries()
 ] as const satisfies readonly SettingDef[]

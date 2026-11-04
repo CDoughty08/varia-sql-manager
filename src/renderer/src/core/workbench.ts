@@ -19,6 +19,7 @@ import { ResultMemoryService } from '../results/memory'
 import { documentOwner, documentPage, LiveService } from '../live/LiveService'
 import { ActivityMonitorService } from '../activity/ActivityMonitorService'
 import { activityContribution } from '../contributions/activity'
+import { searchContribution } from '../contributions/search'
 import ResultsWorker from '../results/results.worker.ts?worker'
 import { GridStats } from '../grid/stats'
 import { PaneService } from '../services/panes'
@@ -69,6 +70,7 @@ import { DatabasePropertiesService } from '../properties/DatabasePropertiesServi
 import { NewDatabaseService } from '../new-database/NewDatabaseService'
 import { RestoreService } from '../restore/RestoreService'
 import { SsisOperationsService } from '../ssis/SsisOperationsService'
+import { ObjectSearchService } from '../search/ObjectSearchService'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
 import { MenuTargetService } from '../menus/targets'
@@ -169,6 +171,8 @@ export interface Workbench extends Disposable {
   readonly activity: ActivityMonitorService
   /** Integration Services Operations (Active Operations, All Executions…): each connection's document, filters and Stop Operation. */
   readonly operations: SsisOperationsService
+  /** Search Objects: each connected server's object index (built in the backend) and the Search Objects tabs. */
+  readonly objectSearch: ObjectSearchService
   readonly theme: ThemeService
   /** Toasts for work that finished out of sight, such as a save whose query is not the active document. */
   readonly notifications: NotificationService
@@ -288,6 +292,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     api, documents, panes, live, connections, settings,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-ssis-operations="${CSS.escape(id)}"] [role="grid"]`)?.focus())
   })
+  const objectSearch = new ObjectSearchService({
+    api, documents, connections, settings,
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-object-search="${CSS.escape(id)}"] [data-object-search-focus]`)?.focus())
+  })
   const context = new ContextKeyService({
     platform,
     documents,
@@ -387,6 +395,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     restore,
     activity,
     operations,
+    objectSearch,
     theme,
     notifications,
     updates,
@@ -409,6 +418,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       resultMemory.dispose()
       actionProgress.dispose()
       // Before the live views: its documents' views and stops are cancelled while the service still runs them.
+      objectSearch.dispose()
       operations.dispose()
       // Before the live views: each monitor disposes its own; then the client, while the port is still there.
       activity.dispose()
@@ -471,6 +481,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     designerContribution(workbench),
     ssisContribution(workbench),
     activityContribution(workbench),
+    searchContribution(workbench),
     settingsContribution(workbench),
     notificationsContribution(workbench)
   ]

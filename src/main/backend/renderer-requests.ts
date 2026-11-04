@@ -89,7 +89,7 @@ export class RendererRequests {
  *  (`connectRequestId`, from its context). Of the Activity Monitor's methods only Details is: Kill carries no requestId. */
 export function cancellableRequests<T>(method: string, channels: { readonly explorer: T; readonly scripting: T; readonly actions: T; readonly ssis: T; readonly activity: T; readonly connections: T }, connectRequestId?: string): T | undefined {
   if (method === 'connections.connect' || method === 'connections.databases') return connectRequestId ? channels.connections : undefined
-  return method === 'explorer.children' ? channels.explorer : method === 'scripting.script' ? channels.scripting : method.startsWith('actions.') ? channels.actions
+  return method.startsWith('explorer.') ? channels.explorer : method === 'scripting.script' ? channels.scripting : method.startsWith('actions.') ? channels.actions
     : method.startsWith('ssis.') ? channels.ssis : method === 'activity.details' ? channels.activity : undefined
 }
 
