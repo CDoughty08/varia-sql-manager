@@ -171,6 +171,8 @@ A property grid: True/False lists, values that differ from their default in bold
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `objectExplorer.selectTopRows` | Value for Select Top &lt;n> Rows command | Integer 1–2,147,483,647 | 1,000 |  | All | At once | How many rows Select Top Rows reads, and the number its menu item shows. |
+| `objectExplorer.search.indexOnConnect` | Index objects when a server connects | Boolean | True |  | All | At once | Reads the names of every table, view, procedure, function, synonym, sequence, trigger and type you may see in each database, one database at a time on a session of its own, so Search Objects finds them whether or not Object Explorer has loaded them. The index stays in memory and is dropped when the server disconnects. While it is False, Search Objects indexes a server the first time you search it. Not in SSMS. |
+| `objectExplorer.search.definitions` | Index module definitions | Boolean | True |  | All | At once | Also keeps the text of procedures, functions, views and triggers you may VIEW DEFINITION of, so Search Objects can find text inside them (up to 1,000,000 characters of each, and 64 Mi characters in all). Applies to the next build. Not in SSMS. |
 
 ### SQL Server Object Explorer › Scripting
 
@@ -274,4 +276,4 @@ How Varia follows the SSIS Catalog (SSISDB) as it changes. Not in SSMS.
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (91 today).
+A patch holds at most one entry per setting (93 today).

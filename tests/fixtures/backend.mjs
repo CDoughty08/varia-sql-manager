@@ -308,6 +308,38 @@ const serverRoles = ['##MS_DatabaseConnector##', '##MS_LoginManager##', 'bulkadm
 // exists. The SSIS Catalog has one folder, Finance, with the project Loads (an entry point and a child package) and the
 // environment Test.
 const explorerProfile = { band: 16, engine: 'box' }
+// Search Objects' fixture index: AppData's dbo.Orders, a procedure whose definition names it, and a trigger on it.
+const searchObjects = [
+  { object: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' }, folder: 'tables', label: 'dbo.Orders' },
+  { object: { kind: 'procedure', database: 'AppData', schema: 'dbo', name: 'usp_ShipOrders' }, folder: 'storedProcedures', label: 'dbo.usp_ShipOrders',
+    definition: 'CREATE PROCEDURE dbo.usp_ShipOrders AS\n  UPDATE dbo.Orders SET shipped = 1;' },
+  { object: { kind: 'trigger', database: 'AppData', name: 'trg_Orders', parent: { kind: 'table', schema: 'dbo', name: 'Orders' } }, folder: 'tableTriggers', label: 'dbo.Orders.trg_Orders' }
+]
+const indexStatus = definitions => ({ state: 'ready', databases: 1, indexed: 1, objects: searchObjects.length, modules: definitions ? 1 : 0, cut: 0, skipped: [], definitions, builtAt: '2026-11-03T12:00:00Z' })
+/** A search of the fixture index with the real backend's options (a regular expression as JavaScript reads it, enough here). */
+function searchFixture({ text, caseSensitive, wholeWord, regex, in: scope = 'all' }) {
+  let pattern
+  try { pattern = new RegExp(regex ? text : text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), caseSensitive ? 'gm' : 'gim') }
+  catch { return { hits: [], total: 0, partial: false, elapsedMs: 0, index: indexStatus(true), problem: 'The regular expression is not valid.' } }
+  const find = value => {
+    for (const match of value.matchAll(pattern)) {
+      const before = value[match.index - 1] ?? '', after = value[match.index + match[0].length] ?? ''
+      if (!wholeWord || (!/[\w@#$]/.test(before) && !/[\w@#$]/.test(after))) return match
+    }
+  }
+  const hits = searchObjects.flatMap(({ definition, ...item }) => {
+    const name = scope !== 'definitions' ? find(item.object.name) : undefined
+    const body = scope !== 'names' && definition ? find(definition) : undefined
+    if (!name && !body) return []
+    const start = body ? definition.lastIndexOf('\n', body.index - 1) + 1 : 0
+    const stop = body ? definition.indexOf('\n', body.index) : -1
+    const end = stop < 0 ? definition?.length ?? 0 : stop
+    const line = body ? definition.slice(0, body.index).split('\n').length : 0
+    return [{ ...item, ...name ? { range: [item.label.length - item.object.name.length + name.index, name[0].length] } : {},
+      ...body ? { definition: { line, column: body.index - start + 1, preview: definition.slice(start, end), range: [body.index - start, body[0].length], before: false, after: false, matches: 1, cut: false } } : {} }]
+  })
+  return { hits, total: hits.length, partial: false, elapsedMs: 1, index: indexStatus(true) }
+}
 const explorerRows = {
   systemDatabases: () => ['master', 'model', 'msdb', 'tempdb'].map(name => explorerObject({ kind: 'database', name }, name, { subtype: 'system', hasChildren: true })),
   databaseSnapshots: () => [explorerObject({ kind: 'database', name: 'AppData_Snapshot' }, 'AppData_Snapshot', { subtype: 'snapshot', icon: 'device-camera', hasChildren: true })],
@@ -987,6 +1019,13 @@ async function workbench(id, method, params, credit) {
       return respond(id, { steps: [{ status: 'done', title: 'Drop the object' }], messages: [], elapsedMs: 1 })
     case 'tables.columns': return respond(id, { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false })
     case 'explorer.children': return respond(id, await explorerChildren(params))
+    case 'explorer.index': {
+      const event = value => process.stdout.write(encodeFrame(FrameKind.EVENT, id, 0, encodeControl(value)))
+      event({ type: 'explorer.index.progress', done: 0, total: 1, objects: 0 })
+      event({ type: 'explorer.index.progress', done: 1, total: 1, objects: searchObjects.length })
+      return respond(id, { status: indexStatus(params.definitions !== false), elapsedMs: 2 })
+    }
+    case 'explorer.search': return respond(id, searchFixture(params))
     case 'ssis.describe': return ssisDescribe(id, params)
     case 'ssis.execute': return respond(id, ssisExecute(params))
     case 'query.execute': {

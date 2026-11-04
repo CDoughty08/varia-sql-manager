@@ -30,8 +30,8 @@ pages, limits, error codes, display formats, benchmarks).
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 1222 offline
-  checks; how many depends on the server version and authentication (2001 against a local SQL Server 2025 in Mixed Mode, which
+  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 1279 offline
+  checks; how many depends on the server version and authentication (2016 against a local SQL Server 2025 in Mixed Mode, which
   adds the low-privilege login checks, with Windows authentication and `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer, Script As and object action
   scratch-database checks (the last in their own `VariaScratch_…_act` database) and the script goldens in `tests/fixtures/scripting/`; `VARIA_UPDATE_SCRIPT_GOLDENS=1`
   rewrites the goldens whose manifest source is `varia`),
@@ -130,7 +130,7 @@ pages, limits, error codes, display formats, benchmarks).
   Explorer's status chips are `background` views (`ExplorerStatusService`, one per connected server and login, owned by
   the pane, sampling in master): at most 8 a window, in slots no other view wants, given up to views the user opens when
   the window's slots are taken or the backend refuses them `BUSY` on that server; they never reload the tree.
-  Job progress EVENTs (`results.export`, `actions.execute`) are droppable, per-request and not periodic data.
+  Job progress EVENTs (`results.export`, `actions.execute`, `explorer.index`) are droppable, per-request and not periodic data.
 - UI result caches are 256 windows and 16 Mi units; the worker cache is 64 MiB.
 - Bound every input and output: 4 MiB request and 16 MiB response bodies, 1M-character scripts, 256 pending requests
   per backend generation, a deadline per method (`methodPolicies`), credit for result streams (16 MiB per stream, 64 MiB
@@ -163,6 +163,13 @@ pages, limits, error codes, display formats, benchmarks).
   text per query, band and filter shape, with values as parameters and database names only through `QUOTENAME`; no
   metadata built-ins; `READ UNCOMMITTED` and `LOCK_TIMEOUT 5000` on the explorer pool. The offline `CatalogSql` lint
   renders and checks every variant.
+- Search Objects' index (`backend/Varia.Backend/Search/`, docs/object-search.md) lives only in backend memory, one per
+  connection, never on disk, and is dropped on disconnect; its limits are `objectSearchLimits` in
+  `src/shared/explorer/search.ts`, mirrored in C# (`tests/object-search.test.ts`), with definition text under one budget
+  for all connections (`IndexBudget`). It reads on its own pool (" - Object Search", the explorer's prologue) from
+  `ObjectSearchSql`'s constant batch, run in each database only through `QUOTENAME(@db).sys.sp_executesql` and linted by
+  `CatalogSql.Lint`; definitions come from `sys.sql_modules`. Regex runs only `NonBacktracking` with a match timeout, and
+  a database the build cannot read is a skipped value. Never log names, definitions or search text.
 - Script As verbs, titles, URN types and preflight ids live only in `src/shared/scripting/catalog.ts`, and scripting
   options only in `options.ts`; after changing them, regenerate `docs/scripting.md` and the backend's embedded
   `Scripting/scripting-catalog.json` with `npx vitest run tests/scripting-catalog.test.ts -u`. Scripting uses its own
