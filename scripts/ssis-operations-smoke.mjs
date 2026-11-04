@@ -27,7 +27,6 @@ page.on('pageerror', error => failures.push(error.message))
 const title = 'Operations'
 const frame = () => documentFrame(page, title)
 const grid = () => liveGrid(page, 'Operations')
-const fast = { force: true }
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 const parts = { grid: liveGridSelector('Operations'), row: gridPart.row, cell: gridPart.cell, tones: gridTones }
 /** The operations shown, top to bottom: id, type, status and folder (the grid draws only the columns in view), and tone. */
@@ -79,7 +78,7 @@ async function fromCatalog(server, item) {
   await (await revealExplorerRow(page, server, 'Integration Services Catalogs', 'SSISDB')).click({ button: 'right', force: true })
   const menu = menuNamed('Object Explorer')
   await expect(menu).toBeVisible()
-  await menu.getByRole('menuitem', { name: item, exact: true }).click(fast)
+  await menu.getByRole('menuitem', { name: item, exact: true }).click()
 }
 
 try {
@@ -134,7 +133,7 @@ try {
   const operationsMenu = menuNamed('Integration Services Operations')
   await expect(operationsMenu).toBeVisible()
   expect(await menuItemNames(operationsMenu)).toEqual(['Stop Operation', 'Copy', 'Copy with Headers', 'Refresh', 'Pause'])
-  await operationsMenu.getByRole('menuitem', { name: 'Stop Operation', exact: true }).click(fast)
+  await operationsMenu.getByRole('menuitem', { name: 'Stop Operation', exact: true }).click()
   const question = frame().getByRole('alertdialog', { name: 'Stop Operation', exact: true })
   await expect(question).toContainText('Stop Daily.dtsx? It stops after its current work.')
   await expect(question.getByRole('button', { name: 'Keep running', exact: true })).toBeFocused()
@@ -205,7 +204,7 @@ try {
   await expect(frame()).toContainText(/Live · every 1 s/)
   // The row header selects the whole row, as in a results grid.
   await grid().locator(gridPart.row, { has: page.locator(gridPart.cell, { hasText: /^103$/ }) }).locator(gridPart.rowHeader).click({ button: 'right', force: true })
-  await operationsMenu.getByRole('menuitem', { name: 'Copy with Headers', exact: true }).click(fast)
+  await operationsMenu.getByRole('menuitem', { name: 'Copy with Headers', exact: true }).click()
   await expect.poll(clipboard).toMatch(/^ID\tType\tStatus\tFolder.*\r?\n103\tCreate and start execution\tFailed\tFinance/s)
   console.log('Verbs passed: F5 refreshes, Pause stops and resumes, Copy with Headers copies the selected operation.')
 

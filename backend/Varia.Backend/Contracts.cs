@@ -189,7 +189,7 @@ internal sealed record ScriptError(string Code, string Message, bool Retryable);
 internal sealed record ScriptResult(string? Text, string Database, List<string> Warnings, int Commands, long ElapsedMs, ScriptError? Error = null);
 
 /// <summary>actions.describe: what an object dialog shows (deleteObject: Delete Object's row; databaseProperties: Database Properties' pages),
-/// what the table designer needs of a database (tableDesigner), one database's roles and schemas for User Mapping (loginDatabaseRoles), the server's folders (serverFiles, the server as Target, with Files),
+/// what an inline action reads first (renameDatabase), what the table designer needs of a database (tableDesigner), one database's roles and schemas for User Mapping (loginDatabaseRoles), the server's folders (serverFiles, the server as Target, with Files),
 /// what Restore Database restores from (restoreDatabase, the server as Target, with Restore), or Attach Databases' server facts and,
 /// with Attach, one primary data file's database (attachDatabase, the server as Target).</summary>
 internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target, ServerFilesArgsDto? Files = null, RestoreSourceDto? Restore = null,
@@ -248,7 +248,7 @@ internal sealed record ServerFileEntryDto(string Name, bool Directory, long? Siz
 /// For Exists, Path is the path checked and Entries its own entry when it exists (none when it does not, or with legacyEmpty when
 /// SQL Server 2016 will not tell a login outside sysadmin).</summary>
 internal sealed record ServerFilesDto(string Separator, string? Path, List<ServerRootDto> Roots, List<ServerFileEntryDto> Entries, bool Truncated, string? Notice = null);
-/// <summary>actions.script and actions.execute: rename takes NewName, delete the two database options, properties
+/// <summary>actions.script and actions.execute: rename takes NewName (a database's also CloseConnections and Identity), delete the two database options, properties
 /// CloseConnections and Changes, createTable (Target the database) and createDatabase (Target the new database) Design, restore
 /// (Target the destination database) Restore and Identity, restoreFiles (Target the database) RestoreFiles and Identity, attach (Target
 /// the server) Databases, createLogin (Target the server) Login, ServerRoles, Mappings, Status and, on execute only, Secrets, takeOffline
@@ -357,12 +357,19 @@ internal sealed record DatabaseSessionDto(int SessionId, string? Login, string? 
 internal sealed record DatabaseStateDto(string Name, DatabaseIdentityDto Identity, int State, int UserAccess, bool ReadOnly, bool Standby, int? Sessions, int? WithTransaction,
     List<DatabaseSessionDto> SessionList, bool SessionsTruncated, List<ActionWarningDto> Warnings, List<DatabaseFileRefDto>? Files = null, bool? FilesTruncated = null,
     bool? ConfirmOffline = null);
+/// <summary>What a database's rename reads first (src/shared/actions/schema.ts RenameDatabaseFacts): the database read, its user_access,
+/// the sessions in it without the backend's own pooled ones (null counts: no VIEW SERVER STATE), the logins whose default database it
+/// is, whether Varia may close the sessions (not on Managed Instance, nor in a SINGLE_USER database), and the backend's connections to the
+/// same server (by SERVERPROPERTY('ServerName')), at most the catalogue's serverConnections, this one first.</summary>
+internal sealed record RenameDatabaseDto(string Name, DatabaseIdentityDto Identity, int UserAccess, int? Sessions, int? WithTransaction, int LoginsDefaulting, bool CanClose,
+    List<string> Connections);
 /// <summary>A database file by id (src/shared/actions/schema.ts DatabaseFileRef): Type rows, log or filestream; Path as the server
 /// names it (at most the catalogue's filePath characters), never logged.</summary>
 internal sealed record DatabaseFileRefDto(int FileId, string Name, string Type, string Path);
 internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long ElapsedMs, ActionError? Error = null, DatabasePropertiesDto? DatabaseProperties = null,
     TableDesignerModelDto? TableDesigner = null, ServerFilesDto? ServerFiles = null, RestoreModelDto? Restore = null, NewDatabaseModelDto? NewDatabase = null,
-    AttachDescribeDto? AttachDatabase = null, NewLoginModelDto? NewLogin = null, DatabaseStateDto? DatabaseState = null, LoginDatabaseRolesDto? LoginDatabaseRoles = null);
+    AttachDescribeDto? AttachDatabase = null, NewLoginModelDto? NewLogin = null, DatabaseStateDto? DatabaseState = null, LoginDatabaseRolesDto? LoginDatabaseRoles = null,
+    RenameDatabaseDto? RenameDatabase = null);
 /// <summary>User Mapping's read of one database (src/shared/actions/logins.ts LoginDatabaseRoles): its roles and schemas by name, each
 /// bounded by loginLimits, and whether guest has CONNECT there.</summary>
 internal sealed record LoginDatabaseRolesDto(List<string> Roles, bool RolesTruncated, bool Guest, List<string> Schemas, bool SchemasTruncated);
@@ -407,9 +414,10 @@ internal sealed record ActionStepDto(string Status, string Title, string? Messag
 /// they are could not be asked). The reply leaves it out when it could not be read. After a file restore, FilesRestoring names the database's files
 /// still RESTORING (sys.master_files.state 1), by logical name.</summary>
 internal sealed record RestoredDatabaseDto(int? State, int? UserAccess, bool? Absent = null, List<string>? FilesLeft = null, bool? FilesUnknown = null, List<string>? FilesRestoring = null);
-/// <summary>FilesKept: Detach's files left on the server once the database was detached (at most the catalogue's detachFiles).</summary>
+/// <summary>FilesKept: Detach's files left on the server once the database was detached (at most the catalogue's detachFiles); Identity: a
+/// renamed database's under its new name (src/shared/actions/schema.ts ActionExecuteResult).</summary>
 internal sealed record ActionExecuteResult(List<ActionStepDto> Steps, List<string> Messages, long ElapsedMs, ActionError? Error = null, RestoredDatabaseDto? Restored = null,
-    List<DatabaseFileRefDto>? FilesKept = null);
+    List<DatabaseFileRefDto>? FilesKept = null, DatabaseIdentityDto? Identity = null);
 
 /// <summary>ssis.describe (src/shared/ssis/schema.ts): a view of the SSIS catalogue and the tree object it describes.</summary>
 internal sealed record SsisDescribeArgs(string ConnectionId, string RequestId, string View, ObjectRefDto Target);

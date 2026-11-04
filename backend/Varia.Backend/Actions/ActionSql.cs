@@ -275,11 +275,13 @@ internal static partial class ActionSql
     /// in the database (ALTER ANY DATABASE, dbcreator), to sysadmin while another session holds a SINGLE_USER database, and to everyone
     /// on a database that is not online (probed on SQL Server 2025). So ALTER ANY DATABASE, dbcreator (sys.login_token) or ownership
     /// grant it in any state, and ALTER on the database while it is online. The owner falls back to SUSER_SNAME(d.owner_sid): a Windows
-    /// group's member owns it with no server principal of its own. can_detach is what sp_detach_db's DBCC DETACHDB needs that master
-    /// can answer, sysadmin or ownership (ALTER, CONTROL, ALTER ANY DATABASE and dbcreator get 7983; probed on SQL Server 2025); a
-    /// member of the database's db_owner role is read inside it (DetachInside). sql_login: this connection's login is SQL Server's
-    /// own, whose detached files only the service account can open again on Windows.</summary>
-    public const string Database ="SELECT d.database_id AS database_id, d.create_date AS create_date, d.state AS state, d.state_desc AS state_desc, "
+    /// group's member owns it with no server principal of its own. can_rename is what MODIFY NAME needs: ALTER on the database, which
+    /// it checks with access to the database (a dbcreator member without a user in it gets 916, probed on SQL Server 2025), or
+    /// CONTROL SERVER or ownership, which HAS_PERMS_BY_NAME on the database denies while another session holds it SINGLE_USER. can_detach
+    /// is what sp_detach_db's DBCC DETACHDB needs that master can answer, sysadmin or ownership (ALTER, CONTROL, ALTER ANY DATABASE and
+    /// dbcreator get 7983; probed on SQL Server 2025); a member of the database's db_owner role is read inside it (DetachInside). sql_login:
+    /// this connection's login is SQL Server's own, whose detached files only the service account can open again on Windows.</summary>
+    public const string Database = "SELECT d.database_id AS database_id, d.create_date AS create_date, d.state AS state, d.state_desc AS state_desc, "
         + "d.user_access AS user_access, d.is_read_only AS is_read_only, d.is_in_standby AS is_in_standby, "
         + "CONVERT(bit, CASE WHEN d.source_database_id IS NULL THEN 0 ELSE 1 END) AS is_snapshot, "
         + "CONVERT(bit, CASE WHEN d.database_id <= 4 OR d.is_distributor = 1 THEN 1 ELSE 0 END) AS is_system, "
@@ -295,6 +297,8 @@ internal static partial class ActionSql
         + "CONVERT(bit, CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'ALTER ANY DATABASE') = 1 OR d.owner_sid = SUSER_SID() "
         + "OR EXISTS (SELECT 1 FROM sys.login_token AS t WHERE t.type = N'SERVER ROLE' AND t.name = N'dbcreator') THEN 1 "
         + "WHEN d.state = 0 THEN ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'ALTER'), 1) ELSE 0 END) AS can_alter_state, "
+        + "CONVERT(bit, CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'CONTROL SERVER') = 1 OR d.owner_sid = SUSER_SID() THEN 1 "
+        + "ELSE ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'ALTER'), 1) END) AS can_rename, "
         + "CONVERT(bit, CASE WHEN IS_SRVROLEMEMBER(N'sysadmin') = 1 OR d.owner_sid = SUSER_SID() THEN 1 ELSE 0 END) AS can_detach, "
         + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.login_token AS t WHERE t.type = N'SQL LOGIN') THEN 1 ELSE 0 END) AS sql_login, "
         + "CONVERT(bit, CASE WHEN ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'CONTROL'), 1) = 1 OR HAS_PERMS_BY_NAME(NULL, NULL, N'ALTER ANY DATABASE') = 1 THEN 1 ELSE 0 END) AS can_drop, "
@@ -354,6 +358,10 @@ internal static partial class ActionSql
         + "es.open_transaction_count AS open_transactions FROM sys.dm_exec_sessions AS es WHERE es.database_id = @id AND es.session_id <> @@SPID "
         + "ORDER BY es.session_id;";
 
+    /// <summary>How many logins have the database as their default (D3c): after a rename they cannot sign in with it (4064) until it
+    /// is changed. Without VIEW ANY DEFINITION sys.server_principals shows a login only itself, so it counts the logins this one can see.</summary>
+    public const string LoginsDefaulting = "SELECT COUNT(*) AS logins FROM sys.server_principals AS p WHERE p.default_database_name = @name;";
+
     /// <summary>Detach's files that stay on the server (sys.master_files, in master): at most @take by file id, as the database had them
     /// when the dialog or the action read it. Paths are never logged.</summary>
     public const string DatabaseFiles = "SELECT TOP (@take) f.file_id AS file_id, f.name AS file_name, f.type AS file_type, f.physical_name AS physical_name "
@@ -368,6 +376,9 @@ internal static partial class ActionSql
 
     /// <summary>A database's state and user access after an action, in master (Bring Online reports a database still SINGLE_USER).</summary>
     public const string DatabaseAccess = "SELECT d.state AS state, d.user_access AS user_access FROM sys.databases AS d WHERE d.name = @name;";
+
+    /// <summary>A database's identity by name, in master: a renamed database's under its new name (MODIFY NAME gives it a new create_date).</summary>
+    public const string DatabaseIdentity = "SELECT d.database_id AS database_id, d.create_date AS create_date FROM sys.databases AS d WHERE d.name = @name;";
 
     // --- Lint -----------------------------------------------------------------------------------------------------------
 
@@ -552,6 +563,8 @@ internal static partial class ActionSql
         yield return ("transaction sessions", LintCatalog(TransactionSessions, ExplorerCatalog.MaxBand, database: false));
         yield return ("database sessions", LintCatalog(DatabaseSessions, ExplorerCatalog.MaxBand, database: false));
         yield return ("database access", LintCatalog(DatabaseAccess, ExplorerCatalog.MaxBand, database: false));
+        yield return ("database identity", LintCatalog(DatabaseIdentity, ExplorerCatalog.MaxBand, database: false));
+        yield return ("logins defaulting", LintCatalog(LoginsDefaulting, ExplorerCatalog.MaxBand, database: false));
         yield return ("database files", LintCatalog(DatabaseFiles, ExplorerCatalog.MaxBand, database: false));
         yield return ("detach inside", LintCatalog(DetachInside, ExplorerCatalog.MaxBand, database: true));
         yield return ("module call", LintCatalog(ModuleCall, ExplorerCatalog.MaxBand, database: false));

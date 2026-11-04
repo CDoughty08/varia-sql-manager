@@ -640,6 +640,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         return name.Length > 128 ? name[..128] : name;
     }
 
+    IReadOnlyList<string> IActionHost.SameServer(string connectionId) => SameServer(connectionId);
+
     /// <summary>The connection itself, then every other connection of this backend that reaches its server (ServerOf).</summary>
     private List<string> SameServer(string connectionId)
     {

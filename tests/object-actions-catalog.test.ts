@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import {
   actionCommandEntries, actionContextKey, actionContextValues, actionErrorCodes, actionErrorRetryable, actionKindSpecs, actionLimits, actionMenuState, actionOffered, actionRow,
-  actionsCatalogJson, actionStatuses, createActionSpecs, databaseActionState, databaseStateOf, dialogIds, dialogSpecs, dialogTitle, isCreateAction, isModalDialog, objectActions, objectActionSpecs, offeredOnEngine, overlayRow,
+  actionsCatalogJson, actionStatuses, createActionSpecs, databaseActionState, databaseStateOf, dialogIds, dialogSpecs, dialogTitle, factDescribeSpecs, isCreateAction, isModalDialog, objectActions, objectActionSpecs, offeredOnEngine, overlayRow,
   isServerAction, newDatabaseCommandEntries, pageIds, propertiesCommandEntries, serverActionCommandEntries, serverActions, serverActionSpecs, scriptActionTitles, unknownOutcomeMessage, type ActionCommandId, type DatabaseActionRule, type ModalDialogId, type PageId
 } from '../src/shared/actions/catalog'
 import { currentDatabaseRuntime } from '../src/shared/explorer/status'
@@ -225,6 +225,22 @@ describe('object action catalogue', () => {
     expect(databaseActionState(row, { ...online, userAccess: 1, state: 42 }, rules).reasons).toEqual({ properties: 'Single user.' })
     expect([0, 1, 2, 3, 4, 5, 6, 7, 10, 8, 99].map(databaseStateOf)).toEqual(['online', 'restoring', 'recovering', 'recoveryPending', 'suspect', 'emergency', 'offline', 'copying', 'offlineSecondary', 'other', 'other'])
   })
+  it('greys a database\'s Rename unless it is online, as MODIFY NAME opens the database (D3c)', () => {
+    const at = (state: number) => { const { row, reasons } = databaseActionState(actionRow('database')!, { ...online, state }); return [row.rename, reasons.rename ?? ''] }
+    expect(at(0)).toEqual(['enabled', ''])
+    for (const state of [1, 2, 3, 4, 5, 6, 7, 10, 99]) expect(at(state), String(state)).toEqual(['disabled', 'The database must be online to be renamed.'])
+    // Access leaves it: MODIFY NAME renames a SINGLE_USER or RESTRICTED_USER database. A read-only or standby one fails with 902.
+    expect(databaseActionState(actionRow('database')!, { ...online, userAccess: 1 }).row.rename).toBe('enabled')
+    expect(databaseActionState(actionRow('database')!, { ...online, userAccess: 2 }).row.rename).toBe('enabled')
+    for (const runtime of [{ readOnly: true }, { standby: true }]) {
+      expect(databaseActionState(actionRow('database')!, { ...online, ...runtime })).toMatchObject({ row: { rename: 'disabled' }, reasons: { rename: 'A read-only database cannot be renamed.' } })
+    }
+    // Offline wins: the first rule that applies gives the reason.
+    expect(databaseActionState(actionRow('database')!, { ...online, state: 6, readOnly: true }).reasons.rename).toBe('The database must be online to be renamed.')
+    // The fact describe serves Rename, on databases only, and the backend's copy names it.
+    expect(factDescribeSpecs).toEqual({ renameDatabase: { action: 'rename', kinds: ['database'] } })
+    expect(JSON.parse(actionsCatalogJson()).describes).toEqual([{ action: 'rename', describe: 'renameDatabase', kinds: ['database'] }])
+  })
   it('greys Take Offline and Bring Online by the database\'s state, with the reason the menu shows', () => {
     const at = (state: number) => { const { row, reasons } = databaseActionState(actionRow('database')!, { ...online, state }); return [row.takeOffline, row.bringOnline, reasons.takeOffline ?? '', reasons.bringOnline ?? ''] }
     expect(at(0)).toEqual(['enabled', 'disabled', '', 'The database is online.'])
@@ -233,10 +249,10 @@ describe('object action catalogue', () => {
     // Bring Online tries recovery on the states SQL Server lets SET ONLINE act on (owner default 7).
     for (const state of [3, 4, 5, 99]) expect(at(state).slice(0, 2), String(state)).toEqual(['enabled', 'enabled'])
     expect(at(10).slice(0, 2)).toEqual(['disabled', 'enabled'])
-    // Access and read-only change neither; the other actions keep their rows.
-    expect(databaseActionState(actionRow('database')!, { ...online, userAccess: 1, readOnly: true }).row).toEqual({ ...actionRow('database'), bringOnline: 'disabled' })
+    // Access and read-only change neither; the other actions keep their rows, except Rename, which read-only greys.
+    expect(databaseActionState(actionRow('database')!, { ...online, userAccess: 1, readOnly: true }).row).toEqual({ ...actionRow('database'), bringOnline: 'disabled', rename: 'disabled' })
     // The menu keys read the runtime; an unknown one leaves both enabled for the preflight to decide.
-    expect(actionMenuState({ kind: 'database', database: { ...online, state: 6 } })).toMatchObject({ takeOffline: 'disabled', bringOnline: 'enabled', rename: 'enabled' })
+    expect(actionMenuState({ kind: 'database', database: { ...online, state: 6 } })).toMatchObject({ takeOffline: 'disabled', bringOnline: 'enabled', rename: 'disabled', properties: 'enabled' })
     expect(actionMenuState({ kind: 'database' })).toMatchObject({ takeOffline: 'enabled', bringOnline: 'enabled' })
     // SQL Server's own databases stay greyed whatever their state; Managed Instance and Azure SQL Database hide both.
     expect(actionMenuState({ kind: 'database', subtype: 'system', database: { ...online, state: 6 } })).toMatchObject({ takeOffline: 'disabled', bringOnline: 'disabled' })

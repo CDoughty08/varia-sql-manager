@@ -51,6 +51,7 @@ import { scriptingOptionsFrom } from '../../../shared/settings/catalog'
 import type { SettingsService } from '../settings/SettingsService'
 import { ScriptingService } from '../scripting/ScriptingService'
 import { ObjectActionService } from '../actions/ObjectActionService'
+import { databaseRenameHooks } from '../actions/database-rename'
 import { databaseGoneHandler } from '../dialogs/database-gone'
 import { ActionProgressService } from '../actions/ActionProgressService'
 import { ObjectDialogService } from '../dialogs/ObjectDialogService'
@@ -329,7 +330,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const menuState = new MenuStatePublisher({ commands, context, send: state => api.setMenuState(state) })
   const actions = new ObjectActionService({
     api, explorer, documents, queries, connections, selectTopCount: () => settings.get('objectExplorer.selectTopRows'),
-    report: { error: message => commands.reportError(message), warning: message => commands.reportWarning(message) }
+    report: { error: message => commands.reportError(message), warning: message => commands.reportWarning(message) },
+    databases: databaseRenameHooks({ documents, queries, connections, targets, properties }),
+    notify: notice => { notifications.notify(notice) }
   })
   const cleanup = events.subscribe(event => { if (event.type === 'documents.closed') queries.forget(event.tabId) })
   let disposed = false

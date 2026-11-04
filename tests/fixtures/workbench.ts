@@ -46,6 +46,7 @@ import { helpContribution } from '../../src/renderer/src/contributions/help'
 import { scriptingContribution } from '../../src/renderer/src/contributions/scripting'
 import { ScriptingService } from '../../src/renderer/src/scripting/ScriptingService'
 import { ObjectActionService } from '../../src/renderer/src/actions/ObjectActionService'
+import { databaseRenameHooks } from '../../src/renderer/src/actions/database-rename'
 import { databaseGoneHandler } from '../../src/renderer/src/dialogs/database-gone'
 import { ObjectDialogService } from '../../src/renderer/src/dialogs/ObjectDialogService'
 import { CreateCatalogService } from '../../src/renderer/src/ssis/CreateCatalogService'
@@ -280,8 +281,10 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
       return { ok: true, value: { text: `-- ${params.verb} ${[object.schema, object.name].filter(Boolean).join('.')}`, database: object.database ?? 'master', warnings: [], commands: 1, elapsedMs: 1 } }
     }),
     cancelScripting: vi.fn<VariaApi['cancelScripting']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
-    // Delete Object's row for the object; actions succeed with one done step.
-    describeObject: vi.fn<VariaApi['describeObject']>(async params => ({
+    // Delete Object's row for the object, or a database rename's facts (no other session); actions succeed with one done step.
+    describeObject: vi.fn<VariaApi['describeObject']>(async params => params.dialog === 'renameDatabase'
+      ? { ok: true, value: { renameDatabase: { name: params.target.name!, identity: { id: 7, created: '2026-01-02T03:04:05.000' }, userAccess: 0, sessions: 0, withTransaction: 0, loginsDefaulting: 0, canClose: true, connections: [params.connectionId] }, elapsedMs: 1 } }
+      : ({
       ok: true, value: { deleteTarget: { name: [params.target.schema, params.target.name].filter(Boolean).join('.'), type: kindSpecs[params.target.kind].title, owner: 'dbo', warnings: [], dependentsTruncated: false }, elapsedMs: 1 }
     })),
     scriptObjectAction: vi.fn<VariaApi['scriptObjectAction']>(async params => ({ ok: true, value: { text: `-- ${params.action} ${params.target.name}`, database: params.action === 'createTable' ? params.target.name : params.action === 'createDatabase' ? 'master' : params.target.database ?? 'master', warnings: [] } })),
@@ -386,7 +389,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
   const actions = new ObjectActionService({
     api, explorer, documents, queries, connections, selectTopCount: () => settings.get('objectExplorer.selectTopRows'),
-    report: { error: message => commands.reportError(message), warning: message => commands.reportWarning(message) }, ...(options.timers ? { timers: options.timers } : {})
+    report: { error: message => commands.reportError(message), warning: message => commands.reportWarning(message) }, ...(options.timers ? { timers: options.timers } : {}),
+    databases: databaseRenameHooks({ documents, queries, connections, targets, properties }), notify: notice => { notifications.notify(notice) }
   })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen: options.modal ?? (() => false), editorHasTextFocus: () => false })
   const host: ShellHost = {
