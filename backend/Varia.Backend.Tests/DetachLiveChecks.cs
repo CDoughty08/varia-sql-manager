@@ -181,9 +181,12 @@ internal static class DetachLiveChecks
             var busy = await Describe(db);
             var inUse = await Execute(Detach(db, drop: false, statistics: false, identity: identity));
             var open = (await Sql("SELECT @@TRANCOUNT;", db, holder)).Scalar;
+            var stateAfter = await State();
             check(held.Status == "completed" && busy is { Error: null, DatabaseState: { Sessions: 1, WithTransaction: 1 } } && inUse is { Error.Code: "IN_USE" } && Steps(inUse) == "failed:Detach the database"
-                && inUse.Error.Message.EndsWith(ActionErrors.DropConnectionsAdvice, StringComparison.Ordinal) && open == "1" && await State() == "ONLINE MULTI_USER",
-                "a session in the database makes sp_detach_db fail IN_USE without Drop Connections, and its transaction stays open (" + inUse.Error?.Message + ")");
+                && inUse.Error.Message.EndsWith(ActionErrors.DropConnectionsAdvice, StringComparison.Ordinal) && open == "1" && stateAfter == "ONLINE MULTI_USER",
+                "a session in the database makes sp_detach_db fail IN_USE without Drop Connections, and its transaction stays open (" + inUse.Error?.Message + "; held " + held.Status
+                + ", described " + (busy.Error?.Code ?? busy.DatabaseState?.Sessions + " sessions, " + busy.DatabaseState?.WithTransaction + " with a transaction") + ", steps " + Steps(inUse)
+                + ", @@TRANCOUNT " + open + ", " + stateAfter + ")");
             scratch.Detaching(db, paths);
             var detached = await Execute(Detach(db, drop: true, statistics: true, identity: identity));
             var after = await Sql("SELECT 1;", db, holder);

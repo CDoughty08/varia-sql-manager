@@ -445,7 +445,6 @@ internal static partial class ScriptingLiveChecks
         await VerbsAsync(check, client, sql, scratch);
         await UnresolvedAsync(check, client, sql, scratch);
         await DependentDatabasesAsync(check, service, client, sql, scratch);
-        await InjectionAsync(check, service, client, live, json, scratch);
         await OldHeadersAsync(check, client, sql, db);
         await CultureAsync(check, client, sql, db);
         await GoldenAsync(check, service, client, scratch, sql, live, json);
@@ -809,6 +808,30 @@ internal static partial class ScriptingLiveChecks
         check(created.Status == "completed" && cased.Error is { Code: "ENCRYPTED" } && cased.Error.Message == "dbo.fn_Secret is encrypted (WITH ENCRYPTION), so dbo.vSecretCase cannot "
             + "be scripted with Generate script for dependent objects on. Turn it off in Tools › Options › Scripting and try again.",
             "a dependent reached through the target's database spelled in another case is not named as in another database: " + (created.Error ?? cased.Error?.Message));
+    }
+
+    /// <summary>The injection matrix as a live suite of its own: it needs none of the scripting fixture, and it is the longest
+    /// part of Script As's checks, so CI's live groups can balance it apart from the rest (LiveGroups).</summary>
+    public static async Task InjectionMatrixAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, Func<string, ConnectOptions> live, JsonSerializerOptions json)
+    {
+        if (Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SCRATCH") != "1")
+        {
+            Console.WriteLine("Script As injection matrix skipped. Set VARIA_TEST_SQL_SCRATCH=1 to allow creating and dropping a uniquely named database on a disposable development server.");
+            return;
+        }
+        async Task<SqlRun> Sql(string text, string database)
+        {
+            var session = Guid.NewGuid().ToString();
+            try
+            {
+                var result = (QueryResult)await service.DispatchAsync("query.execute", JsonSerializer.SerializeToElement(
+                    new QueryArgs(info.Id, session, database, text, Guid.NewGuid().ToString(), 100_000, 300, StopOnError: true), json), json);
+                return new(result.Status, result.Error?.Message, [.. result.ResultSets.Select(set => LiveResultChecks.RowsOf(service.Results, set))]);
+            }
+            finally { await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(session), json), json); }
+        }
+        await using var scratch = ScratchDatabase.Bare(Sql);
+        await InjectionAsync(check, service, new Client(service, info.Id, json), live, json, scratch);
     }
 
     /// <summary>The injection matrix (<see cref="InjectionMatrix"/>) in a scratch database of its own, scripted over two
