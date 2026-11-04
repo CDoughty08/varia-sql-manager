@@ -276,7 +276,12 @@ export const databaseActionRules: readonly DatabaseActionRule[] = [
   { action: 'bringOnline', states: ['restoring', 'recovering', 'copying'], reason: 'A database that is restoring or recovering cannot be brought online.' },
   { action: 'detach', states: ['restoring', 'recovering', 'copying'], reason: 'Wait until it finishes restoring or recovering.' },
   // Learn (sp_detach_db): a suspect database must be put into EMERGENCY mode before it can be detached.
-  { action: 'detach', states: ['suspect', 'recoveryPending'], reason: 'Set the database to EMERGENCY with T-SQL before you detach it.' }
+  { action: 'detach', states: ['suspect', 'recoveryPending'], reason: 'Set the database to EMERGENCY with T-SQL before you detach it.' },
+  // MODIFY NAME opens the database: SQL Server answers 942 for one that is offline (probed on 2025), and the other states cannot be opened either.
+  { action: 'rename', states: ['restoring', 'recovering', 'recoveryPending', 'suspect', 'emergency', 'offline', 'copying', 'offlineSecondary', 'other'], reason: 'The database must be online to be renamed.' },
+  // MODIFY NAME checkpoints the database: SQL Server answers 902 for one that is read-only (probed on 2025), standby included, so
+  // closing the connections first would end them for a rename that cannot succeed.
+  { action: 'rename', readOnly: true, reason: 'A read-only database cannot be renamed.' }
 ]
 const ruleApplies = (rule: DatabaseActionRule, runtime: DatabaseRuntime) =>
   !!(rule.states?.includes(databaseStateOf(runtime.state)) || rule.access?.includes(databaseAccessOf(runtime.userAccess)) || rule.readOnly && (runtime.readOnly || runtime.standby))
@@ -339,6 +344,13 @@ export function actionMenuState(target: ActionTarget | undefined, sources: Actio
   const row = target.kind === 'database' ? databaseActionState(listed, target.database, sources.rules).row : listed
   const onRows = (action: ObjectAction) => specs[action]?.folder === undefined || specs[action]?.rows !== undefined
   return Object.fromEntries(objectActions.map(action => [action, onRows(action) && offeredOnEngine(specs[action]?.engines, target.engine) ? row[action] ?? '' : ''])) as Record<ObjectAction, ActionState>
+}
+/** Why the database's state greys each action it greys (the rules' reasons), for a database target; empty for anything else. */
+export function actionMenuReasons(target: ActionTarget | undefined, sources: ActionMenuSources = {}): Partial<Record<ObjectAction, string>> {
+  if (target?.kind !== 'database') return {}
+  const status = target.status && (nodeStatuses as readonly string[]).includes(target.status) ? target.status : undefined
+  const listed = actionRow(target.kind, target.subtype, status, sources.kinds)
+  return listed ? databaseActionState(listed, target.database, sources.rules).reasons : {}
 }
 /** Whether some row of the kind enables the action: what main checks before the backend re-derives the subtype. */
 export function actionOffered(kind: NodeKind, action: ObjectAction): boolean {
@@ -638,6 +650,15 @@ const dialogSpecData = {
   detachDatabase: { title: 'Detach Database', surface: 'modal', titleFormat: 'withName', size: 'compact', action: 'detach', pages: [page('general', 'General')], steps: true }
 } as const satisfies { readonly [D in DialogId]: DialogSpec }
 export const dialogSpecs: { readonly [D in DialogId]: DialogSpec } = dialogSpecData
+/**
+ * Describes that open no dialog: the facts an inline action reads before it runs, by id, with the action they serve and the
+ * kinds they describe. D3c's rename of a database reads its sessions, access and identity, and whether logins default to it.
+ */
+export const factDescribeSpecs = {
+  renameDatabase: { action: 'rename', kinds: ['database'] }
+} as const satisfies { readonly [id: string]: { readonly action: ObjectAction; readonly kinds: readonly NodeKind[] } }
+export type FactDescribeId = keyof typeof factDescribeSpecs
+export const factDescribeIds = Object.keys(factDescribeSpecs) as FactDescribeId[]
 /** The dialogs that open over the workbench (ObjectDialogService), derived from their surface; the others are documents. */
 export type ModalDialogId = { readonly [D in DialogId]: typeof dialogSpecData[D]['surface'] extends 'modal' ? D : never }[DialogId]
 export type DocumentDialogId = Exclude<DialogId, ModalDialogId>
@@ -745,7 +766,9 @@ export const actionLimits = {
    *  characters of a path (sys.master_files.physical_name is nvarchar(260)). */
   detachFiles: 256, filePath: 260,
   /** Delete Object: the sessions in a database it lists (more set a truncation flag), and the characters of each one's program and host. */
-  blockers: 8, blockerChars: 128
+  blockers: 8, blockerChars: 128,
+  /** A database rename's describe: the backend's connections to the same server it names, which the page's windows follow. */
+  serverConnections: 64
 } as const
 
 /** The create actions. New Login runs on SQL Server only until D2e adds Managed Instance (no FROM WINDOWS there, and
@@ -814,6 +837,7 @@ export function actionsCatalogJson(): string {
     `  "databaseOptions": ${block(databaseOptionDefs.map(optionJson))},`,
     `  "databaseRules": ${block(databaseActionRules)},`,
     `  "databaseStates": ${line(databaseStateIds)},`,
+    `  "describes": ${block(factDescribeIds.map(describe => ({ describe, ...factDescribeSpecs[describe] })))},`,
     `  "dialogs": ${block(dialogIds.map(dialog => ({ dialog, action: dialogSpecs[dialog].action, pages: dialogSpecs[dialog].pages.map(page => page.id) })))},`,
     `  "errors": ${block(actionErrorCodes.map(code => ({ code, retryable: actionErrorRetryable[code] })))},`,
     `  "limits": ${line(actionLimits)},`,

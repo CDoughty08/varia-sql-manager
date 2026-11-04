@@ -5,8 +5,8 @@ import { kindSpecs } from '../explorer/catalog.ts'
 import type { ObjectRef } from '../explorer/refs.ts'
 import { ident, objectRefSchema } from '../explorer/schema.ts'
 import {
-  actionErrorCodes, actionLimits, actionOffered, dialogIds, dialogSpecs, isCreateAction, isServerAction, objectActionSpecs, serverFilePurposes, serverFilesDescribeId, type ActionErrorCode,
-  type ObjectAction
+  actionErrorCodes, actionLimits, actionOffered, dialogIds, dialogSpecs, factDescribeIds, factDescribeSpecs, isCreateAction, isServerAction, objectActionSpecs, serverFilePurposes,
+  serverFilesDescribeId, type ActionErrorCode, type ObjectAction
 } from './catalog.ts'
 import {
   loginDatabaseRolesDescribe, loginLimits, newLoginAuths, newLoginStatements, publicRole, tooManyStatementsMessage, windowsLoginName, type LoginDatabaseRoles, type LoginSecrets, type LoginStatusChoice,
@@ -21,10 +21,10 @@ import { createTableSchema, type CreateTableRequest, type TableDesignerModel } f
 import { restoreDescribeId, restoreLimits, type RestoreModel, type RestoreSource } from './restore.ts'
 import { restoreFilesRequestSchema, restoreRequestSchema, restoreSourceSchema, type RestoreFilesRequest, type RestoreRequest } from './restore-schema.ts'
 
-/** What actions.describe describes: an object dialog (PR17's catalogue), a designer (src/shared/designer/catalog.ts), the
+/** What actions.describe describes: an object dialog (PR17's catalogue), an inline action's facts, a designer (src/shared/designer/catalog.ts), the
  *  server's folders for the server file picker, what Restore Database restores from (src/shared/actions/restore.ts), or one
  *  database's roles and schemas for New Login's User Mapping page (logins.ts loginDatabaseRolesDescribe). */
-export const describeIds = [...dialogIds, ...designerDescribeIds, serverFilesDescribeId, restoreDescribeId, loginDatabaseRolesDescribe] as const
+export const describeIds = [...dialogIds, ...factDescribeIds, ...designerDescribeIds, serverFilesDescribeId, restoreDescribeId, loginDatabaseRolesDescribe] as const
 export type DescribeId = typeof describeIds[number]
 
 /** Attach Databases' Add: the primary data file (.mdf) the backend reads with DBCC CHECKPRIMARYFILE, its path bound as a parameter. */
@@ -35,7 +35,14 @@ export interface ActionDescribeRequest {
   readonly connectionId: string; readonly requestId: string; readonly dialog: DescribeId; readonly target: ObjectRef; readonly files?: ServerFilesRequest; readonly restore?: RestoreSource
   readonly attach?: AttachDescribeRequest
 }
-export interface RenameRequest { readonly action: 'rename'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly newName: string }
+/**
+ * Rename. A database's (D3c) may close the other connections first (`closeConnections`: SINGLE_USER WITH ROLLBACK IMMEDIATE,
+ * MODIFY NAME, then its access back on the new name), and names the database its describe read (`identity`).
+ */
+export interface RenameRequest {
+  readonly action: 'rename'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly newName: string; readonly closeConnections?: boolean
+  readonly identity?: DatabaseIdentity
+}
 /** `closeConnections` (SET SINGLE_USER WITH ROLLBACK IMMEDIATE first) and `deleteHistory` apply to databases only. */
 export interface DeleteRequest {
   readonly action: 'delete'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly closeConnections: boolean; readonly deleteHistory: boolean
@@ -240,6 +247,29 @@ export interface DatabaseStateModel {
   /** Detach: the database is offline on a Windows server, whose files may not attach again once detached offline; OK waits for Detach while offline. */
   readonly confirmOffline?: boolean
 }
+/**
+ * What a database's rename needs to know before it runs (D3c): the database read, its access (the plan restores it after
+ * SINGLE_USER), who is using it, and the logins whose default database it is. Absent counts: no VIEW SERVER STATE. The
+ * sessions leave out the backend's own pooled connections, which the rename closes itself.
+ */
+export interface RenameDatabaseFacts {
+  readonly name: string
+  readonly identity: DatabaseIdentity
+  /** sys.databases user_access: 0 MULTI_USER, 1 SINGLE_USER, 2 RESTRICTED_USER. */
+  readonly userAccess: number
+  readonly sessions?: number
+  /** Of `sessions`, those with an open transaction, which closing them rolls back. */
+  readonly withTransaction?: number
+  /** Logins whose default database it is, of those this login can see: they get 4064 after the rename until changed. */
+  readonly loginsDefaulting: number
+  /** Whether Varia may close the sessions (SINGLE_USER): not on Managed Instance, nor in a database already in single-user mode. */
+  readonly canClose: boolean
+  /**
+   * The backend's connections to the same server, as SERVERPROPERTY('ServerName') names it whatever name each was opened with (at
+   * most `actionLimits.serverConnections`, this one first): their windows count in the prompt and follow the new name.
+   */
+  readonly connections: readonly string[]
+}
 /** A database file by its id: the logical name, its type and its path on the server (never logged). */
 export interface DatabaseFileRef { readonly fileId: number; readonly name: string; readonly type: FileType; readonly path: string }
 /** What Attach Databases opens with: the logins its Owner lists (at most `actionLimits.logins`), the server's path separator,
@@ -261,6 +291,7 @@ export interface ActionDescribeResult {
   readonly newLogin?: NewLoginModel
   readonly loginDatabaseRoles?: LoginDatabaseRoles
   readonly databaseState?: DatabaseStateModel
+  readonly renameDatabase?: RenameDatabaseFacts
 }
 export interface ActionScriptResult {
   /** Absent with `error`; at most `actionLimits.scriptChars` characters. */
@@ -305,6 +336,11 @@ export interface ActionExecuteResult {
   readonly messages: readonly string[]
   readonly elapsedMs: number
   readonly error?: ActionError
+  /**
+   * A renamed database's identity under its new name (D3c), read just after MODIFY NAME: SQL Server gives it a new create_date
+   * (sys.databases: "created or renamed"), so the Database Properties documents that follow it apply with this one.
+   */
+  readonly identity?: DatabaseIdentity
   /** Detach: the files it left on the server, at most `actionLimits.detachFiles`, once the database was detached. */
   readonly filesKept?: readonly DatabaseFileRef[]
   /** A restore's destination after the run. */
@@ -362,6 +398,10 @@ export const actionDescribeSchema = z.object({
       case 'tableDesigner':
         if (request.target.kind !== 'database' || request.target.parent) issue(context, 'target', 'The table designer opens on a database.')
         break
+      case 'renameDatabase':
+        if (!(factDescribeSpecs[request.dialog].kinds as readonly string[]).includes(request.target.kind)) issue(context, 'target', 'Only a database is described for a rename.')
+        targetIssues(context, request.target, factDescribeSpecs[request.dialog].action)
+        break
       case 'newLogin':
         if (!isServer(request.target)) issue(context, 'target', 'New Login opens on a server.')
         break
@@ -391,11 +431,11 @@ const exclusiveChange = (changes: DatabaseChanges) => Object.keys(changes.option
 /** How many statements a change set plans at most: one per option (incremental statistics shares one) and scoped configuration, and the owner. */
 export const plannedStatements = (changes: DatabaseChanges) => Object.keys(changes.options ?? {}).length + Object.keys(changes.scoped ?? {}).length + (changes.owner === undefined ? 0 : 1)
 
-// One schema per action, one per line, so later actions append cleanly.
-const renameSchema = z.object({ action: z.literal('rename'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, newName: ident }).strict()
-const deleteSchema = z.object({ action: z.literal('delete'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), deleteHistory: z.boolean() }).strict()
 // create_date as the backend writes it (yyyy-MM-ddTHH:mm:ss.fff); without the m flag, $ refuses a final line break too.
 const identitySchema = z.object({ id: z.number().int().min(1).max(2_147_483_647), created: z.string().max(23).regex(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}$/) }).strict()
+// One schema per action, one per line, so later actions append cleanly.
+const renameSchema = z.object({ action: z.literal('rename'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, newName: ident, closeConnections: z.boolean().optional(), identity: identitySchema.optional() }).strict()
+const deleteSchema = z.object({ action: z.literal('delete'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), deleteHistory: z.boolean() }).strict()
 const propertiesSchema = z.object({ action: z.literal('properties'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), changes: changesSchema, identity: identitySchema.optional() }).strict()
 const takeOfflineSchema = z.object({ action: z.literal('takeOffline'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, dropConnections: z.boolean(), identity: identitySchema.optional() }).strict()
 const bringOnlineSchema = z.object({ action: z.literal('bringOnline'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, identity: identitySchema.optional() }).strict()
@@ -496,6 +536,7 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
       break
     case 'rename':
       if (request.newName === request.target.name) issue(context, 'newName', 'The new name is the current name.')
+      if (request.target.kind !== 'database' && (request.closeConnections !== undefined || request.identity)) issue(context, 'closeConnections', 'Only a database has connections to close and an identity.')
       break
     case 'delete':
       if (kindSpecs[request.target.kind].scope !== 'database' && (request.closeConnections || request.deleteHistory)) issue(context, 'closeConnections', 'Only a database has connections to close and backup history to delete.')
@@ -547,7 +588,7 @@ export const actionExecuteResultSchema = z.object({
   restored: z.union([
     z.object({ state: z.number().int().min(0).max(255), userAccess: z.number().int().min(0).max(255), filesRestoring: z.array(z.string().max(128)).max(restoredFilesLimit).optional() }).strict(),
     z.object({ absent: z.literal(true), filesLeft: z.array(z.string().max(actionLimits.serverPath)).max(restoredFilesLimit).optional(), filesUnknown: z.literal(true).optional() }).strict()
-  ]).optional()
+  ]).optional(), identity: identitySchema.optional()
 }).strict() satisfies z.ZodType<ActionExecuteResult>
 
 /** The index a step takes in the reply, or the percent a long step reports. */

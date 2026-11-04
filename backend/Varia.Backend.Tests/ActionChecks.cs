@@ -30,6 +30,7 @@ internal static class ActionChecks
         Plans(check);
         Errors(check);
         Validation(check);
+        await RenameWaitAsync(check);
         Detach(check);
         await ServiceAsync(check);
     }
@@ -49,6 +50,11 @@ internal static class ActionChecks
             && Catalog.Limit("scriptMs") == (long)options.ScriptBudget.TotalMilliseconds && Catalog.Limit("gateWaitMs") == (long)options.GateWait.TotalMilliseconds
             && Catalog.Limit("messageChars") == ActionErrors.MaxMessage && Catalog.Limit("newName") == ExplorerRefs.MaxIdentifier
             && Catalog.Limit("stopGraceMs") == (long)options.StopGrace.TotalMilliseconds, "the backend's limits are the catalogue's");
+        check(Catalog.Describes.Keys.SequenceEqual(["renameDatabase"]) && Catalog.Describes["renameDatabase"].SequenceEqual(["database"]) && Catalog.ActionOf("renameDatabase") == "rename"
+            && !Catalog.Dialogs.ContainsKey("renameDatabase") && Catalog.DatabaseRefusal("rename", 0, 1, false, false) is null && Catalog.DatabaseRefusal("rename", 0, 2, false, false) is null
+            && Catalog.DatabaseRefusal("rename", 0, 0, true, false) == "A read-only database cannot be renamed." && Catalog.DatabaseRefusal("rename", 0, 0, false, true) == "A read-only database cannot be renamed."
+            && new[] { 1, 2, 3, 4, 5, 6, 7, 10, 42 }.All(state => Catalog.DatabaseRefusal("rename", state, 0, true, false) == "The database must be online to be renamed."),
+            "the renameDatabase describe serves Rename on databases, which the catalogue refuses for a database that is not online, or is read-only or standby (902) (D3c)");
         check(Catalog.ErrorCodes.Count() == 22 && Catalog.ErrorCodes.Contains("FILE_ACCESS") && Catalog.Retryable("FILE_ACCESS") && !Catalog.Retryable("MEDIA") && !Catalog.Retryable("BACKUP_MISMATCH") && !Catalog.Retryable("TAIL_LOG_NEEDED") && !Catalog.Retryable("RESTORE_SEQUENCE") && Catalog.Retryable("PASSWORD_POLICY") && Catalog.Retryable("IN_USE") && Catalog.Retryable("AUTH_ENTRA") && !Catalog.Retryable("DEPENDENTS") && Catalog.Retryable("CANCELLED") && !Catalog.ErrorCodes.Contains("INVALID_NAME")
             && Catalog.Dialogs.Keys.SequenceEqual(["deleteObject", "databaseProperties", "newDatabase", "attachDatabase", "newLogin", "takeOffline", "bringOnline", "detachDatabase"]) && Catalog.IsServerAction("createDatabase") && !Catalog.IsServerAction("properties")
             && Catalog.ActionOf("takeOffline") == "takeOffline" && Catalog.ActionOf("bringOnline") == "bringOnline" && Catalog.ActionOf("detachDatabase") == "detach",
@@ -60,7 +66,7 @@ internal static class ActionChecks
             && Catalog.DatabaseRefusal("takeOffline", 10, 0, false, false) is not null && Catalog.DatabaseRefusal("takeOffline", 0, 1, true, true) is null
             && Catalog.DatabaseRefusal("bringOnline", 0, 0, false, false) == "The database is online." && Catalog.DatabaseRefusal("bringOnline", 6, 1, true, false) is null
             && Catalog.DatabaseRefusal("bringOnline", 2, 0, false, false) == "A database that is restoring or recovering cannot be brought online."
-            && new[] { 3, 4, 5, 10, 42 }.All(state => Catalog.DatabaseRefusal("bringOnline", state, 0, false, false) is null) && Catalog.DatabaseRefusal("rename", 6, 0, false, false) is null
+            && new[] { 3, 4, 5, 10, 42 }.All(state => Catalog.DatabaseRefusal("bringOnline", state, 0, false, false) is null) && Catalog.DatabaseRefusal("properties", 6, 0, false, false) is null
             && Catalog.Allows("database", "", "takeOffline") && !Catalog.Allows("database", "system", "takeOffline") && !Catalog.Allows("database", "snapshot", "bringOnline"),
             "Take Offline and Bring Online are refused in the states the menu greys them in, with its reasons, and never on a snapshot or SQL Server's own databases");
         // A kind's status overlay is emitted as a second row for the same kind and subtype, with its status, and an action
@@ -83,7 +89,7 @@ internal static class ActionChecks
     {
         var results = ActionSql.Lint().ToList();
         var problems = results.SelectMany(result => result.Problems.Select(problem => result.Name + ": " + problem)).ToList();
-        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 11 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2 + 2 + 6 + AttachSql.LintAll().Count() + 2 + 2 + LoginSql.Corpus().Count() * 2, "every executable and catalog statement passes the lint at every band, New Database's, Attach's and New Login's builders and facts and User Mapping's reads included (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
+        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 13 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2 + 2 + 6 + AttachSql.LintAll().Count() + 2 + 2 + LoginSql.Corpus().Count() * 2, "every executable and catalog statement passes the lint at every band, New Database's, Attach's and New Login's builders and facts and User Mapping's reads included (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
         // The transaction DMVs raise error 300 without VIEW SERVER STATE whatever guards them, so the statements every action runs never
         // read them; only the describe's counts and lists do, after Database's guarded count shows the permission.
         check(new[] { ActionSql.Database, ActionSql.DatabaseState, ActionSql.Login, ActionSql.OwnSessions, ActionSql.DatabaseSessions, ActionSql.DatabaseAccess }.All(statement => !statement.Contains("dm_tran_", StringComparison.Ordinal))
@@ -187,6 +193,26 @@ internal static class ActionChecks
         check(Script(TakeOffline(database, drop: false)) == Use("ALTER DATABASE [AppData] SET  OFFLINE") && Script(TakeOffline(database, drop: true)) == Use("ALTER DATABASE [AppData] SET  OFFLINE WITH ROLLBACK IMMEDIATE")
             && Script(BringOnline(database)) == Use("ALTER DATABASE [AppData] SET  ONLINE") && ActionService.Plan(BringOnline(database), database).Single().Database == "master",
             "Take Offline and Bring Online script SSMS's ALTER DATABASE in master: SET OFFLINE, with ROLLBACK IMMEDIATE only when connections are dropped, and SET ONLINE");
+        // D3c: Close Connections and Rename scripts SINGLE_USER, MODIFY NAME and the access back under the new name; its compensations
+        // put the access back under the old name (the rename failed or was stopped) or the new one (only the restore did not complete).
+        var close = Rename(database, "B") with { CloseConnections = true };
+        check(ActionService.ScriptText(ActionService.Plan(close, database)) == Use("ALTER DATABASE [AppData] SET  SINGLE_USER WITH ROLLBACK IMMEDIATE") + Use("ALTER DATABASE [AppData] MODIFY NAME = [B]")
+            + Use("ALTER DATABASE [B] SET  MULTI_USER") && ActionService.ScriptText(ActionService.Plan(close, database, new ActionService.DeleteFacts(false, 2))).EndsWith(Use("ALTER DATABASE [B] SET  RESTRICTED_USER"), StringComparison.Ordinal),
+            "Close Connections and Rename scripts SINGLE_USER, MODIFY NAME and the original access under the new name, compensation left out");
+        check(Script(Rename(database, "B")) == Use("ALTER DATABASE [AppData] MODIFY NAME = [B]") && Script(Rename(database, "B") with { CloseConnections = false }) == Use("ALTER DATABASE [AppData] MODIFY NAME = [B]")
+            && ActionService.Plan(close, database, new ActionService.DeleteFacts(false, 1)).Select(plan => plan.Template).SequenceEqual([ActionTemplate.RenameDatabase]),
+            "Rename When Free, and a database already in SINGLE_USER, run MODIFY NAME alone");
+        var plan = ActionService.Plan(close, database);
+        var compensations = plan.Where(statement => statement.Kind == StepKind.Compensation).ToList();
+        bool Due(PlannedStatement statement, params string[] statuses) => statuses[statement.Undoes!.Value] == "done" && statement.When!(statuses);
+        check(plan.Select(statement => (statement.Template, statement.Kind, string.Join("/", statement.Names))).SequenceEqual([
+                (ActionTemplate.SetSingleUser, StepKind.Main, "AppData"), (ActionTemplate.RenameDatabase, StepKind.Main, "AppData/B"), (ActionTemplate.SetMultiUser, StepKind.Main, "B"),
+                (ActionTemplate.SetMultiUser, StepKind.Compensation, "AppData"), (ActionTemplate.SetMultiUser, StepKind.Compensation, "B")])
+            && compensations.All(statement => statement.Undoes == 0 && statement.Database == "master")
+            && Due(compensations[0], "done", "failed", "skipped") && Due(compensations[0], "done", "cancelled", "skipped") && !Due(compensations[1], "done", "failed", "skipped")
+            && !Due(compensations[0], "done", "done", "failed") && Due(compensations[1], "done", "done", "failed") && Due(compensations[1], "done", "done", "cancelled")
+            && !Due(compensations[0], "failed", "skipped", "skipped") && !Due(compensations[1], "failed", "skipped", "skipped"),
+            "the rename's compensations restore the access under the old name when MODIFY NAME did not complete, under the new one when only the restore did not, and never without SINGLE_USER");
         check(ActionService.StepTitle(ActionTemplate.SetOffline) == "Take database offline" && ActionService.StepTitle(ActionTemplate.SetOfflineRollback) == "Close connections and take database offline"
             && ActionService.StepTitle(ActionTemplate.SetOnline) == "Bring database online", "the state steps have their own titles");
     }
@@ -225,6 +251,37 @@ internal static class ActionChecks
             && ActionErrors.FromSql(Catalog, Sql(1222), null, ddl: false, inUseAdvice: null).Message == "Another session holds a lock on the object; try again when it finishes."
             && ActionErrors.FromSql(Catalog, Sql(50000, 16, new string('m', 5000)), null, ddl: true, inUseAdvice: null).Message.Length == ActionErrors.MaxMessage,
             "error values carry SQL Server's message (clipped to 2,048 characters) with advice for IN_USE");
+    }
+
+    /// <summary>D3c: Rename When Free waits on every version. Where SQL Server refuses MODIFY NAME at once as in use (5030) instead of
+    /// queueing it, the rename tries again until it completes or Stop; any other failure, a single-user database's 924 included, ends it.</summary>
+    private static async Task RenameWaitAsync(Action<bool, string> check)
+    {
+        var tries = 0;
+        string Outcome(Exception? error) => error switch { null => "completed", SqlException sql => sql.Number.ToString(System.Globalization.CultureInfo.InvariantCulture), OperationCanceledException => "cancelled", _ => error.GetType().Name };
+        async Task<string> Run(Func<Task> run, CancellationToken token)
+        {
+            try { await ActionService.WhileLockedAsync(run, ActionService.LockedByOthers, TimeSpan.FromMilliseconds(5), token); return Outcome(null); }
+            catch (Exception error) { return Outcome(error); }
+        }
+        var freed = await Run(() => ++tries < 3 ? throw Sql(5030) : Task.CompletedTask, CancellationToken.None);
+        var completed = tries;
+        tries = 0;
+        var single = await Run(() => { tries++; throw Sql(924); }, CancellationToken.None);
+        var singleTries = tries;
+        using var stop = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        tries = 0;
+        var stopped = await Run(() => { tries++; throw Sql(5030); }, stop.Token);
+        // Stop that lands while the statement runs and SQL Server refuses it as in use (seen on a slow runner) is Stop too.
+        using var during = new CancellationTokenSource();
+        var stoppedDuring = await Run(() => { during.Cancel(); throw Sql(5030); }, during.Token);
+        check(freed == "completed" && completed == 3 && single == "924" && singleTries == 1 && stopped == "cancelled" && tries > 1 && stoppedDuring == "cancelled"
+            && !ActionService.LockedByOthers(new InvalidOperationException()),
+            "Rename When Free tries MODIFY NAME again while SQL Server refuses it as in use (5030), until it completes or Stop; any other failure ends it (" + freed + " after " + completed + ", "
+            + single + ", " + stopped + ", " + stoppedDuring + ")");
+        check(ActionService.RenameInUseAdvice(0) == ActionService.RenameCloseAdvice && ActionService.RenameInUseAdvice(2) == ActionService.RenameCloseAdvice && ActionService.RenameInUseAdvice(1) == ActionService.SingleUserAdvice
+            && ActionErrors.FromSql(Catalog, Sql(5030), null, ddl: true, ActionService.RenameInUseAdvice(0)).Message.EndsWith("Close its connections, or rename it when they disconnect.", StringComparison.Ordinal),
+            "a database rename that fails in use advises closing the connections, or, for a single-user database, ending the session that holds it");
     }
 
     private static void Validation(Action<bool, string> check)
@@ -420,6 +477,7 @@ internal static class ActionChecks
         public bool ClearPoolsFor(string connectionId, string database) { Cleared.Add(database); return true; }
         public bool FreeDatabase(string connectionId, string database) { Cleared.Add("free " + database); return true; }
         public IReadOnlySet<int> PoolSessions(string connectionId) => new HashSet<int>();
+        public IReadOnlyList<string> SameServer(string connectionId) => [connectionId];
         public void DatabaseChanged(string connectionId, string database, string? newName) => Cleared.Add(database + " -> " + newName);
     }
 

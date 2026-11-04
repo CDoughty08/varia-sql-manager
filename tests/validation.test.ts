@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { connectionCancelSchema, requestSchemas, resultsCopyRequestSchema, resultsSaveRequestSchema, validateRequest } from '../src/main/validation'
+import { connectionCancelSchema, requestSchemas, resultsCopyRequestSchema, resultsSaveRequestSchema, validateRequest, validateResult } from '../src/main/validation'
 import { connectContext } from '../src/main/connection-requests'
 import { jobProgressSchema, portRequestSchema, queryEventSchema, queryResultSchema } from '../src/shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../src/shared/explorer/schema'
@@ -124,6 +124,22 @@ describe('IPC validation', () => {
       ['actions.execute', { ...rename, dropConnections: false }], ['actions.execute', { ...properties, dropConnections: false }],
       ['actions.describe', { ...ids, dialog: 'takeOffline', target }], ['actions.describe', { ...ids, dialog: 'bringOnline', target: { kind: 'database', name: 'msdb' } }]
     ] as const) expect(() => validateRequest(method, value), JSON.stringify(value).slice(0, 80)).toThrow('Invalid request')
+    // A database's rename (D3c): closeConnections and the identity its describe read, on databases only; the describe of its facts likewise.
+    const renameDatabase = { action: 'rename', ...ids, target: database, newName: 'b', closeConnections: true, identity }
+    expect(validateRequest('actions.execute', renameDatabase)).toEqual(renameDatabase)
+    expect(validateRequest('actions.script', { ...renameDatabase, closeConnections: false, identity: undefined })).toMatchObject({ closeConnections: false })
+    expect(validateRequest('actions.describe', { ...ids, dialog: 'renameDatabase', target: database })).toMatchObject({ dialog: 'renameDatabase' })
+    for (const [method, value] of [
+      ['actions.execute', { ...rename, identity }], ['actions.execute', { ...renameDatabase, identity: { ...identity, id: 0 } }], ['actions.execute', { ...renameDatabase, dropConnections: true }],
+      ['actions.execute', { ...renameDatabase, deleteHistory: false }], ['actions.execute', { ...renameDatabase, closeConnections: 'yes' }],
+      ['actions.describe', { ...ids, dialog: 'renameDatabase', target }], ['actions.describe', { ...ids, dialog: 'renameDatabase', target: { kind: 'database', name: 'model' } }],
+      ['actions.describe', { ...ids, dialog: 'renameDatabase', target: { kind: 'login', name: 'sa' } }]
+    ] as const) expect(() => validateRequest(method, value), JSON.stringify(value).slice(0, 80)).toThrow('Invalid request')
+    // Its reply carries the database's identity under the new name (MODIFY NAME gives it a new create_date), checked as a request's is.
+    const renamedReply = { steps: [{ status: 'done', title: 'Rename' }], messages: [], elapsedMs: 1, identity }
+    expect(validateResult('actions.execute', renamedReply)).toEqual(renamedReply)
+    for (const bad of [{ ...identity, id: 0 }, { ...identity, created: '2026-01-02 03:04:05' }, { ...identity, extra: 1 }])
+      expect(() => validateResult('actions.execute', { ...renamedReply, identity: bad }), JSON.stringify(bad)).toThrow()
     // Detach (D3b): both boxes, Detach while offline when the describe asked for it, and the identity; nothing else takes them.
     const detach = { action: 'detach', ...ids, target: database, dropConnections: true, updateStatistics: false, identity }
     expect(validateRequest('actions.execute', detach)).toEqual(detach)
