@@ -1135,7 +1135,7 @@ General lists the kinds the server offers (`newLoginAuthEngines` in logins.ts, w
   there is refused with "Enter a password.", which names no option the page lacks. The backend refuses
   the other kinds, and the policy options, there before it connects (`NOT_SUPPORTED`), and on SQL Server it refuses a SQL Server login
   without them.
-- **Search…** (Windows authentication) opens "Select User or Group": "Enter the object name" and **Check Names**, which asks the server
+- **Search…** (Windows authentication) opens "Select User or Group": "Enter the object name to select" and **Check Names**, which asks the server
   (`actions.describe` with dialog `windowsPrincipal` and the target `{ kind: 'login', name }`, on the describe's read connection:
   `EXEC master.sys.xp_logininfo @acctname = @name;`). It answers whether the server found the account, user or group, and the group
   its access comes through. The name stays as typed: xp_logininfo echoes @acctname (probed), and CREATE LOGIN stores the text typed.

@@ -503,7 +503,8 @@ export interface WindowsPrincipal {
 /** Check Names' words, in Varia's: SSMS's Object Picker is Windows' own and has none of these. */
 export const checkNamesText = {
   title: 'Select User or Group',
-  nameLabel: 'Enter the object name',
+  // Windows' picker reads 'Enter the object name to select (examples):', its '(examples)' a link to help Varia has no page for.
+  nameLabel: 'Enter the object name to select',
   check: 'Check Names',
   checking: 'Checking…',
   hint: 'Varia asks the server (xp_logininfo), which resolves the name as CREATE LOGIN … FROM WINDOWS will. Type DOMAIN\\name.',

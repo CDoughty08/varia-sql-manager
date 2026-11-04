@@ -108,6 +108,9 @@ describe('the other kinds in main\'s schemas', () => {
     expect(catalogJson().logins.checkNames).toEqual({ describe: windowsPrincipalDescribe, permission: checkNamesText.permission, notFound: checkNamesText.notFound, lookupFailed: checkNamesText.lookupFailed })
     expect(catalogJson().actions.find(row => row.action === 'createLogin')?.engines).toEqual(['box', 'managedInstance'])
   })
+  it('names Select User or Group\'s parts as Windows\' object picker does, without its (examples) link', () => {
+    expect([checkNamesText.title, checkNamesText.nameLabel, checkNamesText.check]).toEqual(['Select User or Group', 'Enter the object name to select', 'Check Names'])
+  })
 })
 
 describe('New Login\'s kinds per server', () => {

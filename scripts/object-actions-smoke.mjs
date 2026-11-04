@@ -1436,7 +1436,7 @@ try {
   for (const [index, name] of authNames.entries()) await expect(authRadios.nth(index)).toHaveAccessibleName(name)
   await loginDialog().getByRole('button', { name: 'Search…', exact: true }).click()
   const checkNames = page.getByRole('dialog', { name: 'Select User or Group', exact: true })
-  const objectName = checkNames.getByRole('textbox', { name: 'Enter the object name', exact: true })
+  const objectName = checkNames.getByRole('textbox', { name: 'Enter the object name to select', exact: true })
   await expect(objectName).toBeFocused()
   await objectName.fill('CONTOSO\\nobody')
   await checkNames.getByRole('button', { name: 'Check Names', exact: true }).click()
