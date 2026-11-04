@@ -80,19 +80,27 @@ export const actionPrompts = {
   // (SINGLE_USER, rename, restore access) or to wait with Stop, as its rename did before.
   renameDatabase: {
     title: 'Rename Database',
-    message: facts => facts.sessions === undefined
-      ? `Other connections may be using ${show(facts.database)}. Close them and rename the database?`
-      : `${plural(facts.sessions, 'connection is', 'connections are')} using ${show(facts.database)}${facts.tabs ? ` (${plural(facts.tabs, 'query window', 'query windows')} in Varia)` : ''}. Close them and rename the database?`,
-    // A7: the box always says what closing rolls back; when the transactions could not be counted, it says so generally.
-    detail: facts => [
-      ...facts.transactions === undefined ? ['Closing them rolls back any open transaction.']
-        : facts.transactions ? [`${plural(facts.transactions, 'session has an open transaction', 'sessions have open transactions')}, which closing rolls back.`] : [],
-      ...facts.tabsWithTransactions.length || facts.moreTabsWithTransactions ? [`Varia's query windows with open transactions: ${[
-        ...facts.tabsWithTransactions.map(show), ...facts.moreTabsWithTransactions ? [facts.tabsWithTransactions.length ? `and ${plural(facts.moreTabsWithTransactions, 'more', 'more')}` : plural(facts.moreTabsWithTransactions, 'window', 'windows')] : []
-      ].join(', ')}.`] : [],
-      ...facts.canClose ? [] : ['This server does not let Varia close them.'],
-      'Rename When Free waits until they disconnect; Stop in the status bar ends the wait.'
-    ],
+    // The question matches the buttons: closing when Varia may, else renaming once the connections are gone. One connection is "it".
+    message: facts => {
+      const one = facts.sessions === 1
+      const using = facts.sessions === undefined ? `Other connections may be using ${show(facts.database)}`
+        : `${plural(facts.sessions, 'connection is', 'connections are')} using ${show(facts.database)}${facts.tabs ? ` (${plural(facts.tabs, 'query window', 'query windows')} in Varia)` : ''}`
+      return `${using}. ${facts.canClose ? `Close ${one ? 'it' : 'them'} and rename the database?` : `Rename the database when ${one ? 'it disconnects' : 'they disconnect'}?`}`
+    },
+    // A7: when Varia may close them, the box always says what closing rolls back; when the transactions could not be counted, it
+    // says so generally. Without Close, nothing is rolled back, and the windows with open transactions are what the wait waits for.
+    detail: facts => {
+      const one = facts.sessions === 1
+      return [
+        ...!facts.canClose ? [] : facts.transactions === undefined ? [`Closing ${one ? 'it' : 'them'} rolls back any open transaction.`]
+          : facts.transactions ? [`${plural(facts.transactions, 'session has an open transaction', 'sessions have open transactions')}, which closing rolls back.`] : [],
+        ...facts.tabsWithTransactions.length || facts.moreTabsWithTransactions ? [`Varia's query windows with open transactions: ${[
+          ...facts.tabsWithTransactions.map(show), ...facts.moreTabsWithTransactions ? [facts.tabsWithTransactions.length ? `and ${plural(facts.moreTabsWithTransactions, 'more', 'more')}` : plural(facts.moreTabsWithTransactions, 'window', 'windows')] : []
+        ].join(', ')}.`] : [],
+        ...facts.canClose ? [] : [`This server does not let Varia close ${one ? 'it' : 'them'}.`],
+        `Rename When Free waits until ${one ? 'it disconnects' : 'they disconnect'}; Stop in the status bar ends the wait.`
+      ]
+    },
     buttons: facts => [...facts.canClose ? [{ answer: 'closeAndRename' as const, label: 'Close Connections and Rename' }] : [], { answer: 'renameWhenFree', label: 'Rename When Free' }, { answer: 'cancel', label: 'Cancel' }],
     defaultAnswer: facts => facts.canClose ? 'closeAndRename' : 'renameWhenFree',
     cancelAnswer: 'cancel'

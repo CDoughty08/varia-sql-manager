@@ -10,7 +10,7 @@ tab strip rounds each tab's name up to whole pixels. An id below replaces the co
 same name. Icons are sized with the `--varia-glyph-*` tokens ([metrics](themes/metrics.md)) and coloured
 with theme keys; Microsoft's SSMS icons are never used.
 
-## Varia's icons (14)
+## Varia's icons (15)
 
 | Id | Use |
 | --- | --- |
@@ -27,10 +27,11 @@ with theme keys; Microsoft's SSMS icons are never used.
 | `execution-plan` | Execution plan documents. |
 | `agent-job` | SQL Server Agent: Object Explorer's running-jobs chip, and jobs (planned). |
 | `ssis-package` | Integration Services packages (planned). |
+| `drive` | Drives in the server file picker. |
 | `ssis-environment` | Integration Services environments (planned). |
 
-## Codicons (114)
+## Codicons (115)
 
 From the codicon font bundled with Monaco ([reference](https://microsoft.github.io/vscode-codicons/dist/codicon.html)):
 
-`add`, `archive`, `arrow-left`, `arrow-small-down`, `bell`, `book`, `bookmark`, `case-sensitive`, `check`, `chevron-down`, `chevron-right`, `chevron-up`, `circle-filled`, `circle-outline`, `circle-slash`, `circuit-board`, `clear-all`, `clippy`, `close`, `close-all`, `cloud`, `code`, `collapse-all`, `comment`, `copy`, `debug-disconnect`, `debug-pause`, `debug-restart`, `debug-stop`, `device-camera`, `discard`, `edit`, `ellipsis`, `error`, `file`, `file-code`, `filter`, `filter-filled`, `folder`, `folder-library`, `folder-opened`, `git-compare`, `go-to-file`, `graph`, `graph-line`, `history`, `info`, `insert`, `json`, `law`, `layers`, `layout`, `link`, `list-flat`, `list-ordered`, `list-tree`, `loading`, `lock`, `milestone`, `multiple-windows`, `new-file`, `output`, `package`, `pass`, `person`, `play`, `plug`, `project`, `pulse`, `redo`, `references`, `refresh`, `remote`, `remove`, `replace`, `save`, `save-all`, `save-as`, `screen-full`, `search`, `settings-gear`, `split-horizontal`, `star-empty`, `star-full`, `symbol-color`, `symbol-constant`, `symbol-field`, `symbol-file`, `symbol-function`, `symbol-key`, `symbol-namespace`, `symbol-numeric`, `symbol-operator`, `symbol-parameter`, `symbol-ruler`, `symbol-snippet`, `symbol-structure`, `symbol-variable`, `tag`, `tools`, `trash`, `triangle-right`, `type-hierarchy`, `unlock`, `verified`, `warning`, `watch`, `whitespace`, `window`, `word-wrap`, `workspace-trusted`, `zap`, `zoom-in`, `zoom-out`.
+`add`, `archive`, `arrow-left`, `arrow-small-down`, `bell`, `book`, `bookmark`, `case-sensitive`, `check`, `chevron-down`, `chevron-right`, `chevron-up`, `circle-filled`, `circle-outline`, `circle-slash`, `circuit-board`, `clear-all`, `clippy`, `close`, `close-all`, `cloud`, `code`, `collapse-all`, `comment`, `copy`, `debug-disconnect`, `debug-pause`, `debug-restart`, `debug-stop`, `device-camera`, `discard`, `edit`, `ellipsis`, `error`, `export`, `file`, `file-code`, `filter`, `filter-filled`, `folder`, `folder-library`, `folder-opened`, `git-compare`, `go-to-file`, `graph`, `graph-line`, `history`, `info`, `insert`, `json`, `law`, `layers`, `layout`, `link`, `list-flat`, `list-ordered`, `list-tree`, `loading`, `lock`, `milestone`, `multiple-windows`, `new-file`, `output`, `package`, `pass`, `person`, `play`, `plug`, `project`, `pulse`, `redo`, `references`, `refresh`, `remote`, `remove`, `replace`, `save`, `save-all`, `save-as`, `screen-full`, `search`, `settings-gear`, `split-horizontal`, `star-empty`, `star-full`, `symbol-color`, `symbol-constant`, `symbol-field`, `symbol-file`, `symbol-function`, `symbol-key`, `symbol-namespace`, `symbol-numeric`, `symbol-operator`, `symbol-parameter`, `symbol-ruler`, `symbol-snippet`, `symbol-structure`, `symbol-variable`, `tag`, `tools`, `trash`, `triangle-right`, `type-hierarchy`, `unlock`, `verified`, `warning`, `watch`, `whitespace`, `window`, `word-wrap`, `workspace-trusted`, `zap`, `zoom-in`, `zoom-out`.

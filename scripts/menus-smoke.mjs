@@ -768,7 +768,7 @@ try {
   await expandExplorerPath(page, 'server-a', 'Databases')
   const appData = await row('server-a', 'Databases', 'AppData')
   await appData.click({ button: 'right', force: true })
-  expect(await labels()).toEqual(['New Query', 'Script Database as', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
+  expect(await labels()).toEqual(['New Database…', 'New Query', 'Script Database as', 'Tasks', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await explorerMenu.getByRole('menuitem', { name: 'Copy Name', exact: true }).click(fast)
   await expect.poll(clipboard).toBe('[AppData]')
   await expect(tree).toBeFocused()
@@ -884,11 +884,12 @@ try {
   await expect.poll(() => loads('tables')).toBe(listed.tables + 2)
   expect(await loads('databases')).toBe(listed.databases)
   await expect(tree).toBeFocused()
-  // A login's name; the server's Disconnect needs no picker.
+  // A login's name (New Login… first, as in SSMS); the server's Disconnect needs no picker.
   await expandExplorerPath(page, 'server-a', 'Security', 'Logins')
   await (await row('server-a', 'Security', 'Logins', 'sa')).click({ button: 'right', force: true })
-  // The fixture's sa is disabled, so it offers Enable in place of Disable (D4b), and as a SQL Server login Unlock… (D4d).
-  expect(await labels()).toEqual(['Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Refresh'])
+  // The fixture's sa is disabled, so it offers Enable in place of Disable (D4b), as a SQL Server login Unlock… (D4d), and Delete
+  // follows Rename as in SSMS (D4c).
+  expect(await labels()).toEqual(['New Login…', 'Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh'])
   await explorerMenu.getByRole('menuitem', { name: 'Copy Name', exact: true }).click(fast)
   await expect.poll(clipboard).toBe('[sa]')
   await serverA.click({ button: 'right', force: true })

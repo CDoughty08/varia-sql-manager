@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { databaseOptionDefs, scopedConfigurationDefs } from '../src/shared/actions/database'
-import { actionCancelSchema, actionDescribeSchema, actionExecuteResultSchema, actionRequestSchema, actionTargetProblems } from '../src/shared/actions/schema'
+import { actionCancelSchema, actionDescribeSchema, actionExecuteRequestSchema, actionExecuteResultSchema, actionRequestSchema, actionScriptRequestSchema, actionTargetProblems } from '../src/shared/actions/schema'
+import { requestSchemas } from '../src/main/validation'
 
 const table = { kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' } as const
 const database = { kind: 'database', name: 'AppData' } as const
@@ -24,7 +25,8 @@ describe('object action request schemas', () => {
   it('refuses U+0000, 129 units, the same name, an empty one, delete options on a table, and kinds or objects that never offer the action', () => {
     for (const [name, request] of [
       ['U+0000', rename({ newName: 'a\u0000b' })], ['129 units', rename({ newName: 'x'.repeat(129) })], ['the same name', rename({ newName: 'Orders' })], ['empty', rename({ newName: '' })],
-      ['close connections on a table', remove({ closeConnections: true })], ['history on a table', remove({ deleteHistory: true })], ['a login\'s delete', remove({ target: { kind: 'login', name: 'AppUser' } })],
+      ['close connections on a table', remove({ closeConnections: true })], ['history on a table', remove({ deleteHistory: true })], ['a login\'s delete flags', remove({ target: { kind: 'login', name: 'AppUser' }, closeConnections: true })], ['mapped users on a table', remove({ dropMappedUsers: false })],
+      ['a login identity on a table', remove({ loginIdentity: { sid: '01', created: '2026-01-02T03:04:05.000' } })], ['SQL Server\'s own login\'s delete', remove({ target: { kind: 'login', name: '##MS_PolicyTsqlExecutionLogin##' } })],
       ['a system database', rename({ target: { kind: 'database', name: 'master' } })], ['a system view', remove({ target: { kind: 'view', database: 'AppData', schema: 'sys', name: 'objects' } })],
       ['a synonym', remove({ target: { kind: 'synonym', database: 'AppData', schema: 'dbo', name: 's' } })], ['an unknown action', rename({ action: 'drop' })],
       ['a new name on a delete', remove({ newName: 'x' })], ['delete flags on a rename', rename({ closeConnections: false })], ['delete flags missing', { ...remove(), deleteHistory: undefined }],
@@ -41,7 +43,9 @@ describe('object action request schemas', () => {
     expect(actionDescribeSchema.safeParse({ ...request, dialog: 'databaseProperties', target: { kind: 'database', name: 'master' } }).success).toBe(true)
     expect(actionDescribeSchema.safeParse({ ...request, dialog: 'databaseProperties' }).success).toBe(false)
     expect(actionDescribeSchema.safeParse({ ...request, dialog: 'deleteObject', target: { kind: 'database', name: 'master' } }).success).toBe(false)
-    expect(actionDescribeSchema.safeParse({ ...request, target: { kind: 'login', name: 'sa' } }).success).toBe(false)
+    // A login's Delete Object (D4c); sa's is greyed by its subtype, which only the backend's preflight derives.
+    expect(actionDescribeSchema.safeParse({ ...request, target: { kind: 'login', name: 'sa' } }).success).toBe(true)
+    expect(actionDescribeSchema.safeParse({ ...request, target: { kind: 'login', name: '##MS_PolicyTsqlExecutionLogin##' } }).success).toBe(false)
     expect(actionDescribeSchema.safeParse({ ...request, extra: true }).success).toBe(false)
   })
   it('takes a login\'s Disable and Enable with only a target and the login\'s identity, and refuses SQL Server\'s own logins and other kinds', () => {
@@ -56,7 +60,7 @@ describe('object action request schemas', () => {
     expect([{ ...identity, sid: '0' }, { ...identity, sid: '0'.repeat(172) + 'F' }, { ...identity, sid: '0a' }, { ...identity, sid: '01\n' }, { ...identity, created: '2026-01-02 03:04:05' },
       { ...identity, created: '2026-01-02T03:04:05.000\n' }, { sid: '01' }, { ...identity, id: 1 }].map(loginIdentity => valid(state('disable', { loginIdentity })))).toEqual(Array(8).fill(false))
     expect([valid(rename({ target: login, newName: 'x', loginIdentity: identity })), valid({ action: 'delete', ...ids(), target: login, closeConnections: false, deleteHistory: false, loginIdentity: identity })])
-      .toEqual([false, false])
+      .toEqual([false, true])
     // A backslash is left to the preflight, which knows whether the login is a SQL Server or a Windows login.
     expect(valid(rename({ target: { kind: 'login', name: 'sa' }, newName: 'a\\b' }))).toBe(true)
     const system = { kind: 'login', name: '##MS_PolicyTsqlExecutionLogin##' } as const
@@ -137,5 +141,56 @@ describe('object action request schemas', () => {
     ] as const) expect(valid(request), name).toBe(false)
     expect(actionTargetProblems({ kind: 'database', name: 'master' }, 'properties')).toEqual([])
     expect(actionTargetProblems(table, 'properties')).toEqual(['A table cannot be shown in Properties.'])
+  })
+})
+
+describe('New Login requests (D2a)', () => {
+  const server = { kind: 'server' } as const
+  const sqlLogin = { auth: 'sql', name: 'app', defaultDatabase: 'master', checkPolicy: true, checkExpiration: true, mustChange: true }
+  const create = (changes: Record<string, unknown> = {}) => ({ action: 'createLogin', ...ids(), target: server, login: sqlLogin, serverRoles: [], mappings: [], status: { connect: 'grant', enabled: true }, ...changes })
+  const executes = (value: unknown) => actionExecuteRequestSchema.safeParse(value).success
+  const scripts = (value: unknown) => actionScriptRequestSchema.safeParse(value).success
+  it('accepts hostile names verbatim, each auth, the policy chain, a quote in a password, and Windows DOMAIN\\name', () => {
+    for (const name of [']', "'", 'a\nGO\nb', 'x'.repeat(128), "q]'); DROP LOGIN sa; --"]) expect(valid(create({ login: { ...sqlLogin, name } })), JSON.stringify(name)).toBe(true)
+    expect(executes(create({ secrets: { password: "it's" } }))).toBe(true)
+    expect(executes(create({ secrets: { password: 'x'.repeat(128) } }))).toBe(true)
+    expect(executes(create({ login: { auth: 'windows', name: 'CONTOSO\\ann', defaultDatabase: 'AppData', defaultLanguage: 'us_english' }, serverRoles: ['sysadmin', 'Sysadmin'], status: { connect: 'deny', enabled: false } }))).toBe(true)
+    for (const [checkPolicy, checkExpiration, mustChange] of [[true, true, true], [true, true, false], [true, false, false], [false, false, false]]) {
+      expect(executes(create({ login: { ...sqlLogin, checkPolicy, checkExpiration, mustChange }, secrets: { password: 'p' } }))).toBe(true)
+    }
+    // A blank password is the server's to refuse under its policy.
+    expect(executes(create({ secrets: { password: '' } }))).toBe(true)
+    expect(scripts(create())).toBe(true)
+  })
+  it('refuses the chain broken, public, duplicates, a backslash in a SQL login, a Windows name without one, options on Windows, and an object target', () => {
+    for (const [name, request] of [
+      ['expiration without policy', create({ login: { ...sqlLogin, checkPolicy: false, mustChange: false } })],
+      ['must change without expiration', create({ login: { ...sqlLogin, checkExpiration: false } })],
+      ['options missing', create({ login: { ...sqlLogin, mustChange: undefined } })],
+      ['public', create({ serverRoles: ['public'] })], ['a duplicate role', create({ serverRoles: ['sysadmin', 'sysadmin'] })],
+      ['a 129-unit role', create({ serverRoles: ['x'.repeat(129)] })], ['257 roles', create({ serverRoles: Array.from({ length: 257 }, (_, index) => `r${index}`) })],
+      ['a backslash in a SQL login', create({ login: { ...sqlLogin, name: 'D\\x' } })], ['a Windows login without a domain', create({ login: { auth: 'windows', name: 'ann', defaultDatabase: 'master' } })],
+      ['two backslashes', create({ login: { auth: 'windows', name: 'D\\a\\b', defaultDatabase: 'master' } })],
+      ['options on a Windows login', create({ login: { auth: 'windows', name: 'D\\a', defaultDatabase: 'master', checkPolicy: true } })],
+      ['an empty name', create({ login: { ...sqlLogin, name: '' } })], ['U+0000', create({ login: { ...sqlLogin, name: 'a\u0000b' } })],
+      ['a login target', create({ target: { kind: 'login', name: 'sa' } })], ['a database target', create({ target: database })],
+      ['an unknown auth', create({ login: { ...sqlLogin, auth: 'entra' } })], ['an unknown connect', create({ status: { connect: 'revoke', enabled: true } })],
+      ['an old password', create({ secrets: { password: 'p', oldPassword: 'o' } })], ['an extra member', create({ extra: 1 })]
+    ] as const) expect(valid(request), name).toBe(false)
+  })
+  it('takes a password only on actions.execute, only for a SQL Server login, bounded, and blank only under the policy', () => {
+    expect(executes(create())).toBe(false)
+    expect(executes(create({ secrets: {} }))).toBe(false)
+    expect(executes(create({ login: { auth: 'windows', name: 'D\\a', defaultDatabase: 'master' }, secrets: { password: 'p' } }))).toBe(false)
+    expect(executes(create({ login: { ...sqlLogin, checkPolicy: false, checkExpiration: false, mustChange: false }, secrets: { password: '' } }))).toBe(false)
+    for (const password of ['x'.repeat(129), 'a\u0000b', 'a\uD800b', 'b\uDC00']) expect(executes(create({ secrets: { password } })), JSON.stringify(password)).toBe(false)
+    expect(scripts(create({ secrets: { password: 'p' } }))).toBe(false)
+    expect(requestSchemas['actions.execute'].safeParse(create())).toMatchObject({ success: false })
+    expect(requestSchemas['actions.execute'].safeParse(create({ secrets: { password: 'Throwaway-1' } })).success).toBe(true)
+  })
+  it('describes New Login on the server only', () => {
+    expect(actionDescribeSchema.safeParse({ ...ids(), dialog: 'newLogin', target: server }).success).toBe(true)
+    expect(actionDescribeSchema.safeParse({ ...ids(), dialog: 'newLogin', target: { kind: 'login', name: 'sa' } }).success).toBe(false)
+    expect(actionDescribeSchema.safeParse({ ...ids(), dialog: 'newLogin', target: database }).success).toBe(false)
   })
 })

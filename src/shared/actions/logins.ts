@@ -55,7 +55,7 @@ export function loginStatusOf(disabled: boolean, connectDenied: boolean): 'disab
  *  policy, from catalog views only (sys.server_principals, sys.server_permissions and sys.sql_logins). */
 export const loginDetailWords = {
   types: {
-    S: 'SQL Server authentication', U: 'Windows user', G: 'Windows group', C: 'Mapped to a certificate', K: 'Mapped to an asymmetric key',
+    S: 'SQL Server authentication', U: 'Windows user', G: 'Windows group', C: 'Mapped to certificate', K: 'Mapped to asymmetric key',
     E: 'Microsoft Entra user or application', X: 'Microsoft Entra group'
   },
   disabled: 'Disabled',
@@ -115,6 +115,8 @@ export const loginMessages = {
   sqlBackslash: "A SQL Server login's name cannot contain a backslash.",
   // SQL Server accepts such a name, and Varia would then take the login for one of SQL Server's own and refuse to change it.
   systemName: "Names that start and end with ## are reserved for SQL Server's own logins.",
+  // A login's Delete drops its users before the login; a session it cannot see would then fail the login's DROP (15434) after them.
+  sessionsUncounted: "This connection cannot count the login's sessions (that needs VIEW SERVER STATE), and one would make its DROP fail after its users were deleted. Delete the login without its users.",
   // Unlock… (D4d). Only a SQL Server login that enforces the password policy is ever locked out; turning the policy on for one
   // that does not would change it rather than unlock it.
   unlockNoPolicy: 'The login does not enforce the password policy, so it is never locked out.',
@@ -149,6 +151,9 @@ export const loginLimits = {
   /** An action step's title and detail (ActionStep). */
   stepTitle: 64, stepDetail: 128,
   ownedDatabases: 100, mappedUsers: 100, scanDatabases: 4_096, serviceNames: 4,
+  /** How long the mapped-user scan (D4c's, which Login Properties reuses) reads databases before it counts the rest as not
+   *  checked, inside the describe's 40 s. */
+  scanMs: 20_000,
   /** sys.dm_server_services.servicename, as the login facts carry it. */
   serviceName: 256
 } as const
@@ -172,6 +177,9 @@ export interface LoginFacts {
   /** The login this connection uses, or a Windows group it gets in through (sys.login_token). */
   readonly own: boolean
   readonly sysadmin: boolean
+  /** User sessions signed in as this login (sys.dm_exec_sessions.security_id). A Windows group's members sign in under their own SIDs,
+   *  so a group counts none of them (critic D4-6): harmless: a group cannot be disabled, and its DROP is not
+   *  refused for its members' sessions (15434; unverified). */
   readonly sessions?: number
   /** The service that runs as this Windows login (sys.dm_server_services, guarded; or an NT SERVICE\ name), read by the
    *  loginFacts describe only; at most loginLimits.serviceName characters. */
@@ -180,6 +188,10 @@ export interface LoginFacts {
   /** At most loginLimits.ownedDatabases, by name. */
   readonly ownedDatabaseNames: readonly string[]
   readonly ownedServerObjects?: number
+  /** The server permissions it granted to other principals (DROP LOGIN fails on them, 15173); with the owned counts. */
+  readonly grantedPermissions?: number
+  /** The SQL Server Agent jobs it owns (Delete Object's describe only); absent when msdb could not be read. */
+  readonly ownedJobs?: number
   readonly canAlter: boolean
   readonly canControlServer: boolean
   readonly nameInUse: boolean
@@ -223,6 +235,53 @@ export type UnlockMode = typeof unlockModes[number]
 export function unlockRefusal(facts: Pick<LoginFacts, 'subtype' | 'own' | 'sysadmin' | 'canAlter' | 'canControlServer' | 'type' | 'policyChecked'>, lock: Pick<LoginLockFacts, 'locked' | 'mustChange'>): LoginMessageId | undefined {
   return loginRefusal(facts, 'unlock') ?? (facts.type !== 'S' || facts.policyChecked !== true ? 'unlockNoPolicy' : lock.mustChange ? 'unlockMustChange' : !lock.locked ? 'notLocked' : undefined)
 }
+/** A database user mapped to a login (D4c): its database and name, the schemas, roles and other securables it owns, the permissions
+ *  it granted to others, whether its database is read-only, and whether this connection may drop users there (ALTER ANY USER).
+ *  C#: MappedUserDto. */
+export interface MappedUser {
+  readonly database: string; readonly user: string; readonly ownedSchemas: number; readonly ownedRoles: number; readonly readOnly: boolean
+  readonly ownedSecurables: number; readonly grantedPermissions: number; readonly canDrop: boolean
+}
+/** The mapped-user scan's answer: at most loginLimits.mappedUsers users, how many it found in all, and how many databases it read
+ *  and did not (offline, not accessible or readable, a failed read, or past its bound or budget). C#: LoginMappingsDto. */
+export interface LoginMappings { readonly users: readonly MappedUser[]; readonly mapped: number; readonly checked: number; readonly notChecked: number }
+/** Whether a Delete that drops the mapped users keeps this one: DROP USER fails while it owns a schema (15138), a role (15421) or
+ *  another securable (15138, 15183), or has granted permissions (15284), cannot run in a read-only database, and needs ALTER ANY
+ *  USER there. C#: ActionService.Kept. */
+export const mappedUserKept = (user: MappedUser): boolean =>
+  user.ownedSchemas > 0 || user.ownedRoles > 0 || user.ownedSecurables > 0 || user.grantedPermissions > 0 || user.readOnly || !user.canDrop
+
+const counted = (value: number, one: string, many: string) => `${value.toLocaleString('en-US')} ${value === 1 ? one : many}`
+/** What Delete Object says about a login (D4c). The note is SSMS's, which shows it once the login is gone; Varia shows it before OK
+ *  and offers to delete the users too. */
+export const loginDeleteText = {
+  mappedHeading: 'Database users mapped to this login',
+  noneMapped: 'No database user is mapped to this login.',
+  /** The empty list when some databases were not read. */
+  noneMappedChecked: 'No database user is mapped to this login in the databases checked.',
+  orphanNote: 'Deleting a login does not delete the database users mapped to it. They are left orphaned: they keep their permissions but no login can use them.',
+  dropOption: 'Also delete the database users mapped to this login',
+  dropHint: 'Users that own schemas or other securables, or have granted permissions, are kept. Transfer or revoke those first, then delete the users in each database.',
+  /** Why the option is greyed: nothing to drop, every mapped user kept, too many to list, or sessions it cannot count. */
+  noneToDrop: 'There is no mapped user to delete.',
+  allKept: 'Every mapped user is kept, as listed: none can be deleted with the login.',
+  sessionsUncounted: loginMessages.sessionsUncounted,
+  more: (count: number) => `…and ${count.toLocaleString('en-US')} more`,
+  notChecked: (count: number) => `${count === 1 ? '1 database was' : `${count.toLocaleString('en-US')} databases were`} not checked (offline or not accessible).`,
+  /** The backend refuses to drop more users than it lists (C#: ActionService.TooManyMappedUsers). */
+  tooMany: `More than ${loginLimits.mappedUsers.toLocaleString('en-US')} users are mapped. Delete them in each database first, or delete the login without them.`,
+  /** Why a Delete keeps a user: every reason its DROP USER would fail, as one note. */
+  kept: (user: MappedUser) => `kept: ${[
+    user.readOnly ? 'the database is read-only' : '',
+    !user.canDrop ? 'you cannot delete users there (ALTER ANY USER)' : '',
+    user.ownedSchemas || user.ownedRoles || user.ownedSecurables ? `owns ${[user.ownedSchemas ? counted(user.ownedSchemas, 'schema', 'schemas') : '', user.ownedRoles ? counted(user.ownedRoles, 'role', 'roles') : '',
+      user.ownedSecurables ? counted(user.ownedSecurables, 'other securable', 'other securables') : ''].filter(Boolean).join(' and ')}` : '',
+    user.grantedPermissions ? `has granted ${counted(user.grantedPermissions, 'permission', 'permissions')}` : ''
+  ].filter(Boolean).join('; ')}`,
+  /** What Varia's other connections that sign in as the login do to its Delete (critic D4-3): their pools' sessions fail the DROP
+   *  (15434) until they disconnect, and Activity Monitor neither shows nor ends Varia's own sessions. */
+  connections: (count: number) => count === 1 ? 'its sessions fail the DROP until it is disconnected' : 'their sessions fail the DROP until they are disconnected'
+} as const
 
 /** The subtypes whose names SQL Server authenticates itself, so a backslash is never part of one. */
 export const noBackslashSubtypes: readonly LoginSubtype[] = ['sa', 'sql']
@@ -244,6 +303,143 @@ export function loginsCatalog() {
     ownRefuses: ownLoginRefuses,
     rules: loginSubtypes.map(subtype => ({ subtype, ...loginRules[subtype], greyed: Object.fromEntries(loginVerbs.filter(verb => loginRules[subtype][verb] === 'greyed').map(verb => [verb, loginGreyedMessage(subtype, verb)])) })),
     saPrincipalId,
+    rolesDescribe: loginDatabaseRolesDescribe,
+    scriptHeader: passwordScriptHeader,
     typeSubtypes: loginTypeSubtypes
   }
 }
+
+// --- New Login (D2a) ---------------------------------------------------------------------------------------------------
+
+/** How a new login authenticates. D2a offers SSMS's first two; certificate, asymmetric key and Microsoft Entra come with D2e. */
+export const newLoginAuths = ['windows', 'sql'] as const
+export type NewLoginAuth = typeof newLoginAuths[number]
+/** New Login's General page as the request carries it. The SQL Server authentication options are present exactly for `sql`,
+ *  and follow SQL Server's chain: MUST_CHANGE needs CHECK_EXPIRATION (15099), which needs CHECK_POLICY (15122). */
+export interface NewLoginGeneral {
+  readonly auth: NewLoginAuth
+  /** Used verbatim, at most 128 UTF-16 units; a Windows login is DOMAIN\name, a SQL login has no backslash (15006). */
+  readonly name: string
+  readonly defaultDatabase: string
+  /** Absent: the server's default language (no DEFAULT_LANGUAGE clause). */
+  readonly defaultLanguage?: string
+  readonly checkPolicy?: boolean
+  readonly checkExpiration?: boolean
+  readonly mustChange?: boolean
+}
+/** The Status page: Permission to connect to database engine (Grant or Deny) and Login (Enabled or Disabled). */
+export interface LoginStatusChoice { readonly connect: 'grant' | 'deny'; readonly enabled: boolean }
+/** Passwords, only ever on actions.execute (sensitive as a whole); at most loginLimits.password UTF-16 units, no U+0000, well formed. */
+export interface LoginSecrets { readonly password?: string; readonly oldPassword?: string }
+
+/** A database as New Login's Default database list and User Mapping show it: its sys.databases state, whether this login can
+ *  open it, and whether it is read-only (set READ_ONLY, a log-shipping standby or a database snapshot), where no user can be
+ *  created. */
+export interface NewLoginDatabase { readonly name: string; readonly state: number; readonly accessible: boolean; readonly readOnly: boolean }
+/** A language from sys.syslanguages: SSMS lists names; the alias is secondary text. */
+export interface NewLoginLanguage { readonly name: string; readonly alias: string }
+/** A server role from sys.server_principals (type R): fixed roles, SQL Server 2022's ##MS_…## roles, and user-defined ones. */
+export interface NewLoginServerRole { readonly name: string; readonly fixed: boolean }
+/** What New Login's describe reads in master (the newLogin describe id, target the server). */
+export interface NewLoginModel {
+  readonly server: {
+    /** The version band (13 = SQL Server 2016 … 17 = 2025). */
+    readonly level: number
+    readonly linux: boolean
+    /** SERVERPROPERTY('IsIntegratedSecurityOnly'): Windows Authentication mode only. */
+    readonly windowsOnly: boolean
+    /** HAS_PERMS_BY_NAME ALTER ANY LOGIN; advisory, the server decides on OK. */
+    readonly canCreate: boolean
+  }
+  readonly databases: readonly NewLoginDatabase[]
+  readonly databasesTruncated: boolean
+  readonly languages: readonly NewLoginLanguage[]
+  readonly serverRoles: readonly NewLoginServerRole[]
+  readonly serverRolesTruncated: boolean
+}
+/** A Windows login's name: DOMAIN\name, one backslash with text on both sides (the server answers 15407 otherwise). */
+export const windowsLoginName = /^[^\\]+\\[^\\]+$/
+/** Every login is a member of public, so it is shown checked and greyed, and never requested. */
+export const publicRole = 'public'
+
+/** New Login's messages in Varia's words where SSMS's exact text is unverified. They name fields, never values. */
+export const newLoginMessages = {
+  nameRequired: 'Enter a login name.',
+  sqlBackslash: 'A SQL Server login name cannot contain a backslash.',
+  windowsName: 'Enter a Windows login as DOMAIN\\name.',
+  mismatch: 'Password and confirm password do not match.',
+  tooLong: `A password can have at most ${loginLimits.password} characters.`,
+  broken: 'The password holds a broken character (half of a surrogate pair), which SQL Server would not receive as typed. Retype the password.',
+  blankWithoutPolicy: 'Enter a password. A blank password needs Enforce password policy, so the server can refuse it.',
+  defaultDatabase: 'Choose a default database from the list.',
+  defaultLanguage: 'Choose a default language from the list.',
+  windowsOnly: 'This server accepts Windows authentication only. The login can\'t connect until SQL Server and Windows Authentication mode is turned on.',
+  canCreate: 'You may not have permission to create logins (ALTER ANY LOGIN). The server checks when you press OK.',
+  passwordsMatch: 'Passwords match.',
+  policyServer: 'The server checks its password policy on OK.',
+  passwordScript: 'Sent only with OK; Script shows PASSWORD=<password>.'
+} as const
+/** The Script Action header for a script with a password placeholder (D2 §5.6, A14): run unedited, the batch fails to parse. */
+export const passwordScriptHeader = '/* Varia leaves passwords out of scripts. Replace <password> with the login\'s password, as an N\'…\' literal, before you run this script. */'
+
+/** Why a New Login request cannot be sent, or undefined: the problems the page shows before anything is sent. `password` is
+ *  only its length and whether it equals the confirmation, so no value leaves the secret slot. */
+export function newLoginProblem(login: NewLoginGeneral, password: { readonly empty: boolean; readonly matches: boolean; readonly wellFormed?: boolean; readonly tooLong?: boolean } | undefined, model?: Pick<NewLoginModel, 'databases' | 'languages'>): string | undefined {
+  if (!login.name) return newLoginMessages.nameRequired
+  if (login.auth === 'sql' && login.name.includes('\\')) return newLoginMessages.sqlBackslash
+  if (login.auth === 'windows' && !windowsLoginName.test(login.name)) return newLoginMessages.windowsName
+  if (model && !model.databases.some(database => database.name === login.defaultDatabase)) return newLoginMessages.defaultDatabase
+  if (model && login.defaultLanguage !== undefined && !model.languages.some(language => language.name === login.defaultLanguage)) return newLoginMessages.defaultLanguage
+  if (login.auth === 'sql' && password) {
+    if (password.tooLong) return newLoginMessages.tooLong
+    if (!password.matches) return newLoginMessages.mismatch
+    if (password.wellFormed === false) return newLoginMessages.broken
+    if (password.empty && !login.checkPolicy) return newLoginMessages.blankWithoutPolicy
+  }
+  return undefined
+}
+
+// --- User Mapping (D2b) -------------------------------------------------------------------------------------------------
+
+/** The describe id of User Mapping's lazy read of one database (target `{ kind: 'database', name }`): its roles, whether guest
+ *  can connect, and its schemas, read through the database's own module when its row is selected, as SSMS's
+ *  InitializeRoleMembership does. Login Properties (D2c) adds the login's user and memberships. */
+export const loginDatabaseRolesDescribe = 'loginDatabaseRoles'
+/** What `loginDatabaseRoles` answers: at most loginLimits.roles database roles and loginLimits.schemas schemas, by name (one more
+ *  read, so a truncation shows), and whether guest has CONNECT there (sys.database_permissions CO, granted). */
+export interface LoginDatabaseRoles {
+  readonly roles: readonly string[]
+  readonly rolesTruncated: boolean
+  readonly guest: boolean
+  readonly schemas: readonly string[]
+  readonly schemasTruncated: boolean
+}
+/**
+ * One mapped database of New Login: CREATE USER [user] FOR LOGIN, then ALTER USER … WITH DEFAULT_SCHEMA when a default schema is
+ * chosen (CREATE SCHEMA … AUTHORIZATION [user] too when the database has no such schema), then ALTER ROLE … ADD MEMBER for each
+ * role in `rolesAdd` (public never: every user is a member). Login Properties (D2c) adds what changes for a mapped user.
+ */
+export interface UserMappingChoice {
+  readonly database: string
+  /** Blank in the grid means the login's name (SSMS fills it in when Map is checked). */
+  readonly user: string
+  readonly defaultSchema?: string
+  readonly rolesAdd: readonly string[]
+}
+/** The most statements a mapping plans: CREATE USER, the default schema's ALTER USER and CREATE SCHEMA, and one per role. */
+export const mappingStatements = (mapping: Pick<UserMappingChoice, 'defaultSchema' | 'rolesAdd'>): number => 1 + (mapping.defaultSchema === undefined ? 0 : 2) + mapping.rolesAdd.length
+/** The most statements New Login plans: CREATE LOGIN, Deny, Disable, each server role, and each mapping's. Bounded by
+ *  actionLimits.statements (src/shared/actions/catalog.ts), which the request schema, the page and C# all check. */
+export function newLoginStatements(request: { readonly serverRoles: readonly string[]; readonly status: LoginStatusChoice; readonly mappings: readonly Pick<UserMappingChoice, 'defaultSchema' | 'rolesAdd'>[] }): number {
+  return 1 + (request.status.connect === 'deny' ? 1 : 0) + (request.status.enabled ? 0 : 1) + request.serverRoles.length + request.mappings.reduce((sum, mapping) => sum + mappingStatements(mapping), 0)
+}
+/** Why a plan is too long (the limit is actionLimits.statements; catalog.ts imports this file, so the number is passed in). */
+export const tooManyStatementsMessage = (limit: number) => `This login would need more than ${limit.toLocaleString('en-US')} statements. Map fewer databases, or apply the rest afterwards.`
+/** User Mapping's own notes, in Varia's words. They name databases only as the page shows them. */
+export const userMappingMessages = {
+  rolesLoading: 'Reading the database roles…',
+  notMapped: 'Check Map to choose roles for this database.',
+  unavailable: 'This database is not online, not accessible to you, or read-only, so it cannot be mapped.',
+  mappingsLimit: `At most ${loginLimits.mappings} databases can be mapped at once.`,
+  noSchemas: 'This database lists no schemas.'
+} as const

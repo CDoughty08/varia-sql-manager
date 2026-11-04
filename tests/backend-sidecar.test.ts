@@ -180,7 +180,12 @@ describe('real .NET sidecar over protocol v2', () => {
     const ids = { connectionId: crypto.randomUUID(), requestId: crypto.randomUUID() }, target = { kind: 'table', database: 'master', schema: 'dbo', name: 'Orders' } as const
     for (const [method, params] of [
       ['actions.execute', { action: 'rename', ...ids, target, newName: 'Orders' }], ['actions.execute', { action: 'rename', ...ids, target, newName: 'a\u0000b' }],
-      ['actions.execute', { action: 'delete', ...ids, target, closeConnections: true, deleteHistory: false }], ['actions.script', { action: 'delete', ...ids, target: { kind: 'login', name: 'sa' }, closeConnections: false, deleteHistory: false }],
+      ['actions.execute', { action: 'delete', ...ids, target, closeConnections: true, deleteHistory: false }], ['actions.script', { action: 'delete', ...ids, target: { kind: 'login', name: '##MS_PolicyTsqlExecutionLogin##' }, closeConnections: false, deleteHistory: false }],
+      // D4c: a login's Delete options on a table, and a login's Delete that would close connections.
+      ['actions.execute', { action: 'delete', ...ids, target, closeConnections: false, deleteHistory: false, dropMappedUsers: true }],
+      ['actions.execute', { action: 'delete', ...ids, target: { kind: 'login', name: 'AppUser' }, closeConnections: true, deleteHistory: false }],
+      // A login's Delete without the identity of the login it read: nothing would bind its DROPs to that principal.
+      ['actions.execute', { action: 'delete', ...ids, target: { kind: 'login', name: 'AppUser' }, closeConnections: false, deleteHistory: false, dropMappedUsers: true }],
       ['actions.describe', { ...ids, dialog: 'loginProperties', target: { kind: 'database', name: 'AppData' } }], ['actions.describe', { ...ids, dialog: 'databaseProperties', target }],
       ['actions.describe', { ...ids, dialog: 'deleteObject', target, extra: 1 }],
       // Database Properties: an unknown option, U+0000 in the owner, a table target, and changes on a rename.
@@ -196,6 +201,15 @@ describe('real .NET sidecar over protocol v2', () => {
       ['actions.script', { action: 'createTable', ...ids, target: { kind: 'database', name: 'AppData' }, design: { schema: 'dbo', name: 'x'.repeat(129), columns: [{ name: 'a', type: { system: 'int' }, allowNulls: true }], primaryKey: [] } }],
       ['actions.script', { action: 'createTable', ...ids, target: { kind: 'database', name: 'AppData' }, newName: 'x', design: { schema: 'dbo', name: 'T', columns: [{ name: 'a', type: { system: 'int' }, allowNulls: true }], primaryKey: [] } }],
       ['actions.execute', { action: 'createTable', ...ids, target: { kind: 'database', name: 'AppData' }, design: { schema: 'dbo', name: 'T', columns: [{ name: 'a', type: { system: 'char', length: 8001 }, allowNulls: true }], primaryKey: [] } }],
+      // The server file picker: a relative path, a wildcard, 261 units, a control character, All Files for a folder, a database target, no files, files elsewhere, an unknown member.
+      ['actions.describe', { ...ids, dialog: 'serverFiles', target: { kind: 'server' }, files: { purpose: 'backup', path: 'Backups' } }],
+      ['actions.describe', { ...ids, dialog: 'serverFiles', target: { kind: 'server' }, files: { purpose: 'backup', path: 'C:\\*.bak' } }],
+      ['actions.describe', { ...ids, dialog: 'serverFiles', target: { kind: 'server' }, files: { purpose: 'backup', path: 'C:\\' + 'x'.repeat(258) } }],
+      ['actions.describe', { ...ids, dialog: 'serverFiles', target: { kind: 'server' }, files: { purpose: 'backup', path: 'C:\\a\tb' } }],
+      ['actions.describe', { ...ids, dialog: 'serverFiles', target: { kind: 'server' }, files: { purpose: 'folder', allFiles: true } }],
+      ['actions.describe', { ...ids, dialog: 'serverFiles', target: { kind: 'database', name: 'master' }, files: { purpose: 'backup' } }],
+      ['actions.describe', { ...ids, dialog: 'serverFiles', target: { kind: 'server' } }], ['actions.describe', { ...ids, dialog: 'deleteObject', target, files: { purpose: 'backup' } }],
+      ['actions.describe', { ...ids, dialog: 'serverFiles', target: { kind: 'server' }, files: { purpose: 'backup', depth: 2 } }],
       // A temporary table's name, a seed before a line break (.NET's $ would match there), and names that differ only in trailing spaces.
       ['actions.execute', { action: 'createTable', ...ids, target: { kind: 'database', name: 'AppData' }, design: { schema: 'dbo', name: '##T', columns: [{ name: 'a', type: { system: 'int' }, allowNulls: true }], primaryKey: [] } }],
       ['actions.script', { action: 'createTable', ...ids, target: { kind: 'database', name: 'AppData' }, design: { schema: 'dbo', name: 'T', columns: [{ name: 'a', type: { system: 'int' }, allowNulls: false, identity: { seed: '12\n', increment: '1' } }], primaryKey: [] } }],
@@ -207,10 +221,20 @@ describe('real .NET sidecar over protocol v2', () => {
     await expect(call(connection, 'actions.script', { action: 'properties', ...ids, requestId: crypto.randomUUID(), target: { kind: 'database', name: 'master' }, closeConnections: false,
       changes: { options: { recoveryModel: 'FULL' }, scoped: { maxDopForSecondary: 'PRIMARY' }, owner: "q]'; --" } })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
     await expect(call(connection, 'actions.execute', { action: 'delete', ...ids, requestId: crypto.randomUUID(), target, closeConnections: false, deleteHistory: false })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
+    // A login's Delete (sa's included: the preflight refuses it with the facts it reads) passes validation and then needs a connection.
+    await expect(call(connection, 'actions.script', { action: 'delete', ...ids, requestId: crypto.randomUUID(), target: { kind: 'login', name: 'sa' }, closeConnections: false, deleteHistory: false,
+      dropMappedUsers: true, loginIdentity: { sid: '01', created: '2026-01-02T03:04:05.000' } })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
+    await expect(call(connection, 'actions.execute', { action: 'delete', ...ids, requestId: crypto.randomUUID(), target: { kind: 'login', name: 'AppUser' }, closeConnections: false, deleteHistory: false,
+      dropMappedUsers: true, loginIdentity: { sid: '01', created: '2026-01-02T03:04:05.000' } })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
+    await expect(call(connection, 'actions.script', { action: 'delete', ...ids, requestId: crypto.randomUUID(), target: { kind: 'login', name: 'AppUser' }, closeConnections: false, deleteHistory: false,
+      dropMappedUsers: true })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
     // A valid design on master passes validation and then needs a connection.
     await expect(call(connection, 'actions.execute', { action: 'createTable', ...ids, requestId: crypto.randomUUID(), target: { kind: 'database', name: 'master' },
       design: { schema: 'dbo', name: "q]'); --", columns: [{ name: 'Id', type: { system: 'decimal', precision: 38, scale: 0 }, allowNulls: false, identity: { seed: '-1', increment: '1' } }], primaryKey: [0] } })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
     await expect(call(connection, 'actions.describe', { ...ids, requestId: crypto.randomUUID(), dialog: 'tableDesigner', target: { kind: 'database', name: 'tempdb' } })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
+    // A hostile share path passes validation verbatim and then needs a connection.
+    await expect(call(connection, 'actions.describe', { ...ids, requestId: crypto.randomUUID(), dialog: 'serverFiles', target: { kind: 'server' }, files: { purpose: 'database', path: "\\\\files\\O'Brien ]] --\\", allFiles: true } }))
+      .rejects.toMatchObject({ code: 'NOT_CONNECTED' })
     expect(deadlineFor('actions.execute', { action: 'rename', ...ids, target, newName: 'x' })).toEqual({ deadlineMs: 0, backstopMs: 0 })
   })
   it('offers the Activity Monitor session actions in HELLO and checks them before the connection', async () => {

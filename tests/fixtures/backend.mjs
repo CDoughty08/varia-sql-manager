@@ -172,6 +172,16 @@ function request(id, deadline, { method, params, credit }) {
       write(FrameKind.EVENT, id, 0, { type: 'messages', messages: [{ text: 'first', kind: 'info' }] })
       process.stdout.write(encodeFrame(FrameKind.EVENT, id, 0, Uint8Array.of(0xc1)))
       return
+    // A long action's STATS progress: two valid EVENTs around an out-of-range one and one of another type, then the reply.
+    case 'action-progress':
+      if (method === 'actions.execute') {
+        write(FrameKind.EVENT, id, 0, { type: 'action.progress', step: 0, percent: 5 })
+        write(FrameKind.EVENT, id, 0, { type: 'action.progress', step: 0, percent: 101 })
+        write(FrameKind.EVENT, id, 0, { type: 'messages', messages: [] })
+        write(FrameKind.EVENT, id, 0, { type: 'action.progress', step: 1, percent: 50 })
+        return respond(id, { steps: [{ status: 'done', title: 'Back up', progress: 50 }] })
+      }
+      break
   }
   if (method === 'live.subscribe') return liveEcho(id, credit, params)
   if (credit !== undefined) return stream(id, credit, params)
@@ -970,7 +980,11 @@ async function workbench(id, method, params, credit) {
         case 'properties': return respond(id, { text: `USE [master]\r\nGO\r\nALTER DATABASE [${params.target.name}] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n`, database: 'master', warnings: [] })
         default: return respond(id, { text: 'DROP TABLE [dbo].[Orders]', database: params.target.database ?? 'master', warnings: [] })
       }
-    case 'actions.execute': return respond(id, { steps: [{ status: 'done', title: 'Drop the object' }], messages: [], elapsedMs: 1 })
+    // Progress EVENTs as a long step's STATS sends them, at once: main pushes step 0's first at once, holds its second (inside its
+    // 250 ms) until step 1 replaces it, and drops the out-of-range one.
+    case 'actions.execute':
+      for (const [step, percent] of [[0, 25], [0, 100], [0, 101], [1, 40]]) write(FrameKind.EVENT, id, 0, { type: 'action.progress', step, percent })
+      return respond(id, { steps: [{ status: 'done', title: 'Drop the object' }], messages: [], elapsedMs: 1 })
     case 'tables.columns': return respond(id, { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false })
     case 'explorer.children': return respond(id, await explorerChildren(params))
     case 'ssis.describe': return ssisDescribe(id, params)

@@ -1,0 +1,142 @@
+name: Release builds
+
+on:
+  pull_request:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+  CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+jobs:
+  build:
+    name: Package ${{ matrix.rid }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            rid: win-x64
+            target: --win nsis portable --x64
+            executable: dist/win-unpacked/Varia SQL Manager.exe
+            asset: dist/*.exe
+          - runner: ubuntu-24.04
+            rid: linux-x64
+            target: --linux AppImage --x64
+            executable: dist/linux-unpacked/varia-sql-manager
+            asset: dist/*.AppImage
+          - runner: macos-15
+            rid: osx-arm64
+            target: --mac dmg zip --arm64
+            executable: dist/mac-arm64/Varia SQL Manager.app/Contents/MacOS/Varia SQL Manager
+            asset: |
+              dist/*.dmg
+              dist/*.zip
+          - runner: macos-15-intel
+            rid: osx-x64
+            target: --mac dmg zip --x64
+            executable: dist/mac/Varia SQL Manager.app/Contents/MacOS/Varia SQL Manager
+            asset: |
+              dist/*.dmg
+              dist/*.zip
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+      - name: Check release version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node -e "const v = require('./package.json').version; if (process.env.RELEASE_TAG !== 'v' + v) throw new Error('Tag must match package.json version: v' + v)"
+      - run: npm ci
+      - name: Build application
+        run: npm run typecheck && npx electron-vite build
+      - name: Publish self-contained backend
+        run: dotnet publish backend/Varia.Backend/Varia.Backend.csproj -c Release -r ${{ matrix.rid }} --self-contained true -o artifacts/release-backend
+      - name: Package application
+        id: package
+        run: npm run package -- ${{ matrix.target }}
+      - name: Check release assets
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          $expected = switch ('${{ matrix.rid }}') {
+            'win-x64' { @("dist/Varia-SQL-Manager-$version-Windows-x64-Setup.exe", "dist/Varia-SQL-Manager-$version-Windows-x64-Portable.exe") }
+            'linux-x64' { @("dist/Varia-SQL-Manager-$version-linux-x86_64.AppImage") }
+            'osx-arm64' { @("dist/Varia-SQL-Manager-$version-mac-arm64.dmg", "dist/Varia-SQL-Manager-$version-mac-arm64.zip") }
+            'osx-x64' { @("dist/Varia-SQL-Manager-$version-mac-x64.dmg", "dist/Varia-SQL-Manager-$version-mac-x64.zip") }
+          }
+          foreach ($file in $expected) { if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing release asset: $file" } }
+      - name: Prepare Linux display
+        if: runner.os == 'Linux'
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          command -v xvfb-run || { sudo apt-get update && sudo apt-get install -y xvfb; }
+      - name: Smoke test packaged application
+        shell: bash
+        env:
+          VARIA_PACKAGED_EXECUTABLE: ${{ matrix.executable }}
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a -s "-screen 0 1600x1000x24" node scripts/packaged-smoke.mjs
+          else
+            node scripts/packaged-smoke.mjs
+          fi
+      - name: Smoke test Windows portable application
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          $env:VARIA_PORTABLE_EXECUTABLE = "dist/Varia-SQL-Manager-$version-Windows-x64-Portable.exe"
+          node scripts/portable-smoke.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Smoke test Windows installer
+        if: (success() || failure()) && runner.os == 'Windows' && steps.package.outcome == 'success'
+        shell: pwsh
+        run: ./scripts/windows-installer-smoke.ps1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.rid }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+      - name: Create release with generated notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          args=(--verify-tag --generate-notes)
+          if [[ "$RELEASE_TAG" == *-* ]]; then args+=(--prerelease); fi
+          gh release create "$RELEASE_TAG" release-assets/* "${args[@]}"

@@ -86,6 +86,36 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const document = this.documents.get(id), connectionId = isQueryDocument(document) ? document?.connectionId : undefined, connection = connectionId ? this.getConnection(connectionId) : undefined
     return !this.disposed && !!connection && !connection.lost
   }
+  /**
+   * The names of this window's queries on `connectionId` in `database` that are running or may hold an open transaction,
+   * read from their sessions a few at a time within `stateBudgetMs` (one not read by then may hold one), for a prompt that
+   * closes the database's connections and so rolls them back (critic A7). Names compare without case.
+   */
+  async transactionTabs(connectionId: string, database: string): Promise<string[]> {
+    const wanted = database.toLowerCase()
+    const tabs = this.documents.getSnapshot().documents.filter(document => isQueryDocument(document) && document.connectionId === connectionId && document.database.toLowerCase() === wanted)
+      .map(document => ({ id: document.id, name: document.name, open: this.isRunning(document.id) || this.connected(document.id) }))
+    const reads = tabs.filter(tab => tab.open && !this.isRunning(tab.id))
+    if (reads.length) {
+      let expired = false
+      const reading = (async () => {
+        for (let next = 0; next < reads.length && !expired; next += sessionRequests)
+          await Promise.all(reads.slice(next, next + sessionRequests).map(async tab => { const state = await this.transactionState(tab.id); if (!expired) tab.open = state.transactions > 0 || !!state.unchecked }))
+      })()
+      await Promise.race([reading, this.wait(stateBudgetMs)])
+      expired = true
+    }
+    return tabs.filter(tab => tab.open).map(tab => tab.name)
+  }
+  /**
+   * The names of the open query tabs among `ids`, in tab order. A query's session id is its tab's id, so the backend, which sees
+   * each session's transactions on the server, says which tabs hold one in a database (A7: Delete Object names them), whatever
+   * database the tab is in.
+   */
+  tabNames(ids: readonly string[]): string[] {
+    const wanted = new Set(ids)
+    return this.documents.getSnapshot().documents.filter(document => isQueryDocument(document) && wanted.has(document.id)).map(document => document.name)
+  }
   /** Whether the idle query's session may hold a transaction (read now, as transactionState does). */
   async mayHaveTransaction(id: string): Promise<boolean> {
     const state = await this.transactionState(id)

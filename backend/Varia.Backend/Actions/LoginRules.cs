@@ -3,8 +3,8 @@ namespace Varia.Backend.Actions;
 /// <summary>One login subtype's rule per verb ('allowed', 'greyed' or 'hidden'), and the message id each greyed verb answers with.</summary>
 internal sealed record LoginRuleJson(string Subtype, string Disable, string Enable, string Unlock, string Rename, string Delete, Dictionary<string, string> Greyed);
 /// <summary>The logins block of actions-catalog.json (src/shared/actions/logins.ts loginsCatalog()).</summary>
-internal sealed record LoginRulesJson(Dictionary<string, long> Limits, List<string> LockProperties, Dictionary<string, string> Messages, List<string> OwnRefuses, List<LoginRuleJson> Rules, int SaPrincipalId,
-    Dictionary<string, string> TypeSubtypes, LoginDetailJson Detail, List<string> NoBackslash);
+internal sealed record LoginRulesJson(Dictionary<string, long> Limits, List<string> LockProperties, Dictionary<string, string> Messages, List<string> OwnRefuses, string RolesDescribe,
+    List<LoginRuleJson> Rules, int SaPrincipalId, string ScriptHeader, Dictionary<string, string> TypeSubtypes, LoginDetailJson Detail, List<string> NoBackslash);
 /// <summary>The words of a Logins folder row's detail (logins.ts loginDetailWords): its kind by type letter, then its state and
 /// password policy.</summary>
 internal sealed record LoginDetailJson(Dictionary<string, string> Types, string Disabled, string ConnectDenied, string PolicyChecked, string ExpirationChecked);
@@ -112,6 +112,12 @@ internal sealed class LoginRules
         SystemName(newName) ? "systemName" : json.NoBackslash.Contains(subtype) && newName.Contains('\\') ? "sqlBackslash" : null;
 
     public string Message(string id) => json.Messages.TryGetValue(id, out var text) ? text : throw new InvalidOperationException("Unknown login message " + id);
+
+    /// <summary>The describe id of User Mapping's read of one database (logins.ts loginDatabaseRolesDescribe).</summary>
+    public string RolesDescribe => json.RolesDescribe;
+
+    /// <summary>The comment above a script whose password is the <password> placeholder (New Login's Script Action).</summary>
+    public string ScriptHeader => json.ScriptHeader;
 
     public long Limit(string key) => json.Limits.TryGetValue(key, out var value) ? value : throw new InvalidOperationException("Unknown login limit " + key);
 }
