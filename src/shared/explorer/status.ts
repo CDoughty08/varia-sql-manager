@@ -107,8 +107,9 @@ export function serverChips(runningJobs: number | null | undefined, groups: read
   const chips: StatusChip[] = []
   if (runningJobs !== null && runningJobs !== undefined && runningJobs > 0) {
     const count = Math.trunc(runningJobs), number = count.toLocaleString('en-US'), text = `${number} ${count === 1 ? 'job' : 'jobs'} running`
+    // The label names the Agent, so it does not read as SSIS executions; the words already say "SQL Server Agent".
     // A still glyph: replication and change data capture agents run as jobs that never end, and a spinner would never stop.
-    chips.push({ id: 'jobs', tone: 'running', label: text, value: number, words: `SQL Server Agent: ${text}`, title: `SQL Server Agent: ${text}.`, icon: 'agent-job' })
+    chips.push({ id: 'jobs', tone: 'running', label: `${number} Agent ${count === 1 ? 'job' : 'jobs'} running`, value: number, words: `SQL Server Agent: ${text}`, title: `SQL Server Agent: ${text}.`, icon: 'agent-job' })
   }
   if (groups && groups.length > 0) {
     const worst = Math.max(0, Math.min(2, Math.min(...groups.map(group => group.health))))
@@ -127,6 +128,6 @@ export const statusChipDocs: readonly { readonly kind: 'server' | 'database'; re
   ...Object.entries(states).filter(([state]) => state !== '10').map(([state, value]) => ({ kind: 'database' as const, chip: value.label + (value.tone === 'running' && state !== '7' ? ' n %' : ''), tone: value.tone, when: `state ${state}${state === '6' ? ' or 10' : ''}: ${value.title}` })),
   { kind: 'database', chip: 'READ-ONLY / STANDBY', tone: 'warning', when: 'is_read_only, or is_in_standby (a log-shipping standby)' },
   { kind: 'database', chip: 'SINGLE USER / RESTRICTED USER', tone: 'warning', when: 'user_access 1 or 2' },
-  { kind: 'server', chip: 'n jobs running', tone: 'running', when: 'SQL Server Agent jobs of its current session that started and have not stopped (none while none runs)' },
+  { kind: 'server', chip: 'n Agent jobs running', tone: 'running', when: 'SQL Server Agent jobs of its current session that started and have not stopped (none while none runs)' },
   { kind: 'server', chip: '<group> healthy / partially healthy / not healthy', tone: 'success, warning, critical', when: 'the least healthy availability group (several: "n AGs …"); its tooltip names each group with its health and this replica\'s role' }
 ]

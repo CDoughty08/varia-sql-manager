@@ -441,7 +441,7 @@ export const explorerLabel = row => row.locator(part.explorerLabel)
 export const explorerSublabel = row => row.locator(part.explorerSublabel)
 export const itemCount = row => row.locator(part.explorerCount)
 export const connectionDot = row => row.locator(part.explorerDot)
-/** A row's live status chips, in order; each one's text is its whole label ("RESTORING 42 %", "2 jobs running"). */
+/** A row's live status chips, in order; each one's text is its whole label ("RESTORING 42 %", "2 Agent jobs running"). */
 export const statusChips = row => row.locator(`${part.explorerChips} ${part.statusPill}`)
 /** The server rows marked as the active query's server (at most one). */
 export const activeServerRows = page => serverRows(page).filter({ has: page.locator(part.explorerActive) })
