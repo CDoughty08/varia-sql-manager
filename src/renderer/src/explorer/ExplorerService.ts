@@ -113,6 +113,12 @@ interface HeldPaging { readonly cursor: string | undefined; readonly capped: boo
 /** What the service remembers about a node beyond what rows show. */
 interface NodeState { pendingMode?: FirstMode; retryMode?: FirstMode; deep?: boolean; budgetExempt?: boolean; loadingTimer?: unknown; held?: HeldPaging; reconciling?: Reconciling }
 /** What `reconcile` does besides reloading the node. */
+/** A path from the server down to a node: each ref a child of the one before (the server itself is not a step). */
+export type RevealPath = readonly ExplorerNodeRef[]
+/** How a seek ended: the node it selected, or why it could not (`cancelled` when Stop, another seek or a reset ended it). */
+export type SeekOutcome = { readonly ok: true; readonly nodeId: number } | { readonly ok: false; readonly message: string; readonly cancelled?: boolean }
+interface Seeking { readonly connectionId: string; readonly paths: readonly { readonly steps: RevealPath; readonly keys: readonly string[] }[]; at: number; reason?: string; readonly resolve: (outcome: SeekOutcome) => void }
+
 export interface ReconcileOptions {
   /** Selects (and reveals) the child with this identity once a page brings it; the node itself if none does. */
   readonly select?: ExplorerNodeRef
@@ -216,6 +222,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private status?: DatabaseRuntimeSource
   /** The child `reconcile` selects when a page of its folder brings it. */
   private pendingSelect?: { readonly folder: number; readonly key: string; readonly name: string | undefined }
+  /** The node `seek` walks towards, re-tried as each page arrives. */
+  private seeking?: Seeking
   private readonly unsubscribe: () => void
   /** The selected node's context keys; it publishes only when one changes, and synchronously on `select`. */
   readonly context: ExternalStore<ExplorerContextState> = this.contextStore
@@ -327,6 +335,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   /** Stops every load. Partly loaded folders show a Stopped row, and first pages that never arrived collapse. */
   stop(): void {
     this.pendingSelect = undefined
+    this.endSeek({ ok: false, message: 'Stopped.', cancelled: true })
     for (const [id, running] of [...this.running]) { this.running.delete(id); this.loader.abort(running.task); this.reverted(id, running, 'stop') }
     for (const id of this.stalled) {
       const node = this.nodes.get(id)
@@ -534,6 +543,22 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     for (const node of this.nodes.values()) if (node.kind === 'folder' && node.connectionId === connectionId && !node.lost && refKey(node.connectionId, node.ref) === key && this.attached(node)) return node.id
     return undefined
   }
+  /**
+   * Shows a node that may not be loaded yet (Search Objects' Reveal): walks the first path down from the server, expanding
+   * each node on it and loading a folder's later pages (at the user's priority, past the node budget) until the next step
+   * arrives, then selects the node and scrolls it into view. A path whose step a fully listed node lacks gives way to the
+   * next path (a database under System Databases); when none is left the seek ends with why: the listing failed, a filter
+   * hides the row, the folder stopped at its cap, or the object is no longer there. Stop, a reset, a lost server or another
+   * seek ends it.
+   */
+  seek(connectionId: string, paths: readonly RevealPath[]): Promise<SeekOutcome> {
+    this.endSeek({ ok: false, message: 'Another reveal started.', cancelled: true })
+    if (!paths.length || paths.some(path => !path.length)) return Promise.resolve({ ok: false, message: 'There is nothing to reveal.' })
+    return new Promise(resolve => {
+      this.seeking = { connectionId, paths: paths.map(steps => ({ steps, keys: steps.map(step => refKey(connectionId, step)) })), at: 0, resolve }
+      this.advanceSeek()
+    })
+  }
   /** The server's Databases folder above a node: a database under System Databases or Database Snapshots too, whose own
    *  listing folder is not where a new database appears (New Database reloads this one). */
   databasesFolderOf(nodeId: number): number | undefined {
@@ -641,6 +666,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
 
   /** Cancels everything and rebuilds the servers from the connections (the error boundary's Reload). Filters stay. */
   reset(): void {
+    this.endSeek({ ok: false, message: 'Object Explorer was reloaded.', cancelled: true })
     this.loader.abortWhere(() => true)
     this.running.clear()
     this.stalled.clear()
@@ -659,6 +685,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.endSeek({ ok: false, message: 'Object Explorer closed.', cancelled: true })
     this.unsubscribe()
     this.loader.dispose()
     for (const state of this.states.values()) this.timers.clearTimeout(state.loadingTimer)
@@ -700,6 +727,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (this.selected === undefined && roots.length) this.selected = added[0] ?? roots[0]
     for (const id of added) this.expand(id, 'user')
     this.invalidate()
+    // A seek on a server that went away ends now, not when a load that will never come settles.
+    if (this.seeking) this.advanceSeek()
   }
   private addRoot(connection: LiveConnection): number {
     const node = this.createNode(0, connection.id, serverRef, 'server', undefined, 0, connection.displayName || connection.server, 'server')
@@ -731,6 +760,65 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     state.pendingMode = state.retryMode = state.deep = state.held = state.reconciling = undefined
     root.rev++
     if (this.selected !== undefined && this.within(rowOwner(this.selected), root.id)) this.selected = root.id
+  }
+
+  private endSeek(outcome: SeekOutcome): void {
+    const seeking = this.seeking
+    if (!seeking) return
+    this.seeking = undefined
+    seeking.resolve(outcome)
+  }
+  /** Takes the seek as far as the loaded tree goes, then waits for the load it needs, or ends it. */
+  private advanceSeek(): void {
+    const seeking = this.seeking
+    if (!seeking || this.disposed) return
+    const rootId = this.rootByConnection.get(seeking.connectionId), root = rootId === undefined ? undefined : this.nodes.get(rootId)
+    if (!root || root.lost) return this.endSeek({ ok: false, message: 'Object Explorer is not connected to this server.' })
+    const { steps, keys } = seeking.paths[seeking.at]
+    let node = root
+    for (let at = 0; at < steps.length; at++) {
+      const step = steps[at], key = keys[at]
+      const child = node.children?.find(candidate => this.isStep(candidate, step, key))
+      if (child) { node = child; continue }
+      const reason = this.seekBelow(node, step)
+      if (reason === undefined) return
+      seeking.reason ??= reason
+      if (++seeking.at < seeking.paths.length) return this.advanceSeek()
+      return this.endSeek({ ok: false, message: seeking.reason })
+    }
+    this.seeking = undefined
+    this.reveal(node.id)
+    seeking.resolve({ ok: true, nodeId: node.id })
+  }
+  private isStep(candidate: TreeNode, step: ExplorerNodeRef, key: string): boolean {
+    if (candidate.ref.type !== step.type) return false
+    if (step.type === 'folder' ? candidate.folder !== step.folder : candidate.ref.type === 'object' && candidate.ref.object.name !== step.object.name) return false
+    return refKey(candidate.connectionId, candidate.ref) === key
+  }
+  /** Starts the load that may bring `step` below `node`, and answers undefined to wait for it; else why it cannot arrive. */
+  private seekBelow(node: TreeNode, step: ExplorerNodeRef): string | undefined {
+    const what = step.type === 'folder' ? folderSpecs[step.folder].label : step.object.schema !== undefined && step.object.parent === undefined ? `${step.object.schema}.${step.object.name}` : step.object.name ?? 'the object'
+    if (node.lost || !this.attached(node)) return 'Object Explorer is not connected to this server.'
+    if (node.load === 'error') return `Object Explorer could not list ${node.label}: ${node.error?.message ?? 'the listing failed.'}`
+    if (node.more === 'error') return `Object Explorer could not load more of ${node.label}: ${node.error?.message ?? 'the listing failed.'}`
+    if (!node.hasChildren) return `${displayText(what)} is not in ${node.label}. Refresh Object Explorer, then try again.`
+    if (this.running.has(node.id)) return undefined
+    if (!node.expanded || node.load === 'none' || node.load === 'loading') {
+      this.expand(node.id, 'user')
+      return this.running.has(node.id) || node.load === 'loaded' ? undefined : `Object Explorer could not list ${node.label}.`
+    }
+    if (node.cursor) {
+      this.state(node).budgetExempt = true
+      node.more = 'auto'
+      node.rev++
+      this.loadMore(node, 'user')
+      this.invalidate()
+      return undefined
+    }
+    const filtered = node.kind === 'folder' && this.filters.get(node.connectionId)?.has(refKey(node.connectionId, node.ref))
+    if (filtered) return `A filter on ${node.label} hides ${displayText(what)}. Remove it, then try again.`
+    if (node.more === 'capped') return `${node.label} stopped at ${count(this.limits.folderCap)} items (its cap). Filter it by name to find ${displayText(what)}.`
+    return `${displayText(what)} is not in ${node.label}. Refresh Object Explorer, then try again.`
   }
 
   // Loading
@@ -816,6 +904,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (running.mode !== 'more' && this.stalled.size) this.resumeStalled()
     this.enforceBudget()
     this.invalidate()
+    this.advanceSeek()
   }
   private firstPage(node: TreeNode, wires: readonly WireNode[], cursor: string | undefined, total: number | undefined): void {
     const truncated = this.replaceChildren(node, wires)

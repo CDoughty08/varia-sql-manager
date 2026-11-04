@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (204)
+## Commands (211)
 
 ### File
 
@@ -191,6 +191,9 @@ keys it uses are listed below.
 | Modify | `explorer.modify` | — | — | — | `backendReady && explorerSelectionModifiable && explorerScriptAlter == 'enabled' && !documentBusy` | Object Explorer context menu › Modify |
 | Cancel Scripting | `explorer.cancelScripting` | — | — | — | `scriptingRunning` | — |
 | Copy Name | `explorer.copyName` | — | — | — | `hasConnection` | Object Explorer context menu › Copy Name |
+| Search Objects… | `explorer.searchObjects` | — | — | — | `hasConnection` | View › Search Objects…; Object Explorer context menu › Search Objects… |
+| Rebuild Search Index | `explorer.rebuildIndex` | — | — | — | `hasConnection` | — |
+| Stop Indexing | `explorer.stopIndexing` | — | — | — | Always | — |
 
 ### Table Designer
 
@@ -290,6 +293,10 @@ keys it uses are listed below.
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
 | Clear Entra ID Token Cache | `help.clearEntraTokenCache` | — | — | — | Always | Help › Clear Entra ID Token Cache |
+| Check for Updates | `help.checkForUpdates` | — | — | — | `!updateBusy` | Help › Check for Updates |
+| Download Update | `help.downloadUpdate` | — | — | — | `updateAvailable` | — |
+| Restart to Update | `help.restartToUpdate` | — | — | — | `updateReady` | Help › Restart to Update |
+| Release Notes | `help.releaseNotes` | — | — | — | Always | Help › Release Notes |
 
 ### Other
 
@@ -401,6 +408,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `0_palette` | **C**ommand Palette… | `workbench.showCommands` | Always |
 | `0_palette` | **G**o to Query… | `workbench.quickOpen` | Always |
 | `0_palette` | Se**a**rch… | `workbench.search` | Always |
+| `0_palette` | Search Ob**j**ects… | `explorer.searchObjects` | Always |
 | `1_layout` | **S**ave Layout… | `layout.save` | Always |
 | `1_layout` | **L**oad Layout… | `layout.load` | Always |
 | `1_layout` | **R**eset Layout | `layout.reset` | Always |
@@ -474,6 +482,9 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
 | `1_entra` | Clear **E**ntra ID Token Cache | `help.clearEntraTokenCache` | Always |
+| `2_updates` | Check for **U**pdates | `help.checkForUpdates` | Always |
+| `2_updates` | **R**estart to Update | `help.restartToUpdate` | Always |
+| `2_updates` | Release **N**otes | `help.releaseNotes` | Always |
 
 ### Context menus
 
@@ -520,6 +531,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `1_query` | Select Top 1000 Ro**w**s | `explorer.selectTopRows` | `explorerActionSelectTop != '' && explorerNode != 'background'` |
 | `1_query` | Modif**y** | `explorer.modify` | `explorerSelectionModifiable && explorerNode != 'background'` |
 | `1_query` | Ac**t**ivity Monitor | `activity.open` | `explorerNode == 'server' && !explorerServerLost` |
+| `1_query` | Searc**h** Objects… | `explorer.searchObjects` | `(explorerNode == 'server' && !explorerServerLost) \|\| explorerNode == 'database'` |
 | `2_script` | **S**cript … as › | Submenu: Object Explorer context menu › Script … as | `explorerScriptTitle != '' && explorerNode != 'background'` |
 | `3_filter` | F**i**lter Settings… | `explorer.filter` | `explorerFolderFilterable` |
 | `3_filter` | Remove Fi**l**ter | `explorer.removeFilter` | `explorerFolderFiltered` |
@@ -737,7 +749,7 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 | `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
 | `8_view` | **P**ause | `ssis.pauseOperations` | Always |
 
-## Context keys (116)
+## Context keys (119)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -810,6 +822,9 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `editorOvertype` | boolean | state | The editor is in overtype mode (OVR): typing replaces the character after the caret. |
 | `hasRecentFiles` | boolean | state | File › Recent Files lists at least one file. |
 | `hasRecoveryFiles` | boolean | state | AutoRecover kept queries that an earlier run or an earlier workbench did not save, and they were neither recovered nor discarded. |
+| `updateBusy` | boolean | state | An update check or download is running. |
+| `updateAvailable` | boolean | state | A newer release that this copy can install waits for Help › Download Update (Automatically download updates is off). |
+| `updateReady` | boolean | state | A newer release was downloaded and verified: Help › Restart to Update installs it. |
 | `explorerHasSelection` | boolean | state | A node is selected in Object Explorer (a loading, error, or progress row is not a node). |
 | `explorerSelectionKind` | `''`, `'folder'`, `'server'`, `'login'`, `'serverRole'`, `'credential'`, `'cryptographicProvider'`, `'audit'`, `'serverAuditSpecification'`, `'backupDevice'`, `'linkedServer'`, `'serverTrigger'`, `'database'`, `'user'`, `'databaseRole'`, `'applicationRole'`, `'schema'`, `'assembly'`, `'asymmetricKey'`, `'certificate'`, `'symmetricKey'`, `'columnMasterKey'`, `'columnEncryptionKey'`, `'databaseAuditSpecification'`, `'databaseTrigger'`, `'externalDataSource'`, `'externalFileFormat'`, `'fullTextCatalog'`, `'fullTextStoplist'`, `'partitionScheme'`, `'partitionFunction'`, `'searchPropertyList'`, `'planGuide'`, `'table'`, `'view'`, `'synonym'`, `'procedure'`, `'function'`, `'sequence'`, `'type'`, `'tableType'`, `'xmlSchemaCollection'`, `'rule'`, `'default'`, `'securityPolicy'`, `'column'`, `'key'`, `'constraint'`, `'trigger'`, `'index'`, `'statistic'`, `'parameter'`, `'returnValue'`, `'ssisCatalog'`, `'ssisFolder'`, `'ssisProject'`, `'ssisPackage'`, `'ssisEnvironment'` | state | The kind of the selected Object Explorer node: 'folder', an object kind from `src/shared/explorer/catalog.ts`, or '' for none. Keep it out of keybinding `when` clauses. |
 | `explorerSelectionFolder` | `''`, `'databases'`, `'systemDatabases'`, `'databaseSnapshots'`, `'serverSecurity'`, `'logins'`, `'serverRoles'`, `'credentials'`, `'cryptographicProviders'`, `'audits'`, `'serverAuditSpecifications'`, `'serverObjects'`, `'backupDevices'`, `'linkedServers'`, `'serverTriggers'`, `'tables'`, `'systemTables'`, `'fileTables'`, `'externalTables'`, `'graphTables'`, `'droppedLedgerTables'`, `'views'`, `'systemViews'`, `'droppedLedgerViews'`, `'externalResources'`, `'externalDataSources'`, `'externalFileFormats'`, `'synonyms'`, `'programmability'`, `'storedProcedures'`, `'systemStoredProcedures'`, `'functions'`, `'tableValuedFunctions'`, `'scalarValuedFunctions'`, `'aggregateFunctions'`, `'databaseTriggers'`, `'assemblies'`, `'types'`, `'userDefinedDataTypes'`, `'userDefinedTableTypes'`, `'userDefinedTypes'`, `'xmlSchemaCollections'`, `'rules'`, `'defaults'`, `'planGuides'`, `'sequences'`, `'storage'`, `'fullTextCatalogs'`, `'partitionSchemes'`, `'partitionFunctions'`, `'fullTextStoplists'`, `'searchPropertyLists'`, `'databaseSecurity'`, `'users'`, `'roles'`, `'databaseRoles'`, `'applicationRoles'`, `'schemas'`, `'asymmetricKeys'`, `'certificates'`, `'symmetricKeys'`, `'alwaysEncryptedKeys'`, `'columnMasterKeys'`, `'columnEncryptionKeys'`, `'databaseAuditSpecifications'`, `'securityPolicies'`, `'columns'`, `'keys'`, `'constraints'`, `'tableTriggers'`, `'indexes'`, `'statistics'`, `'parameters'`, `'integrationServicesCatalogs'`, `'ssisProjects'`, `'ssisEnvironments'`, `'ssisPackages'` | state | The selected Object Explorer folder's id from `src/shared/explorer/catalog.ts`, or '' when the selection is not a folder. Keep it out of keybinding `when` clauses. |

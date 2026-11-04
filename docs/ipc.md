@@ -228,6 +228,8 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `live.subscribe` | port | stream of credited EVENTs ([Live subscriptions](#live-subscriptions)) | live (no slot) | none, and no backstop: only CANCEL, a disconnect, a shutdown, a failure or its source ending ends it |
 | `live.update` | port | unary | control | 10 s |
 | `explorer.children` | invoke; cancelled with `explorerCancel` | unary | explorer | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value |
+| `explorer.index` | invoke; cancelled with `explorerCancel` | unary with droppable `explorer.index.progress` EVENTs (relayed to the requesting window, at most 4 a second) | explorer | none; each database has its own 120 s budget ([Search Objects](object-search.md)) |
+| `explorer.search` | invoke; cancelled with `explorerCancel` | unary | explorer | 15 s; the backend stops at 5 s and answers `partial` |
 | `results.copy` | main only (`varia:results-copy`) | stream, with EVENTs | results | 120 s |
 | `results.export` | main only (`varia:results-save`) | unary with EVENTs | results | none, and no backstop: only CANCEL (reason 1) ends it |
 | `scripting.script` | invoke; cancelled with `cancelScripting` | unary | metadata | 60 s; the backend answers its own 55 s budget as an `error: TIMEOUT` value |
@@ -318,7 +320,7 @@ gate (2 per connection, 4 in all) until its thread ends; scripting failures are 
 **Object action cancellation** works the same way (`ActionRequests`, `varia:actions-cancel`, 1–16 ids, 64 tombstones for
 60 s; 128 running): the object dialog's Stop, the status bar's Stop for a rename, and a disconnect cancel
 `actions.describe`, `actions.script` and `actions.execute` by `requestId` (main routes exactly these and
-`explorer.children` and `scripting.script` to a cancel channel, `cancellableRequests`). The backend cancels the statement
+`explorer.children`, `explorer.index`, `explorer.search` and `scripting.script` to a cancel channel, `cancellableRequests`). The backend cancels the statement
 in SQL Server (an attention, which rolls it back). A describe, a script, or a disconnect answers `CANCELLED` at once, and
 the action's job keeps its gate and connection until the statement has ended. A user CANCEL (reason 1) of
 `actions.execute`, the one method on the `actions` lane, is the exception: ProtocolHost does not answer it, and the

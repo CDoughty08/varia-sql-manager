@@ -585,6 +585,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 }
 .memory-indicator { display: flex; align-items: center; gap: 4px; margin-left: 12px; white-space: nowrap; }
 .memory-indicator .codicon { font-size: var(--varia-glyph-sm); }
+.update-status { display: flex; align-items: center; margin-left: 12px; white-space: nowrap; }
+.update-status > button, .update-status > span { display: flex; align-items: center; gap: 4px; }
+.update-status > button { color: inherit; border-color: transparent; padding: 0 4px; font-size: var(--varia-size-xs); line-height: 14px; cursor: pointer; }
+.update-status .codicon { font-size: var(--varia-glyph-sm); }
 
 .layout-dialog { width: 560px; max-width: 90vw; max-height: 90vh; overflow: auto; padding: 24px; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-dialog) var(--varia-widget-shadow); animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease); }
 .layout-dialog .dialog-heading { display: flex; align-items: start; justify-content: space-between; }
@@ -1699,3 +1703,35 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .activity-splitter { background: CanvasText; forced-color-adjust: none; }
   .activity-splitter:hover, .activity-splitter:focus-visible { background: Highlight; outline: 2px solid Highlight; }
 }
+
+/* Search Objects: the query (field, toggles, scope) above a list of hits, each a name, its path and a definition's line. */
+.object-search { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.object-search-query { flex-shrink: 0; display: flex; flex-direction: column; gap: var(--varia-space-2); padding: var(--varia-space-3) var(--varia-space-4) var(--varia-space-2); }
+.object-search-field { display: flex; align-items: center; gap: var(--varia-space-1); max-width: 720px; height: var(--varia-control); padding: 0 var(--varia-space-1) 0 var(--varia-space-2); color: var(--varia-input-placeholderForeground); background: var(--varia-input-background); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); }
+.object-search-field:has(input:focus-visible) { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
+.object-search-field input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--varia-input-foreground); font-size: var(--varia-size-sm); }
+.object-search-field input:focus-visible { outline: none; }
+.object-search-toggle { width: 22px; height: 22px; color: var(--varia-objectExplorer-actionForeground); }
+.object-search-toggle[aria-pressed="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
+.object-search-options { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-3); }
+.object-search-server { display: flex; align-items: center; gap: var(--varia-space-1); font-size: var(--varia-size-sm); color: var(--varia-descriptionForeground); }
+.object-search-index, .object-search-summary { margin: 0; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.object-search-summary.error { color: var(--varia-errorForeground); }
+.object-search-summary:empty { display: none; }
+.object-search-hits { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 0 0 var(--varia-space-2); list-style: none; }
+.object-search-hit { display: flex; align-items: start; gap: var(--varia-space-1); padding: 0 var(--varia-space-3) 0 var(--varia-space-2); }
+.object-search-hit:hover { background: var(--varia-list-hoverBackground); }
+.object-search-hit .icon-button { visibility: hidden; flex-shrink: 0; }
+.object-search-hit:hover .icon-button, .object-search-hit:focus-within .icon-button { visibility: visible; }
+.object-search-open { flex: 1; min-width: 0; display: grid; grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr); column-gap: var(--varia-space-2); align-items: center; padding: var(--varia-space-1); text-align: start; color: inherit; background: transparent; border: 0; border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); cursor: pointer; }
+.object-search-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.object-search-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.object-search-line { grid-column: 2 / -1; overflow: hidden; text-overflow: ellipsis; white-space: pre; font: var(--varia-size-xs) var(--varia-font-mono); color: var(--varia-descriptionForeground); }
+.object-search-line-number { margin-inline-end: var(--varia-space-1); }
+.object-search-more { font-family: var(--varia-font-ui); }
+.object-search mark { background: transparent; color: var(--varia-list-highlightForeground); font-weight: 600; }
+.index-status { display: flex; align-items: center; gap: var(--varia-space-1); margin-left: var(--varia-space-3); white-space: nowrap; }
+.index-status .codicon { font-size: var(--varia-glyph-sm); }
+.index-status button { color: inherit; background: transparent; border: 1px solid currentColor; padding: 0 var(--varia-space-1); font-size: var(--varia-size-xs); line-height: 14px; }
+.index-status button.index-status-text { border-color: transparent; padding: 0; cursor: pointer; }
+.index-status button.index-status-text:hover { text-decoration: underline; }

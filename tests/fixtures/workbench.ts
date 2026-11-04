@@ -62,13 +62,18 @@ import { RestoreService } from '../../src/renderer/src/restore/RestoreService'
 import { ActionProgressService } from '../../src/renderer/src/actions/ActionProgressService'
 import { ActivityMonitorService } from '../../src/renderer/src/activity/ActivityMonitorService'
 import { activityContribution } from '../../src/renderer/src/contributions/activity'
+import { searchContribution } from '../../src/renderer/src/contributions/search'
 import { documentOwner } from '../../src/renderer/src/live/LiveService'
 import { fakeLiveViews } from './live-views'
 import { SsisOperationsService } from '../../src/renderer/src/ssis/SsisOperationsService'
+import { ObjectSearchService } from '../../src/renderer/src/search/ObjectSearchService'
 import { fakeLive } from './live-handle'
 import { settingsContribution } from '../../src/renderer/src/contributions/settings'
 import { notificationsContribution } from '../../src/renderer/src/contributions/notifications'
 import { NotificationService } from '../../src/renderer/src/core/notifications'
+import { UpdateService } from '../../src/renderer/src/updates/UpdateService'
+import { updatesContribution } from '../../src/renderer/src/contributions/updates'
+import type { UpdateState } from '../../src/shared/updates'
 import { SettingsService } from '../../src/renderer/src/settings/SettingsService'
 import { defaultSettings, scriptingOptionsFrom, type SettingsValues } from '../../src/shared/settings/catalog'
 import type { SettingsState } from '../../src/shared/settings/schema'
@@ -212,6 +217,22 @@ export function fakeInputMode(): MonacoInputMode {
   }
   return target
 }
+/** The update half of VariaApi: `push` stands in for main's state pushes, and the commands answer `answer`. */
+export function updatesApi(initial: UpdateState = { status: 'idle', currentVersion: '1.0.0', kind: 'nsis', enabled: true }) {
+  const listeners = new Set<(state: UpdateState) => void>()
+  let current = initial
+  const push = (state: UpdateState) => { current = state; listeners.forEach(listener => listener(state)) }
+  return {
+    pushUpdate: push,
+    getUpdateState: vi.fn<VariaApi['getUpdateState']>(async () => ({ ok: true, value: current })),
+    onUpdateState: vi.fn<VariaApi['onUpdateState']>(callback => { listeners.add(callback); return () => { listeners.delete(callback) } }),
+    checkForUpdates: vi.fn<VariaApi['checkForUpdates']>(async () => ({ ok: true, value: current })),
+    downloadUpdate: vi.fn<VariaApi['downloadUpdate']>(async () => ({ ok: true, value: current })),
+    restartToUpdate: vi.fn<VariaApi['restartToUpdate']>(async () => ({ ok: true, value: current.status === 'ready' })),
+    openReleasesPage: vi.fn<VariaApi['openReleasesPage']>(async () => ({ ok: true, value: undefined }))
+  }
+}
+
 /**
  * The renderer's services and every command contribution, wired as createWorkbench does but with fake IPC and a fake
  * shell host, so command enablement can be tested in Node.
@@ -229,6 +250,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(async () => ({ ok: true, value: { cancelled: true } })),
     onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}),
     onActionProgress: vi.fn<VariaApi['onActionProgress']>(() => () => {}),
+    onExplorerIndexProgress: vi.fn<VariaApi['onExplorerIndexProgress']>(() => () => {}),
+    explorerIndex: vi.fn<VariaApi['explorerIndex']>(async () => ({ ok: true, value: { status: { state: 'ready', databases: 0, indexed: 0, objects: 0, modules: 0, cut: 0, skipped: [], definitions: true }, elapsedMs: 0 } })),
+    explorerSearch: vi.fn<VariaApi['explorerSearch']>(async () => ({ ok: true, value: { hits: [], total: 0, partial: false, elapsedMs: 0, index: { state: 'ready', databases: 0, indexed: 0, objects: 0, modules: 0, cut: 0, skipped: [], definitions: true } } })),
     cancel: vi.fn<VariaApi['cancel']>(async () => ({ ok: true, value: { cancelled: true } })),
     openSqlFiles: vi.fn<VariaApi['openSqlFiles']>(async () => ({ ok: true, value: [] })),
     releaseSqlFile: vi.fn<VariaApi['releaseSqlFile']>(async () => ({ ok: true, value: undefined })),
@@ -284,7 +308,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     ...recentFilesApi(),
     ...recoveryApi(options.recovery),
     ...settingsApi(options.settings),
-    ...backendApi()
+    ...backendApi(),
+    ...updatesApi()
   }
   const { documents, events } = doc
   // Seeded values apply at once, as if main had answered before the workbench was created.
@@ -335,8 +360,10 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const activity = new ActivityMonitorService({ documents, connections, live: liveViews, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values })
   const live = fakeLive()
   const operations = new SsisOperationsService({ api, documents, panes, live, connections, settings })
+  const objectSearch = new ObjectSearchService({ api, documents, connections, settings })
   const inputMode = new InputModeService(fakeInputMode())
   const notifications = new NotificationService(options.timers ? { timers: options.timers } : {})
+  const updates = new UpdateService(api)
   const databaseGone = databaseGoneHandler({ documents, properties, notify: toast => { notifications.notify(toast) }, copy: text => { void api.writeClipboardText(text) } })
   const context = new ContextKeyService({
     platform,
@@ -360,6 +387,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     newDatabase: newDatabase.context,
     restore: restore.context,
     notifications,
+    updates,
     activity: activity.context,
     ssis: operations.context,
     activeElement
@@ -426,8 +454,10 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     restore,
     actionProgress,
     notifications,
+    updates,
     activity,
-    operations
+    operations,
+    objectSearch
   }
   const contributions = [
     queryContribution(workbench, api),
@@ -444,11 +474,13 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     themeContribution(workbench, api, options.timers),
     backendContribution(workbench),
     helpContribution(workbench, api),
+    updatesContribution(workbench, api),
     scriptingContribution(workbench),
     actionsContribution(workbench),
     designerContribution(workbench),
     ssisContribution(workbench),
     activityContribution(workbench),
+    searchContribution(workbench),
     settingsContribution(workbench),
     notificationsContribution(workbench)
   ]
@@ -488,11 +520,13 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     newDatabase.dispose()
     restore.dispose()
     operations.dispose()
+    objectSearch.dispose()
     bookmarks.dispose()
     editorDialogs.dispose()
     shellOptions.dispose()
     settings.dispose()
     notifications.dispose()
+    updates.dispose()
     documents.dispose()
     backend.dispose()
   }
@@ -527,9 +561,11 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     activity,
     liveViews,
     operations,
+    objectSearch,
     live,
     focusEditor,
     notifications,
+    updates,
     queries,
     files,
     recentFiles,

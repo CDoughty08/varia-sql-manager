@@ -1,0 +1,116 @@
+// Search Objects: the object index's requests, answers, progress and limits (backend/Varia.Backend/Search/). The index lives
+// only in the backend's memory, per connection, and is dropped on disconnect; nothing about it reaches disk.
+import { z } from 'zod'
+import { maxIdentifierLength } from '../sql/identifiers.ts'
+import type { ObjectRef } from './refs.ts'
+import type { FolderId } from './catalog.ts'
+
+/** Mirrors ObjectSearchService and ObjectIndexLimits (tests/object-search.test.ts compares them). */
+export const objectSearchLimits = {
+  /** The longest search text, in UTF-16 code units. */
+  text: 1000,
+  /** The most hits one search answers. */
+  hits: 1000,
+  /** The hits a search answers when it names no limit. */
+  defaultHits: 200,
+  /** Databases a status lists as skipped. */
+  skipped: 256,
+  /** How long one search may work before it answers what it found, marked partial, in ms. */
+  searchMs: 5000,
+  /** How long one database's read may take before it is skipped as TIMEOUT, in ms. */
+  databaseMs: 120_000,
+  /** The longest part of one definition the index keeps, in characters. */
+  definitionChars: 1_000_000,
+  /** Definition characters held across every connection. */
+  totalDefinitionChars: 64 * 1024 * 1024,
+  /** Index progress pushed to the window, at most, per second. */
+  progressPerSecond: 4,
+  /** How long the Search Objects box waits after a key before it searches, in ms. */
+  typingMs: 200
+} as const
+
+/** The kinds the index holds, as Object Explorer names them. */
+export const searchKinds = ['table', 'view', 'procedure', 'function', 'synonym', 'sequence', 'trigger', 'type', 'tableType', 'databaseTrigger'] as const
+export type SearchKind = typeof searchKinds[number]
+export const searchScopes = ['all', 'names', 'definitions'] as const
+export type SearchScope = typeof searchScopes[number]
+
+export interface ObjectIndexParams { readonly connectionId: string; readonly requestId: string; readonly definitions?: boolean }
+export interface ObjectIndexSkip { readonly database: string; readonly code: string; readonly message: string }
+/** none: never built; building: a build is reading; ready: the last build ended. `indexed` counts the databases read so far. */
+export interface ObjectIndexStatus {
+  readonly state: 'none' | 'building' | 'ready'
+  readonly databases: number
+  readonly indexed: number
+  readonly objects: number
+  readonly modules: number
+  /** Definitions cut at the per-module limit or left out once the shared budget was spent. */
+  readonly cut: number
+  readonly skipped: readonly ObjectIndexSkip[]
+  readonly definitions: boolean
+  /** UTC, when the last build ended. */
+  readonly builtAt?: string
+}
+export interface ObjectIndexResult { readonly status: ObjectIndexStatus; readonly elapsedMs: number }
+
+export interface ObjectSearchParams {
+  readonly connectionId: string
+  readonly requestId: string
+  readonly text: string
+  readonly caseSensitive?: boolean
+  readonly wholeWord?: boolean
+  readonly regex?: boolean
+  readonly in?: SearchScope
+  readonly kinds?: readonly SearchKind[]
+  readonly database?: string
+  readonly limit?: number
+}
+/** A definition's first match: line and column are 1-based; range is [start, length] in preview. */
+export interface DefinitionMatch {
+  readonly line: number
+  readonly column: number
+  readonly preview: string
+  readonly range: readonly [number, number]
+  readonly before: boolean
+  readonly after: boolean
+  readonly matches: number
+  readonly cut: boolean
+}
+export interface ObjectSearchHit {
+  readonly object: ObjectRef
+  readonly folder: FolderId
+  /** schema.name, or parentSchema.parent.name for a trigger. */
+  readonly label: string
+  /** The name match's [start, length] in label. */
+  readonly range?: readonly [number, number]
+  readonly modified?: string
+  readonly definition?: DefinitionMatch
+}
+export interface ObjectSearchResult {
+  readonly hits: readonly ObjectSearchHit[]
+  readonly total: number
+  readonly partial: boolean
+  readonly elapsedMs: number
+  readonly index: ObjectIndexStatus
+  /** Why the pattern cannot be searched for. */
+  readonly problem?: string
+}
+
+/** A build's progress EVENT, as the backend sends it. */
+export const objectIndexProgressEventSchema = z.object({
+  type: z.literal('explorer.index.progress'), done: z.number().int().min(0), total: z.number().int().min(0), objects: z.number().int().min(0)
+}).strict().refine(value => value.done <= value.total, 'A build cannot have read more databases than it lists.')
+export type ObjectIndexProgressEvent = z.infer<typeof objectIndexProgressEventSchema>
+/** What main pushes on `varia:explorer-index-progress` to the window that started the build. */
+export interface ObjectIndexProgress { readonly requestId: string; readonly done: number; readonly total: number; readonly objects: number }
+
+// zod's max() counts code points; the backend counts UTF-16 code units.
+const units = (max: number) => z.string().min(1).refine(value => value.length <= max, `At most ${max} UTF-16 code units.`)
+export const objectIndexParamsSchema = z.object({ connectionId: z.uuid(), requestId: z.uuid(), definitions: z.boolean().optional() }).strict() satisfies z.ZodType<ObjectIndexParams>
+export const objectSearchParamsSchema = z.object({
+  connectionId: z.uuid(), requestId: z.uuid(), text: units(objectSearchLimits.text).refine(value => !value.includes('\u0000'), 'The text cannot contain U+0000.'),
+  caseSensitive: z.boolean().optional(), wholeWord: z.boolean().optional(), regex: z.boolean().optional(), in: z.enum(searchScopes).optional(),
+  kinds: z.array(z.enum(searchKinds)).min(1).max(16).optional(),
+  database: units(maxIdentifierLength).refine(value => !value.includes('\u0000'), 'A name cannot contain U+0000.').optional(),
+  limit: z.number().int().min(1).max(objectSearchLimits.hits).optional()
+}).strict() satisfies z.ZodType<ObjectSearchParams>

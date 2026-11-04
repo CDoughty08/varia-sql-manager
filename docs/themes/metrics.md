@@ -74,7 +74,7 @@ Icons ([the registry](../icons.md)) are drawn on a 16 px grid, the codicon font'
 | Token | px | Use | Sized with it |
 | --- | --- | --- | --- |
 | `--varia-glyph-badge` | 9 | The status mark at a tree icon's corner. | `.oe-icon .oe-badge` |
-| `--varia-glyph-sm` | 12 | Glyphs in status bars and tab strips, beside xs and sm text. | `.tab-close .codicon`, `.tab-select .tab-readonly`, `.tab-select .tab-running`, `.connection-save-actions .codicon`, `.query-status-state .codicon`, `.output-status .codicon`, `.memory-indicator .codicon`, `.oe-active > .codicon`, `.editor-status .codicon`, `.status-pill > .codicon`, `.status-pill > .icon`, `.chip > .codicon`, `.chip > .icon`, `.live-pill > .codicon`, `.stale-badge > .codicon`, `.tile-caption > .codicon` |
+| `--varia-glyph-sm` | 12 | Glyphs in status bars and tab strips, beside xs and sm text. | `.tab-close .codicon`, `.tab-select .tab-readonly`, `.tab-select .tab-running`, `.connection-save-actions .codicon`, `.query-status-state .codicon`, `.output-status .codicon`, `.memory-indicator .codicon`, `.update-status .codicon`, `.oe-active > .codicon`, `.editor-status .codicon`, `.index-status .codicon`, `.status-pill > .codicon`, `.status-pill > .icon`, `.chip > .codicon`, `.chip > .icon`, `.live-pill > .codicon`, `.stale-badge > .codicon`, `.tile-caption > .codicon` |
 | `--varia-glyph-md` | 16 | Every other icon: tree rows, toolbars, menus, the palette, tabs, dialogs. | `.icon` |
 | `--varia-glyph-lg` | 24 | Large glyphs; none today (an empty state draws its glyph at md, as the states kit specifies). |  |
 
@@ -92,6 +92,6 @@ Compact is the default and the only density `:root` sets; Comfortable is planned
 | --- | --- | --- | --- | --- |
 | `--varia-header` | 40 | 44 | The title bar. | `.title-bar` |
 | `--varia-bar` | 36 | 40 | Tab strips, the query bar, side-bar headers. | `.query-tabs`, `.explorer-header`, `.query-bar`, `.output-toolbar`, `.document-script-head`, `.activity-pane-tabs [role="tab"]` |
-| `--varia-control` | 26 | 28 | Buttons, inputs, selects. | `.icon-button`, `.explorer-filter`, `.command-centre`, `.query-bar-action`, `.query-connection`, `.document-verb`, `.property-input`, `.property-field-control > .property-input-action > .property-input`, `.property-value.restore-to`, `.activity-select`, `.activity-tile-toggle` |
+| `--varia-control` | 26 | 28 | Buttons, inputs, selects. | `.icon-button`, `.explorer-filter`, `.object-search-field`, `.command-centre`, `.query-bar-action`, `.query-connection`, `.document-verb`, `.property-input`, `.property-field-control > .property-input-action > .property-input`, `.property-value.restore-to`, `.activity-select`, `.activity-tile-toggle` |
 | `--varia-row` | 22 | 26 | Tree, grid and list rows. | `.explorer-row`, `.skeleton-row`, `.document-nav-item`, `.server-files-head`, `.server-files-row`, `.new-database-cell`, `.attach-database-grid .attach-database-cell`, `.user-mapping-head` |
 | `--varia-status` | 24 | 26 | The status bars. | `.status-bar`, `.query-status-bar` |
