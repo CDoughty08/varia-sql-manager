@@ -33,7 +33,7 @@ async function resolveAll(platform: Platform): Promise<(readonly ResolvedMenuIte
   const theme = fixture.theme as { state: ThemeState }
   theme.state = { ...theme.state, themes }
   fixture.api.push(readyBackend())
-  fixture.panes.set({ explorer: true, editor: true, output: true })
+  fixture.panes.set({ explorer: true, editor: true, results: true, messages: false, plan: false })
   const tab = fixture.documents.create('SQLQuery1.sql', 'SELECT 1', 'master')
   const snapshots: (readonly ResolvedMenuItem[])[][] = []
   const capture = () => { snapshots.push(applicationMenus.map(menu => fixture.menus.resolve(menu.id))) }
@@ -71,7 +71,7 @@ async function resolveContexts(platform: Platform): Promise<{ labels: string[]; 
   const output = (view: OutputView, resultIndex: number, selectedText = ''): MenuTarget => ({ kind: 'output', tabId: ran.id, view, resultIndex, selectedText, element: { textContent: 'Completed.' } as HTMLElement })
   const unsaved = fixture.documents.create('SQLQuery1.sql', 'SELECT 1', 'master')
   const saved = fixture.documents.create('saved.sql', 'SELECT 2', 'master', undefined, false, { id: '6f0c9a77-0d3b-4c39-9a2e-36c4a1f5e6a1', name: 'saved.sql', path: '/queries/saved.sql', encoding: 'utf8', readOnly: false })
-  vi.mocked(fixture.host.paneLocation).mockImplementation(pane => pane === 'output' ? 'floating' : 'grid')
+  vi.mocked(fixture.host.paneLocation).mockImplementation(pane => pane === 'results' ? 'floating' : 'grid')
   // Server-l's connection was lost with an earlier backend generation.
   fixture.connections.add(connectionInfo('server-l', 0), connectionOptions)
   let ids = 0
@@ -88,7 +88,7 @@ async function resolveContexts(platform: Platform): Promise<{ labels: string[]; 
   const field = (facts: Partial<InputTarget>): MenuTarget => ({ kind: 'input', element: {} as HTMLElement, readOnly: false, secret: false, hasSelection: true, empty: false, canUndo: true, canRedo: false, ...facts })
   const targets: [string, MenuTarget][] = [
     ['the query editor', { kind: 'editor', tabId: saved.id }], ['a saved query\'s tab', { kind: 'documentTab', tabId: saved.id }], ['an unsaved query\'s tab', { kind: 'documentTab', tabId: unsaved.id }],
-    ['a docked panel\'s tab', { kind: 'dockTab', pane: 'explorer', floating: false }], ['a floating panel\'s tab', { kind: 'dockTab', pane: 'output', floating: true }],
+    ['a docked panel\'s tab', { kind: 'dockTab', pane: 'explorer', floating: false }], ['a floating panel\'s tab', { kind: 'dockTab', pane: 'results', floating: true }],
     ['a text field with selected text', field({})], ['a read-only text field', field({ readOnly: true })], ['a password field', field({ secret: true })],
     ['an empty text field', field({ empty: true, hasSelection: false, canUndo: false })],
     ['Object Explorer\'s empty area', { kind: 'explorer' }], ['a server', object(server, 'server-a.example')],

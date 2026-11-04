@@ -334,7 +334,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const targets = new TargetService(documents, queries, connections, files)
   const platform = options.platform ?? 'win32', focus = fakeFocus()
   const quickInput = new QuickInputService(focus.adapter, options.timers)
-  const focused = { panel: '' as '' | 'explorer' | 'editor' | 'output' }
+  const focused = { panel: '' as '' | 'explorer' | 'editor' | 'results' | 'messages' | 'plan' }
   // The focused element is a stand-in whose pane is `focused.panel`, so tests can put focus in Object Explorer.
   const activeElement = () => focused.panel ? { matches: () => false, closest: (selector: string) => selector === '[data-pane]' ? { getAttribute: () => focused.panel } : null } as unknown as Element : null
   settings.setReporter((message, kind) => kind === 'warning' ? commands.reportWarning(message) : commands.reportError(message))
@@ -402,7 +402,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen: options.modal ?? (() => false), editorHasTextFocus: () => false })
   const host: ShellHost = {
     disconnect: vi.fn(async () => {}), reveal: vi.fn(), manageLayouts: vi.fn(), resetLayout: vi.fn(), flushLayout: vi.fn(async () => {}), showConnect: vi.fn(), reconnect: vi.fn(), editEnvironment: vi.fn(), closePane: vi.fn(),
-    paneLocation: vi.fn<ShellHost['paneLocation']>(() => 'grid'), floatPane: vi.fn(), dockPane: vi.fn(), dockPaneAt: vi.fn(), tabPaneWith: vi.fn()
+    paneLocation: vi.fn<ShellHost['paneLocation']>(() => 'grid'), floatPane: vi.fn(), dockPane: vi.fn(), dockPaneAt: vi.fn(), tabPaneWith: vi.fn(),
+    revealOutput: vi.fn(), toggleOutput: vi.fn<ShellHost['toggleOutput']>(() => 'hidden')
   }
   const history = new CommandHistory(options.storage ?? memoryStorage())
   // tests/theme-picker.test.ts drives a real ThemeService; here the theme commands only need somewhere to go.

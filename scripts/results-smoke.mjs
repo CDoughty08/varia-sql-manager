@@ -13,7 +13,7 @@ import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, backendReady, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice,
   jobProgress, kindIcon, lostServerRows, matching, memoryIndicator, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
-  outputToolbar, outputView, paneTab, part, planList, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, resultToggle, statusBar,
+  outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planList, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, resultToggle, statusBar,
   statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, unsavedMark
 } from './fixtures/ui.mjs'
 
@@ -1315,12 +1315,14 @@ try {
   await expect(grid()).toBeFocused()
   await page.keyboard.press('F6')
   await expect(textbox()).toBeFocused()
+  // Ctrl+R closes every output panel and brings each back where it was, Results showing.
   await page.keyboard.press('Control+R')
-  await expect(paneTab(page, 'output')).toHaveCount(0)
+  for (const id of outputPaneIds) await expect(paneTab(page, id)).toHaveCount(0)
   await expect(outputPane(page)).toBeHidden()
   await page.keyboard.press('Control+R')
-  await expect(paneTab(page, 'output')).toHaveCount(1)
-  await expect(outputPane(page)).toBeVisible()
+  for (const id of outputPaneIds) await expect(paneTab(page, id)).toHaveCount(1)
+  await expect(outputPanel(page, 'results')).toBeVisible()
+  await expect(page.locator('.dv-groupview').filter({ has: paneTab(page, 'results') }).locator('[data-pane-tab]')).toHaveCount(3)
   await expect.poll(scrollTop).toBe(keptTop)
   expect(await active()).toMatchObject({ row: kept.row, column: kept.column, selected: 'true' })
   expect(await widthOf(header('id'))).toBeCloseTo(resized, 0)
@@ -1334,7 +1336,7 @@ try {
   expect(await page.evaluate(async () => {
     const press = () => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'r', code: 'KeyR', ctrlKey: true, bubbles: true, cancelable: true }))
     press()
-    const closed = document.querySelector('[data-pane-tab="output"]') === null
+    const closed = document.querySelector('[data-pane-tab="results"]') === null
     await Promise.resolve()
     press()
     return closed

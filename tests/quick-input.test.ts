@@ -641,7 +641,7 @@ describe('command palette', () => {
     await expect(key('workbench.showCommands')).resolves.toBe(true)
   })
   it('lists recently used commands first, newest first, at most ten', async () => {
-    const recent: CommandId[] = ['layout.reset', 'file.new', 'window.output', 'window.editor', 'window.explorer', 'layout.save', 'layout.load', 'edit.undo', 'edit.redo', 'file.open', 'document.next']
+    const recent: CommandId[] = ['layout.reset', 'file.new', 'window.results', 'window.editor', 'window.explorer', 'layout.save', 'layout.load', 'edit.undo', 'edit.redo', 'file.open', 'document.next']
     const { key, view, quickInput, history } = palette({ storage: memoryStorage({ [historyKey]: JSON.stringify(recent) }) })
     await key('workbench.showCommands')
     const rows = view().rows

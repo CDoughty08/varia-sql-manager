@@ -6,6 +6,7 @@ import { isQueryDocument, isTextDocument } from '../documents'
 import type { DocumentSnapshot } from '../services/documents'
 import type { BookmarkSnapshot } from '../editor/bookmarks'
 import type { EditorOptions } from '../services/editor-options'
+import { isOutputPane, outputPaneIds } from '../../../shared/layouts'
 import type { PaneVisibility } from '../services/panes'
 import type { ShellOptions } from '../services/shell-options'
 import type { QuerySnapshot } from '../services/queries'
@@ -45,7 +46,7 @@ export interface FocusElement { matches(selector: string): boolean; closest(sele
 export interface FocusEditor<E> { getContainerDomNode(): { contains(node: E): boolean }; hasTextFocus(): boolean }
 
 const noFocus: FocusFacts = { editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '', outputGridFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false }
-const panels: ReadonlySet<string> = new Set(['explorer', 'editor', 'output'])
+const panels: ReadonlySet<string> = new Set(['explorer', 'editor'])
 
 /** Focus keys for the focused element. The find widget is inside the editor, so its inputs give editorFocus and inputFocus. */
 export function focusFacts<E extends FocusElement>(element: E | null, editor: FocusEditor<E> | undefined): FocusFacts {
@@ -56,7 +57,7 @@ export function focusFacts<E extends FocusElement>(element: E | null, editor: Fo
   // DockWorkspace marks each pane host, and the mark moves with floating groups.
   const pane = element.closest('[data-pane]')?.getAttribute('data-pane') ?? ''
   return {
-    editorFocus, editorTextFocus, inputFocus, activePanel: panels.has(pane) ? pane as FocusFacts['activePanel'] : '', outputGridFocus: !!element.closest('[data-result-grid]'),
+    editorFocus, editorTextFocus, inputFocus, activePanel: isOutputPane(pane) ? 'output' : panels.has(pane) ? pane as FocusFacts['activePanel'] : '', outputGridFocus: !!element.closest('[data-result-grid]'),
     designerFocus: !!element.closest('[data-designer]'), queryBarFocus: !!element.closest('[data-query-bar]'), activityMonitorFocus: !!element.closest('[data-activity-monitor]')
   }
 }
@@ -133,7 +134,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     hasConnection: connections.some(connection => !connection.lost), hasLostConnection: connections.some(connection => connection.lost),
     activeDocumentConnected: !!activeConnection && !activeConnection.lost, activeConnectionLost: !!activeConnection?.lost,
     anyDocumentConnected: documents.documents.some(document => isQueryDocument(document) && !!document.connectionId && connections.some(connection => connection.id === document.connectionId && !connection.lost)),
-    queryRunning: !!active && !!inputs.queries[active.id]?.running, hasResults: !!active && !!inputs.results?.[active.id], outputPaneVisible: !!inputs.panes?.output, panelTabsVisible: !!inputs.panelTabs, ...inputs.explorer,
+    queryRunning: !!active && !!inputs.queries[active.id]?.running, hasResults: !!active && !!inputs.results?.[active.id], outputPaneVisible: !!inputs.panes && outputPaneIds.some(id => inputs.panes![id]), panelTabsVisible: !!inputs.panelTabs, ...inputs.explorer,
     scriptingRunning: !!inputs.scriptingRunning, hasNotifications: !!inputs.notifications,
     updateBusy: inputs.update?.status === 'checking' || inputs.update?.status === 'downloading', updateReady: inputs.update?.status === 'ready',
     updateAvailable: inputs.update?.status === 'available' && inputs.update.size !== undefined

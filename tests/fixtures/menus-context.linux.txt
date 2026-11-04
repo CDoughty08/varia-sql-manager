@@ -47,7 +47,9 @@ dockTab.context, for a docked panel's tab
   Dock &Bottom  ++++
   ---
   Tab with Query &Editor  ++++
-  Tab with Q&uery Output  ++++
+  Tab with Res&ults  ++++
+  Tab with &Messages  ++++
+  Tab with E&xecution Plan  ++++
   ---
   &Float  ++++
   ---
@@ -62,6 +64,8 @@ dockTab.context, for a floating panel's tab
   ---
   Tab with &Object Explorer  ++++
   Tab with Query &Editor  ++++
+  Tab with &Messages  ++++
+  Tab with E&xecution Plan  ++++
   ---
   &Dock  ++++
   ---

@@ -198,14 +198,22 @@ export const commandCatalog = {
     title: 'Show Query Editor', category: 'View', icon: 'window',
     menus: [{ menu: 'window', group: '1_panes', order: 2, title: 'Query Editor', mnemonic: 'e' }]
   },
-  'window.output': {
-    title: 'Show Query Output', category: 'View', icon: 'output', keywords: ['results', 'messages'],
-    menus: [{ menu: 'window', group: '1_panes', order: 3, title: 'Query Output', mnemonic: 'u' }]
+  'window.results': {
+    title: 'Show Results', category: 'View', icon: 'table', keywords: ['output', 'grid'],
+    menus: [{ menu: 'window', group: '1_panes', order: 3, title: 'Results', mnemonic: 'u' }]
   },
-  // SSMS's Ctrl+R: hides the results (closing the panel keeps them) or shows them again. It never reloads the window.
+  'window.messages': {
+    title: 'Show Messages', category: 'View', icon: 'output', keywords: ['output', 'errors', 'print'],
+    menus: [{ menu: 'window', group: '1_panes', order: 4, title: 'Messages', mnemonic: 'm' }]
+  },
+  'window.plan': {
+    title: 'Show Execution Plan', category: 'View', icon: 'execution-plan', keywords: ['output', 'showplan', 'plan'],
+    menus: [{ menu: 'window', group: '1_panes', order: 5, title: 'Execution Plan', mnemonic: 'x' }]
+  },
+  // SSMS's Ctrl+R: hides the output panels (closing them keeps the results) or shows them again. It never reloads the window.
   'view.toggleResultsPane': {
-    title: 'Toggle Results Pane', category: 'View', icon: 'output', keywords: ['results', 'output', 'hide', 'show'], toggled: 'outputPaneVisible',
-    keybindings: [{ key: 'mod+r' }], menus: [{ menu: 'window', group: '1_panes', order: 4, title: 'Show Results Pane', mnemonic: 'h' }]
+    title: 'Toggle Results Pane', category: 'View', icon: 'output', keywords: ['results', 'messages', 'output', 'hide', 'show'], toggled: 'outputPaneVisible',
+    keybindings: [{ key: 'mod+r' }], menus: [{ menu: 'window', group: '1_panes', order: 6, title: 'Show Results Pane', mnemonic: 'h' }]
   },
   // SSMS's F6: between the query editor and its results (the grid that last had focus, else the first, else Messages).
   'window.switchPane': {
@@ -662,14 +670,16 @@ export const commandCatalog = {
   'pane.dockBottom': { title: 'Dock Bottom', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_move', order: 4, mnemonic: 'b' }] },
   'pane.tabWithExplorer': { title: 'Tab with Object Explorer', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_tab', order: 1, mnemonic: 'o', when: "pane != 'explorer'" }] },
   'pane.tabWithEditor': { title: 'Tab with Query Editor', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_tab', order: 2, mnemonic: 'e', when: "pane != 'editor'" }] },
-  'pane.tabWithOutput': { title: 'Tab with Query Output', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_tab', order: 3, mnemonic: 'u', when: "pane != 'output'" }] },
+  'pane.tabWithResults': { title: 'Tab with Results', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_tab', order: 3, mnemonic: 'u', when: "pane != 'results'" }] },
+  'pane.tabWithMessages': { title: 'Tab with Messages', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_tab', order: 4, mnemonic: 'm', when: "pane != 'messages'" }] },
+  'pane.tabWithPlan': { title: 'Tab with Execution Plan', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_tab', order: 5, mnemonic: 'x', when: "pane != 'plan'" }] },
   'pane.float': { title: 'Float', category: 'View', icon: 'multiple-windows', palette: false, menus: [{ menu: 'dockTab.context', group: '1_dock', order: 1, mnemonic: 'f', when: '!paneFloating' }] },
   'pane.dock': { title: 'Dock', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '1_dock', order: 2, mnemonic: 'd', when: 'paneFloating' }] },
   'pane.close': { title: 'Close', category: 'View', icon: 'close', palette: false, menus: [{ menu: 'dockTab.context', group: '2_close', order: 1, mnemonic: 'c' }] },
   // A panel alone in its dock group hides its tab, as VS Code's single views do; this shows those tabs again for dragging.
   'window.togglePanelTabs': {
     title: 'Toggle Panel Tabs', category: 'View', icon: 'layout', keywords: ['panel', 'tab', 'header', 'dock', 'drag'], toggled: 'panelTabsVisible',
-    menus: [{ menu: 'window', group: '1_panes', order: 5, title: 'Panel Tabs', mnemonic: 't' }, { menu: 'dockTab.context', group: '3_tabs', order: 1, title: 'Show Panel Tabs', mnemonic: 's' }]
+    menus: [{ menu: 'window', group: '1_panes', order: 7, title: 'Panel Tabs', mnemonic: 't' }, { menu: 'dockTab.context', group: '3_tabs', order: 1, title: 'Show Panel Tabs', mnemonic: 's' }]
   },
   // The header's search box: open queries, commands, and the Object Explorer nodes already loaded. SSMS 22's search box
   // (the Visual Studio shell's) is Ctrl+Q; Linux and macOS keep that key for quitting.
