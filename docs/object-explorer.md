@@ -352,4 +352,3 @@ count and connection dot keep their size, and the label gives up the row's empty
 | `detail` | 512 | Characters in tooltip details |
 | `message` | 512 | Characters in an error message |
 | `maxName` | 260 | UTF-16 code units in the longest name a kind may declare; every other kind keeps 128 |
-| `quickFilter` | 128 | Characters in the Filter loaded objects box |

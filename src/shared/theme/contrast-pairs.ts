@@ -192,7 +192,7 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...graphic(['objectExplorer.connectedIndicator', 'objectExplorer.connectionErrorIndicator', 'objectExplorer.disconnectedIndicator'], sideBar, treeHover, treeServer, treeActive, treeInactive),
   // So does the active query's server glyph, which is all that marks that row.
   ...graphic(['objectExplorer.activeConnectionForeground'], sideBar, treeHover, treeServer, treeActive, treeInactive),
-  // Characters that match the Filter loaded objects box (selected rows draw them in the row's own color, in bold).
+  // Characters a search hit marks, in bold: Object Explorer's search band sits on the side bar, its hovered hits on the tree's hover.
   ...text(['list.highlightForeground'], treeHover, treeServer),
   ...graphic(['list.focusOutline'], sideBar, treeActive),
   ...graphic(['titleBar.iconForeground'], titleBar),

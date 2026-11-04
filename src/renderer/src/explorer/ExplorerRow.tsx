@@ -56,10 +56,6 @@ export interface RowProps {
   readonly menuTarget: RefCallback<HTMLDivElement>
   /** The label is the inline Rename box. */
   readonly renaming?: boolean
-  /** The Filter loaded objects text (`filterText`), whose match in the label is highlighted. */
-  readonly match?: string
-  /** The filter shows only some of the node's children (`FilteredRows.partial`), so its item count is left out. */
-  readonly partial?: boolean
   /** Live status (ExplorerStatusService): chips at the row's end; for a database, its state in place of the listing's. */
   readonly status?: RowStatus
 }
@@ -93,12 +89,11 @@ export const connectionState = (node: Pick<TreeNode, 'lost' | 'connectionError'>
 const connectionWords: Readonly<Record<ConnectionState, string>> = { online: 'Connected', error: 'Connection failed', lost: 'Connection lost' }
 
 /**
- * What the tooltip says after the name: kind and creation date, facts, item count (unless `counted` is false, while the
- * filter shows only some of the items), status, and any error.
+ * What the tooltip says after the name: kind and creation date, facts, item count, status, and any error.
  */
-function tooltipFacts(node: TreeNode, counted: boolean, note?: string): string[] {
+function tooltipFacts(node: TreeNode, note?: string): string[] {
   const kind = node.kind === 'folder' ? undefined : [kindSpecs[node.kind].title, node.created && `Created ${node.created.replace('T', ' ')}`].filter(Boolean).join(' · ')
-  const error = node.error ?? node.connectionError, count = counted ? itemCount(node) : undefined
+  const error = node.error ?? node.connectionError, count = itemCount(node)
   const listed = listedChips(node)
   const status = node.lost ? lostSentence : listed.length ? listed.map(chip => chip.title).join('\n') : node.status && statusSentences[node.status]
   return [kind, node.detail && displayText(node.detail), count !== undefined && items(count), status, note,
@@ -106,16 +101,16 @@ function tooltipFacts(node: TreeNode, counted: boolean, note?: string): string[]
 }
 /** The row's tooltip: name, kind and creation date, facts, status, `note` (such as a live state), any error, and another
  *  service's note on the node. */
-export function rowTooltip(node: TreeNode, counted = true, note?: string): string {
+export function rowTooltip(node: TreeNode, note?: string): string {
   const name = node.lost ? `${node.label} (connection lost)` : [node.label, node.sublabel, node.note?.label].filter(Boolean).join(' ')
-  return clip([displayText(name), ...tooltipFacts(node, counted, note)].join('\n'))
+  return clip([displayText(name), ...tooltipFacts(node, note)].join('\n'))
 }
 /**
  * The row's accessible description: the tooltip without the name, which the accessible name already says (a title
  * alone would be the description, so screen readers would read the name twice).
  */
-export function rowDescription(node: TreeNode, counted = true, note?: string): string | undefined {
-  return clip(tooltipFacts(node, counted, note).join('\n')) || undefined
+export function rowDescription(node: TreeNode, note?: string): string | undefined {
+  return clip(tooltipFacts(node, note).join('\n')) || undefined
 }
 
 /**
@@ -195,14 +190,9 @@ function RenameBox({ rowId, name, title, actions }: { rowId: number; name: strin
     onKeyDown={keyDown} onBlur={blur} onMouseDown={stop} onDoubleClick={stop} onCopy={stop} onCut={stop} onPaste={stop} onDragStart={stop} />
 }
 
-/** The label, with the part that matches the Filter loaded objects box in bold. */
-export function Label({ text, match }: { text: string; match: string | undefined }) {
-  const shown = displayText(text), lower = shown.toLocaleLowerCase()
-  // Only where lower-casing keeps the length, so offsets in the lower-cased text are the shown text's.
-  const at = match && lower.length === shown.length ? lower.indexOf(match) : -1
-  if (at < 0) return <bdi className="oe-label">{shown}</bdi>
-  const end = at + match!.length
-  return <bdi className="oe-label">{shown.slice(0, at)}<span className="oe-match">{shown.slice(at, end)}</span>{shown.slice(end)}</bdi>
+/** The label, with hidden characters shown as displayText marks them. */
+export function Label({ text }: { text: string }) {
+  return <bdi className="oe-label">{displayText(text)}</bdi>
 }
 
 /** The text after a node's label: a server's version and login in brief (its name keeps SSMS's full text), or a lost one's state. */
@@ -227,7 +217,7 @@ export function RowEnd({ count, connection, active, children, actions }: { count
 }
 
 /** One windowed row of the tree: a node, or a loading, error, progress, stopped, capped, or paused row. */
-function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed, text, selected, draggable, active, color, environment, actions, menuTarget, renaming, match, partial, status }: RowProps) {
+function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed, text, selected, draggable, active, color, environment, actions, menuTarget, renaming, status }: RowProps) {
   const style = { transform: `translateY(${top}px)` }
   const indent = <span className="oe-indent" style={{ width: (level - 1) * explorerLimits.indent }} />
   const select = (event: MouseEvent) => { if (!(event.target as Element).closest('.oe-twistie')) actions.select(rowId) }
@@ -247,7 +237,7 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
   const expandable = node.hasChildren && !node.lost, folder = node.kind === 'folder', root = node.parent === 0
   const toggle = (event: MouseEvent) => { event.stopPropagation(); if (expandable) actions.toggle(rowId) }
   const dimmed = node.status === 'disabled' || node.status === 'unavailable' || node.status === 'noAccess' || node.lost
-  const sublabel = shownSublabel(node), counted = !partial
+  const sublabel = shownSublabel(node)
   const tag = root ? environmentTag(environment) : undefined
   // A server's chips (running jobs, availability groups) follow its name and come before its environment. Server and database
   // rows show live chips (group names are the server's text); a login shows its listing's static chips.
@@ -255,11 +245,11 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
   const chips = staticChips ?? status?.chips
   const serverWords = root && status?.words ? displayText(status.words) : undefined
   const name = [rowName(node), serverWords, tag?.description].filter(Boolean).join(', ')
-  const tooltip = [rowTooltip(node, counted, note), serverWords, tag?.description].filter(Boolean).join('\n')
+  const tooltip = [rowTooltip(node, note), serverWords, tag?.description].filter(Boolean).join('\n')
   return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId}
     className={`explorer-row${folder ? ' folder' : ''}${root ? ' server' : ''}${node.lost ? ' lost' : ''}${active ? ' active-connection' : ''}${dimmed ? ' dimmed' : ''}${staticChips?.length ? ' static-chips' : ''}`}
     aria-level={level} aria-setsize={setsize || undefined} aria-posinset={posinset || undefined} aria-expanded={expandable ? node.expanded : undefined} aria-selected={selected}
-    aria-busy={node.load === 'loading' || undefined} aria-label={name} aria-description={rowDescription(node, counted, note)} title={clip(tooltip)} style={style} draggable={(draggable && !renaming) || undefined}
+    aria-busy={node.load === 'loading' || undefined} aria-label={name} aria-description={rowDescription(node, note)} title={clip(tooltip)} style={style} draggable={(draggable && !renaming) || undefined}
     onMouseDown={select} onDoubleClick={() => { if (expandable) actions.toggle(rowId); else actions.activate(rowId) }}
     onDragStart={draggable ? (event: DragEvent) => { if (!actions.dragStart(rowId, event.dataTransfer)) event.preventDefault() } : undefined}>
     {root && <Accent color={color} />}
@@ -268,11 +258,11 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
     <ExplorerIcon name={folder && node.expanded ? 'folder-opened' : node.icon} folder={folder} badge={badgeOf(node)} />
     {renaming && node.ref.type === 'object' && node.kind !== 'folder'
       ? <RenameBox rowId={rowId} name={node.ref.object.name ?? ''} title={kindSpecs[node.kind].title} actions={actions} />
-      : <Label text={node.label} match={match} />}
+      : <Label text={node.label} />}
     {node.filtered && <span className="oe-filtered">(filtered)</span>}
     {sublabel && !live && <span className="oe-sublabel">{displayText(sublabel)}</span>}
     {!node.lost && node.note && <span className="oe-sublabel">{displayText(node.note.label)}</span>}
-    <RowEnd count={counted ? itemCount(node) : undefined} connection={root ? connectionState(node) : undefined} active={active} actions={node.lost && <LostActions rowId={rowId} label={node.label} actions={actions} />}>
+    <RowEnd count={itemCount(node)} connection={root ? connectionState(node) : undefined} active={active} actions={node.lost && <LostActions rowId={rowId} label={node.label} actions={actions} />}>
       {chips && chips.length > 0 && <StatusChips chips={chips} />}
       {tag && <EnvironmentTag environment={environment} place="explorer" />}
     </RowEnd>

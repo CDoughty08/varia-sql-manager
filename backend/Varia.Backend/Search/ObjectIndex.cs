@@ -4,9 +4,10 @@ using System.Text.RegularExpressions;
 namespace Varia.Backend.Search;
 
 /// <summary>One indexed object: its Object Explorer identity (kind, schema, name and, for a DML trigger, its parent), the
-/// folder that lists it, and its module definition when it has one the login may read, cut at the index's per-module limit.</summary>
+/// folder that lists it, its module definition when it has one the login may read, cut at the index's per-module limit, and
+/// whether it is a system object (Microsoft-shipped, or a database diagrams support object), which ranks after user ones.</summary>
 internal sealed record IndexedObject(string Kind, string Folder, string? Schema, string Name, string? ParentKind = null, string? ParentSchema = null, string? ParentName = null,
-    DateTime? Modified = null, string? Definition = null, bool DefinitionCut = false)
+    DateTime? Modified = null, string? Definition = null, bool DefinitionCut = false, bool System = false)
 {
     /// <summary>What the results show and a name search with a dot matches: schema.name, or the parent's for a trigger.</summary>
     public string Label => Schema is not null ? Schema + "." + Name : ParentName is not null ? ParentSchema + "." + ParentName + "." + Name : Name;
@@ -67,15 +68,31 @@ internal sealed class IndexBudget(long limit)
 }
 
 /// <summary>A connection's index: its databases, each swapped in whole as its read completes, so a search during a rebuild
-/// sees every database either as it was or as it is now.</summary>
-internal sealed class ConnectionIndex(IndexBudget budget)
+/// sees every database either as it was or as it is now, and its share of the resource database's objects
+/// (<see cref="ResourceCatalog"/>), which every database shows and the index holds once.</summary>
+internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resources = null)
 {
     private readonly object gate = new();
     private Dictionary<string, DatabaseIndex> databases = new(StringComparer.Ordinal);
+    private ResourceSet? resource;
     public bool Disposed { get; private set; }
 
     public IReadOnlyCollection<DatabaseIndex> Databases { get { lock (gate) return [.. databases.Values]; } }
-    public int Objects { get { lock (gate) return databases.Values.Sum(value => value.Objects.Length); } }
+    public ResourceSet? Resource { get { lock (gate) return resource; } }
+    public int Objects { get { lock (gate) return databases.Values.Sum(value => value.Objects.Length) + (resource?.Objects.Length ?? 0); } }
+
+    /// <summary>Holds <paramref name="value"/> (a reference already taken) in place of the set held before, whose reference goes back.</summary>
+    public void PutResource(ResourceSet? value)
+    {
+        ResourceSet? drop;
+        lock (gate)
+        {
+            // A disconnected index keeps nothing, and the same set put again gives back its second reference.
+            if (Disposed || ReferenceEquals(resource, value)) drop = value;
+            else { drop = resource; resource = value; }
+        }
+        if (drop is not null) resources?.Release(drop);
+    }
 
     public void Put(DatabaseIndex value)
     {
@@ -97,12 +114,16 @@ internal sealed class ConnectionIndex(IndexBudget budget)
 
     public void Dispose()
     {
+        ResourceSet? old;
         lock (gate)
         {
             Disposed = true;
             foreach (var value in databases.Values) budget.Release(value.DefinitionChars);
             databases = new(StringComparer.Ordinal);
+            old = resource;
+            resource = null;
         }
+        if (old is not null) resources?.Release(old);
     }
 }
 
@@ -184,32 +205,37 @@ internal sealed class SearchMatcher
 internal sealed record SearchQuery(string Text, bool CaseSensitive, bool WholeWord, bool Regex, bool Names, bool Definitions, IReadOnlySet<string>? Kinds, string? Database, int Limit);
 
 /// <summary>Searches a connection's index. Names rank first (an exact name, then one that starts with the text, then any),
-/// definition matches after them, each by database, schema and name.</summary>
+/// definition matches after them; within each, user objects before system ones, then by database, schema and name. The
+/// resource database's objects are searched once, as master's (or the database the search names).</summary>
 internal static class IndexSearch
 {
     public static ObjectSearchResult Run(ConnectionIndex index, SearchQuery query, SearchMatcher matcher, ObjectIndexLimits limits, ObjectIndexStatus status)
     {
         var watch = Stopwatch.StartNew();
-        var found = new List<(int Rank, ObjectSearchHit Hit)>();
+        var found = new List<(int Rank, bool System, ObjectSearchHit Hit)>();
         var total = 0;
         var partial = false;
         var dotted = query.Text.Contains('.');
-        foreach (var database in index.Databases.OrderBy(value => value.Database, StringComparer.OrdinalIgnoreCase))
+        var databases = index.Databases.OrderBy(value => value.Database, StringComparer.OrdinalIgnoreCase).ToList();
+        var sources = databases.Where(value => query.Database is null || string.Equals(value.Database, query.Database, StringComparison.Ordinal))
+            .Select(value => (value.Database, value.Objects)).ToList();
+        if (index.Resource is { } resource)
+            sources.Add((query.Database ?? databases.FirstOrDefault(value => value.Database == "master")?.Database ?? databases.FirstOrDefault()?.Database ?? "master", resource.Objects));
+        foreach (var (name, objects) in sources)
         {
-            if (query.Database is not null && !string.Equals(database.Database, query.Database, StringComparison.Ordinal)) continue;
-            foreach (var item in database.Objects)
+            foreach (var item in objects)
             {
                 if (query.Kinds is not null && !query.Kinds.Contains(item.Kind)) continue;
                 if ((total & 255) == 0 && watch.Elapsed > limits.SearchBudget) { partial = true; goto done; }
-                var hit = Match(database.Database, item, query, matcher, limits, dotted, out var rank);
+                var hit = Match(name, item, query, matcher, limits, dotted, out var rank);
                 if (hit is null) continue;
                 total++;
-                if (found.Count < limits.Candidates) found.Add((rank, hit));
+                if (found.Count < limits.Candidates) found.Add((rank, item.System, hit));
                 else partial = true;
             }
         }
     done:
-        var hits = found.OrderBy(value => value.Rank).ThenBy(value => value.Hit.Object.Database, StringComparer.OrdinalIgnoreCase)
+        var hits = found.OrderBy(value => value.Rank).ThenBy(value => value.System).ThenBy(value => value.Hit.Object.Database, StringComparer.OrdinalIgnoreCase)
             .ThenBy(value => value.Hit.Label, StringComparer.OrdinalIgnoreCase).ThenBy(value => value.Hit.Label, StringComparer.Ordinal)
             .Take(query.Limit).Select(value => value.Hit).ToList();
         return new(hits, total, partial, watch.ElapsedMilliseconds, status);

@@ -29,6 +29,7 @@ export function searchContribution({ commands, objectSearch, documents, connecti
   }
   const registrations = [
     commands.register('explorer.searchObjects', { run: withServer('Select a server to search', id => { objectSearch.open(id) }) }),
+    commands.register('explorer.focusSearch', { run: () => { void commands.execute('window.explorer', undefined, 'toolbar'); objectSearch.focusPane() } }),
     commands.register('explorer.rebuildIndex', { run: withServer('Select a server to index', id => objectSearch.build(id)) }),
     commands.register('explorer.stopIndexing', {
       when: () => Object.values(objectSearch.getSnapshot().indexes).some(entry => entry.requestId),

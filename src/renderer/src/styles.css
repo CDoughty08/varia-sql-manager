@@ -165,18 +165,16 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .explorer-toolbar .icon-button { color: var(--varia-objectExplorer-actionForeground); }
 .explorer-toolbar .icon-button:focus-visible { outline-offset: -2px; }
 .explorer-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
-/* Filter loaded objects: one field, the search glyph and the clear button inside its border. */
-.explorer-filter { flex-shrink: 0; display: flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-control); margin: var(--varia-space-2) var(--varia-space-2) var(--varia-space-1); padding: 0 var(--varia-space-0) 0 var(--varia-space-2); color: var(--varia-input-placeholderForeground); background: var(--varia-input-background); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); }
-/* The field takes the controls' ring (2 px at 2 px), drawn around the field rather than the borderless input inside it. */
-.explorer-filter:has(input:focus-visible) { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
-.explorer-filter input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; font-size: var(--varia-size-sm); }
-.explorer-filter input:focus-visible { outline: none; }
-.explorer-filter .icon-button { width: 20px; height: 20px; color: var(--varia-objectExplorer-actionForeground); }
-/* Filter text that matches nothing: one compact line under the box rather than a centred empty pane. */
-.explorer-no-match.empty-state { flex: none; flex-direction: row; flex-wrap: wrap; justify-content: flex-start; gap: var(--varia-space-1) var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-3); text-align: left; }
-.explorer-no-match .empty-state-icon { margin-bottom: 0; }
-.explorer-no-match .empty-state-detail { min-width: 0; overflow-wrap: anywhere; }
-.explorer-no-match .empty-state-actions { margin-top: 0; }
+/* Object Explorer's search box (SearchPanel's pane layout): the tab's search, compact, its hits in a band above the tree. */
+.object-search.object-search-pane { flex: 0 1 auto; height: auto; max-height: 50%; border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
+.object-search-pane .object-search-query { gap: var(--varia-space-1); padding: var(--varia-space-2) var(--varia-space-2) var(--varia-space-1); }
+.object-search-pane .object-search-field { max-width: none; }
+.object-search-pane .object-search-field .icon-button { width: 20px; height: 20px; }
+.object-search-pane .object-search-options { gap: var(--varia-space-2); }
+.object-search-pane .object-search-hit { padding: 0 var(--varia-space-1); }
+.object-search-pane .object-search-open { grid-template-columns: auto minmax(0, 1fr); }
+.object-search-pane .object-search-path { grid-column: 2; }
+.object-search-pane .empty-state { flex: none; padding: var(--varia-space-2) var(--varia-space-3); }
 /*
  * The footer: how fresh the selection's listing is, then the connected servers. It is one line as tall as the stale
  * badge's 20 px pill (.stale-badge[data-stale]), so a refresh that fails does not move the tree's bottom edge. The server
@@ -233,9 +231,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .explorer-row.static-chips .oe-end { flex-shrink: 1000; }
 /* The sublabel takes only the space the label leaves (basis 0), so a label that fits never ellipsizes for its sublabel. */
 .oe-sublabel { min-width: 0; flex: 1 1 0; overflow: hidden; text-overflow: ellipsis; font-size: var(--varia-size-sm); color: var(--varia-objectExplorer-sublabelForeground); }
-.oe-match { font-weight: 600; color: var(--varia-list-highlightForeground); }
 .oe-filtered, .explorer-row.progress .oe-text { color: var(--varia-objectExplorer-countForeground); }
-.explorer-row[aria-selected="true"] .oe-label, .explorer-row[aria-selected="true"] .oe-filtered, .explorer-row[aria-selected="true"] .oe-text, .explorer-row[aria-selected="true"] .oe-actions button, .explorer-row[aria-selected="true"] .oe-match, .explorer-row[aria-selected="true"] .oe-count { color: inherit; }
+.explorer-row[aria-selected="true"] .oe-label, .explorer-row[aria-selected="true"] .oe-filtered, .explorer-row[aria-selected="true"] .oe-text, .explorer-row[aria-selected="true"] .oe-actions button, .explorer-row[aria-selected="true"] .oe-count { color: inherit; }
 .oe-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
 .explorer-row.synthetic .oe-icon { color: var(--varia-icon-foreground); }
 .explorer-row.error .oe-icon { color: var(--varia-errorForeground); }

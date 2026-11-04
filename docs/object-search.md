@@ -1,8 +1,16 @@
 # Search Objects
 
-Search Objects (View › Search Objects…, a server or database node's menu in Object Explorer, or the palette) searches every
-object a server's login can see. It does not search just the nodes Object Explorer has loaded. It matches names, and it
-can also match text inside module definitions (procedures, functions, views and triggers).
+Search Objects searches every object a server's login can see, not just the nodes Object Explorer has loaded. It matches
+names, and it can also match text inside module definitions (procedures, functions, views and triggers).
+
+The same search runs in two places, with the same options and results:
+
+- **Object Explorer's search box**, at the top of the pane (Search in Object Explorer in the palette focuses it). It searches
+  the server of the tree's selection, or the first connected server. While the box has text, its hits show in a band above
+  the tree, which stays as it is; a hit reveals its object in the tree below. Escape clears the text, and Escape in an empty
+  box returns to the tree.
+- **The Search Objects tab** (View › Search Objects…, a server or database node's menu, or the palette), with a server picker
+  when more than one server is connected.
 
 ## The index
 
@@ -15,9 +23,18 @@ can also match text inside module definitions (procedures, functions, views and 
   at a time. Each database is one constant batch of catalog views on the " - Object Search" pool (`READ UNCOMMITTED`,
   `LOCK_TIMEOUT 5000`, `DEADLOCK_PRIORITY LOW`) through `QUOTENAME(@db).sys.sp_executesql`. On Azure SQL Database each
   database gets its own connection instead. No metadata built-ins are used, and definitions come from `sys.sql_modules`.
-- **Objects indexed.** Tables, external tables, views, procedures (T-SQL, CLR and extended), scalar, table-valued and
-  aggregate functions, synonyms, sequences, DML triggers (under their table or view), user-defined data and CLR types,
-  table types, and database DDL triggers. Microsoft-shipped objects are left out.
+- **Objects indexed.** Tables, external tables, views, procedures (T-SQL, CLR, extended and replication-filter), scalar,
+  table-valued and aggregate functions, synonyms, sequences, DML triggers (under their table or view), user-defined data
+  and CLR types, table types, and database DDL triggers. Every object the login can see is indexed, Microsoft-shipped ones
+  included: master's `spt_` tables and msdb's procedures under System Tables and System Stored Procedures, as Object Explorer
+  lists them, and system functions under Functions. System objects rank after user objects with the same kind of match.
+- **The resource database's objects.** The `sys` and `INFORMATION_SCHEMA` views, procedures and functions that every database
+  shows come from SQL Server's hidden resource database, so they are the same in every database. The index reads them once
+  per build, not once per database, and a search shows each of them once, as master's (or as the database a search names).
+  Connections to servers whose resource objects have the same fingerprint (version, edition, and the count, latest change
+  and checksum of those objects) share one copy in memory. Definitions that two builds have in common are held and counted
+  against the definition budget once. A server whose objects differ never reuses another's copy, even with the same
+  version string. If the read fails, the status lists it as skipped as `mssqlsystemresource`.
 - **Skipped databases.** A database the build could not read is reported as skipped, with a reason, and the build
   carries on: `TIMEOUT` (120 s per database), `NO_DB_ACCESS`, `DATABASE_UNAVAILABLE`, `CATALOG_ERROR` or `TOO_LARGE`.
 - **Definitions.** Setting `objectExplorer.search.definitions` controls whether definitions are indexed. With it off,
