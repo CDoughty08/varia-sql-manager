@@ -1,5 +1,6 @@
 import type { VariaApi } from '../../../shared/contracts'
-import type { ObjectRef } from '../../../shared/explorer/refs.ts'
+import { folderSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
+import type { ExplorerNodeRef, ObjectRef } from '../../../shared/explorer/refs.ts'
 import { objectSearchLimits, type ObjectIndexProgress, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult, type SearchScope } from '../../../shared/explorer/search.ts'
 import type { SettingKey, SettingValue } from '../../../shared/settings/catalog'
 import { onUnexpectedError } from '../core/errors'
@@ -7,6 +8,7 @@ import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable } from '../core/types'
 import type { ConnectionService, LiveConnection } from '../services/connections'
+import type { RevealPath, SeekOutcome } from '../explorer/ExplorerService'
 import type { CustomDocumentProvider, DocumentService } from '../services/documents'
 
 /** One connection's index as the page knows it: a build running (with its progress) or the last build's status. */
@@ -44,11 +46,7 @@ export interface ObjectSearchSnapshot {
 }
 /** Object Explorer as Reveal uses it. */
 export interface RevealHost {
-  objectNode(connectionId: string, object: ObjectRef): number | undefined
-  folderNode(connectionId: string, owner: ObjectRef, folder: ObjectSearchHit['folder']): number | undefined
-  reveal(id: number): boolean
-  expand(id: number): void
-  reconcile(id: number, options: { readonly select: { readonly type: 'object'; readonly object: ObjectRef } }): void
+  seek(connectionId: string, paths: readonly RevealPath[]): Promise<SeekOutcome>
 }
 export interface ObjectSearchOptions {
   readonly api: Pick<VariaApi, 'explorerIndex' | 'explorerSearch' | 'explorerCancel' | 'onExplorerIndexProgress'>
@@ -61,6 +59,32 @@ export interface ObjectSearchOptions {
 }
 
 export const searchTitle = 'Search Objects'
+
+/** The folders from the owner down to `folder`, outermost first (Programmability › Functions › Scalar-valued Functions). */
+function folderChain(owner: ObjectRef, folder: FolderId): ExplorerNodeRef[] {
+  const chain: ExplorerNodeRef[] = []
+  for (let at: FolderId | undefined = folder; at; at = folderSpecs[at].parent) chain.unshift({ type: 'folder', owner, folder: at })
+  return chain
+}
+const systemDatabases = new Set(['master', 'model', 'msdb'])
+/**
+ * Where a hit is in Object Explorer, from the server down: its database under Databases (or System Databases, tried first
+ * for master, model and msdb, and second for the rest: a distribution database is a system one too), the folders above its
+ * listing, a trigger's table or view, and the object.
+ */
+export function revealPaths(hit: ObjectSearchHit): RevealPath[] {
+  const name = hit.object.database ?? ''
+  const database: ObjectRef = { kind: 'database', name }
+  const parent = hit.object.parent
+  const below: ExplorerNodeRef[] = parent
+    ? (() => {
+        const owner: ObjectRef = { kind: parent.kind, database: name, schema: parent.schema, name: parent.name }
+        return [...folderChain(database, parent.kind === 'view' ? 'views' : 'tables'), { type: 'object' as const, object: owner }, ...folderChain(owner, hit.folder)]
+      })()
+    : folderChain(database, hit.folder)
+  const via = (folder: FolderId): RevealPath => [...folderChain({ kind: 'server' }, folder), { type: 'object', object: database }, ...below, { type: 'object', object: hit.object }]
+  return systemDatabases.has(name.toLowerCase()) ? [via('systemDatabases'), via('databases')] : [via('databases'), via('systemDatabases')]
+}
 const emptyQuery: SearchQueryState = { text: '', caseSensitive: false, wholeWord: false, regex: false, scope: 'all' }
 const live = (connection: LiveConnection | undefined): connection is LiveConnection => !!connection && !connection.lost
 
@@ -178,25 +202,9 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     }, onUnexpectedError)
   }
 
-  /**
-   * Shows a hit in Object Explorer: the object's node once a listing brought it; else its folder, reloaded so the object is
-   * selected once its page arrives; else the nearest loaded ancestor. True when the tree has something to show.
-   */
-  reveal(host: RevealHost, connectionId: string, hit: ObjectSearchHit): boolean {
-    const own = host.objectNode(connectionId, hit.object)
-    if (own !== undefined) return host.reveal(own)
-    const database: ObjectRef = { kind: 'database', name: hit.object.database! }
-    const owner: ObjectRef = hit.object.parent ? { kind: hit.object.parent.kind, database: hit.object.database, schema: hit.object.parent.schema, name: hit.object.parent.name } : database
-    const folder = host.folderNode(connectionId, owner, hit.folder)
-    if (folder !== undefined && host.reveal(folder)) {
-      host.reconcile(folder, { select: { type: 'object', object: hit.object } })
-      return true
-    }
-    for (const near of hit.object.parent ? [owner, database] : [database]) {
-      const node = host.objectNode(connectionId, near)
-      if (node !== undefined && host.reveal(node)) { host.expand(node); return true }
-    }
-    return false
+  /** Reveal in Object Explorer: walks the hit's path from the server down, loading what it needs, and selects its node. */
+  reveal(host: RevealHost, connectionId: string, hit: ObjectSearchHit): Promise<SeekOutcome> {
+    return host.seek(connectionId, revealPaths(hit))
   }
 
   // --- CustomDocumentProvider ------------------------------------------------------------------------------------------

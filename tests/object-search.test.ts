@@ -12,7 +12,7 @@ import {
 import { SnapshotStore } from '../src/renderer/src/core/store'
 import type { Timers } from '../src/renderer/src/core/timers'
 import type { LiveConnection } from '../src/renderer/src/services/connections'
-import { ObjectSearchService, type ObjectSearchOptions, type RevealHost } from '../src/renderer/src/search/ObjectSearchService'
+import { ObjectSearchService, revealPaths, type ObjectSearchOptions, type RevealHost } from '../src/renderer/src/search/ObjectSearchService'
 import { indexSummary } from '../src/renderer/src/search/ObjectSearch'
 
 const csharp = (file: string) => readFileSync(new URL('../backend/Varia.Backend/Search/' + file, import.meta.url), 'utf8')
@@ -222,28 +222,22 @@ describe('ObjectSearchService', () => {
     expect([cleared.error, cleared.result]).toEqual([undefined, undefined])
   })
 
-  it('reveals the object\'s node, else reloads its folder to select it, else opens the nearest loaded ancestor', () => {
+  it('reveals a hit by its path from the server: the database, the folders above its listing, a trigger\'s table or view', async () => {
     const { service } = harness()
-    const host = (nodes: Record<string, number>): RevealHost & { calls: string[] } => {
-      const calls: string[] = []
-      return { calls, objectNode: (_c, object) => nodes[object.kind + ':' + object.name], folderNode: (_c, owner, folder) => nodes[`folder:${owner.name}:${folder}`],
-        reveal: id => { calls.push('reveal ' + id); return true }, expand: id => calls.push('expand ' + id),
-        reconcile: (id, options) => calls.push(`reconcile ${id} ${options.select.object.name}`) }
-    }
-    let tree = host({ 'table:Orders': 7 })
-    expect(service.reveal(tree, 'a', hit)).toBe(true)
-    expect(tree.calls).toEqual(['reveal 7'])
-    tree = host({ 'folder:Sales:tables': 3 })
-    service.reveal(tree, 'a', hit)
-    expect(tree.calls).toEqual(['reveal 3', 'reconcile 3 Orders'])
-    const trigger: ObjectSearchHit = { object: { kind: 'trigger', database: 'Sales', name: 't', parent: { kind: 'table', schema: 'dbo', name: 'Orders' } }, folder: 'tableTriggers', label: 'dbo.Orders.t' }
-    tree = host({ 'folder:Orders:tableTriggers': 4 })
-    service.reveal(tree, 'a', trigger)
-    expect(tree.calls).toEqual(['reveal 4', 'reconcile 4 t'])
-    tree = host({ 'database:Sales': 2 })
-    service.reveal(tree, 'a', hit)
-    expect(tree.calls).toEqual(['reveal 2', 'expand 2'])
-    expect(service.reveal(host({}), 'a', hit)).toBe(false)
+    const seeks: unknown[][] = []
+    const host: RevealHost = { seek: async (connectionId, paths) => { seeks.push([connectionId, paths]); return { ok: true, nodeId: 9 } } }
+    expect(await service.reveal(host, 'a', hit)).toEqual({ ok: true, nodeId: 9 })
+    const server = { kind: 'server' }, sales = { kind: 'database', name: 'Sales' }
+    const databases = { type: 'folder', owner: server, folder: 'databases' }, system = { type: 'folder', owner: server, folder: 'systemDatabases' }
+    const tail = [{ type: 'object', object: sales }, { type: 'folder', owner: sales, folder: 'tables' }, { type: 'object', object: hit.object }]
+    expect(seeks[0]).toEqual(['a', [[databases, ...tail], [databases, system, ...tail]]])
+    // Nested folders come outermost first; master is looked for under System Databases first.
+    const fn: ObjectSearchHit = { object: { kind: 'function', database: 'master', schema: 'dbo', name: 'f' }, folder: 'scalarValuedFunctions', label: 'dbo.f' }
+    const master = { kind: 'database', name: 'master' }
+    expect(revealPaths(fn)[0]).toEqual([databases, system, { type: 'object', object: master }, ...['programmability', 'functions', 'scalarValuedFunctions'].map(folder => ({ type: 'folder', owner: master, folder })), { type: 'object', object: fn.object }])
+    const trigger: ObjectSearchHit = { object: { kind: 'trigger', database: 'Sales', name: 't', parent: { kind: 'view', schema: 'dbo', name: 'V' } }, folder: 'tableTriggers', label: 'dbo.V.t' }
+    const view = { kind: 'view', database: 'Sales', schema: 'dbo', name: 'V' }
+    expect(revealPaths(trigger)[0].slice(2)).toEqual([{ type: 'folder', owner: sales, folder: 'views' }, { type: 'object', object: view }, { type: 'folder', owner: view, folder: 'tableTriggers' }, { type: 'object', object: trigger.object }])
   })
 
   it('refuses a tab without a connected server, forgets a closed tab, and stops listening once disposed', () => {

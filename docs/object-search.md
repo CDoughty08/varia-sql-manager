@@ -52,8 +52,16 @@ can also match text inside module definitions (procedures, functions, views and 
 - **Definition hits.** A hit inside a definition shows the line, a preview with the match marked, and how many more
   matches the definition has.
 - **While a build runs.** A search answers from what the index holds so far. Searches run again when the build ends.
-- **Using a hit.** Clicking a hit reveals the object in Object Explorer, loading its folder if needed. The script button
-  scripts it to a new query: ALTER for modules where the login may, otherwise CREATE.
+- **Using a hit.** Clicking a hit reveals the object in Object Explorer. The tree walks its path down from the server,
+  expanding each node on the way (the database, nested folders such as Programmability › Functions, a trigger's table or
+  view) and loading a folder's later pages until the object's row arrives, past the node budget. It then selects the row
+  and scrolls it into view. A database is looked for under Databases, then System Databases (the other way round for
+  master, model and msdb).
+- **When a reveal fails.** The status says why: the listing failed, a filter hides the row, the folder stopped at its
+  100,000-item cap (filter it by name), or the object is gone. Stop in Object Explorer, another reveal, or losing the
+  server ends it.
+- **Scripting a hit.** The script button scripts the object to a new query: ALTER for modules where the login may,
+  otherwise CREATE.
 
 ## Protocol
 
@@ -71,4 +79,3 @@ can also match text inside module definitions (procedures, functions, views and 
 ## Later
 
 - **Disk persistence.** A disk copy (for example SQLite) could start searches before a rebuild ends.
-- **Deep reveal.** Revealing objects beyond a folder's first page of children.

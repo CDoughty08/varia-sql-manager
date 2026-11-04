@@ -3,6 +3,7 @@ import { folderSpecs, kindSpecs } from '../../../shared/explorer/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import { objectSearchLimits, type ObjectIndexStatus, type ObjectSearchHit, type SearchScope } from '../../../shared/explorer/search.ts'
 import type { ExplorerTarget } from '../../../shared/explorer/refs.ts'
+import { onUnexpectedError } from '../core/errors'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import ExplorerIcon from '../explorer/ExplorerIcon'
 import Icon from '../Icon'
@@ -70,9 +71,10 @@ export default function ObjectSearch({ documentId }: { readonly documentId: stri
     else all[Math.min(next, all.length - 1)]?.focus()
   }
   const target = (hit: ObjectSearchHit): ExplorerTarget => ({ connectionId: state.connectionId, ref: { type: 'object', object: hit.object }, kind: hit.object.kind, label: hit.label })
+  // Object Explorer shows at once and follows the seek as it expands and pages its way to the object.
   const reveal = (hit: ObjectSearchHit) => {
-    if (objectSearch.reveal(explorer, state.connectionId, hit)) void commands.execute('window.explorer', undefined, 'toolbar')
-    else commands.reportError('Object Explorer has not loaded this server yet. Connect it in Object Explorer, then try again.')
+    void commands.execute('window.explorer', undefined, 'toolbar')
+    void objectSearch.reveal(explorer, state.connectionId, hit).then(outcome => { if (!outcome.ok && !outcome.cancelled) commands.reportError(outcome.message) }, onUnexpectedError)
   }
   const script = (hit: ObjectSearchHit) => {
     const verb = hit.definition && scripting.canRun('alter', target(hit)) ? 'alter' : 'create'
