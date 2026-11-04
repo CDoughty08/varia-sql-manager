@@ -30,7 +30,7 @@ env:
 # the benchmarks run side by side, so a failure in one hides nothing in the others and the run takes as long as its
 # longest job. Every pull request runs every platform, drafts included: the repository is public, so runners cost nothing.
 # What a public repository does pay in is concurrency (20 jobs at once across the account, 5 of them macOS), so a pull request
-# runs 10 jobs: no job repeats another's work, and report-only work (the desktop benchmarks, Linux's 1024x768 repeats of
+# runs 11 jobs: no job repeats another's work, and report-only work (the desktop benchmarks, Linux's 1024x768 repeats of
 # suites the Windows shards already run at that size) runs on main only.
 jobs:
   check:
@@ -63,14 +63,14 @@ jobs:
         run: npm run check
 
   live:
-    name: Live SQL Server checks (Linux ${{ matrix.group }}/2)
+    name: Live SQL Server checks (Linux ${{ matrix.group }}/3)
     if: github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'
     strategy:
       fail-fast: false
       matrix:
         # LiveGroups.cs splits the live .NET suites by measured time, each group against a server of its own; the count here
         # is LiveGroups.CiGroups. Check (ubuntu) runs the offline .NET checks and the rest of vitest.
-        group: [1, 2]
+        group: [1, 2, 3]
     runs-on: ubuntu-24.04
     # Room for every timed step below (tests/ci-workflow.test.ts) plus the setup before them.
     timeout-minutes: 35
@@ -116,7 +116,7 @@ jobs:
         id: test
         # All the live .NET suites took 11 minutes in one job on PR #96's run; each group prints its suites' times.
         timeout-minutes: 20
-        run: dotnet run --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --live-group ${{ matrix.group }}/2
+        run: dotnet run --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --live-group ${{ matrix.group }}/3
       - name: Live vitest suites against SQL Server
         # Only the vitest files that use SQL Server (tests/*-live.test.ts); Check runs the others. After a failed group too:
         # the Release backend they start was built either way.

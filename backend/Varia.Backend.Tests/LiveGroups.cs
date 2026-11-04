@@ -8,7 +8,7 @@ namespace Varia.Backend.Tests;
 public static class LiveGroups
 {
     /// <summary>The live job's matrix in .github/workflows/ci.yml (tests/ci-workflow.test.ts holds them equal).</summary>
-    public const int CiGroups = 2;
+    public const int CiGroups = 3;
 
     /// <summary>
     /// The most one group may take in CI, so a slow new suite fails the offline checks instead of quietly lengthening every

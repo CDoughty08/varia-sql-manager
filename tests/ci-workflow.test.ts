@@ -95,16 +95,16 @@ describe('CI workflow', () => {
       expect(job.timeout, name).toBeGreaterThan(steps)
     }
   })
-  it('runs every platform on every pull request, drafts included, in at most 10 jobs', () => {
+  it('runs every platform on every pull request, drafts included, in at most 11 jobs', () => {
     expect([...workflow.values()].map(job => job.if ?? '').filter(condition => /draft/.test(condition))).toEqual([])
     // Only report-only work waits for main: the desktop benchmarks enforce no floors.
     for (const [name, job] of own) expect(job.if, name).toBe(name === 'bench-desktop' ? mainOnly : runAlways)
     const pullRequest = own.filter(([, job]) => job.if === runAlways)
     const platforms = new Set(pullRequest.flatMap(([, job]) => job.runsOn === '${{ matrix.os }}' ? job.matrix.get('os')!.split(', ') : [job.runsOn!]))
     expect([...platforms].sort()).toEqual(['macos-latest', 'ubuntu-24.04', 'windows-latest'])
-    // GitHub runs 20 jobs at once for a public repository's account: two pull request runs, or one and main's, fit together.
+    // GitHub runs 20 jobs at once for a public repository's account: a pull request run takes about half, so two overlapping runs queue only briefly.
     const size = (job: Job) => [...job.matrix.values()].reduce((product, axis) => product * axis.split(',').length, 1)
-    expect(pullRequest.reduce((sum, [, job]) => sum + size(job), 0)).toBeLessThanOrEqual(10)
+    expect(pullRequest.reduce((sum, [, job]) => sum + size(job), 0)).toBeLessThanOrEqual(11)
     // Linux repeats at 1024x768 only on main: the Windows shards run those suites at that size on every pull request.
     for (const step of workflow.get('smoke-linux')!.steps.filter(step => /1024x768x24/.test(step.run))) expect(step.if, step.name).toMatch(/github\.event_name == 'push'/)
   })

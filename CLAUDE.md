@@ -19,7 +19,7 @@ pages, limits, error codes, display formats, benchmarks).
   Headless Linux: `xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke`.
 - `npm run test:electron`: `check` followed by `test:smoke`.
 - `npm run backend:test`: only the .NET checks. `dotnet run --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj
-  --configuration Release -- --live-group 1/2`: one CI live group (no offline checks; needs `VARIA_TEST_SQL_SERVER`). `npx vitest run tests/<name>.test.ts`: one vitest file
+  --configuration Release -- --live-group 1/3`: one CI live group (no offline checks; needs `VARIA_TEST_SQL_SERVER`). `npx vitest run tests/<name>.test.ts`: one vitest file
   (`backend-sidecar.test.ts` starts the Release backend, so build it first with `npm run check` or `npm run backend:test`).
 - `npm run bench` (node harness, Release backend), `npm run bench:e2e [-- --live]` and `npm run bench:grid [-- --live]`
   (Electron, need `out/`): the IPC and results grid benchmarks, not part of `check`. `node scripts/check-bench.mjs
@@ -316,9 +316,9 @@ pages, limits, error codes, display formats, benchmarks).
   commits (never squash or rebase), so stacked branches need no rebase; imperative commit subjects.
 - CI (`.github/workflows/ci.yml`) runs on every PR, drafts included (any base branch, so stacked PRs are tested), every
   push to main and manual runs; the repository is public, so its minutes cost nothing, but GitHub runs only 20 of its jobs
-  at once (5 on macOS), so a PR runs at most 10 and no job repeats another's work. Every job starts at once and builds
+  at once (5 on macOS), so a PR runs at most 11 and no job repeats another's work. Every job starts at once and builds
   what it needs, so one failure hides nothing and the run takes as long as its longest job: `npm run check` on Linux,
-  Windows and macOS; the live .NET checks on Linux in two groups (`--live-group k/2`, each against its own SQL Server
+  Windows and macOS; the live .NET checks on Linux in three groups (`--live-group k/3`, each against its own SQL Server
   service; the first also runs `tests/*-live.test.ts` and Kerberos); the smoke suites in two shards on Linux (sandboxed,
   under xvfb, with SQL Server) and Windows (`scripts/smoke-shards.mjs`, which splits `test:smoke` by each platform's times
   in its `suiteSeconds`); and the Linux benchmarks (floors enforced). Report-only work runs on main pushes only: the
