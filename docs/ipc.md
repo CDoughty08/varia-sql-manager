@@ -530,12 +530,39 @@ state the catalogue's database rules grey it in (docs/object-actions.md), or for
 DATABASE, dbcreator, ownership, or (while it is online) ALTER on the database (`HAS_PERMS_BY_NAME` on the database answers 0 to
 a login with no user in it, to sysadmin while another session holds it SINGLE_USER, and on a database that is not online). `actions.script` and `actions.execute` take `{ action: 'takeOffline', connectionId, requestId, target,
 dropConnections, identity? }` or `{ action: 'bringOnline', connectionId, requestId, target, identity? }` (`identity` as for
-Database Properties; `dropConnections` is Drop All Active Connections, `WITH ROLLBACK IMMEDIATE`, and only Take Offline takes it).
+Database Properties; `dropConnections` is Drop All Active Connections, `WITH ROLLBACK IMMEDIATE`, and only Take Offline and Detach take it).
 Execute repeats the describe's refusals and runs one step, `Take database offline`, `Close connections and take database
 offline` or `Bring database online`; without `dropConnections`, SET OFFLINE waits for other sessions until Stop. Bring Online
 adds a message when the database is still SINGLE_USER or RESTRICTED_USER, read under a 5 s budget of its own after SET ONLINE
 completed (left out if it cannot be read, so a late Stop never turns the success into `CANCELLED`). SQL Server's error 5011 (no ALTER on the database)
 answers `PERMISSION_DENIED`.
+
+**Detach Database** (D3b) uses the same three methods, with no new method. `actions.describe { …, dialog: 'detachDatabase',
+target: { kind: 'database', name } }` (a user database, SQL Server only: Azure SQL Database and Managed Instance answer
+`NOT_SUPPORTED` before any connection opens) answers the same `databaseState` as Take Offline's, read after closing the
+backend's own idle pooled connections in it, plus `files: [{ fileId, name, type: 'rows' | 'log' | 'filestream', path }]`
+(≤ 256 files, `detachFiles`; names clipped to 128 and paths to 260, `filePath`; from `sys.database_files` in an online database
+when `sys.master_files` shows none, and empty with a note when neither does), `filesTruncated`, and `confirmOffline: true`
+for a database that is not online (OFFLINE, EMERGENCY) on Windows. A login that is neither sysadmin nor in the database's
+db_owner role gets `PERMISSION_DENIED` from the describe and the execute. Its
+`warnings` are blocking for what makes `sp_detach_db` fail (replication, a database snapshot of it, an availability group,
+mirroring); on Linux a database that is not online adds a non-blocking note instead of `confirmOffline`, and on Windows a
+SQL Server login adds one about the files' access. `actions.script` and
+`actions.execute` take `{ action: 'detach', connectionId, requestId, target, dropConnections, updateStatistics,
+detachOffline?, identity? }` (both booleans required; `detachOffline` only for a database that is not online on Windows, which
+execute refuses as `NOT_SUPPORTED` without it; execute also refuses `updateStatistics: true` for a database that is not online,
+read-only or in standby; `updateStatistics` and `detachOffline` are refused on every other action). Execute
+repeats the describe's refusals and runs `Close existing connections` (`SET SINGLE_USER WITH ROLLBACK IMMEDIATE`, only with
+`dropConnections`) and `Detach the database` (`sp_detach_db @dbname, @skipchecks`, `'false'` when Update Statistics is
+checked); when the detach fails or is stopped after SINGLE_USER, a compensation step gives the database back the access it
+had (`Restore multi-user access` or `Restore restricted user access`, `compensates: true`). A detach step that failed or was
+stopped while SQL Server detached the database anyway (gone from `sys.databases`) is `done`, with SQL Server's error in
+`messages`. Once `Detach the database` is
+done, the result carries `filesKept`, the files read before it (≤ 256), and the backend forgets its pooled connections to the
+database. SQL Server's error 3703 (in use) answers `IN_USE` with the advice to close its connections or check Drop
+Connections, 3709 (a snapshot of it) `DEPENDENTS`, 3707 (suspect or recovery pending) `NOT_SUPPORTED`, and 7983 (DBCC DETACHDB without
+db_owner) `PERMISSION_DENIED`. When Update
+Statistics is cleared, Script adds a comment line, because SSMS's script leaves `@skipchecks` out.
 
 **Object action confirmations** (A13) are main's message boxes too, on one channel, `varia:confirm-action` (trusted senders
 only): the page sends `{ prompt, facts }`, a strict zod union (`actionPromptRequestSchema` in

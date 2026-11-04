@@ -73,6 +73,7 @@ import { QuickInputService } from '../quickinput/QuickInputService'
 import { CommandService } from './commands'
 import { NotificationService } from './notifications'
 import { ContextKeyService } from './contextkeys'
+import { onUnexpectedError } from './errors'
 import { EventBus } from './events'
 import { domFocusAdapter } from './focus'
 import { InputModeService } from './input-mode'
@@ -252,8 +253,6 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     // The current section's item in the list: one tab stop, from which the keys move through the sections.
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-properties="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus())
   })
-  // A database Delete removed: its Properties documents turn orphan and a toast counts the query windows left on it (D3 §8).
-  const databaseGone = databaseGoneHandler({ documents, properties, notify: toast => { notifications.notify(toast) } })
   const newDatabase = new NewDatabaseService({
     api, documents, files, connections, explorer, longRuns, serverFiles, focusEditor: () => focusLater(() => documents.focusActive()),
     // The database name, once the first read has drawn it; until then the document's first section in its list.
@@ -268,6 +267,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const restore = new RestoreService({
     api, documents, files, connections, longRuns, progress: actionProgress, explorer, transactions: queries, focusEditor: () => focusLater(() => documents.focusActive()),
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-restore="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus())
+  })
+  // A database Delete or Detach removed: its Properties documents turn orphan and a toast counts the query windows left on it
+  // (D3 §8); a detached one's toast offers Copy paths for its files.
+  const databaseGone = databaseGoneHandler({
+    documents, properties, notify: toast => { notifications.notify(toast) },
+    copy: text => { void api.writeClipboardText(text).then(result => { if (!result.ok) commands.reportWarning(result.error) }, onUnexpectedError) }
   })
   const activity = new ActivityMonitorService({
     documents, connections, live, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values,

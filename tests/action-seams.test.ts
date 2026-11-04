@@ -23,11 +23,11 @@ describe('server engines', () => {
   })
   it('lets each action declare the engines it runs on, and the backend reads them from the catalogue', () => {
     expect(objectActions.filter(action => actionServes(action, 'cloud'))).toEqual(['selectTop'])
-    // Attach is SQL Server's box editions' alone (decision 10), Managed Instance cannot SET OFFLINE or ONLINE (Take Offline and
-    // Bring Online run on box servers only), and it restores from URL only, which neither Restore Database nor Restore Files and
+    // Attach is SQL Server's box editions' alone (decision 10), Managed Instance cannot SET OFFLINE or ONLINE, nor run sp_detach_db
+    // (Take Offline, Bring Online and Detach run on box servers only), and it restores from URL only, which neither Restore Database nor Restore Files and
     // Filegroups offers.
     expect(objectActions.filter(action => actionServes(action, 'managedInstance'))).toEqual(['selectTop', 'rename', 'delete', 'properties'])
-    expect(objectActions.filter(action => !actionServes(action, 'managedInstance'))).toEqual(['attach', 'takeOffline', 'bringOnline', 'restore', 'restoreFiles'])
+    expect(objectActions.filter(action => !actionServes(action, 'managedInstance'))).toEqual(['attach', 'takeOffline', 'bringOnline', 'detach', 'restore', 'restoreFiles'])
     // New Database runs only on a SQL Server box: Managed Instance and Azure place files themselves.
     expect((['box', 'managedInstance', 'cloud'] as const).map(engine => actionServes('createDatabase', engine))).toEqual([true, false, false])
     const json = JSON.parse(actionsCatalogJson()) as { version: number; actions: { action: string; engines: string[]; cleanupMs: number }[]; limits: Record<string, number> }

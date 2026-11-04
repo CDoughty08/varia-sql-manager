@@ -40,6 +40,8 @@ import { explorerStatics } from './explorer-tree.mjs'
  * Take Database Offline describes AppData with two sessions, one of them in a transaction; taken offline (Drop All Active
  * Connections, or none left), it lists as "(Offline)" until Bring Online. With `holding` set, a SET OFFLINE without Drop All
  * Active Connections waits, as on a session that joined after the describe, until its Stop arrives.
+ * Detach Database describes AppData with the same sessions and `detachFiles`; detached, it leaves Databases and the result
+ * keeps its files, until AppData is put back in `databases` (as if it were attached again) and Databases is refreshed.
  */
 export function actionsStubData() {
   return { statics: explorerStatics(), serverFiles: stubServerFiles }
@@ -76,6 +78,9 @@ export const newDatabaseScript = name => `CREATE DATABASE [${name}]
 GO
 `
 export const offlineScript = drop => `USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET  OFFLINE${drop ? ' WITH ROLLBACK IMMEDIATE' : ''}\r\nGO\r\n`
+export const detachScript = (drop, statistics) => (drop ? 'USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET  SINGLE_USER WITH ROLLBACK IMMEDIATE\r\nGO\r\n' : '')
+  + `USE [master]\r\nGO\r\nEXEC master.dbo.sp_detach_db @dbname = N'AppData', @skipchecks = '${statistics ? 'false' : 'true'}'\r\nGO\r\n`
+export const detachFiles = [{ fileId: 1, name: 'AppData', type: 'rows', path: 'C:\\Data\\AppData.mdf' }, { fileId: 2, name: 'AppData_log', type: 'log', path: 'C:\\Data\\AppData_log.ldf' }]
 export const stubSessions = [{ sessionId: 61, login: 'app', program: 'Contoso Orders', host: 'web1', openTransactions: 1 }, { sessionId: 62, login: 'report', program: 'Reports', host: 'web2', openTransactions: 0 }]
 export const restoreFilesScript = "USE [master]\r\nRESTORE DATABASE [AppData] FILE = N'AppData_2' FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NORECOVERY,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
 export const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
@@ -103,6 +108,9 @@ export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
 GO
 `
   const offlineScript = drop => `USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET  OFFLINE${drop ? ' WITH ROLLBACK IMMEDIATE' : ''}\r\nGO\r\n`
+  const detachScript = (drop, statistics) => (drop ? 'USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET  SINGLE_USER WITH ROLLBACK IMMEDIATE\r\nGO\r\n' : '')
+    + `USE [master]\r\nGO\r\nEXEC master.dbo.sp_detach_db @dbname = N'AppData', @skipchecks = '${statistics ? 'false' : 'true'}'\r\nGO\r\n`
+  const detachFiles = [{ fileId: 1, name: 'AppData', type: 'rows', path: 'C:\\Data\\AppData.mdf' }, { fileId: 2, name: 'AppData_log', type: 'log', path: 'C:\\Data\\AppData_log.ldf' }]
   const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
   const offlineWarning = 'This database is offline. Deleting it removes it from the server but leaves its files on disk.'
   const newLoginScript = name => `USE [master]\r\nGO\r\nSET XACT_ABORT ON;\r\nBEGIN TRANSACTION;\r\nCREATE LOGIN [${name}] WITH PASSWORD=<password>, DEFAULT_DATABASE=[master], CHECK_EXPIRATION=OFF, CHECK_POLICY=OFF;\r\nCOMMIT TRANSACTION;\r\nGO\r\n`
@@ -178,7 +186,15 @@ GO
     if (dialog === 'bringOnline' && !stub.offline) return refused('The database is online.')
     const sessions = stub.offline ? [] : stub.sessions
     return ok({ databaseState: { name: target.name, identity: { id: 7, created: '2026-01-02T03:04:05.000' }, state: stub.offline ? 6 : 0, userAccess: 0, readOnly: false, standby: false,
-      sessions: sessions.length, withTransaction: sessions.filter(session => session.openTransactions > 0).length, sessionList: sessions, sessionsTruncated: false, warnings: [] }, elapsedMs: 1 })
+      sessions: sessions.length, withTransaction: sessions.filter(session => session.openTransactions > 0).length, sessionList: sessions, sessionsTruncated: false, warnings: [],
+      ...(dialog === 'detachDatabase' ? { files: detachFiles, filesTruncated: false } : {}) }, elapsedMs: 1 })
+  }
+  /** Detach: AppData leaves Databases; the result lists the files that stay on the server. */
+  function detach(params) {
+    stub.databases = stub.databases.filter(name => name !== params.target.name)
+    stub.sessions = []
+    const steps = [...params.dropConnections ? [{ status: 'done', title: 'Close existing connections' }] : [], { status: 'done', title: 'Detach the database' }]
+    return ok({ steps, messages: [], elapsedMs: 1, filesKept: detachFiles })
   }
   /** SET OFFLINE (waiting until Stop while `holding`, without Drop All Active Connections) and SET ONLINE. */
   function databaseStateChange(params) {
@@ -338,6 +354,7 @@ GO
     if (params.action === 'createLogin') return createLogin(params)
     if (params.action === 'attach') return attachExecute(params)
     if (params.action === 'takeOffline' || params.action === 'bringOnline') return databaseStateChange(params)
+    if (params.action === 'detach') return detach(params)
     if (params.action === 'properties') return ok({ steps: Object.keys(params.changes.options ?? {}).map(key => ({ status: 'done', title: 'Set ' + key })), messages: [], elapsedMs: 1 })
     if (params.action === 'rename') {
       if (params.newName === 'Taken') return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NAME_IN_USE', message: 'The name Taken is already in use in this schema.', retryable: false } })
@@ -412,7 +429,7 @@ GO
           case 'serverFiles': return listServerFiles(params)
           case 'restoreDatabase': return restore(params)
           case 'attachDatabase': return attachDescribe(params)
-          case 'takeOffline': case 'bringOnline': return databaseState(params)
+          case 'takeOffline': case 'bringOnline': case 'detachDatabase': return databaseState(params)
           default: return describe(params)
         }
       case 'actions.script':
@@ -425,6 +442,7 @@ GO
           case 'attach': return ok({ text: params.databases.map(database => `USE [master]\r\nGO\r\nCREATE DATABASE [${database.name}] ON ${database.files.map(file => `( FILENAME = N'${file}' )`).join(', ')}`
             + ` FOR ATTACH${database.rebuildLog ? '_REBUILD_LOG' : ''}\r\nGO\r\n`).join(''), database: 'master', warnings: [] })
           case 'takeOffline': return ok({ text: offlineScript(params.dropConnections), database: 'master', warnings: [] })
+          case 'detach': return ok({ text: detachScript(params.dropConnections, params.updateStatistics), database: 'master', warnings: [] })
           case 'restoreFiles': return ok({ text: restoreFilesScript, database: 'master', warnings: [] })
           default: return ok({ text: scriptText(params.target.name), database: params.target.database ?? 'master', warnings: [] })
         }
