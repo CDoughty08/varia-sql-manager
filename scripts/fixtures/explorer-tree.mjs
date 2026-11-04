@@ -91,6 +91,17 @@ export async function revealExplorerRow(page, ...path) {
 }
 
 /**
+ * Waits for the app to select the row at a path after a reload (a database it created or attached). The tree scrolls the
+ * selected row into view, which can leave its server out of the rendered window, so the row is found through
+ * revealExplorerRow, and the reload may still be on its way, so the search repeats until the row is there and selected.
+ */
+export async function expectSelectedExplorerRow(page, ...path) {
+  await expect(async () => {
+    await expect(await revealExplorerRow(page, ...path)).toHaveAttribute('aria-selected', 'true', { timeout: 1000 })
+  }).toPass({ timeout: 30000, intervals: [250, 500, 1000] })
+}
+
+/**
  * Expands each row of a path that is collapsed, from the server down, by its chevron. A row moves whenever a folder above
  * it finishes loading (expanding Tables, then Views below it, moves Views down by the tables that arrive), so a click aimed
  * at a chevron can land on another row and expand nothing. The click is therefore not forced: Playwright waits for the
@@ -102,7 +113,10 @@ export async function expandExplorerPath(page, ...path) {
   // Room for a lost click, the 2 s that notice it and a second click, on slow Linux runners too (CI ran out at 5 s).
   const timeout = options.timeout ?? (process.platform === 'win32' ? 15000 : 10000)
   for (let length = 1; length <= path.length; length++) {
-    const row = await explorerRow(page, ...path.slice(0, length), options)
+    // An earlier step can leave the tree scrolled far from the server, so each row is found through revealExplorerRow; a row
+    // whose folder is still loading is not there yet, so the search repeats.
+    let row
+    await expect(async () => { row = await revealExplorerRow(page, ...path.slice(0, length)) }).toPass({ timeout, intervals: [250, 500, 1000] })
     if (await row.getAttribute('aria-expanded') !== 'false') {
       await expect(row).toHaveAttribute('aria-expanded', 'true', options)
       continue
