@@ -41,12 +41,15 @@ internal static partial class ScriptingLiveChecks
 
         public string ConnectionId { get; } = connectionId;
 
+        /// <summary>A second connection for <see cref="ScriptAll"/>, which the scratch checks keep open.</summary>
+        public string? Second { get; set; }
+
         /// <summary>Scripts independent read-only requests at the service's limit, two jobs at a time on each connection (this
-        /// client's and <paramref name="others"/>), in input order. Four at a time takes about half as long as one at a time,
+        /// client's and <see cref="Second"/>), in input order. Four at a time takes about a quarter as long as one at a time,
         /// and a deeper queue would spend the jobs' 55 s budgets waiting for a gate.</summary>
-        public async Task<ScriptResult[]> ScriptAll(IReadOnlyList<(ObjectRefDto Target, string Verb, ScriptingOptionsDto? Options)> requests, params string[] others)
+        public async Task<ScriptResult[]> ScriptAll(IReadOnlyList<(ObjectRefDto Target, string Verb, ScriptingOptionsDto? Options)> requests)
         {
-            var connections = (string[])[ConnectionId, .. others];
+            var connections = Second is { } second ? new[] { ConnectionId, second } : [ConnectionId];
             var results = new ScriptResult[requests.Count];
             var next = -1;
             await Task.WhenAll(Enumerable.Range(0, connections.Length * 2).Select(async worker =>
@@ -75,17 +78,8 @@ internal static partial class ScriptingLiveChecks
     [GeneratedRegex(@"^/\*{6} Object:[^\r\n]*\*{6}/\r?\nGO\r?$", RegexOptions.Multiline)]
     private static partial Regex HeaderOnly();
 
-    // Temporary: where the suite's time goes.
-    private static readonly Stopwatch lap = new();
-    private static void Lap(string phase)
-    {
-        Console.WriteLine("Script As phase " + phase + ": " + lap.Elapsed.TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture) + " s");
-        lap.Restart();
-    }
-
     public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, Func<string, ConnectOptions> live, JsonSerializerOptions json)
     {
-        lap.Restart();
         var client = new Client(service, info.Id, json);
         async Task<SqlRun> Sql(string text, string database = "master")
         {
@@ -214,16 +208,13 @@ internal static partial class ScriptingLiveChecks
         }
         finally { ScriptingCulture.Override = null; }
 
-        Lap("msdb");
         await CancellationAsync(check, service, client, live, json);
-        Lap("cancellation");
         if (Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SCRATCH") != "1")
         {
             Console.WriteLine("Scripting scratch-database checks skipped. Set VARIA_TEST_SQL_SCRATCH=1 to allow creating and dropping a uniquely named database on a disposable development server.");
             return;
         }
         await ScratchAsync(check, service, client, json, Sql, live);
-        Lap("scratch teardown");
     }
 
     private static async Task<bool> Stops(Task task)
@@ -308,8 +299,14 @@ internal static partial class ScriptingLiveChecks
         {
             var server = await sql(File.ReadAllText(Path.Combine(fixtures, "scripting-server.sql")).Replace("{{scratch}}", db, StringComparison.Ordinal), "master");
             if (server.Status != "completed") throw new InvalidOperationException("The scripting server fixture failed: " + server.Error);
-            Lap("scratch setup");
-            await ScratchChecksAsync(check, service, client, json, sql, live, scratch);
+            var second = (ConnectionInfo)await service.DispatchAsync("connections.connect", JsonSerializer.SerializeToElement(live("master"), json), json);
+            client.Second = second.Id;
+            try { await ScratchChecksAsync(check, service, client, json, sql, live, scratch); }
+            finally
+            {
+                client.Second = null;
+                await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(second.Id), json), json);
+            }
         }
         finally { await DropServerObjectsAsync(sql, db); }
     }
@@ -378,11 +375,7 @@ internal static partial class ScriptingLiveChecks
         requests.AddRange(headerless.Select(item => (item.Target, item.Verb, (ScriptingOptionsDto?)plain)));
         requests.AddRange(withDependents.Select(item => (item.Item1, "create", (ScriptingOptionsDto?)dependents)));
         requests.AddRange(paired.SelectMany(target => new[] { "create", "drop", "dropAndCreate" }.Select(verb => (target, verb, (ScriptingOptionsDto?)null))));
-        var second = (ConnectionInfo)await service.DispatchAsync("connections.connect", JsonSerializer.SerializeToElement(live("master"), json), json);
-        Queue<ScriptResult> answers;
-        try { answers = new(await client.ScriptAll(requests, second.Id)); }
-        finally { await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(second.Id), json), json); }
-        Lap("read-only batch");
+        var answers = new Queue<ScriptResult>(await client.ScriptAll(requests));
 
         var failed = new List<string>();
         foreach (var (target, contains) in objects)
@@ -487,23 +480,14 @@ internal static partial class ScriptingLiveChecks
         }
         finally { await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(holder), json), json); }
         check(Ok(await client.Script(Schema("table", "dbo", "a"), "create")), "the table scripts once the other session rolls back");
-        Lap("guards and blocking");
         await SchemaLockAsync(check, service, client, json, Schema("table", "dbo", "Victim"), db);
-        Lap("SchemaLockAsync");
         await DefinitionsAsync(check, client, Schema);
-        Lap("DefinitionsAsync");
         await VerbsAsync(check, client, sql, scratch);
-        Lap("VerbsAsync");
         await UnresolvedAsync(check, client, sql, scratch);
-        Lap("UnresolvedAsync");
         await DependentDatabasesAsync(check, service, client, sql, scratch);
-        Lap("DependentDatabasesAsync");
         await OldHeadersAsync(check, client, sql, db);
-        Lap("OldHeadersAsync");
         await CultureAsync(check, client, sql, db);
-        Lap("CultureAsync");
         await GoldenAsync(check, service, client, scratch, sql, live, json);
-        Lap("GoldenAsync");
     }
 
     /// <summary>Another session's uncommitted TRUNCATE holds a schema-modification lock that sys.tables does not wait for
@@ -732,14 +716,18 @@ internal static partial class ScriptingLiveChecks
         };
         var failed = new List<string>();
         var scripts = new List<string>();
-        foreach (var (procedure, reference) in crafted)
-            foreach (var headers in new[] { true, false })
-                foreach (var verb in new[] { "create", "alter", "createOrAlter", "dropAndCreate" })
+        var cases = (from item in crafted from headers in new[] { true, false } from verb in new[] { "create", "alter", "createOrAlter", "dropAndCreate" }
+            select (item.Procedure, item.Reference, Headers: headers, Verb: verb, Target: new ObjectRefDto("procedure", db, "dbo", item.Procedure))).ToList();
+        // Each case with Generate script for dependent objects and without, all at once (Client.ScriptAll).
+        var answers = new Queue<ScriptResult>(await client.ScriptAll([.. cases.SelectMany(item => new (ObjectRefDto, string, ScriptingOptionsDto?)[]
+        {
+            (item.Target, item.Verb, client.Options with { IncludeHeaders = item.Headers, GenerateDependentObjects = true }),
+            (item.Target, item.Verb, client.Options with { IncludeHeaders = item.Headers })
+        })]));
+        foreach (var (procedure, reference, headers, verb, _) in cases)
                 {
-                    var target = new ObjectRefDto("procedure", db, "dbo", procedure);
-                    var options = client.Options with { IncludeHeaders = headers };
-                    var result = await client.Script(target, verb, options with { GenerateDependentObjects = true });
-                    var alone = await client.Script(target, verb, options);
+                    var result = answers.Dequeue();
+                    var alone = answers.Dequeue();
                     // SMO walks a module's references for CREATE, also DROP And CREATE's second pass, and not for ALTER.
                     string[] expected = verb is "create" or "dropAndCreate" ? [UnresolvedWarning(reference)] : [];
                     // Equal to the script without the option, so framed alike; a GO line inside a name breaks Framed's count.
@@ -961,10 +949,27 @@ internal static partial class ScriptingLiveChecks
     {
         var failed = new List<string>();
         var verbs = new (string Verb, string Keyword)[] { ("create", "CREATE"), ("alter", "ALTER"), ("createOrAlter", "CREATE OR ALTER"), ("dropAndCreate", "CREATE") };
-        foreach (var name in new[] { "usp_OldHeader", "usp_OldHeaderLine", "usp_LeadingHeader", "usp_HeaderTrailing", "usp_HeaderBanner", "usp_HeaderNoDate", "usp_HeaderSameLine",
-            "usp_Banners", "usp_HeaderBoth" })
+        var names = new[] { "usp_OldHeader", "usp_OldHeaderLine", "usp_LeadingHeader", "usp_HeaderTrailing", "usp_HeaderBanner", "usp_HeaderNoDate", "usp_HeaderSameLine",
+            "usp_Banners", "usp_HeaderBoth" };
+        // A trigger or a function with such a banner comes in with Script triggers or Generate script for dependent objects.
+        const string banner = "/****** Object:  StoredProcedure [dbo].[old]\r\n** Purpose: nightly load\r\n******/\r\n";
+        var bannered = (from headers in new[] { true, false }
+            let options = client.Options with { IncludeHeaders = headers }
+            from item in new (string Label, ObjectRefDto Target, ScriptingOptionsDto Extra)[]
+            {
+                ("trigger", new ObjectRefDto("trigger", db, Name: "TR_HeaderBanner", Parent: new ParentRefDto("table", "dbo", "HeaderTrigger")), options),
+                ("its table with Script triggers", new ObjectRefDto("table", db, "dbo", "HeaderTrigger"), options with { ScriptTriggers = true }),
+                ("function", new ObjectRefDto("function", db, "dbo", "fn_HeaderBanner"), options),
+                ("view over it with dependent objects", new ObjectRefDto("view", db, "dbo", "vHeaderBanner"), options with { GenerateDependentObjects = true })
+            }
+            select (item.Label, item.Target, item.Extra, Headers: headers)).ToList();
+        // Every script at once (Client.ScriptAll), each check reading its answers in order.
+        var answers = new Queue<ScriptResult>(await client.ScriptAll([
+            .. from name in names from headers in new[] { true, false } from item in verbs
+               select (new ObjectRefDto("procedure", db, "dbo", name), item.Verb, (ScriptingOptionsDto?)(client.Options with { IncludeHeaders = headers })),
+            .. bannered.Select(item => (item.Target, "create", (ScriptingOptionsDto?)item.Extra))]));
+        foreach (var name in names)
         {
-            var target = new ObjectRefDto("procedure", db, "dbo", name);
             var header = "/****** Object:  StoredProcedure [dbo].[" + name + "]    Script Date: ";
             // SMO writes the name quoted and keeps the stored text around it byte for byte, the old header included.
             var definition = (await sql("SELECT definition FROM sys.sql_modules WHERE object_id = OBJECT_ID(N'dbo." + name + "');", db)).Scalar ?? "";
@@ -973,30 +978,18 @@ internal static partial class ScriptingLiveChecks
             foreach (var headers in new[] { true, false })
                 foreach (var (verb, keyword) in verbs)
                 {
-                    var result = await client.Script(target, verb, client.Options with { IncludeHeaders = headers });
+                    var result = answers.Dequeue();
                     var stored = at < 0 ? null : definition[..at] + keyword + " PROCEDURE [dbo].[" + name + "]" + definition[(at + create.Length)..];
                     if (!Ok(result) || result.Text!.Contains(header, StringComparison.Ordinal) != headers || stored is null || !result.Text.Contains(stored, StringComparison.Ordinal)
                         || result.Warnings.Count > 0 || !Framed(result.Text))
                         failed.Add(name + " " + verb + (headers ? "" : " without headers") + ": " + (result.Error?.Message ?? string.Join(" ", result.Warnings)));
                 }
         }
-        // A trigger or a function with such a banner comes in with Script triggers or Generate script for dependent objects.
-        const string banner = "/****** Object:  StoredProcedure [dbo].[old]\r\n** Purpose: nightly load\r\n******/\r\n";
-        foreach (var headers in new[] { true, false })
+        foreach (var (label, _, _, headers) in bannered)
         {
-            var options = client.Options with { IncludeHeaders = headers };
-            foreach (var (label, target, extra) in new (string, ObjectRefDto, ScriptingOptionsDto)[]
-            {
-                ("trigger", new ObjectRefDto("trigger", db, Name: "TR_HeaderBanner", Parent: new ParentRefDto("table", "dbo", "HeaderTrigger")), options),
-                ("its table with Script triggers", new ObjectRefDto("table", db, "dbo", "HeaderTrigger"), options with { ScriptTriggers = true }),
-                ("function", new ObjectRefDto("function", db, "dbo", "fn_HeaderBanner"), options),
-                ("view over it with dependent objects", new ObjectRefDto("view", db, "dbo", "vHeaderBanner"), options with { GenerateDependentObjects = true })
-            })
-            {
-                var result = await client.Script(target, "create", extra);
-                if (!Ok(result) || !result.Text!.Contains(banner + "CREATE ", StringComparison.Ordinal) || result.Warnings.Count > 0 || !Framed(result.Text))
-                    failed.Add(label + (headers ? "" : " without headers") + ": " + (result.Error?.Message ?? string.Join(" ", result.Warnings)));
-            }
+            var result = answers.Dequeue();
+            if (!Ok(result) || !result.Text!.Contains(banner + "CREATE ", StringComparison.Ordinal) || result.Warnings.Count > 0 || !Framed(result.Text))
+                failed.Add(label + (headers ? "" : " without headers") + ": " + (result.Error?.Message ?? string.Join(" ", result.Warnings)));
         }
         check(failed.Count == 0, "a definition holding an old SSMS header of any shape scripts as stored with every DDL verb, with headers on or off, also as a trigger "
             + "or dependent object: " + string.Join("; ", failed));
@@ -1010,39 +1003,37 @@ internal static partial class ScriptingLiveChecks
         var trigger = new ObjectRefDto("trigger", db, Name: "TR_Banners", Parent: new ParentRefDto("table", "dbo", "BannerTrigger"));
         var function = new ObjectRefDto("function", db, "dbo", "fn_Banners");
         var over = new ObjectRefDto("view", db, "dbo", "vBanners");
+        var cases = new List<(string Label, ObjectRefDto Target, string Verb, ScriptingOptionsDto Options, string[] Contains, bool Headers)>();
         foreach (var headers in new[] { true, false })
         {
             var options = client.Options with { IncludeHeaders = headers };
-            var cases = new List<(string Label, ObjectRefDto Target, string Verb, ScriptingOptionsDto Options, string[] Contains)>();
             foreach (var (verb, keyword) in verbs)
             {
-                cases.Add(("trigger", trigger, verb, options, ["/****** Audit ******/\r\n" + keyword + " TRIGGER [dbo].[TR_Banners] ON [dbo].[BannerTrigger]", "SET NOCOUNT ON;" + end]));
-                cases.Add(("function", function, verb, options, ["/****** Helper ******/\r\n" + keyword + " FUNCTION [dbo].[fn_Banners]", "SELECT 1 AS One;" + end]));
-                cases.Add(("view", over, verb, options, [keyword + " VIEW [dbo].[vBanners]", "SELECT One FROM dbo.fn_Banners();" + end]));
+                cases.Add(("trigger", trigger, verb, options, ["/****** Audit ******/\r\n" + keyword + " TRIGGER [dbo].[TR_Banners] ON [dbo].[BannerTrigger]", "SET NOCOUNT ON;" + end], headers));
+                cases.Add(("function", function, verb, options, ["/****** Helper ******/\r\n" + keyword + " FUNCTION [dbo].[fn_Banners]", "SELECT 1 AS One;" + end], headers));
+                cases.Add(("view", over, verb, options, [keyword + " VIEW [dbo].[vBanners]", "SELECT One FROM dbo.fn_Banners();" + end], headers));
                 // Check for object existence writes a procedure's CREATE as a stub and then an ALTER, a trigger's ALTER as
                 // is, and the other definitions inside sp_executesql strings.
                 var existence = options with { CheckExistence = true };
                 cases.Add(("procedure with existence checks", new ObjectRefDto("procedure", db, "dbo", "usp_Banners"), verb, existence,
-                    ["/****** Nightly load ******/\r\n", "SELECT 1 AS one;" + end]));
-                cases.Add(("trigger with existence checks", trigger, verb, existence, ["/****** Audit ******/\r\n", "SET NOCOUNT ON;" + end]));
-                cases.Add(("function with existence checks", function, verb, existence, ["/****** Helper ******/\r\n", "SELECT 1 AS One;" + end]));
+                    ["/****** Nightly load ******/\r\n", "SELECT 1 AS one;" + end], headers));
+                cases.Add(("trigger with existence checks", trigger, verb, existence, ["/****** Audit ******/\r\n", "SET NOCOUNT ON;" + end], headers));
+                cases.Add(("function with existence checks", function, verb, existence, ["/****** Helper ******/\r\n", "SELECT 1 AS One;" + end], headers));
             }
             foreach (var verb in new[] { "create", "dropAndCreate" })
             {
                 cases.Add(("table with Script triggers", new ObjectRefDto("table", db, "dbo", "BannerTrigger"), verb, options with { ScriptTriggers = true },
-                    ["/****** Audit ******/\r\nCREATE TRIGGER [dbo].[TR_Banners]", "SET NOCOUNT ON;" + end]));
+                    ["/****** Audit ******/\r\nCREATE TRIGGER [dbo].[TR_Banners]", "SET NOCOUNT ON;" + end], headers));
                 cases.Add(("view with dependent objects", over, verb, options with { GenerateDependentObjects = true },
-                    ["/****** Helper ******/\r\nCREATE FUNCTION [dbo].[fn_Banners]", "SELECT 1 AS One;" + end, "CREATE VIEW [dbo].[vBanners]", "SELECT One FROM dbo.fn_Banners();" + end]));
+                    ["/****** Helper ******/\r\nCREATE FUNCTION [dbo].[fn_Banners]", "SELECT 1 AS One;" + end, "CREATE VIEW [dbo].[vBanners]", "SELECT One FROM dbo.fn_Banners();" + end], headers));
             }
             cases.Add(("function with dependent objects", function, "createOrAlter", options with { GenerateDependentObjects = true },
-                ["CREATE OR ALTER FUNCTION [dbo].[fn_Banners]", "CREATE OR ALTER VIEW [dbo].[vBanners]", "SELECT One FROM dbo.fn_Banners();" + end]));
-            foreach (var (label, target, verb, extra, contains) in cases)
-            {
-                var result = await client.Script(target, verb, extra);
-                if (!Ok(result) || contains.Any(text => !result.Text!.Contains(text, StringComparison.Ordinal)) || result.Warnings.Count > 0 || !Framed(result.Text!))
-                    failed.Add(label + " " + verb + (headers ? "" : " without headers") + ": " + (result.Error?.Message ?? string.Join(" ", result.Warnings)));
-            }
+                ["CREATE OR ALTER FUNCTION [dbo].[fn_Banners]", "CREATE OR ALTER VIEW [dbo].[vBanners]", "SELECT One FROM dbo.fn_Banners();" + end], headers));
         }
+        var bannerResults = await client.ScriptAll([.. cases.Select(item => (item.Target, item.Verb, (ScriptingOptionsDto?)item.Options))]);
+        foreach (var ((label, _, verb, _, contains, headers), result) in cases.Zip(bannerResults))
+            if (!Ok(result) || contains.Any(text => !result.Text!.Contains(text, StringComparison.Ordinal)) || result.Warnings.Count > 0 || !Framed(result.Text!))
+                failed.Add(label + " " + verb + (headers ? "" : " without headers") + ": " + (result.Error?.Message ?? string.Join(" ", result.Warnings)));
         check(failed.Count == 0, "a definition with a banner comment at both ends scripts as stored with every DDL verb, with headers on or off, also as a trigger or "
             + "dependent object: " + string.Join("; ", failed));
         var secret = new ObjectRefDto("databaseTrigger", db, Name: "trg_SecretDdl");
