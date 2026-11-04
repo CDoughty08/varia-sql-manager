@@ -12,7 +12,7 @@ import {
 import { SnapshotStore } from '../src/renderer/src/core/store'
 import type { Timers } from '../src/renderer/src/core/timers'
 import type { LiveConnection } from '../src/renderer/src/services/connections'
-import { ObjectSearchService, revealPaths, type ObjectSearchOptions, type RevealHost } from '../src/renderer/src/search/ObjectSearchService'
+import { explorerSearchId, ObjectSearchService, revealPaths, type ObjectSearchOptions, type RevealHost } from '../src/renderer/src/search/ObjectSearchService'
 import { indexSummary } from '../src/renderer/src/search/ObjectSearch'
 
 const csharp = (file: string) => readFileSync(new URL('../backend/Varia.Backend/Search/' + file, import.meta.url), 'utf8')
@@ -238,6 +238,44 @@ describe('ObjectSearchService', () => {
     const trigger: ObjectSearchHit = { object: { kind: 'trigger', database: 'Sales', name: 't', parent: { kind: 'view', schema: 'dbo', name: 'V' } }, folder: 'tableTriggers', label: 'dbo.V.t' }
     const view = { kind: 'view', database: 'Sales', schema: 'dbo', name: 'V' }
     expect(revealPaths(trigger)[0].slice(2)).toEqual([{ type: 'folder', owner: sales, folder: 'views' }, { type: 'object', object: view }, { type: 'folder', owner: view, folder: 'tableTriggers' }, { type: 'object', object: trigger.object }])
+    // A trigger's table may be a system one (Tables › System Tables), tried after Tables, in each databases folder.
+    const onTable: ObjectSearchHit = { object: { kind: 'trigger', database: 'msdb', name: 't', parent: { kind: 'table', schema: 'dbo', name: 'sysjobs' } }, folder: 'tableTriggers', label: 'dbo.sysjobs.t' }
+    const msdb = { kind: 'database', name: 'msdb' }
+    expect(revealPaths(onTable).map(path => path.filter(step => step.type === 'folder').map(step => step.type === 'folder' ? step.folder : ''))).toEqual([
+      ['databases', 'systemDatabases', 'tables', 'tableTriggers'], ['databases', 'systemDatabases', 'tables', 'systemTables', 'tableTriggers'],
+      ['databases', 'tables', 'tableTriggers'], ['databases', 'tables', 'systemTables', 'tableTriggers']
+    ])
+    expect(revealPaths(onTable)[1]).toContainEqual({ type: 'folder', owner: msdb, folder: 'systemTables' })
+  })
+
+  it('runs Object Explorer\'s box as one more search, on the selected server or the first connected one', () => {
+    const { service, connections, calls } = harness({ indexOnConnect: false })
+    service.followExplorer(undefined)
+    expect(service.getSnapshot().documents[explorerSearchId]).toBeUndefined()
+    connections.set([connection('a'), connection('b')])
+    service.followExplorer(undefined)
+    expect(service.getSnapshot().documents[explorerSearchId]).toMatchObject({ connectionId: 'a', text: '', caseSensitive: false, wholeWord: false, regex: false, scope: 'all' })
+    expect(calls.index.map(call => call.connectionId)).toEqual(['a'])
+    service.setQuery(explorerSearchId, { text: 'ord', wholeWord: true })
+    service.search(explorerSearchId)
+    expect(calls.search.at(-1)).toMatchObject({ connectionId: 'a', text: 'ord', wholeWord: true })
+    // Selecting a node on another server moves the box there, keeping its text and options, and indexes that server.
+    service.followExplorer('b')
+    expect(service.getSnapshot().documents[explorerSearchId]).toMatchObject({ connectionId: 'b', text: 'ord', wholeWord: true })
+    expect(calls.index.map(call => call.connectionId)).toEqual(['a', 'b'])
+    expect(calls.search.at(-1)).toMatchObject({ connectionId: 'b', text: 'ord', wholeWord: true })
+    // A lost server falls back to the first connected one.
+    connections.set([connection('a'), connection('b', true)])
+    service.followExplorer('b')
+    expect(service.getSnapshot().documents[explorerSearchId]?.connectionId).toBe('a')
+  })
+
+  it('hands focus to the box once per Search in Object Explorer, even when the box mounts later', () => {
+    const { service } = harness()
+    expect(service.takePaneFocus()).toBe(false)
+    service.focusPane()
+    expect(service.takePaneFocus()).toBe(true)
+    expect(service.takePaneFocus()).toBe(false)
   })
 
   it('refuses a tab without a connected server, forgets a closed tab, and stops listening once disposed', () => {

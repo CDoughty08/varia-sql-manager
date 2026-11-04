@@ -4,7 +4,8 @@ using Varia.Backend.Search;
 namespace Varia.Backend.Tests;
 
 /// <summary>Offline object index checks: the SQL lint, the matcher's modes, ranking, definition previews, the shared budget,
-/// request validation, and the service's answers with no index and for an unknown connection.</summary>
+/// system objects' folders and the shared resource sets, request validation, and the service's answers with no index and
+/// for an unknown connection.</summary>
 internal static class SearchChecks
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
@@ -20,6 +21,8 @@ internal static class SearchChecks
         Ranking(check);
         Previews(check);
         Budget(check);
+        SystemObjects(check);
+        ResourceSets(check).GetAwaiter().GetResult();
         Requests(check);
     }
 
@@ -32,6 +35,14 @@ internal static class SearchChecks
         check(ObjectSearchSql.ModuleCall.Contains("QUOTENAME(@db)", StringComparison.Ordinal), "the object index reaches a database only through QUOTENAME");
         check(ObjectSearchSql.Databases.Contains("HAS_DBACCESS", StringComparison.Ordinal) && ObjectSearchSql.Databases.Contains("d.state = 0", StringComparison.Ordinal),
             "the object index lists only online databases the login may open");
+        check(!ObjectSearchSql.Batch(true).Contains("is_ms_shipped = 0", StringComparison.Ordinal) && !ObjectSearchSql.Batch(true).Contains("ep.major_id IS NULL", StringComparison.Ordinal)
+            && ObjectSearchSql.Batch(true).Contains("FROM sys.objects AS o", StringComparison.Ordinal),
+            "a database's batch lists every object of its own catalog, Microsoft-shipped and diagram support ones too");
+        check(ObjectSearchSql.ResourceObjects(true).Contains("sys.all_objects AS o", StringComparison.Ordinal) && ObjectSearchSql.ResourceObjects(true).Contains("o.object_id < 0", StringComparison.Ordinal)
+            && ObjectSearchSql.ResourceObjects(true).Contains("sys.all_sql_modules AS m WHERE m.object_id < 0", StringComparison.Ordinal) && !ObjectSearchSql.ResourceObjects(false).Contains("sql_modules", StringComparison.Ordinal),
+            "the resource database's objects and definitions are read apart, by their negative ids");
+        check(ObjectSearchSql.ResourceFingerprint.Contains("o.object_id < 0", StringComparison.Ordinal) && ObjectSearchSql.ResourceFingerprint.Contains("CHECKSUM_AGG", StringComparison.Ordinal),
+            "the resource fingerprint covers exactly the objects the shared set holds");
     }
 
     private static SearchMatcher Make(string text, bool caseSensitive = false, bool wholeWord = false, bool regex = false) =>
@@ -149,6 +160,67 @@ internal static class SearchChecks
         check(DatabaseReader.Map("TR", "dbo", "t", DateTime.UnixEpoch, null, null, null) is null, "a trigger without a listable parent is left out");
         check(DatabaseReader.Map("IF", "dbo", "f", DateTime.UnixEpoch, null, null, null) is { Kind: "function", Folder: "tableValuedFunctions" }, "inline functions are table-valued functions");
         check(DatabaseReader.Map("TR", "dbo", "t", DateTime.UnixEpoch, "v", "s", "V") is { Kind: "trigger", ParentKind: "view", ParentSchema: "s", Schema: null }, "a view's trigger names its view");
+    }
+
+    private static void SystemObjects(Action<bool, string> check)
+    {
+        IndexedObject? Map(string type, bool system, string? parentType = null) =>
+            DatabaseReader.Map(type, "dbo", "x", DateTime.UnixEpoch, parentType is null ? null : "p", parentType is null ? null : "dbo", parentType, system);
+        check(Map("U", true) is { Kind: "table", Folder: "systemTables", System: true } && Map("U", false) is { Folder: "tables", System: false },
+            "a Microsoft-shipped table (master's spt_fallback_db) is under System Tables, as Object Explorer lists it");
+        check(Map("V", true) is { Kind: "view", Folder: "systemViews", System: true }, "a system view is under System Views");
+        check(new[] { "P", "PC", "X", "RF" }.All(type => Map(type, true) is { Kind: "procedure", Folder: "systemStoredProcedures", System: true }),
+            "system procedures of every kind are under System Stored Procedures");
+        check(Map("X", false) is { Folder: "systemStoredProcedures", System: false } && Map("P", false) is { Folder: "storedProcedures" },
+            "a user's extended procedure is where Object Explorer lists extended procedures, and still a user object");
+        check(new[] { "FN", "IF", "TF", "AF" }.All(type => Map(type, true) is { Kind: "function", Folder: "functions", System: true }), "a system function is under Functions");
+        check(Map("TR", true, "U") is { Kind: "trigger", Folder: "tableTriggers", System: true, ParentKind: "table" }, "a Microsoft-shipped trigger is kept with its table");
+        check(Map("SN", true) is { Kind: "synonym", System: true } && Map("SO", true) is { Kind: "sequence", System: true }, "nothing the login may see is left out for being Microsoft-shipped");
+
+        var index = new ConnectionIndex(new IndexBudget(1 << 20));
+        index.Put(new DatabaseIndex("master", [new("table", "systemTables", "dbo", "spt_fallback_db", System: true), new("table", "tables", "dbo", "spt_mine")], 0, 0, 0));
+        index.Put(new DatabaseIndex("Sales", [new("table", "tables", "dbo", "spt_fallback_db")], 0, 0, 0));
+        var labels = Search(index, "spt_fallback_db", definitions: false).Hits.Select(hit => hit.Object.Database + ":" + hit.Folder).ToList();
+        check(labels.SequenceEqual(["Sales:tables", "master:systemTables"]), "within a rank, user objects come before system ones whatever their database: " + string.Join(", ", labels));
+        check(Search(index, "spt_", definitions: false).Hits.Select(hit => hit.Object.Name).SequenceEqual(["spt_mine", "spt_fallback_db", "spt_fallback_db"]),
+            "a system object still ranks by how its name matches first");
+    }
+
+    private static async Task ResourceSets(Action<bool, string> check)
+    {
+        var budget = new IndexBudget(1 << 20);
+        var catalog = new ResourceCatalog(budget);
+        var reads = 0;
+        IndexedObject[] Objects(params string[] definitions) => [.. definitions.Select((text, at) => new IndexedObject("procedure", "systemStoredProcedures", "sys", "sp_" + at, Definition: text, System: true))];
+        Func<Task<IndexedObject[]>> Read(params string[] definitions) => () => { reads++; return Task.FromResult(Objects(definitions)); };
+        var key = new ResourceKey("16.0.4135.4", 3, 2, DateTime.UnixEpoch, 42, true);
+        var first = await catalog.AcquireAsync(key, Read("CREATE PROCEDURE sys.sp_0 AS 1", "CREATE PROCEDURE sys.sp_1 AS 2"));
+        var second = await catalog.AcquireAsync(key with { }, Read("never read"));
+        check(reads == 1 && ReferenceEquals(first, second) && catalog.Sets == 1, "connections to servers with the same fingerprint share one read of the system objects");
+        check(budget.Used == "CREATE PROCEDURE sys.sp_0 AS 1".Length + "CREATE PROCEDURE sys.sp_1 AS 2".Length && first.Modules == 2, "a shared set charges its definitions once");
+        // Another build (a cumulative update) changes one module: the other's text is held once for both sets.
+        var other = await catalog.AcquireAsync(key with { Version = "16.0.4140.3", Checksum = 7 }, Read("CREATE PROCEDURE sys.sp_0 AS 1", "CREATE PROCEDURE sys.sp_1 AS 3"));
+        check(reads == 2 && catalog.Sets == 2 && catalog.Texts == 3 && ReferenceEquals(other.Objects[0].Definition, first.Objects[0].Definition),
+            "two builds' sets hold the definitions they share once");
+        check(budget.Used == 3 * "CREATE PROCEDURE sys.sp_0 AS 1".Length, "the budget is charged for distinct definitions only");
+        try { await catalog.AcquireAsync(key with { Checksum = 9 }, () => throw new InvalidOperationException("boom")); check(false, "a failed read throws"); }
+        catch (InvalidOperationException) { check(catalog.Sets == 2, "a failed read keeps nothing, so the next build reads again"); }
+
+        // A connection's index searches its share once, as master's, or as the database a search names.
+        var index = new ConnectionIndex(budget, catalog);
+        index.Put(new DatabaseIndex("master", [], 0, 0, 0));
+        index.Put(new DatabaseIndex("Sales", [], 0, 0, 0));
+        index.PutResource(first);
+        var hits = Search(index, "sp_0", names: true, definitions: false).Hits;
+        check(hits is [{ Object: { Database: "master", Schema: "sys", Name: "sp_0" }, Folder: "systemStoredProcedures" }], "a system object every database shows is one hit, under master");
+        check(Search(index, "sp_0", definitions: false, database: "Sales").Hits is [{ Object.Database: "Sales" }], "a search of one database finds the system objects in it");
+        check(index.Objects == 2, "a connection counts its share of the system objects once");
+        index.Dispose();
+        catalog.Release(second);
+        check(catalog.Sets == 1 && budget.Used == 2 * "CREATE PROCEDURE sys.sp_0 AS 1".Length,
+            "the last connection to let a set go drops it, keeping the texts another set holds");
+        catalog.Release(other);
+        check(catalog.Sets == 0 && catalog.Texts == 0 && budget.Used == 0, "with no connection left, every system definition's share is given back");
     }
 
     private static void Requests(Action<bool, string> check)

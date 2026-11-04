@@ -42,7 +42,10 @@ export interface SearchDocumentState extends SearchQueryState {
 }
 export interface ObjectSearchSnapshot {
   readonly indexes: Readonly<Record<string, IndexEntry>>
+  /** Each Search Objects tab's search, by document id, and Object Explorer's box's under `explorerSearchId`. */
   readonly documents: Readonly<Record<string, SearchDocumentState>>
+  /** Changes when Search in Object Explorer asks the box to take focus. */
+  readonly paneFocus: number
 }
 /** Object Explorer as Reveal uses it. */
 export interface RevealHost {
@@ -59,6 +62,8 @@ export interface ObjectSearchOptions {
 }
 
 export const searchTitle = 'Search Objects'
+/** The search Object Explorer's box runs: the same search as a tab's, on the server of the explorer's selection. */
+export const explorerSearchId = 'explorer'
 
 /** The folders from the owner down to `folder`, outermost first (Programmability › Functions › Scalar-valued Functions). */
 function folderChain(owner: ObjectRef, folder: FolderId): ExplorerNodeRef[] {
@@ -70,20 +75,21 @@ const systemDatabases = new Set(['master', 'model', 'msdb'])
 /**
  * Where a hit is in Object Explorer, from the server down: its database under Databases (or System Databases, tried first
  * for master, model and msdb, and second for the rest: a distribution database is a system one too), the folders above its
- * listing, a trigger's table or view, and the object.
+ * listing, a trigger's table or view (under Tables or Views, then under their System folders), and the object.
  */
 export function revealPaths(hit: ObjectSearchHit): RevealPath[] {
   const name = hit.object.database ?? ''
   const database: ObjectRef = { kind: 'database', name }
   const parent = hit.object.parent
-  const below: ExplorerNodeRef[] = parent
+  const belows: ExplorerNodeRef[][] = parent
     ? (() => {
         const owner: ObjectRef = { kind: parent.kind, database: name, schema: parent.schema, name: parent.name }
-        return [...folderChain(database, parent.kind === 'view' ? 'views' : 'tables'), { type: 'object' as const, object: owner }, ...folderChain(owner, hit.folder)]
+        const folders: FolderId[] = parent.kind === 'view' ? ['views', 'systemViews'] : ['tables', 'systemTables']
+        return folders.map(folder => [...folderChain(database, folder), { type: 'object' as const, object: owner }, ...folderChain(owner, hit.folder)])
       })()
-    : folderChain(database, hit.folder)
-  const via = (folder: FolderId): RevealPath => [...folderChain({ kind: 'server' }, folder), { type: 'object', object: database }, ...below, { type: 'object', object: hit.object }]
-  return systemDatabases.has(name.toLowerCase()) ? [via('systemDatabases'), via('databases')] : [via('databases'), via('systemDatabases')]
+    : [folderChain(database, hit.folder)]
+  const via = (folder: FolderId): RevealPath[] => belows.map(below => [...folderChain({ kind: 'server' }, folder), { type: 'object', object: database }, ...below, { type: 'object', object: hit.object }])
+  return systemDatabases.has(name.toLowerCase()) ? [...via('systemDatabases'), ...via('databases')] : [...via('databases'), ...via('systemDatabases')]
 }
 const emptyQuery: SearchQueryState = { text: '', caseSensitive: false, wholeWord: false, regex: false, scope: 'all' }
 const live = (connection: LiveConnection | undefined): connection is LiveConnection => !!connection && !connection.lost
@@ -105,9 +111,10 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   private readonly registrations: Disposable[] = []
   private known = new Set<string>()
   private disposed = false
+  private paneFocusTaken = 0
 
   constructor(private readonly o: ObjectSearchOptions) {
-    super({ indexes: {}, documents: {} })
+    super({ indexes: {}, documents: {}, paneFocus: 0 })
     this.timers = o.timers ?? browserTimers
     this.newId = o.newId ?? (() => crypto.randomUUID())
     this.registrations.push(o.documents.registerProvider(this))
@@ -155,6 +162,34 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     if (text) this.search(document.id)
     this.o.focus?.(document.id)
     return document.id
+  }
+
+  /**
+   * Points Object Explorer's box at a server: the one its selection is on, or the first connected one. Its text and options
+   * stay; a server with no index yet gets one. With no server connected the box keeps its text for the next one.
+   */
+  followExplorer(connectionId: string | undefined): void {
+    if (this.disposed) return
+    const target = connectionId && live(this.o.connections.get(connectionId)) ? connectionId : this.o.connections.getSnapshot().find(live)?.id
+    if (!target) return
+    const current = this.getSnapshot().documents[explorerSearchId]
+    if (!current) {
+      this.putDocument({ id: explorerSearchId, connectionId: target, ...emptyQuery })
+      const entry = this.getSnapshot().indexes[target]
+      if (!entry?.status && !entry?.requestId) this.build(target)
+    } else this.setConnection(explorerSearchId, target)
+  }
+
+  /** Search in Object Explorer: the box takes focus once it is shown. */
+  focusPane(): void {
+    if (!this.disposed) this.publish({ ...this.getSnapshot(), paneFocus: this.getSnapshot().paneFocus + 1 })
+  }
+  /** Whether the box should take focus now: once per request, so a box mounted later (the pane was hidden) still takes it. */
+  takePaneFocus(): boolean {
+    const { paneFocus } = this.getSnapshot()
+    if (paneFocus === this.paneFocusTaken) return false
+    this.paneFocusTaken = paneFocus
+    return true
   }
 
   /** Changes what a tab asks; text changes search after a short pause, option changes at once. */

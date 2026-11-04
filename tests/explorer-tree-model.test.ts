@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { FolderId, NodeKind, NodeSubtype } from '../src/shared/explorer/catalog'
 import type { ExplorerNodeRef } from '../src/shared/explorer/refs'
 import {
-  computeWindow, filterMatch, filterText, flatten, flattenFiltered, layoutWindow, needsQuery, rowLayout, parentIndex, renderedIndices, revealScroll, rowIndex, rowKindOf, RowKind, rowOwner, siblingPlan, swallowedKey, syntheticId, treeKey, treeKeyOf, typeAhead,
+  computeWindow, flatten, layoutWindow, needsQuery, rowLayout, parentIndex, renderedIndices, revealScroll, rowIndex, rowKindOf, RowKind, rowOwner, siblingPlan, swallowedKey, syntheticId, treeKey, treeKeyOf, typeAhead,
   TypeAheadBuffer, type TreeNode, type VisibleRows
 } from '../src/renderer/src/explorer/tree-model'
 import { meterWork } from './fixtures/work-meter'
@@ -394,94 +394,6 @@ describe('* (expand siblings)', () => {
     expect(needsQuery({ kind: 'table', folder: undefined, subtype: undefined })).toBe(false)
     expect(needsQuery({ kind: 'table', folder: undefined, subtype: 'systemVersioned' })).toBe(true)
     expect(needsQuery({ kind: 'table', folder: undefined, subtype: 'history' })).toBe(false)
-  })
-})
-
-describe('Filter loaded objects', () => {
-  const filtered = (t: ReturnType<typeof sample>, text: string) => { const result = flattenFiltered(t.nodes, t.roots, filterText(text)); return { rows: describeRows(result.rows, t.nodes), matches: result.matches } }
-  it('keeps matches with their ancestors, counts the siblings that show, and leaves the rest out', () => {
-    const t = sample(12)
-    const other = t.add(0, 'server-b', { kind: 'server', expanded: true })
-    t.add(other.id, 'Databases', { folder: 'databases' })
-    expect(filtered(t, 'TABLE1')).toEqual({
-      rows: [['server-a', 1, 1, 2], ['Databases', 2, 1, 1], ['AppData', 3, 1, 1], ['Tables', 4, 1, 1], ['dbo.Table1', 5, 1, 3], ['dbo.Table10', 5, 2, 3], ['dbo.Table11', 5, 3, 3], ['server-b', 1, 2, 2]],
-      matches: 3
-    })
-    expect(filtered(t, 'nothing')).toEqual({ rows: [['server-a', 1, 1, 2], ['server-b', 1, 2, 2]], matches: 0 })
-  })
-  it('names the nodes shown only for rows below them, whose item counts would misread, and not a match or its subtree', () => {
-    const t = sample(12)
-    t.add(t.tables.id, 'Columns', { folder: 'columns' })
-    const partial = (text: string, pinned?: number) => [...flattenFiltered(t.nodes, t.roots, filterText(text), 64, pinned).partial].map(id => t.nodes.get(id)!.label)
-    // Tables shows 3 of its 13 rows, so it is partial, as are its ancestors and the server.
-    expect(partial('table1')).toEqual(['Tables', 'AppData', 'Databases', 'server-a'])
-    // Tables matches, so it shows whole with its count; only its ancestors are partial.
-    expect(partial('tables')).toEqual(['AppData', 'Databases', 'server-a'])
-    // A server that matches nothing shows alone; the pinned selection's folder, collapsed, shows none of its rows.
-    expect(partial('nothing')).toEqual(['server-a'])
-    t.tables.expanded = false
-    expect(partial('nothing', t.tables.id)).toEqual(['Tables', 'AppData', 'Databases', 'server-a'])
-  })
-  it('shows a match\'s expanded rows as they are, and searches only expanded nodes', () => {
-    const t = sample(2)
-    // Below a collapsed folder, a loaded match stays hidden: the filter narrows what is open.
-    t.add(t.system.id, 'master', { kind: 'database' })
-    expect(filtered(t, 'tables')).toEqual({
-      rows: [['server-a', 1, 1, 1], ['Databases', 2, 1, 1], ['AppData', 3, 1, 1], ['Tables', 4, 1, 1], ['dbo.Table0', 5, 1, 2], ['dbo.Table1', 5, 2, 2]],
-      matches: 1
-    })
-    expect(filtered(t, 'master').rows).toEqual([['server-a', 1, 1, 1]])
-  })
-  it('keeps a shown node\'s loading, error and progress rows, and drops those of a node it leaves out', () => {
-    const t = sample(2)
-    Object.assign(t.tables, { more: 'auto', cursor: 'v1.tables.2', total: 10 })
-    Object.assign(t.databases, { load: 'error' })
-    expect(filtered(t, 'table0').rows).toEqual([
-      ['server-a', 1, 1, 1], ['Databases', 2, 1, 1], ['Error(Databases)', 3, 0, 0], ['AppData', 3, 1, 1], ['Tables', 4, 1, 1], ['dbo.Table0', 5, 1, 1], ['More(Tables)', 5, 0, 0]
-    ])
-    expect(filtered(t, 'security').rows).toEqual([['server-a', 1, 1, 1], ['Security', 2, 1, 1]])
-  })
-  it('keeps the pinned node (the selection) and its ancestors, matching or not, without counting them', () => {
-    const t = sample(2)
-    // Tables, collapsed while it showed only for its matches, stays with its ancestors.
-    t.tables.expanded = false
-    const pinned = (id: number, text: string) => { const result = flattenFiltered(t.nodes, t.roots, filterText(text), 64, id); return { rows: describeRows(result.rows, t.nodes), matches: result.matches } }
-    expect(pinned(t.tables.id, 'table1')).toEqual({ rows: [['server-a', 1, 1, 1], ['Databases', 2, 1, 1], ['AppData', 3, 1, 1], ['Tables', 4, 1, 1]], matches: 0 })
-    expect(filtered(t, 'table1').rows).toEqual([['server-a', 1, 1, 1]])
-    // A pinned leaf beside the matches, and a pinned node that is gone or a server, change nothing else.
-    t.tables.expanded = true
-    const security = t.nodes.get(t.server.children!.find(child => child.label === 'Security')!.id)!
-    expect(pinned(security.id, 'table1')).toEqual({ rows: [['server-a', 1, 1, 1], ['Databases', 2, 1, 2], ['AppData', 3, 1, 1], ['Tables', 4, 1, 1], ['dbo.Table1', 5, 1, 1], ['Security', 2, 2, 2]], matches: 1 })
-    expect(pinned(9999, 'table1')).toEqual(filtered(t, 'table1'))
-    expect(pinned(t.server.id, 'zzz')).toEqual({ rows: [['server-a', 1, 1, 1]], matches: 0 })
-  })
-  it('matches anywhere in the label, ignoring case and surrounding spaces', () => {
-    expect(filterText('  Ord ')).toBe('ord')
-    expect(filterMatch({ lower: 'dbo.orders' }, 'ord')).toBe(4)
-    expect(filterMatch({ lower: 'dbo.orders' }, '')).toBe(-1)
-  })
-  it('filters 100,000 loaded rows in one pass, reading each open node\'s name once and nothing below a collapsed one', () => {
-    const t = sample(100_000)
-    // A collapsed folder whose loaded rows would match: the filter narrows what is open, so it never looks inside.
-    const hidden = t.add(t.app.id, 'Views', { folder: 'views' })
-    for (let index = 0; index < 1_000; index++) t.add(hidden.id, `dbo.Table9View${index}`)
-    // An open match shows whole, down to its collapsed folders, whose loaded rows stay out of sight.
-    const table9 = t.tables.children![9], folder = t.add(table9.id, 'Columns', { folder: 'columns' })
-    table9.expanded = true
-    const columns = Array.from({ length: 100 }, (_, index) => t.add(folder.id, `table9_column${index}`, { kind: 'column' }))
-    const reads = new Map<number, number>()
-    for (const [id, node] of t.nodes) {
-      const lower = node.lower
-      Object.defineProperty(node, 'lower', { configurable: true, enumerable: true, get: () => { reads.set(id, (reads.get(id) ?? 0) + 1); return lower } })
-    }
-    // Count the work rather than time it, so a loaded runner cannot fail it: 1 + 10 + 100 + 1,000 + 10,000 tables match.
-    const result = flattenFiltered(t.nodes, t.roots, 'table9')
-    expect(result.matches).toBe(11_111)
-    expect(result.rows.count).toBe(11_111 + 5)
-    expect(reads.get(folder.id)).toBe(1)
-    expect(Math.max(...reads.values())).toBe(1)
-    expect(t.tables.children!.every(node => reads.get(node.id) === 1)).toBe(true)
-    expect([...hidden.children!, ...columns].some(node => reads.has(node.id))).toBe(false)
   })
 })
 

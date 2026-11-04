@@ -1,5 +1,4 @@
 import { useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type Ref } from 'react'
-import { explorerLimits } from '../../../shared/explorer/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { useCommandEnabled, useCommandsEnabled, useKeybindingLabel } from '../core/useCommand'
@@ -10,9 +9,10 @@ import Icon from '../Icon'
 import PaneMenuButton from '../PaneMenuButton'
 import EmptyState from '../kit/EmptyState'
 import { StaleBadge } from '../kit/LivePill'
+import SearchPanel from '../search/SearchPanel'
+import { explorerSearchId } from '../search/ObjectSearchService'
 import ExplorerErrorBoundary, { FaultProbe, focusLost } from './ExplorerErrorBoundary'
 import ExplorerTree from './ExplorerTree'
-import { filterMatch, RowKind } from './tree-model'
 
 interface Tool { readonly id: CommandId; readonly icon: IconId; readonly label: string; readonly args?: CommandArgs }
 
@@ -72,47 +72,19 @@ function ExplorerToolbar({ tools }: { tools: readonly Tool[] }) {
 }
 
 /**
- * Filter loaded objects: narrows the tree to the loaded rows whose name contains the text (Filter Settings, by contrast,
- * asks the server for a narrower list). ↓ or Enter moves to the tree on the first match; Escape clears the text, or,
- * when there is none, returns to the tree. Text that matches nothing says so below the box, which a tree of bare server
- * rows would not.
+ * Object Explorer's search box: the object index search the Search Objects tab runs (Match Case, Whole Word, Regex, names
+ * and definitions), on the server of the tree's selection, or the first connected one. Its hits show in a band above the
+ * tree while there is text, and reveal their object in it. Escape clears the text, or, when there is none, returns to the
+ * tree; so does ↓ or Enter in an empty box.
  */
-function QuickFilter() {
-  const { explorer } = useWorkbench()
-  const { input: value, focus } = useServiceSnapshot(explorer.quickFilter)
-  const { filter: applied } = useServiceSnapshot(explorer)
+function ExplorerSearch({ connectionId }: { readonly connectionId: string | undefined }) {
+  const { objectSearch } = useWorkbench()
+  const { paneFocus } = useServiceSnapshot(objectSearch)
   const input = useRef<HTMLInputElement>(null)
-  const clear = () => { explorer.setQuickFilter(''); input.current?.focus() }
-  // Filter Loaded Objects asks for focus, perhaps before this pane was shown.
-  useLayoutEffect(() => { if (explorer.takeQuickFilterFocus()) input.current?.focus() }, [explorer, focus])
-  const toTree = (first: boolean) => {
-    const { rows, filter } = explorer.getSnapshot()
-    if (first && filter) {
-      const index = rows.nodes.findIndex((node, at) => rows.kinds[at] === RowKind.Node && !!node && node.parent !== 0 && filterMatch(node, filter.text) >= 0)
-      if (index >= 0) explorer.select(rows.ids[index], { reveal: true })
-    }
-    document.querySelector<HTMLElement>('[data-explorer-tree]')?.focus()
-  }
-  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || event.nativeEvent.isComposing) return
-    if (event.key === 'Escape' && value) explorer.setQuickFilter('')
-    else if (event.key === 'Escape') toTree(false)
-    else if (event.key === 'ArrowDown' || event.key === 'Enter') toTree(true)
-    else return
-    event.preventDefault()
-    event.stopPropagation()
-  }
-  return <>
-    <div className="explorer-filter" role="search">
-      <Icon name="search" />
-      <input ref={input} type="text" aria-label="Filter loaded objects" placeholder="Filter loaded objects" maxLength={explorerLimits.quickFilter} spellCheck={false} autoComplete="off"
-        value={value} onChange={event => explorer.setQuickFilter(event.target.value)} onKeyDown={onKeyDown} />
-      {value && <button type="button" className="icon-button" tabIndex={-1} aria-label="Clear filter" title="Clear filter (Escape)" onClick={clear}><Icon name="close" /></button>}
-    </div>
-    {/* The live region announces the count; this is for the eye. */}
-    {applied?.matches === 0 && value.trim() && <EmptyState className="explorer-no-match" icon="search" detail={<>No loaded objects match <bdi>“{displayText(value.trim())}”</bdi></>}
-      actions={[{ label: 'Clear filter', run: clear }]} />}
-  </>
+  useLayoutEffect(() => objectSearch.followExplorer(connectionId), [objectSearch, connectionId])
+  // Search in Object Explorer asks for focus, perhaps before this pane was shown.
+  useLayoutEffect(() => { if (objectSearch.takePaneFocus()) input.current?.focus() }, [objectSearch, paneFocus])
+  return <SearchPanel searchId={explorerSearchId} layout="pane" inputRef={input} onLeave={() => document.querySelector<HTMLElement>('[data-explorer-tree]')?.focus()} />
 }
 
 /**
@@ -168,15 +140,15 @@ export default function ExplorerPane({ error, activeConnectionId }: { readonly e
     }
     wasEmpty.current = empty
   }, [empty])
-  // The box shows while Filter Loaded Objects can run (`hasConnection`): lost servers have no rows to narrow. Focus it
+  // The box shows while Search in Object Explorer can run (`hasConnection`): a lost server cannot be searched. Focus it
   // held when the last connection went moves to the tree.
-  const filterable = live > 0
+  const searchable = live > 0
   useLayoutEffect(() => {
-    if (!filterable && !empty && focusLost()) document.querySelector<HTMLElement>('[data-explorer-tree]')?.focus()
-  }, [filterable, empty])
+    if (!searchable && !empty && focusLost()) document.querySelector<HTMLElement>('[data-explorer-tree]')?.focus()
+  }, [searchable, empty])
   return <>
     <div className="explorer-header pane-header"><span className="pane-title">Object Explorer</span><ExplorerToolbar tools={tools} /><PaneMenuButton pane="explorer" /></div>
-    {filterable && <QuickFilter />}
+    {searchable && <ExplorerSearch connectionId={selectedServer} />}
     <div className="explorer-body" ref={background}>
       {servers.length ? <ExplorerErrorBoundary onReload={() => explorer.reset()} onReloaded={() => document.querySelector<HTMLElement>('[data-explorer-tree]')?.focus()}>
         <FaultProbe /><ExplorerTree activeConnectionId={activeConnectionId} /></ExplorerErrorBoundary>

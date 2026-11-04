@@ -27,8 +27,10 @@ internal static class SearchLiveChecks
         async Task<ObjectIndexResult> Build(bool definitions = true) => (ObjectIndexResult)await service.DispatchAsync("explorer.index",
             JsonSerializer.SerializeToElement(new ObjectIndexArgs(connectionId, Guid.NewGuid().ToString(), definitions), json), json);
         async Task<ObjectSearchResult> Find(string text, string scope = "all", bool caseSensitive = false, bool wholeWord = false, bool regex = false) =>
+            await FindIn(database, text, scope, caseSensitive, wholeWord, regex);
+        async Task<ObjectSearchResult> FindIn(string? inDatabase, string text, string scope = "all", bool caseSensitive = false, bool wholeWord = false, bool regex = false) =>
             (ObjectSearchResult)await service.DispatchAsync("explorer.search", JsonSerializer.SerializeToElement(
-                new ObjectSearchArgs(connectionId, Guid.NewGuid().ToString(), text, caseSensitive, wholeWord, regex, scope, Database: database), json), json);
+                new ObjectSearchArgs(connectionId, Guid.NewGuid().ToString(), text, caseSensitive, wholeWord, regex, scope, Database: inDatabase), json), json);
 
         var events = new List<JsonElement>();
         var built = await service.Search.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), CancellationToken.None, value => events.Add(JsonSerializer.SerializeToElement(value, json)));
@@ -37,6 +39,16 @@ internal static class SearchLiveChecks
         check(events.Count >= 2 && events[0].GetProperty("type").GetString() == "explorer.index.progress" && events[^1].GetProperty("done").GetInt32() == built.Status.Databases,
             "a build reports its progress, ending at every database");
         check(service.Search.DefinitionChars > 0, "the build holds definitions against the budget");
+
+        // Microsoft-shipped objects are indexed as Object Explorer lists them: master's own under System Tables, and the resource
+        // database's (sys.sp_who) once per server, not once per database.
+        check((await FindIn("master", "spt_fallback_db", "names")).Hits.Any(hit => hit.Object is { Kind: "table", Schema: "dbo", Name: "spt_fallback_db", Database: "master" } && hit.Folder == "systemTables"),
+            "master's spt_fallback_db is found under System Tables");
+        var who = (await FindIn(null, "sp_who", "names", wholeWord: true)).Hits;
+        check(who is [{ Object: { Kind: "procedure", Schema: "sys", Name: "sp_who", Database: "master" }, Folder: "systemStoredProcedures" }],
+            "a resource database procedure is one hit for the whole server, under master: " + string.Join(", ", who.Select(hit => hit.Object.Database + ":" + hit.Label)));
+        check(service.Search.Resources.Sets == 1, "the build holds one shared set of the resource database's objects");
+        var textsBefore = service.Search.Resources.Texts;
 
         var byName = await Find("search ]'");
         check(byName.Hits.Any(hit => hit.Object is { Kind: "table", Schema: "srch", Name: hostile } && hit.Folder == "tables" && hit.Label == "srch." + hostile),
@@ -53,6 +65,8 @@ internal static class SearchLiveChecks
         check((await Find(@"^\s*--\s*varia_marker_[0-9a-f]{8}$", "definitions", regex: true)).Hits.Any(hit => hit.Label == "srch.usp_Find"), "a regular expression matches a definition's line");
         check((await Find("(a", regex: true)).Problem is { Length: > 0 }, "an invalid regular expression answers why");
 
+        await Build();
+        check(service.Search.Resources.Sets == 1 && service.Search.Resources.Texts == textsBefore, "a rebuild of an unchanged server reuses its system objects' set");
         var names = await Build(definitions: false);
         check(names.Status.Definitions == false && (await Find(marker, "definitions")).Hits.Count == 0, "a build without definitions searches names only");
         await sql("DROP PROCEDURE [srch].[usp_Find];", database);

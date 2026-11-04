@@ -129,21 +129,12 @@ class RowBuilder {
     this.ids = copy(this.ids, new Int32Array(capacity)); this.kinds = copy(this.kinds, new Uint8Array(capacity)); this.levels = copy(this.levels, new Uint8Array(capacity))
     this.posinset = copy(this.posinset, new Int32Array(capacity)); this.setsize = copy(this.setsize, new Int32Array(capacity))
   }
-  /** Drops the rows from `mark` on: a filtered subtree with no match in it. */
-  truncate(mark: number): void {
-    this.count = mark
-    this.nodes.length = mark
-  }
   rows(): VisibleRows {
     const n = this.count
     return { count: n, ids: this.ids.subarray(0, n), kinds: this.kinds.subarray(0, n), levels: this.levels.subarray(0, n), posinset: this.posinset.subarray(0, n), setsize: this.setsize.subarray(0, n), nodes: this.nodes }
   }
 }
 
-/** A filter's text as `TreeNode.lower` is compared with it: trimmed and in lower case; '' for no filter. */
-export const filterText = (text: string): string => text.trim().toLocaleLowerCase()
-/** Where `filter` (from `filterText`) starts in a node's label, or −1. */
-export const filterMatch = (node: Pick<TreeNode, 'lower'>, filter: string): number => filter ? node.lower.indexOf(filter) : -1
 
 /** The row after an expanded node's children, if any. */
 export function tailRow(node: TreeNode): RowKind | undefined {
@@ -187,74 +178,6 @@ export function flatten(nodes: NodeTable, roots: readonly number[], capacityHint
     if (root) visit(root, index + 1, roots.length)
   }
   return out.rows()
-}
-
-/**
- * The rows a filter leaves, how many of their nodes match it, and the nodes shown only for rows below them or as the
- * selection (`partial`: neither a match nor inside a match's subtree). Those list only some of their children, so a
- * folder's item count would misread beside them.
- */
-export interface FilteredRows { readonly rows: VisibleRows; readonly matches: number; readonly partial: ReadonlySet<number> }
-/**
- * `flatten` narrowed to the nodes whose label contains `filter` (from `filterText`). It walks expanded nodes only, so it
- * searches what has been loaded and opened, and never asks for more. A match keeps its ancestors (servers always show)
- * and shows its expanded rows below as usual; a node that neither matches nor has a match below is left out with its
- * loading and error rows. Positions in a set count the siblings that show. O(visible rows unfiltered).
- *
- * The `pinned` node (the selection) and its ancestors show too, matching or not: collapsing a node that showed only for
- * the matches below it, or typing text the selection does not match, would otherwise leave the selection off the rows,
- * where F5, copy and the footer would still act on it unseen.
- */
-export function flattenFiltered(nodes: NodeTable, roots: readonly number[], filter: string, capacityHint = 256, pinned?: number): FilteredRows {
-  const out = new RowBuilder(Math.max(64, capacityHint))
-  const keep = new Set<number>()
-  for (let node = pinned === undefined ? undefined : nodes.get(pinned); node; node = node.parent ? nodes.get(node.parent) : undefined) keep.add(node.id)
-  let matches = 0
-  const partial = new Set<number>()
-  /** A node's synthetic rows around its children, as `flatten` places them; `each` emits one child. */
-  const visitChildren = (node: TreeNode, each: (child: TreeNode, index: number, size: number) => void) => {
-    const level = node.level + 1, children = node.children
-    if (node.load === 'error') out.push(syntheticId(node.id, RowKind.Error), RowKind.Error, level, 0, 0, undefined)
-    else if (node.showLoading && !children?.length) out.push(syntheticId(node.id, RowKind.Loading), RowKind.Loading, level, 0, 0, undefined)
-    if (children) {
-      const size = Math.max(node.total ?? 0, children.length)
-      for (let index = 0; index < children.length; index++) each(children[index], index, size)
-    }
-    const tail = tailRow(node)
-    if (tail !== undefined) out.push(syntheticId(node.id, tail), tail, level, 0, 0, undefined)
-  }
-  // A match's subtree shows whole, as without a filter; the matches in it still count. `matched`: the caller has
-  // already matched the node, so each name is searched once.
-  const visitAll = (node: TreeNode, posinset: number, setsize: number, matched = false) => {
-    out.push(node.id, RowKind.Node, node.level, posinset, setsize, node)
-    if (matched || filterMatch(node, filter) >= 0) matches++
-    if (node.expanded) visitChildren(node, (child, index, size) => visitAll(child, index + 1, size))
-  }
-  /** Emits the node if it or a node below it matches, or it is a server or pinned; true when it did. */
-  const visit = (node: TreeNode, posinset: number, setsize: number, server: boolean): boolean => {
-    if (filterMatch(node, filter) >= 0) { visitAll(node, posinset, setsize, true); return true }
-    const mark = out.count
-    out.push(node.id, RowKind.Node, node.level, posinset, setsize, node)
-    const shown: number[] = []
-    if (node.expanded) {
-      visitChildren(node, child => {
-        const at = out.count
-        if (child.expanded || keep.has(child.id) ? visit(child, 0, 0, false) : filterMatch(child, filter) >= 0) {
-          if (out.count === at) { out.push(child.id, RowKind.Node, child.level, 0, 0, child); matches++ }
-          shown.push(at)
-        }
-      })
-    }
-    if (!shown.length && !server && !keep.has(node.id)) { out.truncate(mark); return false }
-    for (let index = 0; index < shown.length; index++) { out.posinset[shown[index]] = index + 1; out.setsize[shown[index]] = shown.length }
-    partial.add(node.id)
-    return true
-  }
-  for (let index = 0; index < roots.length; index++) {
-    const root = nodes.get(roots[index])
-    if (root) visit(root, index + 1, roots.length, true)
-  }
-  return { rows: out.rows(), matches, partial }
 }
 
 /**
