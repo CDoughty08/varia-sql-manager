@@ -1,5 +1,5 @@
 import type { VariaApi } from '../../../shared/contracts'
-import { folderSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
+import { belowSchema, folderSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
 import type { ExplorerNodeRef, ObjectRef } from '../../../shared/explorer/refs.ts'
 import { objectSearchLimits, type ObjectIndexProgress, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult, type SearchScope } from '../../../shared/explorer/search.ts'
 import type { SettingKey, SettingValue } from '../../../shared/settings/catalog'
@@ -47,9 +47,10 @@ export interface ObjectSearchSnapshot {
   /** Changes when Search in Object Explorer asks the box to take focus. */
   readonly paneFocus: number
 }
-/** Object Explorer as Reveal uses it. */
+/** Object Explorer as Reveal uses it: its seek, and whether it groups objects by schema (the paths differ). */
 export interface RevealHost {
   seek(connectionId: string, paths: readonly RevealPath[]): Promise<SeekOutcome>
+  readonly groupBySchema?: boolean
 }
 export interface ObjectSearchOptions {
   readonly api: Pick<VariaApi, 'explorerIndex' | 'explorerSearch' | 'explorerCancel' | 'onExplorerIndexProgress'>
@@ -75,19 +76,27 @@ const systemDatabases = new Set(['master', 'model', 'msdb'])
 /**
  * Where a hit is in Object Explorer, from the server down: its database under Databases (or System Databases, tried first
  * for master, model and msdb, and second for the rest: a distribution database is a system one too), the folders above its
- * listing, a trigger's table or view (under Tables or Views, then under their System folders), and the object.
+ * listing, a trigger's table or view (under Tables or Views, then under their System folders), and the object. With Group
+ * by Schema on (`grouped`), a schema-scoped listing hangs below its schema's row, the object's (or the trigger's table's)
+ * schema, rather than below the database.
  */
-export function revealPaths(hit: ObjectSearchHit): RevealPath[] {
+export function revealPaths(hit: ObjectSearchHit, grouped = false): RevealPath[] {
   const name = hit.object.database ?? ''
   const database: ObjectRef = { kind: 'database', name }
+  /** The folders down to `folder` below the database, or below the schema row when grouped and the folder moved there. */
+  const listing = (folder: FolderId, schema: string | undefined): ExplorerNodeRef[] => {
+    if (!grouped || schema === undefined || !belowSchema(folder)) return folderChain(database, folder)
+    const row: ObjectRef = { kind: 'schema', database: name, name: schema }
+    return [{ type: 'object', object: row }, ...folderChain(row, folder)]
+  }
   const parent = hit.object.parent
   const belows: ExplorerNodeRef[][] = parent
     ? (() => {
         const owner: ObjectRef = { kind: parent.kind, database: name, schema: parent.schema, name: parent.name }
         const folders: FolderId[] = parent.kind === 'view' ? ['views', 'systemViews'] : ['tables', 'systemTables']
-        return folders.map(folder => [...folderChain(database, folder), { type: 'object' as const, object: owner }, ...folderChain(owner, hit.folder)])
+        return folders.map(folder => [...listing(folder, parent.schema), { type: 'object' as const, object: owner }, ...folderChain(owner, hit.folder)])
       })()
-    : [folderChain(database, hit.folder)]
+    : [listing(hit.folder, hit.object.schema)]
   const via = (folder: FolderId): RevealPath[] => belows.map(below => [...folderChain({ kind: 'server' }, folder), { type: 'object', object: database }, ...below, { type: 'object', object: hit.object }])
   return systemDatabases.has(name.toLowerCase()) ? [...via('systemDatabases'), ...via('databases')] : [...via('databases'), ...via('systemDatabases')]
 }
@@ -239,7 +248,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
 
   /** Reveal in Object Explorer: walks the hit's path from the server down, loading what it needs, and selects its node. */
   reveal(host: RevealHost, connectionId: string, hit: ObjectSearchHit): Promise<SeekOutcome> {
-    return host.seek(connectionId, revealPaths(hit))
+    return host.seek(connectionId, revealPaths(hit, !!host.groupBySchema))
   }
 
   // --- CustomDocumentProvider ------------------------------------------------------------------------------------------

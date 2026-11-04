@@ -1,5 +1,5 @@
 import type { ExplorerNode as WireNode, VariaApi } from '../../../shared/contracts'
-import { cloudEngineEditions, explorerLimits, filterProperties, folderSpecs, kindSpecs, nodeStatuses, parentKinds, serverEngineOf, type FolderId, type NodeKind, type NodeStatus, type ServerEngine } from '../../../shared/explorer/catalog.ts'
+import { cloudEngineEditions, explorerLimits, filterProperties, folderFilterFor, folderSpecs, kindSpecs, nodeStatuses, parentKinds, serverEngineOf, type FolderId, type FilterProperty, type NodeKind, type NodeStatus, type ServerEngine } from '../../../shared/explorer/catalog.ts'
 import { displayText, insertTextFor, refKey, type ExplorerFilter, type ExplorerNodeRef, type ExplorerTarget, type ObjectRef, type ParentRef } from '../../../shared/explorer/refs.ts'
 import { explorerFilterSchema } from '../../../shared/explorer/schema.ts'
 import { currentDatabaseRuntime, type DatabaseRuntime, type DatabaseStatusRow } from '../../../shared/explorer/status.ts'
@@ -45,11 +45,13 @@ export interface ExplorerContextState extends ScriptContextValues, ActionContext
   readonly explorerSelectionServerEngine: '' | ServerEngine
   readonly explorerSelectionServerLinux: boolean
   readonly explorerLoading: boolean
+  /** Group by Schema is on (`objectExplorer.groupBySchema`). */
+  readonly explorerGroupBySchema: boolean
 }
 export const noExplorerContext: ExplorerContextState = {
   explorerHasSelection: false, explorerSelectionKind: '', explorerSelectionFolder: '', explorerSelectionFilterable: false, explorerSelectionFiltered: false,
   explorerSelectionInsertable: false, explorerSelectionStatus: '', explorerSelectionServerEngine: '', explorerSelectionServerLinux: false, ...scriptContextValues(scriptMenuState(undefined)), ...actionContextValues(actionMenuState(undefined)), ...ssisVerbContextValues(ssisVerbMenuState(undefined)),
-  explorerLoading: false
+  explorerLoading: false, explorerGroupBySchema: false
 }
 export type RefreshScope = 'server' | 'databases' | 'other'
 export type ExplorerServiceLimits = LoaderLimits & ExplorerLimitValues<'pageSize' | 'folderCap' | 'nodeBudget' | 'siblingLoads' | 'filters' | 'loadingRowDelayMs' | 'deleteSlice'>
@@ -64,7 +66,10 @@ export interface ExplorerServiceOptions {
   readonly limits?: Partial<ExplorerServiceLimits>
   /** The wall clock (epoch ms) a listing's freshness is stamped with. */
   readonly now?: () => number
+  /** Whether Group by Schema is on (the `objectExplorer.groupBySchema` setting), and a signal when it may have changed. */
+  readonly groupBySchema?: GroupBySchemaSource
 }
+export interface GroupBySchemaSource { get(): boolean; subscribe(listener: () => void): () => void }
 /** Where a database's live runtime state comes from (ExplorerStatusService): a peek at its last sample, and a signal when
  *  the samples change. */
 export interface DatabaseRuntimeSource {
@@ -132,6 +137,9 @@ const reconcileLookahead = 16
 const databaseFolders: ReadonlySet<string> = new Set<FolderId>(['databases', 'systemDatabases', 'databaseSnapshots'])
 /** The object a node is, or the object a folder hangs below. */
 const objectOf = (ref: ExplorerNodeRef): ObjectRef => ref.type === 'object' ? ref.object : ref.owner
+/** Requests that say whether Group by Schema is on: a database's, and its own folders' (its Programmability folder lists
+ *  only the subfolders of database-scoped objects while grouped). */
+const groupable = (node: TreeNode): boolean => node.ref.type === 'object' ? node.ref.object.kind === 'database' : node.ref.owner.kind === 'database' && !!node.folder && folderSpecs[node.folder].owner === 'database'
 const isParentKind = (kind: string): kind is ParentRef['kind'] => (parentKinds as readonly string[]).includes(kind)
 const sameParent = (a: ParentRef, b: ObjectRef) => a.kind === b.kind && a.schema === b.schema && a.name === b.name
 
@@ -215,6 +223,9 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   /** The node `seek` walks towards, re-tried as each page arrives. */
   private seeking?: Seeking
   private readonly unsubscribe: () => void
+  private readonly grouping?: GroupBySchemaSource
+  private readonly unsubscribeGrouping?: () => void
+  private grouped = false
   /** The selected node's context keys; it publishes only when one changes, and synchronously on `select`. */
   readonly context: ExternalStore<ExplorerContextState> = this.contextStore
 
@@ -228,8 +239,13 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.now = options.now ?? Date.now
     this.loader = new ExplorerLoader({ api: options.api, timers: this.timers, newId: options.newId, limits: this.limits, onPendingChange: () => this.updateContext() })
     this.unsubscribe = this.connections.subscribe(() => this.guard(() => this.syncConnections()))
+    this.grouping = options.groupBySchema
+    this.grouped = !!this.grouping?.get()
+    this.unsubscribeGrouping = this.grouping?.subscribe(() => this.guard(() => this.groupingChanged()))
     this.syncConnections()
   }
+  /** Whether Group by Schema is on: databases list their schemas, with the schema-scoped folders below each. */
+  get groupBySchema(): boolean { return this.grouped }
 
   /** The node table, for the tree's `*` plan. */
   get table(): NodeTable { return this.nodes }
@@ -467,7 +483,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   /** Opens Filter Settings for a folder that can be filtered. */
   openFilter(folderNodeId: number): void {
     const node = this.nodes.get(folderNodeId)
-    if (!node?.folder || !folderSpecs[node.folder].filter?.length || !this.attached(node)) throw new Error('Select a folder that can be filtered.')
+    if (!node?.folder || !this.filterProperties(node).length || !this.attached(node)) throw new Error('Select a folder that can be filtered.')
     this.dialogStore.set(folderNodeId)
   }
   closeFilter(): void { this.dialogStore.set(undefined) }
@@ -535,6 +551,10 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     }
     return undefined
   }
+  /** The properties Filter Settings offers for a folder node: the folder's, but not Schema below a schema row (Group by Schema). */
+  filterProperties(node: TreeNode): readonly FilterProperty[] {
+    return node.kind === 'folder' && node.folder ? folderFilterFor(node.folder, objectOf(node.ref).kind) : []
+  }
   /** The folder's filter; filters are kept per connection until it disconnects. */
   filter(folderNodeId: number): ExplorerFilter | undefined {
     const node = this.nodes.get(folderNodeId)
@@ -543,7 +563,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   /** Sets or clears a folder's filter, then reloads the folder (expanded): its static subfolders stay as they are. */
   setFilter(folderNodeId: number, filter: ExplorerFilter | undefined): void {
     const node = this.nodes.get(folderNodeId)
-    const allowed = node?.folder ? folderSpecs[node.folder].filter ?? [] : []
+    const allowed = node ? this.filterProperties(node) : []
     if (!node || !allowed.length || !this.attached(node)) throw new Error('Select a folder that can be filtered.')
     if (filter) {
       const parsed = explorerFilterSchema.safeParse(filter)
@@ -655,6 +675,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.disposed = true
     this.endSeek({ ok: false, message: 'Object Explorer closed.', cancelled: true })
     this.unsubscribe()
+    this.unsubscribeGrouping?.()
     this.loader.dispose()
     for (const state of this.states.values()) this.timers.clearTimeout(state.loadingTimer)
     this.running.clear()
@@ -806,7 +827,26 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   }
   private params(node: TreeNode, cursor?: string): LoadTask['params'] {
     const filter = node.kind === 'folder' ? this.filters.get(node.connectionId)?.get(refKey(node.connectionId, node.ref)) : undefined
-    return { node: node.ref, ...(node.ref.type === 'object' && node.subtype ? { subtype: node.subtype } : {}), ...(cursor ? { cursor } : {}), ...(filter ? { filter } : {}) }
+    return {
+      node: node.ref, ...(node.ref.type === 'object' && node.subtype ? { subtype: node.subtype } : {}), ...(cursor ? { cursor } : {}), ...(filter ? { filter } : {}),
+      ...(this.grouped && groupable(node) ? { groupBySchema: true as const } : {})
+    }
+  }
+  /**
+   * Group by Schema turned on or off: every database that has listed its children lists them again, deeply, behind the
+   * user's own loads, so its folders and schema rows follow the setting; a collapsed one does when next expanded. A folder
+   * that moved is a different node, so its children and expansion go; its filter stays with its ref, for when it is back.
+   */
+  private groupingChanged(): void {
+    const grouped = !!this.grouping?.get()
+    if (grouped === this.grouped) return
+    this.grouped = grouped
+    for (const node of [...this.nodes.values()]) {
+      if (node.kind === 'database' && node.children !== undefined && !node.lost && this.attached(node)) this.reconcileNode(node, { deep: true }, 'background')
+    }
+    this.announce(grouped ? 'Objects grouped by schema' : 'Objects no longer grouped by schema')
+    this.updateContext()
+    this.invalidate()
   }
   private loadFirst(node: TreeNode, mode: FirstMode, priority: LoadPriority, deep = false): void {
     const previous = this.running.get(node.id)
@@ -1447,7 +1487,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       ...scriptContextValues(scriptMenuState(node && { kind: node.kind, subtype: node.subtype, parentKind: node.ref.type === 'object' ? node.ref.object.parent?.kind : undefined })),
       ...actionContextValues(actionMenuState(target)),
       ...ssisVerbContextValues(ssisVerbMenuState(node?.kind)),
-      explorerLoading: this.loader.pending > 0
+      explorerLoading: this.loader.pending > 0,
+      explorerGroupBySchema: this.grouped
     }
     const current = this.contextStore.getSnapshot()
     if ((Object.keys(next) as (keyof ExplorerContextState)[]).some(key => next[key] !== current[key])) this.contextStore.set(next)

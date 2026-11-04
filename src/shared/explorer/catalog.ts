@@ -93,7 +93,7 @@ export const queryIds = [
   'procedures', 'systemProcedures', 'tableValuedFunctions', 'scalarFunctions', 'aggregateFunctions', 'databaseTriggers', 'assemblies',
   'aliasTypes', 'tableTypes', 'clrTypes', 'xmlSchemaCollections', 'rules', 'defaults', 'planGuides', 'sequences',
   'fullTextCatalogs', 'partitionSchemes', 'partitionFunctions', 'fullTextStoplists', 'searchPropertyLists',
-  'users', 'databaseRoles', 'applicationRoles', 'schemas', 'asymmetricKeys', 'certificates', 'symmetricKeys', 'columnMasterKeys', 'columnEncryptionKeys',
+  'users', 'databaseRoles', 'applicationRoles', 'schemas', 'schemaGroups', 'asymmetricKeys', 'certificates', 'symmetricKeys', 'columnMasterKeys', 'columnEncryptionKeys',
   'databaseAuditSpecifications', 'securityPolicies',
   'columns', 'keys', 'constraints', 'tableTriggers', 'indexes', 'statistics', 'parameters',
   'ssisCatalogs', 'ssisFolders', 'ssisProjects', 'ssisPackages', 'ssisEnvironments'
@@ -456,6 +456,17 @@ export const explorerLimits = {
 /** The name bound of a kind's refs: sysname's 128 UTF-16 code units unless the kind declares a longer one. */
 export const maxNameOf = (spec: Pick<KindSpec, 'maxName'>): number => spec.maxName ?? maxIdentifierLength
 
+/**
+ * Group by Schema (SSMS 2022's Object Explorer option, the `objectExplorer.groupBySchema` setting): a database's
+ * schema-scoped folders move below one schema row per schema (query `schemaGroups`), listed after the database's own
+ * folders, each with the usual folders that list its objects; folders of database-scoped objects stay below the database.
+ * `schemaGroupRoots` are the database folders that move; below them, `schemaPlacement` says where each folder shows.
+ */
+export const schemaGroupRoots = ['tables', 'views', 'synonyms', 'programmability'] as const satisfies readonly FolderId[]
+export const schemaGroupList: QueryId = 'schemaGroups'
+/** Where a folder shows with Group by Schema on: below a schema row, below the database, or both (Programmability). */
+export type SchemaPlacement = 'schema' | 'database' | 'both'
+
 const byOrder = (a: { readonly order: number }, b: { readonly order: number }) => a.order - b.order
 const subfolderMap = new Map<FolderId, readonly FolderId[]>(folderIds.map(id => [id, folderIds.filter(child => folderSpecs[child].parent === id).map(child => folderSpecs[child]).sort(byOrder).map(spec => spec.id)]))
 /** A folder's static subfolders, in SSMS order; its dynamic rows follow them. */
@@ -468,9 +479,47 @@ export function rootFolder(folder: FolderId): FolderId {
 }
 /** The static folders below a node of this kind and subtype. */
 export const foldersFor = (kind: NodeKind, subtype?: NodeSubtype): readonly FolderId[] => (subtype && kindSpecs[kind].subtypeFolders?.[subtype]) || kindSpecs[kind].folders
+const placementMap = new Map<FolderId, SchemaPlacement>()
+function placeFolder(id: FolderId): SchemaPlacement {
+  const known = placementMap.get(id)
+  if (known) return known
+  const spec = folderSpecs[id]
+  const own = (spec.rows ?? []).map(kind => kindSpecs[kind].scope === 'schemaObject' ? 'schema' : 'database')
+  const below = subfolders(id).map(placeFolder).flatMap(place => place === 'both' ? ['schema', 'database'] : [place])
+  const places = new Set([...own, ...below])
+  const placement: SchemaPlacement = places.size === 2 ? 'both' : places.has('schema') ? 'schema' : 'database'
+  placementMap.set(id, placement)
+  return placement
+}
+/**
+ * Where a folder shows with Group by Schema on, for the folders below `schemaGroupRoots` (undefined for every other): below
+ * a schema row when it lists schema-scoped objects, below the database when it lists database-scoped ones (Database
+ * Triggers, Assemblies, Plan Guides), or below both when its subfolders hold each (Programmability).
+ */
+export const schemaPlacement = (folder: FolderId): SchemaPlacement | undefined =>
+  folderSpecs[folder].owner === 'database' && (schemaGroupRoots as readonly FolderId[]).includes(rootFolder(folder)) ? placeFolder(folder) : undefined
+/** Whether a folder shows below a schema row (Group by Schema). */
+export const belowSchema = (folder: FolderId): boolean => { const place = schemaPlacement(folder); return place === 'schema' || place === 'both' }
+/** Whether a folder shows below a database with Group by Schema on: every database folder but those only a schema row has. */
+export const belowGroupedDatabase = (folder: FolderId): boolean => folderSpecs[folder].owner === 'database' && schemaPlacement(folder) !== 'schema'
+/** The static folders a schema row has with Group by Schema on, served on this server. */
+export const schemaGroupFolders = (profile: ExplorerProfile): readonly FolderId[] => kindSpecs.database.folders.filter(id => belowSchema(id) && folderServed(id, profile))
+/**
+ * A folder's static subfolders as an owner shows them: below a schema row only those that list its objects, below a
+ * database with Group by Schema on only those that do not; otherwise all of them.
+ */
+export function ownedSubfolders(folder: FolderId, owner: NodeKind, grouped: boolean): readonly FolderId[] {
+  const ids = subfolders(folder)
+  return owner === 'schema' ? ids.filter(belowSchema) : owner === 'database' && grouped ? ids.filter(belowGroupedDatabase) : ids
+}
+/** The filter properties a folder offers below its owner: below a schema row the schema is the row's, so Schema is not one. */
+export const folderFilterFor = (folder: FolderId, owner: NodeKind): readonly FilterProperty[] =>
+  (folderSpecs[folder].filter ?? []).filter(property => owner !== 'schema' || property !== 'schema')
+
 const ownerMap = new Map<FolderId, readonly NodeKind[]>(folderIds.map(id => {
   const root = rootFolder(id)
-  return [id, nodeKinds.filter(kind => [kindSpecs[kind].folders, ...Object.values(kindSpecs[kind].subtypeFolders ?? {})].some(set => set?.includes(root)))]
+  const owners = nodeKinds.filter(kind => [kindSpecs[kind].folders, ...Object.values(kindSpecs[kind].subtypeFolders ?? {})].some(set => set?.includes(root)))
+  return [id, belowSchema(id) ? [...owners, 'schema' as const] : owners]
 }))
 /** The kinds a folder can hang below, whatever their subtype: a folder ref's `owner` must be one of them. */
 export const folderOwnerKinds = (folder: FolderId): readonly NodeKind[] => ownerMap.get(folder) ?? []
@@ -508,12 +557,13 @@ const line = (value: unknown) => JSON.stringify(sortKeys(value))
 const block = (items: readonly unknown[]) => '[\n' + items.map(item => '    ' + line(item)).join(',\n') + '\n  ]'
 
 /**
- * The catalogue as the backend embeds it: `{"cloudEngineEditions", "folders", "kinds", "managedInstanceEngineEditions", "queries", "scopes", "version"}`,
- * keys sorted and everything derived spelled out, so C# needs no rules of its own: each folder's `since` and `engines`
- * include the gates of the folders above it, and kinds carry every collection and a child's `parents`.
+ * The catalogue as the backend embeds it: `{"cloudEngineEditions", "folders", "kinds", "managedInstanceEngineEditions", "queries", "schemaGroups", "scopes",
+ * "version"}`, keys sorted and everything derived spelled out, so C# needs no rules of its own: each folder's `since` and
+ * `engines` include the gates of the folders above it, its `schemaPlacement` is Group by Schema's, and kinds carry every
+ * collection and a child's `parents`.
  */
 export function explorerCatalogJson(): string {
-  const folders = folderIds.map(id => ({ ...folderSpecs[id], ...folderGates(id), filter: folderSpecs[id].filter ?? [] }))
+  const folders = folderIds.map(id => ({ ...folderSpecs[id], ...folderGates(id), filter: folderSpecs[id].filter ?? [], schemaPlacement: schemaPlacement(id) }))
   const kinds = nodeKinds.map(kind => {
     const spec = kindSpecs[kind]
     return {
@@ -528,6 +578,7 @@ export function explorerCatalogJson(): string {
     `  "kinds": ${block(kinds)},`,
     `  "managedInstanceEngineEditions": ${line(managedInstanceEngineEditions)},`,
     `  "queries": ${line(queryIds)},`,
+    `  "schemaGroups": ${line({ list: schemaGroupList, rows: ['schema'] })},`,
     `  "scopes": ${line(scopeFields)},`,
     '  "version": 1',
     '}',

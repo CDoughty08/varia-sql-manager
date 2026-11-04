@@ -203,7 +203,9 @@ function editorCaret(documents: DocumentService, monaco: typeof Monaco) {
 export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: ThemeService, settings: SettingsService): Workbench {
   const platform = toPlatform(api.platform)
   const events = new EventBus(), connections = new ConnectionService(), editorOptions = new EditorOptionsService(settings), shellOptions = new ShellOptionsService(settings), panes = new PaneService()
-  const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame }), databaseList = new DatabaseListService(api, connections, events)
+  // Group by Schema follows its setting (the toolbar button and the palette flip it).
+  const groupBySchema = { get: () => settings.get('objectExplorer.groupBySchema'), subscribe: settings.subscribe }
+  const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame, groupBySchema }), databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
   const notifications = new NotificationService()
   const updates = new UpdateService(api)
