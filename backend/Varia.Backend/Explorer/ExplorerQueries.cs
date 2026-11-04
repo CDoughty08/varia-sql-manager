@@ -240,7 +240,9 @@ internal static class ExplorerQueries
         Id = id, Scope = QueryScope.Database, ChildFolder = true, From = from, Where = where is null ? null : _ => where, Keys = [key], Select = select, Map = map
     };
 
-    private static string ColumnVisibility(SqlRender r) =>
+    /// <summary>The columns the Columns folder shows (the object index keeps the same ones): not graph tables' hidden columns or
+    /// dropped ledger columns.</summary>
+    internal static string ColumnVisibility(SqlRender r) =>
         "NOT (" + r.Col(13, "c.is_hidden", "CONVERT(bit, 0)") + " = 1 AND " + r.Col(14, "c.graph_type", "CONVERT(int, NULL)") + " IS NOT NULL) AND "
         + r.Col(16, "c.is_dropped_ledger_column", "CONVERT(bit, 0)") + " = 0";
 

@@ -1,5 +1,5 @@
 import type { VariaApi } from '../../../shared/contracts'
-import { belowSchema, folderSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
+import { belowSchema, folderSpecs, kindSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
 import type { ExplorerNodeRef, ObjectRef } from '../../../shared/explorer/refs.ts'
 import { objectSearchLimits, type ObjectIndexProgress, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult, type SearchScope } from '../../../shared/explorer/search.ts'
 import type { SettingKey, SettingValue } from '../../../shared/settings/catalog'
@@ -73,14 +73,24 @@ function folderChain(owner: ObjectRef, folder: FolderId): ExplorerNodeRef[] {
   return chain
 }
 const systemDatabases = new Set(['master', 'model', 'msdb'])
+/** Where a child's parent may be listed when the hit does not say: under its kind's folder, then the System one. */
+const parentFolders: { readonly [K in 'table' | 'view' | 'tableType' | 'procedure' | 'function']: readonly FolderId[] } = {
+  table: ['tables', 'systemTables'], view: ['views', 'systemViews'], tableType: ['userDefinedTableTypes'],
+  procedure: ['storedProcedures', 'systemStoredProcedures'], function: ['tableValuedFunctions', 'scalarValuedFunctions', 'aggregateFunctions', 'functions']
+}
 /**
- * Where a hit is in Object Explorer, from the server down: its database under Databases (or System Databases, tried first
- * for master, model and msdb, and second for the rest: a distribution database is a system one too), the folders above its
- * listing, a trigger's table or view (under Tables or Views, then under their System folders), and the object. With Group
- * by Schema on (`grouped`), a schema-scoped listing hangs below its schema's row, the object's (or the trigger's table's)
- * schema, rather than below the database.
+ * Where a hit is in Object Explorer, from the server down. A server object is in its folder below the server (Security ›
+ * Logins), and a database in its Databases folder. Anything else is in its database, under Databases (or System Databases,
+ * tried first for master, model and msdb, and second for the rest: a distribution database is a system one too): the folders
+ * above its listing, a child's parent in the folder the hit names (or, when it names none, under its kind's folders, then
+ * their System ones), and the object. A temporal or ledger history table (or a child of one) is below the table whose history
+ * row shows it. With Group by Schema on (`grouped`), a schema-scoped listing hangs below its schema's row (the object's, its
+ * parent's or its history table's schema) rather than below the database.
  */
 export function revealPaths(hit: ObjectSearchHit, grouped = false): RevealPath[] {
+  const server: ObjectRef = { kind: 'server' }
+  const scope = kindSpecs[hit.object.kind].scope
+  if (scope === 'serverObject' || scope === 'database') return [[...folderChain(server, hit.folder), { type: 'object', object: hit.object }]]
   const name = hit.object.database ?? ''
   const database: ObjectRef = { kind: 'database', name }
   /** The folders down to `folder` below the database, or below the schema row when grouped and the folder moved there. */
@@ -90,15 +100,16 @@ export function revealPaths(hit: ObjectSearchHit, grouped = false): RevealPath[]
     return [{ type: 'object', object: row }, ...folderChain(row, folder)]
   }
   const parent = hit.object.parent
-  const belows: ExplorerNodeRef[][] = parent
-    ? (() => {
-        const owner: ObjectRef = { kind: parent.kind, database: name, schema: parent.schema, name: parent.name }
-        const folders: FolderId[] = parent.kind === 'view' ? ['views', 'systemViews'] : ['tables', 'systemTables']
-        return folders.map(folder => [...listing(folder, parent.schema), { type: 'object' as const, object: owner }, ...folderChain(owner, hit.folder)])
-      })()
-    : [listing(hit.folder, hit.object.schema)]
-  const via = (folder: FolderId): RevealPath[] => belows.map(below => [...folderChain({ kind: 'server' }, folder), { type: 'object', object: database }, ...below, { type: 'object', object: hit.object }])
-  return systemDatabases.has(name.toLowerCase()) ? [...via('systemDatabases'), ...via('databases')] : [...via('databases'), ...via('systemDatabases')]
+  const owner: ObjectRef | undefined = parent && { kind: parent.kind, database: name, schema: parent.schema, name: parent.name }
+  // Below a parent: the parent's node, then the folders down to the hit's.
+  const belowOwner: ExplorerNodeRef[] = owner ? [{ type: 'object', object: owner }, ...folderChain(owner, hit.folder)] : []
+  const belows: ExplorerNodeRef[][] = hit.via
+    ? [[...listing(hit.via.folder, hit.via.schema), { type: 'object', object: { kind: 'table', database: name, schema: hit.via.schema, name: hit.via.name } }, ...belowOwner]]
+    : parent
+      ? (hit.parentFolder ? [hit.parentFolder] : parentFolders[parent.kind]).map(folder => [...listing(folder, parent.schema), ...belowOwner])
+      : [listing(hit.folder, hit.object.schema)]
+  const under = (folder: FolderId): RevealPath[] => belows.map(below => [...folderChain(server, folder), { type: 'object', object: database }, ...below, { type: 'object', object: hit.object }])
+  return systemDatabases.has(name.toLowerCase()) ? [...under('systemDatabases'), ...under('databases')] : [...under('databases'), ...under('systemDatabases')]
 }
 const emptyQuery: SearchQueryState = { text: '', caseSensitive: false, wholeWord: false, regex: false, scope: 'all' }
 const live = (connection: LiveConnection | undefined): connection is LiveConnection => !!connection && !connection.lost
