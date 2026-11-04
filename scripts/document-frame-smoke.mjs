@@ -119,6 +119,9 @@ try {
   await expect.poll(atEnd, 'PageDown reaches the end of the column').toBe(true)
   await page.keyboard.press('PageUp')
   await expect.poll(atEnd, 'PageUp pages back').toBe(false)
+  // Chromium animates keyboard scrolling on Linux; an animation still running would carry the column away from End's section.
+  let lastTop
+  await expect.poll(async () => { const now = await scrollTop(), same = now === lastTop; lastTop = now; return same }, 'PageUp finishes scrolling').toBe(true)
 
   await item('files').focus()
   await page.keyboard.press('End')

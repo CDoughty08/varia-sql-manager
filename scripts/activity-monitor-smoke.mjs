@@ -133,6 +133,8 @@ try {
   // With no server connected, the monitor asks for one, then opens on it: no query tab comes with it.
   const before = await queryTabs().allTextContents()
   await menu('activity.open')
+  // The monitor opens Connect itself; connect() would otherwise press the toolbar's Connect under its arriving backdrop.
+  await expect(page.getByRole('dialog', { name: 'Connect', exact: true })).toBeVisible()
   await connect('activity-server')
   await expect(queryTabs().filter({ hasText: 'activity-server - Activity Monitor' })).toHaveCount(1)
   expect((await queryTabs().allTextContents()).filter(name => !name.includes('Activity Monitor'))).toEqual(before)
