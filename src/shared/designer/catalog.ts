@@ -235,7 +235,7 @@ export function designerCommandEntries(): { readonly [K in DesignerCommandId]: D
     'explorer.newTable': {
       title: 'New Table…', category: 'Object Explorer', icon: 'table', keywords: ['create', 'designer', 'design'],
       precondition: "backendReady && explorerSelectionFolder == 'tables' && !documentBusy", unavailableHint: 'Select the Tables folder of a database in Object Explorer.',
-      menus: [{ menu: 'explorer.new', group: '1_table', order: 1, title: 'Table…', mnemonic: 't' }]
+      menus: [{ menu: 'explorer.new', group: '1_table', order: 1, title: 'Table…', mnemonic: 't', when: "explorerFolder == 'tables'" }]
     },
     'tableDesigner.setPrimaryKey': {
       title: 'Set Primary Key', category: 'Table Designer', icon: 'key', keywords: ['key', 'pk'], precondition: `${editable} && designerRowSelected && !designerPrimaryKeyRemovable`,

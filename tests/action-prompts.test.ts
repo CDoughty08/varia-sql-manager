@@ -17,14 +17,21 @@ describe('object action prompts (varia:confirm-action)', () => {
       detail: 'Rename When Free waits until they disconnect; Stop in the status bar ends the wait.',
       buttons: ['Close Connections and Rename', 'Rename When Free', 'Cancel'], answers: ['closeAndRename', 'renameWhenFree', 'cancel'], defaultId: 0, cancelId: 2
     })
+    // One connection is "it".
+    const single = confirmActionBox(rename({ sessions: 1, tabs: 0, transactions: 1 }))
+    expect(single.message).toBe('1 connection is using Sales. Close it and rename the database?')
+    expect(single.detail.split('\n\n')).toEqual(['1 session has an open transaction, which closing rolls back.', 'Rename When Free waits until it disconnects; Stop in the status bar ends the wait.'])
+    // Where Varia cannot close them, the question matches the buttons, and nothing is said to roll back.
     const busy = confirmActionBox(rename({ sessions: 1, tabs: 0, transactions: 2, tabsWithTransactions: ['Query1.sql', 'Load.sql'], canClose: false }))
-    expect(busy.message).toBe('1 connection is using Sales. Close them and rename the database?')
+    expect(busy.message).toBe('1 connection is using Sales. Rename the database when it disconnects?')
     expect(busy.detail.split('\n\n')).toEqual([
-      '2 sessions have open transactions, which closing rolls back.', "Varia's query windows with open transactions: Query1.sql, Load.sql.",
-      'This server does not let Varia close them.', 'Rename When Free waits until they disconnect; Stop in the status bar ends the wait.'
+      "Varia's query windows with open transactions: Query1.sql, Load.sql.", 'This server does not let Varia close it.', 'Rename When Free waits until it disconnects; Stop in the status bar ends the wait.'
     ])
     expect(busy).toMatchObject({ buttons: ['Rename When Free', 'Cancel'], defaultId: 0, cancelId: 1 })
     expect(confirmActionBox(rename({ sessions: undefined })).message).toBe('Other connections may be using Sales. Close them and rename the database?')
+    const uncounted = confirmActionBox(rename({ sessions: undefined, transactions: undefined, canClose: false }))
+    expect(uncounted.message).toBe('Other connections may be using Sales. Rename the database when they disconnect?')
+    expect(uncounted.detail.split('\n\n')).toEqual(['This server does not let Varia close them.', 'Rename When Free waits until they disconnect; Stop in the status bar ends the wait.'])
   })
   it('says what closing rolls back even when the transactions could not be counted, and counts the tabs it cannot name', () => {
     // A7: sessions and transactions unknown, the box still warns that closing rolls back.

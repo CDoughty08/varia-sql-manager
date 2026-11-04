@@ -6,7 +6,8 @@ import type { KeyboardEvent } from 'react'
  */
 export function trapFocus(event: KeyboardEvent<HTMLElement>): void {
   if (event.key !== 'Tab') return
-  const items = [...event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary')].filter(item => item.getClientRects().length)
+  // Composite widgets (a tree, a grid, a read-only value) take focus through tabindex="0" and are tab stops too.
+  const items = [...event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex="0"]')].filter(item => item.getClientRects().length)
   const first = items[0], last = items.at(-1)
   if (event.shiftKey && (document.activeElement === first || document.activeElement === event.currentTarget)) { event.preventDefault(); last?.focus() }
   else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }

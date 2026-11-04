@@ -225,6 +225,45 @@ describe('ExplorerStatusService', () => {
     expect(status.server(first)!.server?.chips.map(chip => chip.label)).toEqual(['1 job running', 'AG1 healthy'])
   })
 
+  it('gives a peek at a database\'s last sampled runtime state, dated by the tick that sampled it (D3a)', async () => {
+    connections.add(info(first), { server: 'a' } as never)
+    const fake = streamOf(first)
+    open(fake)
+    expect(status.databaseRuntime(first, 'Archive')).toBeUndefined()
+    const sampled = Date.now()
+    fake.onEvent(tick([table('explorer.databases', [['Archive', '6', '0', '0', '0']])]), 10)
+    await settle()
+    expect(status.databaseRuntime(first, 'Archive')).toEqual({ at: sampled, row: { name: 'Archive', state: 6, userAccess: 0, readOnly: false, standby: false }, complete: true })
+    // A database the complete list leaves out is plainly online; the caller (currentDatabaseRuntime) decides.
+    expect(status.databaseRuntime(first, 'Sales')).toEqual({ at: sampled, row: undefined, complete: true })
+    expect(status.databaseRuntime(second, 'Archive')).toBeUndefined()
+    // An unchanged revision dates the rows already read to its own tick, and publishes nothing.
+    vi.advanceTimersByTime(5000)
+    const before = status.getSnapshot()
+    fake.onEvent(tick([table('explorer.databases', [], { added: 0, removed: 0, changed: 0 })]), 10)
+    await settle()
+    expect(status.databaseRuntime(first, 'Archive')?.at).toBe(sampled + 5000)
+    expect(status.getSnapshot()).toBe(before)
+    // While a changed revision is still being read, an unchanged tick cannot date the rows it replaces.
+    vi.advanceTimersByTime(5000)
+    const changed = table('explorer.databases', [['Archive', '0', '0', '0', '0']], { added: 0, removed: 0, changed: 1 })
+    const heldId = (changed.tables[0].descriptor as unknown as { resultId: number }).resultId
+    client.hold.add(heldId)
+    fake.onEvent(tick([changed]), 10)
+    vi.advanceTimersByTime(5000)
+    fake.onEvent(tick([table('explorer.databases', [], { added: 0, removed: 0, changed: 0 })]), 10)
+    await settle()
+    expect(status.databaseRuntime(first, 'Archive')?.at).toBe(sampled + 5000)
+    client.hold.delete(heldId)
+    client.holds.get(heldId)!()
+    await settle()
+    expect(status.databaseRuntime(first, 'Archive')).toMatchObject({ at: sampled + 10_000, row: { state: 0 } })
+    // A probe that fails says nothing.
+    fake.onEvent(tick([], [{ probe: 'explorer.databases', code: 'BLOCKED', message: 'Blocked.', retryInMs: 5000, terminal: false }]), 10)
+    await settle()
+    expect(status.databaseRuntime(first, 'Archive')).toBeUndefined()
+  })
+
   it('leaves a database without progress when the progress probe is unavailable, and the server without chips while nothing runs', async () => {
     connections.add(info(first), { server: 'a' } as never)
     const fake = streamOf(first)
