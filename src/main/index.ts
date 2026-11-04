@@ -1,17 +1,19 @@
-import { app, BrowserWindow, clipboard, ipcMain, Menu, MessageChannelMain, dialog, nativeTheme, powerMonitor, safeStorage, shell, type IpcMainEvent, type IpcMainInvokeEvent, type Rectangle } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, Menu, MessageChannelMain, dialog, nativeTheme, powerMonitor, safeStorage, session, shell, type IpcMainEvent, type IpcMainInvokeEvent, type Rectangle } from 'electron'
 import { basename, dirname, isAbsolute, join } from 'node:path'
-import { stat } from 'node:fs/promises'
+import { stat, writeFile } from 'node:fs/promises'
 import { z } from 'zod'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import { BackendSupervisor } from './backend/supervisor'
 import { BackendError } from './backend/errors'
 import { backendSpawnSpec } from './backend/spawn-spec'
+import { rendererUrlVerifier } from './trusted-renderer'
 import { installTestHooks, type BackendTestHooks, type RendererLossSource } from './backend/test-hooks'
 import { ResultsPortHost, supervisorResults } from './backend/results-port'
 import { ExplorerRequests } from './backend/explorer-requests'
 import { ResultsJobHost, supervisorJobs } from './results-jobs'
 import { ScriptingRequests } from './backend/scripting-requests'
 import { ActionRequests } from './backend/action-requests'
+import { actionProgressRelay } from './action-progress'
 import { SsisRequests } from './backend/ssis-requests'
 import { ActivityRequests } from './backend/activity-requests'
 import { cancellableRequests, connectionRequestLimits, RendererRequests } from './backend/renderer-requests'
@@ -60,10 +62,14 @@ import { activityCancelSchema } from '../shared/activity/schema.ts'
 import type { CommandId } from '../shared/commands/catalog'
 import { sanitizeLabel } from '../shared/theme/format'
 import type { ResolvedTheme, ThemeState } from '../shared/theme/types'
+import { Updater } from './updater'
+import { applyUpdate, installTargetFor, removeReplacedPortable, testUpdateTarget, type InstallTarget } from './update-install'
+import { assetUrl, releasesPageUrl, updateErrors, updateFeedUrl, type InstallKind } from '../shared/updates'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const rendererFile = join(here, '../renderer/index.html')
 const developmentUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined
+const isRendererUrl = rendererUrlVerifier(rendererFile, developmentUrl)
 const maxClipboardText = 8_388_608
 let mainWindow: BrowserWindow | null = null
 let backend: BackendSupervisor
@@ -104,6 +110,11 @@ let windowActive = true
 let userActivation = new UserActivation()
 let layouts: LayoutStore
 let appearance: AppearanceService
+// Help › Check for Updates; created once the app is ready (its network session needs that).
+let updater: Updater | undefined
+let updateTarget: InstallTarget | undefined
+// Smoke runs point updates at their own loopback feed; their install writes a marker instead of running anything.
+const testUpdateFeed = testSeams && /^http:\/\/127\.0\.0\.1:\d{1,5}\/$/.test(process.env.VARIA_TEST_UPDATE_FEED ?? '') ? process.env.VARIA_TEST_UPDATE_FEED : undefined
 // Tests use their own profile so layout checks never modify the user's workspace preferences.
 if (process.env.VARIA_SMOKE_TEST === '1' && process.env.VARIA_TEST_USER_DATA) app.setPath('userData', process.env.VARIA_TEST_USER_DATA)
 // Tools › Options. Constructing it reads nothing; code that acts on a value awaits load(), and current() is for menu titles.
@@ -170,8 +181,7 @@ function command(id: CommandId): void { mainWindow?.webContents.send('varia:comm
 function trusted(event: IpcMainInvokeEvent | IpcMainEvent): boolean {
   if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) return false
   const senderUrl = event.senderFrame?.url
-  try { return !!senderUrl && (developmentUrl ? new URL(senderUrl).origin === new URL(developmentUrl).origin : senderUrl === pathToFileURL(rendererFile).href) }
-  catch { return false }
+  return !!senderUrl && isRendererUrl(senderUrl)
 }
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -602,6 +612,7 @@ app.whenReady().then(async () => {
   // may have changed.
   void recovery.purge(retentionDays(settings))
   settings.onDidChange(state => {
+    updater?.settingsChanged()
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:settings-changed', state)
     buildMenu()
     // Items shown in recently used file lists may have changed.
@@ -609,6 +620,7 @@ app.whenReady().then(async () => {
   })
   void recent.load()
   recent.onDidChange(() => { buildMenu(); publishRecentFiles() })
+  startUpdater(loaded)
   const jobs = resultsJobs = new ResultsJobHost({
     backend: supervisorJobs(backend), owns: (generation, resultId) => results.owns(generation, resultId), liveNewest: (generation, resultId) => results.liveNewest(generation, resultId), platform: process.platform,
     writeClipboard: text => clipboard.writeText(text), documentsDir: () => app.getPath('documents'),
@@ -678,7 +690,18 @@ app.whenReady().then(async () => {
     deliverLaunchFiles()
   })
   // Only the live page can end a close: a page being unloaded (not ready since the reset) may still report its own.
-  ipcMain.on('varia:close-cancelled', event => { if (trusted(event) && rendererReady) { closePending = false; closeIntent = undefined } })
+  // A Restart to Update whose quit was cancelled (a query kept) installs nothing at a later exit.
+  ipcMain.on('varia:close-cancelled', event => { if (trusted(event) && rendererReady) { closePending = false; closeIntent = undefined; updater?.disarm() } })
+  handle('varia:updates-state', () => requireUpdater().state)
+  handle('varia:updates-check', () => requireUpdater().check(true))
+  handle('varia:updates-download', () => requireUpdater().download())
+  // The app closes as File › Exit does, so unsaved queries ask first; the update installs once it has closed.
+  handle('varia:updates-restart', async () => {
+    if (!await requireUpdater().arm()) return false
+    app.quit()
+    return true
+  })
+  handle('varia:updates-releases-page', () => shell.openExternal(releasesPageUrl))
   // Invalid payloads are dropped: the menu keeps its last valid state, and every command re-checks enablement when it runs.
   ipcMain.on('varia:menu-state', (event, state: unknown) => { if (trusted(event)) menuBridge.applyState(state) })
   handle('varia:connections-load', async () => ({ ...await library.load(), windowsIdentity: process.platform === 'win32' ? [process.env.USERDOMAIN, userInfo().username].filter(Boolean).join('\\') : userInfo().username }))
@@ -722,12 +745,18 @@ app.whenReady().then(async () => {
       // with a requestId is registered before it is sent, so its cancel channel can always find it.
       const cancellable = cancellableRequests(method, { explorer: explorerRequests, scripting: scriptingRequests, actions: actionRequests, ssis: ssisRequests, activity: activityRequests, connections: connectionRequests }, prepared.context?.requestId)
       const load = cancellable?.begin(prepared.context?.requestId ?? (validated as RpcMethods['explorer.children' | 'scripting.script' | 'actions.describe' | 'actions.script' | 'actions.execute' | 'ssis.describe' | 'ssis.execute' | 'ssis.catalogSetup' | 'activity.details']['params']).requestId)
+      // A long action's STATS progress goes back only to the window that sent it (varia:actions-progress).
+      const progress = method === 'actions.execute' ? actionProgressRelay((validated as RpcMethods['actions.execute']['params']).requestId, event.sender) : undefined
       let result: unknown
       let outcome: Settled
       try {
         try {
-          result = await backend.request(method as RpcMethod, prepared.params as never, queryId !== undefined ? { onEvent: queryEvent => results.queryEvent(queryId, queryEvent) } : load ? { onSent: load.sent } : {})
-        } finally { load?.end() }
+          result = await backend.request(method as RpcMethod, prepared.params as never, queryId !== undefined ? { onEvent: queryEvent => results.queryEvent(queryId, queryEvent) }
+            : load ? { onSent: load.sent, ...progress ? { onActionProgress: progress.event } : {} } : {})
+        } finally {
+          load?.end()
+          progress?.close()
+        }
         result = validateResult(method as RpcMethod, result)
         outcome = { ok: true, value: result }
       } catch (error) { outcome = { ok: false, error } }
@@ -881,5 +910,45 @@ app.on('will-quit', event => {
   event.preventDefault()
   // Every window is closed: a relaunch during the wait must start a new instance, not be handed to this one and dropped.
   app.releaseSingleInstanceLock()
-  void backend.stop().finally(() => { backendStopped = true; app.exit(0) })
+  void backend.stop().finally(async () => { backendStopped = true; await installArmedUpdate(); app.exit(0) })
 })
+
+function requireUpdater(): Updater {
+  if (!updater) throw new Error('Updates are not available yet.')
+  return updater
+}
+
+/** Help › Check for Updates, and the automatic checks once settings have loaded (they may be off). */
+function startUpdater(settingsLoaded: Promise<unknown>): void {
+  const userData = app.getPath('userData')
+  const target = updateTarget = testUpdateFeed ? testUpdateTarget(process.env.VARIA_TEST_UPDATE_KIND, userData)
+    : installTargetFor({ packaged: app.isPackaged, platform: process.platform, execPath: process.execPath, env: process.env, productName: app.getName(), userData })
+  // Its own in-memory session: the system proxy and certificate store, no cookies or cache, and none of the page's rules.
+  const network = session.fromPartition('varia-updates', { cache: false })
+  network.setUserAgent(`Varia-SQL-Manager/${app.getVersion()} (${process.platform}; ${process.arch})`)
+  const feed = testUpdateFeed
+  updater = new Updater({
+    currentVersion: app.getVersion(), kind: target.kind, arch: process.arch, enabled: app.isPackaged || !!feed,
+    feedUrl: feed ? new URL('varia-update.json', feed).href : updateFeedUrl,
+    assetUrl: feed ? (version, name) => new URL(`download/v${encodeURIComponent(version)}/${encodeURIComponent(name)}`, feed).href : assetUrl,
+    fetch: (url, init) => network.fetch(url, { ...init, cache: 'no-store', redirect: 'follow' }), secureOnly: !feed,
+    downloadDir: target.downloadDir, privateDir: target.privateDir,
+    settings: () => ({ checkAutomatically: settings.current()['environment.updates.checkAutomatically'], downloadAutomatically: settings.current()['environment.updates.downloadAutomatically'] }),
+    publish: state => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:updates-changed', state) }
+  })
+  if (target.kind === 'portable' && !feed) void removeReplacedPortable(process.env)
+  void settingsLoaded.catch(() => {}).finally(() => updater?.start())
+}
+
+/** At exit, after the backend stopped: the update Restart to Update armed. A failure says where to get it instead. */
+async function installArmedUpdate(): Promise<void> {
+  const armed = updater?.takeArmed(), kind: InstallKind | undefined = updateTarget?.kind
+  updater?.dispose()
+  if (!armed || !kind) return
+  try {
+    if (testUpdateFeed) await writeFile(join(app.getPath('userData'), 'update-applied.json'), JSON.stringify({ kind, version: armed.version, file: basename(armed.file) }))
+    else await applyUpdate(kind, armed.file, armed.version, { env: process.env, currentVersion: app.getVersion(), openPath: path => shell.openPath(path) })
+  } catch {
+    dialog.showErrorBox('Varia SQL Manager update', `${updateErrors.install.message} ${updateErrors.install.hint}\n\n${releasesPageUrl}`)
+  }
+}

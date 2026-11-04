@@ -258,9 +258,9 @@ internal static class LoginPropertiesChecks
         var strayAccepted = others.Where(item => Refused(item.Args, script: true) != "INVALID_PARAMS").Select(item => item.Name).ToList();
         check(strayAccepted.Count == 0, "every other action refuses loginChanges (finding 20): " + string.Join(", ", strayAccepted));
         check(DescribeRefused(new(Id(), Id(), "loginProperties", App)) == "accepted" && DescribeRefused(new(Id(), Id(), "loginProperties", new ObjectRefDto("database", Name: "AppData"))) == "INVALID_PARAMS"
-            && DescribeRefused(new(Id(), Id(), Catalog.Logins.RolesDescribe, new ObjectRefDto("database", Name: "Sales"), "a]'b")) == "accepted"
-            && DescribeRefused(new(Id(), Id(), Catalog.Logins.RolesDescribe, new ObjectRefDto("database", Name: "Sales"), new string('l', 129))) == "INVALID_PARAMS"
-            && DescribeRefused(new(Id(), Id(), "loginProperties", App, "app_login")) == "INVALID_PARAMS"
+            && DescribeRefused(new(Id(), Id(), Catalog.Logins.RolesDescribe, new ObjectRefDto("database", Name: "Sales"), Login: "a]'b")) == "accepted"
+            && DescribeRefused(new(Id(), Id(), Catalog.Logins.RolesDescribe, new ObjectRefDto("database", Name: "Sales"), Login: new string('l', 129))) == "INVALID_PARAMS"
+            && DescribeRefused(new(Id(), Id(), "loginProperties", App, Login: "app_login")) == "INVALID_PARAMS"
             && DescribeRefused(new(Id(), Id(), "databaseProperties", App)) == "INVALID_PARAMS",
             "the loginProperties describe takes a login, and only User Mapping's read of a database names a login");
     }

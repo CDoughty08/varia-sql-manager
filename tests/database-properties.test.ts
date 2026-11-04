@@ -91,7 +91,11 @@ describe('Database Properties draft', () => {
     for (const identity of [{ id: 0, created: sent.identity!.created }, { id: 7, created: '2026-01-02 03:04:05' }, { id: 7, created: `${sent.identity!.created}\n` }, { id: 7.5, created: sent.identity!.created }, { ...sent.identity, extra: 1 }]) {
       expect(actionRequestSchema.safeParse({ ...sent, ...ids, identity }).success, JSON.stringify(identity)).toBe(false)
     }
-    expect(actionRequestSchema.safeParse({ action: 'rename', ...ids, target: { kind: 'database', name: 'AppData' }, newName: 'B', identity: sent.identity }).success).toBe(false)
+    // A database's rename takes the identity too (D3c); a table's rename has none.
+    expect(actionRequestSchema.safeParse({ action: 'rename', ...ids, target: { kind: 'database', name: 'AppData' }, newName: 'B', identity: sent.identity }).success).toBe(true)
+    const tableRename = { action: 'rename', ...ids, target: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' }, newName: 'B' }
+    expect(actionRequestSchema.safeParse(tableRename).success).toBe(true)
+    expect(actionRequestSchema.safeParse({ ...tableRename, identity: sent.identity }).success).toBe(false)
   })
   it('shows a problem instead of sending a number out of range or an empty owner', () => {
     expect(request(undefined, draft => setOption(draft, 'maxDop', '40000'))).toEqual({ problem: 'Max DOP must be a whole number from 0 to 32,767.' })

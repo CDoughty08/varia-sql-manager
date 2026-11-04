@@ -84,6 +84,8 @@ internal static class ActionLiveChecks
             {
                 // sp_detach_db's @skipchecks is true or false only (ActionSql.Checked); its name is the procedure's own argument.
                 var plan = template == ActionTemplate.DetachDatabase ? ActionSql.Detach(name, updateStatistics: true)
+                    // The restore cleanup's second name is a database id (Checked); its dry run selects the DROP without the RESTORING check.
+                    : template == ActionTemplate.DropRestoring ? ActionSql.DropRestoring(name, 1)
                     : new PlannedStatement(template, "master", Enumerable.Repeat(name, ActionSql.ParameterCount(template)).ToList());
                 var selected = await service.Actions.DryRunAsync(info.Id, plan, CancellationToken.None);
                 var expected = template switch

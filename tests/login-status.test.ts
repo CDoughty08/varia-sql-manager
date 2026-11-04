@@ -21,8 +21,8 @@ describe('Logins listing (D4a)', () => {
     expect(loginDetail('S ', { ...none, policyChecked: true, expirationChecked: true })).toBe('SQL Server authentication · Password policy enforced · Password expiration enforced')
     expect(loginDetail('G', { ...none, disabled: true, connectDenied: true })).toBe('Windows group · Disabled · Permission to connect denied')
     expect(loginDetail('U', none)).toBe('Windows user')
-    expect(loginDetail('C', { ...none, connectDenied: true })).toBe('Mapped to a certificate · Permission to connect denied')
-    expect(loginDetail('K', { ...none, disabled: true })).toBe('Mapped to an asymmetric key · Disabled')
+    expect(loginDetail('C', { ...none, connectDenied: true })).toBe('Mapped to certificate · Permission to connect denied')
+    expect(loginDetail('K', { ...none, disabled: true })).toBe('Mapped to asymmetric key · Disabled')
     expect(loginDetail('E', none)).toBe('Microsoft Entra user or application')
     expect(loginDetail('X', none)).toBe('Microsoft Entra group')
     // A server role is not a login: no kind of its own.
@@ -59,7 +59,8 @@ describe('Logins listing (D4a)', () => {
     expect(prose(docs)).toContain('the listing also sends `connectDenied`, so its row shows both chips and says both')
     expect(prose(docs)).toContain('amber (`warningForeground`) for `noAccess` (a database the current login cannot open, a login denied permission to connect)')
     expect(prose(readFileSync('docs/ipc.md', 'utf8'))).toContain('A login row carries `connectDenied: true` when CONNECT SQL is denied to it')
-    // README says what the live Logins checks do to a shared server, and names their lane.
-    expect(readFileSync('README.md', 'utf8')).toMatch(/The Logins listing checks create a scratch login .*uncommitted `ALTER LOGIN … DISABLE`.*`--logins-live` runs only them\./)
+    // The docs say what the live Logins listing checks do to a shared server, and name their lane (the README no longer
+    // lists test lanes, and `--logins-live` is New Login's).
+    expect(prose(docs)).toMatch(/The live Logins listing checks .*create a scratch login .*uncommitted `ALTER LOGIN … DISABLE`.*`--login-listing-live` runs only them\./)
   })
 })

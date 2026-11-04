@@ -172,6 +172,8 @@ export const part = {
   objectDialogPage: '.object-dialog-page:not([hidden])',
   objectDialogSteps: '.object-dialog-steps',
   objectDialogCaption: '.object-dialog-caption',
+  // Attach Databases: a path cell's file name, which stays visible while its folder gives way
+  attachPathName: '.attach-path-name',
   stepList: '.step-list',
   stepListText: '.step-list-text',
   optionsDescription: '.options-description',
@@ -215,6 +217,13 @@ export const part = {
   chartTooltip: '.live-chart-tip',
   chartSwatch: '.live-chart-swatch',
   chartTableWrap: '.live-chart-table-wrap',
+  // Restore Database's Backup Timeline (src/renderer/src/restore/BackupTimeline.tsx): a backup's mark on the track (full,
+  // differential or log, by kind) and the legend's samples, which draw the same shapes.
+  restoreTimelineFull: '.restore-timeline-track .restore-timeline-full',
+  restoreTimelineDifferential: '.restore-timeline-track .restore-timeline-differential',
+  restoreTimelineLog: '.restore-timeline-track .restore-timeline-log',
+  restoreTimelineCovered: '.restore-timeline-track .restore-timeline-covered',
+  restoreTimelineSwatch: '.restore-timeline-swatch',
   // Stand-ins: page code gives a probe element these classes to read what the stylesheet gives that surface (a menu's
   // entrance, a selected tree row, the current dialog page, an open menu-bar button) without opening one.
   menu: '.menu',
@@ -498,6 +507,20 @@ export async function addObjectDialogSteps(dialog, count) {
     .map(([key, selector]) => [key, key === 'main' || key === 'page' ? selector : selector.slice(1)]))])
   return () => dialog.evaluate(form => form.querySelector('[data-smoke-steps]')?.remove())
 }
+/**
+ * Whether an Attach Databases path cell shows its whole file name: its box is as wide as its text is laid out (scrollWidth
+ * rounds, and a box a fraction of a pixel narrower already draws an ellipsis) and inside the cell's content box.
+ */
+export const attachFileNameShown = cell => cell.evaluate((td, selector) => {
+  const name = td.querySelector(selector)
+  if (!name) return false
+  const range = document.createRange()
+  range.selectNodeContents(name)
+  const text = range.getBoundingClientRect().width, own = name.getBoundingClientRect(), box = td.getBoundingClientRect()
+  return own.width > 0 && own.width >= text - 0.01 && own.right <= box.right - parseFloat(getComputedStyle(td).paddingRight) + 0.01
+}, part.attachPathName)
+/** Whether a text input shows the end of its value (an Attach Databases path's file name) rather than its start. */
+export const inputShowsEnd = input => input.evaluate(element => element.scrollLeft + element.clientWidth >= element.scrollWidth - 1)
 /** The Options dialog's page heading (Query Execution › SQL Server › General), notes, form and description pane. */
 export const optionsHeading = dialog => dialog.getByRole('heading', { level: 3 })
 export const optionsNotes = dialog => dialog.locator(part.optionsNote)

@@ -196,8 +196,9 @@ JavaScript and .NET strings they came from cannot be zeroed. Main zeroes the met
 backend schedules it: `control` runs at once, `metadata` waits for one of 8 slots (at most 30 s or the remaining
 deadline, then `BUSY`), `query` uses the per-tab session path, `results` takes one of 16 read slots, `explorer`
 runs at once under Object Explorer's own gates (4 statements per connection, 8 in all; static folders need neither), and
-`actions` runs object action DDL at once under the action service's own gates (1 per connection, 2 in all, each waited
-for at most 30 s, then `BUSY`), so a DROP waiting on a lock never holds a metadata slot; Kill Process (`activity.kill`)
+`actions` runs object action DDL at once under the action service's own gates (1 per Varia connection, 2 in all, each waited
+for at most 30 s, then `BUSY`; a long action, a restore or backup, takes the long gate instead, also 1 per connection and 2 in
+all), so a DROP waiting on a lock never holds a metadata slot; Kill Process (`activity.kill`)
 runs there too, under gates of its own (1 per connection, 2 in all, waited for at most 5 s, then `BUSY`), so it never queues behind a
 DROP that may be waiting on the very session it kills. `live` takes no slot either: a live subscription samples on its
 own task, and its statements, like those of a unary method on lane `live` (`activity.details`, through
@@ -230,9 +231,9 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `results.copy` | main only (`varia:results-copy`) | stream, with EVENTs | results | 120 s |
 | `results.export` | main only (`varia:results-save`) | unary with EVENTs | results | none, and no backstop: only CANCEL (reason 1) ends it |
 | `scripting.script` | invoke; cancelled with `cancelScripting` | unary | metadata | 60 s; the backend answers its own 55 s budget as an `error: TIMEOUT` value |
-| `actions.describe` | invoke; cancelled with `cancelObjectActions` | unary | metadata | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (reads wait at most 10 s for a lock: `BLOCKED`) |
+| `actions.describe` | invoke; cancelled with `cancelObjectActions` | unary | metadata | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (reads wait at most 10 s for a lock: `BLOCKED`). The server file picker (`dialog: 'serverFiles'`): 15 s around the backend's 10 s budget per listing. Restore Database (`dialog: 'restoreDatabase'`): 130 s around the backend's 120 s budget for reading backup media |
 | `actions.script` | invoke; cancelled with `cancelObjectActions` | unary | metadata | 30 s; the backend answers its own 25 s budget as an `error: TIMEOUT` value |
-| `actions.execute` | invoke; cancelled with `cancelObjectActions` (Stop) | unary | actions | none, and no backstop: DDL waits for locks as SSMS does, and only CANCEL (reason 1) ends it, answered with its steps once SQL Server has ended the statement and the action's compensation and cleanup steps have run (at most 10 s plus its `cleanupMs` later). Sensitive (frame zeroed). Main checks the answer (`actionExecuteResultSchema`: each step's title, message, detail and progress bounded). Never re-sent |
+| `actions.execute` | invoke; cancelled with `cancelObjectActions` (Stop); progress through `onActionProgress` | unary with EVENTs | actions | none, and no backstop: DDL waits for locks as SSMS does, and only CANCEL (reason 1) ends it, answered with its steps once SQL Server has ended the statement and the action's compensation and cleanup steps have run (at most 10 s plus its `cleanupMs` later). A long action's steps send droppable `action.progress` EVENTs (below), and while one is pending main closes its generation with a grace of 10 s plus its `cleanupMs` plus 5 s (`drainMs`, `actionDrainMs`), because the backend's shutdown stops it and waits for its cleanup. Sensitive (frame zeroed). Main checks the answer (`actionExecuteResultSchema`: each step's title, message, detail and progress bounded). Never re-sent |
 | `ssis.describe` | invoke; cancelled with `cancelSsis` | unary | ssis | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (reads wait at most 5 s for a lock, the profile's role checks 1 s: `BLOCKED`) |
 | `ssis.execute` | invoke; cancelled with `cancelSsis` (Stop) | unary | ssis | none, and no backstop: a write waits for locks as SSMS does, and only CANCEL (reason 1) ends it, answered with its steps once SQL Server has ended the statement (at most 10 s later); its preflight answers its own 25 s budget as `error: TIMEOUT` (10 s lock timeout: `BLOCKED`). Sensitive (frame zeroed). Never re-sent. Create Catalog: Stop ends it at any statement but its restore, and its reply waits (past the grace, a disconnect included) for the restore to end and for the removal of what was created; while one is pending, main closes its generation with a 130 s grace instead of 2 s (`drainMs`), because the backend's shutdown waits up to 120 s for it |
 | `ssis.catalogSetup` | invoke; cancelled with `cancelSsis` | unary | ssis | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (10 s lock timeout: `BLOCKED`) |
@@ -329,14 +330,14 @@ the same connection; describe and script use `LOCK_TIMEOUT 10000`. A lost backen
 renderer reports as an unknown outcome ("Refresh Object Explorer to check"), since main never sends a request twice.
 Failures the user can act on are `result.error` values, not envelope codes: `NOT_FOUND`, `NOT_SUPPORTED` (also every
 action on Azure SQL Database, before any connection opens), `PERMISSION_DENIED`, `IN_USE`, `BLOCKED`, `DEPENDENTS`,
-`NAME_IN_USE`, `DATABASE_UNAVAILABLE`, `TIMEOUT`, `CONNECTION_LOST`, `SQL_ERROR`, `CANCELLED` (Stop), `AUTH_KERBEROS`,
+`NAME_IN_USE`, `PATH_NOT_FOUND` (the server file picker and backup files), `FILE_ACCESS` (a database or backup file SQL Server cannot open, or its service account may not read), `MEDIA` (backup media a restore cannot use), `DATABASE_UNAVAILABLE`, `TIMEOUT`, `CONNECTION_LOST`, `SQL_ERROR`, `CANCELLED` (Stop), `AUTH_KERBEROS`,
 `AUTH_UNSUPPORTED` and `AUTH_ENTRA` (docs/object-actions.md). `actions.execute` answers `{ steps: { status: done | failed | skipped |
-cancelled | rolledBack, message? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`: statements run in order and stop at the first
-failure. `rolledBack` marks a step that completed in a transaction a later failure or Stop rolled back (the table designer's
-Save, Unlock), whose message then names no step as completed. The backend's DryRun, which selects a statement instead of running it, exists only for the .NET checks and is
-not reachable from the wire. Delete Object's `actions.describe` answers `deleteTarget { name, type, owner?, warnings: { text,
-blocking }[], dependentsTruncated, isSnapshot?, sessions?, withTransaction?, blockers?: { sessionId, program?, host?,
-openTransaction }[], blockersTruncated?, closeConnectionsNote?, transactionTabs?, login?, mappings? }`: for a database, the session count
+cancelled | rolledBack, title, message?, detail?, compensates?, progress? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`: statements run
+in order and stop at the first failure. `rolledBack` marks a step that completed in a transaction a later failure or Stop rolled
+back (the table designer's Save, Unlock), whose message then names no step as completed. The backend's DryRun, which selects a statement instead of running it, exists only for
+the .NET checks and is not reachable from the wire. Delete Object's `actions.describe` answers `deleteTarget { name, type, owner?,
+warnings: { text, blocking }[], dependentsTruncated, isSnapshot?, sessions?, withTransaction?, blockers?: { sessionId, program?,
+host?, openTransaction }[], blockersTruncated?, closeConnectionsNote?, transactionTabs?, login?, mappings? }`: for a database, the session count
 (sessions in it or with a transaction in it, from any database), those with an open transaction, the sessions listed (at
 most 8, never the backend's own pooled sessions; program and host at most 128 characters) and `transactionTabs` (the
 session ids of Varia's query tabs holding an open transaction there, at most 1,000) need VIEW SERVER STATE, and
@@ -346,6 +347,33 @@ login (D4c), `login` is its facts (as `loginFacts` answers them, plus `ownedJobs
 ownedRoles, readOnly, ownedSecurables, grantedPermissions, canDrop }[] (≤ 100), mapped, checked, notChecked }` the database
 users mapped to its SID, read one database at a time within `loginLimits.scanMs`; a database not read (the server's total
 is read on its own) is counted in `notChecked`, never an error.
+
+**Action progress** (D1c). A long action (the catalogue's `long`: a restore, a verify, a backup) runs its DDL under the long
+gate (1 per Varia connection, 2 in all; the next waits up to 30 s, then `BUSY` "Another restore or backup is running on this
+connection.", or "Restores or backups are already running on other connections." when the two slots are taken elsewhere; the
+execute gate words its two cases the same way), not the execute gate, so a rename on the same connection still runs. Every
+action statement runs through a data reader, never `ExecuteNonQuery` (`tests/action-reader-lint.test.ts`), because SqlClient
+raises informational messages as they arrive only for a reader; SQL Server's message 3211 ("n percent processed.", from
+`STATS`) becomes the running step's percent, and a long action's request sends droppable `{ type: 'action.progress', step,
+percent }` EVENTs (`step` is the step's index in the reply, 0 – 519; `percent` 0 – 100): each step's start at once as percent 0,
+then its percents at most every 250 ms (`progressEventMs`, on a Stopwatch), a percent held inside the interval going out when it
+ends or before the next step's start. A Stop reaches a statement through `ActionService.StatementStop`, never SqlClient's token:
+once a statement has sent an informational message (a RESTORE's STATS), SqlClient's cancel from another thread waits until the
+statement ends (probed: a restore stopped at 5 % ran to 100 %), while from the reader's own thread it goes out at once, so the
+reader cancels at the next message (or, if none comes within a second, the Stop's thread after all), and the job's token is
+cancelled off the frame loop (`CancelAsync`), which would otherwise stop reading frames, PINGs included, until then. A
+statement whose Stop came before its reader reported the end is listed cancelled, never done: SqlClient now and then ends a
+cancelled statement's reader as if it had finished (query batches are handled the same way).
+3211 lines are not among the 32 kept messages; the reply's steps carry the last percent each
+reached (`progress`). Main checks each EVENT (`actionProgressEventSchema`); an invalid one is dropped, not a protocol failure,
+because failing the request would CANCEL a restore part way. It pushes `varia:actions-progress { requestId, step, percent }`
+(`actionProgressSchema`) only to the window that sent the request, at most 4 a second per request: a new step at once, and the
+latest percent held inside the interval when it ends, never after the request ended (`actionProgressRelay`); the preload's `onActionProgress(listener)` passes on only those three fields and returns its
+unsubscribe. The renderer's `ActionProgressService` keeps the latest percent of each request it tracks (at most 128) and fills
+the running step's progress bar in a `StepList`. Like `job.progress`, these EVENTs are per request and droppable, not periodic
+data (live data flows only through the results port). When a generation closes, the backend's CancelAll stops its long
+actions, and its shutdown waits (`DrainCommitted`, beside Create Catalog's) for each to end and run its cleanup steps, within 10 s
+plus its cleanup budget.
 
 **Integration Services** (docs/integration-services.md). The SSIS Catalog's tree is Object Explorer's: `explorer.children`
 serves the server's Integration Services Catalogs folder (from SQL Server 2016) and the catalog's folders, projects, packages
@@ -497,6 +525,75 @@ metadata lane. A script is at most 1,000,000 characters (`scriptChars`, main's q
 main's message box on its own channel, `varia:confirm-open-connections` (no payload, trusted senders only), answering
 `true` only for Yes.
 
+**Take Offline and Bring Online** (D3a) use the same three methods too, with no new method. `actions.describe { connectionId,
+requestId, dialog: 'takeOffline' | 'bringOnline', target: { kind: 'database', name } }` (a user database) answers `{ databaseState:
+{ name, identity: { id, created }, state, userAccess, readOnly, standby, sessions?, withTransaction?, sessionList: [{ sessionId,
+login?, program?, host?, openTransactions }] (≤ 8, names clipped to 128), sessionsTruncated, warnings }, elapsedMs }`, read in
+master after Take Offline's describe has closed the backend's own idle pooled connections in the database (as execute does
+before SET OFFLINE): the counts and the list then include every session left, this backend's query windows too, and are
+absent without VIEW SERVER STATE. It answers an `error` value instead where the action cannot run: `NOT_SUPPORTED` with the menu's reason in a
+state the catalogue's database rules grey it in (docs/object-actions.md), or for a snapshot; `PERMISSION_DENIED` without ALTER ANY
+DATABASE, dbcreator, ownership, or (while it is online) ALTER on the database (`HAS_PERMS_BY_NAME` on the database answers 0 to
+a login with no user in it, to sysadmin while another session holds it SINGLE_USER, and on a database that is not online). `actions.script` and `actions.execute` take `{ action: 'takeOffline', connectionId, requestId, target,
+dropConnections, identity? }` or `{ action: 'bringOnline', connectionId, requestId, target, identity? }` (`identity` as for
+Database Properties; `dropConnections` is Drop All Active Connections, `WITH ROLLBACK IMMEDIATE`, and only Take Offline and Detach take it).
+Execute repeats the describe's refusals and runs one step, `Take database offline`, `Close connections and take database
+offline` or `Bring database online`; without `dropConnections`, SET OFFLINE waits for other sessions until Stop. Bring Online
+adds a message when the database is still SINGLE_USER or RESTRICTED_USER, read under a 5 s budget of its own after SET ONLINE
+completed (left out if it cannot be read, so a late Stop never turns the success into `CANCELLED`). SQL Server's error 5011 (no ALTER on the database)
+answers `PERMISSION_DENIED`.
+
+**Detach Database** (D3b) uses the same three methods, with no new method. `actions.describe { …, dialog: 'detachDatabase',
+target: { kind: 'database', name } }` (a user database, SQL Server only: Azure SQL Database and Managed Instance answer
+`NOT_SUPPORTED` before any connection opens) answers the same `databaseState` as Take Offline's, read after closing the
+backend's own idle pooled connections in it, plus `files: [{ fileId, name, type: 'rows' | 'log' | 'filestream', path }]`
+(≤ 256 files, `detachFiles`; names clipped to 128 and paths to 260, `filePath`; from `sys.database_files` in an online database
+when `sys.master_files` shows none, and empty with a note when neither does), `filesTruncated`, and `confirmOffline: true`
+for a database that is not online (OFFLINE, EMERGENCY) on Windows. A login that is neither sysadmin nor in the database's
+db_owner role gets `PERMISSION_DENIED` from the describe and the execute. Its
+`warnings` are blocking for what makes `sp_detach_db` fail (replication, a database snapshot of it, an availability group,
+mirroring); on Linux a database that is not online adds a non-blocking note instead of `confirmOffline`, and on Windows a
+SQL Server login adds one about the files' access. `actions.script` and
+`actions.execute` take `{ action: 'detach', connectionId, requestId, target, dropConnections, updateStatistics,
+detachOffline?, identity? }` (both booleans required; `detachOffline` only for a database that is not online on Windows, which
+execute refuses as `NOT_SUPPORTED` without it; execute also refuses `updateStatistics: true` for a database that is not online,
+read-only or in standby; `updateStatistics` and `detachOffline` are refused on every other action). Execute
+repeats the describe's refusals and runs `Close existing connections` (`SET SINGLE_USER WITH ROLLBACK IMMEDIATE`, only with
+`dropConnections`) and `Detach the database` (`sp_detach_db @dbname, @skipchecks`, `'false'` when Update Statistics is
+checked); when the detach fails or is stopped after SINGLE_USER, a compensation step gives the database back the access it
+had (`Restore multi-user access` or `Restore restricted user access`, `compensates: true`). A detach step that failed or was
+stopped while SQL Server detached the database anyway (gone from `sys.databases`) is `done`, with SQL Server's error in
+`messages`. Once `Detach the database` is
+done, the result carries `filesKept`, the files read before it (≤ 256), and the backend forgets its pooled connections to the
+database. SQL Server's error 3703 (in use) answers `IN_USE` with the advice to close its connections or check Drop
+Connections, 3709 (a snapshot of it) `DEPENDENTS`, 3707 (suspect or recovery pending) `NOT_SUPPORTED`, and 7983 (DBCC DETACHDB without
+db_owner) `PERMISSION_DENIED`. When Update
+Statistics is cleared, Script adds a comment line, because SSMS's script leaves `@skipchecks` out.
+
+**Rename of a database** (D3c) uses the same methods too. Before it renames, the page sends `actions.describe { connectionId,
+requestId, dialog: 'renameDatabase', target: { kind: 'database', name } }` (a fact describe: no dialog opens), which answers
+`{ renameDatabase: { name, identity: { id, created }, userAccess, sessions?, withTransaction?, loginsDefaulting, canClose,
+connections }, elapsedMs }`, read in master after the backend's own idle pooled connections in the database were closed (the
+counts are absent without VIEW SERVER STATE; `loginsDefaulting` counts the logins whose default database it is; `canClose` is
+false on Managed Instance, which cannot set SINGLE_USER, and for a database already in single-user mode; `connections` lists the
+backend's connections to the same server by `SERVERPROPERTY('ServerName')`, this one first, at most 64, so the page counts and
+moves the query windows of a connection opened under another name for the same instance), or an `error` value where the rename
+cannot run: `NOT_SUPPORTED` for a database that is not online, read-only or standby (902), in an availability group, or on
+Managed Instance with `closeConnections`; `IN_USE` for a single-user database another session is in (MODIFY NAME would fail
+with 924, and SET SINGLE_USER would wait for it); `PERMISSION_DENIED` without CONTROL SERVER, ownership or ALTER on the
+database; `NAME_IN_USE`; `NOT_FOUND` for an identity that changed. The page sends the describe under the rename's own
+`requestId`, so the status bar's Stop cancels it (`cancelObjectActions`) before anything runs, and the execute that follows the
+describe (and the prompt) reuses that id once the describe has answered. The rename itself is
+`actions.execute { action: 'rename', connectionId, requestId, target, newName, closeConnections?, identity? }` (both only for a
+database; `identity` as for Database Properties). `closeConnections` runs `Close existing connections` (SINGLE_USER WITH
+ROLLBACK IMMEDIATE, unless the database is already single-user), `Rename` and `Restore multi-user access` (or `Restore
+restricted user access`); a failure or Stop after the first step runs a compensating step restoring the access under whichever
+name the database then has. Without it, `Rename` alone waits for other sessions until Stop: where SQL Server refuses MODIFY NAME
+at once as in use (5030) rather than queueing it, the backend tries it again each second until it completes or Stop. Once MODIFY
+NAME has completed, the reply carries `identity: { id, created }`, the database's identity under the new name, read in the action's
+connection just after (SQL Server gives a renamed database a new `create_date`); it is absent when it cannot be read within 5 s or
+the name now belongs to another database. Database Properties documents that follow the rename send it with their Apply.
+
 **Login actions** use the same three methods, with no new method. `actions.describe { connectionId, requestId, dialog:
 'loginFacts', target: { kind: 'login', name } }` runs the login preflight in the action's own connection, under READ UNCOMMITTED (its facts only advise; another
 session's open change to the login would otherwise hold the read until its lock timeout), and answers
@@ -589,6 +686,104 @@ created." (a Stop during a statement marks that step `cancelled` and the rest `s
 with no steps). The design reaches SQL Server only as one `nvarchar(max)` JSON parameter, which constant builder batches shred
 with OPENJSON (master needs compatibility level 130, else `NOT_SUPPORTED`). The largest design is far below the 4 MiB
 request body.
+
+**New Database** (D1b) uses the same three methods, again with no new method. `actions.describe { connectionId, requestId,
+dialog: 'newDatabase', target: { kind: 'server' } }` (only a server target; SQL Server only, `NOT_SUPPORTED` on Azure SQL
+Database and Managed Instance) answers `{ newDatabase: { model (model as `databaseProperties` describes it), dataPath, logPath,
+serverCollation, canCreate, masterLevel, linux }, elapsedMs }`, read in master. `actions.script` and `actions.execute` take
+`{ action: 'createDatabase', connectionId, requestId, target: { kind: 'database', name }, design: { owner?, files: [{ name,
+type: 'rows' | 'log' | 'filestream', filegroup?, sizeMb?, growth, path, fileName }] (2 to 256), filegroups: [{ name, type:
+'rows' | 'filestream' | 'memoryOptimized', readOnly?, isDefault?, autogrowAllFiles? }] (PRIMARY first, 1 to 256), collation?,
+containment: 'NONE' | 'PARTIAL', ledger?, options, scoped } }`, strict at every level (the design is read as the action's own
+type, so a table design's members are refused) and checked by `newDatabaseProblems` in main and `NewDatabaseValidator` in
+the backend: sizes are whole MB (data 1 – 16,777,215, 2,147,483,647 pages; log 1 – 2,097,152), growth 1 – 2,097,152 MB or
+1 – 100 %, a maximum no smaller than the size and, in MB, no smaller than the growth (SQL Server's 5169), file names the
+server's platform allows (no `\` on Linux either, which SQL Server there reads as a separator), distinct names and paths, every filegroup with a file, and
+options only those Database Properties sets but collation and containment, which CREATE DATABASE writes. Script answers
+CREATE DATABASE as SSMS lays it out, then Database Properties' ALTER statements, with `database: 'master'` and, as warnings,
+what OK would refuse; it runs nothing. Execute refuses those first (`NAME_IN_USE` for a database or file that exists,
+`PATH_NOT_FOUND` for a missing folder from SQL Server 2017, `NOT_FOUND` for an owner or collation, `PERMISSION_DENIED`
+without CREATE DATABASE), then runs "Create the database", each option's step, the filegroup steps and "Set the owner"; it
+never compensates, so a later failure leaves the database created and says so. The design reaches SQL Server only as one
+JSON parameter; a constant builder (`CreateDatabaseSql`, checked by its own `Lint` with the table designer's OPENJSON rules in
+`JsonBuilderLint`) shreds it with OPENJSON, quotes names with `QUOTENAME` and file names and paths on the server (`REPLACE`
+under a binary collation), writes sizes as typed numbers with a unit (KB up to 2,097,151 MB, since SQL Server reads a size as
+an int, and MB above), takes the collation only as
+`sys.fn_helpcollations()` names it, and runs the statement through `QUOTENAME(@db) + N'.sys.sp_executesql'` in master. It
+is a long run (`LongRunService`, kind `newDatabase`).
+
+The **server file picker** (Locate Backup File, Locate Database Files, Locate Folder) is `actions.describe` too, again with
+no new method: `{ connectionId, requestId, dialog: 'serverFiles', target: { kind: 'server' }, files: { purpose: 'backup' |
+'database' | 'log' | 'folder', path?, allFiles?, exists? } }` (`files` only with that dialog, `allFiles` never with `folder`,
+`exists` only with a path and no `allFiles`; a path
+is `serverPathSchema` in `src/shared/actions/schema.ts` and `ServerPath.Valid` in C#: 1 – 260 UTF-16 code units, well formed,
+no control characters or `*?"<>|`, a drive, a share or `/`). It answers `{ serverFiles: { separator, path?, roots: [{ path,
+kind: 'drive' | 'folder', defaults?: ('data' | 'log' | 'backup')[], freeMb? }], entries: [{ name, directory, sizeBytes?,
+modified? }] (≤ 2,000, folders first), truncated, notice?: 'legacyEmpty' }, elapsedMs }`: with no path the drives (`/` on
+Linux) and default folders, else one level of the folder, typed with the server's separator. With `exists` it checks the
+path itself, for a typed name a listing does not show (past its limit or outside the type filter): `path` is the path
+checked and `entries` its own entry, or none (`legacyEmpty` when SQL Server 2016 will not tell a login outside sysadmin).
+Its deadline is a function of the request (`methodPolicies`), 15 s instead of 45 s. Listings run under a gate of their
+own, one per connection (`browsePerConnection`), outside the describe and script gates: SQL Server honours the attention
+only once a file-system call returns (about 21 s for an unreachable share), so a listing past its budget keeps its gate
+until then, and the picker runs one listing at a time and cancels those it no longer needs. A missing folder, a file or
+another platform's path is `PATH_NOT_FOUND`; Azure SQL Database and Managed Instance are `NOT_SUPPORTED` before any
+connection opens.
+
+**Attach Databases** adds no method either. Its describe is `{ dialog: 'attachDatabase', target: { kind: 'server' },
+attach?: { mdf } }` (`attach` only with that dialog; `mdf` a server path as above): without `attach` it answers
+`{ attachDatabase: { server: { logins (≤ 1,024), loginsTruncated, separator, dataPath? } } }`, and with it also
+`database: { mdf, databaseName, version?, files: [{ original, type: 'data' | 'log', current, found? }] (≤ 1,000, by file
+id) }`, read with `DBCC CHECKPRIMARYFILE (@mdf, n)` (the path bound, never spliced) and each file checked as the picker's
+`exists` checks one (`found` absent where SQL Server 2016 will not say, and for a share or device path the file records,
+which is never probed). It runs on the picker's gate and the describe budget. A file that is not primary, or a database
+newer than master's version, is `NOT_SUPPORTED`; one SQL Server cannot open is `FILE_ACCESS` (5120, 5123), a login outside
+sysadmin `PERMISSION_DENIED` (2571). Its `actions.script` and `actions.execute` are `{ action: 'attach', target: { kind:
+'server' }, databases: [{ name, owner?, files: path[] (1 – 1,000, none twice), rebuildLog }] (1 – 16, no name twice) }`.
+Execute checks every database first (name free, owner's login present, CREATE ANY DATABASE, master at compatibility level
+130 or more, the primary file no newer than the server), then runs, per
+database, `Attach the database` (a builder batch: SQL Server builds `CREATE DATABASE … FOR ATTACH[_REBUILD_LOG]` from the
+name through `QUOTENAME` and one JSON array of paths, each quoted on the server) and, with an owner, `Set the database
+owner`; each step's `detail` is its database's name. After a failure or Stop, `Detach the database again` steps
+(`compensates: true`) detach, newest first, what this request attached (an attach Stop reached counts when a database of its
+name has its primary file), within the cleanup budget. Attach is a long run:
+the renderer registers it while the request is in flight.
+docs/object-actions.md lists the statements by version.
+
+Restore Database reads through `actions.describe` as well, with no new method: `{ connectionId, requestId, dialog:
+'restoreDatabase', target: { kind: 'server' }, restore: { kind: 'history', database? } | { kind: 'devices', devices } |
+{ kind: 'historyFiles', setId } | { kind: 'mediaFiles', devices, file } }` (`restore` only with that dialog; 1 – 64 devices,
+each a server path as above). It answers `{ restore: { server?, historyDatabases?, sets?, files?, …Truncated }, elapsedMs }`:
+msdb's history, `RESTORE LABELONLY` and `HEADERONLY` on the files, or one set's files (msdb's `backupfile` or
+`RESTORE FILELISTONLY`). Reading media can take long on a large striped set or a slow share, so its deadline is a function
+of the request too: 130 s around the backend's 120 s budget (`restoreLimits`), and these reads run 2 per connection under
+their own gate, outside the object actions' read gates, so a read held past its budget by an unreachable share never delays
+another dialog's describe. `actions.script` with the `restore` action takes the plan (`restore: { sets, relocate, recovery,
+… }`, at most 1,024 sets and 1,000 moves), is written on no connection, and answers the script SMO's restore plan would
+write (at most 4,000,000 characters, checked as it is written). `actions.execute` with `restore` (D1f) takes the same plan with
+`target: { kind: 'database', name }` and, over a database that exists, the `identity` the document read; it is a long action
+(the long gate, Stop, `action.progress` from `STATS`, the shutdown drain, a 30 s cleanup budget). Its preflight in the action's
+connection checks the identity, permission, the tail-log backup's conditions, the media's chain (`RestoreChain`), WITH REPLACE's
+case (`BACKUP_MISMATCH`), Close existing connections over a database that is not online (`DATABASE_UNAVAILABLE`) and the
+files it writes (`NAME_IN_USE`: another database's file, a file already on disk that is not the destination's, a standby or
+tail-log file over a database file), before anything changes; the reply adds `restored` (sys.databases, read once the steps are
+over) so the page names what a Stop or failure left: `{ state, userAccess }`, or `{ absent: true, filesLeft?, filesUnknown? }`
+when no database has the name (`filesLeft`, at most 16 paths, are files SQL Server left on disk after a cancelled RESTORE whose
+partly restored database Varia dropped; `filesUnknown` when their existence could not be checked), and no `restored` when
+the read failed.
+Restore Files and Filegroups (D1g) uses the same describes, where a set's file may carry `absent: true` (a file backup does not
+hold it), and the action `restoreFiles` in `actions.script` and `actions.execute`: `{ target: { kind: 'database', name }, identity,
+restoreFiles: { sets, files, filegroups, relocate, replace, restrictedUser, recovery, standbyFile?, logBackup?: { file } } }` (a full
+or file backup then its logs, at most 1,024 sets; at most 256 files and 256 filegroups, at least one of them; 1,000 moves; and at
+most 2,100 parameters in its RESTORE DATABASE; the identity is required, since the database must exist). It is a long action as
+Restore Database is; its preflight adds the files variant of the chain, that the backups are the database's own, that each file
+and filegroup is in the set and held by it (`NOT_FOUND`), SIMPLE's read-only rule, STANDBY over an online database, a log
+backup under SIMPLE and a PRIMARY file of an online or offline database (`NOT_SUPPORTED`), a plan that does not reach the
+database's log chain (`RESTORE_SEQUENCE`: a log backup taken after its last set, named from msdb where it can be read), a log
+backup of a database that is not online (`DATABASE_UNAVAILABLE`), and a log backup file already on the server (`NAME_IN_USE`).
+Its "Back up the log" step reads the log chain again and fails with `RESTORE_SEQUENCE` when a log backup was taken during the run. Its `restored` adds `filesRestoring` (logical names, at most 16): the database's files left
+RESTORING.
+docs/object-actions.md describes the planner, the steps and the limits.
 
 **New Login** (D2a, D2b) uses the same three methods. `actions.describe` with `dialog: 'newLogin'` and the server as target
 answers `{ newLogin }` (databases, each `{ name, state, accessible, readOnly }`, languages, server roles and the server's facts); with `dialog: 'loginDatabaseRoles'` and
@@ -1758,12 +1953,16 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Copy | 64 MiB of UTF-8 (estimated before any work; main cancels past 65 MiB received); DATA ≤ 1 MiB; 16 MiB initial credit; 120 s; one per window | backend and main |
 | Save Results As | one per window; 1 MiB writes; no deadline; suggested name ≤ 128 characters, path ≤ 32,767 | main and backend |
 | Job progress | EVENTs every ≥ 250 ms; pushed to the renderer ≤ 4 a second | backend and main |
+| Action progress | EVENTs every ≥ 250 ms besides each step's start, the last held one at the interval's end; pushed ≤ 4 a second per request (a new step at once, the latest held one at the interval's end); step 0 – 519, percent 0 – 100; the renderer tracks ≤ 128 requests | backend, main and renderer |
+| Long object actions | 1 per Varia connection, 2 in all, waited for ≤ 30 s, then `BUSY`; a closing generation waits 10 s plus the action's cleanup budget plus 5 s | backend and main |
 | Pending requests in main | 256 per generation plus 32 for control-lane methods; 32 MiB queued for stdin | main |
 | Connection environment | `environment` in the connection options: absent (None) or 1 – 32 characters after trimming, without control, format, line or paragraph separator characters; stored in `connections.json` (Set Connection Environment, `varia:connections-environment`, takes the same label and the live connection's options, and changes only that entry's label), never in the connection string | zod (main) and backend |
 | Session prompts | 1,024 queries, names ≤ 512 characters, 10 listed by name; 15 s for cancelled queries to stop | zod and renderer |
 | Files main opens | 32 at a time (an Open selection, the command line, a second instance, macOS open-file, a drop); paths ≤ 4,096 characters; errors ≤ 600 characters; change checks 2 comparisons at a time (counting those that outlived their 2 s) and none again for a file whose last one has not settled | zod and main |
 | Recent Files | 50 entries in `recent-files.json` (≤ 256 KiB); 1 – 24 shown; names ≤ 260 characters; menu paths ≤ 60 | zod and main |
 | AutoRecover | 64 records and 256 MiB in `AutoRecover/`, 32 MiB each, read or written; text ≤ the kind's limit (5,000,000 characters for a query, 4,194,304 for a value); names ≤ 512, servers ≤ 256, databases ≤ 128, paths ≤ 4,096 characters; 256 ids a discard; every 1 – 60 minutes, kept 1 – 90 days | zod, renderer and main |
+| Server file picker | paths 1 – 260 UTF-16 code units, no U+0000 – U+001F or `*?"<>|`, absolute; ≤ 2,000 entries a folder (`truncated`), 10 s a listing (15 s deadline) | zod and backend |
+| Restore Database | 1 – 64 backup files, each a server path as above; ≤ 1,024 databases and 1,024 sets a history or media read (`…Truncated`); ≤ 256 sets and 1,000 moves a restore; a file restore ≤ 1,024 sets, 256 files and 256 filegroups, 2,100 parameters; set names ≤ 128, ids ≤ 36 characters, LSNs ≤ 25 digits, positions 1 – 32,767; 120 s a read (130 s deadline) | zod and backend |
 | Object Explorer requests | node names 1 – 128 UTF-16 code units, or a kind's own bound up to 260 (`maxName`, only for a kind without folders or rows of its own); other identity names, SSIS folders and projects included, 1 – 128; no U+0000; pages of 1 – 2,000 nodes; cursors ≤ 1,650 characters; 1 – 256 ids a cancel | zod and backend |
 | SSIS requests | folder, project, environment and other names 1 – 128 UTF-16 code units, package names 1 – 260, no U+0000; 1 – 64 ids a cancel; describe lists ≤ 2,048 rows, values ≤ 4,000 characters, answers ≤ about 4,000,000 bytes; revisions 64 lowercase hex characters, only for a write verb that takes one; Stop Operation ids 1 – 2^53 − 1; Create Catalog passwords 1 – 128 UTF-16 code units, no U+0000, no lone surrogate, and the server paths it reads ≤ 1,024 characters; error messages ≤ 2,048. `ssis.operations` args: kinds 1 – 4 and statuses 1 – 9, distinct; folder, project and caller 1 – 128, package 1 – 260; windowHours 1 – 8,760; limit 1 – 10,000 (100 – 10,000 in Tools › Options): a window of at most 10,000 rows, at most 20,000 (2 × limit) read a sample and as many open ones with a baseline, at most 256 open ids read again a sample | zod and backend |
 | Backend concurrency | 288 requests in flight; 8 metadata slots; 1,000 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads; SSIS reads 2 per connection and 4 in all, 256 registered; SSIS writes 1 per connection and 2 in all, 64 registered | backend |

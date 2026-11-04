@@ -19,7 +19,7 @@ function propertiesOf(open: PageProps['open']) {
 /** Why Login Properties cannot change the login (SQL Server's own logins), or undefined: every page says so and greys its controls,
  *  since OK is greyed whichever page is shown. */
 export function loginBlocked(open: PageProps['open']): string | undefined {
-  return open.dialog === 'loginProperties' && open.model ? definitionOf(open.dialog).blocked?.(open.model) : undefined
+  return open.dialog === 'loginProperties' && open.model && open.draft ? definitionOf(open.dialog).blocked?.(open.model, open.draft) : undefined
 }
 /** The blocked reason above a page's controls. */
 export function LoginBlockedNote({ open }: Pick<PageProps, 'open'>) {

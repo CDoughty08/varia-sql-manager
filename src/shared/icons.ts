@@ -25,6 +25,7 @@ export const svgIcons = {
   'execution-plan': { path: 'M2.5 2.5h4v4h-4ZM9.5 2.5h4v4h-4ZM9.5 9.5h4v4h-4ZM6.5 4.5h3M7.5 4.5v7h2', use: 'Execution plan documents.' },
   'agent-job': { path: 'M13.5 8a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0ZM7.5 4.5v4h3', use: 'SQL Server Agent: Object Explorer\'s running-jobs chip, and jobs (planned).' },
   'ssis-package': { path: 'M1.5 3.5h13v2h-13ZM2.5 5.5h11v8h-11ZM5.5 9.5h4.5M8.5 8l1.5 1.5-1.5 1.5', use: 'Integration Services packages (planned).' },
+  drive: { path: 'M2.5 9.5 4 3.5h8l1.5 6M3.5 9.5h9a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1ZM10.5 11.5h1', use: 'Drives in the server file picker.' },
   'ssis-environment': { path: 'M2.5 3.5h11M2.5 7.5h11M2.5 11.5h7M13.5 11.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Z', use: 'Integration Services environments (planned).' }
 } as const satisfies Record<string, { readonly path: string; readonly use: string }>
 export type SvgIconId = keyof typeof svgIcons
@@ -34,14 +35,14 @@ export const iconStroke = 1
 /** The codicons Varia draws; tests/icons.test.ts checks each exists in the bundled font. */
 export const codiconIcons = [
   'add', 'archive', 'arrow-left', 'arrow-small-down', 'bell', 'book', 'bookmark', 'case-sensitive', 'check', 'chevron-down', 'chevron-right',
-  'chevron-up', 'circle-filled', 'circle-outline', 'circle-slash', 'circuit-board', 'clear-all', 'clippy', 'close', 'close-all', 'cloud', 'code',
+  'chevron-up', 'circle-filled', 'circle-outline', 'circle-slash', 'circuit-board', 'clear-all', 'clippy', 'close', 'close-all', 'cloud', 'cloud-download', 'code',
   'collapse-all', 'comment', 'copy', 'debug-disconnect', 'debug-pause', 'debug-restart', 'debug-stop', 'device-camera', 'discard', 'edit', 'ellipsis',
-  'error', 'file', 'file-code', 'filter', 'filter-filled', 'folder', 'folder-library', 'folder-opened', 'git-compare', 'go-to-file', 'graph',
-  'graph-line', 'history', 'info', 'insert', 'json', 'law', 'layers', 'layout', 'link', 'list-flat', 'list-ordered', 'list-tree', 'loading', 'lock',
+  'error', 'export', 'file', 'file-code', 'filter', 'filter-filled', 'folder', 'folder-library', 'folder-opened', 'git-compare', 'go-to-file', 'graph',
+  'graph-line', 'history', 'info', 'insert', 'json', 'law', 'layers', 'layout', 'link', 'link-external', 'list-flat', 'list-ordered', 'list-tree', 'loading', 'lock',
   'milestone', 'multiple-windows', 'new-file', 'output', 'package', 'pass', 'person', 'play', 'plug', 'project', 'pulse', 'redo', 'references',
   'refresh', 'remote', 'remove', 'replace', 'save', 'save-all', 'save-as', 'screen-full', 'search', 'settings-gear', 'split-horizontal', 'star-empty',
   'star-full', 'symbol-color', 'symbol-constant', 'symbol-field', 'symbol-file', 'symbol-function', 'symbol-key', 'symbol-namespace', 'symbol-numeric',
-  'symbol-operator', 'symbol-parameter', 'symbol-ruler', 'symbol-snippet', 'symbol-structure', 'symbol-variable', 'tag', 'tools', 'trash',
+  'symbol-operator', 'symbol-parameter', 'symbol-ruler', 'symbol-snippet', 'symbol-structure', 'symbol-variable', 'sync', 'tag', 'tools', 'trash',
   'triangle-right', 'type-hierarchy', 'unlock', 'verified',
   'warning', 'watch', 'whitespace', 'window', 'word-wrap', 'workspace-trusted', 'zap', 'zoom-in', 'zoom-out'
 ] as const

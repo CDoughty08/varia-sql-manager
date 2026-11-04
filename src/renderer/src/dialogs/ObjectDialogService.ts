@@ -1,9 +1,9 @@
-import { actionLimits, dialogSpecs, dialogTitle, isModalDialog, unknownOutcomeMessage, type ModalDialogId, type PageId } from '../../../shared/actions/catalog.ts'
+import { actionLimits, dialogSpecs, dialogTitle, isCreateAction, isKindDialogAction, isModalDialog, isServerAction, objectActionSpecs, unknownOutcomeMessage, type ModalDialogId, type PageId } from '../../../shared/actions/catalog.ts'
 import { noScriptNotice } from '../../../shared/actions/database.ts'
 import { loginDatabaseRolesDescribe, loginLimits, type LoginDatabaseRoles, type NewLoginModel } from '../../../shared/actions/logins.ts'
 import { actionPrompts, promptTabFacts } from '../../../shared/actions/prompts.ts'
 import { loginEffectiveDescribe, securableKey, type EffectivePermissions, type SecurableRef } from '../../../shared/actions/securables.ts'
-import type { ActionError, ActionExecuteResult, ActionRequest, ActionStep, DeleteTarget } from '../../../shared/actions/schema.ts'
+import type { ActionDescribeRequest, ActionDescribeResult, ActionError, ActionExecuteResult, ActionRequest, ActionStep, DatabaseFileRef, DatabaseStateModel, DeleteTarget } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import type { FolderId } from '../../../shared/explorer/catalog.ts'
 import type { ExplorerNodeRef, ObjectRef } from '../../../shared/explorer/refs.ts'
@@ -18,11 +18,16 @@ import type { ExplorerMenuNode } from '../menus/targets'
 import { deliverScript, type DeliverScriptDeps } from '../scripting/deliver'
 import { scriptFileName, scriptObjectLabel } from '../scripting/ScriptingService'
 import type { LiveConnection } from '../services/connections'
+import type { ServerFilePick } from '../server-files/ServerFilePickerService'
+import { filePathsText } from './database-gone'
 import { definitionOf, type BuiltRequest, type DialogConfirmation, type DialogContext, type DialogDraft, type DialogEffects, type DialogModel } from './definitions'
 import { emptySecrets, mappable, type SecretState } from './new-login'
 
-/** loading → ready, or loadFailed; OK → (confirming →) executing → closed, or failed (or stopped); a lost server → disconnected. */
-export type DialogPhase = 'loading' | 'ready' | 'loadFailed' | 'confirming' | 'scripting' | 'executing' | 'failed' | 'stopped' | 'disconnected'
+/**
+ * loading → ready, or loadFailed; OK → (confirming →) executing → closed (`succeeded` for a dialog that stays open on its
+ * steps), or failed (or stopped); a lost server → disconnected. Check Again reads the object again (`loading` with the model kept).
+ */
+export type DialogPhase = 'loading' | 'ready' | 'loadFailed' | 'confirming' | 'scripting' | 'executing' | 'succeeded' | 'failed' | 'stopped' | 'disconnected'
 export interface OpenObjectDialog {
   /** Changes with every dialog, so the frame remounts. */
   readonly id: number
@@ -30,6 +35,8 @@ export interface OpenObjectDialog {
   readonly connectionId: string
   /** The tree node it was opened for, which focus returns to. */
   readonly nodeId: number
+  /** It was opened on a folder (Databases › Attach…): the folder is its listing, and `target` is the folder's server. */
+  readonly folder?: boolean
   readonly target: ObjectRef
   /** The object as Object Explorer shows it. */
   readonly label: string
@@ -46,6 +53,9 @@ export interface OpenObjectDialog {
   readonly steps?: readonly ActionStep[]
   /** An info line for the message bar (a script delivered, informational messages). */
   readonly notice?: string
+  /** Delete Object on a database: Varia's query tabs whose session holds an open transaction there (A7), named as `promptTabFacts` bounds them. */
+  readonly tabsWithTransactions?: readonly string[]
+  readonly moreTabsWithTransactions?: number
   /** What the password fields hold (never their values), for dialogs with any (`definition.secrets`). */
   readonly secretState?: SecretState
   /** Why a window close, Disconnect or Restart was just refused while the dialog's long run runs: the dialog covers the banner. */
@@ -54,9 +64,6 @@ export interface OpenObjectDialog {
   readonly databaseRoles?: ReadonlyMap<string, DatabaseRolesLookup>
   /** Securables' Effective tab reads (Login Properties, `loadEffective`), by securableKey. */
   readonly effective?: ReadonlyMap<string, EffectiveLookup>
-  /** Delete Object on a database: Varia's query tabs whose session holds an open transaction there (A7), named as `promptTabFacts` bounds them. */
-  readonly tabsWithTransactions?: readonly string[]
-  readonly moreTabsWithTransactions?: number
   /** Delete Object on a login: Varia's other connections that sign in as it (critic D4-3), by their labels. */
   readonly loginConnections?: readonly string[]
   /** Counts the times the secret slot was emptied while the dialog stayed open (`spentSecrets`): the password fields, which keep their
@@ -67,8 +74,11 @@ export interface OpenObjectDialog {
 export type DatabaseRolesLookup = { readonly state: 'loading' } | { readonly state: 'ready'; readonly value: LoginDatabaseRoles } | { readonly state: 'failed'; readonly error: ActionError }
 /** One securable's effective permissions for the login, as the Effective tab reads them when it shows that securable. */
 export type EffectiveLookup = { readonly state: 'loading' } | { readonly state: 'ready'; readonly value: EffectivePermissions } | { readonly state: 'failed'; readonly error: ActionError }
-/** A database an action removed (D3 §8): the server as connected to, so its Properties documents can say where it was. */
-export interface DatabaseGone { readonly connectionId: string; readonly server: string; readonly database: string }
+/**
+ * A database an action removed (D3 §8): the server as connected to, so its Properties documents can say where it was. A
+ * detached one (D3b) carries the files it left on the server (`filesKept`, possibly none listed), which a deleted one never has.
+ */
+export interface DatabaseGone { readonly connectionId: string; readonly server: string; readonly database: string; readonly filesKept?: readonly DatabaseFileRef[] }
 export interface ObjectDialogSnapshot { readonly open?: OpenObjectDialog }
 export interface ObjectDialogServiceOptions {
   readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText' | 'confirmOpenConnections' | 'confirmAction'>
@@ -78,22 +88,25 @@ export interface ObjectDialogServiceOptions {
     reconcile(nodeId: number, options?: { readonly select?: ExplorerNodeRef }): void
     /** The tree's node for a server's folder, if it has been listed. */
     folderNode?(connectionId: string, owner: ObjectRef, folder: FolderId): number | undefined
-    /** The loaded folders of a kind under these databases (ExplorerService.loadedFolders), which an action's other changes reload. */
-    loadedFolders?(connectionId: string, folder: FolderId, databases: readonly string[]): readonly number[]
   }
-  /** New Login is a long run: while it runs, closing the window, disconnecting its server and Restart are refused. */
+  /** The server file picker a dialog's Add… and "…" buttons open (Attach Databases). */
+  readonly serverFiles?: { pick(request: ServerFilePick): Promise<string | undefined> }
+  /** The long-run registry: a dialog whose definition names a kind (Attach, New Login) registers its run while OK runs, so
+   *  closing the window, disconnecting its server and Restart are refused meanwhile. */
   readonly longRuns?: { begin(run: { readonly kind: LongRunKind; readonly connectionId: string; readonly server: string; refused?(message: string): void }): Disposable }
   readonly documents: DeliverScriptDeps['documents']
   readonly files: DeliverScriptDeps['files']
   readonly focusEditor?: () => void
+  /** A database a dialog took offline or brought online (DatabasePropertiesService follows it). */
+  readonly databaseState?: (connectionId: string, database: string, offline: boolean) => void
   readonly newId?: () => string
+  /** A success notice (Unlock Login's), as the object actions' toast; none without it. */
+  readonly notify?: (message: string) => void
   /** An action removed a database: its Properties documents turn orphan and a toast counts the query windows that used it. */
   readonly databaseGone?: (gone: DatabaseGone) => void
   /** The names of the open query tabs among these ids (query session ids), in tab order: Delete Object names those its describe found
    *  holding an open transaction in the database (A7), whatever database each tab is in. */
   readonly tabNames?: (ids: readonly string[]) => readonly string[]
-  /** A success notice (Unlock Login's), as the object actions' toast; none without it. */
-  readonly notify?: (message: string) => void
 }
 
 /** A password field of an object dialog. Their values live only in the service's secret slot, never in its snapshot. The old
@@ -124,6 +137,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   private lookup?: { readonly id: string; readonly dialog: number; readonly database: string }
   /** The Effective tab's read in flight, apart from both: it never waits for User Mapping's, nor cancels it. */
   private effectiveLookup?: { readonly id: string; readonly dialog: number; readonly key: string }
+  /** A page's own describes (Attach's Add, a path check), which Close and a disconnect cancel. */
+  private readonly extra = new Set<string>()
   private disposed = false
   /** The open dialog's password fields (New Login's Password and Confirm password): never published, cleared when the dialog
    *  closes, opens anew, succeeds or loses its server, and on dispose. Only ok() reads them. */
@@ -142,24 +157,25 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   }
 
   get current(): OpenObjectDialog | undefined { return this.getSnapshot().open }
-  /** Why OK cannot run for the open dialog's model (its definition's `unavailable`), or undefined. */
-  unavailable(open: OpenObjectDialog | undefined = this.current): string | undefined {
-    return open?.model ? definitionOf(open.dialog).unavailable?.(open.model, open.draft) : undefined
-  }
 
-  /** Opens `dialog` for an Object Explorer node and describes it; refused while another dialog is open. `patch` goes over its first
-   *  draft (a hand-off's). */
+  /** Opens `dialog` for an Object Explorer node and describes it; refused while another dialog is open. A folder's action
+   *  (Attach) opens on its folder, with the folder's server as the target. `patch` goes over its first draft (a hand-off's). */
   open(dialog: ModalDialogId, node: ExplorerMenuNode, patch?: Readonly<Record<string, unknown>>): void {
     if (this.disposed) return
     if (!isModalDialog(dialog)) throw new Error('That dialog opens as a document.')
     if (this.current) throw new Error('Close the open dialog first.')
     const definition = definitionOf(dialog)
-    const target = definition.targetOf ? definition.targetOf(node) : node.ref.type === 'object' ? node.ref.object : undefined
+    // A folder's action (Attach) opens on its folder and targets the folder's server; a create action (New Login) names its own
+    // target; any other acts on its node's object.
+    const action = dialogSpecs[dialog].action
+    const folder = isServerAction(action) || isCreateAction(action) || isKindDialogAction(action) ? undefined : objectActionSpecs[action].folder
+    const target = definition.targetOf ? definition.targetOf(node)
+      : node.ref.type === 'object' ? (folder ? undefined : node.ref.object) : folder && node.ref.folder === folder ? node.ref.owner : undefined
     const connection = this.options.connections.getSnapshot().find(item => item.id === node.connectionId && !item.lost)
     if (!target || !connection) throw new Error('Connect to the server first.')
-    const label = scriptObjectLabel(target)
+    const label = folder ? connection.server : scriptObjectLabel(target)
     const open: OpenObjectDialog = {
-      id: ++this.dialogs, dialog, connectionId: node.connectionId, nodeId: node.id, target, label, title: dialogTitle(dialog, label), server: connection.server,
+      id: ++this.dialogs, dialog, connectionId: node.connectionId, nodeId: node.id, ...folder ? { folder: true } : {}, target, label, title: dialogTitle(dialog, label), server: connection.server,
       ...(connection.login ? { login: connection.login } : {}), page: dialogSpecs[dialog].pages[0].id, phase: 'loading', ...(definition.secrets ? { secretState: emptySecrets } : {})
     }
     this.secrets.clear()
@@ -172,10 +188,24 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const open = this.current
     if (open && dialogSpecs[open.dialog].pages.some(item => item.id === page)) this.update(open, { page })
   }
-  updateDraft(patch: Partial<DialogDraft>): void {
+  /** Changes the draft, from a patch or from the draft as it is now (a page's async step, Attach's Add, reads the latest). */
+  updateDraft(patch: Partial<DialogDraft> | ((draft: DialogDraft) => Partial<DialogDraft>)): void {
     const open = this.current
-    if (open?.draft && open.phase !== 'executing' && open.phase !== 'disconnected') this.update(open, { draft: { ...open.draft, ...patch } })
+    if (!open?.draft || open.phase === 'executing' || open.phase === 'disconnected' || open.phase === 'succeeded') return
+    this.update(open, { draft: { ...open.draft, ...typeof patch === 'function' ? patch(open.draft) : patch } as DialogDraft })
     this.recheckProblem()
+  }
+  /** Why OK cannot run now with the dialog's draft (its definition's `blocked`: Attach's missing data file, Take Offline's
+   *  sessions), beside OK, which it disables; none once the dialog cannot run anything. */
+  blockedReason(open: OpenObjectDialog | undefined = this.current): string | undefined {
+    return open?.model && open.draft && open.phase !== 'succeeded' && open.phase !== 'loadFailed' && open.phase !== 'disconnected' ? definitionOf(open.dialog).blocked?.(open.model, open.draft) : undefined
+  }
+  /** Check Again: reads the object again, keeping the draft, as SSMS counts connections when its dialog opens. */
+  reload(): void {
+    const open = this.current
+    if (!open || !open.model || (open.phase !== 'ready' && open.phase !== 'failed' && open.phase !== 'stopped')) return
+    this.update(open, { phase: 'loading', error: undefined, notice: undefined })
+    void this.describe(open)
   }
   /** A password field changed: its value goes to the secret slot, and the snapshot learns only whether it is empty, matches its
    *  confirmation and is well formed. Ignored while OK runs, after the server is lost, or in a dialog without password fields. */
@@ -280,6 +310,30 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     this.update(current, { effective: new Map(current.effective ?? []).set(key, failure || !value ? { state: 'failed', error: failure! } : { state: 'ready', value }) })
   }
 
+  /** The server file picker for the open dialog's server (Attach's Add… and "…"): the chosen path, or undefined. */
+  async pickServerFile(request: Omit<ServerFilePick, 'connectionId'>): Promise<string | undefined> {
+    const open = this.current
+    if (!open || !this.options.serverFiles || open.phase === 'executing' || open.phase === 'disconnected') return undefined
+    const path = await this.options.serverFiles.pick({ ...request, connectionId: open.connectionId })
+    return this.current?.id === open.id && this.current.phase !== 'disconnected' ? path : undefined
+  }
+
+  /**
+   * A describe beyond the dialog's first, for its page (Attach's Add reads one .mdf; a typed path is checked with the server
+   * file picker's `exists`): on the dialog's server and target. Its answer, or undefined when the dialog closed or its server
+   * went meanwhile; Close and a disconnect cancel it in the backend.
+   */
+  async describeMore(request: Pick<ActionDescribeRequest, 'attach' | 'files'> & { readonly dialog?: ActionDescribeRequest['dialog'] }): Promise<ApiResult<ActionDescribeResult> | undefined> {
+    const open = this.current
+    if (!open || this.disposed || open.phase === 'disconnected') return undefined
+    const requestId = this.newId()
+    this.extra.add(requestId)
+    const result = await this.call(() => this.options.api.describeObject({ connectionId: open.connectionId, requestId, dialog: request.dialog ?? open.dialog, target: open.target,
+      ...request.attach ? { attach: request.attach } : {}, ...request.files ? { files: request.files } : {} }))
+    this.extra.delete(requestId)
+    const current = this.current
+    return !this.disposed && current?.id === open.id && current.phase !== 'disconnected' ? result : undefined
+  }
   /** For tests: whether the secret slot holds a value, which only an open dialog's password fields put there. */
   get holdsSecrets(): boolean { return this.secrets.size > 0 }
 
@@ -308,18 +362,17 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   async ok(): Promise<void> {
     const open = this.current
     if (!open || open.phase === 'executing' || open.phase === 'scripting' || open.phase === 'loading' || open.phase === 'confirming') return
-    if (open.phase === 'disconnected' || open.phase === 'loadFailed' || !open.model || !open.draft) { this.close(); return }
+    if (open.phase === 'disconnected' || open.phase === 'loadFailed' || open.phase === 'succeeded' || !open.model || !open.draft) { this.close(); return }
     const definition = definitionOf(open.dialog)
-    // The frame greys OK and the page says why; Enter must not run it either.
-    if (definition.unavailable?.(open.model, open.draft)) return
+    // A hand-off (Unlock's Set a new password…) runs nothing here: unless OK is blocked, this dialog closes and the next one opens.
     const handOff = definition.handOff?.(open.model, open.draft)
-    if (handOff) { this.handOver(handOff); return }
+    if (handOff) { if (!this.blockedReason(open)) this.handOver(handOff); return }
     let built = definition.request(open.target, open.model, open.draft, open.secretState ?? emptySecrets)
     if (!built) { this.close(); return }
+    // A draft's own problem (Attach: a data file not found) shows in the message bar; a definition's other reasons (Take Offline:
+    // sessions still connected) keep OK disabled with the reason beside it, so Enter does nothing either.
     if ('problem' in built) { this.showProblem(open, built.problem); return }
-    // OK is greyed then; Enter still reaches here, and nothing is sent.
-    const blocked = definition.blocked?.(open.model)
-    if (blocked) { this.update(open, { error: error('NOT_SUPPORTED', blocked) }); return }
+    if (this.blockedReason(open)) return
     const context = this.context(open)
     const confirmation = definition.confirm?.(open.model, built, context)
     if (confirmation) {
@@ -334,6 +387,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const requestId = this.begin(open)
     this.update(open, { phase: 'executing', error: undefined, notice: undefined, steps: undefined })
     const sent: BuiltRequest = built, draft = open.draft
+    // A long run (Attach, New Login): closing the window, disconnecting its server and Restart are refused until it ends, and
+    // the dialog, which covers the command banner, says so.
     const run = definition.longRun ? this.options.longRuns?.begin({ kind: definition.longRun, connectionId: open.connectionId, server: open.server, refused: refusal => this.update(open, { refusal }) }) : undefined
     let result: ApiResult<ActionExecuteResult>
     try {
@@ -347,22 +402,25 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     if (!this.end(open, requestId)) return
     const value: ActionExecuteResult | undefined = result.ok ? result.value : undefined
     if (value && definition.removesDatabase?.(open.target, value.steps, !value.error) && open.target.name !== undefined) {
-      const gone = { connectionId: open.connectionId, server: open.server, database: open.target.name }
+      const gone = { connectionId: open.connectionId, server: open.server, database: open.target.name, ...open.dialog === 'detachDatabase' ? { filesKept: value.filesKept ?? [] } : {} }
       try { this.options.databaseGone?.(gone) } catch (failure) { onUnexpectedError(failure) }
     }
     if (value && !value.error) {
       this.secrets.clear()
       this.cancelLookup()
-      this.publish({})
-      try { definition.afterSuccess(this.effects(open), sent, { target: open.target, label: open.label }, open.model, context) } catch (failure) { onUnexpectedError(failure) }
+      // SQL Server's informational messages (a database left SINGLE_USER) stay readable in a dialog that stays open.
+      if (definition.keepOpen) this.update(open, { phase: 'succeeded', steps: value.steps, ...(value.messages.length ? { notice: value.messages.join(' ') } : {}) })
+      else this.publish({})
+      try { definition.afterSuccess(this.effectsOf(open), sent, { target: open.target, label: open.label }, open.model, context) } catch (failure) { onUnexpectedError(failure) }
       this.reconcileChanged(open, open.model, value.steps)
       return
     }
     // Steps that completed before a failure or Stop changed the object (a database dropped, then its history step
-    // stopped), so the listing shows what is there now; a dialog that creates an object shows it where it is listed.
-    const partial = !!value?.steps.some(step => step.status === 'done')
+    // stopped), so the listing shows what is there now; so may a step Stop reached after SQL Server finished it (an attach). A
+    // dialog that creates an object shows it where it is listed.
+    const partial = !!value?.steps.some(step => step.status === 'done' || step.status === 'cancelled')
     if (partial) {
-      const effects = this.effects(open)
+      const effects = this.effectsOf(open)
       try { if (definition.afterPartial) definition.afterPartial(effects, sent); else effects.refreshListing() } catch (failure) { onUnexpectedError(failure) }
       this.reconcileChanged(open, open.model, value!.steps)
     }
@@ -370,12 +428,12 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const spent = partial ? this.spend(open, value!.steps) : undefined
     const withNote = (failure: ActionError): ActionError => spent ? { ...failure, message: failure.message + ' ' + spent.note } : failure
     // Stop: the backend answers once SQL Server has ended the statement, saying what completed before it.
-    if (value?.error?.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: withNote(value.error), steps: value.steps, ...spent?.patch }); if (partial) this.reload(open); return }
+    if (value?.error?.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: withNote(value.error), steps: value.steps, ...spent?.patch }); if (partial) this.reloadAfterPartial(open); return }
     if (!result.ok && result.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: error('CANCELLED', dialogMessages.stopped) }); return }
     const failure = value?.error ?? (!result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST') ? error('CONNECTION_LOST', unknownOutcomeMessage) : error('SQL_ERROR', result.ok ? 'The action failed.' : result.error))
     const model = spent?.patch.model ?? definition.afterFailure?.(open.model, failure) ?? open.model
     this.update(open, { phase: 'failed', error: withNote(failure), ...(value ? { steps: value.steps } : {}), ...spent?.patch, model })
-    if (partial) { this.reload(open); return }
+    if (partial) { this.reloadAfterPartial(open); return }
     // SSMS counts other connections when OK is pressed: when nothing ran and the fresh model needs the question this OK
     // did not ask, it is asked at once rather than on the next OK.
     if (!confirmation && model !== open.model && !value?.steps.some(step => step.status === 'done') && definition.confirm?.(model, built, this.context(open))) await this.ok()
@@ -405,6 +463,17 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     return { note: spent.note, patch: { model: spent.model, draft: spent.draft, secretState: emptySecrets, secretEpoch: (open.secretEpoch ?? 0) + 1 } }
   }
 
+  /** Detach Database's Copy paths: the files that stay on the server, one path per line, to the clipboard; the message bar says how it went. */
+  async copyPaths(): Promise<void> {
+    const open = this.current
+    const files = open?.dialog === 'detachDatabase' ? (open.model as DatabaseStateModel | undefined)?.files ?? [] : []
+    if (!open || files.length === 0) return
+    const result = await this.call(() => this.options.api.writeClipboardText(filePathsText(files)))
+    if (this.disposed || this.current?.id !== open.id) return
+    if (result.ok) this.update(open, { notice: files.length === 1 ? 'Copied 1 path.' : `Copied ${files.length.toLocaleString('en-US')} paths.` })
+    else this.update(open, { error: error('SQL_ERROR', result.error) })
+  }
+
   /** Stop: cancels the running action in SQL Server; the dialog reports Stopped, with what completed, when its answer comes. */
   stop(): void {
     const open = this.current, request = this.request
@@ -427,6 +496,7 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     if (this.request?.dialog === open.id) { this.cancel([this.request.id]); this.request = undefined }
     this.cancelLookup()
     this.secrets.clear()
+    this.cancelExtra()
     this.publish({})
     return true
   }
@@ -437,12 +507,14 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     if (this.request) this.cancel([this.request.id])
     this.request = undefined
     this.cancelLookup()
+    this.cancelExtra()
     this.disposed = true
     this.unsubscribe()
     this.clearListeners()
   }
 
   private async describe(open: OpenObjectDialog): Promise<void> {
+    // `open` is the dialog as it was when the read began: with a model only for Check Again.
     const requestId = this.begin(open)
     const result = await this.call(() => this.options.api.describeObject({ connectionId: open.connectionId, requestId, dialog: open.dialog, target: open.target }))
     if (!this.end(open, requestId)) return
@@ -450,10 +522,12 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const definition = definitionOf(open.dialog)
     const model = result.ok ? definition.modelOf(result.value) : undefined
     if (failure || !model) { this.update(open, { phase: 'loadFailed', error: failure ?? error('NOT_FOUND', 'The object could not be read.') }); return }
+    // Check Again keeps what the user chose; a hand-off's patch goes over the first draft.
     const patch = this.patch?.dialog === open.id ? this.patch.value : undefined
     this.patch = undefined
-    this.update(open, { phase: 'ready', model, draft: { ...definition.initialDraft(model, open.target), ...patch } as DialogDraft })
+    this.update(open, { phase: 'ready', model, draft: open.draft ?? { ...definition.initialDraft(model, open.target), ...patch } as DialogDraft })
     if (open.dialog === 'deleteObject' && open.target.kind === 'database') this.nameTabTransactions(open, (model as DeleteTarget).transactionTabs ?? [])
+    if (definition.runOnOpen && !open.model) await this.ok()
     if (open.dialog === 'deleteObject' && open.target.kind === 'login') {
       const labels = this.context(open).loginConnections
       if (labels) this.update(open, { loginConnections: labels })
@@ -464,7 +538,7 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
    * a login's Delete that dropped users and then failed would go on listing them as mapped). The failure and its steps stay shown;
    * a read that fails keeps the old model, and an answer that comes once OK runs again is dropped.
    */
-  private reload(open: OpenObjectDialog): void {
+  private reloadAfterPartial(open: OpenObjectDialog): void {
     const definition = definitionOf(open.dialog)
     if (!definition.reloadsAfterPartial?.(open.target)) return
     void (async () => {
@@ -493,12 +567,12 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
       }
     })().catch(onUnexpectedError)
   }
-  /** Reloads the loaded folders a reply's done steps changed besides the listing (definition.changedFolders). */
+  /** Reloads the folders a reply's done steps changed besides the listing (definition.changedFolders), where the tree has listed them. */
   private reconcileChanged(open: OpenObjectDialog, model: DialogModel | undefined, steps: readonly ActionStep[]): void {
     try {
       const changed = model && definitionOf(open.dialog).changedFolders?.(model, steps)
       if (!changed) return
-      for (const folder of this.options.explorer.loadedFolders?.(open.connectionId, changed.folder, changed.databases) ?? []) this.options.explorer.reconcile(folder)
+      for (const database of changed.databases) this.reloadFolder(open, { kind: 'database', name: database }, changed.folder)
     } catch (failure) { onUnexpectedError(failure) }
   }
   /** Names Varia's query tabs whose session the describe found holding an open transaction in the database (A7). */
@@ -542,13 +616,25 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     this.problem = undefined
     this.update(open, { error: undefined })
   }
-  private refreshListing(open: OpenObjectDialog): void {
-    const folder = this.options.explorer.listingFolderOf(open.nodeId)
-    if (folder !== undefined) this.options.explorer.reconcile(folder)
+  /** Reloads the folder the object is listed in, or the folder the dialog opened on, selecting `select` once it is listed. */
+  private refreshListing(open: OpenObjectDialog, select?: ExplorerNodeRef): void {
+    const folder = open.folder ? open.nodeId : this.options.explorer.listingFolderOf(open.nodeId)
+    if (folder === undefined) return
+    if (select) this.options.explorer.reconcile(folder, { select })
+    else this.options.explorer.reconcile(folder)
   }
-  private effects(open: OpenObjectDialog): DialogEffects {
+  private cancelExtra(): void {
+    if (!this.extra.size) return
+    this.cancel([...this.extra])
+    this.extra.clear()
+  }
+  /** What a definition's afterSuccess and afterPartial may do for this dialog. */
+  private effectsOf(open: OpenObjectDialog): DialogEffects {
     return {
-      refreshListing: () => this.refreshListing(open), reveal: (folder, object) => this.reveal(open, folder, object), reload: (owner, folder) => this.reloadFolder(open, owner, folder),
+      refreshListing: select => this.refreshListing(open, select),
+      reveal: (folder, object) => this.reveal(open, folder, object),
+      reload: (owner, folder) => this.reloadFolder(open, owner, folder),
+      databaseState: offline => { if (open.target.kind === 'database' && open.target.name !== undefined) this.options.databaseState?.(open.connectionId, open.target.name, offline) },
       notify: message => this.options.notify?.(message)
     }
   }
@@ -569,6 +655,7 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     if (this.request?.dialog === open.id) { this.cancel([this.request.id]); this.request = undefined }
     this.cancelLookup()
     this.secrets.clear()
+    this.cancelExtra()
     // An action that was running may or may not have finished.
     this.update(open, { phase: 'disconnected', error: error('CONNECTION_LOST', open.phase === 'executing' ? unknownOutcomeMessage : dialogMessages.disconnected) })
   }

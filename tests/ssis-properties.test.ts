@@ -482,7 +482,7 @@ describe('SSIS properties view', () => {
     const focused: string[] = []
     const control = { focus: () => { focused.push('refresh'); active = control as unknown as Element } }
     const root = { querySelector: (selector: string) => !loading && selector.startsWith('button') ? control : null } as unknown as HTMLElement
-    const host: SsisFocusHost = { root: () => root, activeElement: () => active, body: () => body, modalOpen: () => false, frame: callback => { frames.push(callback); return () => {} } }
+    const host: SsisFocusHost = { root: () => root, activeElement: () => active, body: () => body, focusHeld: () => false, frame: callback => { frames.push(callback); return () => {} } }
     const run = () => frames.splice(0).forEach(frame => frame())
     const finish = () => { loading = false; [...listeners].forEach(listener => listener()); run() }
     const focuser = ssisFocuser(documents, host)

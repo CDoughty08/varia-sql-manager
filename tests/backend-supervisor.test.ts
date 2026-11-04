@@ -391,7 +391,7 @@ describe('smoke-test backends', () => {
     expect(backendSpawnSpec({ ...base, smokeTest: true, env })).toEqual({ command: process.execPath, args: ['--disable-warning=ExperimentalWarning', join(base.root, 'tests/fixtures/backend.mjs'), 'workbench'], cwd: base.root, packaged: false })
     expect(backendSpawnSpec({ ...base, smokeTest: true, env: { ...env, VARIA_TEST_BACKEND: 'crash-after:2' } }).args.slice(-2)).toEqual(['crash-after', '2'])
     expect(backendSpawnSpec({ ...base, smokeTest: false, env })).toMatchObject({ command: 'dotnet', requires: join(base.root, 'backend/Varia.Backend/bin/Debug/net10.0/Varia.Backend.dll') })
-    expect(backendSpawnSpec({ ...base, packaged: true, smokeTest: true, env })).toMatchObject({ args: [], packaged: true })
+    expect(backendSpawnSpec({ ...base, packaged: true, smokeTest: true, env })).toMatchObject({ args: [], cwd: base.resourcesPath, packaged: true })
     expect(() => backendSpawnSpec({ ...base, smokeTest: true, env: { ...env, VARIA_TEST_NODE: 'node' } })).toThrow('absolute VARIA_TEST_NODE')
   })
   it('passes the OS locale to the real backend, which dates script headers in it', () => {
@@ -497,6 +497,18 @@ describe('BackendSupervisor results', () => {
     const descriptor = { resultId: 4, index: 0, batchNumber: 1, iteration: 1, kind: 'rows', columns: [], rowsRead: 1, rowsStored: 1, rowsAvailable: 1, bytesStored: 1, truncatedCells: 0, state: 'complete', incomplete: false }
     last().send(FrameKind.RESPONSE, last().requests.at(-1)!.id, 0, { result: descriptor })
     expect(await synthetic).toEqual({ ...descriptor, generation: 1 })
+  })
+})
+
+describe('BackendSupervisor action progress', () => {
+  it('passes valid action.progress EVENTs on and drops the others without failing the action', async () => {
+    const value = supervisor('action-progress')
+    const progress: unknown[] = []
+    const params = { requestId: crypto.randomUUID(), connectionId: crypto.randomUUID(), action: 'delete', target: {} } as never
+    // Failing on an invalid EVENT would CANCEL the request, which for a restore means stopping it part way.
+    const result = await value.request('actions.execute', params, { onActionProgress: event => { progress.push(event) } })
+    expect(result).toEqual({ steps: [{ status: 'done', title: 'Back up', progress: 50 }] })
+    expect(progress).toEqual([{ type: 'action.progress', step: 0, percent: 5 }, { type: 'action.progress', step: 1, percent: 50 }])
   })
 })
 

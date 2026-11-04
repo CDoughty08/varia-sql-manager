@@ -77,8 +77,9 @@ internal sealed partial class ActionService
 
     /// <summary>Login Properties' describe, in master on the describe's own connection: the login's facts (ActionSql.LoginAlter, which
     /// reads nothing it owns), its default database and language and server roles (LoginSql.PropertiesRead), a SQL Server login's
-    /// lock-out state (ActionSql.LoginLock, critic A15), New Login's lists, and the users mapped to it in each database this connection
-    /// may read, within the scan's budget; a database it did not read is listed as not read.</summary>
+    /// lock-out state (ActionSql.LoginLock, critic A15), New Login's lists, the users mapped to it in each database this connection
+    /// may read, within the scan's budget (a database it did not read is listed as not read), and, for a Windows login, the services
+    /// that run as it (ActionSql.LoginService).</summary>
     private async Task<ActionDescribeResult> DescribeLoginPropertiesJobAsync(SqlConnection connection, ServerProfile profile, ObjectRefDto target, int band, CancellationToken token)
     {
         var (facts, row) = await LoginAsync(connection, target.Name!, null, null, token);
@@ -107,9 +108,12 @@ internal sealed partial class ActionService
         var (users, _, databases, _) = await ScanAsync(connection, SidBytes(facts), LoginSql.PropertiesMappedUser, (int)catalog.Logins.Limit("databases"), ScanBudget, token,
             (database, _, _, reader) => new LoginMappedUserDto(database, reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1), reader.GetBoolean(2)));
         var read = databases.Where(database => database.Checked).Select(database => database.Name).ToList();
+        // Status' Disabled or Deny asks first when a service runs as the login (loginStatusConfirm), as the loginFacts describe
+        // tells Disable; without it the prompt could never name the service.
+        var service = facts.Type.Trim() == "U" ? await LoginServiceAsync(connection, row!.Text("name") ?? target.Name!, token) : null;
         // SQL Server's own logins never change here, so their Securables page reads nothing (SSMS's SecurablePermissions = null).
         var (permissions, permissionsTruncated) = facts.Subtype == "system" ? (new List<ExplicitPermissionDto>(), false) : await ExplicitPermissionsAsync(connection, facts.PrincipalId, token);
-        return new(null, 0, NewLogin: model, Login: facts, Lock: state,
+        return new(null, 0, NewLogin: model, Login: facts with { Service = service }, Lock: state,
             LoginProperties: new(defaultDatabase, language, [.. roles.Take(limit)], roles.Count > limit, users, read, permissions, permissionsTruncated));
     }
 
@@ -123,7 +127,9 @@ internal sealed partial class ActionService
             command.CommandText = LoginSql.LoginSid;
             command.CommandTimeout = 0;
             Add(command, "@name", SqlDbType.NVarChar, 128, login);
-            sid = await command.ExecuteScalarAsync(token) as byte[];
+            // A reader, as every action statement runs (tests/action-reader-lint.test.ts).
+            await using var found = await command.ExecuteReaderAsync(token);
+            sid = await found.ReadAsync(token) && !found.IsDBNull(0) ? (byte[])found.GetValue(0) : null;
         }
         if (sid is null) return (null, [], Error("NOT_FOUND", "The login " + ScriptingErrors.Display(login) + " no longer exists. Refresh Object Explorer."));
         await using var read = connection.CreateCommand();
@@ -326,7 +332,8 @@ internal sealed partial class ActionService
             Add(command, "@principal", SqlDbType.Int, 0, bound.PrincipalId ?? throw new InvalidOperationException("A login's binding needs its principal_id."));
             Add(command, "@created", SqlDbType.DateTime, 0, bound.Created ?? throw new InvalidOperationException("A login's binding needs its create_date."));
         }
-        await command.ExecuteNonQueryAsync(token);
+        // Through a reader, as every action statement (ReadAllAsync): its THROW is the answer.
+        await ReadAllAsync(command, token);
     }
 
     /// <summary>A failure or Stop of Login Properties: 15151 (PERMISSION_DENIED) gets what to check, the old password when its step
