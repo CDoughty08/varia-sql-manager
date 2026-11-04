@@ -17,7 +17,7 @@ namespace Varia.Backend.Tests;
 /// the login's real state; errors as values (a name in use, a missing database and language, a Windows account, the password
 /// policy), none holding the password; no cached plan holding it; critic A24's checks that a held New Login keeps no SQL login
 /// out, a first sign-in included, and what an open transaction holding CREATE LOGIN or a role change would keep out; critic A14's
-/// unedited Script running nothing; and that the Extended Events check's events and fields exist. With VARIA_TEST_SQL_XE=1 too
+/// unedited Script running nothing; User Mapping (D2b, LoginMappingLiveChecks); and that the Extended Events check's events and fields exist. With VARIA_TEST_SQL_XE=1 too
 /// (CI's disposable container only, decision 14): an Extended Events session records RPCs and batches while New Login and Create
 /// Catalog's master key run, and must not hold either password (critic A16). Passwords are throwaway and never printed.</summary>
 internal static class LoginLiveChecks
@@ -262,6 +262,7 @@ internal static class LoginLiveChecks
         }
 
         await ScriptRunsNothingAsync(check, actions, info, scratch, Sql);
+        await LoginMappingLiveChecks.RunAsync(check, actions, info, scratch, Sql);
 
         await ExtendedEventsDefinedAsync(check, Sql);
         if (Environment.GetEnvironmentVariable("VARIA_TEST_SQL_XE") == "1") await ExtendedEventsAsync(check, actions, info, scratch, Sql, With, Create);

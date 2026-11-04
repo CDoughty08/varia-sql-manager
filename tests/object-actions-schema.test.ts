@@ -87,7 +87,7 @@ describe('object action request schemas', () => {
 describe('New Login requests (D2a)', () => {
   const server = { kind: 'server' } as const
   const sqlLogin = { auth: 'sql', name: 'app', defaultDatabase: 'master', checkPolicy: true, checkExpiration: true, mustChange: true }
-  const create = (changes: Record<string, unknown> = {}) => ({ action: 'createLogin', ...ids(), target: server, login: sqlLogin, serverRoles: [], status: { connect: 'grant', enabled: true }, ...changes })
+  const create = (changes: Record<string, unknown> = {}) => ({ action: 'createLogin', ...ids(), target: server, login: sqlLogin, serverRoles: [], mappings: [], status: { connect: 'grant', enabled: true }, ...changes })
   const executes = (value: unknown) => actionExecuteRequestSchema.safeParse(value).success
   const scripts = (value: unknown) => actionScriptRequestSchema.safeParse(value).success
   it('accepts hostile names verbatim, each auth, the policy chain, a quote in a password, and Windows DOMAIN\\name', () => {

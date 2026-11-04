@@ -213,6 +213,8 @@ internal sealed partial class ActionService : IDisposable
             catch (RequestException) { throw Invalid("target."); }
             return args.Target;
         }
+        // User Mapping reads any database, SQL Server's own included: a login may be mapped to master or msdb.
+        if (args.Dialog is not null && args.Dialog == catalog.Logins.RolesDescribe) return MappedDatabase(args.Target);
         if (args.Dialog is not null && designer.Describes.Contains(args.Dialog)) return DatabaseTarget(args.Target);
         if (args.Dialog is null || !catalog.Dialogs.ContainsKey(args.Dialog)) throw Invalid("dialog.");
         // New Login opens on the server: its action makes a login rather than acting on a row.
@@ -247,7 +249,7 @@ internal sealed partial class ActionService : IDisposable
         Ids(args.ConnectionId, args.RequestId);
         if (args.Secrets is not null && (script || !SecretActions.Contains(args.Action))) throw Invalid("this request takes no secrets.");
         if (args.Secrets is { } secrets) { Secret(secrets.Password, "password"); Secret(secrets.OldPassword, "oldPassword"); }
-        if (args.Action != "createLogin" && LoginMembers(args)) throw Invalid(args.Action + " takes no login, server roles or status.");
+        if (args.Action != "createLogin" && LoginMembers(args)) throw Invalid(args.Action + " takes no login, server roles, mappings or status.");
         if (args.Restore is not null && args.Action != "restore") throw Invalid("only a restore takes restore options.");
         if (args.DropConnections is not null && args.Action != "takeOffline") throw Invalid("only takeOffline takes dropConnections.");
         if (args.RestoreFiles is not null && args.Action != "restoreFiles") throw Invalid("only a file restore takes file restore options.");
@@ -343,7 +345,7 @@ internal sealed partial class ActionService : IDisposable
                 error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error), "Listing the folder", own: OwnGate.Browse);
         }
         if (args.Restore is not null) return DescribeRestoreAsync(args, token);
-        var action = designer.Describes.Contains(args.Dialog) ? designer.Requests.Single() : catalog.ActionOf(args.Dialog);
+        var action = designer.Describes.Contains(args.Dialog) ? designer.Requests.Single() : args.Dialog == catalog.Logins.RolesDescribe ? "createLogin" : catalog.ActionOf(args.Dialog);
         var reading = OnBrowseGate(args);
         return RunAsync(args.ConnectionId, args.RequestId, action, read: true, Options.DescribeBudget, token,
             async (connection, profile, band, job) => await (args.Dialog switch
@@ -354,6 +356,7 @@ internal sealed partial class ActionService : IDisposable
                 "newDatabase" => DescribeNewDatabaseJobAsync(connection, profile, band, job),
                 AttachDialog => DescribeAttachJobAsync(connection, args.Attach, profile.Linux, job),
                 "takeOffline" or "bringOnline" => DescribeStateJobAsync(connection, args.ConnectionId, target, action, band, job),
+                _ when args.Dialog == catalog.Logins.RolesDescribe => DescribeDatabaseRolesJobAsync(connection, target, job),
                 _ => DescribeJobAsync(connection, args.ConnectionId, profile.Explorer(explorer).ServerEngine, target, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error), reading ? "Reading the file" : "Reading the object", own: reading ? OwnGate.Browse : OwnGate.None);
@@ -362,7 +365,7 @@ internal sealed partial class ActionService : IDisposable
     public Task<ActionScriptResult> ScriptAsync(ActionArgs args, CancellationToken token)
     {
         var target = Validate(args, script: true);
-        if (args.Action == "createLogin") return Task.FromResult(ScriptNewLogin(args));
+        if (args.Action == "createLogin") return ScriptNewLoginAsync(args, token);
         // The restores' Script reads nothing: it is written from the request and the catalogue, on no connection and under no gate.
         if (catalog.Restore.Requests.Contains(args.Action))
         {
@@ -813,6 +816,10 @@ internal sealed partial class ActionService : IDisposable
         ActionTemplate.DropUser => "Drop the database user",
         ActionTemplate.DropRestoring => "Remove the partly restored database",
         ActionTemplate.AddServerRoleMember => "Add to a server role",
+        ActionTemplate.CreateUserForLogin => "Create a user",
+        ActionTemplate.AlterUserSchema => "Set the default schema",
+        ActionTemplate.CreateSchemaFor => "Create a schema",
+        ActionTemplate.AddRoleMember => "Add to a database role",
         ActionTemplate.SetOffline => "Take database offline",
         ActionTemplate.SetOfflineRollback => "Close connections and take database offline",
         ActionTemplate.SetOnline => "Bring database online",

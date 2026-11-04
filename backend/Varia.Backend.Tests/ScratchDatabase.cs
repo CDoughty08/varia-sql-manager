@@ -79,6 +79,12 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string SeamTaken => Name + "_seamt";
     /// <summary>Where the New Login checks (D2a) run Create Catalog's master key batch under the Extended Events check (created on demand).</summary>
     public string LoginsDatabase => Name + "_lgn";
+    /// <summary>Where the User Mapping checks (D2b) map New Login's logins (created on demand).</summary>
+    public string MappingDatabase => Name + "_lgm";
+    /// <summary>The User Mapping checks' offline database, which a mapping must not reach (created on demand).</summary>
+    public string MappingOffline => Name + "_lgmo";
+    /// <summary>The User Mapping checks' read-only database, which a mapping must not reach either (created on demand).</summary>
+    public string MappingReadOnly => Name + "_lgmr";
     /// <summary>A SQL login the New Login checks create, `tag` being 1 to 8 lowercase letters or digits; dropped on disposal once owned.</summary>
     public string LoginNamed(string tag) => Name + "_l" + tag;
     /// <summary>The New Login checks' Extended Events session (critic A16), dropped on disposal once owned.</summary>
@@ -128,10 +134,10 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
     // _live the live tables', _ssis the fake SSIS catalog, _ssisref the restored catalog backup and _ssiscc Create Catalog's
     // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _files is the server file picker's; _seam and _seamt are the wave 5 seam checks'; _nd is New Database's; _ap the action progress checks';
-    // _at, _at'] and _at2 Attach Databases'; _rst Restore Database's source, _rstf its forked source and _rstr where their plans are restored; _rfl Restore Files and Filegroups' database; _lgn New Login's; _dbs Take Offline's and
+    // _at, _at'] and _at2 Attach Databases'; _rst Restore Database's source, _rstf its forked source and _rstr where their plans are restored; _rfl Restore Files and Filegroups' database; _lgn New Login's, _lgm, _lgmo (offline) and _lgmr (read-only) its User Mapping's; _dbs Take Offline's and
     // Bring Online's (a crashed run can leave it offline, which the sweep drops by state); and _del, _delc, _delcs and _delo Delete parity's (D3d): an offline
     // database, a database with its snapshot, and the login's own.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_files|_seam|_seamt|_nd|_ap|_at|_at'\]|_at2|_rst|_rstr|_rstf|_rfl|_lgn|_dbs|_del|_delc|_delcs|_delo)?$")]
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_files|_seam|_seamt|_nd|_ap|_at|_at'\]|_at2|_rst|_rstr|_rstf|_rfl|_lgn|_lgm|_lgmo|_lgmr|_dbs|_del|_delc|_delcs|_delo)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^[a-z0-9]{1,8}\.(bak|trn)$")]
     private static partial Regex PartPattern();
@@ -627,6 +633,15 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
 
     /// <summary>New Login's database for the Extended Events check's master key batch.</summary>
     public Task<string> CreateLoginsDatabaseAsync() => CreateMarkedAsync(LoginsDatabase);
+    /// <summary>User Mapping's database, its offline one and its read-only one.</summary>
+    public async Task<(string Online, string Offline, string ReadOnly)> CreateMappingDatabasesAsync()
+    {
+        await CreateMarkedAsync(MappingDatabase);
+        await CreateMarkedAsync(MappingOffline);
+        await CreateMarkedAsync(MappingReadOnly);
+        await Exec("ALTER DATABASE " + Bracket(MappingOffline) + " SET OFFLINE WITH ROLLBACK IMMEDIATE;\nALTER DATABASE " + Bracket(MappingReadOnly) + " SET READ_ONLY WITH ROLLBACK IMMEDIATE;");
+        return (MappingDatabase, MappingOffline, MappingReadOnly);
+    }
     /// <summary>Records a login the checks are about to create (by <see cref="LoginNamed"/>), so disposal drops it.</summary>
     public string OwnLogin(string tag)
     {
@@ -648,7 +663,7 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
             await run("IF DB_ID(" + Quote(Attach) + ") IS NULL AND DB_ID(" + Quote(AttachAs) + ") IS NULL AND DB_ID(" + Quote(AttachMissing) + ") IS NULL CREATE DATABASE " + Bracket(Attach) + " ON "
                 + string.Join(", ", files.Select(file => "(FILENAME = " + Quote(file) + ")")) + " FOR ATTACH;", "master");
         // A failed state check can leave _dbs offline; SET ONLINE first lets the DROP delete its files.
-        foreach (var name in created) await Drop(run, name, name != Offline && name != DatabaseState && name != DeleteOffline);
+        foreach (var name in created) await Drop(run, name, name != Offline && name != DatabaseState && name != DeleteOffline && name != MappingOffline);
         // The restoring database's backup file (Linux) goes, then its history.
         if (restoringBackup is not null) await restoringBackup.ForgetAsync(run);
         // Restore Database's source files go, then its history; a file left behind keeps the history for the stale sweep.
