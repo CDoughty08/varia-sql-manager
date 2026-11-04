@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { shardSuites, smokeSuites } from '../scripts/smoke-shards.mjs'
+import { shardBudgetSeconds, shardSuites, smokeSuites, suiteSeconds } from '../scripts/smoke-shards.mjs'
 
 // CI's own contract (CLAUDE.md, Conventions): every job starts at once, so one run reports every suite it reaches, the
-// smoke suites run in shards that cover test:smoke exactly, and every pull request runs every platform. The workflow is
-// plain YAML in a fixed layout, so its jobs and steps are read by indentation.
+// smoke suites run in shards that cover test:smoke exactly and stay within their time budget, and every pull request runs
+// every platform in few enough jobs that two runs fit GitHub's concurrency for a public repository. The workflow is plain
+// YAML in a fixed layout, so its jobs and steps are read by indentation.
 
 interface Step { name: string; id?: string; if?: string; run: string; timeout?: number }
 interface Job { if?: string; needs?: string; runsOn?: string; timeout?: number; matrix: Map<string, string>; steps: Step[] }
@@ -46,6 +47,8 @@ function jobs(path: string): Map<string, Job> {
 const smoke = (step: Step) => /test:smoke|-smoke\.mjs|smoke-shards\.mjs/.test(step.run)
 const bench = (step: Step) => /npm run bench|check-bench/.test(step.run)
 const runAlways = "github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'"
+const mainOnly = "github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.regression-suite == 'none')"
+const liveGroups = Number(/CiGroups = (\d+);/.exec(readFileSync('backend/Varia.Backend.Tests/LiveGroups.cs', 'utf8'))?.[1])
 
 describe('CI workflow', () => {
   const workflow = jobs('.github/workflows/ci.yml')
@@ -58,12 +61,14 @@ describe('CI workflow', () => {
     }
     expect(own.filter(([, job]) => job.steps.some(smoke)).map(([name]) => name)).toEqual(['smoke-linux', 'smoke-windows'])
     expect(own.filter(([, job]) => job.steps.some(bench)).map(([name]) => name)).toEqual(['bench-linux', 'bench-desktop'])
-    // The checks run on every platform; the live checks and the Kerberos check after them on Linux, whichever fails.
+    // The checks run on every platform; the live checks in LiveGroups' groups, and the live vitest suites and the Kerberos
+    // check after the first group on Linux, whichever fails.
     expect(workflow.get('check')!.matrix.get('os')).toBe('ubuntu-24.04, windows-latest, macos-latest')
     expect(workflow.get('check')!.steps.find(step => step.run.trim() === 'npm run check')?.id).toBe('check')
-    const live = workflow.get('live')!.steps
-    expect(live.find(step => step.run.trim() === 'npm test')?.id).toBe('test')
-    expect(live.find(step => /kerberos-live/.test(step.run))?.if).toBe('success() || failure()')
+    const live = workflow.get('live')!
+    expect(live.matrix.get('group')!.split(', ').map(Number)).toEqual(Array.from({ length: liveGroups }, (_, index) => index + 1))
+    expect(live.steps.find(step => step.run.trim().endsWith('--live-group ${{ matrix.group }}/' + liveGroups))?.id).toBe('test')
+    for (const suite of ['tests/*-live.test.ts', 'kerberos-live']) expect(live.steps.find(step => step.run.includes(suite))?.if).toBe('matrix.group == 1 && (success() || failure())')
   })
   it('runs every smoke suite in exactly one shard, and later Linux suites after a shard failure too', () => {
     for (const name of ['smoke-linux', 'smoke-windows']) {
@@ -71,7 +76,10 @@ describe('CI workflow', () => {
       const command = job.steps.map(step => /smoke-shards\.mjs \$\{\{ matrix\.shard \}\}\/(\d+)/.exec(step.run)).find(Boolean)
       expect(Number(command?.[1]), name).toBe(shards.length)
       expect(shards, name).toEqual(shards.map((_, index) => index + 1))
-      expect(shardSuites(smokeSuites(), shards.length).flat().sort(), name).toEqual([...smokeSuites()].sort())
+      const seconds = suiteSeconds[name === 'smoke-windows' ? 'windows' : 'linux']
+      expect(shardSuites(smokeSuites(), shards.length, seconds).flat().sort(), name).toEqual([...smokeSuites()].sort())
+      // A slow new suite fails here rather than lengthening every run: speed it up, or add a shard.
+      for (const shard of shardSuites(smokeSuites(), shards.length, seconds)) expect(shard.reduce((sum, suite) => sum + seconds[suite], 0), name).toBeLessThanOrEqual(shardBudgetSeconds)
       expect(job.steps.find(step => step.run.trim() === 'npm run build:smoke')?.id, name).toBe('build')
     }
     const linux = workflow.get('smoke-linux')!.steps, first = linux.findIndex(smoke)
@@ -87,10 +95,17 @@ describe('CI workflow', () => {
       expect(job.timeout, name).toBeGreaterThan(steps)
     }
   })
-  it('runs every platform on every pull request, drafts included', () => {
+  it('runs every platform on every pull request, drafts included, in at most 10 jobs', () => {
     expect([...workflow.values()].map(job => job.if ?? '').filter(condition => /draft/.test(condition))).toEqual([])
-    for (const [name, job] of own) expect(job.if, name).toBe(runAlways)
-    const platforms = new Set(own.flatMap(([, job]) => job.runsOn === '${{ matrix.os }}' ? job.matrix.get('os')!.split(', ') : [job.runsOn!]))
+    // Only report-only work waits for main: the desktop benchmarks enforce no floors.
+    for (const [name, job] of own) expect(job.if, name).toBe(name === 'bench-desktop' ? mainOnly : runAlways)
+    const pullRequest = own.filter(([, job]) => job.if === runAlways)
+    const platforms = new Set(pullRequest.flatMap(([, job]) => job.runsOn === '${{ matrix.os }}' ? job.matrix.get('os')!.split(', ') : [job.runsOn!]))
     expect([...platforms].sort()).toEqual(['macos-latest', 'ubuntu-24.04', 'windows-latest'])
+    // GitHub runs 20 jobs at once for a public repository's account: two pull request runs, or one and main's, fit together.
+    const size = (job: Job) => [...job.matrix.values()].reduce((product, axis) => product * axis.split(',').length, 1)
+    expect(pullRequest.reduce((sum, [, job]) => sum + size(job), 0)).toBeLessThanOrEqual(10)
+    // Linux repeats at 1024x768 only on main: the Windows shards run those suites at that size on every pull request.
+    for (const step of workflow.get('smoke-linux')!.steps.filter(step => /1024x768x24/.test(step.run))) expect(step.if, step.name).toMatch(/github\.event_name == 'push'/)
   })
 })
