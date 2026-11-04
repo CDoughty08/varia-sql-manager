@@ -679,6 +679,15 @@ try {
   await expect(splitter).toHaveAttribute('aria-valuenow', '85')
   expect((await band()).share).toBeGreaterThan(0.8)
   await expect(tree()).toBeVisible()
+  // In a pane too short for the header, an 85% band and the footer, the band gives way and the footer stays in the pane.
+  const footerFits = () => page.locator(part.explorerSearch).evaluate(element => {
+    const pane = element.parentElement.getBoundingClientRect(), footer = element.parentElement.lastElementChild.getBoundingClientRect()
+    return footer.height > 0 && footer.bottom <= pane.bottom + 1
+  })
+  await page.locator(part.explorerSearch).evaluate(element => { element.parentElement.style.height = '160px' })
+  await expect.poll(footerFits).toBe(true)
+  await page.locator(part.explorerSearch).evaluate(element => { element.parentElement.style.height = '' })
+  await splitter.focus()
   await page.keyboard.press('ArrowUp')
   await expect(splitter).toHaveAttribute('aria-valuenow', '80')
   const box = await splitter.boundingBox(), column = await page.locator(part.explorerSearch).evaluate(element => { const r = element.parentElement.getBoundingClientRect(); return { top: r.top, height: r.height } })
