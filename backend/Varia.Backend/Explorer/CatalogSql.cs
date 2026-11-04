@@ -103,8 +103,8 @@ internal static partial class CatalogSql
     private const string ParentFound = "SELECT CONVERT(bit, CASE WHEN @object_id IS NULL THEN 0 ELSE 1 END);\nIF @object_id IS NULL RETURN;\n";
 
     // Metadata functions ignore the isolation level and LOCK_TIMEOUT, so the catalog is read through joins only. LOGINPROPERTY
-    // waits on a login another session alters even under READ UNCOMMITTED (D4 P8; its one exception will be ActionSql.LoginLock,
-    // D4d), and a password hash never leaves the server: no Varia SQL reads sys.sql_logins.password_hash or LOGINPROPERTY's
+    // waits on a login another session alters even under READ UNCOMMITTED (D4 P8; its one exception is ActionSql.LoginLock,
+    // D4d, whose own lint lifts it for allowlisted properties only), and a password hash never leaves the server: no Varia SQL reads sys.sql_logins.password_hash or LOGINPROPERTY's
     // PasswordHash and PasswordHashAlgorithm (critic A15; "PasswordHash" covers both). Every lint built on this list refuses them.
     internal static readonly string[] Builtins = ["OBJECT_NAME(", "OBJECT_SCHEMA_NAME(", "SCHEMA_NAME(", "TYPE_NAME(", "USER_NAME(", "SUSER_SNAME(", "SUSER_NAME(",
         "OBJECTPROPERTY", "COL_NAME(", "INDEX_COL(", "DATABASEPROPERTYEX(", "OBJECT_DEFINITION(", "LOGINPROPERTY(", "password_hash", "PasswordHash"];

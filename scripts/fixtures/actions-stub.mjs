@@ -32,7 +32,13 @@ import { explorerStatics } from './explorer-tree.mjs'
  * data file it recorded in D:\Old\, not found, and whose log it finds), Sales_2.ndf and Hr.mdf (whose log in D:\Old\ is not
  * found); any other file is not a primary one. An attach that includes Hr fails at Hr and detaches what it attached before
  * (Rolled Back); otherwise each database appears under Databases.
- * Security › Logins lists sa and every login New Login made. New Login describes a Windows server (master, AppData and the
+ * Security › Logins lists AppUser (two sessions), CONTOSO\Ops (a Windows group), Held, Retired (disabled, its CONNECT SQL
+ * denied), sa (the login the stub connects as) and SQL Server's own ##MS_PolicyTsqlExecutionLogin## (disabled). The
+ * loginFacts describe answers their facts; Disable and Enable change what Logins lists, except Held's, which wait until
+ * their Stop arrives; a login renamed to "Taken" is NAME_IN_USE. Every login New Login made is listed too. Locked (with the
+ * password policy) is locked out, AppUser enforces the policy and is not; the unlockLogin describe answers their lock-out state,
+ * and Unlock unlocks Locked.
+ * New Login describes a Windows server (master, AppData and the
  * offline Archive, the read-only Ledger, `longDatabase` and eight Warehouse databases, so User Mapping's grid scrolls; two
  * languages, three server roles); User Mapping's roles describe answers `databaseRoles` (with `longRole`; guest only in
  * master); its Script is `newLoginScript`; OK with the password "Weak" answers PASSWORD_POLICY at "Create the login", "Held"
@@ -45,6 +51,12 @@ import { explorerStatics } from './explorer-tree.mjs'
  * A database's rename (D3c) reads `renameSessions` other sessions (none at first) and renames it in the listings; a name
  * another database has (ignoring case, as SQL Server's default collation does) is refused with NAME_IN_USE, as the backend's
  * preflight refuses it, so a suite cannot leave two databases of one name in the tree.
+ * Delete Object on a login (D4c) lists its mapped users (AppUser's
+ * in AppData, and in Sales one that owns a schema; Retired's in AppData, with a note that SQL Server Agent runs as it; CONTOSO\Ops's
+ * in AppData; offline Archive not checked where a login has users) and warns about AppUser's sessions, whose Delete answers IN_USE
+ * before any step; CONTOSO\Ops's Delete drops its user and then fails the login's DROP (a session signed in meanwhile), after
+ * which its describe lists no user; any other login's Delete drops the users it may when asked, then the login, and leaves
+ * Logins; its script is `loginDeleteScript`.
  */
 export function actionsStubData() {
   return { statics: explorerStatics(), serverFiles: stubServerFiles }
@@ -95,11 +107,19 @@ export const passwordPolicyMessage = 'Password validation failed. The password d
 export const longDatabase = 'Reports_a_very_long_database_name_that_should_overflow_its_column_width_in_any_window'
 export const longRole = 'reporting_readers_with_a_rather_long_role_name_that_cannot_fit_in_one_column_of_the_role_list'
 export const databaseRoles = database => ({ roles: ['db_datareader', 'db_owner', 'public', 'Readers', longRole], rolesTruncated: false, guest: database === 'master', schemas: ['dbo', 'sales'], schemasTruncated: false })
+/** A login's Delete script as the backend writes it: each droppable user's DROP in its database, then DROP LOGIN in master. */
+export const loginDeleteScript = (name, users = []) => [...users.map(([database, user]) => `USE [${database}]\r\nGO\r\nDROP USER [${user}]\r\nGO\r\n`), `USE [master]\r\nGO\r\nDROP LOGIN [${name}]\r\nGO\r\n`].join('')
 
 /** Installs the stub; pass it to `application.evaluate` with `actionsStubData()`. Runs in main, so it is self-contained. */
 export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
-  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], databases: ['AppData', 'Archive'], logins: ['sa'], blocked: new Map(), catalog: false, managed: false, offline: false, holding: false, renameSessions: 0,
-    sessions: [{ sessionId: 61, login: 'app', program: 'Contoso Orders', host: 'web1', openTransactions: 1 }, { sessionId: 62, login: 'report', program: 'Reports', host: 'web2', openTransactions: 0 }] }
+  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], databases: ['AppData', 'Archive'], blocked: new Map(), catalog: false, managed: false, offline: false, holding: false, renameSessions: 0,
+    sessions: [{ sessionId: 61, login: 'app', program: 'Contoso Orders', host: 'web1', openTransactions: 1 }, { sessionId: 62, login: 'report', program: 'Reports', host: 'web2', openTransactions: 0 }],
+    logins: [
+      { name: '##MS_PolicyTsqlExecutionLogin##', type: 'S', subtype: 'system', disabled: true }, { name: 'AppUser', type: 'S', subtype: 'sql', sessions: 2, policy: true, users: [['AppData', 'AppUser'], ['Sales', 'app_owner', 1]] },
+      { name: 'CONTOSO\\Ops', type: 'G', subtype: 'windowsGroup', users: [['AppData', 'ops']], failsDrop: true }, { name: 'Held', type: 'S', subtype: 'sql' },
+      { name: 'Retired', type: 'S', subtype: 'sql', disabled: true, connectDenied: true, users: [['AppData', 'Retired']], service: 'SQL Server Agent (MSSQLSERVER)' },
+      { name: 'Locked', type: 'S', subtype: 'sql', policy: true, locked: true }, { name: 'sa', type: 'S', subtype: 'sa', sysadmin: true }
+    ] }
   // The exported texts again: this function runs in main, where the module's own bindings do not exist.
   const caution = 'Caution: Changing any part of an object name could break scripts and stored procedures.'
   const dependentsMessage = "Could not drop object 'dbo.Lines' because it is referenced by a FOREIGN KEY constraint."
@@ -123,6 +143,7 @@ GO
   const databaseRoles = database => ({ roles: ['db_datareader', 'db_owner', 'public', 'Readers', longRole], rolesTruncated: false, guest: database === 'master', schemas: ['dbo', 'sales'], schemasTruncated: false })
   const restoreScript = "USE [master]\r\nRESTORE DATABASE [AppData] FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
   const restoreFilesScript = "USE [master]\r\nRESTORE DATABASE [AppData] FILE = N'AppData_2' FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NORECOVERY,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
+  const loginDeleteScript = (name, users = []) => [...users.map(([database, user]) => `USE [${database}]\r\nGO\r\nDROP USER [${user}]\r\nGO\r\n`), `USE [master]\r\nGO\r\nDROP LOGIN [${name}]\r\nGO\r\n`].join('')
   const ok = value => ({ ok: true, value })
   const folders = (owner, ids) => ids.map(folder => ({ ref: { type: 'folder', owner, folder }, label: statics.labels[folder], icon: 'folder', hasChildren: true }))
   const object = (value, label, icon, extra = {}) => ({ ref: { type: 'object', object: value }, label, icon, hasChildren: true, ...extra })
@@ -138,7 +159,69 @@ GO
     views: owner => [object({ kind: 'view', database: owner.name, schema: 'dbo', name: 'OrderSummary' }, 'dbo.OrderSummary', 'view')],
     storedProcedures: owner => [object({ kind: 'procedure', database: owner.name, schema: 'dbo', name: 'ShipOrder' }, 'dbo.ShipOrder', 'procedure', { subtype: 'sql' })],
     integrationServicesCatalogs: () => stub.catalog ? [object({ kind: 'ssisCatalog', name: 'SSISDB' }, 'SSISDB', 'database')] : [],
-    logins: () => stub.logins.map(name => object({ kind: 'login', name }, name, 'login', { hasChildren: false, subtype: 'sql' }))
+    logins: () => stub.logins.map(login => object({ kind: 'login', name: login.name }, login.name, 'login',
+      { hasChildren: false, subtype: login.subtype, ...login.disabled ? { status: 'disabled' } : login.connectDenied ? { status: 'noAccess' } : {} }))
+  }
+  const loginOf = target => stub.logins.find(login => login.name === target.name)
+  /** The login preflight's facts (ActionSql.Login), as the loginFacts describe answers them: the stub signs in as sa. */
+  const factsOf = login => ({
+    principalId: login.subtype === 'sa' ? 1 : 300, type: login.type, subtype: login.subtype, disabled: !!login.disabled, sid: '01', created: '2026-01-02T03:04:05.000', connectDenied: !!login.connectDenied,
+    own: login.name === 'sa', sysadmin: !!login.sysadmin, sessions: login.sessions ?? 0, ownedDatabases: 0, ownedDatabaseNames: [], ownedServerObjects: 0, canAlter: true, canControlServer: true, nameInUse: false,
+    ...login.type === 'S' ? { policyChecked: !!login.policy, expirationChecked: !!login.policy } : {}
+  })
+  const notFound = target => ({ code: 'NOT_FOUND', message: `The login ${target.name} no longer exists. Refresh Object Explorer.`, retryable: false })
+  const sessionsWarning = count => `${count} sessions are connected as this login; the DROP fails until they end. Activity Monitor can end them.`
+  /** The users a Delete with dropMappedUsers drops: not those that own a schema (ActionService.Kept). */
+  const droppable = login => (login.users ?? []).filter(([, , schemas]) => !schemas)
+  function loginFacts({ target }) {
+    const login = loginOf(target)
+    if (!login) return ok({ elapsedMs: 1, error: notFound(target) })
+    return ok({ elapsedMs: 1, login: factsOf(login) })
+  }
+  /** Delete Object's describe of a login (ActionService.DescribeLoginDeleteAsync): its facts, the sessions' warning, its users. */
+  function describeLogin({ target }) {
+    const login = loginOf(target)
+    if (!login) return ok({ elapsedMs: 1, error: notFound(target) })
+    const users = (login.users ?? []).map(([database, user, schemas = 0]) => ({ database, user, ownedSchemas: schemas, ownedRoles: 0, readOnly: false, ownedSecurables: 0, grantedPermissions: 0, canDrop: true }))
+    const warnings = [...login.sessions ? [{ text: sessionsWarning(login.sessions), blocking: true }] : [], ...login.service ? [{ text: `${login.service} runs as this account.`, blocking: false }] : []]
+    return ok({ elapsedMs: 1, deleteTarget: { name: login.name, type: 'Login', owner: null, warnings, dependentsTruncated: false,
+      login: factsOf(login), mappings: { users, mapped: users.length, checked: stub.databases.length, notChecked: login.users ? 1 : 0 } } })
+  }
+  /** A login's Delete: refused before any step while it has sessions; otherwise its droppable users when asked, then the login. */
+  function deleteLogin({ target, dropMappedUsers }) {
+    const login = loginOf(target)
+    if (!login) return ok({ steps: [], messages: [], elapsedMs: 1, error: notFound(target) })
+    if (login.sessions) return ok({ steps: [], messages: [], elapsedMs: 1, sessions: login.sessions, error: { code: 'IN_USE', message: sessionsWarning(login.sessions), retryable: true } })
+    const users = dropMappedUsers ? droppable(login) : []
+    const dropped = users.map(([database, user]) => ({ status: 'done', title: 'Drop the database user', detail: `${user} in ${database}` }))
+    if (login.failsDrop) {
+      login.users = (login.users ?? []).filter(user => !users.includes(user))
+      const message = `Could not drop login '${login.name}' as the user is currently logged in. End the login's sessions first; Activity Monitor can end them.`
+      return ok({ steps: [...dropped, { status: 'failed', title: 'Drop the login', message }], messages: [], elapsedMs: 1, error: { code: 'IN_USE', message, retryable: true } })
+    }
+    stub.logins = stub.logins.filter(other => other !== login)
+    return ok({ steps: [...dropped, { status: 'done', title: 'Drop the login' }], messages: [], elapsedMs: 1, sessions: 0 })
+  }
+  /** The unlockLogin describe: the login's facts and its lock-out state (ActionSql.LoginLock). */
+  function unlockFacts(params) {
+    const facts = loginFacts(params), login = loginOf(params.target)
+    if (!login) return facts
+    return ok({ ...facts.value, lock: { locked: !!login.locked, badPasswords: login.locked ? 10 : 0, ...login.locked ? { lockoutTime: '2026-11-02T21:07:12.123' } : {}, mustChange: false, expired: false, daysUntilExpiration: 42 } })
+  }
+  /** Unlock keeping the password: its two statements and the commit, in one transaction. */
+  function unlock({ target }) {
+    const login = loginOf(target)
+    if (!login?.locked) return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NOT_SUPPORTED', message: 'The login is not locked out.', retryable: false } })
+    login.locked = false
+    return ok({ steps: ['Turn off the password policy', 'Turn the password policy and expiration back on', 'Commit'].map(title => ({ status: 'done', title })), messages: [], elapsedMs: 1 })
+  }
+  /** A login's Disable or Enable: Held's waits until its Stop arrives; the others change what Logins lists. */
+  function loginState({ action, target, requestId }) {
+    const login = loginOf(target), title = action === 'disable' ? 'Disable the login' : 'Enable the login'
+    if (target.name === 'Held') return new Promise(resolve => stub.blocked.set(requestId, () => resolve(ok({ steps: [{ status: 'cancelled', title }], messages: [], elapsedMs: 1,
+      error: { code: 'CANCELLED', message: `The action was stopped at "${title}"; SQL Server cancelled that statement.`, retryable: true } }))))
+    if (login) login.disabled = action === 'disable'
+    return ok({ steps: [{ status: 'done', title }], messages: [], elapsedMs: 1, sessions: login?.sessions ?? 0 })
   }
   function children({ node }) {
     if (node.type === 'object') {
@@ -355,7 +438,8 @@ GO
       error: { code: 'PASSWORD_POLICY', message: passwordPolicyMessage, retryable: true } })
     if (secrets?.password === 'Held') return new Promise(resolve => stub.blocked.set(requestId, () => resolve(ok({ steps: [{ status: 'cancelled', ...steps[0] }, ...after], messages: [], elapsedMs: 1,
       error: { code: 'CANCELLED', message: 'The action was stopped at "Create the login"; SQL Server cancelled that statement.', retryable: true } }))))
-    stub.logins = [...stub.logins, login.name].sort()
+    const windows = login.auth === 'windows'
+    stub.logins = [...stub.logins, { name: login.name, type: windows ? 'U' : 'S', subtype: windows ? 'windowsUser' : 'sql' }].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
     return ok({ steps: steps.map(step => ({ status: 'done', ...step })), messages: [], elapsedMs: 1 })
   }
   /** Restore Files and Filegroups' run: RestoreFilesRun.cs's step titles for the request, each done, the database online. */
@@ -370,6 +454,14 @@ GO
     if (params.action === 'createDatabase') return createDatabase(params)
     if (params.action === 'restoreFiles') return restoreFilesRun(params)
     if (params.action === 'createTable') return createTable(params)
+    if (params.action === 'disable' || params.action === 'enable') return loginState(params)
+    if (params.action === 'unlock') return unlock(params)
+    if (params.action === 'rename' && target.kind === 'login') {
+      if (params.newName === 'Taken') return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NAME_IN_USE', message: 'The name Taken is already used by another login or server role.', retryable: false } })
+      const login = loginOf(target)
+      if (login) login.name = params.newName
+      return ok({ steps: [{ status: 'done', title: 'Rename' }], messages: [], elapsedMs: 1 })
+    }
     if (params.action === 'restore') return restoreRun(params, sender)
     if (params.action === 'createLogin') return createLogin(params)
     if (params.action === 'attach') return attachExecute(params)
@@ -384,6 +476,7 @@ GO
       stub.tables = stub.tables.map(name => name === target.name ? params.newName : name)
       return ok({ steps: [{ status: 'done', title: 'Rename' }], messages: [caution], elapsedMs: 1 })
     }
+    if (params.action === 'delete' && target.kind === 'login') return deleteLogin(params)
     if (target.kind === 'database') {
       stub.databases = stub.databases.filter(name => name !== target.name)
       return ok({ steps: [{ status: 'done', title: 'Drop the database' }, ...params.deleteHistory ? [{ status: 'done', title: 'Delete backup and restore history' }] : []], messages: [], elapsedMs: 1 })
@@ -436,6 +529,8 @@ GO
         switch (params.dialog) {
           case 'tableDesigner': return ok({ tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', caseSensitiveNames: false, accentSensitiveNames: true, canCreate: true }, elapsedMs: 1 })
           case 'databaseProperties': return properties(params)
+          case 'loginFacts': return loginFacts(params)
+          case 'unlockLogin': return unlockFacts(params)
           case 'loginDatabaseRoles': return ok({ loginDatabaseRoles: databaseRoles(params.target.name), elapsedMs: 1 })
           case 'newLogin': return ok({ newLogin: { server: { level: 16, linux: false, windowsOnly: false, canCreate: true },
             databases: [{ name: 'AppData', state: 0, accessible: true, readOnly: false }, { name: 'Archive', state: 6, accessible: false, readOnly: false }, { name: 'Ledger', state: 0, accessible: true, readOnly: true },
@@ -452,12 +547,13 @@ GO
           case 'attachDatabase': return attachDescribe(params)
           case 'takeOffline': case 'bringOnline': case 'detachDatabase': return databaseState(params)
           case 'renameDatabase': return renameFacts(params)
-          default: return describe(params)
+          default: return params.target.kind === 'login' ? describeLogin(params) : describe(params)
         }
       case 'actions.script':
         switch (params.action) {
           case 'properties': return ok({ text: propertiesScript, database: 'master', warnings: [] })
           case 'createTable': return ok({ text: designerScript(params.design.name), database: params.target.name, warnings: [] })
+          case 'unlock': return ok({ text: ['USE [master]', 'GO', 'SET XACT_ABORT ON;', 'BEGIN TRANSACTION;', `ALTER LOGIN [${params.target.name}] WITH CHECK_POLICY = OFF;`, `ALTER LOGIN [${params.target.name}] WITH CHECK_POLICY = ON, CHECK_EXPIRATION = ON;`, 'COMMIT TRANSACTION;', 'GO', ''].join(String.fromCharCode(13, 10)), database: 'master', warnings: [] })
           case 'createLogin': return ok({ text: newLoginScript(params.login.name), database: 'master', warnings: [] })
           case 'restore': return ok({ text: restoreScript, database: 'master', warnings: [] })
           case 'createDatabase': return ok({ text: newDatabaseScript(params.target.name), database: 'master', warnings: [] })
@@ -466,7 +562,11 @@ GO
           case 'takeOffline': return ok({ text: offlineScript(params.dropConnections), database: 'master', warnings: [] })
           case 'detach': return ok({ text: detachScript(params.dropConnections, params.updateStatistics), database: 'master', warnings: [] })
           case 'restoreFiles': return ok({ text: restoreFilesScript, database: 'master', warnings: [] })
-          default: return ok({ text: scriptText(params.target.name), database: params.target.database ?? 'master', warnings: [] })
+          default: {
+            const login = params.target.kind === 'login' ? loginOf(params.target) : undefined
+            if (login) return ok({ text: loginDeleteScript(login.name, params.dropMappedUsers ? droppable(login) : []), database: 'master', warnings: login.sessions ? [sessionsWarning(login.sessions)] : [] })
+            return ok({ text: scriptText(params.target.name), database: params.target.database ?? 'master', warnings: [] })
+          }
         }
       case 'actions.execute': return execute(params, _event.sender)
       case 'ssis.catalogSetup': return catalogSetup()

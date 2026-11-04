@@ -15,6 +15,7 @@ import DeleteObjectPage from './pages/DeleteObjectPage'
 import DetachDatabasePage from './pages/DetachDatabasePage'
 import { NewLoginGeneralPage, NewLoginServerRolesPage, NewLoginStatusPage } from './pages/NewLoginPages'
 import UserMappingPage from './pages/UserMappingPage'
+import UnlockLoginPage from './pages/UnlockLoginPage'
 
 /** A page of an object dialog: the open dialog's snapshot, and whether its controls may change now. */
 export interface PageProps { readonly open: OpenObjectDialog; readonly editable: boolean }
@@ -26,7 +27,8 @@ export const dialogPages: { readonly [D in ModalDialogId]: Readonly<Partial<Reco
   newLogin: { general: NewLoginGeneralPage, serverRoles: NewLoginServerRolesPage, userMapping: UserMappingPage, status: NewLoginStatusPage },
   takeOffline: { general: DatabaseStatePage },
   bringOnline: { general: DatabaseStatePage },
-  detachDatabase: { general: DetachDatabasePage }
+  detachDatabase: { general: DetachDatabasePage },
+  unlockLogin: { general: UnlockLoginPage }
 }
 
 const progressText: Readonly<Record<DialogPhase, string>> = {

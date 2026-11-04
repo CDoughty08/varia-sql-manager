@@ -3,13 +3,13 @@ import { kindSpecs, nodeKinds, serverEngines, type NodeSubtype } from '../explor
 import { longRunKinds, longRunLimits, longRunSubjects } from '../long-runs.ts'
 import {
   actionCommandEntries, actionContextKey, actionErrorCodes, actionErrorRetryable, actionKindSpecs, actionLimits, actionMenus, actionRow, actionStatuses, allFilesType, createActionSpecs, createActions,
-  databaseActionRules, databaseStateIds, dialogIds, dialogSpecs, factDescribeIds, objectActions, objectActionSpecs, scriptActionTitles, serverActions, serverActionSpecs, serverFilePurposes,
-  serverFilePurposeSpecs, serverFilesDescribeId, serverFileTypesLabel, unknownOutcomeMessage
+  databaseActionRules, databaseStateIds, dialogIds, dialogSpecs, objectActions, objectActionSpecs, scriptActionTitles, serverActions, serverActionSpecs, serverFilePurposes,
+  serverFilePurposeSpecs, serverFilesDescribeId, serverFileTypesLabel, unknownOutcomeMessage, type FactDescribeId
 } from './catalog.ts'
 import { actionPromptBox, actionPrompts, promptLimits, type ActionPromptRequest } from './prompts.ts'
 import { compatibilityLabel, compatibilityLevels, databaseOptionDefs, noScriptNotice, openConnectionsPrompt, ownerNotOn, scopedConfigurationDefs, type DatabaseOptionDef } from './database.ts'
 import {
-  loginDatabaseRolesDescribe, loginGreyedMessage, loginLimits, loginMessages, loginRules, loginSubtypes, loginTypeSubtypes, loginVerbs, newLoginMessages, ownLoginRefuses, passwordScriptHeader, saPrincipalId,
+  loginDatabaseRolesDescribe, loginDeleteText, loginGreyedMessage, loginLimits, loginLockProperties, loginMessages, loginRules, loginSubtypes, loginTypeSubtypes, loginVerbs, newLoginMessages, ownLoginRefuses, passwordScriptHeader, saPrincipalId,
   tooManyStatementsMessage
 } from './logins.ts'
 import { designerEngines } from '../designer/catalog.ts'
@@ -96,16 +96,26 @@ const loginLimitNotes: Readonly<Record<keyof typeof loginLimits, string>> = {
   ownedDatabases: 'Databases a login owns that the login preflight names',
   mappedUsers: 'Mapped database users Delete Login lists',
   scanDatabases: 'Databases the mapped-user scan reads',
-  serviceNames: 'Service accounts the service lookup reads'
+  scanMs: 'How long the mapped-user scan reads databases before it counts the rest as not checked, in ms',
+  serviceNames: 'Service accounts the service lookup reads',
+  serviceName: 'Characters of the service name the login facts carry'
 }
 
 // As src/shared/commands/menus.ts titles them (that module needs a bundler; this one loads in plain Node).
 const submenuTitles = { 'explorer.tasks': 'Tasks', 'explorer.tasks.restore': 'Tasks › Restore' } as const
 /** Menus, statuses, database states and servers: what narrows an action beyond its kind and subtype. */
 function narrowingDocs(): string[] {
-  const overlays = nodeKinds.flatMap(kind => actionStatuses(kind).map(status => {
-    const overlay = actionKindSpecs[kind]?.statuses?.[status] ?? {}
-    return [code(kind), code(status), objectActions.filter(action => action in overlay).map(action => `${objectActionSpecs[action].title}: ${mark(overlay[action] || undefined)}`).join(', ')]
+  // A kind's overlay, then each subtype's own (a login's Enable depends on its subtype), runs of alike subtypes in one row.
+  const overlays = nodeKinds.flatMap(kind => actionStatuses(kind).flatMap(status => {
+    const spec = actionKindSpecs[kind]
+    const changes = (overlay: Partial<Record<string, string>>) => objectActions.filter(action => action in overlay).map(action => `${objectActionSpecs[action].title}: ${mark(overlay[action] || undefined)}`).join(', ')
+    const rows = spec?.statuses?.[status] ? [[code(kind), 'any', code(status), changes(spec.statuses[status])]] : []
+    const groups = new Map<string, string[]>()
+    for (const [subtype, overlays] of Object.entries(spec?.subtypeStatuses ?? {})) {
+      const overlay = overlays?.[status]
+      if (overlay) groups.set(changes(overlay), [...groups.get(changes(overlay)) ?? [], code(subtype)])
+    }
+    return [...rows, ...[...groups].map(([text, subtypes]) => [code(kind), subtypes.join(', '), code(status), text])]
   }))
   return [
     '## Menus, statuses, database states and servers',
@@ -115,7 +125,10 @@ function narrowingDocs(): string[] {
       ' stay hidden while nothing is placed in them, so they appear with their first action.',
     '',
     'A node\'s status badge (`explorerNodeStatus`) can overlay its row: a disabled login offers Enable in place of Disable.',
-    overlays.length ? table(['Kind', 'Status', 'Changes'], overlays) : 'No kind changes its actions by status yet.',
+    '',
+    overlays.length ? table(['Kind', 'Subtypes', 'Status', 'Changes'], overlays) : 'No kind changes its actions by status yet.',
+    '',
+    'Only `disabled` changes a login\'s actions: a login denied permission to connect can still be disabled, as in SSMS.',
     '',
     `A database row carries its runtime state as listed (state, user access, read-only, standby); a newer live status sample wins.`,
     `Rules narrow a database's actions by it, each with the reason a greyed item shows. The states: ${Object.values(databaseStateIds).map(code).join(', ')}, \`other\`.`,
@@ -133,7 +146,7 @@ function narrowingDocs(): string[] {
 
 const promptSamples: { readonly [P in ActionPromptRequest['prompt']]: Extract<ActionPromptRequest, { prompt: P }>['facts'] } = {
   renameDatabase: { database: 'Sales', sessions: 3, transactions: 1, tabs: 2, tabsWithTransactions: ['Query 1.sql'], canClose: true },
-  disableLogin: { login: 'app_user', sessions: 2, service: 'SQL Server Agent (MSSQLSERVER)', sysadmin: false }
+  disableLogin: { login: 'app_user', sessions: 2, service: 'SQL Server Agent (MSSQLSERVER)', sysadmin: false, connections: ['Reporting (sql01)'] }
 }
 /** The native confirmations, with an example of each. */
 function promptDocs(): string[] {
@@ -176,9 +189,9 @@ function longRunDocs(): string[] {
     '',
     'Create Catalog, New Database and Attach Databases are the long runs so far; the others are reserved for the actions that will use them.',
     '',
-    'A short state action (a rename; later a login\'s Disable and Enable) runs as a status-bar job instead: one per node,',
-    'shown with Stop after `statusDelayMs`, naming its step when it has several ("Renaming Sales to Sales2: Closing',
-    'connections…").',
+    'A short state action (a rename, a login\'s Disable and Enable) runs as a status-bar job instead: one per node, shown',
+    'with Stop after `statusDelayMs` ("Disabling app_user…", Stop disable), naming its step when it has several ("Renaming',
+    'Sales to Sales2: Closing connections…").',
     '',
     ...longActionDocs()
   ]
@@ -229,7 +242,7 @@ function databaseRenameDocs(): string[] {
   return [
     '### Rename of a database',
     '',
-    `F2 on a user database first reads its facts (\`actions.describe\` with ${factDescribeIds.map(code).join(', ')}, one of the fact describes, which`,
+    `F2 on a user database first reads its facts (\`actions.describe\` with ${code('renameDatabase' satisfies FactDescribeId)}, one of the fact describes, which`,
     'open no dialog): the preflight\'s refusals, the database\'s identity and user access, how many other sessions are in it and',
     'how many of those hold an open transaction (with VIEW SERVER STATE, after the backend closed its own idle pooled connections',
     'there, as the rename does), and how many logins have it as their default database. With no other session the rename runs',
@@ -439,7 +452,7 @@ export function renderObjectActionsDocs(): string {
     'than 720 px (a viewport under 768 CSS px, as when zoomed in: the window is at least 1024 px wide) the list becomes a row of tabs above the page (a `tablist` named "Select a page", arrow keys, Home and End). A',
     'page marked kept mounted stays in the page once visited, hidden while another shows, so what it holds (a running list,',
     'a typed value) survives switching away. A dialog with a steps panel shows its plan as a list of steps, scrolling in at most 40 % of the column',
-    '(`kit/StepList.tsx`, Create Catalog\'s too), each pending, running, done, failed, cancelled or skipped, with an optional',
+    '(`kit/StepList.tsx`, Create Catalog\'s too), each pending, running, done, failed, cancelled, skipped or rolled back, with an optional',
     'progress bar under a running step.',
     '',
     `In a modal dialog, the Script button scripts to a new query window; its arrow lists ${Object.values(scriptActionTitles).join(', ')}. Script never runs anything.`,
@@ -495,7 +508,7 @@ export function renderObjectActionsDocs(): string {
     '',
     '### Steps, compensation and cleanup',
     '',
-    'Each statement is a step, and the reply lists them in order with a status (done, failed, cancelled or skipped), a title, SQL',
+    'Each statement is a step, and the reply lists them in order with a status (done, failed, cancelled, skipped or rolledBack), a title, SQL',
     'Server\'s message for a failed one, and for some a detail (a name) or progress. The first failure stops the rest, which are',
     'skipped. An action may also plan compensation steps, each undoing one earlier step once that step completed and a later one',
     'failed or was stopped (restoring a database\'s user access after a failed rename, for example), and cleanup steps that run',
@@ -503,7 +516,9 @@ export function renderObjectActionsDocs(): string {
     'budget (`cleanupMs`), are listed only when they ran, marked as compensating, and the error message says how they ended. A',
     'Stop\'s reply waits for SQL Server to end the statement and then for them, so it never reports an unknown outcome while',
     'Varia\'s own cleanup runs. An action can instead run its steps in one transaction (the table designer\'s Save): a failure or',
-    'Stop rolls it back, and only the commit, which Stop no longer reaches, completes it.',
+    'Stop rolls it back, and only the commit, which Stop no longer reaches, completes it. The steps that had completed are then',
+    'listed as rolledBack, never done, and the message names none as completed; a step that checks the server again before it',
+    'changes anything (Unlock\'s recheck) can refuse with the action\'s own message, and then nothing is said to be rolled back.',
     '',
     'Before the first statement that needs a database to itself (setting single-user, taking it offline, renaming, dropping or detaching it), and',
     'before Database Properties applies its changes, the backend frees the database of its own sessions, on every connection',
@@ -536,7 +551,6 @@ export function renderObjectActionsDocs(): string {
       ['Restore multi-user access', '`ALTER DATABASE [db] SET  MULTI_USER`'],
       ['Restore restricted user access', '`ALTER DATABASE [db] SET  RESTRICTED_USER`'],
       ['Detach the database', '`EXEC master.dbo.sp_detach_db @dbname = N\'db\', @skipchecks = \'false\'` (\'true\' when Update Statistics is cleared)'],
-      ['Disable the login, Enable the login', '`ALTER LOGIN [login] DISABLE`, `ALTER LOGIN [login] ENABLE`'],
       ['Deny or Grant permission to connect', '`DENY CONNECT SQL TO [login]`, `GRANT CONNECT SQL TO [login]`'],
       ['Drop the database user', '`DROP USER [user]`, in its database'],
       ['Add to a server role (New Login)', '`ALTER SERVER ROLE [role] ADD MEMBER [login]`'],
@@ -570,9 +584,126 @@ function loginDocs(): string[] {
     '',
     `Object Explorer gives each login a subtype from \`sys.server_principals\`: \`sa\` by principal_id ${saPrincipalId} whatever its name, \`system\``,
     'for SQL Server\'s own logins (a name that starts and ends with `##`), else by type: ' + types.map(([type, subtype]) => `${code(type)} ${code(subtype)}`).join(', ') + '.',
-    'The login actions arrive in later versions; their rules are data already, and the backend\'s login preflight reads the',
-    'facts they need in the action\'s own connection from catalog views only: never `LOGINPROPERTY`, which waits on a login',
-    'another session is changing, and never a password hash, which no Varia statement may name.',
+    'The backend\'s login preflight reads the facts an action needs in the action\'s own connection from catalog views only:',
+    'never a password hash, which no Varia statement may name, and `LOGINPROPERTY`, which waits on a login another session',
+    'is changing whatever the isolation level, only in Unlock\'s lock-out read below. Properties arrives in a later',
+    'version; its rules are data already.',
+    '',
+    '### Disable, Enable and Rename',
+    '',
+    'Disable and Enable are inline actions in a login\'s menu after Copy Name, one of them at a time: a disabled login offers',
+    'Enable. Each runs at once as a status-bar job with Stop, from the server\'s master database, and then Object Explorer',
+    'reselects the login with its new state. Both first read the login\'s facts (`actions.describe` with `loginFacts`, in the',
+    'action\'s own connection, under READ UNCOMMITTED so that another session\'s open change to the login cannot hold it back;',
+    'meanwhile the status bar says "Disabling app_user: Reading the login…" with Stop, and a second request for the login',
+    'says why it waits). Disable then asks (A13 `disableLogin`): the prompt counts the sessions connected as the login, which',
+    'stay connected, warns when it is a member of sysadmin, names the service that runs as it (from',
+    '`sys.dm_server_services`, or an `NT SERVICE\\` name), and names Varia\'s other connections that sign in as it. Enable',
+    'asks nothing; its notice says when permission to connect is still denied. The statement itself waits behind such a',
+    'change, as SSMS\'s does, until Stop. The facts only advise, since they read past other sessions\' open changes, but the',
+    'request names the login they describe (its SID and creation time): when another login has taken the name since,',
+    'the backend refuses before any statement ("Refresh Object Explorer and try again"). Before Disable, Enable and Rename',
+    'run, the preflight reads only the login\'s own rows, never what it owns, so another session\'s open change to other',
+    'logins (a New Login in its transaction) holds back neither it nor Script Action.',
+    '',
+    'Rename uses Object Explorer\'s inline box, as for a table. A SQL Server login\'s name cannot hold a backslash: "' + loginMessages.sqlBackslash + '"',
+    'SQL Server would refuse it (15021). No login may take a name in SQL Server\'s own form: "' + loginMessages.systemName + '"',
+    'SQL Server would accept it, and Varia would then take the login for one of SQL Server\'s own. The box stays open with',
+    'either message, which leaves the banner when the box closes. The backend refuses a name another login or server role',
+    'uses (`NAME_IN_USE`). A notice says database users mapped to the login keep their names, and a warning names Varia\'s',
+    'other connections that sign in under the old name.',
+    '',
+    table(['Action', 'Step', 'As Script Action writes it'], [
+      ['Disable', 'Disable the login', '`ALTER LOGIN [login] DISABLE`'],
+      ['Enable', 'Enable the login', '`ALTER LOGIN [login] ENABLE`'],
+      ['Rename', 'Rename', '`ALTER LOGIN [login] WITH NAME=[new]`']
+    ]),
+    '',
+    '### Delete',
+    '',
+    'Delete opens Delete Object, as for a table, with the login\'s row (Object Type Login). Its describe reads the login\'s',
+    'facts past other sessions\' open changes (READ UNCOMMITTED: they only advise), then the database users mapped to its SID:',
+    'one read per online database (no snapshots) the connection can enter and see the users of (VIEW DEFINITION), each under',
+    `the lock timeout, at most ${loginLimits.scanDatabases.toLocaleString('en-US')} databases within ${(loginLimits.scanMs / 1000).toLocaleString('en-US')} s. A database it does not reach (offline, restoring,`,
+    'not accessible or readable, a failed read, or past the bound or budget) counts as not checked, and the page says how',
+    'many; the server\'s total is read on its own, so a connection that may read no database is told it checked none, never',
+    `that no user is mapped. The page lists at most ${loginLimits.mappedUsers.toLocaleString('en-US')} users, each as "database: user" ("…and n more" after them), and`,
+    'marks the ones a Delete keeps with why: those whose DROP USER would fail (a schema, role or other securable it owns, a',
+    'permission it granted, 15138, 15421, 15183 and 15284), in a read-only database, or where the connection may not drop users',
+    '(ALTER ANY USER).',
+    '',
+    `SSMS deletes the login and says afterwards that its users are left orphaned; Varia says it first: "${loginDeleteText.orphanNote}"`,
+    `It offers "${loginDeleteText.dropOption}" (unchecked), greyed with its reason when no user is mapped, every`,
+    'listed user is kept, more are mapped than it lists, or the connection cannot count the login\'s sessions (without VIEW',
+    'SERVER STATE a session would fail the login\'s DROP after its users were gone). SSMS\'s note shows only where a user may be',
+    'left orphaned. With the option, Delete drops each user it may in its database, then the login in master; the steps name',
+    'each user ("user in database"). The statements are not one transaction (DROP USER in several databases would hold all of',
+    'them until the end), and every partial outcome is coherent: a user dropped and the login kept. After a user was dropped,',
+    'the loaded Users folders of those databases reload, and after a failure or Stop the page reads the login again, so it lists',
+    'only the users still mapped.',
+    '',
+    'The warnings name what SQL Server refuses the DROP for, with the warning icon: the sessions connected as the login (15434;',
+    'Activity Monitor can end them), the databases it owns (15174), its SQL Server Agent jobs (15170), the server roles,',
+    'endpoints and availability groups it owns (15141) and the server permissions it granted to others (15173); the service',
+    'that runs as a Windows login is a note, with the info icon. OK still runs, and the backend refuses any of these before a',
+    'statement runs. A Windows group\'s members sign in under their own SIDs, so a group counts no sessions. The',
+    'protected-principal rules grey OK with their reason, drawn as an error (sa, the login this connection uses, SQL Server\'s',
+    'own logins, the permissions); Script Action still works and runs nothing. Varia\'s other connections that sign in as the',
+    'login are named as warnings: their pools\' sessions fail the DROP until they are disconnected, and Activity Monitor neither',
+    'shows nor ends Varia\'s own sessions. The execute needs the login it read (its SID and creation time) and reads the login',
+    'again under READ COMMITTED: a login that took the name since is refused. With its users, it also refuses, before any',
+    'DDL, a login whose sessions it cannot count (`NOT_SUPPORTED`) and a database its own scan could not read again (`BLOCKED`,',
+    'retryable), whose users would stay orphaned. Each DROP checks, in its own batch, the principal it was planned for: a user',
+    'by its name and the login\'s SID, the login by its SID, principal id and creation time, again after the DROP in one',
+    'transaction, so a user renamed or remapped in an open transaction while the scan read past it, or a login dropped and',
+    'created again while an earlier step waited, is never dropped in their stead (`NOT_FOUND`). When a session the preflight',
+    'could not count (without VIEW SERVER STATE) fails the DROP, `IN_USE` says to end it first.',
+    '',
+    table(['Action', 'Step', 'As Script Action writes it'], [
+      ['Delete, with the users', 'Drop the database user (one per user; its detail "user in database")', '`DROP USER [user]`, in its database'],
+      ['Delete', 'Drop the login', '`DROP LOGIN [login]`, in master']
+    ]),
+    '',
+    'SQL Server\'s errors for logins map to the codes below; without ALTER ANY LOGIN, `PERMISSION_DENIED` also says what',
+    'changing a login needs. SQL Server\'s own logins (`##…##`, trailing spaces ignored as SQL Server ignores them) are',
+    'refused by the backend as system objects, whatever the page asks: the preflight judges the principal the server',
+    'collation finds by the name the catalog holds, and the statement names exactly that principal, so no other spelling',
+    '(a trailing space, a fullwidth `＃`) reaches one of them. A greyed verb\'s reason (a Windows group\'s Disable, SQL',
+    'Server\'s own logins) is its hint in the command palette.',
+    '',
+    '### Unlock',
+    '',
+    'SSMS unlocks a SQL Server login only on Login Properties › Status, and only with a new password. Varia adds Unlock… to a',
+    'SQL Server login\'s menu (after Disable or Enable, access key U), a modal that keeps the current password, as Microsoft',
+    'documents: it turns the password policy off, which unlocks the login, and back on, with password expiration when the login',
+    'had it, in one transaction, so a failure or Stop rolls both back. This clears the login\'s password history, which the',
+    'dialog says, and nothing is chosen when it opens: OK (and Enter) waits until Keep the current password is, so clearing the',
+    'history is never the default. Setting a new password instead, SSMS\'s way and then the dialog\'s default, arrives with',
+    'Login Properties.',
+    '',
+    'Only `LOGINPROPERTY` knows whether a login is locked out, so the listing offers Unlock… on every SQL Server login and the',
+    'dialog says. Its describe (`unlockLogin`) and its preflight read the login\'s facts and then its lock-out state with',
+    '`ActionSql.LoginLock`, the only Varia statement that may call `LOGINPROPERTY`: of the login the preflight found, and only',
+    'for ' + loginLockProperties.map(code).join(', ') + ', which its own lint checks. Behind another session\'s open',
+    'change to the login the describe gives up after the read lock timeout (`BLOCKED`); the preflight waits, as the statements',
+    'after it would, until Stop. OK is greyed, with the reason on the page, for a login that does not enforce the password',
+    `policy ("${loginMessages.unlockNoPolicy}"), one that must change its password at its next sign-in, whose policy SQL Server`,
+    `will not turn off (15128: "${loginMessages.unlockMustChange}"), and one that is not locked out ("${loginMessages.notLocked}"),`,
+    'which the preflight checks again before any statement. Script Action still writes the transaction for a login that is',
+    'not locked out now. Catalog views and `LOGINPROPERTY` hold no lock on the login (a read in an open transaction, even',
+    'SERIALIZABLE, does not block another session\'s `ALTER LOGIN`), so the first step reads the login\'s facts and lock-out',
+    'state again inside the transaction, after any wait, and changes nothing when the login is gone, replaced, refused or no',
+    'longer locked out, or when another session changed its policy or expiration since the plan was made',
+    `("${loginMessages.unlockChanged}"); only a change in the moment between that read and the first statement goes unseen.`,
+    'On success Object Explorer reloads the Logins folder and a notice says "Unlocked the login app_user.',
+    'Its password history was cleared."',
+    '',
+    table(['Step', 'As Script Action writes it'], [
+      ['Turn off the password policy', '`ALTER LOGIN [login] WITH CHECK_POLICY = OFF;`'],
+      ['Turn the password policy back on', '`ALTER LOGIN [login] WITH CHECK_POLICY = ON;`'],
+      ['Turn the password policy and expiration back on', '`ALTER LOGIN [login] WITH CHECK_POLICY = ON, CHECK_EXPIRATION = ON;` (when expiration was on)'],
+      ['Commit', 'the batch is `SET XACT_ABORT ON; BEGIN TRANSACTION;`, both statements, then `COMMIT TRANSACTION;`']
+    ]),
     '',
     '✓ allowed, ○ shown greyed and refused, – not offered.',
     '',

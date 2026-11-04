@@ -19,26 +19,36 @@ internal static class ActionErrors
     /// <summary>Its advice for any other change other connections are in the way of (Broker Enabled, Containment type, COLLATE's
     /// 5030, a single-user database's 924), which Open Connections never asks about.</summary>
     public const string OtherConnectionsAdvice = "Other connections use the database. Close them first.";
+    /// <summary>What a login action's PERMISSION_DENIED adds (D4 P4, P7): SQL Server's 15151 also says the login may not exist,
+    /// which the preflight has just ruled out.</summary>
+    public const string LoginPermissionAdvice = "Changing a login needs ALTER ANY LOGIN, and CONTROL SERVER for a member of sysadmin.";
+    /// <summary>A login's Delete when a session connected as it fails the DROP (15434): the sessions a preflight could not see
+    /// (without VIEW SERVER STATE), or one that signed in after it (D4c).</summary>
+    public const string LoginSessionsAdvice = "End the login's sessions first; Activity Monitor can end them.";
     /// <summary>SQL Server error numbers by the code they map to (Lost also covers severity 20 and above), one mapping per line.</summary>
     public static readonly IReadOnlyDictionary<string, int[]> Numbers = new Dictionary<string, int[]>(StringComparer.Ordinal)
     {
         ["BLOCKED"] = [1222],
         // 3702 drop, 5030 rename or collation (exclusive lock), 5061 and 5070 state changes, 924 single-user, 3101 a restore's exclusive access,
-        // 3703 sp_detach_db.
-        ["IN_USE"] = [3702, 5030, 5061, 5070, 924, 3101, 3703],
+        // 3703 sp_detach_db; 15434: a login with sessions (DROP LOGIN, D4c).
+        ["IN_USE"] = [3702, 5030, 5061, 5070, 924, 3101, 3703, 15434],
         // 3726 a foreign key, 3729 a schema-bound module, 15336 sp_rename on an object schema binding holds, 5042 a non-empty file or filegroup,
         // 3709 a database snapshot of the database being detached or dropped.
-        ["DEPENDENTS"] = [3726, 3729, 15336, 5042, 3709],
-        // 1828 and 5170: a logical file name or a physical file is taken; 15025 a login, 15023 a user.
+        // From 15174: what a login owns or is mapped to, which DROP LOGIN fails on (D4 §5.4's error map, for D4c); 15173: the server
+        // permissions a login granted.
+        ["DEPENDENTS"] = [3726, 3729, 15336, 5042, 3709, 15174, 15170, 15141, 15155, 15186, 15144, 15138, 15421, 15284, 15183, 15173],
+        // 1828 and 5170: a logical file name or a physical file is taken; 15025 a login (a login's rename too), 15023 a user.
         ["NAME_IN_USE"] = [2714, 1801, 15335, 1828, 5170, 15025, 15023],
-        // 15007: the login is not valid; 15010 a default database, 15033 a language and 15401 a Windows account that does not exist.
-        ["NOT_FOUND"] = [15225, 15007, 15010, 15033, 15401],
+        // 15007: the login is not valid; 15010 a default database, 15033 a language and 15401 a Windows account that does not exist;
+        // 50010: a guarded DROP's principal is not the one it was planned for (ActionSql.UserCheck, LoginCheck).
+        ["NOT_FOUND"] = [15225, 15007, 15010, 15033, 15401, 50010],
         // 5058: the option cannot be set in this database; 3707: sp_detach_db on a suspect or recovery pending database. (948, a
         // database from a newer SQL Server, is severity 20: it ends the session, so it is CONNECTION_LOST, and Attach refuses such a
         // database itself before it runs anything.) New Login (probed by D2): 15099 MUST_CHANGE without CHECK_EXPIRATION, 15122
         // CHECK_EXPIRATION without CHECK_POLICY, 15006 a backslash in a SQL login, 15407 not DOMAIN\name, 37525 Microsoft Entra not
-        // set up on the server.
-        ["NOT_SUPPORTED"] = [5058, 3707, 15099, 15122, 15006, 15407, 37525],
+        // set up on the server. A login's Disable, Enable and Rename (D4b): 15405 and 15021 (a SQL login's name with a
+        // backslash, D4 P3), changes to logins SQL Server refuses outright. 15128: CHECK_POLICY = OFF while MUST_CHANGE is set (Unlock, D4d).
+        ["NOT_SUPPORTED"] = [5058, 3707, 15099, 15122, 15006, 15407, 37525, 15405, 15021, 15128],
         // The password policy: 15114 too recent, 15115 not usable now, 15116 too short, 15117 too long, 15118 not complex enough
         // (Windows' policy); SQL Server's own policy, which SQL Server on Linux applies, answers 33062 too short, 33063 too long and
         // 33064 not complex enough (a password that contains the login name too).

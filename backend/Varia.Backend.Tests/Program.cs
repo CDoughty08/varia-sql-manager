@@ -25,7 +25,7 @@ void Check(bool condition, string name)
 // CI's live jobs (`--live-group k/n`) run only their share of the live suites (LiveGroups), and no offline checks: Check (ubuntu) runs those.
 var liveGroup = LiveGroups.Parse(args);
 // Focused SQL Server lanes: their scratch and permission checks are required, never an offline-only or skipped success.
-if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--server-files-live" or "--seams-live" or "--new-database-live" or "--action-progress-live" or "--attach-live" or "--restore-live" or "--logins-live" or "--login-listing-live" or "--database-state-live" or "--delete-live" or "--detach-live" or "--rename-database-live")])
+if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--server-files-live" or "--seams-live" or "--new-database-live" or "--action-progress-live" or "--attach-live" or "--restore-live" or "--logins-live" or "--login-listing-live" or "--database-state-live" or "--delete-live" or "--detach-live" or "--rename-database-live" or "--login-actions-live" or "--login-delete-live")])
 {
     var focusedServer = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SERVER");
     if (string.IsNullOrWhiteSpace(focusedServer)) throw new Exception(lane + " requires VARIA_TEST_SQL_SERVER.");
@@ -90,6 +90,17 @@ if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live"
         {
             await LoginListingLiveChecks.RunAsync(Check, focusedService, focusedInfo, json);
             Console.WriteLine("Passed " + passed + " focused Logins listing checks.");
+        }
+        else if (lane == "--login-actions-live")
+        {
+            await LoginActionLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
+            await UnlockLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
+            Console.WriteLine("Passed " + passed + " focused login action checks.");
+        }
+        else if (lane == "--login-delete-live")
+        {
+            await LoginDeleteLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json, required: true);
+            Console.WriteLine("Passed " + passed + " focused login Delete checks.");
         }
         else if (lane == "--explorer-status-live")
         {
@@ -238,6 +249,9 @@ if (liveGroup is null)
     await AttachChecks.RunAsync(Check);
     await RestoreChecks.RunAsync(Check);
     await LoginChecks.RunAsync(Check);
+    await LoginActionChecks.RunAsync(Check);
+    await LoginDeleteChecks.RunAsync(Check);
+    await UnlockChecks.RunAsync(Check);
     DatabasePropertiesChecks.Run(Check);
     DesignerChecks.Run(Check);
     NewDatabaseChecks.Run(Check);
@@ -264,18 +278,20 @@ if (liveGroup is null)
         Check(await StateError("invalid") == "INVALID_PARAMS" && await StateError(Guid.NewGuid().ToString()) == "SESSION_CLOSED", "an unknown session's state is an error value, at once");
     }
     // Live runs share one server with other runs: they leave each other's scratch objects alone and time cancels against the load.
-    Check(new[] { "VariaScratch_20261018120000_0123abcd_su", "VariaScratch_x", "varia_scratch_0123456789ab", "VARIA_SCRATCH_x" }.All(ScratchDatabase.IsScratchName)
-        && !new[] { "master", "variascratch_x", "VariaScratch", "AppVariaScratch_x", "varia_scratchy" }.Any(ScratchDatabase.IsScratchName),
-        "scratch names are the .NET checks' VariaScratch_ and the vitest and smoke suites' varia_scratch_ prefixes");
+    Check(new[] { "VariaScratch_20261018120000_0123abcd_su", "VariaScratch_x", "varia_scratch_0123456789ab", "VARIA_SCRATCH_x", "##VariaScratch_20261018120000_0123abcd_ls##" }.All(ScratchDatabase.IsScratchName)
+        && !new[] { "master", "variascratch_x", "VariaScratch", "AppVariaScratch_x", "varia_scratchy", "##MS_PolicyTsqlExecutionLogin##", "#VariaScratch_x", "##variascratch_x" }.Any(ScratchDatabase.IsScratchName)
+        && InjectionMatrix.Inventory.Contains("sp.name NOT LIKE N'##VariaScratch[_]%'", StringComparison.Ordinal),
+        "scratch names are the .NET checks' VariaScratch_ (and ##VariaScratch_ for a login in SQL Server's own name form) and the vitest and smoke suites' varia_scratch_ prefixes, "
+        + "which the injection matrix's server principals leave out");
     static SqlRun Names(params string[] names) => new("Completed", null, [[.. names.Select(name => new string?[] { name })]]);
     Check(ScratchDatabase.Lasting(Names("master", "VariaScratch_20261018120000_0123abcd", "model", "varia_scratch_0123456789ab"))
             == ScratchDatabase.Lasting(Names("master", "model"))
         && ScratchDatabase.Lasting(Names("master", "model")) != ScratchDatabase.Lasting(Names("master", "model", "Sales"))
         && ScratchDatabase.Lasting(Names("master", "model")) != ScratchDatabase.Lasting(Names("master")),
         "\"the server is unchanged\" checks ignore other runs' scratch databases but see any other database come or go");
-    Check(new[] { "", "_ro", "_off", "_su", "_rs", "_rv", "_rvs", "_snap", "_rt", "_inj", "_act", "_actr", "_dbp", "_tbd", "_tbd.]", "_live", "_ssis", "_ssisref", "_ssiscc", "_files", "_seam", "_seamt", "_nd", "_ap", "_at", "_at']", "_at2", "_rst", "_rstr", "_dbs", "_del", "_delc", "_delcs", "_delo", "_det", "_dets" }.All(suffix => ScratchDatabase.Sweepable("VariaScratch_20261018120000_0123abcd" + suffix))
+    Check(new[] { "", "_ro", "_off", "_su", "_rs", "_rv", "_rvs", "_snap", "_rt", "_inj", "_act", "_actr", "_dbp", "_tbd", "_tbd.]", "_live", "_ssis", "_ssisref", "_ssiscc", "_files", "_seam", "_seamt", "_nd", "_ap", "_at", "_at']", "_at2", "_rst", "_rstr", "_dbs", "_del", "_delc", "_delcs", "_delo", "_det", "_dets", "_ldu", "_ldk" }.All(suffix => ScratchDatabase.Sweepable("VariaScratch_20261018120000_0123abcd" + suffix))
         && !new[] { "VariaScratch_20261018120000_0123abcd_acts", "VariaScratch_20261018120000_0123abcd_iso", "VariaScratch_20261018120000_0123abcd_dbpx", "VariaScratch_x_act", "varia_scratch_0123456789ab", "VariaScratch_20261018120000_0123ABCD",
-            "VariaScratch_20261018120000_0123abcd_ssisx", "VariaScratch_20261018120000_0123abcd_ssis_ref", "VariaScratch_20261018120000_0123abcd_ssiscc_", "VariaScratch_20261018120000_0123abcd_file", "VariaScratch_20261018120000_0123abcd_seamx", "VariaScratch_20261018120000_0123abcd_ndx", "VariaScratch_20261018120000_0123abcd_apx", "VariaScratch_20261018120000_0123abcd_at']]", "VariaScratch_20261018120000_0123abcd_at3", "VariaScratch_20261018120000_0123abcd_rstx", "VariaScratch_20261018120000_0123abcd_detx", "SSISDB" }.Any(ScratchDatabase.Sweepable)
+            "VariaScratch_20261018120000_0123abcd_ssisx", "VariaScratch_20261018120000_0123abcd_ssis_ref", "VariaScratch_20261018120000_0123abcd_ssiscc_", "VariaScratch_20261018120000_0123abcd_file", "VariaScratch_20261018120000_0123abcd_seamx", "VariaScratch_20261018120000_0123abcd_ndx", "VariaScratch_20261018120000_0123abcd_apx", "VariaScratch_20261018120000_0123abcd_at']]", "VariaScratch_20261018120000_0123abcd_at3", "VariaScratch_20261018120000_0123abcd_rstx", "VariaScratch_20261018120000_0123abcd_detx", "VariaScratch_20261018120000_0123abcd_ld", "SSISDB" }.Any(ScratchDatabase.Sweepable)
         && ScratchDatabase.IsScratchJob("VariaScratch_20261018120000_0123abcd_job")
         && !new[] { "VariaScratch_x_job", "VariaScratch_cleanup_job", "VariaScratch_nightly_job", "VariaScratch_20261018120000_0123abcd", "VariaScratch_20261018120000_0123ABCD_job",
             "VariaScratch_20261018120000_0123abcd_job2", "VariaScratch_20261018120000_0123abcd_x_job", "xVariaScratch_20261018120000_0123abcd_job" }.Any(ScratchDatabase.IsScratchJob),
@@ -657,6 +673,9 @@ try
     await Suite("Restore", () => RestoreLiveChecks.RunAsync(Check, service, info, json));
     await Suite("Login", () => LoginLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("LoginListing", () => LoginListingLiveChecks.RunAsync(Check, service, info, json));
+    await Suite("LoginAction", () => LoginActionLiveChecks.RunAsync(Check, service, info, Live, json));
+    await Suite("LoginDelete", () => LoginDeleteLiveChecks.RunAsync(Check, service, info, Live, json));
+    await Suite("Unlock", () => UnlockLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("DatabaseProperties", () => DatabasePropertiesLiveChecks.RunAsync(Check, service, info, json));
     await Suite("Designer", () => DesignerLiveChecks.RunAsync(Check, service, info, Live("master"), json));
     await Suite("NewDatabase", () => NewDatabaseLiveChecks.RunAsync(Check, service, info, json));

@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { unknownOutcomeMessage } from '../src/shared/actions/catalog'
+import { loginMessages, type LoginFacts, type LoginLockFacts } from '../src/shared/actions/logins'
 import type { ActionDescribeResult, ActionExecuteResult, ActionScriptResult, DatabaseStateModel, DeleteTarget } from '../src/shared/actions/schema'
 import type { ApiResult, VariaApi } from '../src/shared/contracts'
 import type { ObjectRef } from '../src/shared/explorer/refs'
 import { dialogMessages, ObjectDialogService } from '../src/renderer/src/dialogs/ObjectDialogService'
+import { unlockChooseMode, unlockSuccessNotice } from '../src/renderer/src/dialogs/definitions'
+import { unlockStateLines } from '../src/renderer/src/dialogs/pages/UnlockLoginPage'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { ConnectionService } from '../src/renderer/src/services/connections'
 import { deferred } from './fixtures/documents'
@@ -35,11 +38,12 @@ function setup() {
   const explorer = { listingFolderOf: vi.fn(() => 3 as number | undefined), reconcile: vi.fn() }
   const documents = { newQuery: vi.fn() }, files = { saveCopy: vi.fn(async (name: string) => ({ id: 'f', name, path: '/x/' + name, encoding: 'utf8' as const, readOnly: false })) }
   let ids = 0
+  const notify = vi.fn<(message: string) => void>()
   const databaseState = vi.fn<(connectionId: string, database: string, offline: boolean) => void>()
-  const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, databaseState, newId: () => `id-${++ids}` })
+  const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, notify, databaseState, newId: () => `id-${++ids}` })
   cleanups.push(() => dialogs.dispose())
   const settle = () => new Promise(resolve => setTimeout(resolve, 0))
-  return { dialogs, api, connections, explorer, documents, execute, settle, databaseState, hold: (promise: Promise<ApiResult<ActionDescribeResult>>) => { held = promise } }
+  return { dialogs, api, connections, explorer, documents, execute, settle, notify, databaseState, hold: (promise: Promise<ApiResult<ActionDescribeResult>>) => { held = promise } }
 }
 
 describe('ObjectDialogService', () => {
@@ -66,7 +70,7 @@ describe('ObjectDialogService', () => {
     api.describeObject.mockResolvedValueOnce(row({ isSnapshot: true }))
     dialogs.open('deleteObject', node(databaseRef))
     await settle()
-    expect(dialogs.current?.draft).toEqual({ deleteHistory: false, closeConnections: false })
+    expect(dialogs.current?.draft).toEqual({ deleteHistory: false, closeConnections: false, dropMappedUsers: false })
   })
   it('scripts the action to each destination through Script As\'s delivery and stays open', async () => {
     const { dialogs, api, documents, settle } = setup()
@@ -178,6 +182,78 @@ describe('ObjectDialogService: documents', () => {
     expect(() => dialogs.open('databaseProperties' as never, node(databaseRef, 12))).toThrow('That dialog opens as a document.')
     expect(dialogs.current).toBeUndefined()
     expect(api.describeObject).not.toHaveBeenCalled()
+  })
+})
+
+describe('ObjectDialogService: Unlock Login', () => {
+  const lockedRef: ObjectRef = { kind: 'login', name: 'Locked' }
+  const facts = (changes: Partial<LoginFacts> = {}): LoginFacts => ({ principalId: 300, type: 'S', subtype: 'sql', disabled: false, sid: '0A1B', created: '2026-01-02T03:04:05.000', policyChecked: true, expirationChecked: true,
+    connectDenied: false, own: false, sysadmin: false, ownedDatabaseNames: [], canAlter: true, canControlServer: true, nameInUse: false, ...changes })
+  const lock = (changes: Partial<LoginLockFacts> = {}): LoginLockFacts => ({ locked: true, badPasswords: 11, lockoutTime: '2026-11-02T21:07:12.123', mustChange: false, expired: false, daysUntilExpiration: 42, ...changes })
+  const described = (login = facts(), state = lock()): ApiResult<ActionDescribeResult> => ({ ok: true, value: { login, lock: state, elapsedMs: 1 } })
+  it('describes the lock-out state of the login, and OK unlocks it keeping the password once chosen, bound to the login it read', async () => {
+    const { dialogs, api, explorer, execute, settle, notify } = setup()
+    api.describeObject.mockResolvedValueOnce(described())
+    dialogs.open('unlockLogin', node(lockedRef))
+    expect(dialogs.current).toMatchObject({ dialog: 'unlockLogin', title: 'Unlock Login - Locked', phase: 'loading' })
+    expect(api.describeObject.mock.calls[0][0]).toMatchObject({ dialog: 'unlockLogin', target: lockedRef })
+    await settle()
+    // Nothing is chosen (owner decision 9: keeping the password clears its history, so it is never the default): OK, and Enter,
+    // which runs the same OK, send nothing until the user picks.
+    expect(dialogs.current).toMatchObject({ phase: 'ready', draft: {} })
+    expect(dialogs.blockedReason()).toBe(unlockChooseMode)
+    await dialogs.ok()
+    expect(api.executeObjectAction).not.toHaveBeenCalled()
+    expect(dialogs.current?.phase).toBe('ready')
+    dialogs.updateDraft({ mode: 'keepPassword' })
+    expect(dialogs.blockedReason()).toBeUndefined()
+    await dialogs.script('newQuery')
+    expect(api.scriptObjectAction.mock.calls[0][0]).toEqual({ action: 'unlock', target: lockedRef, mode: 'keepPassword', loginIdentity: { sid: '0A1B', created: '2026-01-02T03:04:05.000' }, connectionId: 'server-a', requestId: 'id-2' })
+    const ok = dialogs.ok()
+    expect(api.executeObjectAction.mock.calls[0][0]).toEqual({ action: 'unlock', target: lockedRef, mode: 'keepPassword', loginIdentity: { sid: '0A1B', created: '2026-01-02T03:04:05.000' }, connectionId: 'server-a', requestId: 'id-3' })
+    execute.resolve({ ok: true, value: { steps: [{ status: 'done', title: 'Turn off the password policy' }, { status: 'done', title: 'Turn the password policy and expiration back on' }, { status: 'done', title: 'Commit' }], messages: [], elapsedMs: 1 } })
+    await ok
+    expect(dialogs.current).toBeUndefined()
+    expect(explorer.reconcile).toHaveBeenCalledWith(3)
+    expect(notify.mock.calls).toEqual([[unlockSuccessNotice('Locked')]])
+    expect(unlockSuccessNotice('Locked')).toBe('Unlocked the login Locked. Its password history was cleared.')
+  })
+  it('greys OK, with the reason, for a login that is not locked, has no policy or must change its password; Script stays', async () => {
+    for (const [name, login, state, reason] of [
+      ['not locked', facts(), lock({ locked: false, badPasswords: 0, lockoutTime: undefined }), loginMessages.notLocked],
+      ['no policy', facts({ policyChecked: false }), lock(), loginMessages.unlockNoPolicy],
+      ['must change', facts(), lock({ mustChange: true }), loginMessages.unlockMustChange],
+      ['no permission', facts({ canAlter: false }), lock(), loginMessages.alterAnyLogin]
+    ] as const) {
+      const { dialogs, api, settle } = setup()
+      api.describeObject.mockResolvedValueOnce(described(login, state))
+      dialogs.open('unlockLogin', node(lockedRef))
+      await settle()
+      expect(dialogs.blockedReason(), name).toBe(reason)
+      await dialogs.ok()
+      expect(api.executeObjectAction, name).not.toHaveBeenCalled()
+      expect(dialogs.current?.phase, name).toBe('ready')
+      await dialogs.script('clipboard')
+      expect(api.scriptObjectAction, name).toHaveBeenCalledTimes(1)
+      dialogs.close()
+    }
+  })
+  it('shows a login unlocked meanwhile as not locked, so OK greys rather than asking again', async () => {
+    const { dialogs, api, execute, settle } = setup()
+    api.describeObject.mockResolvedValueOnce(described())
+    dialogs.open('unlockLogin', node(lockedRef))
+    await settle()
+    dialogs.updateDraft({ mode: 'keepPassword' })
+    const ok = dialogs.ok()
+    execute.resolve({ ok: true, value: { steps: [{ status: 'failed', title: 'Turn off the password policy', message: loginMessages.notLocked }, { status: 'skipped', title: 'Commit' }], messages: [], elapsedMs: 1, error: { code: 'NOT_SUPPORTED', message: loginMessages.notLocked, retryable: false } } })
+    await ok
+    expect(dialogs.current).toMatchObject({ phase: 'failed', error: { message: loginMessages.notLocked } })
+    expect(dialogs.blockedReason()).toBe(loginMessages.notLocked)
+  })
+  it('words the lock-out state from the describe', () => {
+    expect(unlockStateLines(lock())).toEqual(['Locked out since 2026-11-02 21:07:12 (server time) after 11 failed sign-ins.'])
+    expect(unlockStateLines(lock({ badPasswords: 1, lockoutTime: undefined, expired: true, mustChange: true }))).toEqual(['Locked out after 1 failed sign-in.', 'The password has expired.', 'The login must change its password at next sign-in.'])
+    expect(unlockStateLines(lock({ locked: false }))).toEqual(['This login is not locked out.'])
   })
 })
 

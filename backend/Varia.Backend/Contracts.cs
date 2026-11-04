@@ -212,7 +212,7 @@ internal sealed record ScriptResult(string? Text, string Database, List<string> 
 /// <summary>actions.describe: what an object dialog shows (deleteObject: Delete Object's row; databaseProperties: Database Properties' pages),
 /// what an inline action reads first (renameDatabase), what the table designer needs of a database (tableDesigner), one database's roles and schemas for User Mapping (loginDatabaseRoles), the server's folders (serverFiles, the server as Target, with Files),
 /// what Restore Database restores from (restoreDatabase, the server as Target, with Restore), or Attach Databases' server facts and,
-/// with Attach, one primary data file's database (attachDatabase, the server as Target).</summary>
+/// with Attach, one primary data file's database (attachDatabase, the server as Target), or a login's facts (loginFacts, before Disable; unlockLogin, with its lock-out state).</summary>
 internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target, ServerFilesArgsDto? Files = null, RestoreSourceDto? Restore = null,
     AttachDescribeArgsDto? Attach = null);
 /// <summary>Restore Database's describe (src/shared/actions/restore.ts RestoreSource): Kind history (Database, optional), devices
@@ -273,11 +273,17 @@ internal sealed record ServerFilesDto(string Separator, string? Path, List<Serve
 /// CloseConnections and Changes, createTable (Target the database) and createDatabase (Target the new database) Design, restore
 /// (Target the destination database) Restore and Identity, restoreFiles (Target the database) RestoreFiles and Identity, attach (Target
 /// the server) Databases, createLogin (Target the server) Login, ServerRoles, Mappings, Status and, on execute only, Secrets, takeOffline
-/// DropConnections, detach DropConnections, UpdateStatistics and DetachOffline; Validate refuses the rest.</summary>
+/// DropConnections, detach DropConnections, UpdateStatistics and DetachOffline; a login's disable and enable take only LoginIdentity, and a
+/// login's delete LoginIdentity and DropMappedUsers (D4c: also drop the database users mapped to it), and its unlock Mode (keepPassword; the
+/// request's `mode`) and LoginIdentity. Validate refuses the rest.</summary>
 internal sealed record ActionArgs(string Action, string ConnectionId, string RequestId, ObjectRefDto Target, string? NewName = null, bool? CloseConnections = null, bool? DeleteHistory = null,
     DatabaseChangesDto? Changes = null, ActionDesign? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null, RestoreOptionsDto? Restore = null,
     List<AttachDatabaseDto>? Databases = null, NewLoginDto? Login = null, List<string>? ServerRoles = null, LoginStatusDto? Status = null,
-    bool? DropConnections = null, RestoreFilesOptionsDto? RestoreFiles = null, List<UserMappingDto>? Mappings = null, bool? UpdateStatistics = null, bool? DetachOffline = null);
+    bool? DropConnections = null, RestoreFilesOptionsDto? RestoreFiles = null, List<UserMappingDto>? Mappings = null, bool? UpdateStatistics = null, bool? DetachOffline = null, LoginIdentityDto? LoginIdentity = null,
+    bool? DropMappedUsers = null, string? Mode = null);
+/// <summary>Which login the loginFacts describe read (its SID as hexadecimal, at most loginLimits.sidHex characters, and
+/// create_date as the describe writes it): Disable, Enable, Delete and Unlock refuse a principal that has taken the name since.</summary>
+internal sealed record LoginIdentityDto(string Sid, string Created);
 /// <summary>New Login's General page (src/shared/actions/logins.ts NewLoginGeneral): Auth windows or sql; the password policy
 /// options exactly for sql, in SQL Server's chain (MustChange needs CheckExpiration, which needs CheckPolicy).</summary>
 internal sealed record NewLoginDto(string Auth, string Name, string DefaultDatabase, string? DefaultLanguage = null, bool? CheckPolicy = null, bool? CheckExpiration = null, bool? MustChange = null);
@@ -342,9 +348,24 @@ internal sealed record DatabaseIdentityDto(int Id, string Created);
 /// <summary>Database Properties' changes: only what differs from the describe. Options and Scoped map a catalogue key to a token.</summary>
 internal sealed record DatabaseChangesDto(string? Owner = null, Dictionary<string, string>? Options = null, Dictionary<string, string>? Scoped = null);
 internal sealed record ActionError(string Code, string Message, bool Retryable);
-/// <summary>What the login preflight (ActionSql.Login) reads in the action's own connection (src/shared/actions/logins.ts LoginFacts).</summary>
+/// <summary>What the login preflight (ActionSql.Login) reads in the action's own connection (src/shared/actions/logins.ts LoginFacts).
+/// Service (at most loginLimits.serviceName characters) is the loginFacts describe's guarded service lookup only. The owned
+/// counts are null where the preflight leaves them out (ActionSql.LoginAlter, before an ALTER LOGIN). OwnedJobs (Delete Object's
+/// describe only) is null when msdb could not be read. GrantedPermissions (with the owned counts) counts the server permissions it granted
+/// to other principals, which DROP LOGIN fails on (15173).</summary>
 internal sealed record LoginFactsDto(int PrincipalId, string Type, string Subtype, bool Disabled, string Sid, string Created, bool? PolicyChecked, bool? ExpirationChecked, bool ConnectDenied,
-    bool Own, bool Sysadmin, int? Sessions, int OwnedDatabases, List<string> OwnedDatabaseNames, int OwnedServerObjects, bool CanAlter, bool CanControlServer, bool NameInUse);
+    bool Own, bool Sysadmin, int? Sessions, int? OwnedDatabases, List<string> OwnedDatabaseNames, int? OwnedServerObjects, bool CanAlter, bool CanControlServer, bool NameInUse, string? Service = null,
+    int? OwnedJobs = null, int? GrantedPermissions = null);
+/// <summary>A database user mapped to a login (D4 §5.4): its database and name, the schemas, roles and other securables it owns, the
+/// permissions it granted to others, whether its database is read-only, and whether this connection may drop users there (ALTER ANY
+/// USER). A Delete that drops the mapped users keeps those whose DROP USER would fail (ActionService.Kept).</summary>
+internal sealed record MappedUserDto(string Database, string User, int OwnedSchemas, int OwnedRoles, bool ReadOnly, int OwnedSecurables, int GrantedPermissions, bool CanDrop);
+/// <summary>The mapped-user scan's answer: at most loginLimits.mappedUsers users, how many it found in all (Mapped), and how many databases it
+/// read (Checked) and did not (NotChecked: offline, restoring, not accessible, failed, or past the scan's bound or budget).</summary>
+internal sealed record LoginMappingsDto(List<MappedUserDto> Users, int Mapped, int Checked, int NotChecked);
+/// <summary>A login's lock-out state (src/shared/actions/logins.ts LoginLockFacts), from ActionSql.LoginLock: LockoutTime (the
+/// server's clock) only while locked, DaysUntilExpiration only while the password expires.</summary>
+internal sealed record LoginLockFactsDto(bool Locked, int? BadPasswords, string? LockoutTime, bool MustChange, bool Expired, int? DaysUntilExpiration);
 internal sealed record ActionWarningDto(string Text, bool Blocking);
 /// <summary>A session in a database that its DROP waits for and Close existing connections ends (D3 §8): never the backend's own
 /// pooled sessions. Program and host are clipped to the catalogue's blockerChars.</summary>
@@ -353,9 +374,10 @@ internal sealed record BlockerDto(int SessionId, string? Program, string? Host, 
 /// with an open transaction) are absent without VIEW SERVER STATE, as are Blockers (at most the catalogue's blockers; BlockersTruncated
 /// when more exist) and TransactionTabs (the query tabs, by session id, whose session has an open transaction there, at most
 /// ActionService.TransactionTabLimit); CloseConnectionsNote is why Close existing connections is unavailable (Managed Instance, an
-/// offline database).</summary>
+/// offline database). For a login (D4c): Login, its facts with what it owns, and Mappings, the database users mapped to it.</summary>
 internal sealed record DeleteTargetDto(string Name, string Type, string? Owner, List<ActionWarningDto> Warnings, bool DependentsTruncated, bool? IsSnapshot = null, int? Sessions = null,
-    int? WithTransaction = null, List<BlockerDto>? Blockers = null, bool? BlockersTruncated = null, string? CloseConnectionsNote = null, List<string>? TransactionTabs = null);
+    int? WithTransaction = null, List<BlockerDto>? Blockers = null, bool? BlockersTruncated = null, string? CloseConnectionsNote = null, List<string>? TransactionTabs = null,
+    LoginFactsDto? Login = null, LoginMappingsDto? Mappings = null);
 /// <summary>Database Properties' General page; sizes in MB, dates as ISO 8601, a backup of "None" when msdb has no history.</summary>
 internal sealed record DatabaseGeneralDto(string Name, string Status, bool Standby, string? Owner, string Created, double SizeMb, double? SpaceAvailableMb = null, int? Users = null,
     string? LastBackup = null, string? LastLogBackup = null, string? Collation = null, double? MemoryAllocatedMb = null, double? MemoryUsedMb = null, int? Id = null);
@@ -390,7 +412,7 @@ internal sealed record DatabaseFileRefDto(int FileId, string Name, string Type, 
 internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long ElapsedMs, ActionError? Error = null, DatabasePropertiesDto? DatabaseProperties = null,
     TableDesignerModelDto? TableDesigner = null, ServerFilesDto? ServerFiles = null, RestoreModelDto? Restore = null, NewDatabaseModelDto? NewDatabase = null,
     AttachDescribeDto? AttachDatabase = null, NewLoginModelDto? NewLogin = null, DatabaseStateDto? DatabaseState = null, LoginDatabaseRolesDto? LoginDatabaseRoles = null,
-    RenameDatabaseDto? RenameDatabase = null);
+    RenameDatabaseDto? RenameDatabase = null, LoginFactsDto? Login = null, LoginLockFactsDto? Lock = null);
 /// <summary>User Mapping's read of one database (src/shared/actions/logins.ts LoginDatabaseRoles): its roles and schemas by name, each
 /// bounded by loginLimits, and whether guest has CONNECT there.</summary>
 internal sealed record LoginDatabaseRolesDto(List<string> Roles, bool RolesTruncated, bool Guest, List<string> Schemas, bool SchemasTruncated);
@@ -436,9 +458,10 @@ internal sealed record ActionStepDto(string Status, string Title, string? Messag
 /// still RESTORING (sys.master_files.state 1), by logical name.</summary>
 internal sealed record RestoredDatabaseDto(int? State, int? UserAccess, bool? Absent = null, List<string>? FilesLeft = null, bool? FilesUnknown = null, List<string>? FilesRestoring = null);
 /// <summary>FilesKept: Detach's files left on the server once the database was detached (at most the catalogue's detachFiles); Identity: a
-/// renamed database's under its new name (src/shared/actions/schema.ts ActionExecuteResult).</summary>
+/// renamed database's under its new name (src/shared/actions/schema.ts ActionExecuteResult); Sessions: a login action's count of the sessions
+/// connected as the login (VIEW SERVER STATE), which Disable leaves connected.</summary>
 internal sealed record ActionExecuteResult(List<ActionStepDto> Steps, List<string> Messages, long ElapsedMs, ActionError? Error = null, RestoredDatabaseDto? Restored = null,
-    List<DatabaseFileRefDto>? FilesKept = null, DatabaseIdentityDto? Identity = null);
+    List<DatabaseFileRefDto>? FilesKept = null, DatabaseIdentityDto? Identity = null, int? Sessions = null);
 
 /// <summary>ssis.describe (src/shared/ssis/schema.ts): a view of the SSIS catalogue and the tree object it describes.</summary>
 internal sealed record SsisDescribeArgs(string ConnectionId, string RequestId, string View, ObjectRefDto Target);

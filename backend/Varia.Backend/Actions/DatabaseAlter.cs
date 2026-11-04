@@ -45,7 +45,7 @@ internal static partial class DatabaseAlter
     private static partial Regex CollationPattern();
     /// <summary>create_date as the describe writes it (DatabaseProperties.Iso).</summary>
     [GeneratedRegex(@"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}\z")]
-    private static partial Regex IdentityCreated();
+    internal static partial Regex IdentityCreated();
 
     /// <summary>Whether a request's identity is one a describe wrote: a database_id and create_date as DatabaseProperties.Iso writes it.</summary>
     internal static bool IdentityValid(DatabaseIdentityDto identity) => identity.Id >= 1 && identity.Created is not null && IdentityCreated().IsMatch(identity.Created);

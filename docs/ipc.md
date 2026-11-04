@@ -334,15 +334,21 @@ Failures the user can act on are `result.error` values, not envelope codes: `NOT
 action on Azure SQL Database, before any connection opens), `PERMISSION_DENIED`, `IN_USE`, `BLOCKED`, `DEPENDENTS`,
 `NAME_IN_USE`, `PATH_NOT_FOUND` (the server file picker and backup files), `FILE_ACCESS` (a database or backup file SQL Server cannot open, or its service account may not read), `MEDIA` (backup media a restore cannot use), `DATABASE_UNAVAILABLE`, `TIMEOUT`, `CONNECTION_LOST`, `SQL_ERROR`, `CANCELLED` (Stop), `AUTH_KERBEROS`,
 `AUTH_UNSUPPORTED` and `AUTH_ENTRA` (docs/object-actions.md). `actions.execute` answers `{ steps: { status: done | failed | skipped |
-cancelled, title, message?, detail?, compensates?, progress? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`: statements run
-in order and stop at the first failure. The backend's DryRun, which selects a statement instead of running it, exists only for
+cancelled | rolledBack, title, message?, detail?, compensates?, progress? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`: statements run
+in order and stop at the first failure. `rolledBack` marks a step that completed in a transaction a later failure or Stop rolled
+back (the table designer's Save, Unlock), whose message then names no step as completed. The backend's DryRun, which selects a statement instead of running it, exists only for
 the .NET checks and is not reachable from the wire. Delete Object's `actions.describe` answers `deleteTarget { name, type, owner?,
 warnings: { text, blocking }[], dependentsTruncated, isSnapshot?, sessions?, withTransaction?, blockers?: { sessionId, program?,
-host?, openTransaction }[], blockersTruncated?, closeConnectionsNote?, transactionTabs? }`: for a database, the session count
+host?, openTransaction }[], blockersTruncated?, closeConnectionsNote?, transactionTabs?, login?, mappings? }`: for a database, the session count
 (sessions in it or with a transaction in it, from any database), those with an open transaction, the sessions listed (at
 most 8, never the backend's own pooled sessions; program and host at most 128 characters) and `transactionTabs` (the
 session ids of Varia's query tabs holding an open transaction there, at most 1,000) need VIEW SERVER STATE, and
-`closeConnectionsNote` says why Close existing connections is unavailable (Managed Instance, an offline database).
+`closeConnectionsNote` says why Close existing connections is unavailable (Managed Instance, an offline database). For a
+login (D4c), `login` is its facts (as `loginFacts` answers them, plus `ownedJobs?`, absent when msdb cannot be read, and
+`grantedPermissions`, the server permissions it granted to others) and `mappings { users: { database, user, ownedSchemas,
+ownedRoles, readOnly, ownedSecurables, grantedPermissions, canDrop }[] (≤ 100), mapped, checked, notChecked }` the database
+users mapped to its SID, read one database at a time within `loginLimits.scanMs`; a database not read (the server's total
+is read on its own) is counted in `notChecked`, never an error.
 
 **Action progress** (D1c). A long action (the catalogue's `long`: a restore, a verify, a backup) runs its DDL under the long
 gate (1 per Varia connection, 2 in all; the next waits up to 30 s, then `BUSY` "Another restore or backup is running on this
@@ -590,11 +596,65 @@ NAME has completed, the reply carries `identity: { id, created }`, the database'
 connection just after (SQL Server gives a renamed database a new `create_date`); it is absent when it cannot be read within 5 s or
 the name now belongs to another database. Database Properties documents that follow the rename send it with their Apply.
 
+**Login actions** use the same three methods, with no new method. `actions.describe { connectionId, requestId, dialog:
+'loginFacts', target: { kind: 'login', name } }` runs the login preflight in the action's own connection, under READ UNCOMMITTED (its facts only advise; another
+session's open change to the login would otherwise hold the read until its lock timeout), and answers
+`{ login: { principalId, type, subtype, disabled, connectDenied, own, sysadmin, sessions, canAlter, canControlServer, …,
+service?: ≤ 256 }, elapsedMs }`, `service` naming the SQL Server service that runs as a Windows login (from
+`sys.dm_server_services`, read only where VIEW SERVER STATE allows it, else from an `NT SERVICE\` name); a missing login is
+`error: NOT_FOUND`. The catalogue's `describes` block maps each such id to its kind and the action whose permissions it
+checks. `actions.script` and `actions.execute` take `{ action: 'disable' | 'enable', connectionId, requestId, target: { kind:
+'login', name }, loginIdentity?: { sid: ^[0-9A-F]{2,172}$, created: yyyy-MM-ddTHH:mm:ss.fff } }` (strict: no other member) or
+a login's `rename` with `newName` (no `loginIdentity`). `loginIdentity` is the login the describe read; the preflight refuses
+a principal with another SID or creation time (`NOT_FOUND`, "…is not the one that was read…") before any DDL, so a
+confirmation is never applied to a login that has taken the name since. The describe's other facts stay advisory (read
+past open changes). Disable, Enable and Rename's preflight (`ActionSql.LoginAlter`) seeks only the login's own rows and
+leaves out the owned counts, which would scan every principal under READ COMMITTED and wait behind any other session's
+open change to one; the describe and Delete's preflight read them. They run in master, Script answers
+`database: 'master'`, and execute answers `sessions`, the count of sessions connected as the login that the preflight read.
+The backend re-derives the subtype from the name the catalog holds (the server collation also finds `##x## ` and a fullwidth
+spelling of `##x##`) and refuses by `LoginRules` before any DDL, which then names that principal: SQL Server's own logins
+(`##…##`, trailing spaces ignored; zod and `Validate` refuse such a target name as `INVALID_PARAMS` too) for every action,
+the connection's own login, a SQL Server login's name with a backslash (`NOT_SUPPORTED`) and a name another login or
+server role holds (`NAME_IN_USE`). A login's `newName` in the `##…##` form is `INVALID_PARAMS` (zod and `Validate`).
+A login's `delete` (D4c) takes `dropMappedUsers?: boolean` and `loginIdentity` (both refused on any other kind, and
+`dropMappedUsers` on any other action; `loginIdentity` required on `actions.execute`, by zod's `actionExecuteRequestSchema`
+and `Validate`, optional on `actions.script`), with `closeConnections` and `deleteHistory` absent or false. Its execute
+reads the login again under READ COMMITTED (identity and rules), then what blocks the DROP past open changes: sessions
+answer `IN_USE`, owned databases, Agent jobs, server roles, endpoints and availability groups, and granted server
+permissions `DEPENDENTS` (15173 maps there too); with `dropMappedUsers`, sessions it cannot count are `NOT_SUPPORTED`, a
+database its scan could not read again `BLOCKED`, and more mapped users than it lists `NOT_SUPPORTED`, all before any DDL.
+It then runs `Drop the database user` per droppable user (each step's `detail` is `user in database`) and `Drop the
+login`, not in one transaction. Each DROP's batch checks the principal it was planned for (`PrincipalBinding`: the user by
+name and the login's SID, the login by SID, principal id and creation time) before the DROP and again after it in one
+transaction; a mismatch (50010) is `NOT_FOUND` and drops nothing. A 15434 from SQL Server (a session the preflight could
+not count) is `IN_USE` with advice to end it.
+
+**Unlock Login** (D4d) uses them too. `actions.describe { …, dialog: 'unlockLogin', target: { kind: 'login', name } }` reads the
+login's facts as Disable's preflight does (`ActionSql.LoginAlter`, READ COMMITTED) and then its lock-out state with
+`ActionSql.LoginLock`, the only statement that may call `LOGINPROPERTY` (for `IsLocked`, `BadPasswordCount`, `LockoutTime`,
+`IsMustChange`, `IsExpired` and `DaysUntilExpiration` only, which its own lint and the catalogue's `logins.lockProperties`
+check), and answers `{ login, lock: { locked, badPasswords?, lockoutTime? (the server's clock, while locked), mustChange,
+expired, daysUntilExpiration? }, elapsedMs }`. `LOGINPROPERTY` waits for another session's open change to the login whatever
+the isolation level, so behind one the describe answers `BLOCKED` after the read lock timeout (10 s). `actions.script` and
+`actions.execute` take `{ action: 'unlock', connectionId, requestId, target: { kind: 'login', name }, mode: 'keepPassword',
+loginIdentity? }` (strict; no password crosses, and `mode` is the only one until Login Properties). The preflight applies the
+login rules and the identity, reads the lock-out state again, and refuses before any DDL a login that is not a SQL Server login
+enforcing the password policy, one that must change its password (SQL Server would answer 15128, `NOT_SUPPORTED`) and, for
+execute only, one that is not locked out (`NOT_SUPPORTED`). Execute then runs `ALTER LOGIN … WITH CHECK_POLICY = OFF` and
+`… = ON` (with `CHECK_EXPIRATION = ON` when the login had it) through runner v2's transaction mode: steps "Turn off the password
+policy", "Turn the password policy back on" (or "… and expiration back on") and "Commit", rolled back on a failure or Stop
+(a step that had completed is then `rolledBack`). Catalog reads and `LOGINPROPERTY` hold no lock on the login, so the first step
+reads its facts and lock-out state again inside the transaction and, before its statement, answers the refusal itself (no
+rollback sentence, since nothing changed) when the login is gone, replaced or refused, is no longer locked out, or another session
+changed its policy or expiration since the preflight (`NOT_SUPPORTED`, the catalogue's `unlockChanged`).
+Script answers the same statements as one `SET XACT_ABORT ON; BEGIN TRANSACTION; … COMMIT TRANSACTION;` batch in master.
+
 **Object action confirmations** (A13) are main's message boxes too, on one channel, `varia:confirm-action` (trusted senders
 only): the page sends `{ prompt, facts }`, a strict zod union (`actionPromptRequestSchema` in
 `src/shared/actions/prompts.ts`): `renameDatabase { database: 1–128, sessions?: 0–1,000,000, transactions, tabs (the same
 range), tabsWithTransactions: ≤ 8 names of ≤ 260, canClose }` or `disableLogin { login: 1–128, sessions?, service?: ≤ 256,
-sysadmin }`. Main writes the box from that catalogue (names through `displayText`, so none can add lines or hide
+sysadmin, connections?: 1–8 names of ≤ 260 UTF-16 units (Varia's other connections that sign in as the login, cut with … by the page) }`. Main writes the box from that catalogue (names through `displayText`, so none can add lines or hide
 characters), shows it as the page's abortable dialog, and answers with the chosen button's id (`closeAndRename`,
 `renameWhenFree`, `disable`, or `cancel`, which Escape, a closed box and a reload or crash also answer). The page can
 neither word a prompt nor choose its default button. No backend method is involved.

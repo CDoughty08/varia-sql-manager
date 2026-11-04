@@ -3,8 +3,8 @@ namespace Varia.Backend.Actions;
 /// <summary>One login subtype's rule per verb ('allowed', 'greyed' or 'hidden'), and the message id each greyed verb answers with.</summary>
 internal sealed record LoginRuleJson(string Subtype, string Disable, string Enable, string Unlock, string Rename, string Delete, Dictionary<string, string> Greyed);
 /// <summary>The logins block of actions-catalog.json (src/shared/actions/logins.ts loginsCatalog()).</summary>
-internal sealed record LoginRulesJson(Dictionary<string, long> Limits, Dictionary<string, string> Messages, List<string> OwnRefuses, string RolesDescribe, List<LoginRuleJson> Rules,
-    int SaPrincipalId, string ScriptHeader, Dictionary<string, string> TypeSubtypes, LoginDetailJson Detail);
+internal sealed record LoginRulesJson(Dictionary<string, long> Limits, List<string> LockProperties, Dictionary<string, string> Messages, List<string> OwnRefuses, string RolesDescribe,
+    List<LoginRuleJson> Rules, int SaPrincipalId, string ScriptHeader, Dictionary<string, string> TypeSubtypes, LoginDetailJson Detail, List<string> NoBackslash);
 /// <summary>The words of a Logins folder row's detail (logins.ts loginDetailWords): its kind by type letter, then its state and
 /// password policy.</summary>
 internal sealed record LoginDetailJson(Dictionary<string, string> Types, string Disabled, string ConnectDenied, string PolicyChecked, string ExpirationChecked);
@@ -26,9 +26,14 @@ internal sealed class LoginRules
             throw new InvalidOperationException("The login rules do not cover every login subtype.");
         if (json.Detail is null || json.TypeSubtypes.Keys.Any(type => !json.Detail.Types.ContainsKey(type)))
             throw new InvalidOperationException("The login detail words do not name every login type.");
+        // ActionSql.LoginLock reads exactly the properties logins.ts allows (critic A15).
+        if (json.LockProperties is null || !json.LockProperties.SequenceEqual(ActionSql.LoginLockProperties, StringComparer.Ordinal))
+            throw new InvalidOperationException("The login lock-out properties differ from the catalogue's.");
     }
 
     public IReadOnlyCollection<string> Subtypes => rules.Keys;
+    /// <summary>The LOGINPROPERTY properties logins.ts allows ActionSql.LoginLock to read.</summary>
+    public IReadOnlyList<string> LockProperties => json.LockProperties;
     /// <summary>sys.server_principals.type letters the Logins folder lists.</summary>
     public IReadOnlyCollection<string> Types => json.TypeSubtypes.Keys;
 
@@ -38,8 +43,16 @@ internal sealed class LoginRules
     {
         if (type is null || !json.TypeSubtypes.TryGetValue(type.Trim(), out var byType)) return null;
         if (principalId == json.SaPrincipalId) return "sa";
-        if (name.Length >= 4 && name.StartsWith("##", StringComparison.Ordinal) && name.EndsWith("##", StringComparison.Ordinal)) return "system";
+        if (SystemName(name)) return "system";
         return byType;
+    }
+
+    /// <summary>Whether a login's name is SQL Server's own form, ##…## (logins.ts isSystemLoginName). SQL Server compares names
+    /// without trailing spaces, so "##x## " names the same login and counts too.</summary>
+    public static bool SystemName(string name)
+    {
+        var trimmed = name.TrimEnd(' ');
+        return trimmed.Length >= 4 && trimmed.StartsWith("##", StringComparison.Ordinal) && trimmed.EndsWith("##", StringComparison.Ordinal);
     }
 
     /// <summary>A login row's status (logins.ts loginStatusOf): disabled, else noAccess while CONNECT SQL is denied, else none.
@@ -85,6 +98,18 @@ internal sealed class LoginRules
         if (facts.Sysadmin && !facts.CanControlServer) return "controlServer";
         return null;
     }
+
+    /// <summary>The message id that refuses keeping the password to unlock a login, or null (logins.ts unlockRefusal, after the
+    /// rules' Refusal): a login that is not a SQL Server login enforcing the password policy (turning the policy on would change
+    /// it, not unlock it), one that must change its password (SQL Server refuses CHECK_POLICY = OFF then, 15128), and, unless
+    /// <paramref name="script"/>, one that is not locked out. A script is for later, when it may be.</summary>
+    public static string? UnlockRefusal(LoginFactsDto facts, LoginLockFactsDto state, bool script = false) =>
+        facts.Type.Trim() != "S" || facts.PolicyChecked != true ? "unlockNoPolicy" : state.MustChange ? "unlockMustChange" : !script && !state.Locked ? "notLocked" : null;
+
+    /// <summary>The message id that refuses a login's new name, or null: SQL Server's own form for every subtype, then a backslash
+    /// in the name of a login SQL Server authenticates itself (logins.ts loginNameRefusal; SQL Server would answer 15021).</summary>
+    public string? NameRefusal(string subtype, string newName) =>
+        SystemName(newName) ? "systemName" : json.NoBackslash.Contains(subtype) && newName.Contains('\\') ? "sqlBackslash" : null;
 
     public string Message(string id) => json.Messages.TryGetValue(id, out var text) ? text : throw new InvalidOperationException("Unknown login message " + id);
 

@@ -109,7 +109,11 @@ export class CommandService extends SnapshotStore<CommandSnapshot> implements Di
   onWillExecute(listener: (event: CommandEvent) => void): Disposable { return this.willExecute.subscribe(listener) }
   onDidExecute(listener: (event: CommandEvent) => void): Disposable { return this.didExecute.subscribe(listener) }
   onDidChangeHandlers(listener: () => void): Disposable { return this.handlersChanged.subscribe(listener) }
-  clearError(): void { if (this.getSnapshot().error) this.publish({ error: '' }) }
+  /** Clears the banner, or only `message` when given, so a box that reported its own refusal takes back that one alone. */
+  clearError(message?: string): void {
+    const { error } = this.getSnapshot()
+    if (error && (message === undefined || error === truncate(message))) this.publish({ error: '' })
+  }
   /** Shows a failure outside a command (a menu that could not render) in the command banner. */
   reportError(message: string): void { this.publish({ error: truncate(message) }) }
   /** Shows a warning in the command banner: something worked, but the user should know more (a script's warnings). */

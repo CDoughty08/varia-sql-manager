@@ -197,7 +197,7 @@ internal static partial class InjectionMatrix
     /// and modification time. Then the canary's row count (−1 when it is gone) and the marks left. The matrix creates no
     /// server principals (its users are WITHOUT LOGIN), so scratch-named ones (<see cref="ScratchDatabase.IsScratchName"/>)
     /// are left out: other runs on the same server create and drop their scratch logins and server roles while a script runs.</summary>
-    private const string Inventory = "SELECT N'o', SCHEMA_NAME(o.schema_id), o.name, RTRIM(o.type), CONVERT(bigint, o.object_id), o.modify_date FROM sys.objects AS o WHERE o.is_ms_shipped = 0 "
+    internal const string Inventory = "SELECT N'o', SCHEMA_NAME(o.schema_id), o.name, RTRIM(o.type), CONVERT(bigint, o.object_id), o.modify_date FROM sys.objects AS o WHERE o.is_ms_shipped = 0 "
         + "UNION ALL SELECT N's', NULL, s.name, NULL, s.schema_id, NULL FROM sys.schemas AS s "
         + "UNION ALL SELECT N'p', NULL, p.name, RTRIM(p.type), p.principal_id, p.modify_date FROM sys.database_principals AS p "
         + "UNION ALL SELECT N't', SCHEMA_NAME(t.schema_id), t.name, NULL, t.user_type_id, NULL FROM sys.types AS t WHERE t.is_user_defined = 1 "
@@ -208,7 +208,7 @@ internal static partial class InjectionMatrix
         + "UNION ALL SELECT N'e', CONVERT(sysname, ep.class) + N' ' + CONVERT(sysname, ep.major_id) + N' ' + CONVERT(sysname, ep.minor_id), ep.name, NULL, 0, NULL "
         + "FROM sys.extended_properties AS ep WHERE ep.name <> N'" + Mark + "' "
         + "UNION ALL SELECT N'x', NULL, sp.name COLLATE DATABASE_DEFAULT, RTRIM(sp.type) COLLATE DATABASE_DEFAULT, sp.principal_id, sp.modify_date FROM sys.server_principals AS sp "
-        + "WHERE sp.name NOT LIKE N'VariaScratch[_]%' AND sp.name NOT LIKE N'varia[_]scratch[_]%';\n"
+        + "WHERE sp.name NOT LIKE N'VariaScratch[_]%' AND sp.name NOT LIKE N'##VariaScratch[_]%' AND sp.name NOT LIKE N'varia[_]scratch[_]%';\n"
         + "IF OBJECT_ID(N'dbo.Canary', N'U') IS NULL SELECT -1 ELSE EXEC (N'SELECT COUNT(*) FROM dbo.Canary');\n"
         + "SELECT COUNT(*) FROM sys.extended_properties WHERE name = N'" + Mark + "';";
 

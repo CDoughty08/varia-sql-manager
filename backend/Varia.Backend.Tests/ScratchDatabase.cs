@@ -133,6 +133,10 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string Rename => Name + "_ren";
     public string Renamed => Name + "_renn";
     public string RenameTaken => Name + "_rent";
+    /// <summary>A login's Delete (D4c): the database whose mapped users a Delete drops or leaves orphaned, and the one whose user owns
+    /// a schema, which a Delete keeps (the login owns it first, so its DROP is refused).</summary>
+    public string LoginDeleteUsers => Name + "_ldu";
+    public string LoginDeleteKept => Name + "_ldk";
     /// <summary>Held in memory only, never printed.</summary>
     public string Password { get; }
     public bool HasSnapshot { get; private set; }
@@ -148,13 +152,17 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // Bring Online's (a crashed run can leave it offline, which the sweep drops by state); _del, _delc, _delcs and _delo Delete parity's (D3d): an offline
     // database, a database with its snapshot, and the login's own; _det Detach's and _dets its snapshot (a run that crashes while _det is detached
     // leaves only its files, which disposal attaches again when it can); and _ren, _renn and _rent the database rename checks' (D3c): a crashed run
-    // can leave either name, or one in SINGLE_USER, which the DROP handles.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_files|_seam|_seamt|_nd|_ap|_at|_at'\]|_at2|_rst|_rstr|_rstf|_rfl|_lgn|_lgm|_lgmo|_lgmr|_dbs|_del|_delc|_delcs|_delo|_det|_dets|_ren|_renn|_rent)?$")]
+    // can leave either name, or one in SINGLE_USER, which the DROP handles; _ldu and _ldk a login's Delete's (D4c): its mapped users' databases.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_files|_seam|_seamt|_nd|_ap|_at|_at'\]|_at2|_rst|_rstr|_rstf|_rfl|_lgn|_lgm|_lgmo|_lgmr|_dbs|_del|_delc|_delcs|_delo|_det|_dets|_ren|_renn|_rent|_ldu|_ldk)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^[a-z0-9]{1,8}\.(bak|trn)$")]
     private static partial Regex PartPattern();
-    // A run's own login, and New Login's (_l and a tag).
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_l[a-z0-9]{1,8})?$")]
+    // A run's own login, and New Login's (_l and a tag). The login actions (D4b) add _lt, their taken name, _lr]' --, the hostile
+    // name they rename the scratch login to and back, ##…_ls##, the login in SQL Server's own name form that they prove is refused
+    // under other spellings, and _lsx, the name a refused rename of it would have given it. A login's Delete (D4c) adds _ld]' --, the login a Delete
+    // drops with its users (_ld2, the one whose Delete leaves its user orphaned, and _ld3, the login that deletes without VIEW SERVER
+    // STATE, are tags). Unlock (D4d) adds _lk, _lp and _lm, its logins with the password policy (tags too).
+    [GeneratedRegex(@"^(VariaScratch_\d{14}_[0-9a-f]{8}(_l[a-z0-9]{1,8}|_lr\]' --|_ld\]' --)?|##VariaScratch_\d{14}_[0-9a-f]{8}_ls##)$")]
     private static partial Regex LoginPattern();
     // New Login's Extended Events session; its name's UTC timestamp dates it, as sys.server_event_sessions has no creation date.
     [GeneratedRegex(@"^VariaScratch_(\d{14})_[0-9a-f]{8}_xe$")]
@@ -176,10 +184,12 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     internal static bool Sweepable(string name) => Pattern().IsMatch(name);
 
     /// <summary>Whether a name is a scratch object's, this run's or another's on the same server: the .NET checks'
-    /// VariaScratch_ databases, logins and server objects, and the vitest and smoke suites' varia_scratch_ databases.
-    /// Another run's can be mid-setup, single-user, offline or gone a moment later.</summary>
+    /// VariaScratch_ databases, logins and server objects (and the login actions' ##VariaScratch_…_ls##, in SQL Server's own
+    /// name form), and the vitest and smoke suites' varia_scratch_ databases. Another run's can be mid-setup, single-user,
+    /// offline or gone a moment later.</summary>
     public static bool IsScratchName(string name) =>
-        name.StartsWith("VariaScratch_", StringComparison.Ordinal) || name.StartsWith("varia_scratch_", StringComparison.OrdinalIgnoreCase);
+        name.StartsWith("VariaScratch_", StringComparison.Ordinal) || name.StartsWith("##VariaScratch_", StringComparison.Ordinal)
+        || name.StartsWith("varia_scratch_", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Lists every database by name, for "the server is unchanged" checks through <see cref="Lasting"/>.</summary>
     public const string DatabaseNamesSql = "SELECT name FROM sys.databases ORDER BY name;";
@@ -240,9 +250,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
                     log("Could not delete a stale scratch backup file of " + group.Key);
             await run(HistorySql(group.Key), "msdb");
         }
-        var logins = await run("SELECT name FROM sys.server_principals WHERE name LIKE N'VariaScratch[_]%' AND type = 'S' AND create_date < DATEADD(hour, -6, GETDATE());", "master");
+        var logins = await run("SELECT name FROM sys.server_principals WHERE (name LIKE N'VariaScratch[_]%' OR name LIKE N'##VariaScratch[_]%') AND type = 'S' AND create_date < DATEADD(hour, -6, GETDATE());", "master");
         foreach (var row in logins.Sets.Count == 0 ? [] : logins.Sets[0])
-            if (LoginPattern().IsMatch(row[0]!))
+            if (SweepableLogin(row[0]!))
             {
                 log("Dropping stale scratch login " + row[0]);
                 await run("DROP LOGIN " + Bracket(row[0]!) + ";", "master");
@@ -581,6 +591,13 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         await CreateMarkedAsync(DeleteOwned);
         await Exec("ALTER AUTHORIZATION ON DATABASE::" + Bracket(DeleteOwned) + " TO " + Bracket(Login!) + ";");
         return DeleteOwned;
+    }
+
+    /// <summary>For a bare scratch name, a login's Delete's two databases (D4c), marked like the rest.</summary>
+    public async Task CreateLoginDeleteAsync()
+    {
+        await CreateMarkedAsync(LoginDeleteUsers);
+        await CreateMarkedAsync(LoginDeleteKept);
     }
 
     /// <summary>For a bare scratch name, Delete parity's compensation database (D3d) and a snapshot of it, which fails its DROP

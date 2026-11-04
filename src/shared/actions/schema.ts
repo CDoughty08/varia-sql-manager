@@ -9,8 +9,8 @@ import {
   serverFilesDescribeId, type ActionErrorCode, type ObjectAction
 } from './catalog.ts'
 import {
-  loginDatabaseRolesDescribe, loginLimits, newLoginAuths, newLoginStatements, publicRole, tooManyStatementsMessage, windowsLoginName, type LoginDatabaseRoles, type LoginSecrets, type LoginStatusChoice,
-  type NewLoginGeneral, type NewLoginModel, type UserMappingChoice
+  isSystemLoginName, loginDatabaseRolesDescribe, loginLimits, loginMessages, newLoginAuths, newLoginStatements, publicRole, tooManyStatementsMessage, unlockModes, windowsLoginName, type LoginDatabaseRoles, type LoginFacts,
+  type LoginLockFacts, type LoginMappings, type LoginSecrets, type LoginStatusChoice, type NewLoginGeneral, type NewLoginModel, type UnlockMode, type UserMappingChoice
 } from './logins.ts'
 import { wellFormed } from '../ssis/schema.ts'
 import { collationPattern, optionDef, settableOptionKeys, settableScopedKeys, tokenProblem, type FileType, type Growth } from './database.ts'
@@ -21,7 +21,8 @@ import { createTableSchema, type CreateTableRequest, type TableDesignerModel } f
 import { restoreDescribeId, restoreLimits, type RestoreModel, type RestoreSource } from './restore.ts'
 import { restoreFilesRequestSchema, restoreRequestSchema, restoreSourceSchema, type RestoreFilesRequest, type RestoreRequest } from './restore-schema.ts'
 
-/** What actions.describe describes: an object dialog (PR17's catalogue), an inline action's facts, a designer (src/shared/designer/catalog.ts), the
+/** What actions.describe describes: an object dialog (PR17's catalogue), an inline action's facts (a database's rename, a login's
+ *  Disable), a designer (src/shared/designer/catalog.ts), the
  *  server's folders for the server file picker, what Restore Database restores from (src/shared/actions/restore.ts), or one
  *  database's roles and schemas for New Login's User Mapping page (logins.ts loginDatabaseRolesDescribe). */
 export const describeIds = [...dialogIds, ...factDescribeIds, ...designerDescribeIds, serverFilesDescribeId, restoreDescribeId, loginDatabaseRolesDescribe] as const
@@ -43,9 +44,13 @@ export interface RenameRequest {
   readonly action: 'rename'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly newName: string; readonly closeConnections?: boolean
   readonly identity?: DatabaseIdentity
 }
-/** `closeConnections` (SET SINGLE_USER WITH ROLLBACK IMMEDIATE first) and `deleteHistory` apply to databases only. */
+/**
+ * `closeConnections` (SET SINGLE_USER WITH ROLLBACK IMMEDIATE first) and `deleteHistory` apply to databases only; `dropMappedUsers`
+ * (DROP USER in each database first, D4c) and `loginIdentity` (the login Delete Object read) to logins only.
+ */
 export interface DeleteRequest {
   readonly action: 'delete'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly closeConnections: boolean; readonly deleteHistory: boolean
+  readonly dropMappedUsers?: boolean; readonly loginIdentity?: LoginIdentity
 }
 /** Database Properties' changes, only what differs from the describe: options and scoped configurations by key, as tokens. */
 export interface DatabaseChanges {
@@ -105,8 +110,21 @@ export interface CreateLoginRequest {
   readonly status: LoginStatusChoice
   readonly secrets?: LoginSecrets
 }
+/**
+ * The login the loginFacts describe read: its SID (hexadecimal, at most loginLimits.sidHex characters) and create_date as the
+ * describe writes it. The preflight refuses a principal that has taken the name since, whose facts the confirmation never showed.
+ */
+export interface LoginIdentity { readonly sid: string; readonly created: string }
+/** A login's Disable or Enable (D4b): ALTER LOGIN … DISABLE or ENABLE in master, of the login its facts were read from. */
+export interface LoginStateRequest { readonly action: 'disable' | 'enable'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly loginIdentity?: LoginIdentity }
+/**
+ * Unlock Login (D4d): turns the password policy off and on again in one transaction, which unlocks the login and keeps its
+ * password. No password crosses for it; the identity is the login Unlock…'s describe read.
+ */
+export interface UnlockRequest { readonly action: 'unlock'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly mode: UnlockMode; readonly loginIdentity?: LoginIdentity }
 /** One action: actions.script returns its script, actions.execute runs it. */
 export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | CreateDatabaseRequest | AttachRequest | CreateLoginRequest | TakeOfflineRequest | BringOnlineRequest | DetachRequest
+  | LoginStateRequest | UnlockRequest
 /** actions.script and actions.execute also take a restore and a file restore, whose requests have shapes of their own (restore-schema.ts). */
 export type ActionScriptRequest = ActionRequest | RestoreRequest | RestoreFilesRequest
 export type ActionExecuteRequest = ActionRequest | RestoreRequest | RestoreFilesRequest
@@ -137,6 +155,9 @@ export interface DeleteTarget {
   readonly closeConnectionsNote?: string
   /** Varia's query tabs (their session ids) whose session holds an open transaction in the database or while in it, whatever database the tab is in (A7). */
   readonly transactionTabs?: readonly string[]
+  /** A login (D4c): its facts with what it owns (the warnings say what blocks the DROP), and the database users mapped to it. */
+  readonly login?: LoginFacts
+  readonly mappings?: LoginMappings
 }
 /** A session in a database that Delete Object lists; program and host are clipped to `actionLimits.blockerChars`. */
 export interface DatabaseBlocker {
@@ -292,6 +313,10 @@ export interface ActionDescribeResult {
   readonly loginDatabaseRoles?: LoginDatabaseRoles
   readonly databaseState?: DatabaseStateModel
   readonly renameDatabase?: RenameDatabaseFacts
+  /** loginFacts and unlockLogin: what the login preflight read, which the renderer checks against logins.ts' rules before it asks or runs. */
+  readonly login?: LoginFacts
+  /** unlockLogin: the login's lock-out state (ActionSql.LoginLock). */
+  readonly lock?: LoginLockFacts
 }
 export interface ActionScriptResult {
   /** Absent with `error`; at most `actionLimits.scriptChars` characters. */
@@ -301,7 +326,8 @@ export interface ActionScriptResult {
   readonly warnings: readonly string[]
   readonly error?: ActionError
 }
-export const actionStepStatuses = ['done', 'failed', 'skipped', 'cancelled'] as const
+/** A step's status. 'rolledBack': it completed in a transaction that a later failure or Stop rolled back (runner v2's transaction mode). */
+export const actionStepStatuses = ['done', 'failed', 'skipped', 'cancelled', 'rolledBack'] as const
 export type ActionStepStatus = typeof actionStepStatuses[number]
 /**
  * One step of an action's reply. `title` says what it does (constant text); `message` is SQL Server's text for a failed
@@ -329,6 +355,9 @@ export const restoredFilesLimit = 16
 /** The title of a database Delete's DROP step (ActionService.StepTitle in the backend; tests/delete-database.test.ts keeps them equal):
  *  a reply in which it is 'done' removed the database, even when a later step failed. */
 export const dropDatabaseStepTitle = 'Drop the database'
+/** The title of a login Delete's step per mapped user (ActionService.StepTitle; tests/delete-login.test.ts keeps them equal): its
+ *  `detail` is "database: user", and a done one changed that database's Users folder. */
+export const dropUserStepTitle = 'Drop the database user'
 export interface ActionExecuteResult {
   /** One per statement, in order: the first failure stops the rest, which are 'skipped'. */
   readonly steps: readonly ActionStep[]
@@ -345,6 +374,9 @@ export interface ActionExecuteResult {
   readonly filesKept?: readonly DatabaseFileRef[]
   /** A restore's destination after the run. */
   readonly restored?: RestoredDatabase
+  /** A login action's target: the sessions connected as the login when it ran, which a Disable leaves connected; absent
+   *  without VIEW SERVER STATE. */
+  readonly sessions?: number
 }
 
 // Objects in these schemas, and these databases, are SQL Server's own; the backend re-checks by catalog (is_ms_shipped,
@@ -355,16 +387,19 @@ const systemDatabases: ReadonlySet<string> = new Set(['master', 'model', 'msdb',
 export const detachDatabaseStepTitle = 'Detach the database'
 const verbs: Readonly<Record<ObjectAction, string>> = {
   selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties', attach: 'attached', takeOffline: 'taken offline', bringOnline: 'brought online',
-  detach: 'detached', restore: 'restored', restoreFiles: 'restored'
+  detach: 'detached', restore: 'restored', restoreFiles: 'restored', disable: 'disabled', enable: 'enabled', unlock: 'unlocked'
 }
 /** A server ref: what a create action on a server object (a login) names as its target. */
 const isServer = (ref: ObjectRef) => ref.kind === 'server' && Object.keys(ref).length === 1
+const systemLogin = (ref: ObjectRef) => ref.kind === 'login' && isSystemLoginName(ref.name ?? '')
 /** Why `action` cannot act on `ref` whatever its subtype: a kind that never offers it, or one of SQL Server's own objects
  *  (unless the action serves them, as Properties does). A folder's action (Attach) acts on the server alone. */
 export function actionTargetProblems(ref: ObjectRef, action: ObjectAction): string[] {
   if (objectActionSpecs[action].folder) return ref.kind === 'server' && Object.keys(ref).length === 1 ? [] : [`${objectActionSpecs[action].title.replace('…', '')} acts on a server.`]
   if (!actionOffered(ref.kind, action)) return [`A ${ref.kind} cannot be ${verbs[action]}.`]
   if (objectActionSpecs[action].systemObjects) return []
+  // SQL Server's own logins by name, as the Logins folder tells them; the backend re-derives the subtype in its preflight.
+  if (systemLogin(ref)) return ['This login belongs to SQL Server and cannot be changed.']
   if (ref.kind === 'database' ? systemDatabases.has(ref.name ?? '') : ref.schema !== undefined && systemSchemas.has(ref.schema)) return ['System objects cannot be changed.']
   return []
 }
@@ -399,7 +434,10 @@ export const actionDescribeSchema = z.object({
         if (request.target.kind !== 'database' || request.target.parent) issue(context, 'target', 'The table designer opens on a database.')
         break
       case 'renameDatabase':
-        if (!(factDescribeSpecs[request.dialog].kinds as readonly string[]).includes(request.target.kind)) issue(context, 'target', 'Only a database is described for a rename.')
+      case 'loginFacts':
+        if (!(factDescribeSpecs[request.dialog].kinds as readonly string[]).includes(request.target.kind)) {
+          issue(context, 'target', request.dialog === 'loginFacts' ? 'Login facts describe a login.' : 'Only a database is described for a rename.')
+        }
         targetIssues(context, request.target, factDescribeSpecs[request.dialog].action)
         break
       case 'newLogin':
@@ -435,7 +473,13 @@ export const plannedStatements = (changes: DatabaseChanges) => Object.keys(chang
 const identitySchema = z.object({ id: z.number().int().min(1).max(2_147_483_647), created: z.string().max(23).regex(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}$/) }).strict()
 // One schema per action, one per line, so later actions append cleanly.
 const renameSchema = z.object({ action: z.literal('rename'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, newName: ident, closeConnections: z.boolean().optional(), identity: identitySchema.optional() }).strict()
-const deleteSchema = z.object({ action: z.literal('delete'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), deleteHistory: z.boolean() }).strict()
+const loginIdentitySchema = z.object({ sid: z.string().max(loginLimits.sidHex).regex(/^[0-9A-F]{2,172}$/), created: identitySchema.shape.created }).strict()
+const deleteSchema = z.object({
+  action: z.literal('delete'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), deleteHistory: z.boolean(),
+  dropMappedUsers: z.boolean().optional(), loginIdentity: loginIdentitySchema.optional()
+}).strict()
+const loginStateSchema = z.object({ action: z.enum(['disable', 'enable']), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, loginIdentity: loginIdentitySchema.optional() }).strict()
+const unlockSchema = z.object({ action: z.literal('unlock'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, mode: z.enum(unlockModes), loginIdentity: loginIdentitySchema.optional() }).strict()
 const propertiesSchema = z.object({ action: z.literal('properties'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), changes: changesSchema, identity: identitySchema.optional() }).strict()
 const takeOfflineSchema = z.object({ action: z.literal('takeOffline'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, dropConnections: z.boolean(), identity: identitySchema.optional() }).strict()
 const bringOnlineSchema = z.object({ action: z.literal('bringOnline'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, identity: identitySchema.optional() }).strict()
@@ -525,7 +569,9 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
   createLoginSchema,
   takeOfflineSchema,
   bringOnlineSchema,
-  detachSchema
+  detachSchema,
+  loginStateSchema,
+  unlockSchema
 ]).superRefine((request, context) => {
   // A new table, database or login is not an object row's action: its target is the database it goes in (SQL Server's own
   // included), the database it makes, or the server.
@@ -537,9 +583,11 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
     case 'rename':
       if (request.newName === request.target.name) issue(context, 'newName', 'The new name is the current name.')
       if (request.target.kind !== 'database' && (request.closeConnections !== undefined || request.identity)) issue(context, 'closeConnections', 'Only a database has connections to close and an identity.')
+      if (request.target.kind === 'login' && isSystemLoginName(request.newName)) issue(context, 'newName', loginMessages.systemName)
       break
     case 'delete':
       if (kindSpecs[request.target.kind].scope !== 'database' && (request.closeConnections || request.deleteHistory)) issue(context, 'closeConnections', 'Only a database has connections to close and backup history to delete.')
+      if (request.target.kind !== 'login' && (request.dropMappedUsers !== undefined || request.loginIdentity !== undefined)) issue(context, 'dropMappedUsers', 'Only a login has mapped users and an identity to check.')
       break
     case 'properties': {
       const count = plannedStatements(request.changes)
@@ -558,8 +606,10 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
 }) satisfies z.ZodType<ActionRequest>
 /** actions.execute: the same requests, a restore (critic A17: it runs from D1f, with the menu items that open it), or a file restore (D1g), with
  *  the secrets each needs and no others: New Login's password exactly for a SQL Server login (blank only with the password policy on, which
- *  lets the server decide), and none for a Windows login. */
+ *  lets the server decide), and none for a Windows login; and a login's Delete must name the login Delete Object read (`loginIdentity`),
+ *  which binds DROP LOGIN and every DROP USER to that principal (Script runs nothing and may leave it out). C# Validate refuses the same. */
 export const actionExecuteRequestSchema = z.union([actionRequestSchema, restoreRequestSchema, restoreFilesRequestSchema]).superRefine((request, context) => {
+  if (request.action === 'delete' && request.target.kind === 'login' && request.loginIdentity === undefined) issue(context, 'loginIdentity', "A login's Delete needs the identity of the login it read.")
   if (request.action !== 'createLogin') return
   if (request.login.auth === 'sql' && request.secrets?.password === undefined) issue(context, 'secrets', 'A SQL Server login needs a password.')
   if (request.login.auth !== 'sql' && request.secrets !== undefined) issue(context, 'secrets', 'Only a SQL Server login takes a password.')
@@ -588,7 +638,7 @@ export const actionExecuteResultSchema = z.object({
   restored: z.union([
     z.object({ state: z.number().int().min(0).max(255), userAccess: z.number().int().min(0).max(255), filesRestoring: z.array(z.string().max(128)).max(restoredFilesLimit).optional() }).strict(),
     z.object({ absent: z.literal(true), filesLeft: z.array(z.string().max(actionLimits.serverPath)).max(restoredFilesLimit).optional(), filesUnknown: z.literal(true).optional() }).strict()
-  ]).optional(), identity: identitySchema.optional()
+  ]).optional(), identity: identitySchema.optional(), sessions: z.number().int().min(0).max(1_000_000).optional()
 }).strict() satisfies z.ZodType<ActionExecuteResult>
 
 /** The index a step takes in the reply, or the percent a long step reports. */

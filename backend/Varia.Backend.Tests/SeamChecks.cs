@@ -356,6 +356,12 @@ internal static class SeamChecks
         var cancelled = await service.RunStepsAsync(connection, plan, null, stopped.Token, TimeSpan.FromSeconds(1));
         check(cancelled.Steps.Select(step => step.Status + ":" + step.Title).SequenceEqual(["cancelled:Close existing connections", "skipped:Rename", "skipped:Delete backup and restore history", "failed:Remove what was made"])
             && cancelled.Failure is { Code: "CANCELLED" } && ran.Count == 0, "after Stop, no compensation is due for steps that never completed; a cleanup whose condition holds still runs under its own budget");
+        // A first step that checks the server again and refuses (Unlock's recheck) answers with exactly that refusal.
+        ran.Clear();
+        var changed = ActionErrors.Create(ActionsCatalog.Current, "NOT_SUPPORTED", ActionsCatalog.Current.Logins.Message("unlockChanged"));
+        var recheck = await service.RunStepsAsync(connection, [Step("Recheck", new StepRefusedException(changed)), Step("Last")], null, CancellationToken.None, TimeSpan.FromSeconds(1));
+        check(recheck.Failure == changed && recheck.Steps.Select(step => step.Status + ":" + step.Message).SequenceEqual(["failed:" + changed.Message, "skipped:"]) && recheck.Done == 0,
+            "a first step that refuses after checking the server again answers with that refusal alone, and the rest are skipped");
         static async Task<bool> Refuses(Func<Task> run)
         {
             try { await run(); return false; }

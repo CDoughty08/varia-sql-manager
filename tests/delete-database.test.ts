@@ -49,11 +49,11 @@ describe('Delete Object on a database (D3d)', () => {
 
   it('greys Close existing connections where the server cannot set SINGLE_USER, and never sends it there', () => {
     const managed = target({ closeConnectionsNote: 'Managed Instance cannot set SINGLE_USER.' })
-    expect(deleteObjectDefinition.request(appData, managed, { deleteHistory: true, closeConnections: true })).toMatchObject({ closeConnections: false, deleteHistory: true })
-    expect(deleteObjectDefinition.request(appData, target(), { deleteHistory: true, closeConnections: true })).toMatchObject({ closeConnections: true })
+    expect(deleteObjectDefinition.request(appData, managed, { deleteHistory: true, closeConnections: true, dropMappedUsers: false })).toMatchObject({ closeConnections: false, deleteHistory: true })
+    expect(deleteObjectDefinition.request(appData, target(), { deleteHistory: true, closeConnections: true, dropMappedUsers: false })).toMatchObject({ closeConnections: true })
     // The backend greys it for an offline database too, which has no connections to close.
     const offline = target({ closeConnectionsNote: 'An offline database has no connections to close.' })
-    expect(deleteObjectDefinition.request(appData, offline, { deleteHistory: true, closeConnections: true })).toMatchObject({ closeConnections: false })
+    expect(deleteObjectDefinition.request(appData, offline, { deleteHistory: true, closeConnections: true, dropMappedUsers: false })).toMatchObject({ closeConnections: false })
     const service = readFileSync(new URL('../backend/Varia.Backend/Actions/ActionService.cs', import.meta.url), 'utf8')
     expect(service).toContain(`OfflineCloseNote = "${offline.closeConnectionsNote}"`)
   })

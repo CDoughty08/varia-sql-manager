@@ -25,8 +25,8 @@ describe('server engines', () => {
     expect(objectActions.filter(action => actionServes(action, 'cloud'))).toEqual(['selectTop'])
     // Attach is SQL Server's box editions' alone (decision 10), Managed Instance cannot SET OFFLINE or ONLINE, nor run sp_detach_db
     // (Take Offline, Bring Online and Detach run on box servers only), and it restores from URL only, which neither Restore Database nor Restore Files and
-    // Filegroups offers.
-    expect(objectActions.filter(action => actionServes(action, 'managedInstance'))).toEqual(['selectTop', 'rename', 'delete', 'properties'])
+    // Filegroups offers. A login's Disable and Enable (D4b) and Unlock (D4d) run wherever ALTER LOGIN does, as its Rename.
+    expect(objectActions.filter(action => actionServes(action, 'managedInstance'))).toEqual(['selectTop', 'rename', 'delete', 'properties', 'disable', 'enable', 'unlock'])
     expect(objectActions.filter(action => !actionServes(action, 'managedInstance'))).toEqual(['attach', 'takeOffline', 'bringOnline', 'detach', 'restore', 'restoreFiles'])
     // New Database runs only on a SQL Server box: Managed Instance and Azure place files themselves.
     expect((['box', 'managedInstance', 'cloud'] as const).map(engine => actionServes('createDatabase', engine))).toEqual([true, false, false])
@@ -49,7 +49,7 @@ describe('login rules', () => {
   it('derives a subtype as the backend does: sa by principal_id, SQL Server\'s own by ##name##, else by type', () => {
     const cases: [number, string, string, LoginSubtype | undefined][] = [
       [1, 'S', 'renamed_sa', 'sa'], [1, 'S ', 'sa', 'sa'], [270, 'C', '##MS_PolicySigningCertificate##', 'system'], [270, 'S', '##MS_PolicyTsqlExecutionLogin##', 'system'],
-      [300, 'S', '##', 'sql'], [300, 'S', 'app', 'sql'], [300, 'U', 'D\\u', 'windowsUser'], [300, 'G', 'D\\g', 'windowsGroup'], [300, 'C', 'c', 'certificateMapped'],
+      [300, 'S', '##', 'sql'], [300, 'S', '##x##  ', 'system'], [300, 'S', ' ##x##', 'sql'], [300, 'S', 'app', 'sql'], [300, 'U', 'D\\u', 'windowsUser'], [300, 'G', 'D\\g', 'windowsGroup'], [300, 'C', 'c', 'certificateMapped'],
       [300, 'K', 'k', 'asymmetricKeyMapped'], [300, 'E', 'e@x', 'externalUser'], [300, 'X', 'g', 'externalGroup'], [3, 'R', 'sysadmin', undefined]
     ]
     expect(cases.map(([id, type, name]) => loginSubtypeOf(id, type, name))).toEqual(cases.map(item => item[3]))
@@ -82,6 +82,7 @@ describe('action steps and secrets', () => {
   it('checks actions.execute\'s answer in main with the bounds C# clips to (ActionSteps.Bound)', () => {
     const ok = { status: 'failed', title: 'Rename', message: 'm', detail: 'd', compensates: true, progress: 100 }
     expect(actionStepSchema.safeParse(ok).success).toBe(true)
+    expect(actionStepSchema.safeParse({ status: 'rolledBack', title: 'Turn off the password policy' }).success).toBe(true)
     for (const bad of [{ status: 'done' }, { ...ok, title: 't'.repeat(loginLimits.stepTitle + 1) }, { ...ok, detail: 'd'.repeat(loginLimits.stepDetail + 1) },
       { ...ok, message: 'm'.repeat(actionLimits.messageChars + 1) }, { ...ok, progress: 101 }, { ...ok, progress: 1.5 }, { ...ok, status: 'undone' }, { ...ok, extra: 1 }]) {
       expect(actionStepSchema.safeParse(bad).success, JSON.stringify(bad).slice(0, 80)).toBe(false)
@@ -114,7 +115,8 @@ describe('password hashes', () => {
   it('appear in no Varia source but the lint lists that refuse them and comments (critic A15)', () => {
     const root = join(__dirname, '..')
     const sources = [...files(join(root, 'backend', 'Varia.Backend'), /\.cs$/), ...files(join(root, 'src'), /\.tsx?$/)]
-    const offending: string[] = []
+    const offending: string[] = [], lockLines: number[] = []
+    const lockCall = /LOGINPROPERTY\(@name, N'(IsLocked|BadPasswordCount|LockoutTime|IsMustChange|IsExpired|DaysUntilExpiration)'\)/g
     for (const file of sources) {
       const name = relative(root, file).replaceAll('\\', '/')
       readFileSync(file, 'utf8').split('\n').forEach((line, index) => {
@@ -122,16 +124,25 @@ describe('password hashes', () => {
         // CatalogSql.SecretUses, the lint every other lint calls.
         const lint = name === 'backend/Varia.Backend/Explorer/CatalogSql.cs'
           && /^\s*(if \(LoginFunction\(\)\.IsMatch|foreach \(var token in new\[\] \{ "password_hash", "PasswordHash" \}|\[GeneratedRegex\(@"\\bLOGINPROPERTY|if \(text\.Contains\("sql_logins")/.test(line)
+        // ActionSql.LoginLock (D4d), the one statement that may call LOGINPROPERTY: only of @name, only for the lock-out
+        // properties, and its own lint's pattern for such a call.
+        const loginLock = name === 'backend/Varia.Backend/Actions/ActionSql.cs' && !comment && (line.trim() === String.raw`[GeneratedRegex(@"\bLOGINPROPERTY\(@name, N'(\w+)'\)")]`
+          || /LOGINPROPERTY/.test(line) && line.replace(lockCall, '').search(/LOGINPROPERTY|password_?hash/i) < 0)
         // A star over sys.sql_logins reads password_hash without naming it (COUNT(*) aside).
         if (/sql_logins/i.test(line) && /(?<!\(\s*)\*/.test(line) && !comment && !lint) offending.push(`${name}:${index + 1} (*)`)
         if (!/password_?hash|LOGINPROPERTY/i.test(line)) return
         const list = line.includes('"LOGINPROPERTY(", "password_hash", "PasswordHash"')
         // Generated docs may name LOGINPROPERTY to say why it is not used; never a password hash.
         const docs = (name === 'src/shared/actions/docs.ts' || name === 'src/shared/explorer/docs.ts') && !/password_?hash/i.test(line)
+        if (loginLock) { lockLines.push(index + 1); return }
         if (!comment && !list && !docs && !lint) offending.push(`${name}:${index + 1}`)
       })
     }
     expect(offending).toEqual([])
+    // LoginLock's three lines and its lint's pattern, nothing more.
+    expect(lockLines).toHaveLength(4)
+    const actionSql = readFileSync(join(root, 'backend', 'Varia.Backend', 'Actions', 'ActionSql.cs'), 'utf8')
+    expect(actionSql).toContain('LoginLockProperties = ["IsLocked", "BadPasswordCount", "LockoutTime", "IsMustChange", "IsExpired", "DaysUntilExpiration"];')
     const catalogSql = readFileSync(join(root, 'backend', 'Varia.Backend', 'Explorer', 'CatalogSql.cs'), 'utf8')
     expect(catalogSql).toContain('"LOGINPROPERTY(", "password_hash", "PasswordHash"]')
     expect(catalogSql).toContain('[GeneratedRegex(@"\\bLOGINPROPERTY\\s*\\(", RegexOptions.IgnoreCase)]')

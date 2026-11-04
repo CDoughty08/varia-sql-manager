@@ -38,27 +38,27 @@ internal static class ActionChecks
     private static void CatalogChecks(Action<bool, string> check)
     {
         var rows = Catalog.Rows.ToList();
-        check(rows.Count == 32 && rows.All(row => ExplorerCatalog.Current.Kind(row.Kind) is { } kind && (row.Subtype == "" || kind.Subtypes.Contains(row.Subtype))),
+        check(rows.Count == 52 && rows.All(row => ExplorerCatalog.Current.Kind(row.Kind) is { } kind && (row.Subtype == "" || kind.Subtypes.Contains(row.Subtype))),
             "the embedded actions catalogue loads and every row names an Object Explorer kind and subtype");
         check(Catalog.Allows("table", "", "delete") && Catalog.Allows("table", "graphEdge", "rename") && !Catalog.Allows("table", "system", "rename") && !Catalog.Allows("table", "systemVersioned", "delete")
             && !Catalog.Allows("procedure", "extended", "delete") && !Catalog.Allows("database", "system", "rename") && Catalog.Allows("database", "snapshot", "delete")
             && !Catalog.Allows("database", "snapshot", "rename") && Catalog.Allows("function", "aggregate", "rename") && !Catalog.Allows("function", "aggregate", "delete")
-            && !Catalog.Offered("login", "delete") && Catalog.Offered("view", "selectTop"), "the catalogue's rows decide what each subtype allows");
+            && Catalog.Offered("login", "delete") && Catalog.Offered("view", "selectTop"), "the catalogue's rows decide what each subtype allows");
         var options = new ActionServiceOptions();
         check(Catalog.Limit("readPerConnection") == options.ReadPerConnection && Catalog.Limit("readTotal") == options.ReadTotal && Catalog.Limit("executePerConnection") == options.ExecutePerConnection
             && Catalog.Limit("executeTotal") == options.ExecuteTotal && Catalog.Limit("registered") == options.MaxRegistered && Catalog.Limit("describeMs") == (long)options.DescribeBudget.TotalMilliseconds
             && Catalog.Limit("scriptMs") == (long)options.ScriptBudget.TotalMilliseconds && Catalog.Limit("gateWaitMs") == (long)options.GateWait.TotalMilliseconds
             && Catalog.Limit("messageChars") == ActionErrors.MaxMessage && Catalog.Limit("newName") == ExplorerRefs.MaxIdentifier
             && Catalog.Limit("stopGraceMs") == (long)options.StopGrace.TotalMilliseconds, "the backend's limits are the catalogue's");
-        check(Catalog.Describes.Keys.SequenceEqual(["renameDatabase"]) && Catalog.Describes["renameDatabase"].SequenceEqual(["database"]) && Catalog.ActionOf("renameDatabase") == "rename"
+        check(Catalog.Describes.Keys.Order(StringComparer.Ordinal).SequenceEqual(["loginFacts", "renameDatabase"]) &&Catalog.Describes["renameDatabase"].SequenceEqual(["database"]) && Catalog.ActionOf("renameDatabase") == "rename"
             && !Catalog.Dialogs.ContainsKey("renameDatabase") && Catalog.DatabaseRefusal("rename", 0, 1, false, false) is null && Catalog.DatabaseRefusal("rename", 0, 2, false, false) is null
             && Catalog.DatabaseRefusal("rename", 0, 0, true, false) == "A read-only database cannot be renamed." && Catalog.DatabaseRefusal("rename", 0, 0, false, true) == "A read-only database cannot be renamed."
             && new[] { 1, 2, 3, 4, 5, 6, 7, 10, 42 }.All(state => Catalog.DatabaseRefusal("rename", state, 0, true, false) == "The database must be online to be renamed."),
             "the renameDatabase describe serves Rename on databases, which the catalogue refuses for a database that is not online, or is read-only or standby (902) (D3c)");
         check(Catalog.ErrorCodes.Count() == 22 && Catalog.ErrorCodes.Contains("FILE_ACCESS") && Catalog.Retryable("FILE_ACCESS") && !Catalog.Retryable("MEDIA") && !Catalog.Retryable("BACKUP_MISMATCH") && !Catalog.Retryable("TAIL_LOG_NEEDED") && !Catalog.Retryable("RESTORE_SEQUENCE") && Catalog.Retryable("PASSWORD_POLICY") && Catalog.Retryable("IN_USE") && Catalog.Retryable("AUTH_ENTRA") && !Catalog.Retryable("DEPENDENTS") && Catalog.Retryable("CANCELLED") && !Catalog.ErrorCodes.Contains("INVALID_NAME")
-            && Catalog.Dialogs.Keys.SequenceEqual(["deleteObject", "databaseProperties", "newDatabase", "attachDatabase", "newLogin", "takeOffline", "bringOnline", "detachDatabase"]) && Catalog.IsServerAction("createDatabase") && !Catalog.IsServerAction("properties")
+            && Catalog.Dialogs.Keys.SequenceEqual(["deleteObject", "databaseProperties", "newDatabase", "attachDatabase", "newLogin", "takeOffline", "bringOnline", "detachDatabase", "unlockLogin"]) && Catalog.IsServerAction("createDatabase") && !Catalog.IsServerAction("properties")
             && Catalog.ActionOf("takeOffline") == "takeOffline" && Catalog.ActionOf("bringOnline") == "bringOnline" && Catalog.ActionOf("detachDatabase") == "detach",
-            "the catalogue lists the action error codes (a file SQL Server cannot open, FILE_ACCESS, retryable once fixed; restore's MEDIA, BACKUP_MISMATCH, TAIL_LOG_NEEDED and RESTORE_SEQUENCE not; New Login's PASSWORD_POLICY retryable) and the Delete Object, Database Properties, New Database, Attach Databases, New Login, Take Offline, Bring Online and Detach Database dialogs, New Database's createDatabase a server action");
+            "the catalogue lists the action error codes (a file SQL Server cannot open, FILE_ACCESS, retryable once fixed; restore's MEDIA, BACKUP_MISMATCH, TAIL_LOG_NEEDED and RESTORE_SEQUENCE not; New Login's PASSWORD_POLICY retryable) and the Delete Object, Database Properties, New Database, Attach Databases, New Login, Take Offline, Bring Online, Detach Database and Unlock Login dialogs, New Database's createDatabase a server action");
         // The database rules are the menu's (databaseActionState, tests/object-actions-catalog.test.ts): the preflight refuses what the menu greys.
         check(Catalog.DatabaseStateOf(0) == "online" && Catalog.DatabaseStateOf(6) == "offline" && Catalog.DatabaseStateOf(10) == "offlineSecondary" && Catalog.DatabaseStateOf(42) == "other"
             && Catalog.DatabaseRefusal("takeOffline", 0, 0, false, false) is null && Catalog.DatabaseRefusal("takeOffline", 6, 0, false, false) == "The database is offline."
@@ -89,10 +89,10 @@ internal static class ActionChecks
     {
         var results = ActionSql.Lint().ToList();
         var problems = results.SelectMany(result => result.Problems.Select(problem => result.Name + ": " + problem)).ToList();
-        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 13 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2 + 2 + 6 + AttachSql.LintAll().Count() + 2 + 2 + LoginSql.Corpus().Count() * 2, "every executable and catalog statement passes the lint at every band, New Database's, Attach's and New Login's builders and facts and User Mapping's reads included (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
+        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 20 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2 + 2 + 6 + AttachSql.LintAll().Count() + 2 + 2 + LoginSql.Corpus().Count() * 2, "every executable and catalog statement passes the lint at every band, New Database's, Attach's and New Login's builders and facts and User Mapping's reads included (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
         // The transaction DMVs raise error 300 without VIEW SERVER STATE whatever guards them, so the statements every action runs never
         // read them; only the describe's counts and lists do, after Database's guarded count shows the permission.
-        check(new[] { ActionSql.Database, ActionSql.DatabaseState, ActionSql.Login, ActionSql.OwnSessions, ActionSql.DatabaseSessions, ActionSql.DatabaseAccess }.All(statement => !statement.Contains("dm_tran_", StringComparison.Ordinal))
+        check(new[] { ActionSql.Database, ActionSql.DatabaseState, ActionSql.Login, ActionSql.LoginAlter, ActionSql.OwnSessions, ActionSql.DatabaseSessions, ActionSql.DatabaseAccess }.All(statement => !statement.Contains("dm_tran_", StringComparison.Ordinal))
             && new[] { ActionSql.DatabaseUse, ActionSql.DatabaseUseSessions, ActionSql.TransactionSessions }.All(statement => statement.Contains("sys.dm_tran_session_transactions", StringComparison.Ordinal)),
             "only Delete Object's session counts and lists read the transaction DMVs, never the statements every action runs");
         // The lint must catch what it is for: a name spliced into the text, a name parameter outside QUOTENAME, a metadata function.
@@ -131,7 +131,10 @@ internal static class ActionChecks
                 new PlannedStatement(ActionTemplate.SetOffline, "master", [name]), new PlannedStatement(ActionTemplate.SetOfflineRollback, "master", [name]),
                 new PlannedStatement(ActionTemplate.SetOnline, "master", [name]),
                 // Restore Database's cleanup (D1f).
-                ActionSql.DropRestoring(name, 2_147_483_647)
+                ActionSql.DropRestoring(name, 2_147_483_647),
+                // Unlock's (D4d), which its own script wraps in one transaction (UnlockChecks).
+                new PlannedStatement(ActionTemplate.CheckPolicyOff, "master", [name]), new PlannedStatement(ActionTemplate.CheckPolicyOn, "master", [name]),
+                new PlannedStatement(ActionTemplate.CheckPolicyExpirationOn, "master", [name])
             };
             foreach (var plan in plans)
             {
@@ -298,7 +301,7 @@ internal static class ActionChecks
         {
             ("unknown action", Rename(table, "x") with { Action = "drop" }), ("connection id", Rename(table, "x") with { ConnectionId = "server-a" }),
             ("request id", Rename(table, "x") with { RequestId = "r1" }), ("ref shape", Rename(new ObjectRefDto("table", "AppData", Name: "Orders"), "x")),
-            ("a kind without rename", Rename(new ObjectRefDto("login", Name: "sa"), "x")), ("U+0000", Rename(table, "a\0b")), ("129 units", Rename(table, new string('x', 129))),
+            ("a kind without rename", Rename(new ObjectRefDto("synonym", "AppData", "dbo", "s"), "x")), ("U+0000", Rename(table, "a\0b")), ("129 units", Rename(table, new string('x', 129))),
             ("empty name", Rename(table, "")), ("the same name", Rename(table, "Orders")), ("delete flags on a rename", Rename(table, "x") with { CloseConnections = false }),
             ("a new name on a delete", Delete(table) with { NewName = "x" }), ("delete flags missing", Delete(table) with { DeleteHistory = null }),
             ("delete flags on a table", Delete(table, close: true)), ("a system database", Rename(new ObjectRefDto("database", Name: "master"), "x")),
@@ -329,13 +332,14 @@ internal static class ActionChecks
             catch (RequestException error) { return error.Code; }
         }
         check(DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "databaseProperties", table)) == "INVALID_PARAMS"
-            && DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "deleteObject", new ObjectRefDto("login", Name: "sa"))) == "INVALID_PARAMS"
+            && DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "deleteObject", new ObjectRefDto("login", Name: "##MS_PolicyTsqlExecutionLogin##"))) == "INVALID_PARAMS"
+            && DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "deleteObject", new ObjectRefDto("login", Name: "sa"))) == "accepted"
             && DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "deleteObject", table)) == "accepted"
             && DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "takeOffline", appData)) == "accepted"
             && DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "bringOnline", appData)) == "accepted"
             && DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "takeOffline", table)) == "INVALID_PARAMS"
             && DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "bringOnline", new ObjectRefDto("database", Name: "msdb"))) == "INVALID_PARAMS",
-            "describe refuses unknown dialogs and kinds the dialog does not serve, SQL Server's own databases for Take Offline and Bring Online");
+            "describe refuses unknown dialogs and kinds the dialog does not serve, SQL Server's own logins (sa's Delete Object opens to say why OK is greyed), SQL Server's own databases for Take Offline and Bring Online");
         var sql = new SqlService();
         check(sql.LaneOf("actions.execute") == RequestLane.Actions && sql.LaneOf("actions.describe") == RequestLane.Metadata && sql.LaneOf("actions.script") == RequestLane.Metadata
             && new[] { "actions.describe", "actions.script", "actions.execute" }.All(SqlService.MethodNames.Contains), "DDL runs on the actions lane, never holding a metadata slot; HELLO lists the three methods");
@@ -463,7 +467,7 @@ internal static class ActionChecks
             "the describe's blocking warnings are the execute's refusals");
     }
 
-    private sealed class FakeHost(int edition = 3) : IActionHost
+    internal sealed class FakeHost(int edition = 3) : IActionHost
     {
         public int Connections;
         public List<string> Cleared { get; } = [];

@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { displayText } from '../explorer/refs.ts'
 
 /** Bounds of a prompt's facts: names as SQL Server allows them, counts, and the query tabs a prompt names. */
-export const promptLimits = { name: 128, count: 1_000_000, tabs: 8, tabName: 260, service: 256 } as const
+export const promptLimits = { name: 128, count: 1_000_000, tabs: 8, tabName: 260, service: 256, connections: 8, connectionName: 260 } as const
 const name = z.string().min(1).max(promptLimits.name)
 const count = z.number().int().min(0).max(promptLimits.count)
 
@@ -46,7 +46,10 @@ export const disableLoginFactsSchema = z.object({
   sessions: count.optional(),
   /** The service that runs as this login (`sys.dm_server_services.servicename`). */
   service: z.string().min(1).max(promptLimits.service).optional(),
-  sysadmin: z.boolean()
+  sysadmin: z.boolean(),
+  /** Varia's other connections to the server that sign in as this login (critic D4-3), by their Object Explorer label:
+   *  they cannot reconnect while it is disabled. */
+  connections: z.array(z.string().min(1).max(promptLimits.connectionName)).min(1).max(promptLimits.connections).optional()
 }).strict()
 export const actionPromptRequestSchema = z.discriminatedUnion('prompt', [
   z.object({ prompt: z.literal('renameDatabase'), facts: renameDatabaseFactsSchema }).strict(),
@@ -68,6 +71,9 @@ export interface ActionPromptSpec<P extends ActionPromptId, A extends string> {
 }
 const plural = (value: number, one: string, many: string) => `${value.toLocaleString('en-US')} ${value === 1 ? one : many}`
 const show = (text: string) => displayText(text)
+/** Varia's connections that sign in as a login, and what a change to the login does to them (critic D4-3). */
+export const loginConnectionsText = (labels: readonly string[], consequence: string): string =>
+  labels.length === 1 ? `Varia's connection ${show(labels[0])} signs in as this login, and ${consequence}.` : `Varia's connections ${labels.map(show).join(', ')} sign in as this login, and ${consequence}.`
 
 export const actionPrompts = {
   // SSMS has none: its rename fails ("The database could not be exclusively locked"); Varia offers to close the connections
@@ -104,9 +110,10 @@ export const actionPrompts = {
     title: 'Disable Login',
     message: facts => `Disable the login ${show(facts.login)}?`,
     detail: facts => [
-      'New connections will be refused.' + (facts.sessions ? ` ${plural(facts.sessions, 'session', 'sessions')} connected as this login stay connected until they end; Activity Monitor can end them.` : ''),
+      'New connections will be refused.' + (facts.sessions ? ` ${facts.sessions === 1 ? '1 session connected as this login stays connected until it ends' : `${plural(facts.sessions, 'session', 'sessions')} connected as this login stay connected until they end`}; Activity Monitor can end ${facts.sessions === 1 ? 'it' : 'them'}.` : ''),
       ...facts.service ? [`${show(facts.service)} runs as this account, and cannot connect while it is disabled.`] : [],
-      ...facts.sysadmin ? ['This login is a member of sysadmin.'] : []
+      ...facts.sysadmin ? ['This login is a member of sysadmin.'] : [],
+      ...facts.connections?.length ? [loginConnectionsText(facts.connections, 'cannot reconnect while it is disabled')] : []
     ],
     buttons: () => [{ answer: 'disable', label: 'Disable' }, { answer: 'cancel', label: 'Cancel' }],
     defaultAnswer: facts => facts.service ? 'cancel' : 'disable',

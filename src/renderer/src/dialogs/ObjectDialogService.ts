@@ -9,6 +9,7 @@ import type { ExplorerNodeRef, ObjectRef } from '../../../shared/explorer/refs.t
 import type { LongRunKind } from '../../../shared/long-runs.ts'
 import { wellFormed } from '../../../shared/ssis/schema.ts'
 import type { ScriptDestination } from '../../../shared/scripting/catalog.ts'
+import { otherLoginConnections } from '../actions/ObjectActionService'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
 import type { Disposable, ExternalStore } from '../core/types'
@@ -60,6 +61,8 @@ export interface OpenObjectDialog {
   readonly refusal?: string
   /** User Mapping's reads of the databases selected so far (`loadDatabaseRoles`), by database name. */
   readonly databaseRoles?: ReadonlyMap<string, DatabaseRolesLookup>
+  /** Delete Object on a login: Varia's other connections that sign in as it (critic D4-3), by their labels. */
+  readonly loginConnections?: readonly string[]
 }
 /** One database's roles, guest state and schemas, as User Mapping reads them when its row is selected. */
 export type DatabaseRolesLookup = { readonly state: 'loading' } | { readonly state: 'ready'; readonly value: LoginDatabaseRoles } | { readonly state: 'failed'; readonly error: ActionError }
@@ -89,6 +92,8 @@ export interface ObjectDialogServiceOptions {
   /** A database a dialog took offline or brought online (DatabasePropertiesService follows it). */
   readonly databaseState?: (connectionId: string, database: string, offline: boolean) => void
   readonly newId?: () => string
+  /** A success notice (Unlock Login's), as the object actions' toast; none without it. */
+  readonly notify?: (message: string) => void
   /** An action removed a database: its Properties documents turn orphan and a toast counts the query windows that used it. */
   readonly databaseGone?: (gone: DatabaseGone) => void
   /** The names of the open query tabs among these ids (query session ids), in tab order: Delete Object names those its describe found
@@ -337,21 +342,25 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
       if (definition.keepOpen) this.update(open, { phase: 'succeeded', steps: value.steps, ...(value.messages.length ? { notice: value.messages.join(' ') } : {}) })
       else this.publish({})
       try { definition.afterSuccess(this.effectsOf(open), sent) } catch (failure) { onUnexpectedError(failure) }
+      this.reconcileChanged(open, open.model, value.steps)
       return
     }
     // Steps that completed before a failure or Stop changed the object (a database dropped, then its history step
     // stopped), so the listing shows what is there now; so may a step Stop reached after SQL Server finished it (an attach). A
     // dialog that creates an object shows it where it is listed.
-    if (value?.steps.some(step => step.status === 'done' || step.status === 'cancelled')) {
+    const partial = !!value?.steps.some(step => step.status === 'done' || step.status === 'cancelled')
+    if (partial) {
       const effects = this.effectsOf(open)
       try { if (definition.afterPartial) definition.afterPartial(effects, sent); else effects.refreshListing() } catch (failure) { onUnexpectedError(failure) }
+      this.reconcileChanged(open, open.model, value!.steps)
     }
     // Stop: the backend answers once SQL Server has ended the statement, saying what completed before it.
-    if (value?.error?.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: value.error, steps: value.steps }); return }
+    if (value?.error?.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: value.error, steps: value.steps }); if (partial) this.reloadAfterPartial(open); return }
     if (!result.ok && result.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: error('CANCELLED', dialogMessages.stopped) }); return }
     const failure = value?.error ?? (!result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST') ? error('CONNECTION_LOST', unknownOutcomeMessage) : error('SQL_ERROR', result.ok ? 'The action failed.' : result.error))
     const model = definition.afterFailure?.(open.model, failure) ?? open.model
     this.update(open, { phase: 'failed', error: failure, model, ...(value ? { steps: value.steps } : {}) })
+    if (partial) { this.reloadAfterPartial(open); return }
     // SSMS counts other connections when OK is pressed: when nothing ran and the fresh model needs the question this OK
     // did not ask, it is asked at once rather than on the next OK.
     if (!confirmation && model !== open.model && !value?.steps.some(step => step.status === 'done') && definition.confirm?.(model, built)) await this.ok()
@@ -413,6 +422,35 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     this.update(open, { phase: 'ready', model, draft: open.draft ?? definition.initialDraft(model, open.target) })
     if (open.dialog === 'deleteObject' && open.target.kind === 'database') this.nameTabTransactions(open, (model as DeleteTarget).transactionTabs ?? [])
     if (definition.runOnOpen && !open.model) await this.ok()
+    if (open.dialog === 'deleteObject' && open.target.kind === 'login') {
+      const labels = otherLoginConnections(this.options.connections.getSnapshot(), open.connectionId, open.target.name)
+      if (labels.length) this.update(open, { loginConnections: labels })
+    }
+  }
+  /**
+   * Reads the model again once steps completed before a failure or Stop changed what the page lists (definition.reloadsAfterPartial:
+   * a login's Delete that dropped users and then failed would go on listing them as mapped). The failure and its steps stay shown;
+   * a read that fails keeps the old model, and an answer that comes once OK runs again is dropped.
+   */
+  private reloadAfterPartial(open: OpenObjectDialog): void {
+    const definition = definitionOf(open.dialog)
+    if (!definition.reloadsAfterPartial?.(open.target)) return
+    void (async () => {
+      const requestId = this.begin(open)
+      const result = await this.call(() => this.options.api.describeObject({ connectionId: open.connectionId, requestId, dialog: open.dialog, target: open.target }))
+      if (!this.end(open, requestId)) return
+      const current = this.current
+      const model = result.ok && !result.value.error ? definition.modelOf(result.value) : undefined
+      if (model && current && (current.phase === 'failed' || current.phase === 'stopped')) this.update(current, { model })
+    })().catch(onUnexpectedError)
+  }
+  /** Reloads the folders a reply's done steps changed besides the listing (definition.changedFolders), where the tree has listed them. */
+  private reconcileChanged(open: OpenObjectDialog, model: DialogModel | undefined, steps: readonly ActionStep[]): void {
+    try {
+      const changed = model && definitionOf(open.dialog).changedFolders?.(model, steps)
+      if (!changed) return
+      for (const database of changed.databases) this.reloadFolder(open, { kind: 'database', name: database }, changed.folder)
+    } catch (failure) { onUnexpectedError(failure) }
   }
   /** Names Varia's query tabs whose session the describe found holding an open transaction in the database (A7). */
   private nameTabTransactions(open: OpenObjectDialog, ids: readonly string[]): void {
@@ -473,7 +511,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
       refreshListing: select => this.refreshListing(open, select),
       reveal: (folder, object) => this.reveal(open, folder, object),
       reload: (owner, folder) => this.reloadFolder(open, owner, folder),
-      databaseState: offline => { if (open.target.kind === 'database' && open.target.name !== undefined) this.options.databaseState?.(open.connectionId, open.target.name, offline) }
+      databaseState: offline => { if (open.target.kind === 'database' && open.target.name !== undefined) this.options.databaseState?.(open.connectionId, open.target.name, offline) },
+      notify: message => this.options.notify?.(message)
     }
   }
   /** Reloads the server's folder a new object is listed in and selects it there; a folder never listed loads fresh when opened. */

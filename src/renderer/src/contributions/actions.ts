@@ -5,7 +5,8 @@ import { explorerNodeOf, type ExplorerMenuNode } from '../menus/targets'
 import { newLoginTarget } from '../dialogs/new-login'
 
 /**
- * Object Explorer's object actions (src/shared/actions/catalog.ts): Select Top 1000 Rows, Rename, Delete, Properties, and
+ * Object Explorer's object actions (src/shared/actions/catalog.ts): Select Top 1000 Rows, Rename, Delete, Properties, a
+ * login's Disable, Enable and Unlock…, and
  * Tasks › Take Offline and Bring Online, and Integration Services Catalogs › Create Catalog… (S9a), and Security › New ›
  * Login… (D2a). Each acts on the node its menu was opened for, otherwise on the selected node (F2, Delete, the palette), on a
  * live server. The Database Properties document's verbs (Apply, Discard Changes, Refresh, Stop) and the restore documents'
@@ -51,6 +52,23 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
       when: args => actions.canRun('rename', nodeOf(args)),
       unavailable: args => actions.unavailable('rename', nodeOf(args)),
       run: args => { const node = nodeOf(args); if (node) actions.beginRename(node) }
+    }),
+    // A login's state: the facts, Disable's confirmation and the job run in ObjectActionService.
+    commands.register('explorer.disable', {
+      when: args => actions.canRun('disable', nodeOf(args)),
+      unavailable: args => actions.unavailable('disable', nodeOf(args)),
+      run: async args => { const node = nodeOf(args); if (node) await actions.changeLoginState(node, 'disable') }
+    }),
+    commands.register('explorer.enable', {
+      when: args => actions.canRun('enable', nodeOf(args)),
+      unavailable: args => actions.unavailable('enable', nodeOf(args)),
+      run: async args => { const node = nodeOf(args); if (node) await actions.changeLoginState(node, 'enable') }
+    }),
+    // Unlock… (D4d): the modal reads the login's lock-out state; the listing cannot know it, so every SQL Server login offers it.
+    commands.register('explorer.unlock', {
+      when: args => actions.canRun('unlock', nodeOf(args)) && !dialogs.current,
+      unavailable: args => actions.unavailable('unlock', nodeOf(args)),
+      run: args => { const node = nodeOf(args); if (node) dialogs.open('unlockLogin', node) }
     }),
     commands.register('explorer.attachDatabase', {
       when: args => actions.canRun('attach', nodeOf(args)) && !dialogs.current,

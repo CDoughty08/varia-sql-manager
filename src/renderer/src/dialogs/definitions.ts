@@ -6,8 +6,8 @@
 // src/shared/actions/catalog.ts, a describe in the backend, a definition here, and its pages or sections. No React here,
 // so the services and their tests stay in Node.
 import { databaseStateOf, type DialogId } from '../../../shared/actions/catalog.ts'
-import type { NewLoginModel } from '../../../shared/actions/logins.ts'
-import { detachDatabaseStepTitle, dropDatabaseStepTitle, type ActionDescribeResult, type ActionError, type ActionRequest, type ActionStep, type AttachRequest, type AttachServerFacts, type CreateLoginRequest, type DatabasePropertiesModel, type DatabaseStateModel, type DeleteTarget } from '../../../shared/actions/schema.ts'
+import { loginDeleteText, loginMessages, loginRefusal, mappedUserKept, unlockRefusal, type LoginFacts, type LoginLockFacts, type NewLoginModel, type UnlockMode } from '../../../shared/actions/logins.ts'
+import { detachDatabaseStepTitle, dropDatabaseStepTitle, dropUserStepTitle, type ActionDescribeResult, type ActionError, type ActionRequest, type ActionStep, type AttachRequest, type AttachServerFacts, type CreateLoginRequest, type DatabasePropertiesModel, type DatabaseStateModel, type DeleteTarget } from '../../../shared/actions/schema.ts'
 import type { FolderId } from '../../../shared/explorer/catalog.ts'
 import { displayText, type ExplorerNodeRef, type ObjectRef } from '../../../shared/explorer/refs.ts'
 import type { LongRunKind } from '../../../shared/long-runs.ts'
@@ -31,6 +31,8 @@ export interface DialogEffects {
   reload(owner: ObjectRef, folder: FolderId): void
   /** The dialog's database went offline or came online: its Database Properties documents follow. */
   databaseState(offline: boolean): void
+  /** A toast with the object actions' notice key, which the next one replaces (Unlock Login's success). */
+  notify(message: string): void
 }
 /** A question main asks before OK runs: SSMS's Open Connections prompt. */
 export type DialogConfirmation = 'openConnections'
@@ -71,10 +73,39 @@ export interface ObjectDialogDefinition<Model, Draft> {
   readonly runOnOpen?: true
   /** A success leaves the dialog open on its steps with Close, as SSMS's progress dialogs do, instead of closing it. */
   readonly keepOpen?: true
+  /** Folders other than the object's listing that a reply's done steps changed (the Users folders of the databases a login's Delete
+   *  dropped users in), which the dialog reconciles where they are loaded, after a success or a partial failure. */
+  readonly changedFolders?: (model: Model, steps: readonly ActionStep[]) => ChangedFolders | undefined
+  /** Whether the dialog reads its model again after steps completed before a failure or Stop (ObjectDialogService.reload). */
+  readonly reloadsAfterPartial?: (target: ObjectRef) => boolean
 }
+/** A folder kind and the databases whose folder of that kind changed. */
+export interface ChangedFolders { readonly folder: FolderId; readonly databases: readonly string[] }
 
-/** Delete Object's checkboxes; they apply to databases only. */
-export interface DeleteDraft { readonly deleteHistory: boolean; readonly closeConnections: boolean }
+/** Delete Object's checkboxes: the first two apply to databases only, the last to logins only. */
+export interface DeleteDraft { readonly deleteHistory: boolean; readonly closeConnections: boolean; readonly dropMappedUsers: boolean }
+/** The mapped users a login's Delete may drop: those it lists that are not kept (they own a schema or role, or their database is read-only). */
+export const droppableUsers = (model: DeleteTarget) => (model.mappings?.users ?? []).filter(user => !mappedUserKept(user))
+/**
+ * Why Delete Object greys the option to drop the mapped users, or undefined when it offers it: no user is mapped, more are mapped
+ * than it lists (the backend refuses those), every one listed is kept, or the login's sessions cannot be counted (the backend
+ * refuses that too: a session would fail the login's DROP after its users were gone).
+ */
+export const dropMappedUsersNote = (model: DeleteTarget): string | undefined => {
+  const mapped = model.mappings?.mapped ?? 0, listed = model.mappings?.users.length ?? 0
+  if (mapped === 0) return loginDeleteText.noneToDrop
+  if (mapped > listed) return loginDeleteText.tooMany
+  if (droppableUsers(model).length === 0) return loginDeleteText.allKept
+  if (model.login?.sessions === undefined) return loginDeleteText.sessionsUncounted
+  return undefined
+}
+/** Whether Delete Object offers to drop the mapped users: nothing greys it (dropMappedUsersNote). */
+export const canDropMappedUsers = (model: DeleteTarget): boolean => !!model.mappings && dropMappedUsersNote(model) === undefined
+/** Why Delete Object greys OK for a login: the protected-principal rules (logins.ts) over the facts it read (own, sa, system, permissions). */
+export const loginDeleteRefusal = (model: DeleteTarget): string | undefined => {
+  const refused = model.login && loginRefusal(model.login, 'delete')
+  return refused ? loginMessages[refused] : undefined
+}
 /** Whether Delete Object can close the database's connections: not for a snapshot, nor where the describe says why not (Managed Instance cannot set SINGLE_USER; an offline database has none). */
 export const canCloseConnections = (model: DeleteTarget): boolean => !model.isSnapshot && !model.closeConnectionsNote
 const count = (value: number, one: string, many: string) => `${value.toLocaleString('en-US')} ${value === 1 ? one : many}`
@@ -99,13 +130,28 @@ export const deleteObjectDefinition: ObjectDialogDefinition<DeleteTarget, Delete
   dialog: 'deleteObject',
   modelOf: result => result.deleteTarget,
   // SSMS: Delete backup and restore history is checked (greyed for a snapshot); Close existing connections is not.
-  initialDraft: (model, target) => ({ deleteHistory: target.kind === 'database' && !model.isSnapshot, closeConnections: false }),
+  // SSMS deletes a login and leaves its users orphaned; Varia offers to delete them too, unchecked (D4 owner question 3).
+  initialDraft: (model, target) => ({ deleteHistory: target.kind === 'database' && !model.isSnapshot, closeConnections: false, dropMappedUsers: false }),
   request: (target, model, draft) => {
     const database = target.kind === 'database'
-    return { action: 'delete', target, closeConnections: database && canCloseConnections(model) && draft.closeConnections, deleteHistory: database && !model.isSnapshot && draft.deleteHistory }
+    const request = { action: 'delete', target, closeConnections: database && canCloseConnections(model) && draft.closeConnections, deleteHistory: database && !model.isSnapshot && draft.deleteHistory } as const
+    // The login the dialog read: the backend refuses one that has taken the name since, whose facts the dialog never showed.
+    return target.kind === 'login' && model.login
+      ? { ...request, dropMappedUsers: canDropMappedUsers(model) && draft.dropMappedUsers, loginIdentity: { sid: model.login.sid, created: model.login.created } }
+      : request
   },
   removesDatabase: (target, steps, succeeded) => target.kind === 'database' && (succeeded || steps.some(step => step.status === 'done' && !step.compensates && step.title === dropDatabaseStepTitle)),
-  afterSuccess: effects => effects.refreshListing()
+  afterSuccess: effects => effects.refreshListing(),
+  blocked: model => loginDeleteRefusal(model),
+  // A login's Delete that dropped users and then failed or stopped: the list shows who is still mapped.
+  reloadsAfterPartial: target => target.kind === 'login',
+  // Once a user was dropped, the Users folders of every database the dialog listed a droppable user in: a step's detail is clipped
+  // display text, so it is not matched back to its database, and reconciling an unchanged folder changes nothing.
+  changedFolders: (model, steps) => {
+    if (!steps.some(step => step.status === 'done' && step.title === dropUserStepTitle)) return undefined
+    const databases = [...new Set(droppableUsers(model).map(user => user.database))]
+    return databases.length ? { folder: 'users', databases } : undefined
+  }
 }
 
 const isProperties = (request: BuiltRequest): request is DatabaseRequest => request.action === 'properties'
@@ -242,15 +288,41 @@ export const detachDatabaseDefinition: ObjectDialogDefinition<DatabaseStateModel
   afterSuccess: effects => effects.refreshListing()
 }
 
+/** Unlock Login (D4d): the login preflight's facts and its lock-out state, as the unlockLogin describe read them. */
+export interface UnlockModel { readonly login: LoginFacts; readonly lock: LoginLockFacts }
+/** How to unlock: none until the user chooses (owner decision 9: keeping the password, which clears its history, is never the
+ *  default). Keeping it is the only way until Login Properties (D2c) adds Set a new password, which is then the default. */
+export interface UnlockDraft { readonly mode?: UnlockMode }
+export const unlockChooseMode = 'Choose how to unlock the login.'
+export const unlockSuccessNotice = (label: string) => `Unlocked the login ${label}. Its password history was cleared.`
+/** Why Unlock's OK cannot run: the login's own refusal (the page shows it as a warning), else no choice made yet. */
+export const unlockBlocked = (model: UnlockModel, draft: UnlockDraft): string | undefined => {
+  const id = unlockRefusal(model.login, model.lock)
+  return id ? loginMessages[id] : draft.mode ? undefined : unlockChooseMode
+}
+export const unlockLoginDefinition: ObjectDialogDefinition<UnlockModel, UnlockDraft> = {
+  dialog: 'unlockLogin',
+  modelOf: result => result.login && result.lock ? { login: result.login, lock: result.lock } : undefined,
+  initialDraft: () => ({}),
+  // The identity binds OK to the login this dialog read: one renamed, dropped or replaced since is refused, not unlocked.
+  // OK waits for a choice (blocked); Script, which runs nothing, shows the only way there is before one.
+  request: (target, model, draft) => ({ action: 'unlock', target, mode: draft.mode ?? 'keepPassword', ...(model.login.sid && model.login.created ? { loginIdentity: { sid: model.login.sid, created: model.login.created } } : {}) }),
+  blocked: unlockBlocked,
+  // Unlocked meanwhile (by its owner's new password, or another admin): the page says so and OK greys, as on a fresh open.
+  afterFailure: (model, failure) => failure.code === 'NOT_SUPPORTED' && failure.message === loginMessages.notLocked ? { ...model, lock: { ...model.lock, locked: false } } : model,
+  // The Logins folder's row and its status come from the reconciled listing.
+  afterSuccess: (effects, request) => { effects.refreshListing(); effects.notify(unlockSuccessNotice(request.target.name ?? '')) }
+}
+
 /** The dialogs this module defines: New Database is a document with a service of its own (src/renderer/src/new-database). */
 export type DefinedDialogId = Exclude<DialogId, 'newDatabase'>
 export interface DialogModels {
   readonly deleteObject: DeleteTarget; readonly databaseProperties: DatabasePropertiesModel; readonly attachDatabase: AttachServerFacts; readonly newLogin: NewLoginModel
-  readonly takeOffline: DatabaseStateModel; readonly bringOnline: DatabaseStateModel; readonly detachDatabase: DatabaseStateModel
+  readonly takeOffline: DatabaseStateModel; readonly bringOnline: DatabaseStateModel; readonly detachDatabase: DatabaseStateModel; readonly unlockLogin: UnlockModel
 }
 export interface DialogDrafts {
   readonly deleteObject: DeleteDraft; readonly databaseProperties: DatabaseDraft; readonly attachDatabase: AttachDraft; readonly newLogin: NewLoginDraft
-  readonly takeOffline: TakeOfflineDraft; readonly bringOnline: BringOnlineDraft; readonly detachDatabase: DetachDraft
+  readonly takeOffline: TakeOfflineDraft; readonly bringOnline: BringOnlineDraft; readonly detachDatabase: DetachDraft; readonly unlockLogin: UnlockDraft
 }
 export type DialogModel = DialogModels[DefinedDialogId]
 export type DialogDraft = DialogDrafts[DefinedDialogId]
@@ -261,7 +333,8 @@ export const dialogDefinitions: { readonly [D in DefinedDialogId]: ObjectDialogD
   newLogin: newLoginDefinition,
   takeOffline: takeOfflineDefinition,
   bringOnline: bringOnlineDefinition,
-  detachDatabase: detachDatabaseDefinition
+  detachDatabase: detachDatabaseDefinition,
+  unlockLogin: unlockLoginDefinition
 }
 /** A dialog's definition over the open dialog's model and draft, which the service keeps paired with its dialog. */
 export const definitionOf = (dialog: DefinedDialogId) => dialogDefinitions[dialog] as unknown as ObjectDialogDefinition<DialogModel, DialogDraft>

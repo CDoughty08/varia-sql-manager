@@ -146,8 +146,9 @@ internal sealed class ActionsCatalog
     /// preflight derives the subtype.</summary>
     public bool Offered(string kind, string action) => rows.Values.Any(row => row.Kind == kind && row.Enabled.Contains(action));
 
-    /// <summary>Whether the derived subtype's row enables the action now. It reads the row without a status: the preflights
-    /// that derive a status (a disabled login) arrive with the actions that need them.</summary>
+    /// <summary>Whether the derived subtype's row enables the action now. It reads the row without a status. A login answers by
+    /// its rules instead (LoginRules.Refusal), which decide every verb whatever its status: Disable and Enable are idempotent,
+    /// so a stale tree that offers one just runs it again.</summary>
     public bool Allows(string kind, string subtype, string action) => (Row(kind, subtype) ?? Row(kind, "")) is { } row && row.Enabled.Contains(action);
 
     /// <summary>sys.databases.state by the catalogue's name ('other' for a value it does not know).</summary>

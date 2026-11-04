@@ -270,9 +270,12 @@ internal sealed partial class ActionService
         return new(done, [.. messages.Collected().Select(Scrubbed)], 0, failure);
     }
 
-    /// <summary>What a step acts on: a server role; a mapped database; a database role and its database.</summary>
+    /// <summary>What a step acts on where its title alone does not say it: a server role; a mapped database; a database role and its
+    /// database; a database user's name and database (a login's Delete drops one per database: "app_user in AppData", which reads
+    /// cleanly after the steps panel's "title: "), its names as display text.</summary>
     internal static string? StepDetail(PlannedStatement statement) => statement.Template switch
     {
+        ActionTemplate.DropUser or ActionTemplate.DropMappedUser => ScriptingErrors.Display(statement.Names[0]) + " in " + ScriptingErrors.Display(statement.Database),
         ActionTemplate.AddServerRoleMember => statement.Names[0],
         ActionTemplate.AddRoleMember => statement.Names[0] + " in " + statement.Database,
         _ when MappingStep(statement.Template) => statement.Database,

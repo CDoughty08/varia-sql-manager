@@ -51,7 +51,7 @@ import { EditorDialogs } from '../editor/go-to-line'
 import { scriptingOptionsFrom } from '../../../shared/settings/catalog'
 import type { SettingsService } from '../settings/SettingsService'
 import { ScriptingService } from '../scripting/ScriptingService'
-import { ObjectActionService } from '../actions/ObjectActionService'
+import { objectActionNoticeKey, ObjectActionService } from '../actions/ObjectActionService'
 import { databaseRenameHooks } from '../actions/database-rename'
 import { databaseGoneHandler } from '../dialogs/database-gone'
 import { ActionProgressService } from '../actions/ActionProgressService'
@@ -244,7 +244,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     api, connections, explorer, documents, files, serverFiles, longRuns, focusEditor: () => focusLater(() => documents.focusActive()),
     // Database Properties documents of a database a dialog took offline or brought online follow it.
     databaseState: (connectionId, database, offline) => properties.databaseStateChanged(connectionId, database, offline),
-    databaseGone: gone => databaseGone(gone), tabNames: ids => queries.tabNames(ids)
+    databaseGone: gone => databaseGone(gone), tabNames: ids => queries.tabNames(ids),
+    notify: message => notifications.notify({ severity: 'info', message, key: objectActionNoticeKey })
   })
   const ssisCatalog = new CreateCatalogService({ api, connections, explorer, longRuns })
   const designers = new TableDesignerService({
@@ -338,7 +339,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const menuState = new MenuStatePublisher({ commands, context, send: state => api.setMenuState(state) })
   const actions = new ObjectActionService({
     api, explorer, documents, queries, connections, selectTopCount: () => settings.get('objectExplorer.selectTopRows'),
-    report: { error: message => commands.reportError(message), warning: message => commands.reportWarning(message) },
+    report: { error: message => commands.reportError(message), warning: message => commands.reportWarning(message), clear: message => commands.clearError(message), notice: message => notifications.notify({ severity: 'info', message, key: objectActionNoticeKey }) },
     databases: databaseRenameHooks({ documents, queries, connections, targets, properties }),
     notify: notice => { notifications.notify(notice) }
   })

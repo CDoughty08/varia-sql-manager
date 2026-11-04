@@ -6,8 +6,8 @@ import { resizeWindow } from './fixtures/window-resize.mjs'
 import { actionsStubData, caution, dependentsMessage, detachFiles, detachScript, installActionsStub, longDatabase, longRole, offlineScript, offlineWarning, propertiesScript, restoreFilesScript, restoreScript, scriptText, stubServerFiles, stubSessions } from './fixtures/actions-stub.mjs'
 import {
   addObjectDialogSteps, attachFileNameShown, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, editorTextbox,
-  errorBanner, explorerLabel, fieldHint, frameSection, inputShowsEnd, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogSessions, objectDialogSessionsToggle, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part,
-  passwordField, propertyFact, propertyRow, queryDatabase, renameBox, scriptActions, scriptDrawer, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toastMessage, toasts, toolbarButton, unsavedMark,
+  errorBanner, explorerLabel, fieldHint, frameSection, inputShowsEnd, objectDialogConnection, objectDialogMappedUsers, objectDialogPage, objectDialogProgress, objectDialogSessions, objectDialogSessionsToggle, objectDialogStepItems, objectDialogTabs, objectDialogWarningIcons, objectDialogWarnings, openMenus as openMenusOf, part,
+  passwordField, propertyFact, propertyRow, queryDatabase, quickInput, quickInputActive, quickInputMessage, renameBox, scriptActions, scriptDrawer, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toastMessage, toasts, toolbarButton, unsavedMark,
   warningBanner as warningBannerOf
 } from './fixtures/ui.mjs'
 
@@ -21,7 +21,8 @@ const mac = process.platform === 'darwin'
 let application
 let page
 const failures = []
-const watchdog = setTimeout(() => { console.error('Object actions suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 300000)
+// A hang guard, not a speed check: wave 5's sections take the whole suite past five minutes on a desktop (305 s with D4c).
+const watchdog = setTimeout(() => { console.error('Object actions suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 480000)
 
 const menuNamed = name => page.getByRole('menu', { name, exact: true })
 const explorerMenu = () => menuNamed('Object Explorer')
@@ -1362,6 +1363,221 @@ try {
   expect(copies.some(text => text.includes(typed) || text.includes('Weak') || text.includes('Held'))).toBe(false)
   console.log('Object action checks: New Login opens from Security › New and Logins with SSMS\'s pages and defaults, greys the password rows\' labels under Windows authentication, scrolls General in the narrow frame with its fields aligned, keeps its masked password across pages, maps a database (Select Schema, a role, keys) but never an offline one, scripts PASSWORD=<password> to the clipboard and a query window without sending the password, keeps the dialog on PASSWORD_POLICY with focus back on Password, Stops, and selects the new login.')
 
+  // 8b. A login's Disable, Enable and Rename (D4b): the menu offers one of Disable and Enable by the login's state, greys
+  // what its kind refuses; Disable asks first, then the row and its menu follow; the login this connection uses is refused
+  // before any prompt; Enable never asks; a Disable waiting on a lock shows in the status bar with Stop; Rename refuses a
+  // SQL Server login's backslash and keeps the box, then renames with a notice.
+  const logins = ['server-a', 'Security', 'Logins']
+  await expandExplorerPath(page, ...logins)
+  // Main's native message boxes: each is recorded and answered from a queue (Cancel when it is empty).
+  await application.evaluate(({ dialog }) => {
+    globalThis.loginPrompts = []
+    globalThis.loginAnswers = []
+    globalThis.previousShowMessageBox ??= dialog.showMessageBox
+    dialog.showMessageBox = async (_window, options) => {
+      globalThis.loginPrompts.push({ title: options.title, message: options.message, detail: options.detail, buttons: options.buttons, defaultId: options.defaultId, cancelId: options.cancelId })
+      return { response: globalThis.loginAnswers.shift() ?? options.cancelId, checkboxChecked: false }
+    }
+  })
+  const prompts = () => application.evaluate(() => globalThis.loginPrompts)
+  const answer = response => application.evaluate((_electron, value) => { globalThis.loginAnswers.push(value) }, response)
+  const promptCount = 0
+  const notice = () => toastMessage(toasts(page).last())
+  /** A login row's menu items and those greyed (explorerMenuItems); the menu stays open. */
+  const loginMenu = name => explorerMenuItems(page, ...logins, name)
+  const chooseLogin = (name, item) => chooseExplorerMenuItem(page, [...logins, name], item)
+  // A SQL Server login offers Unlock… whatever its state (only its dialog reads whether it is locked out); other kinds do not.
+  expect((await loginMenu('AppUser')).names).toEqual(['New Login…', 'Script Login as', 'Copy Name', 'Disable', 'Unlock…', 'Rename', 'Delete', 'Refresh'])
+  await closeMenu()
+  expect((await loginMenu('Retired')).names).toEqual(['New Login…', 'Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh'])
+  await closeMenu()
+  // A Windows group cannot be disabled (SQL Server refuses it), and SQL Server's own logins cannot be changed.
+  expect(await loginMenu('CONTOSO\\Ops')).toEqual({ names: ['New Login…', 'Script Login as', 'Copy Name', 'Disable', 'Rename', 'Delete', 'Refresh'], disabled: ['Disable'] })
+  await closeMenu()
+  expect(await loginMenu('##MS_PolicyTsqlExecutionLogin##')).toEqual({ names: ['New Login…', 'Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh'], disabled: ['Enable', 'Unlock…', 'Rename', 'Delete'] })
+  await closeMenu()
+  // The palette says why a greyed login verb is greyed for the login selected, in its own words.
+  await select(...logins, 'CONTOSO\\Ops')
+  await page.keyboard.press('F1')
+  await page.keyboard.insertText('Disable Login')
+  await expect(quickInputActive(page)).toContainText('Object Explorer: Disable Login')
+  await page.keyboard.press('Enter')
+  await expect(quickInputMessage(page)).toHaveText('A Windows group cannot be disabled. Deny it permission to connect (DENY CONNECT SQL) instead.')
+  await page.keyboard.press('Escape')
+  await expect(quickInput(page)).toHaveCount(0)
+  await answer(0)
+  await chooseLogin('AppUser', 'Disable')
+  await expect.poll(async () => (await prompts()).length).toBe(promptCount + 1)
+  expect((await prompts()).at(-1)).toEqual({ title: 'Disable Login', message: 'Disable the login AppUser?', buttons: ['Disable', 'Cancel'], defaultId: 0, cancelId: 1,
+    detail: 'New connections will be refused. 2 sessions connected as this login stay connected until they end; Activity Monitor can end them.' })
+  await expect(notice()).toHaveText('Disabled the login AppUser. Its 2 open sessions stay connected.')
+  // The request names the principal the facts describe (the stub's SID and creation time), which the backend checks before any DDL.
+  expect((await stubCalls('actions.execute')).at(-1)).toEqual({ action: 'disable', connectionId: expect.any(String), requestId: expect.any(String), target: { kind: 'login', name: 'AppUser' },
+    loginIdentity: { sid: '01', created: '2026-01-02T03:04:05.000' } })
+  // The row follows once Logins is listed again; each read opens the row's menu afresh.
+  await expect.poll(async () => (await loginMenu('AppUser')).names).toEqual(['New Login…', 'Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh'])
+  // Enable runs at once; the notice says the login still may not connect while its CONNECT SQL is denied.
+  await closeMenu()
+  await chooseLogin('Retired', 'Enable')
+  await expect(notice()).toHaveText('Enabled the login Retired. Permission to connect is still denied.')
+  expect((await prompts()).length).toBe(promptCount + 1)
+  // The login this connection uses: refused before any prompt, and nothing runs.
+  const executed = (await stubCalls('actions.execute')).length
+  await chooseLogin('sa', 'Disable')
+  await expect(commandBanner()).toHaveText('This is the login this connection uses. Connect with another login to change it.')
+  expect([(await prompts()).length, (await stubCalls('actions.execute')).length]).toEqual([promptCount + 1, executed])
+  await page.getByRole('button', { name: 'Dismiss command error', exact: true }).click()
+  // A Disable waiting on a lock: the status bar shows it with Stop, which cancels it in the backend.
+  await answer(0)
+  await chooseLogin('Held', 'Disable')
+  await expect(status).toContainText('Disabling Held…')
+  const heldId = (await stubCalls('actions.execute')).at(-1).requestId
+  await status.getByRole('button', { name: 'Stop disable', exact: true }).click()
+  await expect.poll(() => application.evaluate(() => globalThis.variaStub.cancels)).toContain(heldId)
+  await expect(status).not.toContainText('Disabling')
+  await expect(commandBanner()).toHaveCount(0)
+  // Unlock… (D4d): a modal over the login's lock-out state. Locked is locked out; nothing is chosen, so OK is greyed until Keep the
+  // current password is, and then unlocks it keeping its password, bound to the login the dialog read; a notice says its
+  // password history was cleared. AppUser is not locked out: OK is greyed.
+  const unlockDialog = name => page.getByRole('dialog', { name: `Unlock Login - ${name}`, exact: true })
+  await chooseLogin('Locked', 'Unlock…')
+  await expect(objectDialogProgress(unlockDialog('Locked'))).toHaveText('Ready')
+  const how = unlockDialog('Locked').getByRole('radiogroup', { name: 'How to unlock', exact: true })
+  const keep = how.getByRole('radio', { name: 'Keep the current password', exact: true })
+  await expect(keep).not.toBeChecked()
+  await expect(unlockDialog('Locked').getByRole('button', { name: 'OK', exact: true })).toBeDisabled()
+  await expect(how).toContainText('Choose how to unlock the login.')
+  await keep.check()
+  await expect(keep).toBeChecked()
+  await expect(how).not.toContainText('Choose how to unlock the login.')
+  await expect(unlockDialog('Locked')).toContainText('Locked out since 2026-11-02 21:07:12 (server time) after 10 failed sign-ins.')
+  await expect(how).toContainText("This clears the login's password history.")
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-unlock-dark.png') })
+  await unlockDialog('Locked').getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(unlockDialog('Locked')).toHaveCount(0)
+  await expect(notice()).toHaveText('Unlocked the login Locked. Its password history was cleared.')
+  expect((await stubCalls('actions.execute')).at(-1)).toEqual({ action: 'unlock', connectionId: expect.any(String), requestId: expect.any(String), target: { kind: 'login', name: 'Locked' },
+    mode: 'keepPassword', loginIdentity: { sid: '01', created: '2026-01-02T03:04:05.000' } })
+  const unlocks = (await stubCalls('actions.execute')).length
+  await chooseLogin('AppUser', 'Unlock…')
+  await expect(objectDialogProgress(unlockDialog('AppUser'))).toHaveText('Ready')
+  await expect(unlockDialog('AppUser')).toContainText('This login is not locked out.')
+  await expect(unlockDialog('AppUser').getByRole('button', { name: 'OK', exact: true })).toBeDisabled()
+  await expect(unlockDialog('AppUser').getByRole('button', { name: 'Script', exact: true })).toBeEnabled()
+  await page.keyboard.press('Enter')
+  await unlockDialog('AppUser').getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(unlockDialog('AppUser')).toHaveCount(0)
+  expect((await stubCalls('actions.execute')).length).toBe(unlocks)
+  // Rename: F2 on a login; a name in SQL Server's own form keeps the box with the reason, which Escape takes away with the box.
+  await select(...logins, 'AppUser')
+  await page.keyboard.press('F2')
+  const loginBox = page.getByRole('textbox', { name: 'Rename Login', exact: true })
+  await expect(loginBox).toHaveValue('AppUser')
+  await page.keyboard.type('##AppUser##')
+  await page.keyboard.press('Enter')
+  await expect(commandBanner()).toHaveText("Names that start and end with ## are reserved for SQL Server's own logins.")
+  await expect(loginBox).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(loginBox).toHaveCount(0)
+  await expect(commandBanner()).toHaveCount(0)
+  // A backslash keeps the box too, and a new name renames the login with a notice and takes the message away.
+  await select(...logins, 'AppUser')
+  await page.keyboard.press('F2')
+  await expect(loginBox).toHaveValue('AppUser')
+  await page.keyboard.type('CONTOSO\\AppUser')
+  await page.keyboard.press('Enter')
+  await expect(commandBanner()).toHaveText("A SQL Server login's name cannot contain a backslash.")
+  await expect(loginBox).toBeVisible()
+  await loginBox.fill('AppOwner')
+  await page.keyboard.press('Enter')
+  await expect(notice()).toHaveText('Renamed the login AppUser to AppOwner. Database users mapped to it keep their names.')
+  await expect(await revealExplorerRow(page, ...logins, 'AppOwner')).toBeVisible()
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'rename', target: { kind: 'login', name: 'AppUser' }, newName: 'AppOwner' })
+  await expect(commandBanner()).toHaveCount(0)
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-logins-dark.png') })
+  await application.evaluate(({ dialog }) => { dialog.showMessageBox = globalThis.previousShowMessageBox })
+  console.log('Object action checks: a login\'s menu offers Disable or Enable by its state and greys what its kind refuses; Disable asks, Enable does not, the palette says why a group\'s Disable is greyed, the own login is refused first, Stop reaches a waiting Disable, Unlock… unlocks a locked-out login keeping its password and greys OK for one that is not, and Rename refuses a ##…## name and a SQL login\'s backslash, the message leaving with the box.')
+
+  // 8b. A login's Delete (D4c): greyed for sa; Delete Object lists the users mapped to a login (a schema owner as kept), the
+  // databases it could not check, SSMS's orphan note and the option to delete the users too, which Script and OK send with the
+  // identity of the login it read. A login with sessions is refused with the dialog kept; another is deleted and leaves Logins.
+  // Logins may still be reloading after the rename; each read opens sa's menu afresh.
+  await expect.poll(() => loginMenu('sa')).toEqual({ names: ['New Login…', 'Script Login as', 'Copy Name', 'Disable', 'Unlock…', 'Rename', 'Delete', 'Refresh'], disabled: ['Delete'] })
+  await closeMenu()
+  await chooseLogin('AppOwner', 'Delete')
+  await expect(objectDialogProgress(dialog())).toHaveText('Ready')
+  await expect(dialog().getByRole('grid').locator('tbody td')).toHaveText(['AppOwner', 'Login', '', '', ''])
+  const sessionsWarning = '2 sessions are connected as this login; the DROP fails until they end. Activity Monitor can end them.'
+  await expect(objectDialogWarnings(dialog())).toHaveText([sessionsWarning])
+  // What fails the DROP carries the warning icon (a note, below, the info icon).
+  expect(await objectDialogWarningIcons(dialog()).evaluateAll(icons => icons.map(icon => icon.getAttribute('aria-label')))).toEqual(['Warning'])
+  await expect(objectDialogMappedUsers(dialog())).toHaveText(['AppData: AppUser', 'Sales: app_owner (kept: owns 1 schema)'])
+  await expect(dialog().getByText('1 database was not checked (offline or not accessible).', { exact: true })).toBeVisible()
+  await expect(dialog().getByText('Deleting a login does not delete the database users mapped to it. They are left orphaned: they keep their permissions but no login can use them.', { exact: true })).toBeVisible()
+  const dropUsers = () => dialog().getByLabel('Also delete the database users mapped to this login', { exact: true })
+  await expect(dropUsers()).not.toBeChecked()
+  await expect(dropUsers()).toBeEnabled()
+  await expect(dropUsers()).toHaveAccessibleDescription('Users that own schemas or other securables, or have granted permissions, are kept. Transfer or revoke those first, then delete the users in each database.')
+  await dropUsers().check()
+  const tabsBeforeScript = await tabs().count()
+  await dialog().getByRole('button', { name: 'Script options', exact: true }).click()
+  await dialog().getByRole('option', { name: 'Script Action to New Query Window', exact: true }).click()
+  await expect(tabs()).toHaveCount(tabsBeforeScript + 1)
+  const loginIdentity = { sid: '01', created: '2026-01-02T03:04:05.000' }
+  expect((await stubCalls('actions.script')).at(-1)).toMatchObject({ action: 'delete', target: { kind: 'login', name: 'AppOwner' }, dropMappedUsers: true, loginIdentity })
+  await expect(dialog()).toBeVisible()
+  await dialog().getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(dialog().getByRole('alert')).toHaveText(sessionsWarning)
+  await expect(objectDialogProgress(dialog())).toHaveText('Error')
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'delete', target: { kind: 'login', name: 'AppOwner' }, dropMappedUsers: true, loginIdentity })
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-delete-login-dark.png') })
+  await dialog().getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog()).toHaveCount(0)
+  // The script went to the new query window: each droppable user's DROP in its database, then the login's (a schema owner's is not there).
+  const loginScript = async () => (await editorText(page)).replaceAll('\u00a0', ' ')
+  await expect.poll(loginScript).toContain('DROP USER [AppUser]')
+  expect(await loginScript()).toContain('DROP LOGIN [AppOwner]')
+  expect(await loginScript()).not.toContain('app_owner')
+  // Held has no user mapped and every database was checked: no orphan note, and the option is greyed, saying why.
+  await chooseLogin('Held', 'Delete')
+  await expect(objectDialogProgress(dialog())).toHaveText('Ready')
+  await expect(dialog().getByText('No database user is mapped to this login.', { exact: true })).toBeVisible()
+  await expect(dialog().getByText(/^Deleting a login does not delete/)).toHaveCount(0)
+  await expect(dropUsers()).toBeDisabled()
+  await expect(dropUsers()).toHaveAccessibleDescription('There is no mapped user to delete.')
+  await dialog().getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog()).toHaveCount(0)
+  // CONTOSO\Ops: its user is dropped, then the login's DROP fails (a session signed in meanwhile). The step names the user it
+  // dropped, and the page reads the login again, so the user leaves the list and the option is greyed, while the failure stays.
+  await chooseLogin('CONTOSO\\Ops', 'Delete')
+  await expect(objectDialogProgress(dialog())).toHaveText('Ready')
+  await expect(objectDialogMappedUsers(dialog())).toHaveText(['AppData: ops'])
+  await dropUsers().check()
+  await dialog().getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(objectDialogProgress(dialog())).toHaveText('Error')
+  await expect(objectDialogStepItems(dialog())).toHaveCount(2)
+  await expect(objectDialogStepItems(dialog()).first()).toContainText('Drop the database user: ops in AppData')
+  await expect(objectDialogMappedUsers(dialog())).toHaveCount(0)
+  await expect(dialog().getByText('No database user is mapped to this login in the databases checked.', { exact: true })).toBeVisible()
+  await expect(dropUsers()).toBeDisabled()
+  await expect(dialog().getByRole('alert')).toContainText("Could not drop login 'CONTOSO\\Ops'")
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-delete-login-partial.png') })
+  await dialog().getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog()).toHaveCount(0)
+  // Retired has no sessions: OK drops its user, then the login, and Logins reloads without it. SQL Server Agent runs as it: a
+  // note, with the info icon, not a warning.
+  await chooseLogin('Retired', 'Delete')
+  await expect(objectDialogProgress(dialog())).toHaveText('Ready')
+  await expect(objectDialogWarnings(dialog())).toHaveText(['SQL Server Agent (MSSQLSERVER) runs as this account.'])
+  expect(await objectDialogWarningIcons(dialog()).evaluateAll(icons => icons.map(icon => icon.getAttribute('aria-label')))).toEqual(['Note'])
+  await expect(objectDialogMappedUsers(dialog())).toHaveText(['AppData: Retired'])
+  await dropUsers().check()
+  await dialog().getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(dialog()).toHaveCount(0)
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'delete', target: { kind: 'login', name: 'Retired' }, dropMappedUsers: true, loginIdentity })
+  await expect(explorerTree(page).locator(part.explorerLabel, { hasText: /^Retired$/ })).toHaveCount(0)
+  console.log('Object action checks: a login\'s Delete is greyed for sa; Delete Object lists its mapped users, what it could not check and the orphan note, Script and OK send the option with the login\'s identity, sessions keep the dialog with IN_USE, a login with no user greys the option with why, a partial failure reads the login again, a note is not a warning, and a Delete leaves Logins.')
+
   // 9. Tasks › Take Offline and Bring Online (D3a). The submenu greys by the listing's state; Take Database Offline lists the
   // sessions in the database (one in a transaction, which Drop All Active Connections rolls back) and keeps OK disabled, saying
   // why, until the box is checked or Check Again finds none; Script Action shows SET OFFLINE; Success leaves Close, focused, and
@@ -1670,7 +1886,7 @@ try {
   console.log('Object action checks: a database\'s Delete Object offers SSMS\'s options with their defaults, and a lost server leaves only Close.')
 
   expect(failures).toEqual([])
-  console.log('Object action checks passed: menus, Select Top for views, inline Rename (a database\'s with its prompt), the Delete Object dialog with Script and errors, Database Properties, database options, and a lost server.')
+  console.log('Object action checks passed: menus, Select Top for views, inline Rename (a database\'s with its prompt), the Delete Object dialog with Script and errors, Database Properties, a login\'s Disable, Enable, Rename and Delete, database options, and a lost server.')
 } catch (error) {
   await page?.screenshot({ path: resolve('artifacts', 'object-actions-failure.png') }).catch(() => {})
   throw error

@@ -1,4 +1,4 @@
-// Object Explorer actions: Select Top 1000 Rows, Rename, Delete, Properties, Take Offline, Bring Online, Detach, the Databases folder's Attach, Restore Database and Restore Files and Filegroups, which kinds, subtypes and folders offer each, the object
+// Object Explorer actions: Select Top 1000 Rows, Rename, Delete, Properties, Take Offline, Bring Online, Detach, a login's Disable, Enable and Unlock, the Databases folder's Attach, Restore Database and Restore Files and Filegroups, which kinds, subtypes and folders offer each, the object
 // dialogs and their pages, error codes and limits. It is the only declaration of what an action may touch: menus,
 // context keys, the palette and docs/object-actions.md read it, and the backend embeds actionsCatalogJson() as
 // Actions/actions-catalog.json (a vitest file snapshot keeps that copy in sync), so a stale tree cannot ask the backend
@@ -9,7 +9,7 @@ import type { IconId } from '../icons.ts'
 import type { ScriptDestination } from '../scripting/catalog.ts'
 import { compatibilityLevels, databaseOptionDefs, ownerNotOn, scopedConfigurationDefs, type DatabaseOptionDef } from './database.ts'
 import type { LongRunKind } from '../long-runs.ts'
-import { loginsCatalog } from './logins.ts'
+import { loginRules, loginSubtypes, loginsCatalog, type LoginRule, type LoginSubtype } from './logins.ts'
 import { restoreCatalog, restoreMessages } from './restore.ts'
 
 // One entry per line, so later actions and dialogs append cleanly.
@@ -23,11 +23,14 @@ export const objectActions = [
   'bringOnline',
   'detach',
   'restore',
-  'restoreFiles'
+  'restoreFiles',
+  'disable',
+  'enable',
+  'unlock'
 ] as const
 export type ObjectAction = typeof objectActions[number]
-/** `query` opens and runs a query, `inline` edits the tree row, `dialog` opens an object dialog, `create` makes a new
- *  object from a dialog opened on a folder (New Login). */
+/** `query` opens and runs a query, `inline` runs on the tree row as a status-bar job (Rename's box, a login's Disable and
+ *  Enable), `dialog` opens an object dialog, `create` makes a new object from a dialog opened on a folder (New Login). */
 export type ActionClass = 'query' | 'inline' | 'dialog' | 'create'
 /**
  * Actions that make an object rather than act on one: their dialog opens on a folder (or on a sibling), their target is
@@ -56,7 +59,8 @@ export const dialogIds = [
   'newLogin',
   'takeOffline',
   'bringOnline',
-  'detachDatabase'
+  'detachDatabase',
+  'unlockLogin'
 ] as const
 export type DialogId = typeof dialogIds[number]
 /** The menus an action can be placed in: Object Explorer's context menu and its Tasks submenus (src/shared/commands/menus.ts). */
@@ -128,7 +132,13 @@ const actionSpecData = {
   restoreFiles: {
     title: 'Restore Files and Filegroups…', mnemonic: 'e', group: '0_new', order: 4, class: 'dialog', command: 'explorer.restoreFiles', folder: 'databases',
     rows: { command: 'explorer.tasks.restoreFiles', menu: 'explorer.tasks.restore', title: 'Files and Filegroups…', group: '1_restore', order: 2, mnemonic: 'f' }, engines: ['box'], long: true
-  }
+  },
+  // A login's state (D4b): SSMS 22's menu words and access key are recalled, not verified. B is free in a login's menu, and
+  // the two never show together (a status overlay swaps them).
+  disable: { title: 'Disable Login', menuTitle: 'Disable', mnemonic: 'b', group: '6_state', order: 1, class: 'inline', command: 'explorer.disable', engines: onServers },
+  enable: { title: 'Enable Login', menuTitle: 'Enable', mnemonic: 'b', group: '6_state', order: 1, class: 'inline', command: 'explorer.enable', engines: onServers },
+  // Varia's own verb (D4d): SSMS unlocks only on Login Properties › Status, with a new password. U is free in a login's menu.
+  unlock: { title: 'Unlock Login…', menuTitle: 'Unlock…', mnemonic: 'u', group: '6_state', order: 2, class: 'dialog', dialog: 'unlockLogin', command: 'explorer.unlock', engines: onServers }
 } as const satisfies { readonly [A in ObjectAction]: ObjectActionSpec }
 export const objectActionSpecs: { readonly [A in ObjectAction]: ObjectActionSpec & { readonly command: typeof actionSpecData[A]['command'] } } = actionSpecData
 type RowCommandOf<S> = S extends { readonly rows: { readonly command: infer C } } ? C : never
@@ -199,11 +209,22 @@ export interface ActionKindSpec {
   readonly subtypes?: Partial<Record<NodeSubtype, ActionRow>>
   /** Overlaid on the subtype's row for a node with that status (a disabled login offers Enable in place of Disable). */
   readonly statuses?: Partial<Record<NodeStatus, ActionRowOverlay>>
+  /** A subtype's own overlay for a status, in place of `statuses`' (a disabled system login keeps Enable greyed). */
+  readonly subtypeStatuses?: Partial<Record<NodeSubtype, Partial<Record<NodeStatus, ActionRowOverlay>>>>
 }
 const all: ActionRow = { selectTop: 'enabled', rename: 'enabled', delete: 'enabled' }
 const selectOnly: ActionRow = { selectTop: 'enabled', rename: 'disabled', delete: 'disabled' }
 const editable: ActionRow = { rename: 'enabled', delete: 'enabled' }
 const locked: ActionRow = { rename: 'disabled', delete: 'disabled' }
+/** The login verbs whose rows this catalogue declares from logins.ts' rules; Properties (D2c) joins as it arrives. Enable is
+ *  not here: only a disabled login's overlay offers it. Unlock is offered whatever the login's state: only LOGINPROPERTY knows
+ *  whether it is locked out, so its dialog says. */
+export const loginRowVerbs = ['disable', 'unlock', 'rename', 'delete'] as const satisfies readonly ObjectAction[]
+const ruleState = (rule: LoginRule): 'enabled' | 'disabled' | undefined => rule === 'allowed' ? 'enabled' : rule === 'greyed' ? 'disabled' : undefined
+const loginRow = (subtype: LoginSubtype): ActionRow => Object.fromEntries(loginRowVerbs.flatMap(verb => { const state = ruleState(loginRules[subtype][verb]); return state ? [[verb, state]] : [] }))
+/** A disabled login offers Enable, as its subtype's rule says, in place of Disable. A login whose CONNECT SQL is denied keeps
+ *  Disable: Grant is Login Properties' Status page (D2c), and ENABLE leaves the DENY in place. */
+const loginDisabled = (subtype: LoginSubtype): ActionRowOverlay => ({ disable: '', enable: ruleState(loginRules[subtype].enable) ?? '' })
 // Temporal, ledger, FileTable and external tables need SYSTEM_VERSIONING and ledger handling before they can be renamed
 // or dropped (a follow-up); a dropped ledger table or view can be neither selected from nor changed.
 export const actionKindSpecs: { readonly [K in NodeKind]?: ActionKindSpec } = {
@@ -225,6 +246,12 @@ export const actionKindSpecs: { readonly [K in NodeKind]?: ActionKindSpec } = {
   database: {
     row: { ...editable, properties: 'enabled', takeOffline: 'enabled', bringOnline: 'enabled', detach: 'enabled', restore: 'enabled', restoreFiles: 'enabled' },
     subtypes: { system: { ...locked, properties: 'enabled', takeOffline: 'disabled', bringOnline: 'disabled', detach: 'disabled', restore: 'disabled', restoreFiles: 'disabled' }, snapshot: { rename: 'disabled', delete: 'enabled', properties: 'enabled' } }
+  },
+  // A login of a type the Logins folder does not list has no subtype, and no actions.
+  login: {
+    row: {},
+    subtypes: Object.fromEntries(loginSubtypes.map(subtype => [subtype, loginRow(subtype)])),
+    subtypeStatuses: Object.fromEntries(loginSubtypes.map(subtype => [subtype, { disabled: loginDisabled(subtype) }]))
   }
 }
 
@@ -241,10 +268,13 @@ export function actionRow(kind: NodeKind, subtype?: NodeSubtype, status?: NodeSt
   const spec = specs[kind]
   if (!spec || subtype !== undefined && !kindSpecs[kind].subtypes?.includes(subtype)) return undefined
   const row = (subtype && spec.subtypes?.[subtype]) || spec.row
-  return status ? overlayRow(row, spec.statuses?.[status]) : row
+  return status ? overlayRow(row, (subtype && spec.subtypeStatuses?.[subtype]?.[status]) || spec.statuses?.[status]) : row
 }
-/** The statuses a kind has overlays for, in `nodeStatuses` order. */
-export const actionStatuses = (kind: NodeKind): NodeStatus[] => nodeStatuses.filter(status => actionKindSpecs[kind]?.statuses?.[status])
+/** The statuses a kind has overlays for, its subtypes' included, in `nodeStatuses` order. */
+export const actionStatuses = (kind: NodeKind): NodeStatus[] => {
+  const spec = actionKindSpecs[kind]
+  return nodeStatuses.filter(status => spec?.statuses?.[status] || Object.values(spec?.subtypeStatuses ?? {}).some(overlays => overlays?.[status]))
+}
 
 /** sys.databases.state by name; values SQL Server may add later are `other`. */
 export const databaseStateIds = { 0: 'online', 1: 'restoring', 2: 'recovering', 3: 'recoveryPending', 4: 'suspect', 5: 'emergency', 6: 'offline', 7: 'copying', 10: 'offlineSecondary' } as const
@@ -399,10 +429,10 @@ const commandData: { readonly [A in ObjectAction]: Omit<ActionCommandEntry, 'tit
     icon: 'table', keywords: ['select', 'rows', 'query', 'view'], documentTask: true, unavailableHint: 'Select a table or view in Object Explorer.',
     titleSetting: { setting: 'objectExplorer.selectTopRows', template: 'Select Top {n} Rows' }
   },
-  rename: { icon: 'edit', keywords: ['name'], documentTask: false, unavailableHint: 'Select a table, view, stored procedure, function, or user database.', keybindings: [{ key: 'f2', when: explorerKeyWhen }] },
+  rename: { icon: 'edit', keywords: ['name'], documentTask: false, unavailableHint: 'Select a table, view, stored procedure, function, user database, or login.', keybindings: [{ key: 'f2', when: explorerKeyWhen }] },
   // ⌘⌫ deletes in macOS's Finder; the forward Delete key works there too.
   delete: {
-    icon: 'close', keywords: ['drop', 'remove'], documentTask: false, unavailableHint: 'Select a table, view, stored procedure, function, user database, or database snapshot.',
+    icon: 'close', keywords: ['drop', 'remove'], documentTask: false, unavailableHint: 'Select a table, view, stored procedure, function, user database, database snapshot, or login.',
     keybindings: [{ win: 'delete', linux: 'delete', mac: 'mod+backspace', when: explorerKeyWhen }, { mac: 'delete', when: explorerKeyWhen }]
   },
   // ⌘I is Finder's Get Info. Alt+Enter is reserved on Windows and Linux, and SSMS 22's binding is unverified, so there is no key there.
@@ -425,7 +455,11 @@ const commandData: { readonly [A in ObjectAction]: Omit<ActionCommandEntry, 'tit
   restoreFiles: {
     icon: 'history', keywords: ['backup', 'recover', 'file', 'filegroup', 'piecemeal', 'online'], documentTask: false,
     unavailableHint: `Select the Databases folder or a user database on SQL Server. ${restoreMessages.systemDatabase}`
-  }
+  },
+  // SSMS has no keys for either.
+  disable: { icon: 'circle-slash', keywords: ['login', 'account', 'block', 'deactivate'], documentTask: false, unavailableHint: 'Select an enabled login in Object Explorer.' },
+  enable: { icon: 'pass', keywords: ['login', 'account', 'allow', 'activate'], documentTask: false, unavailableHint: 'Select a disabled login in Object Explorer.' },
+  unlock: { icon: 'unlock', keywords: ['login', 'account', 'locked', 'lockout', 'password', 'policy'], documentTask: false, unavailableHint: 'Select a SQL Server login in Object Explorer.' }
 }
 /**
  * The action commands, keyed by their command ids (explorer.selectTopRows keeps PR4's id). A long-running action (a
@@ -621,7 +655,8 @@ const page = (id: PageId, title: string, options: { readonly icon?: IconId; read
  *  later Database Properties pages (Change Tracking, Permissions, Extended Properties, Mirroring, Transaction Log
  *  Shipping, Query Store) are listed once they exist. */
 const dialogSpecData = {
-  deleteObject: { title: 'Delete Object', surface: 'modal', titleFormat: 'plain', size: 'compact', action: 'delete', pages: [page('general', 'General')] },
+  // Its steps: a login's Delete drops each mapped user, then the login (D4c); a database's closes connections, drops it and its history.
+  deleteObject: { title: 'Delete Object', surface: 'modal', titleFormat: 'plain', size: 'compact', action: 'delete', pages: [page('general', 'General')], steps: true },
   databaseProperties: {
     title: 'Database Properties', surface: 'document', titleFormat: 'withName', size: 'large', action: 'properties',
     pages: [page('general', 'General'), page('files', 'Files'), page('filegroups', 'Filegroups'), page('options', 'Options')]
@@ -647,15 +682,19 @@ const dialogSpecData = {
   bringOnline: { title: 'Bring Database Online', surface: 'modal', titleFormat: 'withName', size: 'compact', action: 'bringOnline', pages: [page('general', 'General')], steps: true },
   // Learn's Detach Database dialog: "Databases to detach" (Database Name, Drop Connections, Update Statistics, Status, Message).
   // Keep Full-Text Catalogs applies only to databases upgraded from SQL Server 2005, which Varia does not reach, so it is left out.
-  detachDatabase: { title: 'Detach Database', surface: 'modal', titleFormat: 'withName', size: 'compact', action: 'detach', pages: [page('general', 'General')], steps: true }
+  detachDatabase: { title: 'Detach Database', surface: 'modal', titleFormat: 'withName', size: 'compact', action: 'detach', pages: [page('general', 'General')], steps: true },
+  // Varia's own dialog (D4d); its run lists the transaction's steps when it fails or is stopped.
+  unlockLogin: { title: 'Unlock Login', surface: 'modal', titleFormat: 'withName', size: 'compact', action: 'unlock', pages: [page('general', 'General')], steps: true }
 } as const satisfies { readonly [D in DialogId]: DialogSpec }
 export const dialogSpecs: { readonly [D in DialogId]: DialogSpec } = dialogSpecData
 /**
  * Describes that open no dialog: the facts an inline action reads before it runs, by id, with the action they serve and the
- * kinds they describe. D3c's rename of a database reads its sessions, access and identity, and whether logins default to it.
+ * kinds they describe (the backend's Target, and zod's, follow the action's target rules). D3c's rename of a database reads
+ * its sessions, access and identity, and whether logins default to it; D4b's loginFacts reads a login's facts before Disable.
  */
 export const factDescribeSpecs = {
-  renameDatabase: { action: 'rename', kinds: ['database'] }
+  renameDatabase: { action: 'rename', kinds: ['database'] },
+  loginFacts: { action: 'disable', kinds: ['login'] }
 } as const satisfies { readonly [id: string]: { readonly action: ObjectAction; readonly kinds: readonly NodeKind[] } }
 export type FactDescribeId = keyof typeof factDescribeSpecs
 export const factDescribeIds = Object.keys(factDescribeSpecs) as FactDescribeId[]
