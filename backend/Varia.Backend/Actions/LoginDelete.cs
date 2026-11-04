@@ -103,8 +103,9 @@ internal sealed partial class ActionService
             command.CommandText = ActionSql.LoginJobs;
             command.CommandTimeout = 0;
             Add(command, "@sid", SqlDbType.VarBinary, 85, sid);
-            var value = await command.ExecuteScalarAsync(token);
-            return value is null or DBNull ? null : Convert.ToInt32(value, CultureInfo.InvariantCulture);
+            // A reader, as every action statement runs (tests/action-reader-lint.test.ts).
+            await using var reader = await command.ExecuteReaderAsync(token);
+            return await reader.ReadAsync(token) && !reader.IsDBNull(0) ? reader.GetInt32(0) : null;
         }
         catch (SqlException) when (!token.IsCancellationRequested) { return null; }
     }
@@ -218,21 +219,21 @@ internal sealed partial class ActionService
         var (facts, _, _, scan) = await LoginDeleteFactsAsync(connection, subject.Target.Name!, scan: args.DropMappedUsers == true, token);
         if (facts is null || !string.Equals(facts.Sid, read.Sid, StringComparison.Ordinal) || facts.PrincipalId != read.PrincipalId || subject.Row.Raw("create_date") is not DateTime created)
             return new([], [], 0, Error("NOT_FOUND", "The login " + subject.Display + " changed while it was read. Refresh Object Explorer and try again."));
-        if (facts.Sessions is > 0 and var sessions) return new([], [], 0, Error("IN_USE", SessionsWarning(sessions)), sessions);
+        if (facts.Sessions is > 0 and var sessions) return new([], [], 0, Error("IN_USE", SessionsWarning(sessions)), Sessions: sessions);
         var dependents = LoginDeleteWarnings(facts, null).Where(warning => warning.Blocking).Select(warning => warning.Text).ToList();
-        if (dependents.Count > 0) return new([], [], 0, Error("DEPENDENTS", string.Join(" ", dependents)), facts.Sessions);
+        if (dependents.Count > 0) return new([], [], 0, Error("DEPENDENTS", string.Join(" ", dependents)), Sessions: facts.Sessions);
         if (scan is not null)
         {
             // Users go first, so nothing the preflight cannot see may fail the login's DROP after them: a session it cannot count
             // (15434), or a database it could not read again, whose users would stay orphaned while the reply said success.
             if (facts.Sessions is null) return new([], [], 0, Error("NOT_SUPPORTED", catalog.Logins.Message("sessionsUncounted")));
-            if (scan.Databases.Count(database => !database.Checked) is > 0 and var unread) return new([], [], 0, Error("BLOCKED", UnreadDatabases(unread)), facts.Sessions);
-            if (scan.Mapped > scan.Users.Count) return new([], [], 0, Error("NOT_SUPPORTED", TooManyMappedUsers), facts.Sessions);
+            if (scan.Databases.Count(database => !database.Checked) is > 0 and var unread) return new([], [], 0, Error("BLOCKED", UnreadDatabases(unread)), Sessions: facts.Sessions);
+            if (scan.Mapped > scan.Users.Count) return new([], [], 0, Error("NOT_SUPPORTED", TooManyMappedUsers), Sessions: facts.Sessions);
         }
         await RunAsync(connection, ActionSql.ExecutePrologue, token);
         var plan = Plan(args, subject.Target, users: scan?.Users, login: new(SidBytes(facts), facts.PrincipalId, created));
         var (steps, failure, _) = await RunPlannedAsync(connection, args.ConnectionId, args.Action, plan, ActionErrors.LoginSessionsAdvice, token);
         if (failure is { Code: "PERMISSION_DENIED" }) failure = Error(failure.Code, failure.Message + " " + ActionErrors.LoginPermissionAdvice);
-        return new(steps, messages.Collected(), 0, failure, facts.Sessions);
+        return new(steps, messages.Collected(), 0, failure, Sessions: facts.Sessions);
     }
 }

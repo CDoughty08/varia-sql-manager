@@ -702,9 +702,9 @@ describe('Search', () => {
     // The previous query is active, as in Go to Query.
     expect(view().rows[view().activeIndex].item.label).toBe('b.sql')
     quickInput.filter('orders')
-    // A command matches too (o-r-d-e-r-s from the start of Operations), between the queries and the objects.
-    expect(view().rows.map(row => [row.group, row.item.label])).toEqual([['open queries', 'Orders report.sql'], ['commands', 'Integration Services: Copy Operations with Headers'], ['Object Explorer', 'dbo.Orders']])
-    expect(view().rows[2].item).toMatchObject({ icon: 'table', description: 'server-a.example › Databases › AppData › Tables' })
+    // Commands match too (o-r-d-e-r-s from the start of Operations, and spread through Restore Files and Filegroups), between the queries and the objects.
+    expect(view().rows.map(row => [row.group, row.item.label])).toEqual([['open queries', 'Orders report.sql'], ['commands', 'Integration Services: Copy Operations with Headers'], [undefined, 'Object Explorer: Restore Files and Filegroups…'], ['Object Explorer', 'dbo.Orders']])
+    expect(view().rows[3].item).toMatchObject({ icon: 'table', description: 'server-a.example › Databases › AppData › Tables' })
     // Folders are not objects of their own (an object in one matches by its path), and nothing is loaded for a search.
     quickInput.filter('tables')
     expect(view().rows.filter(row => row.group === 'Object Explorer').map(row => row.item.label)).toEqual(['dbo.Orders'])
@@ -712,7 +712,8 @@ describe('Search', () => {
     quickInput.filter('new query')
     expect(view().rows[0]).toMatchObject({ group: 'commands', item: { label: 'File: New Query' } })
     quickInput.filter('orders')
-    // Past the command, to the object.
+    // Past the commands, to the object.
+    quickInput.move('next')
     quickInput.move('next')
     quickInput.move('next')
     quickInput.accept()

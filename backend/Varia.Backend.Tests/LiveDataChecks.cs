@@ -78,7 +78,9 @@ internal static class LiveDataChecks
             "every live query at the server's band (" + band + ") returns the columns it declares, by name, in order and numeric, and its tables' columns by name and type: " + string.Join("; ", shapes));
 
         // Rates on the server's clock: a baseline with gauges only, then every series, the second within about a second
-        // (the quick second sample; the interval is 2 s). Measured once more when a tick failed (a busy shared server).
+        // (the quick second sample; the interval is 2 s). Measured once more when a tick failed (a busy shared server) or a
+        // counter went backwards: another check dropping a database a summed counter covered makes a reset, which LiveDeltas
+        // reports without values by design.
         async Task<((Task<LiveEnd> Task, LiveRecorder Recorder, string Id) View, bool Sampled, List<LiveTickEvent> Ticks)> Overview()
         {
             var view = Subscribe(info.Id, 2000);
@@ -86,9 +88,10 @@ internal static class LiveDataChecks
             return (view, sampled, view.Recorder.Ticks.Take(3).ToList());
         }
         var measured = await Overview();
-        if (measured.Ticks.Any(tick => tick.Errors is not null))
+        var reset = measured.Ticks.Skip(1).Any(tick => tick.Samples.Any(sample => sample.Gap == "reset"));
+        if (measured.Ticks.Any(tick => tick.Errors is not null) || reset)
         {
-            Console.WriteLine("Timing: an activity.overview tick failed (" + string.Join(", ", measured.Ticks.SelectMany(tick => tick.Errors ?? []).Select(error => error.Code)) + "); measuring it once more.");
+            Console.WriteLine("Timing: " + (reset ? "an activity.overview counter went backwards (a reset)" : "an activity.overview tick failed (" + string.Join(", ", measured.Ticks.SelectMany(tick => tick.Errors ?? []).Select(error => error.Code)) + ")") + "; measuring it once more.");
             await Stop(measured.View);
             measured = await Overview();
         }

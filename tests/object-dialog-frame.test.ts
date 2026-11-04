@@ -58,10 +58,13 @@ describe('object dialog frame', () => {
   })
   it('lists a run\'s steps with their state in words, and nothing before the run reports any', () => {
     expect(html(createElement(StepsPanel, { steps: [] }))).toBe('')
-    const panel = html(createElement(StepsPanel, { steps: [{ status: 'done', title: 'Close connections' }, { status: 'failed', title: 'Take database offline' }, { status: 'skipped', title: 'Restore access' }] }))
+    const panel = html(createElement(StepsPanel, { steps: [{ status: 'done', title: 'Close connections' }, { status: 'failed', title: 'Take database offline', message: 'Msg 5070: Database state cannot be changed while other users are using the database' }, { status: 'skipped', title: 'Restore access' }] }))
     expect(panel).toContain('<section class="object-dialog-steps" aria-labelledby="object-dialog-steps"><div class="object-dialog-caption" id="object-dialog-steps">Steps</div>')
     expect([...panel.matchAll(/data-status="(\w+)"/g)].map(match => match[1])).toEqual(['done', 'failed', 'skipped'])
     expect(panel).toContain('<span class="visually-hidden">Failed: </span>Take database offline')
+    // Every step reads as its title (a done step has no message); the failure's text belongs to the message bar.
+    expect(panel).toContain('<span class="visually-hidden">Done: </span>Close connections')
+    expect(panel).not.toContain('Msg 5070')
   })
 })
 
@@ -88,5 +91,50 @@ describe('StepList', () => {
       .toContain('aria-valuenow="100" aria-valuetext="Nearly done"><div class="step-list-fill" style="width:100%"')
     expect([clampPercent(-5), clampPercent(Number.NaN), clampPercent(42)]).toEqual([0, 0, 42])
     expect(Object.keys(stepIcons).sort()).toEqual(Object.keys(stepWords).sort())
+  })
+})
+
+describe('Take Database Offline and Bring Database Online page', () => {
+  it('says who is in the database, how many have open transactions, and when it cannot know', async () => {
+    const { sessionsMessage } = await import('../src/renderer/src/dialogs/pages/DatabaseStatePage')
+    expect(sessionsMessage({ sessions: undefined, withTransaction: undefined })).toBe('Sessions unknown (needs VIEW SERVER STATE).')
+    expect(sessionsMessage({ sessions: 0, withTransaction: 0 })).toBe('No active connections.')
+    expect(sessionsMessage({ sessions: 1, withTransaction: 0 })).toBe('1 active connection')
+    expect(sessionsMessage({ sessions: 1200, withTransaction: 1 })).toBe('1,200 active connections (1 with an open transaction)')
+    expect(sessionsMessage({ sessions: 3, withTransaction: 2 })).toBe('3 active connections (2 with open transactions)')
+  })
+  it('shows SSMS\'s Ready and Not ready before OK, then the run\'s outcome', async () => {
+    const { databaseStateStatus } = await import('../src/renderer/src/dialogs/pages/DatabaseStatePage')
+    const at = (phase: Parameters<typeof databaseStateStatus>[0]['phase'], blocked = false, model?: object) => databaseStateStatus({ phase, model: model as never }, blocked).label
+    expect([at('ready'), at('ready', true), at('loading'), at('loading', false, {}), at('executing'), at('succeeded'), at('failed'), at('loadFailed'), at('stopped')])
+      .toEqual(['Ready', 'Not ready', 'Loading', 'Checking', 'In progress', 'Success', 'Error', 'Error', 'Stopped'])
+    expect(databaseStateStatus({ phase: 'succeeded', model: undefined }, false).tone).toBe('success')
+    expect(databaseStateStatus({ phase: 'ready', model: undefined }, true).tone).toBe('warning')
+  })
+  it('offers Script before OK and after a failure or Stop, never while it runs or once a dialog that stays open has succeeded', async () => {
+    const { scriptAvailable } = await import('../src/renderer/src/dialogs/ObjectDialog')
+    const phases = ['ready', 'failed', 'stopped', 'loading', 'scripting', 'confirming', 'executing', 'succeeded'] as const
+    expect(phases.filter(phase => scriptAvailable(phase, true))).toEqual(['ready', 'failed', 'stopped'])
+    expect(scriptAvailable('ready', false)).toBe(false)
+  })
+  it('keeps Stop and Cancel different buttons, so focus moved to Stop is not left on Cancel when a run ends', async () => {
+    // Focus moves to Stop as a run starts; were Cancel the same element, focus would stay there after New Login's
+    // PASSWORD_POLICY instead of returning to Password.
+    const { DialogButtons } = await import('../src/renderer/src/dialogs/ObjectDialog')
+    type Shown = { key: string | null; props: { children: string; disabled?: boolean } }
+    const buttons = (phase: Parameters<typeof DialogButtons>[0]['phase'], busy = false) => {
+      const element = DialogButtons({ phase, busy, blocked: undefined, closeRef: null, stopRef: null, onClose: () => {}, onStop: () => {} }) as unknown as Shown & { props: { children: Shown | (Shown | false)[] } }
+      const shown = Array.isArray(element.props.children) ? element.props.children.filter((child): child is Shown => !!child) : [element]
+      return shown.map(button => `${button.key} ${button.props.children}${button.props.disabled ? ' (disabled)' : ''}`)
+    }
+    expect(buttons('ready')).toEqual(['ok OK', 'cancel Cancel'])
+    expect(buttons('executing', true)).toEqual(['ok OK (disabled)', 'stop Stop'])
+    expect(buttons('failed')).toEqual(['ok OK', 'cancel Cancel'])
+    expect(buttons('disconnected')).toEqual(['ok OK (disabled)', 'cancel Close'])
+    expect(buttons('succeeded')).toEqual(['close Close'])
+  })
+  it('says after Stop that the count read before OK no longer holds', async () => {
+    const { stoppedMessage } = await import('../src/renderer/src/dialogs/pages/DatabaseStatePage')
+    expect(stoppedMessage).toBe('Stopped. Check Again to see who is connected now.')
   })
 })

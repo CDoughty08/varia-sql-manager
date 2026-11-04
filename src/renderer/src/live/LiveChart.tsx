@@ -43,6 +43,8 @@ function subscribeForced(listener: () => void): () => void {
   return () => query.removeEventListener('change', listener)
 }
 const forcedNow = () => typeof matchMedia === 'function' && matchMedia(forcedQuery).matches
+/** Whether forced colours are on: a drawing that fills with theme colours leaves its fills to the forced-colours CSS then. */
+export const useForcedColors = (): boolean => useSyncExternalStore(subscribeForced, forcedNow)
 
 export function LiveChart(props: LiveChartProps) {
   const { handle, probe, title, scale, window, variant = 'chart', labels, surface, link, tableRows, className, onView, onTableShownChange, tableToggle = true } = props
@@ -54,7 +56,7 @@ export function LiveChart(props: LiveChartProps) {
   const tableShown = props.tableShown ?? ownTableShown
   const toggleTable = () => { const next = !tableShown; if (props.tableShown === undefined) setOwnTableShown(next); onTableShownChange?.(next) }
   const [table, setTable] = useState<{ rows: readonly ChartTableRow[]; total: number }>({ rows: [], total: 0 })
-  const forced = useSyncExternalStore(subscribeForced, forcedNow)
+  const forced = useForcedColors()
   const onViewRef = useRef(onView)
   onViewRef.current = onView
   const first = useRef({ title, series, scale, window })

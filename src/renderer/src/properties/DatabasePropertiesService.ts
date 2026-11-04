@@ -1,6 +1,6 @@
 import { actionLimits, dialogSpecs, dialogTitle } from '../../../shared/actions/catalog.ts'
 import { noScriptNotice } from '../../../shared/actions/database.ts'
-import type { ActionError, ActionExecuteResult, ActionRequest, ActionStep, DatabasePropertiesModel } from '../../../shared/actions/schema.ts'
+import type { ActionError, ActionExecuteResult, ActionRequest, ActionStep, DatabaseIdentity, DatabasePropertiesModel } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
 import type { ScriptDestination } from '../../../shared/scripting/catalog.ts'
@@ -49,7 +49,12 @@ export interface PropertiesState {
   readonly changed: boolean
   /** Whether the last Apply completed is unknown (the server or backend went, or Stop got no answer): Apply waits for a Refresh. */
   readonly stale: boolean
-  /** Varia deleted the database (D3 §8): the document is an orphan, read-only with no Refresh, until it is closed. */
+  /** Take Offline took the database offline while the document held changes, which it keeps: the banner and the status say so
+   *  until the database is read again. Apply still runs, and its preflight refuses a database that is not online, so one brought
+   *  online elsewhere (a query, another connection) never leaves the changes stuck. A document without changes reads the
+   *  database again instead (its readOnlyReason says it). */
+  readonly offline?: boolean
+  /** Varia deleted or detached the database (D3 §8): the document is an orphan, read-only with no Refresh, until it is closed. */
   readonly gone?: boolean
   readonly error?: ActionError
   /** An info line: the changes applied, a script delivered. */
@@ -95,7 +100,9 @@ export const propertiesMessages = {
   /** Apply ran, but reading the database again failed: said before the read's error, so the Apply is never taken for a failure. */
   appliedUnread: 'The changes were applied, but the database could not be read again:',
   applying: 'The changes are being applied. Stop them, or wait for them to finish.',
-  readFailed: 'The database could not be read.'
+  readFailed: 'The database could not be read.',
+  /** Take Offline took the database offline while the document held changes. */
+  offline: 'The database was taken offline. Bring it online before you apply these changes, or discard them.'
 } as const
 /** How long the Script preview waits after the last edit before it asks the backend, so typing sends one request. */
 export const previewDelayMs = 300
@@ -239,7 +246,7 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
     }
     const current = this.get(id)!
     this.patch(id, {
-      phase: 'ready', model, draft: definition.initialDraft(model, current.target), changed: false, stale: false, revision: current.revision + 1, error: undefined,
+      phase: 'ready', model, draft: definition.initialDraft(model, current.target), changed: false, stale: false, offline: undefined, revision: current.revision + 1, error: undefined,
       ...notice ? { notice } : {}, script: { state: 'idle', message: noScriptNotice }, scriptRevision: undefined
     })
     this.options.documents.setDirty(id, false)
@@ -254,10 +261,10 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
     return !!state && state.phase === 'ready' && state.changed && !state.stale && !state.gone && this.live(id) && !state.model?.readOnlyReason
   }
 
-  // --- A deleted database ----------------------------------------------------------------------------------------------
+  // --- A deleted or detached database ------------------------------------------------------------------------------------
 
   /**
-   * Varia deleted the database (Delete Object, D3 §8): each of its documents on that connection turns orphan. What it showed
+   * Varia deleted or detached the database (Delete Object, D3 §8; Detach Database, D3b): each of its documents on that connection turns orphan. What it showed
    * stays, read-only, under "This database no longer exists on <server>." with Close and no Refresh, since a database that
    * takes the name later is another one; its requests are cancelled and its changes dropped, so closing it asks nothing.
    */
@@ -272,7 +279,7 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
       this.previews.delete(state.id)
       this.clearPreviewTimer(state.id)
       this.patch(state.id, {
-        gone: true, phase: state.model ? 'ready' : 'loadFailed', changed: false, error: error('NOT_FOUND', goneMessage(state.server)), notice: undefined, steps: undefined,
+        gone: true, offline: undefined, phase: state.model ? 'ready' : 'loadFailed', changed: false, error: error('NOT_FOUND', goneMessage(state.server)), notice: undefined, steps: undefined,
         script: { state: 'idle', message: goneMessage(state.server) }, scriptRevision: undefined, scriptNotice: undefined
       })
       this.options.documents.setDirty(state.id, false)
@@ -284,6 +291,39 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
   private revive(id: string): void {
     this.patch(id, { gone: undefined, error: undefined })
     if (this.canRefresh(id)) this.refresh(id)
+  }
+  /**
+   * A dialog took a database offline or brought it online on a connection (D3a): each of its documents on that server, through
+   * any connection, reads it again when nothing would be lost (the describe of an offline database says so, read-only), and one
+   * with changes keeps them, marked offline until the database is online again or read again.
+   */
+  databaseStateChanged(connectionId: string, database: string, offline: boolean): void {
+    const server = this.options.connections.getSnapshot().find(connection => connection.id === connectionId)?.server
+    for (const state of Object.values(this.getSnapshot().documents)) {
+      if (state.gone || state.target.name !== database || (this.connectionOf(state.id) !== connectionId && (server === undefined || !this.follows(state.id, server)))) continue
+      if (!state.changed && this.canRefresh(state.id)) { this.patch(state.id, { offline: undefined }); this.refresh(state.id) }
+      else if (!!state.offline !== offline) this.patch(state.id, { offline: offline || undefined })
+    }
+  }
+  /**
+   * Object Explorer renamed a database (D3c): each of its documents on that server, through any connection, follows the new
+   * name, as it is the same database: the tab retitles, Properties on the renamed node finds it, and Apply and Refresh act on the
+   * new name. One without changes reads it again; one with changes keeps them, and takes the database's identity under the new
+   * name (`identity`, the rename's reply: MODIFY NAME gives it a new create_date), so its Apply is not refused as another
+   * database's. `connections` are the backend's to the same server (the describe's), which match whatever name each was opened with.
+   */
+  databaseRenamed(connectionId: string, database: string, newName: string, connections: readonly string[] = [], identity?: DatabaseIdentity): void {
+    const server = this.options.connections.getSnapshot().find(connection => connection.id === connectionId)?.server
+    const named = new Set([connectionId, ...connections])
+    for (const state of Object.values(this.getSnapshot().documents)) {
+      const owner = this.connectionOf(state.id)
+      if (state.target.name !== database || (!(owner !== undefined && named.has(owner)) && (server === undefined || !this.follows(state.id, server)))) continue
+      const target = { ...state.target, name: newName }, label = scriptObjectLabel(target)
+      this.options.documents.update(state.id, { name: dialogTitle('databaseProperties', label), database: newName })
+      const read = state.model, model = read && { ...read, general: { ...read.general, name: newName, ...identity && identity.id === read.general.id ? { created: identity.created } : {} } }
+      this.patch(state.id, { target, label, ...model ? { model } : {} })
+      if (!state.changed && this.canRefresh(state.id)) this.refresh(state.id)
+    }
   }
   /** Apply (and File › Save, the close prompt's Save): one at a time per document; resolves true once the changes ran. */
   apply(id: string): Promise<boolean> {

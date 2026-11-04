@@ -23,7 +23,7 @@ void Check(bool condition, string name)
     passed++;
 }
 // Focused SQL Server lanes: their scratch and permission checks are required, never an offline-only or skipped success.
-if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--seams-live" or "--logins-live" or "--login-actions-live" or "--login-delete-live" or "--delete-live")])
+if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--server-files-live" or "--seams-live" or "--new-database-live" or "--action-progress-live" or "--attach-live" or "--restore-live" or "--logins-live" or "--login-listing-live" or "--database-state-live" or "--delete-live" or "--detach-live" or "--rename-database-live" or "--login-actions-live" or "--login-delete-live")])
 {
     var focusedServer = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SERVER");
     if (string.IsNullOrWhiteSpace(focusedServer)) throw new Exception(lane + " requires VARIA_TEST_SQL_SERVER.");
@@ -38,7 +38,17 @@ if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live"
     var focusedInfo = (ConnectionInfo)await focusedService.DispatchAsync("connections.connect", JsonSerializer.SerializeToElement(FocusedLive("master"), json), json);
     try
     {
-        if (lane == "--delete-live")
+        if (lane == "--rename-database-live")
+        {
+            await RenameDatabaseLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
+            Console.WriteLine("Passed " + passed + " focused database rename checks.");
+        }
+        else if (lane == "--detach-live")
+        {
+            await DetachLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
+            Console.WriteLine("Passed " + passed + " focused Detach Database checks.");
+        }
+        else if (lane == "--delete-live")
         {
             await using var deleteScratch = ScratchDatabase.Bare(async (text, database) =>
             {
@@ -54,12 +64,27 @@ if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live"
             await ActionLiveChecks.DeleteParityAsync(Check, focusedService, focusedInfo, FocusedLive("master"), json, deleteScratch, requirePermissionChecks: true);
             Console.WriteLine("Passed " + passed + " focused Delete parity checks.");
         }
+        else if (lane == "--database-state-live")
+        {
+            await DatabaseStateLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
+            Console.WriteLine("Passed " + passed + " focused Take Offline and Bring Online checks.");
+        }
         else if (lane == "--seams-live")
         {
             await SeamLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
             Console.WriteLine("Passed " + passed + " focused wave 5 seam checks.");
         }
+        else if (lane == "--action-progress-live")
+        {
+            await ActionProgressLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
+            Console.WriteLine("Passed " + passed + " focused action progress checks.");
+        }
         else if (lane == "--logins-live")
+        {
+            await LoginLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json, required: true);
+            Console.WriteLine("Passed " + passed + " focused New Login checks.");
+        }
+        else if (lane == "--login-listing-live")
         {
             await LoginListingLiveChecks.RunAsync(Check, focusedService, focusedInfo, json);
             Console.WriteLine("Passed " + passed + " focused Logins listing checks.");
@@ -78,6 +103,26 @@ if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live"
         {
             await ExplorerStatusLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
             Console.WriteLine("Passed " + passed + " focused Object Explorer status checks.");
+        }
+        else if (lane == "--new-database-live")
+        {
+            await NewDatabaseLiveChecks.RunAsync(Check, focusedService, focusedInfo, json);
+            Console.WriteLine("Passed " + passed + " focused New Database checks.");
+        }
+        else if (lane == "--restore-live")
+        {
+            await RestoreLiveChecks.RunAsync(Check, focusedService, focusedInfo, json);
+            Console.WriteLine("Passed " + passed + " focused Restore Database checks.");
+        }
+        else if (lane == "--server-files-live")
+        {
+            await ServerFilesLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
+            Console.WriteLine("Passed " + passed + " focused server file picker checks.");
+        }
+        else if (lane == "--attach-live")
+        {
+            await AttachLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
+            Console.WriteLine("Passed " + passed + " focused Attach Databases checks.");
         }
         else
         {
@@ -192,11 +237,17 @@ await TextChecks.RunAsync(Check);
 await ExplorerChecks.RunAsync(Check);
 await ScriptingChecks.RunAsync(Check);
 await ActionChecks.RunAsync(Check);
+await ServerFilesChecks.RunAsync(Check);
 await SeamChecks.RunAsync(Check);
+await ActionProgressChecks.RunAsync(Check);
+await AttachChecks.RunAsync(Check);
+await RestoreChecks.RunAsync(Check);
+await LoginChecks.RunAsync(Check);
 await LoginActionChecks.RunAsync(Check);
 await LoginDeleteChecks.RunAsync(Check);
 DatabasePropertiesChecks.Run(Check);
 DesignerChecks.Run(Check);
+NewDatabaseChecks.Run(Check);
 await SsisChecks.RunAsync(Check);
 ActivityChecks.Run(Check);
 ActivitySourceChecks.Run(Check);
@@ -231,13 +282,19 @@ Check(ScratchDatabase.Lasting(Names("master", "VariaScratch_20261018120000_0123a
     && ScratchDatabase.Lasting(Names("master", "model")) != ScratchDatabase.Lasting(Names("master", "model", "Sales"))
     && ScratchDatabase.Lasting(Names("master", "model")) != ScratchDatabase.Lasting(Names("master")),
     "\"the server is unchanged\" checks ignore other runs' scratch databases but see any other database come or go");
-Check(new[] { "", "_ro", "_off", "_su", "_rs", "_rv", "_rvs", "_snap", "_rt", "_inj", "_act", "_actr", "_dbp", "_tbd", "_tbd.]", "_live", "_ssis", "_ssisref", "_ssiscc", "_seam", "_seamt", "_del", "_delc", "_delcs", "_delo", "_ldu", "_ldk" }.All(suffix => ScratchDatabase.Sweepable("VariaScratch_20261018120000_0123abcd" + suffix))
+Check(new[] { "", "_ro", "_off", "_su", "_rs", "_rv", "_rvs", "_snap", "_rt", "_inj", "_act", "_actr", "_dbp", "_tbd", "_tbd.]", "_live", "_ssis", "_ssisref", "_ssiscc", "_files", "_seam", "_seamt", "_nd", "_ap", "_at", "_at']", "_at2", "_rst", "_rstr", "_dbs", "_del", "_delc", "_delcs", "_delo", "_det", "_dets", "_ldu", "_ldk" }.All(suffix => ScratchDatabase.Sweepable("VariaScratch_20261018120000_0123abcd" + suffix))
     && !new[] { "VariaScratch_20261018120000_0123abcd_acts", "VariaScratch_20261018120000_0123abcd_iso", "VariaScratch_20261018120000_0123abcd_dbpx", "VariaScratch_x_act", "varia_scratch_0123456789ab", "VariaScratch_20261018120000_0123ABCD",
-        "VariaScratch_20261018120000_0123abcd_ssisx", "VariaScratch_20261018120000_0123abcd_ssis_ref", "VariaScratch_20261018120000_0123abcd_ssiscc_", "VariaScratch_20261018120000_0123abcd_seamx", "VariaScratch_20261018120000_0123abcd_ld", "SSISDB" }.Any(ScratchDatabase.Sweepable)
+        "VariaScratch_20261018120000_0123abcd_ssisx", "VariaScratch_20261018120000_0123abcd_ssis_ref", "VariaScratch_20261018120000_0123abcd_ssiscc_", "VariaScratch_20261018120000_0123abcd_file", "VariaScratch_20261018120000_0123abcd_seamx", "VariaScratch_20261018120000_0123abcd_ndx", "VariaScratch_20261018120000_0123abcd_apx", "VariaScratch_20261018120000_0123abcd_at']]", "VariaScratch_20261018120000_0123abcd_at3", "VariaScratch_20261018120000_0123abcd_rstx", "VariaScratch_20261018120000_0123abcd_detx", "VariaScratch_20261018120000_0123abcd_ld", "SSISDB" }.Any(ScratchDatabase.Sweepable)
     && ScratchDatabase.IsScratchJob("VariaScratch_20261018120000_0123abcd_job")
     && !new[] { "VariaScratch_x_job", "VariaScratch_cleanup_job", "VariaScratch_nightly_job", "VariaScratch_20261018120000_0123abcd", "VariaScratch_20261018120000_0123ABCD_job",
         "VariaScratch_20261018120000_0123abcd_job2", "VariaScratch_20261018120000_0123abcd_x_job", "xVariaScratch_20261018120000_0123abcd_job" }.Any(ScratchDatabase.IsScratchJob),
-    "the sweep finds every scratch database a crashed run can leave, the object actions' _act and _actr, Database Properties' _dbp, the table designer's _tbd and _tbd.], the live tables' _live, the SSIS checks' _ssis, _ssisref and _ssiscc, the wave 5 seam checks' _seam and _seamt, Delete parity's _del, _delc, _delcs and _delo, and Object Explorer status's _rs, _rv and _rvs included, and nothing else (never SSISDB); only an Agent job named as a run names its own (VariaScratch_<14 digits>_<8 hex>_job) can be swept");
+    "the sweep finds every scratch database a crashed run can leave, the object actions' _act and _actr, Database Properties' _dbp, the table designer's _tbd and _tbd.], the live tables' _live, the SSIS checks' _ssis, _ssisref and _ssiscc, the server file picker's _files, the wave 5 seam checks' _seam and _seamt, New Database's _nd, the action progress checks' _ap, Attach Databases' _at, _at'] and _at2, Restore Database's _rst and _rstr, Take Offline's _dbs, Delete parity's _del, _delc, _delcs and _delo, Detach's _det and _dets, and Object Explorer status's _rs, _rv and _rvs included, and nothing else (never SSISDB); only an Agent job named as a run names its own (VariaScratch_<14 digits>_<8 hex>_job) can be swept");
+Check(new[] { "_lgn", "_lgm", "_lgmo", "_lgmr" }.All(suffix => ScratchDatabase.Sweepable("VariaScratch_20261018120000_0123abcd" + suffix)) && !ScratchDatabase.Sweepable("VariaScratch_20261018120000_0123abcd_lgmx") && new[] { "VariaScratch_20261018120000_0123abcd", "VariaScratch_20261018120000_0123abcd_lnew", "VariaScratch_20261018120000_0123abcd_l1" }.All(ScratchDatabase.SweepableLogin)
+    && !new[] { "VariaScratch_20261018120000_0123abcd_l", "VariaScratch_20261018120000_0123abcd_lNEW", "VariaScratch_20261018120000_0123abcd_l123456789", "VariaScratch_20261018120000_0123abcd_x", "sa", "VariaScratch_x_lnew" }.Any(ScratchDatabase.SweepableLogin)
+    && ScratchDatabase.StaleXeSession("VariaScratch_20261018120000_0123abcd_xe", new DateTime(2026, 10, 18, 18, 0, 1, DateTimeKind.Utc))
+    && !ScratchDatabase.StaleXeSession("VariaScratch_20261018120000_0123abcd_xe", new DateTime(2026, 10, 18, 11, 0, 0, DateTimeKind.Utc))
+    && !new[] { "VariaScratch_20261018120000_0123abcd", "VariaScratch_20261318120000_0123abcd_xe", "system_health", "VariaScratch_20261018120000_0123abcd_xe2" }.Any(name => ScratchDatabase.StaleXeSession(name, DateTime.MaxValue)),
+    "the sweep finds New Login's _lgn database, User Mapping's _lgm, _lgmo and _lgmr, the logins it names with _l and a tag of up to 8 lowercase letters or digits, and its Extended Events session once its name's UTC time is old enough, and nothing else (never system_health)");
 {
     // SQL Server on Linux cannot back up to /dev/null (error 3634 in DiskChangeFileSize), so its RESTORING database backs up to one file; Windows keeps NUL.
     const string rs = "VariaScratch_20261018120000_0123abcd_rs";
@@ -263,6 +320,19 @@ Check(new[] { "", "_ro", "_off", "_su", "_rs", "_rv", "_rvs", "_snap", "_rt", "_
         && Refused(() => ScratchDatabase.Backup.For(rs, "Linux", null, 16)) && Refused(() => ScratchDatabase.Backup.For(rs, "Linux", @"C:\Backup", 16)),
         "scratch backups go to NUL on Windows and, since SQL Server on Linux cannot write /dev/null, to one file named after the scratch database in its backup folder (full and tail-log backup alike), "
         + "deleted with xp_delete_files from 2019 or xp_delete_file before; only a sweepable scratch name of plain characters names a file, and only in a Linux folder");
+    // Restore Database's source backs up to real files on both platforms, which a crashed run's sweep must find again, and nothing else.
+    const string rst = "VariaScratch_20261018120000_0123abcd_rst";
+    const string winFolder = @"C:\Program Files\Microsoft SQL Server\MSSQL17.MSSQLSERVER\MSSQL\Backup";
+    Check(ScratchDatabase.Backup.PartIn(winFolder, rst, "full1.bak") == winFolder + "\\" + rst + "_full1.bak" && ScratchDatabase.Backup.PartIn(winFolder + "\\", rst, "log.trn") == winFolder + "\\" + rst + "_log.trn"
+        && ScratchDatabase.Backup.PartIn("/var/opt/mssql/data/", rst, "diff.bak") == "/var/opt/mssql/data/" + rst + "_diff.bak"
+        && ScratchDatabase.Backup.Stale(winFolder + "\\" + rst + "_full2.bak", winFolder + "\\", rst) && ScratchDatabase.Backup.Stale("/var/opt/mssql/data/" + rst + "_log3.trn", "/var/opt/mssql/data", rst)
+        && ScratchDatabase.Backup.Stale(linux.Device, "/var/opt/mssql/data/", rs)
+        && !new[] { winFolder + "\\" + rst + "_full1.mdf", winFolder + "\\" + rst + "_x_y.bak", winFolder + "\\other\\" + rst + "_full1.bak", @"D:\Backup\" + rst + "_full1.bak", winFolder + "\\" + rst + ".bak",
+            winFolder + "\\" + rst + "_FULL.bak", winFolder + "\\Sales_full1.bak", winFolder + "\\" + rst + "_full1.bak\\..\\x.bak" }.Any(device => ScratchDatabase.Backup.Stale(device, winFolder, rst))
+        && !ScratchDatabase.Backup.Stale(winFolder + "\\Sales_full1.bak", winFolder, "Sales")
+        && Refused(() => new(rst, ScratchDatabase.Backup.PartIn("Backup", rst, "full.bak"), 17)) && Refused(() => new("Sales", ScratchDatabase.Backup.PartIn(winFolder, "Sales", "full.bak"), 17))
+        && Refused(() => new(rst, ScratchDatabase.Backup.PartIn(winFolder, rst, "../x.bak"), 17)),
+        "Restore Database's source backs up to <backup folder><scratch name>_<part>.bak or .trn on either platform, and the stale sweep deletes only such files of a sweepable scratch name in that folder");
 }
 SsisFixtureChecks.Run(Check);
 Check(LiveResultChecks.CancelBound(5000, 1200) == 5000 && LiveResultChecks.CancelBound(5000, 4000) == 8000, "a cancel's time bound keeps its floor and grows with a slower reference");
@@ -479,6 +549,20 @@ try
     // RAISERROR WITH NOWAIT flushes the buffered error to the client before the batch waits.
     result = await Run("SELECT 1/0; RAISERROR ('flush', 0, 1) WITH NOWAIT;\nWAITFOR DELAY '00:00:05';", timeout: 1);
     Check(result.Status == "timedOut" && result.Error?.Message.Contains("Msg 8134") == true, "errors raised before a timeout are still reported");
+    // Now and then SqlClient ends a cancelled batch's reader as if the batch had finished, raising nothing (1 of 24 tabs above
+    // reported completedWithErrors after 1 s of its WAITFOR). Cancelling just as the reader ends stands in for it.
+    {
+        var tab = Guid.NewGuid().ToString();
+        var stoppedId = Guid.NewGuid().ToString();
+        service.ReaderEnded = () => Call<object>("query.cancel", new CancelArgs(stoppedId)).GetAwaiter().GetResult();
+        try { result = await Run("SELECT 1/0; RAISERROR ('flush', 0, 1) WITH NOWAIT;", tab, query: stoppedId); }
+        finally { service.ReaderEnded = null; }
+        var probe = await Run("SELECT 'in step';", tab);
+        await Call<object>("query.session.close", new SessionArgs(tab));
+        Check(result.Status == "cancelled" && result.Error?.Code == "CANCELLED" && result.CompletedBatches == 0 && result.Error.Message.Contains("Msg 8134")
+            && probe.Status == "completed" && RowsOf(probe.ResultSets[0]).SingleOrDefault()?[0] == "in step",
+            "a batch whose token fired before its reader ended is reported stopped, not finished, and its session stays in step: " + result.Status + " " + result.CompletedBatches);
+    }
     result = await Run("SELECT 1;", database: "VariaDatabaseThatDoesNotExist");
     Check(result.Status == "failed" && result.Error?.Message.Contains("Msg 911") == true && result.Error.BatchNumber == 0, "a missing target database fails before any batch runs");
     result = await Run("SELECT DB_NAME();");
@@ -539,12 +623,21 @@ try
     await ExplorerLiveChecks.RunAsync(Check, service, info, Live, sqlUser, json);
     await ScriptingLiveChecks.RunAsync(Check, service, info, Live, json);
     await ActionLiveChecks.RunAsync(Check, service, info, Live("master"), json);
+    await ServerFilesLiveChecks.RunAsync(Check, service, info, Live, json);
     await SeamLiveChecks.RunAsync(Check, service, info, Live, json);
+    await DatabaseStateLiveChecks.RunAsync(Check, service, info, Live, json);
+    await RenameDatabaseLiveChecks.RunAsync(Check, service, info, Live, json);
+    await DetachLiveChecks.RunAsync(Check, service, info, Live, json);
+    await ActionProgressLiveChecks.RunAsync(Check, service, info, Live, json);
+    await AttachLiveChecks.RunAsync(Check, service, info, Live, json);
+    await RestoreLiveChecks.RunAsync(Check, service, info, json);
+    await LoginLiveChecks.RunAsync(Check, service, info, Live, json);
     await LoginListingLiveChecks.RunAsync(Check, service, info, json);
     await LoginActionLiveChecks.RunAsync(Check, service, info, Live, json);
     await LoginDeleteLiveChecks.RunAsync(Check, service, info, Live, json);
     await DatabasePropertiesLiveChecks.RunAsync(Check, service, info, json);
     await DesignerLiveChecks.RunAsync(Check, service, info, Live("master"), json);
+    await NewDatabaseLiveChecks.RunAsync(Check, service, info, json);
     await SsisLiveChecks.RunAsync(Check, service, info, Live, json);
     await ActivityLiveChecks.RunAsync(Check, service, info);
     await ActivitySourceLiveChecks.RunAsync(Check, service, info, Live, json);

@@ -8,12 +8,18 @@ namespace Varia.Backend.Actions;
 /// <summary>The statements an action runs: DROP TABLE, VIEW, PROCEDURE or FUNCTION, sp_rename, ALTER DATABASE … MODIFY NAME,
 /// SET SINGLE_USER, DROP DATABASE and msdb's backup history cleanup; and the shared templates later actions plan (critic
 /// A21): SET MULTI_USER and RESTRICTED_USER (which also restore a database's access after a failed or stopped step),
-/// sp_detach_db, ALTER LOGIN … DISABLE and ENABLE, DENY and GRANT CONNECT SQL, and DROP USER; a login's rename (D4b); and a login's Delete
-/// (D4c): DROP USER of a mapped user and DROP LOGIN, each bound to the principal it was planned for (<see cref="PrincipalBinding"/>).</summary>
+/// sp_detach_db, ALTER LOGIN … DISABLE and ENABLE, DENY and GRANT CONNECT SQL, and DROP USER; New Login's ALTER SERVER ROLE …
+/// ADD MEMBER (its CREATE LOGIN is LoginSql's builder, which takes the password) and its User Mapping's CREATE USER … FOR LOGIN,
+/// ALTER USER … WITH DEFAULT_SCHEMA, CREATE SCHEMA … AUTHORIZATION and ALTER ROLE … ADD MEMBER, each in the mapped database; then
+/// Take Offline's SET OFFLINE (plain, or WITH ROLLBACK IMMEDIATE) and Bring Online's SET ONLINE; and Restore Database's cleanup,
+/// which drops only the RESTORING database the restore created (critic A11a); a login's rename (D4b); and a login's Delete (D4c): DROP USER
+/// of a mapped user and DROP LOGIN, each bound to the principal it was planned for (<see cref="PrincipalBinding"/>).</summary>
 internal enum ActionTemplate
 {
     DropTable, DropView, DropProcedure, DropFunction, RenameObject, RenameDatabase, SetSingleUser, DropDatabase, DeleteBackupHistory,
-    SetMultiUser, SetRestrictedUser, DetachDatabase, DisableLogin, EnableLogin, DenyConnect, GrantConnect, DropUser, RenameLogin, DropLogin, DropMappedUser
+    SetMultiUser, SetRestrictedUser, DetachDatabase, DisableLogin, EnableLogin, DenyConnect, GrantConnect, DropUser,
+    AddServerRoleMember, SetOffline, SetOfflineRollback, SetOnline, DropRestoring, CreateUserForLogin, AlterUserSchema, CreateSchemaFor, AddRoleMember, RenameLogin,
+    DropLogin, DropMappedUser
 }
 
 /// <summary>The principal a guarded DROP was planned for (D4c): its SID, and for a login its principal_id and create_date. SQL Server
@@ -30,7 +36,8 @@ internal enum StepKind { Main, Compensation, Cleanup }
 
 /// <summary>One statement of an action: its template, the database it runs in, and the names it takes, verbatim (a
 /// schema-scoped object's schema and name, then a new name; a database's name, then a new name; sp_detach_db's @skipchecks
-/// as true or false, from <see cref="ActionSql.Detach"/>). Kind, Undoes and When place it in runner v2 (StepKind).</summary>
+/// as true or false, from <see cref="ActionSql.Detach"/>; a partly restored database's name and its database_id as decimal digits,
+/// from <see cref="ActionSql.DropRestoring"/>). Kind, Undoes and When place it in runner v2 (StepKind).</summary>
 internal sealed record PlannedStatement(ActionTemplate Template, string Database, IReadOnlyList<string> Names, StepKind Kind = StepKind.Main, int? Undoes = null,
     Func<IReadOnlyList<string>, bool>? When = null, PrincipalBinding? Principal = null);
 
@@ -64,7 +71,8 @@ internal static partial class ActionSql
     public static int ParameterCount(ActionTemplate template) => template switch
     {
         ActionTemplate.DropTable or ActionTemplate.DropView or ActionTemplate.DropProcedure or ActionTemplate.DropFunction or ActionTemplate.RenameDatabase or ActionTemplate.DetachDatabase
-            or ActionTemplate.RenameLogin => 2,
+            or ActionTemplate.AddServerRoleMember or ActionTemplate.DropRestoring or ActionTemplate.CreateUserForLogin or ActionTemplate.AlterUserSchema
+            or ActionTemplate.CreateSchemaFor or ActionTemplate.AddRoleMember or ActionTemplate.RenameLogin => 2,
         ActionTemplate.RenameObject => 3,
         _ => 1
     };
@@ -93,12 +101,20 @@ internal static partial class ActionSql
     public static PlannedStatement Detach(string database, bool updateStatistics, StepKind kind = StepKind.Main, int? undoes = null) =>
         new(ActionTemplate.DetachDatabase, "master", [database, updateStatistics ? "false" : "true"], kind, undoes);
 
-    /// <summary>The plan, or a throw when its names do not fit its template: the wrong count, or an @skipchecks that is not
-    /// true or false. Every statement passes it before it runs or is scripted.</summary>
+    /// <summary>Restore Database's cleanup (critic A11a): drop the database named <paramref name="database"/> only while it is still the
+    /// RESTORING database with <paramref name="id"/>, which the restore created (its id was absent at the preflight). The batch checks
+    /// both itself, right before the DROP, so a database that took the name or left RESTORING since is never dropped.</summary>
+    public static PlannedStatement DropRestoring(string database, int id, StepKind kind = StepKind.Cleanup) =>
+        new(ActionTemplate.DropRestoring, "master", [database, id.ToString(CultureInfo.InvariantCulture)], kind);
+
+    /// <summary>The plan, or a throw when its names do not fit its template: the wrong count, an @skipchecks that is not true or
+    /// false, or a database id that is not a positive int in decimal digits. Every statement passes it before it runs or is scripted.</summary>
     public static PlannedStatement Checked(PlannedStatement plan)
     {
         if (plan.Names.Count != ParameterCount(plan.Template)) throw new InvalidOperationException("The plan has the wrong number of names for " + plan.Template + ".");
         if (plan.Template == ActionTemplate.DetachDatabase && plan.Names[1] is not ("true" or "false")) throw new InvalidOperationException("@skipchecks is true or false.");
+        if (plan.Template == ActionTemplate.DropRestoring && !(plan.Names[1].Length is > 0 and <= 10 && plan.Names[1].All(char.IsAsciiDigit) && plan.Names[1][0] != '0'
+            && long.Parse(plan.Names[1], CultureInfo.InvariantCulture) <= int.MaxValue)) throw new InvalidOperationException("A database id is a positive int.");
         if (plan.Principal is { } bound && (!Guarded(plan.Template) || bound.Sid.Length is < 1 or > 85 || (plan.Template == ActionTemplate.DropLogin) != (bound.PrincipalId is not null && bound.Created is not null)))
             throw new InvalidOperationException("The principal binding does not fit " + plan.Template + ".");
         return plan;
@@ -130,6 +146,18 @@ internal static partial class ActionSql
             ActionTemplate.DropUser or ActionTemplate.DropMappedUser => "DROP USER " + Quote(names[0]),
             // SMO's text for a login's rename (probed for D4 §5.3), with no spaces around the equals sign.
             ActionTemplate.RenameLogin => "ALTER LOGIN " + Quote(names[0]) + " WITH NAME=" + Quote(names[1]),
+            // The role, then the member, as SMO writes it (captured by D2).
+            ActionTemplate.AddServerRoleMember => "ALTER SERVER ROLE " + Quote(names[0]) + " ADD MEMBER " + Quote(names[1]),
+            // SMO's capture of SSMS's Take Offline and Bring Online (probed by D3).
+            ActionTemplate.SetOffline => "ALTER DATABASE " + Quote(names[0]) + " SET  OFFLINE",
+            ActionTemplate.SetOfflineRollback => "ALTER DATABASE " + Quote(names[0]) + " SET  OFFLINE WITH ROLLBACK IMMEDIATE",
+            ActionTemplate.SetOnline => "ALTER DATABASE " + Quote(names[0]) + " SET  ONLINE",
+            ActionTemplate.DropRestoring => "DROP DATABASE " + Quote(Checked(plan).Names[0]),
+            // User Mapping, each in its database, as SMO writes them (captured by D2): the user, then the login, schema or member.
+            ActionTemplate.CreateUserForLogin => "CREATE USER " + Quote(names[0]) + " FOR LOGIN " + Quote(names[1]),
+            ActionTemplate.AlterUserSchema => "ALTER USER " + Quote(names[0]) + " WITH DEFAULT_SCHEMA=" + Quote(names[1]),
+            ActionTemplate.CreateSchemaFor => "CREATE SCHEMA " + Quote(names[0]) + " AUTHORIZATION " + Quote(names[1]),
+            ActionTemplate.AddRoleMember => "ALTER ROLE " + Quote(names[0]) + " ADD MEMBER " + Quote(names[1]),
             ActionTemplate.DropLogin => "DROP LOGIN " + Quote(names[0]),
             _ => throw new InvalidOperationException("Unknown template " + plan.Template)
         };
@@ -167,6 +195,19 @@ internal static partial class ActionSql
             ActionTemplate.GrantConnect => Run("DECLARE @stmt nvarchar(max) = N'GRANT CONNECT SQL TO ' + QUOTENAME(@p1);\n"),
             ActionTemplate.DropUser => Run("DECLARE @stmt nvarchar(max) = N'DROP USER ' + QUOTENAME(@p1);\n"),
             ActionTemplate.RenameLogin => Run("DECLARE @stmt nvarchar(max) = N'ALTER LOGIN ' + QUOTENAME(@p1) + N' WITH NAME=' + QUOTENAME(@p2);\n"),
+            ActionTemplate.AddServerRoleMember => Run("DECLARE @stmt nvarchar(max) = N'ALTER SERVER ROLE ' + QUOTENAME(@p1) + N' ADD MEMBER ' + QUOTENAME(@p2);\n"),
+            ActionTemplate.SetOffline => Run("DECLARE @stmt nvarchar(max) = N'ALTER DATABASE ' + QUOTENAME(@p1) + N' SET  OFFLINE';\n"),
+            ActionTemplate.SetOfflineRollback => Run("DECLARE @stmt nvarchar(max) = N'ALTER DATABASE ' + QUOTENAME(@p1) + N' SET  OFFLINE WITH ROLLBACK IMMEDIATE';\n"),
+            ActionTemplate.SetOnline => Run("DECLARE @stmt nvarchar(max) = N'ALTER DATABASE ' + QUOTENAME(@p1) + N' SET  ONLINE';\n"),
+            // The name is compared, never run, and the id converted: neither reaches the statement except through QUOTENAME. The dry
+            // run (live checks) selects the statement without the check, which no scratch database is in the state to pass.
+            ActionTemplate.DropRestoring => Run("DECLARE @stmt nvarchar(max) = N'DROP DATABASE ' + QUOTENAME(@p1);\n"
+                + (dryRun ? "" : "IF NOT EXISTS (SELECT 1 FROM sys.databases AS d WHERE d.name = @p1 AND d.state = 1 AND d.database_id = CONVERT(int, @p2)) THROW 50000, " + NotRestoring + ", 1;\n")),
+            ActionTemplate.CreateUserForLogin => Run("DECLARE @stmt nvarchar(max) = N'CREATE USER ' + QUOTENAME(@p1) + N' FOR LOGIN ' + QUOTENAME(@p2);\n"),
+            ActionTemplate.AlterUserSchema => Run("DECLARE @stmt nvarchar(max) = N'ALTER USER ' + QUOTENAME(@p1) + N' WITH DEFAULT_SCHEMA=' + QUOTENAME(@p2);\n"),
+            // CREATE SCHEMA must be its batch's only statement, which sp_executesql gives it.
+            ActionTemplate.CreateSchemaFor => Run("DECLARE @stmt nvarchar(max) = N'CREATE SCHEMA ' + QUOTENAME(@p1) + N' AUTHORIZATION ' + QUOTENAME(@p2);\n"),
+            ActionTemplate.AddRoleMember => Run("DECLARE @stmt nvarchar(max) = N'ALTER ROLE ' + QUOTENAME(@p1) + N' ADD MEMBER ' + QUOTENAME(@p2);\n"),
             ActionTemplate.DropMappedUser => Bound("DECLARE @drop nvarchar(max) = N'DROP USER ' + QUOTENAME(@p1);\nDECLARE @stmt nvarchar(max) = " + UserCheck + " + @drop + " + UserRecheck + ";\n",
                 UserParameters + ", @name = @p1, @sid = @sid;"),
             ActionTemplate.DropLogin => Bound("DECLARE @drop nvarchar(max) = N'DROP LOGIN ' + QUOTENAME(@p1);\nDECLARE @stmt nvarchar(max) = " + LoginCheck + " + @drop + " + LoginRecheck + ";\n",
@@ -174,6 +215,9 @@ internal static partial class ActionSql
             _ => throw new InvalidOperationException("Unknown template " + template)
         };
     }
+
+    /// <summary>Why the cleanup left a database alone: it is no longer the RESTORING database this restore created.</summary>
+    internal const string NotRestoring = "N'The database is not the RESTORING database this restore created, so it was not removed.'";
 
     /// <summary>A guarded DROP's check, in its database (inside sp_executesql, under the batch's READ COMMITTED and lock timeout, so it
     /// waits for any open change to the row): the principal with the planned name and binding, else 50010 before anything runs. The
@@ -198,9 +242,14 @@ internal static partial class ActionSql
 
     // --- Catalog statements ---------------------------------------------------------------------------------------------
 
-    /// <summary>The object's database as master sees it: whether it exists, is online, and the login can open it.</summary>
+    /// <summary>Whether sys.databases' row d cannot be written to: set READ_ONLY, a log-shipping standby, or a database snapshot. An
+    /// availability group's readable secondary is not caught: its role is only in a DMV that needs VIEW SERVER STATE.</summary>
+    public const string ReadOnlyFact = "CONVERT(bit, CASE WHEN d.is_read_only = 1 OR d.is_in_standby = 1 OR d.source_database_id IS NOT NULL THEN 1 ELSE 0 END)";
+
+    /// <summary>The object's database as master sees it: whether it exists, is online, the login can open it, and it is read-only
+    /// (<see cref="ReadOnlyFact"/>).</summary>
     public const string DatabaseState = "SELECT d.database_id AS database_id, d.state AS state, d.state_desc AS state_desc, "
-        + "CONVERT(bit, ISNULL(CASE WHEN d.user_access = 1 THEN 1 ELSE HAS_DBACCESS(d.name) END, 0)) AS has_access FROM sys.databases AS d WHERE d.name = @db;";
+        + "CONVERT(bit, ISNULL(CASE WHEN d.user_access = 1 THEN 1 ELSE HAS_DBACCESS(d.name) END, 0)) AS has_access, " + ReadOnlyFact + " AS read_only FROM sys.databases AS d WHERE d.name = @db;";
 
     /// <summary>The sys.objects types a kind's object is found by.</summary>
     public static string Types(string kind) => kind switch
@@ -256,7 +305,7 @@ internal static partial class ActionSql
     /// both, and rolls back the whole transaction ("Nonqualified transactions are being rolled back"), so Delete Object counts both.
     /// These DMVs raise error 300 for a login without VIEW SERVER STATE (VIEW SERVER PERFORMANCE STATE on 2022 and later) whatever
     /// guards them in the statement, unlike sys.dm_exec_sessions, which shows such a login its own sessions: so only the statements
-    /// the describe runs once Database's guarded count says it has the permission read them (DatabaseUse, DatabaseSessions,
+    /// the describe runs once Database's guarded count says it has the permission read them (DatabaseUse, DatabaseUseSessions,
     /// TransactionSessions), never Database, which every database action runs.</summary>
     private const string InTransaction = "EXISTS (SELECT 1 FROM sys.dm_tran_session_transactions AS st JOIN sys.dm_tran_database_transactions AS dt ON dt.transaction_id = st.transaction_id "
         + "WHERE st.session_id = es.session_id AND dt.database_id = d.database_id)";
@@ -264,11 +313,22 @@ internal static partial class ActionSql
     /// <summary>A session that uses the database (UsesDatabase) with an open transaction, which closing its connections rolls back.</summary>
     private const string HoldsTransaction = "((es.database_id = d.database_id AND es.open_transaction_count > 0) OR " + InTransaction + ")";
 
-    /// <summary>A database's row in master: state, user access, subtype, what blocks a DROP (replication, an availability group,
-    /// mirroring, its own database snapshots), owner, the sessions in it and those with an open transaction (with VIEW SERVER STATE,
-    /// else null; DatabaseUse adds those with a transaction there from elsewhere), permissions and whether @new is another database's name. The owner falls back to SUSER_SNAME(d.owner_sid): a Windows
-    /// group's member owns it with no server principal of its own.</summary>
-    public const string Database = "SELECT d.database_id AS database_id, d.state AS state, d.state_desc AS state_desc, d.user_access AS user_access, "
+    /// <summary>A database's row in master: its identity (database_id, create_date), state, user access, read-only and standby,
+    /// subtype, what blocks a DROP, SET OFFLINE or sp_detach_db (replication, an availability group, mirroring, its own database
+    /// snapshots), owner, the sessions in it and those with an open transaction (with VIEW SERVER STATE, else null; DatabaseUse adds
+    /// those with a transaction there from elsewhere), permissions and whether @new is another database's name. can_alter_state is
+    /// what SET OFFLINE and SET ONLINE need, which HAS_PERMS_BY_NAME on the database does not answer: it says 0 to a login with no user
+    /// in the database (ALTER ANY DATABASE, dbcreator), to sysadmin while another session holds a SINGLE_USER database, and to everyone
+    /// on a database that is not online (probed on SQL Server 2025). So ALTER ANY DATABASE, dbcreator (sys.login_token) or ownership
+    /// grant it in any state, and ALTER on the database while it is online. The owner falls back to SUSER_SNAME(d.owner_sid): a Windows
+    /// group's member owns it with no server principal of its own. can_rename is what MODIFY NAME needs: ALTER on the database, which
+    /// it checks with access to the database (a dbcreator member without a user in it gets 916, probed on SQL Server 2025), or
+    /// CONTROL SERVER or ownership, which HAS_PERMS_BY_NAME on the database denies while another session holds it SINGLE_USER. can_detach
+    /// is what sp_detach_db's DBCC DETACHDB needs that master can answer, sysadmin or ownership (ALTER, CONTROL, ALTER ANY DATABASE and
+    /// dbcreator get 7983; probed on SQL Server 2025); a member of the database's db_owner role is read inside it (DetachInside). sql_login:
+    /// this connection's login is SQL Server's own, whose detached files only the service account can open again on Windows.</summary>
+    public const string Database = "SELECT d.database_id AS database_id, d.create_date AS create_date, d.state AS state, d.state_desc AS state_desc, "
+        + "d.user_access AS user_access, d.is_read_only AS is_read_only, d.is_in_standby AS is_in_standby, "
         + "CONVERT(bit, CASE WHEN d.source_database_id IS NULL THEN 0 ELSE 1 END) AS is_snapshot, "
         + "CONVERT(bit, CASE WHEN d.database_id <= 4 OR d.is_distributor = 1 THEN 1 ELSE 0 END) AS is_system, "
         + "CONVERT(bit, CASE WHEN d.is_published = 1 OR d.is_subscribed = 1 OR d.is_merge_published = 1 OR d.is_distributor = 1 THEN 1 ELSE 0 END) AS replicated, "
@@ -280,6 +340,13 @@ internal static partial class ActionSql
         + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.database_id = d.database_id "
         + "AND es.open_transaction_count > 0 AND es.session_id <> @@SPID) END AS with_transaction, "
         + "CONVERT(bit, ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'ALTER'), 1)) AS can_alter, "
+        + "CONVERT(bit, CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'ALTER ANY DATABASE') = 1 OR d.owner_sid = SUSER_SID() "
+        + "OR EXISTS (SELECT 1 FROM sys.login_token AS t WHERE t.type = N'SERVER ROLE' AND t.name = N'dbcreator') THEN 1 "
+        + "WHEN d.state = 0 THEN ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'ALTER'), 1) ELSE 0 END) AS can_alter_state, "
+        + "CONVERT(bit, CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'CONTROL SERVER') = 1 OR d.owner_sid = SUSER_SID() THEN 1 "
+        + "ELSE ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'ALTER'), 1) END) AS can_rename, "
+        + "CONVERT(bit, CASE WHEN IS_SRVROLEMEMBER(N'sysadmin') = 1 OR d.owner_sid = SUSER_SID() THEN 1 ELSE 0 END) AS can_detach, "
+        + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.login_token AS t WHERE t.type = N'SQL LOGIN') THEN 1 ELSE 0 END) AS sql_login, "
         + "CONVERT(bit, CASE WHEN ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'CONTROL'), 1) = 1 OR HAS_PERMS_BY_NAME(NULL, NULL, N'ALTER ANY DATABASE') = 1 THEN 1 ELSE 0 END) AS can_drop, "
         + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.databases AS x WHERE x.name = @new AND x.database_id <> d.database_id) THEN 1 ELSE 0 END) AS name_in_use "
         + "FROM sys.databases AS d LEFT JOIN sys.database_mirroring AS dm ON dm.database_id = d.database_id LEFT JOIN sys.server_principals AS sp ON sp.sid = d.owner_sid "
@@ -380,7 +447,7 @@ internal static partial class ActionSql
     /// <summary>The sessions using a database (UsesDatabase) that Delete Object lists (D3 §8), each with whether it holds an open
     /// transaction (HoldsTransaction): at most @take by session id, never this one. Only with VIEW SERVER STATE (InTransaction): without
     /// it the describe lists none (unknown); the action leaves out the backend's pooled sessions.</summary>
-    public const string DatabaseSessions = "SELECT TOP (@take) es.session_id AS session_id, es.host_process_id AS host_process_id, "
+    public const string DatabaseUseSessions = "SELECT TOP (@take) es.session_id AS session_id, es.host_process_id AS host_process_id, "
         + "CONVERT(int, CASE WHEN " + HoldsTransaction + " THEN 1 ELSE 0 END) AS open_transaction, es.program_name AS program_name, es.host_name AS host_name "
         + "FROM sys.dm_exec_sessions AS es CROSS JOIN sys.databases AS d WHERE d.name = @name AND es.session_id <> @@SPID AND " + UsesDatabase + " ORDER BY es.session_id;";
 
@@ -389,6 +456,35 @@ internal static partial class ActionSql
     public const string TransactionSessions = "SELECT TOP (@take) es.session_id AS session_id FROM sys.dm_exec_sessions AS es CROSS JOIN sys.databases AS d "
         + "WHERE d.name = @name AND es.host_process_id = @pid AND es.session_id <> @@SPID AND " + HoldsTransaction + " ORDER BY es.session_id;";
 
+    /// <summary>The sessions in a database that Take Offline lists (in master, with VIEW SERVER STATE; without it only this session, which
+    /// is not in it, is visible), at most @take by session id, this process's query windows among them. Names are clipped in C#.</summary>
+    public const string DatabaseSessions = "DECLARE @id int = (SELECT d.database_id FROM sys.databases AS d WHERE d.name = @name);\n"
+        + "SELECT TOP (@take) es.session_id AS session_id, es.login_name AS login_name, es.program_name AS program_name, es.host_name AS host_name, "
+        + "es.open_transaction_count AS open_transactions FROM sys.dm_exec_sessions AS es WHERE es.database_id = @id AND es.session_id <> @@SPID "
+        + "ORDER BY es.session_id;";
+
+    /// <summary>How many logins have the database as their default (D3c): after a rename they cannot sign in with it (4064) until it
+    /// is changed. Without VIEW ANY DEFINITION sys.server_principals shows a login only itself, so it counts the logins this one can see.</summary>
+    public const string LoginsDefaulting = "SELECT COUNT(*) AS logins FROM sys.server_principals AS p WHERE p.default_database_name = @name;";
+
+    /// <summary>Detach's files that stay on the server (sys.master_files, in master): at most @take by file id, as the database had them
+    /// when the dialog or the action read it. Paths are never logged.</summary>
+    public const string DatabaseFiles = "SELECT TOP (@take) f.file_id AS file_id, f.name AS file_name, f.type AS file_type, f.physical_name AS physical_name "
+        + "FROM sys.master_files AS f JOIN sys.databases AS d ON d.database_id = f.database_id WHERE d.name = @name ORDER BY f.file_id;";
+
+    /// <summary>Detach inside an online database (ModuleCall): whether this login is in its db_owner role, which sp_detach_db needs
+    /// besides sysadmin or ownership, then at most @take of its files by file id. sys.master_files shows rows only with CREATE
+    /// DATABASE, ALTER ANY DATABASE or VIEW ANY DEFINITION, which a db_owner member who may detach can lack; sys.database_files
+    /// shows them to every user of the database.</summary>
+    public const string DetachInside = "SELECT CONVERT(bit, ISNULL(IS_ROLEMEMBER(N'db_owner'), 0)) AS db_owner;\n"
+        + "SELECT TOP (@take) f.file_id AS file_id, f.name AS file_name, f.type AS file_type, f.physical_name AS physical_name FROM sys.database_files AS f ORDER BY f.file_id;";
+
+    /// <summary>A database's state and user access after an action, in master (Bring Online reports a database still SINGLE_USER).</summary>
+    public const string DatabaseAccess = "SELECT d.state AS state, d.user_access AS user_access FROM sys.databases AS d WHERE d.name = @name;";
+
+    /// <summary>A database's identity by name, in master: a renamed database's under its new name (MODIFY NAME gives it a new create_date).</summary>
+    public const string DatabaseIdentity = "SELECT d.database_id AS database_id, d.create_date AS create_date FROM sys.databases AS d WHERE d.name = @name;";
+
     // --- Lint -----------------------------------------------------------------------------------------------------------
 
     private static readonly HashSet<string> Literals =
@@ -396,10 +492,22 @@ internal static partial class ActionSql
         "N'.'", "N'.sys.sp_executesql'", "N'.sys.sp_rename'", "N'OBJECT'", "N'SCHEMA'", "N'DATABASE'", "N'ALTER'", "N'CONTROL'", "N'VIEW SERVER STATE'", "N'ALTER ANY DATABASE'",
         "N'A name could not be quoted.'", "N'DROP TABLE '", "N'DROP VIEW '", "N'DROP PROCEDURE '", "N'DROP FUNCTION '", "N'DROP DATABASE '", "N'ALTER DATABASE '",
         "N' MODIFY NAME = '", "N' SET  SINGLE_USER WITH ROLLBACK IMMEDIATE'",
+        // Take Offline and Bring Online.
+        "N' SET  OFFLINE'", "N' SET  OFFLINE WITH ROLLBACK IMMEDIATE'", "N' SET  ONLINE'",
         // The shared templates (critic A21).
         "N' SET  MULTI_USER'", "N' SET  RESTRICTED_USER'", "N'ALTER LOGIN '", "N' DISABLE'", "N' ENABLE'", "N'DENY CONNECT SQL TO '", "N'GRANT CONNECT SQL TO '", "N'DROP USER '",
+        // New Login's server roles (Actions/LoginSql), and its describe's and preflight's server facts.
+        "N'ALTER SERVER ROLE '", "N' ADD MEMBER '", "'IsIntegratedSecurityOnly'",
+        // Its User Mapping's statements, and its describe's guest CONNECT state (LoginSql.DatabaseRoles).
+        "N'CREATE USER '", "N' FOR LOGIN '", "N'ALTER USER '", "N' WITH DEFAULT_SCHEMA='", "N'CREATE SCHEMA '", "N' AUTHORIZATION '", "N'ALTER ROLE '",
         // The login preflight (Login), a login's rename, and the service lookup (LoginService).
         "N'GRANT OR DENY'", "N'ALTER ANY LOGIN'", "N'CONTROL SERVER'", "'COSQ'", "N' WITH NAME='", "N'LOCALSYSTEM'", @"N'NT AUTHORITY\SYSTEM'",
+        // Take Offline's and Bring Online's permission (Database's can_alter_state).
+        "N'SERVER ROLE'", "N'dbcreator'",
+        // Detach's permission and the login kind its files note reads (Database, DetachInside).
+        "N'db_owner'", "N'SQL LOGIN'",
+        // Restore Database's cleanup (DropRestoring).
+        NotRestoring,
         // A login's Delete (D4c): DROP LOGIN and the mapped-user scan's call (MappedUserCall).
         "N'DROP LOGIN '", "N'@sid varbinary(85), @take int'", "N'VIEW DEFINITION'", "N'ALTER ANY USER'",
         // Its guarded DROPs (PrincipalBinding).
@@ -408,7 +516,9 @@ internal static partial class ActionSql
         "N'contained database authentication'", "N'sysadmin'", "N'##%'", "N'SpaceUsed'", "N'@take int'", "N'MAXDOP'", "N'LEGACY_CARDINALITY_ESTIMATION'", "N'PARAMETER_SNIFFING'",
         "N'QUERY_OPTIMIZER_HOTFIXES'", "'FilestreamEffectiveLevel'", "'EngineEdition'", "'ProductMajorVersion'",
         // The table designer's master facts and its describe's collation probes (Designer/DesignerSql).
-        "N'CREATE TABLE'", "N'a'", "N'A'", "N'e'"
+        "N'CREATE TABLE'", "N'a'", "N'A'", "N'e'",
+        // New Database's facts (CreateDatabaseSql.Facts) and Attach Databases' facts and preflight (AttachSql).
+        "'InstanceDefaultDataPath'", "'InstanceDefaultLogPath'", "'Collation'", "N'CREATE ANY DATABASE'", "N'CREATE DATABASE'", "N'dm_os_file_exists'"
     ];
     [GeneratedRegex(@"N?'(?:[^']|'')*'")]
     private static partial Regex LiteralPattern();
@@ -422,7 +532,7 @@ internal static partial class ActionSql
     private static partial Regex NamedArgument();
     [GeneratedRegex(@"@p\d+")]
     private static partial Regex Placeholder();
-    [GeneratedRegex(@"QUOTENAME\(@p\d+\)|(?<=EXEC [^;]*= )@p\d+(?=[,;])|(?<=SELECT )@p\d+(?= AS )|, @p\d+(?= AS )")]
+    [GeneratedRegex(@"QUOTENAME\(@p\d+\)|(?<=EXEC [^;]*= )@p\d+(?=[,;])|(?<=SELECT )@p\d+(?= AS )|, @p\d+(?= AS )|(?<=WHERE d\.name = )@p1(?= AND d\.state = 1 AND )|(?<=d\.database_id = )CONVERT\(int, @p2\)(?=\) THROW )")]
     private static partial Regex QuotedPlaceholder();
     /// <summary>Builder batches' keyword text: letters, digits, underscores, spaces and the punctuation SMO's forms use. No quote,
     /// bracket, comment or line break can be written with it, and it comes only from an embedded catalogue.</summary>
@@ -434,6 +544,10 @@ internal static partial class ActionSql
     private static partial Regex BuilderUse();
     /// <summary>The one metadata function the catalog statements use, for the owner of a database a Windows group's member made.</summary>
     private const string OwnerFallback = "SUSER_SNAME(d.owner_sid)";
+    /// <summary>The other: master's database version, the newest an attach can open (Attach Databases compares a primary file's
+    /// with it, since SQL Server's own refusal, 948, is severity 20 and ends the session). Its literals are constant, and master
+    /// takes no lock a waiting attach or restore holds.</summary>
+    public const string MasterVersion = "CONVERT(int, DATABASEPROPERTYEX(N'master', 'Version'))";
 
     /// <summary>LOGINPROPERTY and password hashes, which no batch may name (critic A15), as every catalog lint refuses them.</summary>
     private static IEnumerable<string> SecretUses(string text) => CatalogSql.SecretUses(text);
@@ -479,14 +593,6 @@ internal static partial class ActionSql
 
     [GeneratedRegex(@"^N'[A-Za-z0-9_ ():=;,]*'$")]
     private static partial Regex DesignKeywordLiteral();
-    /// <summary>A JSON text column of an OPENJSON WITH clause (not AS JSON): a value from the request.</summary>
-    [GeneratedRegex(@"(\[?\w+\]?) nvarchar\(max\)(?! AS JSON)")]
-    private static partial Regex JsonText();
-    /// <summary>An OPENJSON WITH clause's columns (its alias is one lowercase letter).</summary>
-    [GeneratedRegex(@"OPENJSON\([^)]*\) WITH \((.*?)\) AS [a-z](?=[ ;\n])")]
-    private static partial Regex WithClause();
-    [GeneratedRegex(@"\b\w+\.(\[?\w+\]?)")]
-    private static partial Regex Qualified();
     /// <summary>A row of the builders' constant type table: (id, N'keyword', form, lob).</summary>
     [GeneratedRegex(@"\(\d+, (N'[^']*'), \d, [01]\)")]
     private static partial Regex TypeRow();
@@ -497,9 +603,10 @@ internal static partial class ActionSql
 
     /// <summary>Problems with one of the table designer's builder batches (Designer/DesignerSql.Builder), which has SQL Server
     /// shred one JSON parameter and compose the statement: a format hole, no quoting guard, @db outside QUOTENAME, @design
-    /// outside ISJSON or OPENJSON, a JSON text value used anywhere but inside QUOTENAME, a JSON array or element used
-    /// anywhere but OPENJSON (or an index's CONVERT to int), an undeclared variable, and a literal that is neither one of the
-    /// rules' messages nor keyword text (a type keyword must be one of the catalogue's).</summary>
+    /// outside ISJSON or OPENJSON, the OPENJSON rules of <see cref="JsonBuilderLint"/> (a JSON text value used anywhere but inside
+    /// QUOTENAME, a JSON array or element used anywhere but OPENJSON or an index's CONVERT to int, a column of another type), an
+    /// undeclared variable, and a literal that is neither one of the rules' messages nor keyword text (a type keyword must be one of
+    /// the catalogue's).</summary>
     public static List<string> LintExecutable(string text, DesignBuilderRules rules)
     {
         var problems = new List<string>();
@@ -509,22 +616,8 @@ internal static partial class ActionSql
         if (Variable().Matches(text.Replace("QUOTENAME(@db)", "", StringComparison.Ordinal)).Any(used => used.Value == "@db")) problems.Add("uses @db outside QUOTENAME");
         if (Variable().Matches(text.Replace("ISJSON(@design)", "", StringComparison.Ordinal).Replace("OPENJSON(@design)", "", StringComparison.Ordinal)).Any(used => used.Value == "@design"))
             problems.Add("uses @design outside ISJSON or OPENJSON");
-        // JSON text (a name) reaches the statement only as QUOTENAME(alias.column).
-        var texts = WithClause().Matches(text).SelectMany(clause => JsonText().Matches(clause.Groups[1].Value)).Select(match => match.Groups[1].Value.Trim('[', ']')).ToHashSet(StringComparer.Ordinal);
-        foreach (Match used in Qualified().Matches(text))
-        {
-            var column = used.Groups[1].Value.Trim('[', ']');
-            if (texts.Contains(column) && !(text[..used.Index].EndsWith("QUOTENAME(", StringComparison.Ordinal) && text[(used.Index + used.Length)..].StartsWith(')')))
-                problems.Add("uses the JSON text " + used.Value + " outside QUOTENAME");
-            if (column == "value" && !(text[..used.Index].EndsWith("OPENJSON(", StringComparison.Ordinal) || text[..used.Index].EndsWith("CONVERT(int, ", StringComparison.Ordinal)))
-                problems.Add("uses " + used.Value + " outside OPENJSON or an index's CONVERT");
-        }
-        foreach (var json in new[] { "@columns", "@key" })
-        {
-            var rest = text.Replace("OPENJSON(" + json + ")", "", StringComparison.Ordinal).Replace(json + " = d.", "", StringComparison.Ordinal).Replace(json + " IS NULL", "", StringComparison.Ordinal)
-                .Replace(json + " nvarchar(max)", "", StringComparison.Ordinal);
-            if (Variable().Matches(rest).Any(used => used.Value == json)) problems.Add("uses " + json + " outside OPENJSON");
-        }
+        // JSON text (a name) reaches the statement only as QUOTENAME(alias.column), the arrays only through OPENJSON.
+        problems.AddRange(JsonBuilderLint.Problems(text, ["@columns", "@key"]));
         var declared = Declaration().Matches(text).SelectMany(match => DeclaredName().Matches(match.Groups[1].Value).Select(name => name.Groups[1].Value)).ToHashSet(StringComparer.Ordinal);
         foreach (Match used in Variable().Matches(text)) if (used.Value is not ("@db" or "@design") && !declared.Contains(used.Value)) problems.Add("uses the undeclared " + used.Value);
         foreach (Match literal in LiteralPattern().Matches(text))
@@ -539,13 +632,13 @@ internal static partial class ActionSql
     public static List<string> LintCatalog(string text, int band, bool database)
     {
         var problems = new List<string>();
-        var stripped = text.Replace(OwnerFallback, "", StringComparison.Ordinal);
+        var stripped = text.Replace(OwnerFallback, "", StringComparison.Ordinal).Replace(MasterVersion, "", StringComparison.Ordinal);
         foreach (var builtin in CatalogSql.Builtins) if (stripped.Contains(builtin, StringComparison.OrdinalIgnoreCase)) problems.Add("uses " + builtin);
         problems.AddRange(CatalogSql.SecretUses(text));
         if (stripped.Contains("DB_NAME(", StringComparison.OrdinalIgnoreCase) || stripped.Contains("OBJECT_ID(", StringComparison.OrdinalIgnoreCase)) problems.Add("uses a metadata function");
         if (database && text.Contains("HAS_DBACCESS(", StringComparison.OrdinalIgnoreCase)) problems.Add("uses HAS_DBACCESS inside a database");
         foreach (var (token, since) in CatalogSql.Gates) if (band < since && text.Contains(token, StringComparison.Ordinal)) problems.Add("uses " + token + " below band " + since);
-        foreach (Match literal in LiteralPattern().Matches(text))
+        foreach (Match literal in LiteralPattern().Matches(stripped))
             if (!Literals.Contains(literal.Value) && !TypeLetters().IsMatch(literal.Value)) problems.Add("has the literal " + literal.Value);
         if (database && text.Contains("@db", StringComparison.Ordinal)) problems.Add("names @db inside a statement");
         if (Placeholder().IsMatch(text)) problems.Add("uses a DDL name parameter");
@@ -583,8 +676,14 @@ internal static partial class ActionSql
         yield return ("login jobs", LintCatalog(LoginJobs, ExplorerCatalog.MaxBand, database: false));
         yield return ("own sessions", LintCatalog(OwnSessions, ExplorerCatalog.MaxBand, database: false));
         yield return ("database use", LintCatalog(DatabaseUse, ExplorerCatalog.MaxBand, database: false));
-        yield return ("database sessions", LintCatalog(DatabaseSessions, ExplorerCatalog.MaxBand, database: false));
+        yield return ("database use sessions", LintCatalog(DatabaseUseSessions, ExplorerCatalog.MaxBand, database: false));
         yield return ("transaction sessions", LintCatalog(TransactionSessions, ExplorerCatalog.MaxBand, database: false));
+        yield return ("database sessions", LintCatalog(DatabaseSessions, ExplorerCatalog.MaxBand, database: false));
+        yield return ("database access", LintCatalog(DatabaseAccess, ExplorerCatalog.MaxBand, database: false));
+        yield return ("database identity", LintCatalog(DatabaseIdentity, ExplorerCatalog.MaxBand, database: false));
+        yield return ("logins defaulting", LintCatalog(LoginsDefaulting, ExplorerCatalog.MaxBand, database: false));
+        yield return ("database files", LintCatalog(DatabaseFiles, ExplorerCatalog.MaxBand, database: false));
+        yield return ("detach inside", LintCatalog(DetachInside, ExplorerCatalog.MaxBand, database: true));
         yield return ("module call", LintCatalog(ModuleCall, ExplorerCatalog.MaxBand, database: false));
         // Database Properties: the describe in master and inside the database for every band, its call, the preflight,
         // and every ALTER the catalogue can plan, run and dry run.
@@ -596,6 +695,16 @@ internal static partial class ActionSql
         yield return ("properties call", LintCatalog(DatabaseProperties.InsideCall, ExplorerCatalog.MaxBand, database: false));
         yield return ("properties preflight", LintCatalog(ActionService.DatabasePropertiesPreflight, ExplorerCatalog.MaxBand, database: false));
         foreach (var item in DatabaseAlter.Lint(ActionsCatalog.Current)) yield return item;
+        // New Database: its facts for every band, and its builder (form 5), run and dry run.
+        foreach (var item in CreateDatabaseSql.LintAll()) yield return item;
+        foreach (var item in AttachSql.LintAll()) yield return item;
+        // New Login: its describe and preflight in master, and every CREATE LOGIN its builder can write, run and dry run.
+        yield return ("new login describe", LintCatalog(LoginSql.Describe, ExplorerCatalog.MaxBand, database: false));
+        yield return ("new login preflight", LintCatalog(LoginSql.Preflight, ExplorerCatalog.MaxBand, database: false));
+        // User Mapping: its read of a database and its per-database preflight, each run inside the database through ModuleCall.
+        yield return ("login database roles", LintCatalog(LoginSql.DatabaseRoles, ExplorerCatalog.MaxBand, database: true));
+        yield return ("login mapping preflight", LintCatalog(LoginSql.MappingPreflight, ExplorerCatalog.MaxBand, database: true));
+        foreach (var item in LoginSql.Lint()) yield return item;
     }
 }
 

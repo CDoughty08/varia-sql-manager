@@ -155,17 +155,17 @@ describe('document frame markup', () => {
       keyOf: id => id === 'file.save' ? { text: 'Ctrl+S' } : undefined, execute: (id, args) => ran.push([id, args])
     })
     expect(verbs.map(({ run: _run, ...verb }) => verb)).toEqual([
-      { key: 'file.save-0', label: 'Save', title: 'Save (Ctrl+S)', icon: 'save', emphasis: 'primary', disabled: false },
-      { key: 'query.cancel-1', label: 'Stop', title: 'Stop', icon: 'debug-stop', emphasis: 'danger', disabled: true },
+      { key: 'file.save-0', command: 'file.save', label: 'Save', title: 'Save (Ctrl+S)', icon: 'save', emphasis: 'primary', disabled: false },
+      { key: 'query.cancel-1', command: 'query.cancel', label: 'Stop', title: 'Stop', icon: 'debug-stop', emphasis: 'danger', disabled: true },
       // Only a command with a toggled condition is a toggle button, pressed or not.
-      { key: 'view.toggleResultsPane-2', label: 'Toggle Results Pane', title: 'Toggle Results Pane', icon: 'output', emphasis: undefined, disabled: false, pressed: true },
-      { key: 'view.toggleResultsPane-3', label: 'Toggle Results Pane', title: 'Toggle Results Pane', icon: 'output', emphasis: undefined, disabled: false, pressed: false }
+      { key: 'view.toggleResultsPane-2', command: 'view.toggleResultsPane', label: 'Toggle Results Pane', title: 'Toggle Results Pane', icon: 'output', emphasis: undefined, disabled: false, pressed: true },
+      { key: 'view.toggleResultsPane-3', command: 'view.toggleResultsPane', label: 'Toggle Results Pane', title: 'Toggle Results Pane', icon: 'output', emphasis: undefined, disabled: false, pressed: false }
     ])
     verbs[1].run()
     expect(ran).toEqual([['query.cancel', { tabId: 't1' }]])
     const markup = html(createElement(DocumentHeader, { id: 'd', title: 'Activity Monitor', verbs: verbs.slice(2) }))
-    expect(markup).toContain('<button type="button" class="document-verb" title="Toggle Results Pane" aria-pressed="true">')
-    expect(markup).toContain('<button type="button" class="document-verb" title="Toggle Results Pane" aria-pressed="false">')
+    expect(markup).toContain('<button type="button" class="document-verb" data-command="view.toggleResultsPane" title="Toggle Results Pane" aria-pressed="true">')
+    expect(markup).toContain('<button type="button" class="document-verb" data-command="view.toggleResultsPane" title="Toggle Results Pane" aria-pressed="false">')
     expect(html(createElement(DocumentHeader, { id: 'd', title: 'x', verbs: verbs.slice(0, 1) }))).not.toContain('aria-pressed')
   })
   it('names a verb as the menus and palette do on this platform, with its setting filled in', () => {
@@ -288,11 +288,11 @@ describe('document frame verbs in a workbench', () => {
     const verbs: Verb[] = [{ command: 'file.save', emphasis: 'primary' }, { command: 'view.toggleResultsPane' }]
     const first = render(verbs)
     // No document is open: Save cannot run, and the results pane is hidden.
-    expect(first.markup).toContain('<button type="button" class="document-verb primary" title="Save (Ctrl+S)" disabled="">')
-    expect(first.markup).toContain('<button type="button" class="document-verb" title="Toggle Results Pane (Ctrl+R)" aria-pressed="false">')
+    expect(first.markup).toContain('<button type="button" class="document-verb primary" data-command="file.save" title="Save (Ctrl+S)" disabled="">')
+    expect(first.markup).toContain('<button type="button" class="document-verb" data-command="view.toggleResultsPane" title="Toggle Results Pane (Ctrl+R)" aria-pressed="false">')
     panes.set({ explorer: true, editor: true, output: true })
     const shown = render(verbs)
-    expect(shown.markup).toContain('<button type="button" class="document-verb" title="Toggle Results Pane (Ctrl+R)" aria-pressed="true">')
+    expect(shown.markup).toContain('<button type="button" class="document-verb" data-command="view.toggleResultsPane" title="Toggle Results Pane (Ctrl+R)" aria-pressed="true">')
     const execute = vi.spyOn(commands, 'execute')
     shown.verbs[1].run()
     expect(execute).toHaveBeenLastCalledWith('view.toggleResultsPane', undefined, 'toolbar')
