@@ -40,6 +40,22 @@ internal static partial class ScriptingLiveChecks
                 new ScriptArgs(connectionId ?? ConnectionId, Guid.NewGuid().ToString(), [target], verb, options ?? Options), json), json, context);
 
         public string ConnectionId { get; } = connectionId;
+
+        /// <summary>Scripts independent read-only requests at the service's limit, two jobs at a time on each connection (this
+        /// client's and <paramref name="others"/>), in input order. Four at a time takes about half as long as one at a time,
+        /// and a deeper queue would spend the jobs' 55 s budgets waiting for a gate.</summary>
+        public async Task<ScriptResult[]> ScriptAll(IReadOnlyList<(ObjectRefDto Target, string Verb, ScriptingOptionsDto? Options)> requests, params string[] others)
+        {
+            var connections = (string[])[ConnectionId, .. others];
+            var results = new ScriptResult[requests.Count];
+            var next = -1;
+            await Task.WhenAll(Enumerable.Range(0, connections.Length * 2).Select(async worker =>
+            {
+                for (int index; (index = Interlocked.Increment(ref next)) < requests.Count;)
+                    results[index] = await Script(requests[index].Target, requests[index].Verb, requests[index].Options, connectionId: connections[worker % connections.Length]);
+            }));
+            return results;
+        }
     }
 
     private static bool Ok(ScriptResult result) => result.Error is null && result.Text is { Length: > 0 };
@@ -59,8 +75,17 @@ internal static partial class ScriptingLiveChecks
     [GeneratedRegex(@"^/\*{6} Object:[^\r\n]*\*{6}/\r?\nGO\r?$", RegexOptions.Multiline)]
     private static partial Regex HeaderOnly();
 
+    // Temporary: where the suite's time goes.
+    private static readonly Stopwatch lap = new();
+    private static void Lap(string phase)
+    {
+        Console.WriteLine("Script As phase " + phase + ": " + lap.Elapsed.TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture) + " s");
+        lap.Restart();
+    }
+
     public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, Func<string, ConnectOptions> live, JsonSerializerOptions json)
     {
+        lap.Restart();
         var client = new Client(service, info.Id, json);
         async Task<SqlRun> Sql(string text, string database = "master")
         {
@@ -189,13 +214,16 @@ internal static partial class ScriptingLiveChecks
         }
         finally { ScriptingCulture.Override = null; }
 
+        Lap("msdb");
         await CancellationAsync(check, service, client, live, json);
+        Lap("cancellation");
         if (Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SCRATCH") != "1")
         {
             Console.WriteLine("Scripting scratch-database checks skipped. Set VARIA_TEST_SQL_SCRATCH=1 to allow creating and dropping a uniquely named database on a disposable development server.");
             return;
         }
         await ScratchAsync(check, service, client, json, Sql, live);
+        Lap("scratch teardown");
     }
 
     private static async Task<bool> Stops(Task task)
@@ -280,6 +308,7 @@ internal static partial class ScriptingLiveChecks
         {
             var server = await sql(File.ReadAllText(Path.Combine(fixtures, "scripting-server.sql")).Replace("{{scratch}}", db, StringComparison.Ordinal), "master");
             if (server.Status != "completed") throw new InvalidOperationException("The scripting server fixture failed: " + server.Error);
+            Lap("scratch setup");
             await ScratchChecksAsync(check, service, client, json, sql, live, scratch);
         }
         finally { await DropServerObjectsAsync(sql, db); }
@@ -331,40 +360,59 @@ internal static partial class ScriptingLiveChecks
             (Named("partitionScheme", "ps_Range"), "CREATE PARTITION SCHEME [ps_Range]"),
             (Named("planGuide", "pg_Orders"), "sp_create_plan_guide")
         };
+        // These scripts only read and none depends on another, so they run four at a time over a second connection
+        // (Client.ScriptAll); each check below reads its results in the order they were asked for.
+        var plain = client.Options with { IncludeHeaders = false };
+        var dependents = client.Options with { GenerateDependentObjects = true };
+        var drops = objects.Where(item => item.Target.Kind is not "database").ToList();
+        var headerless = objects.Select(item => item.Target).Concat([new ObjectRefDto("login", Name: "sa"), new ObjectRefDto("serverTrigger", Name: db + "_trg"),
+            Schema("table", "dbo", "x*/ DROP TABLE dbo.Victim /*"), Schema("table", "dbo", "a*/b"), Schema("table", "dbo", "line\r\nGO\r\nbreak")])
+            .SelectMany(target => (target.Kind == "database" ? new[] { "create" } : ["create", "drop"]).Select(verb => (Target: target, Verb: verb))).ToList();
+        var withDependents = objects.Append((new ObjectRefDto("login", Name: "sa"), "CREATE LOGIN [sa]"))
+            .Append((new ObjectRefDto("serverTrigger", Name: db + "_trg"), "CREATE TRIGGER [" + db + "_trg] ON ALL SERVER")).ToList();
+        var paired = new[] { new ObjectRefDto("database", Name: db), Schema("table", "Sales", "Orders"), Schema("view", "dbo", "vCustomers"), Schema("procedure", "Sales", "usp_Orders"),
+            Named("schema", "Sales"), Child("index", "table", "Sales", "Orders", "IX_Orders_Customer"), Child("trigger", "table", "Sales", "Orders", "TR_Orders_Audit"), new ObjectRefDto("login", Name: "sa") };
+        var requests = new List<(ObjectRefDto Target, string Verb, ScriptingOptionsDto? Options)>();
+        requests.AddRange(objects.Select(item => (item.Target, "create", (ScriptingOptionsDto?)null)));
+        requests.AddRange(drops.Select(item => (item.Target, "drop", (ScriptingOptionsDto?)null)));
+        requests.AddRange(headerless.Select(item => (item.Target, item.Verb, (ScriptingOptionsDto?)plain)));
+        requests.AddRange(withDependents.Select(item => (item.Item1, "create", (ScriptingOptionsDto?)dependents)));
+        requests.AddRange(paired.SelectMany(target => new[] { "create", "drop", "dropAndCreate" }.Select(verb => (target, verb, (ScriptingOptionsDto?)null))));
+        var second = (ConnectionInfo)await service.DispatchAsync("connections.connect", JsonSerializer.SerializeToElement(live("master"), json), json);
+        Queue<ScriptResult> answers;
+        try { answers = new(await client.ScriptAll(requests, second.Id)); }
+        finally { await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(second.Id), json), json); }
+        Lap("read-only batch");
+
         var failed = new List<string>();
         foreach (var (target, contains) in objects)
         {
-            var result = await client.Script(target, "create");
+            var result = answers.Dequeue();
             if (!Ok(result) || !result.Text!.Contains(contains, StringComparison.Ordinal) || !Framed(result.Text)) failed.Add(target.Kind + " " + target.Name + ": " + (result.Error?.Message ?? Excerpt(result.Text, contains)));
         }
         check(failed.Count == 0, "Script as CREATE resolves every kind of the scratch fixture: " + string.Join("; ", failed));
         failed.Clear();
-        foreach (var (target, _) in objects.Where(item => item.Target.Kind is not "database"))
+        foreach (var (target, _) in drops)
         {
-            var result = await client.Script(target, "drop");
+            var result = answers.Dequeue();
             if (!Ok(result) || !result.Text!.Contains("DROP", StringComparison.Ordinal)) failed.Add(target.Kind + " " + target.Name + ": " + (result.Error?.Message ?? "no DROP"));
         }
         check(failed.Count == 0, "Script as DROP resolves every kind of the scratch fixture: " + string.Join("; ", failed));
         // The runner guards only scripts with headers (spec C7): SMO 181 writes none when asked for none, whatever the kind
         // or name, so nothing a name holds can end a comment there.
         failed.Clear();
-        var plain = client.Options with { IncludeHeaders = false };
-        foreach (var target in objects.Select(item => item.Target).Concat([new ObjectRefDto("login", Name: "sa"), new ObjectRefDto("serverTrigger", Name: db + "_trg"),
-            Schema("table", "dbo", "x*/ DROP TABLE dbo.Victim /*"), Schema("table", "dbo", "a*/b"), Schema("table", "dbo", "line\r\nGO\r\nbreak")]))
-            foreach (var verb in target.Kind == "database" ? new[] { "create" } : ["create", "drop"])
-            {
-                var result = await client.Script(target, verb, plain);
-                if (!Ok(result) || result.Text!.Contains("/******", StringComparison.Ordinal) || HeaderGuard.Dated(result.Text) > 0 || result.Warnings.Count > 0)
-                    failed.Add(target.Kind + " " + target.Name + " " + verb + ": " + (result.Error?.Message ?? string.Join(" ", result.Warnings)));
-            }
+        foreach (var (target, verb) in headerless)
+        {
+            var result = answers.Dequeue();
+            if (!Ok(result) || result.Text!.Contains("/******", StringComparison.Ordinal) || HeaderGuard.Dated(result.Text) > 0 || result.Warnings.Count > 0)
+                failed.Add(target.Kind + " " + target.Name + " " + verb + ": " + (result.Error?.Message ?? string.Join(" ", result.Warnings)));
+        }
         check(failed.Count == 0, "with headers off SMO writes no descriptive header for any kind, crafted names included: " + string.Join("; ", failed));
         // SMO's dependency discovery refuses most kinds (databases, indexes, keys, principals); the option then adds nothing.
         failed.Clear();
-        var dependents = client.Options with { GenerateDependentObjects = true };
-        foreach (var (target, contains) in objects.Append((new ObjectRefDto("login", Name: "sa"), "CREATE LOGIN [sa]"))
-            .Append((new ObjectRefDto("serverTrigger", Name: db + "_trg"), "CREATE TRIGGER [" + db + "_trg] ON ALL SERVER")))
+        foreach (var (target, contains) in withDependents)
         {
-            var result = await client.Script(target, "create", dependents);
+            var result = answers.Dequeue();
             if (!Ok(result) || !result.Text!.Contains(contains, StringComparison.Ordinal)) failed.Add(target.Kind + " " + target.Name + ": " + (result.Error?.Message ?? Excerpt(result.Text, contains)));
         }
         check(failed.Count == 0, "Script as CREATE resolves every kind with Generate script for dependent objects on: " + string.Join("; ", failed));
@@ -372,18 +420,17 @@ internal static partial class ScriptingLiveChecks
         // SMO writes inside it (a database's extended properties are added in the database, then the script returns to master).
         failed.Clear();
         var golden = GoldenText.Load();
-        foreach (var target in new[] { new ObjectRefDto("database", Name: db), Schema("table", "Sales", "Orders"), Schema("view", "dbo", "vCustomers"), Schema("procedure", "Sales", "usp_Orders"),
-            Named("schema", "Sales"), Child("index", "table", "Sales", "Orders", "IX_Orders_Customer"), Child("trigger", "table", "Sales", "Orders", "TR_Orders_Audit"), new ObjectRefDto("login", Name: "sa") })
+        foreach (var target in paired)
         {
             // Spec G5's normalization: a login's CREATE carries a new random password each time.
-            var create = golden.Normalize((await client.Script(target, "create")).Text ?? "");
-            var drop = golden.Normalize((await client.Script(target, "drop")).Text ?? "");
-            var both = golden.Normalize((await client.Script(target, "dropAndCreate")).Text ?? "");
+            var create = golden.Normalize(answers.Dequeue().Text ?? "");
+            var drop = golden.Normalize(answers.Dequeue().Text ?? "");
+            var both = golden.Normalize(answers.Dequeue().Text ?? "");
             var use = create.StartsWith("USE [", StringComparison.Ordinal) ? create.IndexOf("\nGO\n\n", StringComparison.Ordinal) + 5 : -1;
             if (use < 0 || !drop.StartsWith(create[..use], StringComparison.Ordinal) || both != drop + create[use..])
                 failed.Add(target.Kind + " " + target.Name + (use < 0 ? ": no USE" : " differs at " + GoldenText.FirstDifference(drop + create[use..], both)));
         }
-        check(failed.Count == 0, "DROP And CREATE is the DROP script followed by the CREATE script after its USE: " + string.Join("; ", failed));
+        check(failed.Count == 0 && answers.Count == 0, "DROP And CREATE is the DROP script followed by the CREATE script after its USE: " + string.Join("; ", failed));
 
         var secret = Schema("procedure", "dbo", "usp_Secret");
         var encrypted = await client.Script(secret, "create");
@@ -440,14 +487,23 @@ internal static partial class ScriptingLiveChecks
         }
         finally { await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(holder), json), json); }
         check(Ok(await client.Script(Schema("table", "dbo", "a"), "create")), "the table scripts once the other session rolls back");
+        Lap("guards and blocking");
         await SchemaLockAsync(check, service, client, json, Schema("table", "dbo", "Victim"), db);
+        Lap("SchemaLockAsync");
         await DefinitionsAsync(check, client, Schema);
+        Lap("DefinitionsAsync");
         await VerbsAsync(check, client, sql, scratch);
+        Lap("VerbsAsync");
         await UnresolvedAsync(check, client, sql, scratch);
+        Lap("UnresolvedAsync");
         await DependentDatabasesAsync(check, service, client, sql, scratch);
+        Lap("DependentDatabasesAsync");
         await OldHeadersAsync(check, client, sql, db);
+        Lap("OldHeadersAsync");
         await CultureAsync(check, client, sql, db);
+        Lap("CultureAsync");
         await GoldenAsync(check, service, client, scratch, sql, live, json);
+        Lap("GoldenAsync");
     }
 
     /// <summary>Another session's uncommitted TRUNCATE holds a schema-modification lock that sys.tables does not wait for

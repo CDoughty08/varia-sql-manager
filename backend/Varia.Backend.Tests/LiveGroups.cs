@@ -31,11 +31,15 @@ public static class LiveGroups
         ("Entra", 0)
     ];
 
-    public sealed record Group(int Index, int Count);
+    /// <summary>Group <c>Index</c> of <c>Count</c>, or with <c>Suite</c> only that suite (a developer's `--live-suite name`).</summary>
+    public sealed record Group(int Index, int Count, string? Suite = null);
 
-    /// <summary>`--live-group k/n` as a group, no arguments as null (every suite, after the offline checks).</summary>
+    /// <summary>`--live-group k/n` as a group, `--live-suite name` as one suite, no arguments as null (every suite, after the
+    /// offline checks).</summary>
     public static Group? Parse(string[] args)
     {
+        if (args is ["--live-suite", var suite])
+            return Suites.Any(item => item.Name == suite) ? new(1, 1, suite) : throw new ArgumentException("Unknown live suite " + suite + "; LiveGroups.Suites names them.");
         if (args is not ["--live-group", var value]) return null;
         var parts = value.Split('/');
         if (parts.Length == 2 && int.TryParse(parts[0], out var index) && int.TryParse(parts[1], out var count) && count >= 1 && index >= 1 && index <= count)
@@ -61,6 +65,7 @@ public static class LiveGroups
     public static bool Runs(Group? group, string name)
     {
         if (!Suites.Any(suite => suite.Name == name)) throw new Exception("FAIL: the live suite " + name + " needs its seconds in LiveGroups.Suites.");
+        if (group?.Suite is { } only) return name == only;
         return group is null || Split(Suites, group.Count)[group.Index - 1].Contains(name);
     }
 

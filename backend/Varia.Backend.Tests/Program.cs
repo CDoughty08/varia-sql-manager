@@ -349,8 +349,10 @@ if (liveGroup is null)
         "each of CI's " + LiveGroups.CiGroups + " live groups stays within " + LiveGroups.BudgetSeconds + " s (" + string.Join(", ", ciGroups) + "): speed the slow suite up, or add a group to LiveGroups.CiGroups and ci.yml's live matrix");
     Check(LiveGroups.Parse([]) is null && LiveGroups.Parse(["--live-group", "2/3"]) == new LiveGroups.Group(2, 3)
         && new[] { "0/2", "3/2", "1/0", "x/2", "1/2/3" }.All(value => { try { LiveGroups.Parse(["--live-group", value]); return false; } catch (ArgumentException) { return true; } })
-        && LiveGroups.Runs(null, "Query") && LiveGroups.Split([("a", 5), ("b", 5), ("c", 9)], 2) is [["c"], ["a", "b"]],
-        "--live-group k/n names one group of n, and a run without it runs every suite");
+        && LiveGroups.Runs(null, "Query") && LiveGroups.Split([("a", 5), ("b", 5), ("c", 9)], 2) is [["c"], ["a", "b"]]
+        && LiveGroups.Parse(["--live-suite", "Scripting"]) is { Suite: "Scripting" } single && LiveGroups.Runs(single, "Scripting") && !LiveGroups.Runs(single, "Query")
+        && ((Func<bool>)(() => { try { LiveGroups.Parse(["--live-suite", "NoSuchSuite"]); return false; } catch (ArgumentException) { return true; } }))(),
+        "--live-group k/n names one group of n, --live-suite one known suite, and a run without either runs every suite");
     Console.WriteLine("Passed " + passed + " offline .NET checks.");
 }
 
@@ -666,6 +668,6 @@ try
     Check(LiveGroups.Covers(reached), "the live suites are LiveGroups.Suites, in order: " + string.Join(", ", reached));
     Console.WriteLine(liveGroup is null
         ? "Passed " + passed + " total .NET checks including live SQL batches, statistics variants, isolation, failure, cancellation, timeout, and cleanup."
-        : "Passed " + passed + " live .NET checks of group " + liveGroup.Index + "/" + liveGroup.Count + ".");
+        : "Passed " + passed + " live .NET checks of " + (liveGroup.Suite is { } only ? "the suite " + only : "group " + liveGroup.Index + "/" + liveGroup.Count) + ".");
 }
 finally { await Call<object>("connections.disconnect", new ConnectionArgs(info.Id)); }
