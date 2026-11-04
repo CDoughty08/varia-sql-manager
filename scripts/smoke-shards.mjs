@@ -19,7 +19,7 @@ export const suiteSeconds = {
   'scripts/electron-smoke.mjs': 12, 'scripts/layout-smoke.mjs': 6, 'scripts/connections-smoke.mjs': 14, 'scripts/theme-smoke.mjs': 3,
   'scripts/palette-smoke.mjs': 5, 'scripts/backend-smoke.mjs': 40, 'scripts/live-smoke.mjs': 39, 'scripts/chart-smoke.mjs': 44,
   'scripts/live-grid-smoke.mjs': 38, 'scripts/activity-monitor-smoke.mjs': 43, 'scripts/menus-smoke.mjs': 80, 'scripts/explorer-smoke.mjs': 22,
-  'scripts/scripting-smoke.mjs': 12, 'scripts/object-actions-smoke.mjs': 60, 'scripts/results-smoke.mjs': 50, 'scripts/options-resize-smoke.mjs': 3,
+  'scripts/scripting-smoke.mjs': 12, 'scripts/object-actions-smoke.mjs': 70, 'scripts/results-smoke.mjs': 50, 'scripts/options-resize-smoke.mjs': 3,
   'scripts/options-smoke.mjs': 6, 'scripts/files-smoke.mjs': 12, 'scripts/editor-smoke.mjs': 10, 'scripts/table-designer-smoke.mjs': 3,
   'scripts/document-frame-smoke.mjs': 13, 'scripts/ssis-smoke.mjs': 4, 'scripts/ssis-operations-smoke.mjs': 18
 }
