@@ -37,7 +37,7 @@ export const codiconIcons = [
   'add', 'archive', 'arrow-left', 'arrow-small-down', 'bell', 'book', 'bookmark', 'case-sensitive', 'check', 'chevron-down', 'chevron-right',
   'chevron-up', 'circle-filled', 'circle-outline', 'circle-slash', 'circuit-board', 'clear-all', 'clippy', 'close', 'close-all', 'cloud', 'code',
   'collapse-all', 'comment', 'copy', 'debug-disconnect', 'debug-pause', 'debug-restart', 'debug-stop', 'device-camera', 'discard', 'edit', 'ellipsis',
-  'error', 'file', 'file-code', 'filter', 'filter-filled', 'folder', 'folder-library', 'folder-opened', 'git-compare', 'go-to-file', 'graph',
+  'error', 'export', 'file', 'file-code', 'filter', 'filter-filled', 'folder', 'folder-library', 'folder-opened', 'git-compare', 'go-to-file', 'graph',
   'graph-line', 'history', 'info', 'insert', 'json', 'law', 'layers', 'layout', 'link', 'list-flat', 'list-ordered', 'list-tree', 'loading', 'lock',
   'milestone', 'multiple-windows', 'new-file', 'output', 'package', 'pass', 'person', 'play', 'plug', 'project', 'pulse', 'redo', 'references',
   'refresh', 'regex', 'remote', 'remove', 'replace', 'save', 'save-all', 'save-as', 'screen-full', 'search', 'settings-gear', 'split-horizontal', 'star-empty',

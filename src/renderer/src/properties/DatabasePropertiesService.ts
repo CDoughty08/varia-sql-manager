@@ -49,13 +49,13 @@ export interface PropertiesState {
   readonly changed: boolean
   /** Whether the last Apply completed is unknown (the server or backend went, or Stop got no answer): Apply waits for a Refresh. */
   readonly stale: boolean
-  /** Varia deleted the database (D3 §8): the document is an orphan, read-only with no Refresh, until it is closed. */
-  readonly gone?: boolean
   /** Take Offline took the database offline while the document held changes, which it keeps: the banner and the status say so
    *  until the database is read again. Apply still runs, and its preflight refuses a database that is not online, so one brought
    *  online elsewhere (a query, another connection) never leaves the changes stuck. A document without changes reads the
    *  database again instead (its readOnlyReason says it). */
   readonly offline?: boolean
+  /** Varia deleted or detached the database (D3 §8): the document is an orphan, read-only with no Refresh, until it is closed. */
+  readonly gone?: boolean
   readonly error?: ActionError
   /** An info line: the changes applied, a script delivered. */
   readonly notice?: string
@@ -261,10 +261,10 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
     return !!state && state.phase === 'ready' && state.changed && !state.stale && !state.gone && this.live(id) && !state.model?.readOnlyReason
   }
 
-  // --- A deleted database ----------------------------------------------------------------------------------------------
+  // --- A deleted or detached database ------------------------------------------------------------------------------------
 
   /**
-   * Varia deleted the database (Delete Object, D3 §8): each of its documents on that connection turns orphan. What it showed
+   * Varia deleted or detached the database (Delete Object, D3 §8; Detach Database, D3b): each of its documents on that connection turns orphan. What it showed
    * stays, read-only, under "This database no longer exists on <server>." with Close and no Refresh, since a database that
    * takes the name later is another one; its requests are cancelled and its changes dropped, so closing it asks nothing.
    */
@@ -279,7 +279,7 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
       this.previews.delete(state.id)
       this.clearPreviewTimer(state.id)
       this.patch(state.id, {
-        gone: true, phase: state.model ? 'ready' : 'loadFailed', changed: false, error: error('NOT_FOUND', goneMessage(state.server)), notice: undefined, steps: undefined,
+        gone: true, offline: undefined, phase: state.model ? 'ready' : 'loadFailed', changed: false, error: error('NOT_FOUND', goneMessage(state.server)), notice: undefined, steps: undefined,
         script: { state: 'idle', message: goneMessage(state.server) }, scriptRevision: undefined, scriptNotice: undefined
       })
       this.options.documents.setDirty(state.id, false)
@@ -300,7 +300,7 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
   databaseStateChanged(connectionId: string, database: string, offline: boolean): void {
     const server = this.options.connections.getSnapshot().find(connection => connection.id === connectionId)?.server
     for (const state of Object.values(this.getSnapshot().documents)) {
-      if (state.target.name !== database || (this.connectionOf(state.id) !== connectionId && (server === undefined || !this.follows(state.id, server)))) continue
+      if (state.gone || state.target.name !== database || (this.connectionOf(state.id) !== connectionId && (server === undefined || !this.follows(state.id, server)))) continue
       if (!state.changed && this.canRefresh(state.id)) { this.patch(state.id, { offline: undefined }); this.refresh(state.id) }
       else if (!!state.offline !== offline) this.patch(state.id, { offline: offline || undefined })
     }

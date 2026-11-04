@@ -159,6 +159,8 @@ explorer.context, for a database
       C&lipboard  -+++
   ---
   &Tasks >
+    &Detach…  -+++
+    ---
     &Take Offline  -+++
     Bring &Online  -+++
     ---

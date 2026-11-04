@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (204)
+## Commands (205)
 
 ### File
 
@@ -147,6 +147,7 @@ keys it uses are listed below.
 | Attach Database… | `explorer.attachDatabase` | — | — | — | `backendReady && explorerActionAttach == 'enabled'` | Object Explorer context menu › Attach… |
 | Take Database Offline | `explorer.takeOffline` | — | — | — | `backendReady && explorerActionTakeOffline == 'enabled'` | Object Explorer context menu › Tasks › Take Offline |
 | Bring Database Online | `explorer.bringOnline` | — | — | — | `backendReady && explorerActionBringOnline == 'enabled'` | Object Explorer context menu › Tasks › Bring Online |
+| Detach Database… | `explorer.detachDatabase` | — | — | — | `backendReady && explorerActionDetach == 'enabled'` | Object Explorer context menu › Tasks › Detach… |
 | Restore Database… | `explorer.restoreDatabase` | — | — | — | `backendReady && explorerActionRestore == 'enabled'` | Object Explorer context menu › Restore Database… |
 | Restore Database… (not in the palette) | `explorer.tasks.restoreDatabase` | — | — | — | `backendReady && explorerActionRestore == 'enabled'` | Object Explorer context menu › Tasks › Restore › Database… |
 | Restore Files and Filegroups… | `explorer.restoreFiles` | — | — | — | `backendReady && explorerActionRestoreFiles == 'enabled'` | Object Explorer context menu › Restore Files and Filegroups… |
@@ -547,6 +548,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
+| `0_detach` | **D**etach… | `explorer.detachDatabase` | `explorerActionDetach != '' && explorerNode != 'background'` |
 | `1_state` | **T**ake Offline | `explorer.takeOffline` | `explorerActionTakeOffline != '' && explorerNode != 'background'` |
 | `1_state` | Bring **O**nline | `explorer.bringOnline` | `explorerActionBringOnline != '' && explorerNode != 'background'` |
 | `4_backup` | **R**estore › | Submenu: Object Explorer context menu › Tasks › Restore | Always |
@@ -736,7 +738,7 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 | `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
 | `8_view` | **P**ause | `ssis.pauseOperations` | Always |
 
-## Context keys (113)
+## Context keys (114)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -837,6 +839,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerActionAttach` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Attach Database…: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionTakeOffline` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Take Database Offline: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionBringOnline` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Bring Database Online: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `explorerActionDetach` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Detach Database…: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionRestore` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Restore Database…: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionRestoreFiles` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Restore Files and Filegroups…: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `ssisVerbFolderProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Folder Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |

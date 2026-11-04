@@ -228,7 +228,27 @@ internal static class SsisCreateLiveChecks
         {
             try { await body(); }
             catch (Exception error) when (!error.Message.StartsWith("FAIL: ", StringComparison.Ordinal)) { check(false, name + " threw " + error.GetType().Name + ": " + error.Message); }
-            finally { options.BeforeCreateStep = null; await Drop(); }
+            finally { options.BeforeCreateStep = null; await Drop(); await RemoveLeftFiles(name); }
+        }
+        // SQL Server leaves a RESTORE cancelled part way's data file on disk after the DROP of the database it left restoring (probed on
+        // SQL Server 2025 on Windows), and Create Catalog then refuses every later dry run as SSMS refuses a catalog file that exists.
+        // Once the database is gone, the files named after this run's own scratch database in master's folder (where Create Catalog
+        // puts them) are deleted (xp_delete_files, SQL Server 2019 and later), so each check starts from a server without them.
+        async Task RemoveLeftFiles(string name)
+        {
+            var directory = (await sql("SELECT CASE WHEN CHARINDEX(N'master.mdf', LOWER(f.physical_name)) > 1 THEN SUBSTRING(f.physical_name, 1, CHARINDEX(N'master.mdf', LOWER(f.physical_name)) - 1) END "
+                + "FROM sys.master_files AS f WHERE f.database_id = 1 AND f.file_id = 1;", "master")).Scalar;
+            if (string.IsNullOrEmpty(directory) || await State() is not null) return;
+            foreach (var file in new[] { directory + db + ".mdf", directory + db + ".ldf" })
+            {
+                var found = await sql("DECLARE @found TABLE (file_exists int, is_directory int, parent_directory_exists int);\n"
+                    + "INSERT @found EXEC master.sys.xp_fileexist " + Literal(file) + ";\nSELECT f.file_exists FROM @found AS f;", "master");
+                if (found.Scalar != "1") continue;
+                var deletable = (await sql("SELECT COUNT(*) FROM sys.system_objects WHERE name = N'xp_delete_files';", "master")).Scalar == "1";
+                if (deletable) await sql("EXEC master.sys.xp_delete_files " + Literal(file) + ";", "master");
+                Console.WriteLine(name + ": SQL Server left a file of the removed database on disk, as it does after a RESTORE cancelled part way; "
+                    + (deletable ? "the check deleted it." : "this server cannot delete it from T-SQL (before SQL Server 2019), so later dry runs refuse it."));
+            }
         }
 
         // The product's restore and master key, with the dry run's name for the database.
@@ -355,6 +375,7 @@ internal static class SsisCreateLiveChecks
             if (!restoring)
             {
                 var finished = await running;
+                check(finished.Steps.Count > 0, "Stop during the restore's Create Catalog ran its restore, which ended before it could be seen running: " + Dump(finished));
                 Console.WriteLine("Stop during the restore is not checked: the restore ended before it could be seen running (" + Dump(finished.Steps) + ").");
                 return;
             }
@@ -378,7 +399,9 @@ internal static class SsisCreateLiveChecks
                 var running = CreateAsync(service, info.Id, password, stop.Token, requestId: requestId);
                 if (!await Restoring(requestId, running))
                 {
-                    Console.WriteLine("Stop past RestoreStop is not checked: the restore ended before it could be seen running (" + Dump((await running).Steps) + ").");
+                    var finished = await running;
+                    check(finished.Steps.Count > 0, "Stop past RestoreStop's Create Catalog ran its restore, which ended before it could be seen running: " + Dump(finished));
+                    Console.WriteLine("Stop past RestoreStop is not checked: the restore ended before it could be seen running (" + Dump(finished.Steps) + ").");
                     return;
                 }
                 await stop.CancelAsync();
@@ -409,7 +432,9 @@ internal static class SsisCreateLiveChecks
             var running = CreateAsync(service, info.Id, password, requestId: requestId);
             if (!await Restoring(requestId, running))
             {
-                Console.WriteLine("A shutdown during the restore is not checked: the restore ended before it could be seen running (" + Dump((await running).Steps) + ").");
+                var finished = await running;
+                check(finished.Steps.Count > 0, "a shutdown during the restore's Create Catalog ran its restore, which ended before it could be seen running: " + Dump(finished));
+                Console.WriteLine("A shutdown during the restore is not checked: the restore ended before it could be seen running (" + Dump(finished.Steps) + ").");
                 return;
             }
             service.SsisActions.CancelAll();

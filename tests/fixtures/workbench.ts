@@ -340,7 +340,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const objectSearch = new ObjectSearchService({ api, documents, connections, settings })
   const inputMode = new InputModeService(fakeInputMode())
   const notifications = new NotificationService(options.timers ? { timers: options.timers } : {})
-  const databaseGone = databaseGoneHandler({ documents, properties, notify: toast => { notifications.notify(toast) } })
+  const databaseGone = databaseGoneHandler({ documents, properties, notify: toast => { notifications.notify(toast) }, copy: text => { void api.writeClipboardText(text) } })
   const context = new ContextKeyService({
     platform,
     documents,

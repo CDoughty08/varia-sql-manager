@@ -273,11 +273,11 @@ internal sealed record ServerFilesDto(string Separator, string? Path, List<Serve
 /// CloseConnections and Changes, createTable (Target the database) and createDatabase (Target the new database) Design, restore
 /// (Target the destination database) Restore and Identity, restoreFiles (Target the database) RestoreFiles and Identity, attach (Target
 /// the server) Databases, createLogin (Target the server) Login, ServerRoles, Mappings, Status and, on execute only, Secrets, takeOffline
-/// DropConnections; Validate refuses the rest.</summary>
+/// DropConnections, detach DropConnections, UpdateStatistics and DetachOffline; Validate refuses the rest.</summary>
 internal sealed record ActionArgs(string Action, string ConnectionId, string RequestId, ObjectRefDto Target, string? NewName = null, bool? CloseConnections = null, bool? DeleteHistory = null,
     DatabaseChangesDto? Changes = null, ActionDesign? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null, RestoreOptionsDto? Restore = null,
     List<AttachDatabaseDto>? Databases = null, NewLoginDto? Login = null, List<string>? ServerRoles = null, LoginStatusDto? Status = null,
-    bool? DropConnections = null, RestoreFilesOptionsDto? RestoreFiles = null, List<UserMappingDto>? Mappings = null);
+    bool? DropConnections = null, RestoreFilesOptionsDto? RestoreFiles = null, List<UserMappingDto>? Mappings = null, bool? UpdateStatistics = null, bool? DetachOffline = null);
 /// <summary>New Login's General page (src/shared/actions/logins.ts NewLoginGeneral): Auth windows or sql; the password policy
 /// options exactly for sql, in SQL Server's chain (MustChange needs CheckExpiration, which needs CheckPolicy).</summary>
 internal sealed record NewLoginDto(string Auth, string Name, string DefaultDatabase, string? DefaultLanguage = null, bool? CheckPolicy = null, bool? CheckExpiration = null, bool? MustChange = null);
@@ -325,7 +325,6 @@ internal sealed class ActionDesignConverter : JsonConverter<ActionDesign>
 
     public override void Write(Utf8JsonWriter writer, ActionDesign value, JsonSerializerOptions options) => value.WriteTo(writer);
 }
-
 /// <summary>Passwords an action needs (New Login and Login Properties, later): only actions.execute carries them, which is
 /// sensitive as a whole (its frame is zeroed once read); Validate refuses them on actions.script and on every other action.
 /// Never logged, echoed or persisted; ActionService.Validate bounds them. The record never prints them, so neither does an ActionArgs.</summary>
@@ -373,9 +372,15 @@ internal sealed record DatabasePropertiesDto(DatabaseGeneralDto General, Diction
 internal sealed record DatabaseSessionDto(int SessionId, string? Login, string? Program, string? Host, int OpenTransactions);
 /// <summary>Take Database Offline's and Bring Database Online's row (src/shared/actions/schema.ts DatabaseStateModel): the database read,
 /// its sys.databases state, user_access, is_read_only and is_in_standby, and the sessions in it without the backend's own pooled
-/// ones (null counts: no VIEW SERVER STATE), at most the catalogue's sessions listed.</summary>
+/// ones (null counts: no VIEW SERVER STATE), at most the catalogue's sessions listed.
+/// Detach adds the files that stay on the server (at most the catalogue's detachFiles) and ConfirmOffline: the database is offline on
+/// a Windows server, so OK waits for Detach while offline.</summary>
 internal sealed record DatabaseStateDto(string Name, DatabaseIdentityDto Identity, int State, int UserAccess, bool ReadOnly, bool Standby, int? Sessions, int? WithTransaction,
-    List<DatabaseSessionDto> SessionList, bool SessionsTruncated, List<ActionWarningDto> Warnings);
+    List<DatabaseSessionDto> SessionList, bool SessionsTruncated, List<ActionWarningDto> Warnings, List<DatabaseFileRefDto>? Files = null, bool? FilesTruncated = null,
+    bool? ConfirmOffline = null);
+/// <summary>A database file by id (src/shared/actions/schema.ts DatabaseFileRef): Type rows, log or filestream; Path as the server
+/// names it (at most the catalogue's filePath characters), never logged.</summary>
+internal sealed record DatabaseFileRefDto(int FileId, string Name, string Type, string Path);
 internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long ElapsedMs, ActionError? Error = null, DatabasePropertiesDto? DatabaseProperties = null,
     TableDesignerModelDto? TableDesigner = null, ServerFilesDto? ServerFiles = null, RestoreModelDto? Restore = null, NewDatabaseModelDto? NewDatabase = null,
     AttachDescribeDto? AttachDatabase = null, NewLoginModelDto? NewLogin = null, DatabaseStateDto? DatabaseState = null, LoginDatabaseRolesDto? LoginDatabaseRoles = null);
@@ -423,7 +428,9 @@ internal sealed record ActionStepDto(string Status, string Title, string? Messag
 /// they are could not be asked). The reply leaves it out when it could not be read. After a file restore, FilesRestoring names the database's files
 /// still RESTORING (sys.master_files.state 1), by logical name.</summary>
 internal sealed record RestoredDatabaseDto(int? State, int? UserAccess, bool? Absent = null, List<string>? FilesLeft = null, bool? FilesUnknown = null, List<string>? FilesRestoring = null);
-internal sealed record ActionExecuteResult(List<ActionStepDto> Steps, List<string> Messages, long ElapsedMs, ActionError? Error = null, RestoredDatabaseDto? Restored = null);
+/// <summary>FilesKept: Detach's files left on the server once the database was detached (at most the catalogue's detachFiles).</summary>
+internal sealed record ActionExecuteResult(List<ActionStepDto> Steps, List<string> Messages, long ElapsedMs, ActionError? Error = null, RestoredDatabaseDto? Restored = null,
+    List<DatabaseFileRefDto>? FilesKept = null);
 
 /// <summary>ssis.describe (src/shared/ssis/schema.ts): a view of the SSIS catalogue and the tree object it describes.</summary>
 internal sealed record SsisDescribeArgs(string ConnectionId, string RequestId, string View, ObjectRefDto Target);

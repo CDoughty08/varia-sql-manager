@@ -12,6 +12,7 @@ import type { DialogPhase, OpenObjectDialog } from './ObjectDialogService'
 import AttachDatabasePage from './pages/AttachDatabasePage'
 import DatabaseStatePage from './pages/DatabaseStatePage'
 import DeleteObjectPage from './pages/DeleteObjectPage'
+import DetachDatabasePage from './pages/DetachDatabasePage'
 import { NewLoginGeneralPage, NewLoginServerRolesPage, NewLoginStatusPage } from './pages/NewLoginPages'
 import UserMappingPage from './pages/UserMappingPage'
 
@@ -24,7 +25,8 @@ export const dialogPages: { readonly [D in ModalDialogId]: Readonly<Partial<Reco
   attachDatabase: { general: AttachDatabasePage },
   newLogin: { general: NewLoginGeneralPage, serverRoles: NewLoginServerRolesPage, userMapping: UserMappingPage, status: NewLoginStatusPage },
   takeOffline: { general: DatabaseStatePage },
-  bringOnline: { general: DatabaseStatePage }
+  bringOnline: { general: DatabaseStatePage },
+  detachDatabase: { general: DetachDatabasePage }
 }
 
 const progressText: Readonly<Record<DialogPhase, string>> = {
