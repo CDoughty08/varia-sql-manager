@@ -121,8 +121,8 @@ internal sealed partial class ActionService
             command.CommandTimeout = 0;
             Add(command, "@name", SqlDbType.NVarChar, 128, login);
             // A reader, as every action statement runs (tests/action-reader-lint.test.ts).
-            await using var reader = await command.ExecuteReaderAsync(token);
-            sid = await reader.ReadAsync(token) && !reader.IsDBNull(0) ? (byte[])reader.GetValue(0) : null;
+            await using var found = await command.ExecuteReaderAsync(token);
+            sid = await found.ReadAsync(token) && !found.IsDBNull(0) ? (byte[])found.GetValue(0) : null;
         }
         if (sid is null) return (null, [], Error("NOT_FOUND", "The login " + ScriptingErrors.Display(login) + " no longer exists. Refresh Object Explorer."));
         await using var read = connection.CreateCommand();
