@@ -16,7 +16,6 @@ let page
 const failures = []
 const watchdog = setTimeout(() => { console.error('Table designer suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 300000)
 
-const fast = { force: true }
 const menuNamed = name => page.getByRole('menu', { name, exact: true })
 const tabs = () => documentTabs(page).getByRole('tab')
 const designer = () => page.locator(part.tableDesigner)
@@ -47,8 +46,8 @@ async function connect(server) {
 async function newTable() {
   await (await revealExplorerRow(page, ...tablesPath)).click({ button: 'right', force: true })
   await expect(menuNamed('Object Explorer')).toBeVisible()
-  await menuNamed('Object Explorer').getByRole('menuitem', { name: 'New', exact: true }).click(fast)
-  await page.getByRole('menuitem', { name: 'Table…', exact: true }).click(fast)
+  await menuNamed('Object Explorer').getByRole('menuitem', { name: 'New', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Table…', exact: true }).click()
   await expect(grid()).toBeFocused()
   await expect(designer().getByRole('status').filter({ hasText: 'Reading the database…' })).toHaveCount(0)
 }
@@ -116,7 +115,7 @@ try {
   const designerMenu = menuNamed('Table Designer')
   await expect(designerMenu).toBeVisible()
   expect(await menuItemNames(designerMenu)).toEqual(['Set Primary Key', 'Insert Column', 'Delete Column', 'Generate Change Script…', 'Properties'])
-  await designerMenu.getByRole('menuitem', { name: 'Set Primary Key', exact: true }).click(fast)
+  await designerMenu.getByRole('menuitem', { name: 'Set Primary Key', exact: true }).click()
   await expect(rows().nth(0).locator('[data-icon="key"]')).toHaveCount(1)
   await expect(rows().nth(0).getByRole('checkbox')).toBeDisabled()
   // Column Properties: (Is Identity) Yes; its parent mirrors it.
@@ -144,7 +143,7 @@ try {
   // 4. Generate Change Script… shows the backend's script; No closes it.
   await grid().focus()
   await rows().nth(0).getByRole('rowheader').click({ button: 'right' })
-  await menuNamed('Table Designer').getByRole('menuitem', { name: 'Generate Change Script…', exact: true }).click(fast)
+  await menuNamed('Table Designer').getByRole('menuitem', { name: 'Generate Change Script…', exact: true }).click()
   const scriptDialog = page.getByRole('dialog', { name: 'Save Change Script', exact: true })
   // A text area's value has LF line breaks.
   await expect(scriptDialog.getByRole('textbox', { name: 'Change script' })).toHaveValue(designerScript('Table_1').replaceAll(String.fromCharCode(13), ''))
@@ -208,7 +207,7 @@ try {
   const scriptFile = resolve(profile, 'Held.sql')
   await application.evaluate(({ dialog }, path) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: path }) }, scriptFile)
   await rows().nth(0).getByRole('rowheader').click({ button: 'right' })
-  await menuNamed('Table Designer').getByRole('menuitem', { name: 'Generate Change Script…', exact: true }).click(fast)
+  await menuNamed('Table Designer').getByRole('menuitem', { name: 'Generate Change Script…', exact: true }).click()
   await scriptDialog.getByRole('button', { name: 'Yes', exact: true }).click()
   await expect(scriptDialog).toHaveCount(0)
   await expect.poll(async () => (await readFile(scriptFile, 'utf8').catch(() => '')).replace(/^﻿/, '').replaceAll('\r', '')).toBe(designerScript('Held').replaceAll('\r', ''))
