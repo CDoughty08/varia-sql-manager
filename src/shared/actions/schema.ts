@@ -8,7 +8,10 @@ import {
   actionErrorCodes, actionLimits, actionOffered, dialogIds, dialogSpecs, isCreateAction, isServerAction, objectActionSpecs, serverFilePurposes, serverFilesDescribeId, type ActionErrorCode,
   type ObjectAction
 } from './catalog.ts'
-import { loginLimits, newLoginAuths, publicRole, windowsLoginName, type LoginSecrets, type LoginStatusChoice, type NewLoginGeneral, type NewLoginModel } from './logins.ts'
+import {
+  loginDatabaseRolesDescribe, loginLimits, newLoginAuths, newLoginStatements, publicRole, tooManyStatementsMessage, windowsLoginName, type LoginDatabaseRoles, type LoginSecrets, type LoginStatusChoice,
+  type NewLoginGeneral, type NewLoginModel, type UserMappingChoice
+} from './logins.ts'
 import { wellFormed } from '../ssis/schema.ts'
 import { collationPattern, optionDef, settableOptionKeys, settableScopedKeys, tokenProblem, type FileType, type Growth } from './database.ts'
 import { containmentTypes, newDatabaseOptionKeys, newDatabaseProblems, newDatabaseScopedKeys, type NewDatabaseDesign, type NewDatabaseModel } from './new-database.ts'
@@ -19,8 +22,9 @@ import { restoreDescribeId, restoreLimits, type RestoreModel, type RestoreSource
 import { restoreFilesRequestSchema, restoreRequestSchema, restoreSourceSchema, type RestoreFilesRequest, type RestoreRequest } from './restore-schema.ts'
 
 /** What actions.describe describes: an object dialog (PR17's catalogue), a designer (src/shared/designer/catalog.ts), the
- *  server's folders for the server file picker, or what Restore Database restores from (src/shared/actions/restore.ts). */
-export const describeIds = [...dialogIds, ...designerDescribeIds, serverFilesDescribeId, restoreDescribeId] as const
+ *  server's folders for the server file picker, what Restore Database restores from (src/shared/actions/restore.ts), or one
+ *  database's roles and schemas for New Login's User Mapping page (logins.ts loginDatabaseRolesDescribe). */
+export const describeIds = [...dialogIds, ...designerDescribeIds, serverFilesDescribeId, restoreDescribeId, loginDatabaseRolesDescribe] as const
 export type DescribeId = typeof describeIds[number]
 
 /** Attach Databases' Add: the primary data file (.mdf) the backend reads with DBCC CHECKPRIMARYFILE, its path bound as a parameter. */
@@ -60,6 +64,15 @@ export interface TakeOfflineRequest {
 }
 /** Tasks › Bring Online: SET ONLINE. */
 export interface BringOnlineRequest { readonly action: 'bringOnline'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly identity?: DatabaseIdentity }
+/**
+ * Tasks › Detach…'s OK: sp_detach_db, after SET SINGLE_USER WITH ROLLBACK IMMEDIATE with `dropConnections` (Drop Connections).
+ * `updateStatistics` runs UPDATE STATISTICS first (@skipchecks 'false'); cleared, it is skipped ('true'). `detachOffline` (Detach
+ * while offline) is the answer to the warning about an offline database on Windows, whose files may not attach again.
+ */
+export interface DetachRequest {
+  readonly action: 'detach'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly dropConnections: boolean; readonly updateStatistics: boolean
+  readonly detachOffline?: boolean; readonly identity?: DatabaseIdentity
+}
 /** New Database's OK and Script: the new database's name as the target, and the design (src/shared/actions/new-database.ts). */
 export interface CreateDatabaseRequest {
   readonly action: 'createDatabase'; readonly connectionId: string; readonly requestId: string; readonly target: { readonly kind: 'database'; readonly name: string }; readonly design: NewDatabaseDesign
@@ -73,19 +86,20 @@ export interface AttachDatabaseSpec { readonly name: string; readonly owner?: st
 /** Attach Databases' OK and Script: the server as the target, and at most `actionLimits.attachDatabases` databases. */
 export interface AttachRequest { readonly action: 'attach'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly databases: readonly AttachDatabaseSpec[] }
 /**
- * New Login's OK and Script (D2a): the General page, the server roles to join (public never: every login is a member), and
- * the Status page. `secrets` carries the password of a SQL login on actions.execute only; the script schema refuses it.
+ * New Login's OK and Script (D2a, D2b): the General page, the server roles to join (public never: every login is a member), the
+ * databases User Mapping maps (each at most once), and the Status page. `secrets` carries the password of a SQL login on actions.execute only; the script schema refuses it.
  * The target is the server.
  */
 export interface CreateLoginRequest {
   readonly action: 'createLogin'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef
   readonly login: NewLoginGeneral
   readonly serverRoles: readonly string[]
+  readonly mappings: readonly UserMappingChoice[]
   readonly status: LoginStatusChoice
   readonly secrets?: LoginSecrets
 }
 /** One action: actions.script returns its script, actions.execute runs it. */
-export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | CreateDatabaseRequest | AttachRequest | CreateLoginRequest | TakeOfflineRequest | BringOnlineRequest
+export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | CreateDatabaseRequest | AttachRequest | CreateLoginRequest | TakeOfflineRequest | BringOnlineRequest | DetachRequest
 /** actions.script and actions.execute also take a restore and a file restore, whose requests have shapes of their own (restore-schema.ts). */
 export type ActionScriptRequest = ActionRequest | RestoreRequest | RestoreFilesRequest
 export type ActionExecuteRequest = ActionRequest | RestoreRequest | RestoreFilesRequest
@@ -220,7 +234,14 @@ export interface DatabaseStateModel {
   readonly sessionsTruncated: boolean
   /** Facts that make the statement fail or matter (an availability group, mirroring). */
   readonly warnings: readonly ActionWarning[]
+  /** Detach: the database's files, which stay on the server (sys.master_files; none without CREATE DATABASE, ALTER ANY DATABASE or VIEW ANY DEFINITION). */
+  readonly files?: readonly DatabaseFileRef[]
+  readonly filesTruncated?: boolean
+  /** Detach: the database is offline on a Windows server, whose files may not attach again once detached offline; OK waits for Detach while offline. */
+  readonly confirmOffline?: boolean
 }
+/** A database file by its id: the logical name, its type and its path on the server (never logged). */
+export interface DatabaseFileRef { readonly fileId: number; readonly name: string; readonly type: FileType; readonly path: string }
 /** What Attach Databases opens with: the logins its Owner lists (at most `actionLimits.logins`), the server's path separator,
  *  and its default data folder, where Add's picker starts. */
 export interface AttachServerFacts { readonly logins: readonly string[]; readonly loginsTruncated: boolean; readonly separator: '\\' | '/'; readonly dataPath?: string }
@@ -238,6 +259,7 @@ export interface ActionDescribeResult {
   readonly newDatabase?: NewDatabaseModel
   readonly attachDatabase?: AttachDescribeModel
   readonly newLogin?: NewLoginModel
+  readonly loginDatabaseRoles?: LoginDatabaseRoles
   readonly databaseState?: DatabaseStateModel
 }
 export interface ActionScriptResult {
@@ -283,6 +305,8 @@ export interface ActionExecuteResult {
   readonly messages: readonly string[]
   readonly elapsedMs: number
   readonly error?: ActionError
+  /** Detach: the files it left on the server, at most `actionLimits.detachFiles`, once the database was detached. */
+  readonly filesKept?: readonly DatabaseFileRef[]
   /** A restore's destination after the run. */
   readonly restored?: RestoredDatabase
 }
@@ -291,7 +315,12 @@ export interface ActionExecuteResult {
 // database_id), so this only stops an obviously wrong request early.
 const systemSchemas: ReadonlySet<string> = new Set(['sys', 'INFORMATION_SCHEMA'])
 const systemDatabases: ReadonlySet<string> = new Set(['master', 'model', 'msdb', 'tempdb'])
-const verbs: Readonly<Record<ObjectAction, string>> = { selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties', attach: 'attached', takeOffline: 'taken offline', bringOnline: 'brought online', restore: 'restored', restoreFiles: 'restored' }
+/** The step sp_detach_db runs as (C#: ActionService.StepTitle): done, the database is gone, whatever came after it. */
+export const detachDatabaseStepTitle = 'Detach the database'
+const verbs: Readonly<Record<ObjectAction, string>> = {
+  selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties', attach: 'attached', takeOffline: 'taken offline', bringOnline: 'brought online',
+  detach: 'detached', restore: 'restored', restoreFiles: 'restored'
+}
 /** A server ref: what a create action on a server object (a login) names as its target. */
 const isServer = (ref: ObjectRef) => ref.kind === 'server' && Object.keys(ref).length === 1
 /** Why `action` cannot act on `ref` whatever its subtype: a kind that never offers it, or one of SQL Server's own objects
@@ -336,6 +365,10 @@ export const actionDescribeSchema = z.object({
       case 'newLogin':
         if (!isServer(request.target)) issue(context, 'target', 'New Login opens on a server.')
         break
+      // Any database, SQL Server's own included: a login may be mapped to master or msdb, as in SSMS.
+      case loginDatabaseRolesDescribe:
+        if (request.target.kind !== 'database' || request.target.parent) issue(context, 'target', 'User Mapping reads a database.')
+        break
       default: {
         // A server action's document describes the server it makes something on.
         const action = dialogSpecs[request.dialog].action
@@ -366,6 +399,10 @@ const identitySchema = z.object({ id: z.number().int().min(1).max(2_147_483_647)
 const propertiesSchema = z.object({ action: z.literal('properties'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), changes: changesSchema, identity: identitySchema.optional() }).strict()
 const takeOfflineSchema = z.object({ action: z.literal('takeOffline'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, dropConnections: z.boolean(), identity: identitySchema.optional() }).strict()
 const bringOnlineSchema = z.object({ action: z.literal('bringOnline'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, identity: identitySchema.optional() }).strict()
+const detachSchema = z.object({
+  action: z.literal('detach'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, dropConnections: z.boolean(), updateStatistics: z.boolean(), detachOffline: z.boolean().optional(),
+  identity: identitySchema.optional()
+}).strict()
 // New Database's design; the rules that need the server (Linux, FILESTREAM, the version) wait for the backend's preflight.
 const growthSchema = z.discriminatedUnion('enabled', [
   z.object({ enabled: z.literal(false) }).strict(),
@@ -408,12 +445,14 @@ const newLoginGeneralSchema = z.object({
   auth: z.enum(newLoginAuths), name: ident, defaultDatabase: ident, defaultLanguage: ident.optional(), checkPolicy: z.boolean().optional(), checkExpiration: z.boolean().optional(),
   mustChange: z.boolean().optional()
 }).strict() satisfies z.ZodType<NewLoginGeneral>
+const userMappingSchema = z.object({ database: ident, user: ident, defaultSchema: ident.optional(), rolesAdd: z.array(ident).max(loginLimits.roles) }).strict() satisfies z.ZodType<UserMappingChoice>
 const createLoginSchema = z.object({
   action: z.literal('createLogin'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, login: newLoginGeneralSchema,
-  serverRoles: z.array(ident).max(loginLimits.serverRoles), status: z.object({ connect: z.enum(['grant', 'deny']), enabled: z.boolean() }).strict(), secrets: loginSecretsSchema.optional()
+  serverRoles: z.array(ident).max(loginLimits.serverRoles), mappings: z.array(userMappingSchema).max(loginLimits.mappings), status: z.object({ connect: z.enum(['grant', 'deny']), enabled: z.boolean() }).strict(), secrets: loginSecretsSchema.optional()
 }).strict()
 /** New Login's rules beyond the shapes: the server as its target, the auth's own fields and SQL Server's policy chain, the
- *  login name's backslash rule, and roles that are unique and not public. */
+ *  login name's backslash rule, roles that are unique and not public, each database mapped once with unique roles other than
+ *  public, and a plan of at most actionLimits.statements statements. */
 function createLoginIssues(request: z.infer<typeof createLoginSchema>, context: z.RefinementCtx): void {
   const { login } = request
   if (!isServer(request.target)) issue(context, 'target', 'A login is created on a server.')
@@ -429,6 +468,12 @@ function createLoginIssues(request: z.infer<typeof createLoginSchema>, context: 
   if (request.secrets?.oldPassword !== undefined) issue(context, 'secrets', 'A new login has no old password.')
   if (request.serverRoles.includes(publicRole)) issue(context, 'serverRoles', 'Every login is a member of public.')
   if (new Set(request.serverRoles).size !== request.serverRoles.length) issue(context, 'serverRoles', 'Duplicate server role.')
+  if (new Set(request.mappings.map(mapping => mapping.database)).size !== request.mappings.length) issue(context, 'mappings', 'A database is mapped twice.')
+  for (const mapping of request.mappings) {
+    if (mapping.rolesAdd.includes(publicRole)) issue(context, 'mappings', 'Every database user is a member of public.')
+    if (new Set(mapping.rolesAdd).size !== mapping.rolesAdd.length) issue(context, 'mappings', 'Duplicate database role.')
+  }
+  if (newLoginStatements(request) > actionLimits.statements) issue(context, 'mappings', tooManyStatementsMessage(actionLimits.statements))
 }
 export const actionRequestSchema = z.discriminatedUnion('action', [
   renameSchema,
@@ -439,7 +484,8 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
   attachSchema,
   createLoginSchema,
   takeOfflineSchema,
-  bringOnlineSchema
+  bringOnlineSchema,
+  detachSchema
 ]).superRefine((request, context) => {
   // A new table, database or login is not an object row's action: its target is the database it goes in (SQL Server's own
   // included), the database it makes, or the server.
@@ -489,12 +535,15 @@ export const actionStepSchema = z.object({
   detail: z.string().max(loginLimits.stepDetail).optional(), compensates: z.boolean().optional(), progress: z.number().int().min(0).max(100).optional()
 }).strict() satisfies z.ZodType<ActionStep>
 const actionErrorSchema = z.object({ code: z.enum(actionErrorCodes), message: z.string().max(actionLimits.messageChars), retryable: z.boolean() }).strict() satisfies z.ZodType<ActionError>
+const fileRefSchema = z.object({
+  fileId: z.number().int().min(1).max(32_767), name: z.string().max(128), type: z.enum(['rows', 'log', 'filestream']), path: z.string().max(actionLimits.filePath)
+}).strict() satisfies z.ZodType<DatabaseFileRef>
 /** The most steps a reply lists: one per planned statement (a restore plans one per backup set), the commit, and compensation and cleanup steps. */
 export const actionStepLimit = Math.max(actionLimits.statements, restoreLimits.planSets) + 8
-/** actions.execute's answer, which main checks before the renderer sees it: at most actionStepLimit steps; bounded messages. */
+/** actions.execute's answer, which main checks before the renderer sees it: at most actionStepLimit steps; bounded messages; Detach's files kept. */
 export const actionExecuteResultSchema = z.object({
   steps: z.array(actionStepSchema).max(actionStepLimit), messages: z.array(z.string().max(actionLimits.infoMessageChars)).max(actionLimits.infoMessages),
-  elapsedMs: z.number().int().min(0), error: actionErrorSchema.optional(),
+  elapsedMs: z.number().int().min(0), error: actionErrorSchema.optional(), filesKept: z.array(fileRefSchema).max(actionLimits.detachFiles).optional(),
   restored: z.union([
     z.object({ state: z.number().int().min(0).max(255), userAccess: z.number().int().min(0).max(255), filesRestoring: z.array(z.string().max(128)).max(restoredFilesLimit).optional() }).strict(),
     z.object({ absent: z.literal(true), filesLeft: z.array(z.string().max(actionLimits.serverPath)).max(restoredFilesLimit).optional(), filesUnknown: z.literal(true).optional() }).strict()

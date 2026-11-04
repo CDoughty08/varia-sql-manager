@@ -6,8 +6,8 @@ using Varia.Backend.Scripting;
 namespace Varia.Backend.Actions;
 
 /// <summary>
-/// New Login's SQL (D2a): its describe and preflight in master, the CREATE LOGIN builder, the statements after it, and Script
-/// Action's text. CREATE LOGIN takes its password only as a literal, so SQL Server builds the statement from constant text:
+/// New Login's SQL (D2a, D2b): its describe and preflight in master, User Mapping's read and preflight of each mapped database,
+/// the CREATE LOGIN builder, the statements after it, and Script Action's text. CREATE LOGIN takes its password only as a literal, so SQL Server builds the statement from constant text:
 /// names reach it as nvarchar(128) parameters through QUOTENAME, and the password as one nvarchar(128) parameter, read once,
 /// quoted by a binary-collation REPLACE (a width-insensitive collation would double U+FF07 too, and store another password).
 /// The client never formats a value into SQL text, and no batch returns, logs or passes on the password.
@@ -38,12 +38,13 @@ internal static partial class LoginSql
     // --- Catalog statements -----------------------------------------------------------------------------------------------
 
     /// <summary>New Login's describe, in master: whether the server takes Windows authentication only and whether this login may
-    /// create logins (advisory: NULL does not warn), then at most @databases databases with their state and this login's access,
+    /// create logins (advisory: NULL does not warn), then at most @databases databases with their state, this login's access and
+    /// whether they are read-only (ActionSql.ReadOnlyFact),
     /// @languages languages and @roles server roles (each one more than listed, so a truncation shows).</summary>
     public const string Describe = "SELECT CONVERT(bit, CASE WHEN CONVERT(int, SERVERPROPERTY('IsIntegratedSecurityOnly')) = 1 THEN 1 ELSE 0 END) AS windows_only, "
         + "CONVERT(bit, ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, N'ALTER ANY LOGIN'), 1)) AS can_create;\n"
-        + "SELECT TOP (@databases) d.name AS name, d.state AS state, CONVERT(bit, ISNULL(CASE WHEN d.user_access = 1 THEN 1 ELSE HAS_DBACCESS(d.name) END, 0)) AS has_access "
-        + "FROM sys.databases AS d ORDER BY d.name;\n"
+        + "SELECT TOP (@databases) d.name AS name, d.state AS state, CONVERT(bit, ISNULL(CASE WHEN d.user_access = 1 THEN 1 ELSE HAS_DBACCESS(d.name) END, 0)) AS has_access, "
+        + ActionSql.ReadOnlyFact + " AS read_only FROM sys.databases AS d ORDER BY d.name;\n"
         + "SELECT TOP (@languages) l.name AS name, l.alias AS alias FROM sys.syslanguages AS l ORDER BY l.name;\n"
         + "SELECT TOP (@roles) p.name AS name, p.is_fixed_role AS is_fixed FROM sys.server_principals AS p WHERE p.type = 'R' ORDER BY p.name;";
 
@@ -118,23 +119,78 @@ internal static partial class LoginSql
         return plan;
     }
 
+    /// <summary>User Mapping's statements (D2 §3.3), after the server roles: per database in name order (Ordered), CREATE USER … FOR
+    /// LOGIN, then ALTER USER … WITH DEFAULT_SCHEMA when a schema is chosen and CREATE SCHEMA … AUTHORIZATION the user when the
+    /// database has no such schema (<paramref name="missingSchemas"/>, by database, from the preflight or Script's read), then ALTER
+    /// ROLE … ADD MEMBER per role in name order: the ported ApplyDatabaseRoleChanges' order. Each runs in its database.</summary>
+    public static List<PlannedStatement> Mappings(NewLoginDto login, IReadOnlyList<UserMappingDto> mappings, IReadOnlySet<string> missingSchemas)
+    {
+        var plan = new List<PlannedStatement>();
+        var byName = mappings.ToDictionary(mapping => mapping.Database, StringComparer.Ordinal);
+        foreach (var database in Ordered(byName.Keys))
+        {
+            var mapping = byName[database];
+            plan.Add(new(ActionTemplate.CreateUserForLogin, database, [mapping.User, login.Name]));
+            if (mapping.DefaultSchema is { } schema)
+            {
+                plan.Add(new(ActionTemplate.AlterUserSchema, database, [mapping.User, schema]));
+                if (missingSchemas.Contains(database)) plan.Add(new(ActionTemplate.CreateSchemaFor, database, [schema, mapping.User]));
+            }
+            foreach (var role in Ordered(mapping.RolesAdd)) plan.Add(new(ActionTemplate.AddRoleMember, database, [role, mapping.User]));
+        }
+        return plan;
+    }
+
+    /// <summary>The most statements New Login plans (src/shared/actions/logins.ts newLoginStatements): CREATE LOGIN, Deny, Disable,
+    /// each server role, and per mapping CREATE USER, the default schema's two and one per role.</summary>
+    public static int Statements(LoginStatusDto status, IReadOnlyCollection<string> roles, IReadOnlyList<UserMappingDto> mappings) =>
+        1 + (status.Connect == "deny" ? 1 : 0) + (status.Enabled ? 0 : 1) + roles.Count + mappings.Sum(mapping => 1 + (mapping.DefaultSchema is null ? 0 : 2) + mapping.RolesAdd.Count);
+
     /// <summary>Script Action's text (D2 §5.6, critic A14). A SQL Server login's script is one batch in one XACT_ABORT transaction
     /// under the placeholder header: unedited, it fails to parse and runs nothing, so no later statement can give a role to an
-    /// existing login of that name. A Windows login's script is SSMS's, a GO after each statement.</summary>
-    public static string ScriptText(NewLoginDto login, IReadOnlyList<string> roles, LoginStatusDto status, string header)
+    /// existing login of that name or map a user to it; a mapped database's statement runs there as EXEC [db].sys.sp_executesql
+    /// N'…' (one batch cannot USE a database for a later statement only). A Windows login's script is SSMS's: a GO after each
+    /// statement, and USE [db] before each mapped database's.</summary>
+    public static string ScriptText(NewLoginDto login, IReadOnlyList<string> roles, LoginStatusDto status, IReadOnlyList<UserMappingDto> mappings, IReadOnlySet<string> missingSchemas, string header)
     {
-        var statements = new List<string> { CreateStatement(login, null) };
-        statements.AddRange(After(login, roles, status).Select(ActionSql.Checked).Select(ActionSql.Statement));
+        var server = new List<string> { CreateStatement(login, null) };
+        server.AddRange(After(login, roles, status).Select(ActionSql.Checked).Select(ActionSql.Statement));
+        var mapped = Mappings(login, mappings, missingSchemas).Select(ActionSql.Checked).ToList();
         var text = new StringBuilder("USE [master]").Append(NL).Append("GO").Append(NL);
         if (!Sql(login))
         {
-            foreach (var statement in statements) text.Append(statement).Append(NL).Append("GO").Append(NL);
+            foreach (var statement in server) text.Append(statement).Append(NL).Append("GO").Append(NL);
+            foreach (var statement in mapped) text.Append(ActionSql.ScriptText(statement));
             return text.ToString();
         }
         text.Append(header).Append(NL).Append("SET XACT_ABORT ON;").Append(NL).Append("BEGIN TRANSACTION;").Append(NL);
-        foreach (var statement in statements) text.Append(statement).Append(';').Append(NL);
+        foreach (var statement in server) text.Append(statement).Append(';').Append(NL);
+        foreach (var statement in mapped) text.Append(InDatabase(statement)).Append(';').Append(NL);
         return text.Append("COMMIT TRANSACTION;").Append(NL).Append("GO").Append(NL).ToString();
     }
+
+    /// <summary>A mapped database's statement inside the one-batch script: run in its database through that database's
+    /// sp_executesql, with the statement's quotes doubled.</summary>
+    public static string InDatabase(PlannedStatement statement) =>
+        "EXEC " + ActionSql.Quote(statement.Database) + ".sys.sp_executesql N'" + ActionSql.Statement(statement).Replace("'", "''", StringComparison.Ordinal) + "'";
+
+    // --- User Mapping's reads ---------------------------------------------------------------------------------------------
+
+    /// <summary>User Mapping's read of one database (the loginDatabaseRoles describe), inside it through ActionSql.ModuleCall: at most
+    /// @take database roles and @take schemas by name (the caller keeps loginLimits' counts and reads one more of each, so a
+    /// truncation shows), and whether guest (principal_id 2 in every database) has CONNECT granted on the database, which SSMS's
+    /// read-only Guest account enabled box shows.</summary>
+    public const string DatabaseRoles = "SELECT TOP (@take) p.name AS name FROM sys.database_principals AS p WHERE p.type = 'R' ORDER BY p.name;\n"
+        + "SELECT CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.database_permissions AS dp WHERE dp.grantee_principal_id = 2 AND dp.class = 0 AND dp.type = 'CO' AND dp.state IN ('G', 'W')) "
+        + "THEN 1 ELSE 0 END) AS guest;\n"
+        + "SELECT TOP (@take) s.name AS name FROM sys.schemas AS s ORDER BY s.name;";
+
+    /// <summary>The preflight of one mapped database, inside it through ActionSql.ModuleCall, before anything runs: whether a database
+    /// principal (a user or role) already has the user's name (@name), whether the default schema (@schema; NULL for none) exists,
+    /// which decides the CREATE SCHEMA step, then at most @take database roles, so a role that is not there is refused early.</summary>
+    public const string MappingPreflight = "SELECT CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.database_principals AS p WHERE p.name = @name) THEN 1 ELSE 0 END) AS user_in_use, "
+        + "CONVERT(bit, CASE WHEN @schema IS NULL OR EXISTS (SELECT 1 FROM sys.schemas AS s WHERE s.name = @schema) THEN 1 ELSE 0 END) AS schema_exists;\n"
+        + "SELECT TOP (@take) p.name AS name FROM sys.database_principals AS p WHERE p.type = 'R' ORDER BY p.name;";
 
     // --- Secrets ----------------------------------------------------------------------------------------------------------
 

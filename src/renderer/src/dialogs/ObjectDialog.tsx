@@ -12,7 +12,9 @@ import type { DialogPhase, OpenObjectDialog } from './ObjectDialogService'
 import AttachDatabasePage from './pages/AttachDatabasePage'
 import DatabaseStatePage from './pages/DatabaseStatePage'
 import DeleteObjectPage from './pages/DeleteObjectPage'
+import DetachDatabasePage from './pages/DetachDatabasePage'
 import { NewLoginGeneralPage, NewLoginServerRolesPage, NewLoginStatusPage } from './pages/NewLoginPages'
+import UserMappingPage from './pages/UserMappingPage'
 
 /** A page of an object dialog: the open dialog's snapshot, and whether its controls may change now. */
 export interface PageProps { readonly open: OpenObjectDialog; readonly editable: boolean }
@@ -21,9 +23,10 @@ export interface PageProps { readonly open: OpenObjectDialog; readonly editable:
 export const dialogPages: { readonly [D in ModalDialogId]: Readonly<Partial<Record<PageId, ComponentType<PageProps>>>> } = {
   deleteObject: { general: DeleteObjectPage },
   attachDatabase: { general: AttachDatabasePage },
-  newLogin: { general: NewLoginGeneralPage, serverRoles: NewLoginServerRolesPage, status: NewLoginStatusPage },
+  newLogin: { general: NewLoginGeneralPage, serverRoles: NewLoginServerRolesPage, userMapping: UserMappingPage, status: NewLoginStatusPage },
   takeOffline: { general: DatabaseStatePage },
-  bringOnline: { general: DatabaseStatePage }
+  bringOnline: { general: DatabaseStatePage },
+  detachDatabase: { general: DetachDatabasePage }
 }
 
 const progressText: Readonly<Record<DialogPhase, string>> = {

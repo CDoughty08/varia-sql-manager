@@ -22,7 +22,7 @@ afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 const server: ObjectRef = { kind: 'server' }
 const model = (changes: Partial<NewLoginModel['server']> = {}): NewLoginModel => ({
   server: { level: 17, linux: false, windowsOnly: false, canCreate: true, ...changes },
-  databases: [{ name: 'AppData', state: 0, accessible: true }, { name: 'master', state: 0, accessible: true }], databasesTruncated: false,
+  databases: [{ name: 'AppData', state: 0, accessible: true, readOnly: false }, { name: 'master', state: 0, accessible: true, readOnly: false }], databasesTruncated: false,
   languages: [{ name: 'Deutsch', alias: 'German' }, { name: 'us_english', alias: 'English' }],
   serverRoles: [{ name: 'bulkadmin', fixed: true }, { name: 'public', fixed: true }, { name: 'sysadmin', fixed: true }], serverRolesTruncated: false
 })
@@ -34,7 +34,7 @@ const folder = (folderId: 'logins' | 'serverSecurity' | 'tables', engine: 'box' 
 
 describe('New Login draft and request', () => {
   it('starts from SSMS\'s defaults: Windows authentication, or SQL Server authentication on Linux; master; the three options; Grant; Enabled', () => {
-    expect(initialNewLoginDraft(model())).toEqual({ auth: 'windows', name: '', defaultDatabase: 'master', checkPolicy: true, checkExpiration: true, mustChange: true, serverRoles: [], connect: 'grant', enabled: true })
+    expect(initialNewLoginDraft(model())).toEqual({ auth: 'windows', name: '', defaultDatabase: 'master', checkPolicy: true, checkExpiration: true, mustChange: true, serverRoles: [], connect: 'grant', enabled: true, mappings: [] })
     expect(initialNewLoginDraft(model({ linux: true })).auth).toBe('sql')
   })
   it('greys the password fields for Windows logins and each option unless the one before it is checked', () => {
@@ -45,14 +45,14 @@ describe('New Login draft and request', () => {
   })
   it('maps the draft to createLogin: options only for SQL Server logins and as enabled, a language only when chosen, roles in the describe\'s order', () => {
     expect(newLoginRequest(server, model(), sqlDraft({ serverRoles: ['sysadmin', 'bulkadmin', 'gone'], connect: 'deny', enabled: false, defaultLanguage: 'Deutsch' }), set)).toEqual({
-      action: 'createLogin', target: server, serverRoles: ['bulkadmin', 'sysadmin'], status: { connect: 'deny', enabled: false },
+      action: 'createLogin', target: server, serverRoles: ['bulkadmin', 'sysadmin'], mappings: [], status: { connect: 'deny', enabled: false },
       login: { auth: 'sql', name: 'app', defaultDatabase: 'master', defaultLanguage: 'Deutsch', checkPolicy: true, checkExpiration: true, mustChange: true }
     })
     // Unchecking the policy greys and clears the options after it, whatever they held.
     expect(newLoginRequest(server, model(), sqlDraft({ checkPolicy: false }), set)).toMatchObject({ login: { checkPolicy: false, checkExpiration: false, mustChange: false } })
     expect(newLoginRequest(server, model(), sqlDraft({ checkExpiration: false }), set)).toMatchObject({ login: { checkPolicy: true, checkExpiration: false, mustChange: false } })
     const windows = newLoginRequest(server, model(), { ...initialNewLoginDraft(model()), name: 'CONTOSO\\ann', serverRoles: ['public', 'sysadmin'] }, emptySecrets)
-    expect(windows).toEqual({ action: 'createLogin', target: server, serverRoles: ['sysadmin'], status: { connect: 'grant', enabled: true }, login: { auth: 'windows', name: 'CONTOSO\\ann', defaultDatabase: 'master' } })
+    expect(windows).toEqual({ action: 'createLogin', target: server, serverRoles: ['sysadmin'], mappings: [], status: { connect: 'grant', enabled: true }, login: { auth: 'windows', name: 'CONTOSO\\ann', defaultDatabase: 'master' } })
     expect(JSON.stringify(windows)).not.toContain('secrets')
   })
   it('names what is missing in the page\'s words, never a value', () => {

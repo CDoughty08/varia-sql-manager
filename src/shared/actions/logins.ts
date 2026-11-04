@@ -178,6 +178,7 @@ export function loginsCatalog() {
     ownRefuses: ownLoginRefuses,
     rules: loginSubtypes.map(subtype => ({ subtype, ...loginRules[subtype], greyed: Object.fromEntries(loginVerbs.filter(verb => loginRules[subtype][verb] === 'greyed').map(verb => [verb, loginGreyedMessage(subtype, verb)])) })),
     saPrincipalId,
+    rolesDescribe: loginDatabaseRolesDescribe,
     scriptHeader: passwordScriptHeader,
     typeSubtypes: loginTypeSubtypes
   }
@@ -206,8 +207,10 @@ export interface LoginStatusChoice { readonly connect: 'grant' | 'deny'; readonl
 /** Passwords, only ever on actions.execute (sensitive as a whole); at most loginLimits.password UTF-16 units, no U+0000, well formed. */
 export interface LoginSecrets { readonly password?: string; readonly oldPassword?: string }
 
-/** A database as New Login's Default database list shows it. */
-export interface NewLoginDatabase { readonly name: string; readonly state: number; readonly accessible: boolean }
+/** A database as New Login's Default database list and User Mapping show it: its sys.databases state, whether this login can
+ *  open it, and whether it is read-only (set READ_ONLY, a log-shipping standby or a database snapshot), where no user can be
+ *  created. */
+export interface NewLoginDatabase { readonly name: string; readonly state: number; readonly accessible: boolean; readonly readOnly: boolean }
 /** A language from sys.syslanguages: SSMS lists names; the alias is secondary text. */
 export interface NewLoginLanguage { readonly name: string; readonly alias: string }
 /** A server role from sys.server_principals (type R): fixed roles, SQL Server 2022's ##MS_…## roles, and user-defined ones. */
@@ -270,3 +273,48 @@ export function newLoginProblem(login: NewLoginGeneral, password: { readonly emp
   }
   return undefined
 }
+
+// --- User Mapping (D2b) -------------------------------------------------------------------------------------------------
+
+/** The describe id of User Mapping's lazy read of one database (target `{ kind: 'database', name }`): its roles, whether guest
+ *  can connect, and its schemas, read through the database's own module when its row is selected, as SSMS's
+ *  InitializeRoleMembership does. Login Properties (D2c) adds the login's user and memberships. */
+export const loginDatabaseRolesDescribe = 'loginDatabaseRoles'
+/** What `loginDatabaseRoles` answers: at most loginLimits.roles database roles and loginLimits.schemas schemas, by name (one more
+ *  read, so a truncation shows), and whether guest has CONNECT there (sys.database_permissions CO, granted). */
+export interface LoginDatabaseRoles {
+  readonly roles: readonly string[]
+  readonly rolesTruncated: boolean
+  readonly guest: boolean
+  readonly schemas: readonly string[]
+  readonly schemasTruncated: boolean
+}
+/**
+ * One mapped database of New Login: CREATE USER [user] FOR LOGIN, then ALTER USER … WITH DEFAULT_SCHEMA when a default schema is
+ * chosen (CREATE SCHEMA … AUTHORIZATION [user] too when the database has no such schema), then ALTER ROLE … ADD MEMBER for each
+ * role in `rolesAdd` (public never: every user is a member). Login Properties (D2c) adds what changes for a mapped user.
+ */
+export interface UserMappingChoice {
+  readonly database: string
+  /** Blank in the grid means the login's name (SSMS fills it in when Map is checked). */
+  readonly user: string
+  readonly defaultSchema?: string
+  readonly rolesAdd: readonly string[]
+}
+/** The most statements a mapping plans: CREATE USER, the default schema's ALTER USER and CREATE SCHEMA, and one per role. */
+export const mappingStatements = (mapping: Pick<UserMappingChoice, 'defaultSchema' | 'rolesAdd'>): number => 1 + (mapping.defaultSchema === undefined ? 0 : 2) + mapping.rolesAdd.length
+/** The most statements New Login plans: CREATE LOGIN, Deny, Disable, each server role, and each mapping's. Bounded by
+ *  actionLimits.statements (src/shared/actions/catalog.ts), which the request schema, the page and C# all check. */
+export function newLoginStatements(request: { readonly serverRoles: readonly string[]; readonly status: LoginStatusChoice; readonly mappings: readonly Pick<UserMappingChoice, 'defaultSchema' | 'rolesAdd'>[] }): number {
+  return 1 + (request.status.connect === 'deny' ? 1 : 0) + (request.status.enabled ? 0 : 1) + request.serverRoles.length + request.mappings.reduce((sum, mapping) => sum + mappingStatements(mapping), 0)
+}
+/** Why a plan is too long (the limit is actionLimits.statements; catalog.ts imports this file, so the number is passed in). */
+export const tooManyStatementsMessage = (limit: number) => `This login would need more than ${limit.toLocaleString('en-US')} statements. Map fewer databases, or apply the rest afterwards.`
+/** User Mapping's own notes, in Varia's words. They name databases only as the page shows them. */
+export const userMappingMessages = {
+  rolesLoading: 'Reading the database roles…',
+  notMapped: 'Check Map to choose roles for this database.',
+  unavailable: 'This database is not online, not accessible to you, or read-only, so it cannot be mapped.',
+  mappingsLimit: `At most ${loginLimits.mappings} databases can be mapped at once.`,
+  noSchemas: 'This database lists no schemas.'
+} as const

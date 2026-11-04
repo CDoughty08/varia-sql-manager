@@ -124,6 +124,19 @@ describe('IPC validation', () => {
       ['actions.execute', { ...rename, dropConnections: false }], ['actions.execute', { ...properties, dropConnections: false }],
       ['actions.describe', { ...ids, dialog: 'takeOffline', target }], ['actions.describe', { ...ids, dialog: 'bringOnline', target: { kind: 'database', name: 'msdb' } }]
     ] as const) expect(() => validateRequest(method, value), JSON.stringify(value).slice(0, 80)).toThrow('Invalid request')
+    // Detach (D3b): both boxes, Detach while offline when the describe asked for it, and the identity; nothing else takes them.
+    const detach = { action: 'detach', ...ids, target: database, dropConnections: true, updateStatistics: false, identity }
+    expect(validateRequest('actions.execute', detach)).toEqual(detach)
+    expect(validateRequest('actions.execute', { ...detach, detachOffline: true })).toMatchObject({ detachOffline: true })
+    expect(validateRequest('actions.script', { ...detach, updateStatistics: true })).toMatchObject({ updateStatistics: true })
+    expect(validateRequest('actions.describe', { ...ids, dialog: 'detachDatabase', target: database })).toMatchObject({ dialog: 'detachDatabase' })
+    for (const [method, value] of [
+      ['actions.execute', { ...detach, updateStatistics: undefined }], ['actions.execute', { ...detach, dropConnections: undefined }], ['actions.execute', { ...detach, target }],
+      ['actions.execute', { ...detach, target: { kind: 'database', name: 'model' } }], ['actions.execute', { ...detach, newName: 'x' }], ['actions.execute', { ...detach, closeConnections: true }],
+      ['actions.execute', { ...detach, detachOffline: 'yes' }], ['actions.execute', { ...detach, identity: { ...identity, id: 0 } }],
+      ['actions.execute', { ...takeOffline, updateStatistics: false }], ['actions.execute', { ...bringOnline, detachOffline: true }], ['actions.execute', { ...remove, updateStatistics: true }],
+      ['actions.describe', { ...ids, dialog: 'detachDatabase', target }], ['actions.describe', { ...ids, dialog: 'detachDatabase', target: { kind: 'database', name: 'tempdb' } }]
+    ] as const) expect(() => validateRequest(method, value), JSON.stringify(value).slice(0, 80)).toThrow('Invalid request')
     // The table designer: describe and createTable take a database, SQL Server's own included; main refuses malformed designs.
     const design = { schema: 'dbo', name: "q]'); DROP TABLE x; --", columns: [{ name: 'Id', type: { system: 'int' }, allowNulls: false, identity: { seed: '1', increment: '1' } }], primaryKey: [0] }
     const createTable = { action: 'createTable', ...ids, target: { kind: 'database', name: 'master' }, design }

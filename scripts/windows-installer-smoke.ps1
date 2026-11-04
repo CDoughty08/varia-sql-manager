@@ -38,9 +38,13 @@ function Invoke-Button($button) {
   $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 }
 
-# The first wizard page must appear even for --updated and lookalike flags; no app may be installed yet.
-foreach ($flag in @('', '--updated', '--silent-extra')) {
-  Write-Host "Checking interactive installer flag: '$flag'"
+# Repeated fresh launches exercise the formerly intermittent per-user path lookup, before any installation exists.
+# Also check that --updated and lookalike flags cannot skip the first wizard page.
+$interactiveCases = @('') * 12 + @('--updated', '--silent-extra')
+$caseNumber = 0
+foreach ($flag in $interactiveCases) {
+  $caseNumber++
+  Write-Host "Checking interactive installer case $caseNumber/$($interactiveCases.Count), flag: '$flag'"
   $arguments = @()
   if ($flag) { $arguments += $flag }
   $arguments += "/D=$installDir"
@@ -48,7 +52,7 @@ foreach ($flag in @('', '--updated', '--silent-extra')) {
   try {
     if (Test-Path -LiteralPath $exe) { throw "Installer wrote application files before confirmation ($flag)." }
     $next = Find-Button $process '^Next'
-    if (-not $flag) {
+    if ($caseNumber -eq 1) {
       Invoke-Button $next
       Write-Host 'Welcome page passed; checking install-mode choices.'
       $deadline = (Get-Date).AddSeconds(15)

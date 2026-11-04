@@ -32,12 +32,16 @@ import { explorerStatics } from './explorer-tree.mjs'
  * data file it recorded in D:\Old\, not found, and whose log it finds), Sales_2.ndf and Hr.mdf (whose log in D:\Old\ is not
  * found); any other file is not a primary one. An attach that includes Hr fails at Hr and detaches what it attached before
  * (Rolled Back); otherwise each database appears under Databases.
- * Security › Logins lists sa and every login New Login made. New Login describes a Windows server (master and AppData, two
- * languages, three server roles); its Script is `newLoginScript`; OK with the password "Weak" answers PASSWORD_POLICY at
- * "Create the login", "Held" waits until its Stop arrives, and anything else adds the login.
+ * Security › Logins lists sa and every login New Login made. New Login describes a Windows server (master, AppData and the
+ * offline Archive, the read-only Ledger, `longDatabase` and eight Warehouse databases, so User Mapping's grid scrolls; two
+ * languages, three server roles); User Mapping's roles describe answers `databaseRoles` (with `longRole`; guest only in
+ * master); its Script is `newLoginScript`; OK with the password "Weak" answers PASSWORD_POLICY at "Create the login", "Held"
+ * waits until its Stop arrives, and anything else adds the login.
  * Take Database Offline describes AppData with two sessions, one of them in a transaction; taken offline (Drop All Active
  * Connections, or none left), it lists as "(Offline)" until Bring Online. With `holding` set, a SET OFFLINE without Drop All
  * Active Connections waits, as on a session that joined after the describe, until its Stop arrives.
+ * Detach Database describes AppData with the same sessions and `detachFiles`; detached, it leaves Databases and the result
+ * keeps its files, until AppData is put back in `databases` (as if it were attached again) and Databases is refreshed.
  */
 export function actionsStubData() {
   return { statics: explorerStatics(), serverFiles: stubServerFiles }
@@ -74,6 +78,9 @@ export const newDatabaseScript = name => `CREATE DATABASE [${name}]
 GO
 `
 export const offlineScript = drop => `USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET  OFFLINE${drop ? ' WITH ROLLBACK IMMEDIATE' : ''}\r\nGO\r\n`
+export const detachScript = (drop, statistics) => (drop ? 'USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET  SINGLE_USER WITH ROLLBACK IMMEDIATE\r\nGO\r\n' : '')
+  + `USE [master]\r\nGO\r\nEXEC master.dbo.sp_detach_db @dbname = N'AppData', @skipchecks = '${statistics ? 'false' : 'true'}'\r\nGO\r\n`
+export const detachFiles = [{ fileId: 1, name: 'AppData', type: 'rows', path: 'C:\\Data\\AppData.mdf' }, { fileId: 2, name: 'AppData_log', type: 'log', path: 'C:\\Data\\AppData_log.ldf' }]
 export const stubSessions = [{ sessionId: 61, login: 'app', program: 'Contoso Orders', host: 'web1', openTransactions: 1 }, { sessionId: 62, login: 'report', program: 'Reports', host: 'web2', openTransactions: 0 }]
 export const restoreFilesScript = "USE [master]\r\nRESTORE DATABASE [AppData] FILE = N'AppData_2' FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NORECOVERY,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
 export const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
@@ -81,6 +88,10 @@ export const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId i
 export const offlineWarning = 'This database is offline. Deleting it removes it from the server but leaves its files on disk.'
 export const newLoginScript = name => `USE [master]\r\nGO\r\nSET XACT_ABORT ON;\r\nBEGIN TRANSACTION;\r\nCREATE LOGIN [${name}] WITH PASSWORD=<password>, DEFAULT_DATABASE=[master], CHECK_EXPIRATION=OFF, CHECK_POLICY=OFF;\r\nCOMMIT TRANSACTION;\r\nGO\r\n`
 export const passwordPolicyMessage = 'Password validation failed. The password does not meet the operating system policy requirements because it is not complex enough.'
+/** User Mapping's roles describe of a database: its roles and schemas, and guest's CONNECT (master's only). */
+export const longDatabase = 'Reports_a_very_long_database_name_that_should_overflow_its_column_width_in_any_window'
+export const longRole = 'reporting_readers_with_a_rather_long_role_name_that_cannot_fit_in_one_column_of_the_role_list'
+export const databaseRoles = database => ({ roles: ['db_datareader', 'db_owner', 'public', 'Readers', longRole], rolesTruncated: false, guest: database === 'master', schemas: ['dbo', 'sales'], schemasTruncated: false })
 
 /** Installs the stub; pass it to `application.evaluate` with `actionsStubData()`. Runs in main, so it is self-contained. */
 export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
@@ -97,10 +108,16 @@ export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
 GO
 `
   const offlineScript = drop => `USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET  OFFLINE${drop ? ' WITH ROLLBACK IMMEDIATE' : ''}\r\nGO\r\n`
+  const detachScript = (drop, statistics) => (drop ? 'USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET  SINGLE_USER WITH ROLLBACK IMMEDIATE\r\nGO\r\n' : '')
+    + `USE [master]\r\nGO\r\nEXEC master.dbo.sp_detach_db @dbname = N'AppData', @skipchecks = '${statistics ? 'false' : 'true'}'\r\nGO\r\n`
+  const detachFiles = [{ fileId: 1, name: 'AppData', type: 'rows', path: 'C:\\Data\\AppData.mdf' }, { fileId: 2, name: 'AppData_log', type: 'log', path: 'C:\\Data\\AppData_log.ldf' }]
   const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
   const offlineWarning = 'This database is offline. Deleting it removes it from the server but leaves its files on disk.'
   const newLoginScript = name => `USE [master]\r\nGO\r\nSET XACT_ABORT ON;\r\nBEGIN TRANSACTION;\r\nCREATE LOGIN [${name}] WITH PASSWORD=<password>, DEFAULT_DATABASE=[master], CHECK_EXPIRATION=OFF, CHECK_POLICY=OFF;\r\nCOMMIT TRANSACTION;\r\nGO\r\n`
   const passwordPolicyMessage = 'Password validation failed. The password does not meet the operating system policy requirements because it is not complex enough.'
+  const longDatabase = 'Reports_a_very_long_database_name_that_should_overflow_its_column_width_in_any_window'
+  const longRole = 'reporting_readers_with_a_rather_long_role_name_that_cannot_fit_in_one_column_of_the_role_list'
+  const databaseRoles = database => ({ roles: ['db_datareader', 'db_owner', 'public', 'Readers', longRole], rolesTruncated: false, guest: database === 'master', schemas: ['dbo', 'sales'], schemasTruncated: false })
   const restoreScript = "USE [master]\r\nRESTORE DATABASE [AppData] FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
   const restoreFilesScript = "USE [master]\r\nRESTORE DATABASE [AppData] FILE = N'AppData_2' FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NORECOVERY,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
   const ok = value => ({ ok: true, value })
@@ -169,7 +186,15 @@ GO
     if (dialog === 'bringOnline' && !stub.offline) return refused('The database is online.')
     const sessions = stub.offline ? [] : stub.sessions
     return ok({ databaseState: { name: target.name, identity: { id: 7, created: '2026-01-02T03:04:05.000' }, state: stub.offline ? 6 : 0, userAccess: 0, readOnly: false, standby: false,
-      sessions: sessions.length, withTransaction: sessions.filter(session => session.openTransactions > 0).length, sessionList: sessions, sessionsTruncated: false, warnings: [] }, elapsedMs: 1 })
+      sessions: sessions.length, withTransaction: sessions.filter(session => session.openTransactions > 0).length, sessionList: sessions, sessionsTruncated: false, warnings: [],
+      ...(dialog === 'detachDatabase' ? { files: detachFiles, filesTruncated: false } : {}) }, elapsedMs: 1 })
+  }
+  /** Detach: AppData leaves Databases; the result lists the files that stay on the server. */
+  function detach(params) {
+    stub.databases = stub.databases.filter(name => name !== params.target.name)
+    stub.sessions = []
+    const steps = [...params.dropConnections ? [{ status: 'done', title: 'Close existing connections' }] : [], { status: 'done', title: 'Detach the database' }]
+    return ok({ steps, messages: [], elapsedMs: 1, filesKept: detachFiles })
   }
   /** SET OFFLINE (waiting until Stop while `holding`, without Drop All Active Connections) and SET ONLINE. */
   function databaseStateChange(params) {
@@ -298,10 +323,13 @@ GO
     return ok({ steps: [{ status: 'done', title: 'Create the database' }], messages: [], elapsedMs: 1 })
   }
   /** New Login: "Weak" answers PASSWORD_POLICY, "Held" waits for Stop, anything else adds the login to Logins. The steps are
-   * the backend's, in SSMS's order: CREATE LOGIN, then Deny and Disable as Status chose, then each server role. */
-  function createLogin({ login, secrets, serverRoles, status, requestId }) {
+   * the backend's, in SSMS's order: CREATE LOGIN, then Deny and Disable as Status chose, then each server role, then per mapped
+   * database its user, default schema and roles (the stub's databases have every schema chosen, so no CREATE SCHEMA). */
+  function createLogin({ login, secrets, serverRoles, status, mappings, requestId }) {
     const steps = [{ title: 'Create the login' }, ...status?.connect === 'deny' ? [{ title: 'Deny permission to connect' }] : [], ...status?.enabled === false ? [{ title: 'Disable the login' }] : [],
-      ...serverRoles.map(detail => ({ title: 'Add to a server role', detail }))]
+      ...serverRoles.map(detail => ({ title: 'Add to a server role', detail })),
+      ...(mappings ?? []).flatMap(({ database, defaultSchema, rolesAdd }) => [{ title: 'Create a user', detail: database }, ...defaultSchema ? [{ title: 'Set the default schema', detail: database }] : [],
+        ...rolesAdd.map(role => ({ title: 'Add to a database role', detail: `${role} in ${database}` }))])]
     const after = steps.slice(1).map(step => ({ status: 'skipped', ...step }))
     if (secrets?.password === 'Weak') return ok({ steps: [{ status: 'failed', ...steps[0], message: passwordPolicyMessage }, ...after], messages: [], elapsedMs: 1,
       error: { code: 'PASSWORD_POLICY', message: passwordPolicyMessage, retryable: true } })
@@ -326,6 +354,7 @@ GO
     if (params.action === 'createLogin') return createLogin(params)
     if (params.action === 'attach') return attachExecute(params)
     if (params.action === 'takeOffline' || params.action === 'bringOnline') return databaseStateChange(params)
+    if (params.action === 'detach') return detach(params)
     if (params.action === 'properties') return ok({ steps: Object.keys(params.changes.options ?? {}).map(key => ({ status: 'done', title: 'Set ' + key })), messages: [], elapsedMs: 1 })
     if (params.action === 'rename') {
       if (params.newName === 'Taken') return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NAME_IN_USE', message: 'The name Taken is already in use in this schema.', retryable: false } })
@@ -386,8 +415,11 @@ GO
         switch (params.dialog) {
           case 'tableDesigner': return ok({ tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', caseSensitiveNames: false, accentSensitiveNames: true, canCreate: true }, elapsedMs: 1 })
           case 'databaseProperties': return properties(params)
+          case 'loginDatabaseRoles': return ok({ loginDatabaseRoles: databaseRoles(params.target.name), elapsedMs: 1 })
           case 'newLogin': return ok({ newLogin: { server: { level: 16, linux: false, windowsOnly: false, canCreate: true },
-            databases: [{ name: 'AppData', state: 0, accessible: true }, { name: 'master', state: 0, accessible: true }], databasesTruncated: false,
+            databases: [{ name: 'AppData', state: 0, accessible: true, readOnly: false }, { name: 'Archive', state: 6, accessible: false, readOnly: false }, { name: 'Ledger', state: 0, accessible: true, readOnly: true },
+              { name: 'master', state: 0, accessible: true, readOnly: false }, { name: longDatabase, state: 0, accessible: true, readOnly: false },
+              ...Array.from({ length: 8 }, (_, index) => ({ name: `Warehouse0${index + 1}`, state: 0, accessible: true, readOnly: false }))], databasesTruncated: false,
             languages: [{ name: 'Deutsch', alias: 'German' }, { name: 'us_english', alias: 'English' }],
             serverRoles: [{ name: 'dbcreator', fixed: true }, { name: 'public', fixed: true }, { name: 'sysadmin', fixed: true }], serverRolesTruncated: false }, elapsedMs: 1 })
           case 'newDatabase': {
@@ -397,7 +429,7 @@ GO
           case 'serverFiles': return listServerFiles(params)
           case 'restoreDatabase': return restore(params)
           case 'attachDatabase': return attachDescribe(params)
-          case 'takeOffline': case 'bringOnline': return databaseState(params)
+          case 'takeOffline': case 'bringOnline': case 'detachDatabase': return databaseState(params)
           default: return describe(params)
         }
       case 'actions.script':
@@ -410,6 +442,7 @@ GO
           case 'attach': return ok({ text: params.databases.map(database => `USE [master]\r\nGO\r\nCREATE DATABASE [${database.name}] ON ${database.files.map(file => `( FILENAME = N'${file}' )`).join(', ')}`
             + ` FOR ATTACH${database.rebuildLog ? '_REBUILD_LOG' : ''}\r\nGO\r\n`).join(''), database: 'master', warnings: [] })
           case 'takeOffline': return ok({ text: offlineScript(params.dropConnections), database: 'master', warnings: [] })
+          case 'detach': return ok({ text: detachScript(params.dropConnections, params.updateStatistics), database: 'master', warnings: [] })
           case 'restoreFiles': return ok({ text: restoreFilesScript, database: 'master', warnings: [] })
           default: return ok({ text: scriptText(params.target.name), database: params.target.database ?? 'master', warnings: [] })
         }

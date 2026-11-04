@@ -8,7 +8,10 @@ import {
 } from './catalog.ts'
 import { actionPromptBox, actionPrompts, promptLimits, type ActionPromptRequest } from './prompts.ts'
 import { compatibilityLabel, compatibilityLevels, databaseOptionDefs, noScriptNotice, openConnectionsPrompt, ownerNotOn, scopedConfigurationDefs, type DatabaseOptionDef } from './database.ts'
-import { loginGreyedMessage, loginLimits, loginMessages, loginRules, loginSubtypes, loginTypeSubtypes, loginVerbs, newLoginMessages, ownLoginRefuses, passwordScriptHeader, saPrincipalId } from './logins.ts'
+import {
+  loginDatabaseRolesDescribe, loginGreyedMessage, loginLimits, loginMessages, loginRules, loginSubtypes, loginTypeSubtypes, loginVerbs, newLoginMessages, ownLoginRefuses, passwordScriptHeader, saPrincipalId,
+  tooManyStatementsMessage
+} from './logins.ts'
 import { designerEngines } from '../designer/catalog.ts'
 import { restoredFilesLimit } from './schema.ts'
 import {
@@ -68,6 +71,8 @@ const limitNotes: Readonly<Record<keyof typeof actionLimits, string>> = {
   growthPercent: 'A file\'s autogrowth in percent, in New Database',
   sessions: 'Sessions Take Database Offline lists from the database (with VIEW SERVER STATE); more say so',
   sessionText: 'Characters of each login, program and host name in that list',
+  detachFiles: 'Files Detach Database lists as staying on the server, and the reply\'s `filesKept`; more make the dialog say so',
+  filePath: 'Characters of a file\'s path in that list (`sys.master_files.physical_name` is nvarchar(260))',
   blockers: 'Sessions in a database that Delete Object lists (never Varia\'s own pooled sessions); more set `blockersTruncated`',
   blockerChars: 'Characters of each listed session\'s program and host names'
 }
@@ -218,6 +223,60 @@ function databaseStateDocs(): string[] {
   ]
 }
 
+/** Tasks › Detach… (D3b). */
+function detachDocs(): string[] {
+  return [
+    '### Detach',
+    '',
+    'Tasks › Detach… opens Detach Database - <name>, a modal laid out as Learn describes SSMS\'s dialog: a "Databases to detach"',
+    'grid of Database Name, Drop Connections and Update Statistics (both cleared), Status and Message. Keep Full-Text Catalogs is',
+    'left out: SSMS shows it only for a database upgraded from SQL Server 2005. The Message counts the sessions in the database',
+    '(after the describe closes the backend\'s own idle pooled connections in it, as Take Offline\'s does); a closed disclosure',
+    'lists them, and the page says what Drop Connections rolls back, naming Varia\'s query windows with an open transaction (A7).',
+    `Below the grid, "Files that stay on the server" lists the database's files (\`sys.master_files\`, at most ${actionLimits.detachFiles}: logical name, type`,
+    'and path), which Copy paths copies one per line, for an Attach later. A db_owner member without VIEW ANY DEFINITION sees no',
+    'rows there, so an online database\'s own `sys.database_files` lists them instead; when neither shows any, a note says the paths',
+    'could not be read. Once the detach succeeded, the sessions and what closing them rolls back are no longer shown, and the',
+    'boxes are disabled. Enter on the closed Sessions list opens it, as on any disclosure or link, and never presses OK.',
+    '',
+    '`sp_detach_db` refuses a database other sessions use (3703, `IN_USE`), so while sessions are connected and Drop Connections',
+    'is cleared the Status is Not ready and OK is disabled; Check Again counts them again. So is a database SQL Server would refuse:',
+    'one used for replication, one with a database snapshot (3709, `DEPENDENTS`), in an availability group, or mirrored, each a',
+    'blocking warning. The menu greys Detach… while the database is restoring, recovering or copying, and while it is suspect or',
+    'recovery pending (SQL Server\'s 3707 asks for EMERGENCY first). A database that is not online on a Windows server is Not ready',
+    'until its box is checked, Detach while offline (OFFLINE) or Detach anyway (EMERGENCY): SQL Server may leave a database',
+    'detached in those states with files no attach can open (critic A27; probed for both, OS error 5). On Linux the dialog only',
+    'says so. On Windows a SQL Server login also gets a note: SQL Server then lets only its service account open the detached',
+    'files (probed), so a Windows-authenticated attach fails and the attach should use SQL Server authentication.',
+    '',
+    'Detach needs sysadmin or membership in the database\'s db_owner role (its owner is dbo), which DBCC DETACHDB checks: ALTER or',
+    'CONTROL on the database, ALTER ANY DATABASE and dbcreator pass SET OFFLINE\'s check but get 7983 (`PERMISSION_DENIED`) from',
+    '`sp_detach_db`, after Drop Connections would already have rolled everyone back. So the describe and the execute read the',
+    'permission first (sysadmin or ownership in master, db_owner membership inside an online database) and refuse the rest. Update',
+    'Statistics is greyed and cleared, and refused at execute, while the database is not online, read-only or in standby:',
+    '`sp_updatestats` raises 942 on an offline database, which aborts the detach, and 15635 on the others, which does not.',
+    '',
+    'OK runs Close existing connections (`SET SINGLE_USER WITH ROLLBACK IMMEDIATE`, only with Drop Connections), then Detach the',
+    'database (`sp_detach_db`, with `@skipchecks = \'false\'` when Update Statistics is checked and `\'true\'` when it is not).',
+    'SQL Server can raise an error, or answer a Stop, after DBCC DETACHDB has detached the database: when the detach step fails',
+    'or is stopped and the database is gone from `sys.databases`, the step is done and the error is kept as a message. When',
+    'the detach fails or is stopped after SINGLE_USER and the database is still there, a compensation step gives it back the access it had:',
+    'Restore multi-user access, or Restore restricted user access for one that was RESTRICTED_USER; one already SINGLE_USER is',
+    'left so. SSMS\'s script leaves `@skipchecks` out when Update Statistics is cleared, which runs UPDATE STATISTICS anyway',
+    '(the procedure\'s default); Varia\'s Script Action writes `\'true\'`, with a comment saying why, so the script does what the',
+    'dialog does.',
+    '',
+    'A success keeps the dialog open on its steps with Close focused. The reply lists the files left on the server (`filesKept`),',
+    'the Databases folder is listed again, so the node goes, the database\'s Database Properties documents on that connection',
+    'turn orphan ("This database no longer exists on <server>." with only Close), and a toast says "<name> was detached. Its',
+    'files stay on the server.", counts the query windows that were using it, and offers Copy paths. The connection forgets',
+    'the name as it does for a dropped database. Detach is offered on box SQL Server only (Managed Instance cannot run',
+    '`sp_detach_db`), greyed on SQL Server\'s own databases and absent on a snapshot; the backend re-derives every rule above',
+    'before it runs anything and refuses a database whose identity changed since the dialog read it.',
+    ''
+  ]
+}
+
 /** The long gate, STATS progress and the drain of a closing backend (D1 §3.3, §9.4, §9.5). */
 function longActionDocs(): string[] {
   const long = objectActions.filter(action => objectActionSpecs[action].long)
@@ -277,8 +336,8 @@ export function renderObjectActionsDocs(): string {
     '',
     '<!-- Generated from src/shared/actions/catalog.ts. Regenerate with: npx vitest run tests/object-actions-catalog.test.ts -u -->',
     '',
-    'Object Explorer\'s actions on objects: Select Top 1000 Rows, Rename, Delete, Properties, a database\'s Tasks › Take Offline and',
-    'Bring Online, and the Databases folder\'s Attach. Which kinds, subtypes and folders offer each is',
+    'Object Explorer\'s actions on objects: Select Top 1000 Rows, Rename, Delete, Properties, a database\'s Tasks › Detach…, Take',
+    'Offline and Bring Online, and the Databases folder\'s Attach. Which kinds, subtypes and folders offer each is',
     'data in `src/shared/actions/catalog.ts`; the backend embeds the same data as `backend/Varia.Backend/Actions/actions-catalog.json`',
     'and re-derives the subtype in the action\'s own connection before any DDL runs.',
     '',
@@ -367,6 +426,7 @@ export function renderObjectActionsDocs(): string {
     'Refresh, and a toast counts the query windows that were using it ("3 query windows were using SalesDb."), which stay open.',
     '',
     ...databaseStateDocs(),
+    ...detachDocs(),
     'The Table Designer (New › Table…) uses the same requests without being a dialog: `actions.describe` with',
     '`tableDesigner` and a database, and the `createTable` action; its ids live in `src/shared/designer/catalog.ts`, and',
     '[docs/table-designer.md](table-designer.md) describes them.',
@@ -421,7 +481,7 @@ export function renderObjectActionsDocs(): string {
     '',
     '### Shared statements',
     '',
-    'Take Offline and Bring Online plan the first three, later actions the others. Each is built by SQL Server from constant text, linted, and checked against hostile',
+    'Take Offline and Bring Online plan the first three, Detach the next three, later actions the others. Each is built by SQL Server from constant text, linted, and checked against hostile',
     'names by a live dry run:',
     '',
     table(['Step', 'As Script Action writes it'], [
@@ -434,7 +494,11 @@ export function renderObjectActionsDocs(): string {
       ['Disable the login, Enable the login', '`ALTER LOGIN [login] DISABLE`, `ALTER LOGIN [login] ENABLE`'],
       ['Deny or Grant permission to connect', '`DENY CONNECT SQL TO [login]`, `GRANT CONNECT SQL TO [login]`'],
       ['Drop the database user', '`DROP USER [user]`, in its database'],
-      ['Add to a server role (New Login)', '`ALTER SERVER ROLE [role] ADD MEMBER [login]`']
+      ['Add to a server role (New Login)', '`ALTER SERVER ROLE [role] ADD MEMBER [login]`'],
+      ['Create a user (User Mapping)', '`CREATE USER [user] FOR LOGIN [login]`, in its database'],
+      ['Set the default schema (User Mapping)', '`ALTER USER [user] WITH DEFAULT_SCHEMA=[schema]`, in its database'],
+      ['Create a schema (User Mapping)', '`CREATE SCHEMA [schema] AUTHORIZATION [user]`, in its database, in a batch of its own'],
+      ['Add to a database role (User Mapping)', '`ALTER ROLE [role] ADD MEMBER [user]`, in its database']
     ]),
     '',
     ...loginDocs(),
@@ -481,14 +545,14 @@ function loginDocs(): string[] {
   ]
 }
 
-/** New Login (D2a): where it opens, its pages, the password path, its Script and how it runs. */
+/** New Login (D2a, D2b): where it opens, its pages, the password path, User Mapping, its Script and how it runs. */
 function newLoginDocs(): string[] {
   const spec = dialogSpecs.newLogin
   return [
     '### New Login',
     '',
     `Security › New › Login…, and New Login… on the Logins folder and on a login, open "${spec.title}", a modal dialog with the pages`,
-    `${spec.pages.map(page => page.title).join(', ')} (User Mapping and Securables follow once their OK works). Its action is \`createLogin\`, on`,
+    `${spec.pages.map(page => page.title).join(', ')} (Securables follows once its OK works). Its action is \`createLogin\`, on`,
     `${createActionSpecs.createLogin.engines.map(engine => engineNames[engine]).join(', ')} (Managed Instance follows); its target is the server.`,
     '',
     '- **General**: Login name; Windows authentication (DOMAIN\\name) or SQL Server authentication (the default when the server',
@@ -498,6 +562,18 @@ function newLoginDocs(): string[] {
     '  15122); Default database and Default language (`<default>`: no DEFAULT_LANGUAGE clause). A note says when the server',
     `  takes Windows authentication only, and when this login may lack ALTER ANY LOGIN. A blank password needs the password policy on.`,
     '- **Server Roles**: every server role, public checked and greyed (every login is a member).',
+    '- **User Mapping**: the grid "Users mapped to this login:" (Map, Database, User, Default Schema), one row per database New Login',
+    '  listed, virtualized; a database that is not online, not open to this login, or read-only (set READ_ONLY, a log-shipping',
+    '  standby or a database snapshot, where CREATE USER would fail after CREATE LOGIN had run) shows its state chip (or NO ACCESS,',
+    '  READ-ONLY) and cannot be mapped. Map fills User with the login name; a User or Default Schema that equals the login name',
+    '  follows a rename, on unmapped rows too, but a blank one stays blank: a blank User shows and sends the login name, and a blank',
+    '  Default Schema leaves the clause out (typing the name after checking Map never sets one). The … button (and Alt+Down) opens Select Schema, the database\'s schemas. Below it,',
+    '  "Guest account enabled for:" the selected database (read-only, as in SSMS) and "Database role membership for:" it: public',
+    '  checked and greyed, the others enabled once its row is mapped. The keys are the grid\'s: arrows, Home/End, Page Up/Down,',
+    '  Space toggles Map, F2 or Enter or typing edits User or Default Schema, Enter or Tab commits, Escape ends the edit only.',
+    `  Selecting a database reads its roles, schemas and guest state once (\`actions.describe\` with dialog \`${loginDatabaseRolesDescribe}\`,`,
+    '  on the action\'s read connection, inside the database through sp_executesql; a newer selection cancels a read still',
+    `  running); at most ${loginLimits.roles} roles and ${loginLimits.schemas.toLocaleString('en-US')} schemas are listed, and ${loginLimits.mappings} databases mapped.`,
     '- **Status**: Permission to connect to database engine (Grant, Deny) and Login (Enabled, Disabled).',
     '',
     'The password fields are masked, never reach the dialog\'s snapshot, React state that is saved, AutoRecover, a toast or a log, and',
@@ -514,24 +590,36 @@ function newLoginDocs(): string[] {
     'Script Action never carries or writes the password: a SQL Server login\'s script is one batch in one `SET XACT_ABORT ON` transaction',
     `under the comment "${passwordScriptHeader}", with \`PASSWORD=<password>\` unquoted, so an unedited script fails to parse and runs`,
     'nothing (no later statement can give a role to an existing login of that name). A Windows login\'s script is SSMS\'s, one statement',
-    'per batch.',
+    'per batch. Each mapped database\'s statements run there through `EXEC [database].sys.sp_executesql N\'…\'` inside that transaction',
+    '(a Windows login\'s script uses `USE [database]` and `GO` as SSMS does); Script reads the server only when a Default Schema is',
+    'chosen, to learn whether the database has it (SSMS\'s CREATE SCHEMA), and never refuses a name.',
     '',
     'OK runs SSMS\'s statements in SSMS\'s order, one by one: `CREATE LOGIN`, `DENY CONNECT SQL` (Deny), `ALTER LOGIN … DISABLE`',
-    '(Disabled), then `ALTER SERVER ROLE … ADD MEMBER` per role by name. They do not share a transaction (critic A24, owner decision',
+    '(Disabled), then `ALTER SERVER ROLE … ADD MEMBER` per role by name, then per mapped database by name, in it: `CREATE USER … FOR',
+    'LOGIN`, `ALTER USER … WITH DEFAULT_SCHEMA=` when one is chosen, `CREATE SCHEMA … AUTHORIZATION` the user when the database',
+    `lacks it, and \`ALTER ROLE … ADD MEMBER\` per role by name (at most ${actionLimits.statements} statements in all, or OK and Script refuse:`,
+    `"${tooManyStatementsMessage(actionLimits.statements)}"). They do not share a transaction (critic A24, owner decision`,
     '6): on SQL Server 2025 an open transaction holding `CREATE LOGIN` keeps out every SQL Server login whose security token is not',
     'cached (one that has not signed in since the server started) until it ends, and one holding a server role membership change',
     'keeps out every SQL Server login, so one statement waiting for a lock would lock users out. A live check signs in four such',
     'logins while New Login waits before each later statement, and shows both blocks with transactions it rolls back.',
     'A failure or Stop after `CREATE LOGIN` leaves what completed, and the message starts with the login\'s real state: "The login was',
     'created, but the steps after it did not all complete.", then "It can connect: permission to connect was not denied." when Deny',
-    'did not apply, "It is enabled." when Disabled did not, and "Not every server role was added." when a role is missing, so the clip',
+    `did not apply, "It is enabled." when Disabled did not, "Not every server role was added." when a role is missing, and "Not every database was mapped as chosen." when a mapping step is, so the clip`,
     'at the message limit cuts the list of completed steps, never that. When Stop reaches SQL Server as `CREATE LOGIN` completes, the',
     'backend looks for the login within the cleanup budget; if it exists, that step is done and the message says so. Either way the',
     'dialog reloads Logins and selects the login, as after OK, and stays open with the error.',
     'Before anything runs, the preflight refuses a name a login or server role already has (`NAME_IN_USE`) and a',
-    'login without ALTER ANY LOGIN (`PERMISSION_DENIED`). The server\'s password policy answers `PASSWORD_POLICY` (15114 to 15118, and',
-    '33062 to 33064 from the policy SQL Server on Linux applies), which keeps the dialog open with its password; 15025 and 15023 are `NAME_IN_USE`, 15010, 15033 and 15401 `NOT_FOUND`, and 15099,',
-    '15122, 15006, 15407 and 37525 `NOT_SUPPORTED`. After OK the server\'s Logins folder, once Object Explorer has listed it, reloads and selects the new login.',
+    'login without ALTER ANY LOGIN (`PERMISSION_DENIED`); then, per mapped database, one that is gone (`NOT_FOUND`), not online,',
+    'not open to this login or read-only (`DATABASE_UNAVAILABLE`), a user name a user or role there already has (`NAME_IN_USE`) and a',
+    'role it lacks (`NOT_FOUND`). Two cases are not caught before `CREATE LOGIN` runs, so they end as a partial run: an availability',
+    'group\'s readable secondary (its role is only in a DMV that needs VIEW SERVER STATE), which fails `CREATE USER` as read-only, and a',
+    'Windows login whose SID already has a user under another name in the database (an orphan, often after a restore from another',
+    'server in the domain), which fails it with 15063; resolving a Windows SID before the login exists would mean asking the domain',
+    'from the preflight. The server\'s password policy answers `PASSWORD_POLICY` (15114 to 15118, and 33062 to 33064 from the',
+    'policy SQL Server on Linux applies), which keeps the dialog open with its password; 15025 and 15023 are `NAME_IN_USE`, 15010, 15033 and 15401 `NOT_FOUND`, and 15099,',
+    '15122, 15006, 15407 and 37525 `NOT_SUPPORTED`. After OK the server\'s Logins folder, once Object Explorer has listed it, reloads and selects the new login,',
+    'and each mapped database\'s Users folder that Object Explorer has listed reloads (after a partial run too).',
     '',
     'Whether a server-side trace or Extended Events session can read the password from the RPC (critic A16) is checked by an opt-in live',
     'check (`VARIA_TEST_SQL_XE=1`, set only for CI\'s disposable SQL Server container; it first checks, read-only, that every event,',

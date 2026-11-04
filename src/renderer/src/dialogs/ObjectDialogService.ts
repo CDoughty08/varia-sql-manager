@@ -1,8 +1,8 @@
 import { actionLimits, dialogSpecs, dialogTitle, isCreateAction, isModalDialog, isServerAction, objectActionSpecs, unknownOutcomeMessage, type ModalDialogId, type PageId } from '../../../shared/actions/catalog.ts'
 import { noScriptNotice } from '../../../shared/actions/database.ts'
-import { loginLimits } from '../../../shared/actions/logins.ts'
+import { loginDatabaseRolesDescribe, loginLimits, type LoginDatabaseRoles, type NewLoginModel } from '../../../shared/actions/logins.ts'
 import { promptTabFacts } from '../../../shared/actions/prompts.ts'
-import type { ActionDescribeRequest, ActionDescribeResult, ActionError, ActionExecuteResult, ActionRequest, ActionStep, DeleteTarget } from '../../../shared/actions/schema.ts'
+import type { ActionDescribeRequest, ActionDescribeResult, ActionError, ActionExecuteResult, ActionRequest, ActionStep, DatabaseFileRef, DatabaseStateModel, DeleteTarget } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import type { FolderId } from '../../../shared/explorer/catalog.ts'
 import type { ExplorerNodeRef, ObjectRef } from '../../../shared/explorer/refs.ts'
@@ -17,8 +17,9 @@ import { deliverScript, type DeliverScriptDeps } from '../scripting/deliver'
 import { scriptFileName, scriptObjectLabel } from '../scripting/ScriptingService'
 import type { LiveConnection } from '../services/connections'
 import type { ServerFilePick } from '../server-files/ServerFilePickerService'
+import { filePathsText } from './database-gone'
 import { definitionOf, type BuiltRequest, type DialogDraft, type DialogEffects, type DialogModel } from './definitions'
-import { emptySecrets, type SecretState } from './new-login'
+import { emptySecrets, mappable, type SecretState } from './new-login'
 
 /**
  * loading → ready, or loadFailed; OK → (confirming →) executing → closed (`succeeded` for a dialog that stays open on its
@@ -57,9 +58,16 @@ export interface OpenObjectDialog {
   readonly secretState?: SecretState
   /** Why a window close, Disconnect or Restart was just refused while the dialog's long run runs: the dialog covers the banner. */
   readonly refusal?: string
+  /** User Mapping's reads of the databases selected so far (`loadDatabaseRoles`), by database name. */
+  readonly databaseRoles?: ReadonlyMap<string, DatabaseRolesLookup>
 }
-/** A database an action removed (D3 §8): the server as connected to, so its Properties documents can say where it was. */
-export interface DatabaseGone { readonly connectionId: string; readonly server: string; readonly database: string }
+/** One database's roles, guest state and schemas, as User Mapping reads them when its row is selected. */
+export type DatabaseRolesLookup = { readonly state: 'loading' } | { readonly state: 'ready'; readonly value: LoginDatabaseRoles } | { readonly state: 'failed'; readonly error: ActionError }
+/**
+ * A database an action removed (D3 §8): the server as connected to, so its Properties documents can say where it was. A
+ * detached one (D3b) carries the files it left on the server (`filesKept`, possibly none listed), which a deleted one never has.
+ */
+export interface DatabaseGone { readonly connectionId: string; readonly server: string; readonly database: string; readonly filesKept?: readonly DatabaseFileRef[] }
 export interface ObjectDialogSnapshot { readonly open?: OpenObjectDialog }
 export interface ObjectDialogServiceOptions {
   readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText' | 'confirmOpenConnections'>
@@ -111,6 +119,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   private dialogs = 0
   /** The request in flight (describe, script or execute), so Stop and a disconnect can cancel it. */
   private request?: { readonly id: string; readonly dialog: number }
+  /** User Mapping's read in flight, apart from `request`: OK and Script run while it reads, and Stop never cancels it. */
+  private lookup?: { readonly id: string; readonly dialog: number; readonly database: string }
   /** A page's own describes (Attach's Add, a path check), which Close and a disconnect cancel. */
   private readonly extra = new Set<string>()
   private disposed = false
@@ -189,6 +199,46 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const current = open.secretState
     if (current.password !== secretState.password || current.matches !== secretState.matches || current.wellFormed !== secretState.wellFormed || current.tooLong !== secretState.tooLong) this.update(open, { secretState })
     this.recheckProblem()
+  }
+  /**
+   * User Mapping selected a database: reads its roles, whether guest can connect and its schemas, once per dialog (again after a
+   * failure), as SSMS's InitializeRoleMembership does when a row is selected. A read still running for another database is
+   * cancelled and forgotten, so moving through the grid never queues reads behind the read gates.
+   */
+  loadDatabaseRoles(database: string): void {
+    const open = this.current
+    if (!open?.model || open.phase === 'loadFailed' || open.phase === 'disconnected' || !dialogSpecs[open.dialog].pages.some(page => page.id === 'userMapping')) return
+    // A database that cannot be mapped (offline, or closed to this login) is not read: its page says why instead.
+    const listed = (open.model as NewLoginModel).databases.find(item => item.name === database)
+    if (listed && !mappable(listed)) return
+    const known = open.databaseRoles?.get(database)
+    if (known && known.state !== 'failed') return
+    const stale = this.lookup
+    let lookups = new Map(open.databaseRoles ?? [])
+    if (stale) {
+      this.lookup = undefined
+      this.cancel([stale.id])
+      if (stale.dialog === open.id) lookups.delete(stale.database)
+    }
+    const requestId = this.newId()
+    this.lookup = { id: requestId, dialog: open.id, database }
+    lookups = lookups.set(database, { state: 'loading' })
+    this.update(open, { databaseRoles: lookups })
+    void this.readDatabaseRoles(open, database, requestId)
+  }
+  private async readDatabaseRoles(open: OpenObjectDialog, database: string, requestId: string): Promise<void> {
+    const result = await this.call(() => this.options.api.describeObject({ connectionId: open.connectionId, requestId, dialog: loginDatabaseRolesDescribe, target: { kind: 'database', name: database } }))
+    if (this.lookup?.id !== requestId) return
+    this.lookup = undefined
+    const current = this.current
+    if (this.disposed || current?.id !== open.id || current.phase === 'disconnected') return
+    const value = result.ok ? result.value.loginDatabaseRoles : undefined
+    const failure = !result.ok ? error('SQL_ERROR', result.error) : result.value.error ?? (value ? undefined : error('NOT_FOUND', 'The database could not be read.'))
+    this.update(current, { databaseRoles: new Map(current.databaseRoles ?? []).set(database, failure || !value ? { state: 'failed', error: failure! } : { state: 'ready', value }) })
+  }
+  private cancelLookup(): void {
+    if (this.lookup) this.cancel([this.lookup.id])
+    this.lookup = undefined
   }
 
   /** The server file picker for the open dialog's server (Attach's Add… and "…"): the chosen path, or undefined. */
@@ -277,11 +327,12 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     if (!this.end(open, requestId)) return
     const value: ActionExecuteResult | undefined = result.ok ? result.value : undefined
     if (value && definition.removesDatabase?.(open.target, value.steps, !value.error) && open.target.name !== undefined) {
-      const gone = { connectionId: open.connectionId, server: open.server, database: open.target.name }
+      const gone = { connectionId: open.connectionId, server: open.server, database: open.target.name, ...open.dialog === 'detachDatabase' ? { filesKept: value.filesKept ?? [] } : {} }
       try { this.options.databaseGone?.(gone) } catch (failure) { onUnexpectedError(failure) }
     }
     if (value && !value.error) {
       this.secrets.clear()
+      this.cancelLookup()
       // SQL Server's informational messages (a database left SINGLE_USER) stay readable in a dialog that stays open.
       if (definition.keepOpen) this.update(open, { phase: 'succeeded', steps: value.steps, ...(value.messages.length ? { notice: value.messages.join(' ') } : {}) })
       else this.publish({})
@@ -306,6 +357,17 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     if (!confirmation && model !== open.model && !value?.steps.some(step => step.status === 'done') && definition.confirm?.(model, built)) await this.ok()
   }
 
+  /** Detach Database's Copy paths: the files that stay on the server, one path per line, to the clipboard; the message bar says how it went. */
+  async copyPaths(): Promise<void> {
+    const open = this.current
+    const files = open?.dialog === 'detachDatabase' ? (open.model as DatabaseStateModel | undefined)?.files ?? [] : []
+    if (!open || files.length === 0) return
+    const result = await this.call(() => this.options.api.writeClipboardText(filePathsText(files)))
+    if (this.disposed || this.current?.id !== open.id) return
+    if (result.ok) this.update(open, { notice: files.length === 1 ? 'Copied 1 path.' : `Copied ${files.length.toLocaleString('en-US')} paths.` })
+    else this.update(open, { error: error('SQL_ERROR', result.error) })
+  }
+
   /** Stop: cancels the running action in SQL Server; the dialog reports Stopped, with what completed, when its answer comes. */
   stop(): void {
     const open = this.current, request = this.request
@@ -319,6 +381,7 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     if (!open) return true
     if (open.phase === 'executing') return false
     if (this.request?.dialog === open.id) { this.cancel([this.request.id]); this.request = undefined }
+    this.cancelLookup()
     this.secrets.clear()
     this.cancelExtra()
     this.publish({})
@@ -330,6 +393,7 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     this.secrets.clear()
     if (this.request) this.cancel([this.request.id])
     this.request = undefined
+    this.cancelLookup()
     this.cancelExtra()
     this.disposed = true
     this.unsubscribe()
@@ -403,24 +467,31 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     this.cancel([...this.extra])
     this.extra.clear()
   }
-  /** Reloads the server's folder a new object is listed in and selects it there; a folder never listed loads fresh when opened. */
   /** What a definition's afterSuccess and afterPartial may do for this dialog. */
   private effectsOf(open: OpenObjectDialog): DialogEffects {
     return {
       refreshListing: select => this.refreshListing(open, select),
       reveal: (folder, object) => this.reveal(open, folder, object),
+      reload: (owner, folder) => this.reloadFolder(open, owner, folder),
       databaseState: offline => { if (open.target.kind === 'database' && open.target.name !== undefined) this.options.databaseState?.(open.connectionId, open.target.name, offline) }
     }
   }
+  /** Reloads the server's folder a new object is listed in and selects it there; a folder never listed loads fresh when opened. */
   private reveal(open: OpenObjectDialog, folder: FolderId, object: ObjectRef): void {
     const node = this.options.explorer.folderNode?.(open.connectionId, { kind: 'server' }, folder)
     if (node !== undefined) this.options.explorer.reconcile(node, { select: { type: 'object', object } })
+  }
+  /** Reloads an owner's folder (a database's Users) when the tree has listed it. */
+  private reloadFolder(open: OpenObjectDialog, owner: ObjectRef, folder: FolderId): void {
+    const node = this.options.explorer.folderNode?.(open.connectionId, owner, folder)
+    if (node !== undefined) this.options.explorer.reconcile(node)
   }
   /** A server that disconnects leaves only Close; its request is cancelled. */
   private connectionsChanged(): void {
     const open = this.current
     if (!open || open.phase === 'disconnected' || this.options.connections.getSnapshot().some(item => item.id === open.connectionId && !item.lost)) return
     if (this.request?.dialog === open.id) { this.cancel([this.request.id]); this.request = undefined }
+    this.cancelLookup()
     this.secrets.clear()
     this.cancelExtra()
     // An action that was running may or may not have finished.

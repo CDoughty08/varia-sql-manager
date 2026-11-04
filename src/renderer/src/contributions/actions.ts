@@ -78,6 +78,11 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
       when: args => actions.canRun('bringOnline', nodeOf(args)) && !dialogs.current,
       run: args => { const node = nodeOf(args); if (node) dialogs.open('bringOnline', node) }
     }),
+    // Tasks › Detach… (D3b): a modal dialog that stays open on its steps.
+    commands.register('explorer.detachDatabase', {
+      when: args => actions.canRun('detach', nodeOf(args)) && !dialogs.current,
+      run: args => { const node = nodeOf(args); if (node) dialogs.open('detachDatabase', node) }
+    }),
     // The Databases folder opens it with no source chosen (msdb's first database with backups); a database, with itself as the source.
     ...(['explorer.restoreDatabase', 'explorer.tasks.restoreDatabase'] as const).map(id => commands.register(id, {
       when: args => actions.canRun('restore', nodeOf(args)),
