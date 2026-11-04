@@ -82,7 +82,7 @@ export const glyphUse: Readonly<Record<GlyphSizeName, readonly string[]>> = {
   badge: ['.oe-icon .oe-badge'],
   sm: [
     '.tab-close .codicon', '.tab-select .tab-readonly', '.tab-select .tab-running', '.connection-save-actions .codicon', '.query-status-state .codicon', '.output-status .codicon', '.memory-indicator .codicon', '.oe-active > .codicon',
-    '.editor-status .codicon', '.status-pill > .codicon', '.status-pill > .icon', '.chip > .codicon', '.chip > .icon', '.live-pill > .codicon', '.stale-badge > .codicon',
+    '.editor-status .codicon', '.index-status .codicon', '.status-pill > .codicon', '.status-pill > .icon', '.chip > .codicon', '.chip > .icon', '.live-pill > .codicon', '.stale-badge > .codicon',
     '.tile-caption > .codicon'
   ],
   md: ['.icon'],
@@ -118,7 +118,7 @@ export const densityPlanned: Readonly<Record<keyof DensityMetrics, string>> = {
 export const densityUse: Readonly<Record<keyof DensityMetrics, readonly string[]>> = {
   header: ['.title-bar'],
   bar: ['.query-tabs', '.explorer-header', '.query-bar', '.output-toolbar', '.document-script-head', '.activity-pane-tabs [role="tab"]'],
-  control: ['.icon-button', '.explorer-filter', '.command-centre', '.query-bar-action', '.query-connection', '.document-verb', '.property-input', '.property-field-control > .property-input-action > .property-input', '.property-value.restore-to', '.activity-select', '.activity-tile-toggle'],
+  control: ['.icon-button', '.explorer-filter', '.object-search-field', '.command-centre', '.query-bar-action', '.query-connection', '.document-verb', '.property-input', '.property-field-control > .property-input-action > .property-input', '.property-value.restore-to', '.activity-select', '.activity-tile-toggle'],
   row: ['.explorer-row', '.skeleton-row', '.document-nav-item', '.server-files-head', '.server-files-row', '.new-database-cell', '.attach-database-grid .attach-database-cell'],
   status: ['.status-bar', '.query-status-bar']
 }

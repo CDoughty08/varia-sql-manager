@@ -7,6 +7,7 @@ Varia is a cross-platform desktop workbench for Microsoft SQL Server. It combine
 - Connect to multiple servers using SQL Server, Windows, or Microsoft Entra ID authentication.
 - Write and execute T-SQL in a Monaco-based editor, with separate connections and sessions for query tabs. `GO` batches and repetitions are supported.
 - Browse databases and server objects in Object Explorer, generate scripts, and perform supported object actions.
+- Search every object on a server by name or inside definitions, with Match Case, Whole Word and regular expressions.
 - View, copy, and export query results as CSV, tab-delimited text, or JSON.
 - Use the Table Designer, Activity Monitor, live data views, and Integration Services Catalog tools.
 - Customize themes and workspace layouts, and access commands through the command palette.
@@ -81,7 +82,7 @@ The Electron application uses React, TypeScript, Monaco, and Dockview. A .NET si
 ## Documentation
 
 - [Commands and shortcuts](docs/commands.md)
-- [Object Explorer](docs/object-explorer.md) and [object actions](docs/object-actions.md)
+- [Object Explorer](docs/object-explorer.md), [object actions](docs/object-actions.md) and [Search Objects](docs/object-search.md)
 - [Scripting](docs/scripting.md) and [Table Designer](docs/table-designer.md)
 - [Activity Monitor](docs/activity-monitor.md), [live data](docs/live.md), and [Integration Services](docs/integration-services.md)
 - [Settings](docs/settings.md) and [themes](docs/themes/README.md)

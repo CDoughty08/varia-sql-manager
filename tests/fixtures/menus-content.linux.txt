@@ -64,6 +64,7 @@ View
   &Command Palette…  Ctrl+Shift+P  ++++
   &Go to Query…  Ctrl+P  ++++
   Se&arch…  ++++
+  Search Ob&jects…  -+++
   ---
   &Save Layout…  ++++
   &Load Layout…  ++++

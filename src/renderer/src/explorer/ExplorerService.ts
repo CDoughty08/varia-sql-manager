@@ -534,6 +534,12 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     for (const node of this.nodes.values()) if (node.kind === 'folder' && node.connectionId === connectionId && !node.lost && refKey(node.connectionId, node.ref) === key && this.attached(node)) return node.id
     return undefined
   }
+  /** The tree's node for an object (Search Objects' Reveal), once a listing has brought it; undefined otherwise. */
+  objectNode(connectionId: string, object: ObjectRef): number | undefined {
+    const key = refKey(connectionId, { type: 'object', object })
+    for (const node of this.nodes.values()) if (node.kind !== 'folder' && node.connectionId === connectionId && !node.lost && refKey(node.connectionId, node.ref) === key && this.attached(node)) return node.id
+    return undefined
+  }
   /** The server's Databases folder above a node: a database under System Databases or Database Snapshots too, whose own
    *  listing folder is not where a new database appears (New Database reloads this one). */
   databasesFolderOf(nodeId: number): number | undefined {

@@ -7,6 +7,7 @@ import type { MenuStyle } from './menu-style'
 import type { ErrorCode, ErrorReason } from './ipc/wire/protocol'
 import type { AuthenticationMode } from './auth'
 import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts'
+import type { ObjectIndexParams, ObjectIndexProgress, ObjectIndexResult, ObjectSearchParams, ObjectSearchResult } from './explorer/search.ts'
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
 import type { DatabaseRuntime } from './explorer/status.ts'
 import type { ActionPromptAnswer, ActionPromptRequest } from './actions/prompts.ts'
@@ -271,6 +272,10 @@ export interface RpcMethods {
   /** An idle session's @@TRANCOUNT, read before it ends; see SessionState. */
   'query.session.state': { params: { sessionId: string }; result: SessionState }
   'explorer.children': { params: ExplorerChildrenParams; result: ExplorerChildrenResult }
+  /** (Re)builds the connection's object index in backend memory; progress EVENTs, and Stop is varia:explorer-cancel. */
+  'explorer.index': { params: ObjectIndexParams; result: ObjectIndexResult }
+  /** Searches the connection's object index (names and module definitions), in backend memory. */
+  'explorer.search': { params: ObjectSearchParams; result: ObjectSearchResult }
   'scripting.script': { params: ScriptRequest; result: ScriptResult }
   /** What an object dialog shows (Delete Object's row and warnings), read in the action's own connection. */
   'actions.describe': { params: ActionDescribeRequest; result: ActionDescribeResult }
@@ -409,6 +414,12 @@ export interface VariaApi {
   /** Cancels Object Explorer loads by their `requestId`s (1–256); `cancelled` counts those still running. A load cancelled
    *  this way answers `CANCELLED`. */
   explorerCancel(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
+  /** Builds a connection's object index; it answers once every database was read or skipped. Stop it with explorerCancel. */
+  explorerIndex(params: ObjectIndexParams): Promise<ApiResult<ObjectIndexResult>>
+  /** Searches a connection's object index; a search replaced by a newer one is cancelled with explorerCancel. */
+  explorerSearch(params: ObjectSearchParams): Promise<ApiResult<ObjectSearchResult>>
+  /** A build's progress, at most 4 a second per build and only for builds this window started; droppable. Returns the unsubscribe. */
+  onExplorerIndexProgress(listener: (progress: ObjectIndexProgress) => void): () => void
   /** Scripts one Object Explorer object (Script As). Failures the user can act on come back as `result.error`. */
   scriptObjects(params: ScriptRequest): Promise<ApiResult<ScriptResult>>
   /** Cancels scripting requests by their `requestId`s (1–64); `cancelled` counts those still running. A request

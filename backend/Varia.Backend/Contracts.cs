@@ -139,6 +139,27 @@ internal sealed record ExplorerError(string Code, string Message, bool Retryable
 /// <summary>A page of children: static folders first (first page only), then rows. Total is on the first page only.</summary>
 internal sealed record ExplorerChildrenResult(List<ExplorerNode> Nodes, long ElapsedMs, string? Cursor = null, int? Total = null, ExplorerError? Error = null);
 
+/// <summary>explorer.index: (re)builds the connection's object index, with module definitions unless Definitions is false. It
+/// sends droppable explorer.index.progress EVENTs and answers once every database was read or skipped; a newer build of the
+/// same connection, Stop, or a disconnect ends it (CANCELLED), keeping what it read.</summary>
+internal sealed record ObjectIndexArgs(string ConnectionId, string RequestId, bool? Definitions = null);
+/// <summary>A database the index could not read: its code (NO_DB_ACCESS, TIMEOUT, TOO_LARGE, CATALOG_ERROR) and a sentence.</summary>
+internal sealed record ObjectIndexSkip(string Database, string Code, string Message);
+/// <summary>The index as a search finds it. State: none (never built), building, or ready. BuiltAt: UTC, when the last build ended.</summary>
+internal sealed record ObjectIndexStatus(string State, int Databases, int Indexed, int Objects, int Modules, int Cut, List<ObjectIndexSkip> Skipped, bool Definitions, string? BuiltAt = null);
+internal sealed record ObjectIndexResult(ObjectIndexStatus Status, long ElapsedMs);
+/// <summary>explorer.search: In is names, definitions or all; Kinds and Database narrow it; Limit is at most 1000 hits.</summary>
+internal sealed record ObjectSearchArgs(string ConnectionId, string RequestId, string Text, bool? CaseSensitive = null, bool? WholeWord = null, bool? Regex = null, string? In = null,
+    List<string>? Kinds = null, string? Database = null, int? Limit = null);
+/// <summary>A definition's first match: its line and column (1-based), part of its line with the match's [start, length] in it,
+/// whether the line goes on before or after the part, the matches counted (at most 999), and whether the definition was cut.</summary>
+internal sealed record DefinitionMatch(int Line, int Column, string Preview, int[] Range, bool Before, bool After, int Matches, bool Cut);
+/// <summary>One object found: Range is the name match's [start, length] in Label; Modified is server local time.</summary>
+internal sealed record ObjectSearchHit(ObjectRefDto Object, string Folder, string Label, int[]? Range, string? Modified, DefinitionMatch? Definition);
+/// <summary>The best Limit hits of Total; Partial when the search stopped at its budget or candidate cap. Problem: why the
+/// pattern cannot be searched for (no hits then).</summary>
+internal sealed record ObjectSearchResult(List<ObjectSearchHit> Hits, int Total, bool Partial, long ElapsedMs, ObjectIndexStatus Index, string? Problem = null);
+
 /// <summary>scripting.script: one object for Script As (the wizard will send many), a verb of the catalogue, and every
 /// scripting option (src/shared/scripting/schema.ts). Cancellation is a CANCEL frame for the request.</summary>
 internal sealed record ScriptArgs(string ConnectionId, string RequestId, List<ObjectRefDto> Targets, string Verb, ScriptingOptionsDto Options);

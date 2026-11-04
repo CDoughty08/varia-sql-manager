@@ -484,6 +484,7 @@ explorer.context, for a DML trigger
   Re&fresh
 explorer.context, for a database
   New &Query
+  Searc&h Objects…
   ---
   &Script Database as >
     &CREATE To >
@@ -521,6 +522,7 @@ explorer.context, for a database
   &Properties
 explorer.context, for a database snapshot
   New &Query
+  Searc&h Objects…
   ---
   &Script Database as >
     &CREATE To >

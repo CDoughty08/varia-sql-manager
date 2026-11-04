@@ -6,6 +6,7 @@ import type { ContextMenuCommand } from '../shared/commands/menus'
 import { menuStyleFromArgv } from '../shared/menu-style'
 import type { ThemeState } from '../shared/theme/types'
 import type { ActionProgress } from '../shared/actions/schema'
+import type { ObjectIndexProgress } from '../shared/explorer/search'
 import type { SettingsState } from '../shared/settings/schema'
 // Bundled into this one file: a sandboxed preload can require only electron and a few Node built-ins.
 import { installFileDrop } from './drop'
@@ -43,6 +44,14 @@ const api: VariaApi = {
   tableColumns: (connectionId, database, schema, name) => request('tables.columns', { connectionId, database, schema, name }),
   explorerChildren: params => request('explorer.children', params),
   explorerCancel: requestIds => ipcRenderer.invoke('varia:explorer-cancel', { requestIds }),
+  explorerIndex: params => request('explorer.index', params),
+  explorerSearch: params => request('explorer.search', params),
+  // Only the four fields cross to the page, whatever main sent.
+  onExplorerIndexProgress: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: ObjectIndexProgress) => callback({ requestId: progress.requestId, done: progress.done, total: progress.total, objects: progress.objects })
+    ipcRenderer.on('varia:explorer-index-progress', listener)
+    return () => { ipcRenderer.removeListener('varia:explorer-index-progress', listener) }
+  },
   scriptObjects: params => request('scripting.script', params),
   cancelScripting: requestIds => ipcRenderer.invoke('varia:scripting-cancel', { requestIds }),
   describeObject: params => request('actions.describe', params),
