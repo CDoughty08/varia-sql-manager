@@ -61,7 +61,7 @@ internal static class SearchLiveChecks
         check(who is [{ Object: { Kind: "procedure", Schema: "sys", Name: "sp_who", Database: "master" }, Folder: "systemStoredProcedures" }],
             "a resource database procedure is one hit for the whole server, under master: " + string.Join(", ", who.Select(hit => hit.Object.Database + ":" + hit.Label)));
         check(service.Search.Resources.Sets == 1, "the build holds one shared set of the resource database's objects");
-        var textsBefore = service.Search.Resources.Texts;
+        var memoryBefore = service.Search.MemoryUsed;
 
         var byName = await Find("search ]'");
         check(byName.Hits.Any(hit => hit.Object is { Kind: "table", Schema: "srch", Name: hostile } && hit.Folder == "tables" && hit.Label == "srch." + hostile),
@@ -116,7 +116,10 @@ internal static class SearchLiveChecks
         check((await Find("(a", regex: true)).Problem is { Length: > 0 }, "an invalid regular expression answers why");
 
         await Build();
-        check(service.Search.Resources.Sets == 1 && service.Search.Resources.Texts == textsBefore, "a rebuild of an unchanged server reuses its system objects' set");
+        // A rebuild swaps each database for its new read: the texts both hold stay pooled, and nothing is charged twice (tempdb's
+        // objects may change meanwhile, so the memory is compared within a margin).
+        check(service.Search.Resources.Sets == 1 && Math.Abs(service.Search.MemoryUsed - memoryBefore) < memoryBefore / 10,
+            "a rebuild of an unchanged server reuses its system objects' set and holds about the memory the build before it held");
         var names = await Build(definitions: false);
         check(names.Status.Definitions == false && (await Find(marker, "definitions")).Hits.Count == 0, "a build without definitions searches names only");
         await sql("DROP PROCEDURE [srch].[usp_Find];", database);
