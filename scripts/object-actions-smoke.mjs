@@ -21,7 +21,8 @@ const mac = process.platform === 'darwin'
 let application
 let page
 const failures = []
-const watchdog = setTimeout(() => { console.error('Object actions suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 300000)
+// A hang guard, not a speed check: wave 5's sections take the whole suite past five minutes on a desktop (305 s with D4c).
+const watchdog = setTimeout(() => { console.error('Object actions suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 480000)
 
 const menuNamed = name => page.getByRole('menu', { name, exact: true })
 const explorerMenu = () => menuNamed('Object Explorer')
