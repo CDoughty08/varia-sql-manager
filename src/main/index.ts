@@ -926,7 +926,7 @@ function requireUpdater(): Updater {
 function startUpdater(settingsLoaded: Promise<unknown>): void {
   const userData = app.getPath('userData')
   const target = updateTarget = testUpdateFeed ? testUpdateTarget(process.env.VARIA_TEST_UPDATE_KIND, userData)
-    : installTargetFor({ packaged: app.isPackaged, platform: process.platform, execPath: process.execPath, env: process.env, productName: app.getName(), userData })
+    : installTargetFor({ packaged: app.isPackaged, platform: process.platform, execPath: process.execPath, env: process.env, userData })
   // Its own in-memory session: the system proxy and certificate store, no cookies or cache, and none of the page's rules.
   const network = session.fromPartition('varia-updates', { cache: false })
   network.setUserAgent(`Varia-SQL-Manager/${app.getVersion()} (${process.platform}; ${process.arch})`)
