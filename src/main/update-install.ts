@@ -10,7 +10,6 @@ export interface LaunchFacts {
   readonly platform: NodeJS.Platform
   readonly execPath: string
   readonly env: NodeJS.ProcessEnv
-  readonly productName: string
   readonly userData: string
 }
 
@@ -22,7 +21,8 @@ export interface InstallTarget {
 }
 
 /**
- * The installed (NSIS) build has electron-builder's uninstaller beside it; the portable build's launcher names itself in
+ * The installed (NSIS) build has electron-builder's uninstaller beside it, named after the executable (both come from
+ * electron-builder.yml's productName, which the packaged package.json lacks, so app.getName() is the npm name); the portable build's launcher names itself in
  * PORTABLE_EXECUTABLE_FILE; an AppImage's runtime sets APPIMAGE; a packaged macOS app runs from its bundle. Anything else
  * (an unpacked folder, a development run) cannot update itself.
  */
@@ -33,7 +33,7 @@ export function installTargetFor(facts: LaunchFacts): InstallTarget {
   if (facts.platform === 'win32') {
     const portable = facts.env.PORTABLE_EXECUTABLE_FILE
     if (portable && /\.exe$/i.test(portable)) return { kind: 'portable', downloadDir: dirname(portable), privateDir: false }
-    if (existsSync(join(dirname(facts.execPath), `Uninstall ${facts.productName}.exe`))) return { kind: 'nsis', downloadDir: updates, privateDir: true }
+    if (existsSync(join(dirname(facts.execPath), `Uninstall ${basename(facts.execPath)}`))) return { kind: 'nsis', downloadDir: updates, privateDir: true }
     return unsupported
   }
   if (facts.platform === 'linux') {
