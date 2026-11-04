@@ -12,30 +12,30 @@ export function smokeSuites() {
 }
 
 /**
- * Seconds each suite took in CI's smoke jobs (2026-11: Linux under xvfb with SQL Server, Windows without), to balance the
+ * Seconds each suite took in CI's smoke jobs (PR #99's run: Linux under xvfb with SQL Server, Windows without), to balance the
  * shards on each platform; macOS uses Linux's. Every suite in `test:smoke` needs one on each platform
  * (tests/smoke-shards.test.ts); rough is fine, and each shard's summary prints the times to copy from.
  */
 export const suiteSeconds = {
   linux: {
-    'scripts/electron-smoke.mjs': 20, 'scripts/layout-smoke.mjs': 11, 'scripts/connections-smoke.mjs': 22,
-    'scripts/theme-smoke.mjs': 5, 'scripts/palette-smoke.mjs': 11, 'scripts/backend-smoke.mjs': 52,
+    'scripts/electron-smoke.mjs': 20, 'scripts/layout-smoke.mjs': 12, 'scripts/connections-smoke.mjs': 22,
+    'scripts/theme-smoke.mjs': 5, 'scripts/palette-smoke.mjs': 10, 'scripts/backend-smoke.mjs': 51,
     'scripts/live-smoke.mjs': 40, 'scripts/chart-smoke.mjs': 45, 'scripts/live-grid-smoke.mjs': 36,
-    'scripts/activity-monitor-smoke.mjs': 51, 'scripts/menus-smoke.mjs': 73, 'scripts/explorer-smoke.mjs': 37,
-    'scripts/scripting-smoke.mjs': 22, 'scripts/object-actions-smoke.mjs': 35, 'scripts/results-smoke.mjs': 82,
-    'scripts/options-resize-smoke.mjs': 2, 'scripts/options-smoke.mjs': 10, 'scripts/files-smoke.mjs': 14,
-    'scripts/editor-smoke.mjs': 12, 'scripts/table-designer-smoke.mjs': 5, 'scripts/document-frame-smoke.mjs': 19,
-    'scripts/ssis-smoke.mjs': 6, 'scripts/ssis-operations-smoke.mjs': 20
+    'scripts/activity-monitor-smoke.mjs': 51, 'scripts/menus-smoke.mjs': 79, 'scripts/explorer-smoke.mjs': 35,
+    'scripts/scripting-smoke.mjs': 23, 'scripts/object-actions-smoke.mjs': 36, 'scripts/results-smoke.mjs': 83,
+    'scripts/options-resize-smoke.mjs': 2, 'scripts/options-smoke.mjs': 11, 'scripts/files-smoke.mjs': 14,
+    'scripts/editor-smoke.mjs': 12, 'scripts/table-designer-smoke.mjs': 5, 'scripts/document-frame-smoke.mjs': 18,
+    'scripts/ssis-smoke.mjs': 6, 'scripts/ssis-operations-smoke.mjs': 18
   },
   windows: {
-    'scripts/electron-smoke.mjs': 18, 'scripts/layout-smoke.mjs': 11, 'scripts/connections-smoke.mjs': 14,
-    'scripts/theme-smoke.mjs': 6, 'scripts/palette-smoke.mjs': 15, 'scripts/backend-smoke.mjs': 49,
-    'scripts/live-smoke.mjs': 40, 'scripts/chart-smoke.mjs': 45, 'scripts/live-grid-smoke.mjs': 38,
-    'scripts/activity-monitor-smoke.mjs': 43, 'scripts/menus-smoke.mjs': 94, 'scripts/explorer-smoke.mjs': 26,
-    'scripts/scripting-smoke.mjs': 12, 'scripts/object-actions-smoke.mjs': 74, 'scripts/results-smoke.mjs': 66,
-    'scripts/options-resize-smoke.mjs': 3, 'scripts/options-smoke.mjs': 8, 'scripts/files-smoke.mjs': 15,
-    'scripts/editor-smoke.mjs': 12, 'scripts/table-designer-smoke.mjs': 4, 'scripts/document-frame-smoke.mjs': 19,
-    'scripts/ssis-smoke.mjs': 6, 'scripts/ssis-operations-smoke.mjs': 19
+    'scripts/electron-smoke.mjs': 19, 'scripts/layout-smoke.mjs': 10, 'scripts/connections-smoke.mjs': 20,
+    'scripts/theme-smoke.mjs': 6, 'scripts/palette-smoke.mjs': 6, 'scripts/backend-smoke.mjs': 48,
+    'scripts/live-smoke.mjs': 39, 'scripts/chart-smoke.mjs': 45, 'scripts/live-grid-smoke.mjs': 36,
+    'scripts/activity-monitor-smoke.mjs': 44, 'scripts/menus-smoke.mjs': 94, 'scripts/explorer-smoke.mjs': 25,
+    'scripts/scripting-smoke.mjs': 15, 'scripts/object-actions-smoke.mjs': 68, 'scripts/results-smoke.mjs': 55,
+    'scripts/options-resize-smoke.mjs': 2, 'scripts/options-smoke.mjs': 8, 'scripts/files-smoke.mjs': 15,
+    'scripts/editor-smoke.mjs': 10, 'scripts/table-designer-smoke.mjs': 4, 'scripts/document-frame-smoke.mjs': 14,
+    'scripts/ssis-smoke.mjs': 6, 'scripts/ssis-operations-smoke.mjs': 18
   }
 }
 

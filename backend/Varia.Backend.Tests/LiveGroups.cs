@@ -17,16 +17,16 @@ public static class LiveGroups
     public const int BudgetSeconds = 360;
 
     /// <summary>
-    /// Every live suite in the order Program.cs runs them, with the seconds it took in CI's Linux live job (each prints
+    /// Every live suite in the order Program.cs runs them, with the seconds it took in CI's Linux live job (PR #99's run; each prints
     /// "Live suite name: n s"; rough is fine). A new suite needs an entry here, or the live run fails.
     /// </summary>
     public static readonly (string Name, int Seconds)[] Suites =
     [
-        ("Query", 20), ("Live", 5), ("LiveData", 10), ("LiveTableData", 5), ("ExplorerStatus", 5), ("Execution", 15), ("Transaction", 10),
-        ("LiveResult", 50), ("Explorer", 40), ("Scripting", 170), ("Action", 40), ("ServerFiles", 10), ("Seam", 20), ("DatabaseState", 15),
-        ("RenameDatabase", 15), ("Detach", 15), ("ActionProgress", 15), ("Attach", 15), ("Restore", 15), ("Login", 20), ("LoginListing", 6), ("DatabaseProperties", 40),
-        ("Designer", 30), ("NewDatabase", 30), ("Ssis", 47), ("Activity", 5), ("ActivitySource", 25), ("ActivityAction", 3), ("SsisCreate", 1),
-        ("Entra", 1)
+        ("Query", 7), ("Live", 0), ("LiveData", 17), ("LiveTableData", 13), ("ExplorerStatus", 13), ("Execution", 4), ("Transaction", 5),
+        ("LiveResult", 62), ("Explorer", 28), ("Scripting", 151), ("Action", 32), ("ServerFiles", 1), ("Seam", 24), ("DatabaseState", 16),
+        ("RenameDatabase", 23), ("Detach", 25), ("ActionProgress", 4), ("Attach", 1), ("Restore", 26), ("Login", 9), ("LoginListing", 0), ("DatabaseProperties", 47),
+        ("Designer", 8), ("NewDatabase", 1), ("Ssis", 111), ("Activity", 0), ("ActivitySource", 28), ("ActivityAction", 0), ("SsisCreate", 0),
+        ("Entra", 0)
     ];
 
     public sealed record Group(int Index, int Count);
