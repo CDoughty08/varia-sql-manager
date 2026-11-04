@@ -217,7 +217,7 @@ describe('Object Explorer row visuals', () => {
     const chips = serverChips(2, [{ name: 'AG‮1', health: 1, role: 1 }])
     const status: RowStatus = { chips, live: true, words: chips.map(chip => chip.words).join(', ') }
     const markup = render(server(), { status })
-    expect(markup).toContain('<span class="status-pill-value">2</span><span class="status-pill-label"> jobs running</span>')
+    expect(markup).toContain('<span class="status-pill-value">2</span><span class="status-pill-label"> Agent jobs running</span>')
     // Group names are the server's text: markers for hidden characters, in the chip and its tooltip.
     expect(markup).toContain('<span class="status-pill-label">AG⟨U+202E⟩1 partially healthy</span>')
     expect(markup).toContain('title="Availability groups\nAG⟨U+202E⟩1: partially healthy, primary"')
