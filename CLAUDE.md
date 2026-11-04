@@ -169,7 +169,10 @@ pages, limits, error codes, display formats, benchmarks).
   `src/shared/explorer/search.ts`, mirrored in C# (`tests/object-search.test.ts`), with definition text under one budget
   for all connections (`IndexBudget`). It reads on its own pool (" - Object Search", the explorer's prologue) from
   `ObjectSearchSql`'s constant batch, run in each database only through `QUOTENAME(@db).sys.sp_executesql` and linted by
-  `CatalogSql.Lint`; definitions come from `sys.sql_modules`. Regex runs only `NonBacktracking` with a match timeout, and
+  `CatalogSql.Lint`; definitions come from `sys.sql_modules`. It indexes Microsoft-shipped objects too; the resource
+  database's (negative ids, from `sys.all_objects` and `sys.all_sql_modules`) are read once per build and shared across
+  connections by fingerprint in `ResourceCatalog`, which interns their definitions. Object Explorer's search box and the
+  Search Objects tab are one search (`SearchPanel`, `ObjectSearchService`); the tree has no filter of loaded rows. Regex runs only `NonBacktracking` with a match timeout, and
   a database the build cannot read is a skipped value. Never log names, definitions or search text.
 - Script As verbs, titles, URN types and preflight ids live only in `src/shared/scripting/catalog.ts`, and scripting
   options only in `options.ts`; after changing them, regenerate `docs/scripting.md` and the backend's embedded

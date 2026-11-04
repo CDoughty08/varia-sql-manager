@@ -106,11 +106,9 @@ export const part = {
   explorerDot: '.oe-dot',
   /** The glyph that marks the active query's server. */
   explorerActive: '.oe-active',
-  /** The part of a label that matches the Filter loaded objects text. */
-  explorerMatch: '.oe-match',
-  /** The Filter loaded objects field around its input, and the line under it when nothing matches. */
-  explorerFilter: '.explorer-filter',
-  explorerNoMatch: '.explorer-no-match',
+  /** Object Explorer's search (SearchPanel's pane layout) and the field around its input. */
+  explorerSearch: '.object-search-pane',
+  explorerSearchField: '.object-search-pane .object-search-field',
   /** The pane's footer: the selection's listing and its freshness, then the connected servers. */
   explorerFooter: '.explorer-footer',
   explorerFreshness: '.explorer-freshness',
@@ -441,14 +439,15 @@ export const explorerLabel = row => row.locator(part.explorerLabel)
 export const explorerSublabel = row => row.locator(part.explorerSublabel)
 export const itemCount = row => row.locator(part.explorerCount)
 export const connectionDot = row => row.locator(part.explorerDot)
-/** A row's live status chips, in order; each one's text is its whole label ("RESTORING 42 %", "2 jobs running"). */
+/** A row's live status chips, in order; each one's text is its whole label ("RESTORING 42 %", "2 Agent jobs running"). */
 export const statusChips = row => row.locator(`${part.explorerChips} ${part.statusPill}`)
 /** The server rows marked as the active query's server (at most one). */
 export const activeServerRows = page => serverRows(page).filter({ has: page.locator(part.explorerActive) })
-export const explorerMatches = page => explorerTree(page).locator(part.explorerMatch)
-export const explorerFilterBox = page => page.getByRole('textbox', { name: 'Filter loaded objects', exact: true })
-export const explorerFilterField = page => page.locator(part.explorerFilter)
-export const explorerNoMatch = page => page.locator(part.explorerNoMatch)
+export const explorerSearchBox = page => page.getByRole('textbox', { name: 'Search in Object Explorer', exact: true })
+export const explorerSearchField = page => page.locator(part.explorerSearchField)
+/** Object Explorer's search hits, by their reveal buttons' accessible names. */
+export const explorerSearchHits = page => page.locator(part.explorerSearch).getByRole('list', { name: 'Search results', exact: true }).locator('[data-hit]')
+export const explorerSearchToggle = (page, name) => page.locator(part.explorerSearch).getByRole('button', { name, exact: true })
 export const explorerFooter = page => page.locator(part.explorerFooter)
 export const explorerFreshness = page => explorerFooter(page).locator(part.explorerFreshness)
 export const explorerFreshnessScope = page => explorerFooter(page).locator(part.explorerFreshnessScope)

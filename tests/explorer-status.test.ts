@@ -55,11 +55,11 @@ describe('Object Explorer status chips', () => {
     expect(serverChips(undefined, undefined)).toEqual([])
     expect(serverChips(0, [])).toEqual([])
     expect(serverChips(null, undefined)).toEqual([])
-    expect(serverChips(1, undefined)).toEqual([expect.objectContaining({ id: 'jobs', tone: 'running', label: '1 job running', words: 'SQL Server Agent: 1 job running' })])
-    expect(serverChips(1200, undefined)[0].label).toBe('1,200 jobs running')
+    expect(serverChips(1, undefined)).toEqual([expect.objectContaining({ id: 'jobs', tone: 'running', label: '1 Agent job running', words: 'SQL Server Agent: 1 job running' })])
+    expect(serverChips(1200, undefined)[0].label).toBe('1,200 Agent jobs running')
     expect(serverChips(undefined, [{ name: 'AG1', health: 2, role: 1 }])).toEqual([expect.objectContaining({ id: 'availability', tone: 'success', label: 'AG1 healthy', icon: 'pass', title: 'Availability groups\nAG1: healthy, primary' })])
     const mixed = serverChips(2, [{ name: 'AG1', health: 2, role: 1 }, { name: 'AG2', health: 1, role: 2 }, { name: 'AG3', health: 1, role: 0 }])
-    expect(mixed.map(chip => [chip.label, chip.tone])).toEqual([['2 jobs running', 'running'], ['2 AGs partially healthy', 'warning']])
+    expect(mixed.map(chip => [chip.label, chip.tone])).toEqual([['2 Agent jobs running', 'running'], ['2 AGs partially healthy', 'warning']])
     expect(mixed[1].title).toBe('Availability groups\nAG1: healthy, primary\nAG2: partially healthy, secondary\nAG3: partially healthy, resolving')
     expect(serverChips(0, [{ name: 'AG1', health: 0, role: 2 }])[0]).toMatchObject({ label: 'AG1 not healthy', tone: 'critical' })
     const many = serverChips(0, Array.from({ length: 12 }, (_, at) => ({ name: 'AG' + at, health: 2, role: 1 })))[0]
@@ -195,7 +195,7 @@ describe('ExplorerStatusService', () => {
     ]), 10)
     await settle()
     const server = status.server(first)!
-    expect(server.server?.chips.map(chip => chip.label)).toEqual(['3 jobs running', 'AG1 healthy'])
+    expect(server.server?.chips.map(chip => chip.label)).toEqual(['3 Agent jobs running', 'AG1 healthy'])
     expect(server.server?.words).toBe('SQL Server Agent: 3 jobs running, Availability groups: AG1 healthy')
     expect(server.databases?.get('Restored')).toMatchObject({ live: true, words: 'Restoring 42 %', state: 'unavailable' })
     expect(server.databases?.get('Archive')).toMatchObject({ words: 'Read-only', state: 'readOnly' })
@@ -222,7 +222,7 @@ describe('ExplorerStatusService', () => {
     fake.onEvent(tick([{ probe: 'explorer.agent', costMs: 1, effectiveIntervalMs: 10_000, metrics: [1] }], [{ probe: 'explorer.databases', code: 'BLOCKED', message: 'Another session held a lock this view needed for more than a second. It tries again.', retryInMs: 5000, terminal: false }]), 10)
     await settle()
     expect(status.server(first)).toMatchObject({ databases: undefined })
-    expect(status.server(first)!.server?.chips.map(chip => chip.label)).toEqual(['1 job running', 'AG1 healthy'])
+    expect(status.server(first)!.server?.chips.map(chip => chip.label)).toEqual(['1 Agent job running', 'AG1 healthy'])
   })
 
   it('gives a peek at a database\'s last sampled runtime state, dated by the tick that sampled it (D3a)', async () => {

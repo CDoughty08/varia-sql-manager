@@ -321,7 +321,7 @@ count and connection dot keep their size, and the label gives up the row's empty
 | database | COPYING | running | state 7: The database is being copied (Azure SQL Database copy). |
 | database | READ-ONLY / STANDBY | warning | is_read_only, or is_in_standby (a log-shipping standby) |
 | database | SINGLE USER / RESTRICTED USER | warning | user_access 1 or 2 |
-| server | n jobs running | running | SQL Server Agent jobs of its current session that started and have not stopped (none while none runs) |
+| server | n Agent jobs running | running | SQL Server Agent jobs of its current session that started and have not stopped (none while none runs) |
 | server | <group> healthy / partially healthy / not healthy | success, warning, critical | the least healthy availability group (several: "n AGs …"); its tooltip names each group with its health and this replica's role |
 
 ## Limits
@@ -352,4 +352,3 @@ count and connection dot keep their size, and the label gives up the row's empty
 | `detail` | 512 | Characters in tooltip details |
 | `message` | 512 | Characters in an error message |
 | `maxName` | 260 | UTF-16 code units in the longest name a kind may declare; every other kind keeps 128 |
-| `quickFilter` | 128 | Characters in the Filter loaded objects box |

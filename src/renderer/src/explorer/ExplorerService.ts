@@ -14,7 +14,7 @@ import type { Disposable, ExternalStore } from '../core/types'
 import type { ExplorerMenuNode } from '../menus/targets'
 import type { LiveConnection } from '../services/connections'
 import { ExplorerLoader, type ExplorerLimitValues, type LoaderLimits, type LoadOutcome, type LoadPriority, type LoadTask } from './loader'
-import { emptyRows, filterText, flatten, flattenFiltered, rowIndex, rowKindOf, rowOwner, RowKind, siblingPlan, type NodeError, type NodeNote, type NodeTable, type TreeNode, type VisibleRows } from './tree-model'
+import { emptyRows, flatten, rowIndex, rowKindOf, rowOwner, RowKind, siblingPlan, type NodeError, type NodeNote, type NodeTable, type TreeNode, type VisibleRows } from './tree-model'
 
 export type { NodeNote, TreeNode } from './tree-model'
 /** A sentence for the tree's live region; `id` changes with every announcement, so a repeated sentence is heard again. */
@@ -27,14 +27,7 @@ export interface ExplorerSnapshot {
   readonly announcement?: Announcement
   /** Changes when a selection made outside the tree asks it to scroll the selected row into view. */
   readonly reveal?: number
-  /**
-   * The Filter loaded objects box narrows `rows`: its text as rows match it (`filterText`), how many nodes match, and
-   * the nodes that show only some of their children (`FilteredRows.partial`), whose item counts are left out.
-   */
-  readonly filter?: { readonly text: string; readonly matches: number; readonly partial: ReadonlySet<number> }
 }
-/** The box's text as typed, and a count that changes when Filter Loaded Objects asks the box to take focus. */
-export interface QuickFilterState { readonly input: string; readonly focus: number }
 /** How fresh the listing that shows a row is: the node it is a child of (or itself, expanded), for the pane's footer. */
 export interface ListingFreshness { readonly label: string; readonly updatedAt: number; readonly staleSince?: number }
 /**
@@ -59,7 +52,7 @@ export const noExplorerContext: ExplorerContextState = {
   explorerLoading: false
 }
 export type RefreshScope = 'server' | 'databases' | 'other'
-export type ExplorerServiceLimits = LoaderLimits & ExplorerLimitValues<'pageSize' | 'folderCap' | 'nodeBudget' | 'siblingLoads' | 'filters' | 'loadingRowDelayMs' | 'deleteSlice' | 'quickFilter'>
+export type ExplorerServiceLimits = LoaderLimits & ExplorerLimitValues<'pageSize' | 'folderCap' | 'nodeBudget' | 'siblingLoads' | 'filters' | 'loadingRowDelayMs' | 'deleteSlice'>
 export interface ExplorerServiceOptions {
   readonly api: Pick<VariaApi, 'explorerChildren' | 'explorerCancel'>
   readonly connections: ExternalStore<readonly LiveConnection[]>
@@ -214,10 +207,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private readonly dialogStore = new (class extends SnapshotStore<number | undefined> { set(value: number | undefined) { if (value !== this.getSnapshot()) this.publish(value) } clear() { this.clearListeners() } })(undefined)
   private readonly renameStore = new (class extends SnapshotStore<number | undefined> { set(value: number | undefined) { if (value !== this.getSnapshot()) this.publish(value) } clear() { this.clearListeners() } })(undefined)
   // Published at once, not with the next tick's rows, so the box shows each key as it is typed.
-  private readonly quickFilterStore = new (class extends SnapshotStore<QuickFilterState> { set(value: QuickFilterState) { this.publish(value) } clear() { this.clearListeners() } })({ input: '', focus: 0 })
   /** The filter the rows were last flattened with, so a change of filter is announced once. */
-  private filtered = ''
-  private focusTaken = 0
   private readonly now: () => number
   private status?: DatabaseRuntimeSource
   /** The child `reconcile` selects when a page of its folder brings it. */
@@ -482,28 +472,6 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   }
   closeFilter(): void { this.dialogStore.set(undefined) }
 
-  /** The Filter loaded objects box (unlike Filter Settings, it narrows the rows already loaded and asks for nothing). */
-  get quickFilter(): ExternalStore<QuickFilterState> { return this.quickFilterStore }
-  /** Narrows the rows to the loaded nodes whose label contains the text; clearing it shows the selection again. */
-  setQuickFilter(input: string): void {
-    const value = input.slice(0, this.limits.quickFilter), current = this.quickFilterStore.getSnapshot()
-    if (value === current.input) return
-    this.quickFilterStore.set({ ...current, input: value })
-    if (!filterText(value) && this.filtered) this.reveals++
-    this.invalidate()
-  }
-  /** Filter Loaded Objects: the box takes focus once it is shown. */
-  focusQuickFilter(): void {
-    const current = this.quickFilterStore.getSnapshot()
-    this.quickFilterStore.set({ ...current, focus: current.focus + 1 })
-  }
-  /** Whether the box should take focus now: once per request, so a box mounted later (the pane was hidden) still takes it. */
-  takeQuickFilterFocus(): boolean {
-    const { focus } = this.quickFilterStore.getSnapshot()
-    if (focus === this.focusTaken) return false
-    this.focusTaken = focus
-    return true
-  }
   /**
    * The listing a row belongs to, for the footer's "Updated 4 s ago": an expanded node that has loaded its children, else
    * the node it is listed under. Undefined before that listing's first page arrived.
@@ -694,7 +662,6 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.contextStore.clear()
     this.dialogStore.clear()
     this.renameStore.clear()
-    this.quickFilterStore.clear()
   }
 
   // Connections
@@ -1452,22 +1419,14 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (!this.dirty || this.disposed) return
     this.dirty = false
     const previous = this.getSnapshot()
-    const filter = filterText(this.quickFilterStore.getSnapshot().input)
-    const filtered = filter ? flattenFiltered(this.nodes, this.roots, filter, previous.rows.count + 64, this.selected === undefined ? undefined : rowOwner(this.selected)) : undefined
-    const rows = filtered?.rows ?? flatten(this.nodes, this.roots, previous.rows.count + 64)
-    // Spoken once per change of filter, not again as later pages bring more matches.
-    if (filter !== this.filtered) {
-      this.filtered = filter
-      if (filtered) this.announce(filtered.matches ? `Filter: ${count(filtered.matches)} loaded ${filtered.matches === 1 ? 'item matches' : 'items match'}` : 'Filter: no loaded items match')
-      else this.announce('Filter cleared')
-    }
+    const rows = flatten(this.nodes, this.roots, previous.rows.count + 64)
     const renaming = this.renameStore.getSnapshot(), renamed = renaming === undefined ? undefined : this.nodes.get(renaming)
     if (renaming !== undefined && (!renamed || renamed.lost || !this.attached(renamed) || this.rootOf(renamed)?.lost)) this.renameStore.set(undefined)
     // A synthetic row can disappear (a load finished); its owner is selected instead.
     if (this.selected !== undefined && this.selected < 0 && rowIndex(rows, this.selected) < 0) this.selected = rowOwner(this.selected)
     if (this.selected !== undefined && !this.nodes.has(rowOwner(this.selected))) this.selected = undefined
     this.publish({ version: ++this.version, rows, ...(this.selected !== undefined ? { selected: this.selected } : {}), ...(this.announcement ? { announcement: this.announcement } : {}),
-      ...(this.reveals ? { reveal: this.reveals } : {}), ...(filtered ? { filter: { text: filter, matches: filtered.matches, partial: filtered.partial } } : {}) })
+      ...(this.reveals ? { reveal: this.reveals } : {}) })
     this.updateContext()
   }
   private updateContext(): void {

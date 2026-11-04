@@ -6,7 +6,7 @@ import { expandExplorerPath, explorerLines, explorerRow, explorerTree, revealExp
 import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.mjs'
 import {
   activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
-  explorerFilterField, explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerMatches, explorerNoMatch, explorerServerCount, explorerSublabel, explorerToolbar, itemCount,
+  explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchField, explorerSearchHits, explorerSearchToggle, explorerServerCount, explorerSublabel, explorerToolbar, itemCount,
   messages, outputView, paneMenuButton, part, primaryAction, quickInput, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
 } from './fixtures/ui.mjs'
 
@@ -46,7 +46,10 @@ const editorText = () => editorTextOf(page)
 const tabs = () => documentTabs(page).getByRole('tab')
 const toolbarButton = name => explorerToolbar(page).getByRole('button', { name, exact: true })
 const menu = name => page.getByRole('menu', { name, exact: true })
-const filterBox = () => page.getByRole('textbox', { name: 'Filter loaded objects', exact: true })
+const searchBox = () => page.getByRole('textbox', { name: 'Search in Object Explorer', exact: true })
+/** Shift+Tab from the tree to the search box, past its Match Case, Whole Word and Regex toggles; Tab from the box to the tree. */
+const backToSearchBox = async () => { for (let step = 0; step < 4; step++) await page.keyboard.press('Shift+Tab'); await expect(searchBox()).toBeFocused() }
+const searchBoxToTree = async () => { for (let step = 0; step < 4; step++) await page.keyboard.press('Tab'); await expect(tree()).toBeFocused() }
 const isFolder = (params, folder) => params.node.type === 'folder' && params.node.folder === folder
 /** The row `aria-activedescendant` names, as a screen reader finds it. */
 const active = () => page.evaluate(text => {
@@ -267,9 +270,8 @@ try {
   await expect(explorerTree(page).locator(part.explorerProgressRow)).toBeVisible()
   // Stop by keyboard: it disables itself, and focus moves on to the next enabled button instead of the page.
   await expect(tree()).toBeFocused()
-  // The filter box and the header's ⋯ button sit between the toolbar and the tree.
-  await page.keyboard.press('Shift+Tab')
-  await expect(filterBox()).toBeFocused()
+  // The search box (and its toggles) and the header's ⋯ button sit between the toolbar and the tree.
+  await backToSearchBox()
   await page.keyboard.press('Shift+Tab')
   await expect(paneMenuButton(page, 'explorer')).toBeFocused()
   await page.keyboard.press('Shift+Tab')
@@ -282,9 +284,8 @@ try {
   await page.keyboard.press('Tab')
   await expect(paneMenuButton(page, 'explorer')).toBeFocused()
   await page.keyboard.press('Tab')
-  await expect(filterBox()).toBeFocused()
-  await page.keyboard.press('Tab')
-  await expect(tree()).toBeFocused()
+  await expect(searchBox()).toBeFocused()
+  await searchBoxToTree()
   console.log('Object Explorer checks: folders load only when expanded, collapsing cancels a running load, Stop (by mouse and by keyboard, which keeps focus in the toolbar) shows how far a folder got, and Enter continues.')
 
   // 4. F5 in the tree reconciles the selected folder: rows still there keep their row, and what is expanded below them
@@ -577,12 +578,11 @@ try {
     await page.keyboard.press('Escape')
     await expect(tree()).toBeFocused()
   }
-  // The toolbar is one tab stop: Shift+Tab from the tree reaches it past the filter box and the header's ⋯ button, the
+  // The toolbar is one tab stop: Shift+Tab from the tree reaches it past the search box and the header's ⋯ button, the
   // arrows, Home and End move between its enabled buttons (wrapping), Tab goes on to ⋯, the box and then the tree, and the
   // toolbar remembers the button last used.
   await tree().focus()
-  await page.keyboard.press('Shift+Tab')
-  await expect(filterBox()).toBeFocused()
+  await backToSearchBox()
   await page.keyboard.press('Shift+Tab')
   await expect(paneMenuButton(page, 'explorer')).toBeFocused()
   await page.keyboard.press('Shift+Tab')
@@ -601,20 +601,20 @@ try {
   await page.keyboard.press('Tab')
   await expect(paneMenuButton(page, 'explorer')).toBeFocused()
   await page.keyboard.press('Tab')
-  await expect(filterBox()).toBeFocused()
-  await page.keyboard.press('Tab')
-  await expect(tree()).toBeFocused()
-  await page.keyboard.press('Shift+Tab')
+  await expect(searchBox()).toBeFocused()
+  await searchBoxToTree()
+  // Back past the search box with its three toggles and ⋯ to the toolbar's remembered button, and forward again.
+  await backToSearchBox()
   await page.keyboard.press('Shift+Tab')
   await page.keyboard.press('Shift+Tab')
   expect(await focusedTool()).toBe(tools.at(-1))
   await page.keyboard.press('Tab')
   await page.keyboard.press('Tab')
-  await page.keyboard.press('Tab')
-  await expect(tree()).toBeFocused()
+  await expect(searchBox()).toBeFocused()
+  await searchBoxToTree()
   console.log('Object Explorer checks: Ctrl+N on a database, F8, Filter Settings in the palette, and the toolbar\'s arrow keys.')
 
-  // 10b. The server row, item counts, the footer's freshness and the Filter loaded objects box.
+  // 10b. The server row, item counts, the footer's freshness and the search box.
   await setStub({ tables: 3 })
   await expandExplorerPath(page, 'server-a', 'Databases', 'AppData', 'Tables')
   await select('server-a', 'Databases', 'AppData', 'Tables')
@@ -656,83 +656,60 @@ try {
   await select('server-a', 'Databases', 'AppData', 'Tables', 'dbo.table1')
   await expect(explorerFreshnessScope(page)).toHaveText('Tables')
   await expect(explorerServerCount(page)).toHaveText('2 connected servers')
-  // Typing narrows the tree to loaded matches with their parents, bold where they match, without asking the backend.
-  const requested = (await stubCalls()).length
-  await filterBox().click()
+  // The search box searches the server's object index, as Search Objects does, and leaves the tree as it is: no listing is
+  // asked for, and the selection (which ORD does not match) stays selected.
+  const listings = async () => (await stubCalls()).length
+  const listed = await listings()
+  await searchBox().click()
   // The field shows the controls' 2 px ring at 2 px, around the field rather than the input.
-  expect(await explorerFilterField(page).evaluate(element => { const style = getComputedStyle(element); return [style.outlineStyle, style.outlineWidth, style.outlineOffset] })).toEqual(['solid', '2px', '2px'])
+  expect(await explorerSearchField(page).evaluate(element => { const style = getComputedStyle(element); return [style.outlineStyle, style.outlineWidth, style.outlineOffset] })).toEqual(['solid', '2px', '2px'])
   await page.keyboard.type('ORD')
-  // dbo.Orders matches, so its expanded rows show as they are (an earlier step left Columns open); the selected
-  // dbo.table1 stays listed, so nothing acts on a row out of sight.
-  const ordLines = ['1 server-a [true]', '2 Databases [true]', '3 AppData [true]', '4 Tables [true]', '5 dbo.Orders [true]', '6 Columns [true]', '7 Id', '7 CustomerName',
-    '6 Keys [false]', '6 Constraints [false]', '6 Triggers [false]', '6 Indexes [false]', '6 Statistics [false]', '5 dbo.table1 [false]', '1 server-b [true]']
-  await expect.poll(() => explorerLines(page)).toEqual(ordLines)
-  await expect(explorerMatches(page)).toHaveText(['Ord'])
-  await expect(liveRegion()).toHaveText('Filter: 1 loaded item matches')
-  // Tables shows 2 of its 3 rows (the match and the selection), so it leaves its count out, on screen and in words.
-  await expect(itemCount(tablesFolder)).toHaveCount(0)
-  await expect(tablesFolder).not.toHaveAttribute('aria-description', /items?$/)
-  await expect(tablesFolder).not.toHaveAttribute('title', /\n3 items/)
-  expect((await stubCalls()).length).toBe(requested)
-  // ↓ moves to the first match in the tree; Escape in the box clears it and shows the selection in context again.
+  await expect(explorerSearchHits(page).first()).toHaveAttribute('title', 'Reveal in Object Explorer: dbo.Orders')
+  await expect(explorerSearchHits(page)).toHaveCount(3)
+  expect(await listings()).toBe(listed)
+  expect(await active()).toMatchObject({ label: 'dbo.table1', selected: 'true' })
+  await page.screenshot({ path: resolve('artifacts', 'explorer-search.png') })
+  // Match Case, Whole Word and Regex are the tab's toggles: Whole Word leaves nothing for ORD, and says so.
+  const wholeWord = explorerSearchToggle(page, 'Match Whole Word')
+  await wholeWord.click()
+  await expect(wholeWord).toHaveAttribute('aria-pressed', 'true')
+  await expect(explorerSearchHits(page)).toHaveCount(0)
+  await expect(page.getByText('No objects match', { exact: true })).toBeVisible()
+  await wholeWord.click()
+  await expect(explorerSearchHits(page)).toHaveCount(3)
+  const matchCase = explorerSearchToggle(page, 'Match Case')
+  await matchCase.click()
+  await expect(explorerSearchHits(page)).toHaveCount(0)
+  await matchCase.click()
+  await expect(explorerSearchHits(page)).toHaveCount(3)
+  // ↓ moves to the first hit; Enter reveals it in the tree below, which selects it.
+  await searchBox().focus()
   await page.keyboard.press('ArrowDown')
-  await expect(tree()).toBeFocused()
+  await expect(explorerSearchHits(page).first()).toBeFocused()
+  await page.keyboard.press('Enter')
   await expect.poll(async () => (await active())?.label).toBe('dbo.Orders')
-  // Collapsing Tables, shown only for the match below it, keeps it listed, selected and in view; expanding it shows the match again.
-  await press('ArrowLeft', 'dbo.Orders')
-  await press('ArrowLeft', 'Tables')
-  await press('ArrowLeft', 'Tables')
-  await expect.poll(() => explorerLines(page)).toEqual(['1 server-a [true]', '2 Databases [true]', '3 AppData [true]', '4 Tables [false]', '1 server-b [true]'])
-  expect(await activeInView()).toBe(true)
-  // Right, Right in one task, with no frame between them to draw the rows the first one opened, expands Tables and then
-  // enters it: each key acts on what the key before it did.
-  await page.evaluate(selector => {
-    const tree = document.querySelector(selector)
-    for (let key = 0; key < 2; key++) tree.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', code: 'ArrowRight', bubbles: true, cancelable: true }))
-  }, part.explorerTree)
-  await expect.poll(async () => (await active())?.label, { message: 'Right, Right enters Tables' }).toBe('dbo.Orders')
   expect((await active())?.selected).toBe('true')
-  await press('ArrowRight', 'dbo.Orders')
-  await expect.poll(() => explorerLines(page)).toEqual(ordLines.filter(line => line !== '5 dbo.table1 [false]'))
-  // Text that matches nothing says so under the box, with Clear filter; the selection stays in view.
-  await filterBox().fill('zzz')
-  const noMatch = explorerNoMatch(page)
-  await expect(emptyStateDetail(noMatch)).toHaveText('No loaded objects match “zzz”')
-  await expect(liveRegion()).toHaveText('Filter: no loaded items match')
-  expect(await activeInView()).toBe(true)
-  // Tab passes Clear filter to the tree, whose active row is the selection the text left listed.
-  await page.keyboard.press('Tab')
-  await expect(noMatch.getByRole('button', { name: 'Clear filter', exact: true })).toBeFocused()
-  await page.keyboard.press('Tab')
-  await expect(tree()).toBeFocused()
-  expect(await active()).toMatchObject({ label: 'dbo.Orders', selected: 'true' })
-  await noMatch.getByRole('button', { name: 'Clear filter', exact: true }).click()
-  await expect(filterBox()).toHaveValue('')
-  await expect(filterBox()).toBeFocused()
-  await expect(noMatch).toHaveCount(0)
-  await page.keyboard.type('ORD')
-  await expect.poll(() => explorerLines(page)).toEqual(ordLines.filter(line => line !== '5 dbo.table1 [false]'))
-  await filterBox().focus()
+  // Escape clears the text and hides the hits; Escape in the empty box returns to the tree.
+  await searchBox().focus()
   await page.keyboard.press('Escape')
-  await expect(filterBox()).toHaveValue('')
-  await expect(filterBox()).toBeFocused()
-  await expect(await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables', 'dbo.table2')).toBeVisible()
-  await expect(explorerMatches(page)).toHaveCount(0)
-  await expect(itemCount(tablesFolder)).toHaveText('3')
+  await expect(searchBox()).toHaveValue('')
+  await expect(searchBox()).toBeFocused()
+  await expect(explorerSearchHits(page)).toHaveCount(0)
   await page.keyboard.press('Escape')
   await expect(tree()).toBeFocused()
-  expect(await activeInView()).toBe(true)
   if (process.platform !== 'darwin') {
-    // The palette's Filter Loaded Objects focuses the box.
+    // The palette's Search in Object Explorer focuses the box.
     await page.keyboard.press('F1')
-    await page.keyboard.type('filter loaded')
-    await expect(quickInput(page).getByRole('option', { name: /^Object Explorer: Filter Loaded Objects/ })).toHaveCount(1)
+    await page.keyboard.type('search in object')
+    await expect(quickInput(page).getByRole('option', { name: /^Object Explorer: Search in Object Explorer/ })).toHaveCount(1)
     await page.keyboard.press('Enter')
-    await expect(filterBox()).toBeFocused()
+    await expect(searchBox()).toBeFocused()
     await page.keyboard.press('Escape')
     await expect(tree()).toBeFocused()
   }
-  // Forced colors: the dot keeps its shape, in the system's text colour.
+  // Forced colors: the dot keeps its shape, in the system's text colour. The reveal above scrolled the server row away.
+  await explorerTree(page).evaluate(element => { for (let node = element; node; node = node.parentElement) if (node.scrollTop) { node.scrollTop = 0; break } element.scrollTop = 0 })
+  await expect(serverRow).toBeVisible()
   await page.emulateMedia({ forcedColors: 'active' })
   const dot = await connectionDot(serverRow).evaluate(element => { const style = getComputedStyle(element); return { background: style.backgroundColor, border: style.borderTopColor } })
   await page.emulateMedia({ forcedColors: null })
@@ -876,7 +853,7 @@ try {
   expect(narrow.label, JSON.stringify(narrow)).toBeCloseTo(narrow.kept, 0)
   if (wasExpanded === 'false') { await select('server-a', 'Server Objects'); await press('ArrowLeft', 'Server Objects') }
   await page.screenshot({ path: resolve('artifacts', 'explorer-visuals.png') })
-  console.log('Object Explorer checks: 30 px server rows with version, login, connection dot and active-query glyph, muted item counts (left out while filtered), the environment tag\'s slot, the footer\'s freshness, and the Filter loaded objects box by keyboard and from the palette.')
+  console.log('Object Explorer checks: 30 px server rows with version, login, connection dot and active-query glyph, muted item counts, the environment tag\'s slot, the footer\'s freshness, and the Filter loaded objects box by keyboard and from the palette.')
 
   // 11. Disconnecting a server while one of its folders streams cancels the load and removes its rows.
   await setStub({ tables: 120_000, pageDelayMs: 250 })

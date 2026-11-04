@@ -118,7 +118,7 @@ export const densityPlanned: Readonly<Record<keyof DensityMetrics, string>> = {
 export const densityUse: Readonly<Record<keyof DensityMetrics, readonly string[]>> = {
   header: ['.title-bar'],
   bar: ['.query-tabs', '.explorer-header', '.query-bar', '.output-toolbar', '.document-script-head', '.activity-pane-tabs [role="tab"]'],
-  control: ['.icon-button', '.explorer-filter', '.object-search-field', '.command-centre', '.query-bar-action', '.query-connection', '.document-verb', '.property-input', '.property-field-control > .property-input-action > .property-input', '.property-value.restore-to', '.activity-select', '.activity-tile-toggle'],
+  control: ['.icon-button', '.object-search-field', '.command-centre', '.query-bar-action', '.query-connection', '.document-verb', '.property-input', '.property-field-control > .property-input-action > .property-input', '.property-value.restore-to', '.activity-select', '.activity-tile-toggle'],
   row: ['.explorer-row', '.skeleton-row', '.document-nav-item', '.server-files-head', '.server-files-row', '.new-database-cell', '.attach-database-grid .attach-database-cell', '.user-mapping-head', '.new-login-credentials-grid th', '.new-login-credentials-grid td'],
   status: ['.status-bar', '.query-status-bar']
 }

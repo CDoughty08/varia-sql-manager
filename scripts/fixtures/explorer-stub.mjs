@@ -13,6 +13,7 @@ import { explorerStatics } from './explorer-tree.mjs'
  * - AppData › Views: `views` expandable views (dbo.view0…), paged the same way.
  * - Security › Audits fails with PERMISSION_DENIED until `auditsOk` is set.
  * - Server Objects › Linked Servers is held until `release()` or a cancel for its request.
+ * - The object index (explorer.index, explorer.search) holds dbo.Orders, dbo.usp_ShipOrders and dbo.Orders.trg_Orders.
  */
 export function explorerStubData() {
   return { statics: explorerStatics() }
@@ -91,6 +92,35 @@ export function installExplorerStub({ ipcMain }, { statics }) {
       }
     }
   }
+  // The object index: AppData's dbo.Orders, a procedure that names it, and its trigger, searched with the real options.
+  const searchObjects = [
+    { object: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' }, folder: 'tables', label: 'dbo.Orders' },
+    { object: { kind: 'procedure', database: 'AppData', schema: 'dbo', name: 'usp_ShipOrders' }, folder: 'storedProcedures', label: 'dbo.usp_ShipOrders',
+      definition: 'CREATE PROCEDURE dbo.usp_ShipOrders AS\n  UPDATE dbo.Orders SET shipped = 1;' },
+    { object: { kind: 'trigger', database: 'AppData', name: 'trg_Orders', parent: { kind: 'table', schema: 'dbo', name: 'Orders' } }, folder: 'tableTriggers', label: 'dbo.Orders.trg_Orders' }
+  ]
+  const indexStatus = definitions => ({ state: 'ready', databases: 2, indexed: 2, objects: searchObjects.length, modules: definitions ? 1 : 0, cut: 0, skipped: [], definitions, builtAt: '2026-11-03T12:00:00Z' })
+  function search({ text, caseSensitive, wholeWord, regex, in: scope = 'all' }) {
+    let pattern
+    try { pattern = new RegExp(regex ? text : text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), caseSensitive ? 'gm' : 'gim') }
+    catch { return { hits: [], total: 0, partial: false, elapsedMs: 0, index: indexStatus(true), problem: 'The regular expression is not valid.' } }
+    const find = value => {
+      for (const match of value.matchAll(pattern)) {
+        const before = value[match.index - 1] ?? '', after = value[match.index + match[0].length] ?? ''
+        if (!wholeWord || (!/[\w@#$]/.test(before) && !/[\w@#$]/.test(after))) return match
+      }
+    }
+    const hits = searchObjects.flatMap(({ definition, ...item }) => {
+      const name = scope !== 'definitions' ? find(item.object.name) : undefined
+      const body = scope !== 'names' && definition ? find(definition) : undefined
+      if (!name && !body) return []
+      const start = body ? definition.lastIndexOf('\n', body.index - 1) + 1 : 0, stop = body ? definition.indexOf('\n', body.index) : -1
+      const end = stop < 0 ? definition?.length ?? 0 : stop
+      return [{ ...item, ...name ? { range: [item.label.length - item.object.name.length + name.index, name[0].length] } : {},
+        ...body ? { definition: { line: definition.slice(0, body.index).split('\n').length, column: body.index - start + 1, preview: definition.slice(start, end), range: [body.index - start, body[0].length], before: false, after: false, matches: 1, cut: false } } : {} }]
+    })
+    return { hits, total: hits.length, partial: false, elapsedMs: 1, index: indexStatus(true) }
+  }
   ipcMain.removeHandler('varia:request')
   ipcMain.handle('varia:request', async (_event, method, params) => {
     stub.calls.push({ method, params: method === 'connections.connect' ? { server: params.server } : params })
@@ -104,6 +134,8 @@ export function installExplorerStub({ ipcMain }, { statics }) {
       case 'connections.disconnect': delete stub.connections[params.connectionId]; return ok({ disconnected: true })
       case 'databases.list': return ok([{ name: 'master', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }])
       case 'explorer.children': return children(params)
+      case 'explorer.index': return ok({ status: indexStatus(params.definitions !== false), elapsedMs: 1 })
+      case 'explorer.search': return ok(search(params))
       case 'query.session.close': return ok({ closed: true })
       case 'query.session.state': return ok({ transactionCount: 0, checked: true })
       case 'query.execute': return ok({

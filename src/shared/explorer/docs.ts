@@ -40,7 +40,6 @@ const limitNotes: Readonly<Record<keyof typeof explorerLimits, string>> = {
   detail: 'Characters in tooltip details',
   message: 'Characters in an error message',
   maxName: 'UTF-16 code units in the longest name a kind may declare; every other kind keeps 128',
-  quickFilter: 'Characters in the Filter loaded objects box'
 }
 
 const lists = (id: FolderId) => {

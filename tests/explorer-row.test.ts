@@ -121,12 +121,6 @@ describe('Object Explorer row visuals', () => {
     expect(markup).toContain('<span class="oe-end"><span class="oe-count" aria-hidden="true">1,234</span></span>')
     expect(rowTooltip(tables({ total: 2, staticCount: 1 }))).toBe('Tables\n1 item')
     expect(rowDescription(tables({ total: 1_235, staticCount: 1 }))).toBe('1,234 items')
-    // While Filter loaded objects shows only some of its rows, the folder says no count, to the eye or in words.
-    const partial = render(tables({ total: 1_235, staticCount: 1 }), { match: 'ord', partial: true })
-    expect(partial).toContain('<span class="oe-end"></span>')
-    expect(partial).not.toContain('1,234')
-    expect(partial).toContain('title="Tables"')
-    expect(rowDescription(tables({ total: 1_235, staticCount: 1 }), false)).toBeUndefined()
     // Placed by its offset, so rows below a taller server row sit lower; a row with nothing at its end has an empty one.
     expect(markup).toContain('transform:translateY(52px)')
     expect(render(node())).toContain('<span class="oe-end"></span>')
@@ -217,20 +211,16 @@ describe('Object Explorer row visuals', () => {
     const chips = serverChips(2, [{ name: 'AG‮1', health: 1, role: 1 }])
     const status: RowStatus = { chips, live: true, words: chips.map(chip => chip.words).join(', ') }
     const markup = render(server(), { status })
-    expect(markup).toContain('<span class="status-pill-value">2</span><span class="status-pill-label"> jobs running</span>')
+    expect(markup).toContain('<span class="status-pill-value">2</span><span class="status-pill-label"> Agent jobs running</span>')
     // Group names are the server's text: markers for hidden characters, in the chip and its tooltip.
     expect(markup).toContain('<span class="status-pill-label">AG⟨U+202E⟩1 partially healthy</span>')
     expect(markup).toContain('title="Availability groups\nAG⟨U+202E⟩1: partially healthy, primary"')
     expect(markup).toContain('aria-label="localhost (SQL Server 17.0.1000.7 - sa), SQL Server Agent: 2 jobs running, Availability groups: AG⟨U+202E⟩1 partially healthy"')
     expect(markup).toContain('<span class="oe-sublabel">17.0 · sa</span>')
   })
-  it('mark the part of the label that matches the filter, keeping the label\'s text whole', () => {
-    expect(render(node(), { match: 'ord' })).toContain('<bdi class="oe-label">dbo.<span class="oe-match">Ord</span>ers</bdi>')
-    expect(render(node(), { match: 'zzz' })).toContain('<bdi class="oe-label">dbo.Orders</bdi>')
-    // The match is found in the text as shown, markers for hidden characters included.
-    expect(renderToStaticMarkup(createElement(Label, { text: 'dbo.a\u202eorders', match: 'ord' }))).toBe('<bdi class="oe-label">dbo.a⟨U+202E⟩<span class="oe-match">ord</span>ers</bdi>')
-    // Where lower-casing changes the length, nothing is marked rather than the wrong letters.
-    expect(renderToStaticMarkup(createElement(Label, { text: 'İstanbul', match: 'stan' }))).toBe('<bdi class="oe-label">İstanbul</bdi>')
+  it('shows the label whole, with markers for hidden characters', () => {
+    expect(render(node())).toContain('<bdi class="oe-label">dbo.Orders</bdi>')
+    expect(renderToStaticMarkup(createElement(Label, { text: 'dbo.a\u202eorders' }))).toBe('<bdi class="oe-label">dbo.a⟨U+202E⟩orders</bdi>')
   })
 })
 

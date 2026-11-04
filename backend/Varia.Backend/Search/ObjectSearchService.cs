@@ -30,6 +30,7 @@ internal sealed class ObjectSearchService : IDisposable
     private readonly IObjectSearchHost host;
     private readonly ConcurrentDictionary<string, State> states = new(StringComparer.Ordinal);
     private readonly IndexBudget budget;
+    private readonly ResourceCatalog resources;
     private readonly SemaphoreSlim total;
     private readonly RequestRegistry running;
     public const int MaxText = 1000;
@@ -40,11 +41,14 @@ internal sealed class ObjectSearchService : IDisposable
     public static readonly TimeSpan ProgressEvery = TimeSpan.FromMilliseconds(250);
     public static readonly string[] Kinds = ["table", "view", "procedure", "function", "synonym", "sequence", "trigger", "type", "tableType", "databaseTrigger"];
 
+    /// <summary>The database a skipped resource read is reported as.</summary>
+    public const string ResourceDatabase = "mssqlsystemresource";
+
     /// <summary>One connection's index and its build.</summary>
-    private sealed class State(IndexBudget budget)
+    private sealed class State(IndexBudget budget, ResourceCatalog resources)
     {
         public readonly object Gate = new();
-        public ConnectionIndex Index { get; } = new(budget);
+        public ConnectionIndex Index { get; } = new(budget, resources);
         public CancellationTokenSource? Build;
         public bool Building;
         public bool Built;
@@ -60,6 +64,7 @@ internal sealed class ObjectSearchService : IDisposable
         this.host = host;
         Limits = limits ?? new ObjectIndexLimits();
         budget = new IndexBudget(Limits.TotalDefinitionChars);
+        resources = new ResourceCatalog(budget);
         total = new SemaphoreSlim(Limits.Total);
         running = new RequestRegistry(64, "object index");
     }
@@ -67,6 +72,8 @@ internal sealed class ObjectSearchService : IDisposable
     public ObjectIndexLimits Limits { get; }
     /// <summary>Definition characters held across every connection (the checks read it).</summary>
     public long DefinitionChars => budget.Used;
+    /// <summary>The shared resource sets and their distinct definitions (the checks read it).</summary>
+    internal ResourceCatalog Resources => resources;
 
     public async Task<ObjectIndexResult> IndexAsync(ObjectIndexArgs args, CancellationToken token, Action<object>? progress = null)
     {
@@ -75,7 +82,7 @@ internal sealed class ObjectSearchService : IDisposable
         if (!Guid.TryParse(args.RequestId, out _)) throw Invalid("requestId.");
         var profile = host.Profile(args.ConnectionId);
         var perDatabase = profile.Explorer(ExplorerCatalog.Current).Cloud;
-        var state = states.GetOrAdd(args.ConnectionId, _ => new State(budget));
+        var state = states.GetOrAdd(args.ConnectionId, _ => new State(budget, resources));
         using var source = CancellationTokenSource.CreateLinkedTokenSource(token);
         var entry = running.Register(args.RequestId, args.ConnectionId, source);
         var definitions = args.Definitions ?? true;
@@ -94,6 +101,8 @@ internal sealed class ObjectSearchService : IDisposable
             var names = await ListAsync(args.ConnectionId, source.Token);
             lock (state.Gate) state.Databases = names.Count;
             state.Index.Keep(names.ToHashSet(StringComparer.Ordinal));
+            if (await ReadResourceAsync(args.ConnectionId, profile, state, definitions, source.Token) is { } resourceSkip)
+                lock (state.Gate) state.Skipped.Add(resourceSkip);
             var last = Stopwatch.StartNew();
             progress?.Invoke(new { Type = "explorer.index.progress", Done = 0, Total = names.Count, Objects = state.Index.Objects });
             for (var done = 0; done < names.Count; done++)
@@ -187,7 +196,7 @@ internal sealed class ObjectSearchService : IDisposable
         var databases = state.Index.Databases;
         lock (state.Gate)
             return new(state.Building ? "building" : state.Built ? "ready" : databases.Count > 0 ? "ready" : "none", state.Databases, state.Building ? state.Indexed : databases.Count,
-                databases.Sum(value => value.Objects.Length), databases.Sum(value => value.Modules), databases.Sum(value => value.Cut), [.. state.Skipped], state.Definitions,
+                state.Index.Objects, databases.Sum(value => value.Modules) + (state.Index.Resource?.Modules ?? 0), databases.Sum(value => value.Cut) + (state.Index.Resource?.Cut ?? 0), [.. state.Skipped], state.Definitions,
                 state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture));
     }
 
@@ -250,6 +259,48 @@ internal sealed class ObjectSearchService : IDisposable
         finally { total.Release(); }
     }
 
+    /// <summary>Takes this connection's share of the resource database's objects: the set another connection (or an earlier build)
+    /// holds for the same fingerprint, or a new read. The reason it could not, as a value; the set held before stays then.</summary>
+    private async Task<ObjectIndexSkip?> ReadResourceAsync(string connectionId, ServerProfile profile, State state, bool definitions, CancellationToken token)
+    {
+        using var budgetSource = CancellationTokenSource.CreateLinkedTokenSource(token);
+        budgetSource.CancelAfter(Limits.DatabaseBudget);
+        try
+        {
+            await using var connection = host.Connection(connectionId, null);
+            await host.OpenAsync(connection, budgetSource.Token);
+            ResourceKey key;
+            await using (var command = connection.CreateCommand())
+            {
+                command.CommandTimeout = 0;
+                command.CommandText = ObjectSearchSql.Prologue + ObjectSearchSql.ResourceFingerprint;
+                await using var rows = await command.ExecuteReaderAsync(budgetSource.Token);
+                await rows.ReadAsync(budgetSource.Token);
+                key = new(profile.ProductVersion ?? profile.Major.ToString(CultureInfo.InvariantCulture), profile.EngineEdition, rows.GetInt64(0),
+                    rows.IsDBNull(1) ? null : rows.GetDateTime(1), rows.IsDBNull(2) ? 0 : rows.GetInt32(2), definitions);
+            }
+            if (state.Index.Resource?.Key == key) return null;
+            var set = await resources.AcquireAsync(key, async () =>
+            {
+                await using var command = connection.CreateCommand();
+                command.CommandTimeout = 0;
+                command.CommandText = ObjectSearchSql.Prologue + ObjectSearchSql.ResourceObjects(definitions);
+                await using var rows = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, budgetSource.Token);
+                return await DatabaseReader.ReadResourceAsync(rows, definitions, Limits, budgetSource.Token);
+            });
+            state.Index.PutResource(set);
+            return null;
+        }
+        catch (Exception error) when (error is OperationCanceledException or SqlException && budgetSource.IsCancellationRequested && !token.IsCancellationRequested)
+        {
+            return new(ResourceDatabase, "TIMEOUT", "Reading the system objects took longer than " + Limits.DatabaseBudget.TotalSeconds.ToString(CultureInfo.InvariantCulture) + " seconds.");
+        }
+        catch (SqlException error) when (!token.IsCancellationRequested)
+        {
+            return new(ResourceDatabase, "CATALOG_ERROR", ExplorerErrors.From(error, ErrorPhase.Statement, "System objects", null).Message);
+        }
+    }
+
     private static int OtherObjects(State state, string database) => state.Index.Databases.Where(value => value.Database != database).Sum(value => value.Objects.Length);
 }
 
@@ -282,7 +333,8 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             var parent = reader.IsDBNull(5) ? null : reader.GetString(5);
             var parentSchema = reader.IsDBNull(6) ? null : reader.GetString(6);
             var parentType = reader.IsDBNull(7) ? null : reader.GetString(7).TrimEnd();
-            var item = Map(type, schema, name, modified, parent, parentSchema, parentType);
+            var system = reader.GetBoolean(8);
+            var item = Map(type, schema, name, modified, parent, parentSchema, parentType, system);
             if (item is null) continue;
             byId[id] = objects.Count;
             objects.Add(item);
@@ -305,8 +357,9 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             var id = reader.GetInt32(0);
             var name = reader.GetString(1);
             var modified = reader.GetDateTime(2);
+            var system = reader.GetBoolean(3);
             byId[id] = objects.Count;
-            objects.Add(new("databaseTrigger", "databaseTriggers", null, name, Modified: modified));
+            objects.Add(new("databaseTrigger", "databaseTriggers", null, name, Modified: modified, System: system));
         }
         var modules = 0;
         var cut = 0;
@@ -331,14 +384,47 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
         return index;
     }
 
+    /// <summary>The resource database's objects (<see cref="ObjectSearchSql.ResourceObjects"/>), each a system one, with the
+    /// definitions cut at the per-module limit; the shared catalog charges them to the budget.</summary>
+    public static async Task<IndexedObject[]> ReadResourceAsync(SqlDataReader reader, bool definitions, ObjectIndexLimits limits, CancellationToken token)
+    {
+        var objects = new List<IndexedObject>();
+        var byId = new Dictionary<int, int>();
+        while (await reader.ReadAsync(token))
+        {
+            // Sequential access reads the columns in order.
+            var id = reader.GetInt32(0);
+            var schema = reader.GetString(1);
+            var name = reader.GetString(2);
+            var type = reader.GetString(3).TrimEnd();
+            var item = Map(type, schema, name, reader.GetDateTime(4), null, null, null, system: true);
+            if (item is null) continue;
+            byId[id] = objects.Count;
+            objects.Add(item);
+        }
+        if (definitions && await reader.NextResultAsync(token))
+        {
+            var buffer = new char[Math.Min(limits.DefinitionChars, 64 * 1024)];
+            while (await reader.ReadAsync(token))
+            {
+                if (!byId.TryGetValue(reader.GetInt32(0), out var at)) continue;
+                var (text, longer) = ReadText(reader, 1, ref buffer, limits.DefinitionChars);
+                if (text.Length > 0) objects[at] = objects[at] with { Definition = text, DefinitionCut = longer };
+            }
+        }
+        return [.. objects];
+    }
+
     /// <summary>A text column read only as far as the per-module limit, and whether it goes on past it.</summary>
-    private (string Text, bool Longer) ReadText(SqlDataReader reader, int ordinal, ref char[] buffer)
+    private (string Text, bool Longer) ReadText(SqlDataReader reader, int ordinal, ref char[] buffer) => ReadText(reader, ordinal, ref buffer, limits.DefinitionChars);
+
+    private static (string Text, bool Longer) ReadText(SqlDataReader reader, int ordinal, ref char[] buffer, int limit)
     {
         var builder = new System.Text.StringBuilder();
         long offset = 0;
-        while (builder.Length < limits.DefinitionChars)
+        while (builder.Length < limit)
         {
-            var want = Math.Min(buffer.Length, limits.DefinitionChars - builder.Length);
+            var want = Math.Min(buffer.Length, limit - builder.Length);
             var read = (int)reader.GetChars(ordinal, offset, buffer, 0, want);
             if (read <= 0) return (builder.ToString(), false);
             builder.Append(buffer, 0, read);
@@ -348,20 +434,28 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
         return (builder.ToString(), more);
     }
 
-    /// <summary>The Object Explorer identity of a sys.objects row, or null for a trigger whose parent it cannot list.</summary>
-    internal static IndexedObject? Map(string type, string schema, string name, DateTime modified, string? parent, string? parentSchema, string? parentType) => type switch
-    {
-        "U" => new("table", "tables", schema, name, Modified: modified),
-        "ET" => new("table", "externalTables", schema, name, Modified: modified),
-        "V" => new("view", "views", schema, name, Modified: modified),
-        "P" or "PC" or "X" => new("procedure", "storedProcedures", schema, name, Modified: modified),
-        "FN" or "FS" => new("function", "scalarValuedFunctions", schema, name, Modified: modified),
-        "IF" or "TF" or "FT" => new("function", "tableValuedFunctions", schema, name, Modified: modified),
-        "AF" => new("function", "aggregateFunctions", schema, name, Modified: modified),
-        "SN" => new("synonym", "synonyms", schema, name, Modified: modified),
-        "SO" => new("sequence", "sequences", schema, name, Modified: modified),
-        "TR" when parent is not null && parentSchema is not null && parentType is "U" or "ET" or "V" =>
-            new("trigger", "tableTriggers", null, name, parentType == "V" ? "view" : "table", parentSchema, parent, modified),
-        _ => null
-    };
+    /// <summary>The Object Explorer identity of a sys.objects or sys.all_objects row, or null for a trigger whose parent it cannot name. A system
+    /// table, view or procedure is in its System folder; a system function, which Object Explorer's static System Functions
+    /// folder does not list, is under Functions.</summary>
+    internal static IndexedObject? Map(string type, string schema, string name, DateTime modified, string? parent, string? parentSchema, string? parentType, bool system = false) =>
+        (type, system) switch
+        {
+            ("U", false) => new("table", "tables", schema, name, Modified: modified),
+            ("U", true) => new("table", "systemTables", schema, name, Modified: modified, System: true),
+            ("ET", _) => new("table", "externalTables", schema, name, Modified: modified, System: system),
+            ("V", false) => new("view", "views", schema, name, Modified: modified),
+            ("V", true) => new("view", "systemViews", schema, name, Modified: modified, System: true),
+            // Object Explorer's Stored Procedures folder lists T-SQL and CLR procedures; the System one every other kind.
+            ("P" or "PC", false) => new("procedure", "storedProcedures", schema, name, Modified: modified),
+            ("P" or "PC" or "X" or "RF", _) => new("procedure", "systemStoredProcedures", schema, name, Modified: modified, System: system),
+            ("FN" or "FS", false) => new("function", "scalarValuedFunctions", schema, name, Modified: modified),
+            ("IF" or "TF" or "FT", false) => new("function", "tableValuedFunctions", schema, name, Modified: modified),
+            ("AF", false) => new("function", "aggregateFunctions", schema, name, Modified: modified),
+            ("FN" or "FS" or "IF" or "TF" or "FT" or "AF", true) => new("function", "functions", schema, name, Modified: modified, System: true),
+            ("SN", _) => new("synonym", "synonyms", schema, name, Modified: modified, System: system),
+            ("SO", _) => new("sequence", "sequences", schema, name, Modified: modified, System: system),
+            ("TR", _) when parent is not null && parentSchema is not null && parentType is "U" or "ET" or "V" =>
+                new("trigger", "tableTriggers", null, name, parentType == "V" ? "view" : "table", parentSchema, parent, modified, System: system),
+            _ => null
+        };
 }
