@@ -68,6 +68,8 @@ internal sealed class SmoScriptRunner
         CultureInfo.CurrentCulture = ScriptingCulture.Formatting;
         CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo("en-US");
         if (target.Kind == "credential") return Credential(target, verb, dto, max, warnings);
+        // Before any SMO: two jobs' first dependency walks would otherwise fill SMO's static type table together.
+        SmoDependencyTypes.Ensure();
         var smo = Server();
         var urn = new Urn(UrnBuilder.Build(smo.Urn.Value, target.Kind, target.Row.Urn, target.Ref, target.ParentUrnType, target.Column));
         var dependencies = dto.GenerateDependentObjects && SmoOptionsMapper.Dependencies(target.Row.Urn, target.ParentUrnType, target.Ref.Database is null);
