@@ -39,6 +39,10 @@ class WorkerPort implements PortMainLike {
   end(rid: number) { return this.posted.find((message): message is Extract<PortMessage, { t: 'end' }> => message.t === 'end' && message.rid === rid) }
 }
 
+// A wait that spans the fake backend's process start (a first start or a restart): a node process starts in well under a
+// second alone, but a Windows runner with every test file's worker starting at once took longer than expect.poll's 1 s.
+const backendStart = { timeout: 15000 }
+
 /** The fake backend's workbench mode behind main's supervisor and results port; with `custom`, the port is the caller's and
  *  opening it is left to the caller (a ResultClient asks for it); with `ready: false` it returns while the backend starts. */
 async function workbench<P extends PortMainLike = WorkerPort>(custom?: P, o: { ready?: boolean } = {}) {
@@ -48,7 +52,7 @@ async function workbench<P extends PortMainLike = WorkerPort>(custom?: P, o: { r
   const host = new ResultsPortHost({ backend: supervisorResults(supervisor), createChannel: () => ({ port1: port, port2: {} }), testSources: true })
   supervisor.onState(state => host.backendState(state))
   supervisor.start()
-  if (o.ready !== false) await expect.poll(() => supervisor.state.status).toBe('ready')
+  if (o.ready !== false) await expect.poll(() => supervisor.state.status, backendStart).toBe('ready')
   if (!custom) host.open({ postMessage: () => {} })
   return { supervisor, host, port: port as P }
 }
@@ -210,7 +214,7 @@ describe('live subscriptions through the results worker and ResultClient', () =>
         return { stream, ticks: () => ticks }
       }
       const first = subscribe()
-      await expect.poll(() => first.ticks()).toBeGreaterThanOrEqual(2)
+      await expect.poll(() => first.ticks(), backendStart).toBeGreaterThanOrEqual(2)
       expect(host.liveCount).toBe(1)
 
       // A restart loses the running stream; a resubscribe as soon as the page hears of the next generation (while it is
@@ -224,7 +228,7 @@ describe('live subscriptions through the results worker and ResultClient', () =>
       })
       void supervisor.restart('manual')
       expect(await first.stream.done).toMatchObject({ ok: false })
-      await expect.poll(() => second?.ticks() ?? 0).toBeGreaterThanOrEqual(2)
+      await expect.poll(() => second?.ticks() ?? 0, backendStart).toBeGreaterThanOrEqual(2)
       expect(status).toBe('starting')
       second!.stream.cancel()
       expect(await second!.stream.done).toMatchObject({ ok: true, value: { ended: 'cancelled' } })
@@ -337,7 +341,7 @@ describe('live subscriptions through the results worker and ResultClient', () =>
       // The newest table went with its backend; an older one was already released when a later tick retired it.
       expect(handle.table('debug.synthetic.table')!.handle.getSnapshot().state).toBe('lost')
       expect(table.handle.getSnapshot().state).toBe('released')
-      await expect.poll(() => supervisor.state.status).toBe('ready')
+      await expect.poll(() => supervisor.state.status, backendStart).toBe('ready')
       // Reconnect moves the tab to the new generation's connection; the view follows it.
       connection = crypto.randomUUID()
       notify()
@@ -347,7 +351,8 @@ describe('live subscriptions through the results worker and ResultClient', () =>
       expect(handle.getSnapshot().connectionId).toBe(connection)
       handle.dispose()
       await expect.poll(() => host.liveCount).toBe(0)
-      expect(client.liveStreams).toBe(0)
+      // Main forgets the stream before its end reaches the worker and then the client, so the client counts it a moment longer.
+      await expect.poll(() => client.liveStreams).toBe(0)
     } finally {
       service.dispose()
       close()

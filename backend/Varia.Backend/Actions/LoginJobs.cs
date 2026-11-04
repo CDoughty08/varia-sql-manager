@@ -28,7 +28,7 @@ internal sealed partial class ActionService
     private static bool MappingStep(ActionTemplate template) => template is ActionTemplate.CreateUserForLogin or ActionTemplate.AlterUserSchema or ActionTemplate.CreateSchemaFor or ActionTemplate.AddRoleMember
         or ActionTemplate.RenameUser or ActionTemplate.DropRoleMember;
     private static bool SameMembers(ActionArgs args) => args.NewName is null && args.CloseConnections is null && args.DeleteHistory is null && args.Changes is null && args.Design is null
-        && args.Identity is null;
+        && args.Identity is null && args.Databases is null;
     /// <summary>Whether a request carries New Login's members, which only createLogin takes.</summary>
     private static bool LoginMembers(ActionArgs args) => args.Login is not null || args.ServerRoles is not null || args.Status is not null || args.Mappings is not null;
 
@@ -267,13 +267,27 @@ internal sealed partial class ActionService
                 await using var command = connection.CreateCommand();
                 command.CommandText = LoginSql.Preflight;
                 Add(command, "@name", SqlDbType.NVarChar, 128, login.Name);
-                if (await command.ExecuteScalarAsync(budget.Token) is true) (done, failure) = StoppedAsCreated(done, failure);
+                // A reader, as every action statement is (tests/action-reader-lint.test.ts); its first column says the name is taken.
+                await using var reader = await command.ExecuteReaderAsync(budget.Token);
+                if (await reader.ReadAsync(budget.Token) && reader.GetBoolean(0)) (done, failure) = StoppedAsCreated(done, failure);
             }
             catch (Exception exception) when (exception is SqlException or InvalidOperationException or OperationCanceledException) { }
         }
         if (failure is not null && done is [{ Status: "done" }, ..]) failure = PartlyCreated(failure, args.Status!, done);
         return new(done, [.. messages.Collected().Select(Scrubbed)], 0, failure);
     }
+
+    /// <summary>What a step acts on where its title alone does not say it: a server role; a mapped database; a database role and its
+    /// database; a database user's name and database (a login's Delete drops one per database: "app_user in AppData", which reads
+    /// cleanly after the steps panel's "title: "), its names as display text.</summary>
+    internal static string? StepDetail(PlannedStatement statement) => statement.Template switch
+    {
+        ActionTemplate.DropUser or ActionTemplate.DropMappedUser => ScriptingErrors.Display(statement.Names[0]) + " in " + ScriptingErrors.Display(statement.Database),
+        ActionTemplate.AddServerRoleMember or ActionTemplate.DropServerRoleMember => statement.Names[0],
+        ActionTemplate.AddRoleMember or ActionTemplate.DropRoleMember => statement.Names[0] + " in " + statement.Database,
+        _ when MappingStep(statement.Template) => statement.Database,
+        _ => null
+    };
 
     /// <summary>A Stop whose CREATE LOGIN completed after all (the login exists): that step is done, and the message says nothing
     /// after it ran.</summary>

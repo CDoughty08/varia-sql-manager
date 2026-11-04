@@ -201,6 +201,15 @@ describe('real .NET sidecar over protocol v2', () => {
       ['actions.script', { action: 'createTable', ...ids, target: { kind: 'database', name: 'AppData' }, design: { schema: 'dbo', name: 'x'.repeat(129), columns: [{ name: 'a', type: { system: 'int' }, allowNulls: true }], primaryKey: [] } }],
       ['actions.script', { action: 'createTable', ...ids, target: { kind: 'database', name: 'AppData' }, newName: 'x', design: { schema: 'dbo', name: 'T', columns: [{ name: 'a', type: { system: 'int' }, allowNulls: true }], primaryKey: [] } }],
       ['actions.execute', { action: 'createTable', ...ids, target: { kind: 'database', name: 'AppData' }, design: { schema: 'dbo', name: 'T', columns: [{ name: 'a', type: { system: 'char', length: 8001 }, allowNulls: true }], primaryKey: [] } }],
+      // The server file picker: a relative path, a wildcard, 261 units, a control character, All Files for a folder, a database target, no files, files elsewhere, an unknown member.
+      ['actions.describe', { ...ids, dialog: 'serverFiles', target: { kind: 'server' }, files: { purpose: 'backup', path: 'Backups' } }],
+      ['actions.describe', { ...ids, dialog: 'serverFiles', target: { kind: 'server' }, files: { purpose: 'backup', path: 'C:\\*.bak' } }],
+      ['actions.describe', { ...ids, dialog: 'serverFiles', target: { kind: 'server' }, files: { purpose: 'backup', path: 'C:\\' + 'x'.repeat(258) } }],
+      ['actions.describe', { ...ids, dialog: 'serverFiles', target: { kind: 'server' }, files: { purpose: 'backup', path: 'C:\\a\tb' } }],
+      ['actions.describe', { ...ids, dialog: 'serverFiles', target: { kind: 'server' }, files: { purpose: 'folder', allFiles: true } }],
+      ['actions.describe', { ...ids, dialog: 'serverFiles', target: { kind: 'database', name: 'master' }, files: { purpose: 'backup' } }],
+      ['actions.describe', { ...ids, dialog: 'serverFiles', target: { kind: 'server' } }], ['actions.describe', { ...ids, dialog: 'deleteObject', target, files: { purpose: 'backup' } }],
+      ['actions.describe', { ...ids, dialog: 'serverFiles', target: { kind: 'server' }, files: { purpose: 'backup', depth: 2 } }],
       // A temporary table's name, a seed before a line break (.NET's $ would match there), and names that differ only in trailing spaces.
       ['actions.execute', { action: 'createTable', ...ids, target: { kind: 'database', name: 'AppData' }, design: { schema: 'dbo', name: '##T', columns: [{ name: 'a', type: { system: 'int' }, allowNulls: true }], primaryKey: [] } }],
       ['actions.script', { action: 'createTable', ...ids, target: { kind: 'database', name: 'AppData' }, design: { schema: 'dbo', name: 'T', columns: [{ name: 'a', type: { system: 'int' }, allowNulls: false, identity: { seed: '12\n', increment: '1' } }], primaryKey: [] } }],
@@ -223,6 +232,9 @@ describe('real .NET sidecar over protocol v2', () => {
     await expect(call(connection, 'actions.execute', { action: 'createTable', ...ids, requestId: crypto.randomUUID(), target: { kind: 'database', name: 'master' },
       design: { schema: 'dbo', name: "q]'); --", columns: [{ name: 'Id', type: { system: 'decimal', precision: 38, scale: 0 }, allowNulls: false, identity: { seed: '-1', increment: '1' } }], primaryKey: [0] } })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
     await expect(call(connection, 'actions.describe', { ...ids, requestId: crypto.randomUUID(), dialog: 'tableDesigner', target: { kind: 'database', name: 'tempdb' } })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
+    // A hostile share path passes validation verbatim and then needs a connection.
+    await expect(call(connection, 'actions.describe', { ...ids, requestId: crypto.randomUUID(), dialog: 'serverFiles', target: { kind: 'server' }, files: { purpose: 'database', path: "\\\\files\\O'Brien ]] --\\", allFiles: true } }))
+      .rejects.toMatchObject({ code: 'NOT_CONNECTED' })
     expect(deadlineFor('actions.execute', { action: 'rename', ...ids, target, newName: 'x' })).toEqual({ deadlineMs: 0, backstopMs: 0 })
   })
   it('offers the Activity Monitor session actions in HELLO and checks them before the connection', async () => {
@@ -662,6 +674,8 @@ describe('real .NET sidecar live subscriptions (test hooks)', () => {
 
   it('ends a subscription whose source ended, keeping its last table, and one whose connection is disconnected', async () => {
     const connection = backend(hooks)
+    // The event poll measures the subscription, not .NET's cold start on a loaded runner.
+    await connection.ready
     const ended = subscribe(connection, params({ tickMs: 20, endAfterTicks: 2 }, ['debug.synthetic.table']))
     await expect.poll(() => ended.events.length).toBe(1)
     ended.ack()
@@ -691,6 +705,7 @@ describe('real .NET sidecar live subscriptions (test hooks)', () => {
 
   it('sends main-valid table samples (two tables, facets, an append log) whose keys equal the cells the worker decodes', async () => {
     const connection = backend(hooks)
+    await connection.ready
     const value = params({ tickMs: 20, rows: 6, logRows: 3, lateEvery: 2 }, ['debug.synthetic.grid', 'debug.synthetic.log'])
     const live = subscribe(connection, value)
     for (let tick = 0; tick < 5; tick++) {

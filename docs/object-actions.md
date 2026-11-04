@@ -2,21 +2,28 @@
 
 <!-- Generated from src/shared/actions/catalog.ts. Regenerate with: npx vitest run tests/object-actions-catalog.test.ts -u -->
 
-Object Explorer's actions on objects: Select Top 1000 Rows, Rename, Delete and Properties. Which kinds and subtypes offer each is
+Object Explorer's actions on objects: Select Top 1000 Rows, Rename, Delete, Properties, a database's Tasks › Detach…, Take
+Offline and Bring Online, and the Databases folder's Attach. Which kinds, subtypes and folders offer each is
 data in `src/shared/actions/catalog.ts`; the backend embeds the same data as `backend/Varia.Backend/Actions/actions-catalog.json`
 and re-derives the subtype in the action's own connection before any DDL runs.
 
 ## Actions
 
-| Action | Menu title | Command | Kind | Menu | Group | Mnemonic | Windows and Linux | macOS | Context key | Runs on |
+| Action | Menu title | Command | Kind | Menu | Group | Mnemonic | Windows and Linux | macOS | Servers | Context key |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `selectTop` | Select Top 1000 Rows | `explorer.selectTopRows` | query | `explorer.context` | `1_query` 2 | w | — | — | `explorerActionSelectTop` | SQL Server, Managed Instance, Azure SQL Database |
-| `rename` | Rename | `explorer.rename` | inline | `explorer.context` | `7_edit` 1 | m | F2 | F2 | `explorerActionRename` | SQL Server, Managed Instance |
-| `delete` | Delete | `explorer.delete` | dialog (`deleteObject`) | `explorer.context` | `7_edit` 2 | e | Delete | ⌘⌫, Delete | `explorerActionDelete` | SQL Server, Managed Instance |
-| `properties` | Properties | `explorer.properties` | dialog (`databaseProperties`) | `explorer.context` | `9_properties` 1 | p | — | ⌘I | `explorerActionProperties` | SQL Server, Managed Instance |
-| `disable` | Disable | `explorer.disable` | inline | `explorer.context` | `6_state` 1 | b | — | — | `explorerActionDisable` | SQL Server, Managed Instance |
-| `enable` | Enable | `explorer.enable` | inline | `explorer.context` | `6_state` 1 | b | — | — | `explorerActionEnable` | SQL Server, Managed Instance |
-| `unlock` | Unlock… | `explorer.unlock` | dialog (`unlockLogin`) | `explorer.context` | `6_state` 2 | u | — | — | `explorerActionUnlock` | SQL Server, Managed Instance |
+| `selectTop` | Select Top 1000 Rows | `explorer.selectTopRows` | query | `explorer.context` | `1_query` 3 | w | — | — | SQL Server, Managed Instance, Azure SQL Database | `explorerActionSelectTop` |
+| `rename` | Rename | `explorer.rename` | inline | `explorer.context` | `7_edit` 1 | m | F2 | F2 | SQL Server, Managed Instance | `explorerActionRename` |
+| `delete` | Delete | `explorer.delete` | dialog (`deleteObject`) | `explorer.context` | `7_edit` 2 | e | Delete | ⌘⌫, Delete | SQL Server, Managed Instance | `explorerActionDelete` |
+| `properties` | Properties | `explorer.properties` | dialog (`databaseProperties`) | `explorer.context` | `9_properties` 1 | p | — | ⌘I | SQL Server, Managed Instance | `explorerActionProperties` |
+| `attach` | Attach… | `explorer.attachDatabase` | dialog (`attachDatabase`) | `explorer.context` | `0_new` 2 | a | — | — | SQL Server | `explorerActionAttach` |
+| `takeOffline` | Take Offline | `explorer.takeOffline` | dialog (`takeOffline`) | `explorer.tasks` | `1_state` 1 | t | — | — | SQL Server | `explorerActionTakeOffline` |
+| `bringOnline` | Bring Online | `explorer.bringOnline` | dialog (`bringOnline`) | `explorer.tasks` | `1_state` 2 | o | — | — | SQL Server | `explorerActionBringOnline` |
+| `detach` | Detach… | `explorer.detachDatabase` | dialog (`detachDatabase`) | `explorer.tasks` | `0_detach` 1 | d | — | — | SQL Server | `explorerActionDetach` |
+| `restore` | Restore Database… | `explorer.restoreDatabase` | dialog | `explorer.context` | `0_new` 3 | r | — | — | SQL Server | `explorerActionRestore` |
+| `restoreFiles` | Restore Files and Filegroups… | `explorer.restoreFiles` | dialog | `explorer.context` | `0_new` 4 | e | — | — | SQL Server | `explorerActionRestoreFiles` |
+| `disable` | Disable | `explorer.disable` | inline | `explorer.context` | `6_state` 1 | b | — | — | SQL Server, Managed Instance | `explorerActionDisable` |
+| `enable` | Enable | `explorer.enable` | inline | `explorer.context` | `6_state` 1 | b | — | — | SQL Server, Managed Instance | `explorerActionEnable` |
+| `unlock` | Unlock… | `explorer.unlock` | dialog (`unlockLogin`) | `explorer.context` | `6_state` 2 | u | — | — | SQL Server, Managed Instance | `explorerActionUnlock` |
 
 "Servers" is each action's `engines`: SQL Server is the box editions, Managed Instance is EngineEdition 8, and Azure SQL
 Database stands for the cloud editions. The backend refuses an action elsewhere with `NOT_SUPPORTED` before it opens a
@@ -40,28 +47,39 @@ is reserved on Windows and Linux.
 
 ✓ enabled, ○ shown greyed, – not offered.
 
-| Kind | Subtypes | Select Top 1000 Rows | Rename | Delete | Properties | Disable Login | Enable Login | Unlock Login… |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `login` | none | – | – | – | – | – | – | – |
-| `login` | `sa` | – | ✓ | ○ | ✓ | ✓ | – | ✓ |
-| `login` | `system` | – | ○ | ○ | ✓ | ○ | – | ○ |
-| `login` | `sql` | – | ✓ | ✓ | ✓ | ✓ | – | ✓ |
-| `login` | `windowsUser`, `certificateMapped`, `asymmetricKeyMapped` | – | ✓ | ✓ | ✓ | ✓ | – | – |
-| `login` | `windowsGroup` | – | ✓ | ✓ | ✓ | ○ | – | – |
-| `login` | `externalUser`, `externalGroup` | – | ○ | ✓ | ✓ | ✓ | – | – |
-| `database` | none | – | ✓ | ✓ | ✓ | – | – | – |
-| `database` | `system` | – | ○ | ○ | ✓ | – | – | – |
-| `database` | `snapshot` | – | ○ | ✓ | ✓ | – | – | – |
-| `table` | none, `graphNode`, `graphEdge` | ✓ | ✓ | ✓ | – | – | – | – |
-| `table` | `systemVersioned`, `history`, `updatableLedger`, `appendOnlyLedger`, `ledgerHistory`, `fileTable`, `external`, `system` | ✓ | ○ | ○ | – | – | – | – |
-| `table` | `droppedLedger` | – | ○ | ○ | – | – | – | – |
-| `view` | none | ✓ | ✓ | ✓ | – | – | – | – |
-| `view` | `system`, `ledger` | ✓ | ○ | ○ | – | – | – | – |
-| `view` | `droppedLedger` | – | ○ | ○ | – | – | – | – |
-| `procedure` | none, `sql`, `clr` | – | ✓ | ✓ | – | – | – | – |
-| `procedure` | `extended`, `replicationFilter`, `system` | – | ○ | ○ | – | – | – | – |
-| `function` | none, `inline`, `tableValued`, `clrTableValued`, `scalar`, `clrScalar` | – | ✓ | ✓ | – | – | – | – |
-| `function` | `aggregate` | – | ✓ | ○ | – | – | – | – |
+| Kind | Subtypes | Select Top 1000 Rows | Rename | Delete | Properties | Take Database Offline | Bring Database Online | Detach Database… | Disable Login | Enable Login | Unlock Login… |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `login` | none | – | – | – | – | – | – | – | – | – | – |
+| `login` | `sa` | – | ✓ | ○ | ✓ | – | – | – | ✓ | – | ✓ |
+| `login` | `system` | – | ○ | ○ | ✓ | – | – | – | ○ | – | ○ |
+| `login` | `sql` | – | ✓ | ✓ | ✓ | – | – | – | ✓ | – | ✓ |
+| `login` | `windowsUser`, `certificateMapped`, `asymmetricKeyMapped` | – | ✓ | ✓ | ✓ | – | – | – | ✓ | – | – |
+| `login` | `windowsGroup` | – | ✓ | ✓ | ✓ | – | – | – | ○ | – | – |
+| `login` | `externalUser`, `externalGroup` | – | ○ | ✓ | ✓ | – | – | – | ✓ | – | – |
+| `database` | none | – | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | – | – |
+| `database` | `system` | – | ○ | ○ | ✓ | ○ | ○ | ○ | – | – | – |
+| `database` | `snapshot` | – | ○ | ✓ | ✓ | – | – | – | – | – | – |
+| `table` | none, `graphNode`, `graphEdge` | ✓ | ✓ | ✓ | – | – | – | – | – | – | – |
+| `table` | `systemVersioned`, `history`, `updatableLedger`, `appendOnlyLedger`, `ledgerHistory`, `fileTable`, `external`, `system` | ✓ | ○ | ○ | – | – | – | – | – | – | – |
+| `table` | `droppedLedger` | – | ○ | ○ | – | – | – | – | – | – | – |
+| `view` | none | ✓ | ✓ | ✓ | – | – | – | – | – | – | – |
+| `view` | `system`, `ledger` | ✓ | ○ | ○ | – | – | – | – | – | – | – |
+| `view` | `droppedLedger` | – | ○ | ○ | – | – | – | – | – | – | – |
+| `procedure` | none, `sql`, `clr` | – | ✓ | ✓ | – | – | – | – | – | – | – |
+| `procedure` | `extended`, `replicationFilter`, `system` | – | ○ | ○ | – | – | – | – | – | – | – |
+| `function` | none, `inline`, `tableValued`, `clrTableValued`, `scalar`, `clrScalar` | – | ✓ | ✓ | – | – | – | – | – | – | – |
+| `function` | `aggregate` | – | ✓ | ○ | – | – | – | – | – | – | – |
+
+## Folder actions
+
+These are offered on an Object Explorer folder instead of object rows; their target is the folder's server (`{ kind: 'server' }`),
+and the backend refuses any other target.
+
+| Action | Folder | Servers |
+| --- | --- | --- |
+| Attach Database… | `databases` | SQL Server |
+| Restore Database… | `databases` | SQL Server |
+| Restore Files and Filegroups… | `databases` | SQL Server |
 
 ## Menus, statuses, database states and servers
 
@@ -79,10 +97,20 @@ Only `disabled` changes a login's actions: a login denied permission to connect 
 
 A database row carries its runtime state as listed (state, user access, read-only, standby); a newer live status sample wins.
 Rules narrow a database's actions by it, each with the reason a greyed item shows. The states: `online`, `restoring`, `recovering`, `recoveryPending`, `suspect`, `emergency`, `offline`, `copying`, `offlineSecondary`, `other`.
-No rule narrows a database's actions yet.
+| Action | States | Access | Read-only | Effect | Reason |
+| --- | --- | --- | --- | --- | --- |
+| Take Database Offline | offline | Any | Any | Greyed | The database is offline. |
+| Take Database Offline | restoring, recovering, copying, offlineSecondary | Any | Any | Greyed | A database that is restoring or recovering cannot be taken offline. |
+| Bring Database Online | online | Any | Any | Greyed | The database is online. |
+| Bring Database Online | restoring, recovering, copying | Any | Any | Greyed | A database that is restoring or recovering cannot be brought online. |
+| Detach Database… | restoring, recovering, copying | Any | Any | Greyed | Wait until it finishes restoring or recovering. |
+| Detach Database… | suspect, recoveryPending | Any | Any | Greyed | Set the database to EMERGENCY with T-SQL before you detach it. |
+| Rename | restoring, recovering, recoveryPending, suspect, emergency, offline, copying, offlineSecondary, other | Any | Any | Greyed | The database must be online to be renamed. |
+| Rename | Any | Any | Yes | Greyed | A read-only database cannot be renamed. |
 
-Each action names the servers it runs on (`box`, `managedInstance`, `cloud`: an on-premises SQL Server or a container, Azure SQL Managed Instance, Azure SQL Database);
-the Runs on column above says which, and the menu hides it elsewhere. Menus read the server through `explorerServerEngine` and `explorerServerLinux`.
+Each action names the servers that offer it (`box`, `managedInstance`, `cloud`: an on-premises SQL Server or a container, Azure SQL Managed Instance, Azure SQL Database);
+the Servers column above says which, and on another server the menu hides the item. Menus read the server through
+`explorerServerEngine` and `explorerServerLinux`.
 
 ## Dialogs
 
@@ -90,7 +118,12 @@ the Runs on column above says which, and the menu hides it elsewhere. Menus read
 | --- | --- | --- | --- | --- | --- |
 | `deleteObject` | Delete Object | Modal dialog | `delete` | General (`settings-gear`) | Yes |
 | `databaseProperties` | Database Properties - <name> | Document tab | `properties` | General (`settings-gear`), Files (`settings-gear`), Filegroups (`settings-gear`), Options (`settings-gear`) | No |
+| `newDatabase` | New Database | Document tab | `createDatabase` | General (`settings-gear`), Options (`settings-gear`), Filegroups (`settings-gear`) | No |
+| `attachDatabase` | Attach Databases | Modal dialog | `attach` | General (`settings-gear`) | No |
 | `newLogin` | Login - New | Modal dialog | `createLogin` | General (`settings-gear`, kept mounted), Server Roles (`settings-gear`), User Mapping (`settings-gear`, kept mounted), Status (`settings-gear`) | Yes |
+| `takeOffline` | Take Database Offline - <name> | Modal dialog | `takeOffline` | General (`settings-gear`) | Yes |
+| `bringOnline` | Bring Database Online - <name> | Modal dialog | `bringOnline` | General (`settings-gear`) | Yes |
+| `detachDatabase` | Detach Database - <name> | Modal dialog | `detach` | General (`settings-gear`) | Yes |
 | `unlockLogin` | Unlock Login - <name> | Modal dialog | `unlock` | General (`settings-gear`) | Yes |
 | `loginProperties` | Login Properties - <name> | Modal dialog | `loginProperties` | General (`settings-gear`, kept mounted), Server Roles (`settings-gear`), User Mapping (`settings-gear`, kept mounted), Status (`settings-gear`) | Yes |
 
@@ -131,9 +164,155 @@ Once a database is deleted (or its DROP completed before a later step failed), e
 turns orphan: what it showed stays, read-only, under "This database no longer exists on <server>." with Close and no
 Refresh, and a toast counts the query windows that were using it ("3 query windows were using SalesDb."), which stay open.
 
+### Take Offline and Bring Online
+
+Tasks › Take Offline opens Take Database Offline - <name>: a grid of Database Name, Drop All Active Connections
+(cleared), Status and Message, as SSMS 18 and later lay it out (recalled). The Message counts the sessions in the
+database and those with an open transaction; a disclosure lists them (session id, login, program, host and open
+transactions, at most 8, with VIEW SERVER STATE), and the page names Varia's own query windows on the database
+whose session holds an open transaction, which Drop All Active Connections rolls back (A7). Before it counts, the
+describe closes the backend's own idle pooled connections in the database, as the action does before SET OFFLINE, and
+waits up to a second for SQL Server to end their sessions; every session left is listed, Varia's query windows and busy
+pooled connections included (a session id alone never marks a session as Varia's: SQL Server reuses freed ids). Without
+VIEW SERVER STATE the Message says the sessions are unknown, and OK runs.
+
+`SET OFFLINE` without a termination clause waits for every other session to leave, so while sessions are connected and
+the box is cleared the Status is Not ready and OK is disabled, with the reason beside it; Check Again counts them again.
+Checked, OK runs `SET OFFLINE WITH ROLLBACK IMMEDIATE` (about 3 s even on an idle database, probed). Either way the run
+can wait for locks, so Stop (focused once OK starts the run) cancels it in SQL Server and the database stays online; the
+row then asks to Check Again. A success keeps the dialog open on its steps with Close focused and Script greyed, as
+SSMS's progress dialog does.
+
+Tasks › Bring Online opens Bring Database Online - <name> and runs `SET ONLINE` at once, with nothing to confirm; Stop
+cancels a recovery that waits. The menu offers it on any state SQL Server lets `SET ONLINE` act on (offline, recovery
+pending, suspect, emergency) and greys it while the database is online, restoring, recovering or copying. A database left
+SINGLE_USER (or RESTRICTED_USER) while it was offline comes back so, and the reply says so in a message (read after
+SET ONLINE under a budget of its own, so a Stop that arrives just then leaves the success a success).
+
+Both are offered on box SQL Server only (Managed Instance cannot set OFFLINE or ONLINE), greyed on SQL Server's own
+databases and absent on a snapshot. The backend re-derives the state rules above from `sys.databases` before it runs
+anything, refuses a database whose identity changed since the dialog read it, and needs ALTER ANY DATABASE, dbcreator,
+ownership, or (while it is online) ALTER on the database: `HAS_PERMS_BY_NAME` on the database answers 0 to a login with no
+user in it, to sysadmin while another session holds it SINGLE_USER, and to everyone once it is offline (probed). SQL
+Server's 5011 is PERMISSION_DENIED too. After either, the Databases folder is listed again ("(Offline)" in the sublabel),
+and the database's Database Properties documents on that server read it again, or, while they hold changes, keep them
+with an Offline status and a banner; Apply still runs, and its preflight refuses a database that is not online.
+
+### Detach
+
+Tasks › Detach… opens Detach Database - <name>, a modal laid out as Learn describes SSMS's dialog: a "Databases to detach"
+grid of Database Name, Drop Connections and Update Statistics (both cleared), Status and Message. Keep Full-Text Catalogs is
+left out: SSMS shows it only for a database upgraded from SQL Server 2005. The Message counts the sessions in the database
+(after the describe closes the backend's own idle pooled connections in it, as Take Offline's does); a closed disclosure
+lists them, and the page says what Drop Connections rolls back, naming Varia's query windows with an open transaction (A7).
+Below the grid, "Files that stay on the server" lists the database's files (`sys.master_files`, at most 256: logical name, type
+and path), which Copy paths copies one per line, for an Attach later. A db_owner member without VIEW ANY DEFINITION sees no
+rows there, so an online database's own `sys.database_files` lists them instead; when neither shows any, a note says the paths
+could not be read. Once the detach succeeded, the sessions and what closing them rolls back are no longer shown, and the
+boxes are disabled. Enter on the closed Sessions list opens it, as on any disclosure or link, and never presses OK.
+
+`sp_detach_db` refuses a database other sessions use (3703, `IN_USE`), so while sessions are connected and Drop Connections
+is cleared the Status is Not ready and OK is disabled; Check Again counts them again. So is a database SQL Server would refuse:
+one used for replication, one with a database snapshot (3709, `DEPENDENTS`), in an availability group, or mirrored, each a
+blocking warning. The menu greys Detach… while the database is restoring, recovering or copying, and while it is suspect or
+recovery pending (SQL Server's 3707 asks for EMERGENCY first). A database that is not online on a Windows server is Not ready
+until its box is checked, Detach while offline (OFFLINE) or Detach anyway (EMERGENCY): SQL Server may leave a database
+detached in those states with files no attach can open (critic A27; probed for both, OS error 5). On Linux the dialog only
+says so. On Windows a SQL Server login also gets a note: SQL Server then lets only its service account open the detached
+files (probed), so a Windows-authenticated attach fails and the attach should use SQL Server authentication.
+
+Detach needs sysadmin or membership in the database's db_owner role (its owner is dbo), which DBCC DETACHDB checks: ALTER or
+CONTROL on the database, ALTER ANY DATABASE and dbcreator pass SET OFFLINE's check but get 7983 (`PERMISSION_DENIED`) from
+`sp_detach_db`, after Drop Connections would already have rolled everyone back. So the describe and the execute read the
+permission first (sysadmin or ownership in master, db_owner membership inside an online database) and refuse the rest. Update
+Statistics is greyed and cleared, and refused at execute, while the database is not online, read-only or in standby:
+`sp_updatestats` raises 942 on an offline database, which aborts the detach, and 15635 on the others, which does not.
+
+OK runs Close existing connections (`SET SINGLE_USER WITH ROLLBACK IMMEDIATE`, only with Drop Connections), then Detach the
+database (`sp_detach_db`, with `@skipchecks = 'false'` when Update Statistics is checked and `'true'` when it is not).
+SQL Server can raise an error, or answer a Stop, after DBCC DETACHDB has detached the database: when the detach step fails
+or is stopped and the database is gone from `sys.databases`, the step is done and the error is kept as a message. When
+the detach fails or is stopped after SINGLE_USER and the database is still there, a compensation step gives it back the access it had:
+Restore multi-user access, or Restore restricted user access for one that was RESTRICTED_USER; one already SINGLE_USER is
+left so. SSMS's script leaves `@skipchecks` out when Update Statistics is cleared, which runs UPDATE STATISTICS anyway
+(the procedure's default); Varia's Script Action writes `'true'`, with a comment saying why, so the script does what the
+dialog does.
+
+A success keeps the dialog open on its steps with Close focused. The reply lists the files left on the server (`filesKept`),
+the Databases folder is listed again, so the node goes, the database's Database Properties documents on that connection
+turn orphan ("This database no longer exists on <server>." with only Close), and a toast says "<name> was detached. Its
+files stay on the server.", counts the query windows that were using it, and offers Copy paths. The connection forgets
+the name as it does for a dropped database. Detach is offered on box SQL Server only (Managed Instance cannot run
+`sp_detach_db`), greyed on SQL Server's own databases and absent on a snapshot; the backend re-derives every rule above
+before it runs anything and refuses a database whose identity changed since the dialog read it.
+
+### Rename of a database
+
+F2 on a user database first reads its facts (`actions.describe` with `renameDatabase`, one of the fact describes, which
+open no dialog): the preflight's refusals, the database's identity and user access, how many other sessions are in it and
+how many of those hold an open transaction (with VIEW SERVER STATE, after the backend closed its own idle pooled connections
+there, as the rename does), and how many logins have it as their default database. With no other session the rename runs
+at once, `ALTER DATABASE … MODIFY NAME` alone. Otherwise the Rename Database confirmation (Confirmations, below) asks: Close Connections and
+Rename sets `SINGLE_USER WITH ROLLBACK IMMEDIATE`, renames, and restores the access the database had (MULTI_USER, or
+RESTRICTED_USER), the status bar saying "Closing connections" while it runs; Rename When Free runs MODIFY NAME alone, which
+waits for the other sessions until they leave or Stop cancels it, the status bar saying "Waiting for connections to close"
+(SQL Server 2025 queues MODIFY NAME behind them, probed; where SQL Server refuses it at once with 5030, as earlier versions are
+recalled to, the backend tries it again each second until it completes or Stop); Cancel sends nothing. The prompt names Varia's own query
+windows on the database whose session holds an open transaction (A7), through any connection the describe names as reaching
+the same server (`SERVERPROPERTY('ServerName')`, whatever name each was opened with). From Enter the status bar shows the
+rename ("Reading the database" during the describe) with Stop, which cancels the describe too. A database already in
+single-user mode is renamed without setting it again, and only when no other session is in it: while one is, MODIFY NAME
+fails with 924 and `SET SINGLE_USER WITH ROLLBACK IMMEDIATE` waits for that session rather than closing it (both probed on
+SQL Server 2025), so the describe refuses it with `IN_USE`, saying the session must disconnect or be ended in Activity
+Monitor; where the sessions cannot be counted, its prompt offers Rename When Free only.
+
+If the rename fails or is stopped after SINGLE_USER completed, Varia restores the access it changed, under the old name, or
+under the new one when MODIFY NAME completed first, and only that: never another session's change. A rename that completed
+before a later step failed still counts, and the message says what was left. After a rename, the database's query windows on
+that server (through any connection to it), the home database of the connections opened in it (New Query on the server), and
+its Database Properties documents follow the new name. MODIFY NAME gives the database a new `create_date` (sys.databases:
+"created or renamed"), so the reply carries its identity under the new name, read just after, and a document with unsaved
+changes takes it, so its Apply is not refused as another database's. When logins default to the old name a warning says how
+many, since they cannot connect without naming a database until their defaults change.
+
+Rename is greyed unless the database is online and read-write (MODIFY NAME checkpoints it: SQL Server answers 902 for a
+read-only or standby database, probed), and F2 on a greyed one says why in a notice, as the command palette's greyed row does
+(Take Offline and Bring Online likewise). It is refused on an availability group database,
+and needs CONTROL SERVER, ownership, or ALTER on the database (`can_rename`): a dbcreator member with no user in the database is refused before
+anything runs, because SQL Server refuses its MODIFY NAME with 916 (probed). Managed Instance renames, but cannot set
+SINGLE_USER, so its prompt offers Rename When Free only. The backend refuses a database whose identity changed since the
+describe read it.
+
 The Table Designer (New › Table…) uses the same requests without being a dialog: `actions.describe` with
 `tableDesigner` and a database, and the `createTable` action; its ids live in `src/shared/designer/catalog.ts`, and
 [docs/table-designer.md](table-designer.md) describes them.
+
+## Server file picker
+
+`actions.describe` with `serverFiles`, the server as its target and a `files` member (`purpose`, `path`,
+`allFiles`, `exists`) lists one folder on the server, or with no path the server's drives (/ on Linux) and its default
+data, log and backup folders. With `exists` it checks one path instead, for a typed name the listing does not show (past
+its limit or outside the type filter): the answer's entries hold that path's own entry, or none when it does not exist.
+Paths are the server's, with its separator; SQL Server's service account must be able to read them.
+
+| Purpose | Title | Files of type | Extensions |
+| --- | --- | --- | --- |
+| `backup` | Locate Backup File - <server> | Backup Files(*.bak;*.trn), All Files(*.*) | .bak, .trn |
+| `database` | Locate Database Files - <server> | Database Data Files(*.mdf), All Files(*.*) | .mdf |
+| `log` | Locate Database Files - <server> | Database Log Files(*.ldf), All Files(*.*) | .ldf |
+| `folder` | Locate Folder - <server> | Folders only | — |
+
+A listing reads one level: SQL Server 2017 and later through `sys.dm_os_enumerate_filesystem` (level 0, with sizes and
+times), `sys.dm_os_file_exists` and `sys.dm_os_enumerate_fixed_drives`; SQL Server 2016 through `xp_dirtree`,
+`xp_fileexist` and `xp_fixeddrives`, which list folders only to members of sysadmin and answer anyone else with
+nothing, so that listing (and a check) carries the `legacyEmpty` notice. The path is a parameter of constant
+statements, and the type filter runs in SQL before `TOP`, so a folder full of other files still lists its backups. A
+missing folder, a file, or a path that is not a full path on that server is `PATH_NOT_FOUND`. Azure SQL Database and
+Managed Instance are refused before connecting (`NOT_SUPPORTED`). Main's deadline for a listing is 15 s. Listings take
+a gate of their own, one per server, so one stuck on an unreachable share never delays a dialog's describe.
+
+The picker's titles, Files of type entries and field names (Select the file, Select the folder, Selected path, Files of
+type, File name, Folder name) are SSMS's as recalled, not yet checked against SSMS 22.
 
 ## Confirmations
 
@@ -175,11 +354,34 @@ last resort.
 | `backup` | A backup |
 | `shrink` | A shrink |
 
-Create Catalog is the only long run so far; the others are reserved for the actions that will use them.
+Create Catalog, New Database and Attach Databases are the long runs so far; the others are reserved for the actions that will use them.
 
 A short state action (a rename, a login's Disable and Enable) runs as a status-bar job instead: one per node, shown
 with Stop after `statusDelayMs` ("Disabling app_user…", Stop disable), naming its step when it has several ("Renaming
 Sales to Sales2: Closing connections…").
+
+### Long actions and progress
+
+An action marked long in the catalogue (a restore, a verify or a backup) takes the long gate instead of the execute gate:
+1 per Varia connection and 2 in all. Another waits up to `gateWaitMs`, then answers `BUSY`
+("Another restore or backup is running on this connection.", or "Restores or backups are already running on other
+connections." when long actions elsewhere hold every slot), so a long run never blocks a rename or a delete.
+Its steps run through a data reader, never `ExecuteNonQuery`, because SqlClient raises informational messages as they
+arrive only for a reader: SQL Server's message 3211 ("n percent processed.", from `STATS`) becomes a droppable
+`action.progress` EVENT `{step, percent}` at most every 250 ms, and is never one of the 32 messages the reply keeps.
+Each step's start goes out at once as percent 0, and a percent the interval held back goes out when the interval ends (or
+before the next step's start), so a step's last percent is not lost and a finished step never looks stuck while the next waits.
+Main checks each EVENT and pushes `varia:actions-progress {requestId, step, percent}` only to the window that sent the request, at most 4 a
+second: a new step at once, and the latest percent held inside the interval when it ends (`actionProgressRelay`); an
+invalid EVENT is dropped, never a reason to stop the run. The page keeps
+the latest percent per request (`ActionProgressService`) and draws it under the running step of its `StepList`; the
+reply's steps carry the last percent each step reached as `progress`.
+
+When the backend's generation is closed (a quit, a reload, Restart SQL Backend), it stops its long actions itself and
+runs their cleanup steps within their budgets; main lets that generation run `stopGraceMs` plus the action's cleanup budget plus 5 s
+before it kills it (`actionDrainMs`, methodPolicies' `drainMs`).
+
+Long actions: Restore Database…, Restore Files and Filegroups….
 
 ## Database Properties
 
@@ -306,6 +508,331 @@ choosing Yes only after an exclusive change made without closing connections; ot
 type with other sessions, which SSMS does not close connections for) it advises closing them first. Script never
 asks: it always writes WITH NO_WAIT, as SSMS does.
 
+## New Database
+
+A server action makes something on the server rather than acting on an object row, so no row offers it and no
+`explorerAction*` key gates it: its item reads the node it is on, and its describe's target is the server.
+
+| Action | Menu title | Command | Document | On | Group | Mnemonic | Servers | Long run |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `createDatabase` | New Database… | `explorer.newDatabase` | `newDatabase` | the `databases` folder, a `database` node | `0_new` 1; on a node, `1_query` 1, as the menu-only `explorer.newDatabaseOnDatabase` | n | SQL Server | `newDatabase` |
+
+New Database opens as a document tab (`newDatabase`, never dirty and never in Save All; Cancel, Escape or closing it
+discards it, as SSMS's Cancel does, and Save (Ctrl+S), or Enter outside its grids, is OK). A second one open is titled
+New Database (2), and so on. Its describe reads model as Database Properties reads it (a new database starts as a copy of
+model), the instance's default data and log folders, the server's collation, whether the login may create a database,
+master's compatibility level and the platform. The document sends the files, filegroups, collation, containment and
+ledger, and only the options and scoped configurations that differ from model: Script writes those, never every option as
+SSMS does. A file's default name is its logical name with .mdf, .ndf or .ldf, made safe for the server's platform
+(critic A23); a FILESTREAM or memory-optimized container is a folder named after it and grows as it needs. SQL Server on
+Linux has no FILESTREAM, so its filegroups are not offered there.
+
+OK runs the steps "Create the database", then Database Properties' own ALTER steps for the options (titled by option),
+the filegroup changes (Autogrow all files, Set the default filegroup, Make the filegroup read-only) and "Set the owner".
+A failure after CREATE leaves the database, as SSMS does, and the steps say what completed. OK registers the
+`newDatabase` long run while it runs, and Stop cancels the running statement. On success the document closes, Object
+Explorer reloads the Databases folder (the one above System Databases, when it was opened on a system database) and
+selects the new database, and the toolbar's database list refreshes.
+
+The builder has SQL Server compose CREATE DATABASE from one JSON parameter: names through `QUOTENAME`, file names and
+paths as N'' literals quoted on the server (`REPLACE` under `Latin1_General_BIN2`), sizes through `CONVERT` of typed
+numbers (in KB up to 2,097,151 MB, as SQL Server reads a size as an int, and in MB above), the collation only as
+`sys.fn_helpcollations()` names it, files joined without `STRING_AGG`, and one execution
+form, `EXEC @module @stmt` with `@module = QUOTENAME(@db) + N'.sys.sp_executesql'`. Before it, the preflight refuses a
+name in use, a login without CREATE ANY DATABASE, a missing owner or collation, a folder that does not exist or a file
+that does (from SQL Server 2017, through `sys.dm_os_file_exists`), FILESTREAM where it is off, ledger before SQL Server
+2022, and Partial containment without contained database authentication. `CreateDatabaseSql.Lint` checks the builder
+with the table designer's OPENJSON rules (`JsonBuilderLint`): every column a number or `nvarchar(max)`, text only inside
+`QUOTENAME` (or the quoted-literal form), and JSON columns only into the arrays it shreds again.
+
+## Attach Databases
+
+Databases › Attach… opens Attach Databases, a modal dialog, on SQL Server's box editions only (Managed Instance and Azure SQL
+Database have no attach). It opens with the server's logins for Owner and its default data folder; Add… opens the server
+file picker (Locate Database Files, Database Data Files(*.mdf)), then `actions.describe` with `attachDatabase` and `attach: { mdf }`
+reads the file with `DBCC CHECKPRIMARYFILE (@mdf, 0)`, `(@mdf, 2)` and `(@mdf, 3)`: whether it is a primary data file, its
+database's name and version, and the files it records (a log by status 0x40). The path is a bound parameter; nothing
+is built as text, and the result sets are read in the backend. Each recorded file on the server's own disks is checked as
+the picker checks a path (`sys.dm_os_file_exists`, or `xp_fileexist` on SQL Server 2016, which answers only sysadmin); a
+share or device path the file records is never probed, since SQL Server's service account would sign in to that host, so
+its existence is unknown until the user checks it or OK runs. The .mdf's own row takes the path that was added. A file
+that is in use (an attached database's) cannot be read, and the error says so. A database newer than the server (its
+version above master's, `DATABASEPROPERTYEX(N'master', 'Version')`, the catalog lint's one exception) is refused with
+`NOT_SUPPORTED`: SQL Server's own refusal, 948, is severity 20 and ends the session. Add's read waits on the file system,
+so it takes the picker's gate, not the describe gates.
+
+Each database row has Attach As (its database name by default), Owner (`<default>`: the attaching login), Status and
+Message; its details list Original File Name, File Type, Current File Path (typed, or chosen with "…", and checked again
+on Enter or when the field is left) and Message ("Not found"). OK is disabled while a data file is not found or a typed
+one is not yet checked, and while Add… reads a file or a path is checked. Remove takes a log file out: with every log file
+removed, SQL Server rebuilds the log (`FOR ATTACH_REBUILD_LOG`), which breaks the log backup chain, needs the database to
+have been shut down cleanly, and needs every data file.
+
+OK first checks, in the action's connection, that no database has the name, that the owner's login exists, that the login
+may create databases, that master's compatibility level is 130 or more (OPENJSON), and that the primary file is not newer
+than the server (its version read again). Then, per database, "Attach the
+database" (`CREATE DATABASE [name] ON ( FILENAME = N'…' ), … FOR ATTACH`, or `FOR ATTACH_REBUILD_LOG`), and with an owner
+"Set the database owner" (`ALTER AUTHORIZATION ON DATABASE::[name] TO [login]` in the database, as Database Properties
+writes it; SSMS uses the deprecated `sp_changedbowner`). SQL Server builds the CREATE DATABASE from two parameters:
+the name, through `QUOTENAME`, and one JSON array of paths, each quoted on the server (`REPLACE` of `'` in a binary collation), joined in order
+without `STRING_AGG` (SQL Server 2016), and the keyword chosen from two constant batches. When a later step fails or Stop
+ends one, "Detach the database again" (`sp_detach_db` with `@skipchecks = 'true'`) undoes each attach this OK made
+(and one Stop reached after SQL Server finished it, found by its name and primary file),
+newest first, so its row reads Rolled Back, as SSMS's does. Script Action writes the same statements and runs nothing.
+An attach is a long run: while it runs, closing the window, disconnecting its server and Restart SQL Backend are refused.
+
+Its labels (Databases to attach, MDF File Location, Database Name, Attach As, Owner, Status, Message, Add…, Remove,
+"<name>" database details, Original File Name, File Type, Current File Path, Not found) are SSMS's as recalled, not yet
+checked against SSMS 22.
+
+## Restore Database
+
+Restore Database is a document tab ("Restore Database - <database>") with SSMS's pages as sections
+(General, Files, Options), the Select backup devices and Backup Timeline sub-dialogs, and a Script
+drawer. The Databases folder's Restore Database… (R) and a user database's Tasks › Restore › Database… (D) open it, on
+SQL Server itself (not Azure SQL Database or Managed Instance); from a database, that database is the source. Its header
+verbs are Refresh and Restore, and Stop while it runs (catalogue commands, so the palette offers them too).
+
+Its reads are `actions.describe` with `restoreDatabase`, the server as its target and a `restore` member, one of
+`history`, `devices`, `historyFiles`, `mediaFiles`:
+
+| Source | Reads |
+| --- | --- |
+| `history` | msdb's history: the databases it has backups of, and with `database` that database's newest sets with their media (disk files only) |
+| `devices` | `RESTORE LABELONLY` on each backup file, which groups them into media sets, then `RESTORE HEADERONLY` on each media set |
+| `historyFiles` | One history set's files from msdb's `backupfile` |
+| `mediaFiles` | `RESTORE FILELISTONLY` on one media set at one position |
+
+Every answer also carries the server's facts: its path separator, default data, log and backup folders, whether the
+login may restore, the databases a restore could replace and the files other databases hold. SQL Server 2016 and 2017
+have no default backup folder (`InstanceDefaultBackupPath` came with 2019), so their backup folder is the default data
+folder; SSMS reads the registry's BackupDirectory instead, which Varia's constant reads cannot. Statements are constant
+(`Actions/RestoreSql.cs`), with every name, path and position a parameter. A restore describe takes a gate of its own,
+2 per connection and outside the object actions' read gates, because SQL Server ends a read of a file on an
+unreachable share only when the file call returns (about 21 s per file): a media read past its budget then still holds
+its gate, and never one Database Properties or Delete Object waits for. Its budget is 120 s, and main's deadline is 130 s.
+A device SQL Server cannot open is `PATH_NOT_FOUND` when its operating system error says the file or path is not
+there (2, 3, 53, 67, 123, 161), and `FILE_ACCESS` otherwise (access denied, a file another program holds); media a
+restore cannot use (another program's, a damaged or incomplete set) is `MEDIA`. Azure SQL Database and Managed Instance
+are refused before connecting (`NOT_SUPPORTED`).
+
+### Plan
+
+The planner (`src/shared/actions/restore-plan.ts`) chooses only full, differential, transaction log backups that are on disk and not damaged;
+the grid still lists the other kinds it reads, unchecked, with checkboxes disabled and the reason as their description:
+
+| Set type | Component | Type | Planned |
+| --- | --- | --- | --- |
+| `full` | Database | Full | Yes |
+| `differential` | Database | Differential | Yes |
+| `log` | Database | Transaction Log | Yes |
+| `file` | File | Full | No |
+| `fileDifferential` | File | Differential | No |
+| `partial` | Partial | Full | No |
+| `partialDifferential` | Partial | Differential | No |
+
+It builds each plan backwards from its end, as SMO does. For the last backup taken, it starts from the newest backup
+and goes back through the logs it continues to the latest differential (with its full) or full. For a point in time
+(STOPAT, the server's local time) it takes the latest full and differential that finished by the point when one ends
+there; otherwise the first log that finished at or after the point, back through sets that finished by it. A copy-only
+log never joins a chain. A log continues a set only on its recovery fork: after a restore to a point in time, the next
+log starts on the old fork and forks inside itself, so it continues only a set that ends by its fork point, and the
+abandoned branch's logs never join a plan (`tests/fixtures/restore/smo-fork.json`, which the live checks record and
+restore). Sets of another database (`family_guid`) never chain, and Source › Device lists one database the media hold
+at a time (Source › Device › Database, the first one by default). SMO's `DatabaseRestorePlanner`, which SSMS uses,
+chooses the same sets in every case but one: for a point between
+the last log before a differential and that differential, SMO restores the differential, which no STOPAT can undo, so
+the database comes back as at the differential. Varia restores the logs instead (`tests/fixtures/restore/smo-plans.json`
+records both plans; the live checks restore each).
+
+The grid's checkboxes take clicks only while Manual Selection is checked; unchecking a set also unchecks every set
+after it in the plan, as SSMS does, and unchecking Manual Selection brings the planner's plan back. Sets that do not chain say "The selected backup sets do not form a valid restore plan."
+A set the planner never uses keeps its checkbox disabled, with the reason as its description and the row's tooltip:
+not on a disk file, "This backup set is marked damaged.", "A copy-only log backup is not part of the log chain." or "File and partial backups restore with T-SQL."
+A point in time the checked sets cannot stop at says "The checked backup sets do not reach the point to restore to: check the log backup that covers it, or restore to the last backup taken."
+Until the plan's full backup's files are read, Script waits: "The files of the full backup to restore are not read yet."
+
+The Backup Timeline shows the backups over an interval (Hour, Six Hours, Day, Week; Day first) ending at the last
+backup: a large triangle for a full backup, a small one for a differential, a tick for a log, and a band where log
+backups cover. Its point is a slider: the arrow keys move it a minute, Shift and an arrow or Page Up and Page Down an
+hour, Home and End to the interval's ends. A point outside the covered band (other than a full or differential
+backup's finish) leaves OK disabled. SSMS also allows a point after the last log backup, restoring the tail-log backup
+it takes first; Varia refuses such a point (a known gap: restore to the last backup taken, or past it in T-SQL).
+
+### Options and script
+
+Recovery state is one of RESTORE WITH RECOVERY, RESTORE WITH NORECOVERY, RESTORE WITH STANDBY. Restoring over the database the
+backups came from takes a tail-log backup first by default (BACKUP LOG … WITH NORECOVERY into the default backup folder,
+`<database>_LogBackup_<yyyy-MM-dd_HH-mm-ss>.bak`); a copy under another name moves its files to the default data and
+log folders under its own name, or to the folders Relocate all files to folder names. A Restore As path that another
+database holds, or that two files share, is marked on the Files section: the Files section compares paths as the
+server's platform does (exactly on Linux), while main and the backend refuse two files on one path ignoring case on
+every platform, so on Linux two files whose paths differ only in case cannot restore together (a known limit).
+
+Script (`actions.script` with the `restore` action) is written from the request and the catalogue, on no connection, and
+stops once it passes 4,000,000 characters ("The script is too large"). It writes what SMO's restore plan scripts for the same choices:
+`USE [master]`, `ALTER DATABASE … SET SINGLE_USER WITH ROLLBACK IMMEDIATE` when Close existing connections is checked
+and the destination exists, the tail-log backup, one RESTORE per set (`FILE =`, `MOVE`, `REPLACE`, `KEEP_REPLICATION`, `RESTRICTED_USER`,
+`NORECOVERY` or `STANDBY`, `STOPAT`, `NOUNLOAD`, `STATS = 5`), `SET MULTI_USER` after it, and `GO`. Live checks compare
+the text with SMO's `Script()` for hostile names and paths; Varia writes two spaces after SET (`SET  SINGLE_USER`), as its
+other database options do, where SMO writes one.
+
+### Run
+
+Restore (SSMS's OK) reads the server again, then asks in the document when a fact calls for it, Restore first and Cancel
+last, the default (focused, drawn as the default, and Escape's answer; Restore is disabled while the bar asks):
+REPLACE over an existing database (which is left restoring if the run stops or fails part way, and whose contents are
+lost outright when it is not the database the backups are of: another name, or the same name with another recovery
+family, from another server or an earlier database of that name), a tail-log backup that could be taken but is off, and
+Close existing connections, with the sessions it ends, those with open transactions it rolls back, and Varia's own
+query windows in the database that are running or may hold one. Only an online database has connections to close, so
+the option is disabled, and not sent, for any other. SSMS asks none of these. It then runs `actions.execute`
+with the same request Script takes, as a long run (closing the tab or the window, Disconnect of the server and Restart
+SQL Backend are refused until it ends: Stop it first) on the long gate, and the Run panel lists its steps with the running
+RESTORE's STATS percent (`action.progress`), an overall percent (the sets done and the running set's percent, each set
+alike) and the time. Answering the bar moves focus to the Run panel's title (Restore, Stop) or back to the verb (Cancel,
+Keep restoring).
+
+The backend first checks what the request names, on the action's own connection: the destination's identity (an
+existing database must be the one the document read), a snapshot or a database without RESTORING rights, whether the
+tail-log backup can be taken, Close existing connections over a database that is not online (`DATABASE_UNAVAILABLE`),
+each set's header on the media (`RESTORE HEADERONLY`: its type, family, and that it continues the set before it;
+`RestoreChain`), REPLACE over another database's backups (`BACKUP_MISMATCH`), and the files the restore writes
+(`NAME_IN_USE`): the first set's `RESTORE FILELISTONLY` with the Restore As paths gives each file's path, which must be no
+other database's file and, unless it is a file of the destination, no file already on the server; a standby file or
+tail-log backup must be no database's file and have no database file's extension. Paths compare by a key
+(`ServerPath.Key`, `serverPathKey` in the renderer, both checked against `tests/fixtures/server-paths.json`): `.` and
+empty segments dropped, `..` resolved, and on Windows `/` as `\`, trailing dots and spaces trimmed, and case ignored.
+Files on disk are seen through `sys.dm_os_file_exists` (SQL Server 2017 and later) or `xp_fileexist` (2016, sysadmin
+only; otherwise not checked). Then the steps, each its own statement with every name, path and number a parameter
+(`RestoreSql`):
+
+| Step | When |
+| --- | --- |
+| Close existing connections | Close existing connections is checked and the destination exists (`SET SINGLE_USER WITH ROLLBACK IMMEDIATE`, after Varia's own pooled sessions in it are cleared) |
+| Back up the tail of the log | The tail-log backup is on (`BACKUP LOG … TO DISK = … WITH NORECOVERY` when Leave source database in the restoring state is checked) |
+| Restore the full backup, Restore the differential backup, Restore log backup (n of m) | One RESTORE per set of the plan, NORECOVERY on all but the last |
+| Restore multi-user access | After a RECOVERY restore that closed connections, unless Restrict access is checked |
+| Bring the database back online | Cleanup: the tail-log backup left the database restoring (it ended, or a Stop came as it finished), no RESTORE has written to it, and it is still RESTORING with the id the preflight read (`RESTORE DATABASE … WITH RECOVERY`) |
+| Restore multi-user access | Compensation: connections were closed and no RESTORE has written to the database (its access as it was: multi-user or restricted) |
+| Remove the partly restored database | Cleanup: the destination did not exist, and a RESTORE left it RESTORING; dropped only when its name, state 1 and an id absent at the preflight all match, which the DROP's own batch checks again. Its files are read first, and checked on disk after the DROP |
+
+After a failure or Stop the compensations and the cleanup run in order under a fresh 30 s budget, and are listed only
+when they run. Varia never drops a database that existed (owner decision 5). Stop cancels the running statement in SQL
+Server; over a database that existed it asks first ("Stopping leaves <database> restoring and unusable until a restore
+finishes", Stop first and Keep restoring last, the default). A refusal SQL Server makes while it plans a RESTORE (3101, 3154, 3159, 3201, 4305…)
+has not written to the database, so the compensations still run. The reply lists the steps, and the database's state and
+access as the run left it (`restored`: `sys.databases` read last; the access comes from the backup), or `absent` when no
+database has the name, or nothing when it could not be read (the panel then says to check Object Explorer). A Stop that
+came as the last RESTORE WITH RECOVERY reached 100 % and left the database online says it was restored. SQL Server leaves
+the files of a cancelled RESTORE on disk even when the partly restored database is dropped: `restored.filesLeft` names
+them (at most 16), the error and the cleanup step say to delete them or restore to other paths, and the
+next restore to those paths is refused until then. A Stop or an unknown outcome shows as a status in the warning tone, a
+failure as an error. The Databases folder is reconciled once the run ends, and Restore again keeps the choices. A run
+whose backend or server is lost, or whose reply main stopped waiting for, says that how far it got is not known.
+
+SQL Server's own databases (master, model, msdb, tempdb) are refused as destinations, in any case (MSDB too): "Restore system databases with T-SQL; it needs single-user mode or a stopped Agent."
+Their backups can still be sources, restored under another name (msdb_copy), as SSMS allows.
+Prompt before restoring each backup and Verify Backup Media are greyed ("Not yet available").
+
+The labels (General, Files and Options; Source, Device, Destination, Restore to, Timeline…, Backup sets to restore and
+its columns, Manual Selection; Relocate all files to folder, Data file folder, Log file folder, Restore the database
+files as, Restore As; the restore options, Tail-Log
+backup, Server connections and Prompt; Select backup devices; Backup Timeline) are SSMS's as recalled, not yet checked
+against SSMS 22.
+
+### Restore Files and Filegroups
+
+Restore Files and Filegroups (D1g) restores some files of an existing database: the Databases folder's Restore Files and
+Filegroups… (E) and a user database's Tasks › Restore › Files and Filegroups… (F) open the same document in its files mode
+("Restore Files and Filegroups - <database>"), with SSMS's pages as sections (General, Options), and the same
+describes, Script drawer, verbs, Run panel, Stop and long run as Restore Database. General has To database (the server's
+user databases), Source for restore (From database, whose backups msdb has, or From device, whose … opens Restore Database's
+Select backup devices titled Specify backup devices, Learn's name for it in this dialog), and Select the backup sets
+to restore: the files of the newest 16 full and file backups (msdb's `backupfile` or FILELISTONLY, read one describe after
+another; files a file backup does not hold (`absent`: `is_present` 0) and log files are not listed), then the log backups
+that continue the backup set of the checked rows, checked with them and never alone (copy-only and damaged logs never
+chain). One restore restores from one backup set: checking a row of another set starts again from it. Options has Restore
+as filegroup (the rows become filegroups, named with FILEGROUP =, and a Filegroup column first shows each row's name),
+Overwrite the existing database (WITH REPLACE), Prompt before restoring each backup (greyed, with a note saying why, as every
+greyed option has), Restrict access to the restored database (WITH RESTRICTED_USER), Restore the
+database files as (Original File Name, File Type and Restore As, for the restored files, where they are unless typed), the
+Recovery state with SSMS's long labels ("Leave the database ready for use by rolling back the uncommitted transactions. Additional transaction logs cannot be restored. (RESTORE WITH RECOVERY)"…) and Rollback undo file, and Varia's own
+Log backup group.
+
+Under the full or bulk-logged recovery model an online file restore ends only with a log backup taken after it (probed on
+2025: the files stay RESTORING after every earlier log, "Additional roll forward past LSN … is required"). SSMS's dialog
+has no such step and leaves the person to take and restore one; Varia offers "Back up the log and restore it to bring the
+files online (WITH COPY_ONLY)", checked by default for an online database in the full or bulk-logged recovery model WITH
+RECOVERY, to a new file named as SSMS names a tail-log backup. Unchecked there, Restore asks first ("No log backup is
+taken: under the full or bulk-logged recovery model, restored files stay restoring until a log backup taken after they are restored is restored."), as it does for WITH REPLACE. STANDBY
+is greyed while the database is online: SQL Server refuses it on an online file restore (4302), and only after the files
+are restored, so the preflight refuses it first.
+
+A file of the PRIMARY filegroup restores only offline: on an online database it puts the whole database in RESTORING, and
+with WITH REPLACE it restores the log file too, so the changes since the last log backup are lost and the database cannot
+recover (probed on 2025: 4303, then 927 for a tail-log backup). Varia greys PRIMARY's rows while the database is online or
+offline, with the reason under the grid ("A file of the PRIMARY filegroup restores only offline, which takes the whole database out of use and, without a tail-log backup, loses the changes since the last log backup: restore the database with Restore Database, which backs up the tail of the log first."), and the preflight refuses them (`NOT_SUPPORTED`);
+they restore only into a database already restoring. Restore Database restores PRIMARY with its tail-log backup first.
+
+Under the full or bulk-logged recovery model the plan must reach the database's log chain: its last set must end at or
+after `sys.database_recovery_status.last_log_backup_lsn`, where the next log backup starts (a copy-only log backup leaves it).
+A regular log backup taken after the plan's last set (a maintenance job, media not added under From device, or one taken
+after the document read msdb) would leave the restored files waiting for it, and Varia's copy-only backup would not continue
+them (4305). The preflight refuses such a plan before any statement (`RESTORE_SEQUENCE`, "The log has been backed up since the last backup set this restore plans, and restored files roll forward only through every log backup: Refresh to read the backup history again, or add the files of the newer log backups under From device."),
+naming the newest log backup from msdb (when it finished and its file) where the login may read msdb. Back up the log reads
+the chain again before it runs: a log backup taken during the restore fails that step with the same naming
+("The log was backed up during the restore, so a log backup taken now would not continue the restored files: restore that log backup, then back up the log and restore it WITH RECOVERY to bring the files online."), before the doomed backup and restore.
+
+The request (`restoreFiles`) names the sets (a full or file backup, then logs), the files and filegroups (each at most
+256), the moves, the options and the log backup. A file restore takes no STOPAT and no differential, and its
+database must exist, so its identity is required. The backend's preflight checks the identity and that it is no snapshot;
+the log backup (not under SIMPLE, and only online); STANDBY online; the chain on the media (`RestoreChain`, files variant);
+that the backups are the database's own (its backup family, else its name; `BACKUP_MISMATCH`, "These backups are of another database: files restore only from the database's own backups.");
+that the plan reaches the log chain; that each file and filegroup is in the set, held by it, no log file and, online or
+offline, not of PRIMARY; under SIMPLE, Learn's rule
+("Under the simple recovery model, the file must belong to a read-only filegroup.", `NOT_SUPPORTED`, from `sys.master_files.is_read_only`); and the files it writes, as Restore
+Database's does, with the log backup file new. The steps, each its own statement with every name a parameter
+(`FILE = @f1`, `FILEGROUP = @g1`; live checks restore hostile names):
+
+| Step | When |
+| --- | --- |
+| Restore the files | `RESTORE DATABASE … FILE = … FILEGROUP = … FROM … WITH FILE =`, the moves, `NORECOVERY` (or the recovery state when it is the last statement), `REPLACE`, `RESTRICTED_USER`, `STATS = 5` |
+| Restore log backup (n of m) | One `RESTORE LOG` per log backup after the set |
+| Back up the log | The log backup is on: the log chain read again, then `BACKUP LOG … TO DISK = … WITH COPY_ONLY, NOFORMAT, NOINIT, NAME = …` |
+| Restore the log backup | Then `RESTORE LOG` from that new file WITH RECOVERY, which brings the restored files online |
+
+A file restore has no compensation or cleanup, and Varia never drops the database; Stop asks first ("Stopping leaves the
+files being restored in <database> restoring…"). The reply names the files still RESTORING (`restored.filesRestoring`, by
+logical name, at most 16), and the Run panel says so. Script writes the statements SMO's `Restore { Action = Files }` writes,
+with `STATS = 5` as Restore Database's (SMO scripted 10 as the spec captured it), and the log backup's two statements
+after the logs.
+
+### Restore limits
+
+| Limit | Value | Meaning |
+| --- | --- | --- |
+| `mediaReadMs` | 120,000 | The backend's budget for one restore describe, in ms (LABELONLY and HEADERONLY on a large striped set or a slow share); then `TIMEOUT` |
+| `describeDeadlineMs` | 130,000 | Main's deadline for a restore describe, in ms: the budget and time to answer |
+| `mediaReadsPerConnection` | 2 | Restore describes one connection runs at once, under their own gate outside the object actions' read gates |
+| `backupDevices` | 64 | Backup files one describe or restore names (a media set's families) |
+| `historyDatabases` | 1,024 | Databases msdb's history lists; more set `historyTruncated` |
+| `historySets` | 1,024 | The newest backup sets one database's history, or the media, lists; more set `setsTruncated` |
+| `planSets` | 1,024 | Backup sets one restore runs: as many as the history lists (each RESTORE is a statement of its own) |
+| `restoreMoves` | 1,000 | Files one restore moves (64 devices and 2 × 1,000 MOVE parameters stay under SQL Server's 2,100) |
+| `destinations` | 4,096 | Destination names and other databases' files read for Restore As collisions; more set a truncation flag |
+| `serverFiles` | 8,192 | Other databases' files read for Restore As collisions |
+| `setName` | 128 | Characters of a backup set's name and user name (nvarchar(128)) |
+| `setId` | 36 | Characters of a set id: a backup_set_uuid (history) or <media set>:<position> (devices) |
+| `lsnDigits` | 25 | Digits of an LSN, numeric(25, 0) sent as decimal text |
+| `position` | 32,767 | A backup set's position in its media set (RESTORE … WITH FILE) |
+| `stats` | 5 | STATS = n in the script, as SSMS asks SMO for |
+| `databases` | 32,767 | Database ids a run's preflight reads (SQL Server's most): its cleanup drops only a database whose id was not among them |
+| `scriptChars` | 4,000,000 | Characters of a restore's script, checked as each statement is written (every RESTORE repeats the moves) |
+| `restoreFiles` | 256 | Files (FILE), and filegroups (FILEGROUP), one file restore names: form 4's `@f1`…`@f256` and `@g1`…`@g256` |
+| `fileSets` | 16 | The newest full and file backups whose files Restore Files and Filegroups reads, one describe each |
+| `parameters` | 2,100 | SQL Server's parameters per statement: a file restore's files, filegroups, devices and moves (two each), with its own three, stay under them |
+
 ## SQL
 
 DDL runs on its own unpooled connection (the program name plus " - Object Actions"), never Object Explorer's or
@@ -330,7 +857,7 @@ Stop rolls it back, and only the commit, which Stop no longer reaches, completes
 listed as rolledBack, never done, and the message names none as completed; a step that checks the server again before it
 changes anything (Unlock's recheck) can refuse with the action's own message, and then nothing is said to be rolled back.
 
-Before the first statement that needs a database to itself (setting single-user, renaming, dropping or detaching it), and
+Before the first statement that needs a database to itself (setting single-user, taking it offline, renaming, dropping or detaching it), and
 before Database Properties applies its changes, the backend frees the database of its own sessions, on every connection
 to that server: for each connection whose own database it is (the Connect dialog's Database, or the login's default, read
 at connect), Object Explorer's, scripting's, SSIS's and the live views' server-scope connections open in master from then
@@ -351,11 +878,14 @@ If the backend stops while an action runs: "The SQL backend stopped while the ac
 
 ### Shared statements
 
-Later actions plan these statements. Each is built by SQL Server from constant text, linted, and checked against hostile
+Take Offline and Bring Online plan the first three, Detach the next three, later actions the others. Each is built by SQL Server from constant text, linted, and checked against hostile
 names by a live dry run:
 
 | Step | As Script Action writes it |
 | --- | --- |
+| Take database offline | `ALTER DATABASE [db] SET  OFFLINE` |
+| Close connections and take database offline | `ALTER DATABASE [db] SET  OFFLINE WITH ROLLBACK IMMEDIATE` |
+| Bring database online | `ALTER DATABASE [db] SET  ONLINE` |
 | Restore multi-user access | `ALTER DATABASE [db] SET  MULTI_USER` |
 | Restore restricted user access | `ALTER DATABASE [db] SET  RESTRICTED_USER` |
 | Detach the database | `EXEC master.dbo.sp_detach_db @dbname = N'db', @skipchecks = 'false'` ('true' when Update Statistics is cleared) |
@@ -601,8 +1131,8 @@ role it lacks (`NOT_FOUND`). Two cases are not caught before `CREATE LOGIN` runs
 group's readable secondary (its role is only in a DMV that needs VIEW SERVER STATE), which fails `CREATE USER` as read-only, and a
 Windows login whose SID already has a user under another name in the database (an orphan, often after a restore from another
 server in the domain), which fails it with 15063; resolving a Windows SID before the login exists would mean asking the domain
-from the preflight. The server's password policy answers `PASSWORD_POLICY` (15114 to 15118),
-which keeps the dialog open with its password; 15025 and 15023 are `NAME_IN_USE`, 15010, 15033 and 15401 `NOT_FOUND`, and 15099,
+from the preflight. The server's password policy answers `PASSWORD_POLICY` (15114 to 15118, and 33062 to 33064 from the
+policy SQL Server on Linux applies), which keeps the dialog open with its password; 15025 and 15023 are `NAME_IN_USE`, 15010, 15033 and 15401 `NOT_FOUND`, and 15099,
 15122, 15006, 15407 and 37525 `NOT_SUPPORTED`. After OK the server's Logins folder, once Object Explorer has listed it, reloads and selects the new login,
 and each mapped database's Users folder that Object Explorer has listed reloads (after a partial run too).
 
@@ -703,6 +1233,12 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `BLOCKED` | Yes |
 | `DEPENDENTS` | No |
 | `NAME_IN_USE` | No |
+| `PATH_NOT_FOUND` | No |
+| `FILE_ACCESS` | Yes |
+| `MEDIA` | No |
+| `BACKUP_MISMATCH` | No |
+| `TAIL_LOG_NEEDED` | No |
+| `RESTORE_SEQUENCE` | No |
 | `DATABASE_UNAVAILABLE` | Yes |
 | `TIMEOUT` | Yes |
 | `CONNECTION_LOST` | Yes |
@@ -721,9 +1257,9 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `scriptMs` | 25,000 | The backend's budget for building a script, in ms; then `TIMEOUT` |
 | `readLockTimeoutMs` | 10,000 | `LOCK_TIMEOUT` while reading for a dialog or a script, in ms; then `BLOCKED`. DDL itself waits without one |
 | `gateWaitMs` | 30,000 | How long a request waits for its gate before the backend answers `BUSY`, in ms |
-| `readPerConnection` | 2 | Describe and script requests at once per server |
+| `readPerConnection` | 2 | Describe and script requests at once per connection |
 | `readTotal` | 4 | Describe and script requests at once in total |
-| `executePerConnection` | 1 | Actions running at once per server |
+| `executePerConnection` | 1 | Actions running at once per connection; long actions take the long gate instead |
 | `executeTotal` | 2 | Actions running at once in total |
 | `registered` | 128 | Requests the backend tracks; more fail with `BUSY` |
 | `cancelIds` | 16 | Request ids per cancellation |
@@ -742,6 +1278,28 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `statements` | 512 | Statements one Database Properties request may plan |
 | `stopGraceMs` | 10,000 | How long a stopped action waits for SQL Server to end its statement before it answers `CANCELLED` with an unknown outcome, in ms |
 | `statusDelayMs` | 300 | How long a state action (a rename, a login's Disable or Enable) runs before the status bar shows it with Stop, in ms |
+| `serverPath` | 260 | UTF-16 code units in a path on the server (`sys.master_files.physical_name` is nvarchar(260)) |
+| `browseEntries` | 2,000 | Entries the server file picker lists per folder; more set `truncated` |
+| `browseMs` | 10,000 | The backend's budget for one listing of the server file picker, in ms; then `TIMEOUT` (main's deadline is 15 s) |
+| `browsePerConnection` | 1 | Server file picker listings at once per server, under a gate of their own rather than the describe and script gates |
+| `attachDatabases` | 16 | Databases one Attach Databases OK attaches |
+| `attachFiles` | 1,000 | Files one database to attach lists (a primary file that records more is refused) |
 | `cleanupMs` | 10,000 | How long an action's compensation and cleanup steps may run after a failure or Stop, in ms, unless the action sets its own; a Stop's reply waits `stopGraceMs` plus this |
+| `progressEventMs` | 250 | How often a long step's progress (SQL Server's message 3211, from `STATS`) may reach main as a droppable `action.progress` EVENT, at most, in ms |
+| `progressPerSecond` | 4 | Progress updates main pushes to the window per request each second, at most; the first of each step always goes |
+| `longPerConnection` | 1 | Long actions (a restore or backup) running at once per connection; another waits `gateWaitMs`, then `BUSY` |
+| `longTotal` | 2 | Long actions running at once in total |
+| `drainMarginMs` | 5,000 | What main adds to a long action's Stop wait (`stopGraceMs` plus its cleanup budget) when it lets a closing backend finish, in ms |
+| `newDatabaseFiles` | 256 | Files one New Database request may create |
+| `newDatabaseFilegroups` | 256 | Filegroups one New Database request may create, PRIMARY included |
+| `dataFileMb` | 16,777,215 | A data file's initial and maximum size in New Database, in MB (2,147,483,647 pages, SQL Server's ceiling for a file, just under 16 TB) |
+| `logFileMb` | 2,097,152 | A log file's initial and maximum size in New Database, in MB (2 TB, SQL Server's ceiling for a log file) |
+| `growthMb` | 2,097,152 | A file's autogrowth in MB, in New Database |
+| `growthPercent` | 100 | A file's autogrowth in percent, in New Database |
+| `sessions` | 8 | Sessions Take Database Offline lists from the database (with VIEW SERVER STATE); more say so |
+| `sessionText` | 128 | Characters of each login, program and host name in that list |
+| `detachFiles` | 256 | Files Detach Database lists as staying on the server, and the reply's `filesKept`; more make the dialog say so |
+| `filePath` | 260 | Characters of a file's path in that list (`sys.master_files.physical_name` is nvarchar(260)) |
 | `blockers` | 8 | Sessions in a database that Delete Object lists (never Varia's own pooled sessions); more set `blockersTruncated` |
 | `blockerChars` | 128 | Characters of each listed session's program and host names |
+| `serverConnections` | 64 | Connections to the same server a database rename's describe names (whatever name each was opened with); their query windows and Database Properties documents follow the new name |

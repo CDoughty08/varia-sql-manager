@@ -28,6 +28,12 @@ export function problemSections(errors: ReadonlyMap<string, string>): ReadonlySe
  * recovering is running, a read-only or single-user one needs attention, and an online multi-user one is fine. The pill
  * says SMO's words ("Normal", "Restoring, Standby", "Normal, Read-Only"), so the colour only repeats them.
  */
+/** The model as a document shows the database's state: one Take Offline took offline while the document held changes reads
+ *  OFFLINE, as its banner says, until the database is read again (D3a). */
+export function shownModel(model: DatabasePropertiesModel, offline: boolean | undefined): DatabasePropertiesModel {
+  return offline ? { ...model, general: { ...model.general, status: 'OFFLINE' } } : model
+}
+
 export function databaseStatusPill(model: DatabasePropertiesModel): { readonly tone: StatusTone; readonly label: string } {
   const { status, standby } = model.general, readOnly = model.options.readOnly === 'true', access = model.options.restrictAccess
   const words = databaseStatusText(status, { standby, readOnly })

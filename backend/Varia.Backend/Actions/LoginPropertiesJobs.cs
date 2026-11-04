@@ -120,7 +120,9 @@ internal sealed partial class ActionService
             command.CommandText = LoginSql.LoginSid;
             command.CommandTimeout = 0;
             Add(command, "@name", SqlDbType.NVarChar, 128, login);
-            sid = await command.ExecuteScalarAsync(token) as byte[];
+            // A reader, as every action statement runs (tests/action-reader-lint.test.ts).
+            await using var reader = await command.ExecuteReaderAsync(token);
+            sid = await reader.ReadAsync(token) && !reader.IsDBNull(0) ? (byte[])reader.GetValue(0) : null;
         }
         if (sid is null) return (null, [], Error("NOT_FOUND", "The login " + ScriptingErrors.Display(login) + " no longer exists. Refresh Object Explorer."));
         await using var read = connection.CreateCommand();
@@ -315,7 +317,8 @@ internal sealed partial class ActionService
             Add(command, "@principal", SqlDbType.Int, 0, bound.PrincipalId ?? throw new InvalidOperationException("A login's binding needs its principal_id."));
             Add(command, "@created", SqlDbType.DateTime, 0, bound.Created ?? throw new InvalidOperationException("A login's binding needs its create_date."));
         }
-        await command.ExecuteNonQueryAsync(token);
+        // Through a reader, as every action statement (ReadAllAsync): its THROW is the answer.
+        await ReadAllAsync(command, token);
     }
 
     /// <summary>A failure or Stop of Login Properties: 15151 (PERMISSION_DENIED) gets what to check, the old password when its step

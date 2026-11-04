@@ -52,6 +52,7 @@ internal static class SeamChecks
         public void DatabaseChanged(string connectionId, string database, string? newName) { }
         public bool FreeDatabase(string connectionId, string database) { Freed.Add(database); return false; }
         public IReadOnlySet<int> PoolSessions(string connectionId) => new HashSet<int>();
+        public IReadOnlyList<string> SameServer(string connectionId) => [connectionId];
     }
 
     private static ActionArgs Delete(ObjectRefDto target) => new("delete", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), target, null, false, false);
@@ -75,8 +76,8 @@ internal static class SeamChecks
             && !catalog.Serves("delete", "onPrem")
             && DesignerCatalog.Current.Engines.SequenceEqual(["box", "managedInstance"]),
             "each action declares its engines: Select Top everywhere, Rename, Delete, Properties and the designer's createTable on SQL Server and Managed Instance");
-        check(catalog.Actions.All(action => catalog.CleanupBudget(action) == TimeSpan.FromMilliseconds(catalog.Limit("cleanupMs"))) && catalog.Limit("cleanupMs") == 10_000,
-            "every action's compensation and cleanup run under the catalogue's 10-second budget unless it sets its own");
+        check(catalog.Actions.All(action => catalog.CleanupBudget(action) == TimeSpan.FromMilliseconds(action == "restore" ? 30_000 : catalog.Limit("cleanupMs"))) && catalog.Limit("cleanupMs") == 10_000,
+            "every action's compensation and cleanup run under the catalogue's 10-second budget unless it sets its own (Restore Database's 30 s, to drop a partly restored database)");
 
         // A later action that Managed Instance cannot run (Detach, Restore) is refused before any connection opens; the message names the engine.
         var mi = new Host(8);
@@ -342,20 +343,25 @@ internal static class SeamChecks
             "runner v2 skips the rest after a failure and runs only the compensations of completed steps and the cleanups their condition allows, listed as compensating: "
             + string.Join(", ", outcome.Steps.Select(step => step.Status + ":" + step.Title)) + " | " + outcome.Failure?.Code + " " + outcome.Failure?.Message);
         ran.Clear();
+        // A main step that finds it must not go on (StepRefusedException) fails with its own error, as a SqlException does.
+        var refusal = ActionErrors.Create(ActionsCatalog.Current, "RESTORE_SEQUENCE", "The log was backed up during the run.");
+        var refused = await service.RunStepsAsync(connection, [Step("Restore"), Step("Back up", new StepRefusedException(refusal)), Step("Restore it")], null, CancellationToken.None, TimeSpan.FromSeconds(1));
+        check(refused.Steps.Select(step => step.Status + ":" + step.Title + ":" + step.Message).SequenceEqual(["done:Restore:", "failed:Back up:The log was backed up during the run.", "skipped:Restore it:"])
+            && refused.Failure is { Code: "RESTORE_SEQUENCE" } && refused.Failure.Message == "The log was backed up during the run. Completed before the failure: Restore." && refused.Done == 1
+            && ran.SequenceEqual(["Restore", "Back up"]),
+            "a step that refuses to go on fails with its own error, the rest skipped and the steps completed named: " + string.Join(", ", refused.Steps.Select(step => step.Status + ":" + step.Title)) + " | " + refused.Failure?.Message);
+        ran.Clear();
         using var stopped = new CancellationTokenSource();
         stopped.Cancel();
         var cancelled = await service.RunStepsAsync(connection, plan, null, stopped.Token, TimeSpan.FromSeconds(1));
         check(cancelled.Steps.Select(step => step.Status + ":" + step.Title).SequenceEqual(["cancelled:Close existing connections", "skipped:Rename", "skipped:Delete backup and restore history", "failed:Remove what was made"])
             && cancelled.Failure is { Code: "CANCELLED" } && ran.Count == 0, "after Stop, no compensation is due for steps that never completed; a cleanup whose condition holds still runs under its own budget");
-        // A step that checks the server again and refuses (Unlock's recheck) fails with the action's own answer.
+        // A first step that checks the server again and refuses (Unlock's recheck) answers with exactly that refusal.
         ran.Clear();
         var changed = ActionErrors.Create(ActionsCatalog.Current, "NOT_SUPPORTED", ActionsCatalog.Current.Logins.Message("unlockChanged"));
-        var refused = await service.RunStepsAsync(connection, [Step("Check"), Step("Recheck", new StepRefusedException(changed)), Step("Last")], null, CancellationToken.None, TimeSpan.FromSeconds(1));
-        var refusedFirst = await service.RunStepsAsync(connection, [Step("Recheck", new StepRefusedException(changed)), Step("Last")], null, CancellationToken.None, TimeSpan.FromSeconds(1));
-        check(refused.Steps.Select(step => step.Status + ":" + step.Title).SequenceEqual(["done:Check", "failed:Recheck", "skipped:Last"]) && refused.Steps[1].Message == changed.Message
-            && refused.Failure is { Code: "NOT_SUPPORTED" } && refused.Failure.Message == changed.Message + " Completed before the failure: Check." && refused.Done == 1
-            && refusedFirst.Failure == changed && refusedFirst.Steps.Select(step => step.Status).SequenceEqual(["failed", "skipped"]),
-            "a step that refuses after checking the server again fails with that refusal as the action's answer, and the rest are skipped");
+        var recheck = await service.RunStepsAsync(connection, [Step("Recheck", new StepRefusedException(changed)), Step("Last")], null, CancellationToken.None, TimeSpan.FromSeconds(1));
+        check(recheck.Failure == changed && recheck.Steps.Select(step => step.Status + ":" + step.Message).SequenceEqual(["failed:" + changed.Message, "skipped:"]) && recheck.Done == 0,
+            "a first step that refuses after checking the server again answers with that refusal alone, and the rest are skipped");
         static async Task<bool> Refuses(Func<Task> run)
         {
             try { await run(); return false; }

@@ -171,8 +171,8 @@ describe('Login Properties drafts', () => {
     expect(loginPropertiesHints(group, draftOf(group))).toEqual([])
     expect(loginPropertiesRefusal({ type: 'U', subtype: 'windowsUser', own: false }, { checkPolicy: true })).toBe('propertiesNotSql')
     expect(loginPropertiesRefusal({ type: 'S', subtype: 'system', own: false }, { enabled: true })).toBe('system')
-    expect(loginPropertiesDefinition.blocked?.(model({ login: { subtype: 'system' } }))).toBe(loginMessages.system)
-    expect(loginPropertiesDefinition.blocked?.(model({ login: { subtype: 'sa' } }))).toBeUndefined()
+    expect(loginPropertiesDefinition.blocked?.(model({ login: { subtype: 'system' } }), draftOf(model({ login: { subtype: 'system' } })))).toBe(loginMessages.system)
+    expect(loginPropertiesDefinition.blocked?.(model({ login: { subtype: 'sa' } }), draftOf(model({ login: { subtype: 'sa' } })))).toBeUndefined()
   })
   it('unmaps, renames and changes a mapped user\'s schema and roles once read; dbo and unread databases never change', () => {
     let of = model(), draft = draftOf(of)

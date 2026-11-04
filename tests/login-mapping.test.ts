@@ -292,7 +292,7 @@ describe('User Mapping in the object dialog service', () => {
     expect(explorer.reconcile).toHaveBeenCalledTimes(2)
   })
   it('reloads the mapped databases\' Users folders after a run that created the login and then stopped', () => {
-    const effects = { refreshListing: vi.fn(), reveal: vi.fn(), reload: vi.fn(), notify: vi.fn() }
+    const effects = { refreshListing: vi.fn(), reveal: vi.fn(), reload: vi.fn(), databaseState: vi.fn(), notify: vi.fn() }
     newLoginDefinition.afterPartial!(effects, { ...create({ mappings: [{ database: 'Sales', user: 'u', rolesAdd: [] }] }) } as never)
     expect(effects.reveal).toHaveBeenCalledWith('logins', { kind: 'login', name: 'app' })
     expect(effects.reload).toHaveBeenCalledWith({ kind: 'database', name: 'Sales' }, 'users')

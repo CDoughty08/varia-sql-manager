@@ -55,7 +55,7 @@ export function loginStatusOf(disabled: boolean, connectDenied: boolean): 'disab
  *  policy, from catalog views only (sys.server_principals, sys.server_permissions and sys.sql_logins). */
 export const loginDetailWords = {
   types: {
-    S: 'SQL Server authentication', U: 'Windows user', G: 'Windows group', C: 'Mapped to a certificate', K: 'Mapped to an asymmetric key',
+    S: 'SQL Server authentication', U: 'Windows user', G: 'Windows group', C: 'Mapped to certificate', K: 'Mapped to asymmetric key',
     E: 'Microsoft Entra user or application', X: 'Microsoft Entra group'
   },
   disabled: 'Disabled',
@@ -215,6 +215,33 @@ export function loginRefusal(facts: Pick<LoginFacts, 'subtype' | 'own' | 'sysadm
   return undefined
 }
 
+/**
+ * A login's lock-out state, which only LOGINPROPERTY knows (ActionSql.LoginLock, the one statement allowed to call it, D4 §7):
+ * read by Unlock…'s describe and again by its preflight. `lockoutTime` (the server's clock, yyyy-MM-ddTHH:mm:ss.fff) only
+ * while locked; `daysUntilExpiration` only while the password expires.
+ */
+export interface LoginLockFacts {
+  readonly locked: boolean
+  readonly badPasswords?: number
+  readonly lockoutTime?: string
+  readonly mustChange: boolean
+  readonly expired: boolean
+  readonly daysUntilExpiration?: number
+}
+/** How Unlock… unlocks (D4d, owner decision 9): keeping the current password, by turning the password policy off and on
+ *  again in one transaction (which clears the password history). D2c's Login Properties adds setting a new password, SSMS's way,
+ *  as the dialog's first choice; that hand-off sends no request of its own. */
+export const unlockModes = ['keepPassword'] as const
+/** The only LOGINPROPERTY properties Varia reads (ActionSql.LoginLock, critic A15): never PasswordHash or
+ *  PasswordHashAlgorithm. The backend checks its statement against this list (LoginRules.LockProperties). */
+export const loginLockProperties = ['IsLocked', 'BadPasswordCount', 'LockoutTime', 'IsMustChange', 'IsExpired', 'DaysUntilExpiration'] as const
+export type UnlockMode = typeof unlockModes[number]
+/** Why Unlock… cannot keep the password now, or undefined: the login's rules (loginRefusal), then a login that is not a SQL
+ *  Server login enforcing the password policy, one that must change its password, and one that is not locked out. C#:
+ *  LoginRules.UnlockRefusal. */
+export function unlockRefusal(facts: Pick<LoginFacts, 'subtype' | 'own' | 'sysadmin' | 'canAlter' | 'canControlServer' | 'type' | 'policyChecked'>, lock: Pick<LoginLockFacts, 'locked' | 'mustChange'>): LoginMessageId | undefined {
+  return loginRefusal(facts, 'unlock') ?? (facts.type !== 'S' || facts.policyChecked !== true ? 'unlockNoPolicy' : lock.mustChange ? 'unlockMustChange' : !lock.locked ? 'notLocked' : undefined)
+}
 /** A database user mapped to a login (D4c): its database and name, the schemas, roles and other securables it owns, the permissions
  *  it granted to others, whether its database is read-only, and whether this connection may drop users there (ALTER ANY USER).
  *  C#: MappedUserDto. */
@@ -262,33 +289,6 @@ export const loginDeleteText = {
    *  (15434) until they disconnect, and Activity Monitor neither shows nor ends Varia's own sessions. */
   connections: (count: number) => count === 1 ? 'its sessions fail the DROP until it is disconnected' : 'their sessions fail the DROP until they are disconnected'
 } as const
-/**
- * A login's lock-out state, which only LOGINPROPERTY knows (ActionSql.LoginLock, the one statement allowed to call it, D4 §7):
- * read by Unlock…'s describe and again by its preflight. `lockoutTime` (the server's clock, yyyy-MM-ddTHH:mm:ss.fff) only
- * while locked; `daysUntilExpiration` only while the password expires.
- */
-export interface LoginLockFacts {
-  readonly locked: boolean
-  readonly badPasswords?: number
-  readonly lockoutTime?: string
-  readonly mustChange: boolean
-  readonly expired: boolean
-  readonly daysUntilExpiration?: number
-}
-/** How Unlock… unlocks (D4d, owner decision 9): keeping the current password, by turning the password policy off and on
- *  again in one transaction (which clears the password history). D2c's Login Properties adds setting a new password, SSMS's way,
- *  as the dialog's first choice; that hand-off sends no request of its own. */
-export const unlockModes = ['keepPassword'] as const
-/** The only LOGINPROPERTY properties Varia reads (ActionSql.LoginLock, critic A15): never PasswordHash or
- *  PasswordHashAlgorithm. The backend checks its statement against this list (LoginRules.LockProperties). */
-export const loginLockProperties = ['IsLocked', 'BadPasswordCount', 'LockoutTime', 'IsMustChange', 'IsExpired', 'DaysUntilExpiration'] as const
-export type UnlockMode = typeof unlockModes[number]
-/** Why Unlock… cannot keep the password now, or undefined: the login's rules (loginRefusal), then a login that is not a SQL
- *  Server login enforcing the password policy, one that must change its password, and one that is not locked out. C#:
- *  LoginRules.UnlockRefusal. */
-export function unlockRefusal(facts: Pick<LoginFacts, 'subtype' | 'own' | 'sysadmin' | 'canAlter' | 'canControlServer' | 'type' | 'policyChecked'>, lock: Pick<LoginLockFacts, 'locked' | 'mustChange'>): LoginMessageId | undefined {
-  return loginRefusal(facts, 'unlock') ?? (facts.type !== 'S' || facts.policyChecked !== true ? 'unlockNoPolicy' : lock.mustChange ? 'unlockMustChange' : !lock.locked ? 'notLocked' : undefined)
-}
 
 /** The subtypes whose names SQL Server authenticates itself, so a backslash is never part of one. */
 export const noBackslashSubtypes: readonly LoginSubtype[] = ['sa', 'sql']
