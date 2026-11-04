@@ -175,7 +175,7 @@ GO
   const factsOf = login => ({
     principalId: login.subtype === 'sa' ? 1 : 300, type: login.type, subtype: login.subtype, disabled: !!login.disabled, sid: '01', created: '2026-01-02T03:04:05.000', connectDenied: !!login.connectDenied,
     own: login.name === 'sa', sysadmin: !!login.sysadmin, sessions: login.sessions ?? 0, ownedDatabases: 0, ownedDatabaseNames: [], ownedServerObjects: 0, canAlter: true, canControlServer: true, nameInUse: false,
-    ...login.type === 'S' ? { policyChecked: !!login.policy, expirationChecked: !!login.policy } : {}
+    ...login.type === 'S' ? { policyChecked: !!login.policy, expirationChecked: !!login.policy } : {}, ...login.service ? { service: login.service } : {}
   })
   const notFound = target => ({ code: 'NOT_FOUND', message: `The login ${target.name} no longer exists. Refresh Object Explorer.`, retryable: false })
   const sessionsWarning = count => `${count} sessions are connected as this login; the DROP fails until they end. Activity Monitor can end them.`

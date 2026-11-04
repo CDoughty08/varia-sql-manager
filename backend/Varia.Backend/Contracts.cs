@@ -344,7 +344,8 @@ internal sealed record DatabaseIdentityDto(int Id, string Created);
 internal sealed record DatabaseChangesDto(string? Owner = null, Dictionary<string, string>? Options = null, Dictionary<string, string>? Scoped = null);
 internal sealed record ActionError(string Code, string Message, bool Retryable);
 /// <summary>What the login preflight (ActionSql.Login) reads in the action's own connection (src/shared/actions/logins.ts LoginFacts).
-/// Service (at most loginLimits.serviceName characters) is the loginFacts describe's guarded service lookup only. The owned
+/// Service (at most loginLimits.serviceName characters) is the guarded service lookup of the loginFacts, Delete Object and Login
+/// Properties describes only. The owned
 /// counts are null where the preflight leaves them out (ActionSql.LoginAlter, before an ALTER LOGIN). OwnedJobs (Delete Object's
 /// describe only) is null when msdb could not be read. GrantedPermissions (with the owned counts) counts the server permissions it granted
 /// to other principals, which DROP LOGIN fails on (15173).</summary>

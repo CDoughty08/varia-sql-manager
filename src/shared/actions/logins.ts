@@ -189,7 +189,7 @@ export interface LoginFacts {
    *  refused for its members' sessions (15434; unverified). */
   readonly sessions?: number
   /** The service that runs as this Windows login (sys.dm_server_services, guarded; or an NT SERVICE\ name), read by the
-   *  loginFacts describe only; at most loginLimits.serviceName characters. */
+   *  loginFacts, Delete Object and Login Properties describes only; at most loginLimits.serviceName characters. */
   readonly service?: string
   readonly ownedDatabases?: number
   /** At most loginLimits.ownedDatabases, by name. */
