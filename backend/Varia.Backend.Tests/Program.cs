@@ -230,6 +230,7 @@ await EntraChecks.RunAsync(Check);
 StoreChecks.Run(Check);
 await TextChecks.RunAsync(Check);
 await ExplorerChecks.RunAsync(Check);
+SearchChecks.Run(Check);
 await ScriptingChecks.RunAsync(Check);
 await ActionChecks.RunAsync(Check);
 await ServerFilesChecks.RunAsync(Check);

@@ -19,6 +19,7 @@ import { ResultMemoryService } from '../results/memory'
 import { documentOwner, documentPage, LiveService } from '../live/LiveService'
 import { ActivityMonitorService } from '../activity/ActivityMonitorService'
 import { activityContribution } from '../contributions/activity'
+import { searchContribution } from '../contributions/search'
 import ResultsWorker from '../results/results.worker.ts?worker'
 import { GridStats } from '../grid/stats'
 import { PaneService } from '../services/panes'
@@ -35,6 +36,8 @@ import { paletteContribution } from '../contributions/palette'
 import { themeContribution } from '../contributions/theme'
 import { backendContribution } from '../contributions/backend'
 import { helpContribution } from '../contributions/help'
+import { updatesContribution } from '../contributions/updates'
+import { UpdateService } from '../updates/UpdateService'
 import { editContribution } from '../contributions/edit'
 import { windowContribution } from '../contributions/window'
 import { menusContribution } from '../contributions/menus'
@@ -67,6 +70,7 @@ import { DatabasePropertiesService } from '../properties/DatabasePropertiesServi
 import { NewDatabaseService } from '../new-database/NewDatabaseService'
 import { RestoreService } from '../restore/RestoreService'
 import { SsisOperationsService } from '../ssis/SsisOperationsService'
+import { ObjectSearchService } from '../search/ObjectSearchService'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
 import { MenuTargetService } from '../menus/targets'
@@ -167,9 +171,13 @@ export interface Workbench extends Disposable {
   readonly activity: ActivityMonitorService
   /** Integration Services Operations (Active Operations, All Executions…): each connection's document, filters and Stop Operation. */
   readonly operations: SsisOperationsService
+  /** Search Objects: each connected server's object index (built in the backend) and the Search Objects tabs. */
+  readonly objectSearch: ObjectSearchService
   readonly theme: ThemeService
   /** Toasts for work that finished out of sight, such as a save whose query is not the active document. */
   readonly notifications: NotificationService
+  /** Help › Check for Updates, as main reports it. */
+  readonly updates: UpdateService
 }
 /**
  * The next animation frame, or 50 ms when frames are throttled: a hidden window (the smoke tests') gets one a second,
@@ -198,6 +206,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame }), databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
   const notifications = new NotificationService()
+  const updates = new UpdateService(api)
   const documents = new DocumentService((text, uri, language) => monaco.editor.createModel(text, language, monaco.Uri.parse(uri)), api, events, callback => { frame(callback) },
     { ...settingsDocumentOptions(() => settings.getSnapshot().values), newLineEnding: platformLineEnding(platform) })
   const editorStatus = new EditorStatusService(callback => { frame(callback) }), inputMode = new InputModeService()
@@ -283,6 +292,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     api, documents, panes, live, connections, settings,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-ssis-operations="${CSS.escape(id)}"] [role="grid"]`)?.focus())
   })
+  const objectSearch = new ObjectSearchService({
+    api, documents, connections, settings,
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-object-search="${CSS.escape(id)}"] [data-object-search-focus]`)?.focus())
+  })
   const context = new ContextKeyService({
     platform,
     documents,
@@ -305,6 +318,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     newDatabase: newDatabase.context,
     restore: restore.context,
     notifications,
+    updates,
     activity: activity.context,
     ssis: operations.context,
     editor: () => documents.boundEditor
@@ -381,8 +395,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     restore,
     activity,
     operations,
+    objectSearch,
     theme,
     notifications,
+    updates,
     dispose: () => {
       if (disposed) return
       disposed = true
@@ -402,6 +418,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       resultMemory.dispose()
       actionProgress.dispose()
       // Before the live views: its documents' views and stops are cancelled while the service still runs them.
+      objectSearch.dispose()
       operations.dispose()
       // Before the live views: each monitor disposes its own; then the client, while the port is still there.
       activity.dispose()
@@ -439,6 +456,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       resultSelection.dispose()
       settings.dispose()
       notifications.dispose()
+      updates.dispose()
       theme.dispose()
       events.dispose()
     }
@@ -457,11 +475,13 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     themeContribution(workbench, api),
     backendContribution(workbench),
     helpContribution(workbench, api),
+    updatesContribution(workbench, api),
     scriptingContribution(workbench),
     actionsContribution(workbench),
     designerContribution(workbench),
     ssisContribution(workbench),
     activityContribution(workbench),
+    searchContribution(workbench),
     settingsContribution(workbench),
     notificationsContribution(workbench)
   ]

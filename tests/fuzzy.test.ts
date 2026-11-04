@@ -50,7 +50,9 @@ describe('fuzzy matching', () => {
     // The word in the title outranks the same word in the category, and in another command's title. Reconnect is
     // unavailable until a connection is lost, so it ranks below the commands that tie with it.
     expect(palette('connect', ['Connection: Reconnect…']).slice(0, 2)).toEqual(['Connection: Connect to Server…', 'Query: Change Connection…'])
-    expect(palette('restart')[0]).toBe('Connection: Restart SQL Backend…')
+    // Restart to Update is unavailable until an update has downloaded, so it ranks below Restart SQL Backend until then.
+    expect(palette('restart', ['Help: Restart to Update'])[0]).toBe('Connection: Restart SQL Backend…')
+    expect(palette('restart').slice(0, 2).sort()).toEqual(['Connection: Restart SQL Backend…', 'Help: Restart to Update'])
     expect(palette('conn')[0]).toBe('Connection: Connect to Server…')
   })
   it('does not match letters scattered from the middle of words', () => {
@@ -59,7 +61,7 @@ describe('fuzzy matching', () => {
       expect(palette(query), query).not.toContain(label)
     }
     // Words that start with it match, not "Reload Themes" scattered.
-    expect(palette('refresh')).toEqual(['Object Explorer: Refresh', 'Restore Database: Refresh', 'Database Properties: Refresh', 'Activity Monitor: Refresh Now', 'Integration Services: Refresh Operations', 'Integration Services: Refresh Properties', 'Activity Monitor: Set Refresh Interval…'])
+    expect(palette('refresh')).toEqual(['Object Explorer: Refresh', 'Restore Database: Refresh', 'Database Properties: Refresh', 'Activity Monitor: Refresh Now', 'Integration Services: Refresh Operations', 'Integration Services: Refresh Properties', 'Activity Monitor: Set Refresh Interval…', 'Object Explorer: Rebuild Search Index'])
     expect(palette('go to')[0]).toBe('Go to Query…')
     // The last capital of an acronym starts the next word.
     expect(highlight('q1', 'SQLQuery1.sql')).toEqual(['Q', '1'])

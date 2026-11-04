@@ -15,6 +15,7 @@ import { queryExecutionSettings } from './query-execution'
 import { queryResultsSettings } from './query-results'
 import { statusBarSettings } from './status-bar'
 import { textEditorSettings } from './text-editor'
+import { updateSettings } from './updates'
 import type { SettingDef, SettingPage } from './types'
 
 export type { SettingDef, SettingPage } from './types'
@@ -30,7 +31,8 @@ const settingAreas = [
   objectExplorerSettings,
   liveDataSettings,
   activityMonitorSettings,
-  integrationServicesSettings
+  integrationServicesSettings,
+  updateSettings
 ] as const
 
 type Def = typeof settingAreas[number][number]

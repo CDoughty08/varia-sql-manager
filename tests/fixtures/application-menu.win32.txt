@@ -63,6 +63,7 @@
   {"accelerator":"Ctrl+Shift+P","id":"workbench.showCommands","label":"Command Palette…","registerAccelerator":false,"type":"normal","click":[["command","workbench.showCommands"]]}
   {"accelerator":"Ctrl+P","id":"workbench.quickOpen","label":"Go to Query…","registerAccelerator":false,"type":"normal","click":[["command","workbench.quickOpen"]]}
   {"accelerator":"Ctrl+Q","id":"workbench.search","label":"Search…","registerAccelerator":false,"type":"normal","click":[["command","workbench.search"]]}
+  {"id":"explorer.searchObjects","label":"Search Objects…","registerAccelerator":false,"type":"normal","click":[["command","explorer.searchObjects"]]}
   {"type":"separator"}
   {"id":"layout.save","label":"Save Layout…","registerAccelerator":false,"type":"normal","click":[["command","layout.save"]]}
   {"id":"layout.load","label":"Load Layout…","registerAccelerator":false,"type":"normal","click":[["command","layout.load"]]}
@@ -133,3 +134,7 @@
   {"id":"layout.reset@window","label":"Reset Window Layout","registerAccelerator":false,"type":"normal","click":[["command","layout.reset"]]}
 {"id":"menu.help","label":"Help"}
   {"id":"help.clearEntraTokenCache","label":"Clear Entra ID Token Cache","registerAccelerator":false,"type":"normal","click":[["command","help.clearEntraTokenCache"]]}
+  {"type":"separator"}
+  {"id":"help.checkForUpdates","label":"Check for Updates","registerAccelerator":false,"type":"normal","click":[["command","help.checkForUpdates"]]}
+  {"id":"help.restartToUpdate","label":"Restart to Update","registerAccelerator":false,"type":"normal","click":[["command","help.restartToUpdate"]]}
+  {"id":"help.releaseNotes","label":"Release Notes","registerAccelerator":false,"type":"normal","click":[["command","help.releaseNotes"]]}

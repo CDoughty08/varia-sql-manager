@@ -21,7 +21,7 @@ export const suiteSeconds = {
   'scripts/live-grid-smoke.mjs': 38, 'scripts/activity-monitor-smoke.mjs': 43, 'scripts/menus-smoke.mjs': 80, 'scripts/explorer-smoke.mjs': 22,
   'scripts/scripting-smoke.mjs': 12, 'scripts/object-actions-smoke.mjs': 60, 'scripts/results-smoke.mjs': 50, 'scripts/options-resize-smoke.mjs': 3,
   'scripts/options-smoke.mjs': 6, 'scripts/files-smoke.mjs': 12, 'scripts/editor-smoke.mjs': 10, 'scripts/table-designer-smoke.mjs': 3,
-  'scripts/document-frame-smoke.mjs': 13, 'scripts/ssis-smoke.mjs': 4, 'scripts/ssis-operations-smoke.mjs': 18
+  'scripts/document-frame-smoke.mjs': 13, 'scripts/ssis-smoke.mjs': 4, 'scripts/ssis-operations-smoke.mjs': 18, 'scripts/updates-smoke.mjs': 20
 }
 
 /** Splits `suites` into `count` shards of similar time (longest first, each to the lightest shard), each in suite order. */

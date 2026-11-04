@@ -16,6 +16,7 @@ from Microsoft's documentation, so Varia keeps its own.
   - Documents (`environment.documents`)
   - Fonts and Colors (`environment.fontsAndColors`)
   - Keyboard (`environment.keyboard`)
+  - Product Updates (`environment.productUpdates`)
   - Live Data (`environment.liveData`)
 - Text Editor
   - General (`textEditor.general`)
@@ -83,6 +84,15 @@ Colors come from the color theme (View › Theme).
 Shortcuts follow SSMS's defaults and cannot be changed yet. The command palette (F1) shows each command's shortcut.
 
 _No settings yet._
+
+### Environment › Product Updates
+
+How Varia SQL Manager finds, downloads and installs new releases.
+
+| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `environment.updates.checkAutomatically` | Automatically check for updates | Boolean | True |  | All | At once | Checks Varia SQL Manager's releases on GitHub shortly after start-up and every four hours while it runs. Help › Check for Updates checks at any time. The check reads one small file from github.com through the system's proxy settings and sends nothing about you or your servers. |
+| `environment.updates.downloadAutomatically` | Automatically download updates | Boolean | True |  | All | At once | Downloads a new release in the background as soon as a check finds it, and verifies it against the release's checksum; the status bar shows its progress. Nothing installs until you choose Restart to Update. While it is False, the status bar offers the update and Help › Download Update downloads it. Not in SSMS. Greyed while `environment.updates.checkAutomatically` is False. |
 
 ### Environment › Live Data
 
@@ -161,6 +171,8 @@ A property grid: True/False lists, values that differ from their default in bold
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `objectExplorer.selectTopRows` | Value for Select Top &lt;n> Rows command | Integer 1–2,147,483,647 | 1,000 |  | All | At once | How many rows Select Top Rows reads, and the number its menu item shows. |
+| `objectExplorer.search.indexOnConnect` | Index objects when a server connects | Boolean | True |  | All | At once | Reads the names of every table, view, procedure, function, synonym, sequence, trigger and type you may see in each database, one database at a time on a session of its own, so Search Objects finds them whether or not Object Explorer has loaded them. The index stays in memory and is dropped when the server disconnects. While it is False, Search Objects indexes a server the first time you search it. Not in SSMS. |
+| `objectExplorer.search.definitions` | Index module definitions | Boolean | True |  | All | At once | Also keeps the text of procedures, functions, views and triggers you may VIEW DEFINITION of, so Search Objects can find text inside them (up to 1,000,000 characters of each, and 64 Mi characters in all). Applies to the next build. Not in SSMS. |
 
 ### SQL Server Object Explorer › Scripting
 
@@ -264,4 +276,4 @@ How Varia follows the SSIS Catalog (SSISDB) as it changes. Not in SSMS.
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (89 today).
+A patch holds at most one entry per setting (93 today).
