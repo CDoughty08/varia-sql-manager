@@ -40,7 +40,7 @@ export const objectExplorerSettings = [
   {
     key: 'objectExplorer.search.definitions', page: 'objectExplorer.commands', group: 'Search Objects', label: 'Index module definitions', type: 'boolean', default: true, varia: true,
     keywords: ['search', 'index', 'definitions', 'procedures', 'text'],
-    description: 'Also keeps the text of procedures, functions, views and triggers you may VIEW DEFINITION of, so Search Objects can find text inside them (up to 1,000,000 characters of each, and 64 Mi characters in all). Applies to the next build.'
+    description: 'Also keeps the text of procedures, functions, views and triggers you may VIEW DEFINITION of, so Search Objects can find text inside them (up to 1,000,000 characters of each, within the index’s 512 MiB). Applies to the next build.'
   },
   ...scriptingSettingEntries()
 ] as const satisfies readonly SettingDef[]

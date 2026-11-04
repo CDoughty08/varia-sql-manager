@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Data;
+using System.Data.Common;
 using System.Diagnostics;
 using System.Globalization;
 using Microsoft.Data.SqlClient;
@@ -39,10 +40,17 @@ internal sealed class ObjectSearchService : IDisposable
     public const int MaxSkipped = 256;
     /// <summary>The least time between two explorer.index.progress EVENTs of one build.</summary>
     public static readonly TimeSpan ProgressEvery = TimeSpan.FromMilliseconds(250);
-    public static readonly string[] Kinds = ["table", "view", "procedure", "function", "synonym", "sequence", "trigger", "type", "tableType", "databaseTrigger"];
+    /// <summary>The most kinds one search may name.</summary>
+    public const int MaxKinds = 64;
+    public static readonly string[] Kinds = ["table", "view", "procedure", "function", "synonym", "sequence", "trigger", "type", "tableType", "databaseTrigger", "login", "serverRole", "credential", "cryptographicProvider", "audit", "serverAuditSpecification", "backupDevice", "linkedServer", "serverTrigger", "database", "user", "databaseRole", "applicationRole", "schema", "assembly", "asymmetricKey", "certificate", "symmetricKey", "columnMasterKey", "columnEncryptionKey", "databaseAuditSpecification", "externalDataSource", "externalFileFormat", "fullTextCatalog", "fullTextStoplist", "partitionScheme", "partitionFunction", "searchPropertyList", "planGuide", "xmlSchemaCollection", "rule", "default", "securityPolicy", "column", "key", "constraint", "index", "statistic", "parameter"];
 
     /// <summary>The database a skipped resource read is reported as.</summary>
     public const string ResourceDatabase = "mssqlsystemresource";
+    /// <summary>The database a skipped (or partly read) server batch is reported as: no database has an empty name.</summary>
+    public const string ServerScope = "";
+    /// <summary>The code of a database whose objects the index keeps without their columns, indexes, statistics and parameters,
+    /// which would have taken it past the objects per connection limit. It still counts as indexed (objectIndexCodes).</summary>
+    public const string ChildrenLeftOut = "CHILDREN_LEFT_OUT";
 
     /// <summary>One connection's index and its build.</summary>
     private sealed class State(IndexBudget budget, ResourceCatalog resources)
@@ -63,15 +71,15 @@ internal sealed class ObjectSearchService : IDisposable
     {
         this.host = host;
         Limits = limits ?? new ObjectIndexLimits();
-        budget = new IndexBudget(Limits.TotalDefinitionChars);
-        resources = new ResourceCatalog(budget);
+        budget = new IndexBudget(Limits.MemoryBytes);
+        resources = new ResourceCatalog(budget, Limits.NamesReserveBytes);
         total = new SemaphoreSlim(Limits.Total);
         running = new RequestRegistry(64, "object index");
     }
 
     public ObjectIndexLimits Limits { get; }
-    /// <summary>Definition characters held across every connection (the checks read it).</summary>
-    public long DefinitionChars => budget.Used;
+    /// <summary>The memory every connection's index holds (the checks read it).</summary>
+    public long MemoryUsed => budget.Used;
     /// <summary>The shared resource sets and their distinct definitions (the checks read it).</summary>
     internal ResourceCatalog Resources => resources;
 
@@ -81,7 +89,9 @@ internal sealed class ObjectSearchService : IDisposable
         if (!Guid.TryParse(args.ConnectionId, out _)) throw Invalid("connectionId.");
         if (!Guid.TryParse(args.RequestId, out _)) throw Invalid("requestId.");
         var profile = host.Profile(args.ConnectionId);
-        var perDatabase = profile.Explorer(ExplorerCatalog.Current).Cloud;
+        var explorer = profile.Explorer(ExplorerCatalog.Current);
+        var perDatabase = explorer.Cloud;
+        var render = new SqlRender(explorer.Band);
         var state = states.GetOrAdd(args.ConnectionId, _ => new State(budget, resources));
         using var source = CancellationTokenSource.CreateLinkedTokenSource(token);
         var entry = running.Register(args.RequestId, args.ConnectionId, source);
@@ -101,6 +111,8 @@ internal sealed class ObjectSearchService : IDisposable
             var names = await ListAsync(args.ConnectionId, source.Token);
             lock (state.Gate) state.Databases = names.Count;
             state.Index.Keep(names.ToHashSet(StringComparer.Ordinal));
+            if (await ReadServerAsync(args.ConnectionId, state, !explorer.Cloud, definitions, source.Token) is { } serverSkip)
+                lock (state.Gate) state.Skipped.Add(serverSkip);
             if (await ReadResourceAsync(args.ConnectionId, profile, state, definitions, source.Token) is { } resourceSkip)
                 lock (state.Gate) state.Skipped.Add(resourceSkip);
             var last = Stopwatch.StartNew();
@@ -108,11 +120,11 @@ internal sealed class ObjectSearchService : IDisposable
             for (var done = 0; done < names.Count; done++)
             {
                 var name = names[done];
-                var skip = await ReadAsync(args.ConnectionId, state, name, definitions, perDatabase, source.Token);
+                var skip = await ReadAsync(args.ConnectionId, state, name, render, definitions, perDatabase, source.Token);
                 lock (state.Gate)
                 {
-                    if (skip is null) state.Indexed++;
-                    else if (state.Skipped.Count < MaxSkipped) state.Skipped.Add(skip);
+                    if (skip is null or { Code: ChildrenLeftOut }) state.Indexed++;
+                    if (skip is not null && state.Skipped.Count < MaxSkipped) state.Skipped.Add(skip);
                 }
                 if (progress is not null && (last.Elapsed >= ProgressEvery || done + 1 == names.Count))
                 {
@@ -183,7 +195,7 @@ internal sealed class ObjectSearchService : IDisposable
         HashSet<string>? kinds = null;
         if (args.Kinds is { } list)
         {
-            if (list.Count is < 1 or > 16 || list.Any(kind => Array.IndexOf(Kinds, kind) < 0)) throw Invalid("kinds.");
+            if (list.Count is < 1 or > MaxKinds || list.Any(kind => Array.IndexOf(Kinds, kind) < 0)) throw Invalid("kinds.");
             kinds = list.ToHashSet(StringComparer.Ordinal);
         }
         return new(args.Text, args.CaseSensitive ?? false, args.WholeWord ?? false, args.Regex ?? false, scope != "definitions", scope != "names", kinds, args.Database, args.Limit ?? DefaultLimit);
@@ -196,7 +208,8 @@ internal sealed class ObjectSearchService : IDisposable
         var databases = state.Index.Databases;
         lock (state.Gate)
             return new(state.Building ? "building" : state.Built ? "ready" : databases.Count > 0 ? "ready" : "none", state.Databases, state.Building ? state.Indexed : databases.Count,
-                state.Index.Objects, databases.Sum(value => value.Modules) + (state.Index.Resource?.Modules ?? 0), databases.Sum(value => value.Cut) + (state.Index.Resource?.Cut ?? 0), [.. state.Skipped], state.Definitions,
+                state.Index.Objects, databases.Sum(value => value.Modules) + (state.Index.Resource?.Modules ?? 0) + (state.Index.Server?.Modules ?? 0),
+                databases.Sum(value => value.Cut) + (state.Index.Resource?.Cut ?? 0) + (state.Index.Server?.Cut ?? 0), [.. state.Skipped], state.Definitions,
                 state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture));
     }
 
@@ -213,20 +226,35 @@ internal sealed class ObjectSearchService : IDisposable
         return names;
     }
 
-    /// <summary>Reads one database and swaps it into the index; the reason it could not, as a value.</summary>
-    private async Task<ObjectIndexSkip?> ReadAsync(string connectionId, State state, string database, bool definitions, bool perDatabase, CancellationToken token)
+    /// <summary>Reads one database and swaps it into the index; the reason it could not, as a value. A database too large to keep
+    /// with its children is read again without them (<see cref="WithFallbackAsync"/>).</summary>
+    private Task<ObjectIndexSkip?> ReadAsync(string connectionId, State state, string database, SqlRender render, bool definitions, bool perDatabase, CancellationToken token) =>
+        WithFallbackAsync(database, children => ReadOnceAsync(connectionId, state, database, render, definitions, perDatabase, children, token));
+
+    /// <summary>Runs <paramref name="read"/> with children, and when that is TOO_LARGE once more without them: the database's
+    /// tables, procedures and every other object then stay searchable, reported as <see cref="ChildrenLeftOut"/>.</summary>
+    internal static async Task<ObjectIndexSkip?> WithFallbackAsync(string database, Func<bool, Task<ObjectIndexSkip?>> read)
+    {
+        var skip = await read(true);
+        if (skip is not { Code: "TOO_LARGE" }) return skip;
+        return await read(false) ?? new(database, ChildrenLeftOut,
+            "The database's columns, indexes, statistics and parameters were left out: with them it does not fit in the memory the index shares across connections.");
+    }
+
+    private async Task<ObjectIndexSkip?> ReadOnceAsync(string connectionId, State state, string database, SqlRender render, bool definitions, bool perDatabase, bool children,
+        CancellationToken token)
     {
         using var budgetSource = CancellationTokenSource.CreateLinkedTokenSource(token);
         budgetSource.CancelAfter(Limits.DatabaseBudget);
         await total.WaitAsync(token);
-        var reader = new DatabaseReader(database, Limits, budget, Limits.ObjectsPerConnection - OtherObjects(state, database));
+        var reader = new DatabaseReader(database, Limits, budget, state.Index.Databases.FirstOrDefault(value => value.Database == database));
         try
         {
             await using var connection = host.Connection(connectionId, perDatabase ? database : null);
             await host.OpenAsync(connection, budgetSource.Token);
             await using var command = connection.CreateCommand();
             command.CommandTimeout = 0;
-            var batch = ObjectSearchSql.Batch(definitions);
+            var batch = ObjectSearchSql.Batch(render, definitions, children);
             if (perDatabase) command.CommandText = ObjectSearchSql.Prologue + batch;
             else
             {
@@ -235,8 +263,8 @@ internal sealed class ObjectSearchService : IDisposable
                 command.Parameters.Add(new SqlParameter("@stmt", SqlDbType.NVarChar, -1) { Value = batch });
             }
             await using var rows = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, budgetSource.Token);
-            var index = await reader.ReadAsync(rows, definitions, budgetSource.Token);
-            if (index is null) return new(database, "TOO_LARGE", "The database has more objects than the index keeps per server (" + Limits.ObjectsPerConnection.ToString("N0", CultureInfo.InvariantCulture) + ").");
+            var index = await reader.ReadAsync(rows, definitions, budgetSource.Token, children);
+            if (index is null) return new(database, "TOO_LARGE", "The database does not fit in the index's memory (" + Size + " across every connection).");
             state.Index.Put(index);
             return null;
         }
@@ -247,9 +275,60 @@ internal sealed class ObjectSearchService : IDisposable
         }
         catch (SqlException error) when (!token.IsCancellationRequested)
         {
-            reader.Abandon();
+            // A statement that fails part way (a catalog view this edition lacks) keeps what came before it, unless an earlier build
+            // read the database whole.
+            KeepPartial(reader, state.Index.Databases.Any(value => value.Database == database), state.Index.Put);
             var value = ExplorerErrors.From(error, ErrorPhase.Scope, database, database);
             return new(database, value.Code is "NO_DB_ACCESS" or "DATABASE_UNAVAILABLE" ? value.Code : "CATALOG_ERROR", value.Message);
+        }
+        catch
+        {
+            reader.Abandon();
+            throw;
+        }
+        finally { total.Release(); }
+    }
+
+    /// <summary>After a read failed part way: holds what it read when nothing was held before, else keeps the earlier read whole.</summary>
+    internal static void KeepPartial(DatabaseReader reader, bool held, Action<DatabaseIndex> put)
+    {
+        if (!held && reader.Any) put(reader.Partial());
+        else reader.Abandon();
+    }
+
+    /// <summary>Reads the server's own objects (its databases and, on box editions and Managed Instance, its logins, roles and
+    /// other server objects) into the index. The reason it could not, as a value; a read that failed part way keeps what it read
+    /// only when no earlier build's objects are held.</summary>
+    private async Task<ObjectIndexSkip?> ReadServerAsync(string connectionId, State state, bool box, bool definitions, CancellationToken token)
+    {
+        using var budgetSource = CancellationTokenSource.CreateLinkedTokenSource(token);
+        budgetSource.CancelAfter(Limits.DatabaseBudget);
+        await total.WaitAsync(token);
+        var reader = new DatabaseReader(ServerScope, Limits, budget, state.Index.Server);
+        try
+        {
+            await using var connection = host.Connection(connectionId, null);
+            await host.OpenAsync(connection, budgetSource.Token);
+            await using var command = connection.CreateCommand();
+            command.CommandTimeout = 0;
+            command.CommandText = ObjectSearchSql.Prologue + ObjectSearchSql.Server(box, definitions);
+            await using var rows = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, budgetSource.Token);
+            var index = await reader.ReadServerAsync(rows, box, definitions, Actions.ActionsCatalog.Current.Logins, budgetSource.Token);
+            if (index is null) return new(ServerScope, "TOO_LARGE", "The server's objects do not fit in the index's memory (" + Size + " across every connection).");
+            state.Index.PutServer(index);
+            return null;
+        }
+        catch (Exception error) when (error is OperationCanceledException or SqlException && budgetSource.IsCancellationRequested && !token.IsCancellationRequested)
+        {
+            reader.Abandon();
+            return new(ServerScope, "TIMEOUT", "Reading the server's objects took longer than " + Limits.DatabaseBudget.TotalSeconds.ToString(CultureInfo.InvariantCulture) + " seconds.");
+        }
+        catch (SqlException error) when (!token.IsCancellationRequested)
+        {
+            // A catalog view the login may not read fails its statement: what came before it (the databases) stays searchable,
+            // unless an earlier build read them all.
+            KeepPartial(reader, state.Index.Server is not null, state.Index.PutServer);
+            return new(ServerScope, "CATALOG_ERROR", ExplorerErrors.From(error, ErrorPhase.Statement, "Server objects", null).Message);
         }
         catch
         {
@@ -301,106 +380,291 @@ internal sealed class ObjectSearchService : IDisposable
         }
     }
 
-    private static int OtherObjects(State state, string database) => state.Index.Databases.Where(value => value.Database != database).Sum(value => value.Objects.Length);
+    private string Size => (Limits.MemoryBytes / (1024 * 1024)).ToString("N0", CultureInfo.InvariantCulture) + " MiB";
 }
 
-/// <summary>Reads one database's batch (<see cref="ObjectSearchSql.Batch"/>) into a <see cref="DatabaseIndex"/>, charging the
-/// definitions it keeps against the shared budget.</summary>
-internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, IndexBudget budget, int room)
+/// <summary>Reads the server batch (<see cref="ObjectSearchSql.Server"/>) or one database's batch (<see cref="ObjectSearchSql.Batch"/>)
+/// into a <see cref="DatabaseIndex"/>, charging what it keeps (<see cref="IndexMemory"/>) against the shared budget: first against
+/// the share of the index it will replace (<paramref name="credit"/>), so a rebuild fits wherever the build before it did, then
+/// against what is free. A read past the budget answers null; a definition past it is left out. Children (columns, keys,
+/// constraints, triggers, indexes, statistics, parameters) are kept only under a parent Object Explorer lists them below, and share
+/// its strings; repeated names (schemas, common column names) are held once per read. A history table (and its children) names
+/// the table whose history row lists it.</summary>
+internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, IndexBudget budget, DatabaseIndex? credit = null)
 {
     private long taken;
+    private long credited;
+    private long creditLeft = credit?.Bytes ?? 0;
+    private int modules;
+    private int cut;
+    private readonly List<IndexedObject?> objects = [];
+    private readonly HashSet<string> strings = new(StringComparer.Ordinal);
+    /// <summary>Rows waiting for the object that lists them: children for their parent, history tables for their table.</summary>
+    private readonly List<(int At, int Owner, bool History)> pending = [];
+    private char[] buffer = new char[Math.Min(limits.DefinitionChars, 64 * 1024)];
 
-    /// <summary>Gives back what a failed read took.</summary>
+    /// <summary>A read past the budget.</summary>
+    private sealed class TooLarge : Exception;
+
+    /// <summary>Gives back what a failed read took; the share it would have replaced stays with its owner.</summary>
     public void Abandon()
     {
         budget.Release(taken);
         taken = 0;
+        credited = 0;
+        creditLeft = 0;
     }
 
-    /// <summary>The database's index, or null when it holds more objects than <paramref name="room"/>.</summary>
-    public async Task<DatabaseIndex?> ReadAsync(SqlDataReader reader, bool definitions, CancellationToken token)
+    /// <summary>Charges <paramref name="bytes"/> to the credit, else to the budget when that leaves <paramref name="keepFree"/> free.</summary>
+    private bool TryCharge(long bytes, long keepFree)
     {
-        var objects = new List<IndexedObject>();
-        var byId = new Dictionary<int, int>();
-        while (await reader.ReadAsync(token))
-        {
-            if (objects.Count >= room) { Abandon(); return null; }
-            var id = reader.GetInt32(0);
-            var schema = reader.GetString(1);
-            var name = reader.GetString(2);
-            var type = reader.GetString(3).TrimEnd();
-            var modified = reader.GetDateTime(4);
-            var parent = reader.IsDBNull(5) ? null : reader.GetString(5);
-            var parentSchema = reader.IsDBNull(6) ? null : reader.GetString(6);
-            var parentType = reader.IsDBNull(7) ? null : reader.GetString(7).TrimEnd();
-            var system = reader.GetBoolean(8);
-            var item = Map(type, schema, name, modified, parent, parentSchema, parentType, system);
-            if (item is null) continue;
-            byId[id] = objects.Count;
-            objects.Add(item);
-        }
-        await reader.NextResultAsync(token);
-        while (await reader.ReadAsync(token))
-        {
-            if (objects.Count >= room) { Abandon(); return null; }
-            reader.GetInt32(0);
-            var schema = reader.GetString(1);
-            var name = reader.GetString(2);
-            var table = reader.GetBoolean(3);
-            var assembly = reader.GetBoolean(4);
-            objects.Add(table ? new("tableType", "userDefinedTableTypes", schema, name) : new("type", assembly ? "userDefinedTypes" : "userDefinedDataTypes", schema, name));
-        }
-        await reader.NextResultAsync(token);
-        while (await reader.ReadAsync(token))
-        {
-            if (objects.Count >= room) { Abandon(); return null; }
-            var id = reader.GetInt32(0);
-            var name = reader.GetString(1);
-            var modified = reader.GetDateTime(2);
-            var system = reader.GetBoolean(3);
-            byId[id] = objects.Count;
-            objects.Add(new("databaseTrigger", "databaseTriggers", null, name, Modified: modified, System: system));
-        }
-        var modules = 0;
-        var cut = 0;
-        if (definitions && await reader.NextResultAsync(token))
-        {
-            var buffer = new char[Math.Min(limits.DefinitionChars, 64 * 1024)];
-            while (await reader.ReadAsync(token))
-            {
-                var id = reader.GetInt32(0);
-                if (!byId.TryGetValue(id, out var at)) continue;
-                var (text, longer) = ReadText(reader, 1, ref buffer);
-                if (text.Length == 0) continue;
-                if (!budget.TryTake(text.Length)) { cut++; continue; }
-                taken += text.Length;
-                modules++;
-                if (longer) cut++;
-                objects[at] = objects[at] with { Definition = text, DefinitionCut = longer };
-            }
-        }
-        var index = new DatabaseIndex(database, [.. objects], taken, modules, cut);
+        if (creditLeft >= bytes) { creditLeft -= bytes; credited += bytes; return true; }
+        if (!budget.TryTake(bytes, keepFree)) return false;
+        taken += bytes;
+        return true;
+    }
+
+    /// <summary>Whether the read holds anything (a read that failed part way keeps it).</summary>
+    public bool Any => objects.Count > 0;
+
+    /// <summary>What the read holds so far, as an index: rows still waiting for the object that lists them are left out.</summary>
+    public DatabaseIndex Partial()
+    {
+        foreach (var (at, _, _) in pending) objects[at] = null;
+        pending.Clear();
+        var index = new DatabaseIndex(database, [.. objects.OfType<IndexedObject>()], taken + credited, modules, cut, credited, credited > 0 ? credit : null);
         taken = 0;
+        credited = 0;
+        creditLeft = 0;
         return index;
     }
 
-    /// <summary>The resource database's objects (<see cref="ObjectSearchSql.ResourceObjects"/>), each a system one, with the
-    /// definitions cut at the per-module limit; the shared catalog charges them to the budget.</summary>
-    public static async Task<IndexedObject[]> ReadResourceAsync(SqlDataReader reader, bool definitions, ObjectIndexLimits limits, CancellationToken token)
+    /// <summary>The database's index, or null when it does not fit in the budget. Without
+    /// <paramref name="children"/> the batch has no column, index, statistics or parameter result sets.</summary>
+    public async Task<DatabaseIndex?> ReadAsync(DbDataReader reader, bool definitions, CancellationToken token, bool children = true)
+    {
+        try
+        {
+            var byId = new Dictionary<int, int>();
+            while (await reader.ReadAsync(token))
+            {
+                var id = reader.GetInt32(0);
+                var schema = Intern(reader.GetString(1));
+                var name = reader.GetString(2);
+                var type = reader.GetString(3).TrimEnd();
+                var modified = reader.GetDateTime(4);
+                var parent = reader.GetInt32(5);
+                var system = reader.GetBoolean(6);
+                var variant = reader.GetByte(7);
+                var current = reader.IsDBNull(8) ? 0 : reader.GetInt32(8);
+                if (ChildOf(type, parent) is { } child)
+                {
+                    // Its parent may come later in id order, or be a table type (read next): placed once every parent is read.
+                    byId[id] = Add(new(child.Kind, child.Folder, null, name, Modified: modified, Subtype: child.Subtype));
+                    pending.Add((objects.Count - 1, parent, false));
+                }
+                else if (Map(type, schema, name, modified, system, variant) is { } item)
+                {
+                    byId[id] = Add(item);
+                    if (variant is 6 or 7) pending.Add((objects.Count - 1, current, true));
+                }
+            }
+            await reader.NextResultAsync(token);
+            while (await reader.ReadAsync(token))
+            {
+                reader.GetInt32(0);
+                var schema = Intern(reader.GetString(1));
+                var name = reader.GetString(2);
+                var table = reader.GetBoolean(3);
+                var assembly = reader.GetBoolean(4);
+                var at = Add(table ? new("tableType", "userDefinedTableTypes", schema, name) : new("type", assembly ? "userDefinedTypes" : "userDefinedDataTypes", schema, name, Subtype: assembly ? "clr" : "alias"));
+                if (!reader.IsDBNull(5)) byId[reader.GetInt32(5)] = at;
+            }
+            Place(byId);
+            await reader.NextResultAsync(token);
+            while (await reader.ReadAsync(token))
+            {
+                var code = reader.GetString(0);
+                var schema = reader.IsDBNull(1) ? null : Intern(reader.GetString(1));
+                var name = reader.GetString(2);
+                DateTime? modified = reader.IsDBNull(3) ? null : reader.GetDateTime(3);
+                var system = reader.GetBoolean(4);
+                if (Named(code) is var (kind, folder)) Add(new(kind, folder, schema, name, Modified: modified, System: system));
+            }
+            await reader.NextResultAsync(token);
+            while (await reader.ReadAsync(token))
+            {
+                var id = reader.GetInt32(0);
+                byId[id] = Add(new("databaseTrigger", "databaseTriggers", null, reader.GetString(1), Modified: reader.GetDateTime(2), System: reader.GetBoolean(3)));
+            }
+            await reader.NextResultAsync(token);
+            while (await reader.ReadAsync(token))
+            {
+                var name = reader.GetString(0);
+                var modified = reader.GetDateTime(1);
+                var (text, longer) = definitions ? Text(reader, 2) : ("", false);
+                var guide = new IndexedObject("planGuide", "planGuides", null, name, Modified: modified);
+                Add(text.Length > 0 ? guide with { Definition = text, DefinitionCut = longer } : guide);
+            }
+            if (children)
+            {
+                await Children(reader, byId, "column", "columns", definitions, token);
+                await Children(reader, byId, "index", "indexes", false, token);
+                await Children(reader, byId, "statistic", "statistics", false, token);
+                await Children(reader, byId, "parameter", "parameters", false, token);
+            }
+            if (definitions && await reader.NextResultAsync(token))
+                while (await reader.ReadAsync(token))
+                {
+                    if (!byId.TryGetValue(reader.GetInt32(0), out var at) || objects[at] is not { } item) continue;
+                    var (text, longer) = Text(reader, 1);
+                    if (text.Length > 0) objects[at] = item with { Definition = text, DefinitionCut = longer };
+                }
+            return Partial();
+        }
+        catch (TooLarge)
+        {
+            Abandon();
+            return null;
+        }
+    }
+
+    /// <summary>Gives each waiting row the object that lists it, once every table and table type is read: a history table its
+    /// table (whose history row Object Explorer shows it as), then a child its parent. A row whose owner the login cannot see, or
+    /// whose owner lists no such folder, is left out.</summary>
+    private void Place(Dictionary<int, int> byId)
+    {
+        IndexedObject? Owner(int id) => id != 0 && byId.TryGetValue(id, out var at) ? objects[at] : null;
+        foreach (var (at, owner, history) in pending)
+            if (history) objects[at] = Owner(owner) is { Kind: "table" } table ? objects[at]! with { Via = table } : null;
+        foreach (var (at, owner, history) in pending)
+        {
+            if (history) continue;
+            var child = objects[at]!;
+            objects[at] = Owner(owner) is { } found ? Child(found, child.Kind, child.Folder, child.Name, child.Subtype, child.Modified) : null;
+        }
+        pending.Clear();
+    }
+
+    /// <summary>One child result set (object id, name, then a subtype column or a definition): each row kept under its parent.</summary>
+    private async Task Children(DbDataReader reader, Dictionary<int, int> byId, string kind, string folder, bool definition, CancellationToken token)
+    {
+        await reader.NextResultAsync(token);
+        var last = int.MinValue;
+        IndexedObject? parent = null;
+        while (await reader.ReadAsync(token))
+        {
+            var id = reader.GetInt32(0);
+            var name = reader.GetString(1);
+            if (id != last) { last = id; parent = byId.TryGetValue(id, out var at) ? objects[at] : null; }
+            string? subtype = kind switch
+            {
+                "index" => ExplorerLabels.IndexSubtype(reader.GetByte(2)),
+                "parameter" => reader.GetBoolean(2) ? "output" : "input",
+                _ => null
+            };
+            if (parent is null || name.Length == 0) continue;
+            var item = Child(parent, kind, folder, Intern(name), subtype);
+            if (item is null) continue;
+            if (definition && !reader.IsDBNull(2))
+            {
+                var (text, longer) = Text(reader, 2);
+                if (text.Length > 0) item = item with { Definition = text, DefinitionCut = longer };
+            }
+            Add(item, nameShared: true);
+        }
+    }
+
+    /// <summary>The server's own objects (<see cref="ObjectSearchSql.Server"/>): its databases, then, where it has them, its logins,
+    /// server roles, other server objects and server triggers. Null when they do not fit in the budget.</summary>
+    public async Task<DatabaseIndex?> ReadServerAsync(DbDataReader reader, bool box, bool definitions, Actions.LoginRules logins, CancellationToken token)
+    {
+        try
+        {
+            while (await reader.ReadAsync(token))
+            {
+                var name = reader.GetString(0);
+                var created = reader.GetDateTime(1);
+                var system = reader.GetBoolean(2);
+                var snapshot = reader.GetBoolean(3);
+                Add(snapshot ? new("database", "databaseSnapshots", null, name, Modified: created, Subtype: "snapshot")
+                    : system ? new("database", "systemDatabases", null, name, Modified: created, System: true, Subtype: "system")
+                    : new("database", "databases", null, name, Modified: created));
+            }
+            if (!box) return Partial();
+            await reader.NextResultAsync(token);
+            while (await reader.ReadAsync(token))
+            {
+                var principal = reader.GetInt32(0);
+                var name = reader.GetString(1);
+                var type = reader.GetString(2).TrimEnd();
+                var modified = reader.GetDateTime(3);
+                var fixedRole = reader.GetBoolean(4);
+                if (type == "R") { Add(new("serverRole", "serverRoles", null, name, Modified: modified, System: fixedRole || principal == 2)); continue; }
+                var subtype = logins.SubtypeOf(principal, type, name);
+                Add(new("login", "logins", null, name, Modified: modified, System: subtype == "system", Subtype: subtype));
+            }
+            await reader.NextResultAsync(token);
+            while (await reader.ReadAsync(token))
+            {
+                var code = reader.GetString(0);
+                var name = reader.GetString(1);
+                DateTime? modified = reader.IsDBNull(2) ? null : reader.GetDateTime(2);
+                if (ServerNamed(code) is var (kind, folder)) Add(new(kind, folder, null, name, Modified: modified));
+            }
+            await reader.NextResultAsync(token);
+            var byId = new Dictionary<int, int>();
+            while (await reader.ReadAsync(token))
+            {
+                var id = reader.GetInt32(0);
+                byId[id] = Add(new("serverTrigger", "serverTriggers", null, reader.GetString(1), Modified: reader.GetDateTime(2), System: reader.GetBoolean(3)));
+            }
+            if (definitions && await reader.NextResultAsync(token))
+                while (await reader.ReadAsync(token))
+                {
+                    if (!byId.TryGetValue(reader.GetInt32(0), out var at) || objects[at] is not { } item) continue;
+                    var (text, longer) = Text(reader, 1);
+                    if (text.Length > 0) objects[at] = item with { Definition = text, DefinitionCut = longer };
+                }
+            return Partial();
+        }
+        catch (TooLarge)
+        {
+            Abandon();
+            return null;
+        }
+    }
+
+    /// <summary>The resource database's objects (<see cref="ObjectSearchSql.ResourceObjects"/>), each a system one, with their
+    /// columns and parameters and the definitions cut at the per-module limit; the shared catalog charges them to the budget.</summary>
+    public static async Task<IndexedObject[]> ReadResourceAsync(DbDataReader reader, bool definitions, ObjectIndexLimits limits, CancellationToken token)
     {
         var objects = new List<IndexedObject>();
         var byId = new Dictionary<int, int>();
+        var strings = new HashSet<string>(StringComparer.Ordinal);
+        string Intern(string value) => strings.TryGetValue(value, out var held) ? held : strings.Add(value) ? value : value;
         while (await reader.ReadAsync(token))
         {
             // Sequential access reads the columns in order.
             var id = reader.GetInt32(0);
-            var schema = reader.GetString(1);
+            var schema = Intern(reader.GetString(1));
             var name = reader.GetString(2);
             var type = reader.GetString(3).TrimEnd();
-            var item = Map(type, schema, name, reader.GetDateTime(4), null, null, null, system: true);
+            var item = Map(type, schema, name, reader.GetDateTime(4), system: true);
             if (item is null) continue;
             byId[id] = objects.Count;
             objects.Add(item);
+        }
+        foreach (var (kind, folder) in new[] { ("column", "columns"), ("parameter", "parameters") })
+        {
+            await reader.NextResultAsync(token);
+            while (await reader.ReadAsync(token))
+            {
+                var id = reader.GetInt32(0);
+                var name = reader.GetString(1);
+                var subtype = kind == "parameter" ? reader.GetBoolean(2) ? "output" : "input" : null;
+                if (name.Length > 0 && byId.TryGetValue(id, out var at) && Child(objects[at], kind, folder, Intern(name), subtype) is { } child) objects.Add(child);
+            }
         }
         if (definitions && await reader.NextResultAsync(token))
         {
@@ -415,10 +679,37 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
         return [.. objects];
     }
 
-    /// <summary>A text column read only as far as the per-module limit, and whether it goes on past it.</summary>
-    private (string Text, bool Longer) ReadText(SqlDataReader reader, int ordinal, ref char[] buffer) => ReadText(reader, ordinal, ref buffer, limits.DefinitionChars);
+    /// <summary>Keeps <paramref name="item"/>, charging its record and, unless <paramref name="nameShared"/> (interned), its name.</summary>
+    private int Add(IndexedObject item, bool nameShared = false)
+    {
+        if (!TryCharge(IndexMemory.RecordBytes + (nameShared ? 0 : IndexMemory.StringBytes(item.Name.Length)), 0)) throw new TooLarge();
+        objects.Add(item);
+        return objects.Count - 1;
+    }
 
-    private static (string Text, bool Longer) ReadText(SqlDataReader reader, int ordinal, ref char[] buffer, int limit)
+    /// <summary>The string held for <paramref name="value"/>, charged once per read when new.</summary>
+    private string Intern(string value)
+    {
+        if (strings.TryGetValue(value, out var held)) return held;
+        if (!TryCharge(IndexMemory.StringBytes(value.Length), 0)) throw new TooLarge();
+        strings.Add(value);
+        return value;
+    }
+
+    /// <summary>A text column read only as far as the per-module limit and charged to the budget: empty when the budget is spent
+    /// (counted as cut), and whether it goes on past the limit.</summary>
+    private (string Text, bool Longer) Text(DbDataReader reader, int ordinal)
+    {
+        if (reader.IsDBNull(ordinal)) return ("", false);
+        var (text, longer) = ReadText(reader, ordinal, ref buffer, limits.DefinitionChars);
+        if (text.Length == 0) return ("", false);
+        if (!TryCharge(IndexMemory.StringBytes(text.Length), limits.NamesReserveBytes)) { cut++; return ("", false); }
+        modules++;
+        if (longer) cut++;
+        return (text, longer);
+    }
+
+    private static (string Text, bool Longer) ReadText(DbDataReader reader, int ordinal, ref char[] buffer, int limit)
     {
         var builder = new System.Text.StringBuilder();
         long offset = 0;
@@ -434,28 +725,114 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
         return (builder.ToString(), more);
     }
 
-    /// <summary>The Object Explorer identity of a sys.objects or sys.all_objects row, or null for a trigger whose parent it cannot name. A system
-    /// table, view or procedure is in its System folder; a system function, which Object Explorer's static System Functions
-    /// folder does not list, is under Functions.</summary>
-    internal static IndexedObject? Map(string type, string schema, string name, DateTime modified, string? parent, string? parentSchema, string? parentType, bool system = false) =>
+    /// <summary>The Object Explorer identity of a sys.objects or sys.all_objects row that is not a child, or null for a type it
+    /// does not list. A system table, view or procedure is in its System folder; a system function, which Object Explorer's static
+    /// System Functions folder does not list, is under Functions. <paramref name="variant"/> is the batch's table and view folder
+    /// variant: 1 FileTable, 2 external, 3 graph node, 4 graph edge, 5 dropped ledger, 6 temporal history, 7 ledger history (both
+    /// shown below their table: the reader names it), 8 a dropped ledger table's history, which Object Explorer does not list.</summary>
+    internal static IndexedObject? Map(string type, string schema, string name, DateTime modified, bool system = false, int variant = 0) =>
         (type, system) switch
         {
-            ("U", false) => new("table", "tables", schema, name, Modified: modified),
-            ("U", true) => new("table", "systemTables", schema, name, Modified: modified, System: true),
-            ("ET", _) => new("table", "externalTables", schema, name, Modified: modified, System: system),
+            ("U", true) => new("table", "systemTables", schema, name, Modified: modified, System: true, Subtype: "system"),
+            ("U", false) => variant switch
+            {
+                1 => new("table", "fileTables", schema, name, Modified: modified, Subtype: "fileTable"),
+                2 => new("table", "externalTables", schema, name, Modified: modified, Subtype: "external"),
+                3 => new("table", "graphTables", schema, name, Modified: modified, Subtype: "graphNode"),
+                4 => new("table", "graphTables", schema, name, Modified: modified, Subtype: "graphEdge"),
+                5 => new("table", "droppedLedgerTables", schema, name, Modified: modified, Subtype: "droppedLedger"),
+                6 => new("table", "tables", schema, name, Modified: modified, Subtype: "history"),
+                7 => new("table", "tables", schema, name, Modified: modified, Subtype: "ledgerHistory"),
+                8 => null,
+                _ => new("table", "tables", schema, name, Modified: modified)
+            },
+            ("ET", _) => new("table", "externalTables", schema, name, Modified: modified, System: system, Subtype: "external"),
+            ("V", true) => new("view", "systemViews", schema, name, Modified: modified, System: true, Subtype: "system"),
+            ("V", false) when variant == 5 => new("view", "droppedLedgerViews", schema, name, Modified: modified, Subtype: "droppedLedger"),
             ("V", false) => new("view", "views", schema, name, Modified: modified),
-            ("V", true) => new("view", "systemViews", schema, name, Modified: modified, System: true),
             // Object Explorer's Stored Procedures folder lists T-SQL and CLR procedures; the System one every other kind.
-            ("P" or "PC", false) => new("procedure", "storedProcedures", schema, name, Modified: modified),
-            ("P" or "PC" or "X" or "RF", _) => new("procedure", "systemStoredProcedures", schema, name, Modified: modified, System: system),
-            ("FN" or "FS", false) => new("function", "scalarValuedFunctions", schema, name, Modified: modified),
-            ("IF" or "TF" or "FT", false) => new("function", "tableValuedFunctions", schema, name, Modified: modified),
-            ("AF", false) => new("function", "aggregateFunctions", schema, name, Modified: modified),
-            ("FN" or "FS" or "IF" or "TF" or "FT" or "AF", true) => new("function", "functions", schema, name, Modified: modified, System: true),
+            ("P" or "PC", false) => new("procedure", "storedProcedures", schema, name, Modified: modified, Subtype: ExplorerLabels.ProcedureSubtype(type)),
+            ("P" or "PC" or "X" or "RF", _) => new("procedure", "systemStoredProcedures", schema, name, Modified: modified, System: system,
+                Subtype: type is "X" or "RF" ? ExplorerLabels.ProcedureSubtype(type) : "system"),
+            ("FN" or "FS", false) => new("function", "scalarValuedFunctions", schema, name, Modified: modified, Subtype: ExplorerLabels.FunctionSubtype(type)),
+            ("IF" or "TF" or "FT", false) => new("function", "tableValuedFunctions", schema, name, Modified: modified, Subtype: ExplorerLabels.FunctionSubtype(type)),
+            ("AF", false) => new("function", "aggregateFunctions", schema, name, Modified: modified, Subtype: "aggregate"),
+            ("FN" or "FS" or "IF" or "TF" or "FT" or "AF", true) => new("function", "functions", schema, name, Modified: modified, System: true, Subtype: ExplorerLabels.FunctionSubtype(type)),
             ("SN", _) => new("synonym", "synonyms", schema, name, Modified: modified, System: system),
             ("SO", _) => new("sequence", "sequences", schema, name, Modified: modified, System: system),
-            ("TR", _) when parent is not null && parentSchema is not null && parentType is "U" or "ET" or "V" =>
-                new("trigger", "tableTriggers", null, name, parentType == "V" ? "view" : "table", parentSchema, parent, modified, System: system),
+            ("R", _) => new("rule", "rules", schema, name, Modified: modified, System: system),
+            ("D", _) => new("default", "defaults", schema, name, Modified: modified, System: system),
+            ("SP", _) => new("securityPolicy", "securityPolicies", schema, name, Modified: modified, System: system),
             _ => null
         };
+
+    /// <summary>The child kind, folder and subtype of a sys.objects row kept with its parent: DML triggers, keys, and check, default
+    /// and edge constraints. A default with no parent is a stand-alone one (<see cref="Map"/>).</summary>
+    internal static (string Kind, string Folder, string? Subtype)? ChildOf(string type, int parent) => type switch
+    {
+        "TR" => ("trigger", "tableTriggers", null),
+        "PK" => ("key", "keys", "primary"),
+        "UQ" => ("key", "keys", "unique"),
+        "F" => ("key", "keys", "foreign"),
+        "C" => ("constraint", "constraints", "check"),
+        "D" when parent != 0 => ("constraint", "constraints", "default"),
+        "EC" => ("constraint", "constraints", "edge"),
+        _ => null
+    };
+
+    /// <summary>A child under <paramref name="parent"/>, sharing its strings, system flag and the table a history table is shown
+    /// below, or null where Object Explorer lists no such folder below it (a key on a view, a column of a procedure) or does not
+    /// list the parent in a folder at all (a system function, whose System Functions folder is planned).</summary>
+    internal static IndexedObject? Child(IndexedObject parent, string kind, string folder, string name, string? subtype = null, DateTime? modified = null) =>
+        parent.Schema is not null && parent.Folder != "functions" && Lists(kind, parent)
+            ? new(kind, folder, null, name, parent.Kind, parent.Schema, parent.Name, modified, System: parent.System, Subtype: subtype, ParentFolder: parent.Folder, Via: parent.Via)
+            : null;
+
+    private static bool Lists(string kind, IndexedObject parent) => kind switch
+    {
+        "column" => parent.Kind is "table" or "view" or "tableType" or "function",
+        "key" or "constraint" => parent.Kind is "tableType" || parent.Kind is "table" && parent.Subtype is not ("external" or "history" or "ledgerHistory" or "droppedLedger"),
+        "trigger" => parent.Kind is "view" || parent.Kind is "table" && parent.Subtype is not ("external" or "history" or "ledgerHistory" or "droppedLedger"),
+        "index" => parent.Kind is "view" or "tableType" || parent.Kind is "table" && parent.Subtype is not "external",
+        "statistic" => parent.Kind is "table" or "view",
+        "parameter" => parent.Kind is "procedure" or "function",
+        _ => false
+    };
+
+    /// <summary>The kind and folder of a database batch's named-object code.</summary>
+    internal static (string Kind, string Folder)? Named(string code) => code switch
+    {
+        "US" => ("user", "users"),
+        "RL" => ("databaseRole", "databaseRoles"),
+        "AR" => ("applicationRole", "applicationRoles"),
+        "SC" => ("schema", "schemas"),
+        "AS" => ("assembly", "assemblies"),
+        "AK" => ("asymmetricKey", "asymmetricKeys"),
+        "CE" => ("certificate", "certificates"),
+        "SK" => ("symmetricKey", "symmetricKeys"),
+        "CM" => ("columnMasterKey", "columnMasterKeys"),
+        "CK" => ("columnEncryptionKey", "columnEncryptionKeys"),
+        "DS" => ("externalDataSource", "externalDataSources"),
+        "FF" => ("externalFileFormat", "externalFileFormats"),
+        "DA" => ("databaseAuditSpecification", "databaseAuditSpecifications"),
+        "FC" => ("fullTextCatalog", "fullTextCatalogs"),
+        "FL" => ("fullTextStoplist", "fullTextStoplists"),
+        "PS" => ("partitionScheme", "partitionSchemes"),
+        "PF" => ("partitionFunction", "partitionFunctions"),
+        "PL" => ("searchPropertyList", "searchPropertyLists"),
+        "XS" => ("xmlSchemaCollection", "xmlSchemaCollections"),
+        _ => null
+    };
+
+    /// <summary>The kind and folder of the server batch's named-object code.</summary>
+    internal static (string Kind, string Folder)? ServerNamed(string code) => code switch
+    {
+        "CR" => ("credential", "credentials"),
+        "CP" => ("cryptographicProvider", "cryptographicProviders"),
+        "AU" => ("audit", "audits"),
+        "SA" => ("serverAuditSpecification", "serverAuditSpecifications"),
+        "BD" => ("backupDevice", "backupDevices"),
+        "LS" => ("linkedServer", "linkedServers"),
+        _ => null
+    };
 }

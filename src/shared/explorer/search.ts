@@ -3,7 +3,7 @@
 import { z } from 'zod'
 import { maxIdentifierLength } from '../sql/identifiers.ts'
 import type { ObjectRef } from './refs.ts'
-import type { FolderId } from './catalog.ts'
+import type { FolderId, NodeKind, NodeSubtype } from './catalog.ts'
 
 /** Mirrors ObjectSearchService and ObjectIndexLimits (tests/object-search.test.ts compares them). */
 export const objectSearchLimits = {
@@ -21,19 +21,36 @@ export const objectSearchLimits = {
   databaseMs: 120_000,
   /** The longest part of one definition the index keeps, in characters. */
   definitionChars: 1_000_000,
-  /** Definition characters held across every connection. */
-  totalDefinitionChars: 64 * 1024 * 1024,
+  /** The memory every connection's index holds together, in bytes (records, names and definitions, each charged once): a
+   *  database that would pass it is kept without its children (CHILDREN_LEFT_OUT), or skipped as TOO_LARGE. */
+  memoryBytes: 512 * 1024 * 1024,
+  /** The part of `memoryBytes` definitions leave to names: a definition is left out once less than this is free. */
+  namesReserveBytes: 128 * 1024 * 1024,
   /** Index progress pushed to the window, at most, per second. */
   progressPerSecond: 4,
   /** How long the Search Objects box waits after a key before it searches, in ms. */
-  typingMs: 200
+  typingMs: 200,
+  /** The most kinds one search may name. */
+  kinds: 64
 } as const
 
-/** The kinds the index holds, as Object Explorer names them. */
-export const searchKinds = ['table', 'view', 'procedure', 'function', 'synonym', 'sequence', 'trigger', 'type', 'tableType', 'databaseTrigger'] as const
+/** The kinds the index holds, as Object Explorer names them: every kind it lists but the server, return values and the SSIS
+ *  Catalog's (tests/object-search.test.ts checks this against the catalogue). */
+export const searchKinds = [
+  'table', 'view', 'procedure', 'function', 'synonym', 'sequence', 'trigger', 'type', 'tableType', 'databaseTrigger',
+  'login', 'serverRole', 'credential', 'cryptographicProvider', 'audit', 'serverAuditSpecification', 'backupDevice', 'linkedServer', 'serverTrigger',
+  'database', 'user', 'databaseRole', 'applicationRole', 'schema', 'assembly', 'asymmetricKey', 'certificate', 'symmetricKey', 'columnMasterKey',
+  'columnEncryptionKey', 'databaseAuditSpecification', 'externalDataSource', 'externalFileFormat', 'fullTextCatalog', 'fullTextStoplist', 'partitionScheme',
+  'partitionFunction', 'searchPropertyList', 'planGuide', 'xmlSchemaCollection', 'rule', 'default', 'securityPolicy',
+  'column', 'key', 'constraint', 'index', 'statistic', 'parameter'
+] as const satisfies readonly NodeKind[]
 export type SearchKind = typeof searchKinds[number]
 export const searchScopes = ['all', 'names', 'definitions'] as const
 export type SearchScope = typeof searchScopes[number]
+
+/** Skip codes a status lists for a database the index still holds (ObjectSearchService.ChildrenLeftOut): its objects without
+ *  their columns, indexes, statistics and parameters, which would have taken the index past its memory. */
+export const childrenLeftOut = 'CHILDREN_LEFT_OUT'
 
 export interface ObjectIndexParams { readonly connectionId: string; readonly requestId: string; readonly definitions?: boolean }
 export interface ObjectIndexSkip { readonly database: string; readonly code: string; readonly message: string }
@@ -79,12 +96,19 @@ export interface DefinitionMatch {
 export interface ObjectSearchHit {
   readonly object: ObjectRef
   readonly folder: FolderId
-  /** schema.name, or parentSchema.parent.name for a trigger. */
+  /** schema.name, parentSchema.parent.name for a child (a column, key or trigger), or the name alone. */
   readonly label: string
   /** The name match's [start, length] in label. */
   readonly range?: readonly [number, number]
   readonly modified?: string
   readonly definition?: DefinitionMatch
+  /** The node's subtype, where the index knows it (a foreign key, an inline function, a SQL login). */
+  readonly subtype?: NodeSubtype
+  /** The folder that lists a child's parent (a graph table's columns are under Tables › Graph Tables). */
+  readonly parentFolder?: FolderId
+  /** The table (in the hit's database, listed in `folder`) whose history row is a temporal or ledger history table: the hit
+   *  itself, or a child's parent. */
+  readonly via?: { readonly schema: string; readonly name: string; readonly folder: FolderId }
 }
 export interface ObjectSearchResult {
   readonly hits: readonly ObjectSearchHit[]
@@ -110,7 +134,7 @@ export const objectIndexParamsSchema = z.object({ connectionId: z.uuid(), reques
 export const objectSearchParamsSchema = z.object({
   connectionId: z.uuid(), requestId: z.uuid(), text: units(objectSearchLimits.text).refine(value => !value.includes('\u0000'), 'The text cannot contain U+0000.'),
   caseSensitive: z.boolean().optional(), wholeWord: z.boolean().optional(), regex: z.boolean().optional(), in: z.enum(searchScopes).optional(),
-  kinds: z.array(z.enum(searchKinds)).min(1).max(16).optional(),
+  kinds: z.array(z.enum(searchKinds)).min(1).max(objectSearchLimits.kinds).optional(),
   database: units(maxIdentifierLength).refine(value => !value.includes('\u0000'), 'A name cannot contain U+0000.').optional(),
   limit: z.number().int().min(1).max(objectSearchLimits.hits).optional()
 }).strict() satisfies z.ZodType<ObjectSearchParams>

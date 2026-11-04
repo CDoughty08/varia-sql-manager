@@ -3,37 +3,60 @@ using System.Text.RegularExpressions;
 
 namespace Varia.Backend.Search;
 
-/// <summary>One indexed object: its Object Explorer identity (kind, schema, name and, for a DML trigger, its parent), the
-/// folder that lists it, its module definition when it has one the login may read, cut at the index's per-module limit, and
-/// whether it is a system object (Microsoft-shipped, or a database diagrams support object), which ranks after user ones.</summary>
+/// <summary>One indexed object: its Object Explorer identity (kind, subtype, schema, name and, for a child such as a column or a
+/// DML trigger, its parent and the folder that lists the parent), the folder that lists it, its definition when it has one the
+/// login may read (a module's, a constraint's or computed column's expression, a plan guide's statement), cut at the index's
+/// per-module limit, and whether it is a system object (Microsoft-shipped, a database diagrams support object, a fixed role or a
+/// built-in principal or schema), which ranks after user ones. A server object or a database has no database of its own. Via is
+/// the table a temporal or ledger history table is shown below (as its history row), for the history table and its children.</summary>
 internal sealed record IndexedObject(string Kind, string Folder, string? Schema, string Name, string? ParentKind = null, string? ParentSchema = null, string? ParentName = null,
-    DateTime? Modified = null, string? Definition = null, bool DefinitionCut = false, bool System = false)
+    DateTime? Modified = null, string? Definition = null, bool DefinitionCut = false, bool System = false, string? Subtype = null, string? ParentFolder = null, IndexedObject? Via = null)
 {
-    /// <summary>What the results show and a name search with a dot matches: schema.name, or the parent's for a trigger.</summary>
+    /// <summary>What the results show and a name search with a dot matches: schema.name, or the parent's for a child.</summary>
     public string Label => Schema is not null ? Schema + "." + Name : ParentName is not null ? ParentSchema + "." + ParentName + "." + Name : Name;
 }
 
 /// <summary>One database's objects as one read of its catalog left them; replaced whole by the next read.</summary>
-internal sealed class DatabaseIndex(string database, IndexedObject[] objects, long definitionChars, int modules, int cut)
+internal sealed class DatabaseIndex(string database, IndexedObject[] objects, long bytes, int modules, int cut, long credited = 0, DatabaseIndex? creditFrom = null)
 {
     public string Database { get; } = database;
     public IndexedObject[] Objects { get; } = objects;
-    /// <summary>The characters of definitions held, charged against the index's budget until the database is replaced or dropped.</summary>
-    public long DefinitionChars { get; } = definitionChars;
+    /// <summary>The memory it holds (<see cref="IndexMemory"/>), charged against the index's budget until the database is
+    /// replaced or dropped.</summary>
+    public long Bytes { get; } = bytes;
+    /// <summary>The part of <see cref="Bytes"/> the read took from the share of the index it replaces (<see cref="CreditFrom"/>)
+    /// rather than from the budget: the swap moves that share over instead of giving it back.</summary>
+    public long Credited { get; } = credited;
+    public DatabaseIndex? CreditFrom { get; } = creditFrom;
     public int Modules { get; } = modules;
     /// <summary>Definitions cut at the per-module limit, or left out once the budget was spent.</summary>
     public int Cut { get; } = cut;
 }
 
+/// <summary>What the index charges for what it holds: a deterministic estimate of the managed memory of each record (with its
+/// slot in the array that holds it) and of each string it alone holds. A string shared by several records (a schema, a common
+/// column name, a parent's name) is charged once.</summary>
+internal static class IndexMemory
+{
+    /// <summary>An <see cref="IndexedObject"/> on 64-bit .NET: header and method table, eleven references, a nullable DateTime and
+    /// two flags, plus the array slot.</summary>
+    public const long RecordBytes = 136;
+
+    /// <summary>A string of <paramref name="length"/> UTF-16 code units: header, method table, length and terminator, 8-aligned.</summary>
+    public static long StringBytes(int length) => (22L + 2L * length + 7) & ~7L;
+}
+
 /// <summary>Bounds on the index and its searches (objectSearchLimits in src/shared/explorer/search.ts).</summary>
 internal sealed class ObjectIndexLimits
 {
-    /// <summary>Objects kept per connection; a database past it is skipped as TOO_LARGE.</summary>
-    public int ObjectsPerConnection { get; init; } = 1_000_000;
+    /// <summary>The memory every connection's index holds together (<see cref="IndexMemory"/>): a database that would pass it is
+    /// read again without its children (CHILDREN_LEFT_OUT), and one that still would is skipped as TOO_LARGE.</summary>
+    public long MemoryBytes { get; init; } = 512L * 1024 * 1024;
+    /// <summary>The part of <see cref="MemoryBytes"/> definitions leave to names: a definition is left out (counted as cut) once
+    /// less than this is free.</summary>
+    public long NamesReserveBytes { get; init; } = 128L * 1024 * 1024;
     /// <summary>The longest part of one definition the index keeps.</summary>
     public int DefinitionChars { get; init; } = 1_000_000;
-    /// <summary>Definition characters held across every connection (twice that in bytes); past it, definitions are left out.</summary>
-    public long TotalDefinitionChars { get; init; } = 64L * 1024 * 1024;
     /// <summary>Databases indexed at once across every connection, and per connection.</summary>
     public int Total { get; init; } = 2;
     /// <summary>One database's read; a slower one is skipped as TIMEOUT.</summary>
@@ -50,36 +73,68 @@ internal sealed class ObjectIndexLimits
     public int PreviewChars { get; init; } = 160;
 }
 
-/// <summary>Definition characters held, shared by every connection's index.</summary>
+/// <summary>The memory held by every connection's index (<see cref="IndexMemory"/>), in bytes.</summary>
 internal sealed class IndexBudget(long limit)
 {
     private long used;
+    public long Limit => limit;
     public long Used => Interlocked.Read(ref used);
-    public bool TryTake(long chars)
+
+    /// <summary>Takes <paramref name="bytes"/> when that leaves at least <paramref name="keepFree"/> of the limit free.</summary>
+    public bool TryTake(long bytes, long keepFree = 0)
     {
         while (true)
         {
             var current = Interlocked.Read(ref used);
-            if (current + chars > limit) return false;
-            if (Interlocked.CompareExchange(ref used, current + chars, current) == current) return true;
+            if (current + bytes > limit - keepFree) return false;
+            if (Interlocked.CompareExchange(ref used, current + bytes, current) == current) return true;
         }
     }
-    public void Release(long chars) => Interlocked.Add(ref used, -chars);
+
+    /// <summary>Takes <paramref name="bytes"/> whatever the limit: memory already held that moves to a new owner, or the shared
+    /// system objects, which every connection needs and holds once.</summary>
+    public void Force(long bytes) => Interlocked.Add(ref used, bytes);
+    public void Release(long bytes) => Interlocked.Add(ref used, -bytes);
 }
 
-/// <summary>A connection's index: its databases, each swapped in whole as its read completes, so a search during a rebuild
-/// sees every database either as it was or as it is now, and its share of the resource database's objects
-/// (<see cref="ResourceCatalog"/>), which every database shows and the index holds once.</summary>
+/// <summary>A connection's index: the server's own objects (its databases, logins, roles and other server objects) and its
+/// databases, each swapped in whole as its read completes, so a search during a rebuild sees every part either as it was or as
+/// it is now, and its share of the resource database's objects (<see cref="ResourceCatalog"/>), which every database shows and
+/// the index holds once.</summary>
 internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resources = null)
 {
     private readonly object gate = new();
     private Dictionary<string, DatabaseIndex> databases = new(StringComparer.Ordinal);
     private ResourceSet? resource;
+    private DatabaseIndex? server;
     public bool Disposed { get; private set; }
 
     public IReadOnlyCollection<DatabaseIndex> Databases { get { lock (gate) return [.. databases.Values]; } }
     public ResourceSet? Resource { get { lock (gate) return resource; } }
-    public int Objects { get { lock (gate) return databases.Values.Sum(value => value.Objects.Length) + (resource?.Objects.Length ?? 0); } }
+    /// <summary>The server's own objects, whose refs name no database.</summary>
+    public DatabaseIndex? Server { get { lock (gate) return server; } }
+    public int Objects { get { lock (gate) return databases.Values.Sum(value => value.Objects.Length) + (resource?.Objects.Length ?? 0) + (server?.Objects.Length ?? 0); } }
+
+    /// <summary>Holds the server's objects in place of those held before, whose share goes back (or over to the new read).</summary>
+    public void PutServer(DatabaseIndex value)
+    {
+        lock (gate)
+        {
+            if (Disposed) { budget.Release(value.Bytes - value.Credited); return; }
+            Settle(server, value);
+            server = value;
+        }
+    }
+
+    /// <summary>Gives back <paramref name="old"/>'s share, less what <paramref name="value"/>'s read took from it. When the read's
+    /// credit came from an index no longer held (a listing dropped it meanwhile, so its share went back), the new read takes it
+    /// from the budget instead.</summary>
+    private void Settle(DatabaseIndex? old, DatabaseIndex value)
+    {
+        if (old is not null && ReferenceEquals(old, value.CreditFrom)) { budget.Release(old.Bytes - value.Credited); return; }
+        if (old is not null) budget.Release(old.Bytes);
+        if (value.Credited > 0) budget.Force(value.Credited);
+    }
 
     /// <summary>Holds <paramref name="value"/> (a reference already taken) in place of the set held before, whose reference goes back.</summary>
     public void PutResource(ResourceSet? value)
@@ -98,8 +153,9 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
     {
         lock (gate)
         {
-            if (Disposed) { budget.Release(value.DefinitionChars); return; }
-            if (databases.Remove(value.Database, out var old)) budget.Release(old.DefinitionChars);
+            if (Disposed) { budget.Release(value.Bytes - value.Credited); return; }
+            databases.Remove(value.Database, out var old);
+            Settle(old, value);
             databases[value.Database] = value;
         }
     }
@@ -109,7 +165,7 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
     {
         lock (gate)
             foreach (var name in databases.Keys.Where(name => !names.Contains(name)).ToList())
-                if (databases.Remove(name, out var old)) budget.Release(old.DefinitionChars);
+                if (databases.Remove(name, out var old)) budget.Release(old.Bytes);
     }
 
     public void Dispose()
@@ -118,8 +174,10 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
         lock (gate)
         {
             Disposed = true;
-            foreach (var value in databases.Values) budget.Release(value.DefinitionChars);
+            foreach (var value in databases.Values) budget.Release(value.Bytes);
             databases = new(StringComparer.Ordinal);
+            if (server is not null) budget.Release(server.Bytes);
+            server = null;
             old = resource;
             resource = null;
         }
@@ -206,7 +264,8 @@ internal sealed record SearchQuery(string Text, bool CaseSensitive, bool WholeWo
 
 /// <summary>Searches a connection's index. Names rank first (an exact name, then one that starts with the text, then any),
 /// definition matches after them; within each, user objects before system ones, then by database, schema and name. The
-/// resource database's objects are searched once, as master's (or the database the search names).</summary>
+/// resource database's objects are searched once, as master's (or the database the search names); the server's own objects
+/// (which name no database) only by a search of the whole server.</summary>
 internal static class IndexSearch
 {
     public static ObjectSearchResult Run(ConnectionIndex index, SearchQuery query, SearchMatcher matcher, ObjectIndexLimits limits, ObjectIndexStatus status)
@@ -217,8 +276,10 @@ internal static class IndexSearch
         var partial = false;
         var dotted = query.Text.Contains('.');
         var databases = index.Databases.OrderBy(value => value.Database, StringComparer.OrdinalIgnoreCase).ToList();
-        var sources = databases.Where(value => query.Database is null || string.Equals(value.Database, query.Database, StringComparison.Ordinal))
-            .Select(value => (value.Database, value.Objects)).ToList();
+        var sources = new List<(string? Database, IndexedObject[] Objects)>();
+        if (query.Database is null && index.Server is { } server) sources.Add((null, server.Objects));
+        sources.AddRange(databases.Where(value => query.Database is null || string.Equals(value.Database, query.Database, StringComparison.Ordinal))
+            .Select(value => ((string?)value.Database, value.Objects)));
         if (index.Resource is { } resource)
             sources.Add((query.Database ?? databases.FirstOrDefault(value => value.Database == "master")?.Database ?? databases.FirstOrDefault()?.Database ?? "master", resource.Objects));
         foreach (var (name, objects) in sources)
@@ -235,13 +296,13 @@ internal static class IndexSearch
             }
         }
     done:
-        var hits = found.OrderBy(value => value.Rank).ThenBy(value => value.System).ThenBy(value => value.Hit.Object.Database, StringComparer.OrdinalIgnoreCase)
+        var hits = found.OrderBy(value => value.Rank).ThenBy(value => value.System).ThenBy(value => value.Hit.Object.Database ?? "", StringComparer.OrdinalIgnoreCase)
             .ThenBy(value => value.Hit.Label, StringComparer.OrdinalIgnoreCase).ThenBy(value => value.Hit.Label, StringComparer.Ordinal)
             .Take(query.Limit).Select(value => value.Hit).ToList();
         return new(hits, total, partial, watch.ElapsedMilliseconds, status);
     }
 
-    private static ObjectSearchHit? Match(string database, IndexedObject item, SearchQuery query, SearchMatcher matcher, ObjectIndexLimits limits, bool dotted, out int rank)
+    private static ObjectSearchHit? Match(string? database, IndexedObject item, SearchQuery query, SearchMatcher matcher, ObjectIndexLimits limits, bool dotted, out int rank)
     {
         rank = 3;
         var label = item.Label;
@@ -270,7 +331,8 @@ internal static class IndexSearch
         }
         if (range is null && definition is null) return null;
         var value = new ObjectRefDto(item.Kind, database, item.Schema, item.Name, item.ParentName is null ? null : new ParentRefDto(item.ParentKind!, item.ParentSchema!, item.ParentName));
-        return new(value, item.Folder, label, range, item.Modified?.ToString("yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture), definition);
+        return new(value, item.Folder, label, range, item.Modified?.ToString("yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture), definition, item.Subtype, item.ParentFolder,
+            item.Via is { } via ? new ViaRefDto(via.Schema!, via.Name, via.Folder) : null);
     }
 
     /// <summary>The match's line (1-based) and column, and up to <paramref name="chars"/> characters of that line around it.</summary>

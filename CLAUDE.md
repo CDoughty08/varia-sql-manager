@@ -31,7 +31,7 @@ pages, limits, error codes, display formats, benchmarks).
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 1464 offline
+  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 1509 offline
   checks; how many depends on the server version and authentication (2338 against a local SQL Server 2025 in Mixed Mode, which
   adds the low-privilege login checks, with Windows authentication and `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer, Script As and object action
   scratch-database checks (the last in their own `VariaScratch_…_act` database) and the script goldens in `tests/fixtures/scripting/`; `VARIA_UPDATE_SCRIPT_GOLDENS=1`
@@ -166,10 +166,12 @@ pages, limits, error codes, display formats, benchmarks).
   renders and checks every variant.
 - Search Objects' index (`backend/Varia.Backend/Search/`, docs/object-search.md) lives only in backend memory, one per
   connection, never on disk, and is dropped on disconnect; its limits are `objectSearchLimits` in
-  `src/shared/explorer/search.ts`, mirrored in C# (`tests/object-search.test.ts`), with definition text under one budget
-  for all connections (`IndexBudget`). It reads on its own pool (" - Object Search", the explorer's prologue) from
+  `src/shared/explorer/search.ts`, mirrored in C# (`tests/object-search.test.ts`), with everything it holds (records, names
+  and definitions, by `IndexMemory`'s estimates) under one 512 MiB budget for all connections (`IndexBudget`). It reads on its own pool (" - Object Search", the explorer's prologue) from
   `ObjectSearchSql`'s constant batch, run in each database only through `QUOTENAME(@db).sys.sp_executesql` and linted by
-  `CatalogSql.Lint`; definitions come from `sys.sql_modules`. It indexes Microsoft-shipped objects too; the resource
+  `CatalogSql.Lint`, and the server's own objects from `ObjectSearchSql.Server` on the server's connection; it indexes every
+  kind Object Explorer lists but the SSIS Catalog's, and definitions come from `sys.sql_modules` (and constraint, computed column,
+  plan guide and server trigger text). It indexes Microsoft-shipped objects too; the resource
   database's (negative ids, from `sys.all_objects` and `sys.all_sql_modules`) are read once per build and shared across
   connections by fingerprint in `ResourceCatalog`, which interns their definitions. Object Explorer's search box and the
   Search Objects tab are one search (`SearchPanel`, `ObjectSearchService`); the tree has no filter of loaded rows. Regex runs only `NonBacktracking` with a match timeout, and
