@@ -102,6 +102,9 @@ export const contextKeys = {
   editorOvertype: { type: 'boolean', scope: 'state', description: 'The editor is in overtype mode (OVR): typing replaces the character after the caret.' },
   hasRecentFiles: { type: 'boolean', scope: 'state', description: 'File › Recent Files lists at least one file.' },
   hasRecoveryFiles: { type: 'boolean', scope: 'state', description: 'AutoRecover kept queries that an earlier run or an earlier workbench did not save, and they were neither recovered nor discarded.' },
+  updateBusy: { type: 'boolean', scope: 'state', description: 'An update check or download is running.' },
+  updateAvailable: { type: 'boolean', scope: 'state', description: 'A newer release that this copy can install waits for Help › Download Update (Automatically download updates is off).' },
+  updateReady: { type: 'boolean', scope: 'state', description: 'A newer release was downloaded and verified: Help › Restart to Update installs it.' },
   explorerHasSelection: { type: 'boolean', scope: 'state', description: 'A node is selected in Object Explorer (a loading, error, or progress row is not a node).' },
   explorerSelectionKind: {
     type: 'enum', scope: 'state', values: ['', 'folder', ...nodeKinds],
