@@ -275,12 +275,13 @@ internal static class ActionChecks
         using var stop = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
         tries = 0;
         var stopped = await Run(() => { tries++; throw Sql(5030); }, stop.Token);
-        check(freed == "completed" && completed == 3 && single == "924" && singleTries == 1 && stopped == "cancelled" && tries > 1 && !ActionService.LockedByOthers(new InvalidOperationException()),
-            "Rename When Free tries MODIFY NAME again while SQL Server refuses it as in use (5030), until it completes or Stop; any other failure ends it (" + freed + " after " + completed + ", " + single + ", " + stopped + ")");
-        // Stop that lands while a try runs (on Windows the retry delay and Stop's timer can end on one tick) answers as Stop, not as 5030's IN_USE.
+        // Stop that lands while the statement runs and SQL Server refuses it as in use (seen on a slow runner) is Stop too.
         using var during = new CancellationTokenSource();
-        var late = await Run(() => { during.Cancel(); throw Sql(5030); }, during.Token);
-        check(late == "cancelled", "a 5030 refusal that comes after Stop ends Rename When Free as stopped, not in use (" + late + ")");
+        var stoppedDuring = await Run(() => { during.Cancel(); throw Sql(5030); }, during.Token);
+        check(freed == "completed" && completed == 3 && single == "924" && singleTries == 1 && stopped == "cancelled" && tries > 1 && stoppedDuring == "cancelled"
+            && !ActionService.LockedByOthers(new InvalidOperationException()),
+            "Rename When Free tries MODIFY NAME again while SQL Server refuses it as in use (5030), until it completes or Stop; any other failure ends it (" + freed + " after " + completed + ", "
+            + single + ", " + stopped + ", " + stoppedDuring + ")");
         check(ActionService.RenameInUseAdvice(0) == ActionService.RenameCloseAdvice && ActionService.RenameInUseAdvice(2) == ActionService.RenameCloseAdvice && ActionService.RenameInUseAdvice(1) == ActionService.SingleUserAdvice
             && ActionErrors.FromSql(Catalog, Sql(5030), null, ddl: true, ActionService.RenameInUseAdvice(0)).Message.EndsWith("Close its connections, or rename it when they disconnect.", StringComparison.Ordinal),
             "a database rename that fails in use advises closing the connections, or, for a single-user database, ending the session that holds it");

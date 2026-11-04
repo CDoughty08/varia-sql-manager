@@ -1,5 +1,6 @@
 appId: com.varia.sqlmanager
 productName: Varia SQL Manager
+afterPack: build/patch-nsis.cjs
 directories:
   output: dist
 files:

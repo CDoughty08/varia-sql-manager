@@ -674,6 +674,8 @@ describe('real .NET sidecar live subscriptions (test hooks)', () => {
 
   it('ends a subscription whose source ended, keeping its last table, and one whose connection is disconnected', async () => {
     const connection = backend(hooks)
+    // The event poll measures the subscription, not .NET's cold start on a loaded runner.
+    await connection.ready
     const ended = subscribe(connection, params({ tickMs: 20, endAfterTicks: 2 }, ['debug.synthetic.table']))
     await expect.poll(() => ended.events.length).toBe(1)
     ended.ack()
@@ -703,6 +705,7 @@ describe('real .NET sidecar live subscriptions (test hooks)', () => {
 
   it('sends main-valid table samples (two tables, facets, an append log) whose keys equal the cells the worker decodes', async () => {
     const connection = backend(hooks)
+    await connection.ready
     const value = params({ tickMs: 20, rows: 6, logRows: 3, lateEvery: 2 }, ['debug.synthetic.grid', 'debug.synthetic.log'])
     const live = subscribe(connection, value)
     for (let tick = 0; tick < 5; tick++) {
