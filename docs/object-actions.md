@@ -88,6 +88,8 @@ Rules narrow a database's actions by it, each with the reason a greyed item show
 | Bring Database Online | restoring, recovering, copying | Any | Any | Greyed | A database that is restoring or recovering cannot be brought online. |
 | Detach Database… | restoring, recovering, copying | Any | Any | Greyed | Wait until it finishes restoring or recovering. |
 | Detach Database… | suspect, recoveryPending | Any | Any | Greyed | Set the database to EMERGENCY with T-SQL before you detach it. |
+| Rename | restoring, recovering, recoveryPending, suspect, emergency, offline, copying, offlineSecondary, other | Any | Any | Greyed | The database must be online to be renamed. |
+| Rename | Any | Any | Yes | Greyed | A read-only database cannot be renamed. |
 
 Each action names the servers that offer it (`box`, `managedInstance`, `cloud`: an on-premises SQL Server or a container, Azure SQL Managed Instance, Azure SQL Database);
 the Servers column above says which, and on another server the menu hides the item. Menus read the server through
@@ -224,6 +226,43 @@ files stay on the server.", counts the query windows that were using it, and off
 the name as it does for a dropped database. Detach is offered on box SQL Server only (Managed Instance cannot run
 `sp_detach_db`), greyed on SQL Server's own databases and absent on a snapshot; the backend re-derives every rule above
 before it runs anything and refuses a database whose identity changed since the dialog read it.
+
+### Rename of a database
+
+F2 on a user database first reads its facts (`actions.describe` with `renameDatabase`, one of the fact describes, which
+open no dialog): the preflight's refusals, the database's identity and user access, how many other sessions are in it and
+how many of those hold an open transaction (with VIEW SERVER STATE, after the backend closed its own idle pooled connections
+there, as the rename does), and how many logins have it as their default database. With no other session the rename runs
+at once, `ALTER DATABASE … MODIFY NAME` alone. Otherwise the Rename Database confirmation (Confirmations, below) asks: Close Connections and
+Rename sets `SINGLE_USER WITH ROLLBACK IMMEDIATE`, renames, and restores the access the database had (MULTI_USER, or
+RESTRICTED_USER), the status bar saying "Closing connections" while it runs; Rename When Free runs MODIFY NAME alone, which
+waits for the other sessions until they leave or Stop cancels it, the status bar saying "Waiting for connections to close"
+(SQL Server 2025 queues MODIFY NAME behind them, probed; where SQL Server refuses it at once with 5030, as earlier versions are
+recalled to, the backend tries it again each second until it completes or Stop); Cancel sends nothing. The prompt names Varia's own query
+windows on the database whose session holds an open transaction (A7), through any connection the describe names as reaching
+the same server (`SERVERPROPERTY('ServerName')`, whatever name each was opened with). From Enter the status bar shows the
+rename ("Reading the database" during the describe) with Stop, which cancels the describe too. A database already in
+single-user mode is renamed without setting it again, and only when no other session is in it: while one is, MODIFY NAME
+fails with 924 and `SET SINGLE_USER WITH ROLLBACK IMMEDIATE` waits for that session rather than closing it (both probed on
+SQL Server 2025), so the describe refuses it with `IN_USE`, saying the session must disconnect or be ended in Activity
+Monitor; where the sessions cannot be counted, its prompt offers Rename When Free only.
+
+If the rename fails or is stopped after SINGLE_USER completed, Varia restores the access it changed, under the old name, or
+under the new one when MODIFY NAME completed first, and only that: never another session's change. A rename that completed
+before a later step failed still counts, and the message says what was left. After a rename, the database's query windows on
+that server (through any connection to it), the home database of the connections opened in it (New Query on the server), and
+its Database Properties documents follow the new name. MODIFY NAME gives the database a new `create_date` (sys.databases:
+"created or renamed"), so the reply carries its identity under the new name, read just after, and a document with unsaved
+changes takes it, so its Apply is not refused as another database's. When logins default to the old name a warning says how
+many, since they cannot connect without naming a database until their defaults change.
+
+Rename is greyed unless the database is online and read-write (MODIFY NAME checkpoints it: SQL Server answers 902 for a
+read-only or standby database, probed), and F2 on a greyed one says why in a notice, as the command palette's greyed row does
+(Take Offline and Bring Online likewise). It is refused on an availability group database,
+and needs CONTROL SERVER, ownership, or ALTER on the database (`can_rename`): a dbcreator member with no user in the database is refused before
+anything runs, because SQL Server refuses its MODIFY NAME with 916 (probed). Managed Instance renames, but cannot set
+SINGLE_USER, so its prompt offers Rename When Free only. The backend refuses a database whose identity changed since the
+describe read it.
 
 The Table Designer (New › Table…) uses the same requests without being a dialog: `actions.describe` with
 `tableDesigner` and a database, and the `createTable` action; its ids live in `src/shared/designer/catalog.ts`, and
@@ -1049,3 +1088,4 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `filePath` | 260 | Characters of a file's path in that list (`sys.master_files.physical_name` is nvarchar(260)) |
 | `blockers` | 8 | Sessions in a database that Delete Object lists (never Varia's own pooled sessions); more set `blockersTruncated` |
 | `blockerChars` | 128 | Characters of each listed session's program and host names |
+| `serverConnections` | 64 | Connections to the same server a database rename's describe names (whatever name each was opened with); their query windows and Database Properties documents follow the new name |

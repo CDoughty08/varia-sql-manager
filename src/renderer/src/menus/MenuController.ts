@@ -49,6 +49,7 @@ const modifierKeys = new Set(['Control', 'Shift', 'Alt', 'AltGraph', 'Meta', 'OS
 const isItem = (item: ResolvedMenuItem | undefined) => !!item && item.kind !== 'separator'
 const itemIndexes = (items: readonly ResolvedMenuItem[]) => items.flatMap((item, index) => isItem(item) ? [index] : [])
 const zeroRect: Rect = { left: 0, top: 0, right: 0, bottom: 0 }
+const samePoint = (a: Point, b: Point) => Math.abs(a.x - b.x) < 1 && Math.abs(a.y - b.y) < 1
 /** The letter or digit a key types for mnemonics: the layout's key, or the physical key when the layout types a non-Latin letter. */
 function mnemonicKey(key: MenuKey): string | undefined {
   if (/^[a-z0-9]$/i.test(key.key)) return key.key.toLowerCase()
@@ -76,6 +77,12 @@ export class MenuController extends SnapshotStore<MenuView> {
   private typeAhead?: { buffer: string; timer: Timer }
   private point?: Point
   private exit?: Point
+  /**
+   * After the keyboard opens a menu, a pointer that has not moved keeps it on the keyboard's item: Chromium enters the
+   * items that appear under a resting pointer. The menus see no pointer events outside them, so the first item entered
+   * marks where the pointer rests (`at`); `entered` is the item there, applied at the pointer's first real move.
+   */
+  private resting?: { at?: Point; entered?: { readonly level: number; readonly index: number } }
 
   constructor(private readonly options: MenuControllerOptions) {
     super(idle)
@@ -90,6 +97,7 @@ export class MenuController extends SnapshotStore<MenuView> {
     if (!items.some(isItem)) return
     if (this.ownsKeyboard()) this.close('replace')
     this.publish({ levels: [this.level(items, anchor, options.label, options.keyboard ? itemIndexes(items)[0] : -1)], source: 'context', mnemonics: options.keyboard, menubar: idle.menubar })
+    this.resting = options.keyboard ? {} : undefined
   }
 
   openMenubar(id: MenubarId, options: { keyboard: boolean; focus: 'first' | 'last' | 'none'; pressed?: Point }): void {
@@ -102,6 +110,7 @@ export class MenuController extends SnapshotStore<MenuView> {
     const indexes = itemIndexes(items), active = options.focus === 'first' ? indexes[0] ?? -1 : options.focus === 'last' ? indexes.at(-1) ?? -1 : -1
     const label = applicationMenus.find(menu => menu.id === id)!.label
     this.publish({ levels: [this.level(items, { kind: 'below', rect: this.options.menubarRect(id) ?? zeroRect }, label, active)], source: 'menubar', mnemonics: options.keyboard, menubar: { focused: id, open: id } })
+    this.resting = options.keyboard && active >= 0 ? {} : undefined
     if (options.pressed) this.startPress(options.pressed)
   }
 
@@ -129,6 +138,12 @@ export class MenuController extends SnapshotStore<MenuView> {
   }
 
   pointerEnterItem(level: number, index: number, p: Point): void {
+    const { resting } = this
+    if (resting) {
+      resting.at ??= p
+      if (samePoint(resting.at, p)) { resting.entered = { level, index }; this.point = p; return }
+      this.resting = undefined
+    }
     const { levels } = this.view, entered = levels[level]?.items[index]
     if (!entered || entered.kind === 'separator') { this.point = p; return }
     if (this.sibling && level > this.sibling.level) this.cancelSibling()
@@ -144,12 +159,18 @@ export class MenuController extends SnapshotStore<MenuView> {
     this.point = p
   }
   pointerMove(p: Point): void {
+    const { resting } = this
+    if (resting && !samePoint(resting.at ??= p, p)) {
+      this.resting = undefined
+      if (resting.entered) this.pointerEnterItem(resting.entered.level, resting.entered.index, p)
+    }
     this.point = p
     const { press, sibling } = this
     if (press && !press.moved && Math.hypot(p.x - press.at.x, p.y - press.at.y) >= dragActivation.px) press.moved = true
     if (sibling?.mode === 'triangle' && !this.inTriangle(sibling.level, p)) this.restartSibling(sibling, 'hover')
   }
   pointerLeaveLevel(level: number): void {
+    if (this.resting?.entered?.level === level) this.resting.entered = undefined
     const { levels } = this.view
     if (!levels[level]) return
     if (this.sibling?.level === level) this.cancelSibling()
@@ -197,6 +218,7 @@ export class MenuController extends SnapshotStore<MenuView> {
     this.endPress()
     this.rects = []
     this.exit = undefined
+    this.resting = undefined
     if (this.view !== idle) this.publish(idle)
     if (!owned) return
     try { this.options.closed(reason) } catch (error) { onUnexpectedError(error) }

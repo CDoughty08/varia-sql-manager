@@ -23,7 +23,7 @@ void Check(bool condition, string name)
     passed++;
 }
 // Focused SQL Server lanes: their scratch and permission checks are required, never an offline-only or skipped success.
-if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--server-files-live" or "--seams-live" or "--new-database-live" or "--action-progress-live" or "--attach-live" or "--restore-live" or "--logins-live" or "--login-listing-live" or "--database-state-live" or "--delete-live" or "--detach-live")])
+if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--server-files-live" or "--seams-live" or "--new-database-live" or "--action-progress-live" or "--attach-live" or "--restore-live" or "--logins-live" or "--login-listing-live" or "--database-state-live" or "--delete-live" or "--detach-live" or "--rename-database-live")])
 {
     var focusedServer = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SERVER");
     if (string.IsNullOrWhiteSpace(focusedServer)) throw new Exception(lane + " requires VARIA_TEST_SQL_SERVER.");
@@ -38,7 +38,12 @@ if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live"
     var focusedInfo = (ConnectionInfo)await focusedService.DispatchAsync("connections.connect", JsonSerializer.SerializeToElement(FocusedLive("master"), json), json);
     try
     {
-        if (lane == "--detach-live")
+        if (lane == "--rename-database-live")
+        {
+            await RenameDatabaseLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
+            Console.WriteLine("Passed " + passed + " focused database rename checks.");
+        }
+        else if (lane == "--detach-live")
         {
             await DetachLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
             Console.WriteLine("Passed " + passed + " focused Detach Database checks.");
@@ -608,6 +613,7 @@ try
     await ServerFilesLiveChecks.RunAsync(Check, service, info, Live, json);
     await SeamLiveChecks.RunAsync(Check, service, info, Live, json);
     await DatabaseStateLiveChecks.RunAsync(Check, service, info, Live, json);
+    await RenameDatabaseLiveChecks.RunAsync(Check, service, info, Live, json);
     await DetachLiveChecks.RunAsync(Check, service, info, Live, json);
     await ActionProgressLiveChecks.RunAsync(Check, service, info, Live, json);
     await AttachLiveChecks.RunAsync(Check, service, info, Live, json);

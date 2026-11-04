@@ -46,6 +46,15 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
     this.publish(this.getSnapshot().map(connection => connection === target || (key !== undefined && keyOf(connection.options) === key) ? { ...connection, options: label(connection.options) } : connection))
     return label(target.options)
   }
+  /**
+   * A database was renamed: each of `ids` whose home database it was (compared as the backend's DatabaseChanged does, ignoring
+   * case) now opens in `newName`, as the backend has moved it there. The saved options keep what the user connected with.
+   */
+  rehome(ids: ReadonlySet<string>, database: string, newName: string): void {
+    const key = database.toLowerCase(), current = this.getSnapshot()
+    if (current.some(connection => ids.has(connection.id) && connection.database.toLowerCase() === key))
+      this.publish(current.map(connection => ids.has(connection.id) && connection.database.toLowerCase() === key ? { ...connection, database: newName } : connection))
+  }
   remove(id: string): void { this.publish(this.getSnapshot().filter(connection => connection.id !== id)) }
   /** The backend moved on to `generation`: every connection held by an earlier one is gone with its process. */
   markLostBefore(generation: number): void {

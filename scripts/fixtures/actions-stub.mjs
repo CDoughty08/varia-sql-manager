@@ -42,6 +42,9 @@ import { explorerStatics } from './explorer-tree.mjs'
  * Active Connections waits, as on a session that joined after the describe, until its Stop arrives.
  * Detach Database describes AppData with the same sessions and `detachFiles`; detached, it leaves Databases and the result
  * keeps its files, until AppData is put back in `databases` (as if it were attached again) and Databases is refreshed.
+ * A database's rename (D3c) reads `renameSessions` other sessions (none at first) and renames it in the listings; a name
+ * another database has (ignoring case, as SQL Server's default collation does) is refused with NAME_IN_USE, as the backend's
+ * preflight refuses it, so a suite cannot leave two databases of one name in the tree.
  */
 export function actionsStubData() {
   return { statics: explorerStatics(), serverFiles: stubServerFiles }
@@ -95,7 +98,7 @@ export const databaseRoles = database => ({ roles: ['db_datareader', 'db_owner',
 
 /** Installs the stub; pass it to `application.evaluate` with `actionsStubData()`. Runs in main, so it is self-contained. */
 export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
-  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], databases: ['AppData', 'Archive'], logins: ['sa'], blocked: new Map(), catalog: false, managed: false, offline: false, holding: false,
+  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], databases: ['AppData', 'Archive'], logins: ['sa'], blocked: new Map(), catalog: false, managed: false, offline: false, holding: false, renameSessions: 0,
     sessions: [{ sessionId: 61, login: 'app', program: 'Contoso Orders', host: 'web1', openTransactions: 1 }, { sessionId: 62, login: 'report', program: 'Reports', host: 'web2', openTransactions: 0 }] }
   // The exported texts again: this function runs in main, where the module's own bindings do not exist.
   const caution = 'Caution: Changing any part of an object name could break scripts and stored procedures.'
@@ -208,6 +211,23 @@ GO
     stub.offline = true
     stub.sessions = []
     return ok({ steps: [{ status: 'done', title }], messages: [], elapsedMs: 1 })
+  }
+  /** What a database's rename reads first: `renameSessions` other sessions, one of them in a transaction, and no login defaulting to it. */
+  function renameFacts({ target, connectionId }) {
+    const sessions = stub.renameSessions
+    return ok({ renameDatabase: { name: target.name, identity: { id: 7, created: '2026-01-02T03:04:05.000' }, userAccess: 0, sessions, withTransaction: Math.min(sessions, 1), loginsDefaulting: 0, canClose: true,
+      connections: [connectionId] }, elapsedMs: 1 })
+  }
+  /** A database's rename: SINGLE_USER, MODIFY NAME and MULTI_USER when it closes connections, MODIFY NAME alone otherwise; the
+   *  reply names the database under its new name, with the new create_date SQL Server gives it. */
+  function renameDatabase(params) {
+    const key = params.newName.toLowerCase()
+    if (stub.databases.some(name => name !== params.target.name && name.toLowerCase() === key))
+      return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NAME_IN_USE', message: `The name ${params.newName} is already in use by another database.`, retryable: false } })
+    stub.databases =stub.databases.map(name => name === params.target.name ? params.newName : name)
+    const titles = params.closeConnections ? ['Close existing connections', 'Rename', 'Restore multi-user access'] : ['Rename']
+    return ok({ steps: titles.map(title => ({ status: 'done', title })), messages: [`The database name '${params.newName}' has been set.`], elapsedMs: 1,
+      identity: { id: 7, created: '2026-01-02T03:04:06.000' } })
   }
   function describe({ target }) {
     const warnings = target.name === 'Lines' ? [{ text: 'Referenced by foreign key FK_Items_Lines on dbo.Items; the DROP fails until it is dropped.', blocking: true }]
@@ -356,6 +376,7 @@ GO
     if (params.action === 'takeOffline' || params.action === 'bringOnline') return databaseStateChange(params)
     if (params.action === 'detach') return detach(params)
     if (params.action === 'properties') return ok({ steps: Object.keys(params.changes.options ?? {}).map(key => ({ status: 'done', title: 'Set ' + key })), messages: [], elapsedMs: 1 })
+    if (params.action === 'rename' && target.kind === 'database') return renameDatabase(params)
     if (params.action === 'rename') {
       if (params.newName === 'Taken') return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NAME_IN_USE', message: 'The name Taken is already in use in this schema.', retryable: false } })
       if (params.newName === 'Blocked') return new Promise(resolve => stub.blocked.set(params.requestId, () => resolve(ok({ steps: [{ status: 'cancelled', title: 'Rename' }], messages: [], elapsedMs: 1,
@@ -430,6 +451,7 @@ GO
           case 'restoreDatabase': return restore(params)
           case 'attachDatabase': return attachDescribe(params)
           case 'takeOffline': case 'bringOnline': case 'detachDatabase': return databaseState(params)
+          case 'renameDatabase': return renameFacts(params)
           default: return describe(params)
         }
       case 'actions.script':

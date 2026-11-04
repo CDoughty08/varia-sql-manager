@@ -68,7 +68,10 @@ internal static class DatabasePropertiesChecks
             ("database id 0", Properties(Options(("autoClose", "true"))) with { Identity = new(0, "2026-01-02T03:04:05.000") }),
             ("a create date without milliseconds", Properties(Options(("autoClose", "true"))) with { Identity = new(7, "2026-01-02T03:04:05") }),
             ("a create date before a line break", Properties(Options(("autoClose", "true"))) with { Identity = new(7, "2026-01-02T03:04:05.000\n") }),
-            ("an identity on a rename", new ActionArgs("rename", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("database", Name: "AppData"), "B", Identity: new(7, "2026-01-02T03:04:05.000"))),
+            ("an identity on a table's rename", new ActionArgs("rename", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("table", "AppData", "dbo", "Orders"), "B", Identity: new(7, "2026-01-02T03:04:05.000"))),
+            ("closeConnections on a table's rename", new ActionArgs("rename", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("table", "AppData", "dbo", "Orders"), "B", CloseConnections: false)),
+            ("a database rename's identity at id 0", new ActionArgs("rename", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("database", Name: "AppData"), "B", Identity: new(0, "2026-01-02T03:04:05.000"))),
+            ("dropConnections on a database rename", new ActionArgs("rename", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("database", Name: "AppData"), "B", DropConnections: true)),
             ("an identity on a delete", new ActionArgs("delete", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("database", Name: "AppData"), null, false, false, Identity: new(7, "2026-01-02T03:04:05.000"))),
         };
         var accepted = invalid.Where(item => Refused(item.Args) != "INVALID_PARAMS").Select(item => item.Name).ToList();
@@ -84,6 +87,12 @@ internal static class DatabasePropertiesChecks
             try { service.Validate(new ActionDescribeArgs(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), dialog, target)); return "accepted"; }
             catch (RequestException error) { return error.Code; }
         }
+        check(Refused(new ActionArgs("rename", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("database", Name: "AppData"), "B", CloseConnections: true, Identity: new(7, "2026-01-02T03:04:05.000"))) == "accepted"
+            && Refused(new ActionArgs("rename", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("database", Name: "AppData"), "B", CloseConnections: false)) == "accepted",
+            "a database's rename takes closeConnections and the identity its describe read (D3c)");
+        check(DescribeRefused("renameDatabase", new ObjectRefDto("database", Name: "q]'); --")) == "accepted" && DescribeRefused("renameDatabase", new ObjectRefDto("database", Name: "master")) == "INVALID_PARAMS"
+            && DescribeRefused("renameDatabase", new ObjectRefDto("table", "AppData", "dbo", "Orders")) == "INVALID_PARAMS" && DescribeRefused("renameDatabase", new ObjectRefDto("login", Name: "sa")) == "INVALID_PARAMS",
+            "the renameDatabase describe takes a user database only, as zod does (D3c)");
         check(DescribeRefused("databaseProperties", new ObjectRefDto("database", Name: "master")) == "accepted" && DescribeRefused("databaseProperties", new ObjectRefDto("table", "AppData", "dbo", "Orders")) == "INVALID_PARAMS"
             && DescribeRefused("loginProperties", new ObjectRefDto("database", Name: "AppData")) == "INVALID_PARAMS" && DescribeRefused("deleteObject", new ObjectRefDto("database", Name: "master")) == "INVALID_PARAMS",
             "describe serves Database Properties on every database, master included, but not tables, unknown dialogs, or Delete Object on master");
@@ -236,6 +245,7 @@ internal static class DatabasePropertiesChecks
         public bool ClearPoolsFor(string connectionId, string database) => false;
         public bool FreeDatabase(string connectionId, string database) => false;
         public IReadOnlySet<int> PoolSessions(string connectionId) => new HashSet<int>();
+        public IReadOnlyList<string> SameServer(string connectionId) => [connectionId];
         public void DatabaseChanged(string connectionId, string database, string? newName) { }
     }
 }

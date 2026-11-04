@@ -129,6 +129,10 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string DeleteSnapshot => Name + "_delcs";
     /// <summary>Delete parity (D3d): a database the low-privilege login owns, which it describes, scripts and deletes without VIEW SERVER STATE.</summary>
     public string DeleteOwned => Name + "_delo";
+    /// <summary>Where the database rename checks (D3c) rename a database, the name they rename it to, and the name its compensation check takes first (created on demand).</summary>
+    public string Rename => Name + "_ren";
+    public string Renamed => Name + "_renn";
+    public string RenameTaken => Name + "_rent";
     /// <summary>Held in memory only, never printed.</summary>
     public string Password { get; }
     public bool HasSnapshot { get; private set; }
@@ -142,9 +146,10 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _files is the server file picker's; _seam and _seamt are the wave 5 seam checks'; _nd is New Database's; _ap the action progress checks';
     // _at, _at'] and _at2 Attach Databases'; _rst Restore Database's source, _rstf its forked source and _rstr where their plans are restored; _rfl Restore Files and Filegroups' database; _lgn New Login's, _lgm, _lgmo (offline) and _lgmr (read-only) its User Mapping's; _dbs Take Offline's and
     // Bring Online's (a crashed run can leave it offline, which the sweep drops by state); _del, _delc, _delcs and _delo Delete parity's (D3d): an offline
-    // database, a database with its snapshot, and the login's own; and _det Detach's and _dets its snapshot (a run that crashes while _det is detached
-    // leaves only its files, which disposal attaches again when it can).
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_files|_seam|_seamt|_nd|_ap|_at|_at'\]|_at2|_rst|_rstr|_rstf|_rfl|_lgn|_lgm|_lgmo|_lgmr|_dbs|_del|_delc|_delcs|_delo|_det|_dets)?$")]
+    // database, a database with its snapshot, and the login's own; _det Detach's and _dets its snapshot (a run that crashes while _det is detached
+    // leaves only its files, which disposal attaches again when it can); and _ren, _renn and _rent the database rename checks' (D3c): a crashed run
+    // can leave either name, or one in SINGLE_USER, which the DROP handles.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_files|_seam|_seamt|_nd|_ap|_at|_at'\]|_at2|_rst|_rstr|_rstf|_rfl|_lgn|_lgm|_lgmo|_lgmr|_dbs|_del|_delc|_delcs|_delo|_det|_dets|_ren|_renn|_rent)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^[a-z0-9]{1,8}\.(bak|trn)$")]
     private static partial Regex PartPattern();
@@ -489,6 +494,16 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
 
     /// <summary>Creates the empty, marked database the Take Offline and Bring Online checks change the state of.</summary>
     public Task<string> CreateDatabaseStateAsync() => CreateMarkedAsync(DatabaseState);
+
+    /// <summary>Creates the empty, marked database the rename checks rename; disposal also drops it under its new name.</summary>
+    public Task<string> CreateRenameAsync()
+    {
+        created.Add(Renamed);
+        return CreateMarkedAsync(Rename);
+    }
+
+    /// <summary>Creates the marked database whose name the rename compensation check takes.</summary>
+    public Task<string> CreateRenameTakenAsync() => CreateMarkedAsync(RenameTaken);
 
     /// <summary>Creates the empty, marked table designer database.</summary>
     public Task<string> CreateDesignerAsync() => CreateMarkedAsync(Designer);

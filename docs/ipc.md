@@ -566,6 +566,30 @@ Connections, 3709 (a snapshot of it) `DEPENDENTS`, 3707 (suspect or recovery pen
 db_owner) `PERMISSION_DENIED`. When Update
 Statistics is cleared, Script adds a comment line, because SSMS's script leaves `@skipchecks` out.
 
+**Rename of a database** (D3c) uses the same methods too. Before it renames, the page sends `actions.describe { connectionId,
+requestId, dialog: 'renameDatabase', target: { kind: 'database', name } }` (a fact describe: no dialog opens), which answers
+`{ renameDatabase: { name, identity: { id, created }, userAccess, sessions?, withTransaction?, loginsDefaulting, canClose,
+connections }, elapsedMs }`, read in master after the backend's own idle pooled connections in the database were closed (the
+counts are absent without VIEW SERVER STATE; `loginsDefaulting` counts the logins whose default database it is; `canClose` is
+false on Managed Instance, which cannot set SINGLE_USER, and for a database already in single-user mode; `connections` lists the
+backend's connections to the same server by `SERVERPROPERTY('ServerName')`, this one first, at most 64, so the page counts and
+moves the query windows of a connection opened under another name for the same instance), or an `error` value where the rename
+cannot run: `NOT_SUPPORTED` for a database that is not online, read-only or standby (902), in an availability group, or on
+Managed Instance with `closeConnections`; `IN_USE` for a single-user database another session is in (MODIFY NAME would fail
+with 924, and SET SINGLE_USER would wait for it); `PERMISSION_DENIED` without CONTROL SERVER, ownership or ALTER on the
+database; `NAME_IN_USE`; `NOT_FOUND` for an identity that changed. The page sends the describe under the rename's own
+`requestId`, so the status bar's Stop cancels it (`cancelObjectActions`) before anything runs, and the execute that follows the
+describe (and the prompt) reuses that id once the describe has answered. The rename itself is
+`actions.execute { action: 'rename', connectionId, requestId, target, newName, closeConnections?, identity? }` (both only for a
+database; `identity` as for Database Properties). `closeConnections` runs `Close existing connections` (SINGLE_USER WITH
+ROLLBACK IMMEDIATE, unless the database is already single-user), `Rename` and `Restore multi-user access` (or `Restore
+restricted user access`); a failure or Stop after the first step runs a compensating step restoring the access under whichever
+name the database then has. Without it, `Rename` alone waits for other sessions until Stop: where SQL Server refuses MODIFY NAME
+at once as in use (5030) rather than queueing it, the backend tries it again each second until it completes or Stop. Once MODIFY
+NAME has completed, the reply carries `identity: { id, created }`, the database's identity under the new name, read in the action's
+connection just after (SQL Server gives a renamed database a new `create_date`); it is absent when it cannot be read within 5 s or
+the name now belongs to another database. Database Properties documents that follow the rename send it with their Apply.
+
 **Object action confirmations** (A13) are main's message boxes too, on one channel, `varia:confirm-action` (trusted senders
 only): the page sends `{ prompt, facts }`, a strict zod union (`actionPromptRequestSchema` in
 `src/shared/actions/prompts.ts`): `renameDatabase { database: 1–128, sessions?: 0–1,000,000, transactions, tabs (the same

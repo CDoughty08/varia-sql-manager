@@ -7,7 +7,12 @@ import { SnapshotStore } from './store'
 import type { CommandArgs, Disposable } from './types'
 
 export type CommandSource = 'keybinding' | 'menu' | 'palette' | 'toolbar' | 'api'
-export interface CommandHandler { run(args?: CommandArgs): void | Promise<void>; when?(args?: CommandArgs): boolean }
+export interface CommandHandler {
+  run(args?: CommandArgs): void | Promise<void>
+  when?(args?: CommandArgs): boolean
+  /** Why the command is unavailable now, when it can say (a greyed action's reason): a key that reaches it, or the palette's greyed row, shows this. */
+  unavailable?(args?: CommandArgs): string | undefined
+}
 export interface CommandEvent { readonly id: CommandId; readonly source: CommandSource }
 /** The command banner's message; a warning (`kind`) is shown as a notice, not as a failure. */
 export interface CommandSnapshot { readonly error: string; readonly kind?: 'warning' }
@@ -60,6 +65,10 @@ export class CommandService extends SnapshotStore<CommandSnapshot> implements Di
       return handler.when?.(args) ?? true
     } catch (error) { onUnexpectedError(error); return false }
   }
+  /** Why the command is unavailable now, when its handler can say; undefined otherwise (and for an enabled one, which callers check first). */
+  unavailableReason(id: CommandId, args?: CommandArgs): string | undefined {
+    try { return this.handlers.get(id)?.unavailable?.(args) } catch (error) { onUnexpectedError(error); return undefined }
+  }
   isToggled(id: CommandId): boolean {
     const { toggled } = commandDescriptor(id)
     if (toggled === undefined) return false
@@ -78,7 +87,12 @@ export class CommandService extends SnapshotStore<CommandSnapshot> implements Di
       if (!isCommandId(id) || !this.handlers.has(id)) { this.warnOnce(id); return false }
       if (source !== 'api' && !commandDescriptor(id).allowInModal && this.modalOpen()) return false
       // Native menu state can be 50 ms stale, so enablement is checked again here.
-      if (!this.isEnabled(id, args)) return false
+      if (!this.isEnabled(id, args)) {
+        // A key does nothing visible for a greyed command; one that knows why says so, as a notice, since nothing failed (a menu
+        // shows the item greyed, and the palette its row with this reason).
+        if (source === 'keybinding') { const reason = this.unavailableReason(id, args); if (reason) this.publish({ error: truncate(reason), kind: 'warning' }) }
+        return false
+      }
       this.willExecute.emit({ id, source })
       const handler = this.handlers.get(id)
       if (!handler) return false
