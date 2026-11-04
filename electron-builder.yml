@@ -9,9 +9,17 @@ extraResources:
     to: backend
 artifactName: Varia-SQL-Manager-${version}-${os}-${arch}.${ext}
 win:
-  target: nsis
+  target: [nsis, portable]
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  artifactName: Varia-SQL-Manager-${version}-Windows-x64-Setup.${ext}
+portable:
+  artifactName: Varia-SQL-Manager-${version}-Windows-x64-Portable.${ext}
 mac:
-  target: dmg
+  target: [dmg, zip]
   identity: null
 linux:
   target: AppImage
