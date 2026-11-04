@@ -2,10 +2,11 @@ import { app, BrowserWindow, clipboard, ipcMain, Menu, MessageChannelMain, dialo
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { stat } from 'node:fs/promises'
 import { z } from 'zod'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import { BackendSupervisor } from './backend/supervisor'
 import { BackendError } from './backend/errors'
 import { backendSpawnSpec } from './backend/spawn-spec'
+import { rendererUrlVerifier } from './trusted-renderer'
 import { installTestHooks, type BackendTestHooks, type RendererLossSource } from './backend/test-hooks'
 import { ResultsPortHost, supervisorResults } from './backend/results-port'
 import { ExplorerRequests } from './backend/explorer-requests'
@@ -65,6 +66,7 @@ import type { ResolvedTheme, ThemeState } from '../shared/theme/types'
 const here = dirname(fileURLToPath(import.meta.url))
 const rendererFile = join(here, '../renderer/index.html')
 const developmentUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined
+const isRendererUrl = rendererUrlVerifier(rendererFile, developmentUrl)
 const maxClipboardText = 8_388_608
 let mainWindow: BrowserWindow | null = null
 let backend: BackendSupervisor
@@ -171,8 +173,7 @@ function command(id: CommandId): void { mainWindow?.webContents.send('varia:comm
 function trusted(event: IpcMainInvokeEvent | IpcMainEvent): boolean {
   if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) return false
   const senderUrl = event.senderFrame?.url
-  try { return !!senderUrl && (developmentUrl ? new URL(senderUrl).origin === new URL(developmentUrl).origin : senderUrl === pathToFileURL(rendererFile).href) }
-  catch { return false }
+  return !!senderUrl && isRendererUrl(senderUrl)
 }
 
 function errorMessage(error: unknown, fallback: string): string {

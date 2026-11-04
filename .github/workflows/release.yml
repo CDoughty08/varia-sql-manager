@@ -25,7 +25,7 @@ jobs:
         include:
           - runner: windows-latest
             rid: win-x64
-            target: --win nsis --x64
+            target: --win nsis portable --x64
             executable: dist/win-unpacked/Varia SQL Manager.exe
             asset: dist/*.exe
           - runner: ubuntu-24.04
@@ -35,14 +35,18 @@ jobs:
             asset: dist/*.AppImage
           - runner: macos-15
             rid: osx-arm64
-            target: --mac dmg --arm64
+            target: --mac dmg zip --arm64
             executable: dist/mac-arm64/Varia SQL Manager.app/Contents/MacOS/Varia SQL Manager
-            asset: dist/*.dmg
+            asset: |
+              dist/*.dmg
+              dist/*.zip
           - runner: macos-15-intel
             rid: osx-x64
-            target: --mac dmg --x64
+            target: --mac dmg zip --x64
             executable: dist/mac/Varia SQL Manager.app/Contents/MacOS/Varia SQL Manager
-            asset: dist/*.dmg
+            asset: |
+              dist/*.dmg
+              dist/*.zip
     steps:
       - uses: actions/checkout@v7
         with:
@@ -67,7 +71,19 @@ jobs:
       - name: Publish self-contained backend
         run: dotnet publish backend/Varia.Backend/Varia.Backend.csproj -c Release -r ${{ matrix.rid }} --self-contained true -o artifacts/release-backend
       - name: Package application
+        id: package
         run: npm run package -- ${{ matrix.target }}
+      - name: Check release assets
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          $expected = switch ('${{ matrix.rid }}') {
+            'win-x64' { @("dist/Varia-SQL-Manager-$version-Windows-x64-Setup.exe", "dist/Varia-SQL-Manager-$version-Windows-x64-Portable.exe") }
+            'linux-x64' { @("dist/Varia-SQL-Manager-$version-linux-x86_64.AppImage") }
+            'osx-arm64' { @("dist/Varia-SQL-Manager-$version-mac-arm64.dmg", "dist/Varia-SQL-Manager-$version-mac-arm64.zip") }
+            'osx-x64' { @("dist/Varia-SQL-Manager-$version-mac-x64.dmg", "dist/Varia-SQL-Manager-$version-mac-x64.zip") }
+          }
+          foreach ($file in $expected) { if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing release asset: $file" } }
       - name: Prepare Linux display
         if: runner.os == 'Linux'
         run: |
@@ -83,6 +99,18 @@ jobs:
           else
             node scripts/packaged-smoke.mjs
           fi
+      - name: Smoke test Windows portable application
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          $env:VARIA_PORTABLE_EXECUTABLE = "dist/Varia-SQL-Manager-$version-Windows-x64-Portable.exe"
+          node scripts/portable-smoke.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Smoke test Windows installer
+        if: (success() || failure()) && runner.os == 'Windows' && steps.package.outcome == 'success'
+        shell: pwsh
+        run: ./scripts/windows-installer-smoke.ps1
       - uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.rid }}
