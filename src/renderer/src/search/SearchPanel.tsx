@@ -1,5 +1,5 @@
 import { useId, useRef, type KeyboardEvent, type ReactNode, type Ref } from 'react'
-import { folderSpecs, kindSpecs } from '../../../shared/explorer/catalog.ts'
+import { folderSpecs, kindSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import { objectSearchLimits, type ObjectIndexStatus, type ObjectSearchHit, type SearchScope } from '../../../shared/explorer/search.ts'
 import type { ExplorerTarget } from '../../../shared/explorer/refs.ts'
@@ -24,12 +24,27 @@ function Marked({ text, range }: { readonly text: string; readonly range?: reado
   return <>{displayText(text.slice(0, start))}<mark>{displayText(text.slice(start, start + length))}</mark>{displayText(text.slice(start + length))}</>
 }
 
+/**
+ * Where a hit is, for its row: a server object's folders below the server (Security › Logins), a database's Databases folder,
+ * and anything else its database and folder (Sales › Columns; the label names a child's parent).
+ */
+export function searchHitPath(hit: ObjectSearchHit): string {
+  if (hit.object.database === undefined) {
+    const labels: string[] = []
+    for (let at: FolderId | undefined = hit.folder; at; at = folderSpecs[at].parent) labels.unshift(folderSpecs[at].label)
+    return labels.join(' › ')
+  }
+  return `${hit.object.database} › ${folderSpecs[hit.folder].label}`
+}
+
 /** What the index holds, for the summary line. */
 export function indexSummary(entry: IndexEntry | undefined, status: ObjectIndexStatus | undefined): string {
   if (entry?.requestId) return `Indexing ${numbers.format(entry.done)} of ${count(entry.total, 'database')} (${count(entry.objects, 'object')} so far)…`
   if (entry?.error) return `The index could not be built: ${entry.error}`
   if (!status || status.state === 'none') return 'This server has no index yet.'
-  const skipped = status.skipped.length ? ` · ${count(status.skipped.length, 'database')} skipped` : ''
+  // The server's own objects are reported under an empty database name.
+  const databases = status.skipped.filter(skip => skip.database).length
+  const skipped = (databases ? ` · ${count(databases, 'database')} skipped` : '') + (databases < status.skipped.length ? ' · server objects skipped' : '')
   const modules = status.definitions ? `, ${count(status.modules, 'definition')}` : ' (names only)'
   return `Index: ${count(status.objects, 'object')}${modules} in ${count(status.indexed, 'database')}${skipped}`
 }
@@ -86,7 +101,7 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
     if (next < 0) root.current?.querySelector<HTMLElement>('[data-object-search-focus]')?.focus()
     else all[Math.min(next, all.length - 1)]?.focus()
   }
-  const target = (hit: ObjectSearchHit): ExplorerTarget => ({ connectionId: state.connectionId, ref: { type: 'object', object: hit.object }, kind: hit.object.kind, label: hit.label })
+  const target = (hit: ObjectSearchHit): ExplorerTarget => ({ connectionId: state.connectionId, ref: { type: 'object', object: hit.object }, kind: hit.object.kind, label: hit.label, ...hit.subtype ? { subtype: hit.subtype } : {} })
   // Object Explorer shows at once and follows the seek as it expands and pages its way to the object.
   const reveal = (hit: ObjectSearchHit) => {
     if (!pane) void commands.execute('window.explorer', undefined, 'toolbar')
@@ -129,11 +144,11 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
       : <ul ref={list} className="object-search-hits" aria-label={pane ? 'Search results' : 'Results'} onKeyDown={onListKey}>
         {result?.hits.map(hit => {
           const spec = kindSpecs[hit.object.kind]
-          const path = `${hit.object.database} › ${folderSpecs[hit.folder].label}`
+          const path = searchHitPath(hit)
           const key = JSON.stringify([hit.object, hit.folder])
           return <li key={key} className="object-search-hit">
             <button type="button" className="object-search-open" data-hit title={`Reveal in Object Explorer: ${displayText(hit.label)}`} onClick={() => reveal(hit)}>
-              <ExplorerIcon name={spec.icon} />
+              <ExplorerIcon name={(hit.subtype && spec.subtypeIcons?.[hit.subtype]) || spec.icon} />
               <span className="object-search-name"><Marked text={hit.label} range={hit.range} /></span>
               <span className="object-search-path">{displayText(path)}</span>
               {hit.definition && <span className="object-search-line">
@@ -142,9 +157,9 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
                 {hit.definition.matches > 1 && <span className="object-search-more"> (+{numbers.format(hit.definition.matches - 1)}{hit.definition.matches >= 999 ? '+' : ''} more)</span>}
               </span>}
             </button>
-            <button type="button" className="icon-button" tabIndex={-1} aria-label={`Script ${displayText(hit.label)} to a new query`} title="Script to New Query Window" onClick={() => script(hit)}>
+            {spec.scriptable && <button type="button" className="icon-button" tabIndex={-1} aria-label={`Script ${displayText(hit.label)} to a new query`} title="Script to New Query Window" onClick={() => script(hit)}>
               <Icon name="go-to-file" />
-            </button>
+            </button>}
           </li>
         })}
       </ul>)}

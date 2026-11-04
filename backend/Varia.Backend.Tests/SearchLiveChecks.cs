@@ -4,8 +4,10 @@ using Varia.Backend.Search;
 namespace Varia.Backend.Tests;
 
 /// <summary>Live object index checks (scratch only): a build reads the scratch database's objects and definitions, hostile
-/// names and all, a search finds them by name and by definition with each option, a database a build cannot read is skipped
-/// as a value, a rebuild sees a dropped object go, and a disconnect gives the definitions' budget back.</summary>
+/// names and all, and every other kind Object Explorer lists (logins, server roles and databases; users, roles and schemas;
+/// columns, keys, constraints, indexes and parameters, with constraint and computed column expressions as definitions), a search
+/// finds them by name and by definition with each option, a database a build cannot read is skipped as a value, a rebuild sees a
+/// dropped object go, and a disconnect gives the definitions' budget back.</summary>
 internal static class SearchLiveChecks
 {
     public static async Task RunAsync(Action<bool, string> check, SqlService service, string connectionId, JsonSerializerOptions json, Func<string, string, Task<SqlRun>> sql, string database)
@@ -23,6 +25,14 @@ internal static class SearchLiveChecks
         check(created.Error is null, "the search checks create a trigger: " + created.Error);
         created = await sql("CREATE TYPE [srch].[FindList] AS TABLE (id int);", database);
         check(created.Error is null, "the search checks create a table type: " + created.Error);
+        // Children, principals and constraint expressions, with a second marker only the default constraint holds.
+        var constant = "varia_default_" + Guid.NewGuid().ToString("N")[..8];
+        created = await sql("CREATE TABLE [srch].[Priced] (id int CONSTRAINT [pk_srch_priced] PRIMARY KEY, price money CONSTRAINT [ck_srch_price] CHECK (price >= 0),"
+            + " srch_total AS (price * 7), note nvarchar(40) CONSTRAINT [df_srch_note] DEFAULT (N'" + constant + "'));", database);
+        check(created.Error is null, "the search checks create a table with keys, constraints and a computed column: " + created.Error);
+        created = await sql("CREATE INDEX [ix_srch_price] ON [srch].[Priced] (price); EXEC (N'CREATE PROCEDURE [srch].[usp_Param] @srch_param int AS SELECT @srch_param;');"
+            + " CREATE USER [srch_user] WITHOUT LOGIN; CREATE ROLE [srch_role];", database);
+        check(created.Error is null, "the search checks create an index, a procedure with a parameter, a user and a role: " + created.Error);
 
         async Task<ObjectIndexResult> Build(bool definitions = true) => (ObjectIndexResult)await service.DispatchAsync("explorer.index",
             JsonSerializer.SerializeToElement(new ObjectIndexArgs(connectionId, Guid.NewGuid().ToString(), definitions), json), json);
@@ -57,6 +67,34 @@ internal static class SearchLiveChecks
         check(trigger is { Object: { Kind: "trigger", Schema: null, Parent: { Kind: "table", Schema: "srch", Name: hostile } }, Folder: "tableTriggers" },
             "a trigger is found with its parent table, as Object Explorer refers to it");
         check((await Find("FindList", "names")).Hits is [{ Object.Kind: "tableType", Folder: "userDefinedTableTypes" }], "a table type is found under its folder");
+
+        // Every other kind Object Explorer lists, each with its ref and folder.
+        check((await Find("srch_user", "names")).Hits.Any(hit => hit.Object is { Kind: "user", Schema: null, Name: "srch_user" } && hit.Object.Database == database && hit.Folder == "users"),
+            "a database user is found under Security › Users");
+        check((await Find("srch_role", "names")).Hits.Any(hit => hit.Object is { Kind: "databaseRole", Name: "srch_role" } && hit.Folder == "databaseRoles"), "a database role is found");
+        check((await Find("srch", "names", wholeWord: true)).Hits.Any(hit => hit.Object is { Kind: "schema", Name: "srch" } && hit.Folder == "schemas" && hit.Range is [0, 4]),
+            "a schema is found as an exact name");
+        var keys = (await Find("pk_srch_priced", "names")).Hits;
+        check(keys.Any(hit => hit.Object is { Kind: "key", Parent: { Kind: "table", Schema: "srch", Name: "Priced" } } && hit.Subtype == "primary" && hit.ParentFolder == "tables" && hit.Label == "srch.Priced.pk_srch_priced")
+            && keys.Any(hit => hit.Object.Kind == "index") && keys.Any(hit => hit.Object.Kind == "statistic"),
+            "a primary key is found as a key, and as the index and statistics Object Explorer lists for it: " + string.Join(", ", keys.Select(hit => hit.Object.Kind + ":" + hit.Label)));
+        check((await Find("ix_srch_price", "names")).Hits.Any(hit => hit.Object is { Kind: "index", Name: "ix_srch_price" } && hit.Subtype == "nonclustered" && hit.Folder == "indexes"),
+            "an index is found with its subtype");
+        check((await Find("ck_srch_price", "names")).Hits.Any(hit => hit.Object.Kind == "constraint" && hit.Subtype == "check" && hit.Folder == "constraints"), "a check constraint is found");
+        check((await Find("srch_total", "names")).Hits.Any(hit => hit.Object is { Kind: "column", Name: "srch_total", Parent.Name: "Priced" } && hit.Folder == "columns"), "a column is found under its table");
+        check((await Find("@srch_param", "names")).Hits.Any(hit => hit.Object is { Kind: "parameter", Parent: { Kind: "procedure", Name: "usp_Param" } } && hit.Subtype == "input" && hit.ParentFolder == "storedProcedures"),
+            "a parameter is found under its procedure");
+        check((await Find(constant, "definitions")).Hits is [{ Object.Kind: "constraint", Subtype: "default", Definition.Matches: 1 }], "a default constraint's expression is searched as its definition");
+        check((await Find("[price]*(7)", "definitions")).Hits.Any(hit => hit.Object is { Kind: "column", Name: "srch_total" } && hit.Definition is not null),
+            "a computed column's expression is searched as its definition");
+        check((await Find("[price]>=(0)", "definitions")).Hits.Any(hit => hit.Object is { Kind: "constraint", Name: "ck_srch_price" }), "a check constraint's expression is searched as its definition");
+        var servers = await FindIn(null, database, "names");
+        check(servers.Hits.Any(hit => hit.Object is { Kind: "database", Database: null } && hit.Object.Name == database && hit.Folder == "databases"), "a database is found by name, under Databases");
+        var sysadmin = (await FindIn(null, "sysadmin", "names", wholeWord: true)).Hits;
+        check(sysadmin.Any(hit => hit.Object is { Kind: "serverRole", Database: null, Name: "sysadmin" } && hit.Folder == "serverRoles"), "a fixed server role is found under Security › Server Roles");
+        check((await FindIn(null, "sa", "names", wholeWord: true)).Hits.Any(hit => hit.Object is { Kind: "login", Database: null, Name: "sa" } && hit.Folder == "logins" && hit.Subtype == "sa"),
+            "the sa login is found under Security › Logins");
+        check((await Find("sysadmin", "names", wholeWord: true)).Hits.All(hit => hit.Object.Database == database), "a search of one database leaves out the server's objects");
         var inDefinition = await Find(marker, "definitions");
         check(inDefinition.Hits.Count == 2 && inDefinition.Hits.Any(hit => hit.Label == "srch.usp_Find" && hit.Definition is { Line: 3 } && hit.Definition.Preview.Contains(marker, StringComparison.Ordinal)),
             "a definition search finds both modules that hold the marker, with the match's line");
@@ -82,7 +120,8 @@ internal static class SearchLiveChecks
             catch (RequestException error) { check(error.Code == "CANCELLED", "Stop ends a build with CANCELLED"); }
             check((await Find("FindList", "names")).Hits.Count == 1, "a stopped build keeps the index it had");
         }
-        await sql("DROP TYPE [srch].[FindList]; DROP TABLE [srch].[" + hostile.Replace("]", "]]") + "]; DROP SCHEMA [srch];", database);
+        await sql("DROP TYPE [srch].[FindList]; DROP TABLE [srch].[" + hostile.Replace("]", "]]") + "]; DROP TABLE [srch].[Priced]; DROP PROCEDURE [srch].[usp_Param];"
+            + " DROP USER [srch_user]; DROP ROLE [srch_role]; DROP SCHEMA [srch];", database);
     }
 
 }

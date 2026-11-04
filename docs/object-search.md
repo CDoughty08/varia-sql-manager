@@ -1,7 +1,8 @@
 # Search Objects
 
-Search Objects searches every object a server's login can see, not just the nodes Object Explorer has loaded. It matches
-names, and it can also match text inside module definitions (procedures, functions, views and triggers).
+Search Objects searches every object a server's login can see, not just the nodes Object Explorer has loaded: every kind
+Object Explorer lists, from logins and databases down to columns and parameters. It matches names, and it can also match text
+inside definitions (procedures, functions, views and triggers, and constraint, computed column and plan guide expressions).
 
 The same search runs in two places, with the same options and results:
 
@@ -19,17 +20,39 @@ The same search runs in two places, with the same options and results:
   It is dropped on disconnect and when the backend ends.
 - **Progress.** The status bar shows "Indexing objects N / M" and a Stop button while a build runs. A newer build of the
   same connection stops the older one.
-- **What it reads.** Every online database the login can open (`HAS_DBACCESS`, not snapshots or `tempdb`), at most two
-  at a time. Each database is one constant batch of catalog views on the " - Object Search" pool (`READ UNCOMMITTED`,
-  `LOCK_TIMEOUT 5000`, `DEADLOCK_PRIORITY LOW`) through `QUOTENAME(@db).sys.sp_executesql`. On Azure SQL Database each
-  database gets its own connection instead. No metadata built-ins are used, and definitions come from `sys.sql_modules`.
-- **Objects indexed.** Tables, external tables, views, procedures (T-SQL, CLR, extended and replication-filter), scalar,
-  table-valued and aggregate functions, synonyms, sequences, DML triggers (under their table or view), user-defined data
-  and CLR types, table types, and database DDL triggers. Every object the login can see is indexed, Microsoft-shipped ones
-  included: master's `spt_` tables and msdb's procedures under System Tables and System Stored Procedures, as Object Explorer
-  lists them, and system functions under Functions. System objects rank after user objects with the same kind of match.
+- **What it reads.** First the server's own objects, in one constant batch on the server's connection. Then every online
+  database the login can open (`HAS_DBACCESS`, not snapshots or `tempdb`), at most two at a time. Each database is one
+  constant batch of catalog views on the " - Object Search" pool (`READ UNCOMMITTED`, `LOCK_TIMEOUT 5000`,
+  `DEADLOCK_PRIORITY LOW`) through `QUOTENAME(@db).sys.sp_executesql`. On Azure SQL Database each database gets its own
+  connection instead. No metadata built-ins are used. Definitions come from `sys.sql_modules`, `sys.check_constraints`,
+  `sys.default_constraints`, `sys.computed_columns`, `sys.plan_guides` and `sys.server_sql_modules`.
+- **Objects indexed.** Every kind Object Explorer lists except the server node, return values and the SSIS Catalog's
+  folders, projects, packages and environments (which live in SSISDB). Each hit carries the ref and folder Object Explorer
+  uses, so it can be revealed and scripted:
+  - **Server:** every database (under Databases, System Databases or Database Snapshots, whatever its state), and on box
+    editions and Managed Instance the logins, server roles, credentials, cryptographic providers, audits, server audit
+    specifications, backup devices, linked servers and server triggers.
+  - **Database:** users, database and application roles, schemas, assemblies, asymmetric and symmetric keys,
+    certificates, column master and encryption keys, database audit specifications, database triggers, external data
+    sources and file formats, full-text catalogs and stoplists, partition schemes and functions, search property lists and
+    plan guides.
+  - **Schema:** tables (in Tables, or in FileTables, External Tables, Graph Tables or Dropped Ledger Tables), views,
+    synonyms, procedures (T-SQL, CLR, extended and replication-filter), scalar, table-valued and aggregate functions,
+    sequences, user-defined data and CLR types, table types, XML schema collections, rules, defaults and security policies.
+  - **Children:** columns, keys, constraints, DML triggers, indexes, statistics and parameters, each under its table, view,
+    table type, procedure or function, and only where Object Explorer lists such a folder (an external table has no keys).
+    A child's label is `schema.parent.name`, and its hit names the folder that lists its parent.
+
+  Every object the login can see is indexed, Microsoft-shipped ones included: master's `spt_` tables and msdb's procedures
+  under System Tables and System Stored Procedures, as Object Explorer lists them, and system functions under Functions.
+  System objects rank after user objects with the same kind of match. Fixed roles, `public`, `guest`, `sys` and
+  `INFORMATION_SCHEMA`, and SQL Server's own `##…##` logins count as system objects too.
+- **The server's objects.** They name no database, so a search limited to one database leaves them out. If a catalog view
+  fails for the login, the status lists the server read as skipped, and what it read before (the databases) stays
+  searchable. A temporal or ledger history table is listed under Tables; revealing it may not find it, because Object
+  Explorer shows it below its table.
 - **The resource database's objects.** The `sys` and `INFORMATION_SCHEMA` views, procedures and functions that every database
-  shows come from SQL Server's hidden resource database, so they are the same in every database. The index reads them once
+  shows (with their columns and parameters) come from SQL Server's hidden resource database, so they are the same in every database. The index reads them once
   per build, not once per database, and a search shows each of them once, as master's (or as the database a search names).
   Connections to servers whose resource objects have the same fingerprint (version, edition, and the count, latest change
   and checksum of those objects) share one copy in memory. Definitions that two builds have in common are held and counted
@@ -44,12 +67,13 @@ The same search runs in two places, with the same options and results:
 
 | Limit | Value |
 |---|---|
-| Objects per connection | 1,000,000 |
+| Objects per connection (a database past it is skipped as `TOO_LARGE`) | 2,000,000 |
 | Characters kept per definition (longer ones are cut and marked) | 1,000,000 |
 | Definition characters across all connections | 64 Mi |
 | Databases read at once | 2 |
 | Time per database | 120 s |
 | Search text | 1,000 UTF-16 code units |
+| Kinds one search may name | 64 |
 | Hits per search (default 200) | 1,000 |
 | Skipped databases reported | 256 |
 | Time per search | 5 s |
@@ -78,7 +102,7 @@ The same search runs in two places, with the same options and results:
   100,000-item cap (filter it by name), or the object is gone. Stop in Object Explorer, another reveal, or losing the
   server ends it.
 - **Scripting a hit.** The script button scripts the object to a new query: ALTER for modules where the login may,
-  otherwise CREATE.
+  otherwise CREATE. Columns and parameters, which Script As does not script, have no button.
 
 ## Protocol
 

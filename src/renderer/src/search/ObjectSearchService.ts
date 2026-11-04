@@ -1,5 +1,5 @@
 import type { VariaApi } from '../../../shared/contracts'
-import { folderSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
+import { folderSpecs, kindSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
 import type { ExplorerNodeRef, ObjectRef } from '../../../shared/explorer/refs.ts'
 import { objectSearchLimits, type ObjectIndexProgress, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult, type SearchScope } from '../../../shared/explorer/search.ts'
 import type { SettingKey, SettingValue } from '../../../shared/settings/catalog'
@@ -72,19 +72,29 @@ function folderChain(owner: ObjectRef, folder: FolderId): ExplorerNodeRef[] {
   return chain
 }
 const systemDatabases = new Set(['master', 'model', 'msdb'])
+/** Where a child's parent may be listed when the hit does not say: under its kind's folder, then the System one. */
+const parentFolders: { readonly [K in 'table' | 'view' | 'tableType' | 'procedure' | 'function']: readonly FolderId[] } = {
+  table: ['tables', 'systemTables'], view: ['views', 'systemViews'], tableType: ['userDefinedTableTypes'],
+  procedure: ['storedProcedures', 'systemStoredProcedures'], function: ['tableValuedFunctions', 'scalarValuedFunctions', 'aggregateFunctions', 'functions']
+}
 /**
- * Where a hit is in Object Explorer, from the server down: its database under Databases (or System Databases, tried first
- * for master, model and msdb, and second for the rest: a distribution database is a system one too), the folders above its
- * listing, a trigger's table or view (under Tables or Views, then under their System folders), and the object.
+ * Where a hit is in Object Explorer, from the server down. A server object is in its folder below the server (Security ›
+ * Logins), and a database in its Databases folder. Anything else is in its database, under Databases (or System Databases,
+ * tried first for master, model and msdb, and second for the rest: a distribution database is a system one too): the folders
+ * above its listing, a child's parent in the folder the hit names (or, when it names none, under its kind's folders, then
+ * their System ones), and the object.
  */
 export function revealPaths(hit: ObjectSearchHit): RevealPath[] {
+  const server: ObjectRef = { kind: 'server' }
+  const scope = kindSpecs[hit.object.kind].scope
+  if (scope === 'serverObject' || scope === 'database') return [[...folderChain(server, hit.folder), { type: 'object', object: hit.object }]]
   const name = hit.object.database ?? ''
   const database: ObjectRef = { kind: 'database', name }
   const parent = hit.object.parent
   const belows: ExplorerNodeRef[][] = parent
     ? (() => {
         const owner: ObjectRef = { kind: parent.kind, database: name, schema: parent.schema, name: parent.name }
-        const folders: FolderId[] = parent.kind === 'view' ? ['views', 'systemViews'] : ['tables', 'systemTables']
+        const folders: readonly FolderId[] = hit.parentFolder ? [hit.parentFolder] : parentFolders[parent.kind]
         return folders.map(folder => [...folderChain(database, folder), { type: 'object' as const, object: owner }, ...folderChain(owner, hit.folder)])
       })()
     : [folderChain(database, hit.folder)]
