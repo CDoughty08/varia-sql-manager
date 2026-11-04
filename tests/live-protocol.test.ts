@@ -351,7 +351,8 @@ describe('live subscriptions through the results worker and ResultClient', () =>
       expect(handle.getSnapshot().connectionId).toBe(connection)
       handle.dispose()
       await expect.poll(() => host.liveCount).toBe(0)
-      expect(client.liveStreams).toBe(0)
+      // Main forgets the stream before its end reaches the worker and then the client, so the client counts it a moment longer.
+      await expect.poll(() => client.liveStreams).toBe(0)
     } finally {
       service.dispose()
       close()

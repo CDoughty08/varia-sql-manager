@@ -27,6 +27,8 @@ export interface DialogEffects {
   refreshListing(select?: ExplorerNodeRef): void
   /** Reloads the server's `folder` (where a new object is listed) and selects `object` in it, when that folder is in the tree. */
   reveal(folder: FolderId, object: ObjectRef): void
+  /** Reloads `owner`'s `folder` (a database's Users), when that folder is in the tree; one never listed loads fresh when opened. */
+  reload(owner: ObjectRef, folder: FolderId): void
   /** The dialog's database went offline or came online: its Database Properties documents follow. */
   databaseState(offline: boolean): void
 }
@@ -119,11 +121,14 @@ export const databasePropertiesDefinition: ObjectDialogDefinition<DatabaseProper
   afterSuccess: effects => effects.refreshListing()
 }
 
-/** New Login (D2a): opens on a SQL Server's Security or Logins folder or a login, and on success reloads Logins and selects the new
- *  login there, as after a failure or Stop that left it created. A SQL Server login's password goes only with OK. */
+/** New Login (D2a, D2b): opens on a SQL Server's Security or Logins folder or a login, and on success reloads Logins and selects the
+ *  new login there, and reloads each mapped database's Users folder that the tree has listed, as after a failure or Stop that
+ *  left the login created (a mapping that did not complete shows no user, which the reload shows). A SQL Server login's password
+ *  goes only with OK. */
 const revealLogin = (effects: DialogEffects, request: BuiltRequest) => {
-  const login = (request as Partial<Pick<CreateLoginRequest, 'login'>>).login
+  const { login, mappings } = request as Partial<Pick<CreateLoginRequest, 'login' | 'mappings'>>
   if (login) effects.reveal('logins', { kind: 'login', name: login.name })
+  for (const mapping of mappings ?? []) effects.reload({ kind: 'database', name: mapping.database }, 'users')
 }
 export const newLoginDefinition: ObjectDialogDefinition<NewLoginModel, NewLoginDraft> = {
   dialog: 'newLogin',

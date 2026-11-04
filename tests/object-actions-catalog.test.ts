@@ -161,7 +161,7 @@ describe('object action catalogue', () => {
       ['filegroups', 'Filegroups', 'settings-gear'], ['options', 'Options', 'settings-gear']])
     expect([dialogTitle('databaseProperties', 'AppData'), dialogTitle('deleteObject', 'dbo.Orders')]).toEqual(['Database Properties - AppData', 'Delete Object'])
     expect(dialogSpecs.newLogin).toMatchObject({ title: 'Login - New', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'createLogin', steps: true })
-    expect(dialogSpecs.newLogin.pages.map(page => [page.id, page.title, page.keepMounted ?? false])).toEqual([['general', 'General', true], ['serverRoles', 'Server Roles', false], ['status', 'Status', false]])
+    expect(dialogSpecs.newLogin.pages.map(page => [page.id, page.title, page.keepMounted ?? false])).toEqual([['general', 'General', true], ['serverRoles', 'Server Roles', false], ['userMapping', 'User Mapping', true], ['status', 'Status', false]])
     expect(dialogTitle('newLogin', 'ignored')).toBe('Login - New')
     for (const dialog of dialogIds) {
       const action = dialogSpecs[dialog].action
@@ -177,8 +177,8 @@ describe('object action catalogue', () => {
     expectTypeOf<ActionCommandId>().toEqualTypeOf<'explorer.selectTopRows' | 'explorer.rename' | 'explorer.delete' | 'explorer.properties' | 'explorer.attachDatabase' | 'explorer.takeOffline' | 'explorer.bringOnline' | 'explorer.restoreDatabase' | 'explorer.tasks.restoreDatabase'
       | 'explorer.restoreFiles' | 'explorer.tasks.restoreFiles'>()
     expectTypeOf<ModalDialogId>().toEqualTypeOf<'deleteObject' | 'attachDatabase' | 'newLogin' | 'takeOffline' | 'bringOnline'>()
-    expectTypeOf<PageId>().toEqualTypeOf<'general' | 'files' | 'filegroups' | 'options' | 'serverRoles' | 'status'>()
-    expect(pageIds).toEqual(['general', 'files', 'filegroups', 'options', 'serverRoles', 'status'])
+    expectTypeOf<PageId>().toEqualTypeOf<'general' | 'files' | 'filegroups' | 'options' | 'serverRoles' | 'userMapping' | 'status'>()
+    expect(pageIds).toEqual(['general', 'files', 'filegroups', 'options', 'serverRoles', 'userMapping', 'status'])
     for (const dialog of dialogIds) for (const page of dialogSpecs[dialog].pages) {
       expect(isIconId(page.icon), `${dialog}: ${page.id}`).toBe(true)
       expect(pageIds, dialog).toContain(page.id)

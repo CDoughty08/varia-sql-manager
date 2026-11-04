@@ -23,13 +23,14 @@ internal static class LoginChecks
         Partial(check);
         Validation(check);
         await ServiceAsync(check);
+        await LoginMappingChecks.RunAsync(check);
     }
 
     internal static NewLoginDto Sql(string name, bool policy = true, bool expiration = true, bool mustChange = true, string database = "master", string? language = null) =>
         new("sql", name, database, language, policy, expiration, mustChange);
     internal static NewLoginDto Windows(string name, string database = "master", string? language = null) => new("windows", name, database, language);
-    internal static ActionArgs Create(NewLoginDto login, string? password, List<string>? roles = null, LoginStatusDto? status = null) =>
-        new("createLogin", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), Server, Login: login, ServerRoles: roles ?? [], Status: status ?? new("grant", true),
+    internal static ActionArgs Create(NewLoginDto login, string? password, List<string>? roles = null, LoginStatusDto? status = null, List<UserMappingDto>? mappings = null) =>
+        new("createLogin", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), Server, Login: login, ServerRoles: roles ?? [], Status: status ?? new("grant", true), Mappings: mappings ?? [],
             Secrets: login.Auth == "sql" ? new(password) : null);
 
     private static void Lint(Action<bool, string> check)
@@ -103,13 +104,13 @@ internal static class LoginChecks
     private static void Script(Action<bool, string> check)
     {
         const string header = "/* header */";
-        var sql = LoginSql.ScriptText(Sql("app", language: "us_english"), ["sysadmin", "dbcreator"], new("deny", false), header);
+        var sql = LoginSql.ScriptText(Sql("app", language: "us_english"), ["sysadmin", "dbcreator"], new("deny", false), [], new HashSet<string>(), header);
         var expected = "USE [master]" + NL + "GO" + NL + header + NL + "SET XACT_ABORT ON;" + NL + "BEGIN TRANSACTION;" + NL
             + "CREATE LOGIN [app] WITH PASSWORD=<password> MUST_CHANGE, DEFAULT_DATABASE=[master], DEFAULT_LANGUAGE=[us_english], CHECK_EXPIRATION=ON, CHECK_POLICY=ON;" + NL
             + "DENY CONNECT SQL TO [app];" + NL + "ALTER LOGIN [app] DISABLE;" + NL + "ALTER SERVER ROLE [dbcreator] ADD MEMBER [app];" + NL
             + "ALTER SERVER ROLE [sysadmin] ADD MEMBER [app];" + NL + "COMMIT TRANSACTION;" + NL + "GO" + NL;
         check(sql == expected, "a SQL Server login's script is one XACT_ABORT transaction batch under the header, with PASSWORD=<password> unquoted (critic A14):" + NL + sql);
-        var windows = LoginSql.ScriptText(Windows("D\\u"), ["sysadmin"], new("grant", true), header);
+        var windows = LoginSql.ScriptText(Windows("D\\u"), ["sysadmin"], new("grant", true), [], new HashSet<string>(), header);
         check(windows == "USE [master]" + NL + "GO" + NL + "CREATE LOGIN [D\\u] FROM WINDOWS WITH DEFAULT_DATABASE=[master]" + NL + "GO" + NL
                 + "ALTER SERVER ROLE [sysadmin] ADD MEMBER [D\\u]" + NL + "GO" + NL,
             "a Windows login's script is SSMS's, one statement per batch, with no header and no transaction: " + windows);
@@ -244,7 +245,7 @@ internal static class LoginChecks
         using var service = new ActionService(host);
         var args = Create(Sql("app"), null, ["sysadmin"], new("deny", true)) with { Secrets = null };
         var script = await service.ScriptAsync(args, CancellationToken.None);
-        check(script.Error is null && script.Database == "master" && script.Text == LoginSql.ScriptText(args.Login!, args.ServerRoles!, args.Status!, ActionsCatalog.Current.Logins.ScriptHeader)
+        check(script.Error is null && script.Database == "master" && script.Text == LoginSql.ScriptText(args.Login!, args.ServerRoles!, args.Status!, [], new HashSet<string>(), ActionsCatalog.Current.Logins.ScriptHeader)
             && host.Connections == 0, "Script Action builds New Login's text from the request alone, opening no connection, as SSMS's Script runs nothing");
         var execute = await service.ExecuteAsync(Create(Sql("app"), secret), CancellationToken.None);
         check(execute.Error?.Code == "CONNECTION_LOST" && execute.Steps.Count == 0 && !(execute.Error.Message ?? "").Contains(secret, StringComparison.Ordinal) && service.RunningCount == 0,

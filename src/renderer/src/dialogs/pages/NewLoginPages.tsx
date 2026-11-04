@@ -4,7 +4,7 @@ import { displayText } from '../../../../shared/explorer/refs.ts'
 import { useWorkbench } from '../../core/WorkbenchContext'
 import Icon from '../../Icon'
 import PasswordField from '../../kit/PasswordField'
-import { newLoginEnabled, newLoginHints, passwordFieldLength, type NewLoginDraft } from '../new-login'
+import { newLoginEnabled, newLoginHints, passwordFieldLength, renameLogin, type NewLoginDraft } from '../new-login'
 import type { PageProps } from '../ObjectDialog'
 
 function useLogin(open: PageProps['open']) {
@@ -26,7 +26,7 @@ export function NewLoginGeneralPage({ open, editable }: PageProps) {
   return <div className="new-login-page">
     <fieldset className="property-grid new-login-fields" disabled={!editable}>
       <div className="property-row"><label htmlFor="new-login-name">Login name</label>
-        <input id="new-login-name" type="text" autoComplete="off" spellCheck={false} maxLength={actionLimits.newName} value={draft.name} onChange={event => dialogs.updateDraft({ name: event.target.value })} /></div>
+        <input id="new-login-name" type="text" autoComplete="off" spellCheck={false} maxLength={actionLimits.newName} value={draft.name} onChange={event => dialogs.updateDraft(renameLogin(draft, event.target.value))} /></div>
       <div className="new-login-auth" role="radiogroup" aria-label="Authentication">
         <label className="checkbox-label"><input type="radio" name="new-login-auth" checked={draft.auth === 'windows'} onChange={() => dialogs.updateDraft({ auth: 'windows' })} />Windows authentication</label>
         <label className="checkbox-label"><input type="radio" name="new-login-auth" checked={sql} onChange={() => dialogs.updateDraft({ auth: 'sql' })} />SQL Server authentication</label>

@@ -675,6 +675,15 @@ Its "Back up the log" step reads the log chain again and fails with `RESTORE_SEQ
 RESTORING.
 docs/object-actions.md describes the planner, the steps and the limits.
 
+**New Login** (D2a, D2b) uses the same three methods. `actions.describe` with `dialog: 'newLogin'` and the server as target
+answers `{ newLogin }` (databases, each `{ name, state, accessible, readOnly }`, languages, server roles and the server's facts); with `dialog: 'loginDatabaseRoles'` and
+`target: { kind: 'database', name }` it answers User Mapping's read of that database, `{ loginDatabaseRoles: { roles (≤ 256),
+rolesTruncated, guest, schemas (≤ 1,024), schemasTruncated } }`, or `NOT_FOUND` and `DATABASE_UNAVAILABLE` (offline, closed or
+read-only) values.
+`actions.script` and `actions.execute` take `{ action: 'createLogin', login, serverRoles, status, mappings }`, where
+`mappings` is at most 256 `{ database, user, defaultSchema?, rolesAdd (≤ 256, never public) }`, one per database, and the
+whole plan at most 512 statements; only execute carries `secrets`. The backend re-validates all of it.
+
 ## Streams and credits
 
 `results.read { resultId: u32 ≥ 1, firstRow: 0 … 2⁵³ − 1, maxRows: 1 … 65,536 }` sends a DATA frame for every sealed page

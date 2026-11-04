@@ -8,7 +8,10 @@ import {
   actionErrorCodes, actionLimits, actionOffered, dialogIds, dialogSpecs, isCreateAction, isServerAction, objectActionSpecs, serverFilePurposes, serverFilesDescribeId, type ActionErrorCode,
   type ObjectAction
 } from './catalog.ts'
-import { loginLimits, newLoginAuths, publicRole, windowsLoginName, type LoginSecrets, type LoginStatusChoice, type NewLoginGeneral, type NewLoginModel } from './logins.ts'
+import {
+  loginDatabaseRolesDescribe, loginLimits, newLoginAuths, newLoginStatements, publicRole, tooManyStatementsMessage, windowsLoginName, type LoginDatabaseRoles, type LoginSecrets, type LoginStatusChoice,
+  type NewLoginGeneral, type NewLoginModel, type UserMappingChoice
+} from './logins.ts'
 import { wellFormed } from '../ssis/schema.ts'
 import { collationPattern, optionDef, settableOptionKeys, settableScopedKeys, tokenProblem, type FileType, type Growth } from './database.ts'
 import { containmentTypes, newDatabaseOptionKeys, newDatabaseProblems, newDatabaseScopedKeys, type NewDatabaseDesign, type NewDatabaseModel } from './new-database.ts'
@@ -19,8 +22,9 @@ import { restoreDescribeId, restoreLimits, type RestoreModel, type RestoreSource
 import { restoreFilesRequestSchema, restoreRequestSchema, restoreSourceSchema, type RestoreFilesRequest, type RestoreRequest } from './restore-schema.ts'
 
 /** What actions.describe describes: an object dialog (PR17's catalogue), a designer (src/shared/designer/catalog.ts), the
- *  server's folders for the server file picker, or what Restore Database restores from (src/shared/actions/restore.ts). */
-export const describeIds = [...dialogIds, ...designerDescribeIds, serverFilesDescribeId, restoreDescribeId] as const
+ *  server's folders for the server file picker, what Restore Database restores from (src/shared/actions/restore.ts), or one
+ *  database's roles and schemas for New Login's User Mapping page (logins.ts loginDatabaseRolesDescribe). */
+export const describeIds = [...dialogIds, ...designerDescribeIds, serverFilesDescribeId, restoreDescribeId, loginDatabaseRolesDescribe] as const
 export type DescribeId = typeof describeIds[number]
 
 /** Attach Databases' Add: the primary data file (.mdf) the backend reads with DBCC CHECKPRIMARYFILE, its path bound as a parameter. */
@@ -73,14 +77,15 @@ export interface AttachDatabaseSpec { readonly name: string; readonly owner?: st
 /** Attach Databases' OK and Script: the server as the target, and at most `actionLimits.attachDatabases` databases. */
 export interface AttachRequest { readonly action: 'attach'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly databases: readonly AttachDatabaseSpec[] }
 /**
- * New Login's OK and Script (D2a): the General page, the server roles to join (public never: every login is a member), and
- * the Status page. `secrets` carries the password of a SQL login on actions.execute only; the script schema refuses it.
+ * New Login's OK and Script (D2a, D2b): the General page, the server roles to join (public never: every login is a member), the
+ * databases User Mapping maps (each at most once), and the Status page. `secrets` carries the password of a SQL login on actions.execute only; the script schema refuses it.
  * The target is the server.
  */
 export interface CreateLoginRequest {
   readonly action: 'createLogin'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef
   readonly login: NewLoginGeneral
   readonly serverRoles: readonly string[]
+  readonly mappings: readonly UserMappingChoice[]
   readonly status: LoginStatusChoice
   readonly secrets?: LoginSecrets
 }
@@ -238,6 +243,7 @@ export interface ActionDescribeResult {
   readonly newDatabase?: NewDatabaseModel
   readonly attachDatabase?: AttachDescribeModel
   readonly newLogin?: NewLoginModel
+  readonly loginDatabaseRoles?: LoginDatabaseRoles
   readonly databaseState?: DatabaseStateModel
 }
 export interface ActionScriptResult {
@@ -336,6 +342,10 @@ export const actionDescribeSchema = z.object({
       case 'newLogin':
         if (!isServer(request.target)) issue(context, 'target', 'New Login opens on a server.')
         break
+      // Any database, SQL Server's own included: a login may be mapped to master or msdb, as in SSMS.
+      case loginDatabaseRolesDescribe:
+        if (request.target.kind !== 'database' || request.target.parent) issue(context, 'target', 'User Mapping reads a database.')
+        break
       default: {
         // A server action's document describes the server it makes something on.
         const action = dialogSpecs[request.dialog].action
@@ -408,12 +418,14 @@ const newLoginGeneralSchema = z.object({
   auth: z.enum(newLoginAuths), name: ident, defaultDatabase: ident, defaultLanguage: ident.optional(), checkPolicy: z.boolean().optional(), checkExpiration: z.boolean().optional(),
   mustChange: z.boolean().optional()
 }).strict() satisfies z.ZodType<NewLoginGeneral>
+const userMappingSchema = z.object({ database: ident, user: ident, defaultSchema: ident.optional(), rolesAdd: z.array(ident).max(loginLimits.roles) }).strict() satisfies z.ZodType<UserMappingChoice>
 const createLoginSchema = z.object({
   action: z.literal('createLogin'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, login: newLoginGeneralSchema,
-  serverRoles: z.array(ident).max(loginLimits.serverRoles), status: z.object({ connect: z.enum(['grant', 'deny']), enabled: z.boolean() }).strict(), secrets: loginSecretsSchema.optional()
+  serverRoles: z.array(ident).max(loginLimits.serverRoles), mappings: z.array(userMappingSchema).max(loginLimits.mappings), status: z.object({ connect: z.enum(['grant', 'deny']), enabled: z.boolean() }).strict(), secrets: loginSecretsSchema.optional()
 }).strict()
 /** New Login's rules beyond the shapes: the server as its target, the auth's own fields and SQL Server's policy chain, the
- *  login name's backslash rule, and roles that are unique and not public. */
+ *  login name's backslash rule, roles that are unique and not public, each database mapped once with unique roles other than
+ *  public, and a plan of at most actionLimits.statements statements. */
 function createLoginIssues(request: z.infer<typeof createLoginSchema>, context: z.RefinementCtx): void {
   const { login } = request
   if (!isServer(request.target)) issue(context, 'target', 'A login is created on a server.')
@@ -429,6 +441,12 @@ function createLoginIssues(request: z.infer<typeof createLoginSchema>, context: 
   if (request.secrets?.oldPassword !== undefined) issue(context, 'secrets', 'A new login has no old password.')
   if (request.serverRoles.includes(publicRole)) issue(context, 'serverRoles', 'Every login is a member of public.')
   if (new Set(request.serverRoles).size !== request.serverRoles.length) issue(context, 'serverRoles', 'Duplicate server role.')
+  if (new Set(request.mappings.map(mapping => mapping.database)).size !== request.mappings.length) issue(context, 'mappings', 'A database is mapped twice.')
+  for (const mapping of request.mappings) {
+    if (mapping.rolesAdd.includes(publicRole)) issue(context, 'mappings', 'Every database user is a member of public.')
+    if (new Set(mapping.rolesAdd).size !== mapping.rolesAdd.length) issue(context, 'mappings', 'Duplicate database role.')
+  }
+  if (newLoginStatements(request) > actionLimits.statements) issue(context, 'mappings', tooManyStatementsMessage(actionLimits.statements))
 }
 export const actionRequestSchema = z.discriminatedUnion('action', [
   renameSchema,

@@ -560,6 +560,7 @@ export const pageIds = [
   'filegroups',
   'options',
   'serverRoles',
+  'userMapping',
   'status'
 ] as const
 export type PageId = typeof pageIds[number]
@@ -613,10 +614,11 @@ const dialogSpecData = {
   // says how its run went, so the dialog lists no separate steps.
   attachDatabase: { title: 'Attach Databases', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'attach', pages: [page('general', 'General')] },
   // SSMS's "Login - New" is modal, and the password must never live in a document's view state. General keeps its password
-  // fields mounted across page switches. User Mapping (D2b) and Securables (D2d) join once their OK works (critic A17).
+  // fields mounted across page switches, and User Mapping its grid (a cell being edited, the scroll position). Securables (D2d)
+  // joins once its OK works (critic A17).
   newLogin: {
     title: 'Login - New', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'createLogin', steps: true,
-    pages: [page('general', 'General', { keepMounted: true }), page('serverRoles', 'Server Roles'), page('status', 'Status')]
+    pages: [page('general', 'General', { keepMounted: true }), page('serverRoles', 'Server Roles'), page('userMapping', 'User Mapping', { keepMounted: true }), page('status', 'Status')]
   },
   // SSMS's Take Database Offline dialog (recalled, SSMS 18+): a grid of Database Name, Drop All Active Connections, Status
   // and Message. Bring Online runs as it opens and shows the same grid with its outcome.

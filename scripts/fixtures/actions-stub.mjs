@@ -32,9 +32,11 @@ import { explorerStatics } from './explorer-tree.mjs'
  * data file it recorded in D:\Old\, not found, and whose log it finds), Sales_2.ndf and Hr.mdf (whose log in D:\Old\ is not
  * found); any other file is not a primary one. An attach that includes Hr fails at Hr and detaches what it attached before
  * (Rolled Back); otherwise each database appears under Databases.
- * Security › Logins lists sa and every login New Login made. New Login describes a Windows server (master and AppData, two
- * languages, three server roles); its Script is `newLoginScript`; OK with the password "Weak" answers PASSWORD_POLICY at
- * "Create the login", "Held" waits until its Stop arrives, and anything else adds the login.
+ * Security › Logins lists sa and every login New Login made. New Login describes a Windows server (master, AppData and the
+ * offline Archive, the read-only Ledger, `longDatabase` and eight Warehouse databases, so User Mapping's grid scrolls; two
+ * languages, three server roles); User Mapping's roles describe answers `databaseRoles` (with `longRole`; guest only in
+ * master); its Script is `newLoginScript`; OK with the password "Weak" answers PASSWORD_POLICY at "Create the login", "Held"
+ * waits until its Stop arrives, and anything else adds the login.
  * Take Database Offline describes AppData with two sessions, one of them in a transaction; taken offline (Drop All Active
  * Connections, or none left), it lists as "(Offline)" until Bring Online. With `holding` set, a SET OFFLINE without Drop All
  * Active Connections waits, as on a session that joined after the describe, until its Stop arrives.
@@ -81,6 +83,10 @@ export const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId i
 export const offlineWarning = 'This database is offline. Deleting it removes it from the server but leaves its files on disk.'
 export const newLoginScript = name => `USE [master]\r\nGO\r\nSET XACT_ABORT ON;\r\nBEGIN TRANSACTION;\r\nCREATE LOGIN [${name}] WITH PASSWORD=<password>, DEFAULT_DATABASE=[master], CHECK_EXPIRATION=OFF, CHECK_POLICY=OFF;\r\nCOMMIT TRANSACTION;\r\nGO\r\n`
 export const passwordPolicyMessage = 'Password validation failed. The password does not meet the operating system policy requirements because it is not complex enough.'
+/** User Mapping's roles describe of a database: its roles and schemas, and guest's CONNECT (master's only). */
+export const longDatabase = 'Reports_a_very_long_database_name_that_should_overflow_its_column_width_in_any_window'
+export const longRole = 'reporting_readers_with_a_rather_long_role_name_that_cannot_fit_in_one_column_of_the_role_list'
+export const databaseRoles = database => ({ roles: ['db_datareader', 'db_owner', 'public', 'Readers', longRole], rolesTruncated: false, guest: database === 'master', schemas: ['dbo', 'sales'], schemasTruncated: false })
 
 /** Installs the stub; pass it to `application.evaluate` with `actionsStubData()`. Runs in main, so it is self-contained. */
 export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
@@ -101,6 +107,9 @@ GO
   const offlineWarning = 'This database is offline. Deleting it removes it from the server but leaves its files on disk.'
   const newLoginScript = name => `USE [master]\r\nGO\r\nSET XACT_ABORT ON;\r\nBEGIN TRANSACTION;\r\nCREATE LOGIN [${name}] WITH PASSWORD=<password>, DEFAULT_DATABASE=[master], CHECK_EXPIRATION=OFF, CHECK_POLICY=OFF;\r\nCOMMIT TRANSACTION;\r\nGO\r\n`
   const passwordPolicyMessage = 'Password validation failed. The password does not meet the operating system policy requirements because it is not complex enough.'
+  const longDatabase = 'Reports_a_very_long_database_name_that_should_overflow_its_column_width_in_any_window'
+  const longRole = 'reporting_readers_with_a_rather_long_role_name_that_cannot_fit_in_one_column_of_the_role_list'
+  const databaseRoles = database => ({ roles: ['db_datareader', 'db_owner', 'public', 'Readers', longRole], rolesTruncated: false, guest: database === 'master', schemas: ['dbo', 'sales'], schemasTruncated: false })
   const restoreScript = "USE [master]\r\nRESTORE DATABASE [AppData] FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
   const restoreFilesScript = "USE [master]\r\nRESTORE DATABASE [AppData] FILE = N'AppData_2' FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NORECOVERY,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
   const ok = value => ({ ok: true, value })
@@ -298,10 +307,13 @@ GO
     return ok({ steps: [{ status: 'done', title: 'Create the database' }], messages: [], elapsedMs: 1 })
   }
   /** New Login: "Weak" answers PASSWORD_POLICY, "Held" waits for Stop, anything else adds the login to Logins. The steps are
-   * the backend's, in SSMS's order: CREATE LOGIN, then Deny and Disable as Status chose, then each server role. */
-  function createLogin({ login, secrets, serverRoles, status, requestId }) {
+   * the backend's, in SSMS's order: CREATE LOGIN, then Deny and Disable as Status chose, then each server role, then per mapped
+   * database its user, default schema and roles (the stub's databases have every schema chosen, so no CREATE SCHEMA). */
+  function createLogin({ login, secrets, serverRoles, status, mappings, requestId }) {
     const steps = [{ title: 'Create the login' }, ...status?.connect === 'deny' ? [{ title: 'Deny permission to connect' }] : [], ...status?.enabled === false ? [{ title: 'Disable the login' }] : [],
-      ...serverRoles.map(detail => ({ title: 'Add to a server role', detail }))]
+      ...serverRoles.map(detail => ({ title: 'Add to a server role', detail })),
+      ...(mappings ?? []).flatMap(({ database, defaultSchema, rolesAdd }) => [{ title: 'Create a user', detail: database }, ...defaultSchema ? [{ title: 'Set the default schema', detail: database }] : [],
+        ...rolesAdd.map(role => ({ title: 'Add to a database role', detail: `${role} in ${database}` }))])]
     const after = steps.slice(1).map(step => ({ status: 'skipped', ...step }))
     if (secrets?.password === 'Weak') return ok({ steps: [{ status: 'failed', ...steps[0], message: passwordPolicyMessage }, ...after], messages: [], elapsedMs: 1,
       error: { code: 'PASSWORD_POLICY', message: passwordPolicyMessage, retryable: true } })
@@ -386,8 +398,11 @@ GO
         switch (params.dialog) {
           case 'tableDesigner': return ok({ tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', caseSensitiveNames: false, accentSensitiveNames: true, canCreate: true }, elapsedMs: 1 })
           case 'databaseProperties': return properties(params)
+          case 'loginDatabaseRoles': return ok({ loginDatabaseRoles: databaseRoles(params.target.name), elapsedMs: 1 })
           case 'newLogin': return ok({ newLogin: { server: { level: 16, linux: false, windowsOnly: false, canCreate: true },
-            databases: [{ name: 'AppData', state: 0, accessible: true }, { name: 'master', state: 0, accessible: true }], databasesTruncated: false,
+            databases: [{ name: 'AppData', state: 0, accessible: true, readOnly: false }, { name: 'Archive', state: 6, accessible: false, readOnly: false }, { name: 'Ledger', state: 0, accessible: true, readOnly: true },
+              { name: 'master', state: 0, accessible: true, readOnly: false }, { name: longDatabase, state: 0, accessible: true, readOnly: false },
+              ...Array.from({ length: 8 }, (_, index) => ({ name: `Warehouse0${index + 1}`, state: 0, accessible: true, readOnly: false }))], databasesTruncated: false,
             languages: [{ name: 'Deutsch', alias: 'German' }, { name: 'us_english', alias: 'English' }],
             serverRoles: [{ name: 'dbcreator', fixed: true }, { name: 'public', fixed: true }, { name: 'sysadmin', fixed: true }], serverRolesTruncated: false }, elapsedMs: 1 })
           case 'newDatabase': {
