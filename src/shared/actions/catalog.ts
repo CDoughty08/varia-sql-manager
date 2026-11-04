@@ -41,8 +41,26 @@ export const createActions = [
   'createLogin'
 ] as const
 export type CreateAction = typeof createActions[number]
+/**
+ * Actions that one kind's own dialog runs for an object action's verb: Properties on a login opens Login Properties (D2c), whose
+ * OK runs `loginProperties` rather than Database Properties' `properties`. Their rows are the verb's (a login row's
+ * `properties`), so menus, keys and context keys stay the verb's. One entry per line.
+ */
+export const kindDialogActions = [
+  'loginProperties'
+] as const
+export type KindDialogAction = typeof kindDialogActions[number]
+export interface KindDialogActionSpec {
+  readonly title: string
+  readonly dialog: DialogId
+  readonly kind: NodeKind
+  readonly verb: ObjectAction
+  /** As ObjectActionSpec.engines. */
+  readonly engines: readonly ServerEngine[]
+  readonly cleanupMs?: number
+}
 /** Every action a dialog's OK can run. */
-export type DialogAction = ObjectAction | CreateAction
+export type DialogAction = ObjectAction | CreateAction | KindDialogAction
 export interface CreateActionSpec {
   readonly title: string
   readonly dialog: DialogId
@@ -60,7 +78,8 @@ export const dialogIds = [
   'takeOffline',
   'bringOnline',
   'detachDatabase',
-  'unlockLogin'
+  'unlockLogin',
+  'loginProperties'
 ] as const
 export type DialogId = typeof dialogIds[number]
 /** The menus an action can be placed in: Object Explorer's context menu and its Tasks submenus (src/shared/commands/menus.ts). */
@@ -153,8 +172,8 @@ export const serverActions = [
 ] as const
 export type ServerAction = typeof serverActions[number]
 /** Every action actions.execute runs from this catalogue (the table designer's createTable is the designer catalogue's): the
- *  object actions, the server actions and the create actions (New Login). */
-export type CatalogAction = ObjectAction | ServerAction | CreateAction
+ *  object actions, the server actions, the create actions (New Login) and the kind dialog actions (Login Properties). */
+export type CatalogAction = ObjectAction | ServerAction | CreateAction | KindDialogAction
 export interface ServerActionSpec {
   /** The palette's and the menu's title. */
   readonly title: string
@@ -196,7 +215,8 @@ export type ServerActionCommandId = typeof serverActionSpecData[ServerAction]['c
 export const isServerAction = (action: string): action is ServerAction => (serverActions as readonly string[]).includes(action)
 /** An action's servers, from whichever list declares it. */
 export const catalogActionEngines = (action: CatalogAction): readonly ServerEngine[] =>
-  isServerAction(action) ? serverActionSpecs[action].engines : isCreateAction(action) ? createActionSpecs[action].engines : objectActionSpecs[action].engines
+  isServerAction(action) ? serverActionSpecs[action].engines : isCreateAction(action) ? createActionSpecs[action].engines
+    : isKindDialogAction(action) ? kindDialogActionSpecs[action].engines : objectActionSpecs[action].engines
 
 /** '' = not offered (hidden); 'disabled' = shown greyed, as SSMS shows Rename and Delete on system objects. */
 export type ActionState = '' | 'disabled' | 'enabled'
@@ -211,17 +231,22 @@ export interface ActionKindSpec {
   readonly statuses?: Partial<Record<NodeStatus, ActionRowOverlay>>
   /** A subtype's own overlay for a status, in place of `statuses`' (a disabled system login keeps Enable greyed). */
   readonly subtypeStatuses?: Partial<Record<NodeSubtype, Partial<Record<NodeStatus, ActionRowOverlay>>>>
+  /** The kind's own dialog for a verb, in place of the verb's (a login's Properties opens Login Properties). */
+  readonly dialogs?: Partial<Record<ObjectAction, DialogId>>
 }
 const all: ActionRow = { selectTop: 'enabled', rename: 'enabled', delete: 'enabled' }
 const selectOnly: ActionRow = { selectTop: 'enabled', rename: 'disabled', delete: 'disabled' }
 const editable: ActionRow = { rename: 'enabled', delete: 'enabled' }
 const locked: ActionRow = { rename: 'disabled', delete: 'disabled' }
-/** The login verbs whose rows this catalogue declares from logins.ts' rules; Properties (D2c) joins as it arrives. Enable is
- *  not here: only a disabled login's overlay offers it. Unlock is offered whatever the login's state: only LOGINPROPERTY knows
- *  whether it is locked out, so its dialog says. */
+/** The login verbs whose rows this catalogue declares from logins.ts' rules. Enable is not here: only a disabled login's overlay
+ *  offers it. Unlock is offered whatever the login's state: only LOGINPROPERTY knows whether it is locked out, so its dialog says.
+ *  Properties (D2c) opens on every login, SQL Server's own included, as in SSMS: its OK refuses what may not change. */
 export const loginRowVerbs = ['disable', 'unlock', 'rename', 'delete'] as const satisfies readonly ObjectAction[]
 const ruleState = (rule: LoginRule): 'enabled' | 'disabled' | undefined => rule === 'allowed' ? 'enabled' : rule === 'greyed' ? 'disabled' : undefined
-const loginRow = (subtype: LoginSubtype): ActionRow => Object.fromEntries(loginRowVerbs.flatMap(verb => { const state = ruleState(loginRules[subtype][verb]); return state ? [[verb, state]] : [] }))
+const loginRow = (subtype: LoginSubtype): ActionRow => ({
+  ...Object.fromEntries(loginRowVerbs.flatMap(verb => { const state = ruleState(loginRules[subtype][verb]); return state ? [[verb, state]] : [] })),
+  properties: 'enabled'
+})
 /** A disabled login offers Enable, as its subtype's rule says, in place of Disable. A login whose CONNECT SQL is denied keeps
  *  Disable: Grant is Login Properties' Status page (D2c), and ENABLE leaves the DENY in place. */
 const loginDisabled = (subtype: LoginSubtype): ActionRowOverlay => ({ disable: '', enable: ruleState(loginRules[subtype].enable) ?? '' })
@@ -251,9 +276,12 @@ export const actionKindSpecs: { readonly [K in NodeKind]?: ActionKindSpec } = {
   login: {
     row: {},
     subtypes: Object.fromEntries(loginSubtypes.map(subtype => [subtype, loginRow(subtype)])),
-    subtypeStatuses: Object.fromEntries(loginSubtypes.map(subtype => [subtype, { disabled: loginDisabled(subtype) }]))
+    subtypeStatuses: Object.fromEntries(loginSubtypes.map(subtype => [subtype, { disabled: loginDisabled(subtype) }])),
+    dialogs: { properties: 'loginProperties' }
   }
 }
+/** The dialog a verb opens on a kind: the kind's own (a login's Login Properties), else the verb's. */
+export const actionDialog = (kind: NodeKind, action: ObjectAction): DialogId | undefined => actionKindSpecs[kind]?.dialogs?.[action] ?? objectActionSpecs[action].dialog
 
 /** A row with an overlay applied: the actions it names take its state, and '' removes them. */
 export function overlayRow(row: ActionRow, overlay: ActionRowOverlay | undefined): ActionRow {
@@ -437,8 +465,8 @@ const commandData: { readonly [A in ObjectAction]: Omit<ActionCommandEntry, 'tit
   },
   // ⌘I is Finder's Get Info. Alt+Enter is reserved on Windows and Linux, and SSMS 22's binding is unverified, so there is no key there.
   properties: {
-    icon: 'settings-gear', keywords: ['options', 'files', 'filegroups', 'recovery', 'compatibility', 'collation', 'settings'], documentTask: false,
-    unavailableHint: 'Select a database in Object Explorer.', keybindings: [{ mac: 'meta+i', when: explorerKeyWhen }]
+    icon: 'settings-gear', keywords: ['options', 'files', 'filegroups', 'recovery', 'compatibility', 'collation', 'settings', 'login', 'password', 'roles', 'mapping'], documentTask: false,
+    unavailableHint: 'Select a database or login in Object Explorer.', keybindings: [{ mac: 'meta+i', when: explorerKeyWhen }]
   },
   // No default key, as in SSMS.
   attach: { icon: 'plug', keywords: ['attach', 'mdf', 'ldf', 'files', 'detached'], documentTask: false, unavailableHint: 'Select the Databases folder of a connected SQL Server in Object Explorer.' },
@@ -616,6 +644,7 @@ export const pageIds = [
   'options',
   'serverRoles',
   'userMapping',
+  'securables',
   'status'
 ] as const
 export type PageId = typeof pageIds[number]
@@ -670,11 +699,10 @@ const dialogSpecData = {
   // says how its run went, so the dialog lists no separate steps.
   attachDatabase: { title: 'Attach Databases', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'attach', pages: [page('general', 'General')] },
   // SSMS's "Login - New" is modal, and the password must never live in a document's view state. General keeps its password
-  // fields mounted across page switches, and User Mapping its grid (a cell being edited, the scroll position). Securables (D2d)
-  // joins once its OK works (critic A17).
+  // fields mounted across page switches, and User Mapping and Securables their grids (a cell being edited, the scroll position).
   newLogin: {
     title: 'Login - New', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'createLogin', steps: true,
-    pages: [page('general', 'General', { keepMounted: true }), page('serverRoles', 'Server Roles'), page('userMapping', 'User Mapping', { keepMounted: true }), page('status', 'Status')]
+    pages: [page('general', 'General', { keepMounted: true }), page('serverRoles', 'Server Roles'), page('userMapping', 'User Mapping', { keepMounted: true }), page('securables', 'Securables', { keepMounted: true }), page('status', 'Status')]
   },
   // SSMS's Take Database Offline dialog (recalled, SSMS 18+): a grid of Database Name, Drop All Active Connections, Status
   // and Message. Bring Online runs as it opens and shows the same grid with its outcome.
@@ -684,7 +712,13 @@ const dialogSpecData = {
   // Keep Full-Text Catalogs applies only to databases upgraded from SQL Server 2005, which Varia does not reach, so it is left out.
   detachDatabase: { title: 'Detach Database', surface: 'modal', titleFormat: 'withName', size: 'compact', action: 'detach', pages: [page('general', 'General')], steps: true },
   // Varia's own dialog (D4d); its run lists the transaction's steps when it fails or is stopped.
-  unlockLogin: { title: 'Unlock Login', surface: 'modal', titleFormat: 'withName', size: 'compact', action: 'unlock', pages: [page('general', 'General')], steps: true }
+  unlockLogin: { title: 'Unlock Login', surface: 'modal', titleFormat: 'withName', size: 'compact', action: 'unlock', pages: [page('general', 'General')], steps: true },
+  // SSMS's "Login Properties - name" (D2c): New Login's pages on an existing login, modal for the same reasons. Its steps run one
+  // by one, as SSMS's do, and list what completed when one fails.
+  loginProperties: {
+    title: 'Login Properties', surface: 'modal', titleFormat: 'withName', size: 'large', action: 'loginProperties', steps: true,
+    pages: [page('general', 'General', { keepMounted: true }), page('serverRoles', 'Server Roles'), page('userMapping', 'User Mapping', { keepMounted: true }), page('securables', 'Securables', { keepMounted: true }), page('status', 'Status')]
+  }
 } as const satisfies { readonly [D in DialogId]: DialogSpec }
 export const dialogSpecs: { readonly [D in DialogId]: DialogSpec } = dialogSpecData
 /**
@@ -810,12 +844,19 @@ export const actionLimits = {
   serverConnections: 64
 } as const
 
-/** The create actions. New Login runs on SQL Server only until D2e adds Managed Instance (no FROM WINDOWS there, and
- *  SSMS hides the password policy options). */
+/** The create actions. New Login runs on SQL Server and Managed Instance (D2e), whose kinds and options differ
+ *  (logins.ts newLoginAuthEngines and newLoginPolicyEngines). */
 export const createActionSpecs: { readonly [A in CreateAction]: CreateActionSpec } = {
-  createLogin: { title: 'New Login', dialog: 'newLogin', engines: ['box'] }
+  createLogin: { title: 'New Login', dialog: 'newLogin', engines: onServers }
 }
 export const isCreateAction = (action: string): action is CreateAction => (createActions as readonly string[]).includes(action)
+/** The kind dialog actions. Login Properties runs where Properties does (Managed Instance's ALTER LOGIN grammar is SQL Server's, Learn). */
+export const kindDialogActionSpecs: { readonly [A in KindDialogAction]: KindDialogActionSpec } = {
+  loginProperties: { title: 'Login Properties', dialog: 'loginProperties', kind: 'login', verb: 'properties', engines: onServers }
+}
+export const isKindDialogAction = (action: string): action is KindDialogAction => (kindDialogActions as readonly string[]).includes(action)
+/** The object action whose rows decide where an action runs: itself, or a kind dialog action's verb; none for a create action. */
+export const actionVerb = (action: DialogAction): ObjectAction | undefined => isKindDialogAction(action) ? kindDialogActionSpecs[action].verb : isCreateAction(action) ? undefined : action
 /** Whether an action runs on a server of this engine. */
 export const actionServes = (action: CatalogAction, engine: ServerEngine): boolean => catalogActionEngines(action).includes(engine)
 
@@ -869,9 +910,13 @@ export function actionsCatalogJson(): string {
     const spec = createActionSpecs[action]
     return { action, class: 'create', title: spec.title, engines: spec.engines, cleanupMs: spec.cleanupMs ?? actionLimits.cleanupMs }
   }
+  const kindJson = (action: KindDialogAction) => {
+    const spec = kindDialogActionSpecs[action]
+    return { action, class: 'dialog', title: spec.title, kind: spec.kind, verb: spec.verb, engines: spec.engines, cleanupMs: spec.cleanupMs ?? actionLimits.cleanupMs }
+  }
   return [
     '{',
-    `  "actions": ${block([...objectActions.map(actionJson), ...serverActions.map(serverActionJson), ...createActions.map(createJson)])},`,
+    `  "actions": ${block([...objectActions.map(actionJson), ...serverActions.map(serverActionJson), ...createActions.map(createJson), ...kindDialogActions.map(kindJson)])},`,
     `  "compatibilityLevels": ${line(compatibilityLevels)},`,
     `  "databaseOptions": ${block(databaseOptionDefs.map(optionJson))},`,
     `  "databaseRules": ${block(databaseActionRules)},`,

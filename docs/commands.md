@@ -135,8 +135,8 @@ keys it uses are listed below.
 | Search in Object Explorer | `explorer.focusSearch` | — | — | — | `hasConnection` | — |
 | Remove Filter | `explorer.removeFilter` | — | — | — | `hasConnection` | Object Explorer context menu › Remove Filter |
 | Create Catalog… | `explorer.createCatalog` | — | — | — | `backendReady && explorerSelectionFolder == 'integrationServicesCatalogs'` | Object Explorer context menu › Create Catalog… |
-| New Login… | `explorer.newLogin` | — | — | — | `backendReady && (explorerSelectionFolder == 'logins' \|\| explorerSelectionFolder == 'serverSecurity' \|\| explorerSelectionKind == 'login') && explorerSelectionServerEngine == 'box'` | Object Explorer context menu › New Login… |
-| Login… (not in the palette) | `explorer.newLoginOnSecurity` | — | — | — | `backendReady && explorerSelectionFolder == 'serverSecurity' && explorerSelectionServerEngine == 'box'` | Object Explorer context menu › New › Login… |
+| New Login… | `explorer.newLogin` | — | — | — | `backendReady && (explorerSelectionFolder == 'logins' \|\| explorerSelectionFolder == 'serverSecurity' \|\| explorerSelectionKind == 'login') && (explorerSelectionServerEngine == 'box' \|\| explorerSelectionServerEngine == 'managedInstance')` | Object Explorer context menu › New Login… |
+| Login… (not in the palette) | `explorer.newLoginOnSecurity` | — | — | — | `backendReady && explorerSelectionFolder == 'serverSecurity' && (explorerSelectionServerEngine == 'box' \|\| explorerSelectionServerEngine == 'managedInstance')` | Object Explorer context menu › New › Login… |
 | Stop | `explorer.stop` | — | — | — | `explorerLoading` | — |
 | Collapse All | `explorer.collapseAll` | — | — | — | `hasConnection` | — |
 | New Query | `explorer.newQuery` | — | — | — | `!documentBusy` | Object Explorer context menu › New Query |
@@ -516,9 +516,9 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_connect` | **R**econnect… | `connection.reconnect` | `explorerServerLost` |
 | `0_connect` | Rem**o**ve | `connection.removeLost` | `explorerServerLost` |
 | `0_connect` | En**v**ironment… | `connection.environment` | `explorerNode == 'server' && !explorerServerLost` |
-| `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `explorerNode == 'folder' && (explorerFolder == 'tables' \|\| (explorerFolder == 'serverSecurity' && explorerServerEngine == 'box' && !explorerServerLost))` |
+| `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `explorerNode == 'folder' && (explorerFolder == 'tables' \|\| (explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance') && !explorerServerLost))` |
 | `0_new` | **N**ew Database… | `explorer.newDatabase` | `explorerNode == 'folder' && explorerFolder == 'databases' && !explorerServerLost && explorerServerEngine == 'box'` |
-| `0_new` | **N**ew Login… | `explorer.newLogin` | `((explorerNode == 'folder' && explorerFolder == 'logins') \|\| explorerNode == 'login') && !explorerServerLost && explorerServerEngine == 'box'` |
+| `0_new` | **N**ew Login… | `explorer.newLogin` | `((explorerNode == 'folder' && explorerFolder == 'logins') \|\| explorerNode == 'login') && !explorerServerLost && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance')` |
 | `0_new` | **A**ttach… | `explorer.attachDatabase` | `explorerActionAttach != '' && explorerNode == 'folder'` |
 | `0_new` | Crea**t**e Catalog… | `explorer.createCatalog` | `explorerNode == 'folder' && explorerFolder == 'integrationServicesCatalogs' && !explorerServerLost` |
 | `0_new` | **R**estore Database… | `explorer.restoreDatabase` | `explorerActionRestore != '' && explorerNode == 'folder'` |
@@ -554,7 +554,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
-| `1_security` | **L**ogin… | `explorer.newLoginOnSecurity` | `explorerFolder == 'serverSecurity' && explorerServerEngine == 'box'` |
+| `1_security` | **L**ogin… | `explorer.newLoginOnSecurity` | `explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance')` |
 | `1_table` | **T**able… | `explorer.newTable` | `explorerFolder == 'tables'` |
 
 #### Object Explorer context menu › Tasks

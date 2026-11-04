@@ -324,22 +324,22 @@ export const commandCatalog = {
     menus: [{ menu: 'explorer.context', group: '0_new', order: 2, mnemonic: 't', when: "explorerNode == 'folder' && explorerFolder == 'integrationServicesCatalogs' && !explorerServerLost" }]
   },
   // SSMS: Security › New › Login…, and New Login… on the Logins folder and on a login (learn.microsoft.com: Create a login).
-  // SQL Server only until D2e adds Managed Instance; the dialog says when the server lacks permission or SQL Server authentication.
+  // SQL Server and Managed Instance (D2e); the dialog says when the server lacks permission or SQL Server authentication.
   'explorer.newLogin': {
     title: 'New Login…', category: 'Object Explorer', icon: 'login', keywords: ['login', 'security', 'user', 'principal', 'create', 'password'],
-    precondition: "backendReady && (explorerSelectionFolder == 'logins' || explorerSelectionFolder == 'serverSecurity' || explorerSelectionKind == 'login') && explorerSelectionServerEngine == 'box'",
-    unavailableHint: 'Select Security or Logins of a SQL Server in Object Explorer.',
+    precondition: "backendReady && (explorerSelectionFolder == 'logins' || explorerSelectionFolder == 'serverSecurity' || explorerSelectionKind == 'login') && (explorerSelectionServerEngine == 'box' || explorerSelectionServerEngine == 'managedInstance')",
+    unavailableHint: 'Select Security or Logins of a SQL Server or Managed Instance in Object Explorer.',
     menus: [
-      { menu: 'explorer.context', group: '0_new', order: 1, mnemonic: 'n', when: "((explorerNode == 'folder' && explorerFolder == 'logins') || explorerNode == 'login') && !explorerServerLost && explorerServerEngine == 'box'" }
+      { menu: 'explorer.context', group: '0_new', order: 1, mnemonic: 'n', when: "((explorerNode == 'folder' && explorerFolder == 'logins') || explorerNode == 'login') && !explorerServerLost && (explorerServerEngine == 'box' || explorerServerEngine == 'managedInstance')" }
     ]
   },
   // The same dialog as Security › New › Login…: a command of its own because macOS context menus show placements by command id,
   // so one command in both menus would show twice on Security. The palette has New Login… for both.
   'explorer.newLoginOnSecurity': {
     title: 'Login…', category: 'Object Explorer', icon: 'login', palette: false,
-    precondition: "backendReady && explorerSelectionFolder == 'serverSecurity' && explorerSelectionServerEngine == 'box'",
-    unavailableHint: 'Select Security of a SQL Server in Object Explorer.',
-    menus: [{ menu: 'explorer.new', group: '1_security', order: 1, mnemonic: 'l', when: "explorerFolder == 'serverSecurity' && explorerServerEngine == 'box'" }]
+    precondition: "backendReady && explorerSelectionFolder == 'serverSecurity' && (explorerSelectionServerEngine == 'box' || explorerSelectionServerEngine == 'managedInstance')",
+    unavailableHint: 'Select Security of a SQL Server or Managed Instance in Object Explorer.',
+    menus: [{ menu: 'explorer.new', group: '1_security', order: 1, mnemonic: 'l', when: "explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' || explorerServerEngine == 'managedInstance')" }]
   },
   'explorer.stop': { title: 'Stop', category: 'Object Explorer', icon: 'debug-stop', keywords: ['cancel'], precondition: 'explorerLoading', unavailableHint: 'Nothing is loading.' },
   'explorer.collapseAll': { title: 'Collapse All', category: 'Object Explorer', icon: 'collapse-all', precondition: 'hasConnection', unavailableHint: noServer },

@@ -228,7 +228,8 @@ describe('Attach Databases dialog', () => {
       executeObjectAction: vi.fn<VariaApi['executeObjectAction']>(() => execute.promise),
       cancelObjectActions: vi.fn<VariaApi['cancelObjectActions']>(async ids => ({ ok: true, value: { cancelled: ids.length } })),
       writeClipboardText: vi.fn<VariaApi['writeClipboardText']>(),
-      confirmOpenConnections: vi.fn<VariaApi['confirmOpenConnections']>()
+      confirmOpenConnections: vi.fn<VariaApi['confirmOpenConnections']>(),
+      confirmAction: vi.fn<VariaApi['confirmAction']>()
     }
     const connections = new ConnectionService()
     connections.add({ ...connectionInfo('server-a'), login: 'sa' }, connectionOptions)

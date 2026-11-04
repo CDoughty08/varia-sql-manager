@@ -2,18 +2,29 @@
 // from, the action OK sends (and the Script button scripts), SSMS's confirmations before it, and what happens after OK
 // succeeds. ObjectDialogService runs the modal ones and ObjectDialog.tsx renders their pages (`dialogPages`);
 // DatabasePropertiesService runs Database Properties, a document (src/renderer/src/properties). It is the plug-in point
-// for later dialogs (Login Properties, Backup and Restore): a dialog id, its surface and pages in
+// for later dialogs (Backup and Restore): a dialog id, its surface and pages in
 // src/shared/actions/catalog.ts, a describe in the backend, a definition here, and its pages or sections. No React here,
 // so the services and their tests stay in Node.
-import { databaseStateOf, type DialogId } from '../../../shared/actions/catalog.ts'
-import { loginDeleteText, loginMessages, loginRefusal, mappedUserKept, unlockRefusal, type LoginFacts, type LoginLockFacts, type NewLoginModel, type UnlockMode } from '../../../shared/actions/logins.ts'
-import { detachDatabaseStepTitle, dropDatabaseStepTitle, dropUserStepTitle, type ActionDescribeResult, type ActionError, type ActionRequest, type ActionStep, type AttachRequest, type AttachServerFacts, type CreateLoginRequest, type DatabasePropertiesModel, type DatabaseStateModel, type DeleteTarget } from '../../../shared/actions/schema.ts'
+import { databaseStateOf, type DialogId, type ModalDialogId, type PageId } from '../../../shared/actions/catalog.ts'
+import {
+  loginDeleteText, loginMessages, loginPropertiesMessages, loginRefusal, mappedUserKept, unlockHandOffLabel, unlockRefusal, type LoginDatabaseRoles, type LoginFacts, type LoginLockFacts, type LoginMessageId, type NewLoginModel,
+  type UnlockChoice
+} from '../../../shared/actions/logins.ts'
+import { promptLimits, type ActionPromptRequest } from '../../../shared/actions/prompts.ts'
+import {
+  detachDatabaseStepTitle, dropDatabaseStepTitle, dropUserStepTitle, loginPasswordStepTitle, type ActionDescribeResult, type ActionError, type ActionRequest, type ActionStep, type AttachRequest, type AttachServerFacts,
+  type CreateLoginRequest, type DatabasePropertiesModel, type DatabaseStateModel, type DeleteTarget, type LoginPropertiesRequest
+} from '../../../shared/actions/schema.ts'
 import type { FolderId } from '../../../shared/explorer/catalog.ts'
 import { displayText, type ExplorerNodeRef, type ObjectRef } from '../../../shared/explorer/refs.ts'
 import type { LongRunKind } from '../../../shared/long-runs.ts'
+import { clipUnits } from '../actions/ObjectActionService'
 import type { ExplorerMenuNode } from '../menus/targets'
 import { attachBlocked, attachRequest, initialAttachDraft, type AttachDraft } from './attach-database'
 import { afterDatabaseFailure, databaseConfirm, databaseRequest, initialDatabaseDraft, type DatabaseDraft, type DatabaseRequest } from './database-properties'
+import {
+  initialLoginPropertiesDraft, loginPropertiesFocus, loginPropertiesModelOf, loginPropertiesReadAgain, loginPropertiesRequest, withDatabaseRoles, type LoginPropertiesDraft, type LoginPropertiesModel
+} from './login-properties'
 import { initialNewLoginDraft, newLoginRequest, newLoginTarget, type NewLoginDraft, type SecretState } from './new-login'
 
 /** A request without its ids. */
@@ -34,8 +45,14 @@ export interface DialogEffects {
   /** A toast with the object actions' notice key, which the next one replaces (Unlock Login's success). */
   notify(message: string): void
 }
-/** A question main asks before OK runs: SSMS's Open Connections prompt. */
-export type DialogConfirmation = 'openConnections'
+/** The dialog OK succeeded in. */
+export interface DialogSubject { readonly target: ObjectRef; readonly label: string }
+/** What the service knows besides the model: Varia's other connections that sign in as the login a login dialog is about (critic
+ *  D4-3), by their labels. */
+export interface DialogContext { readonly loginConnections?: readonly string[] }
+/** A question main asks before OK runs: SSMS's Open Connections prompt, or one of the action prompts (prompts.ts) with its facts, which
+ *  OK passes unless it is answered with the prompt's cancel answer. */
+export type DialogConfirmation = 'openConnections' | ActionPromptRequest
 export interface ObjectDialogDefinition<Model, Draft> {
   readonly dialog: DialogId
   /** The object a dialog that makes one names as its target (the server for New Login), or undefined where it does not open;
@@ -46,8 +63,20 @@ export interface ObjectDialogDefinition<Model, Draft> {
   readonly initialDraft: (model: Model, target: ObjectRef) => Draft
   /** `secrets` says what the password fields hold, never their values; the request never carries a secret (Script sends it). */
   readonly request: (target: ObjectRef, model: Model, draft: Draft, secrets?: SecretState) => DialogRequest
-  /** Whether OK attaches the secret slot's password to the request (New Login's SQL Server authentication). */
-  readonly secrets?: (draft: Draft) => boolean
+  /** Whether OK attaches the secret slot's password to `request`, the request it sends (New Login's SQL Server authentication, Login
+   *  Properties' new password). A dialog with it has password fields. */
+  readonly secrets?: (draft: Draft, request?: BuiltRequest) => boolean
+  /** Whether OK attaches the old password too (Login Properties' Specify old password). */
+  readonly oldPassword?: (request: BuiltRequest) => boolean
+  /** OK's label when it is not "OK" (Unlock's "Continue in Login Properties…"). */
+  readonly okLabel?: (draft: Draft) => string | undefined
+  /** OK hands over to another dialog on the same node instead of running anything (Unlock's Set a new password…): this one closes
+   *  and that one opens with `patch` over its first draft. */
+  readonly handOff?: (model: Model, draft: Draft) => { readonly dialog: ModalDialogId; readonly patch: Readonly<Record<string, unknown>> } | undefined
+  /** The login User Mapping's read of a database also reads the user of (Login Properties: its own login). */
+  readonly rolesLogin?: (target: ObjectRef) => string | undefined
+  /** User Mapping's read of a database arrived: the model and draft with what it found (Login Properties' mapped user and roles). */
+  readonly lookedUp?: (model: Model, draft: Draft, database: string, value: LoginDatabaseRoles) => { readonly model: Model; readonly draft: Draft }
   /**
    * Whether the action's reply says the database it ran on is gone (Delete: a success, or a reply whose DROP completed before a
    * later step failed or stopped; Detach: a success, or a reply whose sp_detach_db completed before a Stop answered), so its
@@ -59,20 +88,34 @@ export interface ObjectDialogDefinition<Model, Draft> {
   /** The name Script Action to File suggests, when the target has none. */
   readonly fileName?: (draft: Draft) => string
   /** A question to ask before OK sends `request` (never before Script). */
-  readonly confirm?: (model: Model, request: BuiltRequest) => DialogConfirmation | undefined
+  readonly confirm?: (model: Model, request: BuiltRequest, context: DialogContext) => DialogConfirmation | undefined
   /** The request once the user answered Yes. */
   readonly withConfirmation?: (request: BuiltRequest, confirmation: DialogConfirmation) => BuiltRequest
   /** The model after OK failed, when the failure shows part of it is stale (the same model otherwise). */
   readonly afterFailure?: (model: Model, failure: ActionError) => Model
   /** Why OK cannot run the draft as it is (OK is disabled and says so), or undefined. */
   readonly blocked?: (model: Model, draft: Draft) => string | undefined
-  readonly afterSuccess: (effects: DialogEffects, request: BuiltRequest) => void
+  /** After a success: `request` is what OK sent (never with a secret), `subject` the dialog's target and its label, `model` what the
+   *  dialog read. */
+  readonly afterSuccess: (effects: DialogEffects, request: BuiltRequest, subject: DialogSubject, model: Model, context: DialogContext) => void
+  /**
+   * After a failure or Stop whose completed steps used up the secret slot (Login Properties' password changed before a later step
+   * failed): the model and draft without it, and a note for the message bar. The service then clears the slot and the password fields,
+   * so a retry never sends the change again.
+   */
+  readonly spentSecrets?: (model: Model, draft: Draft, steps: readonly ActionStep[]) => { readonly model: Model; readonly draft: Draft; readonly note: string } | undefined
+  /** The databases a partial run's reload reads again for User Mapping (`lookedUp` takes each answer), from the model before it. */
+  readonly readAgain?: (model: Model, draft: Draft) => readonly string[]
+  /** The id of the field that takes focus once the dialog has read its object, when it is not the dialog itself. */
+  readonly initialFocus?: (model: Model, draft: Draft) => string | undefined
   /** After a failure or Stop that left some steps done; reloading the object's listing when absent. */
   readonly afterPartial?: (effects: DialogEffects, request: BuiltRequest) => void
   /** OK runs as soon as the describe answers, with nothing to choose (SSMS's Bring Online). */
   readonly runOnOpen?: true
   /** A success leaves the dialog open on its steps with Close, as SSMS's progress dialogs do, instead of closing it. */
   readonly keepOpen?: true
+  /** Pages the dialog leaves out of "Select a page" for this model (Login Properties' Securables for SQL Server's own logins). */
+  readonly hiddenPages?: (model: Model) => readonly PageId[]
   /** Folders other than the object's listing that a reply's done steps changed (the Users folders of the databases a login's Delete
    *  dropped users in), which the dialog reconciles where they are loaded, after a success or a partial failure. */
   readonly changedFolders?: (model: Model, steps: readonly ActionStep[]) => ChangedFolders | undefined
@@ -290,28 +333,98 @@ export const detachDatabaseDefinition: ObjectDialogDefinition<DatabaseStateModel
 
 /** Unlock Login (D4d): the login preflight's facts and its lock-out state, as the unlockLogin describe read them. */
 export interface UnlockModel { readonly login: LoginFacts; readonly lock: LoginLockFacts }
-/** How to unlock: none until the user chooses (owner decision 9: keeping the password, which clears its history, is never the
- *  default). Keeping it is the only way until Login Properties (D2c) adds Set a new password, which is then the default. */
-export interface UnlockDraft { readonly mode?: UnlockMode }
+/** How to unlock (owner decision 9): Set a new password… (SSMS's way, handed over to Login Properties, D2c) is the default; keeping
+ *  the password, which clears its history, is chosen only by the user. */
+export interface UnlockDraft { readonly mode?: UnlockChoice }
 export const unlockChooseMode = 'Choose how to unlock the login.'
 export const unlockSuccessNotice = (label: string) => `Unlocked the login ${label}. Its password history was cleared.`
-/** Why Unlock's OK cannot run: the login's own refusal (the page shows it as a warning), else no choice made yet. */
+/** Why a choice cannot unlock this login, or undefined: the login's rules for Unlock, then for a new password a login that is never
+ *  locked out or is not now (it unlocks a login that must change its password too), and for keeping it unlockRefusal's rules. */
+export function unlockChoiceRefusal(model: UnlockModel, choice: UnlockChoice): LoginMessageId | undefined {
+  if (choice === 'keepPassword') return unlockRefusal(model.login, model.lock)
+  return loginRefusal(model.login, 'unlock') ?? (model.login.type !== 'S' || model.login.policyChecked !== true ? 'unlockNoPolicy' : !model.lock.locked ? 'notLocked' : undefined)
+}
+/** Why Unlock's OK cannot run: the chosen way's refusal (the page shows the login's own as a warning), else no choice made yet. */
 export const unlockBlocked = (model: UnlockModel, draft: UnlockDraft): string | undefined => {
-  const id = unlockRefusal(model.login, model.lock)
+  const id = unlockChoiceRefusal(model, draft.mode ?? 'keepPassword')
   return id ? loginMessages[id] : draft.mode ? undefined : unlockChooseMode
 }
 export const unlockLoginDefinition: ObjectDialogDefinition<UnlockModel, UnlockDraft> = {
   dialog: 'unlockLogin',
   modelOf: result => result.login && result.lock ? { login: result.login, lock: result.lock } : undefined,
-  initialDraft: () => ({}),
+  // A new password unlocks every login keeping the password can, and more (one that must change it), so it is always the default.
+  initialDraft: () => ({ mode: 'setPassword' }),
   // The identity binds OK to the login this dialog read: one renamed, dropped or replaced since is refused, not unlocked.
-  // OK waits for a choice (blocked); Script, which runs nothing, shows the only way there is before one.
-  request: (target, model, draft) => ({ action: 'unlock', target, mode: draft.mode ?? 'keepPassword', ...(model.login.sid && model.login.created ? { loginIdentity: { sid: model.login.sid, created: model.login.created } } : {}) }),
+  // Set a new password… sends nothing here (Login Properties does), so Script has nothing to script for it.
+  request: (target, model, draft) => draft.mode === 'setPassword' ? undefined
+    : { action: 'unlock', target, mode: 'keepPassword', ...(model.login.sid && model.login.created ? { loginIdentity: { sid: model.login.sid, created: model.login.created } } : {}) },
   blocked: unlockBlocked,
+  okLabel: draft => draft.mode === 'setPassword' ? unlockHandOffLabel : undefined,
+  // Login Properties opens on General with Login is locked out cleared, so a new password is all it asks for.
+  handOff: (_model, draft) => draft.mode === 'setPassword' ? { dialog: 'loginProperties', patch: { locked: false } } : undefined,
   // Unlocked meanwhile (by its owner's new password, or another admin): the page says so and OK greys, as on a fresh open.
   afterFailure: (model, failure) => failure.code === 'NOT_SUPPORTED' && failure.message === loginMessages.notLocked ? { ...model, lock: { ...model.lock, locked: false } } : model,
   // The Logins folder's row and its status come from the reconciled listing.
   afterSuccess: (effects, request) => { effects.refreshListing(); effects.notify(unlockSuccessNotice(request.target.name ?? '')) }
+}
+/** Login Properties (D2c): what differs from its describe; a new password goes only with OK, the old one with it when Specify old
+ *  password is checked. Success and a partial failure reload Logins (the row's status and detail) and each changed database's Users. */
+const loginChangesOf = (request: BuiltRequest) => request.action === 'loginProperties' ? (request as Partial<Pick<LoginPropertiesRequest, 'loginChanges'>>).loginChanges : undefined
+const refreshLogin = (effects: DialogEffects, request: BuiltRequest) => {
+  effects.refreshListing()
+  for (const mapping of loginChangesOf(request)?.mappings ?? []) effects.reload({ kind: 'database', name: mapping.database }, 'users')
+}
+/**
+ * Status' Disabled or Deny (D2c) asks as the Disable verb does (owner decisions 4 and 7) when someone would be locked out: sessions
+ * connected as the login, a service that runs as it, or Varia's other connections that sign in as it. SSMS asks nothing; with none of
+ * those, neither does Varia.
+ */
+export function loginStatusConfirm(model: LoginPropertiesModel, request: BuiltRequest, context: DialogContext): DialogConfirmation | undefined {
+  const changes = loginChangesOf(request), name = (request as { readonly target?: ObjectRef }).target?.name
+  if (!changes || name === undefined || (changes.enabled !== false && changes.connect !== 'deny')) return undefined
+  const { login } = model, connections = context.loginConnections ?? [], sessions = login.sessions ?? 0
+  if (!login.service && !connections.length && sessions <= 0) return undefined
+  return { prompt: 'disableLogin', facts: {
+    login: name, sysadmin: login.sysadmin, ...sessions > 0 ? { sessions: Math.min(sessions, promptLimits.count) } : {}, ...login.service ? { service: clipUnits(login.service, promptLimits.service) } : {},
+    ...connections.length ? { connections: [...connections] } : {}, ...changes.enabled === false ? {} : { deny: true as const }
+  } }
+}
+/** After OK changed the password of a login Varia's connections sign in as (this one, or others): they keep working with the new one
+ *  (the backend gave it to them), and a password Varia remembers for them is out of date. */
+const passwordNotice = (effects: DialogEffects, request: BuiltRequest, subject: DialogSubject, model: LoginPropertiesModel, context: DialogContext) => {
+  refreshLogin(effects, request)
+  if (loginChangesOf(request)?.password && (model.login.own || (context.loginConnections?.length ?? 0) > 0)) effects.notify(loginPropertiesMessages.connectionsPassword(subject.label))
+}
+export const loginPropertiesDefinition: ObjectDialogDefinition<LoginPropertiesModel, LoginPropertiesDraft> = {
+  dialog: 'loginProperties',
+  modelOf: loginPropertiesModelOf,
+  initialDraft: initialLoginPropertiesDraft,
+  request: loginPropertiesRequest,
+  secrets: (_draft, request) => !!(request && loginChangesOf(request)?.password),
+  oldPassword: request => !!loginChangesOf(request)?.password?.oldPassword,
+  longRun: 'loginProperties',
+  fileName: draft => (draft.name || 'Login') + '.sql',
+  // SQL Server's own logins open, as in SSMS, but never change; every page says why.
+  blocked: model => model.login.subtype === 'system' ? loginMessages.system : undefined,
+  // SSMS sets a system login's SecurablePermissions to null, which hides the page; the describe reads none for it either.
+  hiddenPages: model => model.login.subtype === 'system' ? ['securables'] : [],
+  confirm: loginStatusConfirm,
+  rolesLogin: target => target.name,
+  lookedUp: withDatabaseRoles,
+  afterSuccess: passwordNotice,
+  afterPartial: refreshLogin,
+  // Steps that completed before a failure changed the login: the pages show it as it is now, and User Mapping reads its databases again.
+  reloadsAfterPartial: () => true,
+  readAgain: loginPropertiesReadAgain,
+  // The password changed before a later step failed: a retry must not send it again (with the old password, now wrong, it fails 15151).
+  spentSecrets: (model, draft, steps) => steps.some(step => step.title === loginPasswordStepTitle && step.status === 'done')
+    ? {
+      model: model.lock?.locked ? { ...model, lock: { ...model.lock, locked: false } } : model,
+      draft: { ...draft, specifyOld: model.login.own && !model.login.canAlter, locked: false },
+      note: loginPropertiesMessages.passwordApplied
+    }
+    : undefined,
+  initialFocus: loginPropertiesFocus
 }
 
 /** The dialogs this module defines: New Database is a document with a service of its own (src/renderer/src/new-database). */
@@ -319,10 +432,12 @@ export type DefinedDialogId = Exclude<DialogId, 'newDatabase'>
 export interface DialogModels {
   readonly deleteObject: DeleteTarget; readonly databaseProperties: DatabasePropertiesModel; readonly attachDatabase: AttachServerFacts; readonly newLogin: NewLoginModel
   readonly takeOffline: DatabaseStateModel; readonly bringOnline: DatabaseStateModel; readonly detachDatabase: DatabaseStateModel; readonly unlockLogin: UnlockModel
+  readonly loginProperties: LoginPropertiesModel
 }
 export interface DialogDrafts {
   readonly deleteObject: DeleteDraft; readonly databaseProperties: DatabaseDraft; readonly attachDatabase: AttachDraft; readonly newLogin: NewLoginDraft
   readonly takeOffline: TakeOfflineDraft; readonly bringOnline: BringOnlineDraft; readonly detachDatabase: DetachDraft; readonly unlockLogin: UnlockDraft
+  readonly loginProperties: LoginPropertiesDraft
 }
 export type DialogModel = DialogModels[DefinedDialogId]
 export type DialogDraft = DialogDrafts[DefinedDialogId]
@@ -334,7 +449,8 @@ export const dialogDefinitions: { readonly [D in DefinedDialogId]: ObjectDialogD
   takeOffline: takeOfflineDefinition,
   bringOnline: bringOnlineDefinition,
   detachDatabase: detachDatabaseDefinition,
-  unlockLogin: unlockLoginDefinition
+  unlockLogin: unlockLoginDefinition,
+  loginProperties: loginPropertiesDefinition
 }
 /** A dialog's definition over the open dialog's model and draft, which the service keeps paired with its dialog. */
 export const definitionOf = (dialog: DefinedDialogId) => dialogDefinitions[dialog] as unknown as ObjectDialogDefinition<DialogModel, DialogDraft>

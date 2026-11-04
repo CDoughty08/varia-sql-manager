@@ -34,7 +34,7 @@ they have their own commands and no context key:
 
 | Action | Title | Dialog | Servers |
 | --- | --- | --- | --- |
-| `createLogin` | New Login | `newLogin` | SQL Server |
+| `createLogin` | New Login | `newLogin` | SQL Server, Managed Instance |
 
 Keys work while Object Explorer has focus and no text field does. Delete's access key is E: Disconnect has SSMS's D in
 Varia's one Object Explorer menu.
@@ -50,12 +50,12 @@ is reserved on Windows and Linux.
 | Kind | Subtypes | Select Top 1000 Rows | Rename | Delete | Properties | Take Database Offline | Bring Database Online | Detach Database… | Disable Login | Enable Login | Unlock Login… |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `login` | none | – | – | – | – | – | – | – | – | – | – |
-| `login` | `sa` | – | ✓ | ○ | – | – | – | – | ✓ | – | ✓ |
-| `login` | `system` | – | ○ | ○ | – | – | – | – | ○ | – | ○ |
-| `login` | `sql` | – | ✓ | ✓ | – | – | – | – | ✓ | – | ✓ |
-| `login` | `windowsUser`, `certificateMapped`, `asymmetricKeyMapped` | – | ✓ | ✓ | – | – | – | – | ✓ | – | – |
-| `login` | `windowsGroup` | – | ✓ | ✓ | – | – | – | – | ○ | – | – |
-| `login` | `externalUser`, `externalGroup` | – | ○ | ✓ | – | – | – | – | ✓ | – | – |
+| `login` | `sa` | – | ✓ | ○ | ✓ | – | – | – | ✓ | – | ✓ |
+| `login` | `system` | – | ○ | ○ | ✓ | – | – | – | ○ | – | ○ |
+| `login` | `sql` | – | ✓ | ✓ | ✓ | – | – | – | ✓ | – | ✓ |
+| `login` | `windowsUser`, `certificateMapped`, `asymmetricKeyMapped` | – | ✓ | ✓ | ✓ | – | – | – | ✓ | – | – |
+| `login` | `windowsGroup` | – | ✓ | ✓ | ✓ | – | – | – | ○ | – | – |
+| `login` | `externalUser`, `externalGroup` | – | ○ | ✓ | ✓ | – | – | – | ✓ | – | – |
 | `database` | none | – | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | – | – | – |
 | `database` | `system` | – | ○ | ○ | ✓ | ○ | ○ | ○ | – | – | – |
 | `database` | `snapshot` | – | ○ | ✓ | ✓ | – | – | – | – | – | – |
@@ -120,11 +120,12 @@ the Servers column above says which, and on another server the menu hides the it
 | `databaseProperties` | Database Properties - <name> | Document tab | `properties` | General (`settings-gear`), Files (`settings-gear`), Filegroups (`settings-gear`), Options (`settings-gear`) | No |
 | `newDatabase` | New Database | Document tab | `createDatabase` | General (`settings-gear`), Options (`settings-gear`), Filegroups (`settings-gear`) | No |
 | `attachDatabase` | Attach Databases | Modal dialog | `attach` | General (`settings-gear`) | No |
-| `newLogin` | Login - New | Modal dialog | `createLogin` | General (`settings-gear`, kept mounted), Server Roles (`settings-gear`), User Mapping (`settings-gear`, kept mounted), Status (`settings-gear`) | Yes |
+| `newLogin` | Login - New | Modal dialog | `createLogin` | General (`settings-gear`, kept mounted), Server Roles (`settings-gear`), User Mapping (`settings-gear`, kept mounted), Securables (`settings-gear`, kept mounted), Status (`settings-gear`) | Yes |
 | `takeOffline` | Take Database Offline - <name> | Modal dialog | `takeOffline` | General (`settings-gear`) | Yes |
 | `bringOnline` | Bring Database Online - <name> | Modal dialog | `bringOnline` | General (`settings-gear`) | Yes |
 | `detachDatabase` | Detach Database - <name> | Modal dialog | `detach` | General (`settings-gear`) | Yes |
 | `unlockLogin` | Unlock Login - <name> | Modal dialog | `unlock` | General (`settings-gear`) | Yes |
+| `loginProperties` | Login Properties - <name> | Modal dialog | `loginProperties` | General (`settings-gear`, kept mounted), Server Roles (`settings-gear`), User Mapping (`settings-gear`, kept mounted), Securables (`settings-gear`, kept mounted), Status (`settings-gear`) | Yes |
 
 A modal dialog is for a confirmation (Delete Object). A property sheet opens as a document tab instead (U1 D2): its
 pages are sections in one scrolling column with a section list beside it, and a Script drawer under it.
@@ -349,6 +350,7 @@ last resort.
 | `restore` | A restore |
 | `verify` | A backup verification |
 | `newLogin` | New Login |
+| `loginProperties` | Login Properties |
 | `backup` | A backup |
 | `shrink` | A shrink |
 
@@ -890,6 +892,7 @@ names by a live dry run:
 | Deny or Grant permission to connect | `DENY CONNECT SQL TO [login]`, `GRANT CONNECT SQL TO [login]` |
 | Drop the database user | `DROP USER [user]`, in its database |
 | Add to a server role (New Login) | `ALTER SERVER ROLE [role] ADD MEMBER [login]` |
+| Map a credential, Remove a credential (D2e) | `ALTER LOGIN [login] ADD CREDENTIAL [credential]`, `ALTER LOGIN [login] DROP CREDENTIAL [credential]` |
 | Create a user (User Mapping) | `CREATE USER [user] FOR LOGIN [login]`, in its database |
 | Set the default schema (User Mapping) | `ALTER USER [user] WITH DEFAULT_SCHEMA=[schema]`, in its database |
 | Create a schema (User Mapping) | `CREATE SCHEMA [schema] AUTHORIZATION [user]`, in its database, in a batch of its own |
@@ -901,8 +904,7 @@ Object Explorer gives each login a subtype from `sys.server_principals`: `sa` by
 for SQL Server's own logins (a name that starts and ends with `##`), else by type: `S` `sql`, `U` `windowsUser`, `G` `windowsGroup`, `C` `certificateMapped`, `K` `asymmetricKeyMapped`, `E` `externalUser`, `X` `externalGroup`.
 The backend's login preflight reads the facts an action needs in the action's own connection from catalog views only:
 never a password hash, which no Varia statement may name, and `LOGINPROPERTY`, which waits on a login another session
-is changing whatever the isolation level, only in Unlock's lock-out read below. Properties arrives in a later
-version; its rules are data already.
+is changing whatever the isolation level, only in the lock-out read of Unlock and Login Properties below.
 
 ### Disable, Enable and Rename
 
@@ -989,12 +991,13 @@ Server's own logins) is its hint in the command palette.
 ### Unlock
 
 SSMS unlocks a SQL Server login only on Login Properties › Status, and only with a new password. Varia adds Unlock… to a
-SQL Server login's menu (after Disable or Enable, access key U), a modal that keeps the current password, as Microsoft
-documents: it turns the password policy off, which unlocks the login, and back on, with password expiration when the login
-had it, in one transaction, so a failure or Stop rolls both back. This clears the login's password history, which the
-dialog says, and nothing is chosen when it opens: OK (and Enter) waits until Keep the current password is, so clearing the
-history is never the default. Setting a new password instead, SSMS's way and then the dialog's default, arrives with
-Login Properties.
+SQL Server login's menu (after Disable or Enable, access key U), a modal with two choices (owner decision 9).
+"Set a new password…", SSMS's way, is the default: OK, named "Continue in Login Properties…", closes the dialog and opens
+Login Properties on the same login with Login is locked out cleared, where a new password unlocks it (`UNLOCK`). It sends
+nothing itself, so its Script says "There is no action to be scripted." It also unlocks a login that must change its password.
+"Keep the current password" keeps the current password, as Microsoft documents: it turns the password policy off, which
+unlocks the login, and back on, with password expiration when the login had it, in one transaction, so a failure or Stop rolls
+both back. This clears the login's password history, which the dialog says; only the user chooses it.
 
 Only `LOGINPROPERTY` knows whether a login is locked out, so the listing offers Unlock… on every SQL Server login and the
 dialog says. Its describe (`unlockLogin`) and its preflight read the login's facts and then its lock-out state with
@@ -1028,7 +1031,7 @@ Its password history was cleared."
 | `system` | ○ | ○ | ○ | ○ | ○ | This login belongs to SQL Server and cannot be changed. |
 | `sql` | ✓ | ✓ | ✓ | ✓ | ✓ |  |
 | `windowsUser` | ✓ | ✓ | – | ✓ | ✓ |  |
-| `windowsGroup` | ○ | – | – | ✓ | ✓ | A Windows group cannot be disabled. Deny it permission to connect (DENY CONNECT SQL) instead. |
+| `windowsGroup` | ○ | – | – | ✓ | ✓ | A Windows group cannot be disabled. Deny it permission to connect on Login Properties › Status instead. |
 | `certificateMapped` | ✓ | ✓ | – | ✓ | ✓ |  |
 | `asymmetricKeyMapped` | ✓ | ✓ | – | ✓ | ✓ |  |
 | `externalUser` | ✓ | ✓ | – | ○ | ✓ | A Microsoft Entra login cannot be renamed. |
@@ -1048,10 +1051,14 @@ Without ALTER ANY LOGIN: "You do not have permission to change logins (ALTER ANY
 | `roles` | 256 | Database roles listed and chosen per database |
 | `schemas` | 1,024 | Schemas listed per database |
 | `mappings` | 256 | Database user mappings per request |
-| `credentials` | 16 | Credentials mapped per request |
+| `credentials` | 16 | Credentials mapped, or added and removed, per request |
+| `listedCredentials` | 1,024 | Credentials Map to Credential lists, and the Mapped Credentials Login Properties reads for a login |
 | `certificates` | 1,024 | Certificates listed |
 | `asymmetricKeys` | 1,024 | Asymmetric keys listed |
 | `permissions` | 512 | Server permissions per request |
+| `securableObjects` | 1,024 | Objects Add Objects lists per securable type |
+| `explicitPermissions` | 1,024 | Explicit server permissions Login Properties reads |
+| `effectivePermissions` | 256 | Effective permissions the Effective tab lists |
 | `sidHex` | 172 | Characters of a SID as hexadecimal text |
 | `stepTitle` | 64 | Characters in a step's title |
 | `stepDetail` | 128 | Characters in a step's detail |
@@ -1065,8 +1072,8 @@ Without ALTER ANY LOGIN: "You do not have permission to change logins (ALTER ANY
 ### New Login
 
 Security › New › Login…, and New Login… on the Logins folder and on a login, open "Login - New", a modal dialog with the pages
-General, Server Roles, User Mapping, Status (Securables follows once its OK works). Its action is `createLogin`, on
-SQL Server (Managed Instance follows); its target is the server.
+General, Server Roles, User Mapping, Securables, Status (Securables: see [Securables](#securables)). Its action is `createLogin`, on
+SQL Server, Managed Instance; its target is the server.
 
 - **General**: Login name; Windows authentication (DOMAIN\name) or SQL Server authentication (the default when the server
   runs on Linux) with Password, Confirm password, Specify old password (greyed: Login Properties only), Enforce password
@@ -1074,6 +1081,7 @@ SQL Server (Managed Instance follows); its target is the server.
   is checked (SQL Server refuses MUST_CHANGE without CHECK_EXPIRATION, 15099, and CHECK_EXPIRATION without CHECK_POLICY,
   15122); Default database and Default language (`<default>`: no DEFAULT_LANGUAGE clause). A note says when the server
   takes Windows authentication only, and when this login may lack ALTER ANY LOGIN. A blank password needs the password policy on.
+  D2e adds the other kinds and Map to Credential, below.
 - **Server Roles**: every server role, public checked and greyed (every login is a member).
 - **User Mapping**: the grid "Users mapped to this login:" (Map, Database, User, Default Schema), one row per database New Login
   listed, virtualized; a database that is not online, not open to this login, or read-only (set READ_ONLY, a log-shipping
@@ -1089,6 +1097,54 @@ SQL Server (Managed Instance follows); its target is the server.
   running); at most 256 roles and 1,024 schemas are listed, and 256 databases mapped.
 - **Status**: Permission to connect to database engine (Grant, Deny) and Login (Enabled, Disabled).
 
+#### Other kinds, Map to Credential and Check Names (D2e)
+
+General lists the kinds the server offers (`newLoginAuthEngines` in logins.ts, which the backend reads from actions-catalog.json):
+
+| Kind (radio) | CREATE LOGIN | Offered on |
+| --- | --- | --- |
+| Windows authentication | `FROM WINDOWS WITH DEFAULT_DATABASE=…` | SQL Server |
+| SQL Server authentication | `WITH PASSWORD=…, DEFAULT_DATABASE=…` (the policy options on SQL Server) | SQL Server, Managed Instance |
+| Microsoft Entra authentication | `FROM EXTERNAL PROVIDER WITH DEFAULT_DATABASE=…` | SQL Server (SQL Server 2022 and later, band 16), Managed Instance |
+| Mapped to certificate | `FROM CERTIFICATE [certificate]` | SQL Server |
+| Mapped to asymmetric key | `FROM ASYMMETRIC KEY [key]` | SQL Server |
+
+- **Microsoft Entra authentication** (`FROM EXTERNAL PROVIDER`, with Default database and Default language) names the user, group or
+  application as Microsoft Entra ID does. On SQL Server it needs Azure Arc and Microsoft Entra set up first ("SQL Server creates Microsoft Entra logins once Azure Arc and Microsoft Entra authentication are set up on it; otherwise OK fails."):
+  without them SQL Server answers 37525 (`NOT_SUPPORTED`, probed on SQL Server 2025), which a live check confirms creates nothing.
+  The SSMS 22 label of this radio is unverified.
+- **Mapped to certificate** and **Mapped to asymmetric key** choose one of master's certificates or asymmetric keys (Certificate
+  name, Asymmetric key name; at most 1,024 each, SQL Server's own `##MS_…##` ones included, as SSMS lists them).
+  Neither list chooses one until the user does: by name, master lists SQL Server's own signing certificates first, which no login
+  should take by default, so OK waits for the choice ("Choose a certificate from the list."). A certificate or key that is gone when OK
+  runs fails CREATE LOGIN with 15151, which is `NOT_FOUND` with SQL Server's text and "Check that the certificate still exists in
+  master." (or the asymmetric key); nothing is created.
+  Such a login has no Default database or Default language (SMO writes neither, and `FROM CERTIFICATE … WITH DEFAULT_DATABASE` is a
+  syntax error, 102), so both are greyed, and it cannot connect ("A login mapped to a certificate or an asymmetric key cannot connect to SQL Server: it is used for code signing."). Its users have no default schema
+  (SQL Server answers 15259, probed), so User Mapping keeps Default Schema blank and closed ("A user mapped to a certificate or an asymmetric key has no default schema.").
+- **Map to Credential**: the box enables the server's credentials (`sys.credentials`, at most 1,024) and **Add**, which appends the one chosen
+  to **Mapped Credentials** (Credential, Provider: the EKM provider of a credential that has one); **Remove** takes the selected row
+  out (the grid is one tab stop: arrows select, Delete removes). At most 16 credentials are mapped at once. OK maps each with
+  `ALTER LOGIN … ADD CREDENTIAL` after Deny and Disable and before the server roles, in the grid's order; a credential that fails
+  leaves the login created, and the message says "Not every credential was mapped.". A credential that is gone (15151, "does not exist or
+  you do not have permission") is `NOT_FOUND` with "Check that the credential still exists. Mapping or removing a credential also
+  needs ALTER ANY CREDENTIAL.", in New Login and Login Properties alike. Map to Credential is greyed for Microsoft Entra logins
+  ("A Microsoft Entra login cannot be mapped to a credential here."): Managed Instance's ALTER LOGIN for them takes no credential, and SQL Server's is unverified.
+- **Managed Instance**: New Login opens on SQL Server authentication, offers SQL Server and Microsoft Entra logins only, and hides
+  the password policy options, which its CREATE LOGIN does not take ("Azure SQL Managed Instance takes no password policy options when it creates a login. Set them in Login Properties afterwards."); a blank password
+  there is refused with "Enter a password.", which names no option the page lacks. The backend refuses
+  the other kinds, and the policy options, there before it connects (`NOT_SUPPORTED`), and on SQL Server it refuses a SQL Server login
+  without them.
+- **Search…** (Windows authentication) opens "Select User or Group": "Enter the object name to select" and **Check Names**, which asks the server
+  (`actions.describe` with dialog `windowsPrincipal` and the target `{ kind: 'login', name }`, on the describe's read connection:
+  `EXEC master.sys.xp_logininfo @acctname = @name;`). It answers whether the server found the account, user or group, and the group
+  its access comes through. The name stays as typed: xp_logininfo echoes @acctname (probed), and CREATE LOGIN stores the text typed.
+  A missing account (15404 with Windows' 0x534) is `NOT_FOUND` ("The server could not find this Windows account. Check the name, typed as DOMAIN\name."); any other 15404 (0x54b when the
+  account's domain cannot be reached, probed for an account that has a login) is `SQL_ERROR` ("The server could not look up this Windows account, as when its domain cannot be reached. Check the name, typed as DOMAIN\name; the server checks it again when you press OK."); a
+  login that may not run xp_logininfo gets "Check Names needs permission to run xp_logininfo. Type the name as DOMAIN\name; the server checks it when you press OK." (229, `PERMISSION_DENIED`). OK puts the name into Login name. SSMS opens
+  Windows' own Object Picker, which a sandboxed renderer cannot reach and macOS and Linux lack: Check Names works the same on every
+  client and resolves the name as `CREATE LOGIN … FROM WINDOWS` will. It is not offered on Managed Instance.
+
 The password fields are masked, never reach the dialog's snapshot, React state that is saved, AutoRecover, a toast or a log, and
 are cleared when the dialog closes, the server disconnects or OK succeeds. The password travels only in `actions.execute`, which is
 sensitive as a whole (its frames are zeroed on both sides once used); `actions.script` refuses one in main and in the backend.
@@ -1102,8 +1158,11 @@ Varia's own sentences never hold it.
 
 Script Action never carries or writes the password: a SQL Server login's script is one batch in one `SET XACT_ABORT ON` transaction
 under the comment "/* Varia leaves passwords out of scripts. Replace <password> with the login's password, as an N'…' literal, before you run this script. */", with `PASSWORD=<password>` unquoted, so an unedited script fails to parse and runs
-nothing (no later statement can give a role to an existing login of that name). A Windows login's script is SSMS's, one statement
-per batch. Each mapped database's statements run there through `EXEC [database].sys.sp_executesql N'…'` inside that transaction
+nothing (no later statement can give a role to an existing login of that name). A certificate, asymmetric key or Microsoft Entra
+login's script with statements after CREATE LOGIN is the same one-batch transaction without the header: its CREATE fails where
+master lacks that certificate or key or the server lacks Microsoft Entra, and nothing after it may then deny, disable, map a
+credential, give a role or map a user to an existing login of that name (a live check runs such a script against one). A Windows
+login's script, and CREATE LOGIN alone, is SSMS's, one statement per batch. Each mapped database's statements run there through `EXEC [database].sys.sp_executesql N'…'` inside that transaction
 (a Windows login's script uses `USE [database]` and `GO` as SSMS does); Script reads the server only when a Default Schema is
 chosen, to learn whether the database has it (SSMS's CREATE SCHEMA), and never refuses a name.
 
@@ -1111,7 +1170,7 @@ OK runs SSMS's statements in SSMS's order, one by one: `CREATE LOGIN`, `DENY CON
 (Disabled), then `ALTER SERVER ROLE … ADD MEMBER` per role by name, then per mapped database by name, in it: `CREATE USER … FOR
 LOGIN`, `ALTER USER … WITH DEFAULT_SCHEMA=` when one is chosen, `CREATE SCHEMA … AUTHORIZATION` the user when the database
 lacks it, and `ALTER ROLE … ADD MEMBER` per role by name (at most 512 statements in all, or OK and Script refuse:
-"This login would need more than 512 statements. Map fewer databases, or apply the rest afterwards."). They do not share a transaction (critic A24, owner decision
+"This login would need more than 512 statements. Map fewer databases or change fewer permissions, or apply the rest afterwards."). They do not share a transaction (critic A24, owner decision
 6): on SQL Server 2025 an open transaction holding `CREATE LOGIN` keeps out every SQL Server login whose security token is not
 cached (one that has not signed in since the server started) until it ends, and one holding a server role membership change
 keeps out every SQL Server login, so one statement waiting for a lock would lock users out. A live check signs in four such
@@ -1131,18 +1190,171 @@ Windows login whose SID already has a user under another name in the database (a
 server in the domain), which fails it with 15063; resolving a Windows SID before the login exists would mean asking the domain
 from the preflight. The server's password policy answers `PASSWORD_POLICY` (15114 to 15118, and 33062 to 33064 from the
 policy SQL Server on Linux applies), which keeps the dialog open with its password; 15025 and 15023 are `NAME_IN_USE`, 15010, 15033 and 15401 `NOT_FOUND`, and 15099,
-15122, 15006, 15407 and 37525 `NOT_SUPPORTED`. After OK the server's Logins folder, once Object Explorer has listed it, reloads and selects the new login,
+15122, 15006, 15407, 15259 and 37525 `NOT_SUPPORTED`; a certificate, key or credential that does not exist (15151) is `NOT_FOUND`, as above. After OK the server's Logins folder, once Object Explorer has listed it, reloads and selects the new login,
 and each mapped database's Users folder that Object Explorer has listed reloads (after a partial run too).
 
 Whether a server-side trace or Extended Events session can read the password from the RPC (critic A16) is checked by an opt-in live
 check (`VARIA_TEST_SQL_XE=1`, set only for CI's disposable SQL Server container; it first checks, read-only, that every event,
 field, action and predicate it uses exists on the server): it records `rpc_starting`, `rpc_completed`,
 `sql_batch_starting`, `sql_batch_completed` and the statement-level events (statements, batch text, data streams and output
-parameters) in a scratch session while New Login creates a login and Create Catalog's master key batch runs, and fails if either
-password appears in any field, as text, doubled quotes, XML-escaped or UTF-16 bytes. Each half counts only once the session has
-recorded that half's own RPC (its constant batch text, or SQL Server's notice that it hid the statement), polled for on the
+parameters) in a scratch session while New Login creates a login, Create Catalog's master key batch runs and Login Properties
+changes a scratch login's password with Specify old password (`@password` and `@old_password`), and fails if any of their
+passwords appears in any field, as text, doubled quotes, XML-escaped or UTF-16 bytes. Each run counts only once the session has
+recorded that run's own RPC (its constant batch text, or SQL Server's notice that it hid the statement), polled for on the
 ring buffer rather than awaited for a fixed time. Developers' servers never run it (owner decision 14). It has not run yet:
 D2a does not merge until it has run once on a disposable server and its result is recorded here (critic A16).
+
+### Login Properties
+
+Properties on any login (SQL Server's own and sa included, as in SSMS) opens "Login Properties - <name>", a modal dialog with New Login's pages
+General, Server Roles, User Mapping, Securables, Status on the existing login. Its action is `loginProperties` (a kind action of logins), on
+SQL Server, Managed Instance (its ALTER LOGIN on Managed Instance is unverified). SQL Server's own logins open but OK
+is greyed: "This login belongs to SQL Server and cannot be changed."
+
+Its describe (`actions.describe` with dialog `loginProperties`) reads, in master on the describe's connection: the login's facts
+(as Disable reads them), its default database and language and the server roles it is a member of, a SQL Server login's
+lock-out state through `ActionSql.LoginLock` (as Unlock reads it), New Login's lists, and the users mapped to its SID through
+Delete's per-database scan (at most 4,096 databases within 20 s). A database the scan did not read shows "Not read" in
+User and cannot be mapped until it is selected ("This database was not read yet. Select it to read its user and roles."): selecting a database reads it with the
+login (`loginDatabaseRoles` with `login`), answering the user mapped to it there and that user's database roles.
+A database not read yet is muted in the grid, and its cell says why through `aria-describedby`. SQL Server's own logins say on
+every page why they never change, and every page's controls are greyed.
+
+- **General**: Login name and its authentication read-only; Password and Confirm password blank ("Leave blank to keep the current password."
+  SSMS fills them with a fake value); Specify old password and Old password (checked already when the login is this connection's
+  and the connection cannot alter any login, since SQL Server then asks for it, unless the login is locked out, where SQL Server
+  refuses the old password: "The login is locked out, and SQL Server refuses its old password then. Clear Specify old password: a new password unlocks it."); the policy options; User must change password
+  at next login only once a new password is typed, and never for the login this connection uses, whose new sessions SQL Server
+  would then refuse ("This is the login this connection uses. Requiring a new password at its next sign-in would refuse this connection's new sessions. Connect with another login to require it."); Default database and Default language (no `<default>`: SMO's ALTER for it
+  is unverified). Login name reads as text in a frame; the five kinds show read-only with the login's checked (D2e), a certificate
+  or key login's certificate or key in its list, and a note names a Windows group or a Microsoft Entra group, which the radios do
+  not. Map to Credential and Mapped Credentials (D2e) list the credentials mapped to the login (`sys.server_principal_credentials`) and
+  change them: OK removes, then maps, after Connect and Enabled and before the server roles (`credentialsDrop`, `credentialsAdd`),
+  greyed for a Microsoft Entra login. A certificate or key login's users never get a default schema ("A user mapped to a certificate or an asymmetric key has no default schema.").
+- **Server Roles**: the login's memberships checked; public checked and greyed.
+- **User Mapping**: New Login's grid with the mapped users filled in. Unchecking Map unmaps (DROP USER; Script and the steps
+  warn "Drops the user [user] in [database]."), a new user name renames, and the database owner's dbo cannot change
+  ("The login owns this database, so its user is dbo, which cannot be unmapped or renamed here.").
+- **Status**: Permission to connect to database engine, Login (Enabled, Disabled) and "Login is locked out", checked while the
+  login is locked out and enabled then to clear it, which needs a new password ("Type a new password to unlock the login."), or to
+  check it again. Deny and Disabled are greyed for the login this connection uses, and Disabled for a Windows group, with the
+  reason beside them. Opened from Unlock's hand-off (Login is locked out cleared), the dialog puts focus in Password, whose
+  first note then says a new password unlocks the login.
+
+Disabled or Deny asks first, with the Disable verb's message box (owner decisions 4 and 7; its button reads Deny for Deny), when
+someone would be locked out: sessions connected as the login, a service that runs as it, or Varia's other connections that sign
+in as it. With none of those it asks nothing, as SSMS. Cancel sends nothing.
+
+OK and Script send only what differs from the describe, bound to the login it read (its SID and creation time; a login
+recreated since is `NOT_FOUND`). Each statement OK runs is bound too: in a transaction of its own, a check that the login (by
+name, SID, principal_id and create_date) or the user (by name and the login's SID, in its database) is still the one the
+preflight read, the statement, then the check again (`ActionSql.LoginBinding`, `UserBindingCall`); a principal replaced meanwhile
+fails that step with `NOT_FOUND` and changes nothing. The passwords join only OK's request, as in New Login (masked, never in the snapshot, cleared
+with the dialog): the new one as `@password`, the old one as `@old_password` when Specify old password is checked, each one
+nvarchar parameter read once and quoted by a binary-collation REPLACE, which the lint pins. T-SQL takes either `OLD_PASSWORD`
+or `UNLOCK` and `MUST_CHANGE`, never both. Script never carries a password: with a password change it is one `SET XACT_ABORT ON`
+batch under "/* Varia leaves passwords out of scripts. Replace <password> with the login's password, as an N'…' literal, before you run this script. */", `PASSWORD=<password>` (and `OLD_PASSWORD=<old password>`) unquoted, so it
+runs nothing unedited; without one it is SSMS's form, a `GO` after each statement.
+
+OK runs SSMS's statements in SSMS's order, one by one and without a transaction, as New Login does (critic A24): the options'
+`ALTER LOGIN` (only the changed clauses), the password's `ALTER LOGIN`, `GRANT` or `DENY CONNECT SQL`, `ENABLE` or `DISABLE`, each
+server role by name, then per changed database by name: `DROP USER` (in a batch that checks the user is still the one mapped to
+the login's SID), or `CREATE USER … FOR LOGIN` or `ALTER USER … WITH NAME`, then its default schema (and `CREATE SCHEMA` when the
+database lacks it) and each database role. Before any of them the preflight refuses a changed database that is gone, offline,
+closed or read-only, a user that is no longer the one mapped, a name in use and a missing role. A failure or Stop after a step
+leaves what completed; the message starts "The login was changed only in part: its steps run one by one, as in SSMS, and list
+what completed.", and the dialog reads the login again, then User Mapping's databases one at a time; until each is read again,
+OK refuses its changed row ("User Mapping has not read <database> again since the last run. Select it on User Mapping (Retry if its read failed), then press OK."). When the password step completed before the
+failure, the password fields are emptied, so a retry never sends it again ("The new password was set before the failure, so the password fields were cleared.").
+SQL Server answers a wrong old password, and a missing permission,
+with 15151 (`PERMISSION_DENIED`): the message adds "Check the old password." when the password step failed with an old
+password, else what changing a login needs. Permissions are left to SQL Server, since a login may change its own password
+(with the old one) and defaults. SQL Server refuses DROP USER for a user that owns a schema (15138), as in SSMS.
+
+A password change of a login that Varia's connections sign in as (this one or others, by SQL Server authentication) gives them
+the new password in the backend's memory, so their next sessions sign in; a password Varia remembers for them is not changed,
+and a notice says so: "Changed the password of <login>. Varia's connections that sign in as this login use the new password from now on; if Varia remembers the old one, type the new one the next time you connect."
+
+Refused before anything runs: the login this connection uses denied, disabled or made to change its password at its next sign-in
+("This is the login this connection uses. Denying it permission to connect or disabling it would lock this connection out. Connect with another login to change its status."; "This is the login this connection uses. Requiring a new password at its next sign-in would refuse this connection's new sessions. Connect with another login to require it."), a
+Windows group disabled ("A Windows group cannot be disabled. Deny it permission to connect on Login Properties › Status instead."), and a password or policy change on a login that is not a SQL
+Server login ("Only a SQL Server login has a password and a password policy."). After OK the Logins folder and each changed database's Users folder reload.
+
+### Securables
+
+New Login and Login Properties share SSMS's Securables page: the server-level securables the login has permissions on, and the
+permissions of the selected one. "Add Objects" (Search…) asks "What objects do you want to add?": Specific objects… (Select Object Types,
+then Select Objects, which lists the objects of the chosen types that the describe read), All objects of the types… (every listed object of
+the chosen types) or The server '<server>'. The types, in Select Object Types' order (Endpoints, Logins, Servers, Availability Groups, Server roles):
+
+| Type | Class | ON clause | Permissions |
+| --- | --- | --- | --- |
+| Server | SERVER (100) |  | ADMINISTER BULK OPERATIONS, ALTER ANY AVAILABILITY GROUP, ALTER ANY CONNECTION, ALTER ANY CREDENTIAL, ALTER ANY DATABASE, ALTER ANY ENDPOINT, ALTER ANY EVENT NOTIFICATION, ALTER ANY EVENT SESSION, ALTER ANY EVENT SESSION ADD EVENT, ALTER ANY EVENT SESSION ADD TARGET, ALTER ANY EVENT SESSION DISABLE, ALTER ANY EVENT SESSION DROP EVENT, ALTER ANY EVENT SESSION DROP TARGET, ALTER ANY EVENT SESSION ENABLE, ALTER ANY EVENT SESSION OPTION, ALTER ANY LINKED SERVER, ALTER ANY LOGIN, ALTER ANY SERVER AUDIT, ALTER ANY SERVER ROLE, ALTER RESOURCES, ALTER SERVER STATE, ALTER SETTINGS, ALTER TRACE, AUTHENTICATE SERVER, CONNECT ANY DATABASE, CONNECT SQL, CONTROL SERVER, CREATE ANY DATABASE, CREATE ANY EVENT SESSION, CREATE AVAILABILITY GROUP, CREATE DDL EVENT NOTIFICATION, CREATE ENDPOINT, CREATE LOGIN, CREATE SERVER ROLE, CREATE TRACE EVENT NOTIFICATION, DROP ANY EVENT SESSION, EXTERNAL ACCESS ASSEMBLY, IMPERSONATE ANY LOGIN, SELECT ALL USER SECURABLES, SHUTDOWN, UNSAFE ASSEMBLY, VIEW ANY CRYPTOGRAPHICALLY SECURED DEFINITION, VIEW ANY DATABASE, VIEW ANY DEFINITION, VIEW ANY ERROR LOG, VIEW ANY PERFORMANCE DEFINITION, VIEW ANY SECURITY DEFINITION, VIEW SERVER PERFORMANCE STATE, VIEW SERVER SECURITY AUDIT, VIEW SERVER SECURITY STATE, VIEW SERVER STATE |
+| Endpoint | ENDPOINT (105) | `ON ENDPOINT::<name>` | ALTER, CONNECT, CONTROL, TAKE OWNERSHIP, VIEW DEFINITION |
+| Login | LOGIN (101) | `ON LOGIN::<name>` | ALTER, CONTROL, IMPERSONATE, VIEW DEFINITION |
+| Server Role | SERVER ROLE (101) | `ON SERVER ROLE::<name>` | ALTER, CONTROL, TAKE OWNERSHIP, VIEW DEFINITION |
+| Availability Group | AVAILABILITY GROUP (108) | `ON AVAILABILITY GROUP::<name>` | ALTER, CONTROL, TAKE OWNERSHIP, VIEW DEFINITION |
+
+The page offers those of a type's permissions that the server's `sys.fn_builtin_permissions` lists too, so an older server never
+sees a newer one, and a permission keyword reaches SQL only from this table. `CONNECT SQL`
+on the server shows greyed with the Status page's choice ("Set on the Status page (Permission to connect to database engine)."), and the Securables page never sends it.
+Fixed server roles and public are not securables (SQL Server answers 15151), so Add Objects lists only user-defined server roles.
+It lists at most 1,024 objects per type, by name ("Only the first 1,024 objects of each type are listed.").
+Remove takes a securable off the list and drops its unsent changes; it revokes nothing (clear its boxes to revoke).
+
+Below the list, "Permissions for <securable>:" ("Permissions:" while none is selected) has two tabs. **Explicit** is the grid Permission, Grantor, Grant, With Grant, Deny:
+Grant and Deny exclude each other, With Grant implies Grant, and clearing Grant clears With Grant. Its keys are the grid's: arrows,
+Home/End, Page Up/Down, and Space toggles the box under focus; in the securables list, Delete removes the selected row. **Effective**
+(Login Properties only; "Effective permissions show once the login exists.") lists what the login may do on the securable: `actions.describe`
+with dialog `loginEffectivePermissions`, the login as target and the securable as `securable`, reads `sys.fn_my_permissions` under
+`EXECUTE AS LOGIN` (then `REVERT`) on the describe's own unpooled connection, which closes after it, so the context cannot outlive the
+read. EXECUTE AS needs IMPERSONATE on the login: without it SQL Server answers 15406, 15517 or 15151, and the tab says "You don't have permission to view effective permissions."
+(`PERMISSION_DENIED`; `NOT_FOUND` when the login is gone). At most 256 are listed. Selecting another securable cancels a read still running,
+and a partial run's reload, which forgets every answer, reads the shown securable again. SQL Server cannot impersonate a group, or a
+login mapped to a certificate or an asymmetric key (`windowsGroup`, `certificateMapped`, `asymmetricKeyMapped`, `externalGroup`; 15406 even for a sysadmin): for those the tab says
+"SQL Server cannot impersonate a group, or a login mapped to a certificate or an asymmetric key, so it cannot show this login's effective permissions." and reads nothing, and the backend refuses the read (`NOT_SUPPORTED`).
+
+Login Properties reads the login's explicit permissions from `sys.server_permissions` (at most 1,024; "Only the first 1,024 explicit permissions are listed; OK changes only those shown."),
+a deny over a grant and a grant with grant option over a plain one, with every grantor of its rows (a permission on a login is
+recorded with that login as its grantor). SQL Server's own logins (`##…##`) never change, so their describe reads none, the Effective read refuses them, and the page
+is hidden, as SSMS hides it.
+
+OK and Script send one statement per changed permission, as SMO's SecurableUtils writes it, from what the describe read to what the
+boxes ask for:
+
+| Read | Asked for | Statement |
+| --- | --- | --- |
+| none | Grant | GRANT |
+| none | With Grant | GRANT … WITH GRANT OPTION |
+| none | Deny | DENY |
+| Grant | none | REVOKE |
+| Grant | With Grant | GRANT … WITH GRANT OPTION |
+| Grant | Deny | DENY |
+| With Grant | none | REVOKE … CASCADE |
+| With Grant | Grant | REVOKE GRANT OPTION FOR … CASCADE |
+| With Grant | Deny | DENY … CASCADE |
+| Deny | none | REVOKE |
+| Deny | Grant | GRANT |
+| Deny | With Grant | GRANT … WITH GRANT OPTION |
+
+SQL Server refuses to deny or revoke a permission granted WITH GRANT OPTION without CASCADE (4611), so those cascade, as SMO's do.
+New Login sends only GRANT, GRANT … WITH GRANT OPTION and DENY. The statements run after User Mapping's, SSMS's last step, by type
+in the table's order, then by securable name and permission (at most 512 per request:
+"At most 512 permissions can change at once. Apply some, then the rest."). Each is one batch in master from constant keyword text, in which SQL Server
+builds the statement: the verb, permission and ON clause come only from the catalogue, the login and the securable go in as
+nvarchar(128) parameters through `QUOTENAME` (`PermissionSql.Executable`, checked by `ActionSql.LintExecutable`'s builder form and
+`PermissionSql.LintExecutable` for every type, permission and form). Login Properties binds each to the login it read, as its other
+statements. The steps read "Grant a permission", "Deny a permission", "Revoke a permission" and "Revoke a grant option", with the
+permission and its securable; a failure or Stop keeps what completed, and New Login's message then adds "Not every permission was set."
+
+SQL Server changes only the rows recorded under a statement's own grantor, and says nothing when that leaves the permission as it
+was: a REVOKE leaves a grant another principal made, a GRANT leaves another grantor's DENY, and a statement for sa, for the principal
+that runs it or for the securable's owner changes nothing (4624, an informational message, or no message at all). So each of Login
+Properties' permission steps reads `sys.server_permissions` again in its own transaction (`PermissionSql.Remaining`) and fails as a
+value, rolled back, when what remains is not what the boxes asked for (`PermissionSql.Unmet`, which names the grantor in the way) or
+SQL Server sent 4624. For sa and for the login this connection uses the boxes only show the permissions ("SQL Server does not grant, deny or revoke permissions for sa or for the login this connection uses, so they are shown here but cannot change."),
+and the preflight refuses a request that carries any (`permissionsProtected`). A change with CASCADE also revokes the permission from
+every principal the login granted it to; the page and Script warn of each ("CASCADE also revokes <permission> from every principal [<login>] granted it to.").
 
 ## Errors
 

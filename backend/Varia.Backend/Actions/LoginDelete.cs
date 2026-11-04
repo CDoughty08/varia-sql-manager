@@ -43,6 +43,19 @@ internal sealed partial class ActionService
     /// <paramref name="budget"/> has passed: values, never the request's failure. Only the job's own token ends the scan.</summary>
     internal async Task<LoginScan> ScanMappedUsersAsync(SqlConnection connection, byte[] sid, int list, TimeSpan budget, CancellationToken token)
     {
+        var (users, mapped, databases, notListed) = await ScanAsync(connection, sid, ActionSql.MappedUser, list, budget, token, (name, readOnly, canDrop, reader) =>
+        {
+            int Count(int ordinal) => reader.IsDBNull(ordinal) ? 0 : Convert.ToInt32(reader.GetValue(ordinal), CultureInfo.InvariantCulture);
+            return new MappedUserDto(name, reader.GetString(0), Count(1), Count(2), readOnly, Count(3), Count(4), canDrop);
+        });
+        return new(users, mapped, databases, notListed);
+    }
+
+    /// <summary>The scan itself, with the statement it runs in each database (through ActionSql.MappedUserCall, which binds @sid and
+    /// @take) and how a row becomes a user: Delete's ActionSql.MappedUser, or Login Properties' LoginSql.PropertiesMappedUser (D2c).</summary>
+    private async Task<(List<T> Users, int Mapped, List<ScannedDatabase> Databases, int NotListed)> ScanAsync<T>(SqlConnection connection, byte[] sid, string statement, int list,
+        TimeSpan budget, CancellationToken token, Func<string, bool, bool, SqlDataReader, T> project)
+    {
         var listed = new List<(string Name, bool ReadOnly, bool CanDrop)>();
         var total = 0;
         await using (var command = connection.CreateCommand())
@@ -56,14 +69,14 @@ internal sealed partial class ActionService
             if (await reader.NextResultAsync(token))
                 while (await reader.ReadAsync(token)) listed.Add((reader.GetString(0), !reader.IsDBNull(1) && reader.GetBoolean(1), !reader.IsDBNull(2) && reader.GetBoolean(2)));
         }
-        var users = new List<MappedUserDto>();
+        var users = new List<T>();
         var databases = new List<ScannedDatabase>(listed.Count);
         var mapped = 0;
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(token);
         limit.CancelAfter(budget);
         foreach (var (name, readOnly, canDrop) in listed)
         {
-            var found = new List<MappedUserDto>();
+            var found = new List<T>();
             var read = false;
             if (!limit.IsCancellationRequested)
             {
@@ -73,12 +86,11 @@ internal sealed partial class ActionService
                     command.CommandText = ActionSql.MappedUserCall;
                     command.CommandTimeout = 0;
                     Add(command, "@db", SqlDbType.NVarChar, 128, name);
-                    Add(command, "@stmt", SqlDbType.NVarChar, -1, ActionSql.MappedUser);
+                    Add(command, "@stmt", SqlDbType.NVarChar, -1, statement);
                     Add(command, "@sid", SqlDbType.VarBinary, 85, sid);
                     Add(command, "@take", SqlDbType.Int, 0, list + 1);
                     await using var reader = await command.ExecuteReaderAsync(limit.Token);
-                    int Count(int ordinal) => reader.IsDBNull(ordinal) ? 0 : Convert.ToInt32(reader.GetValue(ordinal), CultureInfo.InvariantCulture);
-                    while (await reader.ReadAsync(limit.Token)) found.Add(new(name, reader.GetString(0), Count(1), Count(2), readOnly, Count(3), Count(4), canDrop));
+                    while (await reader.ReadAsync(limit.Token)) found.Add(project(name, readOnly, canDrop, reader));
                     read = true;
                 }
                 catch (Exception error) when (!token.IsCancellationRequested && error is SqlException or OperationCanceledException or InvalidOperationException) { }
@@ -91,7 +103,7 @@ internal sealed partial class ActionService
                 }
             databases.Add(new(name, readOnly, read));
         }
-        return new(users, mapped, databases, Math.Max(0, total - listed.Count));
+        return (users, mapped, databases, Math.Max(0, total - listed.Count));
     }
 
     /// <summary>The SQL Server Agent jobs a login owns (ActionSql.LoginJobs), or null when msdb's job table cannot be read.</summary>

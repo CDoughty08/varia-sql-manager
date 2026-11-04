@@ -14,6 +14,7 @@ import { mappingRange, unavailableChip, userMappingRowHeight } from '../src/rend
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { ConnectionService } from '../src/renderer/src/services/connections'
 import { deferred } from './fixtures/documents'
+import { securablesModel } from './fixtures/securables'
 import { connectionInfo, connectionOptions } from './fixtures/workbench'
 
 const cleanups: (() => void)[] = []
@@ -22,12 +23,14 @@ afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 const server: ObjectRef = { kind: 'server' }
 const ids = () => ({ connectionId: crypto.randomUUID(), requestId: crypto.randomUUID() })
 const model = (): NewLoginModel => ({
-  server: { level: 17, linux: false, windowsOnly: false, canCreate: true },
+  server: { level: 17, linux: false, windowsOnly: false, canCreate: true, engine: 'box' },
   databases: [
     { name: 'AppData', state: 0, accessible: true, readOnly: false }, { name: 'Closed', state: 0, accessible: false, readOnly: false }, { name: 'master', state: 0, accessible: true, readOnly: false },
     { name: 'Old', state: 6, accessible: false, readOnly: false }, { name: 'Sales', state: 0, accessible: true, readOnly: false }, { name: 'Shelf', state: 0, accessible: true, readOnly: true }
   ],
-  databasesTruncated: false, languages: [], serverRoles: [{ name: 'public', fixed: true }], serverRolesTruncated: false
+  databasesTruncated: false, languages: [], serverRoles: [{ name: 'public', fixed: true }], serverRolesTruncated: false,
+  certificates: [], certificatesTruncated: false, asymmetricKeys: [], asymmetricKeysTruncated: false, credentials: [], credentialsTruncated: false,
+  securables: securablesModel()
 })
 const draft = (changes: Partial<NewLoginDraft> = {}): NewLoginDraft => ({ ...initialNewLoginDraft(model()), auth: 'sql', name: 'app', ...changes })
 const set: SecretState = { password: 'set', matches: true, wellFormed: true, tooLong: false }
@@ -66,7 +69,7 @@ describe('User Mapping in the request schemas', () => {
   })
   it('counts the statements a plan can run as C# does: CREATE LOGIN, Deny, Disable, server roles, and per mapping a user, two for a schema and one per role', () => {
     expect(newLoginStatements({ serverRoles: ['sysadmin'], status: { connect: 'deny', enabled: false }, mappings: [{ defaultSchema: 's', rolesAdd: ['a', 'b', 'c'] }, { rolesAdd: [] }] })).toBe(1 + 1 + 1 + 1 + (1 + 2 + 3) + 1)
-    expect(tooManyStatementsMessage(512)).toBe('This login would need more than 512 statements. Map fewer databases, or apply the rest afterwards.')
+    expect(tooManyStatementsMessage(512)).toBe('This login would need more than 512 statements. Map fewer databases or change fewer permissions, or apply the rest afterwards.')
   })
   it('reads a database\'s roles for any database, SQL Server\'s own included, and nothing else', () => {
     const describe = (target: unknown) => actionDescribeSchema.safeParse({ ...ids(), dialog: loginDatabaseRolesDescribe, target }).success
@@ -185,7 +188,8 @@ function setup() {
     executeObjectAction: vi.fn<VariaApi['executeObjectAction']>(() => execute.promise),
     cancelObjectActions: vi.fn<VariaApi['cancelObjectActions']>(async cancelled => ({ ok: true, value: { cancelled: cancelled.length } })),
     writeClipboardText: vi.fn<VariaApi['writeClipboardText']>(async () => ({ ok: true, value: undefined })),
-    confirmOpenConnections: vi.fn<VariaApi['confirmOpenConnections']>(async () => ({ ok: true, value: false }))
+    confirmOpenConnections: vi.fn<VariaApi['confirmOpenConnections']>(async () => ({ ok: true, value: false })),
+    confirmAction: vi.fn<VariaApi['confirmAction']>(async () => ({ ok: true, value: 'cancel' }))
   }
   const connections = new ConnectionService()
   connections.add({ ...connectionInfo('server-a'), login: 'sa' }, connectionOptions)

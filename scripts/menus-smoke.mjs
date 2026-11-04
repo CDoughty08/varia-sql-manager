@@ -882,8 +882,8 @@ try {
   await expandExplorerPath(page, 'server-a', 'Security', 'Logins')
   await (await row('server-a', 'Security', 'Logins', 'sa')).click({ button: 'right', force: true })
   // The fixture's sa is disabled, so it offers Enable in place of Disable (D4b), as a SQL Server login Unlock… (D4d), and Delete
-  // follows Rename as in SSMS (D4c).
-  expect(await labels()).toEqual(['New Login…', 'Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh'])
+  // follows Rename as in SSMS (D4c); Properties, last, opens Login Properties (D2c).
+  expect(await labels()).toEqual(['New Login…', 'Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await explorerMenu.getByRole('menuitem', { name: 'Copy Name', exact: true }).click()
   await expect.poll(clipboard).toBe('[sa]')
   await serverA.click({ button: 'right', force: true })

@@ -37,8 +37,8 @@ internal static class LoginChecks
     {
         var results = LoginSql.Lint().ToList();
         var problems = results.SelectMany(result => result.Problems.Select(problem => result.Name + ": " + problem)).ToList();
-        check(problems.Count == 0 && results.Count == LoginSql.Corpus().Count() * 2 && LoginSql.Corpus().Count() == 10,
-            "every CREATE LOGIN the builder writes (Windows, four SQL password option chains, with and without a language; run and dry run) passes its lint: " + string.Join("; ", problems.Take(5)));
+        check(problems.Count == 0 && results.Count == (LoginSql.Corpus().Count() + LoginSql.OptionsCorpus().Count() + LoginSql.PasswordCorpus().Count()) * 2 && LoginSql.Corpus().Count() == 16,
+            "every CREATE LOGIN the builder writes (Windows, Microsoft Entra, Managed Instance's SQL login and four SQL password option chains, with and without a language, a certificate and an asymmetric key login; run and dry run), and every ALTER LOGIN of Login Properties (D2c), passes its lint: " + string.Join("; ", problems.Take(5)));
         var sql = LoginSql.CreateExecutable(Sql("x"));
         var windows = LoginSql.CreateExecutable(Windows("D\\x"));
         var mutations = new (string Name, string Text)[]
@@ -256,14 +256,14 @@ internal static class LoginChecks
         var refusedRun = await refusing.ExecuteAsync(Create(Sql("app"), secret), CancellationToken.None);
         var refusedDescribe = await refusing.DescribeAsync(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "newLogin", Server), CancellationToken.None);
         check(refusedScript.Error?.Code == "NOT_SUPPORTED" && refusedRun.Error?.Code == "NOT_SUPPORTED" && refusedDescribe.Error?.Code == "NOT_SUPPORTED" && cloud.Connections == 0
-            && ActionsCatalog.Current.Serves("createLogin", "box") && !ActionsCatalog.Current.Serves("createLogin", "cloud") && !ActionsCatalog.Current.Serves("createLogin", "managedInstance"),
-            "New Login runs on SQL Server only for now: Azure SQL Database answers NOT_SUPPORTED to its describe, Script and OK before any connection opens");
+            && ActionsCatalog.Current.Serves("createLogin", "box") && !ActionsCatalog.Current.Serves("createLogin", "cloud") && ActionsCatalog.Current.Serves("createLogin", "managedInstance"),
+            "New Login runs on SQL Server and Managed Instance (D2e): Azure SQL Database answers NOT_SUPPORTED to its describe, Script and OK before any connection opens");
     }
 
-    private sealed class Host(int edition) : IActionHost
+    internal sealed class Host(int edition, int major = 16) : IActionHost
     {
         public int Connections;
-        public ServerProfile Profile(string connectionId) => Box2022 with { EngineEdition = edition };
+        public ServerProfile Profile(string connectionId) => Box2022 with { EngineEdition = edition, Major = major, CatalogBand = major };
         public SqlConnection Connection(string connectionId)
         {
             Interlocked.Increment(ref Connections);

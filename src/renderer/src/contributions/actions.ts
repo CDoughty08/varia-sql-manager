@@ -3,6 +3,7 @@ import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { explorerNodeOf, type ExplorerMenuNode } from '../menus/targets'
 import { newLoginTarget } from '../dialogs/new-login'
+import { actionDialog, isModalDialog } from '../../../shared/actions/catalog'
 
 /**
  * Object Explorer's object actions (src/shared/actions/catalog.ts): Select Top 1000 Rows, Rename, Delete, Properties, a
@@ -83,6 +84,9 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
       run: args => {
         const node = nodeOf(args)
         if (!node) return
+        // A kind whose Properties is a modal (a login's Login Properties, D2c) opens it; a database's is a document.
+        const dialog = node.ref.type === 'object' ? actionDialog(node.ref.object.kind, 'properties') : undefined
+        if (dialog && isModalDialog(dialog)) { dialogs.open(dialog, node); return }
         properties.open(node)
         // The menu returned focus to the tree; the document's section list mounts on a later frame.
         documents.focusActive()

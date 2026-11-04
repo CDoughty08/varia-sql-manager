@@ -162,7 +162,8 @@ describe('ObjectDialogService on a login\'s Delete (D4c)', () => {
       executeObjectAction: vi.fn<VariaApi['executeObjectAction']>(() => execute.promise),
       cancelObjectActions: vi.fn<VariaApi['cancelObjectActions']>(async ids => ({ ok: true, value: { cancelled: ids.length } })),
       writeClipboardText: vi.fn<VariaApi['writeClipboardText']>(async () => ({ ok: true, value: undefined })),
-      confirmOpenConnections: vi.fn<VariaApi['confirmOpenConnections']>(async () => ({ ok: true, value: false }))
+      confirmOpenConnections: vi.fn<VariaApi['confirmOpenConnections']>(async () => ({ ok: true, value: false })),
+      confirmAction: vi.fn<VariaApi['confirmAction']>(async () => ({ ok: true, value: 'cancel' }))
     }
     const connections = new ConnectionService()
     connections.add({ ...connectionInfo('server-a'), login: 'sa' }, connectionOptions)

@@ -40,7 +40,8 @@ internal sealed class ActionsCatalog
         return Parse(stream);
     });
 
-    private sealed record ActionJson(string Action, string Class, string Title, List<string> Engines, long CleanupMs, bool? SystemObjects = null, string? Folder = null, string? Scope = null, bool? Long = null);
+    /// <summary>Kind and Verb: a dialog action that serves one kind through an object action's verb (loginProperties: a login's Properties).</summary>
+    private sealed record ActionJson(string Action, string Class, string Title, List<string> Engines, long CleanupMs, bool? SystemObjects = null, string? Folder = null, string? Scope = null, bool? Long = null, string? Kind = null, string? Verb = null);
     private sealed record DialogJson(string Dialog, string Action, List<string> Pages);
     /// <summary>A fact describe (src/shared/actions/catalog.ts factDescribeSpecs): the action it serves and the kinds it describes.</summary>
     private sealed record DescribeJson(string Describe, string Action, List<string> Kinds);
@@ -133,6 +134,16 @@ internal sealed class ActionsCatalog
 
     /// <summary>Whether the action is a server action (New Database): no row offers it, and its describe's target is the server.</summary>
     public bool IsServerAction(string action) => serverActions.Contains(action);
+
+    /// <summary>The object action whose rows decide where an action runs: itself, or for a kind's own dialog action (loginProperties)
+    /// the verb it serves (properties).</summary>
+    public string VerbOf(string action) => actions.TryGetValue(action, out var row) && row.Verb is { } verb ? verb : action;
+
+    /// <summary>The kind a kind's own dialog action serves (loginProperties: login), or null for an action of every kind that offers it.</summary>
+    public string? KindOf(string action) => actions.TryGetValue(action, out var row) ? row.Kind : null;
+
+    /// <summary>The kind's own dialog action for a verb (login, properties: loginProperties), or null when the verb's own dialog serves it.</summary>
+    public string? KindActionOf(string kind, string verb) => actions.Values.FirstOrDefault(row => row.Kind == kind && row.Verb == verb)?.Action;
 
     /// <summary>Whether the action also serves SQL Server's own objects (Properties on master, model, msdb and tempdb).</summary>
     public bool ServesSystemObjects(string action) => systemActions.Contains(action);

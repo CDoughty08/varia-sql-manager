@@ -60,6 +60,10 @@ internal static class LoginActionLiveChecks
             var described = await Describe(info.Id, runAs);
             check(described is { Error: null, Login: { Type: "U", Service: { } named } } && named.Contains(serviceName, StringComparison.Ordinal),
                 "the loginFacts describe names the service a Windows login runs (" + described.Login?.Service + ")");
+            // Login Properties' Status asks before Disabled or Deny when a service runs as the login, so its describe names it too.
+            var properties = await Call<ActionDescribeResult>("actions.describe", new ActionDescribeArgs(info.Id, Guid.NewGuid().ToString(), "loginProperties", Login(runAs)));
+            check(properties is { Error: null, LoginProperties: not null, Login: { Type: "U", Service: { } shown } } && shown.Contains(serviceName, StringComparison.Ordinal),
+                "Login Properties' describe names the service a Windows login runs (" + properties.Login?.Service + ")");
         }
         else Console.WriteLine("Login service check skipped: no SQL Server service runs as a Windows login on this server.");
 

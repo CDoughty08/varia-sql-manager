@@ -5,12 +5,13 @@ import type { ActionDescribeResult, ActionExecuteResult, ActionScriptResult, Dat
 import type { ApiResult, VariaApi } from '../src/shared/contracts'
 import type { ObjectRef } from '../src/shared/explorer/refs'
 import { dialogMessages, ObjectDialogService } from '../src/renderer/src/dialogs/ObjectDialogService'
-import { unlockChooseMode, unlockSuccessNotice } from '../src/renderer/src/dialogs/definitions'
+import { unlockChooseMode, unlockLoginDefinition, unlockSuccessNotice } from '../src/renderer/src/dialogs/definitions'
 import { unlockStateLines } from '../src/renderer/src/dialogs/pages/UnlockLoginPage'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { ConnectionService } from '../src/renderer/src/services/connections'
 import { deferred } from './fixtures/documents'
 import { connectionInfo, connectionOptions } from './fixtures/workbench'
+import { loginPropertiesDescribe } from './fixtures/login-properties'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
@@ -31,7 +32,8 @@ function setup() {
     executeObjectAction: vi.fn<VariaApi['executeObjectAction']>(() => execute.promise),
     cancelObjectActions: vi.fn<VariaApi['cancelObjectActions']>(async ids => ({ ok: true, value: { cancelled: ids.length } })),
     writeClipboardText: vi.fn<VariaApi['writeClipboardText']>(async () => ({ ok: true, value: undefined })),
-    confirmOpenConnections: vi.fn<VariaApi['confirmOpenConnections']>(async () => ({ ok: true, value: false }))
+    confirmOpenConnections: vi.fn<VariaApi['confirmOpenConnections']>(async () => ({ ok: true, value: false })),
+    confirmAction: vi.fn<VariaApi['confirmAction']>(async () => ({ ok: true, value: 'cancel' }))
   }
   const connections = new ConnectionService()
   connections.add({ ...connectionInfo('server-a'), login: 'sa' }, connectionOptions)
@@ -198,13 +200,13 @@ describe('ObjectDialogService: Unlock Login', () => {
     expect(dialogs.current).toMatchObject({ dialog: 'unlockLogin', title: 'Unlock Login - Locked', phase: 'loading' })
     expect(api.describeObject.mock.calls[0][0]).toMatchObject({ dialog: 'unlockLogin', target: lockedRef })
     await settle()
-    // Nothing is chosen (owner decision 9: keeping the password clears its history, so it is never the default): OK, and Enter,
-    // which runs the same OK, send nothing until the user picks.
-    expect(dialogs.current).toMatchObject({ phase: 'ready', draft: {} })
-    expect(dialogs.blockedReason()).toBe(unlockChooseMode)
-    await dialogs.ok()
-    expect(api.executeObjectAction).not.toHaveBeenCalled()
-    expect(dialogs.current?.phase).toBe('ready')
+    // Set a new password… is the default (owner decision 9, D2c): keeping the password clears its history, so the user picks it.
+    expect(dialogs.current).toMatchObject({ phase: 'ready', draft: { mode: 'setPassword' } })
+    expect(dialogs.blockedReason()).toBeUndefined()
+    expect(unlockLoginDefinition.okLabel?.({ mode: 'setPassword' })).toBe('Continue in Login Properties…')
+    expect(unlockLoginDefinition.okLabel?.({ mode: 'keepPassword' })).toBeUndefined()
+    // A draft without a choice (none is ever made by the dialog now) still sends nothing.
+    expect(unlockLoginDefinition.blocked?.(dialogs.current!.model as never, {})).toBe(unlockChooseMode)
     dialogs.updateDraft({ mode: 'keepPassword' })
     expect(dialogs.blockedReason()).toBeUndefined()
     await dialogs.script('newQuery')
@@ -218,18 +220,45 @@ describe('ObjectDialogService: Unlock Login', () => {
     expect(notify.mock.calls).toEqual([[unlockSuccessNotice('Locked')]])
     expect(unlockSuccessNotice('Locked')).toBe('Unlocked the login Locked. Its password history was cleared.')
   })
+  it('hands Set a new password… over to Login Properties on the same login, with Login is locked out cleared; Script has nothing to script', async () => {
+    const { dialogs, api, settle } = setup()
+    api.describeObject.mockResolvedValueOnce(described())
+    const target = node(lockedRef)
+    dialogs.open('unlockLogin', target)
+    await settle()
+    await dialogs.script('clipboard')
+    expect(api.scriptObjectAction).not.toHaveBeenCalled()
+    expect(dialogs.current?.notice).toBeDefined()
+    api.describeObject.mockResolvedValueOnce({ ok: true, value: { ...loginPropertiesDescribe(), elapsedMs: 1 } })
+    await dialogs.ok()
+    expect(api.executeObjectAction).not.toHaveBeenCalled()
+    expect(dialogs.current).toMatchObject({ dialog: 'loginProperties', title: 'Login Properties - Locked', phase: 'loading' })
+    expect(api.describeObject.mock.calls[1][0]).toMatchObject({ dialog: 'loginProperties', target: lockedRef })
+    await settle()
+    // The patch clears the box Login Properties checks for a locked login, so a new password is all OK needs.
+    expect(dialogs.current).toMatchObject({ dialog: 'loginProperties', phase: 'ready', draft: { locked: false } })
+    // Without the hand-off, the same describe opens with the box checked.
+    dialogs.close()
+    api.describeObject.mockResolvedValueOnce({ ok: true, value: { ...loginPropertiesDescribe(), elapsedMs: 1 } })
+    dialogs.open('loginProperties', target)
+    await settle()
+    expect(dialogs.current).toMatchObject({ dialog: 'loginProperties', phase: 'ready', draft: { locked: true } })
+  })
   it('greys OK, with the reason, for a login that is not locked, has no policy or must change its password; Script stays', async () => {
-    for (const [name, login, state, reason] of [
-      ['not locked', facts(), lock({ locked: false, badPasswords: 0, lockoutTime: undefined }), loginMessages.notLocked],
-      ['no policy', facts({ policyChecked: false }), lock(), loginMessages.unlockNoPolicy],
-      ['must change', facts(), lock({ mustChange: true }), loginMessages.unlockMustChange],
-      ['no permission', facts({ canAlter: false }), lock(), loginMessages.alterAnyLogin]
+    for (const [name, login, state, reason, keep] of [
+      ['not locked', facts(), lock({ locked: false, badPasswords: 0, lockoutTime: undefined }), loginMessages.notLocked, loginMessages.notLocked],
+      ['no policy', facts({ policyChecked: false }), lock(), loginMessages.unlockNoPolicy, loginMessages.unlockNoPolicy],
+      // Only a new password unlocks a login that must change it, so Set a new password… stays open and keeping it greys.
+      ['must change', facts(), lock({ mustChange: true }), undefined, loginMessages.unlockMustChange],
+      ['no permission', facts({ canAlter: false }), lock(), loginMessages.alterAnyLogin, loginMessages.alterAnyLogin]
     ] as const) {
       const { dialogs, api, settle } = setup()
       api.describeObject.mockResolvedValueOnce(described(login, state))
       dialogs.open('unlockLogin', node(lockedRef))
       await settle()
       expect(dialogs.blockedReason(), name).toBe(reason)
+      dialogs.updateDraft({ mode: 'keepPassword' })
+      expect(dialogs.blockedReason(), name).toBe(keep)
       await dialogs.ok()
       expect(api.executeObjectAction, name).not.toHaveBeenCalled()
       expect(dialogs.current?.phase, name).toBe('ready')

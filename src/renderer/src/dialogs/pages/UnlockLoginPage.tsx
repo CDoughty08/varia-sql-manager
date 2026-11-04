@@ -1,7 +1,7 @@
-import { loginMessages, unlockRefusal, type LoginLockFacts } from '../../../../shared/actions/logins.ts'
+import { loginMessages, unlockChoiceText, type LoginLockFacts } from '../../../../shared/actions/logins.ts'
 import { useWorkbench } from '../../core/WorkbenchContext'
 import Icon from '../../Icon'
-import { unlockChooseMode, type UnlockDraft, type UnlockModel } from '../definitions'
+import { unlockChoiceRefusal, unlockChooseMode, type UnlockDraft, type UnlockModel } from '../definitions'
 import type { PageProps } from '../ObjectDialog'
 
 /** The page's words, which the dialog service's tests and the docs share. */
@@ -10,7 +10,9 @@ export const unlockPageText = {
   expired: 'The password has expired.',
   mustChange: 'The login must change its password at next sign-in.',
   how: 'How to unlock',
-  keepPassword: 'Keep the current password',
+  setPassword: unlockChoiceText.setPassword,
+  setPasswordHelp: 'Opens Login Properties, where a new password unlocks the login, as in SSMS. It also unlocks a login that must change its password.',
+  keepPassword: unlockChoiceText.keepPassword,
   keepPasswordHelp: 'Turns the password policy off and on again in one transaction (Microsoft\'s documented way to unlock without a password). This clears the login\'s password history.'
 } as const
 
@@ -27,16 +29,17 @@ export function unlockStateLines(lock: LoginLockFacts): readonly string[] {
 }
 
 /**
- * Unlock Login's General page (D4d): the login's lock-out state, why OK cannot run when it cannot, and How to unlock, with nothing
- * chosen until the user picks. Keeping the current password is its only choice until Login Properties (D2c) adds Set a new
- * password…, SSMS's way and then the default.
+ * Unlock Login's General page (D4d, D2c): the login's lock-out state, why OK cannot run when it cannot, and How to unlock: Set a new
+ * password… (SSMS's way, the default; OK continues in Login Properties) or Keep the current password, greyed with its reason when
+ * only a new password can unlock the login.
  */
 export default function UnlockLoginPage({ open, editable }: PageProps) {
   const { dialogs } = useWorkbench()
   const model = open.model as UnlockModel | undefined, draft = open.draft as UnlockDraft | undefined
   if (!model || !draft) return <p className="field-note">{open.phase === 'loading' ? 'Loading…' : ''}</p>
-  // The login's own refusal is a warning and closes the choice; with none, OK waits only for a choice.
-  const refusal = unlockRefusal(model.login, model.lock), reason = refusal && loginMessages[refusal]
+  // A refusal of both choices (Set a new password… refuses only what keeping it refuses too) is a warning and closes the choice.
+  const refusal = unlockChoiceRefusal(model, 'setPassword'), reason = refusal && loginMessages[refusal]
+  const keep = reason ? undefined : unlockChoiceRefusal(model, 'keepPassword'), keepReason = keep && loginMessages[keep]
   return <div className="unlock-login">
     <section aria-labelledby="unlock-login-state">
       <div className="object-dialog-caption" id="unlock-login-state">State</div>
@@ -47,9 +50,12 @@ export default function UnlockLoginPage({ open, editable }: PageProps) {
     {reason && refusal !== 'notLocked' && <ul className="object-dialog-warnings" aria-label="Warnings"><li><Icon name="warning" /><span>{reason}</span></li></ul>}
     <fieldset className="object-dialog-options" role="radiogroup" aria-labelledby="unlock-login-how" disabled={!editable || !!reason}>
       <legend className="object-dialog-caption" id="unlock-login-how">{unlockPageText.how}</legend>
-      <label className="checkbox-label"><input type="radio" name="unlock-mode" value="keepPassword" checked={draft.mode === 'keepPassword'} aria-describedby="unlock-login-keep-help"
-        onChange={() => dialogs.updateDraft({ mode: 'keepPassword' })} />{unlockPageText.keepPassword}</label>
-      <p className="field-note" id="unlock-login-keep-help">{unlockPageText.keepPasswordHelp}</p>
+      <label className="checkbox-label"><input type="radio" name="unlock-mode" value="setPassword" checked={draft.mode === 'setPassword'} aria-describedby="unlock-login-set-help"
+        onChange={() => dialogs.updateDraft({ mode: 'setPassword' })} />{unlockPageText.setPassword}</label>
+      <p className="field-note" id="unlock-login-set-help">{unlockPageText.setPasswordHelp}</p>
+      <label className="checkbox-label"><input type="radio" name="unlock-mode" value="keepPassword" checked={draft.mode === 'keepPassword'} disabled={!!keepReason}
+        aria-describedby="unlock-login-keep-help" onChange={() => dialogs.updateDraft({ mode: 'keepPassword' })} />{unlockPageText.keepPassword}</label>
+      <p className="field-note" id="unlock-login-keep-help">{keepReason || unlockPageText.keepPasswordHelp}</p>
       {!reason && !draft.mode && <p className="field-note">{unlockChooseMode}</p>}
     </fieldset>
   </div>

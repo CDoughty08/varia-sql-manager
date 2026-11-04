@@ -347,20 +347,24 @@ internal static class LoginLiveChecks
         check(guard == "50000 The password is missing.", "a SQL Server login's batch without its password stops at its guard: " + guard);
     }
 
-    /// <summary>What shows that the A16 session recorded New Login's CREATE LOGIN batch (its password guard) and Create Catalog's
-    /// master key batch: either as text or as UTF-16 bytes, or SQL Server's notice that it replaced an event's text for security, or
-    /// the mask SQL Server 2022 records in place of a statement that holds a password ("*password" and dashes, seen on SQL Server 2022 on Linux).</summary>
-    internal const string XeLoginMarker = "@password IS NULL THROW", XeKeyMarker = "CREATE MASTER KEY ENCRYPTION BY PASSWORD", XeMasked = "for security reasons", XeMaskedStatement = "*password--";
+    /// <summary>What shows that the A16 session recorded New Login's CREATE LOGIN batch (its password guard), Create Catalog's master key
+    /// batch and Login Properties' password batch with Specify old password (its old password's guard): either as text or as UTF-16
+    /// bytes, or SQL Server's notice that it replaced an event's text for security, or the mask SQL Server 2022 records in place of a
+    /// statement that holds a password ("*password" and dashes, seen on SQL Server 2022 on Linux).</summary>
+    internal const string XeLoginMarker = "@password IS NULL THROW", XeKeyMarker = "CREATE MASTER KEY ENCRYPTION BY PASSWORD", XeOldMarker = "The old password is missing",
+        XeMasked = "for security reasons", XeMaskedStatement = "*password--";
 
     /// <summary>Critic A16: an Extended Events session records RPCs, batches and statements (their text, batch text, data stream and
-    /// output parameters) while New Login creates a login and Create Catalog's master key batch runs, each with a throwaway password.
-    /// It reads the ring buffer until each run's password-bearing RPC is seen completed (or 30 seconds pass, which fails), then
-    /// neither password may appear in any field, as text, doubled quotes, XML-escaped or as UTF-16 bytes.</summary>
+    /// output parameters) while New Login creates a login, Create Catalog's master key batch runs and Login Properties changes a login's
+    /// password with its old one (@password and @old_password), each with throwaway passwords. It reads the ring buffer until each run's
+    /// password-bearing RPC is seen completed (or 30 seconds pass, which fails), then no password may appear in any field, as text,
+    /// doubled quotes, XML-escaped or as UTF-16 bytes.</summary>
     private static async Task ExtendedEventsAsync(Action<bool, string> check, ActionService actions, ConnectionInfo info, ScratchDatabase scratch, Func<string, string, int, Task<SqlRun>> sql,
         Func<Func<SqlConnection, Task<string?>>, Task<string?>> with, Func<NewLoginDto, string?, List<string>?, LoginStatusDto?, ActionArgs> create)
     {
-        check(LoginSql.PasswordGuard.Contains(XeLoginMarker, StringComparison.Ordinal) && SsisCreateSql.MasterKey.Text.Contains(XeKeyMarker, StringComparison.Ordinal),
-            "the Extended Events check's markers are in New Login's and Create Catalog's password batches");
+        check(LoginSql.PasswordGuard.Contains(XeLoginMarker, StringComparison.Ordinal) && SsisCreateSql.MasterKey.Text.Contains(XeKeyMarker, StringComparison.Ordinal)
+                && LoginSql.PasswordExecutable(new(true, false, false)).Contains(XeOldMarker, StringComparison.Ordinal),
+            "the Extended Events check's markers are in New Login's, Create Catalog's and Login Properties' password batches");
         var session = scratch.OwnXeSession();
         var definition = "CREATE EVENT SESSION [" + session + "] ON SERVER "
             + string.Join(", ", XeEvents.Select(item => "ADD EVENT sqlserver." + item.Event + "(SET " + string.Join(", ", item.Fields.Select(field => field + " = (1)")) + " "
@@ -388,6 +392,16 @@ internal static class LoginLiveChecks
             return "done";
         });
         var after = await ServerNow();
+        // Login Properties' password with Specify old password, on a login of the run's own.
+        var changing = scratch.OwnLogin("xeprops");
+        var oldPassword = "XeOld-" + ScratchDatabase.Throwaway() + "'";
+        var newPassword = "XeNew-" + ScratchDatabase.Throwaway() + "'";
+        var made = await sql("CREATE LOGIN [" + changing.Replace("]", "]]", StringComparison.Ordinal) + "] WITH PASSWORD = N'" + oldPassword.Replace("'", "''", StringComparison.Ordinal) + "', CHECK_POLICY = OFF;", "master", 300);
+        var described = await actions.DescribeAsync(new ActionDescribeArgs(info.Id, Guid.NewGuid().ToString(), "loginProperties", new ObjectRefDto("login", Name: changing)), CancellationToken.None);
+        var propertiesStart = await ServerNow();
+        var changed = await actions.ExecuteAsync(new ActionArgs("loginProperties", info.Id, Guid.NewGuid().ToString(), new ObjectRefDto("login", Name: changing), Secrets: new(newPassword, oldPassword),
+            LoginIdentity: described.Login is { } facts ? new(facts.Sid, facts.Created) : null, LoginChanges: new(Password: new(true, false, false))), CancellationToken.None);
+        var propertiesEnd = await ServerNow();
         async Task<string> Read() => await with(async connection =>
         {
             await using var command = connection.CreateCommand();
@@ -404,7 +418,7 @@ internal static class LoginLiveChecks
             && item.At >= from && item.At <= to && (item.Text.Contains(marker, StringComparison.Ordinal) || item.Text.Contains(Convert.ToHexString(Encoding.Unicode.GetBytes(marker)), StringComparison.OrdinalIgnoreCase)
                 || item.Text.Contains(XeMasked, StringComparison.Ordinal) || item.Text.Contains(XeMaskedStatement, StringComparison.Ordinal)));
         var data = "";
-        bool login = false, key = false;
+        bool login = false, key = false, properties = false;
         var waited = Stopwatch.StartNew();
         while (true)
         {
@@ -412,7 +426,8 @@ internal static class LoginLiveChecks
             var events = Events(data);
             login = Seen(events, before, between, XeLoginMarker);
             key = Seen(events, between, after, XeKeyMarker);
-            if ((login && key) || waited.Elapsed > TimeSpan.FromSeconds(30)) break;
+            properties = Seen(events, propertiesStart, propertiesEnd, XeOldMarker);
+            if ((login && key && properties) || waited.Elapsed > TimeSpan.FromSeconds(30)) break;
             await Task.Delay(250);
         }
         static IEnumerable<string> Forms(string secret) =>
@@ -420,12 +435,13 @@ internal static class LoginLiveChecks
             secret, secret.Replace("'", "''", StringComparison.Ordinal), System.Security.SecurityElement.Escape(secret)!, secret.Replace("'", "&apos;", StringComparison.Ordinal),
             Convert.ToHexString(Encoding.Unicode.GetBytes(secret)), secret[..^1]
         ];
-        var leaks = new[] { ("New Login", loginPassword), ("Create Catalog", keyPassword) }
+        var leaks = new[] { ("New Login", loginPassword), ("Create Catalog", keyPassword), ("Login Properties", newPassword), ("Login Properties' old", oldPassword) }
             .Where(item => Forms(item.Item2).Any(form => data.Contains(form, StringComparison.OrdinalIgnoreCase))).Select(item => item.Item1).ToList();
-        var unseen = new[] { (login, "New Login"), (key, "Create Catalog") }.Where(item => !item.Item1).Select(item => item.Item2).ToList();
-        check(created.Error is null && keyed == "done" && unseen.Count == 0 && leaks.Count == 0,
-            "an Extended Events session recording RPCs, batches and statements sees neither New Login's nor Create Catalog's password (critic A16): "
-            + (unseen.Count == 0 ? "both runs recorded" : "recorded nothing of " + string.Join(" or ", unseen)) + (leaks.Count == 0 ? "" : "; the password of " + string.Join(" and ", leaks) + " appears"));
+        var unseen = new[] { (login, "New Login"), (key, "Create Catalog"), (properties, "Login Properties") }.Where(item => !item.Item1).Select(item => item.Item2).ToList();
+        check(created.Error is null && keyed == "done" && made.Status == "completed" && changed.Error is null && unseen.Count == 0 && leaks.Count == 0,
+            "an Extended Events session recording RPCs, batches and statements sees none of New Login's, Create Catalog's and Login Properties' passwords (critic A16): "
+            + (unseen.Count == 0 ? "every run recorded" : "recorded nothing of " + string.Join(" or ", unseen)) + (leaks.Count == 0 ? "" : "; the password of " + string.Join(" and ", leaks) + " appears")
+            + (changed.Error is null ? "" : "; Login Properties failed: " + changed.Error.Code));
         Console.WriteLine("New Login Extended Events check (critic A16): " + (unseen.Count > 0 ? "a run was not recorded." : leaks.Count == 0 ? "no password in any recorded field." : "a password appears."));
     }
 }

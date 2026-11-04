@@ -28,6 +28,11 @@ internal interface IActionHost
     /// <summary>A database was renamed (to <paramref name="newName"/>) or dropped (null): a connection whose initial catalog
     /// it was moves to the new name, or to master, so its later connections can still open.</summary>
     void DatabaseChanged(string connectionId, string database, string? newName);
+    /// <summary>Login Properties changed the password of <paramref name="login"/> (its catalog name): every connection of the backend to
+    /// the same server that signs in as that SQL Server login (its SUSER_SNAME at connect, not a contained user) uses the new password
+    /// for its later sessions, so its pools, object actions and live probes never sign in with the old one (which can lock a login out
+    /// under its password policy). Hosts without connections (the offline checks') do nothing.</summary>
+    void PasswordChanged(string connectionId, string login, string password) { }
     /// <summary>Before a statement that needs the database to itself (critic A5), for every connection of the backend to the same
     /// server: when its own database (named, or the login's default) is that one, its server-scope pools (Object Explorer, scripting,
     /// SSIS, live, databases.list) open in master from now on, unless the login is a contained database user; then its idle pools
@@ -194,8 +199,12 @@ internal sealed partial class ActionService : IDisposable
         catch (RequestException) { throw Invalid("target."); }
         // A folder's action (Attach) acts on the server alone.
         if (catalog.FolderOf(action) is not null) return target == ServerRef ? target : throw Invalid("target.");
-        if (!catalog.Offered(target.Kind, action)) throw Invalid("this object does not offer " + action + ".");
-        if (catalog.ServesSystemObjects(action)) return target;
+        // A kind's own dialog action (loginProperties) runs where its verb is offered, on its kind only; the verb's own dialog
+        // (Database Properties) never serves that kind.
+        var verb = catalog.VerbOf(action);
+        if (catalog.KindOf(action) is { } kind ? target.Kind != kind : catalog.KindActionOf(target.Kind, verb) is not null) throw Invalid("target.");
+        if (!catalog.Offered(target.Kind, verb)) throw Invalid("this object does not offer " + action + ".");
+        if (catalog.ServesSystemObjects(verb)) return target;
         // SQL Server's own logins by name, as the Logins folder tells them; the preflight re-derives the subtype.
         if (target.Kind == "login" && LoginRules.SystemName(target.Name!)) throw Invalid("system objects cannot be changed.");
         if (target.Kind == "database" ? SystemDatabases.Contains(target.Name!) : target.Schema is { } schema && SystemSchemas.Contains(schema)) throw Invalid("system objects cannot be changed.");
@@ -217,6 +226,8 @@ internal sealed partial class ActionService : IDisposable
     public ObjectRefDto Validate(ActionDescribeArgs args)
     {
         Ids(args.ConnectionId, args.RequestId);
+        // Login Properties' User Mapping reads one database for the login it shows (D2c): its user there and that user's roles.
+        if (args.Login is not null && (args.Dialog != catalog.Logins.RolesDescribe || !ExplorerRefs.Ident(args.Login))) throw Invalid("login.");
         if ((args.Dialog == ServerFilesDescribe) != (args.Files is not null)) throw Invalid("files.");
         if (args.Attach is { } attach && (args.Dialog != AttachDialog || !ServerPath.Valid(attach.Mdf, catalog.Limit("serverPath")))) throw Invalid("attach.");
         if ((args.Dialog == catalog.Restore.Describe) != (args.Restore is not null)) throw Invalid("restore.");
@@ -232,8 +243,13 @@ internal sealed partial class ActionService : IDisposable
             catch (RequestException) { throw Invalid("target."); }
             return args.Target;
         }
+        // Its Securables page's Effective tab reads one securable as the login (D2d), and only it names one.
+        if ((args.Securable is not null) != (args.Dialog is not null && args.Dialog == catalog.Logins.Securables.EffectiveDescribe)) throw Invalid("securable.");
+        if (args.Securable is not null) return EffectiveTarget(args);
         // User Mapping reads any database, SQL Server's own included: a login may be mapped to master or msdb.
         if (args.Dialog is not null && args.Dialog == catalog.Logins.RolesDescribe) return MappedDatabase(args.Target);
+        // New Login's Check Names (D2e) asks about a Windows account named DOMAIN\name, which need not have a login.
+        if (args.Dialog is not null && args.Dialog == catalog.Logins.CheckNamesDescribe) return WindowsAccount(args.Target);
         if (args.Dialog is not null && designer.Describes.Contains(args.Dialog)) return DatabaseTarget(args.Target);
         if (args.Dialog is not null && catalog.Describes.TryGetValue(args.Dialog, out var kinds))
         {
@@ -274,8 +290,9 @@ internal sealed partial class ActionService : IDisposable
         Ids(args.ConnectionId, args.RequestId);
         if (args.Secrets is not null && (script || !SecretActions.Contains(args.Action))) throw Invalid("this request takes no secrets.");
         if (args.Secrets is { } secrets) { Secret(secrets.Password, "password"); Secret(secrets.OldPassword, "oldPassword"); }
-        // The login a confirmation, Delete Object or Unlock was about: Disable, Enable, Delete and Unlock read it first.
-        if (args.LoginIdentity is { } loginRead && (args.Action is not ("disable" or "enable" or "delete" or "unlock") || loginRead.Sid is null || !LoginSid().IsMatch(loginRead.Sid)
+        if (args.LoginChanges is not null && args.Action != "loginProperties") throw Invalid(args.Action + " takes no loginChanges.");
+        // The login a confirmation or dialog was about: Disable, Enable, Delete, Unlock and Login Properties read it first.
+        if (args.LoginIdentity is { } loginRead && (args.Action is not ("disable" or "enable" or "delete" or "unlock" or "loginProperties") || loginRead.Sid is null || !LoginSid().IsMatch(loginRead.Sid)
             || loginRead.Created is null || !DatabaseAlter.IdentityCreated().IsMatch(loginRead.Created))) throw Invalid("loginIdentity.");
         if (args.Mode is not null && args.Action != "unlock") throw Invalid("only unlock takes a mode.");
         if (args.DropMappedUsers is not null && args.Action != "delete") throw Invalid("only a login's delete drops mapped users.");
@@ -367,6 +384,8 @@ internal sealed partial class ActionService : IDisposable
                 if (args.DropConnections is null || args.UpdateStatistics is null) throw Invalid("dropConnections and updateStatistics are required.");
                 if (args.Identity is { } detached && !DatabaseAlter.IdentityValid(detached)) throw Invalid("identity.");
                 return Target(args.Target, "detach");
+            case "loginProperties":
+                return ValidateLoginProperties(args, script);
             default:
                 throw Invalid("action.");
         }
@@ -391,6 +410,9 @@ internal sealed partial class ActionService : IDisposable
     {
         var target = Validate(args);
         var watch = Stopwatch.StartNew();
+        // Check Names asks about Windows accounts, which only SQL Server's own logins use (Managed Instance has no FROM WINDOWS).
+        if (args.Dialog == catalog.Logins.CheckNamesDescribe && host.Profile(args.ConnectionId).Explorer(explorer).ServerEngine != "box")
+            return Task.FromResult(new ActionDescribeResult(null, 0, Error("NOT_SUPPORTED", catalog.Logins.Message("notOffered"))));
         if (args.Files is { } files)
         {
             // The picker is no catalogue action, so it names its own engines: Azure SQL Database has no server disks to browse,
@@ -406,7 +428,10 @@ internal sealed partial class ActionService : IDisposable
                 error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error), "Listing the folder", own: OwnGate.Browse);
         }
         if (args.Restore is not null) return DescribeRestoreAsync(args, token);
-        var action = designer.Describes.Contains(args.Dialog) ? designer.Requests.Single() : args.Dialog == catalog.Logins.RolesDescribe ? "createLogin" : catalog.ActionOf(args.Dialog);
+        var action = designer.Describes.Contains(args.Dialog) ? designer.Requests.Single() : args.Dialog == catalog.Logins.RolesDescribe ? (args.Login is null ? "createLogin" : "loginProperties")
+            : args.Dialog == catalog.Logins.Securables.EffectiveDescribe ? "loginProperties"
+            : args.Dialog == catalog.Logins.CheckNamesDescribe ? "createLogin"
+            : catalog.ActionOf(args.Dialog);
         var reading = OnBrowseGate(args);
         return RunAsync(args.ConnectionId, args.RequestId, action, read: true, Options.DescribeBudget, token,
             async (connection, profile, band, job) => await (args.Dialog switch
@@ -418,9 +443,12 @@ internal sealed partial class ActionService : IDisposable
                 AttachDialog => DescribeAttachJobAsync(connection, args.Attach, profile.Linux, job),
                 "takeOffline" or "bringOnline" or "detachDatabase" => DescribeStateJobAsync(connection, args.ConnectionId, target, action, band, job, profile.Linux),
                 "renameDatabase" => DescribeRenameJobAsync(connection, args.ConnectionId, target, profile.Explorer(explorer).ServerEngine, band, job),
+                _ when args.Dialog == catalog.Logins.CheckNamesDescribe => DescribeWindowsPrincipalJobAsync(connection, target, job),
+                "loginProperties" => DescribeLoginPropertiesJobAsync(connection, profile, target, band, job),
                 "loginFacts" => DescribeLoginJobAsync(connection, target, job),
                 "unlockLogin" => DescribeUnlockJobAsync(connection, target, job),
-                _ when args.Dialog == catalog.Logins.RolesDescribe => DescribeDatabaseRolesJobAsync(connection, target, job),
+                _ when args.Dialog == catalog.Logins.RolesDescribe => DescribeDatabaseRolesJobAsync(connection, target, job, args.Login),
+                _ when args.Dialog == catalog.Logins.Securables.EffectiveDescribe => DescribeEffectiveJobAsync(connection, target, args.Securable!, job),
                 _ => DescribeJobAsync(connection, args.ConnectionId, profile.Explorer(explorer).ServerEngine, target, action, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error), reading ? "Reading the file" : "Reading the object", own: reading ? OwnGate.Browse : OwnGate.None);
@@ -447,6 +475,7 @@ internal sealed partial class ActionService : IDisposable
                 "unlock" => ScriptUnlockJobAsync(connection, args, target, band, job),
                 "createDatabase" => ScriptNewDatabaseJobAsync(connection, args, profile, band, job),
                 "attach" => Task.FromResult(ScriptAttach(args)),
+                "loginProperties" => ScriptLoginPropertiesJobAsync(connection, args, target, job),
                 _ => ScriptJobAsync(connection, args, target, band, job)
             },
             error => new ActionScriptResult(null, database, [], error));
@@ -462,6 +491,7 @@ internal sealed partial class ActionService : IDisposable
         // asks for it anyway is refused before any connection opens.
         if (args.Action == "delete" && args.CloseConnections == true && host.Profile(args.ConnectionId).Explorer(explorer).ServerEngine == "managedInstance")
             return Task.FromResult(new ActionExecuteResult([], [], 0, Error("NOT_SUPPORTED", ManagedInstanceCloseNote)));
+        if (NewLoginEngineRefusal(args) is { } refused) return Task.FromResult(new ActionExecuteResult([], [], 0, refused));
         var progress = new ActionProgress(catalog.IsLong(args.Action) ? events : null, Options.ProgressInterval);
         return RunAsync(args.ConnectionId, args.RequestId, args.Action, read: false, null, token,
             async (connection, profile, band, job) => await (args.Action switch
@@ -475,6 +505,7 @@ internal sealed partial class ActionService : IDisposable
                 "createLogin" => ExecuteNewLoginJobAsync(connection, args, job),
                 "restoreFiles" => ExecuteRestoreFilesJobAsync(connection, args, target, profile.Linux, progress, job),
                 "detach" => ExecuteDetachJobAsync(connection, args, target, profile.Linux, band, job),
+                "loginProperties" => ExecuteLoginPropertiesJobAsync(connection, args, target, job),
                 _ => ExecuteJobAsync(connection, args, target, profile.Explorer(explorer).ServerEngine, band, progress, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionExecuteResult([], [], watch.ElapsedMilliseconds, error));
@@ -834,8 +865,7 @@ internal sealed partial class ActionService : IDisposable
     /// facts the user never saw (a confirmation's warnings were about the one it read).</summary>
     internal ActionError? LoginRefusal(LoginFactsDto login, ActionArgs args)
     {
-        if (args.LoginIdentity is { } read && (!string.Equals(read.Sid, login.Sid, StringComparison.Ordinal) || !string.Equals(read.Created, login.Created, StringComparison.Ordinal)))
-            return Error("NOT_FOUND", "The login " + ScriptingErrors.Display(args.Target.Name!) + " is not the one that was read: it was renamed, dropped or replaced since. Refresh Object Explorer and try again.");
+        if (IdentityRefusal(login, args) is { } changed) return changed;
         if (catalog.Logins.Refusal(login, args.Action) is { } refused)
             return Error(refused is "alterAnyLogin" or "controlServer" ? "PERMISSION_DENIED" : "NOT_SUPPORTED", catalog.Logins.Message(refused));
         if (args.Action != "rename") return null;
@@ -861,6 +891,12 @@ internal sealed partial class ActionService : IDisposable
         if (closeConnections && engine == "managedInstance") return Error("NOT_SUPPORTED", "Managed Instance cannot set SINGLE_USER, so Varia cannot close the connections. Rename when they are free instead.");
         return null;
     }
+
+    /// <summary>A login the request's identity does not describe: the name now belongs to another principal, whose facts the user never saw.</summary>
+    private ActionError? IdentityRefusal(LoginFactsDto login, ActionArgs args) =>
+        args.LoginIdentity is { } read && (!string.Equals(read.Sid, login.Sid, StringComparison.Ordinal) || !string.Equals(read.Created, login.Created, StringComparison.Ordinal))
+            ? Error("NOT_FOUND", "The login " + ScriptingErrors.Display(args.Target.Name!) + " is not the one that was read: it was renamed, dropped or replaced since. Refresh Object Explorer and try again.")
+            : null;
 
     /// <summary>sys.databases state of an offline database.</summary>
     internal const int OfflineState = 6;
@@ -1089,6 +1125,11 @@ internal sealed partial class ActionService : IDisposable
         ActionTemplate.SetOffline => "Take database offline",
         ActionTemplate.SetOfflineRollback => "Close connections and take database offline",
         ActionTemplate.SetOnline => "Bring database online",
+        ActionTemplate.DropServerRoleMember => "Remove from a server role",
+        ActionTemplate.RenameUser => "Rename a user",
+        ActionTemplate.DropRoleMember => "Remove from a database role",
+        ActionTemplate.AddLoginCredential => "Map a credential",
+        ActionTemplate.DropLoginCredential => "Remove a credential",
         _ => "Drop the object"
     };
 
@@ -1879,6 +1920,9 @@ internal sealed partial class ActionService : IDisposable
     private static async Task<List<string?>> RunStatementAsync(SqlConnection connection, PlannedStatement statement, bool dryRun, CancellationToken token, SqlTransaction? transaction = null)
     {
         ActionSql.Checked(statement);
+        // A bound statement never runs by its names alone: RunBoundAsync checks its principal around it, in its transaction.
+        if (statement.Principal is not null && ActionSql.BindingOf(statement.Template) is not null && !dryRun && transaction is null)
+            throw new InvalidOperationException("A bound statement runs through RunBoundAsync.");
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = ActionSql.Executable(statement.Template, dryRun);

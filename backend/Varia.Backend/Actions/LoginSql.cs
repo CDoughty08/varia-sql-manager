@@ -22,17 +22,21 @@ internal static partial class LoginSql
     /// <summary>Script Action's stand-in: unquoted, so a script run unedited fails to parse (102) and creates nothing.</summary>
     public const string Placeholder = "<password>";
 
-    /// <summary>The keyword text a CREATE LOGIN batch is built from: every literal it holds besides the guard messages and the
-    /// password's own delimiters. Each matches <see cref="KeywordLiteral"/>: no quote, bracket, comment or line break.</summary>
-    internal static readonly IReadOnlySet<string> Fragments = new HashSet<string>(StringComparer.Ordinal)
+    /// <summary>The keyword text a CREATE LOGIN or ALTER LOGIN batch is built from: every literal it holds besides the guard
+    /// messages and the passwords' own delimiters. Each matches <see cref="KeywordLiteral"/>: no quote, bracket, comment or line
+    /// break. Login Properties' options (D2c) each come as " WITH " or ", " before one of SMO's clauses.</summary>
+    internal static readonly IReadOnlySet<string> Fragments = new HashSet<string>(new[]
     {
         "N'CREATE LOGIN '", "N' FROM WINDOWS WITH DEFAULT_DATABASE='", "N' MUST_CHANGE'", "N', DEFAULT_DATABASE='", "N', DEFAULT_LANGUAGE='",
-        "N', CHECK_EXPIRATION=ON, CHECK_POLICY=ON'", "N', CHECK_EXPIRATION=OFF, CHECK_POLICY=ON'", "N', CHECK_EXPIRATION=OFF, CHECK_POLICY=OFF'"
-    };
+        "N', CHECK_EXPIRATION=ON, CHECK_POLICY=ON'", "N', CHECK_EXPIRATION=OFF, CHECK_POLICY=ON'", "N', CHECK_EXPIRATION=OFF, CHECK_POLICY=OFF'",
+        "N'ALTER LOGIN '", "N' UNLOCK'",
+        // D2e: Microsoft Entra, certificate and asymmetric key logins.
+        "N' FROM EXTERNAL PROVIDER WITH DEFAULT_DATABASE='", "N' FROM CERTIFICATE '", "N' FROM ASYMMETRIC KEY '"
+    }.Concat(OptionKeywords.SelectMany(keyword => new[] { "N' WITH " + keyword + "'", "N', " + keyword + "'" })), StringComparer.Ordinal);
     /// <summary>The guard messages and the module suffix, the batch's only other literals.</summary>
     internal static readonly IReadOnlySet<string> Messages = new HashSet<string>(StringComparer.Ordinal)
     {
-        "N'The password is missing.'", "N'A name could not be quoted.'", "N'.sys.sp_executesql'"
+        "N'The password is missing.'", "N'The old password is missing.'", "N'A name could not be quoted.'", "N'.sys.sp_executesql'"
     };
 
     // --- Catalog statements -----------------------------------------------------------------------------------------------
@@ -40,13 +44,23 @@ internal static partial class LoginSql
     /// <summary>New Login's describe, in master: whether the server takes Windows authentication only and whether this login may
     /// create logins (advisory: NULL does not warn), then at most @databases databases with their state, this login's access and
     /// whether they are read-only (ActionSql.ReadOnlyFact),
-    /// @languages languages and @roles server roles (each one more than listed, so a truncation shows).</summary>
+    /// @languages languages and @roles server roles, then (D2e) master's @certificates certificates and @keys asymmetric keys, and
+    /// @credentials credentials with an EKM credential's provider (each one more than listed, so a truncation shows).</summary>
     public const string Describe = "SELECT CONVERT(bit, CASE WHEN CONVERT(int, SERVERPROPERTY('IsIntegratedSecurityOnly')) = 1 THEN 1 ELSE 0 END) AS windows_only, "
         + "CONVERT(bit, ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, N'ALTER ANY LOGIN'), 1)) AS can_create;\n"
         + "SELECT TOP (@databases) d.name AS name, d.state AS state, CONVERT(bit, ISNULL(CASE WHEN d.user_access = 1 THEN 1 ELSE HAS_DBACCESS(d.name) END, 0)) AS has_access, "
         + ActionSql.ReadOnlyFact + " AS read_only FROM sys.databases AS d ORDER BY d.name;\n"
         + "SELECT TOP (@languages) l.name AS name, l.alias AS alias FROM sys.syslanguages AS l ORDER BY l.name;\n"
-        + "SELECT TOP (@roles) p.name AS name, p.is_fixed_role AS is_fixed FROM sys.server_principals AS p WHERE p.type = 'R' ORDER BY p.name;";
+        + "SELECT TOP (@roles) p.name AS name, p.is_fixed_role AS is_fixed FROM sys.server_principals AS p WHERE p.type = 'R' ORDER BY p.name;\n"
+        + "SELECT TOP (@certificates) c.name AS name FROM master.sys.certificates AS c ORDER BY c.name;\n"
+        + "SELECT TOP (@keys) k.name AS name FROM master.sys.asymmetric_keys AS k ORDER BY k.name;\n"
+        + "SELECT TOP (@credentials) c.name AS name, cp.name AS provider FROM sys.credentials AS c "
+        + "LEFT JOIN sys.cryptographic_providers AS cp ON c.target_type = N'CRYPTOGRAPHIC PROVIDER' AND cp.provider_id = c.target_id ORDER BY c.name;";
+
+    /// <summary>Check Names (D2 §6, the windowsPrincipal describe): what the server's Windows knows of @name, as CREATE LOGIN … FROM
+    /// WINDOWS resolves it. xp_logininfo answers a row per access path (none for an account no login lets in) or 15404 for an account
+    /// it cannot find; it needs sysadmin, or EXECUTE granted on it in master (Learn), and answers 229 otherwise.</summary>
+    public const string CheckNames = "EXEC master.sys.xp_logininfo @acctname = @name;";
 
     /// <summary>The preflight on the action's own connection, before anything runs: whether a server principal (a login or a server
     /// role) has the name, and whether this login may create logins (NULL does not refuse).</summary>
@@ -66,9 +80,29 @@ internal static partial class LoginSql
 
     private static bool Sql(NewLoginDto login) => login.Auth == "sql";
 
-    /// <summary>The batch that creates the login: @db (master), @p1 the login, @p2 the default database, @p3 the default language
-    /// when one is chosen, and for a SQL Server login @password. <paramref name="dryRun"/> (the live checks only, never the wire)
-    /// selects the statement instead of running it.</summary>
+    /// <summary>The source clause after the login's name, as SMO writes it (D2 §5.2): FROM WINDOWS and FROM EXTERNAL PROVIDER with the
+    /// default database (@p2), FROM CERTIFICATE and FROM ASYMMETRIC KEY with the certificate or key (@p2) and no defaults.</summary>
+    private static string Source(string auth) => auth switch
+    {
+        "windows" => " FROM WINDOWS WITH DEFAULT_DATABASE=",
+        "entra" => " FROM EXTERNAL PROVIDER WITH DEFAULT_DATABASE=",
+        "certificate" => " FROM CERTIFICATE ",
+        "asymmetricKey" => " FROM ASYMMETRIC KEY ",
+        _ => throw new InvalidOperationException("No source clause for " + auth)
+    };
+
+    /// <summary>What @p2 holds: the default database, or the certificate or asymmetric key a login is mapped to.</summary>
+    public static string SecondName(NewLoginDto login) => login.Auth switch
+    {
+        "certificate" => login.Certificate!,
+        "asymmetricKey" => login.AsymmetricKey!,
+        _ => login.DefaultDatabase!
+    };
+
+    /// <summary>The batch that creates the login: @db (master), @p1 the login, @p2 the default database (or the certificate or key
+    /// <see cref="SecondName"/> names), @p3 the default language when one is chosen, and for a SQL Server login @password. Managed
+    /// Instance's SQL Server login has no policy options (<see cref="NewLoginDto.CheckPolicy"/> null). <paramref name="dryRun"/> (the
+    /// live checks only, never the wire) selects the statement instead of running it.</summary>
     public static string CreateExecutable(NewLoginDto login, bool dryRun = false)
     {
         var build = new StringBuilder();
@@ -80,9 +114,9 @@ internal static partial class LoginSql
             if (login.MustChange == true) build.Append(" + N' MUST_CHANGE'");
             build.Append(" + N', DEFAULT_DATABASE=' + QUOTENAME(@p2)");
         }
-        else build.Append("N' FROM WINDOWS WITH DEFAULT_DATABASE=' + QUOTENAME(@p2)");
+        else build.Append("N'").Append(Source(login.Auth)).Append("' + QUOTENAME(@p2)");
         if (login.DefaultLanguage is not null) build.Append(" + N', DEFAULT_LANGUAGE=' + QUOTENAME(@p3)");
-        if (Sql(login)) build.Append(" + N'").Append(Policy(login)).Append('\'');
+        if (Sql(login) && login.CheckPolicy is not null) build.Append(" + N'").Append(Policy(login)).Append('\'');
         build.Append(";\n").Append(ActionSql.Guard);
         build.Append(dryRun ? "SELECT @stmt AS stmt;" : "DECLARE @module nvarchar(300) = QUOTENAME(@db) + N'.sys.sp_executesql';\nEXEC @module @stmt;");
         return build.ToString();
@@ -97,24 +131,25 @@ internal static partial class LoginSql
         {
             text.Append(" WITH PASSWORD=").Append(password is null ? Placeholder : "N'" + password.Replace("'", "''", StringComparison.Ordinal) + "'");
             if (login.MustChange == true) text.Append(" MUST_CHANGE");
-            text.Append(", DEFAULT_DATABASE=").Append(ActionSql.Quote(login.DefaultDatabase));
+            text.Append(", DEFAULT_DATABASE=").Append(ActionSql.Quote(login.DefaultDatabase!));
         }
-        else text.Append(" FROM WINDOWS WITH DEFAULT_DATABASE=").Append(ActionSql.Quote(login.DefaultDatabase));
+        else text.Append(Source(login.Auth)).Append(ActionSql.Quote(SecondName(login)));
         if (login.DefaultLanguage is { } language) text.Append(", DEFAULT_LANGUAGE=").Append(ActionSql.Quote(language));
-        if (Sql(login)) text.Append(Policy(login));
+        if (Sql(login) && login.CheckPolicy is not null) text.Append(Policy(login));
         return text.ToString();
     }
 
     /// <summary>Server roles in the order the statements run: by name, case-insensitively, then ordinally.</summary>
     public static List<string> Ordered(IEnumerable<string> roles) => [.. roles.Order(StringComparer.OrdinalIgnoreCase).ThenBy(role => role, StringComparer.Ordinal)];
 
-    /// <summary>The statements after CREATE LOGIN, in SSMS's order (D2 §0): DENY CONNECT SQL, then ALTER LOGIN … DISABLE, then
-    /// ALTER SERVER ROLE … ADD MEMBER per role.</summary>
+    /// <summary>The statements after CREATE LOGIN, in SSMS's order (D2 §0): DENY CONNECT SQL, then ALTER LOGIN … DISABLE, then ALTER
+    /// LOGIN … ADD CREDENTIAL per credential in Mapped Credentials' order (D2e), then ALTER SERVER ROLE … ADD MEMBER per role.</summary>
     public static List<PlannedStatement> After(NewLoginDto login, IReadOnlyList<string> roles, LoginStatusDto status)
     {
         var plan = new List<PlannedStatement>();
         if (status.Connect == "deny") plan.Add(new(ActionTemplate.DenyConnect, "master", [login.Name]));
         if (!status.Enabled) plan.Add(new(ActionTemplate.DisableLogin, "master", [login.Name]));
+        foreach (var credential in login.Credentials ?? []) plan.Add(new(ActionTemplate.AddLoginCredential, "master", [login.Name, credential]));
         foreach (var role in Ordered(roles)) plan.Add(new(ActionTemplate.AddServerRoleMember, "master", [role, login.Name]));
         return plan;
     }
@@ -142,30 +177,53 @@ internal static partial class LoginSql
     }
 
     /// <summary>The most statements New Login plans (src/shared/actions/logins.ts newLoginStatements): CREATE LOGIN, Deny, Disable,
-    /// each server role, and per mapping CREATE USER, the default schema's two and one per role.</summary>
-    public static int Statements(LoginStatusDto status, IReadOnlyCollection<string> roles, IReadOnlyList<UserMappingDto> mappings) =>
-        1 + (status.Connect == "deny" ? 1 : 0) + (status.Enabled ? 0 : 1) + roles.Count + mappings.Sum(mapping => 1 + (mapping.DefaultSchema is null ? 0 : 2) + mapping.RolesAdd.Count);
+    /// each credential, each server role, per mapping CREATE USER, the default schema's two and one per role, and one per permission
+    /// (D2d).</summary>
+    public static int Statements(NewLoginDto login, LoginStatusDto status, IReadOnlyCollection<string> roles, IReadOnlyList<UserMappingDto> mappings, int permissions = 0) =>
+        1 + (status.Connect == "deny" ? 1 : 0) + (status.Enabled ? 0 : 1) + (login.Credentials?.Count ?? 0) + roles.Count
+        + mappings.Sum(mapping => 1 + (mapping.DefaultSchema is null ? 0 : 2) + mapping.RolesAdd.Count) + permissions;
 
     /// <summary>Script Action's text (D2 §5.6, critic A14). A SQL Server login's script is one batch in one XACT_ABORT transaction
     /// under the placeholder header: unedited, it fails to parse and runs nothing, so no later statement can give a role to an
     /// existing login of that name or map a user to it; a mapped database's statement runs there as EXEC [db].sys.sp_executesql
-    /// N'…' (one batch cannot USE a database for a later statement only). A Windows login's script is SSMS's: a GO after each
-    /// statement, and USE [db] before each mapped database's.</summary>
-    public static string ScriptText(NewLoginDto login, IReadOnlyList<string> roles, LoginStatusDto status, IReadOnlyList<UserMappingDto> mappings, IReadOnlySet<string> missingSchemas, string header)
+    /// N'…' (one batch cannot USE a database for a later statement only). A certificate, asymmetric key or Microsoft Entra login whose
+    /// CREATE LOGIN has statements after it takes the same form without the header (D2e review): its CREATE fails wherever master lacks
+    /// that certificate or key or the server lacks Microsoft Entra, and a later GO batch would then deny, disable, map a credential, give
+    /// a role or a permission or map a user to an existing login of that name. A Windows login's script, and one with CREATE LOGIN alone,
+    /// is SSMS's: a GO after each statement, and USE [db] before each mapped database's. The Securables page's statements
+    /// (<paramref name="permissions"/>, D2d) come last, in master: after USE [master] again when a mapped database's statements came
+    /// before them.</summary>
+    public static string ScriptText(NewLoginDto login, IReadOnlyList<string> roles, LoginStatusDto status, IReadOnlyList<UserMappingDto> mappings, IReadOnlySet<string> missingSchemas, string header,
+        IReadOnlyList<string>? permissions = null)
     {
         var server = new List<string> { CreateStatement(login, null) };
         server.AddRange(After(login, roles, status).Select(ActionSql.Checked).Select(ActionSql.Statement));
         var mapped = Mappings(login, mappings, missingSchemas).Select(ActionSql.Checked).ToList();
+        var after = permissions ?? [];
+        var oneBatch = Sql(login) || (login.Auth != "windows" && server.Count + mapped.Count + after.Count > 1);
+        return Script(server, mapped, after, oneBatch, Sql(login) ? header : null);
+    }
+
+    /// <summary>The two script forms of New Login and Login Properties: SSMS's (a GO after each statement, USE [db] before each mapped
+    /// database's, USE [master] again before the permissions after them), or with a password one XACT_ABORT batch under the header,
+    /// each mapped database's statement through its sp_executesql (the header only when one is given: a certificate, key or Microsoft
+    /// Entra login's one batch has none, D2e).</summary>
+    internal static string Script(IReadOnlyList<string> server, IReadOnlyList<PlannedStatement> mapped, IReadOnlyList<string> permissions, bool oneBatch, string? header)
+    {
         var text = new StringBuilder("USE [master]").Append(NL).Append("GO").Append(NL);
-        if (!Sql(login))
+        if (!oneBatch)
         {
             foreach (var statement in server) text.Append(statement).Append(NL).Append("GO").Append(NL);
             foreach (var statement in mapped) text.Append(ActionSql.ScriptText(statement));
+            if (mapped.Count > 0 && permissions.Count > 0) text.Append("USE [master]").Append(NL).Append("GO").Append(NL);
+            foreach (var statement in permissions) text.Append(statement).Append(NL).Append("GO").Append(NL);
             return text.ToString();
         }
-        text.Append(header).Append(NL).Append("SET XACT_ABORT ON;").Append(NL).Append("BEGIN TRANSACTION;").Append(NL);
+        if (header is not null) text.Append(header).Append(NL);
+        text.Append("SET XACT_ABORT ON;").Append(NL).Append("BEGIN TRANSACTION;").Append(NL);
         foreach (var statement in server) text.Append(statement).Append(';').Append(NL);
         foreach (var statement in mapped) text.Append(InDatabase(statement)).Append(';').Append(NL);
+        foreach (var statement in permissions) text.Append(statement).Append(';').Append(NL);
         return text.Append("COMMIT TRANSACTION;").Append(NL).Append("GO").Append(NL).ToString();
     }
 
@@ -241,11 +299,13 @@ internal static partial class LoginSql
         return count;
     }
 
-    /// <summary>Problems with one CREATE LOGIN batch (D2 §5.5's LoginBuilderRules; empty when it passes): a format hole, a secret
-    /// use any lint refuses (critic A15), no quoting guard; @password other than exactly twice (its NULL guard first, then once
-    /// through the binary-collation REPLACE), so no inner batch receives it and nothing returns it; a name outside QUOTENAME or @db
-    /// outside the module; a literal that is neither keyword text from <see cref="Fragments"/> nor a guard message; not exactly
-    /// one EXEC @module @stmt (or the dry run's SELECT); and a banned word (SID, HASHED, ROLLBACK, DROP, xp_, EXEC ( …).</summary>
+    /// <summary>Problems with one CREATE LOGIN or ALTER LOGIN batch (D2 §5.5's LoginBuilderRules; empty when it passes): a format
+    /// hole, a secret use any lint refuses (critic A15), no quoting guard; @password other than exactly twice (its NULL guard first,
+    /// then once through the binary-collation REPLACE), so no inner batch receives it and nothing returns it; @old_password (Login
+    /// Properties, D2c) other than exactly twice (its NULL guard right after the password's, then once through the same REPLACE
+    /// right after the password's), or without @password; a name outside QUOTENAME or @db outside the module; a literal that is
+    /// neither keyword text from <see cref="Fragments"/> nor a guard message; not exactly one EXEC @module @stmt (or the dry run's
+    /// SELECT); and a banned word (SID, HASHED, ROLLBACK, DROP, xp_, EXEC ( …).</summary>
     public static List<string> LintExecutable(string text)
     {
         var problems = new List<string>();
@@ -259,11 +319,21 @@ internal static partial class LoginSql
             if (Count(text, PasswordExpression) != 1) problems.Add("does not quote @password exactly once through the binary-collation REPLACE");
             if (uses != 2) problems.Add("uses @password " + uses + " times");
         }
-        // What @password's own forms leave; a @password still in it is reported once, here.
-        var rest = text.Replace(PasswordGuard, "", StringComparison.Ordinal).Replace(PasswordExpression, "", StringComparison.Ordinal);
+        var old = Count(text, "@old_password");
+        if (old > 0)
+        {
+            if (!text.StartsWith(PasswordGuard + OldPasswordGuard, StringComparison.Ordinal)) problems.Add("does not check @old_password for NULL right after @password");
+            if (Count(text, PasswordExpression + " + " + OldPasswordExpression) != 1 || Count(text, OldPasswordExpression) != 1)
+                problems.Add("does not quote @old_password exactly once, right after the password, through the binary-collation REPLACE");
+            if (old != 2) problems.Add("uses @old_password " + old + " times");
+        }
+        // What the passwords' own forms leave; a @password or @old_password still in it is reported once, here.
+        var rest = text.Replace(PasswordGuard, "", StringComparison.Ordinal).Replace(OldPasswordGuard, "", StringComparison.Ordinal)
+            .Replace(PasswordExpression, "", StringComparison.Ordinal).Replace(OldPasswordExpression, "", StringComparison.Ordinal);
         if (rest.Contains("@password", StringComparison.Ordinal)) problems.Add("uses @password outside its guard and REPLACE");
+        if (rest.Contains("@old_password", StringComparison.Ordinal)) problems.Add("uses @old_password outside its guard and REPLACE");
         foreach (Match used in Variable().Matches(NameUse().Replace(rest, "")))
-            if (used.Value is not ("@stmt" or "@module" or "@password")) problems.Add("uses " + used.Value + " outside QUOTENAME");
+            if (used.Value is not ("@stmt" or "@module" or "@password" or "@old_password")) problems.Add("uses " + used.Value + " outside QUOTENAME");
         var runs = Count(text, "EXEC @module @stmt;") + Count(text, "SELECT @stmt AS stmt;");
         if (runs != 1 || Exec().Matches(text).Count != Count(text, "EXEC @module @stmt;")) problems.Add("does not run exactly one EXEC @module @stmt");
         if (Banned().IsMatch(text)) problems.Add("has a banned word: " + Banned().Match(text).Value);
@@ -272,26 +342,32 @@ internal static partial class LoginSql
         return problems;
     }
 
-    /// <summary>Every CREATE LOGIN the builder can write (each auth, password option chain and language, run and dry run), with
-    /// its lint problems (ActionSql.Lint).</summary>
+    /// <summary>Every CREATE LOGIN the builder can write (each auth, password option chain and language, run and dry run), and every
+    /// ALTER LOGIN of Login Properties' options and password, with its lint problems (ActionSql.Lint).</summary>
     public static IEnumerable<(string Name, List<string> Problems)> Lint()
     {
         foreach (var login in Corpus())
             foreach (var dry in new[] { false, true })
                 yield return ("create login " + Shape(login) + (dry ? " (dry run)" : ""), LintExecutable(CreateExecutable(login, dry)));
+        foreach (var item in PropertiesLint()) yield return item;
     }
 
-    /// <summary>One login per shape the builder distinguishes.</summary>
+    /// <summary>One login per shape the builder distinguishes: each kind with and without a language where it takes one, every policy
+    /// chain on SQL Server, and Managed Instance's SQL Server login without the options (D2e).</summary>
     internal static IEnumerable<NewLoginDto> Corpus()
     {
         foreach (var language in new[] { null, "us_english" })
         {
             yield return new("windows", "DOMAIN\\name", "master", language);
+            yield return new("entra", "user@example.com", "master", language);
+            yield return new("sql", "name", "master", language);
             foreach (var (policy, expiration, mustChange) in new[] { (true, true, true), (true, true, false), (true, false, false), (false, false, false) })
                 yield return new("sql", "name", "master", language, policy, expiration, mustChange);
         }
+        yield return new("certificate", "name", null, Certificate: "cert");
+        yield return new("asymmetricKey", "name", null, AsymmetricKey: "key");
     }
 
-    private static string Shape(NewLoginDto login) => login.Auth + (login.Auth == "sql" ? " policy " + login.CheckPolicy + " expiration " + login.CheckExpiration + " must change " + login.MustChange : "")
+    private static string Shape(NewLoginDto login) => login.Auth + (login.Auth == "sql" ? login.CheckPolicy is null ? " without options" : " policy " + login.CheckPolicy + " expiration " + login.CheckExpiration + " must change " + login.MustChange : "")
         + (login.DefaultLanguage is null ? "" : " with a language");
 }

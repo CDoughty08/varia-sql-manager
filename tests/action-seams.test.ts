@@ -5,7 +5,7 @@ import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { requestSchemas, resultSchemas, validateResult } from '../src/main/validation'
 import { methodPolicies } from '../src/shared/ipc/methods'
-import { actionLimits, actionServes, actionsCatalogJson, catalogActionEngines, objectActions, type CatalogAction } from '../src/shared/actions/catalog'
+import { actionLimits, actionServes, actionsCatalogJson, catalogActionEngines, isKindDialogAction, objectActions, type CatalogAction, type DialogAction } from '../src/shared/actions/catalog'
 import { actionExecuteResultSchema, actionScriptRequestSchema, actionStepLimit, actionStepSchema } from '../src/shared/actions/schema'
 import {
   loginLimits, loginMessages, loginRefusal, loginRules, loginsCatalog, loginSubtypeOf, loginSubtypes, loginVerbs, type LoginFacts, type LoginSubtype, type LoginVerb
@@ -37,8 +37,10 @@ describe('server engines', () => {
       // A restore's cleanup drops a partly restored database, which a large one takes a while to do.
       expect(row.cleanupMs, row.action).toBe(row.action === 'restore' ? 30_000 : actionLimits.cleanupMs)
     }
-    // New Login (D2a) runs on SQL Server only until D2e.
-    expect(json.actions.filter(row => row.action === 'createLogin').map(row => [row.action, row.engines])).toEqual([['createLogin', ['box']]])
+    // New Login (D2a) runs on SQL Server, and from D2e on Managed Instance too.
+    expect(json.actions.filter(row => row.action === 'createLogin').map(row => [row.action, row.engines])).toEqual([['createLogin', ['box', 'managedInstance']]])
+    // Login Properties (D2c) is the dialog a login's Properties opens: the backend reads its kind and verb to check its target.
+    expect(json.actions.filter(row => isKindDialogAction(row.action as DialogAction))).toMatchObject([{ action: 'loginProperties', class: 'dialog', kind: 'login', verb: 'properties', engines: ['box', 'managedInstance'] }])
     expect(json.limits.cleanupMs).toBe(10_000)
     expect(designerEngines).toEqual(['box', 'managedInstance'])
     expect(JSON.parse(designerCatalogJson()).engines).toEqual(['box', 'managedInstance'])

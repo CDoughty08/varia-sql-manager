@@ -1,7 +1,8 @@
-import { actionLimits, dialogSpecs, dialogTitle, isCreateAction, isModalDialog, isServerAction, objectActionSpecs, unknownOutcomeMessage, type ModalDialogId, type PageId } from '../../../shared/actions/catalog.ts'
+import { actionLimits, dialogSpecs, dialogTitle, isCreateAction, isKindDialogAction, isModalDialog, isServerAction, objectActionSpecs, unknownOutcomeMessage, type ModalDialogId, type PageId } from '../../../shared/actions/catalog.ts'
 import { noScriptNotice } from '../../../shared/actions/database.ts'
-import { loginDatabaseRolesDescribe, loginLimits, type LoginDatabaseRoles, type NewLoginModel } from '../../../shared/actions/logins.ts'
-import { promptTabFacts } from '../../../shared/actions/prompts.ts'
+import { checkNamesText, loginDatabaseRolesDescribe, loginLimits, newLoginMessages, windowsLoginName, windowsPrincipalDescribe, type LoginDatabaseRoles, type NewLoginModel, type WindowsPrincipal } from '../../../shared/actions/logins.ts'
+import { actionPrompts, promptTabFacts } from '../../../shared/actions/prompts.ts'
+import { loginEffectiveDescribe, securableKey, type EffectivePermissions, type SecurableRef } from '../../../shared/actions/securables.ts'
 import type { ActionDescribeRequest, ActionDescribeResult, ActionError, ActionExecuteResult, ActionRequest, ActionStep, DatabaseFileRef, DatabaseStateModel, DeleteTarget } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import type { FolderId } from '../../../shared/explorer/catalog.ts'
@@ -19,7 +20,7 @@ import { scriptFileName, scriptObjectLabel } from '../scripting/ScriptingService
 import type { LiveConnection } from '../services/connections'
 import type { ServerFilePick } from '../server-files/ServerFilePickerService'
 import { filePathsText } from './database-gone'
-import { definitionOf, type BuiltRequest, type DialogDraft, type DialogEffects, type DialogModel } from './definitions'
+import { definitionOf, type BuiltRequest, type DialogConfirmation, type DialogContext, type DialogDraft, type DialogEffects, type DialogModel } from './definitions'
 import { emptySecrets, mappable, type SecretState } from './new-login'
 
 /**
@@ -61,11 +62,22 @@ export interface OpenObjectDialog {
   readonly refusal?: string
   /** User Mapping's reads of the databases selected so far (`loadDatabaseRoles`), by database name. */
   readonly databaseRoles?: ReadonlyMap<string, DatabaseRolesLookup>
+  /** Check Names' last answer (D2e, `checkNames`), for the name it checked: Select User or Group shows it while that name is typed. */
+  readonly checkNames?: CheckNamesLookup
+  /** Securables' Effective tab reads (Login Properties, `loadEffective`), by securableKey. */
+  readonly effective?: ReadonlyMap<string, EffectiveLookup>
   /** Delete Object on a login: Varia's other connections that sign in as it (critic D4-3), by their labels. */
   readonly loginConnections?: readonly string[]
+  /** Counts the times the secret slot was emptied while the dialog stayed open (`spentSecrets`): the password fields, which keep their
+   *  text themselves, remount on it and come back empty. */
+  readonly secretEpoch?: number
 }
 /** One database's roles, guest state and schemas, as User Mapping reads them when its row is selected. */
 export type DatabaseRolesLookup = { readonly state: 'loading' } | { readonly state: 'ready'; readonly value: LoginDatabaseRoles } | { readonly state: 'failed'; readonly error: ActionError }
+/** Check Names' answer for one typed name: checking, what xp_logininfo said, or why it could not say. */
+export type CheckNamesLookup = { readonly name: string } & ({ readonly state: 'checking' } | { readonly state: 'ready'; readonly value: WindowsPrincipal } | { readonly state: 'failed'; readonly error: ActionError })
+/** One securable's effective permissions for the login, as the Effective tab reads them when it shows that securable. */
+export type EffectiveLookup = { readonly state: 'loading' } | { readonly state: 'ready'; readonly value: EffectivePermissions } | { readonly state: 'failed'; readonly error: ActionError }
 /**
  * A database an action removed (D3 §8): the server as connected to, so its Properties documents can say where it was. A
  * detached one (D3b) carries the files it left on the server (`filesKept`, possibly none listed), which a deleted one never has.
@@ -73,7 +85,7 @@ export type DatabaseRolesLookup = { readonly state: 'loading' } | { readonly sta
 export interface DatabaseGone { readonly connectionId: string; readonly server: string; readonly database: string; readonly filesKept?: readonly DatabaseFileRef[] }
 export interface ObjectDialogSnapshot { readonly open?: OpenObjectDialog }
 export interface ObjectDialogServiceOptions {
-  readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText' | 'confirmOpenConnections'>
+  readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText' | 'confirmOpenConnections' | 'confirmAction'>
   readonly connections: ExternalStore<readonly LiveConnection[]>
   readonly explorer: {
     listingFolderOf(nodeId: number): number | undefined
@@ -101,8 +113,9 @@ export interface ObjectDialogServiceOptions {
   readonly tabNames?: (ids: readonly string[]) => readonly string[]
 }
 
-/** A password field of an object dialog. Their values live only in the service's secret slot, never in its snapshot. */
-export type SecretField = 'password' | 'confirm'
+/** A password field of an object dialog. Their values live only in the service's secret slot, never in its snapshot. The old
+ *  password is Login Properties' (Specify old password). */
+export type SecretField = 'password' | 'confirm' | 'oldPassword'
 
 export const dialogMessages = {
   disconnected: 'The server was disconnected.',
@@ -126,6 +139,10 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   private request?: { readonly id: string; readonly dialog: number }
   /** User Mapping's read in flight, apart from `request`: OK and Script run while it reads, and Stop never cancels it. */
   private lookup?: { readonly id: string; readonly dialog: number; readonly database: string }
+  /** Check Names' read in flight (D2e), apart from both: a new check cancels it. */
+  private check?: { readonly id: string; readonly dialog: number }
+  /** The Effective tab's read in flight, apart from both: it never waits for User Mapping's, nor cancels it. */
+  private effectiveLookup?: { readonly id: string; readonly dialog: number; readonly key: string }
   /** A page's own describes (Attach's Add, a path check), which Close and a disconnect cancel. */
   private readonly extra = new Set<string>()
   private disposed = false
@@ -134,6 +151,10 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   private readonly secrets = new Map<SecretField, string>()
   /** The error showProblem put up, so an edit that resolves it can take it down. */
   private problem?: ActionError
+  /** The tree node the open dialog was opened for, which a hand-off (Unlock's Set a new password…) opens the next dialog on. */
+  private node?: ExplorerMenuNode
+  /** What a hand-off sets over the next dialog's first draft (Login Properties: Login is locked out cleared), by that dialog's id. */
+  private patch?: { readonly dialog: number; readonly value: Readonly<Record<string, unknown>> }
 
   constructor(private readonly options: ObjectDialogServiceOptions) {
     super({})
@@ -144,8 +165,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   get current(): OpenObjectDialog | undefined { return this.getSnapshot().open }
 
   /** Opens `dialog` for an Object Explorer node and describes it; refused while another dialog is open. A folder's action
-   *  (Attach) opens on its folder, with the folder's server as the target. */
-  open(dialog: ModalDialogId, node: ExplorerMenuNode): void {
+   *  (Attach) opens on its folder, with the folder's server as the target. `patch` goes over its first draft (a hand-off's). */
+  open(dialog: ModalDialogId, node: ExplorerMenuNode, patch?: Readonly<Record<string, unknown>>): void {
     if (this.disposed) return
     if (!isModalDialog(dialog)) throw new Error('That dialog opens as a document.')
     if (this.current) throw new Error('Close the open dialog first.')
@@ -153,7 +174,7 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     // A folder's action (Attach) opens on its folder and targets the folder's server; a create action (New Login) names its own
     // target; any other acts on its node's object.
     const action = dialogSpecs[dialog].action
-    const folder = isServerAction(action) || isCreateAction(action) ? undefined : objectActionSpecs[action].folder
+    const folder = isServerAction(action) || isCreateAction(action) || isKindDialogAction(action) ? undefined : objectActionSpecs[action].folder
     const target = definition.targetOf ? definition.targetOf(node)
       : node.ref.type === 'object' ? (folder ? undefined : node.ref.object) : folder && node.ref.folder === folder ? node.ref.owner : undefined
     const connection = this.options.connections.getSnapshot().find(item => item.id === node.connectionId && !item.lost)
@@ -164,6 +185,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
       ...(connection.login ? { login: connection.login } : {}), page: dialogSpecs[dialog].pages[0].id, phase: 'loading', ...(definition.secrets ? { secretState: emptySecrets } : {})
     }
     this.secrets.clear()
+    this.node = node
+    this.patch = patch ? { dialog: open.id, value: patch } : undefined
     this.publish({ open })
     void this.describe(open)
   }
@@ -231,19 +254,94 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     this.update(open, { databaseRoles: lookups })
     void this.readDatabaseRoles(open, database, requestId)
   }
+  /** Reads one database for User Mapping; Login Properties' read names its login, whose user and roles there it reads too, and the
+   *  definition takes them into its model and draft (`lookedUp`). */
   private async readDatabaseRoles(open: OpenObjectDialog, database: string, requestId: string): Promise<void> {
-    const result = await this.call(() => this.options.api.describeObject({ connectionId: open.connectionId, requestId, dialog: loginDatabaseRolesDescribe, target: { kind: 'database', name: database } }))
+    const definition = definitionOf(open.dialog), login = definition.rolesLogin?.(open.target)
+    const result = await this.call(() => this.options.api.describeObject({
+      connectionId: open.connectionId, requestId, dialog: loginDatabaseRolesDescribe, target: { kind: 'database', name: database }, ...(login !== undefined ? { login } : {})
+    }))
     if (this.lookup?.id !== requestId) return
     this.lookup = undefined
     const current = this.current
     if (this.disposed || current?.id !== open.id || current.phase === 'disconnected') return
     const value = result.ok ? result.value.loginDatabaseRoles : undefined
     const failure = !result.ok ? error('SQL_ERROR', result.error) : result.value.error ?? (value ? undefined : error('NOT_FOUND', 'The database could not be read.'))
-    this.update(current, { databaseRoles: new Map(current.databaseRoles ?? []).set(database, failure || !value ? { state: 'failed', error: failure! } : { state: 'ready', value }) })
+    const looked = !failure && value && current.model && current.draft && definition.lookedUp ? definition.lookedUp(current.model, current.draft, database, value) : undefined
+    this.update(current, {
+      databaseRoles: new Map(current.databaseRoles ?? []).set(database, failure || !value ? { state: 'failed', error: failure! } : { state: 'ready', value }),
+      ...(looked ? { model: looked.model, draft: looked.draft } : {})
+    })
   }
+  /** Cancels the dialog's reads apart from its request: User Mapping's, Check Names' and the Effective tab's. */
   private cancelLookup(): void {
     if (this.lookup) this.cancel([this.lookup.id])
     this.lookup = undefined
+    if (this.check) this.cancel([this.check.id])
+    this.check = undefined
+    if (this.effectiveLookup) this.cancel([this.effectiveLookup.id])
+    this.effectiveLookup = undefined
+  }
+
+  /**
+   * Check Names (D2e, Select User or Group): asks the server about a Windows account through xp_logininfo (the windowsPrincipal
+   * describe), as CREATE LOGIN … FROM WINDOWS resolves it. A name that is not DOMAIN\name is refused here without a request; a check
+   * still running is cancelled. Only New Login's open, ready dialog checks.
+   */
+  checkNames(name: string): void {
+    const open = this.current
+    if (!open?.model || open.dialog !== 'newLogin' || open.phase === 'loading' || open.phase === 'loadFailed' || open.phase === 'disconnected' || open.phase === 'executing') return
+    if (this.check) { this.cancel([this.check.id]); this.check = undefined }
+    if (!windowsLoginName.test(name) || name.length > actionLimits.newName) { this.update(open, { checkNames: { name, state: 'failed', error: error('NOT_SUPPORTED', newLoginMessages.windowsName) } }); return }
+    const requestId = this.newId()
+    this.check = { id: requestId, dialog: open.id }
+    this.update(open, { checkNames: { name, state: 'checking' } })
+    void (async () => {
+      const result = await this.call(() => this.options.api.describeObject({ connectionId: open.connectionId, requestId, dialog: windowsPrincipalDescribe, target: { kind: 'login', name } }))
+      if (this.check?.id !== requestId) return
+      this.check = undefined
+      const current = this.current
+      if (this.disposed || current?.id !== open.id || current.phase === 'disconnected') return
+      const value = result.ok ? result.value.windowsPrincipal : undefined
+      const failure = !result.ok ? error('SQL_ERROR', result.error) : result.value.error ?? (value ? undefined : error('NOT_FOUND', checkNamesText.notFound))
+      this.update(current, { checkNames: failure || !value ? { name, state: 'failed', error: failure! } : { name, state: 'ready', value } })
+    })().catch(onUnexpectedError)
+  }
+
+  /**
+   * Securables' Effective tab shows a securable (Login Properties only): reads what the login may do there, as the login, once per
+   * dialog (again after a failure, and after a partial run's reload, which forgets them all). A read still running for another
+   * securable is cancelled and forgotten, so moving through the grid never queues reads.
+   */
+  loadEffective(securable: SecurableRef): void {
+    const open = this.current
+    if (open?.dialog !== 'loginProperties' || !open.model || open.phase === 'loadFailed' || open.phase === 'disconnected' || open.target.name === undefined) return
+    const key = securableKey(securable), known = open.effective?.get(key)
+    if (known && known.state !== 'failed') return
+    const stale = this.effectiveLookup
+    let lookups = new Map(open.effective ?? [])
+    if (stale) {
+      this.effectiveLookup = undefined
+      this.cancel([stale.id])
+      if (stale.dialog === open.id) lookups.delete(stale.key)
+    }
+    const requestId = this.newId()
+    this.effectiveLookup = { id: requestId, dialog: open.id, key }
+    lookups = lookups.set(key, { state: 'loading' })
+    this.update(open, { effective: lookups })
+    void this.readEffective(open, securable, key, requestId)
+  }
+  private async readEffective(open: OpenObjectDialog, securable: SecurableRef, key: string, requestId: string): Promise<void> {
+    const result = await this.call(() => this.options.api.describeObject({
+      connectionId: open.connectionId, requestId, dialog: loginEffectiveDescribe, target: open.target, securable: securable.type === 'server' ? { type: 'server' } : { type: securable.type, name: securable.name! }
+    }))
+    if (this.effectiveLookup?.id !== requestId) return
+    this.effectiveLookup = undefined
+    const current = this.current
+    if (this.disposed || current?.id !== open.id || current.phase === 'disconnected') return
+    const value = result.ok ? result.value.effectivePermissions : undefined
+    const failure = !result.ok ? error('SQL_ERROR', result.error) : result.value.error ?? (value ? undefined : error('NOT_FOUND', 'The effective permissions could not be read.'))
+    this.update(current, { effective: new Map(current.effective ?? []).set(key, failure || !value ? { state: 'failed', error: failure! } : { state: 'ready', value }) })
   }
 
   /** The server file picker for the open dialog's server (Attach's Add… and "…"): the chosen path, or undefined. */
@@ -300,21 +398,25 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     if (!open || open.phase === 'executing' || open.phase === 'scripting' || open.phase === 'loading' || open.phase === 'confirming') return
     if (open.phase === 'disconnected' || open.phase === 'loadFailed' || open.phase === 'succeeded' || !open.model || !open.draft) { this.close(); return }
     const definition = definitionOf(open.dialog)
+    // A hand-off (Unlock's Set a new password…) runs nothing here: unless OK is blocked, this dialog closes and the next one opens.
+    const handOff = definition.handOff?.(open.model, open.draft)
+    if (handOff) { if (!this.blockedReason(open)) this.handOver(handOff); return }
     let built = definition.request(open.target, open.model, open.draft, open.secretState ?? emptySecrets)
     if (!built) { this.close(); return }
     // A draft's own problem (Attach: a data file not found) shows in the message bar; a definition's other reasons (Take Offline:
     // sessions still connected) keep OK disabled with the reason beside it, so Enter does nothing either.
     if ('problem' in built) { this.showProblem(open, built.problem); return }
     if (this.blockedReason(open)) return
-    const confirmation = definition.confirm?.(open.model, built)
+    const context = this.context(open)
+    const confirmation = definition.confirm?.(open.model, built, context)
     if (confirmation) {
       // Main's message box; a failure or a dialog that closed meanwhile counts as No, and No sends nothing.
       this.update(open, { phase: 'confirming', error: undefined, notice: undefined })
-      const answer = await this.call(() => this.options.api.confirmOpenConnections())
+      const answer = await this.confirmed(confirmation)
       // Cancel, a lost server or a disposed service while the box was up: nothing runs.
       if (this.disposed || this.current?.id !== open.id || this.current.phase !== 'confirming') return
-      if (!answer.ok || !answer.value) { this.update(open, { phase: 'ready' }); return }
-      built = definition.withConfirmation?.(built, confirmation) ?? built
+      if (!answer) { this.update(open, { phase: 'ready' }); return }
+      if (confirmation === 'openConnections') built = definition.withConfirmation?.(built, confirmation) ?? built
     }
     const requestId = this.begin(open)
     this.update(open, { phase: 'executing', error: undefined, notice: undefined, steps: undefined })
@@ -324,9 +426,11 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const run = definition.longRun ? this.options.longRuns?.begin({ kind: definition.longRun, connectionId: open.connectionId, server: open.server, refused: refusal => this.update(open, { refusal }) }) : undefined
     let result: ApiResult<ActionExecuteResult>
     try {
-      // The password joins only this request, read from the slot as it is sent; the request object is not kept.
+      // The passwords join only this request, read from the slot as it is sent; the request object is not kept.
+      const attach = !!definition.secrets?.(draft, sent), old = attach && !!definition.oldPassword?.(sent)
       result = await this.call(() => this.options.api.executeObjectAction({
-        ...sent, ...(definition.secrets?.(draft) ? { secrets: { password: this.secrets.get('password') ?? '' } } : {}), connectionId: open.connectionId, requestId
+        ...sent, ...(attach ? { secrets: { password: this.secrets.get('password') ?? '', ...(old ? { oldPassword: this.secrets.get('oldPassword') ?? '' } : {}) } } : {}),
+        connectionId: open.connectionId, requestId
       } as ActionRequest))
     } finally { run?.dispose(); this.update(open, { refusal: undefined }) }
     if (!this.end(open, requestId)) return
@@ -341,7 +445,7 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
       // SQL Server's informational messages (a database left SINGLE_USER) stay readable in a dialog that stays open.
       if (definition.keepOpen) this.update(open, { phase: 'succeeded', steps: value.steps, ...(value.messages.length ? { notice: value.messages.join(' ') } : {}) })
       else this.publish({})
-      try { definition.afterSuccess(this.effectsOf(open), sent) } catch (failure) { onUnexpectedError(failure) }
+      try { definition.afterSuccess(this.effectsOf(open), sent, { target: open.target, label: open.label }, open.model, context) } catch (failure) { onUnexpectedError(failure) }
       this.reconcileChanged(open, open.model, value.steps)
       return
     }
@@ -354,16 +458,43 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
       try { if (definition.afterPartial) definition.afterPartial(effects, sent); else effects.refreshListing() } catch (failure) { onUnexpectedError(failure) }
       this.reconcileChanged(open, open.model, value!.steps)
     }
+    // Completed steps that used the secret slot (Login Properties' password change): a retry must not send it again.
+    const spent = partial ? this.spend(open, value!.steps) : undefined
+    const withNote = (failure: ActionError): ActionError => spent ? { ...failure, message: failure.message + ' ' + spent.note } : failure
     // Stop: the backend answers once SQL Server has ended the statement, saying what completed before it.
-    if (value?.error?.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: value.error, steps: value.steps }); if (partial) this.reloadAfterPartial(open); return }
+    if (value?.error?.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: withNote(value.error), steps: value.steps, ...spent?.patch }); if (partial) this.reloadAfterPartial(open); return }
     if (!result.ok && result.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: error('CANCELLED', dialogMessages.stopped) }); return }
     const failure = value?.error ?? (!result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST') ? error('CONNECTION_LOST', unknownOutcomeMessage) : error('SQL_ERROR', result.ok ? 'The action failed.' : result.error))
-    const model = definition.afterFailure?.(open.model, failure) ?? open.model
-    this.update(open, { phase: 'failed', error: failure, model, ...(value ? { steps: value.steps } : {}) })
+    const model = spent?.patch.model ?? definition.afterFailure?.(open.model, failure) ?? open.model
+    this.update(open, { phase: 'failed', error: withNote(failure), ...(value ? { steps: value.steps } : {}), ...spent?.patch, model })
     if (partial) { this.reloadAfterPartial(open); return }
     // SSMS counts other connections when OK is pressed: when nothing ran and the fresh model needs the question this OK
     // did not ask, it is asked at once rather than on the next OK.
-    if (!confirmation && model !== open.model && !value?.steps.some(step => step.status === 'done') && definition.confirm?.(model, built)) await this.ok()
+    if (!confirmation && model !== open.model && !value?.steps.some(step => step.status === 'done') && definition.confirm?.(model, built, this.context(open))) await this.ok()
+  }
+
+  /** Main's box for a confirmation: Open Connections' Yes, or any action prompt answer but its cancel one. A failure counts as No. */
+  private async confirmed(confirmation: DialogConfirmation): Promise<boolean> {
+    if (confirmation === 'openConnections') {
+      const answer = await this.call(() => this.options.api.confirmOpenConnections())
+      return answer.ok && answer.value
+    }
+    const answer = await this.call(() => this.options.api.confirmAction(confirmation))
+    return answer.ok && answer.value !== actionPrompts[confirmation.prompt].cancelAnswer
+  }
+  /** What a definition knows besides its model: Varia's other connections that sign in as a login target, as they are now. */
+  private context(open: OpenObjectDialog): DialogContext {
+    if (open.target.kind !== 'login') return {}
+    const labels = otherLoginConnections(this.options.connections.getSnapshot(), open.connectionId, open.target.name)
+    return labels.length ? { loginConnections: labels } : {}
+  }
+  /** After a partial run whose done steps used the secret slot: empties the slot and the password fields (`secretEpoch` remounts
+   *  them), and takes the definition's model and draft; the note joins the failure. */
+  private spend(open: OpenObjectDialog, steps: readonly ActionStep[]): { readonly patch: Partial<OpenObjectDialog> & { readonly model: DialogModel }; readonly note: string } | undefined {
+    const spent = open.model && open.draft ? definitionOf(open.dialog).spentSecrets?.(open.model, open.draft, steps) : undefined
+    if (!spent) return undefined
+    this.secrets.clear()
+    return { note: spent.note, patch: { model: spent.model, draft: spent.draft, secretState: emptySecrets, secretEpoch: (open.secretEpoch ?? 0) + 1 } }
   }
 
   /** Detach Database's Copy paths: the files that stay on the server, one path per line, to the clipboard; the message bar says how it went. */
@@ -382,6 +513,13 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const open = this.current, request = this.request
     if (!open || !request || request.dialog !== open.id) return
     this.cancel([request.id])
+  }
+
+  /** A hand-off: this dialog closes and the next opens on the same node, with the patch over its first draft. */
+  private handOver(next: { readonly dialog: ModalDialogId; readonly patch: Readonly<Record<string, unknown>> }): void {
+    const node = this.node
+    if (!node || !this.close()) return
+    try { this.open(next.dialog, node, next.patch) } catch (failure) { onUnexpectedError(failure) }
   }
 
   /** Cancel or Escape. Refused while an action runs (Stop first); returns whether the dialog closed. */
@@ -418,13 +556,15 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const definition = definitionOf(open.dialog)
     const model = result.ok ? definition.modelOf(result.value) : undefined
     if (failure || !model) { this.update(open, { phase: 'loadFailed', error: failure ?? error('NOT_FOUND', 'The object could not be read.') }); return }
-    // Check Again keeps what the user chose.
-    this.update(open, { phase: 'ready', model, draft: open.draft ?? definition.initialDraft(model, open.target) })
+    // Check Again keeps what the user chose; a hand-off's patch goes over the first draft.
+    const patch = this.patch?.dialog === open.id ? this.patch.value : undefined
+    this.patch = undefined
+    this.update(open, { phase: 'ready', model, draft: open.draft ?? { ...definition.initialDraft(model, open.target), ...patch } as DialogDraft })
     if (open.dialog === 'deleteObject' && open.target.kind === 'database') this.nameTabTransactions(open, (model as DeleteTarget).transactionTabs ?? [])
     if (definition.runOnOpen && !open.model) await this.ok()
     if (open.dialog === 'deleteObject' && open.target.kind === 'login') {
-      const labels = otherLoginConnections(this.options.connections.getSnapshot(), open.connectionId, open.target.name)
-      if (labels.length) this.update(open, { loginConnections: labels })
+      const labels = this.context(open).loginConnections
+      if (labels) this.update(open, { loginConnections: labels })
     }
   }
   /**
@@ -441,7 +581,24 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
       if (!this.end(open, requestId)) return
       const current = this.current
       const model = result.ok && !result.value.error ? definition.modelOf(result.value) : undefined
-      if (model && current && (current.phase === 'failed' || current.phase === 'stopped')) this.update(current, { model })
+      if (!model || !current || (current.phase !== 'failed' && current.phase !== 'stopped')) return
+      // The fresh describe holds nothing User Mapping read (roles, users past its scan): those databases are read again, one at a time,
+      // and until each answers, its changed rows count as not read, so OK refuses rather than dropping their changes.
+      const again = current.model && current.draft ? definition.readAgain?.(current.model, current.draft) ?? [] : []
+      const roles = new Map(current.databaseRoles ?? [])
+      for (const database of again) roles.delete(database)
+      // What the login may do changed with the steps that completed, so the Effective tab reads each securable again.
+      if (this.effectiveLookup?.dialog === open.id) { this.cancel([this.effectiveLookup.id]); this.effectiveLookup = undefined }
+      this.update(current, { model, effective: undefined, ...(again.length ? { databaseRoles: roles } : {}) })
+      for (const database of again) {
+        const now = this.current
+        // A database the user selected meanwhile is read by that selection; one left out while it reads stays unread until selected.
+        if (this.disposed || now?.id !== open.id || (now.phase !== 'failed' && now.phase !== 'stopped') || now.databaseRoles?.has(database) || this.lookup) continue
+        const lookupId = this.newId()
+        this.lookup = { id: lookupId, dialog: open.id, database }
+        this.update(now, { databaseRoles: new Map(now.databaseRoles ?? []).set(database, { state: 'loading' }) })
+        await this.readDatabaseRoles(now, database, lookupId)
+      }
     })().catch(onUnexpectedError)
   }
   /** Reloads the folders a reply's done steps changed besides the listing (definition.changedFolders), where the tree has listed them. */

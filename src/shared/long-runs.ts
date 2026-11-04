@@ -14,13 +14,14 @@ export const longRunKinds = [
   'restore',
   'verify',
   'newLogin',
+  'loginProperties',
   'backup',
   'shrink'
 ] as const
 export type LongRunKind = typeof longRunKinds[number]
 /** How a message names the run, at the start of a sentence. */
 export const longRunSubjects: { readonly [K in LongRunKind]: string } = {
-  createCatalog: 'Create Catalog', newDatabase: 'New Database', attach: 'An attach', restore: 'A restore', verify: 'A backup verification', newLogin: 'New Login',
+  createCatalog: 'Create Catalog', newDatabase: 'New Database', attach: 'An attach', restore: 'A restore', verify: 'A backup verification', newLogin: 'New Login', loginProperties: 'Login Properties',
   backup: 'A backup', shrink: 'A shrink'
 }
 /** The renderer tells main about at most this many runs (more are counted, not named), with server names this long. */

@@ -343,7 +343,7 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
     let built: BuiltRequest | undefined | { readonly problem: string } = definition.request(state.target, state.model, state.draft)
     if (!built) return true
     if ('problem' in built) { this.patch(id, { error: error('NOT_SUPPORTED', built.problem) }); this.show(id); return false }
-    const confirmation = definition.confirm?.(state.model, built)
+    const confirmation = definition.confirm?.(state.model, built, {})
     if (confirmation) {
       // Main's message box; a failure, a close or a lost server meanwhile counts as No, and No sends nothing.
       this.patch(id, { phase: 'confirming', error: undefined, notice: undefined })
@@ -387,7 +387,7 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
     // did not ask, it is asked at once rather than on the next Apply.
     if (!confirmation && model !== state.model && !partial && revision === this.get(id)?.revision) {
       const again = definition.request(state.target, model, state.draft!)
-      if (again && !('problem' in again) && definition.confirm?.(model, again)) return this.runApply(id)
+      if (again && !('problem' in again) && definition.confirm?.(model, again, {})) return this.runApply(id)
     }
     return false
   }

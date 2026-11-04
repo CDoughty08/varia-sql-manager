@@ -25,7 +25,7 @@ void Check(bool condition, string name)
 // CI's live jobs (`--live-group k/n`) run only their share of the live suites (LiveGroups), and no offline checks: Check (ubuntu) runs those.
 var liveGroup = LiveGroups.Parse(args);
 // Focused SQL Server lanes: their scratch and permission checks are required, never an offline-only or skipped success.
-if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--server-files-live" or "--seams-live" or "--new-database-live" or "--action-progress-live" or "--attach-live" or "--restore-live" or "--logins-live" or "--login-listing-live" or "--database-state-live" or "--delete-live" or "--detach-live" or "--rename-database-live" or "--login-actions-live" or "--login-delete-live")])
+if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--server-files-live" or "--seams-live" or "--new-database-live" or "--action-progress-live" or "--attach-live" or "--restore-live" or "--logins-live" or "--login-listing-live" or "--database-state-live" or "--delete-live" or "--detach-live" or "--rename-database-live" or "--login-actions-live" or "--login-delete-live" or "--login-properties-live" or "--securables-live" or "--login-kinds-live")])
 {
     var focusedServer = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SERVER");
     if (string.IsNullOrWhiteSpace(focusedServer)) throw new Exception(lane + " requires VARIA_TEST_SQL_SERVER.");
@@ -101,6 +101,21 @@ if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live"
         {
             await LoginDeleteLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json, required: true);
             Console.WriteLine("Passed " + passed + " focused login Delete checks.");
+        }
+        else if (lane == "--login-properties-live")
+        {
+            await LoginPropertiesLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json, required: true);
+            Console.WriteLine("Passed " + passed + " focused Login Properties checks.");
+        }
+        else if (lane == "--login-kinds-live")
+        {
+            await LoginKindsLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json, required: true);
+            Console.WriteLine("Passed " + passed + " focused New Login kind checks.");
+        }
+        else if (lane == "--securables-live")
+        {
+            await SecurablesLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json, required: true);
+            Console.WriteLine("Passed " + passed + " focused Securables checks.");
         }
         else if (lane == "--explorer-status-live")
         {
@@ -252,6 +267,9 @@ if (liveGroup is null)
     await LoginActionChecks.RunAsync(Check);
     await LoginDeleteChecks.RunAsync(Check);
     await UnlockChecks.RunAsync(Check);
+    LoginPropertiesChecks.Run(Check);
+    SecurablesChecks.Run(Check);
+    await LoginKindsChecks.RunAsync(Check);
     DatabasePropertiesChecks.Run(Check);
     DesignerChecks.Run(Check);
     NewDatabaseChecks.Run(Check);
@@ -296,12 +314,12 @@ if (liveGroup is null)
         && !new[] { "VariaScratch_x_job", "VariaScratch_cleanup_job", "VariaScratch_nightly_job", "VariaScratch_20261018120000_0123abcd", "VariaScratch_20261018120000_0123ABCD_job",
             "VariaScratch_20261018120000_0123abcd_job2", "VariaScratch_20261018120000_0123abcd_x_job", "xVariaScratch_20261018120000_0123abcd_job" }.Any(ScratchDatabase.IsScratchJob),
         "the sweep finds every scratch database a crashed run can leave, the object actions' _act and _actr, Database Properties' _dbp, the table designer's _tbd and _tbd.], the live tables' _live, the SSIS checks' _ssis, _ssisref and _ssiscc, the server file picker's _files, the wave 5 seam checks' _seam and _seamt, New Database's _nd, the action progress checks' _ap, Attach Databases' _at, _at'] and _at2, Restore Database's _rst and _rstr, Take Offline's _dbs, Delete parity's _del, _delc, _delcs and _delo, Detach's _det and _dets, and Object Explorer status's _rs, _rv and _rvs included, and nothing else (never SSISDB); only an Agent job named as a run names its own (VariaScratch_<14 digits>_<8 hex>_job) can be swept");
-    Check(new[] { "_lgn", "_lgm", "_lgmo", "_lgmr" }.All(suffix => ScratchDatabase.Sweepable("VariaScratch_20261018120000_0123abcd" + suffix)) && !ScratchDatabase.Sweepable("VariaScratch_20261018120000_0123abcd_lgmx") && new[] { "VariaScratch_20261018120000_0123abcd", "VariaScratch_20261018120000_0123abcd_lnew", "VariaScratch_20261018120000_0123abcd_l1" }.All(ScratchDatabase.SweepableLogin)
+    Check(new[] { "_lgn", "_lgm", "_lgmo", "_lgmr", "_lpr" }.All(suffix => ScratchDatabase.Sweepable("VariaScratch_20261018120000_0123abcd" + suffix)) && !ScratchDatabase.Sweepable("VariaScratch_20261018120000_0123abcd_lgmx") && !ScratchDatabase.Sweepable("VariaScratch_20261018120000_0123abcd_lprx") && new[] { "VariaScratch_20261018120000_0123abcd", "VariaScratch_20261018120000_0123abcd_lnew", "VariaScratch_20261018120000_0123abcd_l1", "VariaScratch_20261018120000_0123abcd_lpa" }.All(ScratchDatabase.SweepableLogin)
         && !new[] { "VariaScratch_20261018120000_0123abcd_l", "VariaScratch_20261018120000_0123abcd_lNEW", "VariaScratch_20261018120000_0123abcd_l123456789", "VariaScratch_20261018120000_0123abcd_x", "sa", "VariaScratch_x_lnew" }.Any(ScratchDatabase.SweepableLogin)
         && ScratchDatabase.StaleXeSession("VariaScratch_20261018120000_0123abcd_xe", new DateTime(2026, 10, 18, 18, 0, 1, DateTimeKind.Utc))
         && !ScratchDatabase.StaleXeSession("VariaScratch_20261018120000_0123abcd_xe", new DateTime(2026, 10, 18, 11, 0, 0, DateTimeKind.Utc))
         && !new[] { "VariaScratch_20261018120000_0123abcd", "VariaScratch_20261318120000_0123abcd_xe", "system_health", "VariaScratch_20261018120000_0123abcd_xe2" }.Any(name => ScratchDatabase.StaleXeSession(name, DateTime.MaxValue)),
-        "the sweep finds New Login's _lgn database, User Mapping's _lgm, _lgmo and _lgmr, the logins it names with _l and a tag of up to 8 lowercase letters or digits, and its Extended Events session once its name's UTC time is old enough, and nothing else (never system_health)");
+        "the sweep finds New Login's _lgn database, User Mapping's _lgm, _lgmo and _lgmr, Login Properties' _lpr, the logins it names with _l and a tag of up to 8 lowercase letters or digits, and its Extended Events session once its name's UTC time is old enough, and nothing else (never system_health)");
     {
         // SQL Server on Linux cannot back up to /dev/null (error 3634 in DiskChangeFileSize), so its RESTORING database backs up to one file; Windows keeps NUL.
         const string rs = "VariaScratch_20261018120000_0123abcd_rs";
@@ -676,6 +694,9 @@ try
     await Suite("LoginAction", () => LoginActionLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("LoginDelete", () => LoginDeleteLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("Unlock", () => UnlockLiveChecks.RunAsync(Check, service, info, Live, json));
+    await Suite("LoginProperties", () => LoginPropertiesLiveChecks.RunAsync(Check, service, info, Live, json));
+    await Suite("Securables", () => SecurablesLiveChecks.RunAsync(Check, service, info, Live, json));
+    await Suite("LoginKinds", () => LoginKindsLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("DatabaseProperties", () => DatabasePropertiesLiveChecks.RunAsync(Check, service, info, json));
     await Suite("Designer", () => DesignerLiveChecks.RunAsync(Check, service, info, Live("master"), json));
     await Suite("NewDatabase", () => NewDatabaseLiveChecks.RunAsync(Check, service, info, json));

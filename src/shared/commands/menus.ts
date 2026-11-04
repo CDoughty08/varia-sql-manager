@@ -109,7 +109,7 @@ export const submenus: Readonly<Record<SubmenuId, SubmenuDescriptor>> = {
     title: 'New', nativeId: 'explorer.new',
     placements: [{
       menu: 'explorer.context', group: '0_new', order: 1, mnemonic: 'n',
-      when: "explorerNode == 'folder' && (explorerFolder == 'tables' || (explorerFolder == 'serverSecurity' && explorerServerEngine == 'box' && !explorerServerLost))"
+      when: "explorerNode == 'folder' && (explorerFolder == 'tables' || (explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' || explorerServerEngine == 'managedInstance') && !explorerServerLost))"
     }]
   },
   // SSMS's Tasks on a database node and its Restore submenu. Both stay hidden until a database action is placed in them

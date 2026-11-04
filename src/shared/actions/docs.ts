@@ -3,14 +3,14 @@ import { kindSpecs, nodeKinds, serverEngines, type NodeSubtype } from '../explor
 import { longRunKinds, longRunLimits, longRunSubjects } from '../long-runs.ts'
 import {
   actionCommandEntries, actionContextKey, actionErrorCodes, actionErrorRetryable, actionKindSpecs, actionLimits, actionMenus, actionRow, actionStatuses, allFilesType, createActionSpecs, createActions,
-  databaseActionRules, databaseStateIds, dialogIds, dialogSpecs, objectActions, objectActionSpecs, scriptActionTitles, serverActions, serverActionSpecs, serverFilePurposes,
+  databaseActionRules, databaseStateIds, dialogIds, dialogSpecs, kindDialogActionSpecs, objectActions, objectActionSpecs, scriptActionTitles, serverActions, serverActionSpecs, serverFilePurposes,
   serverFilePurposeSpecs, serverFilesDescribeId, serverFileTypesLabel, unknownOutcomeMessage, type FactDescribeId
 } from './catalog.ts'
 import { actionPromptBox, actionPrompts, promptLimits, type ActionPromptRequest } from './prompts.ts'
 import { compatibilityLabel, compatibilityLevels, databaseOptionDefs, noScriptNotice, openConnectionsPrompt, ownerNotOn, scopedConfigurationDefs, type DatabaseOptionDef } from './database.ts'
 import {
-  loginDatabaseRolesDescribe, loginDeleteText, loginGreyedMessage, loginLimits, loginLockProperties, loginMessages, loginRules, loginSubtypes, loginTypeSubtypes, loginVerbs, newLoginMessages, ownLoginRefuses, passwordScriptHeader, saPrincipalId,
-  tooManyStatementsMessage
+  loginDatabaseRolesDescribe, loginDeleteText, loginGreyedMessage, loginLimits, loginLockProperties, loginMessages, loginPropertiesMessages, loginRules, loginSubtypes, loginTypeSubtypes, loginVerbs,
+  checkNamesText, entraBoxBand, newLoginAuthEngines, newLoginAuthLabels, newLoginAuths, newLoginMessages, ownLoginRefuses, passwordScriptHeader, windowsPrincipalDescribe, saPrincipalId, tooManyStatementsMessage, unlockChoiceText, unlockHandOffLabel
 } from './logins.ts'
 import { designerEngines } from '../designer/catalog.ts'
 import { restoredFilesLimit } from './schema.ts'
@@ -18,6 +18,10 @@ import {
   backupSetTypes, backupSetTypeSpecs, plannedSetTypes, restoreDescribeId, restoreDevicePickerTitles, restoreFilesRecoveryLabels, restoreFilesSections, restoreLimits, restoreMessages, restoreRecoveryLabels, restoreRecoveryStates, restoreSections,
   restoreSourceKinds, restoreStepTitles, restoreSystemDatabases, timelineIntervals, timelineIntervalSpecs
 } from './restore.ts'
+import {
+  addObjectsText, effectiveUnavailableSubtypes, loginEffectiveDescribe, objectTypeOrder, permissionChange, permissionStates, reservedPermissions, securableSpecs, securableTypes, securablesMessages,
+  type PermissionState
+} from './securables.ts'
 
 const cell = (value: string) => value.replaceAll('|', '\\|')
 const row = (cells: readonly string[]) => '| ' + cells.map(cell).join(' | ') + ' |'
@@ -86,10 +90,14 @@ const loginLimitNotes: Readonly<Record<keyof typeof loginLimits, string>> = {
   roles: 'Database roles listed and chosen per database',
   schemas: 'Schemas listed per database',
   mappings: 'Database user mappings per request',
-  credentials: 'Credentials mapped per request',
+  credentials: 'Credentials mapped, or added and removed, per request',
+  listedCredentials: 'Credentials Map to Credential lists, and the Mapped Credentials Login Properties reads for a login',
   certificates: 'Certificates listed',
   asymmetricKeys: 'Asymmetric keys listed',
   permissions: 'Server permissions per request',
+  securableObjects: 'Objects Add Objects lists per securable type',
+  explicitPermissions: 'Explicit server permissions Login Properties reads',
+  effectivePermissions: 'Effective permissions the Effective tab lists',
   sidHex: 'Characters of a SID as hexadecimal text',
   stepTitle: 'Characters in a step\'s title',
   stepDetail: 'Characters in a step\'s detail',
@@ -554,6 +562,7 @@ export function renderObjectActionsDocs(): string {
       ['Deny or Grant permission to connect', '`DENY CONNECT SQL TO [login]`, `GRANT CONNECT SQL TO [login]`'],
       ['Drop the database user', '`DROP USER [user]`, in its database'],
       ['Add to a server role (New Login)', '`ALTER SERVER ROLE [role] ADD MEMBER [login]`'],
+      ['Map a credential, Remove a credential (D2e)', '`ALTER LOGIN [login] ADD CREDENTIAL [credential]`, `ALTER LOGIN [login] DROP CREDENTIAL [credential]`'],
       ['Create a user (User Mapping)', '`CREATE USER [user] FOR LOGIN [login]`, in its database'],
       ['Set the default schema (User Mapping)', '`ALTER USER [user] WITH DEFAULT_SCHEMA=[schema]`, in its database'],
       ['Create a schema (User Mapping)', '`CREATE SCHEMA [schema] AUTHORIZATION [user]`, in its database, in a batch of its own'],
@@ -586,8 +595,7 @@ function loginDocs(): string[] {
     'for SQL Server\'s own logins (a name that starts and ends with `##`), else by type: ' + types.map(([type, subtype]) => `${code(type)} ${code(subtype)}`).join(', ') + '.',
     'The backend\'s login preflight reads the facts an action needs in the action\'s own connection from catalog views only:',
     'never a password hash, which no Varia statement may name, and `LOGINPROPERTY`, which waits on a login another session',
-    'is changing whatever the isolation level, only in Unlock\'s lock-out read below. Properties arrives in a later',
-    'version; its rules are data already.',
+    'is changing whatever the isolation level, only in the lock-out read of Unlock and Login Properties below.',
     '',
     '### Disable, Enable and Rename',
     '',
@@ -674,12 +682,13 @@ function loginDocs(): string[] {
     '### Unlock',
     '',
     'SSMS unlocks a SQL Server login only on Login Properties › Status, and only with a new password. Varia adds Unlock… to a',
-    'SQL Server login\'s menu (after Disable or Enable, access key U), a modal that keeps the current password, as Microsoft',
-    'documents: it turns the password policy off, which unlocks the login, and back on, with password expiration when the login',
-    'had it, in one transaction, so a failure or Stop rolls both back. This clears the login\'s password history, which the',
-    'dialog says, and nothing is chosen when it opens: OK (and Enter) waits until Keep the current password is, so clearing the',
-    'history is never the default. Setting a new password instead, SSMS\'s way and then the dialog\'s default, arrives with',
-    'Login Properties.',
+    'SQL Server login\'s menu (after Disable or Enable, access key U), a modal with two choices (owner decision 9).',
+    `"${unlockChoiceText.setPassword}", SSMS's way, is the default: OK, named "${unlockHandOffLabel}", closes the dialog and opens`,
+    'Login Properties on the same login with Login is locked out cleared, where a new password unlocks it (`UNLOCK`). It sends',
+    `nothing itself, so its Script says "${noScriptNotice}" It also unlocks a login that must change its password.`,
+    `"${unlockChoiceText.keepPassword}" keeps the current password, as Microsoft documents: it turns the password policy off, which`,
+    'unlocks the login, and back on, with password expiration when the login had it, in one transaction, so a failure or Stop rolls',
+    'both back. This clears the login\'s password history, which the dialog says; only the user chooses it.',
     '',
     'Only `LOGINPROPERTY` knows whether a login is locked out, so the listing offers Unlock… on every SQL Server login and the',
     'dialog says. Its describe (`unlockLogin`) and its preflight read the login\'s facts and then its lock-out state with',
@@ -717,10 +726,17 @@ function loginDocs(): string[] {
     '',
     table(['Limit', 'Value', 'Meaning'], (Object.keys(loginLimitNotes) as (keyof typeof loginLimits)[]).map(key => [code(key), loginLimits[key].toLocaleString('en-US'), loginLimitNotes[key]])),
     '',
-    ...newLoginDocs()
+    ...newLoginDocs(),
+    ...loginPropertiesDocs(),
+    ...securablesDocs()
   ]
 }
 
+/** CREATE LOGIN's source per kind, as Script Action writes it. */
+const newLoginAuthSql: Readonly<Record<(typeof newLoginAuths)[number], string>> = {
+  windows: '`FROM WINDOWS WITH DEFAULT_DATABASE=…`', sql: '`WITH PASSWORD=…, DEFAULT_DATABASE=…` (the policy options on SQL Server)', entra: '`FROM EXTERNAL PROVIDER WITH DEFAULT_DATABASE=…`',
+  certificate: '`FROM CERTIFICATE [certificate]`', asymmetricKey: '`FROM ASYMMETRIC KEY [key]`'
+}
 /** New Login (D2a, D2b): where it opens, its pages, the password path, User Mapping, its Script and how it runs. */
 function newLoginDocs(): string[] {
   const spec = dialogSpecs.newLogin
@@ -728,8 +744,8 @@ function newLoginDocs(): string[] {
     '### New Login',
     '',
     `Security › New › Login…, and New Login… on the Logins folder and on a login, open "${spec.title}", a modal dialog with the pages`,
-    `${spec.pages.map(page => page.title).join(', ')} (Securables follows once its OK works). Its action is \`createLogin\`, on`,
-    `${createActionSpecs.createLogin.engines.map(engine => engineNames[engine]).join(', ')} (Managed Instance follows); its target is the server.`,
+    `${spec.pages.map(page => page.title).join(', ')} (Securables: see [Securables](#securables)). Its action is \`createLogin\`, on`,
+    `${createActionSpecs.createLogin.engines.map(engine => engineNames[engine]).join(', ')}; its target is the server.`,
     '',
     '- **General**: Login name; Windows authentication (DOMAIN\\name) or SQL Server authentication (the default when the server',
     '  runs on Linux) with Password, Confirm password, Specify old password (greyed: Login Properties only), Enforce password',
@@ -737,6 +753,7 @@ function newLoginDocs(): string[] {
     '  is checked (SQL Server refuses MUST_CHANGE without CHECK_EXPIRATION, 15099, and CHECK_EXPIRATION without CHECK_POLICY,',
     '  15122); Default database and Default language (`<default>`: no DEFAULT_LANGUAGE clause). A note says when the server',
     `  takes Windows authentication only, and when this login may lack ALTER ANY LOGIN. A blank password needs the password policy on.`,
+    '  D2e adds the other kinds and Map to Credential, below.',
     '- **Server Roles**: every server role, public checked and greyed (every login is a member).',
     '- **User Mapping**: the grid "Users mapped to this login:" (Map, Database, User, Default Schema), one row per database New Login',
     '  listed, virtualized; a database that is not online, not open to this login, or read-only (set READ_ONLY, a log-shipping',
@@ -752,6 +769,49 @@ function newLoginDocs(): string[] {
     `  running); at most ${loginLimits.roles} roles and ${loginLimits.schemas.toLocaleString('en-US')} schemas are listed, and ${loginLimits.mappings} databases mapped.`,
     '- **Status**: Permission to connect to database engine (Grant, Deny) and Login (Enabled, Disabled).',
     '',
+    '#### Other kinds, Map to Credential and Check Names (D2e)',
+    '',
+    `General lists the kinds the server offers (\`newLoginAuthEngines\` in logins.ts, which the backend reads from actions-catalog.json):`,
+    '',
+    table(['Kind (radio)', 'CREATE LOGIN', 'Offered on'], newLoginAuths.map(auth => [newLoginAuthLabels[auth], newLoginAuthSql[auth],
+      newLoginAuthEngines[auth].map(engine => engineNames[engine] + (auth === 'entra' && engine === 'box' ? ` (SQL Server 2022 and later, band ${entraBoxBand})` : '')).join(', ')])),
+    '',
+    '- **Microsoft Entra authentication** (`FROM EXTERNAL PROVIDER`, with Default database and Default language) names the user, group or',
+    `  application as Microsoft Entra ID does. On SQL Server it needs Azure Arc and Microsoft Entra set up first ("${newLoginMessages.entraBox}"):`,
+    '  without them SQL Server answers 37525 (`NOT_SUPPORTED`, probed on SQL Server 2025), which a live check confirms creates nothing.',
+    '  The SSMS 22 label of this radio is unverified.',
+    '- **Mapped to certificate** and **Mapped to asymmetric key** choose one of master\'s certificates or asymmetric keys (Certificate',
+    `  name, Asymmetric key name; at most ${loginLimits.certificates.toLocaleString('en-US')} each, SQL Server's own \`##MS_…##\` ones included, as SSMS lists them).`,
+    '  Neither list chooses one until the user does: by name, master lists SQL Server\'s own signing certificates first, which no login',
+    `  should take by default, so OK waits for the choice ("${newLoginMessages.certificate}"). A certificate or key that is gone when OK`,
+    '  runs fails CREATE LOGIN with 15151, which is `NOT_FOUND` with SQL Server\'s text and "Check that the certificate still exists in',
+    '  master." (or the asymmetric key); nothing is created.',
+    `  Such a login has no Default database or Default language (SMO writes neither, and \`FROM CERTIFICATE … WITH DEFAULT_DATABASE\` is a`,
+    `  syntax error, 102), so both are greyed, and it cannot connect ("${newLoginMessages.signingOnly}"). Its users have no default schema`,
+    `  (SQL Server answers 15259, probed), so User Mapping keeps Default Schema blank and closed ("${loginMessages.signingSchema}").`,
+    `- **Map to Credential**: the box enables the server's credentials (\`sys.credentials\`, at most ${loginLimits.listedCredentials.toLocaleString('en-US')}) and **Add**, which appends the one chosen`,
+    `  to **Mapped Credentials** (Credential, Provider: the EKM provider of a credential that has one); **Remove** takes the selected row`,
+    `  out (the grid is one tab stop: arrows select, Delete removes). At most ${loginLimits.credentials} credentials are mapped at once. OK maps each with`,
+    '  `ALTER LOGIN … ADD CREDENTIAL` after Deny and Disable and before the server roles, in the grid\'s order; a credential that fails',
+    `  leaves the login created, and the message says "Not every credential was mapped.". A credential that is gone (15151, "does not exist or`,
+    '  you do not have permission") is `NOT_FOUND` with "Check that the credential still exists. Mapping or removing a credential also',
+    '  needs ALTER ANY CREDENTIAL.", in New Login and Login Properties alike. Map to Credential is greyed for Microsoft Entra logins',
+    `  ("${loginMessages.externalCredentials}"): Managed Instance's ALTER LOGIN for them takes no credential, and SQL Server's is unverified.`,
+    `- **Managed Instance**: New Login opens on SQL Server authentication, offers SQL Server and Microsoft Entra logins only, and hides`,
+    `  the password policy options, which its CREATE LOGIN does not take ("${newLoginMessages.policyManagedInstance}"); a blank password`,
+    `  there is refused with "${newLoginMessages.passwordRequired}", which names no option the page lacks. The backend refuses`,
+    '  the other kinds, and the policy options, there before it connects (`NOT_SUPPORTED`), and on SQL Server it refuses a SQL Server login',
+    '  without them.',
+    `- **Search…** (Windows authentication) opens "${checkNamesText.title}": "${checkNamesText.nameLabel}" and **${checkNamesText.check}**, which asks the server`,
+    `  (\`actions.describe\` with dialog \`${windowsPrincipalDescribe}\` and the target \`{ kind: 'login', name }\`, on the describe's read connection:`,
+    '  `EXEC master.sys.xp_logininfo @acctname = @name;`). It answers whether the server found the account, user or group, and the group',
+    '  its access comes through. The name stays as typed: xp_logininfo echoes @acctname (probed), and CREATE LOGIN stores the text typed.',
+    `  A missing account (15404 with Windows' 0x534) is \`NOT_FOUND\` ("${checkNamesText.notFound}"); any other 15404 (0x54b when the`,
+    `  account's domain cannot be reached, probed for an account that has a login) is \`SQL_ERROR\` ("${checkNamesText.lookupFailed}"); a`,
+    `  login that may not run xp_logininfo gets "${checkNamesText.permission}" (229, \`PERMISSION_DENIED\`). OK puts the name into Login name. SSMS opens`,
+    '  Windows\' own Object Picker, which a sandboxed renderer cannot reach and macOS and Linux lack: Check Names works the same on every',
+    '  client and resolves the name as `CREATE LOGIN … FROM WINDOWS` will. It is not offered on Managed Instance.',
+    '',
     'The password fields are masked, never reach the dialog\'s snapshot, React state that is saved, AutoRecover, a toast or a log, and',
     'are cleared when the dialog closes, the server disconnects or OK succeeds. The password travels only in `actions.execute`, which is',
     'sensitive as a whole (its frames are zeroed on both sides once used); `actions.script` refuses one in main and in the backend.',
@@ -765,8 +825,11 @@ function newLoginDocs(): string[] {
     '',
     'Script Action never carries or writes the password: a SQL Server login\'s script is one batch in one `SET XACT_ABORT ON` transaction',
     `under the comment "${passwordScriptHeader}", with \`PASSWORD=<password>\` unquoted, so an unedited script fails to parse and runs`,
-    'nothing (no later statement can give a role to an existing login of that name). A Windows login\'s script is SSMS\'s, one statement',
-    'per batch. Each mapped database\'s statements run there through `EXEC [database].sys.sp_executesql N\'…\'` inside that transaction',
+    'nothing (no later statement can give a role to an existing login of that name). A certificate, asymmetric key or Microsoft Entra',
+    'login\'s script with statements after CREATE LOGIN is the same one-batch transaction without the header: its CREATE fails where',
+    'master lacks that certificate or key or the server lacks Microsoft Entra, and nothing after it may then deny, disable, map a',
+    'credential, give a role or map a user to an existing login of that name (a live check runs such a script against one). A Windows',
+    'login\'s script, and CREATE LOGIN alone, is SSMS\'s, one statement per batch. Each mapped database\'s statements run there through `EXEC [database].sys.sp_executesql N\'…\'` inside that transaction',
     '(a Windows login\'s script uses `USE [database]` and `GO` as SSMS does); Script reads the server only when a Default Schema is',
     'chosen, to learn whether the database has it (SSMS\'s CREATE SCHEMA), and never refuses a name.',
     '',
@@ -794,16 +857,17 @@ function newLoginDocs(): string[] {
     'server in the domain), which fails it with 15063; resolving a Windows SID before the login exists would mean asking the domain',
     'from the preflight. The server\'s password policy answers `PASSWORD_POLICY` (15114 to 15118, and 33062 to 33064 from the',
     'policy SQL Server on Linux applies), which keeps the dialog open with its password; 15025 and 15023 are `NAME_IN_USE`, 15010, 15033 and 15401 `NOT_FOUND`, and 15099,',
-    '15122, 15006, 15407 and 37525 `NOT_SUPPORTED`. After OK the server\'s Logins folder, once Object Explorer has listed it, reloads and selects the new login,',
+    '15122, 15006, 15407, 15259 and 37525 `NOT_SUPPORTED`; a certificate, key or credential that does not exist (15151) is `NOT_FOUND`, as above. After OK the server\'s Logins folder, once Object Explorer has listed it, reloads and selects the new login,',
     'and each mapped database\'s Users folder that Object Explorer has listed reloads (after a partial run too).',
     '',
     'Whether a server-side trace or Extended Events session can read the password from the RPC (critic A16) is checked by an opt-in live',
     'check (`VARIA_TEST_SQL_XE=1`, set only for CI\'s disposable SQL Server container; it first checks, read-only, that every event,',
     'field, action and predicate it uses exists on the server): it records `rpc_starting`, `rpc_completed`,',
     '`sql_batch_starting`, `sql_batch_completed` and the statement-level events (statements, batch text, data streams and output',
-    'parameters) in a scratch session while New Login creates a login and Create Catalog\'s master key batch runs, and fails if either',
-    'password appears in any field, as text, doubled quotes, XML-escaped or UTF-16 bytes. Each half counts only once the session has',
-    'recorded that half\'s own RPC (its constant batch text, or SQL Server\'s notice that it hid the statement), polled for on the',
+    'parameters) in a scratch session while New Login creates a login, Create Catalog\'s master key batch runs and Login Properties',
+    'changes a scratch login\'s password with Specify old password (`@password` and `@old_password`), and fails if any of their',
+    'passwords appears in any field, as text, doubled quotes, XML-escaped or UTF-16 bytes. Each run counts only once the session has',
+    'recorded that run\'s own RPC (its constant batch text, or SQL Server\'s notice that it hid the statement), polled for on the',
     'ring buffer rather than awaited for a fixed time. Developers\' servers never run it (owner decision 14). It has not run yet:',
     'D2a does not merge until it has run once on a disposable server and its result is recorded here (critic A16).',
     ''
@@ -884,6 +948,162 @@ function attachDocs(): string[] {
     'Its labels (Databases to attach, MDF File Location, Database Name, Attach As, Owner, Status, Message, Add…, Remove,',
     '"<name>" database details, Original File Name, File Type, Current File Path, Not found) are SSMS\'s as recalled, not yet',
     'checked against SSMS 22.',
+    ''
+  ]
+}
+
+/** Login Properties (D2c): its describe, pages, password path, Script and how it runs. */
+function loginPropertiesDocs(): string[] {
+  const spec = dialogSpecs.loginProperties
+  return [
+    '### Login Properties',
+    '',
+    `Properties on any login (SQL Server's own and sa included, as in SSMS) opens "${spec.title} - <name>", a modal dialog with New Login's pages`,
+    `${spec.pages.map(page => page.title).join(', ')} on the existing login. Its action is \`loginProperties\` (a kind action of logins), on`,
+    `${kindDialogActionSpecs.loginProperties.engines.map(engine => engineNames[engine]).join(', ')} (its ALTER LOGIN on Managed Instance is unverified). SQL Server's own logins open but OK`,
+    `is greyed: "${loginMessages.system}"`,
+    '',
+    'Its describe (`actions.describe` with dialog `loginProperties`) reads, in master on the describe\'s connection: the login\'s facts',
+    '(as Disable reads them), its default database and language and the server roles it is a member of, a SQL Server login\'s',
+    'lock-out state through `ActionSql.LoginLock` (as Unlock reads it), New Login\'s lists, and the users mapped to its SID through',
+    `Delete's per-database scan (at most ${loginLimits.scanDatabases.toLocaleString('en-US')} databases within ${(loginLimits.scanMs / 1000).toLocaleString('en-US')} s). A database the scan did not read shows "${loginPropertiesMessages.notRead}" in`,
+    `User and cannot be mapped until it is selected ("${loginPropertiesMessages.notReadHint}"): selecting a database reads it with the`,
+    `login (\`${loginDatabaseRolesDescribe}\` with \`login\`), answering the user mapped to it there and that user's database roles.`,
+    'A database not read yet is muted in the grid, and its cell says why through `aria-describedby`. SQL Server\'s own logins say on',
+    'every page why they never change, and every page\'s controls are greyed.',
+    '',
+    `- **General**: Login name and its authentication read-only; Password and Confirm password blank ("${loginPropertiesMessages.keepPassword}"`,
+    '  SSMS fills them with a fake value); Specify old password and Old password (checked already when the login is this connection\'s',
+    '  and the connection cannot alter any login, since SQL Server then asks for it, unless the login is locked out, where SQL Server',
+    `  refuses the old password: "${loginPropertiesMessages.lockedOldPassword}"); the policy options; User must change password`,
+    '  at next login only once a new password is typed, and never for the login this connection uses, whose new sessions SQL Server',
+    `  would then refuse ("${loginMessages.ownMustChange}"); Default database and Default language (no \`<default>\`: SMO's ALTER for it`,
+    '  is unverified). Login name reads as text in a frame; the five kinds show read-only with the login\'s checked (D2e), a certificate',
+    '  or key login\'s certificate or key in its list, and a note names a Windows group or a Microsoft Entra group, which the radios do',
+    '  not. Map to Credential and Mapped Credentials (D2e) list the credentials mapped to the login (`sys.server_principal_credentials`) and',
+    '  change them: OK removes, then maps, after Connect and Enabled and before the server roles (`credentialsDrop`, `credentialsAdd`),',
+    `  greyed for a Microsoft Entra login. A certificate or key login\'s users never get a default schema ("${loginMessages.signingSchema}").`,
+    '- **Server Roles**: the login\'s memberships checked; public checked and greyed.',
+    '- **User Mapping**: New Login\'s grid with the mapped users filled in. Unchecking Map unmaps (DROP USER; Script and the steps',
+    `  warn "${loginPropertiesMessages.dropsUser('user', 'database')}"), a new user name renames, and the database owner's dbo cannot change`,
+    `  ("${loginPropertiesMessages.owner}").`,
+    `- **Status**: Permission to connect to database engine, Login (Enabled, Disabled) and "${loginPropertiesMessages.locked}", checked while the`,
+    `  login is locked out and enabled then to clear it, which needs a new password ("${loginPropertiesMessages.unlockNeedsPassword}"), or to`,
+    '  check it again. Deny and Disabled are greyed for the login this connection uses, and Disabled for a Windows group, with the',
+    '  reason beside them. Opened from Unlock\'s hand-off (Login is locked out cleared), the dialog puts focus in Password, whose',
+    '  first note then says a new password unlocks the login.',
+    '',
+    'Disabled or Deny asks first, with the Disable verb\'s message box (owner decisions 4 and 7; its button reads Deny for Deny), when',
+    'someone would be locked out: sessions connected as the login, a service that runs as it, or Varia\'s other connections that sign',
+    'in as it. With none of those it asks nothing, as SSMS. Cancel sends nothing.',
+    '',
+    'OK and Script send only what differs from the describe, bound to the login it read (its SID and creation time; a login',
+    'recreated since is `NOT_FOUND`). Each statement OK runs is bound too: in a transaction of its own, a check that the login (by',
+    'name, SID, principal_id and create_date) or the user (by name and the login\'s SID, in its database) is still the one the',
+    'preflight read, the statement, then the check again (`ActionSql.LoginBinding`, `UserBindingCall`); a principal replaced meanwhile',
+    'fails that step with `NOT_FOUND` and changes nothing. The passwords join only OK\'s request, as in New Login (masked, never in the snapshot, cleared',
+    'with the dialog): the new one as `@password`, the old one as `@old_password` when Specify old password is checked, each one',
+    'nvarchar parameter read once and quoted by a binary-collation REPLACE, which the lint pins. T-SQL takes either `OLD_PASSWORD`',
+    'or `UNLOCK` and `MUST_CHANGE`, never both. Script never carries a password: with a password change it is one `SET XACT_ABORT ON`',
+    `batch under "${passwordScriptHeader}", \`PASSWORD=<password>\` (and \`OLD_PASSWORD=<old password>\`) unquoted, so it`,
+    'runs nothing unedited; without one it is SSMS\'s form, a `GO` after each statement.',
+    '',
+    'OK runs SSMS\'s statements in SSMS\'s order, one by one and without a transaction, as New Login does (critic A24): the options\'',
+    '`ALTER LOGIN` (only the changed clauses), the password\'s `ALTER LOGIN`, `GRANT` or `DENY CONNECT SQL`, `ENABLE` or `DISABLE`, each',
+    'server role by name, then per changed database by name: `DROP USER` (in a batch that checks the user is still the one mapped to',
+    'the login\'s SID), or `CREATE USER … FOR LOGIN` or `ALTER USER … WITH NAME`, then its default schema (and `CREATE SCHEMA` when the',
+    'database lacks it) and each database role. Before any of them the preflight refuses a changed database that is gone, offline,',
+    'closed or read-only, a user that is no longer the one mapped, a name in use and a missing role. A failure or Stop after a step',
+    'leaves what completed; the message starts "The login was changed only in part: its steps run one by one, as in SSMS, and list',
+    'what completed.", and the dialog reads the login again, then User Mapping\'s databases one at a time; until each is read again,',
+    `OK refuses its changed row ("${loginPropertiesMessages.readAgain('<database>')}"). When the password step completed before the`,
+    `failure, the password fields are emptied, so a retry never sends it again ("${loginPropertiesMessages.passwordApplied}").`,
+    'SQL Server answers a wrong old password, and a missing permission,',
+    `with 15151 (\`PERMISSION_DENIED\`): the message adds "${loginPropertiesMessages.oldPasswordAdvice}" when the password step failed with an old`,
+    'password, else what changing a login needs. Permissions are left to SQL Server, since a login may change its own password',
+    '(with the old one) and defaults. SQL Server refuses DROP USER for a user that owns a schema (15138), as in SSMS.',
+    '',
+    'A password change of a login that Varia\'s connections sign in as (this one or others, by SQL Server authentication) gives them',
+    'the new password in the backend\'s memory, so their next sessions sign in; a password Varia remembers for them is not changed,',
+    `and a notice says so: "${loginPropertiesMessages.connectionsPassword('<login>')}"`,
+    '',
+    `Refused before anything runs: the login this connection uses denied, disabled or made to change its password at its next sign-in`,
+    `("${loginMessages.ownStatus}"; "${loginMessages.ownMustChange}"), a`,
+    `Windows group disabled ("${loginMessages.windowsGroupDisable}"), and a password or policy change on a login that is not a SQL`,
+    `Server login ("${loginMessages.propertiesNotSql}"). After OK the Logins folder and each changed database's Users folder reload.`,
+    ''
+  ]
+}
+
+const permissionVerbText = { grant: 'GRANT', withGrant: 'GRANT … WITH GRANT OPTION', deny: 'DENY', revoke: 'REVOKE', revokeGrantOption: 'REVOKE GRANT OPTION FOR … CASCADE' } as const
+const stateText = (state: PermissionState | undefined) => state === undefined ? 'none' : state === 'withGrant' ? 'With Grant' : state === 'grant' ? 'Grant' : 'Deny'
+
+/** The Securables page (D2d) of New Login and Login Properties: its types, how a checkbox becomes a statement, its reads and limits. */
+function securablesDocs(): string[] {
+  const states = [undefined, ...permissionStates]
+  const changes = states.flatMap(before => states.map(after => [before, after, permissionChange(before, after)] as const))
+    .filter(([, , change]) => change !== undefined)
+    .map(([before, after, change]) => [stateText(before), stateText(after), permissionVerbText[change!.state] + (change!.cascade ? ' … CASCADE' : '')])
+  return [
+    '### Securables',
+    '',
+    'New Login and Login Properties share SSMS\'s Securables page: the server-level securables the login has permissions on, and the',
+    `permissions of the selected one. "${addObjectsText.title}" (Search…) asks "${addObjectsText.prompt}": ${addObjectsText.specific} (${addObjectsText.selectTypes},`,
+    `then ${addObjectsText.selectObjects}, which lists the objects of the chosen types that the describe read), ${addObjectsText.all} (every listed object of`,
+    `the chosen types) or ${addObjectsText.server('<server>')}. The types, in ${addObjectsText.selectTypes}' order (${objectTypeOrder.map(type => securableSpecs[type].plural).join(', ')}):`,
+    '',
+    table(['Type', 'Class', 'ON clause', 'Permissions'], securableTypes.map(type => {
+      const spec = securableSpecs[type]
+      return [spec.label, `${spec.sqlClass} (${spec.classId})`, spec.on ? code(spec.on.trim() + '<name>') : '', spec.permissions.join(', ')]
+    })),
+    '',
+    'The page offers those of a type\'s permissions that the server\'s `sys.fn_builtin_permissions` lists too, so an older server never',
+    `sees a newer one, and a permission keyword reaches SQL only from this table. ${securableTypes.flatMap(type => (reservedPermissions[type] ?? []).map(permission => code(permission))).join(', ')}`,
+    `on the server shows greyed with the Status page's choice ("${securablesMessages.reserved}"), and the Securables page never sends it.`,
+    'Fixed server roles and public are not securables (SQL Server answers 15151), so Add Objects lists only user-defined server roles.',
+    `It lists at most ${loginLimits.securableObjects.toLocaleString('en-US')} objects per type, by name ("${securablesMessages.objectsTruncated(loginLimits.securableObjects)}").`,
+    'Remove takes a securable off the list and drops its unsent changes; it revokes nothing (clear its boxes to revoke).',
+    '',
+    'Below the list, "Permissions for <securable>:" ("Permissions:" while none is selected) has two tabs. **Explicit** is the grid Permission, Grantor, Grant, With Grant, Deny:',
+    'Grant and Deny exclude each other, With Grant implies Grant, and clearing Grant clears With Grant. Its keys are the grid\'s: arrows,',
+    'Home/End, Page Up/Down, and Space toggles the box under focus; in the securables list, Delete removes the selected row. **Effective**',
+    `(Login Properties only; "${securablesMessages.effectiveNewLogin}") lists what the login may do on the securable: \`actions.describe\``,
+    `with dialog \`${loginEffectiveDescribe}\`, the login as target and the securable as \`securable\`, reads \`sys.fn_my_permissions\` under`,
+    '`EXECUTE AS LOGIN` (then `REVERT`) on the describe\'s own unpooled connection, which closes after it, so the context cannot outlive the',
+    `read. EXECUTE AS needs IMPERSONATE on the login: without it SQL Server answers 15406, 15517 or 15151, and the tab says "${securablesMessages.effectiveDenied}"`,
+    `(\`PERMISSION_DENIED\`; \`NOT_FOUND\` when the login is gone). At most ${loginLimits.effectivePermissions.toLocaleString('en-US')} are listed. Selecting another securable cancels a read still running,`,
+    'and a partial run\'s reload, which forgets every answer, reads the shown securable again. SQL Server cannot impersonate a group, or a',
+    `login mapped to a certificate or an asymmetric key (${effectiveUnavailableSubtypes.map(code).join(', ')}; 15406 even for a sysadmin): for those the tab says`,
+    `"${securablesMessages.effectiveUnavailable}" and reads nothing, and the backend refuses the read (\`NOT_SUPPORTED\`).`,
+    '',
+    `Login Properties reads the login's explicit permissions from \`sys.server_permissions\` (at most ${loginLimits.explicitPermissions.toLocaleString('en-US')}; "${securablesMessages.explicitTruncated(loginLimits.explicitPermissions)}"),`,
+    'a deny over a grant and a grant with grant option over a plain one, with every grantor of its rows (a permission on a login is',
+    'recorded with that login as its grantor). SQL Server\'s own logins (`##…##`) never change, so their describe reads none, the Effective read refuses them, and the page',
+    'is hidden, as SSMS hides it.',
+    '',
+    'OK and Script send one statement per changed permission, as SMO\'s SecurableUtils writes it, from what the describe read to what the',
+    'boxes ask for:',
+    '',
+    table(['Read', 'Asked for', 'Statement'], changes),
+    '',
+    'SQL Server refuses to deny or revoke a permission granted WITH GRANT OPTION without CASCADE (4611), so those cascade, as SMO\'s do.',
+    'New Login sends only GRANT, GRANT … WITH GRANT OPTION and DENY. The statements run after User Mapping\'s, SSMS\'s last step, by type',
+    `in the table's order, then by securable name and permission (at most ${loginLimits.permissions.toLocaleString('en-US')} per request:`,
+    `"${securablesMessages.permissionsLimit(loginLimits.permissions)}"). Each is one batch in master from constant keyword text, in which SQL Server`,
+    'builds the statement: the verb, permission and ON clause come only from the catalogue, the login and the securable go in as',
+    'nvarchar(128) parameters through `QUOTENAME` (`PermissionSql.Executable`, checked by `ActionSql.LintExecutable`\'s builder form and',
+    '`PermissionSql.LintExecutable` for every type, permission and form). Login Properties binds each to the login it read, as its other',
+    'statements. The steps read "Grant a permission", "Deny a permission", "Revoke a permission" and "Revoke a grant option", with the',
+    'permission and its securable; a failure or Stop keeps what completed, and New Login\'s message then adds "Not every permission was set."',
+    '',
+    'SQL Server changes only the rows recorded under a statement\'s own grantor, and says nothing when that leaves the permission as it',
+    'was: a REVOKE leaves a grant another principal made, a GRANT leaves another grantor\'s DENY, and a statement for sa, for the principal',
+    'that runs it or for the securable\'s owner changes nothing (4624, an informational message, or no message at all). So each of Login',
+    'Properties\' permission steps reads `sys.server_permissions` again in its own transaction (`PermissionSql.Remaining`) and fails as a',
+    'value, rolled back, when what remains is not what the boxes asked for (`PermissionSql.Unmet`, which names the grantor in the way) or',
+    `SQL Server sent 4624. For sa and for the login this connection uses the boxes only show the permissions ("${loginMessages.permissionsProtected}"),`,
+    'and the preflight refuses a request that carries any (`permissionsProtected`). A change with CASCADE also revokes the permission from',
+    `every principal the login granted it to; the page and Script warn of each ("${securablesMessages.cascades('<permission>', '<login>')}").`,
     ''
   ]
 }

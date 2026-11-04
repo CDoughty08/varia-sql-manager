@@ -42,7 +42,10 @@ import { explorerStatics } from './explorer-tree.mjs'
  * offline Archive, the read-only Ledger, `longDatabase` and eight Warehouse databases, so User Mapping's grid scrolls; two
  * languages, three server roles); User Mapping's roles describe answers `databaseRoles` (with `longRole`; guest only in
  * master); its Script is `newLoginScript`; OK with the password "Weak" answers PASSWORD_POLICY at "Create the login", "Held"
- * waits until its Stop arrives, and anything else adds the login.
+ * waits until its Stop arrives, and anything else adds the login. D2e: master has one certificate (AppSigning) and no asymmetric
+ * key; the server has two credentials (AzureBlob, and Vault of the EKM provider EkmProv), each mapped after Deny and Disable; Check
+ * Names (windowsPrincipal) finds CONTOSO\Ann (a user, any case) and CONTOSO\Ops (a group), each named as typed (xp_logininfo
+ * echoes @acctname), and answers NOT_FOUND for any other.
  * Take Database Offline describes AppData with two sessions, one of them in a transaction; taken offline (Drop All Active
  * Connections, or none left), it lists as "(Offline)" until Bring Online. With `holding` set, a SET OFFLINE without Drop All
  * Active Connections waits, as on a session that joined after the describe, until its Stop arrives.
@@ -57,6 +60,16 @@ import { explorerStatics } from './explorer-tree.mjs'
  * before any step; CONTOSO\Ops's Delete drops its user and then fails the login's DROP (a session signed in meanwhile), after
  * which its describe lists no user; any other login's Delete drops the users it may when asked, then the login, and leaves
  * Logins; its script is `loginDeleteScript`.
+ * Login Properties (D2c) describes any login with New Login's lists, its facts, a SQL Server login's lock-out state, master and
+ * us_english as its defaults (or the language it was given), sa's sysadmin membership and its users (AppData read, Sales not);
+ * User Mapping's read with a login answers that login's user and db_datareader; its Script is `loginPropertiesScript`; OK with the
+ * password "Weak" answers PASSWORD_POLICY at "Change the password", and otherwise applies the language and Status and clears
+ * Locked's lock-out with UNLOCK.
+ * Securables (D2d): New Login's describe lists the server STUB-SQL, a few permissions per type and objects of each named type
+ * (endpoints, the logins, a server role, no availability group). AppUser has VIEW SERVER STATE granted and IMPERSONATE on Held granted
+ * with grant option; Login Properties lists them. The Effective tab's read answers the login's explicit grants on the securable plus
+ * CONNECT SQL on the server, except for Held, where it answers PERMISSION_DENIED as SQL Server refuses EXECUTE AS LOGIN. Each
+ * permission OK sends is a step after the others, and Login Properties' OK applies it to what the login holds.
  */
 export function actionsStubData() {
   return { statics: explorerStatics(), serverFiles: stubServerFiles }
@@ -109,13 +122,17 @@ export const longRole = 'reporting_readers_with_a_rather_long_role_name_that_can
 export const databaseRoles = database => ({ roles: ['db_datareader', 'db_owner', 'public', 'Readers', longRole], rolesTruncated: false, guest: database === 'master', schemas: ['dbo', 'sales'], schemasTruncated: false })
 /** A login's Delete script as the backend writes it: each droppable user's DROP in its database, then DROP LOGIN in master. */
 export const loginDeleteScript = (name, users = []) => [...users.map(([database, user]) => `USE [${database}]\r\nGO\r\nDROP USER [${user}]\r\nGO\r\n`), `USE [master]\r\nGO\r\nDROP LOGIN [${name}]\r\nGO\r\n`].join('')
+/** Login Properties' script as the backend writes it for a change of the default language alone (SSMS's form: GO after each statement). */
+export const loginPropertiesScript = (name, language) => `USE [master]\r\nGO\r\nALTER LOGIN [${name}] WITH DEFAULT_LANGUAGE=[${language}]\r\nGO\r\n`
 
 /** Installs the stub; pass it to `application.evaluate` with `actionsStubData()`. Runs in main, so it is self-contained. */
 export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
   const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], databases: ['AppData', 'Archive'], blocked: new Map(), catalog: false, managed: false, offline: false, holding: false, renameSessions: 0,
     sessions: [{ sessionId: 61, login: 'app', program: 'Contoso Orders', host: 'web1', openTransactions: 1 }, { sessionId: 62, login: 'report', program: 'Reports', host: 'web2', openTransactions: 0 }],
     logins: [
-      { name: '##MS_PolicyTsqlExecutionLogin##', type: 'S', subtype: 'system', disabled: true }, { name: 'AppUser', type: 'S', subtype: 'sql', sessions: 2, policy: true, users: [['AppData', 'AppUser'], ['Sales', 'app_owner', 1]] },
+      { name: '##MS_PolicyTsqlExecutionLogin##', type: 'S', subtype: 'system', disabled: true },
+      { name: 'AppUser', type: 'S', subtype: 'sql', sessions: 2, policy: true, users: [['AppData', 'AppUser'], ['Sales', 'app_owner', 1]],
+        permissions: [{ securable: { type: 'server' }, permission: 'VIEW SERVER STATE', state: 'grant', grantor: 'sa' }, { securable: { type: 'login', name: 'Held' }, permission: 'IMPERSONATE', state: 'withGrant', grantor: 'sa' }] },
       { name: 'CONTOSO\\Ops', type: 'G', subtype: 'windowsGroup', users: [['AppData', 'ops']], failsDrop: true }, { name: 'Held', type: 'S', subtype: 'sql' },
       { name: 'Retired', type: 'S', subtype: 'sql', disabled: true, connectDenied: true, users: [['AppData', 'Retired']], service: 'SQL Server Agent (MSSQLSERVER)' },
       { name: 'Locked', type: 'S', subtype: 'sql', policy: true, locked: true }, { name: 'sa', type: 'S', subtype: 'sa', sysadmin: true }
@@ -144,6 +161,7 @@ GO
   const restoreScript = "USE [master]\r\nRESTORE DATABASE [AppData] FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
   const restoreFilesScript = "USE [master]\r\nRESTORE DATABASE [AppData] FILE = N'AppData_2' FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NORECOVERY,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
   const loginDeleteScript = (name, users = []) => [...users.map(([database, user]) => `USE [${database}]\r\nGO\r\nDROP USER [${user}]\r\nGO\r\n`), `USE [master]\r\nGO\r\nDROP LOGIN [${name}]\r\nGO\r\n`].join('')
+  const loginPropertiesScript = (name, language) => `USE [master]\r\nGO\r\nALTER LOGIN [${name}] WITH DEFAULT_LANGUAGE=[${language}]\r\nGO\r\n`
   const ok = value => ({ ok: true, value })
   const folders = (owner, ids) => ids.map(folder => ({ ref: { type: 'folder', owner, folder }, label: statics.labels[folder], icon: 'folder', hasChildren: true }))
   const object = (value, label, icon, extra = {}) => ({ ref: { type: 'object', object: value }, label, icon, hasChildren: true, ...extra })
@@ -167,7 +185,7 @@ GO
   const factsOf = login => ({
     principalId: login.subtype === 'sa' ? 1 : 300, type: login.type, subtype: login.subtype, disabled: !!login.disabled, sid: '01', created: '2026-01-02T03:04:05.000', connectDenied: !!login.connectDenied,
     own: login.name === 'sa', sysadmin: !!login.sysadmin, sessions: login.sessions ?? 0, ownedDatabases: 0, ownedDatabaseNames: [], ownedServerObjects: 0, canAlter: true, canControlServer: true, nameInUse: false,
-    ...login.type === 'S' ? { policyChecked: !!login.policy, expirationChecked: !!login.policy } : {}
+    ...login.type === 'S' ? { policyChecked: !!login.policy, expirationChecked: !!login.policy } : {}, ...login.service ? { service: login.service } : {}
   })
   const notFound = target => ({ code: 'NOT_FOUND', message: `The login ${target.name} no longer exists. Refresh Object Explorer.`, retryable: false })
   const sessionsWarning = count => `${count} sessions are connected as this login; the DROP fails until they end. Activity Monitor can end them.`
@@ -207,6 +225,83 @@ GO
     const facts = loginFacts(params), login = loginOf(params.target)
     if (!login) return facts
     return ok({ ...facts.value, lock: { locked: !!login.locked, badPasswords: login.locked ? 10 : 0, ...login.locked ? { lockoutTime: '2026-11-02T21:07:12.123' } : {}, mustChange: false, expired: false, daysUntilExpiration: 42 } })
+  }
+  /** New Login's describe: a Windows server's databases (offline Archive, read-only Ledger, eight Warehouses), languages and roles. */
+  const newLoginModel = () => ({ server: { level: 16, linux: false, windowsOnly: false, canCreate: true, engine: 'box' },
+    databases: [{ name: 'AppData', state: 0, accessible: true, readOnly: false }, { name: 'Archive', state: 6, accessible: false, readOnly: false }, { name: 'Ledger', state: 0, accessible: true, readOnly: true },
+      { name: 'master', state: 0, accessible: true, readOnly: false }, { name: longDatabase, state: 0, accessible: true, readOnly: false },
+      ...Array.from({ length: 8 }, (_, index) => ({ name: `Warehouse0${index + 1}`, state: 0, accessible: true, readOnly: false }))], databasesTruncated: false,
+    languages: [{ name: 'Deutsch', alias: 'German' }, { name: 'us_english', alias: 'English' }],
+    serverRoles: [{ name: 'dbcreator', fixed: true }, { name: 'public', fixed: true }, { name: 'sysadmin', fixed: true }], serverRolesTruncated: false,
+    certificates: ['AppSigning'], certificatesTruncated: false, asymmetricKeys: [], asymmetricKeysTruncated: false,
+    credentials: [{ name: 'AzureBlob' }, { name: 'Vault', provider: 'EkmProv' }], credentialsTruncated: false,
+    securables: { server: 'STUB-SQL',
+      permissions: { server: ['ALTER ANY LOGIN', 'CONNECT SQL', 'VIEW ANY DATABASE', 'VIEW SERVER STATE'], endpoint: ['ALTER', 'CONNECT', 'CONTROL', 'TAKE OWNERSHIP', 'VIEW DEFINITION'],
+        login: ['ALTER', 'CONTROL', 'IMPERSONATE', 'VIEW DEFINITION'], serverRole: ['ALTER', 'CONTROL', 'TAKE OWNERSHIP', 'VIEW DEFINITION'], availabilityGroup: ['ALTER', 'CONTROL', 'TAKE OWNERSHIP', 'VIEW DEFINITION'] },
+      objects: { endpoint: ['Dedicated Admin Connection', 'TSQL Default TCP'], login: stub.logins.filter(login => login.subtype !== 'system').map(login => login.name), serverRole: ['auditors'], availabilityGroup: [] },
+      truncated: false } })
+  /** Check Names (D2e): xp_logininfo's answer for the two accounts the stub knows, the name as typed, NOT_FOUND for any other. */
+  function windowsPrincipal({ target }) {
+    const name = target.name.toLowerCase()
+    if (name === 'contoso\\ann') return ok({ windowsPrincipal: { accountName: target.name, access: true, type: 'user', via: target.name }, elapsedMs: 1 })
+    if (name === 'contoso\\ops') return ok({ windowsPrincipal: { accountName: target.name, access: true, type: 'group', via: target.name }, elapsedMs: 1 })
+    return ok({ elapsedMs: 1, error: { code: 'NOT_FOUND', message: 'The server could not find this Windows account. Check the name, typed as DOMAIN\\name.', retryable: false } })
+  }
+  /** A permission step as the backend titles it (PermissionSql.StepTitle and StepDetail). */
+  const permissionStep = ({ securable, permission, state }) => ({ title: state === 'deny' ? 'Deny a permission' : state === 'revoke' ? 'Revoke a permission' : state === 'revokeGrantOption' ? 'Revoke a grant option' : 'Grant a permission',
+    detail: securable.name === undefined ? permission : permission + ' on ' + securable.name })
+  const sameSecurable = (a, b) => a.type === b.type && (a.name ?? '') === (b.name ?? '')
+  /** Applies one permission statement to what the stub login holds. */
+  function applyPermission(login, { securable, permission, state }) {
+    const rest = (login.permissions ?? []).filter(row => !(sameSecurable(row.securable, securable) && row.permission === permission))
+    const held = (login.permissions ?? []).find(row => sameSecurable(row.securable, securable) && row.permission === permission)
+    const next = state === 'revoke' ? undefined : state === 'revokeGrantOption' ? (held ? 'grant' : undefined) : state
+    login.permissions = next ? [...rest, { securable, permission, state: next, grantor: 'sa' }] : rest
+  }
+  /** The Effective tab's read: Held refuses EXECUTE AS LOGIN; otherwise the login's grants on the securable, and CONNECT SQL on the server. */
+  function effective({ target, securable }) {
+    const login = loginOf(target)
+    if (!login) return ok({ elapsedMs: 1, error: notFound(target) })
+    if (login.name === 'Held') return ok({ elapsedMs: 1, error: { code: 'PERMISSION_DENIED', message: 'You don\'t have permission to view effective permissions.', retryable: false } })
+    const granted = (login.permissions ?? []).filter(row => sameSecurable(row.securable, securable) && row.state !== 'deny').map(row => row.permission)
+    const permissions = [...new Set([...securable.type === 'server' && !login.connectDenied ? ['CONNECT SQL'] : [], ...granted])].sort()
+    return ok({ effectivePermissions: { permissions, truncated: false }, elapsedMs: 1 })
+  }
+  /** Login Properties' describe (ActionService.DescribeLoginPropertiesJobAsync): New Login's lists, the login's facts and a SQL
+   *  Server login's lock-out state, its defaults and server roles, and the users the scan read (AppData's; Sales was not read). */
+  function loginProperties(params) {
+    const facts = unlockFacts(params), login = loginOf(params.target)
+    if (!login) return facts
+    const { lock, ...rest } = facts.value
+    const users = (login.users ?? []).filter(([database]) => database === 'AppData').map(([database, user]) => ({ database, user, defaultSchema: 'dbo', owner: false }))
+    return ok({ ...rest, ...login.type === 'S' ? { lock } : {}, newLogin: newLoginModel(),
+      loginProperties: { defaultDatabase: 'master', defaultLanguage: login.language ?? 'us_english', serverRoles: login.sysadmin ? ['sysadmin'] : [], serverRolesTruncated: false, users,
+        read: ['AppData', 'Ledger', 'master', longDatabase], permissions: login.subtype === 'system' ? [] : login.permissions ?? [], permissionsTruncated: false,
+        credentials: [], credentialsTruncated: false } })
+  }
+  /** Login Properties' OK: "Weak" fails at the password; otherwise each change is a step, in the backend's order. */
+  function changeLogin({ target, loginChanges: changes, secrets }) {
+    const login = loginOf(target)
+    if (!login) return ok({ steps: [], messages: [], elapsedMs: 1, error: notFound(target) })
+    const options = ['defaultDatabase', 'defaultLanguage', 'checkPolicy', 'checkExpiration'].some(key => changes[key] !== undefined)
+    const roles = [...changes.rolesAdd ?? [], ...changes.rolesDrop ?? []].sort()
+    const steps = [...options ? [{ title: "Change the login's options" }] : [], ...changes.password ? [{ title: 'Change the password' }] : [],
+      ...changes.connect ? [{ title: changes.connect === 'deny' ? 'Deny permission to connect' : 'Grant permission to connect' }] : [],
+      ...changes.enabled === undefined ? [] : [{ title: changes.enabled ? 'Enable the login' : 'Disable the login' }],
+      ...(changes.credentialsDrop ?? []).map(detail => ({ title: 'Remove a credential', detail })), ...(changes.credentialsAdd ?? []).map(detail => ({ title: 'Map a credential', detail })),
+      ...roles.map(detail => ({ title: (changes.rolesAdd ?? []).includes(detail) ? 'Add to a server role' : 'Remove from a server role', detail })), ...(changes.permissions ?? []).map(permissionStep)]
+    if (secrets?.password === 'Weak') {
+      const failed = steps.findIndex(step => step.title === 'Change the password')
+      const partly = failed > 0 ? 'The login was changed only in part: its steps run one by one, as in SSMS, and list what completed. ' : ''
+      return ok({ steps: steps.map((step, index) => ({ status: index < failed ? 'done' : index === failed ? 'failed' : 'skipped', ...step, ...index === failed ? { message: passwordPolicyMessage } : {} })),
+        messages: [], elapsedMs: 1, error: { code: 'PASSWORD_POLICY', message: partly + passwordPolicyMessage, retryable: true } })
+    }
+    if (changes.defaultLanguage) login.language = changes.defaultLanguage
+    if (changes.password?.unlock) login.locked = false
+    if (changes.enabled !== undefined) login.disabled = !changes.enabled
+    if (changes.connect) login.connectDenied = changes.connect === 'deny'
+    for (const permission of changes.permissions ?? []) applyPermission(login, permission)
+    return ok({ steps: steps.map(step => ({ status: 'done', ...step })), messages: [], elapsedMs: 1 })
   }
   /** Unlock keeping the password: its two statements and the commit, in one transaction. */
   function unlock({ target }) {
@@ -428,18 +523,20 @@ GO
   /** New Login: "Weak" answers PASSWORD_POLICY, "Held" waits for Stop, anything else adds the login to Logins. The steps are
    * the backend's, in SSMS's order: CREATE LOGIN, then Deny and Disable as Status chose, then each server role, then per mapped
    * database its user, default schema and roles (the stub's databases have every schema chosen, so no CREATE SCHEMA). */
-  function createLogin({ login, secrets, serverRoles, status, mappings, requestId }) {
+  function createLogin({ login, secrets, serverRoles, status, mappings, permissions, requestId }) {
     const steps = [{ title: 'Create the login' }, ...status?.connect === 'deny' ? [{ title: 'Deny permission to connect' }] : [], ...status?.enabled === false ? [{ title: 'Disable the login' }] : [],
-      ...serverRoles.map(detail => ({ title: 'Add to a server role', detail })),
+      ...(login.credentials ?? []).map(detail => ({ title: 'Map a credential', detail })), ...serverRoles.map(detail => ({ title: 'Add to a server role', detail })),
       ...(mappings ?? []).flatMap(({ database, defaultSchema, rolesAdd }) => [{ title: 'Create a user', detail: database }, ...defaultSchema ? [{ title: 'Set the default schema', detail: database }] : [],
-        ...rolesAdd.map(role => ({ title: 'Add to a database role', detail: `${role} in ${database}` }))])]
+        ...rolesAdd.map(role => ({ title: 'Add to a database role', detail: `${role} in ${database}` }))]), ...(permissions ?? []).map(permissionStep)]
     const after = steps.slice(1).map(step => ({ status: 'skipped', ...step }))
     if (secrets?.password === 'Weak') return ok({ steps: [{ status: 'failed', ...steps[0], message: passwordPolicyMessage }, ...after], messages: [], elapsedMs: 1,
       error: { code: 'PASSWORD_POLICY', message: passwordPolicyMessage, retryable: true } })
     if (secrets?.password === 'Held') return new Promise(resolve => stub.blocked.set(requestId, () => resolve(ok({ steps: [{ status: 'cancelled', ...steps[0] }, ...after], messages: [], elapsedMs: 1,
       error: { code: 'CANCELLED', message: 'The action was stopped at "Create the login"; SQL Server cancelled that statement.', retryable: true } }))))
-    const windows = login.auth === 'windows'
-    stub.logins = [...stub.logins, { name: login.name, type: windows ? 'U' : 'S', subtype: windows ? 'windowsUser' : 'sql' }].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+    const kinds = { sql: ['S', 'sql'], windows: ['U', 'windowsUser'], entra: ['E', 'externalUser'], certificate: ['C', 'certificateMapped'], asymmetricKey: ['K', 'asymmetricKeyMapped'] }
+    const [type, subtype] = kinds[login.auth]
+    stub.logins = [...stub.logins, { name: login.name, type, subtype,
+      permissions: (permissions ?? []).map(({ securable, permission, state }) => ({ securable, permission, state, grantor: 'sa' })) }].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
     return ok({ steps: steps.map(step => ({ status: 'done', ...step })), messages: [], elapsedMs: 1 })
   }
   /** Restore Files and Filegroups' run: RestoreFilesRun.cs's step titles for the request, each done, the database online. */
@@ -456,6 +553,7 @@ GO
     if (params.action === 'createTable') return createTable(params)
     if (params.action === 'disable' || params.action === 'enable') return loginState(params)
     if (params.action === 'unlock') return unlock(params)
+    if (params.action === 'loginProperties') return changeLogin(params)
     if (params.action === 'rename' && target.kind === 'login') {
       if (params.newName === 'Taken') return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NAME_IN_USE', message: 'The name Taken is already used by another login or server role.', retryable: false } })
       const login = loginOf(target)
@@ -531,13 +629,16 @@ GO
           case 'databaseProperties': return properties(params)
           case 'loginFacts': return loginFacts(params)
           case 'unlockLogin': return unlockFacts(params)
-          case 'loginDatabaseRoles': return ok({ loginDatabaseRoles: databaseRoles(params.target.name), elapsedMs: 1 })
-          case 'newLogin': return ok({ newLogin: { server: { level: 16, linux: false, windowsOnly: false, canCreate: true },
-            databases: [{ name: 'AppData', state: 0, accessible: true, readOnly: false }, { name: 'Archive', state: 6, accessible: false, readOnly: false }, { name: 'Ledger', state: 0, accessible: true, readOnly: true },
-              { name: 'master', state: 0, accessible: true, readOnly: false }, { name: longDatabase, state: 0, accessible: true, readOnly: false },
-              ...Array.from({ length: 8 }, (_, index) => ({ name: `Warehouse0${index + 1}`, state: 0, accessible: true, readOnly: false }))], databasesTruncated: false,
-            languages: [{ name: 'Deutsch', alias: 'German' }, { name: 'us_english', alias: 'English' }],
-            serverRoles: [{ name: 'dbcreator', fixed: true }, { name: 'public', fixed: true }, { name: 'sysadmin', fixed: true }], serverRolesTruncated: false }, elapsedMs: 1 })
+          case 'loginDatabaseRoles': {
+            // With a login (Login Properties): its user there, in db_datareader, or none.
+            const mapped = params.login === undefined ? undefined : (loginOf({ name: params.login })?.users ?? []).find(([database]) => database === params.target.name)
+            const user = params.login === undefined ? {} : mapped ? { user: { name: mapped[1], defaultSchema: 'dbo', owner: false }, memberOf: ['db_datareader'] } : { memberOf: [] }
+            return ok({ loginDatabaseRoles: { ...databaseRoles(params.target.name), ...user }, elapsedMs: 1 })
+          }
+          case 'newLogin': return ok({ newLogin: newLoginModel(), elapsedMs: 1 })
+          case 'windowsPrincipal': return windowsPrincipal(params)
+          case 'loginProperties': return loginProperties(params)
+          case 'loginEffectivePermissions': return effective(params)
           case 'newDatabase': {
             const folder = serverFiles.roots[1].path
             return ok({ newDatabase: { model: properties({ target: { name: 'model' } }).value.databaseProperties, dataPath: folder, logPath: folder, serverCollation: 'Latin1_General_CI_AS', canCreate: true, masterLevel: 160, linux: false }, elapsedMs: 1 })
@@ -553,6 +654,7 @@ GO
         switch (params.action) {
           case 'properties': return ok({ text: propertiesScript, database: 'master', warnings: [] })
           case 'createTable': return ok({ text: designerScript(params.design.name), database: params.target.name, warnings: [] })
+          case 'loginProperties': return ok({ text: loginPropertiesScript(params.target.name, params.loginChanges.defaultLanguage ?? 'us_english'), database: 'master', warnings: [] })
           case 'unlock': return ok({ text: ['USE [master]', 'GO', 'SET XACT_ABORT ON;', 'BEGIN TRANSACTION;', `ALTER LOGIN [${params.target.name}] WITH CHECK_POLICY = OFF;`, `ALTER LOGIN [${params.target.name}] WITH CHECK_POLICY = ON, CHECK_EXPIRATION = ON;`, 'COMMIT TRANSACTION;', 'GO', ''].join(String.fromCharCode(13, 10)), database: 'master', warnings: [] })
           case 'createLogin': return ok({ text: newLoginScript(params.login.name), database: 'master', warnings: [] })
           case 'restore': return ok({ text: restoreScript, database: 'master', warnings: [] })
