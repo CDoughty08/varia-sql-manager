@@ -75,6 +75,10 @@ try {
   expect(await page.evaluate(() => window.varia.databases(crypto.randomUUID()))).toEqual({ ok: false, error: 'Connect to a SQL Server first.', code: 'NOT_CONNECTED' })
   expect(await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, invoke: typeof window.varia.invoke, port: typeof window.varia.port, postMessage: typeof window.varia.postMessage }))).toEqual({ node: 'undefined', process: 'undefined', invoke: 'undefined', port: 'undefined', postMessage: 'undefined' })
   expect(await application.evaluate(({ app }) => app.commandLine.hasSwitch('no-sandbox'))).toBe(process.platform === 'linux' && !launchOptions.chromiumSandbox)
+  // The hidden smoke window draws at full rate (fixtures/smoke.mjs); at Chromium's hidden-window rate of one frame a second
+  // every click waited two seconds for Playwright's stability check, and the suites took twice as long.
+  const frameGap = await page.evaluate(() => new Promise(resolve => requestAnimationFrame(first => requestAnimationFrame(second => resolve(second - first)))))
+  expect(frameGap, 'animation frames in the hidden smoke window').toBeLessThan(250)
   // The page's policy refuses inline scripts and eval, from main's header and from the built page's own <meta>; the
   // <meta> alone still refuses them in a session main's header hook does not reach. There, without main's preload, the
   // workbench cannot start, and its failure screen says so instead of a blank window.
