@@ -74,6 +74,10 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'results.close': control,
   // The backend answers its own 40 s budget as a TIMEOUT value; main cancels it from the renderer (varia:explorer-cancel).
   'explorer.children': { kind: 'unary', lane: 'explorer', deadlineMs: 45_000 },
+  // A build reads every database (each within its own 120 s budget) and only Stop (varia:explorer-cancel), a newer build or a
+  // disconnect ends it; a search answers its own 5 s budget as a partial value.
+  'explorer.index': { kind: 'unary', lane: 'explorer', deadlineMs: 0 },
+  'explorer.search': { kind: 'unary', lane: 'explorer', deadlineMs: 15_000 },
   // Copy streams its text as DATA within credit; an export writes the file the user chose and only CANCEL ends it.
   'results.copy': { kind: 'stream', lane: 'results', deadlineMs: 120_000 },
   'results.export': { kind: 'unary', lane: 'results', deadlineMs: 0 },

@@ -62,9 +62,11 @@ import { RestoreService } from '../../src/renderer/src/restore/RestoreService'
 import { ActionProgressService } from '../../src/renderer/src/actions/ActionProgressService'
 import { ActivityMonitorService } from '../../src/renderer/src/activity/ActivityMonitorService'
 import { activityContribution } from '../../src/renderer/src/contributions/activity'
+import { searchContribution } from '../../src/renderer/src/contributions/search'
 import { documentOwner } from '../../src/renderer/src/live/LiveService'
 import { fakeLiveViews } from './live-views'
 import { SsisOperationsService } from '../../src/renderer/src/ssis/SsisOperationsService'
+import { ObjectSearchService } from '../../src/renderer/src/search/ObjectSearchService'
 import { fakeLive } from './live-handle'
 import { settingsContribution } from '../../src/renderer/src/contributions/settings'
 import { notificationsContribution } from '../../src/renderer/src/contributions/notifications'
@@ -248,6 +250,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(async () => ({ ok: true, value: { cancelled: true } })),
     onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}),
     onActionProgress: vi.fn<VariaApi['onActionProgress']>(() => () => {}),
+    onExplorerIndexProgress: vi.fn<VariaApi['onExplorerIndexProgress']>(() => () => {}),
+    explorerIndex: vi.fn<VariaApi['explorerIndex']>(async () => ({ ok: true, value: { status: { state: 'ready', databases: 0, indexed: 0, objects: 0, modules: 0, cut: 0, skipped: [], definitions: true }, elapsedMs: 0 } })),
+    explorerSearch: vi.fn<VariaApi['explorerSearch']>(async () => ({ ok: true, value: { hits: [], total: 0, partial: false, elapsedMs: 0, index: { state: 'ready', databases: 0, indexed: 0, objects: 0, modules: 0, cut: 0, skipped: [], definitions: true } } })),
     cancel: vi.fn<VariaApi['cancel']>(async () => ({ ok: true, value: { cancelled: true } })),
     openSqlFiles: vi.fn<VariaApi['openSqlFiles']>(async () => ({ ok: true, value: [] })),
     releaseSqlFile: vi.fn<VariaApi['releaseSqlFile']>(async () => ({ ok: true, value: undefined })),
@@ -355,6 +360,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const activity = new ActivityMonitorService({ documents, connections, live: liveViews, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values })
   const live = fakeLive()
   const operations = new SsisOperationsService({ api, documents, panes, live, connections, settings })
+  const objectSearch = new ObjectSearchService({ api, documents, connections, settings })
   const inputMode = new InputModeService(fakeInputMode())
   const notifications = new NotificationService(options.timers ? { timers: options.timers } : {})
   const updates = new UpdateService(api)
@@ -450,7 +456,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     notifications,
     updates,
     activity,
-    operations
+    operations,
+    objectSearch
   }
   const contributions = [
     queryContribution(workbench, api),
@@ -473,6 +480,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     designerContribution(workbench),
     ssisContribution(workbench),
     activityContribution(workbench),
+    searchContribution(workbench),
     settingsContribution(workbench),
     notificationsContribution(workbench)
   ]
@@ -512,6 +520,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     newDatabase.dispose()
     restore.dispose()
     operations.dispose()
+    objectSearch.dispose()
     bookmarks.dispose()
     editorDialogs.dispose()
     shellOptions.dispose()
@@ -552,6 +561,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     activity,
     liveViews,
     operations,
+    objectSearch,
     live,
     focusEditor,
     notifications,

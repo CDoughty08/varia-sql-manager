@@ -40,11 +40,11 @@ export const codiconIcons = [
   'error', 'export', 'file', 'file-code', 'filter', 'filter-filled', 'folder', 'folder-library', 'folder-opened', 'git-compare', 'go-to-file', 'graph',
   'graph-line', 'history', 'info', 'insert', 'json', 'law', 'layers', 'layout', 'link', 'link-external', 'list-flat', 'list-ordered', 'list-tree', 'loading', 'lock',
   'milestone', 'multiple-windows', 'new-file', 'output', 'package', 'pass', 'person', 'play', 'plug', 'project', 'pulse', 'redo', 'references',
-  'refresh', 'remote', 'remove', 'replace', 'save', 'save-all', 'save-as', 'screen-full', 'search', 'settings-gear', 'split-horizontal', 'star-empty',
+  'refresh', 'regex', 'remote', 'remove', 'replace', 'save', 'save-all', 'save-as', 'screen-full', 'search', 'settings-gear', 'split-horizontal', 'star-empty',
   'star-full', 'symbol-color', 'symbol-constant', 'symbol-field', 'symbol-file', 'symbol-function', 'symbol-key', 'symbol-namespace', 'symbol-numeric',
   'symbol-operator', 'symbol-parameter', 'symbol-ruler', 'symbol-snippet', 'symbol-structure', 'symbol-variable', 'sync', 'tag', 'tools', 'trash',
   'triangle-right', 'type-hierarchy', 'unlock', 'verified',
-  'warning', 'watch', 'whitespace', 'window', 'word-wrap', 'workspace-trusted', 'zap', 'zoom-in', 'zoom-out'
+  'warning', 'watch', 'whitespace', 'whole-word', 'window', 'word-wrap', 'workspace-trusted', 'zap', 'zoom-in', 'zoom-out'
 ] as const
 export type CodiconId = typeof codiconIcons[number]
 

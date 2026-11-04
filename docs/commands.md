@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (209)
+## Commands (212)
 
 ### File
 
@@ -192,6 +192,9 @@ keys it uses are listed below.
 | Modify | `explorer.modify` | — | — | — | `backendReady && explorerSelectionModifiable && explorerScriptAlter == 'enabled' && !documentBusy` | Object Explorer context menu › Modify |
 | Cancel Scripting | `explorer.cancelScripting` | — | — | — | `scriptingRunning` | — |
 | Copy Name | `explorer.copyName` | — | — | — | `hasConnection` | Object Explorer context menu › Copy Name |
+| Search Objects… | `explorer.searchObjects` | — | — | — | `hasConnection` | View › Search Objects…; Object Explorer context menu › Search Objects… |
+| Rebuild Search Index | `explorer.rebuildIndex` | — | — | — | `hasConnection` | — |
+| Stop Indexing | `explorer.stopIndexing` | — | — | — | Always | — |
 
 ### Table Designer
 
@@ -406,6 +409,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `0_palette` | **C**ommand Palette… | `workbench.showCommands` | Always |
 | `0_palette` | **G**o to Query… | `workbench.quickOpen` | Always |
 | `0_palette` | Se**a**rch… | `workbench.search` | Always |
+| `0_palette` | Search Ob**j**ects… | `explorer.searchObjects` | Always |
 | `1_layout` | **S**ave Layout… | `layout.save` | Always |
 | `1_layout` | **L**oad Layout… | `layout.load` | Always |
 | `1_layout` | **R**eset Layout | `layout.reset` | Always |
@@ -528,6 +532,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `1_query` | Select Top 1000 Ro**w**s | `explorer.selectTopRows` | `explorerActionSelectTop != '' && explorerNode != 'background'` |
 | `1_query` | Modif**y** | `explorer.modify` | `explorerSelectionModifiable && explorerNode != 'background'` |
 | `1_query` | Ac**t**ivity Monitor | `activity.open` | `explorerNode == 'server' && !explorerServerLost` |
+| `1_query` | Searc**h** Objects… | `explorer.searchObjects` | `(explorerNode == 'server' && !explorerServerLost) \|\| explorerNode == 'database'` |
 | `2_script` | **S**cript … as › | Submenu: Object Explorer context menu › Script … as | `explorerScriptTitle != '' && explorerNode != 'background'` |
 | `3_filter` | F**i**lter Settings… | `explorer.filter` | `explorerFolderFilterable` |
 | `3_filter` | Remove Fi**l**ter | `explorer.removeFilter` | `explorerFolderFiltered` |

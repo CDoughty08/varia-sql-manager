@@ -3,6 +3,7 @@ import type { RpcMethod } from '../shared/contracts'
 import { connectionOptionsSchema } from '../shared/connections'
 import { limits } from '../shared/ipc/wire/protocol'
 import { explorerChildrenParamsSchema } from '../shared/explorer/schema.ts'
+import { objectIndexParamsSchema, objectSearchParamsSchema } from '../shared/explorer/search.ts'
 import { scriptRequestSchema } from '../shared/scripting/schema.ts'
 import { actionDescribeSchema, actionExecuteRequestSchema, actionExecuteResultSchema, actionScriptRequestSchema } from '../shared/actions/schema.ts'
 import { ssisCatalogSetupSchema, ssisDescribeSchema, ssisExecuteSchema } from '../shared/ssis/schema.ts'
@@ -34,6 +35,8 @@ export const requestSchemas = {
   'query.session.close': z.object({ sessionId: z.uuid(), transaction: z.enum(['commit', 'rollback']).optional() }).strict(),
   'query.session.state': z.object({ sessionId: z.uuid() }).strict(),
   'explorer.children': explorerChildrenParamsSchema,
+  'explorer.index': objectIndexParamsSchema,
+  'explorer.search': objectSearchParamsSchema,
   'scripting.script': scriptRequestSchema,
   'actions.describe': actionDescribeSchema,
   'actions.script': actionScriptRequestSchema,

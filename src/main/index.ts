@@ -14,6 +14,7 @@ import { ResultsJobHost, supervisorJobs } from './results-jobs'
 import { ScriptingRequests } from './backend/scripting-requests'
 import { ActionRequests } from './backend/action-requests'
 import { actionProgressRelay } from './action-progress'
+import { indexProgressRelay } from './index-progress'
 import { SsisRequests } from './backend/ssis-requests'
 import { ActivityRequests } from './backend/activity-requests'
 import { cancellableRequests, connectionRequestLimits, RendererRequests } from './backend/renderer-requests'
@@ -744,18 +745,21 @@ app.whenReady().then(async () => {
       // An Object Explorer load, a script, an object action, an SSIS Catalog read or write, a session's Details or a connect
       // with a requestId is registered before it is sent, so its cancel channel can always find it.
       const cancellable = cancellableRequests(method, { explorer: explorerRequests, scripting: scriptingRequests, actions: actionRequests, ssis: ssisRequests, activity: activityRequests, connections: connectionRequests }, prepared.context?.requestId)
-      const load = cancellable?.begin(prepared.context?.requestId ?? (validated as RpcMethods['explorer.children' | 'scripting.script' | 'actions.describe' | 'actions.script' | 'actions.execute' | 'ssis.describe' | 'ssis.execute' | 'ssis.catalogSetup' | 'activity.details']['params']).requestId)
+      const load = cancellable?.begin(prepared.context?.requestId ?? (validated as RpcMethods['explorer.children' | 'explorer.index' | 'explorer.search' | 'scripting.script' | 'actions.describe' | 'actions.script' | 'actions.execute' | 'ssis.describe' | 'ssis.execute' | 'ssis.catalogSetup' | 'activity.details']['params']).requestId)
       // A long action's STATS progress goes back only to the window that sent it (varia:actions-progress).
       const progress = method === 'actions.execute' ? actionProgressRelay((validated as RpcMethods['actions.execute']['params']).requestId, event.sender) : undefined
+      // An object index build's progress goes back only to the window that started it (varia:explorer-index-progress).
+      const indexing = method === 'explorer.index' ? indexProgressRelay((validated as RpcMethods['explorer.index']['params']).requestId, event.sender) : undefined
       let result: unknown
       let outcome: Settled
       try {
         try {
           result = await backend.request(method as RpcMethod, prepared.params as never, queryId !== undefined ? { onEvent: queryEvent => results.queryEvent(queryId, queryEvent) }
-            : load ? { onSent: load.sent, ...progress ? { onActionProgress: progress.event } : {} } : {})
+            : load ? { onSent: load.sent, ...progress ? { onActionProgress: progress.event } : {}, ...indexing ? { onIndexProgress: indexing.event } : {} } : {})
         } finally {
           load?.end()
           progress?.close()
+          indexing?.close()
         }
         result = validateResult(method as RpcMethod, result)
         outcome = { ok: true, value: result }
