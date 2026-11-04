@@ -330,6 +330,8 @@ describe('menu state', () => {
       'output.saveResultsAs', 'output.closeResults', 'output.openValue', 'editor.toggleOvertype', 'file.openRecent', 'file.clearRecent', 'file.recoverUnsaved', 'editor.toggleLineNumbers',
       // Toasts are reached from the palette, as in VS Code.
       'notifications.focus', 'notifications.clearAll',
+      // Download Update is offered by the status bar and its toast while Automatically download updates is off.
+      'help.downloadUpdate',
       // The table designer's menu and toolbar strip; its menubar menu is a follow-up.
       'tableDesigner.setPrimaryKey', 'tableDesigner.removePrimaryKey', 'tableDesigner.insertColumn', 'tableDesigner.deleteColumn', 'tableDesigner.generateChangeScript', 'tableDesigner.properties', 'tableDesigner.stop',
       // The SSIS Catalog's Properties on its tree nodes, and the properties documents' Refresh (their header and F5).

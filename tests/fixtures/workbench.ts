@@ -68,6 +68,9 @@ import { fakeLive } from './live-handle'
 import { settingsContribution } from '../../src/renderer/src/contributions/settings'
 import { notificationsContribution } from '../../src/renderer/src/contributions/notifications'
 import { NotificationService } from '../../src/renderer/src/core/notifications'
+import { UpdateService } from '../../src/renderer/src/updates/UpdateService'
+import { updatesContribution } from '../../src/renderer/src/contributions/updates'
+import type { UpdateState } from '../../src/shared/updates'
 import { SettingsService } from '../../src/renderer/src/settings/SettingsService'
 import { defaultSettings, scriptingOptionsFrom, type SettingsValues } from '../../src/shared/settings/catalog'
 import type { SettingsState } from '../../src/shared/settings/schema'
@@ -211,6 +214,22 @@ export function fakeInputMode(): MonacoInputMode {
   }
   return target
 }
+/** The update half of VariaApi: `push` stands in for main's state pushes, and the commands answer `answer`. */
+export function updatesApi(initial: UpdateState = { status: 'idle', currentVersion: '1.0.0', kind: 'nsis', enabled: true }) {
+  const listeners = new Set<(state: UpdateState) => void>()
+  let current = initial
+  const push = (state: UpdateState) => { current = state; listeners.forEach(listener => listener(state)) }
+  return {
+    pushUpdate: push,
+    getUpdateState: vi.fn<VariaApi['getUpdateState']>(async () => ({ ok: true, value: current })),
+    onUpdateState: vi.fn<VariaApi['onUpdateState']>(callback => { listeners.add(callback); return () => { listeners.delete(callback) } }),
+    checkForUpdates: vi.fn<VariaApi['checkForUpdates']>(async () => ({ ok: true, value: current })),
+    downloadUpdate: vi.fn<VariaApi['downloadUpdate']>(async () => ({ ok: true, value: current })),
+    restartToUpdate: vi.fn<VariaApi['restartToUpdate']>(async () => ({ ok: true, value: current.status === 'ready' })),
+    openReleasesPage: vi.fn<VariaApi['openReleasesPage']>(async () => ({ ok: true, value: undefined }))
+  }
+}
+
 /**
  * The renderer's services and every command contribution, wired as createWorkbench does but with fake IPC and a fake
  * shell host, so command enablement can be tested in Node.
@@ -281,7 +300,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     ...recentFilesApi(),
     ...recoveryApi(options.recovery),
     ...settingsApi(options.settings),
-    ...backendApi()
+    ...backendApi(),
+    ...updatesApi()
   }
   const { documents, events } = doc
   // Seeded values apply at once, as if main had answered before the workbench was created.
@@ -334,6 +354,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const operations = new SsisOperationsService({ api, documents, panes, live, connections, settings })
   const inputMode = new InputModeService(fakeInputMode())
   const notifications = new NotificationService(options.timers ? { timers: options.timers } : {})
+  const updates = new UpdateService(api)
   const databaseGone = databaseGoneHandler({ documents, properties, notify: toast => { notifications.notify(toast) } })
   const context = new ContextKeyService({
     platform,
@@ -357,6 +378,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     newDatabase: newDatabase.context,
     restore: restore.context,
     notifications,
+    updates,
     activity: activity.context,
     ssis: operations.context,
     activeElement
@@ -421,6 +443,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     restore,
     actionProgress,
     notifications,
+    updates,
     activity,
     operations
   }
@@ -439,6 +462,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     themeContribution(workbench, api, options.timers),
     backendContribution(workbench),
     helpContribution(workbench, api),
+    updatesContribution(workbench, api),
     scriptingContribution(workbench),
     actionsContribution(workbench),
     designerContribution(workbench),
@@ -488,6 +512,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     shellOptions.dispose()
     settings.dispose()
     notifications.dispose()
+    updates.dispose()
     documents.dispose()
     backend.dispose()
   }
@@ -525,6 +550,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     live,
     focusEditor,
     notifications,
+    updates,
     queries,
     files,
     recentFiles,

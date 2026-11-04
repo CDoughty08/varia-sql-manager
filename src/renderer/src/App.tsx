@@ -30,6 +30,7 @@ import ScriptingStatus from './scripting/ScriptingStatus'
 import BackendBanner from './BackendBanner'
 import OutputPane from './results/OutputPane'
 import MemoryIndicator from './results/MemoryIndicator'
+import UpdateStatus from './updates/UpdateStatus'
 import TitleBar from './TitleBar'
 import StandardToolbar, { CommandCentre } from './ShellToolbar'
 import QueryBar from './QueryBar'
@@ -311,7 +312,7 @@ export default function App() {
     <footer className="status-bar" aria-label="Status bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !liveConnection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}>
       <span className="backend-status" title={backendState.status === 'ready' ? ['SQL backend: ' + backendState.runtime, versions].filter(Boolean).join('\n') : undefined}><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}</span>
       {environmentTag(connection?.options.environment) && <span className="status-environment"><span className="visually-hidden">Active connection environment: </span><EnvironmentTag environment={connection?.options.environment} place="status" about={connection?.displayName || connection?.server} /></span>}
-      {!shell.queryStatusBar && queryStatus}<ScriptingStatus /><EditorStatus /><MemoryIndicator />
+      {!shell.queryStatusBar && queryStatus}<ScriptingStatus /><EditorStatus /><MemoryIndicator /><UpdateStatus />
     </footer>
     {environmentFor && <EnvironmentDialog key={environmentFor} connectionId={environmentFor} onClose={() => setEnvironmentFor(undefined)} />}
     {showConnect && <ConnectDialog initial={options} onConnected={connected} onClose={() => { setShowConnect(false); setReconnecting(undefined); setPendingExecute(undefined); setPendingMonitor(false) }} />}

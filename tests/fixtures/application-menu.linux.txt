@@ -133,3 +133,7 @@
   {"id":"layout.reset@window","label":"Reset Window Layout","registerAccelerator":false,"type":"normal","click":[["command","layout.reset"]]}
 {"id":"menu.help","label":"Help"}
   {"id":"help.clearEntraTokenCache","label":"Clear Entra ID Token Cache","registerAccelerator":false,"type":"normal","click":[["command","help.clearEntraTokenCache"]]}
+  {"type":"separator"}
+  {"id":"help.checkForUpdates","label":"Check for Updates","registerAccelerator":false,"type":"normal","click":[["command","help.checkForUpdates"]]}
+  {"id":"help.restartToUpdate","label":"Restart to Update","registerAccelerator":false,"type":"normal","click":[["command","help.restartToUpdate"]]}
+  {"id":"help.releaseNotes","label":"Release Notes","registerAccelerator":false,"type":"normal","click":[["command","help.releaseNotes"]]}

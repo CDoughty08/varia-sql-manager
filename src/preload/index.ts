@@ -7,6 +7,7 @@ import { menuStyleFromArgv } from '../shared/menu-style'
 import type { ThemeState } from '../shared/theme/types'
 import type { ActionProgress } from '../shared/actions/schema'
 import type { SettingsState } from '../shared/settings/schema'
+import type { UpdateState } from '../shared/updates'
 // Bundled into this one file: a sandboxed preload can require only electron and a few Node built-ins.
 import { installFileDrop } from './drop'
 
@@ -146,6 +147,16 @@ const api: VariaApi = {
     const listener = (_event: Electron.IpcRendererEvent, state: ThemeState) => callback(state)
     ipcRenderer.on('varia:theme-changed', listener)
     return () => { ipcRenderer.removeListener('varia:theme-changed', listener) }
+  },
+  getUpdateState: () => ipcRenderer.invoke('varia:updates-state'),
+  checkForUpdates: () => ipcRenderer.invoke('varia:updates-check'),
+  downloadUpdate: () => ipcRenderer.invoke('varia:updates-download'),
+  restartToUpdate: () => ipcRenderer.invoke('varia:updates-restart'),
+  openReleasesPage: () => ipcRenderer.invoke('varia:updates-releases-page'),
+  onUpdateState: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, state: UpdateState) => callback(state)
+    ipcRenderer.on('varia:updates-changed', listener)
+    return () => { ipcRenderer.removeListener('varia:updates-changed', listener) }
   }
 }
 contextBridge.exposeInMainWorld('varia', api)
