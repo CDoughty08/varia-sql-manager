@@ -230,6 +230,20 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     this.changed({ ...this.getSnapshot(), activeId: id })
     this.events.emit({ type: 'documents.activated', tabId: id })
   }
+  /**
+   * Moves a tab to `index` in the strip (clamped to its ends), as dragging it or Move Left/Right does; the order is what
+   * Next and Previous Query follow. Returns whether anything moved.
+   */
+  move(id: string, index: number): boolean {
+    const current = this.getSnapshot(), from = current.documents.findIndex(document => document.id === id)
+    if (from < 0 || this.disposed || !Number.isFinite(index)) return false
+    const to = Math.min(current.documents.length - 1, Math.max(0, Math.trunc(index)))
+    if (to === from) return false
+    const documents = current.documents.filter(document => document.id !== id)
+    documents.splice(to, 0, current.documents[from])
+    this.changed({ ...current, documents })
+    return true
+  }
   /** Applies changed settings: indentation to every open model, and bracket matching to the editor. */
   refreshOptions(): void {
     const options = this.options.modelOptions?.()

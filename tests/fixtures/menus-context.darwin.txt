@@ -30,6 +30,9 @@ documentTab.context, for a saved query's tab
   ---
   Copy Full &Path  ++++
   Reveal in Finder  ++++
+  ---
+  Mov&e Left  ⌃⇧⇞  ++++
+  Move &Right  ⌃⇧⇟  ----
 documentTab.context, for an unsaved query's tab
   &Save  ⌘S  +++-
   Save &As…  ⇧⌘S  +++-
@@ -40,6 +43,9 @@ documentTab.context, for an unsaved query's tab
   ---
   Copy Full &Path  ----
   Reveal in Finder  ----
+  ---
+  Mov&e Left  ⌃⇧⇞  ++++
+  Move &Right  ⌃⇧⇟  ++++
 dockTab.context, for a docked panel's tab
   Dock &Left  ++++
   Dock &Right  ++++

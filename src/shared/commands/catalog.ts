@@ -412,6 +412,17 @@ export const commandCatalog = {
     keybindings: [{ key: 'ctrl+shift+tab', allowRepeat: true }, { win: 'ctrl+pageup', linux: 'ctrl+pageup', allowRepeat: true }],
     menus: [{ menu: 'window', group: '2_documents', order: 2, mnemonic: 'p' }]
   },
+  // VS Code's Move Editor Left/Right keys; the query tab menu's items move the tab it was opened for.
+  'document.moveLeft': {
+    title: 'Move Query Left', category: 'View', keywords: ['reorder', 'tab'], precondition: 'multipleDocuments', unavailableHint: secondQuery,
+    keybindings: [{ key: 'ctrl+shift+pageup', allowRepeat: true }],
+    menus: [{ menu: 'documentTab.context', group: '4_move', order: 1, title: 'Move Left', mnemonic: 'e' }]
+  },
+  'document.moveRight': {
+    title: 'Move Query Right', category: 'View', keywords: ['reorder', 'tab'], precondition: 'multipleDocuments', unavailableHint: secondQuery,
+    keybindings: [{ key: 'ctrl+shift+pagedown', allowRepeat: true }],
+    menus: [{ menu: 'documentTab.context', group: '4_move', order: 2, title: 'Move Right', mnemonic: 'r' }]
+  },
   // Edit › Advanced › Word Wrap, where SSMS has it.
   'editor.toggleWordWrap': {
     title: 'Toggle Word Wrap', category: 'View', icon: 'word-wrap', toggled: 'editorWordWrap',

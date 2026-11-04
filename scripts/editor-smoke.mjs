@@ -1,7 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { activeDocumentName, backendReady, part, quickInput, quickInputActive } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, documentTab, documentTabs, documentTabSlots, part, quickInput, quickInputActive } from './fixtures/ui.mjs'
 
 // SSMS's editing commands in the real query editor, over the fake backend (no SQL Server): Comment and Uncomment
 // Selection, Make Uppercase and Lowercase, Increase and Decrease Line Indent from Edit › Advanced, Go To Line, Bookmarks
@@ -160,6 +160,38 @@ try {
   await expect.poll(() => activeDocumentName(page)).toBe(secondTab)
   await chord('L')
   await expect(glyphs()).toHaveCount(0)
+  // Query tabs reorder: Ctrl+Shift+PageUp moves the active tab left and keeps it shown, Ctrl+Tab follows the new order,
+  // and dragging a tab onto the left half of another drops it before that one, leaving the editor's text as it was.
+  const order = () => documentTabSlots(page).evaluateAll(slots => slots.map(slot => slot.querySelector('[role="tab"]').getAttribute('aria-label')))
+  const pair = async () => (await order()).filter(name => name === firstTab || name === secondTab)
+  expect(await pair()).toEqual([firstTab, secondTab])
+  await textbox().focus()
+  await page.keyboard.press('Control+Shift+PageUp')
+  await expect.poll(pair).toEqual([secondTab, firstTab])
+  expect(await activeDocumentName(page)).toBe(secondTab)
+  const kept = await editorText()
+  const source = documentTab(page, firstTab), target = documentTab(page, secondTab)
+  await source.dragTo(target, { targetPosition: { x: 4, y: 8 } }).catch(() => {})
+  let tabDragged = 'dragTo'
+  if (!await expect.poll(pair, { timeout: 3000 }).toEqual([firstTab, secondTab]).then(() => true, () => false)) {
+    // Where the platform's drag does not reach the page, the same events with a real DataTransfer.
+    tabDragged = 'synthetic DragEvent'
+    await page.evaluate(([from, to]) => {
+      const tab = name => [...document.querySelectorAll('[data-tab-id]')].find(slot => slot.querySelector('[role="tab"]').getAttribute('aria-label') === name)
+      const row = tab(from), slot = tab(to), box = slot.getBoundingClientRect(), at = { clientX: box.left + 4, clientY: box.top + 8, bubbles: true, cancelable: true }
+      const dataTransfer = new DataTransfer()
+      row.dispatchEvent(new DragEvent('dragstart', { ...at, dataTransfer }))
+      for (const type of ['dragenter', 'dragover', 'drop']) slot.dispatchEvent(new DragEvent(type, { ...at, dataTransfer }))
+      row.dispatchEvent(new DragEvent('dragend', { ...at, dataTransfer }))
+    }, [firstTab, secondTab])
+  }
+  await expect.poll(pair).toEqual([firstTab, secondTab])
+  expect(await documentTabs(page).locator('[data-drop]').count()).toBe(0)
+  expect(await editorText()).toBe(kept)
+  // The last tab has nowhere further right to go.
+  await page.keyboard.press('Control+Shift+PageDown')
+  await expect.poll(pair).toEqual([firstTab, secondTab])
+  console.log(`Editor checks: query tabs reorder by Ctrl+Shift+PageUp and by dragging (${tabDragged}).`)
   await page.keyboard.press('Alt+e')
   await page.keyboard.press('k')
   await expect(menu('Bookmarks').getByRole('menuitem', { name: 'Next Bookmark', exact: true })).toHaveAttribute('aria-disabled', 'true')

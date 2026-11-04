@@ -180,7 +180,7 @@ describe('menu service with native context menus', () => {
     expect(menus.controller.view.levels).toEqual([])
     expect(main.requests[0].request).toEqual({
       token: 1, menu: 'documentTab.context', x: 120, y: 50,
-      visible: ['file.save', 'file.saveAs', 'file.close', 'file.closeOthers', 'file.closeAll', 'file.copyPath', 'file.revealInFolder'], disabled: ['file.copyPath', 'file.revealInFolder'], checked: []
+      visible: ['file.save', 'file.saveAs', 'file.close', 'file.closeOthers', 'file.closeAll', 'file.copyPath', 'file.revealInFolder', 'document.moveLeft', 'document.moveRight'], disabled: ['file.copyPath', 'file.revealInFolder', 'document.moveLeft'], checked: []
     })
     expect(one.tab.hasAttribute('data-menu-target')).toBe(true)
     main.choose({ token: 1, id: 'file.closeOthers' })
@@ -207,7 +207,7 @@ describe('menu service with native context menus', () => {
     await settle()
     expect(menus.controller.view).toMatchObject({ source: 'context', mnemonics: false })
     expect(menus.controller.view.levels[0]).toMatchObject({ label: 'Query tab', anchor: { kind: 'point', x: 120, y: 50 } })
-    expect(menus.controller.view.levels[0].items.map(item => item.kind === 'separator' ? '-' : item.title)).toEqual(['Save', 'Save As…', '-', 'Close', 'Close All But This', 'Close All', '-', 'Copy Full Path', 'Reveal in Finder'])
+    expect(menus.controller.view.levels[0].items.map(item => item.kind === 'separator' ? '-' : item.title)).toEqual(['Save', 'Save As…', '-', 'Close', 'Close All But This', 'Close All', '-', 'Copy Full Path', 'Reveal in Finder', '-', 'Move Left', 'Move Right'])
     expect(one.tab.hasAttribute('data-menu-target')).toBe(true)
     menus.close('escape')
     expect(one.tab.hasAttribute('data-menu-target')).toBe(false)
