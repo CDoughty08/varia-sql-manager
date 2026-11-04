@@ -271,6 +271,36 @@ describe('pointer', () => {
     controller.pointerEnterItem(1, 1, { x: 400, y: 80 })
     expect(active()).toEqual([2, -1])
   })
+  it('keeps a keyboard-opened menu on its first item under a resting pointer until the pointer moves', () => {
+    const { controller, active } = harness()
+    // The menus last saw the pointer elsewhere (it moved on outside them); Shift+F10 then opens a menu whose third item
+    // appears under the resting pointer.
+    controller.openContext(menus.file, { kind: 'point', x: 10, y: 20 }, { keyboard: false, label: 'Query editor' })
+    controller.pointerMove({ x: 200, y: 200 })
+    controller.close('escape')
+    controller.openContext(menus.file, { kind: 'below', rect: rect(0, 0, 10, 10) }, { keyboard: true, label: 'Query editor' })
+    controller.pointerEnterItem(0, 3, { x: 50, y: 80 })
+    expect(active()).toEqual([0])
+    controller.pointerMove({ x: 50, y: 80 })
+    expect(active()).toEqual([0])
+    // The first real move hovers the item under the pointer.
+    controller.pointerMove({ x: 52, y: 81 })
+    expect(active()).toEqual([3])
+    // With no pointer known yet, the first item it enters is where it rests; leaving that menu forgets the item.
+    const fresh = harness()
+    fresh.controller.openMenubar('file', { keyboard: true, focus: 'first' })
+    fresh.controller.pointerEnterItem(0, 1, { x: 60, y: 70 })
+    expect(fresh.active()).toEqual([0])
+    fresh.controller.pointerLeaveLevel(0)
+    fresh.controller.pointerMove({ x: 300, y: 300 })
+    expect(fresh.active()).toEqual([-1])
+    fresh.controller.pointerEnterItem(0, 3, { x: 60, y: 120 })
+    expect(fresh.active()).toEqual([3])
+    // A menu opened by the pointer hovers at once.
+    controller.openContext(menus.file, { kind: 'point', x: 10, y: 20 }, { keyboard: false, label: 'Query editor' })
+    controller.pointerEnterItem(0, 1, { x: 52, y: 81 })
+    expect(active()).toEqual([1])
+  })
   it('keeps the active item while its submenu is open when the pointer leaves, and clears it otherwise', () => {
     const { controller, active } = harness()
     controller.openMenubar('query', { keyboard: false, focus: 'none' })
