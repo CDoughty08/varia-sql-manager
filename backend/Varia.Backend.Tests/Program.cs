@@ -642,6 +642,7 @@ try
     await Suite("LiveResult", () => LiveResultChecks.RunAsync(Check, service, info, Live("master"), json));
     await Suite("Explorer", () => ExplorerLiveChecks.RunAsync(Check, service, info, Live, sqlUser, json));
     await Suite("Scripting", () => ScriptingLiveChecks.RunAsync(Check, service, info, Live, json));
+    await Suite("ScriptingInjection", () => ScriptingLiveChecks.InjectionMatrixAsync(Check, service, info, Live, json));
     await Suite("Action", () => ActionLiveChecks.RunAsync(Check, service, info, Live("master"), json));
     await Suite("ServerFiles", () => ServerFilesLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("Seam", () => SeamLiveChecks.RunAsync(Check, service, info, Live, json));

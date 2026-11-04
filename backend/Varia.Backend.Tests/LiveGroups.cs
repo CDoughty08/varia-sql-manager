@@ -17,15 +17,17 @@ public static class LiveGroups
     public const int BudgetSeconds = 360;
 
     /// <summary>
-    /// Every live suite in the order Program.cs runs them, with the seconds it took in CI's Linux live job (PR #99's run; each prints
-    /// "Live suite name: n s"; rough is fine). A new suite needs an entry here, or the live run fails.
+    /// Every live suite in the order Program.cs runs them, with the seconds it took in CI's Linux live job (the mean of PR
+    /// #99's first two runs; each suite prints "Live suite name: n s"). Rough is fine, but a suite's time can swing by a
+    /// minute between runs (Scripting took 151 s and 233 s), so a mean of runs beats one. A new suite needs an entry here,
+    /// or the live run fails.
     /// </summary>
     public static readonly (string Name, int Seconds)[] Suites =
     [
-        ("Query", 7), ("Live", 0), ("LiveData", 17), ("LiveTableData", 13), ("ExplorerStatus", 13), ("Execution", 4), ("Transaction", 5),
-        ("LiveResult", 62), ("Explorer", 28), ("Scripting", 151), ("Action", 32), ("ServerFiles", 1), ("Seam", 24), ("DatabaseState", 16),
-        ("RenameDatabase", 23), ("Detach", 25), ("ActionProgress", 4), ("Attach", 1), ("Restore", 26), ("Login", 9), ("LoginListing", 0), ("DatabaseProperties", 47),
-        ("Designer", 8), ("NewDatabase", 1), ("Ssis", 111), ("Activity", 0), ("ActivitySource", 28), ("ActivityAction", 0), ("SsisCreate", 0),
+        ("Query", 9), ("Live", 0), ("LiveData", 17), ("LiveTableData", 13), ("ExplorerStatus", 13), ("Execution", 4), ("Transaction", 5),
+        ("LiveResult", 62), ("Explorer", 32), ("Scripting", 150), ("ScriptingInjection", 42), ("Action", 32), ("ServerFiles", 1), ("Seam", 24), ("DatabaseState", 16),
+        ("RenameDatabase", 23), ("Detach", 25), ("ActionProgress", 4), ("Attach", 2), ("Restore", 28), ("Login", 11), ("LoginListing", 0), ("DatabaseProperties", 47),
+        ("Designer", 8), ("NewDatabase", 1), ("Ssis", 111), ("Activity", 1), ("ActivitySource", 28), ("ActivityAction", 1), ("SsisCreate", 0),
         ("Entra", 0)
     ];
 
