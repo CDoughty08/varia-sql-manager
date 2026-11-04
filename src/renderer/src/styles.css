@@ -585,6 +585,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 }
 .memory-indicator { display: flex; align-items: center; gap: 4px; margin-left: 12px; white-space: nowrap; }
 .memory-indicator .codicon { font-size: var(--varia-glyph-sm); }
+.update-status { display: flex; align-items: center; margin-left: 12px; white-space: nowrap; }
+.update-status > button, .update-status > span { display: flex; align-items: center; gap: 4px; }
+.update-status > button { color: inherit; border-color: transparent; padding: 0 4px; font-size: var(--varia-size-xs); line-height: 14px; cursor: pointer; }
+.update-status .codicon { font-size: var(--varia-glyph-sm); }
 
 .layout-dialog { width: 560px; max-width: 90vw; max-height: 90vh; overflow: auto; padding: 24px; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-dialog) var(--varia-widget-shadow); animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease); }
 .layout-dialog .dialog-heading { display: flex; align-items: start; justify-content: space-between; }

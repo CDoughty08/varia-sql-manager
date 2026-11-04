@@ -251,6 +251,11 @@ pages, limits, error codes, display formats, benchmarks).
   `SsisOptions.CreateScratch` of the dry run), never a request field; Stop cancels any statement but the restore (whose
   reply waits for it to end), and a Stop or failure after the restore removes exactly what the request made, waiting at
   most 30 s per lock. Never log names, values, SQL or messages.
+- Updates live in `src/shared/updates.ts` (feed, manifest schema, states, failure words); only main fetches (its own
+  in-memory session, `net` through the system proxy and certificate store), verifies size and SHA-512 against the
+  release's `varia-update.json` (written by `scripts/update-manifest.mjs` in the release job), and installs, only after
+  Restart to Update's quit has closed the windows and stopped the backend (`src/main/update-install.ts`). The page gets
+  only `UpdateState` and asks with argument-free calls; it never names a URL or path. docs/updates.md describes it.
 - Settings live only in `src/shared/settings/` (pages in `pages.ts`, definitions per area, aggregated by `catalog.ts`;
   the Scripting page's entries come from `src/shared/scripting/options.ts`), with defaults, bounds, platforms and zod
   schemas built from the definitions. Only main reads and writes `settings.json` (`SettingsStore`: overrides only, read

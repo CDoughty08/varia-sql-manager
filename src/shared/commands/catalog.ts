@@ -609,6 +609,24 @@ export const commandCatalog = {
     title: 'Clear Entra ID Token Cache', category: 'Help', icon: 'discard', keywords: ['entra', 'azure', 'token', 'signin', 'login', 'mfa'],
     menus: [{ menu: 'help', group: '1_entra', order: 1, mnemonic: 'e' }]
   },
+  // Varia's own updates (src/shared/updates.ts): main checks GitHub's releases, downloads and verifies, then installs once
+  // the app has closed. SSMS 22's Check for Updates opens the Visual Studio Installer instead.
+  'help.checkForUpdates': {
+    title: 'Check for Updates', category: 'Help', icon: 'sync', keywords: ['update', 'upgrade', 'version', 'release', 'latest'], precondition: '!updateBusy',
+    unavailableHint: 'An update check or download is already running.', menus: [{ menu: 'help', group: '2_updates', order: 1, mnemonic: 'u' }]
+  },
+  'help.downloadUpdate': {
+    title: 'Download Update', category: 'Help', icon: 'cloud-download', keywords: ['update', 'upgrade', 'download'], precondition: 'updateAvailable',
+    unavailableHint: 'No update is waiting to download. Check for updates first.'
+  },
+  'help.restartToUpdate': {
+    title: 'Restart to Update', category: 'Help', icon: 'debug-restart', keywords: ['update', 'upgrade', 'install', 'restart'], precondition: 'updateReady',
+    unavailableHint: 'No update has been downloaded yet.', menus: [{ menu: 'help', group: '2_updates', order: 2, mnemonic: 'r' }]
+  },
+  'help.releaseNotes': {
+    title: 'Release Notes', category: 'Help', icon: 'link-external', keywords: ['update', 'changelog', 'news', 'release', 'download', 'github'],
+    menus: [{ menu: 'help', group: '2_updates', order: 3, mnemonic: 'n' }]
+  },
   // The Query Output menu and the results grid's keys: the grid copies its selected cells (Ctrl+C reaches its copy
   // event, and Ctrl+A is its own), and Messages its selected text.
   'output.copy': {

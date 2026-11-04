@@ -84,6 +84,10 @@ jobs:
             'osx-x64' { @("dist/Varia-SQL-Manager-$version-mac-x64.dmg", "dist/Varia-SQL-Manager-$version-mac-x64.zip") }
           }
           foreach ($file in $expected) { if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing release asset: $file" } }
+      # The packaged names must be ones the update manifest recognises, or this platform's copies could never update.
+      - name: Check update manifest
+        shell: bash
+        run: node scripts/update-manifest.mjs dist "$(node -p "require('./package.json').version")"
       - name: Prepare Linux display
         if: runner.os == 'Linux'
         run: |
@@ -125,11 +129,22 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
       - uses: actions/download-artifact@v8
         with:
           pattern: release-*
           path: release-assets
           merge-multiple: true
+      # The update manifest: each file's size and SHA-512, which Varia's updater checks before installing.
+      - name: Write update manifest
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node scripts/update-manifest.mjs release-assets "$RELEASE_TAG"
       - name: Create release with generated notes
         env:
           GH_TOKEN: ${{ github.token }}

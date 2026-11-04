@@ -203,10 +203,12 @@ internal static class ActionProgressChecks
         stop.Cancel();
         host.Release.TrySetResult();
         var ended = await Task.WhenAll(first, second, rename);
+        // A and B start together, so either may open first; the rename on A always opens third.
+        var opened = host.Opened.ToArray();
         const string LongBusy = "BUSY: Another restore or backup is running on this connection. Retry after it finishes.";
         const string LongElsewhere = "BUSY: Restores or backups are already running on other connections. Retry after one finishes.";
-        check(sameConnection == LongBusy && third == LongElsewhere && renameOpened && host.Opened.ToArray().SequenceEqual(["A", "B", "A"]) && ended.All(code => code.StartsWith("CANCELLED", StringComparison.Ordinal)),
-            $"the long gate allows one long action per Varia connection and two in all, says which (this connection, or the others when all long slots are taken), and leaves the execute gate free: {sameConnection} / {third} / {string.Join(", ", ended)} / {string.Join(",", host.Opened)}");
+        check(sameConnection == LongBusy && third == LongElsewhere && renameOpened && opened.Length == 3 && opened.Take(2).Order(StringComparer.Ordinal).SequenceEqual(["A", "B"]) && opened[2] == "A" && ended.All(code => code.StartsWith("CANCELLED", StringComparison.Ordinal)),
+            $"the long gate allows one long action per Varia connection and two in all, says which (this connection, or the others when all long slots are taken), and leaves the execute gate free: {sameConnection} / {third} / {string.Join(", ", ended)} / {string.Join(",", opened)}");
 
         var shortHost = new HeldHost();
         using var shortService = new ActionService(shortHost, new ActionServiceOptions { GateWait = TimeSpan.FromMilliseconds(200) });
