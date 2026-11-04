@@ -9,6 +9,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { liveProbes } from '../src/shared/live/catalog.ts'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import { activeDocumentName, backendBanner, backendReady, documentTab, documentTabs, environmentPill, explorerLabel, explorerSublabel, explorerTree, part, queryStatus, statusBar, statusChips, toolbarButton } from './fixtures/ui.mjs'
 
@@ -245,10 +246,13 @@ try {
   console.log('Object Explorer status chips at the default pane width: ' + layout)
   // The server changes: the next samples move the chips, and the tree is not listed again.
   const listings = (await calls()).filter(call => call.method === 'explorer.children').length
+  // The fake backend samples each probe at its catalogue default, so a change shows within that probe's interval: 5 s for
+  // database states, 10 s for Agent jobs and availability groups, which is longer than Linux's default 5 s wait.
+  const sampled = (...probes) => ({ timeout: Math.max(...probes.map(probe => liveProbes[probe].intervalMs.default)) + 5000 })
   await writeFile(cue, JSON.stringify({ databases: [['AppData', 0, 0, 1, 0]], jobs: 0, groups: [['AG1', 1, 2]] }))
-  await expect(statusChips(appData)).toHaveText(['READ-ONLY'])
+  await expect(statusChips(appData)).toHaveText(['READ-ONLY'], sampled('explorer.databases'))
   await expect(appData).toHaveAttribute('aria-label', 'AppData (Read-only)')
-  await expect(statusChips(statusServer)).toHaveText(['AG1 partially healthy'])
+  await expect(statusChips(statusServer)).toHaveText(['AG1 partially healthy'], sampled('explorer.agent', 'explorer.availability'))
   expect((await calls()).filter(call => call.method === 'explorer.children').length).toBe(listings)
   const explorerUpdates = async () => (await liveCalls('live.update')).filter(call => call.params.subscriptionId === explorerSubscribe.params.subscriptionId).map(call => call.params)
   // Hidden, the view pauses as every live view does; shown, it resumes.
