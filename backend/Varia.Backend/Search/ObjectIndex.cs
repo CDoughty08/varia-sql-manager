@@ -7,9 +7,10 @@ namespace Varia.Backend.Search;
 /// DML trigger, its parent and the folder that lists the parent), the folder that lists it, its definition when it has one the
 /// login may read (a module's, a constraint's or computed column's expression, a plan guide's statement), cut at the index's
 /// per-module limit, and whether it is a system object (Microsoft-shipped, a database diagrams support object, a fixed role or a
-/// built-in principal or schema), which ranks after user ones. A server object or a database has no database of its own.</summary>
+/// built-in principal or schema), which ranks after user ones. A server object or a database has no database of its own. Via is
+/// the table a temporal or ledger history table is shown below (as its history row), for the history table and its children.</summary>
 internal sealed record IndexedObject(string Kind, string Folder, string? Schema, string Name, string? ParentKind = null, string? ParentSchema = null, string? ParentName = null,
-    DateTime? Modified = null, string? Definition = null, bool DefinitionCut = false, bool System = false, string? Subtype = null, string? ParentFolder = null)
+    DateTime? Modified = null, string? Definition = null, bool DefinitionCut = false, bool System = false, string? Subtype = null, string? ParentFolder = null, IndexedObject? Via = null)
 {
     /// <summary>What the results show and a name search with a dot matches: schema.name, or the parent's for a child.</summary>
     public string Label => Schema is not null ? Schema + "." + Name : ParentName is not null ? ParentSchema + "." + ParentName + "." + Name : Name;
@@ -30,8 +31,9 @@ internal sealed class DatabaseIndex(string database, IndexedObject[] objects, lo
 /// <summary>Bounds on the index and its searches (objectSearchLimits in src/shared/explorer/search.ts).</summary>
 internal sealed class ObjectIndexLimits
 {
-    /// <summary>Objects kept per connection; a database past it is skipped as TOO_LARGE.</summary>
-    public int ObjectsPerConnection { get; init; } = 2_000_000;
+    /// <summary>Objects kept per connection; a database past it is read again without its children (CHILDREN_LEFT_OUT), and one
+    /// still past it is skipped as TOO_LARGE.</summary>
+    public int ObjectsPerConnection { get; init; } = 1_000_000;
     /// <summary>The longest part of one definition the index keeps.</summary>
     public int DefinitionChars { get; init; } = 1_000_000;
     /// <summary>Definition characters held across every connection (twice that in bytes); past it, definitions are left out.</summary>
@@ -292,7 +294,8 @@ internal static class IndexSearch
         }
         if (range is null && definition is null) return null;
         var value = new ObjectRefDto(item.Kind, database, item.Schema, item.Name, item.ParentName is null ? null : new ParentRefDto(item.ParentKind!, item.ParentSchema!, item.ParentName));
-        return new(value, item.Folder, label, range, item.Modified?.ToString("yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture), definition, item.Subtype, item.ParentFolder);
+        return new(value, item.Folder, label, range, item.Modified?.ToString("yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture), definition, item.Subtype, item.ParentFolder,
+            item.Via is { } via ? new ViaRefDto(via.Schema!, via.Name, via.Folder) : null);
     }
 
     /// <summary>The match's line (1-based) and column, and up to <paramref name="chars"/> characters of that line around it.</summary>

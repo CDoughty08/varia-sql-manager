@@ -33,6 +33,9 @@ internal static class SearchLiveChecks
         created = await sql("CREATE INDEX [ix_srch_price] ON [srch].[Priced] (price); EXEC (N'CREATE PROCEDURE [srch].[usp_Param] @srch_param int AS SELECT @srch_param;');"
             + " CREATE USER [srch_user] WITHOUT LOGIN; CREATE ROLE [srch_role];", database);
         check(created.Error is null, "the search checks create an index, a procedure with a parameter, a user and a role: " + created.Error);
+        created = await sql("CREATE TABLE [srch].[Rates] (id int PRIMARY KEY, rate money, valid_from datetime2 GENERATED ALWAYS AS ROW START, valid_to datetime2 GENERATED ALWAYS AS ROW END,"
+            + " PERIOD FOR SYSTEM_TIME (valid_from, valid_to)) WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = [srch].[Rates_Archive])); CREATE TABLE [srch].[Person] (person_name nvarchar(40)) AS NODE;", database);
+        check(created.Error is null, "the search checks create a temporal table and a graph node table: " + created.Error);
 
         async Task<ObjectIndexResult> Build(bool definitions = true) => (ObjectIndexResult)await service.DispatchAsync("explorer.index",
             JsonSerializer.SerializeToElement(new ObjectIndexArgs(connectionId, Guid.NewGuid().ToString(), definitions), json), json);
@@ -88,6 +91,15 @@ internal static class SearchLiveChecks
         check((await Find("[price]*(7)", "definitions")).Hits.Any(hit => hit.Object is { Kind: "column", Name: "srch_total" } && hit.Definition is not null),
             "a computed column's expression is searched as its definition");
         check((await Find("[price]>=(0)", "definitions")).Hits.Any(hit => hit.Object is { Kind: "constraint", Name: "ck_srch_price" }), "a check constraint's expression is searched as its definition");
+        // A history table and its columns are shown below their temporal table; a node table's hidden columns are not shown at all.
+        check((await Find("Rates_Archive", "names")).Hits.Any(hit => hit.Object is { Kind: "table", Name: "Rates_Archive" } && hit.Subtype == "history" && hit.Via is { Schema: "srch", Name: "Rates", Folder: "tables" }),
+            "a temporal history table is found with the table whose history row shows it");
+        check((await Find("rate", "names", wholeWord: true)).Hits.Any(hit => hit.Object.Parent is { Name: "Rates_Archive" } && hit.Via is { Name: "Rates" }),
+            "a history table's column names the table that shows its parent");
+        var person = (await Find("Person", "names")).Hits;
+        check(person.Any(hit => hit.Object is { Kind: "table", Name: "Person" } && hit.Folder == "graphTables" && hit.Subtype == "graphNode")
+            && (await Find("graph_id", "names")).Hits.All(hit => hit.Object.Parent?.Name != "Person"),
+            "a node table is under Graph Tables, and its hidden graph columns are left out as Object Explorer leaves them out");
         var servers = await FindIn(null, database, "names");
         check(servers.Hits.Any(hit => hit.Object is { Kind: "database", Database: null } && hit.Object.Name == database && hit.Folder == "databases"), "a database is found by name, under Databases");
         var sysadmin = (await FindIn(null, "sysadmin", "names", wholeWord: true)).Hits;
@@ -121,6 +133,7 @@ internal static class SearchLiveChecks
             check((await Find("FindList", "names")).Hits.Count == 1, "a stopped build keeps the index it had");
         }
         await sql("DROP TYPE [srch].[FindList]; DROP TABLE [srch].[" + hostile.Replace("]", "]]") + "]; DROP TABLE [srch].[Priced]; DROP PROCEDURE [srch].[usp_Param];"
+            + " ALTER TABLE [srch].[Rates] SET (SYSTEM_VERSIONING = OFF); DROP TABLE [srch].[Rates]; DROP TABLE [srch].[Rates_Archive]; DROP TABLE [srch].[Person];"
             + " DROP USER [srch_user]; DROP ROLE [srch_role]; DROP SCHEMA [srch];", database);
     }
 

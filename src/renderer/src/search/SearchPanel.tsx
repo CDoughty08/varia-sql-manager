@@ -1,7 +1,7 @@
 import { useId, useRef, type KeyboardEvent, type ReactNode, type Ref } from 'react'
 import { folderSpecs, kindSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
-import { objectSearchLimits, type ObjectIndexStatus, type ObjectSearchHit, type SearchScope } from '../../../shared/explorer/search.ts'
+import { childrenLeftOut, objectSearchLimits, type ObjectIndexStatus, type ObjectSearchHit, type SearchScope } from '../../../shared/explorer/search.ts'
 import type { ExplorerTarget } from '../../../shared/explorer/refs.ts'
 import { onUnexpectedError } from '../core/errors'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
@@ -42,9 +42,12 @@ export function indexSummary(entry: IndexEntry | undefined, status: ObjectIndexS
   if (entry?.requestId) return `Indexing ${numbers.format(entry.done)} of ${count(entry.total, 'database')} (${count(entry.objects, 'object')} so far)…`
   if (entry?.error) return `The index could not be built: ${entry.error}`
   if (!status || status.state === 'none') return 'This server has no index yet.'
-  // The server's own objects are reported under an empty database name.
-  const databases = status.skipped.filter(skip => skip.database).length
-  const skipped = (databases ? ` · ${count(databases, 'database')} skipped` : '') + (databases < status.skipped.length ? ' · server objects skipped' : '')
+  // The server's own objects are reported under an empty database name; a database kept without its children is still indexed.
+  const partial = status.skipped.filter(skip => skip.code === childrenLeftOut).length
+  const databases = status.skipped.filter(skip => skip.database && skip.code !== childrenLeftOut).length
+  const server = status.skipped.some(skip => !skip.database)
+  const skipped = (databases ? ` · ${count(databases, 'database')} skipped` : '') + (server ? ' · server objects skipped' : '')
+    + (partial ? ` · columns and other children left out of ${count(partial, 'large database')}` : '')
   const modules = status.definitions ? `, ${count(status.modules, 'definition')}` : ' (names only)'
   return `Index: ${count(status.objects, 'object')}${modules} in ${count(status.indexed, 'database')}${skipped}`
 }

@@ -58,12 +58,13 @@ internal static class ObjectSearchSql
     /// <item>the objects of <see cref="ObjectTypes"/>, each with its parent's id (a child's table or view), whether it is a system
     /// one (Microsoft-shipped, or a database diagrams support object, as Object Explorer's System folders decide), and for a table
     /// or view the folder variant it is listed in (FileTables, External Tables, Graph Tables, Dropped Ledger, or under its
-    /// temporal or ledger table);</item>
+    /// temporal or ledger table, whose id comes last);</item>
     /// <item>the user-defined types, with a table type's own object id, which its columns, keys and indexes name;</item>
     /// <item>the other named database objects (principals, schemas, assemblies, keys, certificates, storage and external
     /// resources, XML schema collections) by a two-letter code;</item>
     /// <item>the database DDL triggers; the plan guides (with their query text);</item>
-    /// <item>the columns (with a computed column's expression), indexes, statistics and parameters, each by its object's id;</item>
+    /// <item>with <paramref name="children"/>, the columns Object Explorer shows (with a computed column's expression), indexes,
+    /// statistics and parameters, each by its object's id;</item>
     /// <item>with <paramref name="definitions"/>, the module, check and default constraint definitions by object id.</item>
     /// </list>
     /// Every object of the database's own catalog is listed, Microsoft-shipped ones too (master's spt_ tables, msdb's procedures).
@@ -71,15 +72,18 @@ internal static class ObjectSearchSql
     /// <see cref="ResourceObjects"/> read lists them once per server build. Text columns come last in their rows and
     /// definitions in id order, so a reader with sequential access reads each one only as far as the index keeps it.
     /// </summary>
-    public static string Batch(SqlRender r, bool definitions) =>
+    public static string Batch(SqlRender r, bool definitions, bool children = true) =>
         "SELECT o.object_id, s.name, o.name, o.type, o.modify_date, o.parent_object_id,"
         + " CONVERT(bit, CASE WHEN o.is_ms_shipped = 1 OR ep.major_id IS NOT NULL THEN 1 ELSE 0 END),"
-        + " CONVERT(tinyint, CASE WHEN t.is_filetable = 1 THEN 1 WHEN " + r.Col(13, "t.is_external", "CONVERT(bit, 0)") + " = 1 THEN 2"
+        + " CONVERT(tinyint, CASE WHEN " + r.Col(16, "t.ledger_type", "CONVERT(tinyint, 0)") + " = 1 AND " + r.Col(16, "t.is_dropped_ledger_table", "CONVERT(bit, 0)") + " = 1 THEN 8"
+        + " WHEN " + r.Col(16, "t.ledger_type", "CONVERT(tinyint, 0)") + " = 1 THEN 7 WHEN " + r.Col(13, "t.temporal_type", "CONVERT(tinyint, 0)") + " = 1 THEN 6"
+        + " WHEN t.is_filetable = 1 THEN 1 WHEN " + r.Col(13, "t.is_external", "CONVERT(bit, 0)") + " = 1 THEN 2"
         + " WHEN " + r.Col(14, "t.is_node", "CONVERT(bit, 0)") + " = 1 THEN 3 WHEN " + r.Col(14, "t.is_edge", "CONVERT(bit, 0)") + " = 1 THEN 4"
-        + " WHEN " + r.Col(16, "t.is_dropped_ledger_table", "CONVERT(bit, 0)") + " = 1 OR " + r.Col(16, "v.is_dropped_ledger_view", "CONVERT(bit, 0)") + " = 1 THEN 5"
-        + " WHEN " + r.Col(13, "t.temporal_type", "CONVERT(tinyint, 0)") + " = 1 OR " + r.Col(16, "t.ledger_type", "CONVERT(tinyint, 0)") + " = 1 THEN 6 ELSE 0 END)"
+        + " WHEN " + r.Col(16, "t.is_dropped_ledger_table", "CONVERT(bit, 0)") + " = 1 OR " + r.Col(16, "v.is_dropped_ledger_view", "CONVERT(bit, 0)") + " = 1 THEN 5 ELSE 0 END),"
+        + " " + r.Col(13, "cur.object_id", "CONVERT(int, NULL)")
         + " FROM sys.objects AS o JOIN sys.schemas AS s ON s.schema_id = o.schema_id"
         + " LEFT JOIN sys.tables AS t ON t.object_id = o.object_id LEFT JOIN sys.views AS v ON v.object_id = o.object_id"
+        + (r.Band >= 13 ? " LEFT JOIN sys.tables AS cur ON cur.history_table_id = o.object_id" : "")
         + " LEFT JOIN sys.extended_properties AS ep ON ep.class = 1 AND ep.major_id = o.object_id AND ep.minor_id = 0 AND ep.name = N'microsoft_database_tools_support'"
         + " WHERE o.type IN (" + ObjectTypes + ") ORDER BY o.object_id;\n"
         + "SELECT t.user_type_id, s.name, t.name, t.is_table_type, t.is_assembly_type, tt.type_table_object_id FROM sys.types AS t JOIN sys.schemas AS s ON s.schema_id = t.schema_id"
@@ -109,12 +113,14 @@ internal static class ObjectSearchSql
         + " WHERE x.xml_collection_id > 1;\n"
         + "SELECT tr.object_id, tr.name, tr.modify_date, tr.is_ms_shipped FROM sys.triggers AS tr WHERE tr.parent_class = 0 ORDER BY tr.object_id;\n"
         + "SELECT g.name, g.modify_date" + (definitions ? ", g.query_text" : "") + " FROM sys.plan_guides AS g ORDER BY g.plan_guide_id;\n"
-        + "SELECT c.object_id, c.name" + (definitions ? ", cc.definition" : "") + " FROM sys.columns AS c"
-        + (definitions ? " LEFT JOIN sys.computed_columns AS cc ON cc.object_id = c.object_id AND cc.column_id = c.column_id" : "")
-        + " WHERE " + r.Col(16, "c.is_dropped_ledger_column", "CONVERT(bit, 0)") + " = 0 ORDER BY c.object_id, c.column_id;\n"
-        + "SELECT i.object_id, i.name, i.type FROM sys.indexes AS i WHERE i.type > 0 AND i.is_hypothetical = 0 AND i.name IS NOT NULL ORDER BY i.object_id, i.index_id;\n"
-        + "SELECT st.object_id, st.name FROM sys.stats AS st ORDER BY st.object_id, st.stats_id;\n"
-        + "SELECT p.object_id, p.name, p.is_output FROM sys.parameters AS p WHERE p.parameter_id > 0 ORDER BY p.object_id, p.parameter_id;\n"
+        + (children
+            ? "SELECT c.object_id, c.name" + (definitions ? ", cc.definition" : "") + " FROM sys.columns AS c"
+                + (definitions ? " LEFT JOIN sys.computed_columns AS cc ON cc.object_id = c.object_id AND cc.column_id = c.column_id" : "")
+                + " WHERE " + ExplorerQueries.ColumnVisibility(r) + " ORDER BY c.object_id, c.column_id;\n"
+                + "SELECT i.object_id, i.name, i.type FROM sys.indexes AS i WHERE i.type > 0 AND i.is_hypothetical = 0 AND i.name IS NOT NULL ORDER BY i.object_id, i.index_id;\n"
+                + "SELECT st.object_id, st.name FROM sys.stats AS st ORDER BY st.object_id, st.stats_id;\n"
+                + "SELECT p.object_id, p.name, p.is_output FROM sys.parameters AS p WHERE p.parameter_id > 0 ORDER BY p.object_id, p.parameter_id;\n"
+            : "")
         + (definitions
             ? "SELECT m.object_id, m.definition FROM sys.sql_modules AS m WHERE m.definition IS NOT NULL"
                 + " UNION ALL SELECT cc.object_id, cc.definition FROM sys.check_constraints AS cc WHERE cc.definition IS NOT NULL"
@@ -149,8 +155,11 @@ internal static class ObjectSearchSql
             problems.AddRange(CatalogSql.Lint(Databases, render, list: false, mayCheckAccess: true).Select(problem => "databases " + problem));
             foreach (var definitions in new[] { false, true })
             {
-                texts.Add(Batch(render, definitions));
-                problems.AddRange(CatalogSql.Lint(Batch(render, definitions), render, list: false, mayCheckAccess: false).Select(problem => "batch " + band + " " + problem));
+                foreach (var children in new[] { false, true })
+                {
+                    texts.Add(Batch(render, definitions, children));
+                    problems.AddRange(CatalogSql.Lint(Batch(render, definitions, children), render, list: false, mayCheckAccess: false).Select(problem => "batch " + band + " " + problem));
+                }
                 problems.AddRange(CatalogSql.Lint(ResourceObjects(definitions), render, list: false, mayCheckAccess: false).Select(problem => "resource " + problem));
                 foreach (var box in new[] { false, true })
                     problems.AddRange(CatalogSql.Lint(Server(box, definitions), render, list: false, mayCheckAccess: false).Select(problem => "server " + problem));

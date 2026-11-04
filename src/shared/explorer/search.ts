@@ -45,6 +45,10 @@ export type SearchKind = typeof searchKinds[number]
 export const searchScopes = ['all', 'names', 'definitions'] as const
 export type SearchScope = typeof searchScopes[number]
 
+/** Skip codes a status lists for a database the index still holds (ObjectSearchService.ChildrenLeftOut): its objects without
+ *  their columns, indexes, statistics and parameters, which would have taken it past the objects per connection limit. */
+export const childrenLeftOut = 'CHILDREN_LEFT_OUT'
+
 export interface ObjectIndexParams { readonly connectionId: string; readonly requestId: string; readonly definitions?: boolean }
 export interface ObjectIndexSkip { readonly database: string; readonly code: string; readonly message: string }
 /** none: never built; building: a build is reading; ready: the last build ended. `indexed` counts the databases read so far. */
@@ -99,6 +103,9 @@ export interface ObjectSearchHit {
   readonly subtype?: NodeSubtype
   /** The folder that lists a child's parent (a graph table's columns are under Tables › Graph Tables). */
   readonly parentFolder?: FolderId
+  /** The table (in the hit's database, listed in `folder`) whose history row is a temporal or ledger history table: the hit
+   *  itself, or a child's parent. */
+  readonly via?: { readonly schema: string; readonly name: string; readonly folder: FolderId }
 }
 export interface ObjectSearchResult {
   readonly hits: readonly ObjectSearchHit[]

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Data;
+using System.Data.Common;
 using System.Diagnostics;
 using System.Globalization;
 using Microsoft.Data.SqlClient;
@@ -47,6 +48,9 @@ internal sealed class ObjectSearchService : IDisposable
     public const string ResourceDatabase = "mssqlsystemresource";
     /// <summary>The database a skipped (or partly read) server batch is reported as: no database has an empty name.</summary>
     public const string ServerScope = "";
+    /// <summary>The code of a database whose objects the index keeps without their columns, indexes, statistics and parameters,
+    /// which would have taken it past the objects per connection limit. It still counts as indexed (objectIndexCodes).</summary>
+    public const string ChildrenLeftOut = "CHILDREN_LEFT_OUT";
 
     /// <summary>One connection's index and its build.</summary>
     private sealed class State(IndexBudget budget, ResourceCatalog resources)
@@ -119,8 +123,8 @@ internal sealed class ObjectSearchService : IDisposable
                 var skip = await ReadAsync(args.ConnectionId, state, name, render, definitions, perDatabase, source.Token);
                 lock (state.Gate)
                 {
-                    if (skip is null) state.Indexed++;
-                    else if (state.Skipped.Count < MaxSkipped) state.Skipped.Add(skip);
+                    if (skip is null or { Code: ChildrenLeftOut }) state.Indexed++;
+                    if (skip is not null && state.Skipped.Count < MaxSkipped) state.Skipped.Add(skip);
                 }
                 if (progress is not null && (last.Elapsed >= ProgressEvery || done + 1 == names.Count))
                 {
@@ -222,8 +226,23 @@ internal sealed class ObjectSearchService : IDisposable
         return names;
     }
 
-    /// <summary>Reads one database and swaps it into the index; the reason it could not, as a value.</summary>
-    private async Task<ObjectIndexSkip?> ReadAsync(string connectionId, State state, string database, SqlRender render, bool definitions, bool perDatabase, CancellationToken token)
+    /// <summary>Reads one database and swaps it into the index; the reason it could not, as a value. A database too large to keep
+    /// with its children is read again without them (<see cref="WithFallbackAsync"/>).</summary>
+    private Task<ObjectIndexSkip?> ReadAsync(string connectionId, State state, string database, SqlRender render, bool definitions, bool perDatabase, CancellationToken token) =>
+        WithFallbackAsync(database, children => ReadOnceAsync(connectionId, state, database, render, definitions, perDatabase, children, token));
+
+    /// <summary>Runs <paramref name="read"/> with children, and when that is TOO_LARGE once more without them: the database's
+    /// tables, procedures and every other object then stay searchable, reported as <see cref="ChildrenLeftOut"/>.</summary>
+    internal static async Task<ObjectIndexSkip?> WithFallbackAsync(string database, Func<bool, Task<ObjectIndexSkip?>> read)
+    {
+        var skip = await read(true);
+        if (skip is not { Code: "TOO_LARGE" }) return skip;
+        return await read(false) ?? new(database, ChildrenLeftOut,
+            "The database's columns, indexes, statistics and parameters were left out: with them it has more objects than the index keeps per server.");
+    }
+
+    private async Task<ObjectIndexSkip?> ReadOnceAsync(string connectionId, State state, string database, SqlRender render, bool definitions, bool perDatabase, bool children,
+        CancellationToken token)
     {
         using var budgetSource = CancellationTokenSource.CreateLinkedTokenSource(token);
         budgetSource.CancelAfter(Limits.DatabaseBudget);
@@ -235,7 +254,7 @@ internal sealed class ObjectSearchService : IDisposable
             await host.OpenAsync(connection, budgetSource.Token);
             await using var command = connection.CreateCommand();
             command.CommandTimeout = 0;
-            var batch = ObjectSearchSql.Batch(render, definitions);
+            var batch = ObjectSearchSql.Batch(render, definitions, children);
             if (perDatabase) command.CommandText = ObjectSearchSql.Prologue + batch;
             else
             {
@@ -244,7 +263,7 @@ internal sealed class ObjectSearchService : IDisposable
                 command.Parameters.Add(new SqlParameter("@stmt", SqlDbType.NVarChar, -1) { Value = batch });
             }
             await using var rows = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, budgetSource.Token);
-            var index = await reader.ReadAsync(rows, definitions, budgetSource.Token);
+            var index = await reader.ReadAsync(rows, definitions, budgetSource.Token, children);
             if (index is null) return new(database, "TOO_LARGE", "The database has more objects than the index keeps per server (" + Limits.ObjectsPerConnection.ToString("N0", CultureInfo.InvariantCulture) + ").");
             state.Index.Put(index);
             return null;
@@ -256,7 +275,9 @@ internal sealed class ObjectSearchService : IDisposable
         }
         catch (SqlException error) when (!token.IsCancellationRequested)
         {
-            reader.Abandon();
+            // A statement that fails part way (a catalog view this edition lacks) keeps what came before it, unless an earlier build
+            // read the database whole.
+            KeepPartial(reader, state.Index.Databases.Any(value => value.Database == database), state.Index.Put);
             var value = ExplorerErrors.From(error, ErrorPhase.Scope, database, database);
             return new(database, value.Code is "NO_DB_ACCESS" or "DATABASE_UNAVAILABLE" ? value.Code : "CATALOG_ERROR", value.Message);
         }
@@ -268,16 +289,22 @@ internal sealed class ObjectSearchService : IDisposable
         finally { total.Release(); }
     }
 
+    /// <summary>After a read failed part way: holds what it read when nothing was held before, else keeps the earlier read whole.</summary>
+    internal static void KeepPartial(DatabaseReader reader, bool held, Action<DatabaseIndex> put)
+    {
+        if (!held && reader.Any) put(reader.Partial());
+        else reader.Abandon();
+    }
+
     /// <summary>Reads the server's own objects (its databases and, on box editions and Managed Instance, its logins, roles and
-    /// other server objects) into the index. The reason it could not, as a value; a read that failed part way keeps what it read,
-    /// and one that failed at once leaves the objects held before.</summary>
+    /// other server objects) into the index. The reason it could not, as a value; a read that failed part way keeps what it read
+    /// only when no earlier build's objects are held.</summary>
     private async Task<ObjectIndexSkip?> ReadServerAsync(string connectionId, State state, bool box, bool definitions, CancellationToken token)
     {
         using var budgetSource = CancellationTokenSource.CreateLinkedTokenSource(token);
         budgetSource.CancelAfter(Limits.DatabaseBudget);
         await total.WaitAsync(token);
         var reader = new DatabaseReader(ServerScope, Limits, budget, Limits.ObjectsPerConnection - state.Index.Databases.Sum(value => value.Objects.Length));
-        var read = false;
         try
         {
             await using var connection = host.Connection(connectionId, null);
@@ -286,7 +313,6 @@ internal sealed class ObjectSearchService : IDisposable
             command.CommandTimeout = 0;
             command.CommandText = ObjectSearchSql.Prologue + ObjectSearchSql.Server(box, definitions);
             await using var rows = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, budgetSource.Token);
-            read = true;
             var index = await reader.ReadServerAsync(rows, box, definitions, Actions.ActionsCatalog.Current.Logins, budgetSource.Token);
             if (index is null) return new(ServerScope, "TOO_LARGE", "The server has more objects than the index keeps per server (" + Limits.ObjectsPerConnection.ToString("N0", CultureInfo.InvariantCulture) + ").");
             state.Index.PutServer(index);
@@ -299,9 +325,9 @@ internal sealed class ObjectSearchService : IDisposable
         }
         catch (SqlException error) when (!token.IsCancellationRequested)
         {
-            // A catalog view the login may not read fails its statement: what came before it (the databases) stays searchable.
-            if (read) state.Index.PutServer(reader.Partial());
-            else reader.Abandon();
+            // A catalog view the login may not read fails its statement: what came before it (the databases) stays searchable,
+            // unless an earlier build read them all.
+            KeepPartial(reader, state.Index.Server is not null, state.Index.PutServer);
             return new(ServerScope, "CATALOG_ERROR", ExplorerErrors.From(error, ErrorPhase.Statement, "Server objects", null).Message);
         }
         catch
@@ -361,7 +387,8 @@ internal sealed class ObjectSearchService : IDisposable
 /// <summary>Reads the server batch (<see cref="ObjectSearchSql.Server"/>) or one database's batch (<see cref="ObjectSearchSql.Batch"/>)
 /// into a <see cref="DatabaseIndex"/>, charging the definitions it keeps against the shared budget. Children (columns, keys,
 /// constraints, triggers, indexes, statistics, parameters) are kept only under a parent Object Explorer lists them below, and share
-/// its strings; repeated names (schemas, common column names) are held once per read.</summary>
+/// its strings; repeated names (schemas, common column names) are held once per read. A history table (and its children) names
+/// the table whose history row lists it.</summary>
 internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, IndexBudget budget, int room)
 {
     private long taken;
@@ -369,6 +396,8 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     private int cut;
     private readonly List<IndexedObject?> objects = [];
     private readonly HashSet<string> strings = new(StringComparer.Ordinal);
+    /// <summary>Rows waiting for the object that lists them: children for their parent, history tables for their table.</summary>
+    private readonly List<(int At, int Owner, bool History)> pending = [];
     private char[] buffer = new char[Math.Min(limits.DefinitionChars, 64 * 1024)];
 
     /// <summary>A read past the room it was given.</summary>
@@ -381,21 +410,26 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
         taken = 0;
     }
 
-    /// <summary>What the read holds so far, as an index (a server read that failed part way keeps it).</summary>
+    /// <summary>Whether the read holds anything (a read that failed part way keeps it).</summary>
+    public bool Any => objects.Count > 0;
+
+    /// <summary>What the read holds so far, as an index: rows still waiting for the object that lists them are left out.</summary>
     public DatabaseIndex Partial()
     {
+        foreach (var (at, _, _) in pending) objects[at] = null;
+        pending.Clear();
         var index = new DatabaseIndex(database, [.. objects.OfType<IndexedObject>()], taken, modules, cut);
         taken = 0;
         return index;
     }
 
-    /// <summary>The database's index, or null when it holds more objects than <paramref name="room"/>.</summary>
-    public async Task<DatabaseIndex?> ReadAsync(SqlDataReader reader, bool definitions, CancellationToken token)
+    /// <summary>The database's index, or null when it holds more objects than <paramref name="room"/>. Without
+    /// <paramref name="children"/> the batch has no column, index, statistics or parameter result sets.</summary>
+    public async Task<DatabaseIndex?> ReadAsync(DbDataReader reader, bool definitions, CancellationToken token, bool children = true)
     {
         try
         {
             var byId = new Dictionary<int, int>();
-            var pending = new List<(int At, int Parent)>();
             while (await reader.ReadAsync(token))
             {
                 var id = reader.GetInt32(0);
@@ -406,13 +440,18 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
                 var parent = reader.GetInt32(5);
                 var system = reader.GetBoolean(6);
                 var variant = reader.GetByte(7);
+                var current = reader.IsDBNull(8) ? 0 : reader.GetInt32(8);
                 if (ChildOf(type, parent) is { } child)
                 {
                     // Its parent may come later in id order, or be a table type (read next): placed once every parent is read.
                     byId[id] = Add(new(child.Kind, child.Folder, null, name, Modified: modified, Subtype: child.Subtype));
-                    pending.Add((objects.Count - 1, parent));
+                    pending.Add((objects.Count - 1, parent, false));
                 }
-                else if (Map(type, schema, name, modified, system, variant) is { } item) byId[id] = Add(item);
+                else if (Map(type, schema, name, modified, system, variant) is { } item)
+                {
+                    byId[id] = Add(item);
+                    if (variant is 6 or 7) pending.Add((objects.Count - 1, current, true));
+                }
             }
             await reader.NextResultAsync(token);
             while (await reader.ReadAsync(token))
@@ -425,11 +464,7 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
                 var at = Add(table ? new("tableType", "userDefinedTableTypes", schema, name) : new("type", assembly ? "userDefinedTypes" : "userDefinedDataTypes", schema, name, Subtype: assembly ? "clr" : "alias"));
                 if (!reader.IsDBNull(5)) byId[reader.GetInt32(5)] = at;
             }
-            foreach (var (at, parent) in pending)
-            {
-                var child = objects[at]!;
-                objects[at] = byId.TryGetValue(parent, out var owner) && objects[owner] is { } found ? Child(found, child.Kind, child.Folder, child.Name, child.Subtype, child.Modified) : null;
-            }
+            Place(byId);
             await reader.NextResultAsync(token);
             while (await reader.ReadAsync(token))
             {
@@ -455,10 +490,13 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
                 var guide = new IndexedObject("planGuide", "planGuides", null, name, Modified: modified);
                 Add(text.Length > 0 ? guide with { Definition = text, DefinitionCut = longer } : guide);
             }
-            await Children(reader, byId, "column", "columns", definitions, token);
-            await Children(reader, byId, "index", "indexes", false, token);
-            await Children(reader, byId, "statistic", "statistics", false, token);
-            await Children(reader, byId, "parameter", "parameters", false, token);
+            if (children)
+            {
+                await Children(reader, byId, "column", "columns", definitions, token);
+                await Children(reader, byId, "index", "indexes", false, token);
+                await Children(reader, byId, "statistic", "statistics", false, token);
+                await Children(reader, byId, "parameter", "parameters", false, token);
+            }
             if (definitions && await reader.NextResultAsync(token))
                 while (await reader.ReadAsync(token))
                 {
@@ -475,8 +513,25 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
         }
     }
 
+    /// <summary>Gives each waiting row the object that lists it, once every table and table type is read: a history table its
+    /// table (whose history row Object Explorer shows it as), then a child its parent. A row whose owner the login cannot see, or
+    /// whose owner lists no such folder, is left out.</summary>
+    private void Place(Dictionary<int, int> byId)
+    {
+        IndexedObject? Owner(int id) => id != 0 && byId.TryGetValue(id, out var at) ? objects[at] : null;
+        foreach (var (at, owner, history) in pending)
+            if (history) objects[at] = Owner(owner) is { Kind: "table" } table ? objects[at]! with { Via = table } : null;
+        foreach (var (at, owner, history) in pending)
+        {
+            if (history) continue;
+            var child = objects[at]!;
+            objects[at] = Owner(owner) is { } found ? Child(found, child.Kind, child.Folder, child.Name, child.Subtype, child.Modified) : null;
+        }
+        pending.Clear();
+    }
+
     /// <summary>One child result set (object id, name, then a subtype column or a definition): each row kept under its parent.</summary>
-    private async Task Children(SqlDataReader reader, Dictionary<int, int> byId, string kind, string folder, bool definition, CancellationToken token)
+    private async Task Children(DbDataReader reader, Dictionary<int, int> byId, string kind, string folder, bool definition, CancellationToken token)
     {
         await reader.NextResultAsync(token);
         var last = int.MinValue;
@@ -506,7 +561,7 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
 
     /// <summary>The server's own objects (<see cref="ObjectSearchSql.Server"/>): its databases, then, where it has them, its logins,
     /// server roles, other server objects and server triggers. Null when they are more than <paramref name="room"/>.</summary>
-    public async Task<DatabaseIndex?> ReadServerAsync(SqlDataReader reader, bool box, bool definitions, Actions.LoginRules logins, CancellationToken token)
+    public async Task<DatabaseIndex?> ReadServerAsync(DbDataReader reader, bool box, bool definitions, Actions.LoginRules logins, CancellationToken token)
     {
         try
         {
@@ -566,7 +621,7 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
 
     /// <summary>The resource database's objects (<see cref="ObjectSearchSql.ResourceObjects"/>), each a system one, with their
     /// columns and parameters and the definitions cut at the per-module limit; the shared catalog charges them to the budget.</summary>
-    public static async Task<IndexedObject[]> ReadResourceAsync(SqlDataReader reader, bool definitions, ObjectIndexLimits limits, CancellationToken token)
+    public static async Task<IndexedObject[]> ReadResourceAsync(DbDataReader reader, bool definitions, ObjectIndexLimits limits, CancellationToken token)
     {
         var objects = new List<IndexedObject>();
         var byId = new Dictionary<int, int>();
@@ -624,7 +679,7 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
 
     /// <summary>A text column read only as far as the per-module limit and charged to the budget: empty when the budget is spent
     /// (counted as cut), and whether it goes on past the limit.</summary>
-    private (string Text, bool Longer) Text(SqlDataReader reader, int ordinal)
+    private (string Text, bool Longer) Text(DbDataReader reader, int ordinal)
     {
         if (reader.IsDBNull(ordinal)) return ("", false);
         var (text, longer) = ReadText(reader, ordinal, ref buffer, limits.DefinitionChars);
@@ -636,7 +691,7 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
         return (text, longer);
     }
 
-    private static (string Text, bool Longer) ReadText(SqlDataReader reader, int ordinal, ref char[] buffer, int limit)
+    private static (string Text, bool Longer) ReadText(DbDataReader reader, int ordinal, ref char[] buffer, int limit)
     {
         var builder = new System.Text.StringBuilder();
         long offset = 0;
@@ -655,8 +710,8 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     /// <summary>The Object Explorer identity of a sys.objects or sys.all_objects row that is not a child, or null for a type it
     /// does not list. A system table, view or procedure is in its System folder; a system function, which Object Explorer's static
     /// System Functions folder does not list, is under Functions. <paramref name="variant"/> is the batch's table and view folder
-    /// variant: 1 FileTable, 2 external, 3 graph node, 4 graph edge, 5 dropped ledger, 6 a temporal or ledger history table (listed
-    /// below its table, which the index does not name, so under Tables).</summary>
+    /// variant: 1 FileTable, 2 external, 3 graph node, 4 graph edge, 5 dropped ledger, 6 temporal history, 7 ledger history (both
+    /// shown below their table: the reader names it), 8 a dropped ledger table's history, which Object Explorer does not list.</summary>
     internal static IndexedObject? Map(string type, string schema, string name, DateTime modified, bool system = false, int variant = 0) =>
         (type, system) switch
         {
@@ -669,6 +724,8 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
                 4 => new("table", "graphTables", schema, name, Modified: modified, Subtype: "graphEdge"),
                 5 => new("table", "droppedLedgerTables", schema, name, Modified: modified, Subtype: "droppedLedger"),
                 6 => new("table", "tables", schema, name, Modified: modified, Subtype: "history"),
+                7 => new("table", "tables", schema, name, Modified: modified, Subtype: "ledgerHistory"),
+                8 => null,
                 _ => new("table", "tables", schema, name, Modified: modified)
             },
             ("ET", _) => new("table", "externalTables", schema, name, Modified: modified, System: system, Subtype: "external"),
@@ -705,18 +762,19 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
         _ => null
     };
 
-    /// <summary>A child under <paramref name="parent"/>, sharing its strings and system flag, or null where Object Explorer lists no
-    /// such folder below it (a key on a view, a column of a procedure).</summary>
+    /// <summary>A child under <paramref name="parent"/>, sharing its strings, system flag and the table a history table is shown
+    /// below, or null where Object Explorer lists no such folder below it (a key on a view, a column of a procedure) or does not
+    /// list the parent in a folder at all (a system function, whose System Functions folder is planned).</summary>
     internal static IndexedObject? Child(IndexedObject parent, string kind, string folder, string name, string? subtype = null, DateTime? modified = null) =>
-        parent.Schema is not null && Lists(kind, parent)
-            ? new(kind, folder, null, name, parent.Kind, parent.Schema, parent.Name, modified, System: parent.System, Subtype: subtype, ParentFolder: parent.Folder)
+        parent.Schema is not null && parent.Folder != "functions" && Lists(kind, parent)
+            ? new(kind, folder, null, name, parent.Kind, parent.Schema, parent.Name, modified, System: parent.System, Subtype: subtype, ParentFolder: parent.Folder, Via: parent.Via)
             : null;
 
     private static bool Lists(string kind, IndexedObject parent) => kind switch
     {
         "column" => parent.Kind is "table" or "view" or "tableType" or "function",
-        "key" or "constraint" => parent.Kind is "tableType" || parent.Kind is "table" && parent.Subtype is not ("external" or "history" or "droppedLedger"),
-        "trigger" => parent.Kind is "view" || parent.Kind is "table" && parent.Subtype is not ("external" or "history" or "droppedLedger"),
+        "key" or "constraint" => parent.Kind is "tableType" || parent.Kind is "table" && parent.Subtype is not ("external" or "history" or "ledgerHistory" or "droppedLedger"),
+        "trigger" => parent.Kind is "view" || parent.Kind is "table" && parent.Subtype is not ("external" or "history" or "ledgerHistory" or "droppedLedger"),
         "index" => parent.Kind is "view" or "tableType" || parent.Kind is "table" && parent.Subtype is not "external",
         "statistic" => parent.Kind is "table" or "view",
         "parameter" => parent.Kind is "procedure" or "function",

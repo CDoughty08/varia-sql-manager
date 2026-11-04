@@ -155,9 +155,11 @@ internal sealed record ObjectSearchArgs(string ConnectionId, string RequestId, s
 /// whether the line goes on before or after the part, the matches counted (at most 999), and whether the definition was cut.</summary>
 internal sealed record DefinitionMatch(int Line, int Column, string Preview, int[] Range, bool Before, bool After, int Matches, bool Cut);
 /// <summary>One object found: Range is the name match's [start, length] in Label; Modified is server local time; Subtype is its
-/// node's where the index knows it; ParentFolder is the folder that lists a child's parent (Tables › Graph Tables, say).</summary>
+/// node's where the index knows it; ParentFolder is the folder that lists a child's parent (Tables › Graph Tables, say); Via is
+/// the table (in its database, in Folder) that shows a history table, or a history table's parent, as its history row.</summary>
 internal sealed record ObjectSearchHit(ObjectRefDto Object, string Folder, string Label, int[]? Range, string? Modified, DefinitionMatch? Definition, string? Subtype = null,
-    string? ParentFolder = null);
+    string? ParentFolder = null, ViaRefDto? Via = null);
+internal sealed record ViaRefDto(string Schema, string Name, string Folder);
 /// <summary>The best Limit hits of Total; Partial when the search stopped at its budget or candidate cap. Problem: why the
 /// pattern cannot be searched for (no hits then).</summary>
 internal sealed record ObjectSearchResult(List<ObjectSearchHit> Hits, int Total, bool Partial, long ElapsedMs, ObjectIndexStatus Index, string? Problem = null);

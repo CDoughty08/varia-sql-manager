@@ -41,16 +41,24 @@ The same search runs in two places, with the same options and results:
     sequences, user-defined data and CLR types, table types, XML schema collections, rules, defaults and security policies.
   - **Children:** columns, keys, constraints, DML triggers, indexes, statistics and parameters, each under its table, view,
     table type, procedure or function, and only where Object Explorer lists such a folder (an external table has no keys).
-    A child's label is `schema.parent.name`, and its hit names the folder that lists its parent.
+    A child's label is `schema.parent.name`, and its hit names the folder that lists its parent. The columns are the ones
+    the Columns folder shows: graph tables' hidden columns and dropped ledger columns are left out. So are the columns and
+    parameters of system functions, which no folder lists yet.
+  - **History tables:** a temporal or ledger history table, and its columns, indexes and statistics, name the table whose
+    history row shows it, and Reveal walks there. A dropped ledger table's history, which Object Explorer does not list,
+    is left out.
 
   Every object the login can see is indexed, Microsoft-shipped ones included: master's `spt_` tables and msdb's procedures
   under System Tables and System Stored Procedures, as Object Explorer lists them, and system functions under Functions.
   System objects rank after user objects with the same kind of match. Fixed roles, `public`, `guest`, `sys` and
   `INFORMATION_SCHEMA`, and SQL Server's own `##…##` logins count as system objects too.
-- **The server's objects.** They name no database, so a search limited to one database leaves them out. If a catalog view
-  fails for the login, the status lists the server read as skipped, and what it read before (the databases) stays
-  searchable. A temporal or ledger history table is listed under Tables; revealing it may not find it, because Object
-  Explorer shows it below its table.
+- **The server's objects.** They name no database, so a search limited to one database leaves them out.
+- **A read that fails part way.** If a statement fails (a catalog view the login may not read, or one an edition lacks),
+  the status lists the server or the database as skipped. A first build keeps what was read before the failure (the
+  databases, or a database's tables and procedures); a rebuild keeps the earlier build's objects whole instead.
+- **Large databases.** A database that would take the connection past the objects limit with its children is read again
+  without its columns, indexes, statistics and parameters. It still counts as indexed, and the status says children were
+  left out (`CHILDREN_LEFT_OUT`). A database too large even without them is skipped as `TOO_LARGE`.
 - **The resource database's objects.** The `sys` and `INFORMATION_SCHEMA` views, procedures and functions that every database
   shows (with their columns and parameters) come from SQL Server's hidden resource database, so they are the same in every database. The index reads them once
   per build, not once per database, and a search shows each of them once, as master's (or as the database a search names).
@@ -67,7 +75,7 @@ The same search runs in two places, with the same options and results:
 
 | Limit | Value |
 |---|---|
-| Objects per connection (a database past it is skipped as `TOO_LARGE`) | 2,000,000 |
+| Objects per connection (past it, a database is kept without its children, or skipped as `TOO_LARGE`) | 1,000,000 |
 | Characters kept per definition (longer ones are cut and marked) | 1,000,000 |
 | Definition characters across all connections | 64 Mi |
 | Databases read at once | 2 |

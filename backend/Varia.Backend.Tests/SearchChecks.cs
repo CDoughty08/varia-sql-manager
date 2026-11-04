@@ -1,3 +1,4 @@
+using System.Data;
 using System.Text.Json;
 using Varia.Backend.Explorer;
 using Varia.Backend.Search;
@@ -24,6 +25,7 @@ internal static class SearchChecks
         Budget(check);
         SystemObjects(check);
         Kinds(check);
+        Reader(check).GetAwaiter().GetResult();
         ResourceSets(check).GetAwaiter().GetResult();
         Requests(check);
     }
@@ -262,6 +264,118 @@ internal static class SearchChecks
         check(budget.Used == 20, "a new read of the server's objects gives the old one's definitions back");
         held.Dispose();
         check(budget.Used == 0 && held.Server is null, "a disconnect gives the server's definitions back");
+    }
+
+    private static DataTable Rows((string Name, Type Type)[] columns, params object?[][] rows)
+    {
+        var table = new DataTable();
+        foreach (var (name, type) in columns) table.Columns.Add(name, type);
+        foreach (var row in rows) table.Rows.Add([.. row.Select(value => value ?? DBNull.Value)]);
+        return table;
+    }
+
+    /// <summary>A database batch's result sets (without definitions) as DataTables, in the batch's order and column types.</summary>
+    private static DataTableReader Batch(bool children, object?[][] objects, object?[][] types, object?[][] named, object?[][] columns, object?[][] indexes, object?[][] stats, object?[][] parameters)
+    {
+        var sets = new List<DataTable>
+        {
+            Rows([("id", typeof(int)), ("schema", typeof(string)), ("name", typeof(string)), ("type", typeof(string)), ("modified", typeof(DateTime)), ("parent", typeof(int)),
+                ("system", typeof(bool)), ("variant", typeof(byte)), ("current", typeof(int))], objects),
+            Rows([("id", typeof(int)), ("schema", typeof(string)), ("name", typeof(string)), ("table", typeof(bool)), ("assembly", typeof(bool)), ("object", typeof(int))], types),
+            Rows([("code", typeof(string)), ("schema", typeof(string)), ("name", typeof(string)), ("modified", typeof(DateTime)), ("system", typeof(bool))], named),
+            Rows([("id", typeof(int)), ("name", typeof(string)), ("modified", typeof(DateTime)), ("system", typeof(bool))]),
+            Rows([("name", typeof(string)), ("modified", typeof(DateTime))], ["pg_orders", DateTime.UnixEpoch])
+        };
+        if (children)
+        {
+            sets.Add(Rows([("id", typeof(int)), ("name", typeof(string))], columns));
+            sets.Add(Rows([("id", typeof(int)), ("name", typeof(string)), ("type", typeof(byte))], indexes));
+            sets.Add(Rows([("id", typeof(int)), ("name", typeof(string))], stats));
+            sets.Add(Rows([("id", typeof(int)), ("name", typeof(string)), ("output", typeof(bool))], parameters));
+        }
+        return new DataTableReader([.. sets]);
+    }
+
+    private static async Task Reader(Action<bool, string> check)
+    {
+        var at = DateTime.UnixEpoch;
+        object?[][] objects =
+        [
+            [5, "dbo", "trg_orders", "TR", at, 10, false, (byte)0, null],
+            [10, "dbo", "Orders", "U", at, 0, false, (byte)0, null],
+            [11, "dbo", "Prices_History", "U", at, 0, false, (byte)6, 12],
+            [12, "dbo", "Prices", "U", at, 0, false, (byte)0, null],
+            [13, "dbo", "Gone_History", "U", at, 0, false, (byte)8, 14],
+            [14, "dbo", "Gone", "U", at, 0, false, (byte)5, null],
+            [15, "dbo", "pk_list", "PK", at, 900, false, (byte)0, null],
+            [16, "dbo", "ck_orphan", "C", at, 999, false, (byte)0, null],
+            [17, "dbo", "fn_rows", "IF", at, 0, false, (byte)0, null]
+        ];
+        object?[][] types = [[257, "dbo", "List", true, false, 900], [258, "dbo", "Phone", false, false, null]];
+        object?[][] named = [["SC", null, "sales", null, false], ["XS", "dbo", "Shapes", at, false], ["ZZ", null, "unknown", null, false]];
+        object?[][] columns = [[10, "id"], [11, "valid_from"], [17, "item"], [900, "value"], [999, "lost"]];
+        object?[][] indexes = [[10, "ix_orders", (byte)2]];
+        object?[][] stats = [[10, "_WA_Sys_1"], [900, "st_list"]];
+        object?[][] parameters = [[17, "@top", false]];
+        var budget = new IndexBudget(1 << 20);
+        var index = await new DatabaseReader("Sales", new ObjectIndexLimits(), budget, 1000).ReadAsync(Batch(true, objects, types, named, columns, indexes, stats, parameters), false, CancellationToken.None);
+        IndexedObject? Find(string name) => index?.Objects.SingleOrDefault(item => item.Name == name);
+        check(Find("trg_orders") is { Kind: "trigger", ParentName: "Orders", ParentFolder: "tables", Schema: null }, "a child that comes before its parent in id order is placed under it");
+        check(Find("Prices_History") is { Kind: "table", Subtype: "history", Via: { Name: "Prices", Folder: "tables" } }, "a history table names the table whose history row shows it");
+        check(Find("valid_from") is { Kind: "column", ParentName: "Prices_History", Via.Name: "Prices" }, "a history table's column names the table that shows its parent");
+        check(Find("Gone_History") is null && Find("Gone") is { Folder: "droppedLedgerTables" }, "a dropped ledger table's history, which Object Explorer does not list, is left out");
+        check(Find("pk_list") is { Kind: "key", Subtype: "primary", ParentKind: "tableType", ParentName: "List" } && Find("value") is { ParentKind: "tableType" },
+            "a table type's keys and columns are placed under it by its own object id");
+        check(Find("st_list") is null && Find("ck_orphan") is null && Find("lost") is null, "children with no parent the index lists, or under one without that folder, are left out");
+        check(Find("ix_orders") is { Kind: "index", Subtype: "nonclustered" } && Find("@top") is { Kind: "parameter", Subtype: "input", ParentKind: "function" } && Find("item") is { ParentName: "fn_rows" },
+            "indexes, parameters and a function's columns are read with their subtypes");
+        check(Find("sales") is { Kind: "schema", Folder: "schemas", Schema: null } && Find("Shapes") is { Kind: "xmlSchemaCollection", Schema: "dbo" } && Find("unknown") is null
+            && Find("pg_orders") is { Kind: "planGuide" } && Find("Phone") is { Kind: "type", Subtype: "alias" },
+            "named database objects, plan guides and types are read; an unknown code is left out");
+        var tooSmall = await new DatabaseReader("Sales", new ObjectIndexLimits(), budget, 10).ReadAsync(Batch(true, objects, types, named, columns, indexes, stats, parameters), false, CancellationToken.None);
+        var withoutChildren = await new DatabaseReader("Sales", new ObjectIndexLimits(), budget, 20).ReadAsync(Batch(false, objects, types, named, [], [], [], []), false, CancellationToken.None, children: false);
+        check(tooSmall is null && withoutChildren is { } kept && kept.Objects.Any(item => item.Name == "Orders") && kept.Objects.All(item => item.Kind is not ("column" or "index" or "statistic" or "parameter")),
+            "a read past its room answers null, and the batch without children reads the rest");
+
+        // A database too large with its children is read again without them, and still counts as indexed.
+        var asked = new List<bool>();
+        Func<bool, Task<ObjectIndexSkip?>> Reads(params ObjectIndexSkip?[] answers) => children => { asked.Add(children); return Task.FromResult(answers[asked.Count - 1]); };
+        var large = new ObjectIndexSkip("Sales", "TOO_LARGE", "m");
+        check(await ObjectSearchService.WithFallbackAsync("Sales", Reads(large, null)) is { Code: ObjectSearchService.ChildrenLeftOut } && asked.SequenceEqual([true, false]),
+            "a database too large with its children is kept without them");
+        asked.Clear();
+        check(await ObjectSearchService.WithFallbackAsync("Sales", Reads(large, large)) is { Code: "TOO_LARGE" } && asked.Count == 2, "one too large even without children is skipped");
+        asked.Clear();
+        check(await ObjectSearchService.WithFallbackAsync("Sales", Reads([null])) is null && asked.SequenceEqual([true]), "a database that fits is read once");
+
+        // A read that failed part way is held only when nothing was held before.
+        var spare = new IndexBudget(1 << 20);
+        DatabaseIndex? put = null;
+        var partial = new DatabaseReader("Sales", new ObjectIndexLimits(), spare, 1000);
+        await partial.ReadAsync(Batch(false, objects, types, named, [], [], [], []), false, CancellationToken.None, children: false);
+        ObjectSearchService.KeepPartial(partial, held: true, value => put = value);
+        check(put is null, "a failed rebuild keeps the earlier read whole");
+        ObjectSearchService.KeepPartial(partial, held: false, value => put = value);
+        check(put is { Database: "Sales" } && put.Objects.Length > 0, "a first read that failed part way keeps what it read");
+
+        // Every folder a hit names, its own or its parent's, is one Object Explorer lists rows in, so Reveal can reach it (system
+        // functions aside: their System Functions folder is planned).
+        var catalog = ExplorerCatalog.Current;
+        var produced = new List<IndexedObject>();
+        foreach (var type in new[] { "U", "ET", "V", "P", "PC", "X", "RF", "FN", "FS", "IF", "TF", "FT", "AF", "SN", "SO", "R", "D", "SP" })
+            foreach (var system in new[] { false, true })
+                for (var variant = 0; variant <= 8; variant++)
+                    if (DatabaseReader.Map(type, "dbo", "x", at, system, variant) is { } item && !(item.Kind == "function" && item.System)) produced.Add(item);
+        produced.AddRange(index!.Objects);
+        var folders = produced.Select(item => item.Folder).Concat(produced.Select(item => item.ParentFolder).OfType<string>()).Concat(produced.Select(item => item.Via?.Folder).OfType<string>())
+            .Concat(new[] { "US", "RL", "AR", "SC", "AS", "AK", "CE", "SK", "CM", "CK", "DS", "FF", "DA", "FC", "FL", "PS", "PF", "PL", "XS" }.Select(code => DatabaseReader.Named(code)!.Value.Folder))
+            .Concat(new[] { "CR", "CP", "AU", "SA", "BD", "LS" }.Select(code => DatabaseReader.ServerNamed(code)!.Value.Folder))
+            .Concat(["logins", "serverRoles", "serverTriggers", "databases", "systemDatabases", "databaseSnapshots", "databaseTriggers", "planGuides", "userDefinedTableTypes", "userDefinedDataTypes", "userDefinedTypes"])
+            .Distinct().ToList();
+        var unlisted = folders.Where(folder => catalog.Folder(folder)?.List is null).ToList();
+        check(unlisted.Count == 0, "every folder the index names lists rows in Object Explorer: " + string.Join(", ", unlisted));
+        var systemFunction = DatabaseReader.Map("IF", "sys", "dm_exec_sessions", at, system: true)!;
+        check(DatabaseReader.Child(systemFunction, "column", "columns", "session_id") is null, "a system function's columns, which no folder lists, are left out");
     }
 
     private static async Task ResourceSets(Action<bool, string> check)
