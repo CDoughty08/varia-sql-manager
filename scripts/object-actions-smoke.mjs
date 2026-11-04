@@ -96,12 +96,12 @@ try {
   await closeMenu()
   expect(await menuOf(...appData, 'Programmability', 'Stored Procedures', 'dbo.ShipOrder')).toEqual(['Modify', 'Script Stored Procedure as', 'Copy Name', 'Rename', 'Delete', 'Refresh'])
   await closeMenu()
-  expect(await menuOf(...appData)).toEqual(['New Database…', 'New Query', 'Script Database as', 'Tasks', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
+  expect(await menuOf(...appData)).toEqual(['New Database…', 'New Query', 'Search Objects…', 'Script Database as', 'Tasks', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await closeMenu()
   // SSMS offers Properties on its own databases too: only Rename, Delete and Tasks' items are greyed. Tasks holds Detach…, Take
   // Offline, Bring Online and Restore › Database… so far, all greyed there (system databases restore with T-SQL), so the submenu is greyed too.
   expect(await explorerMenuItems(page, 'server-a', 'Databases', 'System Databases', 'master')).toEqual({
-    names: ['New Database…', 'New Query', 'Script Database as', 'Tasks', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'], disabled: ['Tasks', 'Rename', 'Delete']
+    names: ['New Database…', 'New Query', 'Search Objects…', 'Script Database as', 'Tasks', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'], disabled: ['Tasks', 'Rename', 'Delete']
   })
   await closeMenu()
   await select('server-a', 'Databases', 'System Databases', 'master')

@@ -62,6 +62,7 @@
   {"accelerator":"Cmd+Shift+P","id":"workbench.showCommands","label":"Command Palette…","registerAccelerator":false,"type":"normal","click":[["command","workbench.showCommands"]]}
   {"accelerator":"Cmd+P","id":"workbench.quickOpen","label":"Go to Query…","registerAccelerator":false,"type":"normal","click":[["command","workbench.quickOpen"]]}
   {"id":"workbench.search","label":"Search…","registerAccelerator":false,"type":"normal","click":[["command","workbench.search"]]}
+  {"id":"explorer.searchObjects","label":"Search Objects…","registerAccelerator":false,"type":"normal","click":[["command","explorer.searchObjects"]]}
   {"type":"separator"}
   {"id":"layout.save","label":"Save Layout…","registerAccelerator":false,"type":"normal","click":[["command","layout.save"]]}
   {"id":"layout.load","label":"Load Layout…","registerAccelerator":false,"type":"normal","click":[["command","layout.load"]]}

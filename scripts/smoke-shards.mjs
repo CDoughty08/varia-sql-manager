@@ -12,20 +12,44 @@ export function smokeSuites() {
 }
 
 /**
- * Seconds each suite took on Windows with live SQL Server checks skipped (2026-11), to balance the shards. Every suite in
- * `test:smoke` needs one (tests/smoke-shards.test.ts); rough is fine.
+ * Seconds each suite took in CI's smoke jobs (PR #99's run: Linux under xvfb with SQL Server, Windows without), to balance the
+ * shards on each platform; macOS uses Linux's. Every suite in `test:smoke` needs one on each platform
+ * (tests/smoke-shards.test.ts); rough is fine, and each shard's summary prints the times to copy from.
  */
 export const suiteSeconds = {
-  'scripts/electron-smoke.mjs': 12, 'scripts/layout-smoke.mjs': 6, 'scripts/connections-smoke.mjs': 14, 'scripts/theme-smoke.mjs': 3,
-  'scripts/palette-smoke.mjs': 5, 'scripts/backend-smoke.mjs': 40, 'scripts/live-smoke.mjs': 39, 'scripts/chart-smoke.mjs': 44,
-  'scripts/live-grid-smoke.mjs': 38, 'scripts/activity-monitor-smoke.mjs': 43, 'scripts/menus-smoke.mjs': 80, 'scripts/explorer-smoke.mjs': 22,
-  'scripts/scripting-smoke.mjs': 12, 'scripts/object-actions-smoke.mjs': 21, 'scripts/results-smoke.mjs': 50, 'scripts/options-resize-smoke.mjs': 3,
-  'scripts/options-smoke.mjs': 6, 'scripts/files-smoke.mjs': 12, 'scripts/editor-smoke.mjs': 10, 'scripts/table-designer-smoke.mjs': 3,
-  'scripts/document-frame-smoke.mjs': 13, 'scripts/ssis-smoke.mjs': 4, 'scripts/ssis-operations-smoke.mjs': 18, 'scripts/updates-smoke.mjs': 20
+  linux: {
+    'scripts/electron-smoke.mjs': 20, 'scripts/layout-smoke.mjs': 12, 'scripts/connections-smoke.mjs': 22,
+    'scripts/theme-smoke.mjs': 5, 'scripts/palette-smoke.mjs': 10, 'scripts/backend-smoke.mjs': 51,
+    'scripts/live-smoke.mjs': 40, 'scripts/chart-smoke.mjs': 45, 'scripts/live-grid-smoke.mjs': 36,
+    'scripts/activity-monitor-smoke.mjs': 51, 'scripts/menus-smoke.mjs': 79, 'scripts/explorer-smoke.mjs': 35,
+    'scripts/scripting-smoke.mjs': 23, 'scripts/object-actions-smoke.mjs': 36, 'scripts/results-smoke.mjs': 83,
+    'scripts/options-resize-smoke.mjs': 2, 'scripts/options-smoke.mjs': 11, 'scripts/files-smoke.mjs': 14,
+    'scripts/editor-smoke.mjs': 12, 'scripts/table-designer-smoke.mjs': 5, 'scripts/document-frame-smoke.mjs': 18,
+    'scripts/ssis-smoke.mjs': 6, 'scripts/ssis-operations-smoke.mjs': 18, 'scripts/updates-smoke.mjs': 20
+  },
+  windows: {
+    'scripts/electron-smoke.mjs': 19, 'scripts/layout-smoke.mjs': 10, 'scripts/connections-smoke.mjs': 20,
+    'scripts/theme-smoke.mjs': 6, 'scripts/palette-smoke.mjs': 6, 'scripts/backend-smoke.mjs': 48,
+    'scripts/live-smoke.mjs': 39, 'scripts/chart-smoke.mjs': 45, 'scripts/live-grid-smoke.mjs': 36,
+    'scripts/activity-monitor-smoke.mjs': 44, 'scripts/menus-smoke.mjs': 94, 'scripts/explorer-smoke.mjs': 25,
+    'scripts/scripting-smoke.mjs': 15, 'scripts/object-actions-smoke.mjs': 68, 'scripts/results-smoke.mjs': 55,
+    'scripts/options-resize-smoke.mjs': 2, 'scripts/options-smoke.mjs': 8, 'scripts/files-smoke.mjs': 15,
+    'scripts/editor-smoke.mjs': 10, 'scripts/table-designer-smoke.mjs': 4, 'scripts/document-frame-smoke.mjs': 14,
+    'scripts/ssis-smoke.mjs': 6, 'scripts/ssis-operations-smoke.mjs': 18, 'scripts/updates-smoke.mjs': 20
+  }
 }
 
+/**
+ * The most one CI shard's suites may take on either platform, so a slow new suite fails tests/ci-workflow.test.ts instead of
+ * quietly lengthening every run: speed it up, or add a shard to ci.yml's matrix (and its command).
+ */
+export const shardBudgetSeconds = 360
+
+/** This machine's weights: Windows's on Windows, Linux's elsewhere. */
+export const platformSeconds = (platform = process.platform) => suiteSeconds[platform === 'win32' ? 'windows' : 'linux']
+
 /** Splits `suites` into `count` shards of similar time (longest first, each to the lightest shard), each in suite order. */
-export function shardSuites(suites, count, seconds = suiteSeconds) {
+export function shardSuites(suites, count, seconds = platformSeconds()) {
   const shards = Array.from({ length: count }, () => ({ total: 0, suites: new Set() }))
   const order = suites.map((suite, index) => ({ suite, index, weight: seconds[suite] ?? 30 })).sort((a, b) => b.weight - a.weight || a.index - b.index)
   for (const { suite, weight } of order) {

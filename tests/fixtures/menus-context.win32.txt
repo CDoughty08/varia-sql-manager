@@ -119,6 +119,7 @@ explorer.context, for a server
   ---
   New &Query  -++-
   Ac&tivity Monitor  -++-
+  Searc&h Objects…  -+++
   ---
   Copy N&ame  -+++
   ---
@@ -137,6 +138,7 @@ explorer.context, for the Databases folder
   Re&fresh  F5  -+++
 explorer.context, for a database
   New &Query  -++-
+  Searc&h Objects…  -+++
   ---
   &Script Database as >
     &CREATE To >

@@ -676,7 +676,21 @@ export const commandCatalog = {
   'workbench.search': {
     title: 'Search…', category: 'View', icon: 'search', keywords: ['find', 'objects', 'tables', 'goto', 'launch'],
     keybindings: [{ win: 'ctrl+q' }], menus: [{ menu: 'view', group: '0_palette', order: 3, mnemonic: 'a' }]
-  }
+  },
+  // Search Objects: a tab that searches a server's object index (names and module definitions), loaded in the tree or not.
+  'explorer.searchObjects': {
+    title: 'Search Objects…', category: 'Object Explorer', icon: 'search', keywords: ['find', 'objects', 'definitions', 'text', 'procedures', 'index', 'regex', 'grep'],
+    precondition: 'hasConnection', unavailableHint: noServer,
+    menus: [
+      { menu: 'view', group: '0_palette', order: 4, mnemonic: 'j' },
+      { menu: 'explorer.context', group: '1_query', order: 6, mnemonic: 'h', when: "(explorerNode == 'server' && !explorerServerLost) || explorerNode == 'database'" }
+    ]
+  },
+  'explorer.rebuildIndex': {
+    title: 'Rebuild Search Index', category: 'Object Explorer', icon: 'refresh', keywords: ['search', 'objects', 'index', 'refresh'],
+    precondition: 'hasConnection', unavailableHint: noServer
+  },
+  'explorer.stopIndexing': { title: 'Stop Indexing', category: 'Object Explorer', icon: 'debug-stop', keywords: ['search', 'index', 'cancel'] }
 } as const satisfies Record<string, CommandDescriptor>
 
 export type CommandId = keyof typeof commandCatalog

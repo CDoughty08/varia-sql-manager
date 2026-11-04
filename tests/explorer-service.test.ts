@@ -1121,6 +1121,83 @@ describe('ExplorerService: reconcile', () => {
   })
 })
 
+describe('ExplorerService: seek', () => {
+  const server: ObjectRef = { kind: 'server' }, appData: ObjectRef = { kind: 'database', name: 'AppData' }
+  const databases: ExplorerNodeRef = { type: 'folder', owner: server, folder: 'databases' }
+  const tablesFolder: ExplorerNodeRef = { type: 'folder', owner: appData, folder: 'tables' }
+  const tablePath = (name: string, database: ObjectRef = appData): ExplorerNodeRef[] =>
+    [databases, { type: 'object', object: database }, { type: 'folder', owner: database, folder: 'tables' }, { type: 'object', object: { kind: 'table', database: database.name, schema: 'dbo', name } }]
+  const names = (count: number) => Array.from({ length: count }, (_, at) => `dbo.T${at}`)
+
+  it('expands each node on the path and pages a folder on until the row arrives, then selects and reveals it', async () => {
+    const f = fixture()
+    f.state.tables = names(10)
+    f.state.pageSize = 2
+    f.connect()
+    await settle()
+    const outcome = await f.explorer.seek(cid('server-a'), [tablePath('T7')])
+    const t7 = f.find('dbo.T7')
+    expect(outcome).toEqual({ ok: true, nodeId: t7 })
+    expect(f.explorer.getSnapshot().selected).toBe(t7)
+    expect(f.explorer.getSnapshot().reveal).toBeDefined()
+    expect([f.find('Databases'), f.find('AppData'), f.find('Tables')].map(id => f.explorer.node(id)!.expanded)).toEqual([true, true, true])
+    // Only the folders on the path were listed, and Tables' later pages by cursor.
+    const pages = f.calls().filter(isFolder('tables')).map(params => params.cursor ?? 'first')
+    expect(pages.slice(0, 4)).toEqual(['first', 'v1.tables.2', 'v1.tables.4', 'v1.tables.6'])
+    expect(f.calls().some(isFolder('views'))).toBe(false)
+  })
+
+  it('tries the next path when a fully listed node lacks the step: a database under System Databases', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const master: ObjectRef = { kind: 'database', name: 'master' }
+    const system: ExplorerNodeRef = { type: 'folder', owner: server, folder: 'systemDatabases' }
+    const outcome = await f.explorer.seek(cid('server-a'), [[databases, { type: 'object', object: master }], [databases, system, { type: 'object', object: master }]])
+    expect(outcome).toEqual({ ok: true, nodeId: f.find('master') })
+    // With no path left, the first path's reason is the answer.
+    expect(await f.explorer.seek(cid('server-a'), [[databases, { type: 'object', object: { kind: 'database', name: 'Gone' } }], [databases, system, { type: 'object', object: { kind: 'database', name: 'Gone' } }]]))
+      .toEqual({ ok: false, message: 'Gone is not in Databases. Refresh Object Explorer, then try again.' })
+    // A database with nothing to list (Offline) has no Tables to walk into.
+    expect(await f.explorer.seek(cid('server-a'), [[databases, { type: 'object', object: { kind: 'database', name: 'Offline' } }, tablesFolder]])).toEqual({ ok: false, message: 'Tables is not in Offline. Refresh Object Explorer, then try again.' })
+  })
+
+  it('says why it cannot get there: the object is gone, a filter hides it, the folder stopped at its cap, a listing failed', async () => {
+    const f = fixture({ folderCap: 4 })
+    f.state.tables = names(10)
+    f.state.pageSize = 2
+    f.connect()
+    await settle()
+    const id = cid('server-a')
+    expect(await f.explorer.seek(id, [tablePath('T2')])).toMatchObject({ ok: true })
+    expect(await f.explorer.seek(id, [tablePath('T9')])).toEqual({ ok: false, message: 'Tables stopped at 4 items (its cap). Filter it by name to find dbo.T9.' })
+    f.explorer.setFilter(f.find('Tables'), { name: { op: 'contains', value: 'T1' } })
+    await settle()
+    expect(await f.explorer.seek(id, [tablePath('T3')])).toEqual({ ok: false, message: 'A filter on Tables hides dbo.T3. Remove it, then try again.' })
+    expect(await f.explorer.seek(id, [tablePath('T1')])).toMatchObject({ ok: true })
+    expect(await f.explorer.seek(id, [tablePath('T1', { kind: 'database', name: 'Locked' })])).toEqual({ ok: false, message: 'Object Explorer could not list Locked: The current login cannot access database Locked.' })
+  })
+
+  it('ends when Stop, another seek or a lost server ends it, and answers a server Object Explorer does not show', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const id = cid('server-a')
+    f.hold(isFolder('tables'))
+    const stopped = f.explorer.seek(id, [tablePath('T1')])
+    await settle()
+    f.explorer.stop()
+    expect(await stopped).toEqual({ ok: false, message: 'Stopped.', cancelled: true })
+    const first = f.explorer.seek(id, [tablePath('T1')])
+    await settle()
+    const second = f.explorer.seek(id, [tablePath('T2')])
+    expect(await first).toEqual({ ok: false, message: 'Another reveal started.', cancelled: true })
+    f.connections.markLostBefore(2)
+    expect(await second).toEqual({ ok: false, message: 'Object Explorer is not connected to this server.' })
+    expect(await f.explorer.seek(cid('server-z'), [tablePath('T1')])).toEqual({ ok: false, message: 'Object Explorer is not connected to this server.' })
+  })
+})
+
 describe('ExplorerService: stop, budget and eviction', () => {
   it('stops every load, shows how far folders got, and continues on Enter', async () => {
     const f = fixture()
