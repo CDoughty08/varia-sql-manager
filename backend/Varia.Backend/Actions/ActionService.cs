@@ -1123,6 +1123,7 @@ internal sealed partial class ActionService : IDisposable
         while (true)
         {
             try { await run(); return; }
+            // Stop that arrives while SQL Server refuses the statement as locked is still Stop, not the refusal.
             catch (Exception error) when (locked(error)) { token.ThrowIfCancellationRequested(); }
             await Task.Delay(delay, token);
         }
