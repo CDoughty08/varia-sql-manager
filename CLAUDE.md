@@ -201,8 +201,7 @@ pages, limits, error codes, display formats, benchmarks).
   names, SQL or values. Varia undoes only its own partial changes and drops only a RESTORING database its own restore created
   (`ActionSql.DropRestoring`, identity checked in the batch), never one that existed. Script never runs anything. Describe and script reads use `LOCK_TIMEOUT 10000`
   (the loginFacts describe, whose facts only advise, under READ UNCOMMITTED). Every lint refuses `LOGINPROPERTY` (it takes its own locks whatever
-  the isolation level) and any read of a password hash (`CatalogSql.SecretUses`), except `ActionSql.LoginLock` (Unlock's
-  lock-out read, in the action's own connection), whose own lint allows only the lock-out properties `logins.ts` lists. The test-only dry
+  the isolation level) and any read of a password hash (`CatalogSql.SecretUses`). The test-only dry
   run is an internal C# method, never a request field. Action statements run through a reader (`ActionService.ReadAllAsync`),
   never `ExecuteNonQuery` (`tests/action-reader-lint.test.ts`), whose info messages SqlClient holds until the statement ends, and a Stop
   reaches the statement only through `ActionService.StatementStop` (SqlClient's own cancel from another thread waits while a statement

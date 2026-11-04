@@ -176,6 +176,9 @@ internal static class ScriptingChecks
         catch (InvalidOperationException) { check(true, "server-level URNs take only server types"); }
         check(SmoScriptRunner.ChildInitTypes.Length == 14 && !SmoScriptRunner.ChildInitTypes.Contains(typeof(Table)) && !SmoScriptRunner.ChildInitTypes.Contains(typeof(Database)),
             "SMO's init fields are set for child types only");
+        // SmoDependencyTypes reaches SMO's internals by name: an SMO that moves them must fail here, not in a user's script.
+        SmoDependencyTypes.Ensure();
+        check(SmoDependencyTypes.Count == 21, "SMO's dependency type table is found and filled before any job's SMO runs");
     }
 
     private static readonly ServerProfile Box2022 = new(16, "16.0.4135.4", 3, "sa", false, true, false, 16);

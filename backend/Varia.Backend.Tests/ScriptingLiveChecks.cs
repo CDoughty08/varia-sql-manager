@@ -358,6 +358,7 @@ internal static partial class ScriptingLiveChecks
                     failed.Add(target.Kind + " " + target.Name + " " + verb + ": " + (result.Error?.Message ?? string.Join(" ", result.Warnings)));
             }
         check(failed.Count == 0, "with headers off SMO writes no descriptive header for any kind, crafted names included: " + string.Join("; ", failed));
+        await ConcurrentDependenciesAsync(check, service, client, live, json, Schema);
         // SMO's dependency discovery refuses most kinds (databases, indexes, keys, principals); the option then adds nothing.
         failed.Clear();
         var dependents = client.Options with { GenerateDependentObjects = true };
@@ -448,6 +449,52 @@ internal static partial class ScriptingLiveChecks
         await OldHeadersAsync(check, client, sql, db);
         await CultureAsync(check, client, sql, db);
         await GoldenAsync(check, service, client, scratch, sql, live, json);
+    }
+
+    /// <summary>SMO's dependency discovery fills a static type table on its first use, without a lock: the process's first
+    /// scripts with Generate script for dependent objects, run at once (two jobs on each of two connections, as the service
+    /// allows), failed with "Discover dependencies failed" (a NullReferenceException, or "Urn ... is missing from the
+    /// dependencies list") and could corrupt the table for the process, until each job filled it under Varia's lock first
+    /// (SmoDependencyTypes). Each round empties the table again, as a new process starts, and lines the four jobs' walks up
+    /// on a barrier so their discoveries read it together: without the lock one round in four to ten failed.</summary>
+    private static async Task ConcurrentDependenciesAsync(Action<bool, string> check, SqlService service, Client client, Func<string, ConnectOptions> live, JsonSerializerOptions json,
+        Func<string, string, string, ObjectRefDto> schema)
+    {
+        const int Rounds = 30;
+        // The table as one thread fills it (SMO 181 has 21 types).
+        SmoDependencyTypes.Reset();
+        SmoDependencyTypes.Ensure();
+        var types = SmoDependencyTypes.Count;
+        var dependents = client.Options with { GenerateDependentObjects = true };
+        var targets = new[] { schema("table", "Sales", "InvoicesHistory"), schema("table", "Sales", "Invoices"), schema("table", "Sales", "InvoicesHistory"), schema("table", "Sales", "Invoices") };
+        var second = (ConnectionInfo)await service.DispatchAsync("connections.connect", JsonSerializer.SerializeToElement(live("master"), json), json);
+        var options = service.Scripting.Options;
+        var failed = new List<string>();
+        var filled = new HashSet<int>();
+        try
+        {
+            for (var round = 0; round < Rounds; round++)
+            {
+                using var barrier = new Barrier(targets.Length);
+                // A job whose walk never comes (a refusal) must not hold the others: they go on after 5 s.
+                options.BeforeDependencies = _ => barrier.SignalAndWait(TimeSpan.FromSeconds(5));
+                SmoDependencyTypes.Reset();
+                var results = await Task.WhenAll(targets.Select((target, index) => client.Script(target, "create", dependents, connectionId: index % 2 == 0 ? client.ConnectionId : second.Id)));
+                options.BeforeDependencies = null;
+                filled.Add(SmoDependencyTypes.Count);
+                foreach (var (result, target) in results.Zip(targets))
+                    if (!Ok(result) || !result.Text!.Contains("CREATE TABLE [Sales].[" + target.Name + "](", StringComparison.Ordinal))
+                        failed.Add("round " + round + " " + target.Name + ": " + (result.Error?.Message ?? Excerpt(result.Text, "CREATE TABLE")));
+            }
+        }
+        finally
+        {
+            options.BeforeDependencies = null;
+            await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(second.Id), json), json);
+        }
+        // Racing fills also leave the table corrupt (27 entries of 21, say), and SMO never fills it again in the process.
+        check(failed.Count == 0 && types > 0 && filled.SetEquals([types]), "four scripts with dependent objects at once, two on each of two connections, discover their dependencies "
+            + "whatever runs first (" + Rounds + " rounds; " + string.Join(", ", filled) + " types of " + types + "): " + string.Join("; ", failed.Take(4)));
     }
 
     /// <summary>Another session's uncommitted TRUNCATE holds a schema-modification lock that sys.tables does not wait for
