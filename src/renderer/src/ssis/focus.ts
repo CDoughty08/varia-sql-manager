@@ -6,7 +6,8 @@ export interface SsisFocusHost {
   readonly activeElement: () => Element | null
   /** The page itself, where focus falls when the element that had it goes (a menu item, say). */
   readonly body: () => Element | null
-  readonly modalOpen: () => boolean
+  /** A modal dialog, the quick input or a menu has focus, and keeps it (focusHeld). */
+  readonly focusHeld: () => boolean
   /** Runs the callback after React has drawn the latest state (the next frame); returns a cancel function. */
   readonly frame: (callback: () => void) => () => void
 }
@@ -28,7 +29,7 @@ export function ssisFocuser(documents: Documents, host: SsisFocusHost): { readon
   const attempt = (id: string, from?: Element | null) => {
     cancelFrame = host.frame(() => {
       cancelFrame = undefined
-      if (host.modalOpen()) return
+      if (host.focusHeld()) return
       const root = host.root(id)
       if (!root) return
       const active = host.activeElement()

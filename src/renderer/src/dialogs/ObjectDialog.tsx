@@ -10,8 +10,12 @@ import { trapFocus } from '../trap-focus'
 import { definitionOf } from './definitions'
 import { dialogEnter } from './dialog-keys'
 import type { DialogPhase, OpenObjectDialog } from './ObjectDialogService'
+import AttachDatabasePage from './pages/AttachDatabasePage'
+import DatabaseStatePage from './pages/DatabaseStatePage'
 import DeleteObjectPage from './pages/DeleteObjectPage'
+import DetachDatabasePage from './pages/DetachDatabasePage'
 import { NewLoginGeneralPage, NewLoginServerRolesPage, NewLoginStatusPage } from './pages/NewLoginPages'
+import SecurablesPage from './pages/SecurablesPage'
 import UserMappingPage from './pages/UserMappingPage'
 import UnlockLoginPage from './pages/UnlockLoginPage'
 
@@ -21,14 +25,22 @@ export interface PageProps { readonly open: OpenObjectDialog; readonly editable:
  *  document instead (src/renderer/src/properties). */
 export const dialogPages: { readonly [D in ModalDialogId]: Readonly<Partial<Record<PageId, ComponentType<PageProps>>>> } = {
   deleteObject: { general: DeleteObjectPage },
-  newLogin: { general: NewLoginGeneralPage, serverRoles: NewLoginServerRolesPage, userMapping: UserMappingPage, status: NewLoginStatusPage },
+  attachDatabase: { general: AttachDatabasePage },
+  newLogin: { general: NewLoginGeneralPage, serverRoles: NewLoginServerRolesPage, userMapping: UserMappingPage, securables: SecurablesPage, status: NewLoginStatusPage },
+  takeOffline: { general: DatabaseStatePage },
+  bringOnline: { general: DatabaseStatePage },
+  detachDatabase: { general: DetachDatabasePage },
   unlockLogin: { general: UnlockLoginPage },
   // Login Properties (D2c) shows New Login's pages on the login, each in its properties form.
-  loginProperties: { general: NewLoginGeneralPage, serverRoles: NewLoginServerRolesPage, userMapping: UserMappingPage, status: NewLoginStatusPage }
+  loginProperties: { general: NewLoginGeneralPage, serverRoles: NewLoginServerRolesPage, userMapping: UserMappingPage, securables: SecurablesPage, status: NewLoginStatusPage }
+}
+/** The pages "Select a page" lists for a model: the spec's, less those the definition hides for it (definition.hiddenPages). */
+export function shownPages(pages: readonly DialogPageSpec[], hidden: readonly PageId[]): readonly DialogPageSpec[] {
+  return hidden.length ? pages.filter(page => !hidden.includes(page.id)) : pages
 }
 
 const progressText: Readonly<Record<DialogPhase, string>> = {
-  loading: 'Loading', ready: 'Ready', confirming: 'Ready', loadFailed: 'Error', scripting: 'Scripting', executing: 'Executing', failed: 'Error', stopped: 'Stopped', disconnected: 'Error'
+  loading: 'Loading', ready: 'Ready', confirming: 'Ready', loadFailed: 'Error', scripting: 'Scripting', executing: 'Executing', succeeded: 'Success', failed: 'Error', stopped: 'Stopped', disconnected: 'Error'
 }
 
 /** The Script split button: the main part scripts to a new query window; the arrow lists the three destinations. */
@@ -65,11 +77,18 @@ function ScriptButton({ disabled, onScript }: { disabled: boolean; onScript(dest
   </div>
 }
 
+/** Whether Script can run in a phase: never while something runs, and not once a dialog that stays open has succeeded (only
+ *  Close is left then, as in SSMS's progress dialogs). */
+export function scriptAvailable(phase: DialogPhase, usable: boolean): boolean {
+  return usable && phase !== 'executing' && phase !== 'loading' && phase !== 'scripting' && phase !== 'confirming' && phase !== 'succeeded'
+}
+
 /**
  * SSMS's object dialog frame: "Select a page" with the Connection and Progress boxes on the left (a row of tabs above
  * them in a dialog under 720 px), the Script button and a message bar above the page, the run's steps when the dialog's
- * spec asks for them, and OK and Cancel (Stop while it runs) below. Escape cancels; Enter is OK except on buttons and
- * lists. Closing returns focus to the tree row it was opened for.
+ * spec asks for them, and OK and Cancel (Stop while it runs) below, with why OK cannot run yet beside them. A dialog that stays
+ * open after its run (Take Offline, Bring Online) then shows only Close, focused. Escape cancels; Enter is OK except on
+ * buttons and lists. Closing returns focus to the tree row it was opened for.
  */
 export default function ObjectDialog() {
   const { dialogs, explorer } = useWorkbench()
@@ -139,8 +158,8 @@ export function PageList({ pages, current, tabs, rendered, onPage, onKeyDown, na
     : <nav ref={navRef} className="object-dialog-pages" aria-label="Select a page" onKeyDown={onKeyDown}><div className="object-dialog-caption">Select a page</div>{buttons}</nav>
 }
 
-/** A run's steps under the message bar, for dialogs whose spec asks for them (`DialogSpec.steps`). A long list scrolls,
- *  and a new step scrolls it to the end, where the run is. */
+/** A run's steps under the message bar, for dialogs whose spec asks for them (`DialogSpec.steps`), each by its title (a
+ *  failed step's SQL Server text is in the message bar). A long list scrolls, and a new step scrolls it to the end, where the run is. */
 export function StepsPanel({ steps }: { readonly steps: readonly ActionStep[] }) {
   const panel = useRef<HTMLElement>(null)
   useEffect(() => { if (panel.current) panel.current.scrollTop = panel.current.scrollHeight }, [steps.length])
@@ -154,16 +173,24 @@ export function StepsPanel({ steps }: { readonly steps: readonly ActionStep[] })
 function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): void }) {
   const { dialogs } = useWorkbench()
   const spec = dialogSpecs[open.dialog]
+  const pages = shownPages(spec.pages, open.model ? definitionOf(open.dialog).hiddenPages?.(open.model) ?? [] : [])
   const components: Partial<Record<PageId, ComponentType<PageProps>>> = dialogPages[open.dialog]
   const executing = open.phase === 'executing', busy = executing || open.phase === 'loading' || open.phase === 'scripting' || open.phase === 'confirming'
+  const succeeded = open.phase === 'succeeded', blocked = dialogs.blockedReason(open)
+  const closeButton = useRef<HTMLButtonElement>(null), stopButton = useRef<HTMLButtonElement>(null)
+  // A run that succeeded leaves Close as the one button, focused, as SSMS's progress dialogs do.
+  useEffect(() => { if (succeeded) closeButton.current?.focus() }, [succeeded])
   const usable = !!open.model && open.phase !== 'loadFailed' && open.phase !== 'disconnected'
-  // The page says why (a login's Delete refused by the protected-principal rules); Script still works.
-  const blocked = !!open.model && !!definitionOf(open.dialog).blocked?.(open.model)
-  // The definition's reason OK cannot run (the page shows it): OK greys, Script stays.
-  const unavailable = usable && !!dialogs.unavailable(open)
   // Unlock's Set a new password… hands over to Login Properties, and OK says so.
   const okLabel = (open.draft && definitionOf(open.dialog).okLabel?.(open.draft)) || 'OK'
   const nav = useRef<HTMLElement>(null), form = useRef<HTMLFormElement>(null)
+  // OK disables itself as the run starts, which drops focus to the page; Stop is then the way out (Escape does nothing while
+  // it runs, and SET OFFLINE can wait indefinitely), so focus moves there unless it is on a control that can still be used.
+  useEffect(() => {
+    if (!executing) return
+    const active = document.activeElement
+    if (!active || active === document.body || !form.current?.contains(active) || (active as HTMLButtonElement).disabled) stopButton.current?.focus()
+  }, [executing])
   const tabs = useMediaQuery(narrowFrameQuery)
   const [visited, setVisited] = useState<ReadonlySet<PageId>>(() => new Set([open.page]))
   useEffect(() => setVisited(seen => seen.has(open.page) ? seen : new Set([...seen, open.page])), [open.page])
@@ -190,7 +217,7 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
     if (password) { password.focus(); password.select() } else form.current?.focus()
   }, [busy, open.error])
   const pageKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    const next = pageForKey(spec.pages, open.page, event.key, tabs)
+    const next = pageForKey(pages, open.page, event.key, tabs)
     if (!next) return
     event.preventDefault()
     event.stopPropagation()
@@ -209,14 +236,14 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
   }
   const title = open.title
   const progress = progressText[open.phase]
-  const mounted = framePages(spec.pages, open.page, visited)
+  const mounted = framePages(pages, open.page, visited)
   return <div className="modal-backdrop"><form ref={form} className={'connection-modal object-dialog' + (spec.size === 'large' ? ' large' : '') + (tabs ? ' narrow' : '')} role="dialog" aria-modal="true" aria-labelledby="object-dialog-title" noValidate tabIndex={-1}
     onSubmit={event => { event.preventDefault(); void dialogs.ok() }} onKeyDown={keyDown}>
     <div className="connection-heading"><h2 id="object-dialog-title">{title}</h2>
       <button type="button" className="icon-button" aria-label={'Close ' + title} disabled={executing} onClick={close}><Icon name="close" /></button></div>
     <div className="object-dialog-body">
       <div className="object-dialog-side">
-        <PageList pages={spec.pages} current={open.page} tabs={tabs} rendered={new Set(mounted.map(({ page }) => page.id))} onPage={page => dialogs.setPage(page)} onKeyDown={pageKeyDown} navRef={nav} />
+        <PageList pages={pages} current={open.page} tabs={tabs} rendered={new Set(mounted.map(({ page }) => page.id))} onPage={page => dialogs.setPage(page)} onKeyDown={pageKeyDown} navRef={nav} />
         <section className="object-dialog-box" aria-labelledby="object-dialog-connection">
           <div className="object-dialog-caption" id="object-dialog-connection">Connection</div>
           <dl><dt>Server:</dt><dd>{displayText(open.server)}</dd><dt>Connection:</dt><dd>{open.login ? displayText(open.login) : '—'}</dd></dl>
@@ -227,7 +254,7 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
         </section>
       </div>
       <div className="object-dialog-main">
-        <div className="object-dialog-toolbar"><ScriptButton disabled={busy || !usable} onScript={destination => void dialogs.script(destination)} /></div>
+        <div className="object-dialog-toolbar"><ScriptButton disabled={!scriptAvailable(open.phase, usable)} onScript={destination => void dialogs.script(destination)} /></div>
         {open.error && <div className={'object-dialog-message' + (open.phase === 'stopped' ? ' info' : '')} role={open.phase === 'stopped' ? 'status' : 'alert'}>
           <Icon name={open.phase === 'stopped' ? 'info' : 'error'} /><span>{open.error.message}</span></div>}
         {executing && open.refusal && <div className="object-dialog-message" role="alert"><Icon name="error" /><span>{open.refusal}</span></div>}
@@ -241,9 +268,35 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
       </div>
     </div>
     <div className="connection-footer">
-      <span />
-      <button className="primary" type="submit" disabled={busy || blocked || unavailable || open.phase === 'loadFailed' || open.phase === 'disconnected'}>{okLabel}</button>
-      {executing ? <button type="button" onClick={() => dialogs.stop()}>Stop</button> : <button type="button" onClick={close}>{open.phase === 'disconnected' ? 'Close' : 'Cancel'}</button>}
+      <span className="object-dialog-blocked" id="object-dialog-blocked">{!busy && blocked}</span>
+      <DialogButtons phase={open.phase} busy={busy} blocked={blocked} closeRef={closeButton} stopRef={stopButton} onClose={close} onStop={() => dialogs.stop()} okLabel={okLabel} />
     </div>
   </form></div>
+}
+
+interface DialogButtonsProps {
+  readonly phase: DialogPhase
+  readonly busy: boolean
+  readonly blocked: string | undefined
+  /** OK's label when the definition names one (Unlock's "Continue in Login Properties…"). */
+  readonly okLabel?: string
+  readonly closeRef: Ref<HTMLButtonElement>
+  readonly stopRef: Ref<HTMLButtonElement>
+  onClose(): void
+  onStop(): void
+}
+/**
+ * OK and Cancel, Stop while a run executes, or only Close once a dialog that stays open has succeeded. Stop and Cancel are
+ * different elements (their keys): focus the run moved to Stop then drops as Stop goes, and the run's end puts it back on the
+ * password the server's policy refused, or on the dialog, instead of staying on a reused button that now says Cancel.
+ */
+export function DialogButtons({ phase, busy, blocked, okLabel = 'OK', closeRef, stopRef, onClose, onStop }: DialogButtonsProps) {
+  if (phase === 'succeeded') return <button key="close" ref={closeRef} className="primary" type="button" onClick={onClose}>Close</button>
+  return <>
+    <button key="ok" className="primary" type="submit" aria-describedby={blocked && !busy ? 'object-dialog-blocked' : undefined}
+      disabled={busy || !!blocked || phase === 'loadFailed' || phase === 'disconnected'}>{okLabel}</button>
+    {phase === 'executing'
+      ? <button key="stop" ref={stopRef} type="button" onClick={onStop}>Stop</button>
+      : <button key="cancel" type="button" onClick={onClose}>{phase === 'disconnected' ? 'Close' : 'Cancel'}</button>}
+  </>
 }

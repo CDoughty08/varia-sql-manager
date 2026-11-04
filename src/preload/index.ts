@@ -5,7 +5,10 @@ import type { CommandId } from '../shared/commands/catalog'
 import type { ContextMenuCommand } from '../shared/commands/menus'
 import { menuStyleFromArgv } from '../shared/menu-style'
 import type { ThemeState } from '../shared/theme/types'
+import type { ActionProgress } from '../shared/actions/schema'
+import type { ObjectIndexProgress } from '../shared/explorer/search'
 import type { SettingsState } from '../shared/settings/schema'
+import type { UpdateState } from '../shared/updates'
 // Bundled into this one file: a sandboxed preload can require only electron and a few Node built-ins.
 import { installFileDrop } from './drop'
 
@@ -42,12 +45,26 @@ const api: VariaApi = {
   tableColumns: (connectionId, database, schema, name) => request('tables.columns', { connectionId, database, schema, name }),
   explorerChildren: params => request('explorer.children', params),
   explorerCancel: requestIds => ipcRenderer.invoke('varia:explorer-cancel', { requestIds }),
+  explorerIndex: params => request('explorer.index', params),
+  explorerSearch: params => request('explorer.search', params),
+  // Only the four fields cross to the page, whatever main sent.
+  onExplorerIndexProgress: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: ObjectIndexProgress) => callback({ requestId: progress.requestId, done: progress.done, total: progress.total, objects: progress.objects })
+    ipcRenderer.on('varia:explorer-index-progress', listener)
+    return () => { ipcRenderer.removeListener('varia:explorer-index-progress', listener) }
+  },
   scriptObjects: params => request('scripting.script', params),
   cancelScripting: requestIds => ipcRenderer.invoke('varia:scripting-cancel', { requestIds }),
   describeObject: params => request('actions.describe', params),
   scriptObjectAction: params => request('actions.script', params),
   executeObjectAction: params => request('actions.execute', params),
   cancelObjectActions: requestIds => ipcRenderer.invoke('varia:actions-cancel', { requestIds }),
+  // Only the three fields cross to the page, whatever main sent.
+  onActionProgress: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: ActionProgress) => callback({ requestId: progress.requestId, step: progress.step, percent: progress.percent })
+    ipcRenderer.on('varia:actions-progress', listener)
+    return () => { ipcRenderer.removeListener('varia:actions-progress', listener) }
+  },
   describeSsis: params => request('ssis.describe', params),
   executeSsis: params => request('ssis.execute', params),
   catalogSetupSsis: params => request('ssis.catalogSetup', params),
@@ -139,6 +156,16 @@ const api: VariaApi = {
     const listener = (_event: Electron.IpcRendererEvent, state: ThemeState) => callback(state)
     ipcRenderer.on('varia:theme-changed', listener)
     return () => { ipcRenderer.removeListener('varia:theme-changed', listener) }
+  },
+  getUpdateState: () => ipcRenderer.invoke('varia:updates-state'),
+  checkForUpdates: () => ipcRenderer.invoke('varia:updates-check'),
+  downloadUpdate: () => ipcRenderer.invoke('varia:updates-download'),
+  restartToUpdate: () => ipcRenderer.invoke('varia:updates-restart'),
+  openReleasesPage: () => ipcRenderer.invoke('varia:updates-releases-page'),
+  onUpdateState: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, state: UpdateState) => callback(state)
+    ipcRenderer.on('varia:updates-changed', listener)
+    return () => { ipcRenderer.removeListener('varia:updates-changed', listener) }
   }
 }
 contextBridge.exposeInMainWorld('varia', api)

@@ -4,8 +4,8 @@ namespace Varia.Backend.Actions;
 internal sealed record LoginRuleJson(string Subtype, string Disable, string Enable, string Unlock, string Rename, string Delete, Dictionary<string, string> Greyed);
 /// <summary>The logins block of actions-catalog.json (src/shared/actions/logins.ts loginsCatalog()).</summary>
 internal sealed record LoginRulesJson(Dictionary<string, long> Limits, List<string> LockProperties, Dictionary<string, string> Messages, List<string> OwnRefuses, string RolesDescribe,
-    List<LoginRuleJson> Rules, int SaPrincipalId, string ScriptHeader, Dictionary<string, string> TypeSubtypes, LoginDetailJson Detail, List<string> NoBackslash, NewLoginRulesJson NewLogin,
-    CheckNamesJson CheckNames);
+    List<LoginRuleJson> Rules, int SaPrincipalId, string ScriptHeader, Dictionary<string, string> TypeSubtypes, LoginDetailJson Detail, List<string> NoBackslash, SecurablesJson Securables,
+    NewLoginRulesJson NewLogin, CheckNamesJson CheckNames);
 /// <summary>New Login's kinds per engine and the rules around them (logins.ts newLoginAuthEngines, entraBoxBand, newLoginPolicyEngines,
 /// credentialAuths, defaultsAuths), with the messages a refusal answers.</summary>
 internal sealed record NewLoginRulesJson(Dictionary<string, List<string>> AuthEngines, int EntraBand, List<string> PolicyEngines, List<string> CredentialAuths, List<string> DefaultsAuths,
@@ -37,6 +37,8 @@ internal sealed class LoginRules
         if (json.LockProperties is null || !json.LockProperties.SequenceEqual(ActionSql.LoginLockProperties, StringComparer.Ordinal))
             throw new InvalidOperationException("The login lock-out properties differ from the catalogue's.");
         if (json.NewLogin is null || json.CheckNames is null || json.NewLogin.AuthEngines.Count == 0) throw new InvalidOperationException("The login catalogue has no New Login rules.");
+        Securables = new SecurableCatalog(json.Securables ?? throw new InvalidOperationException("The login catalogue has no securables."));
+        if (Securables.EffectiveUnavailableSubtypes.Any(subtype => !rules.ContainsKey(subtype))) throw new InvalidOperationException("The Effective tab names an unknown login subtype.");
     }
 
     /// <summary>New Login's kinds (logins.ts newLoginAuths).</summary>
@@ -69,6 +71,8 @@ internal sealed class LoginRules
     public string CheckNamesLookupFailed => json.CheckNames.LookupFailed;
 
     public IReadOnlyCollection<string> Subtypes => rules.Keys;
+    /// <summary>The Securables page's classes and permissions (src/shared/actions/securables.ts, D2d).</summary>
+    public SecurableCatalog Securables { get; }
     /// <summary>The LOGINPROPERTY properties logins.ts allows ActionSql.LoginLock to read.</summary>
     public IReadOnlyList<string> LockProperties => json.LockProperties;
     /// <summary>sys.server_principals.type letters the Logins folder lists.</summary>
@@ -153,6 +157,7 @@ internal sealed class LoginRules
         if (facts.Subtype == "system") return "system";
         if (facts.Own && (changes.Enabled == false || changes.Connect == "deny")) return "ownStatus";
         if (facts.Own && changes.Password is { MustChange: true }) return "ownMustChange";
+        if (changes.Permissions is { Count: > 0 } && PermissionsProtected(facts)) return "permissionsProtected";
         if (facts.Subtype == "windowsGroup" && changes.Enabled == false) return "windowsGroupDisable";
         if (facts.Type.Trim() != "S" && (changes.Password is not null || changes.CheckPolicy is not null || changes.CheckExpiration is not null)) return "propertiesNotSql";
         if (facts.Type.Trim() is "E" or "X" && ((changes.CredentialsAdd?.Count ?? 0) > 0 || (changes.CredentialsDrop?.Count ?? 0) > 0)) return "externalCredentials";
@@ -160,6 +165,10 @@ internal sealed class LoginRules
         if (facts.Type.Trim() is "C" or "K" && (changes.Mappings ?? []).Any(mapping => mapping.DefaultSchema is not null)) return "signingSchema";
         return null;
     }
+
+    /// <summary>Whether SQL Server refuses every permission statement for the login (4624, sent as an informational message while it changes
+    /// nothing): sa, or the login this connection uses itself, not a group it gets in through (logins.ts permissionsProtected).</summary>
+    public static bool PermissionsProtected(LoginFactsDto facts) => facts.Subtype == "sa" || facts.Own && facts.Subtype is not ("windowsGroup" or "externalGroup");
 
     /// <summary>The message id that refuses a login's new name, or null: SQL Server's own form for every subtype, then a backslash
     /// in the name of a login SQL Server authenticates itself (logins.ts loginNameRefusal; SQL Server would answer 15021).</summary>

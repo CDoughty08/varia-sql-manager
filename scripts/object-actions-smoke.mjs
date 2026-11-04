@@ -1,13 +1,13 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
+import { chooseExplorerMenuItem, expandExplorerPath, explorerMenuItems, explorerRow, expectSelectedExplorerRow, explorerSubmenuItems, explorerTree, openExplorerMenu, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { resizeWindow } from './fixtures/window-resize.mjs'
-import { actionsStubData, caution, dependentsMessage, installActionsStub, longDatabase, longRole, offlineWarning, propertiesScript, scriptText } from './fixtures/actions-stub.mjs'
+import { actionsStubData, caution, dependentsMessage, detachFiles, detachScript, installActionsStub, longDatabase, longRole, offlineScript, offlineWarning, propertiesScript, restoreFilesScript, restoreScript, scriptText, stubServerFiles, stubSessions } from './fixtures/actions-stub.mjs'
 import {
-  addObjectDialogSteps, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, editorTextbox, errorBanner,
-  explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogMappedUsers, objectDialogPage, objectDialogProgress, objectDialogSessions, objectDialogSessionsToggle, objectDialogStepItems, objectDialogTabs, objectDialogWarningIcons, objectDialogWarnings, openMenus as openMenusOf, part, passwordField, propertyFact, propertyRow,
-  quickInput, quickInputActive, quickInputMessage, renameBox, scriptActions, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toastMessage, toasts, toolbarButton, unsavedMark,
+  addObjectDialogSteps, attachFileNameShown, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, editorTextbox,
+  errorBanner, explorerLabel, fieldHint, frameSection, inputShowsEnd, objectDialogConnection, objectDialogMappedUsers, objectDialogPage, objectDialogProgress, objectDialogSessions, objectDialogSessionsToggle, objectDialogStepItems, objectDialogTabs, objectDialogWarningIcons, objectDialogWarnings, openMenus as openMenusOf, part,
+  passwordField, propertyFact, propertyRow, queryDatabase, quickInput, quickInputActive, quickInputMessage, renameBox, scriptActions, scriptDrawer, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toastMessage, toasts, toolbarButton, unsavedMark,
   warningBanner as warningBannerOf
 } from './fixtures/ui.mjs'
 
@@ -21,14 +21,13 @@ const mac = process.platform === 'darwin'
 let application
 let page
 const failures = []
-const watchdog = setTimeout(() => { console.error('Object actions suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 300000)
+// A hang guard, not a speed check: wave 5's sections take the whole suite past five minutes on a desktop (305 s with D4c), and
+// the Securables pages of New Login and Login Properties (D2d) add minutes on Windows runners.
+const watchdog = setTimeout(() => { console.error('Object actions suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 600000)
 
-const fast = { force: true }
 const menuNamed = name => page.getByRole('menu', { name, exact: true })
 const explorerMenu = () => menuNamed('Object Explorer')
 const openMenus = () => openMenusOf(page)
-const labels = () => menuItemNames(explorerMenu())
-const disabled = () => menuItemNames(explorerMenu(), { disabled: true })
 const dialog = () => page.getByRole('dialog', { name: 'Delete Object', exact: true })
 const commandBanner = () => errorBanner(page)
 const warningBanner = () => warningBannerOf(page)
@@ -48,11 +47,9 @@ async function connect(server) {
   await connectDialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(connectDialog).toHaveCount(0, { timeout: 30000 })
 }
-/** Right-clicks a row and returns its menu's item labels. */
+/** Opens a row's menu (explorerMenuItems) and returns its item labels; the menu stays open. */
 async function menuOf(...path) {
-  await (await revealExplorerRow(page, ...path)).click({ button: 'right', force: true })
-  await expect(explorerMenu()).toBeVisible()
-  return labels()
+  return (await explorerMenuItems(page, ...path)).names
 }
 async function closeMenu() {
   await page.keyboard.press('Escape')
@@ -99,11 +96,13 @@ try {
   await closeMenu()
   expect(await menuOf(...appData, 'Programmability', 'Stored Procedures', 'dbo.ShipOrder')).toEqual(['Modify', 'Script Stored Procedure as', 'Copy Name', 'Rename', 'Delete', 'Refresh'])
   await closeMenu()
-  expect(await menuOf(...appData)).toEqual(['New Query', 'Script Database as', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
+  expect(await menuOf(...appData)).toEqual(['New Database…', 'New Query', 'Search Objects…', 'Script Database as', 'Tasks', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await closeMenu()
-  // SSMS offers Properties on its own databases too: only Rename and Delete are greyed.
-  expect(await menuOf('server-a', 'Databases', 'System Databases', 'master')).toEqual(['New Query', 'Script Database as', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
-  expect(await disabled()).toEqual(['Rename', 'Delete'])
+  // SSMS offers Properties on its own databases too: only Rename, Delete and Tasks' items are greyed. Tasks holds Detach…, Take
+  // Offline, Bring Online and Restore › Database… so far, all greyed there (system databases restore with T-SQL), so the submenu is greyed too.
+  expect(await explorerMenuItems(page, 'server-a', 'Databases', 'System Databases', 'master')).toEqual({
+    names: ['New Database…', 'New Query', 'Search Objects…', 'Script Database as', 'Tasks', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'], disabled: ['Tasks', 'Rename', 'Delete']
+  })
   await closeMenu()
   await select('server-a', 'Databases', 'System Databases', 'master')
   await page.keyboard.press('F2')
@@ -114,8 +113,7 @@ try {
 
   // 2. Select Top 1000 Rows on a view lists its columns and runs on its database.
   const before = await tabs().count()
-  await (await revealExplorerRow(page, ...appData, 'Views', 'dbo.OrderSummary')).click({ button: 'right', force: true })
-  await explorerMenu().getByRole('menuitem', { name: 'Select Top 1000 Rows', exact: true }).click(fast)
+  await chooseExplorerMenuItem(page, [...appData, 'Views', 'dbo.OrderSummary'], 'Select Top 1000 Rows')
   const selectTop = ['/****** Script for SelectTopNRows command from Varia SQL Manager ******/', 'SELECT TOP (1000) [OrderId]', '      ,[Total]', '  FROM [AppData].[dbo].[OrderSummary]'].join(process.platform === 'win32' ? '\r\n' : '\n')
   // New queries take the platform's line ending, as SSMS's do.
   await expect.poll(async () => (await stubCalls('query.execute')).at(-1)?.sql).toBe(selectTop)
@@ -242,8 +240,7 @@ try {
   await expect(dialog()).toHaveCount(0)
   await expect(explorerTree(page)).toBeFocused()
   // OK deletes dbo.Orders2: the dialog closes, Tables reloads without it, and the tree has focus.
-  await (await explorerRow(page, ...tablesPath, 'dbo.Orders2')).click({ button: 'right', force: true })
-  await explorerMenu().getByRole('menuitem', { name: 'Delete', exact: true }).click(fast)
+  await chooseExplorerMenuItem(page, [...tablesPath, 'dbo.Orders2'], 'Delete')
   await expect(objectDialogProgress(dialog())).toHaveText('Ready')
   await dialog().getByRole('button', { name: 'OK', exact: true }).click()
   await expect(dialog()).toHaveCount(0)
@@ -294,12 +291,9 @@ try {
   const verb = name => documentVerb(properties(), 'AppData', name)
   const sectionList = () => sectionListOf(properties())
   const fact = label => propertyFact(properties(), label)
-  // Tables has just reloaded after the Delete, which can re-render the tree under the press, so it repeats until its row's menu opens.
-  await expect(async () => {
-    await (await revealExplorerRow(page, ...appData)).click({ button: 'right', force: true })
-    await expect(explorerMenu()).toBeVisible({ timeout: 1000 })
-  }).toPass()
-  await explorerMenu().getByRole('menuitem', { name: 'Properties', exact: true }).click(fast)
+  // Tables has just reloaded after the Delete, which can move the rows under the press: chooseExplorerMenuItem presses
+  // until AppData's own menu opens.
+  await chooseExplorerMenuItem(page, appData, 'Properties')
   await expect(properties()).toBeVisible()
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await expect(tabs()).toHaveCount(tabCount + 1)
@@ -501,14 +495,11 @@ try {
   // exists the dialog says so; a failure lists its steps with the removal; Stop waits for the answer and says Stopped.
   const catalogs = ['server-a', 'Integration Services Catalogs']
   const createDialog = () => page.getByRole('dialog', { name: 'Create Catalog', exact: true })
-  // Databases may still be reloading after Database Properties' OK, moving the rows below it, so the press repeats until the
-  // folder's own menu opens.
+  // Databases may still be reloading after Database Properties' OK, moving the rows below it: openExplorerMenu presses
+  // until the folder's own menu opens.
   const openCreate = async () => {
-    await expect(async () => {
-      if (await explorerMenu().count()) await closeMenu()
-      expect(await menuOf(...catalogs)).toEqual(['Create Catalog…', 'Refresh'])
-    }).toPass()
-    await explorerMenu().getByRole('menuitem', { name: 'Create Catalog…', exact: true }).click(fast)
+    expect(await menuOf(...catalogs)).toEqual(['Create Catalog…', 'Refresh'])
+    await chooseExplorerMenuItem(page, catalogs, 'Create Catalog…')
     await expect(createDialog()).toBeVisible()
   }
   await openCreate()
@@ -541,7 +532,8 @@ try {
   expect(await stubCalls('ssis.execute')).toEqual([expect.objectContaining({ action: { verb: 'createCatalog', password: secret, enableClr: true, startupProcedure: true } })])
   await expect(explorerTree(page)).toBeFocused()
   await expandExplorerPath(page, ...catalogs)
-  await expect(await explorerRow(page, ...catalogs, 'SSISDB')).toBeVisible()
+  // On a 1024x768 display the new catalog is below the tree's viewport, where only revealExplorerRow finds it.
+  await expect(await revealExplorerRow(page, ...catalogs, 'SSISDB')).toBeVisible()
   // The dialog's form leaves nothing behind in the page once it closes.
   expect(await page.evaluate(marker => document.documentElement.outerHTML.includes(marker), 'w0rd')).toBe(false)
   await openCreate()
@@ -570,7 +562,606 @@ try {
   await expect(createDialog()).toHaveCount(0)
   console.log('Object action checks: Create Catalog asks for CLR first, checks the passwords, sends the password only in its request, lists SSISDB after, refuses a second catalog, shows a failure\'s steps and Stops.')
 
-  // 8a. New Login (D2a): Security › New › Login… opens "Login - New" with SSMS's pages and defaults; the password fields are masked
+  // 5b. The server file picker, through its test hook until New Database, Attach and Restore open it from "…" (A17): the
+  // default backup folder opens, the keyboard expands a folder and chooses a file, a typed share and folder are listed,
+  // a slow folder is busy, and Escape returns focus to where it was.
+  const picker = () => page.getByRole('dialog', { name: 'Locate Backup File - server-a', exact: true })
+  const pickerTree = () => picker().getByRole('tree', { name: 'Select the file', exact: true })
+  const item = name => pickerTree().getByRole('treeitem', { name, exact: true })
+  const fileName = () => picker().getByLabel('File name', { exact: true })
+  const answers = () => page.evaluate(() => window.__variaServerFiles.answers())
+  await explorerTree(page).focus()
+  expect(await page.evaluate(() => window.__variaServerFiles.pick('backup'))).toBe(true)
+  await expect(pickerTree()).toBeFocused()
+  await expect(item('Nightly')).toBeVisible()
+  await expect(picker().getByText("Paths are on the server server-a; SQL Server's service account must be able to read them.", { exact: true })).toBeVisible()
+  await expect(picker().getByRole('status')).toHaveText(/^5 items · listed in \d+ ms · type a path or a UNC name to go there$/)
+  await expect(item(stubServerFiles.backupFolder)).toHaveAttribute('aria-selected', 'true')
+  await expect(item(stubServerFiles.backupFolder)).toHaveAttribute('aria-description', 'default backup folder')
+  await expect(item('C:\\')).toHaveAttribute('aria-description', '212 GB free')
+  await expect(item('AppData.bak')).toHaveAttribute('aria-description', '15 MB, modified 2026-10-12 14:03')
+  await expect(item('readme.txt')).toHaveCount(0)
+  await expect(picker().getByLabel('Files of type', { exact: true })).toHaveText(/Backup Files\(\*\.bak;\*\.trn\)/)
+  expect((await stubCalls('actions.describe')).filter(call => call.dialog === 'serverFiles').map(call => call.files)).toEqual([{ purpose: 'backup' }, { purpose: 'backup', path: stubServerFiles.backupFolder }])
+  // A default folder shows its own name beside its tag; its full path stays its accessible name.
+  await expect(item(stubServerFiles.backupFolder).getByText('Backup', { exact: true })).toBeVisible()
+  // Tab from the last control and Shift+Tab from the first field come back to the tree, which the trap counts as a stop.
+  await picker().getByRole('button', { name: 'Cancel', exact: true }).focus()
+  await page.keyboard.press('Tab')
+  await expect(pickerTree()).toBeFocused()
+  await picker().getByLabel('Selected path', { exact: true }).focus()
+  await page.keyboard.press('Shift+Tab')
+  await expect(pickerTree()).toBeFocused()
+  // Folders come first, by name: Empty, Nightly, Slow, then the files.
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+  await expect(item('Nightly')).toHaveAttribute('aria-selected', 'true')
+  await page.keyboard.press('Enter')
+  await expect(item('Nightly')).toHaveAttribute('aria-expanded', 'true')
+  await expect(picker()).toBeVisible()
+  await page.keyboard.press('ArrowRight')
+  await expect(item('Sales.bak')).toHaveAttribute('aria-selected', 'true')
+  await expect(fileName()).toHaveValue('Sales.bak')
+  await expect(picker().getByLabel('Selected path', { exact: true })).toHaveValue(stubServerFiles.backupFolder + 'Nightly\\')
+  // Under forced colours the selected row is Highlight, as Object Explorer's is; the others are not.
+  await page.emulateMedia({ forcedColors: 'active' })
+  const highlight = await page.evaluate(() => {
+    const probe = document.createElement('div')
+    probe.style.cssText = 'background: Highlight; forced-color-adjust: none'
+    document.body.append(probe)
+    const color = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return color
+  })
+  const forcedBackgrounds = await Promise.all(['Sales.bak', 'Nightly'].map(name => item(name).evaluate(row => getComputedStyle(row).backgroundColor)))
+  await page.emulateMedia({ forcedColors: null })
+  expect(forcedBackgrounds[0]).toBe(highlight)
+  expect(forcedBackgrounds[1]).not.toBe(highlight)
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-server-files-dark.png') })
+  await page.keyboard.press('Enter')
+  await expect(picker()).toHaveCount(0)
+  await expect.poll(answers).toEqual([stubServerFiles.backupFolder + 'Nightly\\Sales.bak'])
+  await expect(explorerTree(page)).toBeFocused()
+
+  expect(await page.evaluate(() => window.__variaServerFiles.pick('backup'))).toBe(true)
+  await expect(item('Nightly')).toBeVisible()
+  await fileName().fill('//files/share/')
+  await fileName().press('Enter')
+  await expect(item('\\\\files\\share\\')).toHaveAttribute('aria-expanded', 'true')
+  await expect(item('Shared.bak')).toBeVisible()
+  await expect(fileName()).toHaveValue('')
+  await fileName().fill('C:\\Missing\\x.bak')
+  await fileName().press('Enter')
+  await expect(picker().getByRole('alert')).toHaveText('The folder C:\\Missing\\ does not exist, or SQL Server\'s service account cannot see it.')
+  await fileName().fill(stubServerFiles.backupFolder + 'Empty\\')
+  await fileName().press('Enter')
+  await expect(pickerTree().getByText('This folder is empty, or the server\'s account cannot list it.', { exact: true })).toBeVisible()
+  await fileName().fill('C:\\Legacy\\')
+  await fileName().press('Enter')
+  await expect(pickerTree().getByText('SQL Server 2016 lists folders only to members of sysadmin. Type the path instead.', { exact: true })).toBeVisible()
+  // Slow answers after 1.5 s: after 300 ms its row and the tree are busy, with a spinner, until it lists.
+  await fileName().fill(stubServerFiles.backupFolder + 'Slow\\')
+  await fileName().press('Enter')
+  await expect(pickerTree()).toHaveAttribute('aria-busy', 'true')
+  await expect(item('Slow')).toHaveAttribute('aria-busy', 'true')
+  await expect(item('Old.bak')).toBeVisible()
+  await expect(pickerTree()).not.toHaveAttribute('aria-busy', 'true')
+  await picker().getByLabel('Files of type', { exact: true }).selectOption({ label: 'All Files(*.*)' })
+  await expect(item('readme.txt')).toBeVisible()
+  await expect(item('Old.bak')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(picker()).toHaveCount(0)
+  await expect.poll(answers).toEqual([stubServerFiles.backupFolder + 'Nightly\\Sales.bak', null])
+  await expect(explorerTree(page)).toBeFocused()
+
+  // A typed name the listing does not show is asked about, and refused only when the server says it does not exist; under
+  // C:\Legacy\ SQL Server 2016 cannot say, so the name is taken as typed.
+  expect(await page.evaluate(() => window.__variaServerFiles.pick('backup'))).toBe(true)
+  await expect(item('Nightly')).toBeVisible()
+  await fileName().fill('nothing.bak')
+  await fileName().press('Enter')
+  await expect(picker().getByRole('alert')).toHaveText(stubServerFiles.backupFolder + 'nothing.bak does not exist, or SQL Server\'s service account cannot see it.')
+  await fileName().fill('readme.txt')
+  await fileName().press('Enter')
+  await expect(picker()).toHaveCount(0)
+  expect((await stubCalls('actions.describe')).filter(call => call.files?.exists).map(call => call.files.path)).toEqual([stubServerFiles.backupFolder + 'nothing.bak', stubServerFiles.backupFolder + 'readme.txt'])
+  expect(await page.evaluate(() => window.__variaServerFiles.pick('backup', 'C:\\Legacy\\Old.bak'))).toBe(true)
+  await expect(fileName()).toHaveValue('Old.bak')
+  await fileName().press('Enter')
+  await expect(picker()).toHaveCount(0)
+  await expect.poll(answers).toEqual([stubServerFiles.backupFolder + 'Nightly\\Sales.bak', null, stubServerFiles.backupFolder + 'readme.txt', 'C:\\Legacy\\Old.bak'])
+
+  // Locate Folder: "Select the folder", no Modified column, and a folder of files has no subfolders.
+  const folderPicker = () => page.getByRole('dialog', { name: 'Locate Folder - server-a', exact: true })
+  expect(await page.evaluate(() => window.__variaServerFiles.pick('folder'))).toBe(true)
+  const folderTree = folderPicker().getByRole('tree', { name: 'Select the folder', exact: true })
+  await expect(folderTree).toBeFocused()
+  await expect(folderTree.getByText('This folder has no subfolders, or the server\'s account cannot list it.', { exact: true })).toBeVisible()
+  await expect(folderPicker().getByText('Modified', { exact: true })).toHaveCount(0)
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-server-files-folder.png') })
+  await page.keyboard.press('Escape')
+  await expect(folderPicker()).toHaveCount(0)
+  await expect(explorerTree(page)).toBeFocused()
+  console.log('Object action checks: the server file picker opens the default backup folder, keeps Tab in reach of its tree, expands a folder and chooses a file by keyboard, shows the selection under forced colours, goes to typed shares and folders, shows empty, 2016 and slow folders, lists All Files, asks the server about typed names it does not list, and Escape returns focus; Locate Folder names its tree for folders.')
+
+  // 5b. New Database… (D1b): first on the Databases folder's menu and offered on a database's; a document whose logical and file
+  // names follow the database's name, a files grid with Add and Remove, Change Autogrowth over it, Locate Folder for a path,
+  // the Script drawer, OK that closes the tab and selects the new database, and Stop while CREATE DATABASE runs.
+  const newDatabase = () => documentFrame(page, 'New Database')
+  const newVerb = name => documentVerb(newDatabase(), 'New Database', name)
+  const newFiles = () => newDatabase().getByRole('table', { name: 'Database files', exact: true })
+  const databases = ['server-a', 'Databases']
+  // Databases may still be reloading, moving the rows under the press: the helpers press until the folder's own menu opens.
+  const databasesMenu = async () => (await explorerMenuItems(page, ...databases)).names
+  const chooseNewDatabase = () => chooseExplorerMenuItem(page, databases, 'New Database…')
+  expect((await databasesMenu())[0]).toBe('New Database…')
+  await closeMenu()
+  expect((await menuOf(...appData))[0]).toBe('New Database…')
+  await chooseExplorerMenuItem(page, appData, 'New Database…')
+  await expect(newDatabase()).toBeVisible()
+  await expect(documentTab(page, 'New Database')).toHaveAttribute('aria-selected', 'true')
+  await expect(documentCrumbs(newDatabase())).toHaveText(['server-a', 'Databases'])
+  const databaseName = newDatabase().getByLabel('Database name', { exact: true })
+  await expect(databaseName).toBeFocused()
+  await expect(newVerb('OK')).toBeDisabled()
+  await databaseName.fill('Sales')
+  await expect(newFiles().getByLabel('Logical Name of Sales', { exact: true })).toHaveValue('Sales')
+  await expect(newFiles().getByLabel('Logical Name of Sales_log', { exact: true })).toHaveValue('Sales_log')
+  await expect(newFiles().getByLabel('File Name of Sales', { exact: true })).toHaveAttribute('placeholder', 'Sales.mdf')
+  await expect(newFiles().getByLabel('Path of Sales', { exact: true })).toHaveValue(String.raw`C:\Program Files\Microsoft SQL Server\MSSQL17.MSSQLSERVER\MSSQL\DATA`)
+  await expect(newVerb('OK')).toBeEnabled()
+  // Add puts a ROWS file in PRIMARY, which needs a name before OK, with the caret in its name; Remove, named after the row it
+  // takes, leaves the caret on the row before. The primary data file and the only log file cannot be removed.
+  await newDatabase().getByRole('button', { name: 'Add', exact: true }).click()
+  await expect(newFiles().getByRole('row')).toHaveCount(4)
+  await expect(newDatabase().getByText('3 of 256 files · paths are on the server server-a', { exact: true })).toBeVisible()
+  await expect(newVerb('OK')).toBeDisabled()
+  await expect(newFiles().getByLabel('Logical Name of File 3', { exact: true })).toBeFocused()
+  await newFiles().getByLabel('Logical Name of File 3', { exact: true }).fill('Sales2')
+  await expect(newFiles().getByLabel('File Name of Sales2', { exact: true })).toHaveAttribute('placeholder', 'Sales2.ndf')
+  // Forced colours drop the selection's fill, so the row Remove takes is outlined.
+  await page.emulateMedia({ forcedColors: 'active' })
+  const selectedOutline = await newFiles().getByRole('row').nth(3).evaluate(row => getComputedStyle(row).outlineStyle)
+  await page.emulateMedia({ forcedColors: null })
+  expect(selectedOutline, 'forced colours: the selected file row is outlined').toBe('solid')
+  await newDatabase().getByRole('button', { name: 'Remove Sales2', exact: true }).click()
+  await expect(newFiles().getByRole('row')).toHaveCount(3)
+  await expect(newFiles().getByLabel('Logical Name of Sales_log', { exact: true })).toBeFocused()
+  await expect(newDatabase().getByRole('button', { name: 'Remove', exact: true })).toBeDisabled()
+  await newFiles().getByLabel('Logical Name of Sales', { exact: true }).focus()
+  await expect(newDatabase().getByRole('button', { name: 'Remove', exact: true })).toBeDisabled()
+  // Each filegroup list's buttons say which list they act on.
+  await expect(newDatabase().getByRole('group', { name: 'Rows', exact: true }).getByRole('button', { name: 'Add Filegroup to Rows', exact: true })).toBeEnabled()
+  await expect(newDatabase().getByRole('button', { name: 'Remove from Memory Optimized Data', exact: true })).toBeDisabled()
+  // At 1024 x 768 a name and a path stay readable: the grid scrolls rather than squeezing them.
+  const sizeBeforeNarrow = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getSize())
+  await resizeWindow(application, page, 1024, 768)
+  const readable = await Promise.all(['Logical Name of Sales', 'Path of Sales', 'File Name of Sales'].map(label => newFiles().getByLabel(label, { exact: true })
+    .evaluate(input => Math.round(input.getBoundingClientRect().width / parseFloat(getComputedStyle(input).fontSize)))))
+  await resizeWindow(application, page, ...sizeBeforeNarrow)
+  // In font sizes (about two characters each): 16, 24 and 20 characters at least.
+  expect(readable[0], 'Logical Name at 1024 x 768').toBeGreaterThanOrEqual(8)
+  expect(readable[1], 'Path at 1024 x 768').toBeGreaterThanOrEqual(12)
+  expect(readable[2], 'File Name at 1024 x 768').toBeGreaterThanOrEqual(10)
+  // Change Autogrowth over the document: percent growth, and the cell says so.
+  await newFiles().getByRole('button', { name: 'Change Autogrowth of Sales', exact: true }).click()
+  const autogrowth = page.getByRole('dialog', { name: 'Change Autogrowth for Sales', exact: true })
+  await expect(autogrowth).toBeVisible()
+  await autogrowth.getByLabel('In Percent', { exact: true }).check()
+  await autogrowth.getByLabel('File growth in percent', { exact: true }).fill('10')
+  await autogrowth.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(autogrowth).toHaveCount(0)
+  await expect(newFiles().getByRole('row').nth(1)).toContainText('By 10 percent, Unlimited')
+  // The path's "…" opens Locate Folder on the server; Escape leaves the path as it was.
+  const locateFolder = () => page.getByRole('dialog', { name: 'Locate Folder - server-a', exact: true })
+  await newFiles().getByRole('button', { name: 'Browse for the path of Sales', exact: true }).click()
+  await expect(locateFolder()).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(locateFolder()).toHaveCount(0)
+  // The Script drawer previews what OK runs.
+  await scriptToggle(newDatabase()).click()
+  await expect(drawerText(newDatabase())).toContainText('CREATE DATABASE [Sales]')
+  await expect.poll(async () => (await stubCalls('actions.script')).at(-1)).toMatchObject({ action: 'createDatabase', target: { kind: 'database', name: 'Sales' } })
+  await page.screenshot({ path: resolve('artifacts', 'new-database-dark.png') })
+  await newVerb('OK').click()
+  await expect(newDatabase()).toHaveCount(0)
+  const created = (await stubCalls('actions.execute')).at(-1)
+  expect(created).toMatchObject({ action: 'createDatabase', target: { kind: 'database', name: 'Sales' }, design: { containment: 'NONE', options: {}, scoped: {} } })
+  expect(created.design.files.map(file => [file.name, file.fileName, file.growth])).toEqual([
+    ['Sales', 'Sales.mdf', { enabled: true, unit: 'percent', by: 10 }], ['Sales_log', 'Sales_log.ldf', { enabled: true, unit: 'percent', by: 10, maxMb: 2097152 }]
+  ])
+  await expectSelectedExplorerRow(page, 'server-a', 'Databases', 'Sales')
+  // Stop while CREATE DATABASE runs: the tab stays and says what happened; Cancel then closes it.
+  await chooseNewDatabase()
+  await expect(databaseName).toBeFocused()
+  await databaseName.fill('Held')
+  // Enter outside the grids is OK, as in SSMS's dialog.
+  await databaseName.press('Enter')
+  await expect(newVerb('Stop')).toBeVisible()
+  await expect(newDatabase().getByRole('status').filter({ hasText: 'Creating the database…' })).toBeVisible()
+  await newVerb('Stop').click()
+  await expect(newDatabase().getByRole('status').filter({ hasText: 'SQL Server cancelled that statement' })).toBeVisible()
+  await expect(newVerb('OK')).toBeEnabled()
+  await newVerb('Cancel').click()
+  await expect(newDatabase()).toHaveCount(0)
+  // A second New Database is numbered; Ctrl+S is its OK, and Escape cancels the first.
+  await chooseNewDatabase()
+  await expect(databaseName).toBeFocused()
+  await chooseNewDatabase()
+  const secondDatabase = documentFrame(page, 'New Database (2)')
+  await expect(documentTab(page, 'New Database (2)')).toHaveAttribute('aria-selected', 'true')
+  const secondName = secondDatabase.getByLabel('Database name', { exact: true })
+  await expect(secondName).toBeFocused()
+  await secondName.fill('Sales3')
+  await page.keyboard.press('Control+S')
+  await expect(secondDatabase).toHaveCount(0)
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'createDatabase', target: { kind: 'database', name: 'Sales3' } })
+  await documentTab(page, 'New Database').click()
+  await expect(newDatabase()).toBeVisible()
+  await databaseName.focus()
+  await page.keyboard.press('Escape')
+  await expect(newDatabase()).toHaveCount(0)
+  console.log('Object action checks: New Database… comes first on Databases, names files after the database, adds and removes files with the caret kept and buttons named, keeps names and paths readable at 1024 x 768, changes autogrowth, browses the server for a path, scripts, creates and selects the database, stops a create, numbers a second tab, and takes Enter, Ctrl+S and Escape.')
+
+  // 5c. Attach Databases (D1d) on the Databases folder: Add… reads an .mdf chosen in Locate Database Files, a data file that
+  // is not found blocks OK until its path is corrected, Script sends the rows, a log file can be removed (the log is then
+  // rebuilt), a database that fails rolls the first back, and OK attaches it and selects it in the folder.
+  const attachDialog = () => page.getByRole('dialog', { name: 'Attach Databases', exact: true })
+  const attachOk = () => attachDialog().getByRole('button', { name: 'OK', exact: true })
+  const databasesGrid = () => attachDialog().getByRole('table', { name: 'Databases to attach:', exact: true })
+  const databaseRow = index => databasesGrid().getByRole('row').nth(index + 1)
+  const detailsGrid = name => attachDialog().getByRole('table', { name: `"${name}" database details:`, exact: true })
+  const dataPicker = () => page.getByRole('dialog', { name: 'Locate Database Files - server-a', exact: true })
+  const salesMdf = stubServerFiles.dataFolder + 'Sales.mdf'
+  const addButton = () => attachDialog().getByRole('button', { name: 'Add…', exact: true })
+  /** Add… through Locate Database Files: typing the file name and Enter, double-clicking it, or Escape (nothing added). */
+  async function addDatabase(file, how = 'enter') {
+    await addButton().click()
+    await expect(dataPicker().getByLabel('Selected path', { exact: true })).toHaveValue(stubServerFiles.dataFolder)
+    await expect(dataPicker().getByRole('treeitem', { name: file, exact: true })).toBeVisible()
+    if (how === 'double') await dataPicker().getByRole('treeitem', { name: file, exact: true }).dblclick()
+    else if (how === 'escape') await dataPicker().getByLabel('File name', { exact: true }).press('Escape')
+    else {
+      await dataPicker().getByLabel('File name', { exact: true }).fill(file)
+      await dataPicker().getByLabel('File name', { exact: true }).press('Enter')
+    }
+    await expect(dataPicker()).toHaveCount(0)
+    // Focus comes back to Add…, which stays enabled while the file is read, so it never falls out of the modal.
+    await expect(addButton()).toBeFocused()
+  }
+  const openAttach = async () => {
+    expect(await databasesMenu()).toEqual(['New Database…', 'Attach…', 'Restore Database…', 'Restore Files and Filegroups…', 'Filter Settings…', 'Refresh'])
+    await chooseExplorerMenuItem(page, databases, 'Attach…')
+    await expect(objectDialogProgress(attachDialog())).toHaveText('Ready')
+  }
+  await openAttach()
+  await expect(attachDialog().getByText('Add a primary data file (.mdf) to attach its database.', { exact: true })).toBeVisible()
+  expect((await stubCalls('actions.describe')).filter(call => call.dialog === 'attachDatabase').map(call => [call.target, call.attach])).toEqual([[{ kind: 'server' }, undefined]])
+  // Escape in the picker returns to Add…, and Escape there closes the dialog.
+  await addDatabase('Sales.mdf', 'escape')
+  await page.keyboard.press('Escape')
+  await expect(attachDialog()).toHaveCount(0)
+  await openAttach()
+  await addDatabase('Sales.mdf', 'double')
+  // Only .mdf files are listed; the database's name comes from the file, and Attach As starts as it.
+  await expect(databaseRow(0).getByRole('cell')).toHaveText([salesMdf, 'Sales', '', /<default>/, '', ''])
+  await expect(attachDialog().getByLabel('Attach As for ' + salesMdf, { exact: true })).toHaveValue('Sales')
+  await expect(attachDialog().getByLabel('Owner for ' + salesMdf, { exact: true })).toHaveValue('')
+  await expect(detailsGrid('Sales').getByRole('row')).toHaveCount(4)
+  await expect(detailsGrid('Sales').getByRole('row').nth(2).getByRole('cell')).toHaveText(['D:\\Old\\Sales_2.ndf', 'Data', /…/, 'Not found'])
+  await expect(attachOk()).toBeDisabled()
+  await expect(attachDialog().getByText('A data file of Sales is not found. Correct its Current File Path, or remove the database.', { exact: true })).toBeVisible()
+  // Paths keep their file names in view: Sales.mdf and Sales_log.ldf share a long folder, which gives way instead.
+  await expect.poll(() => attachFileNameShown(databaseRow(0).getByRole('cell').first())).toBe(true)
+  await expect.poll(() => attachFileNameShown(detailsGrid('Sales').getByRole('row').nth(1).getByRole('cell').first())).toBe(true)
+  await expect.poll(() => attachFileNameShown(detailsGrid('Sales').getByRole('row').nth(3).getByRole('cell').first())).toBe(true)
+  await expect.poll(() => inputShowsEnd(attachDialog().getByLabel('Current File Path for ' + stubServerFiles.dataFolder + 'Sales_log.ldf', { exact: true }))).toBe(true)
+  // Owner lines up with Attach As: both take the row height.
+  const cellHeights = await Promise.all(['Attach As for ', 'Owner for '].map(async label => (await attachDialog().getByLabel(label + salesMdf, { exact: true }).boundingBox())?.height))
+  expect(cellHeights[0]).toBeGreaterThan(0)
+  expect(cellHeights[1]).toBe(cellHeights[0])
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-attach-dark.png') })
+  // A corrected Current File Path waits for its check (OK stays disabled and says why); Enter asks the server whether the file is there.
+  const secondFile = attachDialog().getByLabel('Current File Path for D:\\Old\\Sales_2.ndf', { exact: true })
+  await secondFile.fill(stubServerFiles.dataFolder + 'Sales_2.ndf')
+  await expect(attachOk()).toBeDisabled()
+  await expect(attachDialog().getByText('Press Enter in a Current File Path of Sales, or leave it, to check the file.', { exact: true })).toBeVisible()
+  await secondFile.press('Enter')
+  await expect(detailsGrid('Sales').getByRole('row').nth(2).getByRole('cell').nth(3)).toHaveText('')
+  await expect(attachOk()).toBeEnabled()
+  await expect(secondFile).toBeFocused()
+  expect((await stubCalls('actions.describe')).filter(call => call.files?.exists).at(-1)?.files).toEqual({ purpose: 'database', path: stubServerFiles.dataFolder + 'Sales_2.ndf', exists: true })
+  await attachDialog().getByLabel('Owner for ' + salesMdf, { exact: true }).selectOption('app_owner')
+  await attachDialog().getByRole('button', { name: 'Script', exact: true }).click()
+  const salesFiles = ['Sales.mdf', 'Sales_2.ndf', 'Sales_log.ldf'].map(name => stubServerFiles.dataFolder + name)
+  await expect.poll(async () => (await stubCalls('actions.script')).filter(call => call.action === 'attach').map(call => call.databases))
+    .toEqual([[{ name: 'Sales', owner: 'app_owner', files: salesFiles, rebuildLog: false }]])
+  await expect(attachDialog()).toBeVisible()
+  // A second database whose log is not found: removing the log rebuilds it, and OK fails at Hr, so Sales is rolled back.
+  await addDatabase('Hr.mdf')
+  await expect(databasesGrid().getByRole('row')).toHaveCount(3)
+  await expect(detailsGrid('Hr').getByRole('row')).toHaveCount(3)
+  // Under forced colours the selected row (Hr, which Remove acts on) is Highlight, and a file that is not found keeps a mark.
+  await page.emulateMedia({ forcedColors: 'active' })
+  const cellBackground = row => row.getByRole('cell').first().evaluate(cell => getComputedStyle(cell).backgroundColor)
+  await expect.poll(async () => await cellBackground(databaseRow(1)) !== await cellBackground(databaseRow(0))).toBe(true)
+  expect(await attachDialog().getByLabel('Current File Path for D:\\Old\\Hr_log.ldf', { exact: true }).evaluate(input => getComputedStyle(input).outlineStyle)).toBe('dashed')
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-attach-forced.png') })
+  await page.emulateMedia({ forcedColors: 'none' })
+  await attachDialog().getByLabel('Current File Path for D:\\Old\\Hr_log.ldf', { exact: true }).focus()
+  await page.keyboard.press('Tab')
+  await page.keyboard.press('Tab')
+  await expect(attachDialog().getByRole('button', { name: 'Remove the selected log file', exact: true })).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(detailsGrid('Hr').getByRole('row')).toHaveCount(2)
+  // The removed row's place is taken, and so is focus: it never drops out of the modal.
+  await expect(attachDialog().getByLabel('Current File Path for ' + stubServerFiles.dataFolder + 'Hr.mdf', { exact: true })).toBeFocused()
+  await expect(attachDialog().getByText(/^No log file is listed, so SQL Server will rebuild the log \(FOR ATTACH_REBUILD_LOG\)\./)).toBeVisible()
+  await attachOk().click()
+  await expect(objectDialogProgress(attachDialog())).toHaveText('Error')
+  await expect(databaseRow(0).getByRole('cell').nth(4)).toHaveText('Rolled Back')
+  await expect(databaseRow(1).getByRole('cell').nth(4)).toHaveText('Error')
+  await expect(databaseRow(1).getByRole('cell').nth(5)).toHaveText(/^Msg 5120: Unable to open the physical file/)
+  // The whole Rolled Back explanation is shown (it wraps), not only a tooltip.
+  await expect(databaseRow(0).getByRole('cell').nth(5)).toHaveText('The attach succeeded but was rolled back because another database failed to attach.')
+  expect(await databaseRow(0).getByRole('cell').nth(5).evaluate(cell => cell.scrollWidth <= cell.clientWidth && cell.scrollHeight <= cell.clientHeight)).toBe(true)
+  expect((await stubCalls('actions.execute')).filter(call => call.action === 'attach').at(-1)?.databases).toEqual([
+    { name: 'Sales', owner: 'app_owner', files: salesFiles, rebuildLog: false }, { name: 'Hr', files: [stubServerFiles.dataFolder + 'Hr.mdf'], rebuildLog: true }])
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-attach-failed-dark.png') })
+  await attachDialog().getByLabel('Attach As for ' + stubServerFiles.dataFolder + 'Hr.mdf', { exact: true }).focus()
+  await attachDialog().getByRole('button', { name: 'Remove the selected database', exact: true }).click()
+  await expect(databasesGrid().getByRole('row')).toHaveCount(2)
+  await expect(attachDialog().getByLabel('Attach As for ' + salesMdf, { exact: true })).toBeFocused()
+  // New Database (5b) made a Sales already, so this one is attached as SalesCopy.
+  await attachDialog().getByLabel('Attach As for ' + salesMdf, { exact: true }).fill('SalesCopy')
+  await attachOk().click()
+  await expect(attachDialog()).toHaveCount(0)
+  expect((await stubCalls('actions.execute')).filter(call => call.action === 'attach').at(-1)?.databases).toEqual([{ name: 'SalesCopy', owner: 'app_owner', files: salesFiles, rebuildLog: false }])
+  await expectSelectedExplorerRow(page, 'server-a', 'Databases', 'SalesCopy')
+  console.log('Object action checks: Attach Databases reads an .mdf chosen in Locate Database Files (Enter, double-click or Escape, focus back on Add…), keeps file names in view, blocks OK while a data file is not found or a typed one unchecked, checks a corrected path on Enter, marks the selection under forced colours, keeps focus in the dialog after Remove, scripts its rows, rebuilds a removed log, shows a rolled-back attach per row, and selects the attached database.')
+  // 5d. Restore Database (D1e, run by D1f): AppData's history plans
+  // the full, differential and log backups; the grid's checkboxes wait for Manual Selection; master is a source but never a
+  // destination; the Backup Timeline draws its marks whole and moves its slider by keys; Script previews the plan; Prompt
+  // before restoring each backup is greyed (critic A22).
+  const restoreFrame = name => documentFrame(page, 'Restore Database - ' + name)
+  const restoreSection = (title, name = 'AppData') => frameSection(restoreFrame(name), title)
+  expect(await page.evaluate(() => window.__variaRestore.open('AppData'))).toEqual(expect.any(String))
+  await expect(documentTab(page, 'Restore Database - AppData')).toBeVisible()
+  const restoreTo = restoreSection('General').getByRole('textbox', { name: 'Restore to:', exact: true })
+  await expect(restoreTo).toHaveText('The last backup taken (2026-10-29 13:00:00)')
+  await expect(restoreSection('General').getByRole('checkbox', { checked: true })).toHaveCount(3)
+  const restoreSource = restoreSection('General').getByRole('combobox', { name: 'Database:', exact: true }).first()
+  await expect(restoreSource).toHaveValue('AppData')
+  await expect(restoreSource.getByRole('option', { name: 'master', exact: true })).toBeEnabled()
+  // Restore to reads as one line in a field's size, not the page's 16 px.
+  await expect(restoreTo).toHaveCSS('font-size', '12px')
+  expect((await restoreTo.boundingBox()).height).toBeLessThanOrEqual(32)
+  // The grid's checkboxes take clicks only while Manual Selection is checked; its scroller is a named tab stop.
+  const manual = restoreSection('General').getByRole('checkbox', { name: 'Manual Selection', exact: true })
+  const setBoxes = restoreSection('General').getByRole('region', { name: 'Backup sets to restore:', exact: true }).getByRole('checkbox')
+  await expect(setBoxes).toHaveCount(3)
+  for (const box of await setBoxes.all()) await expect(box).toBeDisabled()
+  await manual.check()
+  for (const box of await setBoxes.all()) await expect(box).toBeEnabled()
+  await manual.uncheck()
+  await expect(setBoxes.first()).toBeDisabled()
+  const setsRegion = restoreSection('General').getByRole('region', { name: 'Backup sets to restore:', exact: true })
+  await setsRegion.focus()
+  await expect(setsRegion).toBeFocused()
+  await expect(restoreSection('Files').getByRole('table', { name: 'Restore the database files as', exact: true })).toBeVisible()
+  await expect(restoreSection('General').getByRole('button', { name: 'Verify Backup Media', exact: true })).toBeDisabled()
+  await expect(restoreSection('Options').getByRole('checkbox', { name: 'Prompt before restoring each backup', exact: true })).toBeDisabled()
+  await expect(restoreSection('Options').getByRole('checkbox', { name: 'Take tail-log backup before restore', exact: true })).toBeChecked()
+  await restoreSection('General').getByRole('button', { name: 'Timeline…', exact: true }).click()
+  const timeline = page.getByRole('dialog', { name: 'Backup Timeline', exact: true })
+  // The dialog takes its own width (min(560px, 100vw - 48px)), not the sub-dialog's 420 px.
+  const timelineWidth = await timeline.evaluate(element => ({ width: element.getBoundingClientRect().width, expected: Math.min(560, innerWidth - 48) }))
+  expect(Math.abs(timelineWidth.width - timelineWidth.expected)).toBeLessThanOrEqual(1)
+  // In the Day window the marks keep their pixel size: the full backup a 14 px triangle, the log a 3 px tick, and the
+  // differential's triangle smaller than the full's.
+  const markBox = async selector => (await timeline.locator(selector).first().boundingBox())
+  const [fullMark, differentialMark, logMark] = [await markBox(part.restoreTimelineFull), await markBox(part.restoreTimelineDifferential), await markBox(part.restoreTimelineLog)]
+  expect(fullMark.width).toBeGreaterThanOrEqual(13)
+  expect(differentialMark.width).toBeLessThan(fullMark.width)
+  expect(logMark.width).toBeGreaterThanOrEqual(2.5)
+  // Marks at the window's ends show whole: inside the track.
+  const trackBox = await timeline.getByRole('slider', { name: 'Point in time', exact: true }).boundingBox()
+  for (const mark of [fullMark, differentialMark, logMark]) expect(mark.x + mark.width).toBeLessThanOrEqual(trackBox.x + trackBox.width + 0.5)
+  await expect(timeline.locator(part.restoreTimelineSwatch)).toHaveCount(4)
+  // Under forced colours the marks, the band and the legend's samples take system colours that differ from Canvas.
+  await page.emulateMedia({ forcedColors: 'active' })
+  const forcedFills = await timeline.evaluate((element, selectors) => {
+    const fill = selector => getComputedStyle(element.querySelector(selector)).fill
+    const probe = element.appendChild(document.createElement('div'))
+    probe.style.backgroundColor = 'Canvas'
+    const canvas = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return { background: canvas, marks: selectors.map(fill), swatch: getComputedStyle(element.querySelector(selectors.at(-1) + ' polygon')).fill }
+  }, [part.restoreTimelineFull, part.restoreTimelineLog, part.restoreTimelineCovered, part.restoreTimelineSwatch])
+  for (const fill of [...forcedFills.marks.slice(0, 3), forcedFills.swatch]) expect(fill, JSON.stringify(forcedFills)).not.toBe(forcedFills.background)
+  await page.emulateMedia({ forcedColors: 'none' })
+  await timeline.getByLabel('Timeline Interval:', { exact: true }).selectOption({ label: 'Hour' })
+  const slider = timeline.getByRole('slider', { name: 'Point in time', exact: true })
+  await slider.focus()
+  await slider.press('Home')
+  await expect(slider).toHaveAttribute('aria-valuetext', '2026-10-29 12:00:00')
+  // The slider's focus ring is the app's 2 px.
+  await expect(slider).toHaveCSS('outline-width', '2px')
+  await expect(timeline.getByRole('radio', { name: 'Specific date and time', exact: true })).toBeChecked()
+  await slider.press('ArrowRight')
+  await expect(slider).toHaveAttribute('aria-valuetext', '2026-10-29 12:01:00')
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-restore-timeline.png') })
+  await timeline.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(timeline).toHaveCount(0)
+  await expect(restoreTo).toHaveText('2026-10-29 12:01:00')
+  await scriptToggle(restoreFrame('AppData')).click()
+  await expect(drawerText(restoreFrame('AppData'))).toHaveValue(restoreScript.replaceAll('\r\n', '\n'))
+  expect((await stubCalls('actions.script')).at(-1)).toMatchObject({ action: 'restore', target: { kind: 'database', name: 'AppData' }, identity: { id: 5 },
+    restore: { stopAt: '2026-10-29T12:01:00', recovery: 'recovery', tailLog: { noRecovery: true }, sets: [{ type: 'full', file: 1 }, { type: 'differential', file: 2 }, { type: 'log', file: 1 }] } })
+  // Restoring over master is refused with the reason, and nothing more is scripted for it.
+  const scripted = (await stubCalls('actions.script')).length
+  await restoreSection('General').getByRole('combobox', { name: 'Database:', exact: true }).last().fill('master')
+  await expect(restoreSection('General', 'master').getByText('Restore system databases with T-SQL; it needs single-user mode or a stopped Agent.').first()).toBeVisible()
+  await expect(scriptDrawer(restoreFrame('master')).getByText('Restore system databases with T-SQL; it needs single-user mode or a stopped Agent.', { exact: true })).toBeVisible()
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-restore-dark.png') })
+  expect((await stubCalls('actions.script')).length).toBe(scripted)
+  // Select backup devices lists its files in a list eight rows tall, not a one-row spin box.
+  await restoreSection('General', 'master').getByRole('radio', { name: 'Device', exact: true }).click()
+  await restoreSection('General', 'master').getByRole('button', { name: 'Select backup devices', exact: true }).click()
+  const devicesDialog = page.getByRole('dialog', { name: 'Select backup devices', exact: true })
+  expect((await devicesDialog.getByRole('listbox', { name: 'Backup media:', exact: true }).boundingBox()).height).toBeGreaterThanOrEqual(150)
+  await devicesDialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(devicesDialog).toHaveCount(0)
+  // The tab names the destination, as the frame's title does.
+  await expect(documentTab(page, 'Restore Database - master')).toBeVisible()
+  await closeDocumentButton(page, 'Restore Database - master').click()
+  await expect(documentTab(page, 'Restore Database - master')).toHaveCount(0)
+  console.log('Object action checks: Restore Database (test hook) plans the history\'s backups, takes grid clicks only under Manual Selection, refuses master only as the destination, greys Prompt with its reason, draws the Backup Timeline\'s marks whole (and under forced colours) and moves its point by keys, scripts the plan, and lists backup media eight rows tall.')
+
+  // 5c. Restore Database runs (D1f). The Databases folder's Restore Database… opens it on the history's first database, and a
+  // database's Tasks › Restore › Database… on that database. Close existing connections makes Restore ask first, Cancel in
+  // focus, drawn as the default and last, Escape answering it and focus going back to Restore, which is disabled while the bar
+  // asks (owner decision 4); the Run panel lists the backend's steps with the full backup's RESTORE at 40 % (about 13 % of
+  // three sets) while the sections say their choices in a line; Stop over a database that existed asks first (Keep restoring
+  // in focus and last, focus back on Stop), and the outcome, a status rather than an error, names the state SQL Server left
+  // (critic A12). Without the confirm's fact it runs at once, and ends restored.
+  await chooseExplorerMenuItem(page, databases, 'Restore Database…')
+  await expect(documentTab(page, 'Restore Database - AppData')).toBeVisible()
+  await expect(restoreSection('General').getByRole('checkbox', { checked: true })).toHaveCount(3)
+  await closeDocumentButton(page, 'Restore Database - AppData').click()
+  await expect(documentTab(page, 'Restore Database - AppData')).toHaveCount(0)
+  await chooseExplorerMenuItem(page, appData, ['Tasks', 'Restore', 'Database…'])
+  await expect(documentTab(page, 'Restore Database - AppData')).toBeVisible()
+  await expect(restoreSection('General').getByRole('checkbox', { checked: true })).toHaveCount(3)
+  const runFrame = restoreFrame('AppData')
+  const restoreVerb = name => documentVerb(runFrame, 'Restore Database - AppData', name)
+  const restoreRuns = async () => (await stubCalls('actions.execute')).filter(call => call.action === 'restore')
+  const stubCancels = () => application.evaluate(() => globalThis.variaStub.cancels.length)
+  await restoreSection('Options').getByRole('checkbox', { name: 'Close existing connections to destination database', exact: true }).check()
+  await restoreVerb('Restore').click()
+  const runConfirm = runFrame.getByRole('alertdialog', { name: 'Restore Database', exact: true })
+  await expect(runConfirm).toContainText('Closing existing connections ends 1 session in AppData, and rolls back any open transaction.')
+  await expect(runConfirm.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
+  // Danger first, the safe default last and drawn as the default whether or not focus shows (its ring is a box shadow).
+  expect(await runConfirm.getByRole('button').allTextContents()).toEqual(['Restore', 'Cancel'])
+  expect(await runConfirm.getByRole('button', { name: 'Cancel', exact: true }).evaluate(button => getComputedStyle(button).boxShadow)).not.toBe('none')
+  await expect(restoreVerb('Restore')).toBeDisabled()
+  await page.keyboard.press('Escape')
+  await expect(runConfirm).toHaveCount(0)
+  await expect(restoreVerb('Restore')).toBeFocused()
+  expect(await restoreRuns()).toHaveLength(0)
+  await restoreVerb('Restore').click()
+  await runConfirm.getByRole('button', { name: 'Restore', exact: true }).click()
+  const runPanel = runFrame.getByRole('region', { name: 'Restoring AppData', exact: true })
+  await expect(runPanel.getByRole('progressbar', { name: 'Restoring AppData', exact: true })).toHaveAttribute('aria-valuenow', '13')
+  const runStatuses = panel => panel.getByRole('listitem').evaluateAll(items => items.map(item => item.dataset.status))
+  await expect.poll(() => runStatuses(runPanel)).toEqual(['done', 'done', 'running', 'pending', 'pending', 'pending'])
+  await expect(runPanel.getByRole('listitem').nth(2)).toContainText('Restore the full backup (AppData.bak, position 1)')
+  await expect(documentState(runFrame)).toContainText('Restoring · about 13 %')
+  await expect(restoreSection('General').getByRole('checkbox')).toHaveCount(0)
+  expect((await restoreRuns()).at(-1)).toMatchObject({ target: { kind: 'database', name: 'AppData' }, identity: { id: 5 },
+    restore: { closeConnections: true, replace: false, recovery: 'recovery', tailLog: { noRecovery: true }, sets: [{ type: 'full', file: 1 }, { type: 'differential', file: 2 }, { type: 'log', file: 1 }] } })
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-restore-run.png') })
+  const cancelsBefore = await stubCancels()
+  await restoreVerb('Stop').click()
+  const stopConfirm = runFrame.getByRole('alertdialog', { name: 'Stop the restore', exact: true })
+  await expect(stopConfirm).toContainText('Stop the restore? Stopping leaves AppData restoring and unusable until a restore finishes.')
+  await expect(stopConfirm.getByRole('button', { name: 'Keep restoring', exact: true })).toBeFocused()
+  expect(await stopConfirm.getByRole('button').allTextContents()).toEqual(['Stop', 'Keep restoring'])
+  await page.keyboard.press('Escape')
+  await expect(stopConfirm).toHaveCount(0)
+  await expect(runPanel).toBeVisible()
+  await expect(restoreVerb('Stop')).toBeFocused()
+  expect(await stubCancels()).toBe(cancelsBefore)
+  await restoreVerb('Stop').click()
+  await stopConfirm.getByRole('button', { name: 'Stop', exact: true }).click()
+  const stoppedPanel = runFrame.getByRole('region', { name: 'Stopped restoring AppData', exact: true })
+  await expect(stoppedPanel.getByRole('heading', { name: 'Stopped restoring AppData', exact: true })).toBeFocused()
+  await expect(stoppedPanel.getByRole('status')).toContainText('AppData is restoring, in single-user mode, and cannot be used until a restore finishes.')
+  await expect(stoppedPanel.getByRole('alert')).toHaveCount(0)
+  await expect.poll(() => runStatuses(stoppedPanel)).toEqual(['done', 'done', 'cancelled', 'skipped', 'skipped', 'skipped'])
+  await expect(stoppedPanel.getByRole('listitem').nth(2)).toContainText('40 %')
+  await expect(stoppedPanel.getByRole('button', { name: 'Restore again', exact: true })).toBeEnabled()
+  await expect(documentState(runFrame)).toContainText('Stopped')
+  expect(await stubCancels()).toBe(cancelsBefore + 1)
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-restore-stop.png') })
+  await restoreSection('Options').getByRole('checkbox', { name: 'Close existing connections to destination database', exact: true }).uncheck()
+  await restoreVerb('Restore').click()
+  const restoredPanel = runFrame.getByRole('region', { name: 'Restored AppData', exact: true })
+  await expect(restoredPanel).toContainText('AppData is online.')
+  await expect.poll(() => runStatuses(restoredPanel)).toEqual(['done', 'done', 'done', 'done'])
+  await expect(runConfirm).toHaveCount(0)
+  await expect(documentState(runFrame)).toContainText('Restored')
+  expect(await restoreRuns()).toHaveLength(2)
+  await closeDocumentButton(page, 'Restore Database - AppData').click()
+  await expect(documentTab(page, 'Restore Database - AppData')).toHaveCount(0)
+  console.log('Object action checks: Restore Database opens from the Databases folder and from Tasks › Restore › Database…, asks before closing connections (Restore disabled meanwhile, Cancel last, the default and in focus, Escape answering and focus back on Restore), shows the steps and the RESTORE\'s percent while the sections summarise, asks before Stop over a database that existed (Keep restoring last and in focus, focus back on Stop), names what Stop left as a status with focus on the panel title, and runs at once to Restored without the confirm\'s fact.')
+
+  // 5d. Restore Files and Filegroups (D1g): the Databases folder's item and a database's Tasks › Restore › Files and Filegroups…
+  // open it on AppData. The grid lists the full backup's data files, the PRIMARY one greyed online with its reason shown and
+  // read as its description, and Restore as filegroup shows each row's filegroup first; once a file is checked, so is the log
+  // after it, which cannot be unchecked. Varia's log backup is on for an online FULL database and STANDBY greyed (SQL Server
+  // refuses it online), its reason shown and read; the options' labels take the fields' body size. Script shows actions.script's
+  // text for the restoreFiles request, and Restore runs at once to Restored with its four steps, focus on the Run panel's title.
+  const filesTitle = 'Restore Files and Filegroups - AppData'
+  await chooseExplorerMenuItem(page, databases, 'Restore Files and Filegroups…')
+  await expect(documentTab(page, filesTitle)).toBeVisible()
+  await closeDocumentButton(page, filesTitle).click()
+  await expect(documentTab(page, filesTitle)).toHaveCount(0)
+  await chooseExplorerMenuItem(page, appData, ['Tasks', 'Restore', 'Files and Filegroups…'])
+  await expect(documentTab(page, filesTitle)).toBeVisible()
+  const filesFrame = documentFrame(page, filesTitle)
+  const filesSection = title => frameSection(filesFrame, title)
+  await expect(filesSection('Files')).toHaveCount(0)
+  await expect(filesSection('General').getByRole('combobox', { name: 'To database:', exact: true })).toHaveValue('AppData')
+  const backupSetsGrid = filesSection('General').getByRole('region', { name: 'Select the backup sets to restore:', exact: true })
+  await expect(backupSetsGrid.getByRole('row')).toHaveCount(4)
+  const logBox = backupSetsGrid.getByRole('checkbox', { name: 'Restore AppData-Log (2026-10-29 13:00:00)', exact: true })
+  await expect(logBox).toBeDisabled()
+  await expect(logBox).not.toBeChecked()
+  const primaryBox = backupSetsGrid.getByRole('checkbox', { name: 'Restore AppData from AppData-Full (2026-10-29 08:00:00)', exact: true })
+  await expect(primaryBox).toBeDisabled()
+  await expect(primaryBox).toHaveAccessibleDescription(/^A file of the PRIMARY filegroup restores only offline/)
+  await expect(filesSection('General').getByText(/^A file of the PRIMARY filegroup restores only offline/)).toBeVisible()
+  await expect(documentVerb(filesFrame, filesTitle, 'Restore')).toBeDisabled()
+  // Restore as filegroup: each row shows the filegroup its checkbox names, in its own first column.
+  const asFilegroup = filesSection('Options').getByRole('checkbox', { name: 'Restore as filegroup', exact: true })
+  await asFilegroup.check()
+  await expect(backupSetsGrid.getByRole('columnheader', { name: 'Filegroup', exact: true })).toBeVisible()
+  await expect(backupSetsGrid.getByRole('row').filter({ has: page.getByRole('checkbox', { name: 'Restore Archive from AppData-Full (2026-10-29 08:00:00)', exact: true }) }).getByRole('cell').nth(1)).toHaveText('Archive')
+  await asFilegroup.uncheck()
+  await expect(backupSetsGrid.getByRole('columnheader', { name: 'Filegroup', exact: true })).toHaveCount(0)
+  await backupSetsGrid.getByRole('checkbox', { name: 'Restore AppData_2 from AppData-Full (2026-10-29 08:00:00)', exact: true }).check()
+  await expect(logBox).toBeChecked()
+  await expect(filesSection('Options').getByRole('checkbox', { name: 'Back up the log and restore it to bring the files online (WITH COPY_ONLY)', exact: true })).toBeChecked()
+  const standbyRadio = filesSection('Options').getByRole('radio', { name: /\(RESTORE WITH STANDBY\)$/ })
+  await expect(standbyRadio).toBeDisabled()
+  await expect(standbyRadio).toHaveAccessibleDescription(/^RESTORE WITH STANDBY conflicts with an online restore/)
+  await expect(filesSection('Options').getByRole('checkbox', { name: 'Prompt before restoring each backup', exact: true })).toHaveAccessibleDescription('Not yet available')
+  await expect(filesSection('Options').getByRole('radio', { name: /\(RESTORE WITH RECOVERY\)$/ })).toBeChecked()
+  // The options' labels and the grid's title take the fields' body size (the metric token), not the page's 16 px.
+  const bodySize = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--varia-size-md').trim())
+  expect(await standbyRadio.evaluate(radio => getComputedStyle(radio.closest('label')).fontSize)).toBe(bodySize)
+  expect(await backupSetsGrid.evaluate(grid => getComputedStyle(document.getElementById(grid.getAttribute('aria-labelledby'))).fontSize)).toBe(bodySize)
+  await expect(filesSection('Options').getByRole('table', { name: 'Restore the database files as', exact: true }).getByRole('textbox', { name: 'Restore AppData_2 as', exact: true })).toBeVisible()
+  await scriptToggle(filesFrame).click()
+  await expect(drawerText(filesFrame)).toHaveValue(restoreFilesScript.replaceAll('\r\n', '\n'))
+  expect((await stubCalls('actions.script')).at(-1)).toMatchObject({ action: 'restoreFiles', target: { kind: 'database', name: 'AppData' }, identity: { id: 5 },
+    restoreFiles: { files: ['AppData_2'], filegroups: [], recovery: 'recovery', sets: [{ type: 'full', file: 1 }, { type: 'log', file: 1 }], logBackup: { file: expect.stringMatching(/AppData_LogBackup_.*\.bak$/) } } })
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-restore-files.png') })
+  await scriptToggle(filesFrame).click()
+  await documentVerb(filesFrame, filesTitle, 'Restore').click()
+  const filesDone = filesFrame.getByRole('region', { name: 'Restored AppData', exact: true })
+  await expect(filesDone).toContainText('AppData is online.')
+  await expect(filesDone.getByRole('listitem')).toHaveText([/^Done: Restore the files/, /^Done: Restore log backup/, /^Done: Back up the log/, /^Done: Restore the log backup/])
+  // Restore ran at once (no confirm bar) and took the verb that had focus away: the Run panel's title has it.
+  await expect(filesDone.getByRole('heading', { name: 'Restored AppData', exact: true })).toBeFocused()
+  expect((await stubCalls('actions.execute')).filter(call => call.action === 'restoreFiles')).toHaveLength(1)
+  await closeDocumentButton(page, filesTitle).click()
+  await expect(documentTab(page, filesTitle)).toHaveCount(0)
+  console.log('Object action checks: Restore Files and Filegroups opens from the Databases folder and from Tasks › Restore › Files and Filegroups…, lists the full backup\'s files in Select the backup sets to restore (PRIMARY\'s greyed online with its reason, each filegroup named under Restore as filegroup) with the log after it checked once a file is, offers the log backup with STANDBY greyed online and its reason read, draws the options at the body size, scripts the restoreFiles request, and runs to Restored with its four steps and focus on the Run panel.')
+
+  // 8. New Login (D2a): Security › New › Login… opens "Login - New" with SSMS's pages and defaults; the password fields are masked
   // and keep what was typed across pages; Script (clipboard and a query window, so AutoRecover too) never carries the password,
   // which goes only with OK; PASSWORD_POLICY keeps the dialog and its password; Stop answers Stopped with the steps; OK adds the
   // login, and Logins shows and selects it. New Login… on the Logins folder opens the same dialog. User Mapping (D2b) maps
@@ -580,15 +1171,11 @@ try {
   const typed = 'Typed-Z9q-' + Date.now().toString(36)
   // Logins listed first: OK reloads that folder and selects the new login (a folder Object Explorer has not listed stays so).
   await expandExplorerPath(page, 'server-a', 'Security', 'Logins')
-  await expect(async () => {
-    if (await explorerMenu().count()) await closeMenu()
-    expect(await menuOf('server-a', 'Security')).toContain('New')
-  }).toPass()
-  await explorerMenu().getByRole('menuitem', { name: 'New', exact: true }).click(fast)
-  await page.getByRole('menuitem', { name: 'Login…', exact: true }).click(fast)
+  expect(await menuOf('server-a', 'Security')).toContain('New')
+  await chooseExplorerMenuItem(page, ['server-a', 'Security'], ['New', 'Login…'])
   await expect(loginDialog()).toBeVisible()
   await expect(objectDialogProgress(loginDialog())).toHaveText('Ready')
-  expect(await loginDialog().getByRole('navigation', { name: 'Select a page', exact: true }).getByRole('button').allTextContents()).toEqual(['General', 'Server Roles', 'User Mapping', 'Status'])
+  expect(await loginDialog().getByRole('navigation', { name: 'Select a page', exact: true }).getByRole('button').allTextContents()).toEqual(['General', 'Server Roles', 'User Mapping', 'Securables', 'Status'])
   // A Windows server: Windows authentication, so the password fields are greyed until SQL Server authentication is chosen.
   await expect(loginDialog().getByRole('radio', { name: 'Windows authentication', exact: true })).toBeChecked()
   await expect(passwordField(loginDialog(), 'Password')).toBeDisabled()
@@ -605,7 +1192,7 @@ try {
   // fields line up with Login name.
   await resizeWindow(application, page, 1024, 768)
   await zoom(1.5)
-  await expect(objectDialogTabs(loginDialog())).toHaveCount(4)
+  await expect(objectDialogTabs(loginDialog())).toHaveCount(5)
   const loginPage = objectDialogPage(loginDialog())
   const loginOk = loginDialog().getByRole('button', { name: 'OK', exact: true })
   const narrowLogin = async () => {
@@ -711,6 +1298,61 @@ try {
   await expect(loginDialog()).toBeVisible()
   await page.keyboard.press(' ')
   await expect(mappingGrid.getByRole('checkbox', { name: 'Map master', exact: true })).not.toBeChecked()
+  // Securables (D2d): Search… opens Add Objects; The server adds the server's row, whose CONNECT SQL shows the Status page's choice,
+  // greyed; Specific objects… goes through Select Object Types and Select Objects. The Explicit grid's boxes and keys set what OK
+  // grants or denies, and Effective waits for the login to exist.
+  await loginDialog().getByRole('button', { name: 'Securables', exact: true }).click()
+  const securablesGrid = loginDialog().getByRole('grid', { name: 'Securables:', exact: true })
+  await expect(securablesGrid.getByRole('gridcell')).toHaveCount(0)
+  await expect(loginDialog().getByRole('tab', { name: 'Effective', exact: true })).toBeDisabled()
+  // With nothing selected the label names no securable; Search… and Remove are framed like the dialogs' other action rows.
+  await expect(loginDialog().getByText('Permissions:', { exact: true })).toBeVisible()
+  expect(await loginDialog().getByRole('button', { name: 'Search…', exact: true }).evaluate(button => getComputedStyle(button).borderTopColor)).not.toBe('rgba(0, 0, 0, 0)')
+  await loginDialog().getByRole('button', { name: 'Search…', exact: true }).click()
+  const addObjects = page.getByRole('dialog', { name: 'Add Objects', exact: true })
+  await expect(addObjects.getByRole('radiogroup', { name: 'What objects do you want to add?', exact: true }).getByRole('radio')).toHaveCount(3)
+  await addObjects.getByRole('radio', { name: "The server 'STUB-SQL'", exact: true }).check()
+  await addObjects.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(addObjects).toHaveCount(0)
+  await expect(securablesGrid.getByRole('gridcell')).toHaveText(['STUB-SQL', 'Server'])
+  const explicitGrid = loginDialog().getByRole('grid', { name: 'Explicit permissions', exact: true })
+  await expect(explicitGrid.getByRole('columnheader')).toHaveText(['Permission', 'Grantor', 'Grant', 'With Grant', 'Deny'])
+  await expect(explicitGrid.getByRole('checkbox', { name: 'Grant CONNECT SQL', exact: true })).toBeChecked()
+  await expect(explicitGrid.getByRole('checkbox', { name: 'Grant CONNECT SQL', exact: true })).toBeDisabled()
+  await explicitGrid.getByRole('checkbox', { name: 'Grant VIEW SERVER STATE', exact: true }).check()
+  // A click on a permission's name focuses the grid and makes that row the active one, so Space sets its box, not the last one's.
+  await explicitGrid.getByRole('gridcell', { name: 'VIEW ANY DATABASE', exact: true }).click()
+  await expect(explicitGrid).toBeFocused()
+  await page.keyboard.press(' ')
+  await expect(explicitGrid.getByRole('checkbox', { name: 'Grant VIEW ANY DATABASE', exact: true })).toBeChecked()
+  await expect(explicitGrid.getByRole('checkbox', { name: 'Grant VIEW SERVER STATE', exact: true })).toBeChecked()
+  await page.keyboard.press(' ')
+  await expect(explicitGrid.getByRole('checkbox', { name: 'Grant VIEW ANY DATABASE', exact: true })).not.toBeChecked()
+  await loginDialog().getByRole('button', { name: 'Search…', exact: true }).click()
+  await expect(addObjects.getByRole('radio', { name: 'Specific objects…', exact: true })).toBeChecked()
+  await addObjects.getByRole('button', { name: 'OK', exact: true }).click()
+  const selectTypes = page.getByRole('dialog', { name: 'Select Object Types', exact: true })
+  expect(await selectTypes.getByRole('group', { name: 'Select the types of objects:', exact: true }).getByRole('checkbox').evaluateAll(boxes => boxes.map(box => box.labels[0].textContent))).toEqual(['Endpoints', 'Logins', 'Servers', 'Availability Groups', 'Server roles'])
+  await expect(selectTypes.getByRole('button', { name: 'OK', exact: true })).toBeDisabled()
+  await selectTypes.getByRole('checkbox', { name: 'Logins', exact: true }).check()
+  await selectTypes.getByRole('button', { name: 'OK', exact: true }).click()
+  const selectObjects = page.getByRole('dialog', { name: 'Select Objects', exact: true })
+  // Each name carries a title, so one wider than the list can still be read whole.
+  await expect(selectObjects.getByRole('option', { name: 'Held', exact: true })).toHaveAttribute('title', 'Held')
+  await selectObjects.getByRole('listbox', { name: 'Matching objects:', exact: true }).selectOption('login:Held')
+  await selectObjects.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(selectObjects).toHaveCount(0)
+  await expect(securablesGrid.getByRole('gridcell')).toHaveText(['STUB-SQL', 'Server', 'Held', 'Login'])
+  // The server stays selected; a click on its row focuses the grid itself (not its scrolling body), and Down selects Held, whose
+  // Explicit grid takes End (the Deny column) and Space.
+  await securablesGrid.getByRole('gridcell', { name: 'STUB-SQL', exact: true }).click()
+  await expect(securablesGrid).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  await expect(loginDialog().getByText('Permissions for Held:', { exact: true })).toBeVisible()
+  await explicitGrid.focus()
+  await page.keyboard.press('End')
+  await page.keyboard.press(' ')
+  await expect(explicitGrid.getByRole('checkbox', { name: 'Deny ALTER', exact: true })).toBeChecked()
   await loginDialog().getByRole('button', { name: 'General', exact: true }).click()
   expect(await passwordField(loginDialog(), 'Password').evaluate(input => [input.type, input.value.length])).toEqual(['password', typed.length])
   await loginDialog().getByRole('button', { name: 'Script options', exact: true }).click()
@@ -726,6 +1368,8 @@ try {
   expect(loginScripts.every(call => !Object.hasOwn(call, 'secrets')) && !JSON.stringify(loginScripts).includes(typed)).toBe(true)
   expect(loginScripts[0]).toMatchObject({ login: { auth: 'sql', name: 'app_reader', checkPolicy: false, checkExpiration: false, mustChange: false }, serverRoles: ['dbcreator'],
     mappings: [{ database: 'AppData', user: 'app_reader', defaultSchema: 'sales', rolesAdd: ['db_datareader'] }] })
+  const newPermissions = [{ securable: { type: 'server' }, permission: 'VIEW SERVER STATE', state: 'grant' }, { securable: { type: 'login', name: 'Held' }, permission: 'ALTER', state: 'deny' }]
+  expect(loginScripts[0].permissions).toEqual(newPermissions)
   expect((await stubCalls('actions.describe')).filter(call => call.dialog === 'loginDatabaseRoles').map(call => call.target.name), 'each database\'s roles are read once').toEqual(['AppData', 'master'])
   expect(await stubCalls('actions.execute').then(calls => calls.filter(call => call.action === 'createLogin'))).toEqual([])
   // The server's password policy refuses "Weak": the dialog stays open, says why, and keeps the password typed.
@@ -742,16 +1386,17 @@ try {
   await loginDialog().getByRole('button', { name: 'Stop', exact: true }).click()
   await expect(objectDialogProgress(loginDialog())).toHaveText('Stopped')
   await expect(loginDialog().getByRole('status').filter({ hasText: 'The action was stopped at "Create the login"' })).toBeVisible()
-  await expect(loginDialog().getByRole('list', { name: 'Steps', exact: true }).getByRole('listitem')).toHaveCount(5)
+  await expect(loginDialog().getByRole('list', { name: 'Steps', exact: true }).getByRole('listitem')).toHaveCount(7)
+  await expect(loginDialog().getByRole('list', { name: 'Steps', exact: true }).getByRole('listitem').last()).toContainText('Deny a permission')
   // A password the policy takes: the dialog closes, and Logins lists the login and selects it.
   for (const label of ['Password', 'Confirm password']) await passwordField(loginDialog(), label).fill(typed)
   await loginDialog().getByRole('button', { name: 'OK', exact: true }).click()
   await expect(loginDialog()).toHaveCount(0)
   expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'createLogin', target: { kind: 'server' }, secrets: { password: typed }, serverRoles: ['dbcreator'], status: { connect: 'grant', enabled: true },
-    mappings: [{ database: 'AppData', user: 'app_reader', defaultSchema: 'sales', rolesAdd: ['db_datareader'] }] })
+    mappings: [{ database: 'AppData', user: 'app_reader', defaultSchema: 'sales', rolesAdd: ['db_datareader'] }], permissions: newPermissions })
   await expect(explorerTree(page).getByRole('treeitem', { name: 'app_reader', selected: true })).toBeVisible()
   expect(await menuOf('server-a', 'Security', 'Logins')).toContain('New Login…')
-  await explorerMenu().getByRole('menuitem', { name: 'New Login…', exact: true }).click(fast)
+  await chooseExplorerMenuItem(page, ['server-a', 'Security', 'Logins'], 'New Login…')
   await expect(loginDialog()).toBeVisible()
   await expect(loginDialog().getByRole('textbox', { name: 'Login name', exact: true })).toHaveValue('')
   // Enter in Confirm password is OK; when the policy refuses the password, focus returns to Password (running disabled the
@@ -777,13 +1422,13 @@ try {
   expect(copies.some(text => text.includes(typed) || text.includes('Weak') || text.includes('Held'))).toBe(false)
   console.log('Object action checks: New Login opens from Security › New and Logins with SSMS\'s pages and defaults, greys the password rows\' labels under Windows authentication, scrolls General in the narrow frame with its fields aligned, keeps its masked password across pages, maps a database (Select Schema, a role, keys) but never an offline one, scripts PASSWORD=<password> to the clipboard and a query window without sending the password, keeps the dialog on PASSWORD_POLICY with focus back on Password, Stops, and selects the new login.')
 
-  // 8b. New Login's other kinds (D2e): the General page offers the five kinds SQL Server 2022 takes; Search… opens Select User or
+  // 8a. New Login's other kinds (D2e): the General page offers the five kinds SQL Server 2022 takes; Search… opens Select User or
   // Group, whose Check Names asks the server (NOT_FOUND as a value, then the account as typed, as xp_logininfo echoes it, which OK
   // puts in Login name); Map to Credential adds credentials to Mapped Credentials (Credential, Provider) and Remove takes one out; Mapped to
   // certificate enables its list, greys the defaults and Search…, and User Mapping keeps Default Schema closed; Script and OK send
   // the certificate and credentials, no defaults, no default schema and no secrets.
   expect(await menuOf('server-a', 'Security', 'Logins')).toContain('New Login…')
-  await explorerMenu().getByRole('menuitem', { name: 'New Login…', exact: true }).click(fast)
+  await chooseExplorerMenuItem(page, ['server-a', 'Security', 'Logins'], 'New Login…')
   await expect(objectDialogProgress(loginDialog())).toHaveText('Ready')
   const authRadios = loginDialog().getByRole('radiogroup', { name: 'Authentication', exact: true }).getByRole('radio')
   const authNames = ['Windows authentication', 'SQL Server authentication', 'Microsoft Entra authentication', 'Mapped to certificate', 'Mapped to asymmetric key']
@@ -857,7 +1502,7 @@ try {
   await expect(explorerTree(page).getByRole('treeitem', { name: 'app_signer', selected: true })).toBeVisible()
   console.log('Object action checks: New Login offers the five kinds, checks a Windows name on the server from Select User or Group (NOT_FOUND as a value), maps and removes credentials, and creates a certificate login without defaults, default schema or secrets.')
 
-  // 8. A login's Disable, Enable and Rename (D4b): the menu offers one of Disable and Enable by the login's state, greys
+  // 8b. A login's Disable, Enable and Rename (D4b): the menu offers one of Disable and Enable by the login's state, greys
   // what its kind refuses; Disable asks first, then the row and its menu follow; the login this connection uses is refused
   // before any prompt; Enable never asks; a Disable waiting on a lock shows in the status bar with Stop; Rename refuses a
   // SQL Server login's backslash and keeps the box, then renames with a notice.
@@ -877,18 +1522,19 @@ try {
   const answer = response => application.evaluate((_electron, value) => { globalThis.loginAnswers.push(value) }, response)
   const promptCount = 0
   const notice = () => toastMessage(toasts(page).last())
+  /** A login row's menu items and those greyed (explorerMenuItems); the menu stays open. */
+  const loginMenu = name => explorerMenuItems(page, ...logins, name)
+  const chooseLogin = (name, item) => chooseExplorerMenuItem(page, [...logins, name], item)
   // A SQL Server login offers Unlock… whatever its state (only its dialog reads whether it is locked out); other kinds do not. Every
   // login offers Properties (Login Properties, D2c), SQL Server's own too, as in SSMS.
-  expect(await menuOf(...logins, 'AppUser')).toEqual(['Script Login as', 'Copy Name', 'Disable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
+  expect((await loginMenu('AppUser')).names).toEqual(['New Login…', 'Script Login as', 'Copy Name', 'Disable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await closeMenu()
-  expect(await menuOf(...logins, 'Retired')).toEqual(['Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
+  expect((await loginMenu('Retired')).names).toEqual(['New Login…', 'Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await closeMenu()
   // A Windows group cannot be disabled (SQL Server refuses it), and SQL Server's own logins cannot be changed.
-  expect(await menuOf(...logins, 'CONTOSO\\Ops')).toEqual(['Script Login as', 'Copy Name', 'Disable', 'Rename', 'Delete', 'Refresh', 'Properties'])
-  expect(await disabled()).toEqual(['Disable'])
+  expect(await loginMenu('CONTOSO\\Ops')).toEqual({ names: ['New Login…', 'Script Login as', 'Copy Name', 'Disable', 'Rename', 'Delete', 'Refresh', 'Properties'], disabled: ['Disable'] })
   await closeMenu()
-  expect(await menuOf(...logins, '##MS_PolicyTsqlExecutionLogin##')).toEqual(['Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
-  expect(await disabled()).toEqual(['Enable', 'Unlock…', 'Rename', 'Delete'])
+  expect(await loginMenu('##MS_PolicyTsqlExecutionLogin##')).toEqual({ names: ['New Login…', 'Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'], disabled: ['Enable', 'Unlock…', 'Rename', 'Delete'] })
   await closeMenu()
   // The palette says why a greyed login verb is greyed for the login selected, in its own words.
   await select(...logins, 'CONTOSO\\Ops')
@@ -900,36 +1546,30 @@ try {
   await page.keyboard.press('Escape')
   await expect(quickInput(page)).toHaveCount(0)
   await answer(0)
-  await menuOf(...logins, 'AppUser')
-  await explorerMenu().getByRole('menuitem', { name: 'Disable', exact: true }).click(fast)
+  await chooseLogin('AppUser', 'Disable')
   await expect.poll(async () => (await prompts()).length).toBe(promptCount + 1)
   expect((await prompts()).at(-1)).toEqual({ title: 'Disable Login', message: 'Disable the login AppUser?', buttons: ['Disable', 'Cancel'], defaultId: 0, cancelId: 1,
     detail: 'New connections will be refused. 2 sessions connected as this login stay connected until they end; Activity Monitor can end them.' })
   await expect(notice()).toHaveText('Disabled the login AppUser. Its 2 open sessions stay connected.')
-  // Bound to the login whose facts the prompt was about (its SID and creation time).
+  // The request names the principal the facts describe (the stub's SID and creation time), which the backend checks before any DDL.
   expect((await stubCalls('actions.execute')).at(-1)).toEqual({ action: 'disable', connectionId: expect.any(String), requestId: expect.any(String), target: { kind: 'login', name: 'AppUser' },
     loginIdentity: { sid: '01', created: '2026-01-02T03:04:05.000' } })
-  await expect(async () => {
-    if (await explorerMenu().count()) await closeMenu()
-    expect(await menuOf(...logins, 'AppUser')).toEqual(['Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
-  }).toPass()
+  // The row follows once Logins is listed again; each read opens the row's menu afresh.
+  await expect.poll(async () => (await loginMenu('AppUser')).names).toEqual(['New Login…', 'Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
   // Enable runs at once; the notice says the login still may not connect while its CONNECT SQL is denied.
   await closeMenu()
-  await menuOf(...logins, 'Retired')
-  await explorerMenu().getByRole('menuitem', { name: 'Enable', exact: true }).click(fast)
+  await chooseLogin('Retired', 'Enable')
   await expect(notice()).toHaveText('Enabled the login Retired. Permission to connect is still denied.')
   expect((await prompts()).length).toBe(promptCount + 1)
   // The login this connection uses: refused before any prompt, and nothing runs.
   const executed = (await stubCalls('actions.execute')).length
-  await menuOf(...logins, 'sa')
-  await explorerMenu().getByRole('menuitem', { name: 'Disable', exact: true }).click(fast)
+  await chooseLogin('sa', 'Disable')
   await expect(commandBanner()).toHaveText('This is the login this connection uses. Connect with another login to change it.')
   expect([(await prompts()).length, (await stubCalls('actions.execute')).length]).toEqual([promptCount + 1, executed])
   await page.getByRole('button', { name: 'Dismiss command error', exact: true }).click()
   // A Disable waiting on a lock: the status bar shows it with Stop, which cancels it in the backend.
   await answer(0)
-  await menuOf(...logins, 'Held')
-  await explorerMenu().getByRole('menuitem', { name: 'Disable', exact: true }).click(fast)
+  await chooseLogin('Held', 'Disable')
   await expect(status).toContainText('Disabling Held…')
   const heldId = (await stubCalls('actions.execute')).at(-1).requestId
   await status.getByRole('button', { name: 'Stop disable', exact: true }).click()
@@ -943,8 +1583,7 @@ try {
   // locked out: OK is greyed.
   const unlockDialog = name => page.getByRole('dialog', { name: `Unlock Login - ${name}`, exact: true })
   const propertiesDialog = name => page.getByRole('dialog', { name: `Login Properties - ${name}`, exact: true })
-  await menuOf(...logins, 'Locked')
-  await explorerMenu().getByRole('menuitem', { name: 'Unlock…', exact: true }).click(fast)
+  await chooseLogin('Locked', 'Unlock…')
   await expect(objectDialogProgress(unlockDialog('Locked'))).toHaveText('Ready')
   const how = unlockDialog('Locked').getByRole('radiogroup', { name: 'How to unlock', exact: true })
   const setPassword = how.getByRole('radio', { name: 'Set a new password…', exact: true }), keep = how.getByRole('radio', { name: 'Keep the current password', exact: true })
@@ -990,8 +1629,7 @@ try {
   expect(JSON.stringify(await stubCalls('actions.script'))).not.toContain(unlockTyped)
   // Locked out again: Keep the current password unlocks it without a password.
   await application.evaluate(() => { globalThis.variaStub.logins.find(login => login.name === 'Locked').locked = true })
-  await menuOf(...logins, 'Locked')
-  await explorerMenu().getByRole('menuitem', { name: 'Unlock…', exact: true }).click(fast)
+  await chooseLogin('Locked', 'Unlock…')
   await expect(objectDialogProgress(unlockDialog('Locked'))).toHaveText('Ready')
   await keep.check()
   await expect(keep).toBeChecked()
@@ -1001,8 +1639,7 @@ try {
   expect((await stubCalls('actions.execute')).at(-1)).toEqual({ action: 'unlock', connectionId: expect.any(String), requestId: expect.any(String), target: { kind: 'login', name: 'Locked' },
     mode: 'keepPassword', loginIdentity: { sid: '01', created: '2026-01-02T03:04:05.000' } })
   const unlocks = (await stubCalls('actions.execute')).length
-  await menuOf(...logins, 'AppUser')
-  await explorerMenu().getByRole('menuitem', { name: 'Unlock…', exact: true }).click(fast)
+  await chooseLogin('AppUser', 'Unlock…')
   await expect(objectDialogProgress(unlockDialog('AppUser'))).toHaveText('Ready')
   await expect(unlockDialog('AppUser')).toContainText('This login is not locked out.')
   await expect(unlockDialog('AppUser').getByRole('button', { name: 'Continue in Login Properties…', exact: true })).toBeDisabled()
@@ -1015,10 +1652,9 @@ try {
   // denied) maps AppData, whose user and roles show; databases the describe did not read show Not read and cannot be mapped until
   // selected, which reads them with the login. A new default language is all that changed: Script and OK send only it, without
   // secrets.
-  await menuOf(...logins, 'Retired')
-  await explorerMenu().getByRole('menuitem', { name: 'Properties', exact: true }).click(fast)
+  await chooseLogin('Retired', 'Properties')
   await expect(objectDialogProgress(propertiesDialog('Retired'))).toHaveText('Ready')
-  expect(await propertiesDialog('Retired').getByRole('navigation', { name: 'Select a page', exact: true }).getByRole('button').allTextContents()).toEqual(['General', 'Server Roles', 'User Mapping', 'Status'])
+  expect(await propertiesDialog('Retired').getByRole('navigation', { name: 'Select a page', exact: true }).getByRole('button').allTextContents()).toEqual(['General', 'Server Roles', 'User Mapping', 'Securables', 'Status'])
   await expect(propertiesDialog('Retired').getByRole('textbox', { name: 'Login name', exact: true })).toHaveValue('Retired')
   await expect(passwordField(propertiesDialog('Retired'), 'Password')).toHaveValue('')
   await expect(propertiesDialog('Retired').getByRole('checkbox', { name: 'Specify old password', exact: true })).not.toBeChecked()
@@ -1032,13 +1668,13 @@ try {
   // Disabled asks first, as Disable does, since a service runs as Retired; Cancel (the default then) sends nothing.
   const retiredLogin = propertiesDialog('Retired').getByRole('radiogroup', { name: 'Login', exact: true })
   await retiredLogin.getByRole('radio', { name: 'Disabled', exact: true }).check()
-  const promptsBefore = (await prompts()).length, executesBefore = (await stubCalls('actions.execute')).length
+  const promptsBefore = (await prompts()).length, propertiesExecutes = (await stubCalls('actions.execute')).length
   await answer(1)
   await propertiesDialog('Retired').getByRole('button', { name: 'OK', exact: true }).click()
   await expect.poll(async () => (await prompts()).length).toBe(promptsBefore + 1)
   expect((await prompts()).at(-1)).toMatchObject({ title: 'Disable Login', message: 'Disable the login Retired?', buttons: ['Disable', 'Cancel'], defaultId: 1, cancelId: 1 })
   await expect(objectDialogProgress(propertiesDialog('Retired'))).toHaveText('Ready')
-  expect((await stubCalls('actions.execute')).length).toBe(executesBefore)
+  expect((await stubCalls('actions.execute')).length).toBe(propertiesExecutes)
   await retiredLogin.getByRole('radio', { name: 'Enabled', exact: true }).check()
   await propertiesDialog('Retired').getByRole('button', { name: 'User Mapping', exact: true }).click()
   const propertiesGrid = propertiesDialog('Retired').getByRole('grid', { name: 'Users mapped to this login:', exact: true })
@@ -1068,8 +1704,7 @@ try {
   expect((await stubCalls('actions.execute')).at(-1)).toEqual({ action: 'loginProperties', connectionId: expect.any(String), requestId: expect.any(String), target: { kind: 'login', name: 'Retired' },
     loginIdentity: { sid: '01', created: '2026-01-02T03:04:05.000' }, loginChanges: { defaultLanguage: 'Deutsch' } })
   // A Windows group: General names its kind, which the authentication choices do not; Status greys Disabled with the reason.
-  await menuOf(...logins, 'CONTOSO\\Ops')
-  await explorerMenu().getByRole('menuitem', { name: 'Properties', exact: true }).click(fast)
+  await chooseLogin('CONTOSO\\Ops', 'Properties')
   await expect(objectDialogProgress(propertiesDialog('CONTOSO\\Ops'))).toHaveText('Ready')
   await expect(propertiesDialog('CONTOSO\\Ops').getByRole('textbox', { name: 'Login name', exact: true })).toHaveAccessibleDescription('Windows group')
   // Map to Credential (D2e): a credential added in Mapped Credentials is all Script sends.
@@ -1086,13 +1721,82 @@ try {
   await expect(groupDisabled).toBeDisabled()
   await expect(groupDisabled).toHaveAccessibleDescription('A Windows group cannot be disabled. Deny it permission to connect on Login Properties › Status instead.')
   await expect(propertiesDialog('CONTOSO\\Ops').getByRole('radiogroup', { name: 'Permission to connect to database engine', exact: true }).getByRole('radio', { name: 'Deny', exact: true })).toBeEnabled()
+  // SQL Server cannot impersonate a group (15406), so its Effective tab says why and reads nothing.
+  await propertiesDialog('CONTOSO\\Ops').getByRole('button', { name: 'Securables', exact: true }).click()
+  await propertiesDialog('CONTOSO\\Ops').getByRole('button', { name: 'Search…', exact: true }).click()
+  await addObjects.getByRole('radio', { name: "The server 'STUB-SQL'", exact: true }).check()
+  await addObjects.getByRole('button', { name: 'OK', exact: true }).click()
+  await propertiesDialog('CONTOSO\\Ops').getByRole('tab', { name: 'Effective', exact: true }).click()
+  await expect(propertiesDialog('CONTOSO\\Ops').getByRole('tabpanel')).toHaveText("SQL Server cannot impersonate a group, or a login mapped to a certificate or an asymmetric key, so it cannot show this login's effective permissions.")
+  expect((await stubCalls('actions.describe')).filter(call => call.dialog === 'loginEffectivePermissions' && call.target.name === 'CONTOSO\\Ops')).toEqual([])
   await propertiesDialog('CONTOSO\\Ops').getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(propertiesDialog('CONTOSO\\Ops')).toHaveCount(0)
+  // Securables (D2d) on Login Properties: AppUser's explicit permissions with their grantor, by type then name. Effective reads what
+  // the login may do on the selected securable, once per securable; clearing With Grant on IMPERSONATE sends REVOKE GRANT OPTION FOR.
+  await chooseLogin('AppUser', 'Properties')
+  const appUser = propertiesDialog('AppUser')
+  await expect(objectDialogProgress(appUser)).toHaveText('Ready')
+  await appUser.getByRole('button', { name: 'Securables', exact: true }).click()
+  const ownSecurables = appUser.getByRole('grid', { name: 'Securables:', exact: true })
+  await expect(ownSecurables.getByRole('gridcell')).toHaveText(['STUB-SQL', 'Server', 'Held', 'Login'])
+  const ownExplicit = appUser.getByRole('grid', { name: 'Explicit permissions', exact: true })
+  await expect(ownExplicit.getByRole('checkbox', { name: 'Grant VIEW SERVER STATE', exact: true })).toBeChecked()
+  expect(await ownExplicit.getByRole('row').filter({ hasText: 'VIEW SERVER STATE' }).getByRole('gridcell').allTextContents()).toEqual(['VIEW SERVER STATE', 'sa', '', '', ''])
+  await appUser.getByRole('tab', { name: 'Effective', exact: true }).click()
+  const effectiveList = appUser.getByRole('list', { name: 'Effective permissions', exact: true })
+  await expect(effectiveList.getByRole('listitem')).toHaveText(['CONNECT SQL', 'VIEW SERVER STATE'])
+  await ownSecurables.getByRole('row').filter({ hasText: 'Held' }).click()
+  await expect(effectiveList.getByRole('listitem')).toHaveText(['IMPERSONATE'])
+  expect((await stubCalls('actions.describe')).filter(call => call.dialog === 'loginEffectivePermissions').map(call => [call.target.name, call.securable]))
+    .toEqual([['AppUser', { type: 'server' }], ['AppUser', { type: 'login', name: 'Held' }]])
+  // A partial run (the language changes, then the server's policy refuses "Weak") reloads the login, which forgets what Effective read:
+  // the tab, still showing Held, reads it again rather than waiting on a read nobody sent.
+  await appUser.getByRole('button', { name: 'General', exact: true }).click()
+  await appUser.getByRole('combobox', { name: 'Default language', exact: true }).selectOption('Deutsch')
+  for (const label of ['Password', 'Confirm password']) await passwordField(appUser, label).fill('Weak')
+  await appUser.getByRole('button', { name: 'Securables', exact: true }).click()
+  await appUser.getByRole('tab', { name: 'Effective', exact: true }).click()
+  await expect(effectiveList.getByRole('listitem')).toHaveText(['IMPERSONATE'])
+  await appUser.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(appUser.getByRole('alert').filter({ hasText: 'Password validation failed.' })).toBeVisible()
+  await expect.poll(async () => (await stubCalls('actions.describe')).filter(call => call.dialog === 'loginEffectivePermissions').length).toBe(3)
+  await expect(effectiveList.getByRole('listitem')).toHaveText(['IMPERSONATE'])
+  expect((await stubCalls('actions.describe')).filter(call => call.dialog === 'loginEffectivePermissions').at(-1)).toMatchObject({ target: { name: 'AppUser' }, securable: { type: 'login', name: 'Held' } })
+  await appUser.getByRole('button', { name: 'General', exact: true }).click()
+  await appUser.getByRole('combobox', { name: 'Default language', exact: true }).selectOption('us_english')
+  for (const label of ['Password', 'Confirm password']) await passwordField(appUser, label).fill('')
+  await appUser.getByRole('button', { name: 'Securables', exact: true }).click()
+  await appUser.getByRole('tab', { name: 'Explicit', exact: true }).click()
+  await expect(ownExplicit.getByRole('checkbox', { name: 'With Grant IMPERSONATE', exact: true })).toBeChecked()
+  await ownExplicit.getByRole('checkbox', { name: 'With Grant IMPERSONATE', exact: true }).uncheck()
+  await expect(ownExplicit.getByRole('checkbox', { name: 'Grant IMPERSONATE', exact: true })).toBeChecked()
+  const revokeOption = { permissions: [{ securable: { type: 'login', name: 'Held' }, permission: 'IMPERSONATE', state: 'revokeGrantOption' }] }
+  await appUser.getByRole('button', { name: 'Script', exact: true }).click()
+  await expect.poll(async () => (await stubCalls('actions.script')).at(-1)?.target?.name).toBe('AppUser')
+  expect((await stubCalls('actions.script')).at(-1)).toMatchObject({ action: 'loginProperties', loginChanges: revokeOption })
+  await appUser.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(appUser).toHaveCount(0)
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'loginProperties', target: { kind: 'login', name: 'AppUser' }, loginChanges: revokeOption })
+  // Held refuses EXECUTE AS LOGIN: the Effective tab says so as a value, with Retry.
+  await chooseLogin('Held', 'Properties')
+  const heldDialog = propertiesDialog('Held')
+  await expect(objectDialogProgress(heldDialog)).toHaveText('Ready')
+  await heldDialog.getByRole('button', { name: 'Securables', exact: true }).click()
+  await heldDialog.getByRole('button', { name: 'Search…', exact: true }).click()
+  await addObjects.getByRole('radio', { name: "The server 'STUB-SQL'", exact: true }).check()
+  await addObjects.getByRole('button', { name: 'OK', exact: true }).click()
+  await heldDialog.getByRole('tab', { name: 'Effective', exact: true }).click()
+  await expect(heldDialog.getByRole('alert')).toContainText("You don't have permission to view effective permissions.")
+  await expect(heldDialog.getByRole('button', { name: 'Retry', exact: true })).toBeVisible()
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-login-securables-dark.png') })
+  await heldDialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(heldDialog).toHaveCount(0)
   // SQL Server's own login: every page says why it cannot change, its controls are greyed, and so is OK.
-  await menuOf(...logins, '##MS_PolicyTsqlExecutionLogin##')
-  await explorerMenu().getByRole('menuitem', { name: 'Properties', exact: true }).click(fast)
+  await chooseLogin('##MS_PolicyTsqlExecutionLogin##', 'Properties')
   const systemDialog = propertiesDialog('##MS_PolicyTsqlExecutionLogin##')
   await expect(objectDialogProgress(systemDialog)).toHaveText('Ready')
+  // SSMS hides Securables for SQL Server's own logins (D2 §4), and so does Varia.
+  expect(await systemDialog.getByRole('navigation', { name: 'Select a page', exact: true }).getByRole('button').allTextContents()).toEqual(['General', 'Server Roles', 'User Mapping', 'Status'])
   for (const pageName of ['General', 'Server Roles', 'User Mapping', 'Status']) {
     await systemDialog.getByRole('button', { name: pageName, exact: true }).click()
     await expect(systemDialog.getByRole('list', { name: 'Notes', exact: true })).toContainText('This login belongs to SQL Server and cannot be changed.')
@@ -1136,15 +1840,10 @@ try {
   // 8b. A login's Delete (D4c): greyed for sa; Delete Object lists the users mapped to a login (a schema owner as kept), the
   // databases it could not check, SSMS's orphan note and the option to delete the users too, which Script and OK send with the
   // identity of the login it read. A login with sessions is refused with the dialog kept; another is deleted and leaves Logins.
-  // Logins may still be reloading after the rename, so the press repeats until sa's menu opens.
-  await expect(async () => {
-    if (await explorerMenu().count()) await closeMenu()
-    expect(await menuOf(...logins, 'sa')).toEqual(['Script Login as', 'Copy Name', 'Disable', 'Rename', 'Delete', 'Refresh', 'Properties'])
-  }).toPass()
-  expect(await disabled()).toEqual(['Delete'])
+  // Logins may still be reloading after the rename; each read opens sa's menu afresh.
+  await expect.poll(() => loginMenu('sa')).toEqual({ names: ['New Login…', 'Script Login as', 'Copy Name', 'Disable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'], disabled: ['Delete'] })
   await closeMenu()
-  await menuOf(...logins, 'AppOwner')
-  await explorerMenu().getByRole('menuitem', { name: 'Delete', exact: true }).click(fast)
+  await chooseLogin('AppOwner', 'Delete')
   await expect(objectDialogProgress(dialog())).toHaveText('Ready')
   await expect(dialog().getByRole('grid').locator('tbody td')).toHaveText(['AppOwner', 'Login', '', '', ''])
   const sessionsWarning = '2 sessions are connected as this login; the DROP fails until they end. Activity Monitor can end them.'
@@ -1174,13 +1873,12 @@ try {
   await dialog().getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(dialog()).toHaveCount(0)
   // The script went to the new query window: each droppable user's DROP in its database, then the login's (a schema owner's is not there).
-  const scripted = async () => (await editorText(page)).replaceAll('\u00a0', ' ')
-  await expect.poll(scripted).toContain('DROP USER [AppUser]')
-  expect(await scripted()).toContain('DROP LOGIN [AppOwner]')
-  expect(await scripted()).not.toContain('app_owner')
+  const loginScript = async () => (await editorText(page)).replaceAll('\u00a0', ' ')
+  await expect.poll(loginScript).toContain('DROP USER [AppUser]')
+  expect(await loginScript()).toContain('DROP LOGIN [AppOwner]')
+  expect(await loginScript()).not.toContain('app_owner')
   // Held has no user mapped and every database was checked: no orphan note, and the option is greyed, saying why.
-  await menuOf(...logins, 'Held')
-  await explorerMenu().getByRole('menuitem', { name: 'Delete', exact: true }).click(fast)
+  await chooseLogin('Held', 'Delete')
   await expect(objectDialogProgress(dialog())).toHaveText('Ready')
   await expect(dialog().getByText('No database user is mapped to this login.', { exact: true })).toBeVisible()
   await expect(dialog().getByText(/^Deleting a login does not delete/)).toHaveCount(0)
@@ -1190,8 +1888,7 @@ try {
   await expect(dialog()).toHaveCount(0)
   // CONTOSO\Ops: its user is dropped, then the login's DROP fails (a session signed in meanwhile). The step names the user it
   // dropped, and the page reads the login again, so the user leaves the list and the option is greyed, while the failure stays.
-  await menuOf(...logins, 'CONTOSO\\Ops')
-  await explorerMenu().getByRole('menuitem', { name: 'Delete', exact: true }).click(fast)
+  await chooseLogin('CONTOSO\\Ops', 'Delete')
   await expect(objectDialogProgress(dialog())).toHaveText('Ready')
   await expect(objectDialogMappedUsers(dialog())).toHaveText(['AppData: ops'])
   await dropUsers().check()
@@ -1208,8 +1905,7 @@ try {
   await expect(dialog()).toHaveCount(0)
   // Retired has no sessions: OK drops its user, then the login, and Logins reloads without it. SQL Server Agent runs as it: a
   // note, with the info icon, not a warning.
-  await menuOf(...logins, 'Retired')
-  await explorerMenu().getByRole('menuitem', { name: 'Delete', exact: true }).click(fast)
+  await chooseLogin('Retired', 'Delete')
   await expect(objectDialogProgress(dialog())).toHaveText('Ready')
   await expect(objectDialogWarnings(dialog())).toHaveText(['SQL Server Agent (MSSQLSERVER) runs as this account.'])
   expect(await objectDialogWarningIcons(dialog()).evaluateAll(icons => icons.map(icon => icon.getAttribute('aria-label')))).toEqual(['Note'])
@@ -1221,15 +1917,225 @@ try {
   await expect(explorerTree(page).locator(part.explorerLabel, { hasText: /^Retired$/ })).toHaveCount(0)
   console.log('Object action checks: a login\'s Delete is greyed for sa; Delete Object lists its mapped users, what it could not check and the orphan note, Script and OK send the option with the login\'s identity, sessions keep the dialog with IN_USE, a login with no user greys the option with why, a partial failure reads the login again, a note is not a warning, and a Delete leaves Logins.')
 
-  // A database row's menu item. Databases may have just reloaded (after Database Properties' Apply, or a Delete), so the press
-  // repeats until its row's menu opens.
-  const databaseItem = async (path, item) => {
-    await expect(async () => {
-      await (await revealExplorerRow(page, ...path)).click({ button: 'right', force: true })
-      await expect(explorerMenu()).toBeVisible({ timeout: 1000 })
-    }).toPass()
-    await explorerMenu().getByRole('menuitem', { name: item, exact: true }).click(fast)
+  // 9. Tasks › Take Offline and Bring Online (D3a). The submenu greys by the listing's state; Take Database Offline lists the
+  // sessions in the database (one in a transaction, which Drop All Active Connections rolls back) and keeps OK disabled, saying
+  // why, until the box is checked or Check Again finds none; Script Action shows SET OFFLINE; Success leaves Close, focused, and
+  // Databases lists it "(Offline)". A SET OFFLINE that waits on a session says so and Stops; Bring Online runs as it opens.
+  const offlineDialog = () => page.getByRole('dialog', { name: 'Take Database Offline - AppData', exact: true })
+  const onlineDialog = () => page.getByRole('dialog', { name: 'Bring Database Online - AppData', exact: true })
+  const stateCells = dialog => dialog.getByRole('grid', { name: 'Databases', exact: true }).locator('tbody td')
+  const dropBox = () => offlineDialog().getByLabel('Drop All Active Connections', { exact: true })
+  const okButton = dialog => dialog.getByRole('button', { name: 'OK', exact: true })
+  /** The row's Status chip shows its whole label: its width is the column's CSS share, never the font's. */
+  const statusChipFits = async dialog => {
+    const label = stateCells(dialog).nth(2).locator(part.statusPillLabel)
+    await expect(label).toHaveCount(1)
+    return label.evaluate(element => element.scrollWidth <= element.clientWidth)
   }
+  /** Tasks › an item on AppData; Databases may be reloading, so the helpers press until the row's own menu opens. */
+  const task = async (name, states) => {
+    expect((await explorerSubmenuItems(page, appData, ['Tasks'])).disabled, 'greyed Tasks items').toEqual(states)
+    await chooseExplorerMenuItem(page, appData, ['Tasks', name])
+  }
+  await task('Take Offline', ['Bring Online'])
+  await expect(offlineDialog()).toBeVisible()
+  await expect(objectDialogProgress(offlineDialog())).toHaveText('Ready')
+  await expect(stateCells(offlineDialog())).toHaveText(['AppData', '', 'Not ready', '2 active connections (1 with an open transaction)'])
+  await expect(offlineDialog().getByRole('grid', { name: 'Sessions', exact: true }).locator('tbody tr')).toHaveText(stubSessions.map(session => [session.sessionId, session.login, session.program, session.host, session.openTransactions].join('')))
+  await expect(offlineDialog().getByRole('note').first()).toHaveText('Drop All Active Connections rolls back the open transaction of 1 session.')
+  await expect(okButton(offlineDialog())).toBeDisabled()
+  await expect(okButton(offlineDialog())).toHaveAccessibleDescription('2 sessions are connected: check Drop All Active Connections, or Check Again once they leave.')
+  // The chip fits its column, with the border forced colours add too; a session's names are in full on hover.
+  expect(await statusChipFits(offlineDialog()), 'the Not ready chip fits').toBe(true)
+  await page.emulateMedia({ forcedColors: 'active' })
+  expect(await statusChipFits(offlineDialog()), 'the Not ready chip fits under forced colours').toBe(true)
+  await page.emulateMedia({ forcedColors: 'none' })
+  await expect(offlineDialog().getByRole('grid', { name: 'Sessions', exact: true }).getByRole('gridcell', { name: stubSessions[0].program, exact: true })).toHaveAttribute('title', stubSessions[0].program)
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-take-offline-dark.png') })
+  // Script Action shows the statement OK would run, with ROLLBACK IMMEDIATE only once the box is checked.
+  await dropBox().check()
+  await expect(okButton(offlineDialog())).toBeEnabled()
+  await expect(stateCells(offlineDialog()).nth(2)).toHaveText('Ready')
+  await offlineDialog().getByRole('button', { name: 'Script options', exact: true }).click()
+  await offlineDialog().getByRole('option', { name: 'Script Action to Clipboard', exact: true }).click()
+  await expect.poll(clipboard).toBe(offlineScript(true))
+  expect((await stubCalls('actions.script')).at(-1)).toMatchObject({ action: 'takeOffline', target: { kind: 'database', name: 'AppData' }, dropConnections: true })
+  // Check Again: the sessions left meanwhile, so OK runs without dropping anyone; one that joined since holds SET OFFLINE,
+  // which the row says once it has waited a moment, and Stop leaves the database online.
+  await dropBox().uncheck()
+  await application.evaluate(() => { globalThis.variaStub.sessions = []; globalThis.variaStub.holding = true })
+  await offlineDialog().getByRole('button', { name: 'Check Again', exact: true }).click()
+  await expect(stateCells(offlineDialog())).toHaveText(['AppData', '', 'Ready', 'No active connections.'])
+  await expect(dropBox()).toBeDisabled()
+  // Enter on OK: OK disables itself as the run starts, so focus moves to Stop, the only way out of a wait.
+  await okButton(offlineDialog()).focus()
+  await page.keyboard.press('Enter')
+  await expect(offlineDialog().getByRole('button', { name: 'Stop', exact: true })).toBeFocused()
+  await expect(stateCells(offlineDialog()).nth(3)).toHaveText('Waiting for other connections to leave the database. Stop to give up.')
+  expect(await stateCells(offlineDialog()).nth(3).evaluate(cell => cell.firstElementChild?.getAttribute('aria-live')), 'the waiting message is announced').toBe('polite')
+  await expect(stateCells(offlineDialog()).nth(2)).toHaveText('In progress')
+  expect(await statusChipFits(offlineDialog()), 'the In progress chip fits').toBe(true)
+  await page.emulateMedia({ forcedColors: 'active' })
+  expect(await statusChipFits(offlineDialog()), 'the In progress chip fits under forced colours').toBe(true)
+  await page.emulateMedia({ forcedColors: 'none' })
+  await offlineDialog().getByRole('button', { name: 'Stop', exact: true }).click()
+  await expect(objectDialogProgress(offlineDialog())).toHaveText('Stopped')
+  // The count read before OK no longer holds: a session held the database.
+  await expect(stateCells(offlineDialog())).toHaveText(['AppData', '', 'Stopped', 'Stopped. Check Again to see who is connected now.'])
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'takeOffline', dropConnections: false, identity: { id: 7, created: '2026-01-02T03:04:05.000' } })
+  // OK again once nothing holds it: Success, the steps, and Close as the one button, focused.
+  await application.evaluate(() => { globalThis.variaStub.holding = false })
+  await okButton(offlineDialog()).click()
+  await expect(objectDialogProgress(offlineDialog())).toHaveText('Success')
+  await expect(stateCells(offlineDialog())).toHaveText(['AppData', '', 'Success', 'The database is offline.'])
+  await expect(okButton(offlineDialog())).toHaveCount(0)
+  await expect(offlineDialog().getByRole('button', { name: 'Close', exact: true })).toBeFocused()
+  // Only Close is left to act: Script and its options are greyed.
+  await expect(offlineDialog().getByRole('button', { name: 'Script', exact: true })).toBeDisabled()
+  await expect(offlineDialog().getByRole('button', { name: 'Script options', exact: true })).toBeDisabled()
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-take-offline-success-dark.png') })
+  await page.keyboard.press('Enter')
+  await expect(offlineDialog()).toHaveCount(0)
+  await expect(explorerTree(page).getByRole('treeitem', { name: /^AppData\b.*Offline/ })).toHaveCount(1)
+  // F2 on the offline database: Rename is greyed, and the key says why, as a notice rather than a failure, instead of doing nothing.
+  await select(...appData)
+  await page.keyboard.press('F2')
+  await expect(warningBanner()).toHaveText('Rename is unavailable: the database must be online to be renamed.')
+  await expect(commandBanner()).toHaveCount(0)
+  await expect(renameBox(page)).toHaveCount(0)
+  await page.getByRole('button', { name: 'Dismiss warning', exact: true }).click()
+  await expect(warningBanner()).toHaveCount(0)
+  // Offline: Take Offline greys and Bring Online runs as soon as its dialog has read the database.
+  await task('Bring Online', ['Take Offline'])
+  await expect(objectDialogProgress(onlineDialog())).toHaveText('Success')
+  await expect(stateCells(onlineDialog())).toHaveText(['AppData', 'Success', 'The database is online.'])
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'bringOnline', target: { kind: 'database', name: 'AppData' } })
+  await onlineDialog().getByRole('button', { name: 'Close', exact: true }).click()
+  await expect(onlineDialog()).toHaveCount(0)
+  await expect(explorerTree(page).getByRole('treeitem', { name: /^AppData\b.*Offline/ })).toHaveCount(0)
+  console.log('Object action checks: Tasks › Take Offline lists the sessions and open transactions, holds OK until Drop All Active Connections or Check Again, scripts SET OFFLINE, Stops a wait and stays open on Success; Bring Online runs as it opens.')
+
+  // Tasks › Detach… (D3b). Detach Database lists AppData with Drop Connections and Update Statistics (both unchecked, as SSMS
+  // opens it) and the files that stay on the server; OK waits for Drop Connections while sessions are connected. Script Action
+  // shows SINGLE_USER and sp_detach_db's @skipchecks; Success stays open on its steps, AppData leaves Databases, and a toast says
+  // its files stay on the server, with Copy paths.
+  const detachDialog = () => page.getByRole('dialog', { name: 'Detach Database - AppData', exact: true })
+  const detachRow = () => detachDialog().getByRole('grid', { name: 'Databases to detach', exact: true }).locator('tbody td')
+  const detachDrop = () => detachDialog().getByLabel('Drop Connections', { exact: true })
+  const detachStatistics = () => detachDialog().getByLabel('Update Statistics', { exact: true })
+  const filePaths = detachFiles.map(file => file.path)
+  await application.evaluate((_electron, sessions) => { globalThis.variaStub.sessions = sessions }, stubSessions)
+  await task('Detach…', ['Bring Online'])
+  await expect(objectDialogProgress(detachDialog())).toHaveText('Ready')
+  await expect(detachRow()).toHaveText(['AppData', '', '', 'Not ready', '2 active connections (1 with an open transaction)'])
+  await expect(detachDrop()).not.toBeChecked()
+  await expect(detachStatistics()).not.toBeChecked()
+  await expect(detachDialog().getByRole('note').first()).toHaveText('Drop Connections rolls back the open transaction of 1 session.')
+  // A read-only table, not a grid: it has no cells to move between.
+  await expect(detachDialog().getByRole('table', { name: 'Files that stay on the server', exact: true }).locator('tbody tr'))
+    .toHaveText(detachFiles.map(file => file.name + { rows: 'ROWS Data', log: 'LOG' }[file.type] + file.path))
+  await expect(okButton(detachDialog())).toBeDisabled()
+  await expect(okButton(detachDialog())).toHaveAccessibleDescription('2 sessions are connected: check Drop Connections, or Check Again once they leave.')
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-detach-dark.png') })
+  await detachDrop().check()
+  await detachStatistics().check()
+  await expect(okButton(detachDialog())).toBeEnabled()
+  await expect(detachRow().nth(3)).toHaveText('Ready')
+  // Enter on the closed Sessions list opens it, as a disclosure does, and never runs the detach.
+  const detachSessions = () => detachDialog().getByText(/^Sessions in AppData \(2\)$/)
+  const executesBefore = (await stubCalls('actions.execute')).length
+  await expect(detachDialog().getByRole('grid', { name: 'Sessions', exact: true })).toBeHidden()
+  await detachSessions().focus()
+  await page.keyboard.press('Enter')
+  await expect(detachDialog().getByRole('grid', { name: 'Sessions', exact: true })).toBeVisible()
+  await expect(objectDialogProgress(detachDialog())).toHaveText('Ready')
+  expect((await stubCalls('actions.execute')).length).toBe(executesBefore)
+  await detachDialog().getByRole('button', { name: 'Script options', exact: true }).click()
+  await detachDialog().getByRole('option', { name: 'Script Action to Clipboard', exact: true }).click()
+  await expect.poll(clipboard).toBe(detachScript(true, true))
+  expect((await stubCalls('actions.script')).at(-1)).toMatchObject({ action: 'detach', target: { kind: 'database', name: 'AppData' }, dropConnections: true, updateStatistics: true })
+  // The dialog's Copy paths copies one path per line.
+  await detachDialog().getByRole('button', { name: 'Copy paths', exact: true }).click()
+  await expect.poll(clipboard).toBe(filePaths.join('\n'))
+  await detachStatistics().uncheck()
+  await okButton(detachDialog()).click()
+  await expect(objectDialogProgress(detachDialog())).toHaveText('Success')
+  await expect(detachRow()).toHaveText(['AppData', '', '', 'Success', 'The database was detached.'])
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'detach', dropConnections: true, updateStatistics: false, identity: { id: 7, created: '2026-01-02T03:04:05.000' } })
+  expect((await stubCalls('actions.execute')).at(-1)).not.toHaveProperty('detachOffline')
+  await expect(okButton(detachDialog())).toHaveCount(0)
+  await expect(detachDialog().getByRole('button', { name: 'Close', exact: true })).toBeFocused()
+  // The database is gone: no word on its sessions or what closing them rolls back, and the boxes change nothing now.
+  await expect(detachSessions()).toHaveCount(0)
+  await expect(detachDialog().getByRole('note')).toHaveCount(0)
+  await expect(detachDrop()).toBeDisabled()
+  await expect(detachStatistics()).toBeDisabled()
+  const detachedToast = toasts(page).filter({ hasText: 'AppData was detached.' })
+  await expect(toastMessage(detachedToast)).toContainText('AppData was detached. Its 2 files stay on the server.')
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-detach-success-dark.png') })
+  await page.keyboard.press('Enter')
+  await expect(detachDialog()).toHaveCount(0)
+  await expect(explorerTree(page).getByRole('treeitem', { name: /^AppData\b/ })).toHaveCount(0)
+  await application.evaluate(({ clipboard }) => clipboard.writeText(''))
+  await detachedToast.getByRole('button', { name: 'Copy paths', exact: true }).click()
+  await expect.poll(clipboard).toBe(filePaths.join('\n'))
+  // Attached again (as another tool would): Refresh on Databases lists it once more for the checks below.
+  await application.evaluate(() => { globalThis.variaStub.databases = ['AppData', ...globalThis.variaStub.databases.filter(name => name !== 'AppData')] })
+  await expect(async () => {
+    await chooseExplorerMenuItem(page, ['server-a', 'Databases'], 'Refresh')
+    await expect(explorerTree(page).getByRole('treeitem', { name: /^AppData\b/ })).toHaveCount(1, { timeout: 2000 })
+  }).toPass()
+  console.log('Object action checks: Tasks › Detach… lists the sessions and the files that stay, holds OK until Drop Connections, scripts SINGLE_USER and sp_detach_db, stays open on Success, removes AppData and toasts with Copy paths.')
+
+  // Rename of a database (D3c): F2 reads the database first; another session is using it, so main's prompt asks (the test
+  // answers Close Connections and Rename), and the rename closes connections. The tree, a query window on the database and its
+  // Database Properties document follow the new name; renaming it back with no session asks nothing.
+  // Billing is a name no database in the stub has (New Database made Sales, and the stub refuses a name in use, as the backend does).
+  await chooseExplorerMenuItem(page, appData, 'Properties')
+  await expect(documentTab(page, 'Database Properties - AppData')).toHaveCount(1)
+  await chooseExplorerMenuItem(page, appData, 'New Query')
+  await expect(queryDatabase(page)).toHaveValue('AppData')
+  const asked = (await application.evaluate(() => globalThis.variaStub.prompts)).length
+  await application.evaluate(() => { globalThis.variaStub.renameSessions = 1; globalThis.variaStub.answers.push(0) })
+  await select(...appData)
+  await page.keyboard.press('F2')
+  await expect(renameBox(page)).toBeFocused()
+  await expect(renameBox(page)).toHaveValue('AppData')
+  await renameBox(page).fill('Billing')
+  await page.keyboard.press('Enter')
+  await expect(explorerTree(page).getByRole('treeitem', { name: /^Billing\b/ })).toHaveCount(1)
+  expect((await application.evaluate(() => globalThis.variaStub.prompts)).slice(asked)).toEqual([{ title: 'Rename Database', message: '1 connection is using AppData. Close it and rename the database?',
+    buttons: ['Close Connections and Rename', 'Rename When Free', 'Cancel'], defaultId: 0, cancelId: 2 }])
+  // The rename's describe, then Database Properties reading the database again under its new name.
+  expect((await stubCalls('actions.describe')).filter(call => call.dialog === 'renameDatabase').at(-1)).toMatchObject({ target: { kind: 'database', name: 'AppData' } })
+  await expect.poll(async () => (await stubCalls('actions.describe')).at(-1)).toMatchObject({ dialog: 'databaseProperties', target: { kind: 'database', name: 'Billing' } })
+  expect((await stubCalls('actions.execute')).at(-1)).toEqual({ action: 'rename', connectionId: expect.any(String), requestId: expect.any(String), target: { kind: 'database', name: 'AppData' },
+    newName: 'Billing', closeConnections: true, identity: { id: 7, created: '2026-01-02T03:04:05.000' } })
+  await expect(explorerTree(page).getByRole('treeitem', { name: /^AppData\b/ })).toHaveCount(0)
+  await expect(queryDatabase(page)).toHaveValue('Billing')
+  await expect(documentTab(page, 'Database Properties - Billing')).toHaveCount(1)
+  await expect(documentTab(page, 'Database Properties - AppData')).toHaveCount(0)
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-rename-database-dark.png') })
+  // Back to AppData, which no other session uses: no prompt, and MODIFY NAME alone.
+  await application.evaluate(() => { globalThis.variaStub.renameSessions = 0 })
+  await select('server-a', 'Databases', 'Billing')
+  await page.keyboard.press('F2')
+  await expect(renameBox(page)).toBeFocused()
+  await renameBox(page).fill('AppData')
+  await page.keyboard.press('Enter')
+  await expect(explorerTree(page).getByRole('treeitem', { name: /^AppData\b/ })).toHaveCount(1)
+  await expect(documentTab(page, 'Database Properties - AppData')).toHaveCount(1)
+  await expect(queryDatabase(page)).toHaveValue('AppData')
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'rename', target: { kind: 'database', name: 'Billing' }, newName: 'AppData', closeConnections: false })
+  expect((await application.evaluate(() => globalThis.variaStub.prompts)).length).toBe(asked + 1)
+  await closeDocumentButton(page, 'Database Properties - AppData').click()
+  await expect(documentTab(page, 'Database Properties - AppData')).toHaveCount(0)
+  await expect(explorerTree(page)).toHaveAttribute('aria-busy', 'false')
+  console.log('Object action checks: F2 on a database another session uses asks before closing connections, then the tree, a query window and Database Properties follow the new name; with no session it renames at once.')
+
+  // A database row's menu item. Databases may have just reloaded (after Database Properties' Apply, or a Delete), so the
+  // helper presses until its row's own menu opens.
+  const databaseItem = (path, item) => chooseExplorerMenuItem(page, path, item)
 
   // 6a. D3d: offline Archive's Delete Object says that its files stay on disk and counts the query window on it. Deleting it
   // drops it from Databases, a toast counts that window, and its Properties document turns orphan with only Close.
@@ -1269,8 +2175,13 @@ try {
   console.log('Object action checks: an offline database\'s Delete Object warns that its files stay, and deleting it leaves a toast for its query window and an orphaned Properties document with Close.')
 
   // 6. A database: SSMS's two options (backup history checked, Close existing connections not), the sessions using it and
-  // how many hold a transaction that closing them rolls back, then a lost server leaves only Close.
-  await databaseItem(appData, 'Delete')
+  // how many hold a transaction that closing them rolls back, then a lost server leaves only Close. The right-click can
+  // scroll AppData into view first. Chromium sends that scroll's event with a later frame, which must not close the menu:
+  // on a Windows run it did, and the forced click on Delete selected the row under the closed menu instead.
+  await openExplorerMenu(page, ...appData)
+  await explorerTree(page).evaluate(tree => { tree.dispatchEvent(new Event('scroll')) })
+  await expect(explorerMenu()).toBeVisible()
+  await chooseExplorerMenuItem(page, appData, 'Delete')
   await expect(objectDialogProgress(dialog())).toHaveText('Ready')
   await expect(historyOption()).toBeChecked()
   await expect(closeOption()).not.toBeChecked()
@@ -1314,7 +2225,7 @@ try {
   console.log('Object action checks: a database\'s Delete Object offers SSMS\'s options with their defaults, and a lost server leaves only Close.')
 
   expect(failures).toEqual([])
-  console.log('Object action checks passed: menus, Select Top for views, inline Rename, the Delete Object dialog with Script and errors, Database Properties, a login\'s Disable, Enable, Rename and Delete, database options, and a lost server.')
+  console.log('Object action checks passed: menus, Select Top for views, inline Rename (a database\'s with its prompt), the Delete Object dialog with Script and errors, Database Properties, a login\'s Disable, Enable, Rename and Delete, database options, and a lost server.')
 } catch (error) {
   await page?.screenshot({ path: resolve('artifacts', 'object-actions-failure.png') }).catch(() => {})
   throw error

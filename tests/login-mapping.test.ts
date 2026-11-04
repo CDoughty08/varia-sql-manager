@@ -14,6 +14,7 @@ import { mappingRange, unavailableChip, userMappingRowHeight } from '../src/rend
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { ConnectionService } from '../src/renderer/src/services/connections'
 import { deferred } from './fixtures/documents'
+import { securablesModel } from './fixtures/securables'
 import { connectionInfo, connectionOptions } from './fixtures/workbench'
 
 const cleanups: (() => void)[] = []
@@ -28,7 +29,8 @@ const model = (): NewLoginModel => ({
     { name: 'Old', state: 6, accessible: false, readOnly: false }, { name: 'Sales', state: 0, accessible: true, readOnly: false }, { name: 'Shelf', state: 0, accessible: true, readOnly: true }
   ],
   databasesTruncated: false, languages: [], serverRoles: [{ name: 'public', fixed: true }], serverRolesTruncated: false,
-  certificates: [], certificatesTruncated: false, asymmetricKeys: [], asymmetricKeysTruncated: false, credentials: [], credentialsTruncated: false
+  certificates: [], certificatesTruncated: false, asymmetricKeys: [], asymmetricKeysTruncated: false, credentials: [], credentialsTruncated: false,
+  securables: securablesModel()
 })
 const draft = (changes: Partial<NewLoginDraft> = {}): NewLoginDraft => ({ ...initialNewLoginDraft(model()), auth: 'sql', name: 'app', ...changes })
 const set: SecretState = { password: 'set', matches: true, wellFormed: true, tooLong: false }
@@ -67,7 +69,7 @@ describe('User Mapping in the request schemas', () => {
   })
   it('counts the statements a plan can run as C# does: CREATE LOGIN, Deny, Disable, server roles, and per mapping a user, two for a schema and one per role', () => {
     expect(newLoginStatements({ serverRoles: ['sysadmin'], status: { connect: 'deny', enabled: false }, mappings: [{ defaultSchema: 's', rolesAdd: ['a', 'b', 'c'] }, { rolesAdd: [] }] })).toBe(1 + 1 + 1 + 1 + (1 + 2 + 3) + 1)
-    expect(tooManyStatementsMessage(512)).toBe('This login would need more than 512 statements. Map fewer databases, or apply the rest afterwards.')
+    expect(tooManyStatementsMessage(512)).toBe('This login would need more than 512 statements. Map fewer databases or change fewer permissions, or apply the rest afterwards.')
   })
   it('reads a database\'s roles for any database, SQL Server\'s own included, and nothing else', () => {
     const describe = (target: unknown) => actionDescribeSchema.safeParse({ ...ids(), dialog: loginDatabaseRolesDescribe, target }).success
@@ -293,7 +295,7 @@ describe('User Mapping in the object dialog service', () => {
     expect(explorer.reconcile).toHaveBeenCalledTimes(2)
   })
   it('reloads the mapped databases\' Users folders after a run that created the login and then stopped', () => {
-    const effects = { refreshListing: vi.fn(), reveal: vi.fn(), reload: vi.fn(), notify: vi.fn() }
+    const effects = { refreshListing: vi.fn(), reveal: vi.fn(), reload: vi.fn(), databaseState: vi.fn(), notify: vi.fn() }
     newLoginDefinition.afterPartial!(effects, { ...create({ mappings: [{ database: 'Sales', user: 'u', rolesAdd: [] }] }) } as never)
     expect(effects.reveal).toHaveBeenCalledWith('logins', { kind: 'login', name: 'app' })
     expect(effects.reload).toHaveBeenCalledWith({ kind: 'database', name: 'Sales' }, 'users')

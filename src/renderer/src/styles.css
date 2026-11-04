@@ -585,6 +585,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 }
 .memory-indicator { display: flex; align-items: center; gap: 4px; margin-left: 12px; white-space: nowrap; }
 .memory-indicator .codicon { font-size: var(--varia-glyph-sm); }
+.update-status { display: flex; align-items: center; margin-left: 12px; white-space: nowrap; }
+.update-status > button, .update-status > span { display: flex; align-items: center; gap: 4px; }
+.update-status > button { color: inherit; border-color: transparent; padding: 0 4px; font-size: var(--varia-size-xs); line-height: 14px; cursor: pointer; }
+.update-status .codicon { font-size: var(--varia-glyph-sm); }
 
 .layout-dialog { width: 560px; max-width: 90vw; max-height: 90vh; overflow: auto; padding: 24px; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-dialog) var(--varia-widget-shadow); animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease); }
 .layout-dialog .dialog-heading { display: flex; align-items: start; justify-content: space-between; }
@@ -845,6 +849,25 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-dialog-options { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 0; padding: 0; border: 0; }
 .object-dialog-options .checkbox-label { display: flex; align-items: center; gap: 8px; }
 .object-dialog-delete .field-note { margin-top: 10px; }
+/* Unlock Login (D4d): the lock-out state as sentences, then How to unlock. */
+.unlock-login-state { margin: 4px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; user-select: text; }
+.unlock-login .object-dialog-options legend { padding: 0; margin-bottom: 4px; }
+.unlock-login .object-dialog-options .field-note { margin-left: 24px; }
+/* D3d: the sessions a database's DROP meets, a disclosure whose grid scrolls within its own height so the options below stay
+   in view; the notes under Close existing connections line up with its label, and a greyed option's label greys with it. */
+.object-dialog-delete-sessions { margin: var(--varia-space-2) 0 0; }
+.object-dialog-disclosure { display: inline-flex; align-items: center; gap: var(--varia-space-1); padding: var(--varia-space-0) var(--varia-space-1) var(--varia-space-0) 0; border: 0; background: none; color: var(--varia-settings-headerForeground); font-size: var(--varia-size-xs); font-weight: 600; }
+.object-dialog-disclosure { max-width: 100%; }
+.object-dialog-disclosure > span { overflow: hidden; text-overflow: ellipsis; }
+.object-dialog-disclosure:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.object-dialog-sessions-body { max-height: calc(var(--varia-space-6) * 4); overflow: auto; margin-top: var(--varia-space-1); }
+.object-dialog-sessions-body thead th { position: sticky; top: 0; }
+.object-dialog-sessions-body .object-dialog-grid th:first-child { width: calc(var(--varia-space-6) * 2.5); }
+.object-dialog-sessions-body .object-dialog-grid th:last-child { width: calc(var(--varia-space-6) * 3.5); }
+.object-dialog-sessions-body .field-note { margin: var(--varia-space-1) 0 0; }
+.object-dialog-options .field-note { margin: 0 0 0 var(--varia-space-5); }
+.object-dialog-options .checkbox-label:has(input:disabled) { color: var(--varia-disabledForeground); }
+@media (forced-colors: active) { .object-dialog-options .checkbox-label:has(input:disabled) { color: GrayText; } }
 /* New Login (D2a): SSMS's General, Server Roles and Status pages; the SQL Server authentication block indents under its radio. */
 .new-login-page { display: flex; flex-direction: column; gap: 8px; padding-top: 6px; }
 .new-login-fields { margin: 0; padding: 0; border: 0; min-width: 0; }
@@ -925,21 +948,91 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .user-mapping-row[data-selected] .user-mapping-browse { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: HighlightText; }
   .user-mapping-row[data-selected][data-unavailable] .user-mapping-text, .user-mapping-row[data-selected] .user-mapping-text[data-unread] { color: HighlightText; }
 }
-/* D3d: the sessions a database's DROP meets, a disclosure whose grid scrolls within its own height so the options below stay
-   in view; the notes under Close existing connections line up with its label, and a greyed option's label greys with it. */
-.object-dialog-sessions { margin: var(--varia-space-2) 0 0; }
-.object-dialog-disclosure { display: inline-flex; align-items: center; gap: var(--varia-space-1); padding: var(--varia-space-0) var(--varia-space-1) var(--varia-space-0) 0; border: 0; background: none; color: var(--varia-settings-headerForeground); font-size: var(--varia-size-xs); font-weight: 600; }
-.object-dialog-disclosure { max-width: 100%; }
-.object-dialog-disclosure > span { overflow: hidden; text-overflow: ellipsis; }
-.object-dialog-disclosure:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
-.object-dialog-sessions-body { max-height: calc(var(--varia-space-6) * 4); overflow: auto; margin-top: var(--varia-space-1); }
-.object-dialog-sessions-body thead th { position: sticky; top: 0; }
-.object-dialog-sessions-body .object-dialog-grid th:first-child { width: calc(var(--varia-space-6) * 2.5); }
-.object-dialog-sessions-body .object-dialog-grid th:last-child { width: calc(var(--varia-space-6) * 3.5); }
-.object-dialog-sessions-body .field-note { margin: var(--varia-space-1) 0 0; }
-.object-dialog-options .field-note { margin: 0 0 0 var(--varia-space-5); }
-.object-dialog-options .checkbox-label:has(input:disabled) { color: var(--varia-disabledForeground); }
-@media (forced-colors: active) { .object-dialog-options .checkbox-label:has(input:disabled) { color: GrayText; } }
+/* Securables (D2d): User Mapping's grid styles for "Securables:" (Name, Type) and the Explicit tab (Permission, Grantor and three
+   boxes); Search… and Remove under the upper grid; the Explicit and Effective tabs as the Activity Monitor's pane tabs. */
+.securables-grid .user-mapping-head, .securables-grid .user-mapping-row { grid-template-columns: minmax(160px, 2fr) minmax(110px, 1fr); }
+.securables-permissions .user-mapping-head, .securables-permissions .user-mapping-row { grid-template-columns: minmax(170px, 2fr) minmax(90px, 1fr) 64px 84px 60px; }
+.securables-box { justify-content: center; }
+.securables-actions { display: flex; justify-content: flex-end; gap: 8px; }
+/* Framed like the dialogs' other action rows, so they read as buttons beside the bordered grid. */
+.securables-actions button { border-color: var(--varia-button-border); }
+.securables-tabs { border: 1px solid var(--varia-panel-border); border-bottom: 0; }
+.securables-panel { display: flex; flex-direction: column; gap: 6px; min-height: 120px; }
+.securables-effective { margin: 0; padding: 6px 10px; max-height: 200px; overflow: auto; list-style: none; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); }
+.securables-choices, .securables-types { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.securables-choices .checkbox-label, .securables-types .checkbox-label { display: flex; align-items: center; gap: 8px; }
+.object-dialog-blocked { font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); color: var(--varia-descriptionForeground); overflow-wrap: anywhere; }
+/* Attach Databases: two grids with editable cells; a row is selected when anything in it has focus. */
+.attach-database { display: flex; flex-direction: column; gap: var(--varia-space-1); min-width: 0; }
+.attach-database > .object-dialog-caption:not(:first-child) { margin-top: var(--varia-space-2); }
+.attach-database-table { max-width: 100%; max-height: 220px; overflow: auto; }
+.attach-database-grid td:has(> .attach-database-cell), .attach-database-grid td:has(> .attach-database-path) { padding: 1px; }
+.attach-database-grid tr[data-selected] > td { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
+/* While the grid has focus its selected row (which Remove acts on) takes the active selection, as a focused list's does. */
+.attach-database-grid:focus-within tr[data-selected] > td { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); }
+.attach-database-grid .attach-col-path { width: 34%; }
+.attach-database-grid .attach-col-status { width: 12%; }
+.attach-database-grid .attach-col-type { width: 10%; }
+/* Inside the grids, so it outranks the modal's select height and Owner lines up with Attach As. */
+.attach-database-grid .attach-database-cell { box-sizing: border-box; width: 100%; min-width: 0; height: var(--varia-row); font-size: var(--varia-size-xs); }
+.attach-database-path { display: flex; gap: var(--varia-space-0); min-width: 0; }
+.attach-database-path > .attach-database-cell { flex: 1; }
+.attach-database-cell[aria-invalid="true"] { border-color: var(--varia-errorForeground); }
+/* A path keeps its file name: only the folder gives way (a fraction of a pixel taken from the name would cut it with an ellipsis), unless the name alone is too long. */
+.attach-path { display: flex; min-width: 0; }
+.attach-path-folder, .attach-path-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attach-path-folder { flex: 0 1000 auto; }
+.attach-path-name { flex: 0 0 auto; max-width: 100%; }
+.attach-database-status > [data-icon] { margin-right: var(--varia-space-1); vertical-align: text-bottom; }
+.attach-database-status[data-status="In progress"] > [data-icon] { color: var(--varia-focusBorder); }
+.attach-database-status[data-status="Success"] > [data-icon] { color: var(--varia-successForeground); }
+.attach-database-status[data-status="Error"] > [data-icon] { color: var(--varia-errorForeground); }
+.attach-database-grid:focus-within tr[data-selected] > .attach-database-status > [data-icon] { color: inherit; }
+@media (forced-colors: active) {
+  .attach-database-grid tr[data-selected] > td { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+  .attach-database-grid tr[data-selected] .attach-database-cell, .attach-database-grid tr[data-selected] .property-browse { forced-color-adjust: auto; }
+  .attach-database-cell[aria-invalid="true"] { outline: 2px dashed CanvasText; outline-offset: -2px; }
+}
+.attach-database-empty { color: var(--varia-descriptionForeground); }
+.attach-database-buttons { display: flex; justify-content: flex-end; gap: var(--varia-space-2); }
+.attach-database-buttons > button { min-width: 78px; border-color: var(--varia-button-border); }
+.attach-database-problem { display: flex; align-items: flex-start; gap: var(--varia-space-1); margin: 0; padding: var(--varia-space-1) var(--varia-space-2); border-radius: var(--varia-radius-sm); background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); overflow-wrap: anywhere; font-size: var(--varia-size-xs); }
+/* Take Database Offline and Bring Database Online: the database row, the sessions in it, the notes under them, Check Again,
+   and why OK cannot run yet in the footer. */
+/* Headers wrap rather than cut a word ("Drop All Active Connections" is the widest). */
+.object-dialog-state .object-dialog-grid th { white-space: normal; text-overflow: clip; overflow-wrap: break-word; }
+/* The Databases grid: Status fits its longest chip ("In progress" with its spinner, a border under forced colours); Message takes the rest. */
+.object-dialog-state .object-dialog-col-name { width: 24%; }
+.object-dialog-state .object-dialog-col-drop { width: 20%; }
+.object-dialog-state .object-dialog-col-status { width: 22%; }
+/* The Sessions grid: a narrow id, the names that say who is disconnected, and the count right-aligned. */
+.object-dialog-state .object-dialog-col-session { width: 12%; }
+.object-dialog-state .object-dialog-col-count { width: 16%; }
+/* D3b: Detach Database's grid has two check columns, then the files that stay on the server. */
+.object-dialog-detach .object-dialog-col-name { width: 22%; }
+.object-dialog-detach .object-dialog-col-check { width: 14%; }
+.object-dialog-detach .object-dialog-col-status { width: 16%; }
+.object-dialog-detach .object-dialog-col-file { width: 26%; }
+.object-dialog-detach .object-dialog-col-type { width: 20%; }
+/* Both of the page's captions sit flush with the grid below them, as the mockup lines them up. */
+.object-dialog-detach > .object-dialog-caption { padding-left: 0; padding-right: 0; }
+.object-dialog-files-caption { padding: 10px 0 4px; }
+.object-dialog-grid td.object-dialog-cell-path { white-space: normal; overflow-wrap: anywhere; }
+.object-dialog-note-body { display: flex; flex-direction: column; gap: 6px; }
+.object-dialog-note-body .checkbox-label { display: flex; align-items: center; gap: 8px; }
+.object-dialog-cell-count { text-align: right; font-variant-numeric: tabular-nums; }
+.object-dialog-cell-check { text-align: center; }
+.object-dialog-cell-check > input { margin: 0; }
+.object-dialog-sessions { margin: 10px 0 0; }
+.object-dialog-sessions > summary { display: flex; align-items: center; gap: 4px; padding: 2px 0 6px; cursor: pointer; width: max-content; list-style: none; font-size: var(--varia-size-xs); font-weight: 600; color: var(--varia-settings-headerForeground); }
+.object-dialog-sessions > summary::-webkit-details-marker { display: none; }
+.object-dialog-sessions > summary:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
+.object-dialog-sessions[open] > summary > .object-dialog-twisty { transform: rotate(90deg); }
+.object-dialog-sessions .field-note { margin-top: 4px; }
+.object-dialog-note { display: flex; align-items: flex-start; gap: 6px; margin: 10px 0 0; padding: 6px 8px; border-radius: var(--varia-radius-sm); background: var(--varia-statusPill-infoBackground); color: var(--varia-statusPill-infoForeground); font-size: var(--varia-size-xs); line-height: 1.5; overflow-wrap: anywhere; }
+.object-dialog-note.warning { background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); }
+.object-dialog-actions { display: flex; gap: 8px; margin: 10px 0 0; }
+.object-dialog-actions > button { border-color: var(--varia-button-border); }
 /* D4c: the database users mapped to a login, "database: user" with why one is kept, in a list that scrolls within its own
    height so the note and the option below stay in view. */
 .object-dialog-mapped { margin: var(--varia-space-2) 0 0; }
@@ -948,10 +1041,6 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-dialog-mapped-list:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .object-dialog-mapped-list > li { padding: var(--varia-space-0) 0; }
 .object-dialog-kept { color: var(--varia-descriptionForeground); }
-/* Unlock Login (D4d): the lock-out state as sentences, then How to unlock. */
-.unlock-login-state { margin: 4px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; user-select: text; }
-.unlock-login .object-dialog-options legend { padding: 0; margin-bottom: 4px; }
-.unlock-login .object-dialog-options .field-note { margin-left: 24px; }
 /* Create Catalog (S9a): SSMS's options and password, then what the server gets, step by step. */
 .create-catalog-dialog .property-section { display: flex; flex-direction: column; gap: 6px; }
 .create-catalog-dialog .checkbox-label { display: flex; align-items: center; gap: 8px; }
@@ -1007,6 +1096,41 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .sub-dialog-backdrop { z-index: 20001; }
 .connection-modal.sub-dialog { width: min(420px, calc(100vw - 48px)); }
 .sub-dialog-body { display: flex; flex-direction: column; gap: 6px; padding: 10px 16px; }
+/* The server file picker (Locate Backup File): a wide sub-dialog whose tree takes the height the fields leave. */
+.connection-modal.sub-dialog.server-file-picker { width: min(700px, calc(100vw - 48px)); height: min(560px, calc(100vh - 48px)); }
+.server-file-picker .sub-dialog-body { flex: 1; min-height: 0; }
+.server-file-picker .object-dialog-message { margin: 0; }
+.sub-dialog-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.server-files-banner { display: flex; align-items: flex-start; gap: var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-2); border-radius: var(--varia-radius-sm); background: var(--varia-statusPill-infoBackground); color: var(--varia-statusPill-infoForeground); overflow-wrap: anywhere; }
+.server-files-label { font-size: var(--varia-size-xs); color: var(--varia-dialog-labelForeground); }
+.server-files-table { flex: 1; min-height: 120px; display: flex; flex-direction: column; border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); background: var(--varia-input-background); overflow: hidden; }
+.server-files-head, .server-files-row { display: grid; grid-template-columns: minmax(0, 1fr) 104px 124px; align-items: center; column-gap: var(--varia-space-2); }
+.server-files-table.folders .server-files-head, .server-files-table.folders .server-files-row:not(.server-files-note) { grid-template-columns: minmax(0, 1fr) 104px; }
+/* The headings sit in the scroller, above the rows, so a scrollbar narrows both alike and Size stays over its column. */
+.server-files-head { position: sticky; top: 0; z-index: 1; height: var(--varia-row); padding: 0 var(--varia-space-2) 0 var(--varia-space-1); font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); background: var(--varia-input-background); border-bottom: 1px solid var(--varia-input-border); }
+.server-files-tree { flex: 1; min-height: 0; overflow: auto; outline: none; scroll-padding-top: var(--varia-row); }
+.server-files-tree:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.server-files-row { height: var(--varia-row); padding: 0 var(--varia-space-2) 0 var(--varia-space-1); white-space: nowrap; cursor: default; user-select: none; }
+.server-files-row[role="treeitem"]:hover:not([aria-selected="true"]) { background: var(--varia-list-hoverBackground); }
+.server-files-row[aria-selected="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
+.server-files-tree:focus .server-files-row[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); box-shadow: inset 2px 0 var(--varia-focusBorder); }
+.server-files-name { display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; overflow: hidden; }
+.server-files-indent, .server-files-twisty { flex: none; }
+.server-files-twisty { width: var(--varia-glyph-md); display: inline-flex; justify-content: center; }
+.server-files-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.server-files-tag { flex: none; padding: 0 var(--varia-space-1); border-radius: var(--varia-radius-pill); background: var(--varia-badge-background); color: var(--varia-badge-foreground); font-size: var(--varia-size-xs); }
+.server-files-size, .server-files-modified { overflow: hidden; text-overflow: ellipsis; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.server-files-size { text-align: right; }
+.server-file-picker .server-files-row[aria-selected="true"] .server-files-size, .server-file-picker .server-files-row[aria-selected="true"] .server-files-modified { color: inherit; }
+.server-files-note { grid-template-columns: minmax(0, 1fr); color: var(--varia-descriptionForeground); }
+.server-files-note.error { color: var(--varia-errorForeground); }
+@media (forced-colors: active) {
+  .server-files-banner { border: 1px solid CanvasText; }
+  .server-files-row[aria-selected="true"], .server-files-tree:focus .server-files-row[aria-selected="true"] { background: Highlight; color: HighlightText; forced-color-adjust: none; }
+  .server-files-row[aria-selected="true"] .icon, .server-file-picker .server-files-row[aria-selected="true"] .server-files-size, .server-file-picker .server-files-row[aria-selected="true"] .server-files-modified { color: HighlightText; }
+  .server-files-row[aria-selected="true"] .server-files-tag { color: HighlightText; background: Highlight; outline: 1px solid HighlightText; }
+  .server-files-tree:focus .server-files-row[aria-selected="true"] { outline: 2px solid HighlightText; outline-offset: -2px; }
+}
 .database-owner-list { width: 100%; min-height: 200px; }
 /* Table Designer: the toolbar strip, its bars, the column grid over Column Properties, and the Properties panel (F4). */
 .editor-container[hidden] { display: none; }
@@ -1385,6 +1509,116 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .properties-table > .object-dialog-grid [data-wrap="anywhere"] { overflow-wrap: anywhere; }
 .properties-table > .object-dialog-grid [data-wrap="never"] { white-space: nowrap; }
 .properties-table + .field-note, .properties-filegroups > .field-note { margin-top: var(--varia-space-2); }
+/* Restore Database (D1e): the problems a section lists, the sets grid (wider than the column, so its scroller is a tab
+   stop), the Select backup devices list and the Backup Timeline. The timeline draws in CSS pixels; its marks take chart
+   series colours from the page (ChartView's keys) and, under forced colours, system colours from here, with shapes that
+   tell them apart either way. */
+/* Restore Database's run (D1f): the confirm bar, the Run panel at the top of the document, and the sections' summaries while it runs. */
+.restore-confirm { display: flex; align-items: flex-start; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-3); border-radius: var(--varia-radius-sm); background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.restore-confirm > .codicon, .restore-confirm > .icon { margin-top: 2px; }
+.restore-confirm-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.restore-confirm-text > p { margin: 0; }
+.restore-confirm-text > p + p { margin-top: var(--varia-space-1); }
+.restore-confirm button { flex: none; color: inherit; border-color: currentColor; }
+.restore-confirm button.danger, .restore-confirm button.danger:hover:not(:disabled) { color: var(--varia-errorForeground); font-weight: 600; }
+/* The bar's buttons read danger first, safe last (as SSIS's Stop Operation bar), and the safe one is the default: filled and
+   ringed whether or not focus is visible, so Enter's answer shows before any key is pressed. */
+.restore-confirm button.default { background: var(--varia-editor-background); border-color: var(--varia-button-border); box-shadow: 0 0 0 1px currentColor; }
+@media (forced-colors: active) { .restore-confirm button.default { outline: 2px solid Highlight; outline-offset: 1px; } }
+.restore-run { display: grid; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.restore-run-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1) var(--varia-space-2); }
+.restore-run-title { flex: 1 1 0; min-width: 0; margin: 0; font-size: var(--varia-size-md); font-weight: 600; overflow-wrap: anywhere; }
+.restore-run-elapsed { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; }
+.restore-run-overall { display: flex; align-items: center; gap: var(--varia-space-2); margin-left: auto; font-variant-numeric: tabular-nums; }
+.restore-run-overall > .step-list-progress { display: block; width: 180px; }
+.restore-run-overall .step-list-fill { display: block; }
+.restore-run-done { color: var(--varia-successForeground); }
+.restore-run-failed { color: var(--varia-errorForeground); }
+.restore-run-stopped, .restore-run-unknown { color: var(--varia-warningForeground); }
+.restore-run-warning { align-items: flex-start; }
+.restore-run-warning > .codicon, .restore-run-warning > .icon { margin-top: 2px; color: var(--varia-warningForeground); }
+.restore-run-outcome-body { display: grid; gap: var(--varia-space-1); min-width: 0; }
+.restore-run-outcome-body > p { margin: 0; }
+.restore-run-outcome { display: flex; align-items: center; gap: var(--varia-space-1); margin: 0; overflow-wrap: anywhere; }
+.restore-run > .inline-error { padding: 0; }
+.restore-summary { margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); overflow-wrap: anywhere; }
+.restore-problems { list-style: none; margin: 0 0 var(--varia-space-2); padding: 0; font-size: var(--varia-size-xs); color: var(--varia-errorForeground); }
+.restore-problems li { display: flex; align-items: center; gap: var(--varia-space-1); }
+.restore-source-choice { margin-bottom: var(--varia-space-2); }
+.restore-grid-title { margin: 0 0 var(--varia-space-1); }
+.restore-sets { overflow-x: auto; }
+.restore-sets:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
+.restore-sets > .object-dialog-grid { width: max-content; min-width: 100%; }
+.object-dialog-grid tr[data-problem] td { color: var(--varia-descriptionForeground); }
+.restore-plan-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2) var(--varia-space-3); margin-top: var(--varia-space-2); }
+.restore-plan-row > .checkbox-label { display: flex; align-items: center; gap: var(--varia-space-2); }
+.restore-plan-row > .field-note { flex: 1; min-width: 0; margin: 0; }
+/* Restore to: a read-only value drawn as a field, one line at the control's height, ending in an ellipsis (its title holds it all). */
+.property-value.restore-to { flex: 1; min-width: 0; height: var(--varia-control); padding: 0 var(--varia-space-2); border: 1px dashed var(--varia-input-border); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); line-height: calc(var(--varia-control) - 2px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
+/* Path fields take the column's width, as the selects beside them do. */
+.property-field-control > .property-input-action { flex: 1; }
+.property-field-control > .property-input-action > .property-input { width: auto; height: var(--varia-control); }
+.restore-files-table > .object-dialog-grid { width: 100%; }
+.restore-files-table > .object-dialog-grid td:last-child { width: 45%; }
+.restore-files-table > .object-dialog-grid td:last-child > .property-input { width: 100%; }
+.restore-files > .checkbox-label, .restore-options > .checkbox-label { display: flex; align-items: center; gap: var(--varia-space-2); margin: var(--varia-space-1) 0; }
+.restore-media { display: flex; gap: var(--varia-space-2); margin-top: var(--varia-space-1); }
+.connection-modal .restore-media > select { flex: 1; min-width: 0; height: auto; min-height: calc(8 * var(--varia-row)); }
+.restore-media-buttons { display: flex; flex-direction: column; gap: var(--varia-space-1); }
+.connection-modal.sub-dialog.restore-timeline { width: min(560px, calc(100vw - 48px)); }
+.restore-timeline-mode { display: flex; flex-direction: column; gap: var(--varia-space-1); margin: 0 0 var(--varia-space-2); padding: 0; border: 0; }
+.restore-timeline-mode > legend { margin-bottom: var(--varia-space-1); padding: 0; font-size: var(--varia-size-xs); }
+.restore-timeline-mode .checkbox-label { display: flex; align-items: center; gap: var(--varia-space-2); }
+.restore-recovery { display: flex; flex-direction: column; gap: var(--varia-space-1); margin: var(--varia-space-2) 0; padding: 0; border: 0; min-width: 0; }
+.restore-recovery > legend { padding: 0; }
+.restore-recovery .checkbox-label { display: flex; align-items: flex-start; gap: var(--varia-space-2); overflow-wrap: anywhere; }
+.restore-recovery .checkbox-label > input { flex: none; margin-top: 2px; }
+/* The options' labels and the grid's title take the fields' body size (they would inherit the page's 16 px). */
+.restore-grid-title, .restore-files > .checkbox-label, .restore-options > .checkbox-label, .restore-plan-row > .checkbox-label, .restore-recovery .checkbox-label { font-size: var(--varia-size-md); line-height: var(--varia-line-md); }
+/* A greyed option looks greyed; the note under it says why. */
+.restore-files .checkbox-label:has(> input:disabled), .restore-options .checkbox-label:has(> input:disabled), .restore-plan-row > .checkbox-label:has(> input:disabled) { color: var(--varia-disabledForeground); }
+@media (forced-colors: active) { .restore-files .checkbox-label:has(> input:disabled), .restore-options .checkbox-label:has(> input:disabled), .restore-plan-row > .checkbox-label:has(> input:disabled) { color: GrayText; } }
+.restore-timeline-box { margin-top: var(--varia-space-3); min-width: 0; }
+.restore-timeline-track { display: block; cursor: pointer; }
+.restore-timeline-track:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
+.restore-timeline-base { fill: var(--varia-input-border); }
+.restore-timeline-point { fill: var(--varia-focusBorder); }
+.restore-timeline-ends { display: flex; justify-content: space-between; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.restore-timeline-legend { display: flex; flex-wrap: wrap; gap: var(--varia-space-1) var(--varia-space-3); margin: var(--varia-space-2) 0 0; padding: 0; list-style: none; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.restore-timeline-legend > li { display: flex; align-items: center; gap: var(--varia-space-1); }
+.restore-timeline-swatch { flex: none; width: var(--varia-glyph-sm); height: var(--varia-glyph-sm); }
+@media (forced-colors: active) {
+  .restore-timeline-track, .restore-timeline-swatch { forced-color-adjust: none; }
+  .restore-timeline-full, .restore-timeline-differential, .restore-timeline-log { fill: CanvasText; }
+  .restore-timeline-covered { fill: Highlight; }
+  .restore-timeline-base { fill: GrayText; }
+  .restore-timeline-point { fill: LinkText; }
+  .property-value.restore-to { border-color: CanvasText; }
+}
+/* New Database (D1b): its grids edit in place, so a cell holds a borderless field that fills it; the File Name's
+   default shows as an italic placeholder, as SSMS shows <default> names. */
+.new-database-cell { width: 100%; min-width: 0; height: var(--varia-row); padding: 0 var(--varia-space-1); border-color: transparent; background: transparent; }
+.new-database-cell:hover:not(:disabled), .new-database-cell:focus { border-color: var(--varia-input-border); background: var(--varia-input-background); }
+.new-database-cell[aria-invalid="true"] { border-color: var(--varia-errorForeground); }
+.new-database-number { min-width: 9ch; font-variant-numeric: tabular-nums; }
+.new-database-file-name::placeholder { font-style: italic; color: var(--varia-descriptionForeground); }
+.object-dialog-grid tr[data-selected] > td { background: var(--varia-list-inactiveSelectionBackground); }
+.new-database-browse { display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; }
+.new-database-browse > .new-database-cell, .new-database-growth { flex: 1; min-width: 0; }
+/* Each field keeps room for a readable name or path at any width: past that the grid scrolls (.properties-table) rather
+   than squeezing a field to a few letters. Its title shows the whole value. */
+.new-database-cell.new-database-name { min-width: 16ch; }
+.new-database-cell.new-database-file-name { min-width: 20ch; }
+.new-database-browse > .new-database-path { min-width: 24ch; }
+/* Forced colours drop the selection's fill, the only sign of the row Remove takes. */
+@media (forced-colors: active) { .object-dialog-grid tr[data-selected] { outline: 2px solid Highlight; outline-offset: -2px; } }
+.new-database-muted { color: var(--varia-descriptionForeground); }
+.new-database-grid-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); margin-top: var(--varia-space-2); }
+.new-database-grid-bar > .field-note { margin: 0; }
+.new-database-problems { margin: var(--varia-space-2) 0 0; padding: 0; list-style: none; }
+.new-database-check { display: flex; align-items: center; gap: var(--varia-space-1); }
+.new-database-fieldset { display: flex; flex-direction: column; gap: var(--varia-space-1); margin: 0; padding: var(--varia-space-2); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); }
+.new-database-fieldset:disabled { opacity: .5; }
 /* A switch: a checkbox drawn as a track and thumb. On, the thumb moves right and the track fills; the words beside it
    say the state too. State changes are instant, as selection is. */
 .switch-field { display: inline-flex; align-items: center; gap: var(--varia-space-2); }
@@ -1507,3 +1741,35 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .activity-splitter { background: CanvasText; forced-color-adjust: none; }
   .activity-splitter:hover, .activity-splitter:focus-visible { background: Highlight; outline: 2px solid Highlight; }
 }
+
+/* Search Objects: the query (field, toggles, scope) above a list of hits, each a name, its path and a definition's line. */
+.object-search { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.object-search-query { flex-shrink: 0; display: flex; flex-direction: column; gap: var(--varia-space-2); padding: var(--varia-space-3) var(--varia-space-4) var(--varia-space-2); }
+.object-search-field { display: flex; align-items: center; gap: var(--varia-space-1); max-width: 720px; height: var(--varia-control); padding: 0 var(--varia-space-1) 0 var(--varia-space-2); color: var(--varia-input-placeholderForeground); background: var(--varia-input-background); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); }
+.object-search-field:has(input:focus-visible) { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
+.object-search-field input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--varia-input-foreground); font-size: var(--varia-size-sm); }
+.object-search-field input:focus-visible { outline: none; }
+.object-search-toggle { width: 22px; height: 22px; color: var(--varia-objectExplorer-actionForeground); }
+.object-search-toggle[aria-pressed="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
+.object-search-options { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-3); }
+.object-search-server { display: flex; align-items: center; gap: var(--varia-space-1); font-size: var(--varia-size-sm); color: var(--varia-descriptionForeground); }
+.object-search-index, .object-search-summary { margin: 0; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.object-search-summary.error { color: var(--varia-errorForeground); }
+.object-search-summary:empty { display: none; }
+.object-search-hits { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 0 0 var(--varia-space-2); list-style: none; }
+.object-search-hit { display: flex; align-items: start; gap: var(--varia-space-1); padding: 0 var(--varia-space-3) 0 var(--varia-space-2); }
+.object-search-hit:hover { background: var(--varia-list-hoverBackground); }
+.object-search-hit .icon-button { visibility: hidden; flex-shrink: 0; }
+.object-search-hit:hover .icon-button, .object-search-hit:focus-within .icon-button { visibility: visible; }
+.object-search-open { flex: 1; min-width: 0; display: grid; grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr); column-gap: var(--varia-space-2); align-items: center; padding: var(--varia-space-1); text-align: start; color: inherit; background: transparent; border: 0; border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); cursor: pointer; }
+.object-search-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.object-search-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.object-search-line { grid-column: 2 / -1; overflow: hidden; text-overflow: ellipsis; white-space: pre; font: var(--varia-size-xs) var(--varia-font-mono); color: var(--varia-descriptionForeground); }
+.object-search-line-number { margin-inline-end: var(--varia-space-1); }
+.object-search-more { font-family: var(--varia-font-ui); }
+.object-search mark { background: transparent; color: var(--varia-list-highlightForeground); font-weight: 600; }
+.index-status { display: flex; align-items: center; gap: var(--varia-space-1); margin-left: var(--varia-space-3); white-space: nowrap; }
+.index-status .codicon { font-size: var(--varia-glyph-sm); }
+.index-status button { color: inherit; background: transparent; border: 1px solid currentColor; padding: 0 var(--varia-space-1); font-size: var(--varia-size-xs); line-height: 14px; }
+.index-status button.index-status-text { border-color: transparent; padding: 0; cursor: pointer; }
+.index-status button.index-status-text:hover { text-decoration: underline; }

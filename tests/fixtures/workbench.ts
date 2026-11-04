@@ -46,6 +46,7 @@ import { helpContribution } from '../../src/renderer/src/contributions/help'
 import { scriptingContribution } from '../../src/renderer/src/contributions/scripting'
 import { ScriptingService } from '../../src/renderer/src/scripting/ScriptingService'
 import { objectActionNoticeKey, ObjectActionService } from '../../src/renderer/src/actions/ObjectActionService'
+import { databaseRenameHooks } from '../../src/renderer/src/actions/database-rename'
 import { databaseGoneHandler } from '../../src/renderer/src/dialogs/database-gone'
 import { ObjectDialogService } from '../../src/renderer/src/dialogs/ObjectDialogService'
 import { CreateCatalogService } from '../../src/renderer/src/ssis/CreateCatalogService'
@@ -56,15 +57,23 @@ import { TableDesignerService } from '../../src/renderer/src/designer/TableDesig
 import { SsisPropertiesService } from '../../src/renderer/src/ssis/SsisPropertiesService'
 import { ssisContribution } from '../../src/renderer/src/contributions/ssis'
 import { DatabasePropertiesService } from '../../src/renderer/src/properties/DatabasePropertiesService'
+import { NewDatabaseService } from '../../src/renderer/src/new-database/NewDatabaseService'
+import { RestoreService } from '../../src/renderer/src/restore/RestoreService'
+import { ActionProgressService } from '../../src/renderer/src/actions/ActionProgressService'
 import { ActivityMonitorService } from '../../src/renderer/src/activity/ActivityMonitorService'
 import { activityContribution } from '../../src/renderer/src/contributions/activity'
+import { searchContribution } from '../../src/renderer/src/contributions/search'
 import { documentOwner } from '../../src/renderer/src/live/LiveService'
 import { fakeLiveViews } from './live-views'
 import { SsisOperationsService } from '../../src/renderer/src/ssis/SsisOperationsService'
+import { ObjectSearchService } from '../../src/renderer/src/search/ObjectSearchService'
 import { fakeLive } from './live-handle'
 import { settingsContribution } from '../../src/renderer/src/contributions/settings'
 import { notificationsContribution } from '../../src/renderer/src/contributions/notifications'
 import { NotificationService } from '../../src/renderer/src/core/notifications'
+import { UpdateService } from '../../src/renderer/src/updates/UpdateService'
+import { updatesContribution } from '../../src/renderer/src/contributions/updates'
+import type { UpdateState } from '../../src/shared/updates'
 import { SettingsService } from '../../src/renderer/src/settings/SettingsService'
 import { defaultSettings, scriptingOptionsFrom, type SettingsValues } from '../../src/shared/settings/catalog'
 import type { SettingsState } from '../../src/shared/settings/schema'
@@ -208,6 +217,22 @@ export function fakeInputMode(): MonacoInputMode {
   }
   return target
 }
+/** The update half of VariaApi: `push` stands in for main's state pushes, and the commands answer `answer`. */
+export function updatesApi(initial: UpdateState = { status: 'idle', currentVersion: '1.0.0', kind: 'nsis', enabled: true }) {
+  const listeners = new Set<(state: UpdateState) => void>()
+  let current = initial
+  const push = (state: UpdateState) => { current = state; listeners.forEach(listener => listener(state)) }
+  return {
+    pushUpdate: push,
+    getUpdateState: vi.fn<VariaApi['getUpdateState']>(async () => ({ ok: true, value: current })),
+    onUpdateState: vi.fn<VariaApi['onUpdateState']>(callback => { listeners.add(callback); return () => { listeners.delete(callback) } }),
+    checkForUpdates: vi.fn<VariaApi['checkForUpdates']>(async () => ({ ok: true, value: current })),
+    downloadUpdate: vi.fn<VariaApi['downloadUpdate']>(async () => ({ ok: true, value: current })),
+    restartToUpdate: vi.fn<VariaApi['restartToUpdate']>(async () => ({ ok: true, value: current.status === 'ready' })),
+    openReleasesPage: vi.fn<VariaApi['openReleasesPage']>(async () => ({ ok: true, value: undefined }))
+  }
+}
+
 /**
  * The renderer's services and every command contribution, wired as createWorkbench does but with fake IPC and a fake
  * shell host, so command enablement can be tested in Node.
@@ -224,6 +249,10 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     saveResults: vi.fn<VariaApi['saveResults']>(async () => ({ ok: true, value: null })),
     cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(async () => ({ ok: true, value: { cancelled: true } })),
     onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}),
+    onActionProgress: vi.fn<VariaApi['onActionProgress']>(() => () => {}),
+    onExplorerIndexProgress: vi.fn<VariaApi['onExplorerIndexProgress']>(() => () => {}),
+    explorerIndex: vi.fn<VariaApi['explorerIndex']>(async () => ({ ok: true, value: { status: { state: 'ready', databases: 0, indexed: 0, objects: 0, modules: 0, cut: 0, skipped: [], definitions: true }, elapsedMs: 0 } })),
+    explorerSearch: vi.fn<VariaApi['explorerSearch']>(async () => ({ ok: true, value: { hits: [], total: 0, partial: false, elapsedMs: 0, index: { state: 'ready', databases: 0, indexed: 0, objects: 0, modules: 0, cut: 0, skipped: [], definitions: true } } })),
     cancel: vi.fn<VariaApi['cancel']>(async () => ({ ok: true, value: { cancelled: true } })),
     openSqlFiles: vi.fn<VariaApi['openSqlFiles']>(async () => ({ ok: true, value: [] })),
     releaseSqlFile: vi.fn<VariaApi['releaseSqlFile']>(async () => ({ ok: true, value: undefined })),
@@ -257,11 +286,13 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
       return { ok: true, value: { text: `-- ${params.verb} ${[object.schema, object.name].filter(Boolean).join('.')}`, database: object.database ?? 'master', warnings: [], commands: 1, elapsedMs: 1 } }
     }),
     cancelScripting: vi.fn<VariaApi['cancelScripting']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
-    // Delete Object's row for the object; actions succeed with one done step.
-    describeObject: vi.fn<VariaApi['describeObject']>(async params => ({
+    // Delete Object's row for the object, or a database rename's facts (no other session); actions succeed with one done step.
+    describeObject: vi.fn<VariaApi['describeObject']>(async params => params.dialog === 'renameDatabase'
+      ? { ok: true, value: { renameDatabase: { name: params.target.name!, identity: { id: 7, created: '2026-01-02T03:04:05.000' }, userAccess: 0, sessions: 0, withTransaction: 0, loginsDefaulting: 0, canClose: true, connections: [params.connectionId] }, elapsedMs: 1 } }
+      : ({
       ok: true, value: { deleteTarget: { name: [params.target.schema, params.target.name].filter(Boolean).join('.'), type: kindSpecs[params.target.kind].title, owner: 'dbo', warnings: [], dependentsTruncated: false }, elapsedMs: 1 }
     })),
-    scriptObjectAction: vi.fn<VariaApi['scriptObjectAction']>(async params => ({ ok: true, value: { text: `-- ${params.action} ${params.target.name}`, database: params.action === 'createTable' ? params.target.name : params.target.database ?? 'master', warnings: [] } })),
+    scriptObjectAction: vi.fn<VariaApi['scriptObjectAction']>(async params => ({ ok: true, value: { text: `-- ${params.action} ${params.target.name}`, database: params.action === 'createTable' ? params.target.name : params.action === 'createDatabase' ? 'master' : params.target.database ?? 'master', warnings: [] } })),
     executeObjectAction: vi.fn<VariaApi['executeObjectAction']>(async () => ({ ok: true, value: { steps: [{ status: 'done', title: 'Drop the object' }], messages: [], elapsedMs: 1 } })),
     cancelObjectActions: vi.fn<VariaApi['cancelObjectActions']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
     // Create Catalog: a server without a catalog and with CLR off; creating it succeeds.
@@ -277,7 +308,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     ...recentFilesApi(),
     ...recoveryApi(options.recovery),
     ...settingsApi(options.settings),
-    ...backendApi()
+    ...backendApi(),
+    ...updatesApi()
   }
   const { documents, events } = doc
   // Seeded values apply at once, as if main had answered before the workbench was created.
@@ -309,8 +341,10 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const scriptingOptions = { getSnapshot: () => ({ options: scriptingOptionsFrom(settings.getSnapshot().values) }), subscribe: settings.subscribe }
   const focusEditor = vi.fn()
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
+  // As the workbench wires it: Database Properties documents follow a database a dialog took offline or brought online, or deleted.
   const dialogs = new ObjectDialogService({
     api, connections, explorer, documents, files, focusEditor,
+    databaseState: (connectionId, database, offline) => properties.databaseStateChanged(connectionId, database, offline),
     databaseGone: gone => databaseGone(gone), tabNames: ids => queries.tabNames(ids)
   })
   const longRuns = new LongRunService({ api })
@@ -318,14 +352,19 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const designers = new TableDesignerService({ api, documents, files, connections, explorer })
   const ssisProperties = new SsisPropertiesService({ api, documents, connections })
   const properties = new DatabasePropertiesService({ api, documents, files, connections, explorer, focusEditor, close: id => { void files.close(id) }, ...(options.timers ? { timers: options.timers } : {}) })
+  const newDatabase = new NewDatabaseService({ api, documents, files, connections, explorer, longRuns, focusEditor, ...(options.timers ? { timers: options.timers } : {}) })
+  const actionProgress = new ActionProgressService(api)
+  const restore = new RestoreService({ api, documents, files, connections, longRuns, progress: actionProgress, explorer, transactions: queries, focusEditor, now: () => new Date(2026, 9, 30, 12, 0, 0), ...(options.timers ? { timers: options.timers } : {}) })
   // Activity Monitors subscribe through a stand-in for LiveService that records each view.
   const liveViews = fakeLiveViews()
   const activity = new ActivityMonitorService({ documents, connections, live: liveViews, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values })
   const live = fakeLive()
   const operations = new SsisOperationsService({ api, documents, panes, live, connections, settings })
+  const objectSearch = new ObjectSearchService({ api, documents, connections, settings })
   const inputMode = new InputModeService(fakeInputMode())
   const notifications = new NotificationService(options.timers ? { timers: options.timers } : {})
-  const databaseGone = databaseGoneHandler({ documents, properties, notify: toast => { notifications.notify(toast) } })
+  const updates = new UpdateService(api)
+  const databaseGone = databaseGoneHandler({ documents, properties, notify: toast => { notifications.notify(toast) }, copy: text => { void api.writeClipboardText(text) } })
   const context = new ContextKeyService({
     platform,
     documents,
@@ -345,7 +384,10 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     recovery,
     designer: designers.context,
     properties: properties.context,
+    newDatabase: newDatabase.context,
+    restore: restore.context,
     notifications,
+    updates,
     activity: activity.context,
     ssis: operations.context,
     activeElement
@@ -354,7 +396,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const actions = new ObjectActionService({
     api, explorer, documents, queries, connections, selectTopCount: () => settings.get('objectExplorer.selectTopRows'),
     report: { error: message => commands.reportError(message), warning: message => commands.reportWarning(message), clear: message => commands.clearError(message), notice: message => notifications.notify({ severity: 'info', message, key: objectActionNoticeKey }) },
-    ...(options.timers ? { timers: options.timers } : {})
+    ...(options.timers ? { timers: options.timers } : {}),
+    databases: databaseRenameHooks({ documents, queries, connections, targets, properties }), notify: notice => { notifications.notify(notice) }
   })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen: options.modal ?? (() => false), editorHasTextFocus: () => false })
   const host: ShellHost = {
@@ -407,9 +450,14 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     designers,
     ssisProperties,
     properties,
+    newDatabase,
+    restore,
+    actionProgress,
     notifications,
+    updates,
     activity,
-    operations
+    operations,
+    objectSearch
   }
   const contributions = [
     queryContribution(workbench, api),
@@ -426,11 +474,13 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     themeContribution(workbench, api, options.timers),
     backendContribution(workbench),
     helpContribution(workbench, api),
+    updatesContribution(workbench, api),
     scriptingContribution(workbench),
     actionsContribution(workbench),
     designerContribution(workbench),
     ssisContribution(workbench),
     activityContribution(workbench),
+    searchContribution(workbench),
     settingsContribution(workbench),
     notificationsContribution(workbench)
   ]
@@ -444,6 +494,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   /** Connects a server as the Connect dialog would. */
   const connect = (info: ConnectionInfo) => connections.add(info, connectionOptions)
   const dispose = () => {
+    actionProgress.dispose()
     recovery.dispose()
     menus.dispose()
     quickInput.dispose()
@@ -466,12 +517,16 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     ssisProperties.dispose()
     activity.dispose()
     properties.dispose()
+    newDatabase.dispose()
+    restore.dispose()
     operations.dispose()
+    objectSearch.dispose()
     bookmarks.dispose()
     editorDialogs.dispose()
     shellOptions.dispose()
     settings.dispose()
     notifications.dispose()
+    updates.dispose()
     documents.dispose()
     backend.dispose()
   }
@@ -500,12 +555,17 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     designers,
     ssisProperties,
     properties,
+    newDatabase,
+    restore,
+    actionProgress,
     activity,
     liveViews,
     operations,
+    objectSearch,
     live,
     focusEditor,
     notifications,
+    updates,
     queries,
     files,
     recentFiles,

@@ -9,6 +9,7 @@ import { _electron, expect as baseExpect } from '@playwright/test'
 export const expect = baseExpect.configure({ timeout: process.platform === 'win32' ? 15000 : 5000 })
 
 const slowMs = 500
+export const frameRateSwitch = '--disable-frame-rate-limit'
 
 /** Records main's file opens, flushes, and renames that take `slowMs` or longer, or fail other than as missing or taken. */
 async function traceFileOperations(application) {
@@ -66,13 +67,33 @@ function reduceMotion(application) {
 }
 
 /**
+ * With VARIA_SMOKE_PROFILE=<dir>, records a Playwright trace (actions, their call logs and source lines, no snapshots) of
+ * each launched app into that directory, to find slow waits in the trace viewer. A trace holds the launch environment,
+ * passwords included, so it stays on the machine that made it.
+ */
+let profiled = 0
+async function startProfile(application) {
+  const dir = process.env.VARIA_SMOKE_PROFILE
+  if (!dir) return null
+  const { mkdirSync } = await import('node:fs'), { join, basename } = await import('node:path')
+  mkdirSync(dir, { recursive: true })
+  const file = join(dir, `${basename(process.argv[1] ?? 'suite', '.mjs')}-${++profiled}.zip`)
+  const tracing = application.context().tracing
+  await tracing.start({ screenshots: false, snapshots: false, sources: true })
+  return () => tracing.stop({ path: file }).catch(error => console.log('Profile unavailable: ' + error.message))
+}
+
+/**
  * Playwright's Electron launcher, with main's file operations traced and reported when the app is closed. Its windows match
  * `prefers-reduced-motion: reduce` (emulated) unless `motion: true` is passed: checks read colors and boxes as soon as a state
  * changes, and a hover fill or a menu fading in would otherwise be caught partway (the motion tokens are 0 ms then).
  */
 export const electron = {
   async launch({ motion = false, ...options } = {}) {
-    const application = await _electron.launch(options)
+    // Smoke runs keep the window hidden, and Chromium draws a hidden window at one frame a second even without background
+    // throttling. Playwright waits for frames before every click, hover and check, so each took one to three seconds.
+    const args = options.args ?? []
+    const application = await _electron.launch({ ...options, args: args.includes(frameRateSwitch) ? args : [...args, frameRateSwitch] })
     const child = application.process()
     if (process.platform === 'win32' && child?.pid) {
       const pid = child.pid
@@ -83,7 +104,8 @@ export const electron = {
     await traceFileOperations(application).catch(error => console.log('File operation trace unavailable: ' + error.message))
     if (!motion) reduceMotion(application)
     const close = application.close.bind(application)
-    application.close = async () => { await reportFileOperations(application); return close() }
+    const profile = await startProfile(application)
+    application.close = async () => { await reportFileOperations(application); await profile?.(); return close() }
     return application
   }
 }

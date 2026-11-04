@@ -71,6 +71,7 @@ internal sealed partial class ActionService
             };
             if (!valid) throw Invalid("loginChanges.mappings.");
         }
+        if (PermissionSql.Problem(catalog.Logins.Securables, changes.Permissions, create: false, catalog.Logins.Limit("permissions")) is { } problem) throw Invalid("loginChanges." + problem);
         var statements = LoginSql.PropertiesStatements(changes);
         if (statements == 0) throw Invalid("loginChanges: nothing changes.");
         if (statements > catalog.Limit("statements")) throw Invalid("loginChanges: too many statements.");
@@ -85,8 +86,9 @@ internal sealed partial class ActionService
 
     /// <summary>Login Properties' describe, in master on the describe's own connection: the login's facts (ActionSql.LoginAlter, which
     /// reads nothing it owns), its default database and language and server roles (LoginSql.PropertiesRead), a SQL Server login's
-    /// lock-out state (ActionSql.LoginLock, critic A15), New Login's lists, and the users mapped to it in each database this connection
-    /// may read, within the scan's budget; a database it did not read is listed as not read.</summary>
+    /// lock-out state (ActionSql.LoginLock, critic A15), New Login's lists, the users mapped to it in each database this connection
+    /// may read, within the scan's budget (a database it did not read is listed as not read), and, for a Windows login, the services
+    /// that run as it (ActionSql.LoginService).</summary>
     private async Task<ActionDescribeResult> DescribeLoginPropertiesJobAsync(SqlConnection connection, ServerProfile profile, ObjectRefDto target, int band, CancellationToken token)
     {
         var (facts, row) = await LoginAsync(connection, target.Name!, null, null, token);
@@ -123,9 +125,14 @@ internal sealed partial class ActionService
         var (users, _, databases, _) = await ScanAsync(connection, SidBytes(facts), LoginSql.PropertiesMappedUser, (int)catalog.Logins.Limit("databases"), ScanBudget, token,
             (database, _, _, reader) => new LoginMappedUserDto(database, reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1), reader.GetBoolean(2)));
         var read = databases.Where(database => database.Checked).Select(database => database.Name).ToList();
-        return new(null, 0, NewLogin: model, Login: facts, Lock: state,
-            LoginProperties: new(defaultDatabase, language, [.. roles.Take(limit)], roles.Count > limit, users, read, [.. credentials.Take(listed)], credentials.Count > listed,
-                facts.Type.Trim() == "C" ? certificate : null, facts.Type.Trim() == "K" ? key : null));
+        // Status' Disabled or Deny asks first when a service runs as the login (loginStatusConfirm), as the loginFacts describe
+        // tells Disable; without it the prompt could never name the service.
+        var service = facts.Type.Trim() == "U" ? await LoginServiceAsync(connection, row!.Text("name") ?? target.Name!, token) : null;
+        // SQL Server's own logins never change here, so their Securables page reads nothing (SSMS's SecurablePermissions = null).
+        var (permissions, permissionsTruncated) = facts.Subtype == "system" ? (new List<ExplicitPermissionDto>(), false) : await ExplicitPermissionsAsync(connection, facts.PrincipalId, token);
+        return new(null, 0, NewLogin: model, Login: facts with { Service = service }, Lock: state,
+            LoginProperties: new(defaultDatabase, language, [.. roles.Take(limit)], roles.Count > limit, users, read, permissions, permissionsTruncated,
+                [.. credentials.Take(listed)], credentials.Count > listed, facts.Type.Trim() == "C" ? certificate : null, facts.Type.Trim() == "K" ? key : null));
     }
 
     /// <summary>The user mapped to a login in one database and that user's roles (LoginSql.DatabaseUser, through ActionSql.MappedUserCall),
@@ -138,7 +145,9 @@ internal sealed partial class ActionService
             command.CommandText = LoginSql.LoginSid;
             command.CommandTimeout = 0;
             Add(command, "@name", SqlDbType.NVarChar, 128, login);
-            sid = await command.ExecuteScalarAsync(token) as byte[];
+            // A reader, as every action statement runs (tests/action-reader-lint.test.ts).
+            await using var found = await command.ExecuteReaderAsync(token);
+            sid = await found.ReadAsync(token) && !found.IsDBNull(0) ? (byte[])found.GetValue(0) : null;
         }
         if (sid is null) return (null, [], Error("NOT_FOUND", "The login " + ScriptingErrors.Display(login) + " no longer exists. Refresh Object Explorer."));
         await using var read = connection.CreateCommand();
@@ -230,15 +239,20 @@ internal sealed partial class ActionService
         var changes = args.LoginChanges!;
         var (missing, error) = await PropertiesMappingPreflightAsync(connection, changes, null, refuse: false, token);
         if (error is not null) return new(null, "master", [], error);
-        var text = LoginSql.PropertiesScriptText(target.Name!, changes, missing, catalog.Logins.ScriptHeader);
+        var text = LoginSql.PropertiesScriptText(target.Name!, changes, missing, catalog.Logins.ScriptHeader, PermissionStatements(target.Name!, changes.Permissions));
         if (text.Length > ScriptLimit(args.Action)) return new(null, "master", [], Error("SQL_ERROR", "The script is too large."));
-        return new(text, "master", LoginPropertiesWarnings(changes));
+        return new(text, "master", LoginPropertiesWarnings(target.Name!, changes));
     }
 
-    /// <summary>The steps preview's and Script's warnings: each DROP USER, which removes the user's permissions in its database (D2 §4).</summary>
-    internal static List<string> LoginPropertiesWarnings(LoginChangesDto changes) =>
+    /// <summary>The steps preview's and Script's warnings: each DROP USER, which removes the user's permissions in its database (D2 §4),
+    /// then each permission statement with CASCADE, which also revokes the permission from every principal the login granted it to
+    /// (securables.ts securablesMessages.cascades), in the order they run.</summary>
+    internal List<string> LoginPropertiesWarnings(string login, LoginChangesDto changes) =>
         [.. LoginSql.Ordered((changes.Mappings ?? []).Where(mapping => mapping.Change == "unmap").Select(mapping => mapping.Database))
-            .Select(database => "Drops the user " + ActionSql.Quote(changes.Mappings!.First(mapping => mapping.Database == database).User) + " in " + ActionSql.Quote(database) + ".")];
+            .Select(database => "Drops the user " + ActionSql.Quote(changes.Mappings!.First(mapping => mapping.Database == database).User) + " in " + ActionSql.Quote(database) + "."),
+         .. PermissionSql.Ordered(catalog.Logins.Securables, changes.Permissions ?? []).Where(permission => permission.State == "revokeGrantOption" || permission.Cascade == true)
+            .Select(permission => "CASCADE also revokes " + permission.Permission + (permission.Securable.Name is { } name ? " on " + ActionSql.Quote(name) : "") + " from every principal "
+                + ActionSql.Quote(login) + " granted it to.")];
 
     /// <summary>OK: the preflight (the login, the identity the dialog read and the rules; then each changed database's), then the
     /// statements one by one in SSMS's order. What SQL Server says is scrubbed of both passwords. SQL Server answers a wrong old
@@ -270,6 +284,9 @@ internal sealed partial class ActionService
         steps.AddRange(LoginSql.PropertiesServerPlan(login, changes, bound).Concat(LoginSql.PropertiesMappingPlan(login, changes, missing, bound)).Select(ActionSql.Checked).Select(statement =>
             new RunStep(StepTitle(statement.Template), context => NamingAsync(connection, () => RunPlannedBoundAsync(connection, statement, context.Token), NamedAdvice(statement.Template), Scrubbed,
                 context.Token), Detail: StepDetail(statement))));
+        // The Securables page's statements last, each bound to the login like the server statements before them.
+        steps.AddRange(PermissionSteps(changes.Permissions, (permission, context) =>
+            RunBoundAsync(connection, bound, self, self, open => SetPermissionAsync(connection, login, facts.PrincipalId, permission, context.Token, open), context.Token)));
         var (done, failure, _) = await RunStepsAsync(connection, steps, null, token, CleanupBudget(args.Action), serverText: Scrubbed);
         // The connections that sign in as this login keep working: their later sessions use the new password, never the old one.
         if (secrets?.Password is { } changed && done.Any(step => step.Title == LoginPasswordStep && step.Status == "done"))
@@ -334,7 +351,8 @@ internal sealed partial class ActionService
             Add(command, "@principal", SqlDbType.Int, 0, bound.PrincipalId ?? throw new InvalidOperationException("A login's binding needs its principal_id."));
             Add(command, "@created", SqlDbType.DateTime, 0, bound.Created ?? throw new InvalidOperationException("A login's binding needs its create_date."));
         }
-        await command.ExecuteNonQueryAsync(token);
+        // Through a reader, as every action statement (ReadAllAsync): its THROW is the answer.
+        await ReadAllAsync(command, token);
     }
 
     /// <summary>A failure or Stop of Login Properties: 15151 (PERMISSION_DENIED) gets what to check, the old password when its step

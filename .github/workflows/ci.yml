@@ -26,13 +26,54 @@ env:
   DOTNET_CLI_TELEMETRY_OPTOUT: '1'
   DOTNET_NOLOGO: '1'
 
+# Every job starts at once and builds what it needs itself: the checks, the live SQL Server checks, the smoke shards and
+# the benchmarks run side by side, so a failure in one hides nothing in the others and the run takes as long as its
+# longest job. Every pull request runs every platform, drafts included: the repository is public, so runners cost nothing.
+# What a public repository does pay in is concurrency (20 jobs at once across the account, 5 of them macOS), so a pull request
+# runs 11 jobs: no job repeats another's work, and report-only work (the desktop benchmarks, Linux's 1024x768 repeats of
+# suites the Windows shards already run at that size) runs on main only.
 jobs:
-  linux:
-    name: Linux (live SQL Server, Electron smoke)
+  check:
+    name: Check (${{ matrix.os }})
     if: github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    # Room for every timed step below (tests/ci-workflow.test.ts) plus the setup before them.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: backend/Varia.Backend/packages.lock.json
+      - run: npm ci
+      - name: Type check, offline .NET checks, vitest, production build
+        id: check
+        timeout-minutes: 20
+        run: npm run check
+
+  live:
+    name: Live SQL Server checks (Linux ${{ matrix.group }}/3)
+    if: github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'
+    strategy:
+      fail-fast: false
+      matrix:
+        # LiveGroups.cs splits the live .NET suites by measured time, each group against a server of its own; the count here
+        # is LiveGroups.CiGroups. Check (ubuntu) runs the offline .NET checks and the rest of vitest.
+        group: [1, 2, 3]
     runs-on: ubuntu-24.04
-    # Room for every timed step below (tests/ci-workflow.test.ts) plus the build and checks before them.
-    timeout-minutes: 90
+    # Room for every timed step below (tests/ci-workflow.test.ts) plus the setup before them.
+    timeout-minutes: 35
     services:
       sql:
         image: mcr.microsoft.com/mssql/server:2022-latest
@@ -71,81 +112,62 @@ jobs:
           cache: true
           cache-dependency-path: backend/Varia.Backend/packages.lock.json
       - run: npm ci
-      - name: Type check, .NET checks (offline and live), vitest, production build
-        id: check
-        run: npm run check
+      - name: Live .NET checks against SQL Server
+        id: test
+        # All the live .NET suites took 11 minutes in one job on PR #96's run; each group prints its suites' times.
+        timeout-minutes: 20
+        run: dotnet run --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --live-group ${{ matrix.group }}/3
+      - name: Live vitest suites against SQL Server
+        # Only the vitest files that use SQL Server (tests/*-live.test.ts); Check runs the others. After a failed group too:
+        # the Release backend they start was built either way.
+        if: matrix.group == 1 && (success() || failure())
+        timeout-minutes: 5
+        run: npx vitest run tests/*-live.test.ts
       - name: Integrated authentication without a Kerberos ticket
         # Linux connects with integrated authentication through GSSAPI (SqlClient's managed SNI). With no ticket, the backend
         # must say to run kinit (AUTH_KERBEROS) with the failure's details, not refuse the mode or show SqlClient's bare
         # "Cannot generate SSPI context.". The cache named here never exists; the suite fails rather than skips if it cannot run.
+        # It runs after a failed check too: the Release backend it starts was built either way.
+        if: matrix.group == 1 && (success() || failure())
+        timeout-minutes: 5
         env:
           KRB5CCNAME: FILE:/tmp/varia-no-kerberos-ticket
           VARIA_TEST_KERBEROS_NO_TICKET: '1'
         run: |
           dpkg -s libgssapi-krb5-2 > /dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y libgssapi-krb5-2; }
           npx vitest run tests/kerberos-live.test.ts
-      - name: Prepare the Electron sandbox and display
-        id: display
-        # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor; Chromium's sandbox needs them because
-        # npm's chrome-sandbox helper is not setuid root. The smoke tests launch with chromiumSandbox (scripts/*-smoke.mjs),
-        # so the runner user gets the real sandbox instead of Playwright's Linux default of --no-sandbox.
-        run: |
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          command -v xvfb-run || { sudo apt-get update && sudo apt-get install -y xvfb; }
-      - name: IPC benchmarks
-        # Check exports and performance before the long smoke suite. Floors are enforced on Linux only; the table goes
-        # to the job summary. The smoke steps below still run when this one fails (the job fails all the same), so one run
-        # reports both.
-        timeout-minutes: 15
-        run: |
-          npm run bench
-          xvfb-run -a -s "-screen 0 1600x1000x24" npm run bench:e2e -- --live
-          xvfb-run -a -s "-screen 0 1600x1000x24" npm run bench:grid -- --live
-          node scripts/check-bench.mjs --enforce
-      - name: Electron smoke tests
-        # After any earlier failure but the build's or the display's, so a benchmark or Kerberos failure hides no smoke result.
-        if: (success() || failure()) && steps.check.outcome == 'success' && steps.display.outcome == 'success'
-        # The suites took 24 min 49 s on PR #51 against the old 25, and wave 4 keeps adding to them.
-        timeout-minutes: 45
-        run: xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke
-      - name: Scripting smoke test on a 1024x768 display
-        # Windows runners have a 1024x768 display, and Script As dialogs and nested submenus must fit it everywhere.
-        if: (success() || failure()) && steps.check.outcome == 'success' && steps.display.outcome == 'success'
-        timeout-minutes: 5
-        run: xvfb-run -a -s "-screen 0 1024x768x24" node scripts/scripting-smoke.mjs
-      - name: Results grid smoke test on a 1024x768 display
-        # Windows runners have a 1024x768 display; the grid, its strips and the toolbar must work and fit there too.
-        if: (success() || failure()) && steps.check.outcome == 'success' && steps.display.outcome == 'success'
-        timeout-minutes: 8
-        run: xvfb-run -a -s "-screen 0 1024x768x24" node scripts/results-smoke.mjs
-      - name: Upload smoke-test screenshots
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: smoke-artifacts-linux
-          path: artifacts/
-          if-no-files-found: ignore
-          retention-days: 7
-      - name: Upload IPC benchmark results
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: bench-linux
-          path: artifacts/bench/
-          if-no-files-found: ignore
-          retention-days: 30
 
-  desktop:
-    name: ${{ matrix.os }}
-    # Every pull request, drafts included: the repository is public, so these runners cost nothing.
+  smoke-linux:
+    name: Smoke (Linux ${{ matrix.shard }}/2)
     if: github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    # Room for every timed step below (tests/ci-workflow.test.ts) plus the build and checks before them.
-    timeout-minutes: 75
+        # scripts/smoke-shards.mjs splits test:smoke by each platform's measured times; the count here is the one in its command
+        # below, and tests/ci-workflow.test.ts keeps every shard within its budget.
+        shard: [1, 2]
+    runs-on: ubuntu-24.04
+    # Room for every timed step below (tests/ci-workflow.test.ts) plus the setup before them.
+    timeout-minutes: 60
+    services:
+      sql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          MSSQL_SA_PASSWORD: 'Varia_Dev_Pw1!'
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P $MSSQL_SA_PASSWORD -Q 'SELECT 1' -b -o /dev/null"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+          --health-start-period 20s
+    env:
+      VARIA_TEST_SQL_SERVER: localhost
+      VARIA_TEST_SQL_USER: sa
+      VARIA_TEST_SQL_PASSWORD: 'Varia_Dev_Pw1!'
+      VARIA_TEST_SQL_SCRATCH: '1'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -160,34 +182,189 @@ jobs:
           cache: true
           cache-dependency-path: backend/Varia.Backend/packages.lock.json
       - run: npm ci
-      - name: Type check, offline .NET checks, vitest, production build
-        id: check
-        run: npm run check
+      - name: Build the app and the Release backend
+        id: build
+        timeout-minutes: 10
+        run: npm run build:smoke
+      - name: Prepare the Electron sandbox and display
+        id: display
+        # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor; Chromium's sandbox needs them because
+        # npm's chrome-sandbox helper is not setuid root. The smoke tests launch with chromiumSandbox (scripts/*-smoke.mjs),
+        # so the runner user gets the real sandbox instead of Playwright's Linux default of --no-sandbox.
+        timeout-minutes: 5
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          command -v xvfb-run || { sudo apt-get update && sudo apt-get install -y xvfb; }
       - name: Electron smoke tests
-        # The smoke suites assert Windows/Linux window chrome (controls overlay, hidden menu bar, Ctrl shortcuts), so on
-        # macOS they fail at the first check; they run there once its native menu bar and Cmd shortcuts are covered.
-        if: runner.os != 'macOS'
-        # The complete Windows suite passed 21 minutes with live-view and lifecycle coverage, and wave 4 keeps adding to it.
-        timeout-minutes: 45
-        run: npm run test:smoke
+        timeout-minutes: 25
+        run: xvfb-run -a -s "-screen 0 1600x1000x24" node scripts/smoke-shards.mjs ${{ matrix.shard }}/2
+      - name: Scripting smoke test on a 1024x768 display
+        # Windows runners have a 1024x768 display, and Script As dialogs and nested submenus must fit it everywhere. The Windows
+        # shards run this suite at that size on every pull request, so Linux repeats it on main only. After a smoke failure
+        # too, so one run reports both.
+        if: matrix.shard == 2 && github.event_name == 'push' && (success() || failure()) && steps.build.outcome == 'success' && steps.display.outcome == 'success'
+        timeout-minutes: 5
+        run: xvfb-run -a -s "-screen 0 1024x768x24" node scripts/scripting-smoke.mjs
+      - name: Results grid smoke test on a 1024x768 display
+        # Windows runners have a 1024x768 display; the grid, its strips and the toolbar must work and fit there too (on main
+        # only, as above).
+        if: matrix.shard == 2 && github.event_name == 'push' && (success() || failure()) && steps.build.outcome == 'success' && steps.display.outcome == 'success'
+        timeout-minutes: 8
+        run: xvfb-run -a -s "-screen 0 1024x768x24" node scripts/results-smoke.mjs
+      - name: Upload smoke-test screenshots
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-artifacts-linux-${{ matrix.shard }}
+          path: artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  smoke-windows:
+    name: Smoke (Windows ${{ matrix.shard }}/2)
+    # The smoke suites assert Windows/Linux window chrome (controls overlay, hidden menu bar, Ctrl shortcuts), so on macOS
+    # they fail at the first check; they run there once its native menu bar and Cmd shortcuts are covered.
+    if: github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    runs-on: windows-latest
+    # Room for every timed step below (tests/ci-workflow.test.ts) plus the setup before them.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: backend/Varia.Backend/packages.lock.json
+      - run: npm ci
+      - name: Build the app and the Release backend
+        id: build
+        timeout-minutes: 10
+        run: npm run build:smoke
+      - name: Electron smoke tests
+        timeout-minutes: 25
+        run: node scripts/smoke-shards.mjs ${{ matrix.shard }}/2
+      - name: Upload smoke-test screenshots
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-artifacts-windows-${{ matrix.shard }}
+          path: artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  bench-linux:
+    name: Benchmarks (Linux)
+    if: github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'
+    runs-on: ubuntu-24.04
+    # Room for every timed step below (tests/ci-workflow.test.ts) plus the setup before them.
+    timeout-minutes: 40
+    services:
+      sql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          MSSQL_SA_PASSWORD: 'Varia_Dev_Pw1!'
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P $MSSQL_SA_PASSWORD -Q 'SELECT 1' -b -o /dev/null"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+          --health-start-period 20s
+    env:
+      VARIA_TEST_SQL_SERVER: localhost
+      VARIA_TEST_SQL_USER: sa
+      VARIA_TEST_SQL_PASSWORD: 'Varia_Dev_Pw1!'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: backend/Varia.Backend/packages.lock.json
+      - run: npm ci
+      - name: Build the app and the Release backend
+        id: build
+        timeout-minutes: 10
+        run: npm run build:smoke
+      - name: Prepare the Electron sandbox and display
+        id: display
+        timeout-minutes: 5
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          command -v xvfb-run || { sudo apt-get update && sudo apt-get install -y xvfb; }
+      - name: IPC benchmarks
+        # Floors are enforced on Linux only; the table goes to the job summary.
+        timeout-minutes: 15
+        run: |
+          npm run bench
+          xvfb-run -a -s "-screen 0 1600x1000x24" npm run bench:e2e -- --live
+          xvfb-run -a -s "-screen 0 1600x1000x24" npm run bench:grid -- --live
+          node scripts/check-bench.mjs --enforce
+      - name: Upload IPC benchmark results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-linux
+          path: artifacts/bench/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  bench-desktop:
+    name: Benchmarks (${{ matrix.os }})
+    # Report only (no floors), so pull requests leave them out: they would hold two runners, one of them macOS, which has the
+    # fewest concurrent slots.
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.regression-suite == 'none')
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    # Room for every timed step below (tests/ci-workflow.test.ts) plus the setup before them.
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: backend/Varia.Backend/packages.lock.json
+      - run: npm ci
+      - name: Build the app and the Release backend
+        id: build
+        timeout-minutes: 10
+        run: npm run build:smoke
       - name: IPC benchmarks (report only)
-        # The IPC and results grid benchmarks. Shared Windows and macOS runners vary too much for floors; the end-to-end
-        # runs follow the smoke tests' platforms. They report even after a smoke failure.
-        if: (success() || failure()) && steps.check.outcome == 'success'
+        # Shared Windows and macOS runners vary too much for floors; the end-to-end runs follow the smoke tests' platforms.
         timeout-minutes: 15
         shell: bash
         run: |
           npm run bench
           if [ "$RUNNER_OS" != macOS ]; then npm run bench:e2e; npm run bench:grid; fi
           node scripts/check-bench.mjs
-      - name: Upload smoke-test screenshots
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: smoke-artifacts-${{ matrix.os }}
-          path: artifacts/
-          if-no-files-found: ignore
-          retention-days: 7
       - name: Upload IPC benchmark results
         if: always()
         uses: actions/upload-artifact@v7

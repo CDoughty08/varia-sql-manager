@@ -192,36 +192,28 @@ internal static partial class LoginSql
     }
 
     /// <summary>The most statements Login Properties plans (logins.ts loginPropertiesStatements): the options, the password, Connect,
-    /// Enabled, each credential, each server role, and per database its DROP USER, or its CREATE USER or rename, the default schema's two
-    /// and one per role.</summary>
+    /// Enabled, each credential, each server role, per database its DROP USER, or its CREATE USER or rename, the default schema's two
+    /// and one per role, and one per permission (D2d).</summary>
     public static int PropertiesStatements(LoginChangesDto changes) =>
         (HasOptions(changes) ? 1 : 0) + (changes.Password is null ? 0 : 1) + (changes.Connect is null ? 0 : 1) + (changes.Enabled is null ? 0 : 1)
         + (changes.RolesAdd?.Count ?? 0) + (changes.RolesDrop?.Count ?? 0) + (changes.CredentialsAdd?.Count ?? 0) + (changes.CredentialsDrop?.Count ?? 0)
         + (changes.Mappings ?? []).Sum(mapping => mapping.Change == "unmap" ? 1
-            : (mapping.Change == "map" || mapping.NewName is not null ? 1 : 0) + (mapping.DefaultSchema is null ? 0 : 2) + (mapping.RolesAdd?.Count ?? 0) + (mapping.RolesDrop?.Count ?? 0));
+            : (mapping.Change == "map" || mapping.NewName is not null ? 1 : 0) + (mapping.DefaultSchema is null ? 0 : 2) + (mapping.RolesAdd?.Count ?? 0) + (mapping.RolesDrop?.Count ?? 0))
+        + (changes.Permissions?.Count ?? 0);
 
     /// <summary>Script Action's text of Login Properties (D2 §5.6, critic A14). With a password change: one batch in one XACT_ABORT
     /// transaction under the placeholder header, so a script run unedited fails to parse and changes nothing, each mapped database's
     /// statement as EXEC [db].sys.sp_executesql N'…'. Without one: SSMS's form, a GO after each statement and USE [db] before each
-    /// mapped database's. Varia runs the statements one by one, as SSMS does.</summary>
-    public static string PropertiesScriptText(string login, LoginChangesDto changes, IReadOnlySet<string> missingSchemas, string header)
+    /// mapped database's. Varia runs the statements one by one, as SSMS does. The Securables page's statements (<paramref name="permissions"/>,
+    /// D2d) come last, in master.</summary>
+    public static string PropertiesScriptText(string login, LoginChangesDto changes, IReadOnlySet<string> missingSchemas, string header, IReadOnlyList<string>? permissions = null)
     {
         var server = new List<string>();
         if (HasOptions(changes)) server.Add(OptionsStatement(login, changes));
         if (changes.Password is { } password) server.Add(PasswordStatement(login, password, null, null));
         server.AddRange(PropertiesServerPlan(login, changes).Select(ActionSql.Checked).Select(ActionSql.Statement));
         var mapped = PropertiesMappingPlan(login, changes, missingSchemas).Select(ActionSql.Checked).ToList();
-        var text = new StringBuilder("USE [master]").Append(NL).Append("GO").Append(NL);
-        if (changes.Password is null)
-        {
-            foreach (var statement in server) text.Append(statement).Append(NL).Append("GO").Append(NL);
-            foreach (var statement in mapped) text.Append(ActionSql.ScriptText(statement));
-            return text.ToString();
-        }
-        text.Append(header).Append(NL).Append("SET XACT_ABORT ON;").Append(NL).Append("BEGIN TRANSACTION;").Append(NL);
-        foreach (var statement in server) text.Append(statement).Append(';').Append(NL);
-        foreach (var statement in mapped) text.Append(InDatabase(statement)).Append(';').Append(NL);
-        return text.Append("COMMIT TRANSACTION;").Append(NL).Append("GO").Append(NL).ToString();
+        return Script(server, mapped, permissions ?? [], changes.Password is not null, header);
     }
 
     // --- Lint corpus --------------------------------------------------------------------------------------------------------

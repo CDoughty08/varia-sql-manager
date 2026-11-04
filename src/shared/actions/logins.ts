@@ -2,6 +2,7 @@
 // the backend's login preflight (ActionSql.Login) reads. The one place these live (critic A18): Object Explorer's login
 // subtypes, the menus' greying and the backend's refusals all come from here, the backend through actions-catalog.json.
 // Erasable TypeScript (no enums), so Node's type stripping can load it too.
+import { securablesCatalog, type ExplicitPermission, type PermissionChoice, type SecurablesModel } from './securables.ts'
 
 // One entry per line, so later subtypes append cleanly.
 export const loginSubtypes = [
@@ -55,7 +56,7 @@ export function loginStatusOf(disabled: boolean, connectDenied: boolean): 'disab
  *  policy, from catalog views only (sys.server_principals, sys.server_permissions and sys.sql_logins). */
 export const loginDetailWords = {
   types: {
-    S: 'SQL Server authentication', U: 'Windows user', G: 'Windows group', C: 'Mapped to a certificate', K: 'Mapped to an asymmetric key',
+    S: 'SQL Server authentication', U: 'Windows user', G: 'Windows group', C: 'Mapped to certificate', K: 'Mapped to asymmetric key',
     E: 'Microsoft Entra user or application', X: 'Microsoft Entra group'
   },
   disabled: 'Disabled',
@@ -136,7 +137,10 @@ export const loginMessages = {
   // D2e: Managed Instance's ALTER LOGIN for a Microsoft Entra login takes only ENABLE, DISABLE and the defaults (Learn).
   externalCredentials: 'A Microsoft Entra login cannot be mapped to a credential here.',
   // SQL Server refuses DEFAULT_SCHEMA for a user mapped to a certificate or an asymmetric key (15259, probed).
-  signingSchema: 'A user mapped to a certificate or an asymmetric key has no default schema.'
+  signingSchema: 'A user mapped to a certificate or an asymmetric key has no default schema.',
+  // SQL Server grants, denies and revokes nothing for sa or for the principal that runs the statement (4624, an informational message
+  // it sends while changing nothing), so Login Properties' Securables page only shows their permissions.
+  permissionsProtected: 'SQL Server does not grant, deny or revoke permissions for sa or for the login this connection uses, so they are shown here but cannot change.'
 } as const
 export type LoginMessageId = keyof typeof loginMessages
 /** The message a subtype's greyed verb answers with. */
@@ -159,6 +163,9 @@ export const loginLimits = {
   credentials: 16, certificates: 1_024, asymmetricKeys: 1_024, permissions: 512,
   /** Credentials New Login's list and a login's Mapped Credentials grid show (D2e). */
   listedCredentials: 1_024,
+  /** The Securables page (D2d): objects Add Objects lists per type, explicit permissions Login Properties reads, and effective
+   *  permissions the Effective tab lists (each one more is read, so a truncation shows). */
+  securableObjects: 1_024, explicitPermissions: 1_024, effectivePermissions: 256,
   /** A SID as hexadecimal text (CONVERT(varchar(172), sid, 2)). */
   sidHex: 172,
   /** An action step's title and detail (ActionStep). */
@@ -195,7 +202,7 @@ export interface LoginFacts {
    *  refused for its members' sessions (15434; unverified). */
   readonly sessions?: number
   /** The service that runs as this Windows login (sys.dm_server_services, guarded; or an NT SERVICE\ name), read by the
-   *  loginFacts describe only; at most loginLimits.serviceName characters. */
+   *  loginFacts, Delete Object and Login Properties describes only; at most loginLimits.serviceName characters. */
   readonly service?: string
   readonly ownedDatabases?: number
   /** At most loginLimits.ownedDatabases, by name. */
@@ -221,6 +228,33 @@ export function loginRefusal(facts: Pick<LoginFacts, 'subtype' | 'own' | 'sysadm
   return undefined
 }
 
+/**
+ * A login's lock-out state, which only LOGINPROPERTY knows (ActionSql.LoginLock, the one statement allowed to call it, D4 §7):
+ * read by Unlock…'s describe and again by its preflight. `lockoutTime` (the server's clock, yyyy-MM-ddTHH:mm:ss.fff) only
+ * while locked; `daysUntilExpiration` only while the password expires.
+ */
+export interface LoginLockFacts {
+  readonly locked: boolean
+  readonly badPasswords?: number
+  readonly lockoutTime?: string
+  readonly mustChange: boolean
+  readonly expired: boolean
+  readonly daysUntilExpiration?: number
+}
+/** How Unlock… unlocks (D4d, owner decision 9): keeping the current password, by turning the password policy off and on
+ *  again in one transaction (which clears the password history). D2c's Login Properties adds setting a new password, SSMS's way,
+ *  as the dialog's first choice; that hand-off sends no request of its own. */
+export const unlockModes = ['keepPassword'] as const
+/** The only LOGINPROPERTY properties Varia reads (ActionSql.LoginLock, critic A15): never PasswordHash or
+ *  PasswordHashAlgorithm. The backend checks its statement against this list (LoginRules.LockProperties). */
+export const loginLockProperties = ['IsLocked', 'BadPasswordCount', 'LockoutTime', 'IsMustChange', 'IsExpired', 'DaysUntilExpiration'] as const
+export type UnlockMode = typeof unlockModes[number]
+/** Why Unlock… cannot keep the password now, or undefined: the login's rules (loginRefusal), then a login that is not a SQL
+ *  Server login enforcing the password policy, one that must change its password, and one that is not locked out. C#:
+ *  LoginRules.UnlockRefusal. */
+export function unlockRefusal(facts: Pick<LoginFacts, 'subtype' | 'own' | 'sysadmin' | 'canAlter' | 'canControlServer' | 'type' | 'policyChecked'>, lock: Pick<LoginLockFacts, 'locked' | 'mustChange'>): LoginMessageId | undefined {
+  return loginRefusal(facts, 'unlock') ?? (facts.type !== 'S' || facts.policyChecked !== true ? 'unlockNoPolicy' : lock.mustChange ? 'unlockMustChange' : !lock.locked ? 'notLocked' : undefined)
+}
 /** A database user mapped to a login (D4c): its database and name, the schemas, roles and other securables it owns, the permissions
  *  it granted to others, whether its database is read-only, and whether this connection may drop users there (ALTER ANY USER).
  *  C#: MappedUserDto. */
@@ -268,33 +302,6 @@ export const loginDeleteText = {
    *  (15434) until they disconnect, and Activity Monitor neither shows nor ends Varia's own sessions. */
   connections: (count: number) => count === 1 ? 'its sessions fail the DROP until it is disconnected' : 'their sessions fail the DROP until they are disconnected'
 } as const
-/**
- * A login's lock-out state, which only LOGINPROPERTY knows (ActionSql.LoginLock, the one statement allowed to call it, D4 §7):
- * read by Unlock…'s describe and again by its preflight. `lockoutTime` (the server's clock, yyyy-MM-ddTHH:mm:ss.fff) only
- * while locked; `daysUntilExpiration` only while the password expires.
- */
-export interface LoginLockFacts {
-  readonly locked: boolean
-  readonly badPasswords?: number
-  readonly lockoutTime?: string
-  readonly mustChange: boolean
-  readonly expired: boolean
-  readonly daysUntilExpiration?: number
-}
-/** How Unlock… unlocks (D4d, owner decision 9): keeping the current password, by turning the password policy off and on
- *  again in one transaction (which clears the password history). D2c's Login Properties adds setting a new password, SSMS's way,
- *  as the dialog's first choice; that hand-off sends no request of its own. */
-export const unlockModes = ['keepPassword'] as const
-/** The only LOGINPROPERTY properties Varia reads (ActionSql.LoginLock, critic A15): never PasswordHash or
- *  PasswordHashAlgorithm. The backend checks its statement against this list (LoginRules.LockProperties). */
-export const loginLockProperties = ['IsLocked', 'BadPasswordCount', 'LockoutTime', 'IsMustChange', 'IsExpired', 'DaysUntilExpiration'] as const
-export type UnlockMode = typeof unlockModes[number]
-/** Why Unlock… cannot keep the password now, or undefined: the login's rules (loginRefusal), then a login that is not a SQL
- *  Server login enforcing the password policy, one that must change its password, and one that is not locked out. C#:
- *  LoginRules.UnlockRefusal. */
-export function unlockRefusal(facts: Pick<LoginFacts, 'subtype' | 'own' | 'sysadmin' | 'canAlter' | 'canControlServer' | 'type' | 'policyChecked'>, lock: Pick<LoginLockFacts, 'locked' | 'mustChange'>): LoginMessageId | undefined {
-  return loginRefusal(facts, 'unlock') ?? (facts.type !== 'S' || facts.policyChecked !== true ? 'unlockNoPolicy' : lock.mustChange ? 'unlockMustChange' : !lock.locked ? 'notLocked' : undefined)
-}
 
 /** The subtypes whose names SQL Server authenticates itself, so a backslash is never part of one. */
 export const noBackslashSubtypes: readonly LoginSubtype[] = ['sa', 'sql']
@@ -324,6 +331,7 @@ export function loginsCatalog() {
     },
     checkNames: { describe: windowsPrincipalDescribe, permission: checkNamesText.permission, notFound: checkNamesText.notFound, lookupFailed: checkNamesText.lookupFailed },
     scriptHeader: passwordScriptHeader,
+    securables: securablesCatalog(),
     typeSubtypes: loginTypeSubtypes
   }
 }
@@ -432,6 +440,8 @@ export interface NewLoginModel {
   /** sys.credentials, at most loginLimits.listedCredentials by name (D2e). */
   readonly credentials: readonly NewLoginCredential[]
   readonly credentialsTruncated: boolean
+  /** The Securables page's lists (D2d). */
+  readonly securables: SecurablesModel
 }
 /** A Windows login's name: DOMAIN\name, one backslash with text on both sides (the server answers 15407 otherwise). */
 export const windowsLoginName = /^[^\\]+\\[^\\]+$/
@@ -570,14 +580,17 @@ export interface UserMappingChoice {
 }
 /** The most statements a mapping plans: CREATE USER, the default schema's ALTER USER and CREATE SCHEMA, and one per role. */
 export const mappingStatements = (mapping: Pick<UserMappingChoice, 'defaultSchema' | 'rolesAdd'>): number => 1 + (mapping.defaultSchema === undefined ? 0 : 2) + mapping.rolesAdd.length
-/** The most statements New Login plans: CREATE LOGIN, Deny, Disable, each credential (D2e), each server role, and each mapping's.
- *  Bounded by actionLimits.statements (src/shared/actions/catalog.ts), which the request schema, the page and C# all check. */
-export function newLoginStatements(request: { readonly login?: Pick<NewLoginGeneral, 'credentials'>; readonly serverRoles: readonly string[]; readonly status: LoginStatusChoice; readonly mappings: readonly Pick<UserMappingChoice, 'defaultSchema' | 'rolesAdd'>[] }): number {
+/** The most statements New Login plans: CREATE LOGIN, Deny, Disable, each credential (D2e), each server role, each mapping's, and one
+ *  per permission (D2d). Bounded by actionLimits.statements (src/shared/actions/catalog.ts), which the request schema, the page and C# all check. */
+export function newLoginStatements(request: {
+  readonly login?: Pick<NewLoginGeneral, 'credentials'>; readonly serverRoles: readonly string[]; readonly status: LoginStatusChoice
+  readonly mappings: readonly Pick<UserMappingChoice, 'defaultSchema' | 'rolesAdd'>[]; readonly permissions?: readonly unknown[]
+}): number {
   return 1 + (request.status.connect === 'deny' ? 1 : 0) + (request.status.enabled ? 0 : 1) + (request.login?.credentials?.length ?? 0) + request.serverRoles.length
-    + request.mappings.reduce((sum, mapping) => sum + mappingStatements(mapping), 0)
+    + request.mappings.reduce((sum, mapping) => sum + mappingStatements(mapping), 0) + (request.permissions?.length ?? 0)
 }
 /** Why a plan is too long (the limit is actionLimits.statements; catalog.ts imports this file, so the number is passed in). */
-export const tooManyStatementsMessage = (limit: number) => `This login would need more than ${limit.toLocaleString('en-US')} statements. Map fewer databases, or apply the rest afterwards.`
+export const tooManyStatementsMessage = (limit: number) => `This login would need more than ${limit.toLocaleString('en-US')} statements. Map fewer databases or change fewer permissions, or apply the rest afterwards.`
 
 // --- Login Properties (D2c) ---------------------------------------------------------------------------------------------
 
@@ -610,6 +623,8 @@ export interface LoginChanges {
   readonly rolesAdd?: readonly string[]
   readonly rolesDrop?: readonly string[]
   readonly mappings?: readonly LoginMappingChange[]
+  /** The Securables page's statements (D2d), each against the state the describe read. */
+  readonly permissions?: readonly PermissionChoice[]
   readonly connect?: 'grant' | 'deny'
   readonly enabled?: boolean
   /** Mapped Credentials' rows added and removed (D2e): ALTER LOGIN … ADD CREDENTIAL and DROP CREDENTIAL, at most loginLimits.credentials each. */
@@ -629,6 +644,9 @@ export interface LoginPropertiesFacts {
   readonly serverRolesTruncated: boolean
   readonly users: readonly LoginMappedUser[]
   readonly read: readonly string[]
+  /** The login's explicit server-level permissions (D2d; none read for SQL Server's own logins), at most loginLimits.explicitPermissions. */
+  readonly permissions: readonly ExplicitPermission[]
+  readonly permissionsTruncated: boolean
   /** D2e: the credentials mapped to the login (sys.server_principal_credentials), at most loginLimits.listedCredentials by name, and
    *  the certificate or asymmetric key a C or K login is mapped to (by its SID). */
   readonly credentials: readonly string[]
@@ -637,23 +655,29 @@ export interface LoginPropertiesFacts {
   readonly asymmetricKey?: string
 }
 /** The most statements Login Properties plans: the options, the password, Connect, Enabled, each credential removed and added (D2e),
- *  each server role, and per database its DROP USER, or its CREATE USER or rename, the default schema's two and one per role. C#:
- *  LoginSql.PropertiesStatements. */
+ *  each server role, per database its DROP USER, or its CREATE USER or rename, the default schema's two and one per role, and one per
+ *  permission (D2d). C#: LoginSql.PropertiesStatements. */
 export function loginPropertiesStatements(changes: LoginChanges): number {
   const options = changes.defaultDatabase !== undefined || changes.defaultLanguage !== undefined || changes.checkPolicy !== undefined || changes.checkExpiration !== undefined
   return (options ? 1 : 0) + (changes.password ? 1 : 0) + (changes.connect ? 1 : 0) + (changes.enabled === undefined ? 0 : 1) + (changes.rolesAdd?.length ?? 0) + (changes.rolesDrop?.length ?? 0)
     + (changes.credentialsAdd?.length ?? 0) + (changes.credentialsDrop?.length ?? 0)
     + (changes.mappings ?? []).reduce((sum, mapping) => sum + (mapping.change === 'unmap' ? 1
       : (mapping.change === 'map' || mapping.newName !== undefined ? 1 : 0) + (mapping.defaultSchema === undefined ? 0 : 2) + (mapping.rolesAdd?.length ?? 0) + (mapping.rolesDrop?.length ?? 0)), 0)
+    + (changes.permissions?.length ?? 0)
 }
 /** Why Login Properties cannot apply these changes to the login its describe read, or undefined: SQL Server's own logins, Deny,
  *  Disable or MUST_CHANGE of the login this connection uses, Disable of a Windows group, and a password or policy for a login that is
  *  not a SQL Server login. Permissions are the server's to answer: a login may change its own password (with the old one) and defaults. C#:
  *  LoginRules.PropertiesRefusal. */
+/** Whether SQL Server refuses every permission statement for the login (4624): sa, or the login this connection uses itself (not a
+ *  group it gets in through, which SQL Server treats as another principal). C#: LoginRules.PermissionsProtected. */
+export const permissionsProtected = (facts: Pick<LoginFacts, 'subtype' | 'own'>) =>
+  facts.subtype === 'sa' || (facts.own && facts.subtype !== 'windowsGroup' && facts.subtype !== 'externalGroup')
 export function loginPropertiesRefusal(facts: Pick<LoginFacts, 'subtype' | 'own' | 'type'>, changes: LoginChanges): LoginMessageId | undefined {
   if (facts.subtype === 'system') return 'system'
   if (facts.own && (changes.enabled === false || changes.connect === 'deny')) return 'ownStatus'
   if (facts.own && changes.password?.mustChange) return 'ownMustChange'
+  if (changes.permissions?.length && permissionsProtected(facts)) return 'permissionsProtected'
   if (facts.subtype === 'windowsGroup' && changes.enabled === false) return 'windowsGroupDisable'
   if (facts.type !== 'S' && (changes.password || changes.checkPolicy !== undefined || changes.checkExpiration !== undefined)) return 'propertiesNotSql'
   if ((facts.type === 'E' || facts.type === 'X') && (changes.credentialsAdd?.length || changes.credentialsDrop?.length)) return 'externalCredentials'

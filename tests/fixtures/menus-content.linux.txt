@@ -64,6 +64,7 @@ View
   &Command Palette…  Ctrl+Shift+P  ++++
   &Go to Query…  Ctrl+P  ++++
   Se&arch…  ++++
+  Search Ob&jects…  -+++
   ---
   &Save Layout…  ++++
   &Load Layout…  ++++
@@ -128,3 +129,7 @@ Window
   &Reset Window Layout  ++++
 Help
   Clear &Entra ID Token Cache  ++++
+  ---
+  Check for &Updates  ++++
+  &Restart to Update  ----
+  Release &Notes  ++++

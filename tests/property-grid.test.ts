@@ -31,9 +31,13 @@ describe('Enter in an object dialog', () => {
     expect(dialogEnter(element('FORM'))).toBe('ok')
     expect(dialogEnter(null)).toBe('ok')
   })
-  it('leaves buttons and lists their own Enter', () => {
+  it('leaves buttons, lists, disclosures and links their own Enter', () => {
     expect(dialogEnter(element('BUTTON'))).toBe('native')
     expect(dialogEnter(element('SELECT', [`[${propertyGridAttribute}]`]))).toBe('native')
+    // A disclosure opens on Enter (Detach's closed Sessions list), and a link follows itself: neither presses OK.
+    expect(dialogEnter(element('SUMMARY'))).toBe('native')
+    expect(dialogEnter({ ...element('A'), hasAttribute: name => name === 'href' })).toBe('native')
+    expect(dialogEnter(element('A'))).toBe('ok')
   })
   it('edits in place in a property grid, a grid, a list box or a table, never pressing OK', () => {
     for (const container of [`[${propertyGridAttribute}]`, '[role="grid"]', '[role="listbox"]', 'table']) expect(dialogEnter(element('INPUT', [container])), container).toBe('edit')

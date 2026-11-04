@@ -25,7 +25,6 @@ let page
 const failures = []
 const watchdog = setTimeout(() => { console.error('SSIS suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 240000)
 
-const fast = { force: true }
 const catalog = ['server-a', 'Integration Services Catalogs', 'SSISDB']
 const finance = [...catalog, 'Finance']
 const tabs = () => documentTabs(page).getByRole('tab')
@@ -57,7 +56,7 @@ async function menuOn(path, item) {
   await (await explorerRow(page, ...path)).click({ button: 'right', force: true })
   await expect(objectMenu()).toBeVisible()
   const labels = await menuItemNames(objectMenu())
-  if (item) await objectMenu().getByRole('menuitem', { name: item, exact: true }).click(fast)
+  if (item) await objectMenu().getByRole('menuitem', { name: item, exact: true }).click()
   return labels
 }
 /** Whether focus is inside the document's frame. */

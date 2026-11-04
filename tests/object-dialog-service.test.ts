@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { unknownOutcomeMessage } from '../src/shared/actions/catalog'
 import { loginMessages, type LoginFacts, type LoginLockFacts } from '../src/shared/actions/logins'
-import type { ActionDescribeResult, ActionExecuteResult, ActionScriptResult, DeleteTarget } from '../src/shared/actions/schema'
+import type { ActionDescribeResult, ActionExecuteResult, ActionScriptResult, DatabaseStateModel, DeleteTarget } from '../src/shared/actions/schema'
 import type { ApiResult, VariaApi } from '../src/shared/contracts'
 import type { ObjectRef } from '../src/shared/explorer/refs'
 import { dialogMessages, ObjectDialogService } from '../src/renderer/src/dialogs/ObjectDialogService'
@@ -41,10 +41,11 @@ function setup() {
   const documents = { newQuery: vi.fn() }, files = { saveCopy: vi.fn(async (name: string) => ({ id: 'f', name, path: '/x/' + name, encoding: 'utf8' as const, readOnly: false })) }
   let ids = 0
   const notify = vi.fn<(message: string) => void>()
-  const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, notify, newId: () => `id-${++ids}` })
+  const databaseState = vi.fn<(connectionId: string, database: string, offline: boolean) => void>()
+  const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, notify, databaseState, newId: () => `id-${++ids}` })
   cleanups.push(() => dialogs.dispose())
   const settle = () => new Promise(resolve => setTimeout(resolve, 0))
-  return { dialogs, api, connections, explorer, documents, execute, settle, notify, hold: (promise: Promise<ApiResult<ActionDescribeResult>>) => { held = promise } }
+  return { dialogs, api, connections, explorer, documents, execute, settle, notify, databaseState, hold: (promise: Promise<ApiResult<ActionDescribeResult>>) => { held = promise } }
 }
 
 describe('ObjectDialogService', () => {
@@ -201,13 +202,13 @@ describe('ObjectDialogService: Unlock Login', () => {
     await settle()
     // Set a new password… is the default (owner decision 9, D2c): keeping the password clears its history, so the user picks it.
     expect(dialogs.current).toMatchObject({ phase: 'ready', draft: { mode: 'setPassword' } })
-    expect(dialogs.unavailable()).toBeUndefined()
+    expect(dialogs.blockedReason()).toBeUndefined()
     expect(unlockLoginDefinition.okLabel?.({ mode: 'setPassword' })).toBe('Continue in Login Properties…')
     expect(unlockLoginDefinition.okLabel?.({ mode: 'keepPassword' })).toBeUndefined()
     // A draft without a choice (none is ever made by the dialog now) still sends nothing.
-    expect(unlockLoginDefinition.unavailable?.(dialogs.current!.model as never, {})).toBe(unlockChooseMode)
+    expect(unlockLoginDefinition.blocked?.(dialogs.current!.model as never, {})).toBe(unlockChooseMode)
     dialogs.updateDraft({ mode: 'keepPassword' })
-    expect(dialogs.unavailable()).toBeUndefined()
+    expect(dialogs.blockedReason()).toBeUndefined()
     await dialogs.script('newQuery')
     expect(api.scriptObjectAction.mock.calls[0][0]).toEqual({ action: 'unlock', target: lockedRef, mode: 'keepPassword', loginIdentity: { sid: '0A1B', created: '2026-01-02T03:04:05.000' }, connectionId: 'server-a', requestId: 'id-2' })
     const ok = dialogs.ok()
@@ -255,9 +256,9 @@ describe('ObjectDialogService: Unlock Login', () => {
       api.describeObject.mockResolvedValueOnce(described(login, state))
       dialogs.open('unlockLogin', node(lockedRef))
       await settle()
-      expect(dialogs.unavailable(), name).toBe(reason)
+      expect(dialogs.blockedReason(), name).toBe(reason)
       dialogs.updateDraft({ mode: 'keepPassword' })
-      expect(dialogs.unavailable(), name).toBe(keep)
+      expect(dialogs.blockedReason(), name).toBe(keep)
       await dialogs.ok()
       expect(api.executeObjectAction, name).not.toHaveBeenCalled()
       expect(dialogs.current?.phase, name).toBe('ready')
@@ -276,11 +277,114 @@ describe('ObjectDialogService: Unlock Login', () => {
     execute.resolve({ ok: true, value: { steps: [{ status: 'failed', title: 'Turn off the password policy', message: loginMessages.notLocked }, { status: 'skipped', title: 'Commit' }], messages: [], elapsedMs: 1, error: { code: 'NOT_SUPPORTED', message: loginMessages.notLocked, retryable: false } } })
     await ok
     expect(dialogs.current).toMatchObject({ phase: 'failed', error: { message: loginMessages.notLocked } })
-    expect(dialogs.unavailable()).toBe(loginMessages.notLocked)
+    expect(dialogs.blockedReason()).toBe(loginMessages.notLocked)
   })
   it('words the lock-out state from the describe', () => {
     expect(unlockStateLines(lock())).toEqual(['Locked out since 2026-11-02 21:07:12 (server time) after 11 failed sign-ins.'])
     expect(unlockStateLines(lock({ badPasswords: 1, lockoutTime: undefined, expired: true, mustChange: true }))).toEqual(['Locked out after 1 failed sign-in.', 'The password has expired.', 'The login must change its password at next sign-in.'])
     expect(unlockStateLines(lock({ locked: false }))).toEqual(['This login is not locked out.'])
+  })
+})
+
+describe('ObjectDialogService: Take Offline and Bring Online', () => {
+  const identity = { id: 7, created: '2026-01-02T03:04:05.678' }
+  const state = (changes: Partial<DatabaseStateModel> = {}): ApiResult<ActionDescribeResult> => ({ ok: true, value: { elapsedMs: 1, databaseState: {
+    name: 'AppData', identity, state: 0, userAccess: 0, readOnly: false, standby: false, sessions: 0, withTransaction: 0, sessionList: [], sessionsTruncated: false, warnings: [], ...changes
+  } } })
+  const busy = state({ sessions: 2, withTransaction: 1, sessionList: [{ sessionId: 61, login: 'app', program: 'App', host: 'web1', openTransactions: 1 }, { sessionId: 62, openTransactions: 0 }] })
+  const offline: ApiResult<ActionExecuteResult> = { ok: true, value: { steps: [{ status: 'done', title: 'Take database offline' }], messages: [], elapsedMs: 1 } }
+
+  it('disables OK while sessions are in the database and Drop All Active Connections is cleared, and sends the identity it read', async () => {
+    const { dialogs, api, settle, execute, explorer, databaseState } = setup()
+    api.describeObject.mockResolvedValueOnce(busy)
+    dialogs.open('takeOffline', node(databaseRef, 12))
+    await settle()
+    expect(dialogs.current).toMatchObject({ phase: 'ready', draft: { dropConnections: false } })
+    expect(dialogs.blockedReason()).toBe('2 sessions are connected: check Drop All Active Connections, or Check Again once they leave.')
+    await dialogs.ok()
+    expect(api.executeObjectAction).not.toHaveBeenCalled()
+    dialogs.updateDraft({ dropConnections: true })
+    expect(dialogs.blockedReason()).toBeUndefined()
+    const ok = dialogs.ok()
+    expect(api.executeObjectAction.mock.calls[0][0]).toEqual({ action: 'takeOffline', target: databaseRef, dropConnections: true, identity, connectionId: 'server-a', requestId: 'id-2' })
+    execute.resolve(offline)
+    await ok
+    // SSMS's progress dialog stays open on its steps with Close; the listing and Database Properties follow the new state.
+    expect(dialogs.current).toMatchObject({ phase: 'succeeded', steps: [{ status: 'done', title: 'Take database offline' }] })
+    expect(dialogs.blockedReason()).toBeUndefined()
+    dialogs.updateDraft({ dropConnections: false })
+    expect(dialogs.current?.draft).toEqual({ dropConnections: true })
+    expect(explorer.reconcile.mock.calls).toEqual([[3]])
+    expect(databaseState.mock.calls).toEqual([['server-a', 'AppData', true]])
+    await dialogs.ok()
+    expect(dialogs.current).toBeUndefined()
+  })
+  it('says one session in the singular, and unknown sessions (no VIEW SERVER STATE) leave OK enabled', async () => {
+    const { dialogs, api, settle } = setup()
+    api.describeObject.mockResolvedValueOnce(state({ sessions: 1, sessionList: [{ sessionId: 61, openTransactions: 0 }] }))
+    dialogs.open('takeOffline', node(databaseRef))
+    await settle()
+    expect(dialogs.blockedReason()).toBe('1 session is connected: check Drop All Active Connections, or Check Again once it leaves.')
+    dialogs.close()
+    api.describeObject.mockResolvedValueOnce(state({ sessions: undefined, withTransaction: undefined }))
+    dialogs.open('takeOffline', node(databaseRef))
+    await settle()
+    expect(dialogs.blockedReason()).toBeUndefined()
+  })
+  it('Check Again reads the database again and keeps the choice', async () => {
+    const { dialogs, api, settle } = setup()
+    api.describeObject.mockResolvedValueOnce(busy)
+    dialogs.open('takeOffline', node(databaseRef))
+    await settle()
+    dialogs.updateDraft({ dropConnections: true })
+    const again = deferred<ApiResult<ActionDescribeResult>>()
+    api.describeObject.mockReturnValueOnce(again.promise)
+    dialogs.reload()
+    // The model stays on screen while it reads; OK waits for the new count.
+    expect(dialogs.current).toMatchObject({ phase: 'loading', model: { sessions: 2 } })
+    await dialogs.ok()
+    expect(api.executeObjectAction).not.toHaveBeenCalled()
+    again.resolve(state())
+    await settle()
+    expect(dialogs.current).toMatchObject({ phase: 'ready', model: { sessions: 0 }, draft: { dropConnections: true } })
+    expect(api.describeObject.mock.calls.map(call => call[0].dialog)).toEqual(['takeOffline', 'takeOffline'])
+  })
+  it('Bring Online runs as soon as the describe answers, stays open on Success, and shows SQL Server\'s note', async () => {
+    const { dialogs, api, settle, execute, databaseState } = setup()
+    api.describeObject.mockResolvedValueOnce(state({ state: 6 }))
+    dialogs.open('bringOnline', node(databaseRef))
+    await settle()
+    expect(dialogs.current?.phase).toBe('executing')
+    expect(api.executeObjectAction.mock.calls[0][0]).toEqual({ action: 'bringOnline', target: databaseRef, identity, connectionId: 'server-a', requestId: 'id-2' })
+    const note = 'The database is online in SINGLE_USER mode: only one connection at a time can use it.'
+    execute.resolve({ ok: true, value: { steps: [{ status: 'done', title: 'Bring database online' }], messages: [note], elapsedMs: 1 } })
+    await settle()
+    expect(dialogs.current).toMatchObject({ phase: 'succeeded', notice: note })
+    expect(databaseState.mock.calls).toEqual([['server-a', 'AppData', false]])
+    // A refused describe (already online) runs nothing.
+    dialogs.close()
+    api.describeObject.mockResolvedValueOnce({ ok: true, value: { elapsedMs: 1, error: { code: 'NOT_SUPPORTED', message: 'The database is online.', retryable: false } } })
+    dialogs.open('bringOnline', node(databaseRef))
+    await settle()
+    expect(dialogs.current).toMatchObject({ phase: 'loadFailed', error: { message: 'The database is online.' } })
+    expect(api.executeObjectAction).toHaveBeenCalledTimes(1)
+  })
+  it('a failed Bring Online can be retried with OK, which does not run on its own again', async () => {
+    const { dialogs, api, settle, execute } = setup()
+    api.describeObject.mockResolvedValueOnce(state({ state: 3 }))
+    dialogs.open('bringOnline', node(databaseRef))
+    await settle()
+    execute.resolve({ ok: true, value: { steps: [{ status: 'failed', title: 'Bring database online', message: 'File activation failure.' }], messages: [], elapsedMs: 1, error: { code: 'SQL_ERROR', message: 'File activation failure.', retryable: false } } })
+    await settle()
+    expect(dialogs.current).toMatchObject({ phase: 'failed', error: { code: 'SQL_ERROR' } })
+    api.describeObject.mockResolvedValueOnce(state({ state: 3 }))
+    dialogs.reload()
+    await settle()
+    expect(dialogs.current?.phase).toBe('ready')
+    expect(api.executeObjectAction).toHaveBeenCalledTimes(1)
+    api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [{ status: 'done', title: 'Bring database online' }], messages: [], elapsedMs: 1 } })
+    await dialogs.ok()
+    expect(dialogs.current).toMatchObject({ phase: 'succeeded' })
+    expect(dialogs.current?.notice).toBeUndefined()
   })
 })

@@ -119,6 +119,7 @@ explorer.context, for a server
   ---
   New &Query  -++-
   Ac&tivity Monitor  ⌥⌘A  -++-
+  Searc&h Objects…  -+++
   ---
   Copy N&ame  -+++
   ---
@@ -128,11 +129,16 @@ explorer.context, for a server whose connection was lost
   &Reconnect…  ++++
   Rem&ove  +++-
 explorer.context, for the Databases folder
+  &Attach…  -+++
+  &Restore Database…  -+++
+  R&estore Files and Filegroups…  -+++
+  ---
   F&ilter Settings…  -+++
   ---
   Re&fresh  F5  -+++
 explorer.context, for a database
   New &Query  -++-
+  Searc&h Objects…  -+++
   ---
   &Script Database as >
     &CREATE To >
@@ -151,6 +157,16 @@ explorer.context, for a database
       &New Query Editor Window  -++-
       &File…  -++-
       C&lipboard  -+++
+  ---
+  &Tasks >
+    &Detach…  -+++
+    ---
+    &Take Offline  -+++
+    Bring &Online  -+++
+    ---
+    &Restore >
+      &Database…  -+++
+      &Files and Filegroups…  -+++
   ---
   Copy N&ame  -+++
   ---

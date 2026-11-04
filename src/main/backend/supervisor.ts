@@ -4,6 +4,8 @@ import { z } from 'zod'
 import type { BackendMethod, BackendMethods, BackendResultDescriptor, BackendState, LossReason, LostSummary, QueryEvent, ResultDescriptor } from '../../shared/contracts'
 import { deadlineFor } from '../../shared/ipc/methods'
 import { jobProgressSchema, queryEventSchema, queryResultSchema, type JobProgressEvent } from '../../shared/ipc/port-messages'
+import { actionProgressEventSchema, type ActionProgressEvent } from '../../shared/actions/schema.ts'
+import { objectIndexProgressEventSchema, type ObjectIndexProgressEvent } from '../../shared/explorer/search.ts'
 import { liveEndSchema, liveEventFits, liveEventSchema, liveUpdateResultSchema, stampLive, type LiveEvent, type LiveSubscribeParams } from '../../shared/live/schema'
 import { PROTOCOL_VERSION, limits as wire, type CancelReason } from '../../shared/ipc/wire/protocol'
 import { BackendConnection, systemClock, type BackendHello, type Clock, type ConnectionDeps, type Loss, type SendOptions, type SpawnSpec } from './connection'
@@ -38,6 +40,11 @@ export interface RequestOptions extends Pick<SendOptions, 'stream' | 'credit'> {
    *  live.opened, then 1, 2, …), for the subscription's own source and probes, and stamped with the generation; anything
    *  else fails the stream (STREAM_PROTOCOL). */
   onLive?: (event: LiveEvent, bytes: number) => void
+  /** actions.execute's progress (a long step's STATS percent). An invalid one is dropped, not a protocol failure: failing the
+   *  request would CANCEL it, which stops a restore part way. */
+  onActionProgress?: (progress: ActionProgressEvent) => void
+  /** explorer.index's progress. An invalid one is dropped, as an action's is: the build goes on. */
+  onIndexProgress?: (progress: ObjectIndexProgressEvent) => void
   /** Only this generation may serve the request, and only while it is ready: results belong to one generation. */
   generation?: number
   /** The request's id and generation once it is written, for CREDIT and CANCEL frames. */
@@ -142,7 +149,7 @@ export class BackendSupervisor {
       this.sessions.set(sessionId, connection.generation)
       if (this.sessions.size > maxSessions) this.sessions.delete(this.sessions.keys().next().value!)
     }
-    const { onEvent, onProgress, onLive } = o
+    const { onEvent, onProgress, onLive, onActionProgress, onIndexProgress } = o
     let nextSeq = 0
     // The subscription the events must belong to: its source, and only the probes it named.
     const subscribed = method === 'live.subscribe' ? params as LiveSubscribeParams : undefined
@@ -158,6 +165,12 @@ export class BackendSupervisor {
         if (!parsed.success || parsed.data.seq !== nextSeq || !subscribed || !liveEventFits(parsed.data, subscribed)) return false
         nextSeq++
         onLive(stampLive(parsed.data, connection.generation), bytes)
+      } : onActionProgress ? raw => {
+        const parsed = actionProgressEventSchema.safeParse(raw)
+        if (parsed.success) onActionProgress(parsed.data)
+      } : onIndexProgress ? raw => {
+        const parsed = objectIndexProgressEventSchema.safeParse(raw)
+        if (parsed.success) onIndexProgress(parsed.data)
       } : onProgress && (raw => {
         const parsed = jobProgressSchema.safeParse(raw)
         if (!parsed.success) return false

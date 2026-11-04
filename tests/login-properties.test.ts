@@ -118,7 +118,7 @@ describe('Login Properties drafts', () => {
     const of = model()
     expect(draftOf(of)).toEqual({
       auth: 'sql', name: 'app_login', defaultDatabase: 'master', defaultLanguage: 'us_english', checkPolicy: true, checkExpiration: true, mustChange: false, serverRoles: ['bulkadmin'],
-      connect: 'grant', enabled: true, specifyOld: false, locked: true, certificate: '', asymmetricKey: '', mapCredential: false, credential: '', credentials: [],
+      connect: 'grant', enabled: true, specifyOld: false, locked: true, securables: [], permissions: [], certificate: '', asymmetricKey: '', mapCredential: false, credential: '', credentials: [],
       mappings: [{ database: 'AppData', map: true, user: 'app', defaultSchema: 'dbo', roles: [], rolesKnown: false }, { database: 'Owned', map: true, user: 'dbo', defaultSchema: 'dbo', roles: [], rolesKnown: false }]
     })
     expect(loginPropertiesRequest(appLogin, of, draftOf(of))).toBeUndefined()
@@ -171,8 +171,8 @@ describe('Login Properties drafts', () => {
     expect(loginPropertiesHints(group, draftOf(group))).toEqual([])
     expect(loginPropertiesRefusal({ type: 'U', subtype: 'windowsUser', own: false }, { checkPolicy: true })).toBe('propertiesNotSql')
     expect(loginPropertiesRefusal({ type: 'S', subtype: 'system', own: false }, { enabled: true })).toBe('system')
-    expect(loginPropertiesDefinition.blocked?.(model({ login: { subtype: 'system' } }))).toBe(loginMessages.system)
-    expect(loginPropertiesDefinition.blocked?.(model({ login: { subtype: 'sa' } }))).toBeUndefined()
+    expect(loginPropertiesDefinition.blocked?.(model({ login: { subtype: 'system' } }), draftOf(model({ login: { subtype: 'system' } })))).toBe(loginMessages.system)
+    expect(loginPropertiesDefinition.blocked?.(model({ login: { subtype: 'sa' } }), draftOf(model({ login: { subtype: 'sa' } })))).toBeUndefined()
   })
   it('unmaps, renames and changes a mapped user\'s schema and roles once read; dbo and unread databases never change', () => {
     let of = model(), draft = draftOf(of)

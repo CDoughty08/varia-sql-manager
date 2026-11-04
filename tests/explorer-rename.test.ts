@@ -154,7 +154,7 @@ describe('inline Rename in Object Explorer', () => {
     const database = { ...node(orders), kind: 'database' as const, ref: { type: 'object' as const, object: { kind: 'database' as const, name: 'AppData' } } }
     api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [{ status: 'done', title: 'Rename' }], messages: ["The database name 'AppData2' has been set."], elapsedMs: 1 } })
     await actions.commitRename(database, 'AppData2')
-    expect(api.executeObjectAction.mock.calls[0][0]).toMatchObject({ action: 'rename', target: { kind: 'database', name: 'AppData' }, newName: 'AppData2' })
+    expect(api.executeObjectAction.mock.calls[0][0]).toMatchObject({ action: 'rename', target: { kind: 'database', name: 'AppData' }, newName: 'AppData2', closeConnections: false, identity: { id: 7 } })
     expect(commands.getSnapshot()).toMatchObject({ error: '' })
   })
   it('keeps the box through a refresh that keeps its node, and ends it without a request when its node leaves the tree or its server is lost', async () => {

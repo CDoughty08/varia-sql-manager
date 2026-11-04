@@ -7,16 +7,18 @@ import type { MenuStyle } from './menu-style'
 import type { ErrorCode, ErrorReason } from './ipc/wire/protocol'
 import type { AuthenticationMode } from './auth'
 import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts'
+import type { ObjectIndexParams, ObjectIndexProgress, ObjectIndexResult, ObjectSearchParams, ObjectSearchResult } from './explorer/search.ts'
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
 import type { DatabaseRuntime } from './explorer/status.ts'
 import type { ActionPromptAnswer, ActionPromptRequest } from './actions/prompts.ts'
 import type { LongRunState } from './long-runs.ts'
 import type { ScriptRequest, ScriptResult } from './scripting/schema.ts'
-import type { ActionDescribeRequest, ActionDescribeResult, ActionExecuteResult, ActionRequest, ActionScriptResult } from './actions/schema.ts'
+import type { ActionDescribeRequest, ActionDescribeResult, ActionExecuteRequest, ActionExecuteResult, ActionProgress, ActionScriptRequest, ActionScriptResult } from './actions/schema.ts'
 import type { SsisCatalogSetupRequest, SsisCatalogSetupResult, SsisDescribeRequest, SsisDescribeResult, SsisExecuteRequest, SsisExecuteResult } from './ssis/schema.ts'
 import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/schema'
 import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions.ts'
 import type { RecentFile } from './files/recent'
+import type { UpdateState } from './updates'
 import type { RecoveredDocument, RecoveryEntry, RecoveryWrite } from './files/recovery'
 import type { LiveEnd, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from './live/schema'
 import type { ActivityDetailsRequest, ActivityDetailsResult, ActivityKillRequest, ActivityKillResult } from './activity/schema.ts'
@@ -271,13 +273,17 @@ export interface RpcMethods {
   /** An idle session's @@TRANCOUNT, read before it ends; see SessionState. */
   'query.session.state': { params: { sessionId: string }; result: SessionState }
   'explorer.children': { params: ExplorerChildrenParams; result: ExplorerChildrenResult }
+  /** (Re)builds the connection's object index in backend memory; progress EVENTs, and Stop is varia:explorer-cancel. */
+  'explorer.index': { params: ObjectIndexParams; result: ObjectIndexResult }
+  /** Searches the connection's object index (names and module definitions), in backend memory. */
+  'explorer.search': { params: ObjectSearchParams; result: ObjectSearchResult }
   'scripting.script': { params: ScriptRequest; result: ScriptResult }
   /** What an object dialog shows (Delete Object's row and warnings), read in the action's own connection. */
   'actions.describe': { params: ActionDescribeRequest; result: ActionDescribeResult }
   /** An action's script, for the dialog's Script button; it runs nothing. */
-  'actions.script': { params: ActionRequest; result: ActionScriptResult }
+  'actions.script': { params: ActionScriptRequest; result: ActionScriptResult }
   /** Runs an action's DDL after a preflight; never re-sent, and only Stop (varia:actions-cancel) ends a lock wait. */
-  'actions.execute': { params: ActionRequest; result: ActionExecuteResult }
+  'actions.execute': { params: ActionExecuteRequest; result: ActionExecuteResult }
   /** What an SSIS Catalog object is (a properties document's read), on the SSIS read pool; Stop is varia:ssis-cancel. */
   'ssis.describe': { params: SsisDescribeRequest; result: SsisDescribeResult }
   /** Changes the SSIS Catalog (Stop Operation, Create Catalog) on its own unpooled connection after a preflight; never re-sent,
@@ -409,6 +415,12 @@ export interface VariaApi {
   /** Cancels Object Explorer loads by their `requestId`s (1–256); `cancelled` counts those still running. A load cancelled
    *  this way answers `CANCELLED`. */
   explorerCancel(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
+  /** Builds a connection's object index; it answers once every database was read or skipped. Stop it with explorerCancel. */
+  explorerIndex(params: ObjectIndexParams): Promise<ApiResult<ObjectIndexResult>>
+  /** Searches a connection's object index; a search replaced by a newer one is cancelled with explorerCancel. */
+  explorerSearch(params: ObjectSearchParams): Promise<ApiResult<ObjectSearchResult>>
+  /** A build's progress, at most 4 a second per build and only for builds this window started; droppable. Returns the unsubscribe. */
+  onExplorerIndexProgress(listener: (progress: ObjectIndexProgress) => void): () => void
   /** Scripts one Object Explorer object (Script As). Failures the user can act on come back as `result.error`. */
   scriptObjects(params: ScriptRequest): Promise<ApiResult<ScriptResult>>
   /** Cancels scripting requests by their `requestId`s (1–64); `cancelled` counts those still running. A request
@@ -417,12 +429,15 @@ export interface VariaApi {
   /** Reads what an object dialog shows. Failures the user can act on come back as `result.error`. */
   describeObject(params: ActionDescribeRequest): Promise<ApiResult<ActionDescribeResult>>
   /** Scripts an object action (the dialog's Script button) without running it. */
-  scriptObjectAction(params: ActionRequest): Promise<ApiResult<ActionScriptResult>>
+  scriptObjectAction(params: ActionScriptRequest): Promise<ApiResult<ActionScriptResult>>
   /** Runs an object action: Rename, or Delete Object's OK. Its steps report what ran; it is never re-sent. */
-  executeObjectAction(params: ActionRequest): Promise<ApiResult<ActionExecuteResult>>
+  executeObjectAction(params: ActionExecuteRequest): Promise<ApiResult<ActionExecuteResult>>
   /** Cancels object action requests by their `requestId`s (1–16); `cancelled` counts those still running. A request
    *  cancelled this way answers `CANCELLED`. */
   cancelObjectActions(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
+  /** A long object action's progress (a restore or backup step's STATS percent), at most 4 a second per request and only
+   *  for requests this window sent; droppable, so the latest value is all that counts. Returns the unsubscribe. */
+  onActionProgress(listener: (progress: ActionProgress) => void): () => void
   /** Reads an SSIS Catalog object (catalog, folder, project, package or environment). Failures come back as `result.error`. */
   describeSsis(params: SsisDescribeRequest): Promise<ApiResult<SsisDescribeResult>>
   /** Runs an SSIS Catalog action (Stop Operation, Create Catalog). Refusals and failures come back as `result.error` with the
@@ -528,4 +543,14 @@ export interface VariaApi {
   reloadThemes(): Promise<ApiResult<ThemeState>>
   openThemesFolder(): Promise<ApiResult<void>>
   onThemeChanged(callback: (state: ThemeState) => void): () => void
+  /** Updates (src/shared/updates.ts): main checks, downloads and installs; the page only asks and shows. */
+  getUpdateState(): Promise<ApiResult<UpdateState>>
+  /** Help › Check for Updates: resolves once the check (and any download it starts) has ended. */
+  checkForUpdates(): Promise<ApiResult<UpdateState>>
+  downloadUpdate(): Promise<ApiResult<UpdateState>>
+  /** Restart to Update: main closes the app as File › Exit does (unsaved queries ask first), then installs. False when nothing is ready. */
+  restartToUpdate(): Promise<ApiResult<boolean>>
+  /** Opens the releases page in the browser; main names the page, never the renderer. */
+  openReleasesPage(): Promise<ApiResult<void>>
+  onUpdateState(callback: (state: UpdateState) => void): () => void
 }

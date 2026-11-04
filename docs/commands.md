@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (189)
+## Commands (212)
 
 ### File
 
@@ -144,9 +144,19 @@ keys it uses are listed below.
 | Rename | `explorer.rename` | F2 (`activePanel == 'explorer' && !textInputFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus`) | `backendReady && explorerActionRename == 'enabled'` | Object Explorer context menu › Rename |
 | Delete | `explorer.delete` | Delete (`activePanel == 'explorer' && !textInputFocus`) | Delete (`activePanel == 'explorer' && !textInputFocus`) | ⌘⌫ (`activePanel == 'explorer' && !textInputFocus`), ⌦ (`activePanel == 'explorer' && !textInputFocus`) | `backendReady && explorerActionDelete == 'enabled'` | Object Explorer context menu › Delete |
 | Properties | `explorer.properties` | — | — | ⌘I (`activePanel == 'explorer' && !textInputFocus`) | `backendReady && explorerActionProperties == 'enabled'` | Object Explorer context menu › Properties |
+| Attach Database… | `explorer.attachDatabase` | — | — | — | `backendReady && explorerActionAttach == 'enabled'` | Object Explorer context menu › Attach… |
+| Take Database Offline | `explorer.takeOffline` | — | — | — | `backendReady && explorerActionTakeOffline == 'enabled'` | Object Explorer context menu › Tasks › Take Offline |
+| Bring Database Online | `explorer.bringOnline` | — | — | — | `backendReady && explorerActionBringOnline == 'enabled'` | Object Explorer context menu › Tasks › Bring Online |
+| Detach Database… | `explorer.detachDatabase` | — | — | — | `backendReady && explorerActionDetach == 'enabled'` | Object Explorer context menu › Tasks › Detach… |
+| Restore Database… | `explorer.restoreDatabase` | — | — | — | `backendReady && explorerActionRestore == 'enabled'` | Object Explorer context menu › Restore Database… |
+| Restore Database… (not in the palette) | `explorer.tasks.restoreDatabase` | — | — | — | `backendReady && explorerActionRestore == 'enabled'` | Object Explorer context menu › Tasks › Restore › Database… |
+| Restore Files and Filegroups… | `explorer.restoreFiles` | — | — | — | `backendReady && explorerActionRestoreFiles == 'enabled'` | Object Explorer context menu › Restore Files and Filegroups… |
+| Restore Files and Filegroups… (not in the palette) | `explorer.tasks.restoreFiles` | — | — | — | `backendReady && explorerActionRestoreFiles == 'enabled'` | Object Explorer context menu › Tasks › Restore › Files and Filegroups… |
 | Disable Login | `explorer.disable` | — | — | — | `backendReady && explorerActionDisable == 'enabled'` | Object Explorer context menu › Disable |
 | Enable Login | `explorer.enable` | — | — | — | `backendReady && explorerActionEnable == 'enabled'` | Object Explorer context menu › Enable |
 | Unlock Login… | `explorer.unlock` | — | — | — | `backendReady && explorerActionUnlock == 'enabled'` | Object Explorer context menu › Unlock… |
+| New Database… | `explorer.newDatabase` | — | — | — | `backendReady && (explorerSelectionFolder == 'databases' \|\| explorerSelectionKind == 'database') && explorerSelectionServerEngine == 'box'` | Object Explorer context menu › New Database… |
+| New Database… (not in the palette) | `explorer.newDatabaseOnDatabase` | — | — | — | `backendReady && (explorerSelectionFolder == 'databases' \|\| explorerSelectionKind == 'database') && explorerSelectionServerEngine == 'box'` | Object Explorer context menu › New Database… |
 | New Table… | `explorer.newTable` | — | — | — | `backendReady && explorerSelectionFolder == 'tables' && !documentBusy` | Object Explorer context menu › New › Table… |
 | Script as CREATE to New Query Editor Window (not in the palette) | `explorer.scriptCreateToNewQuery` | — | — | — | `backendReady && explorerScriptCreate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › CREATE To › New Query Editor Window |
 | Script as CREATE to File… (not in the palette) | `explorer.scriptCreateToFile` | — | — | — | `backendReady && explorerScriptCreate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › CREATE To › File… |
@@ -182,6 +192,9 @@ keys it uses are listed below.
 | Modify | `explorer.modify` | — | — | — | `backendReady && explorerSelectionModifiable && explorerScriptAlter == 'enabled' && !documentBusy` | Object Explorer context menu › Modify |
 | Cancel Scripting | `explorer.cancelScripting` | — | — | — | `scriptingRunning` | — |
 | Copy Name | `explorer.copyName` | — | — | — | `hasConnection` | Object Explorer context menu › Copy Name |
+| Search Objects… | `explorer.searchObjects` | — | — | — | `hasConnection` | View › Search Objects…; Object Explorer context menu › Search Objects… |
+| Rebuild Search Index | `explorer.rebuildIndex` | — | — | — | `hasConnection` | — |
+| Stop Indexing | `explorer.stopIndexing` | — | — | — | Always | — |
 
 ### Table Designer
 
@@ -203,6 +216,22 @@ keys it uses are listed below.
 | Discard Changes | `databaseProperties.discard` | — | — | — | `activeDocumentIsProperties && propertiesChanged && !propertiesApplying` | — |
 | Refresh | `databaseProperties.refresh` | — | — | — | `activeDocumentIsProperties && propertiesRefreshable` | — |
 | Stop | `databaseProperties.stop` | — | — | — | `activeDocumentIsProperties && propertiesApplying` | — |
+
+### New Database
+
+| Command | Id | Windows | Linux | macOS | Available when | Menus |
+| --- | --- | --- | --- | --- | --- | --- |
+| Create Database | `newDatabase.ok` | — | — | — | `activeDocumentIsNewDatabase && newDatabaseCreatable` | — |
+| Cancel New Database | `newDatabase.cancel` | — | — | — | `activeDocumentIsNewDatabase && !newDatabaseCreating` | — |
+| Stop | `newDatabase.stop` | — | — | — | `activeDocumentIsNewDatabase && newDatabaseCreating` | — |
+
+### Restore Database
+
+| Command | Id | Windows | Linux | macOS | Available when | Menus |
+| --- | --- | --- | --- | --- | --- | --- |
+| Restore | `restoreDatabase.run` | — | — | — | `activeDocumentIsRestore && restoreRunnable` | — |
+| Stop | `restoreDatabase.stop` | — | — | — | `activeDocumentIsRestore && restoreRunning` | — |
+| Refresh | `restoreDatabase.refresh` | — | — | — | `activeDocumentIsRestore && restoreRefreshable` | — |
 
 ### Integration Services
 
@@ -265,6 +294,10 @@ keys it uses are listed below.
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
 | Clear Entra ID Token Cache | `help.clearEntraTokenCache` | — | — | — | Always | Help › Clear Entra ID Token Cache |
+| Check for Updates | `help.checkForUpdates` | — | — | — | `!updateBusy` | Help › Check for Updates |
+| Download Update | `help.downloadUpdate` | — | — | — | `updateAvailable` | — |
+| Restart to Update | `help.restartToUpdate` | — | — | — | `updateReady` | Help › Restart to Update |
+| Release Notes | `help.releaseNotes` | — | — | — | Always | Help › Release Notes |
 
 ### Other
 
@@ -376,6 +409,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `0_palette` | **C**ommand Palette… | `workbench.showCommands` | Always |
 | `0_palette` | **G**o to Query… | `workbench.quickOpen` | Always |
 | `0_palette` | Se**a**rch… | `workbench.search` | Always |
+| `0_palette` | Search Ob**j**ects… | `explorer.searchObjects` | Always |
 | `1_layout` | **S**ave Layout… | `layout.save` | Always |
 | `1_layout` | **L**oad Layout… | `layout.load` | Always |
 | `1_layout` | **R**eset Layout | `layout.reset` | Always |
@@ -449,6 +483,9 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
 | `1_entra` | Clear **E**ntra ID Token Cache | `help.clearEntraTokenCache` | Always |
+| `2_updates` | Check for **U**pdates | `help.checkForUpdates` | Always |
+| `2_updates` | **R**estart to Update | `help.restartToUpdate` | Always |
+| `2_updates` | Release **N**otes | `help.releaseNotes` | Always |
 
 ### Context menus
 
@@ -479,17 +516,23 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_connect` | **R**econnect… | `connection.reconnect` | `explorerServerLost` |
 | `0_connect` | Rem**o**ve | `connection.removeLost` | `explorerServerLost` |
 | `0_connect` | En**v**ironment… | `connection.environment` | `explorerNode == 'server' && !explorerServerLost` |
-| `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `explorerFolder == 'tables' \|\| (explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance') && !explorerServerLost)` |
+| `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `explorerNode == 'folder' && (explorerFolder == 'tables' \|\| (explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance') && !explorerServerLost))` |
+| `0_new` | **N**ew Database… | `explorer.newDatabase` | `explorerNode == 'folder' && explorerFolder == 'databases' && !explorerServerLost && explorerServerEngine == 'box'` |
 | `0_new` | **N**ew Login… | `explorer.newLogin` | `((explorerNode == 'folder' && explorerFolder == 'logins') \|\| explorerNode == 'login') && !explorerServerLost && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance')` |
+| `0_new` | **A**ttach… | `explorer.attachDatabase` | `explorerActionAttach != '' && explorerNode == 'folder'` |
 | `0_new` | Crea**t**e Catalog… | `explorer.createCatalog` | `explorerNode == 'folder' && explorerFolder == 'integrationServicesCatalogs' && !explorerServerLost` |
+| `0_new` | **R**estore Database… | `explorer.restoreDatabase` | `explorerActionRestore != '' && explorerNode == 'folder'` |
+| `0_new` | R**e**store Files and Filegroups… | `explorer.restoreFiles` | `explorerActionRestoreFiles != '' && explorerNode == 'folder'` |
 | `1_operations` | A**c**tive Operations | `ssis.activeOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All E**x**ecutions | `ssis.allExecutions` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All Vali**d**ations | `ssis.allValidations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All O**p**erations | `ssis.allOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
+| `1_query` | **N**ew Database… | `explorer.newDatabaseOnDatabase` | `explorerNode == 'database' && !explorerServerLost && explorerServerEngine == 'box'` |
 | `1_query` | New **Q**uery | `explorer.newQuery` | `(explorerNode == 'server' && !explorerServerLost) \|\| explorerNode == 'database'` |
 | `1_query` | Select Top 1000 Ro**w**s | `explorer.selectTopRows` | `explorerActionSelectTop != '' && explorerNode != 'background'` |
 | `1_query` | Modif**y** | `explorer.modify` | `explorerSelectionModifiable && explorerNode != 'background'` |
 | `1_query` | Ac**t**ivity Monitor | `activity.open` | `explorerNode == 'server' && !explorerServerLost` |
+| `1_query` | Searc**h** Objects… | `explorer.searchObjects` | `(explorerNode == 'server' && !explorerServerLost) \|\| explorerNode == 'database'` |
 | `2_script` | **S**cript … as › | Submenu: Object Explorer context menu › Script … as | `explorerScriptTitle != '' && explorerNode != 'background'` |
 | `3_filter` | F**i**lter Settings… | `explorer.filter` | `explorerFolderFilterable` |
 | `3_filter` | Remove Fi**l**ter | `explorer.removeFilter` | `explorerFolderFiltered` |
@@ -518,11 +561,17 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
+| `0_detach` | **D**etach… | `explorer.detachDatabase` | `explorerActionDetach != '' && explorerNode != 'background'` |
+| `1_state` | **T**ake Offline | `explorer.takeOffline` | `explorerActionTakeOffline != '' && explorerNode != 'background'` |
+| `1_state` | Bring **O**nline | `explorer.bringOnline` | `explorerActionBringOnline != '' && explorerNode != 'background'` |
 | `4_backup` | **R**estore › | Submenu: Object Explorer context menu › Tasks › Restore | Always |
 
 #### Object Explorer context menu › Tasks › Restore
 
-Nothing is placed here yet, so the submenu stays hidden.
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_restore` | **D**atabase… | `explorer.tasks.restoreDatabase` | `explorerActionRestore != '' && explorerNode != 'folder' && explorerNode != 'background'` |
+| `1_restore` | **F**iles and Filegroups… | `explorer.tasks.restoreFiles` | `explorerActionRestoreFiles != '' && explorerNode != 'folder' && explorerNode != 'background'` |
 
 #### Object Explorer context menu › Script … as
 
@@ -702,7 +751,7 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 | `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
 | `8_view` | **P**ause | `ssis.pauseOperations` | Always |
 
-## Context keys (104)
+## Context keys (120)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -744,6 +793,13 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `propertiesApplicable` | boolean | state | The active Database Properties document can apply its changes now: it has loaded and has changes, nothing runs in it, it does not need reading again, and its server is connected. |
 | `propertiesApplying` | boolean | state | The active Database Properties document is applying its changes (Stop cancels them in SQL Server). |
 | `propertiesRefreshable` | boolean | state | The active Database Properties document can read the database again: its server is connected, nothing runs in it, and it has no changes that are not applied. |
+| `activeDocumentIsNewDatabase` | boolean | state | The active document is New Database. |
+| `newDatabaseCreatable` | boolean | state | The active New Database document can create its database now: it has read the server, nothing runs in it, and its server is connected. |
+| `newDatabaseCreating` | boolean | state | The active New Database document is creating its database (Stop cancels it in SQL Server). |
+| `activeDocumentIsRestore` | boolean | state | The active document is Restore Database. |
+| `restoreRunnable` | boolean | state | The active Restore Database document can restore now: it has read the backups, its choices form a restore, nothing runs in it, and its server is connected. |
+| `restoreRunning` | boolean | state | The active Restore Database document is restoring (Stop cancels the running statement in SQL Server). |
+| `restoreRefreshable` | boolean | state | The active Restore Database document can read the server and the backups again: nothing runs in it and its server is connected. |
 | `activeDocumentIsActivityMonitor` | boolean | state | The active document is an Activity Monitor. |
 | `activityPaused` | boolean | state | The active Activity Monitor is paused: it runs no SQL until Resume. |
 | `activitySplit` | boolean | state | The active Activity Monitor shows two panes (Split View). |
@@ -768,6 +824,9 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `editorOvertype` | boolean | state | The editor is in overtype mode (OVR): typing replaces the character after the caret. |
 | `hasRecentFiles` | boolean | state | File › Recent Files lists at least one file. |
 | `hasRecoveryFiles` | boolean | state | AutoRecover kept queries that an earlier run or an earlier workbench did not save, and they were neither recovered nor discarded. |
+| `updateBusy` | boolean | state | An update check or download is running. |
+| `updateAvailable` | boolean | state | A newer release that this copy can install waits for Help › Download Update (Automatically download updates is off). |
+| `updateReady` | boolean | state | A newer release was downloaded and verified: Help › Restart to Update installs it. |
 | `explorerHasSelection` | boolean | state | A node is selected in Object Explorer (a loading, error, or progress row is not a node). |
 | `explorerSelectionKind` | `''`, `'folder'`, `'server'`, `'login'`, `'serverRole'`, `'credential'`, `'cryptographicProvider'`, `'audit'`, `'serverAuditSpecification'`, `'backupDevice'`, `'linkedServer'`, `'serverTrigger'`, `'database'`, `'user'`, `'databaseRole'`, `'applicationRole'`, `'schema'`, `'assembly'`, `'asymmetricKey'`, `'certificate'`, `'symmetricKey'`, `'columnMasterKey'`, `'columnEncryptionKey'`, `'databaseAuditSpecification'`, `'databaseTrigger'`, `'externalDataSource'`, `'externalFileFormat'`, `'fullTextCatalog'`, `'fullTextStoplist'`, `'partitionScheme'`, `'partitionFunction'`, `'searchPropertyList'`, `'planGuide'`, `'table'`, `'view'`, `'synonym'`, `'procedure'`, `'function'`, `'sequence'`, `'type'`, `'tableType'`, `'xmlSchemaCollection'`, `'rule'`, `'default'`, `'securityPolicy'`, `'column'`, `'key'`, `'constraint'`, `'trigger'`, `'index'`, `'statistic'`, `'parameter'`, `'returnValue'`, `'ssisCatalog'`, `'ssisFolder'`, `'ssisProject'`, `'ssisPackage'`, `'ssisEnvironment'` | state | The kind of the selected Object Explorer node: 'folder', an object kind from `src/shared/explorer/catalog.ts`, or '' for none. Keep it out of keybinding `when` clauses. |
 | `explorerSelectionFolder` | `''`, `'databases'`, `'systemDatabases'`, `'databaseSnapshots'`, `'serverSecurity'`, `'logins'`, `'serverRoles'`, `'credentials'`, `'cryptographicProviders'`, `'audits'`, `'serverAuditSpecifications'`, `'serverObjects'`, `'backupDevices'`, `'linkedServers'`, `'serverTriggers'`, `'tables'`, `'systemTables'`, `'fileTables'`, `'externalTables'`, `'graphTables'`, `'droppedLedgerTables'`, `'views'`, `'systemViews'`, `'droppedLedgerViews'`, `'externalResources'`, `'externalDataSources'`, `'externalFileFormats'`, `'synonyms'`, `'programmability'`, `'storedProcedures'`, `'systemStoredProcedures'`, `'functions'`, `'tableValuedFunctions'`, `'scalarValuedFunctions'`, `'aggregateFunctions'`, `'databaseTriggers'`, `'assemblies'`, `'types'`, `'userDefinedDataTypes'`, `'userDefinedTableTypes'`, `'userDefinedTypes'`, `'xmlSchemaCollections'`, `'rules'`, `'defaults'`, `'planGuides'`, `'sequences'`, `'storage'`, `'fullTextCatalogs'`, `'partitionSchemes'`, `'partitionFunctions'`, `'fullTextStoplists'`, `'searchPropertyLists'`, `'databaseSecurity'`, `'users'`, `'roles'`, `'databaseRoles'`, `'applicationRoles'`, `'schemas'`, `'asymmetricKeys'`, `'certificates'`, `'symmetricKeys'`, `'alwaysEncryptedKeys'`, `'columnMasterKeys'`, `'columnEncryptionKeys'`, `'databaseAuditSpecifications'`, `'securityPolicies'`, `'columns'`, `'keys'`, `'constraints'`, `'tableTriggers'`, `'indexes'`, `'statistics'`, `'parameters'`, `'integrationServicesCatalogs'`, `'ssisProjects'`, `'ssisEnvironments'`, `'ssisPackages'` | state | The selected Object Explorer folder's id from `src/shared/explorer/catalog.ts`, or '' when the selection is not a folder. Keep it out of keybinding `when` clauses. |
@@ -793,6 +852,12 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerActionRename` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Rename: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionDelete` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Delete: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `explorerActionAttach` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Attach Database…: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `explorerActionTakeOffline` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Take Database Offline: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `explorerActionBringOnline` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Bring Database Online: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `explorerActionDetach` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Detach Database…: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `explorerActionRestore` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Restore Database…: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `explorerActionRestoreFiles` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Restore Files and Filegroups…: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionDisable` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Disable Login: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionEnable` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Enable Login: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionUnlock` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Unlock Login…: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |

@@ -37,7 +37,7 @@ describe('menu model', () => {
         'edit.toggleLineComment', '-', 'edit.increaseIndent', 'edit.decreaseIndent'])
       expect(outline('edit.bookmarks', platform)).toEqual(['edit.toggleBookmark', '-', 'edit.previousBookmark', 'edit.nextBookmark', '-', 'edit.clearBookmarks', '-', 'edit.previousBookmarkInDocument', 'edit.nextBookmarkInDocument'])
       expect(outline('edit.intellisense', platform)).toEqual(['edit.insertSnippet', 'edit.surroundWith'])
-      expect(outline('view', platform)).toEqual(['workbench.showCommands', 'workbench.quickOpen', 'workbench.search', '-', 'layout.save', 'layout.load', 'layout.reset', '-', 'activity.open', 'ssis.allOperations', '-', 'submenu:view.theme', '-',
+      expect(outline('view', platform)).toEqual(['workbench.showCommands', 'workbench.quickOpen', 'workbench.search', 'explorer.searchObjects', '-', 'layout.save', 'layout.load', 'layout.reset', '-', 'activity.open', 'ssis.allOperations', '-', 'submenu:view.theme', '-',
         'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', '-', 'developer.reloadWindow', 'developer.toggleDevTools'])
       expect(outline('query', platform)).toEqual(['submenu:query.connection', 'query.changeDatabase', '-', 'query.execute', 'query.cancel'])
       expect(raw('query', platform)).toEqual(outline('query', platform))
@@ -60,7 +60,7 @@ describe('menu model', () => {
     // New (Tables only) comes first, then Script as.
     const [newMenu, scriptAs] = submenu('explorer.context', 'darwin')
     expect(newMenu).toMatchObject({ id: 'explorer.new', nativeId: 'explorer.new', title: 'New', mnemonic: 'n' })
-    expect(newMenu.kind === 'submenu' && newMenu.when && [evaluateWhen(newMenu.when, { explorerFolder: 'tables' }), evaluateWhen(newMenu.when, { explorerFolder: 'views' })]).toEqual([true, false])
+    expect(newMenu.kind === 'submenu' && newMenu.when && [evaluateWhen(newMenu.when, { explorerNode: 'folder', explorerFolder: 'tables' }), evaluateWhen(newMenu.when, { explorerNode: 'folder', explorerFolder: 'views' }), evaluateWhen(newMenu.when, { explorerNode: 'database', explorerFolder: 'tables' })]).toEqual([true, false, false])
     expect(scriptAs).toMatchObject({ id: 'explorer.scriptAs', nativeId: 'explorer.scriptAs', title: 'Script as', dynamicTitle: 'scriptAs' })
     expect(scriptAs.kind === 'submenu' && scriptAs.when && [evaluateWhen(scriptAs.when, { explorerScriptTitle: 'table', explorerNode: 'table' }), evaluateWhen(scriptAs.when, { explorerScriptTitle: '', explorerNode: 'database' }),
       evaluateWhen(scriptAs.when, { explorerScriptTitle: 'table', explorerNode: 'background' })]).toEqual([true, false, false])
@@ -324,22 +324,30 @@ describe('menu state', () => {
     const roles = ['window.close', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll', 'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.reloadWindow', 'developer.toggleDevTools']
     // Context-menu commands and the keyboard-only ones are not in the native menu bar either.
     const unplaced = ['file.closeOthers', 'file.copyPath', 'file.revealInFolder', 'workbench.showContextMenu', 'explorer.refresh', 'preferences.createTheme', 'preferences.openThemesFolder',
-      'preferences.reloadThemes', 'preferences.setTheme', 'pane.dockLeft', 'pane.dockRight', 'pane.dockTop', 'pane.dockBottom', 'pane.tabWithExplorer', 'pane.tabWithEditor', 'pane.tabWithOutput', 'pane.float', 'pane.dock', 'pane.close', 'explorer.newQuery', 'explorer.selectTopRows', 'explorer.rename', 'explorer.delete', 'explorer.properties', 'explorer.disable', 'explorer.enable', 'explorer.unlock', 'explorer.newTable', 'explorer.createCatalog', 'explorer.newLogin', 'explorer.newLoginOnSecurity', ...scriptCommandIds,
+      'preferences.reloadThemes', 'preferences.setTheme', 'pane.dockLeft', 'pane.dockRight', 'pane.dockTop', 'pane.dockBottom', 'pane.tabWithExplorer', 'pane.tabWithEditor', 'pane.tabWithOutput', 'pane.float', 'pane.dock', 'pane.close', 'explorer.newQuery', 'explorer.selectTopRows', 'explorer.rename', 'explorer.delete', 'explorer.properties', 'explorer.disable', 'explorer.enable', 'explorer.unlock', 'explorer.restoreDatabase', 'explorer.tasks.restoreDatabase', 'explorer.restoreFiles', 'explorer.tasks.restoreFiles', 'explorer.newTable', 'explorer.newDatabase', 'explorer.newDatabaseOnDatabase', 'explorer.createCatalog', 'explorer.attachDatabase', 'explorer.takeOffline', 'explorer.bringOnline', 'explorer.detachDatabase', 'explorer.newLogin', 'explorer.newLoginOnSecurity', ...scriptCommandIds,
       'explorer.scriptAs', 'explorer.modify', 'explorer.cancelScripting', 'explorer.copyName', 'output.copy', 'output.copyWithHeaders', 'output.selectAll', 'backend.restart',
       'connection.removeLost', 'explorer.stop', 'explorer.collapseAll', 'explorer.filter', 'explorer.filterLoaded', 'explorer.removeFilter', 'window.switchPane',
       'output.saveResultsAs', 'output.closeResults', 'output.openValue', 'editor.toggleOvertype', 'file.openRecent', 'file.clearRecent', 'file.recoverUnsaved', 'editor.toggleLineNumbers',
       // Toasts are reached from the palette, as in VS Code.
       'notifications.focus', 'notifications.clearAll',
+      // Download Update is offered by the status bar and its toast while Automatically download updates is off.
+      'help.downloadUpdate',
       // The table designer's menu and toolbar strip; its menubar menu is a follow-up.
       'tableDesigner.setPrimaryKey', 'tableDesigner.removePrimaryKey', 'tableDesigner.insertColumn', 'tableDesigner.deleteColumn', 'tableDesigner.generateChangeScript', 'tableDesigner.properties', 'tableDesigner.stop',
       // The SSIS Catalog's Properties on its tree nodes, and the properties documents' Refresh (their header and F5).
       'ssis.folderProperties', 'ssis.projectProperties', 'ssis.packageProperties', 'ssis.environmentProperties', 'ssis.refreshProperties',
       // The Database Properties document's header verbs.
       'databaseProperties.apply', 'databaseProperties.discard', 'databaseProperties.refresh', 'databaseProperties.stop',
+      // The New Database document's header verbs.
+      'newDatabase.ok', 'newDatabase.cancel', 'newDatabase.stop',
+      // The Restore Database document's header verbs.
+      'restoreDatabase.run', 'restoreDatabase.stop', 'restoreDatabase.refresh',
       // The Activity Monitor's header verbs and keys; only opening it is in the menu bar.
       'activity.togglePause', 'activity.refresh', 'activity.setInterval', 'activity.setChartWindow', 'activity.toggleSplit', 'activity.nextPane', 'activity.previousPane', 'activity.close',
       // The SSISDB node's Active Operations and reports, and the Operations grid's menu and header; View has All Operations.
-      'ssis.activeOperations', 'ssis.allExecutions', 'ssis.allValidations', 'ssis.stopOperation', 'ssis.refreshOperations', 'ssis.pauseOperations', 'ssis.copyOperations', 'ssis.copyOperationsWithHeaders']
+      'ssis.activeOperations', 'ssis.allExecutions', 'ssis.allValidations', 'ssis.stopOperation', 'ssis.refreshOperations', 'ssis.pauseOperations', 'ssis.copyOperations', 'ssis.copyOperationsWithHeaders',
+      // Search Objects' header and status bar verbs; Search Objects… itself is in View.
+      'explorer.rebuildIndex', 'explorer.stopIndexing']
     expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))
     // Query › Connection is a native submenu too.
     for (const id of ['preferences.colorTheme', 'connection.connect', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'file.closeAll', 'view.toggleResultsPane'] as const) expect(menuCommandIds).toContain(id)

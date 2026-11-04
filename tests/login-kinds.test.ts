@@ -28,6 +28,7 @@ import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { ConnectionService } from '../src/renderer/src/services/connections'
 import { deferred } from './fixtures/documents'
 import { loginPropertiesDescribe } from './fixtures/login-properties'
+import { securablesModel } from './fixtures/securables'
 import { connectionInfo, connectionOptions } from './fixtures/workbench'
 
 const cleanups: (() => void)[] = []
@@ -41,7 +42,7 @@ const model = (changes: Partial<NewLoginModel['server']> = {}, lists: Partial<Ne
   databases: [{ name: 'AppData', state: 0, accessible: true, readOnly: false }, { name: 'master', state: 0, accessible: true, readOnly: false }], databasesTruncated: false,
   languages: [{ name: 'us_english', alias: 'English' }], serverRoles: [{ name: 'public', fixed: true }, { name: 'sysadmin', fixed: true }], serverRolesTruncated: false,
   certificates: ['AppSigning', 'Other'], certificatesTruncated: false, asymmetricKeys: ['AppKey'], asymmetricKeysTruncated: false,
-  credentials: [{ name: 'AzureBlob' }, { name: 'Vault', provider: 'EkmProv' }], credentialsTruncated: false, ...lists
+  credentials: [{ name: 'AzureBlob' }, { name: 'Vault', provider: 'EkmProv' }], credentialsTruncated: false, securables: securablesModel(), ...lists
 })
 const managed = () => model({ engine: 'managedInstance', level: 16 })
 const draft = (of: NewLoginModel, changes: Partial<NewLoginDraft> = {}): NewLoginDraft => ({ ...initialNewLoginDraft(of), name: 'app', ...changes })

@@ -12,10 +12,14 @@ pages, limits, error codes, display formats, benchmarks).
 - `npm run dev`: Debug backend build, then electron-vite with renderer hot reload. Restart after C# changes.
 - `npm run check`: typecheck, Release .NET checks, vitest, production build. Run before every commit.
 - `npm run test:smoke`: the Electron suites listed in package.json's `test:smoke`. Needs the Release backend and `out/`
-  from `npm run check`.
+  from `npm run check` (or just those, from `npm run build:smoke`). `node scripts/smoke-shards.mjs 2/2`: one CI shard.
+  The fixture launches the hidden smoke window with `--disable-frame-rate-limit`: Chromium otherwise draws it at one
+  frame a second, and every Playwright press waits for frames. Set `VARIA_SMOKE_PROFILE=<dir>` to save a Playwright trace
+  of each launch there (it holds the environment, so never upload one from a run with secrets).
   Headless Linux: `xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke`.
 - `npm run test:electron`: `check` followed by `test:smoke`.
-- `npm run backend:test`: only the .NET checks. `npx vitest run tests/<name>.test.ts`: one vitest file
+- `npm run backend:test`: only the .NET checks. `dotnet run --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj
+  --configuration Release -- --live-group 1/3`: one CI live group (no offline checks; needs `VARIA_TEST_SQL_SERVER`). `npx vitest run tests/<name>.test.ts`: one vitest file
   (`backend-sidecar.test.ts` starts the Release backend, so build it first with `npm run check` or `npm run backend:test`).
 - `npm run bench` (node harness, Release backend), `npm run bench:e2e [-- --live]` and `npm run bench:grid [-- --live]`
   (Electron, need `out/`): the IPC and results grid benchmarks, not part of `check`. `node scripts/check-bench.mjs
@@ -27,8 +31,8 @@ pages, limits, error codes, display formats, benchmarks).
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 1014 offline
-  checks; how many depends on the server version and authentication (1608 against a local SQL Server 2025 in Mixed Mode, which
+  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 1415 offline
+  checks; how many depends on the server version and authentication (2298 against a local SQL Server 2025 in Mixed Mode, which
   adds the low-privilege login checks, with Windows authentication and `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer, Script As and object action
   scratch-database checks (the last in their own `VariaScratch_…_act` database) and the script goldens in `tests/fixtures/scripting/`; `VARIA_UPDATE_SCRIPT_GOLDENS=1`
   rewrites the goldens whose manifest source is `varia`),
@@ -127,6 +131,7 @@ pages, limits, error codes, display formats, benchmarks).
   Explorer's status chips are `background` views (`ExplorerStatusService`, one per connected server and login, owned by
   the pane, sampling in master): at most 8 a window, in slots no other view wants, given up to views the user opens when
   the window's slots are taken or the backend refuses them `BUSY` on that server; they never reload the tree.
+  Job progress EVENTs (`results.export`, `actions.execute`, `explorer.index`) are droppable, per-request and not periodic data.
 - UI result caches are 256 windows and 16 Mi units; the worker cache is 64 MiB.
 - Bound every input and output: 4 MiB request and 16 MiB response bodies, 1M-character scripts, 256 pending requests
   per backend generation, a deadline per method (`methodPolicies`), credit for result streams (16 MiB per stream, 64 MiB
@@ -159,6 +164,13 @@ pages, limits, error codes, display formats, benchmarks).
   text per query, band and filter shape, with values as parameters and database names only through `QUOTENAME`; no
   metadata built-ins; `READ UNCOMMITTED` and `LOCK_TIMEOUT 5000` on the explorer pool. The offline `CatalogSql` lint
   renders and checks every variant.
+- Search Objects' index (`backend/Varia.Backend/Search/`, docs/object-search.md) lives only in backend memory, one per
+  connection, never on disk, and is dropped on disconnect; its limits are `objectSearchLimits` in
+  `src/shared/explorer/search.ts`, mirrored in C# (`tests/object-search.test.ts`), with definition text under one budget
+  for all connections (`IndexBudget`). It reads on its own pool (" - Object Search", the explorer's prologue) from
+  `ObjectSearchSql`'s constant batch, run in each database only through `QUOTENAME(@db).sys.sp_executesql` and linted by
+  `CatalogSql.Lint`; definitions come from `sys.sql_modules`. Regex runs only `NonBacktracking` with a match timeout, and
+  a database the build cannot read is a skipped value. Never log names, definitions or search text.
 - Script As verbs, titles, URN types and preflight ids live only in `src/shared/scripting/catalog.ts`, and scripting
   options only in `options.ts`; after changing them, regenerate `docs/scripting.md` and the backend's embedded
   `Scripting/scripting-catalog.json` with `npx vitest run tests/scripting-catalog.test.ts -u`. Scripting uses its own
@@ -167,24 +179,37 @@ pages, limits, error codes, display formats, benchmarks).
   `HeaderGuard` to every SMO script with headers, leaves out SMO's comments for unresolved references (they hold names
   unescaped) and refuses any other SMO comment batch a name breaks, caps output at 4,000,000 characters, never executes
   DDL, and never logs scripts, names or options.
-- Object actions (Select Top 1000 Rows, Rename, Delete, Properties, a login's Disable and Enable), their dialogs, pages and database options live only
+- Object actions (Select Top 1000 Rows, Rename, Delete, Properties, Restore Database, a login's Disable and Enable, and folder actions such as Databases › Attach), their dialogs, pages and database options live only
   in `src/shared/actions/catalog.ts`, `database.ts` and `logins.ts` (login subtypes, protected-principal rules and limits); after changing them, regenerate `docs/object-actions.md` and the
   backend's embedded `Actions/actions-catalog.json` with `npx vitest run tests/object-actions-catalog.test.ts -u`. DDL runs
   only in `ActionService` (and, for the SSIS Catalog's server verbs, in `SsisActionService`; see the SSIS bullet): on its own unpooled connection (the application name plus " - Object Actions", never retried),
   never the explorer or scripting pool; with statements only from constant templates in `ActionSql`, `Actions/DatabaseAlter`
   and `Designer/DesignerSql`, all checked by `ActionSql.LintExecutable` (its template form for `ActionSql`, its builder
-  forms for the others), and, for logins, `Actions/LoginSql`, checked by its own `LoginSql.LintExecutable`, which `ActionSql.Lint`
-  chains (the password only as `@password` behind a NULL guard, through a binary-collation REPLACE, never in a literal), where names, the database a batch runs in included, go in as parameters through server-side
+  forms for the others), New Database's `Actions/CreateDatabaseSql`, checked by its own `Lint` (file names and paths as
+  N'' literals quoted on the server, under a binary collation) with the designer form's OPENJSON rules
+  (`Actions/JsonBuilderLint`: number or `nvarchar(max)` columns, text only inside `QUOTENAME`), `Actions/AttachSql`
+  (Attach's builder and its `DBCC CHECKPRIMARYFILE (@mdf, n)` reads, checked by `AttachSql.Lint`, with paths only in one
+  JSON parameter that the server quotes), for RESTORE and BACKUP, which take no `QUOTENAME`d text, `Actions/RestoreSql`
+  binding only variables (`RestoreSql.LintMedia`), and, for logins, `Actions/LoginSql`, checked by its own `LoginSql.LintExecutable`,
+  which `ActionSql.Lint` chains (the password only as `@password` behind a NULL guard, through a binary-collation REPLACE,
+  never in a literal), where names, the database a batch runs in included, go in as parameters through server-side
   `QUOTENAME`, numbers only through `CONVERT` of range-checked parameters, keywords only from the embedded catalogue, and
   collations only as `sys.fn_helpcollations()` names them (live checks prove the server builds what Script Action shows
   for hostile names, and that Database Properties' script equals SMO's capture of SSMS's sequence); after a preflight in
   the same connection; waiting for locks as SSMS does (`LOCK_TIMEOUT -1`), so every DDL path needs a Stop (the dialog's,
   or the status bar's for a rename and a login's Disable and Enable), whose reply waits for SQL Server and lists the steps completed; and never logging
-  names, SQL or values. Script never runs anything. Describe and script reads use `LOCK_TIMEOUT 10000` (the loginFacts
-  describe, whose facts only advise, under READ UNCOMMITTED). Every lint refuses `LOGINPROPERTY` (it takes its own locks whatever
+  names, SQL or values. Varia undoes only its own partial changes and drops only a RESTORING database its own restore created
+  (`ActionSql.DropRestoring`, identity checked in the batch), never one that existed. Script never runs anything. Describe and script reads use `LOCK_TIMEOUT 10000`
+  (the loginFacts describe, whose facts only advise, under READ UNCOMMITTED). Every lint refuses `LOGINPROPERTY` (it takes its own locks whatever
   the isolation level) and any read of a password hash (`CatalogSql.SecretUses`), except `ActionSql.LoginLock` (Unlock's
   lock-out read, in the action's own connection), whose own lint allows only the lock-out properties `logins.ts` lists. The test-only dry
-  run is an internal C# method, never a request field.
+  run is an internal C# method, never a request field. Action statements run through a reader (`ActionService.ReadAllAsync`),
+  never `ExecuteNonQuery` (`tests/action-reader-lint.test.ts`), whose info messages SqlClient holds until the statement ends, and a Stop
+  reaches the statement only through `ActionService.StatementStop` (SqlClient's own cancel from another thread waits while a statement
+  streams info messages), the job's token cancelled off the frame loop; a long action (the catalogue's `long`)
+  takes the long gate (per Varia connection, like the others) and reports message 3211 as droppable `action.progress` EVENTs
+  that main relays only to the requesting window (`varia:actions-progress`), and a closing backend stops it and waits for
+  its cleanup (`DrainCommitted`; main's `drainMs`, `actionDrainMs`).
 - Table Designer types, properties, commands and limits live only in `src/shared/designer/catalog.ts`; after changing it,
   regenerate `docs/table-designer.md` and the backend's embedded `Designer/designer-catalog.json` with
   `npx vitest run tests/table-designer-catalog.test.ts -u`. Designer DDL runs only through `actions.execute`'s `createTable`,
@@ -236,6 +261,11 @@ pages, limits, error codes, display formats, benchmarks).
   `SsisOptions.CreateScratch` of the dry run), never a request field; Stop cancels any statement but the restore (whose
   reply waits for it to end), and a Stop or failure after the restore removes exactly what the request made, waiting at
   most 30 s per lock. Never log names, values, SQL or messages.
+- Updates live in `src/shared/updates.ts` (feed, manifest schema, states, failure words); only main fetches (its own
+  in-memory session, `net` through the system proxy and certificate store), verifies size and SHA-512 against the
+  release's `varia-update.json` (written by `scripts/update-manifest.mjs` in the release job), and installs, only after
+  Restart to Update's quit has closed the windows and stopped the backend (`src/main/update-install.ts`). The page gets
+  only `UpdateState` and asks with argument-free calls; it never names a URL or path. docs/updates.md describes it.
 - Settings live only in `src/shared/settings/` (pages in `pages.ts`, definitions per area, aggregated by `catalog.ts`;
   the Scripting page's entries come from `src/shared/scripting/options.ts`), with defaults, bounds, platforms and zod
   schemas built from the definitions. Only main reads and writes `settings.json` (`SettingsStore`: overrides only, read
@@ -272,6 +302,14 @@ pages, limits, error codes, display formats, benchmarks).
   metric needs a `tests/bench/floors.json` entry (`tests/bench-floors.test.ts` checks both lists) and a row in
   docs/ipc.md. Floors must stay well below what slow shared CI runners measure.
 - Every behaviour change or bug fix comes with a check that would have caught it.
+- Keep CI fast. Each smoke shard and live group has a time budget (`shardBudgetSeconds` in `scripts/smoke-shards.mjs`,
+  `LiveGroups.BudgetSeconds`, both 360 s); exceeding it fails `tests/ci-workflow.test.ts` or the offline .NET checks.
+  A new smoke suite needs its seconds on Linux and Windows in `suiteSeconds`, and a new live .NET suite runs through
+  `Suite(...)` in `Program.cs` with an entry in `LiveGroups.Suites`. Copy times from CI's logs: each shard's summary and
+  each `Live suite name: n s` line. Before you add a smoke suite, check whether an existing suite's launch can take the
+  checks: each Electron launch costs seconds. Split any suite over about 90 s. Wait on conditions, never fixed sleeps or
+  `WAITFOR` delays longer than the behaviour needs. Put report-only measurements in the benchmarks, not the checks. A
+  live vitest file is named `*-live.test.ts`, so CI's live job runs it.
 
 ## Conventions
 
@@ -279,12 +317,18 @@ pages, limits, error codes, display formats, benchmarks).
   as errors. LF line endings (`.editorconfig`, `.gitattributes`). Comments explain why, sparingly.
 - One `claude/<topic>` branch per PR, off `main` or, for a stacked PR, off the branch it builds on. Merge with merge
   commits (never squash or rebase), so stacked branches need no rebase; imperative commit subjects.
-- CI (`.github/workflows/ci.yml`): the Linux job (live SQL Server service, sandboxed smoke tests under xvfb) and the
-  Windows and macOS jobs run on every PR, drafts included (any base branch, so stacked PRs are tested), every push to
-  main and manual runs; the repository is public, so their minutes cost nothing. macOS skips the smoke tests until they
-  cover its window chrome. Once `npm run check` passes, the smoke suites and the benchmarks each run even when the other
-  failed first, so one run reports both (`tests/ci-workflow.test.ts`). `sql-matrix.yml` (manual runs only) repeats the
-  .NET checks against SQL Server 2017, 2019, 2022 and 2025.
+- CI (`.github/workflows/ci.yml`) runs on every PR, drafts included (any base branch, so stacked PRs are tested), every
+  push to main and manual runs; the repository is public, so its minutes cost nothing, but GitHub runs only 20 of its jobs
+  at once (5 on macOS), so a PR runs at most 11 and no job repeats another's work. Every job starts at once and builds
+  what it needs, so one failure hides nothing and the run takes as long as its longest job: `npm run check` on Linux,
+  Windows and macOS; the live .NET checks on Linux in three groups (`--live-group k/3`, each against its own SQL Server
+  service; the first also runs `tests/*-live.test.ts` and Kerberos); the smoke suites in two shards on Linux (sandboxed,
+  under xvfb, with SQL Server) and Windows (`scripts/smoke-shards.mjs`, which splits `test:smoke` by each platform's times
+  in its `suiteSeconds`); and the Linux benchmarks (floors enforced). Report-only work runs on main pushes only: the
+  Windows and macOS benchmarks, and Linux's 1024x768 repeats of the scripting and results suites (Windows runners' own
+  display is 1024x768). macOS skips the smoke tests until they cover its window chrome. `tests/ci-workflow.test.ts` holds
+  this layout.
+  `sql-matrix.yml` (manual runs only) repeats the .NET checks against SQL Server 2017, 2019, 2022 and 2025.
 - No license has been chosen; do not add one.
 
 ## Product direction (agreed with the owner)

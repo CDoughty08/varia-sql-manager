@@ -37,11 +37,16 @@ await import(${JSON.stringify(core)})`
     expect(result.stderr).toBe('')
     expect(result.status).toBe(0)
   })
-  it('keeps the method policies loadable by the fake backend: erasable, with type-only imports', () => {
+  it('keeps the method policies loadable by the fake backend: erasable, with type-only imports or a shared catalogue by its .ts name', () => {
     const file = join('src', 'shared', 'ipc', 'methods.ts')
     const source = readFileSync(file, 'utf8')
     expect(() => stripTypeScriptTypes(source, { mode: 'strip' })).not.toThrow()
-    for (const statement of source.match(/^import\b.*$/gm) ?? []) expect(statement).toMatch(/^import type /)
+    // A value import (the actions catalogue's long-action drain, D1c) names its .ts file, so Node's own loader finds it.
+    for (const statement of source.match(/^import\b.*$/gm) ?? []) expect(statement).toMatch(/^import type |^import \{[^}]+\} from '\.\.\/[a-z-]+\/[a-z-]+\.ts'$/)
+    const script = `const { methodPolicies } = await import(${JSON.stringify(pathToFileURL(file).href)}); if (methodPolicies['actions.execute'].drainMs({ action: 'delete' }) !== 0) process.exit(2)`
+    const result = spawnSync(process.execPath, ['--input-type=module', '--disable-warning=ExperimentalWarning', '-e', script], { encoding: 'utf8' })
+    expect(result.stderr).toBe('')
+    expect(result.status).toBe(0)
   })
   it('honours the backend test seams only in unpackaged smoke runs', () => {
     const main = readFileSync(join('src', 'main', 'index.ts'), 'utf8')
@@ -54,6 +59,10 @@ await import(${JSON.stringify(core)})`
     expect(main).toContain("...(testSeams ? ['--varia-test-mode'] : [])")
     // Remember password's reversible test cipher, for smoke runs on machines without a keyring.
     expect(main).toContain("const secretCipher = testSeams && process.env.VARIA_TEST_SAFE_STORAGE === 'test' ? testCipher() : safeStorageCipher(safeStorage, process.platform)")
+    // Updates follow a loopback test feed (plain http) only in unpackaged smoke runs; every other build reads GitHub over https.
+    expect(main).toContain("const testUpdateFeed = testSeams && /^http:\\/\\/127\\.0\\.0\\.1:\\d{1,5}\\/$/.test(process.env.VARIA_TEST_UPDATE_FEED ?? '') ? process.env.VARIA_TEST_UPDATE_FEED : undefined")
+    expect(main.match(/VARIA_TEST_UPDATE_FEED/g)).toHaveLength(2)
+    expect(main).toContain('fetch: (url, init) => network.fetch(url, { ...init, cache: \'no-store\', redirect: \'follow\' }), secureOnly: !feed,')
     // The fake backend is chosen in the spawn spec, after the packaged branch and only for smoke tests.
     const spec = readFileSync(join('src', 'main', 'backend', 'spawn-spec.ts'), 'utf8')
     expect(spec.indexOf('if (o.packaged) return')).toBeLessThan(spec.indexOf('VARIA_TEST_BACKEND :'))

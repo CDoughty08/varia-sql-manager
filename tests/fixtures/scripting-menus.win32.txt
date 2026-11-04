@@ -484,6 +484,7 @@ explorer.context, for a DML trigger
   Re&fresh
 explorer.context, for a database
   New &Query
+  Searc&h Objects…
   ---
   &Script Database as >
     &CREATE To >
@@ -503,6 +504,16 @@ explorer.context, for a database
       &File…
       C&lipboard
   ---
+  &Tasks >
+    &Detach…
+    ---
+    &Take Offline
+    Bring &Online
+    ---
+    &Restore >
+      &Database…
+      &Files and Filegroups…
+  ---
   Copy N&ame
   ---
   Rena&me
@@ -513,6 +524,7 @@ explorer.context, for a database
   &Properties
 explorer.context, for a database snapshot
   New &Query
+  Searc&h Objects…
   ---
   &Script Database as >
     &CREATE To >

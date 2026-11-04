@@ -5,20 +5,22 @@
 // for later dialogs (Backup and Restore): a dialog id, its surface and pages in
 // src/shared/actions/catalog.ts, a describe in the backend, a definition here, and its pages or sections. No React here,
 // so the services and their tests stay in Node.
-import type { DialogId, ModalDialogId } from '../../../shared/actions/catalog.ts'
+import { databaseStateOf, type DialogId, type ModalDialogId, type PageId } from '../../../shared/actions/catalog.ts'
 import {
   loginDeleteText, loginMessages, loginPropertiesMessages, loginRefusal, mappedUserKept, unlockHandOffLabel, unlockRefusal, type LoginDatabaseRoles, type LoginFacts, type LoginLockFacts, type LoginMessageId, type NewLoginModel,
   type UnlockChoice
 } from '../../../shared/actions/logins.ts'
 import { promptLimits, type ActionPromptRequest } from '../../../shared/actions/prompts.ts'
 import {
-  dropDatabaseStepTitle, dropUserStepTitle, loginPasswordStepTitle, type ActionDescribeResult, type ActionError, type ActionRequest, type ActionStep, type CreateLoginRequest, type DatabasePropertiesModel, type DeleteTarget, type LoginPropertiesRequest
+  detachDatabaseStepTitle, dropDatabaseStepTitle, dropUserStepTitle, loginPasswordStepTitle, type ActionDescribeResult, type ActionError, type ActionRequest, type ActionStep, type AttachRequest, type AttachServerFacts,
+  type CreateLoginRequest, type DatabasePropertiesModel, type DatabaseStateModel, type DeleteTarget, type LoginPropertiesRequest
 } from '../../../shared/actions/schema.ts'
 import type { FolderId } from '../../../shared/explorer/catalog.ts'
-import { displayText, type ObjectRef } from '../../../shared/explorer/refs.ts'
+import { displayText, type ExplorerNodeRef, type ObjectRef } from '../../../shared/explorer/refs.ts'
 import type { LongRunKind } from '../../../shared/long-runs.ts'
 import { clipUnits } from '../actions/ObjectActionService'
 import type { ExplorerMenuNode } from '../menus/targets'
+import { attachBlocked, attachRequest, initialAttachDraft, type AttachDraft } from './attach-database'
 import { afterDatabaseFailure, databaseConfirm, databaseRequest, initialDatabaseDraft, type DatabaseDraft, type DatabaseRequest } from './database-properties'
 import {
   initialLoginPropertiesDraft, loginPropertiesFocus, loginPropertiesModelOf, loginPropertiesReadAgain, loginPropertiesRequest, withDatabaseRoles, type LoginPropertiesDraft, type LoginPropertiesModel
@@ -31,13 +33,16 @@ export type BuiltRequest = Omit<ActionRequest, 'connectionId' | 'requestId'>
 export type DialogRequest = BuiltRequest | undefined | { readonly problem: string }
 /** What a dialog's success may do to the rest of the workbench. */
 export interface DialogEffects {
-  /** Reloads the folder the object is listed in (a Databases folder also refreshes the toolbar's database list). */
-  refreshListing(): void
+  /** Reloads the folder the object is listed in, or the folder the dialog opened on (a Databases folder also refreshes the
+   *  toolbar's database list), selecting `select` once it is listed. */
+  refreshListing(select?: ExplorerNodeRef): void
   /** Reloads the server's `folder` (where a new object is listed) and selects `object` in it, when that folder is in the tree. */
   reveal(folder: FolderId, object: ObjectRef): void
   /** Reloads `owner`'s `folder` (a database's Users), when that folder is in the tree; one never listed loads fresh when opened. */
   reload(owner: ObjectRef, folder: FolderId): void
-  /** A toast with the object actions' notice key, which the next one replaces. */
+  /** The dialog's database went offline or came online: its Database Properties documents follow. */
+  databaseState(offline: boolean): void
+  /** A toast with the object actions' notice key, which the next one replaces (Unlock Login's success). */
   notify(message: string): void
 }
 /** The dialog OK succeeded in. */
@@ -72,13 +77,14 @@ export interface ObjectDialogDefinition<Model, Draft> {
   readonly rolesLogin?: (target: ObjectRef) => string | undefined
   /** User Mapping's read of a database arrived: the model and draft with what it found (Login Properties' mapped user and roles). */
   readonly lookedUp?: (model: Model, draft: Draft, database: string, value: LoginDatabaseRoles) => { readonly model: Model; readonly draft: Draft }
-  /** A run that window close, Disconnect and Restart must not stop part way (src/shared/long-runs.ts). */
-  readonly longRun?: LongRunKind
   /**
    * Whether the action's reply says the database it ran on is gone (Delete: a success, or a reply whose DROP completed before a
-   * later step failed or stopped), so its Properties documents turn orphan and the query windows that used it are counted (D3 §8).
+   * later step failed or stopped; Detach: a success, or a reply whose sp_detach_db completed before a Stop answered), so its
+   * Properties documents turn orphan and the query windows that used it are counted (D3 §8).
    */
   readonly removesDatabase?: (target: ObjectRef, steps: readonly ActionStep[], succeeded: boolean) => boolean
+  /** A run that window close, Disconnect and Restart must not stop part way (src/shared/long-runs.ts). */
+  readonly longRun?: LongRunKind
   /** The name Script Action to File suggests, when the target has none. */
   readonly fileName?: (draft: Draft) => string
   /** A question to ask before OK sends `request` (never before Script). */
@@ -87,8 +93,8 @@ export interface ObjectDialogDefinition<Model, Draft> {
   readonly withConfirmation?: (request: BuiltRequest, confirmation: DialogConfirmation) => BuiltRequest
   /** The model after OK failed, when the failure shows part of it is stale (the same model otherwise). */
   readonly afterFailure?: (model: Model, failure: ActionError) => Model
-  /** Why OK cannot run for this model and draft, shown on the page; OK is greyed while it is set, and Script stays available. */
-  readonly unavailable?: (model: Model, draft?: Draft) => string | undefined
+  /** Why OK cannot run the draft as it is (OK is disabled and says so), or undefined. */
+  readonly blocked?: (model: Model, draft: Draft) => string | undefined
   /** After a success: `request` is what OK sent (never with a secret), `subject` the dialog's target and its label, `model` what the
    *  dialog read. */
   readonly afterSuccess: (effects: DialogEffects, request: BuiltRequest, subject: DialogSubject, model: Model, context: DialogContext) => void
@@ -104,8 +110,12 @@ export interface ObjectDialogDefinition<Model, Draft> {
   readonly initialFocus?: (model: Model, draft: Draft) => string | undefined
   /** After a failure or Stop that left some steps done; reloading the object's listing when absent. */
   readonly afterPartial?: (effects: DialogEffects, request: BuiltRequest) => void
-  /** Why OK is greyed (the protected-principal rules' refusal of a login), shown on the page; Script still works. */
-  readonly blocked?: (model: Model) => string | undefined
+  /** OK runs as soon as the describe answers, with nothing to choose (SSMS's Bring Online). */
+  readonly runOnOpen?: true
+  /** A success leaves the dialog open on its steps with Close, as SSMS's progress dialogs do, instead of closing it. */
+  readonly keepOpen?: true
+  /** Pages the dialog leaves out of "Select a page" for this model (Login Properties' Securables for SQL Server's own logins). */
+  readonly hiddenPages?: (model: Model) => readonly PageId[]
   /** Folders other than the object's listing that a reply's done steps changed (the Users folders of the databases a login's Delete
    *  dropped users in), which the dialog reconciles where they are loaded, after a success or a partial failure. */
   readonly changedFolders?: (model: Model, steps: readonly ActionStep[]) => ChangedFolders | undefined
@@ -222,6 +232,105 @@ export const newLoginDefinition: ObjectDialogDefinition<NewLoginModel, NewLoginD
   afterSuccess: revealLogin,
   afterPartial: revealLogin
 }
+
+const isAttach = (request: BuiltRequest): request is Omit<AttachRequest, 'connectionId' | 'requestId'> => request.action === 'attach'
+/** Attach Databases (Databases › Attach…): the describe answers the server's facts (logins for Owner, the default data
+ *  folder Add… opens in); the rows are the page's, and each Add… describes one .mdf (attach-database.ts). */
+export const attachDatabaseDefinition: ObjectDialogDefinition<AttachServerFacts, AttachDraft> = {
+  dialog: 'attachDatabase',
+  modelOf: result => result.attachDatabase?.server,
+  initialDraft: () => initialAttachDraft(),
+  request: (_target, _model, draft) => attachRequest(draft),
+  blocked: (_model, draft) => attachBlocked(draft),
+  longRun: 'attach',
+  // The Databases folder lists the attached databases; the first is selected, as a new database is.
+  afterSuccess: (effects, request) => {
+    const first = isAttach(request) ? request.databases[0]?.name : undefined
+    effects.refreshListing(first === undefined ? undefined : { type: 'object', object: { kind: 'database', name: first } })
+  }
+}
+
+/** Take Database Offline's one choice: SSMS's Drop All Active Connections, cleared. */
+export interface TakeOfflineDraft { readonly dropConnections: boolean }
+/** SET OFFLINE without a termination clause waits for every other session to leave, so OK waits for nothing: with sessions
+ *  in the database and Drop All Active Connections cleared, it is disabled (unknown sessions do not disable it). */
+export function takeOfflineBlocked(model: DatabaseStateModel, draft: TakeOfflineDraft): string | undefined {
+  if (draft.dropConnections || !model.sessions) return undefined
+  return `${count(model.sessions, 'session is', 'sessions are')} connected: check Drop All Active Connections, or Check Again once ${model.sessions === 1 ? 'it leaves' : 'they leave'}.`
+}
+export const takeOfflineDefinition: ObjectDialogDefinition<DatabaseStateModel, TakeOfflineDraft> = {
+  dialog: 'takeOffline',
+  modelOf: result => result.databaseState,
+  initialDraft: () => ({ dropConnections: false }),
+  request: (target, model, draft) => ({ action: 'takeOffline', target, dropConnections: draft.dropConnections, identity: model.identity }),
+  blocked: takeOfflineBlocked,
+  keepOpen: true,
+  // The Databases listing shows "(Offline)" in the sublabel; Database Properties of the database turns read-only.
+  afterSuccess: effects => { effects.refreshListing(); effects.databaseState(true) }
+}
+/** Bring Database Online has nothing to choose. */
+export type BringOnlineDraft = Readonly<Record<never, never>>
+export const bringOnlineDefinition: ObjectDialogDefinition<DatabaseStateModel, BringOnlineDraft> = {
+  dialog: 'bringOnline',
+  modelOf: result => result.databaseState,
+  initialDraft: () => ({}),
+  request: (target, model) => ({ action: 'bringOnline', target, identity: model.identity }),
+  runOnOpen: true,
+  keepOpen: true,
+  afterSuccess: effects => { effects.refreshListing(); effects.databaseState(false) }
+}
+
+/** Detach Database's choices: the grid's Drop Connections and Update Statistics (cleared, as in SSMS), and the box a database that
+ *  is not online asks for on a Windows server (critic A27: Detach while offline, or Detach anyway in EMERGENCY). */
+export interface DetachDraft { readonly dropConnections: boolean; readonly updateStatistics: boolean; readonly detachOffline: boolean }
+/** Detach's words for a database state, as the backend's DetachStateWords writes them in its notes and refusals. */
+export function detachStateWords(state: number): string {
+  switch (databaseStateOf(state)) {
+    case 'offline': return 'offline'
+    case 'emergency': return 'in EMERGENCY mode'
+    case 'offlineSecondary': return 'an offline secondary'
+    default: return 'not online'
+  }
+}
+/** The box a database that is not online asks for on Windows (the backend's DetachConfirmLabel). */
+export const detachConfirmLabel = (state: number): string => databaseStateOf(state) === 'offline' ? 'Detach while offline' : 'Detach anyway'
+/**
+ * Why Update Statistics cannot run (the backend's DetachStatisticsRefusal): sp_detach_db's sp_updatestats raises 15635 on a
+ * read-only, standby or EMERGENCY database, and SQL Server detaches it all the same, and 942 on an offline one, which aborts it.
+ */
+export function detachStatisticsBlocked(model: Pick<DatabaseStateModel, 'state' | 'readOnly' | 'standby'>): string | undefined {
+  if (databaseStateOf(model.state) !== 'online') return `Update Statistics cannot run while the database is ${detachStateWords(model.state)}.`
+  if (model.readOnly || model.standby) return 'Update Statistics cannot run on a read-only or standby database.'
+  return undefined
+}
+/**
+ * Why OK waits (SSMS's Not ready): sp_detach_db refuses a database other sessions use (3703), so sessions with Drop Connections
+ * cleared block it, as SSMS's Message counts them; so do what SQL Server refuses anyway (replication, a snapshot, an availability
+ * group, mirroring), and a database that is not online on Windows until its box is checked. Unknown sessions do not block.
+ */
+export function detachBlocked(model: DatabaseStateModel, draft: DetachDraft): string | undefined {
+  const blocking = model.warnings.find(warning => warning.blocking)
+  if (blocking) return blocking.text
+  if (model.confirmOffline && !draft.detachOffline) return `The database is ${detachStateWords(model.state)}: check ${detachConfirmLabel(model.state)}, or bring it online first.`
+  if (draft.dropConnections || !model.sessions) return undefined
+  return `${count(model.sessions, 'session is', 'sessions are')} connected: check Drop Connections, or Check Again once ${model.sessions === 1 ? 'it leaves' : 'they leave'}.`
+}
+export const detachDatabaseDefinition: ObjectDialogDefinition<DatabaseStateModel, DetachDraft> = {
+  dialog: 'detachDatabase',
+  modelOf: result => result.databaseState,
+  initialDraft: () => ({ dropConnections: false, updateStatistics: false, detachOffline: false }),
+  // Update Statistics goes cleared where it cannot run, whatever the draft holds (the page disables it there).
+  request: (target, model, draft) => ({
+    action: 'detach', target, dropConnections: draft.dropConnections, updateStatistics: draft.updateStatistics && !detachStatisticsBlocked(model), identity: model.identity,
+    ...model.confirmOffline ? { detachOffline: draft.detachOffline } : {}
+  }),
+  blocked: detachBlocked,
+  keepOpen: true,
+  removesDatabase: (target, steps, succeeded) => target.kind === 'database' && (succeeded || steps.some(step => step.status === 'done' && !step.compensates && step.title === detachDatabaseStepTitle)),
+  // The Databases listing loses the database; its Properties documents are orphaned (removesDatabase).
+  afterSuccess: effects => effects.refreshListing()
+}
+
 /** Unlock Login (D4d): the login preflight's facts and its lock-out state, as the unlockLogin describe read them. */
 export interface UnlockModel { readonly login: LoginFacts; readonly lock: LoginLockFacts }
 /** How to unlock (owner decision 9): Set a new password… (SSMS's way, handed over to Login Properties, D2c) is the default; keeping
@@ -235,6 +344,11 @@ export function unlockChoiceRefusal(model: UnlockModel, choice: UnlockChoice): L
   if (choice === 'keepPassword') return unlockRefusal(model.login, model.lock)
   return loginRefusal(model.login, 'unlock') ?? (model.login.type !== 'S' || model.login.policyChecked !== true ? 'unlockNoPolicy' : !model.lock.locked ? 'notLocked' : undefined)
 }
+/** Why Unlock's OK cannot run: the chosen way's refusal (the page shows the login's own as a warning), else no choice made yet. */
+export const unlockBlocked = (model: UnlockModel, draft: UnlockDraft): string | undefined => {
+  const id = unlockChoiceRefusal(model, draft.mode ?? 'keepPassword')
+  return id ? loginMessages[id] : draft.mode ? undefined : unlockChooseMode
+}
 export const unlockLoginDefinition: ObjectDialogDefinition<UnlockModel, UnlockDraft> = {
   dialog: 'unlockLogin',
   modelOf: result => result.login && result.lock ? { login: result.login, lock: result.lock } : undefined,
@@ -244,14 +358,14 @@ export const unlockLoginDefinition: ObjectDialogDefinition<UnlockModel, UnlockDr
   // Set a new password… sends nothing here (Login Properties does), so Script has nothing to script for it.
   request: (target, model, draft) => draft.mode === 'setPassword' ? undefined
     : { action: 'unlock', target, mode: 'keepPassword', ...(model.login.sid && model.login.created ? { loginIdentity: { sid: model.login.sid, created: model.login.created } } : {}) },
-  unavailable: (model, draft) => { const id = unlockChoiceRefusal(model, draft?.mode ?? 'keepPassword'); return id ? loginMessages[id] : draft?.mode ? undefined : unlockChooseMode },
+  blocked: unlockBlocked,
   okLabel: draft => draft.mode === 'setPassword' ? unlockHandOffLabel : undefined,
   // Login Properties opens on General with Login is locked out cleared, so a new password is all it asks for.
   handOff: (_model, draft) => draft.mode === 'setPassword' ? { dialog: 'loginProperties', patch: { locked: false } } : undefined,
   // Unlocked meanwhile (by its owner's new password, or another admin): the page says so and OK greys, as on a fresh open.
   afterFailure: (model, failure) => failure.code === 'NOT_SUPPORTED' && failure.message === loginMessages.notLocked ? { ...model, lock: { ...model.lock, locked: false } } : model,
   // The Logins folder's row and its status come from the reconciled listing.
-  afterSuccess: (effects, _request, subject) => { effects.refreshListing(); effects.notify(unlockSuccessNotice(subject.label)) }
+  afterSuccess: (effects, request) => { effects.refreshListing(); effects.notify(unlockSuccessNotice(request.target.name ?? '')) }
 }
 /** Login Properties (D2c): what differs from its describe; a new password goes only with OK, the old one with it when Specify old
  *  password is checked. Success and a partial failure reload Logins (the row's status and detail) and each changed database's Users. */
@@ -292,6 +406,8 @@ export const loginPropertiesDefinition: ObjectDialogDefinition<LoginPropertiesMo
   fileName: draft => (draft.name || 'Login') + '.sql',
   // SQL Server's own logins open, as in SSMS, but never change; every page says why.
   blocked: model => model.login.subtype === 'system' ? loginMessages.system : undefined,
+  // SSMS sets a system login's SecurablePermissions to null, which hides the page; the describe reads none for it either.
+  hiddenPages: model => model.login.subtype === 'system' ? ['securables'] : [],
   confirm: loginStatusConfirm,
   rolesLogin: target => target.name,
   lookedUp: withDatabaseRoles,
@@ -310,20 +426,31 @@ export const loginPropertiesDefinition: ObjectDialogDefinition<LoginPropertiesMo
     : undefined,
   initialFocus: loginPropertiesFocus
 }
+
+/** The dialogs this module defines: New Database is a document with a service of its own (src/renderer/src/new-database). */
+export type DefinedDialogId = Exclude<DialogId, 'newDatabase'>
 export interface DialogModels {
-  readonly deleteObject: DeleteTarget; readonly databaseProperties: DatabasePropertiesModel; readonly newLogin: NewLoginModel; readonly unlockLogin: UnlockModel; readonly loginProperties: LoginPropertiesModel
+  readonly deleteObject: DeleteTarget; readonly databaseProperties: DatabasePropertiesModel; readonly attachDatabase: AttachServerFacts; readonly newLogin: NewLoginModel
+  readonly takeOffline: DatabaseStateModel; readonly bringOnline: DatabaseStateModel; readonly detachDatabase: DatabaseStateModel; readonly unlockLogin: UnlockModel
+  readonly loginProperties: LoginPropertiesModel
 }
 export interface DialogDrafts {
-  readonly deleteObject: DeleteDraft; readonly databaseProperties: DatabaseDraft; readonly newLogin: NewLoginDraft; readonly unlockLogin: UnlockDraft; readonly loginProperties: LoginPropertiesDraft
+  readonly deleteObject: DeleteDraft; readonly databaseProperties: DatabaseDraft; readonly attachDatabase: AttachDraft; readonly newLogin: NewLoginDraft
+  readonly takeOffline: TakeOfflineDraft; readonly bringOnline: BringOnlineDraft; readonly detachDatabase: DetachDraft; readonly unlockLogin: UnlockDraft
+  readonly loginProperties: LoginPropertiesDraft
 }
-export type DialogModel = DialogModels[DialogId]
-export type DialogDraft = DialogDrafts[DialogId]
-export const dialogDefinitions: { readonly [D in DialogId]: ObjectDialogDefinition<DialogModels[D], DialogDrafts[D]> } = {
+export type DialogModel = DialogModels[DefinedDialogId]
+export type DialogDraft = DialogDrafts[DefinedDialogId]
+export const dialogDefinitions: { readonly [D in DefinedDialogId]: ObjectDialogDefinition<DialogModels[D], DialogDrafts[D]> } = {
   deleteObject: deleteObjectDefinition,
   databaseProperties: databasePropertiesDefinition,
+  attachDatabase: attachDatabaseDefinition,
   newLogin: newLoginDefinition,
+  takeOffline: takeOfflineDefinition,
+  bringOnline: bringOnlineDefinition,
+  detachDatabase: detachDatabaseDefinition,
   unlockLogin: unlockLoginDefinition,
   loginProperties: loginPropertiesDefinition
 }
 /** A dialog's definition over the open dialog's model and draft, which the service keeps paired with its dialog. */
-export const definitionOf = (dialog: DialogId) => dialogDefinitions[dialog] as unknown as ObjectDialogDefinition<DialogModel, DialogDraft>
+export const definitionOf = (dialog: DefinedDialogId) => dialogDefinitions[dialog] as unknown as ObjectDialogDefinition<DialogModel, DialogDraft>

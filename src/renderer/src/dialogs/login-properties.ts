@@ -9,6 +9,8 @@ import {
 } from '../../../shared/actions/logins.ts'
 import { displayText, type ObjectRef } from '../../../shared/explorer/refs.ts'
 import { emptySecrets, mappable, mappedUser, signingAuth, type MappingDraft, type NewLoginDraft, type SecretState } from './new-login'
+import { initialSecurables, permissionChoices } from './securables'
+import { securablesMessages } from '../../../shared/actions/securables.ts'
 
 /** What the loginProperties describe answers: New Login's lists, the login's facts (its identity among them), its lock-out state (a
  *  SQL Server login only) and the rest the describe read. `users` grows, and gains each user's roles, as User Mapping reads databases. */
@@ -58,7 +60,8 @@ export function initialLoginPropertiesDraft(model: LoginPropertiesModel, target:
     serverRoles: properties.serverRoles.filter(role => role !== publicRole), connect: login.connectDenied ? 'deny' : 'grant', enabled: !login.disabled,
     mappings: properties.users.map(user => ({ database: user.database, map: true, user: user.user, defaultSchema: user.defaultSchema ?? '', roles: [], rolesKnown: false })),
     specifyOld: login.own && !login.canAlter && !lock?.locked, locked: lock?.locked ?? false,
-    certificate: properties.certificate ?? '', asymmetricKey: properties.asymmetricKey ?? '', mapCredential: false, credential: model.credentials[0]?.name ?? '', credentials: [...properties.credentials]
+    certificate: properties.certificate ?? '', asymmetricKey: properties.asymmetricKey ?? '', mapCredential: false, credential: model.credentials[0]?.name ?? '', credentials: [...properties.credentials],
+    ...initialSecurables(properties.permissions)
   }
 }
 
@@ -149,7 +152,8 @@ export function loginMappingChanges(model: LoginPropertiesModel, draft: LoginPro
 /**
  * What differs from the describe, as OK and Script send it: General's defaults and password policy, the password (a typed one, with
  * the old one, or with UNLOCK when Login is locked out was cleared and MUST_CHANGE while User must change is checked), Status, the
- * server roles added and dropped, Mapped Credentials' rows added (in the grid's order) and removed (D2e), and User Mapping's changes.
+ * server roles added and dropped, Mapped Credentials' rows added (in the grid's order) and removed (D2e), User Mapping's changes, and
+ * Securables' permissions (permissionChoices).
  */
 export function loginPropertiesChanges(model: LoginPropertiesModel, draft: LoginPropertiesDraft, secrets: SecretState = emptySecrets): LoginChanges {
   const { login, properties } = model, sql = sqlLogin(model), enabled = loginPropertiesEnabled(model, draft, secrets)
@@ -157,7 +161,7 @@ export function loginPropertiesChanges(model: LoginPropertiesModel, draft: Login
   const listed = new Set(model.serverRoles.map(role => role.name)), chosen = new Set(draft.serverRoles), current = new Set(properties.serverRoles)
   const rolesAdd = sorted(draft.serverRoles.filter(role => role !== publicRole && listed.has(role) && !current.has(role)))
   const rolesDrop = sorted(properties.serverRoles.filter(role => role !== publicRole && !chosen.has(role)))
-  const mappings = loginMappingChanges(model, draft)
+  const mappings = loginMappingChanges(model, draft), permissions = permissionChoices(model, draft)
   const connect = draft.connect !== (login.connectDenied ? 'deny' : 'grant') ? draft.connect : undefined
   const typed = sql && secrets.password === 'set'
   const mappedBefore = new Set(properties.credentials), mappedNow = new Set(draft.credentials)
@@ -173,7 +177,7 @@ export function loginPropertiesChanges(model: LoginPropertiesModel, draft: Login
       }
     } : {}),
     ...(rolesAdd.length ? { rolesAdd } : {}), ...(rolesDrop.length ? { rolesDrop } : {}), ...(credentialsAdd.length ? { credentialsAdd } : {}), ...(credentialsDrop.length ? { credentialsDrop } : {}),
-    ...(mappings.length ? { mappings } : {}),
+    ...(mappings.length ? { mappings } : {}), ...(permissions.length ? { permissions } : {}),
     ...(connect ? { connect } : {}), ...(draft.enabled !== !login.disabled ? { enabled: draft.enabled } : {})
   }
 }
@@ -199,6 +203,7 @@ export function loginPropertiesProblem(model: LoginPropertiesModel, draft: Login
   if ((changes.credentialsAdd?.length ?? 0) > loginLimits.credentials || (changes.credentialsDrop?.length ?? 0) > loginLimits.credentials) return newLoginMessages.credentialsLimit
   if (changes.credentialsAdd?.some(name => !model.credentials.some(credential => credential.name === name))) return newLoginMessages.credential
   if ((changes.mappings?.length ?? 0) > loginLimits.mappings) return userMappingMessages.mappingsLimit
+  if ((changes.permissions?.length ?? 0) > loginLimits.permissions) return securablesMessages.permissionsLimit(loginLimits.permissions)
   if (loginPropertiesStatements(changes) > actionLimits.statements) return tooManyStatementsMessage(actionLimits.statements)
   return undefined
 }

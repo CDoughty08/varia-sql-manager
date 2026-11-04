@@ -43,8 +43,8 @@ internal static class LoginActionChecks
         check(Catalog.Offered("login", "disable") && Catalog.Offered("login", "enable") && Catalog.Offered("login", "rename") && Catalog.Offered("login", "delete") && Catalog.Offered("login", "properties")
             && !Catalog.Offered("table", "disable") && Catalog.Serves("disable", "box") && Catalog.Serves("enable", "managedInstance") && !Catalog.Serves("disable", "cloud"),
             "Disable, Enable, Delete and Properties are offered on logins, Disable and Enable on logins only, on SQL Server and Managed Instance");
-        check(Catalog.Describes.TryGetValue("loginFacts", out var describe) && describe == ("login", "disable") && !Catalog.Dialogs.ContainsKey("loginFacts"),
-            "loginFacts is a describe without a dialog, for logins, under Disable's target rules");
+        check(Catalog.Describes.TryGetValue("loginFacts", out var kinds) && kinds.SequenceEqual(["login"]) && Catalog.ActionOf("loginFacts") == "disable" && !Catalog.Dialogs.ContainsKey("loginFacts"),
+            "loginFacts is a fact describe without a dialog, for logins, under Disable's target rules");
         check(LoginRules.SystemName("##MS_PolicyTsqlExecutionLogin##") && !LoginRules.SystemName("##") && !LoginRules.SystemName("##x") && !LoginRules.SystemName("AppUser"),
             "SQL Server's own logins are named ##…##");
         // SQL Server compares names without trailing spaces, so "##x## " is SQL Server's own ##x## too.
@@ -136,7 +136,10 @@ internal static class LoginActionChecks
             ("a short SID", State("disable", AppUser) with { LoginIdentity = Identity with { Sid = "0" } }), ("a long SID", State("disable", AppUser) with { LoginIdentity = Identity with { Sid = new string('0', 172) + "F" } }),
             ("a lower-case SID", State("disable", AppUser) with { LoginIdentity = Identity with { Sid = "0a" } }), ("a SID with a line break", State("enable", AppUser) with { LoginIdentity = Identity with { Sid = "01\n" } }),
             ("no SID", State("disable", AppUser) with { LoginIdentity = Identity with { Sid = null! } }), ("a created without milliseconds", State("disable", AppUser) with { LoginIdentity = Identity with { Created = "2026-01-02T03:04:05" } }),
-            ("a created with a line break", State("disable", AppUser) with { LoginIdentity = Identity with { Created = "2026-01-02T03:04:05.000\n" } })
+            ("a created with a line break", State("disable", AppUser) with { LoginIdentity = Identity with { Created = "2026-01-02T03:04:05.000\n" } }),
+            // Members other actions added to ActionArgs (Attach's databases, Take Offline's and Detach's flags) are no login's.
+            ("databases on a disable", State("disable", AppUser) with { Databases = [] }), ("databases on an enable", State("enable", AppUser) with { Databases = [] }),
+            ("dropConnections on a disable", State("disable", AppUser) with { DropConnections = false }), ("updateStatistics on an enable", State("enable", AppUser) with { UpdateStatistics = false })
         };
         var accepted = invalid.Where(item => Refused(item.Args) != "INVALID_PARAMS").Select(item => item.Name).ToList();
         check(accepted.Count == 0, "Validate refuses what zod refuses for a login's actions: " + string.Join(", ", accepted));
@@ -191,7 +194,7 @@ internal static class LoginActionChecks
                 "VariaScratch_20261031010203_0a1b2c3d_lk", "VariaScratch_20261031010203_0a1b2c3d_lp", "VariaScratch_20261031010203_0a1b2c3d_lm" }.All(ScratchDatabase.SweepableLogin)
             && !new[] { "VariaScratch_20261031010203_0a1b2c3d_x", "VariaScratch_2026_0a1b2c3d", "AppUser", "VariaScratch_20261031010203_0a1b2c3d_lr]'", "##VariaScratch_20261031010203_0a1b2c3d##",
                 "##VariaScratch_20261031010203_0a1b2c3d_ls", "##MS_PolicyEventProcessingLogin##",
-                "VariaScratch_20261031010203_0a1b2c3d_ld]", "VariaScratch_20261031010203_0a1b2c3d_lDU", "VariaScratch_20261031010203_0a1b2c3d_ld]' -", "VariaScratch_20261031010203_0a1b2c3d_lk_x" }.Any(ScratchDatabase.SweepableLogin),
+                "VariaScratch_20261031010203_0a1b2c3d_ld]'", "VariaScratch_20261031010203_0a1b2c3d_ld]' -- x" }.Any(ScratchDatabase.SweepableLogin),
             "the scratch sweep drops the login action checks' scratch logins under every name they give them, and no other login");
     }
 

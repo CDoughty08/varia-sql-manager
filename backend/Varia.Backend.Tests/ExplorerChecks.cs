@@ -206,7 +206,7 @@ internal static class ExplorerChecks
             "the Logins listing joins sys.sql_logins for the policy flags, and a login denied permission to connect is noAccess, not disabled");
         check(rules.Detail("S ", false, false, true, true) == "SQL Server authentication · Password policy enforced · Password expiration enforced"
             && rules.Detail("G", true, true, false, false) == "Windows group · Disabled · Permission to connect denied" && rules.Detail("U", false, false, false, false) == "Windows user"
-            && rules.Detail("C", false, true, false, false) == "Mapped to a certificate · Permission to connect denied" && rules.Detail("K", true, false, false, false) == "Mapped to an asymmetric key · Disabled"
+            && rules.Detail("C", false, true, false, false) == "Mapped to certificate · Permission to connect denied" && rules.Detail("K", true, false, false, false) == "Mapped to asymmetric key · Disabled"
             && rules.Detail("E", false, false, false, false) == "Microsoft Entra user or application" && rules.Detail("X", false, false, false, false) == "Microsoft Entra group"
             && rules.Detail("R", false, false, false, false) == "",
             "a login's detail names its kind, then Disabled and Permission to connect denied (both when both apply) and its password policy, in logins.ts's words");

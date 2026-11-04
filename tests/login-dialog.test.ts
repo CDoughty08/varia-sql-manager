@@ -14,6 +14,7 @@ import { ObjectDialogService } from '../src/renderer/src/dialogs/ObjectDialogSer
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { ConnectionService } from '../src/renderer/src/services/connections'
 import { deferred } from './fixtures/documents'
+import { securablesModel } from './fixtures/securables'
 import { connectionInfo, connectionOptions } from './fixtures/workbench'
 
 const cleanups: (() => void)[] = []
@@ -24,7 +25,7 @@ const model = (changes: Partial<NewLoginModel['server']> = {}): NewLoginModel =>
   server: { level: 17, linux: false, windowsOnly: false, canCreate: true, engine: 'box', ...changes },
   databases: [{ name: 'AppData', state: 0, accessible: true, readOnly: false }, { name: 'master', state: 0, accessible: true, readOnly: false }], databasesTruncated: false,
   languages: [{ name: 'Deutsch', alias: 'German' }, { name: 'us_english', alias: 'English' }],
-  serverRoles: [{ name: 'bulkadmin', fixed: true }, { name: 'public', fixed: true }, { name: 'sysadmin', fixed: true }], serverRolesTruncated: false,
+  serverRoles: [{ name: 'bulkadmin', fixed: true }, { name: 'public', fixed: true }, { name: 'sysadmin', fixed: true }], serverRolesTruncated: false, securables: securablesModel(),
   certificates: ['AppSigning'], certificatesTruncated: false, asymmetricKeys: ['AppKey'], asymmetricKeysTruncated: false, credentials: [{ name: 'AzureBlob' }, { name: 'Vault', provider: 'EkmProv' }], credentialsTruncated: false
 })
 const sqlDraft = (changes: Partial<NewLoginDraft> = {}): NewLoginDraft => ({ ...initialNewLoginDraft(model()), auth: 'sql', name: 'app', ...changes })
@@ -37,7 +38,7 @@ describe('New Login draft and request', () => {
   it('starts from SSMS\'s defaults: Windows authentication, or SQL Server authentication on Linux; master; the three options; Grant; Enabled', () => {
     expect(initialNewLoginDraft(model())).toEqual({
       auth: 'windows', name: '', defaultDatabase: 'master', checkPolicy: true, checkExpiration: true, mustChange: true, serverRoles: [], connect: 'grant', enabled: true, mappings: [],
-      certificate: '', asymmetricKey: '', mapCredential: false, credential: 'AzureBlob', credentials: []
+      securables: [], permissions: [], certificate: '', asymmetricKey: '', mapCredential: false, credential: 'AzureBlob', credentials: []
     })
     expect(initialNewLoginDraft(model({ linux: true })).auth).toBe('sql')
   })

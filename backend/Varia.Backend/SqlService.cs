@@ -13,12 +13,13 @@ using Varia.Backend.Explorer;
 using Varia.Backend.Live;
 using Varia.Backend.Protocol;
 using Varia.Backend.Results;
+using Varia.Backend.Search;
 using Varia.Backend.Scripting;
 using Varia.Backend.Ssis;
 
 namespace Varia.Backend;
 
-internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScriptingHost, IActionHost, ISsisHost, ILiveHost, IActivityHost
+internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScriptingHost, IActionHost, ISsisHost, ILiveHost, IActivityHost, IObjectSearchHost
 {
     /// <summary>Announced in HELLO; main refuses a backend that lacks any method it may call (a stale build).</summary>
     public static readonly string[] MethodNames =
@@ -26,7 +27,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
-        "results.read", "results.close", "explorer.children", "results.copy", "results.export",
+        "results.read", "results.close", "explorer.children", "explorer.index", "explorer.search", "results.copy", "results.export",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
         "ssis.describe", "ssis.execute", "ssis.catalogSetup"
@@ -63,6 +64,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// tables.columns) included: what freeing a database waits for (critic A5). The Activity Monitor trusts ownSessions only.</summary>
     private readonly OwnSessionLedger poolSessions = new();
     private readonly ExplorerService explorer;
+    private readonly ObjectSearchService search;
     private readonly ScriptingService scripting;
     private readonly ActionService actions;
     private readonly SsisService ssis;
@@ -125,6 +127,10 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// error partway through its rows on demand (those are resource errors such as 701 or 1105), and that path must still
     /// end the set as incomplete and go on with the batch.</summary>
     internal Func<Exception?>? RowFault { get; set; }
+    /// <summary>Called when a batch's reader has reported the batch's end, just before the script asks whether its token
+    /// fired meanwhile. Only the live checks set it, to cancel there as SqlClient's rare silent cancel does (see the batch
+    /// loop), which no server does on demand.</summary>
+    internal Action? ReaderEnded { get; set; }
     /// <summary>Called with each statement a commit or a state read is about to send in a tab's session; an exception it
     /// returns is thrown there. Only the live checks set it, to raise the fatal transport error managed SNI can report before
     /// Connection.State changes, which no server raises on demand.</summary>
@@ -134,7 +140,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// <param name="hooks">Adds debug.results.synthesize (VARIA_BACKEND_TEST_HOOKS=1, set by main only for smoke tests).</param>
     /// <param name="publish">Sends a global EVENT and says whether it was queued; result memory usage is reported through it
     /// at most once a second.</param>
-    public SqlService(ResultStore? store = null, bool hooks = false, Func<object, bool>? publish = null)
+    /// <param name="actionsCatalog">The object actions' catalogue; the checks pass one that marks an action long (D1c) before D1f does.</param>
+    public SqlService(ResultStore? store = null, bool hooks = false, Func<object, bool>? publish = null, ActionsCatalog? actionsCatalog = null)
     {
         this.store = store ?? ResultStore.FromSystem();
         jobs = new ResultJobs(this.store);
@@ -149,8 +156,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             Record(connection);
         };
         explorer = new ExplorerService(this);
+        search = new ObjectSearchService(this);
         scripting = new ScriptingService(this);
-        actions = new ActionService(this);
+        actions = new ActionService(this, catalog: actionsCatalog);
         ssis = new SsisService(this);
         ssisActions = new SsisActionService(this, ssis);
         live = new LiveService(this);
@@ -172,6 +180,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     public ResultStore Results => store;
     /// <summary>Object Explorer's node provider (the checks set its test options).</summary>
     public ExplorerService Explorer => explorer;
+    /// <summary>The object index (the checks set its limits and read its budget).</summary>
+    internal ObjectSearchService Search => search;
     /// <summary>Script As (the checks set its test options).</summary>
     public ScriptingService Scripting => scripting;
     /// <summary>Object actions (the checks reach its dry run and test options).</summary>
@@ -203,6 +213,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     IReadOnlySet<int> ILiveHost.OwnSessions(string connectionId) => ownSessions.Sessions(connectionId, ServerOf);
     /// <summary>Varia's own session ids (the checks record and read them).</summary>
     internal OwnSessionLedger OwnSessions => ownSessions;
+    /// <summary>The ids the pooled connections were given (the checks record a stale one, as a cleared pool leaves it).</summary>
+    internal OwnSessionLedger PoolSessionLedger => poolSessions;
 
     /// <summary>Own: under one of Varia's own program names (a pool's, Object Actions'), which the Activity Monitor trusts; a plain
     /// pooled connection is recorded only for freeing a database.</summary>
@@ -268,7 +280,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     {
         "query.execute" => RequestLane.Query,
         "results.read" or "results.copy" or "results.export" => RequestLane.Results,
-        "explorer.children" => RequestLane.Explorer,
+        "explorer.children" or "explorer.index" or "explorer.search" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
         "ssis.describe" or "ssis.execute" or "ssis.catalogSetup" => RequestLane.Ssis,
         "live.subscribe" or "activity.details" => RequestLane.Live,
@@ -322,10 +334,14 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "results.copy" => await jobs.CopyAsync(Read<ResultsCopyArgs>(parameters, json), context),
         "results.export" => await jobs.ExportAsync(Read<ResultsExportArgs>(parameters, json), context),
         "explorer.children" => await explorer.ChildrenAsync(Read<ExplorerChildrenArgs>(parameters, json), Token(context)),
+        // The build reports how far it got as droppable explorer.index.progress EVENTs on the request.
+        "explorer.index" => await search.IndexAsync(Read<ObjectIndexArgs>(parameters, json), Token(context), context is null ? null : value => context.SendEvent(value, droppable: true)),
+        "explorer.search" => search.Search(Read<ObjectSearchArgs>(parameters, json), Token(context)),
         "scripting.script" => await scripting.ScriptAsync(Read<ScriptArgs>(parameters, json), Token(context)),
         "actions.describe" => await actions.DescribeAsync(Read<ActionDescribeArgs>(parameters, json), Token(context)),
         "actions.script" => await actions.ScriptAsync(Read<ActionArgs>(parameters, json), Token(context)),
-        "actions.execute" => await actions.ExecuteAsync(Read<ActionArgs>(parameters, json), Token(context)),
+        // A long step's 3211 progress goes out as droppable action.progress EVENTs on the request (ActionProgress).
+        "actions.execute" => await actions.ExecuteAsync(Read<ActionArgs>(parameters, json), Token(context), context is null ? null : value => context.SendEvent(value, droppable: true)),
         "entra.cache.clear" => ClearEntra(Read<EntraCacheArgs>(parameters, json)),
         "ssis.describe" => await ssis.DescribeAsync(Read<SsisDescribeArgs>(parameters, json), Token(context)),
         "ssis.execute" => await ssisActions.ExecuteAsync(Read<SsisExecuteArgs>(parameters, json), Token(context)),
@@ -529,6 +545,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         ownSessions.Forget(args.ConnectionId);
         poolSessions.Forget(args.ConnectionId);
         explorer.Forget(args.ConnectionId);
+        search.Forget(args.ConnectionId);
         scripting.Forget(args.ConnectionId);
         actions.Forget(args.ConnectionId);
         ssis.Forget(args.ConnectionId);
@@ -632,6 +649,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         return name.Length > 128 ? name[..128] : name;
     }
 
+    IReadOnlyList<string> IActionHost.SameServer(string connectionId) => SameServer(connectionId);
+
     /// <summary>The connection itself, then every other connection of this backend that reaches its server (ServerOf).</summary>
     private List<string> SameServer(string connectionId)
     {
@@ -703,7 +722,12 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// READ UNCOMMITTED and LOCK_TIMEOUT never reach query tabs, SMO or databases.list. It keeps the login's initial
     /// catalog (contained-database users), and is cleared with the connection's other pools on disconnect.</summary>
     SqlConnection IExplorerHost.Connection(string connectionId, string? database) => PoolConnection(connectionId, database, ExplorerPool);
-    private const string ExplorerPool = " - Object Explorer", ScriptingPool = " - Scripting";
+    private const string ExplorerPool = " - Object Explorer", ScriptingPool = " - Scripting", SearchPool = " - Object Search";
+
+    ServerProfile IObjectSearchHost.Profile(string connectionId) => Profile(connectionId);
+    /// <summary>The object index's own pool, so its reads never wait behind (or hold) Object Explorer's, under its own program name.</summary>
+    SqlConnection IObjectSearchHost.Connection(string connectionId, string? database) => PoolConnection(connectionId, database, SearchPool);
+    Task IObjectSearchHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
 
     /// <summary>Scripting's own pool, for the same reasons: its READ COMMITTED, LOCK_TIMEOUT 10 s and SMO's USE never
     /// reach the other pools, and each job restores its database before the connection returns to the pool.</summary>
@@ -1004,6 +1028,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                     using var stop = token.Register(Attention, command);
                     command.StatementCompleted += (_, e) => { if (e.RecordCount >= 0) messages.Add(e.RecordCount == 1 ? "(1 row affected)" : "(" + e.RecordCount + " rows affected)"); };
                     SqlDataReader? reader = null;
+                    // The token fired before the reader reported the batch's end.
+                    var cutShort = false;
                     try
                     {
                         // Sequential access streams each value once, in column order, so a huge value is never materialised
@@ -1121,6 +1147,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                                 }
                             }
                         }
+                        ReaderEnded?.Invoke();
+                        cutShort = token.IsCancellationRequested;
                         if (reader.RecordsAffected >= 0) recordsAffected = Math.Max(0, recordsAffected) + reader.RecordsAffected;
                     }
                     catch (Exception error)
@@ -1145,6 +1173,12 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                     {
                         if (reader is not null) await reader.DisposeAsync();
                     }
+                    // Now and then (about once in 600 of the live check's timed WAITFORs under load) SqlClient ends a cancelled
+                    // batch's reader as if the batch had finished and raises no "Operation cancelled", though SQL Server
+                    // stopped the batch where the attention found it (after 1 s of a 5 s WAITFOR). A batch whose token fired
+                    // before its end was stopped, not finished: the script times out or is cancelled, as when SqlClient
+                    // does raise it, and the batch does not count as completed.
+                    if (cutShort) throw new OperationCanceledException(token);
                     database = connection.Database;
                     var failed = Raised() != raisedBefore;
                     // SSMS runs the remaining batches after one that raised an error; stopOnError (SQLCMD's :on error exit) does not.
@@ -1598,11 +1632,19 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         ssisActions.CancelAll();
         live.CancelAll();
     }
-    public void DrainCommitted() => ssisActions.DrainCommitted();
+    /// <summary>Waits, side by side, for a Create Catalog past its restore and for long object actions (a restore) with their cleanup,
+    /// each within its own bound, which main's drainMs for the pending request covers.</summary>
+    public void DrainCommitted()
+    {
+        var restores = Task.Run(actions.DrainLong);
+        ssisActions.DrainCommitted();
+        restores.Wait();
+    }
     public void Dispose()
     {
         memoryTimer?.Dispose();
         explorer.Dispose();
+        search.Dispose();
         scripting.Dispose();
         actions.Dispose();
         ssis.Dispose();

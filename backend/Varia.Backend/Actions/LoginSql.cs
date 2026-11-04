@@ -177,10 +177,11 @@ internal static partial class LoginSql
     }
 
     /// <summary>The most statements New Login plans (src/shared/actions/logins.ts newLoginStatements): CREATE LOGIN, Deny, Disable,
-    /// each credential, each server role, and per mapping CREATE USER, the default schema's two and one per role.</summary>
-    public static int Statements(NewLoginDto login, LoginStatusDto status, IReadOnlyCollection<string> roles, IReadOnlyList<UserMappingDto> mappings) =>
+    /// each credential, each server role, per mapping CREATE USER, the default schema's two and one per role, and one per permission
+    /// (D2d).</summary>
+    public static int Statements(NewLoginDto login, LoginStatusDto status, IReadOnlyCollection<string> roles, IReadOnlyList<UserMappingDto> mappings, int permissions = 0) =>
         1 + (status.Connect == "deny" ? 1 : 0) + (status.Enabled ? 0 : 1) + (login.Credentials?.Count ?? 0) + roles.Count
-        + mappings.Sum(mapping => 1 + (mapping.DefaultSchema is null ? 0 : 2) + mapping.RolesAdd.Count);
+        + mappings.Sum(mapping => 1 + (mapping.DefaultSchema is null ? 0 : 2) + mapping.RolesAdd.Count) + permissions;
 
     /// <summary>Script Action's text (D2 §5.6, critic A14). A SQL Server login's script is one batch in one XACT_ABORT transaction
     /// under the placeholder header: unedited, it fails to parse and runs nothing, so no later statement can give a role to an
@@ -188,24 +189,41 @@ internal static partial class LoginSql
     /// N'…' (one batch cannot USE a database for a later statement only). A certificate, asymmetric key or Microsoft Entra login whose
     /// CREATE LOGIN has statements after it takes the same form without the header (D2e review): its CREATE fails wherever master lacks
     /// that certificate or key or the server lacks Microsoft Entra, and a later GO batch would then deny, disable, map a credential, give
-    /// a role or map a user to an existing login of that name. A Windows login's script, and one with CREATE LOGIN alone, is SSMS's: a
-    /// GO after each statement, and USE [db] before each mapped database's.</summary>
-    public static string ScriptText(NewLoginDto login, IReadOnlyList<string> roles, LoginStatusDto status, IReadOnlyList<UserMappingDto> mappings, IReadOnlySet<string> missingSchemas, string header)
+    /// a role or a permission or map a user to an existing login of that name. A Windows login's script, and one with CREATE LOGIN alone,
+    /// is SSMS's: a GO after each statement, and USE [db] before each mapped database's. The Securables page's statements
+    /// (<paramref name="permissions"/>, D2d) come last, in master: after USE [master] again when a mapped database's statements came
+    /// before them.</summary>
+    public static string ScriptText(NewLoginDto login, IReadOnlyList<string> roles, LoginStatusDto status, IReadOnlyList<UserMappingDto> mappings, IReadOnlySet<string> missingSchemas, string header,
+        IReadOnlyList<string>? permissions = null)
     {
         var server = new List<string> { CreateStatement(login, null) };
         server.AddRange(After(login, roles, status).Select(ActionSql.Checked).Select(ActionSql.Statement));
         var mapped = Mappings(login, mappings, missingSchemas).Select(ActionSql.Checked).ToList();
+        var after = permissions ?? [];
+        var oneBatch = Sql(login) || (login.Auth != "windows" && server.Count + mapped.Count + after.Count > 1);
+        return Script(server, mapped, after, oneBatch, Sql(login) ? header : null);
+    }
+
+    /// <summary>The two script forms of New Login and Login Properties: SSMS's (a GO after each statement, USE [db] before each mapped
+    /// database's, USE [master] again before the permissions after them), or with a password one XACT_ABORT batch under the header,
+    /// each mapped database's statement through its sp_executesql (the header only when one is given: a certificate, key or Microsoft
+    /// Entra login's one batch has none, D2e).</summary>
+    internal static string Script(IReadOnlyList<string> server, IReadOnlyList<PlannedStatement> mapped, IReadOnlyList<string> permissions, bool oneBatch, string? header)
+    {
         var text = new StringBuilder("USE [master]").Append(NL).Append("GO").Append(NL);
-        if (!Sql(login) && (login.Auth == "windows" || server.Count + mapped.Count == 1))
+        if (!oneBatch)
         {
             foreach (var statement in server) text.Append(statement).Append(NL).Append("GO").Append(NL);
             foreach (var statement in mapped) text.Append(ActionSql.ScriptText(statement));
+            if (mapped.Count > 0 && permissions.Count > 0) text.Append("USE [master]").Append(NL).Append("GO").Append(NL);
+            foreach (var statement in permissions) text.Append(statement).Append(NL).Append("GO").Append(NL);
             return text.ToString();
         }
-        if (Sql(login)) text.Append(header).Append(NL);
+        if (header is not null) text.Append(header).Append(NL);
         text.Append("SET XACT_ABORT ON;").Append(NL).Append("BEGIN TRANSACTION;").Append(NL);
         foreach (var statement in server) text.Append(statement).Append(';').Append(NL);
         foreach (var statement in mapped) text.Append(InDatabase(statement)).Append(';').Append(NL);
+        foreach (var statement in permissions) text.Append(statement).Append(';').Append(NL);
         return text.Append("COMMIT TRANSACTION;").Append(NL).Append("GO").Append(NL).ToString();
     }
 

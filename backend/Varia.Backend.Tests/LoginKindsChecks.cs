@@ -135,7 +135,7 @@ internal static class LoginKindsChecks
         // Check Names: a login ref holding DOMAIN\name, and nothing else.
         string Describe(ObjectRefDto target, string? login = null)
         {
-            try { service.Validate(new ActionDescribeArgs(Id(), Id(), "windowsPrincipal", target, login)); return "accepted"; }
+            try { service.Validate(new ActionDescribeArgs(Id(), Id(), "windowsPrincipal", target, Login: login)); return "accepted"; }
             catch (RequestException error) { return error.Code; }
         }
         check(Describe(new("login", Name: "D\\u")) == "accepted" && Describe(new("login", Name: "u")) == "INVALID_PARAMS" && Describe(new("login", Name: "D\\u\\v")) == "INVALID_PARAMS"

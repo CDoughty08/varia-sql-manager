@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { dialogSpecs, type PageId } from '../../../shared/actions/catalog.ts'
 import { autogrowthText, fileTypeLabel, notApplicable, optionDef, type DatabaseOptionDef } from '../../../shared/actions/database.ts'
 import type { DatabaseFilegroup, DatabasePropertiesModel } from '../../../shared/actions/schema.ts'
-import { displayText } from '../../../shared/explorer/refs.ts'
+import { displayText, type ObjectRef } from '../../../shared/explorer/refs.ts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { draftValue, greyNotes, modelValue, optionChoices, optionGroups, optionState, ownerState, setOption, type DatabaseDraft } from '../dialogs/database-properties'
 import SubDialog from '../dialogs/SubDialog'
@@ -14,11 +14,11 @@ import Segmented from '../kit/Segmented'
 import Skeleton from '../kit/Skeleton'
 import StatusPill from '../kit/StatusPill'
 import Switch from '../kit/Switch'
-import { databaseStatusPill, dateText, fieldControl, megabytes, problemSections, switchStates } from './fields'
-import type { DatabasePropertiesService, PropertiesState } from './DatabasePropertiesService'
+import { databaseStatusPill, dateText, fieldControl, megabytes, problemSections, shownModel, switchStates } from './fields'
+import { propertiesMessages, type DatabasePropertiesService, type PropertiesState } from './DatabasePropertiesService'
 
 /** The DOM id prefix of a document's fields, so two open documents never share one. */
-const fieldId = (documentId: string, key: string) => `properties-${documentId}-${key}`
+const fieldId = (documentId: string, key: string, prefix = 'properties') => `${prefix}-${documentId}-${key}`
 /** The header fields above the other options, in SSMS's order: Collation, Recovery model, Compatibility level, Containment type. */
 const headerKeys = ['collation', 'recoveryModel', 'compatibilityLevel', 'containmentType']
 
@@ -52,7 +52,7 @@ function GeneralSection({ model }: Pick<SectionProps, 'model'>) {
 }
 
 /** "Select Database Owner": the server's logins in a list, as SSMS's browse button offers them (a small modal picker). */
-function SelectOwner({ logins, current, onOk, onCancel }: { logins: readonly string[]; current: string; onOk(login: string): void; onCancel(): void }) {
+export function SelectOwner({ logins, current, onOk, onCancel }: { logins: readonly string[]; current: string; onOk(login: string): void; onCancel(): void }) {
   const [chosen, setChosen] = useState(logins.includes(current) ? current : logins[0] ?? '')
   return <SubDialog title="Select Database Owner" okDisabled={!chosen} onOk={() => onOk(chosen)} onCancel={onCancel} initialFocus="database-owner-list">
     <label htmlFor="database-owner-list">Logins:</label>
@@ -124,16 +124,36 @@ function FilegroupsSection({ state, model }: Pick<SectionProps, 'state' | 'model
   </div>
 }
 
+/**
+ * What an option's field needs: the document (its id names the field), the model its values are compared with (Database
+ * Properties' describe, or New Database's baseline), the draft, and where an edit goes. `idPrefix` keeps two kinds of document
+ * from sharing an id.
+ */
+export interface OptionFieldProps {
+  readonly def: DatabaseOptionDef
+  readonly documentId: string
+  readonly idPrefix?: string
+  readonly model: DatabasePropertiesModel
+  readonly draft: DatabaseDraft
+  readonly target: ObjectRef
+  readonly editable: boolean
+  readonly errors: ReadonlyMap<string, string>
+  onDraft(draft: DatabaseDraft): void
+}
+/** The props of an option's field in Database Properties. */
+export const optionProps = ({ state, model, draft, editable, errors, service }: SectionProps) =>
+  ({ documentId: state.id, model, draft, target: state.target, editable, errors, onDraft: (next: DatabaseDraft) => service.updateDraft(state.id, next) })
+
 /** One option as its field: a fact (plain text, never a live region), a switch, a segmented control, a list, or a number field. */
-export function OptionField({ def, state, model, draft, editable, errors, service }: SectionProps & { readonly def: DatabaseOptionDef }) {
-  const id = fieldId(state.id, def.key), control = fieldControl(def)
+export function OptionField({ def, documentId, idPrefix, model, draft, target, editable, errors, onDraft }: OptionFieldProps) {
+  const id = fieldId(documentId, def.key, idPrefix), control = fieldControl(def)
   const value = draftValue(draft, def) ?? '', changed = value !== (modelValue(model, def) ?? '')
-  const greyed = optionState(def, model, draft, state.target)
+  const greyed = optionState(def, model, draft, target)
   // The notes every row would share (a read-only database) show once, at the top of the section.
   const note = greyed.note && greyed.note !== model.readOnlyReason && greyed.note !== greyNotes.readOnlyDatabase ? greyed.note : undefined
   const text = { description: def.description, note, error: errors.get(def.key) }
   const disabled = !editable || greyed.disabled, aria = fieldAria(id, { ...text, changed })
-  const change = (next: string) => service.updateDraft(state.id, setOption(draft, def.key, next))
+  const change = (next: string) => onDraft(setOption(draft, def.key, next))
   const choices = optionChoices(def, model)
   if (control === 'fact') {
     const shown = choices.find(choice => choice.value === value)?.label ?? value
@@ -160,15 +180,15 @@ export function OptionField({ def, state, model, draft, editable, errors, servic
 
 /** Options: the four header fields, then SSMS's categories, each under its own heading. */
 function OptionsSection(props: SectionProps) {
-  const { state, model } = props
+  const { state, model } = props, fields = optionProps(props)
   const header = headerKeys.map(key => optionDef(key)!)
   return <div className="properties-options">
-    <div className="properties-fields">{header.map(def => <OptionField key={def.key} def={def} {...props} />)}</div>
+    <div className="properties-fields">{header.map(def => <OptionField key={def.key} def={def} {...fields} />)}</div>
     {optionGroups(model).map(group => {
       const heading = `${state.id}-options-${group.category.replaceAll(' ', '-')}`
       return <div key={group.category} className="properties-group" role="group" aria-labelledby={heading}>
         <h3 className="properties-group-title" id={heading}>{group.category}</h3>
-        <div className="properties-fields">{group.defs.map(def => <OptionField key={def.key} def={def} {...props} />)}</div>
+        <div className="properties-fields">{group.defs.map(def => <OptionField key={def.key} def={def} {...fields} />)}</div>
       </div>
     })}
   </div>
@@ -192,13 +212,13 @@ export default function DatabaseProperties({ documentId }: { documentId: string 
     ? [{ command: 'databaseProperties.stop', args, emphasis: 'danger' }]
     : [{ command: 'databaseProperties.refresh', args }, { command: 'databaseProperties.discard', args }, { command: 'databaseProperties.apply', args, label: 'Apply', emphasis: 'primary' }]
   // An orphan has no status: the database it showed is gone.
-  const pill = model && !state.gone ? databaseStatusPill(model) : undefined
+  const pill = model && !state.gone ? databaseStatusPill(shownModel(model, state.offline)) : undefined
   const phaseLabel = state.phase === 'loading' ? 'Reading the database…' : state.phase === 'applying' ? 'Applying the changes…' : state.phase === 'confirming' ? 'Waiting for your answer…' : undefined
   const content = (page: PageId) => {
     if (!model || !draft) return state.phase === 'loading' ? <Skeleton rows={4} label="Reading the database" /> : <p className="field-note">{state.phase === 'loadFailed' ? 'Nothing to show: the database could not be read.' : ''}</p>
     const props: SectionProps = { state, model, draft, editable, errors, service: properties }
     switch (page) {
-      case 'general': return <GeneralSection model={model} />
+      case 'general': return <GeneralSection model={shownModel(model, state.offline)} />
       case 'files': return <FilesSection {...props} />
       case 'filegroups': return <FilegroupsSection state={state} model={model} />
       case 'options': return <OptionsSection {...props} />
@@ -219,6 +239,7 @@ export default function DatabaseProperties({ documentId }: { documentId: string 
       actions={recovery} />}
     {!state.error && state.notice && <p className="document-status" role="status"><Icon name="pass" />{state.notice}</p>}
     {model?.readOnlyReason && <p className="document-status"><Icon name="lock" />{model.readOnlyReason}</p>}
+    {model && !model.readOnlyReason && state.offline && <p className="document-status"><Icon name="lock" />{propertiesMessages.offline}</p>}
     {model && !model.readOnlyReason && model.options.readOnly === 'true' && <p className="document-status"><Icon name="lock" />{greyNotes.readOnlyDatabase}</p>}
   </>
   return <FieldHints><DocumentFrame id={`properties-${state.id}`} title={state.label} subtitle="Database Properties" crumbs={[{ label: state.server, title: state.login ? `${state.server} (${state.login})` : state.server }, { label: 'Databases' }]}

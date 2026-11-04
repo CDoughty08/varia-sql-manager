@@ -6,6 +6,7 @@ import { loginDeleteText, loginMessages, mappedUserKept, type LoginFacts, type M
 import { loginConnectionsText } from '../src/shared/actions/prompts'
 import { dropUserStepTitle, type ActionDescribeResult, type ActionExecuteResult, type DeleteTarget } from '../src/shared/actions/schema'
 import type { ApiResult, VariaApi } from '../src/shared/contracts'
+import type { FolderId } from '../src/shared/explorer/catalog'
 import type { ObjectRef } from '../src/shared/explorer/refs'
 import { canDropMappedUsers, deleteObjectDefinition, dropMappedUsersNote, loginDeleteRefusal } from '../src/renderer/src/dialogs/definitions'
 import { ObjectDialogService } from '../src/renderer/src/dialogs/ObjectDialogService'
@@ -74,8 +75,8 @@ describe('Delete Object on a login (D4c)', () => {
     expect(loginDeleteRefusal(login({}, { canAlter: false }))).toBe(loginMessages.alterAnyLogin)
     expect(loginDeleteRefusal(login())).toBeUndefined()
     expect(loginDeleteRefusal(login({}, { subtype: 'windowsGroup', type: 'G' }))).toBeUndefined()
-    expect(deleteObjectDefinition.blocked!(login({}, { subtype: 'sa' }))).toBe('The sa login cannot be deleted.')
-    expect(deleteObjectDefinition.blocked!({ name: 'dbo.Orders', type: 'Table', warnings: [], dependentsTruncated: false })).toBeUndefined()
+    expect(deleteObjectDefinition.blocked!(login({}, { subtype: 'sa' }), { deleteHistory: false, closeConnections: false, dropMappedUsers: false })).toBe('The sa login cannot be deleted.')
+    expect(deleteObjectDefinition.blocked!({ name: 'dbo.Orders', type: 'Table', warnings: [], dependentsTruncated: false }, { deleteHistory: false, closeConnections: false, dropMappedUsers: false })).toBeUndefined()
   })
 
   it('names the Users folders a Delete changed once a user was dropped', () => {
@@ -169,7 +170,12 @@ describe('ObjectDialogService on a login\'s Delete (D4c)', () => {
     // Another of Varia's connections to the same server signs in as the login (names compare without case), one to another server does not count.
     connections.add({ ...connectionInfo('server-b'), server: 'server-a.example', login: 'appuser' }, connectionOptions)
     connections.add({ ...connectionInfo('server-c'), login: 'AppUser' }, connectionOptions)
-    const explorer = { listingFolderOf: vi.fn(() => 3 as number | undefined), reconcile: vi.fn(), loadedFolders: vi.fn(() => [41, 42]) }
+    // The tree has listed AppData's and Hr's Users folders (41, 42).
+    const usersFolders: Record<string, number> = { AppData: 41, Hr: 42 }
+    const explorer = {
+      listingFolderOf: vi.fn(() => 3 as number | undefined), reconcile: vi.fn(),
+      folderNode: vi.fn((_connectionId: string, owner: ObjectRef, folder: FolderId) => owner.kind === 'database' && folder === 'users' ? usersFolders[owner.name ?? ''] : undefined)
+    }
     const dialogs = new ObjectDialogService({ api, connections, explorer, documents: { newQuery: vi.fn() }, files: { saveCopy: vi.fn() }, newId: () => 'id' })
     cleanups.push(() => dialogs.dispose())
     const settle = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -182,7 +188,9 @@ describe('ObjectDialogService on a login\'s Delete (D4c)', () => {
     await settle()
     await dialogs.ok()
     expect(api.executeObjectAction).not.toHaveBeenCalled()
-    expect(dialogs.current).toMatchObject({ phase: 'ready', error: { code: 'NOT_SUPPORTED', message: loginMessages.own } })
+    // OK is disabled with the reason beside it (blockedReason), and Enter, which still reaches ok(), sends nothing.
+    expect(dialogs.current?.phase).toBe('ready')
+    expect(dialogs.blockedReason()).toBe(loginMessages.own)
     await dialogs.script('clipboard')
     expect(api.scriptObjectAction.mock.calls[0][0]).toMatchObject({ action: 'delete', target: appUser, dropMappedUsers: false, loginIdentity: { sid: '0A1B' } })
   })
@@ -205,7 +213,7 @@ describe('ObjectDialogService on a login\'s Delete (D4c)', () => {
     first.execute.resolve({ ok: true, value: { steps: [{ status: 'done', title: dropUserStepTitle }, { status: 'done', title: dropUserStepTitle }, { status: 'done', title: 'Drop the login' }], messages: [], elapsedMs: 1 } })
     await ok
     expect(first.dialogs.current).toBeUndefined()
-    expect(first.explorer.loadedFolders).toHaveBeenCalledWith('server-a', 'users', ['AppData', 'Hr'])
+    expect(first.explorer.folderNode.mock.calls).toEqual([['server-a', { kind: 'database', name: 'AppData' }, 'users'], ['server-a', { kind: 'database', name: 'Hr' }, 'users']])
     expect(first.explorer.reconcile.mock.calls).toEqual([[3], [41], [42]])
 
     // A user dropped, then the login's DROP failed: the user is gone all the same.
@@ -231,7 +239,7 @@ describe('ObjectDialogService on a login\'s Delete (D4c)', () => {
     const plain = third.dialogs.ok()
     third.execute.resolve({ ok: true, value: { steps: [{ status: 'done', title: 'Drop the login' }], messages: [], elapsedMs: 1 } })
     await plain
-    expect(third.explorer.loadedFolders).not.toHaveBeenCalled()
+    expect(third.explorer.folderNode).not.toHaveBeenCalled()
     expect(third.explorer.reconcile.mock.calls).toEqual([[3]])
   })
 })

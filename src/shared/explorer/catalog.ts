@@ -138,18 +138,18 @@ export const bandOf = (major: number): number => major < 13 ? minBand : Math.min
 export const engineOf = (edition: number): Engine => (cloudEngineEditions as readonly number[]).includes(edition) ? 'cloud' : 'box'
 export interface ExplorerProfile { readonly band: number; readonly engine: Engine }
 /**
- * The kind of server an action (its catalogue `engines`) and the server context keys tell apart: Azure SQL Managed Instance
- * (EngineEdition 8) is a `box` engine for the folders above, but it cannot set SINGLE_USER, attach, detach or restore from a
- * disk. Folders keep `Engine`; actions and menus use this one (through the `explorerServerEngine` and
- * `explorerSelectionServerEngine` context keys), derived once here and mirrored in C# (ExplorerProfile.ServerEngine).
+ * The kind of server an action (its catalogue `engines`) or a menu item is offered on: `box` (SQL Server),
+ * `managedInstance` (Azure SQL Managed Instance, EngineEdition 8, which the folders above treat as `box`, but which cannot
+ * set SINGLE_USER, attach, detach or restore from a disk) or `cloud`. Folders keep `Engine`; actions and menus read this
+ * one through the `explorerServerEngine` and `explorerSelectionServerEngine` context keys, and C# mirrors it
+ * (ExplorerProfile.ServerEngine).
  */
 export const serverEngines = ['box', 'managedInstance', 'cloud'] as const
 export type ServerEngine = typeof serverEngines[number]
 export const managedInstanceEngineEditions = [8] as const
 /** A connection without an edition (its profile probe failed) counts as `box`: the backend's preflight still checks the server. */
 export const serverEngineOf = (edition: number | undefined): ServerEngine => edition === undefined ? 'box'
-  : engineOf(edition) === 'cloud' ? 'cloud'
-  : (managedInstanceEngineEditions as readonly number[]).includes(edition) ? 'managedInstance' : 'box'
+  : (managedInstanceEngineEditions as readonly number[]).includes(edition) ? 'managedInstance' : engineOf(edition)
 
 export interface FolderSpec {
   readonly id: FolderId

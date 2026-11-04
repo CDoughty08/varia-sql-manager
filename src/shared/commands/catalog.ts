@@ -1,14 +1,14 @@
 import type { Platform } from './keybindings'
 import type { MenuId } from './menus'
 import type { SettingKey } from '../settings/catalog'
-import { actionCommandEntries, propertiesCommandEntries } from '../actions/catalog.ts'
+import { actionCommandEntries, newDatabaseCommandEntries, propertiesCommandEntries, restoreCommandEntries, serverActionCommandEntries } from '../actions/catalog.ts'
 import { designerCommandEntries } from '../designer/catalog.ts'
 import { scriptCommandEntries, scriptUnavailableHint } from '../scripting/catalog.ts'
 import { operationsCommandEntries } from '../ssis/operations.ts'
 import type { IconId } from '../icons.ts'
 import { ssisCommandEntries } from '../ssis/catalog.ts'
 
-export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Table Designer' | 'Database Properties' | 'Integration Services' | 'Tools' | 'Activity Monitor' | 'Preferences' | 'Developer' | 'Help'
+export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Table Designer' | 'Database Properties' | 'New Database' | 'Restore Database' | 'Integration Services' | 'Tools' | 'Activity Monitor' | 'Preferences' | 'Developer' | 'Help'
 /** Electron roles a command can stand for: native menus show `{ role }`, while custom menus and the palette run its handler. */
 export type RoleName = 'cut' | 'copy' | 'paste' | 'delete' | 'selectAll' | 'reload' | 'toggleDevTools' | 'resetZoom' | 'zoomIn' | 'zoomOut' | 'togglefullscreen' | 'quit'
 /** The roles the renderer may ask main to run (`varia:run-role`); quitting goes through the renderer's own close flow instead. */
@@ -345,13 +345,18 @@ export const commandCatalog = {
   'explorer.collapseAll': { title: 'Collapse All', category: 'Object Explorer', icon: 'collapse-all', precondition: 'hasConnection', unavailableHint: noServer },
   'explorer.newQuery': {
     title: 'New Query', category: 'Object Explorer', icon: 'new-file', precondition: '!documentBusy', unavailableHint: 'Select a server or database in Object Explorer.',
-    menus: [{ menu: 'explorer.context', group: '1_query', order: 1, mnemonic: 'q', when: "(explorerNode == 'server' && !explorerServerLost) || explorerNode == 'database'" }]
+    menus: [{ menu: 'explorer.context', group: '1_query', order: 2, mnemonic: 'q', when: "(explorerNode == 'server' && !explorerServerLost) || explorerNode == 'database'" }]
   },
   // Select Top 1000 Rows, Rename and Delete: generated from src/shared/actions/catalog.ts. Each acts on its menu's node,
   // else the selection; explorer.selectTopRows keeps PR4's id.
   ...actionCommandEntries(),
   // The Database Properties document's verbs (Apply, Discard, Refresh, Stop): also from src/shared/actions/catalog.ts.
   ...propertiesCommandEntries(),
+  // Databases › New Database…, and the New Database document's verbs (OK, Cancel, Stop): also from src/shared/actions/catalog.ts.
+  ...serverActionCommandEntries(),
+  ...newDatabaseCommandEntries(),
+  // The Restore Database document's verbs (Restore, Stop, Refresh): also from src/shared/actions/catalog.ts.
+  ...restoreCommandEntries(),
   // New › Table… and the table designer's commands: generated from src/shared/designer/catalog.ts.
   ...designerCommandEntries(),
   // The Integration Services Operations document: its presets on the SSISDB node and View, and its own commands, generated
@@ -372,7 +377,7 @@ export const commandCatalog = {
   'explorer.modify': {
     title: 'Modify', category: 'Object Explorer', icon: 'edit', precondition: "backendReady && explorerSelectionModifiable && explorerScriptAlter == 'enabled' && !documentBusy",
     unavailableHint: 'Select a stored procedure, function, or trigger.',
-    menus: [{ menu: 'explorer.context', group: '1_query', order: 3, mnemonic: 'y', when: "explorerSelectionModifiable && explorerNode != 'background'" }]
+    menus: [{ menu: 'explorer.context', group: '1_query', order: 4, mnemonic: 'y', when: "explorerSelectionModifiable && explorerNode != 'background'" }]
   },
   'explorer.cancelScripting': { title: 'Cancel Scripting', category: 'Object Explorer', icon: 'debug-stop', keywords: ['script', 'stop'], precondition: 'scriptingRunning', unavailableHint: 'Nothing is being scripted.' },
   'explorer.copyName': {
@@ -518,7 +523,7 @@ export const commandCatalog = {
     menus: [
       // 'm', not 'a': View › Search already has 'a' (tests/command-catalog.test.ts).
       { menu: 'view', group: '2_monitor', order: 1, mnemonic: 'm' },
-      { menu: 'explorer.context', group: '1_query', order: 4, mnemonic: 't', when: "explorerNode == 'server' && !explorerServerLost" }
+      { menu: 'explorer.context', group: '1_query', order: 5, mnemonic: 't', when: "explorerNode == 'server' && !explorerServerLost" }
     ]
   },
   // The monitor's header verbs and keys act on the active monitor. Pause stops collecting (no SQL), as SSMS's does.
@@ -604,6 +609,24 @@ export const commandCatalog = {
     title: 'Clear Entra ID Token Cache', category: 'Help', icon: 'discard', keywords: ['entra', 'azure', 'token', 'signin', 'login', 'mfa'],
     menus: [{ menu: 'help', group: '1_entra', order: 1, mnemonic: 'e' }]
   },
+  // Varia's own updates (src/shared/updates.ts): main checks GitHub's releases, downloads and verifies, then installs once
+  // the app has closed. SSMS 22's Check for Updates opens the Visual Studio Installer instead.
+  'help.checkForUpdates': {
+    title: 'Check for Updates', category: 'Help', icon: 'sync', keywords: ['update', 'upgrade', 'version', 'release', 'latest'], precondition: '!updateBusy',
+    unavailableHint: 'An update check or download is already running.', menus: [{ menu: 'help', group: '2_updates', order: 1, mnemonic: 'u' }]
+  },
+  'help.downloadUpdate': {
+    title: 'Download Update', category: 'Help', icon: 'cloud-download', keywords: ['update', 'upgrade', 'download'], precondition: 'updateAvailable',
+    unavailableHint: 'No update is waiting to download. Check for updates first.'
+  },
+  'help.restartToUpdate': {
+    title: 'Restart to Update', category: 'Help', icon: 'debug-restart', keywords: ['update', 'upgrade', 'install', 'restart'], precondition: 'updateReady',
+    unavailableHint: 'No update has been downloaded yet.', menus: [{ menu: 'help', group: '2_updates', order: 2, mnemonic: 'r' }]
+  },
+  'help.releaseNotes': {
+    title: 'Release Notes', category: 'Help', icon: 'link-external', keywords: ['update', 'changelog', 'news', 'release', 'download', 'github'],
+    menus: [{ menu: 'help', group: '2_updates', order: 3, mnemonic: 'n' }]
+  },
   // The Query Output menu and the results grid's keys: the grid copies its selected cells (Ctrl+C reaches its copy
   // event, and Ctrl+A is its own), and Messages its selected text.
   'output.copy': {
@@ -653,7 +676,21 @@ export const commandCatalog = {
   'workbench.search': {
     title: 'Search…', category: 'View', icon: 'search', keywords: ['find', 'objects', 'tables', 'goto', 'launch'],
     keybindings: [{ win: 'ctrl+q' }], menus: [{ menu: 'view', group: '0_palette', order: 3, mnemonic: 'a' }]
-  }
+  },
+  // Search Objects: a tab that searches a server's object index (names and module definitions), loaded in the tree or not.
+  'explorer.searchObjects': {
+    title: 'Search Objects…', category: 'Object Explorer', icon: 'search', keywords: ['find', 'objects', 'definitions', 'text', 'procedures', 'index', 'regex', 'grep'],
+    precondition: 'hasConnection', unavailableHint: noServer,
+    menus: [
+      { menu: 'view', group: '0_palette', order: 4, mnemonic: 'j' },
+      { menu: 'explorer.context', group: '1_query', order: 6, mnemonic: 'h', when: "(explorerNode == 'server' && !explorerServerLost) || explorerNode == 'database'" }
+    ]
+  },
+  'explorer.rebuildIndex': {
+    title: 'Rebuild Search Index', category: 'Object Explorer', icon: 'refresh', keywords: ['search', 'objects', 'index', 'refresh'],
+    precondition: 'hasConnection', unavailableHint: noServer
+  },
+  'explorer.stopIndexing': { title: 'Stop Indexing', category: 'Object Explorer', icon: 'debug-stop', keywords: ['search', 'index', 'cancel'] }
 } as const satisfies Record<string, CommandDescriptor>
 
 export type CommandId = keyof typeof commandCatalog

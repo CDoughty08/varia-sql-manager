@@ -60,6 +60,17 @@ describe('menu service', () => {
     menus.controller.click(0, indexOf(items, 'file.new'))
     expect(order).toEqual(['closed', 'restore editor', 'execute file.new from menu'])
   })
+  it('says so in the banner, and runs nothing, when a chosen item stopped being available after the menu opened', async () => {
+    const { menus, fixture, order } = setup()
+    const document = fixture.documents.create('SQLQuery1.sql', '', 'master')
+    menus.controller.openMenubar('file', { keyboard: true, focus: 'first' })
+    const items = menus.controller.view.levels[0].items
+    expect(items[indexOf(items, 'file.save')]).toMatchObject({ enabled: true })
+    await fixture.documents.close(document.id)
+    menus.controller.click(0, indexOf(items, 'file.save'))
+    expect(order).toEqual(['closed', 'restore editor'])
+    expect(fixture.commands.getSnapshot().error).toBe('“Save” is no longer available: something changed after the menu opened.')
+  })
   it('returns focus when the menus close without a choice, but not when one menu replaces another', () => {
     const { menus, state, order } = setup()
     menus.controller.focusMenubar('edit')
@@ -195,13 +206,15 @@ describe('menu access keys', () => {
   })
 })
 
+/** A window that records the listeners MenuService attaches, and fires them. */
+function fakeWindow() {
+  const listeners = new Map<string, (event?: unknown) => void>()
+  const document = { visibilityState: 'visible', addEventListener: (type: string, listener: () => void) => { listeners.set('document ' + type, listener) }, removeEventListener: (type: string) => { listeners.delete('document ' + type) } }
+  const window = { document, addEventListener: (type: string, listener: () => void) => { listeners.set(type, listener) }, removeEventListener: (type: string) => { listeners.delete(type) } }
+  return { window: window as unknown as Window, document, listeners, fire: (type: string, event: unknown = {}) => listeners.get(type)!(event) }
+}
+
 describe('menu window listeners', () => {
-  function fakeWindow() {
-    const listeners = new Map<string, (event?: unknown) => void>()
-    const document = { visibilityState: 'visible', addEventListener: (type: string, listener: () => void) => { listeners.set('document ' + type, listener) }, removeEventListener: (type: string) => { listeners.delete('document ' + type) } }
-    const window = { document, addEventListener: (type: string, listener: () => void) => { listeners.set(type, listener) }, removeEventListener: (type: string) => { listeners.delete(type) } }
-    return { window: window as unknown as Window, document, listeners, fire: (type: string, event: unknown = {}) => listeners.get(type)!(event) }
-  }
   /** An element inside the given containers (selectors as MenuService asks for them). */
   const element = (...containers: string[]) => ({ closest: (selectors: string) => selectors.split(', ').some(selector => containers.some(container => selector.endsWith(container))) ? {} : null })
 
@@ -452,6 +465,8 @@ describe('context menus', () => {
   })
   it('opens a tree\'s menu from the keyboard for its active row, below that row, with focus left on the tree', async () => {
     const { menus, doc, fixture, targets } = setup()
+    const fake = fakeWindow()
+    menus.attach(fake.window)
     fixture.api.push(readyBackend())
     fixture.connections.add(connectionInfo('server-a'), connectionOptions)
     const root = fixture.explorer.rootIds[0]
@@ -465,7 +480,7 @@ describe('context menus', () => {
     doc.activeElement = tree
     expect(menus.openForElement(tree.dom, { keyboard: true })).toBe(true)
     expect(level(menus)).toMatchObject({ label: 'Object Explorer', active: 0, anchor: { kind: 'below', rect: { left: 18, top: 100, right: 260, bottom: 122 } } })
-    expect(titles(level(menus).items)).toEqual(['Connect…', 'Disconnect', 'Environment…', '-', 'New Query', 'Activity Monitor', '-', 'Copy Name', '-', 'Refresh'])
+    expect(titles(level(menus).items)).toEqual(['Connect…', 'Disconnect', 'Environment…', '-', 'New Query', 'Activity Monitor', 'Search Objects…', '-', 'Copy Name', '-', 'Refresh'])
     expect([row.hasAttribute('data-menu-target'), tree.hasAttribute('data-menu-target'), doc.activeElement]).toEqual([true, false, tree])
     expect(view.scrollTop).toBe(0)
     menus.close('escape')
@@ -473,6 +488,9 @@ describe('context menus', () => {
     row.rect = { left: 10, top: 500, right: 260, bottom: 522 }
     expect(menus.openForElement(tree.dom, { keyboard: true })).toBe(true)
     expect(view.scrollTop).toBe(122)
+    // Chromium dispatches that scroll's event with the next frame, once the menu shows: it does not close the menu.
+    fake.fire('scroll', { target: tree.dom })
+    expect(menus.ownsKeyboard()).toBe(true)
     expect(level(menus)).toMatchObject({ label: 'Object Explorer', anchor: { kind: 'below', rect: { left: 18, top: 400, right: 260, bottom: 400 } } })
     menus.close('escape')
     row.rect = { left: 10, top: -40, right: 260, bottom: -18 }
@@ -487,6 +505,30 @@ describe('context menus', () => {
     expect(menus.openForElement(tree.dom, { keyboard: true })).toBe(true)
     expect(titles(level(menus).items)).toEqual(['Connect…', '-', 'Refresh'])
     expect(tree.hasAttribute('data-menu-target')).toBe(true)
+  })
+  it('stays open for a scroll made before it opened, and closes once what it is for scrolls', () => {
+    const { menus, one, doc, event } = setup()
+    const fake = fakeWindow()
+    menus.attach(fake.window)
+    const strip = Object.assign(one.tab.parentElement!, { scrollTop: 0, scrollLeft: 40 }), elsewhere = new FakeElement(doc, 'div')
+    // A right-click just after a script or the wheel scrolled the tab into view: that scroll's event comes after the menu opened.
+    menus.openFromEvent(event(one.button))
+    fake.fire('scroll', { target: strip.dom })
+    expect(menus.ownsKeyboard()).toBe(true)
+    strip.scrollLeft = 56
+    fake.fire('scroll', { target: strip.dom })
+    expect(menus.ownsKeyboard()).toBe(false)
+    // The wheel is the user scrolling now, and an element the menu did not record closes it as before.
+    menus.openFromEvent(event(one.button))
+    fake.fire('wheel', { target: strip.dom })
+    expect(menus.ownsKeyboard()).toBe(false)
+    menus.openFromEvent(event(one.button))
+    fake.fire('scroll', { target: elsewhere.dom })
+    expect(menus.ownsKeyboard()).toBe(false)
+    // A menu opened again records the strip where it is now.
+    menus.openFromEvent(event(one.button))
+    fake.fire('scroll', { target: strip.dom })
+    expect(menus.ownsKeyboard()).toBe(true)
   })
   it('opens a results grid\'s menu from the keyboard below its active cell, with focus in the grid', () => {
     const { menus, doc, first } = setup()
