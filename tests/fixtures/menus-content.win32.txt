@@ -129,3 +129,7 @@ Window
   &Reset Window Layout  ++++
 Help
   Clear &Entra ID Token Cache  ++++
+  ---
+  Check for &Updates  ++++
+  &Restart to Update  ----
+  Release &Notes  ++++

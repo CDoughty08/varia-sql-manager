@@ -12,6 +12,7 @@ export const settingPages = [
   { id: 'environment.documents', title: 'Documents', parent: 'environment', layout: 'form' },
   { id: 'environment.fontsAndColors', title: 'Fonts and Colors', parent: 'environment', layout: 'form', description: 'Colors come from the color theme (View › Theme).' },
   { id: 'environment.keyboard', title: 'Keyboard', parent: 'environment', layout: 'keyboard', description: 'Shortcuts follow SSMS\'s defaults and cannot be changed yet. The command palette (F1) shows each command\'s shortcut.' },
+  { id: 'environment.productUpdates', title: 'Product Updates', parent: 'environment', layout: 'form', description: 'How Varia SQL Manager finds, downloads and installs new releases.' },
   { id: 'environment.liveData', title: 'Live Data', parent: 'environment', layout: 'form', description: 'Live views, such as the Activity Monitor: when they pause while hidden, and how much chart history they keep. Not in SSMS.' },
   { id: 'textEditor', title: 'Text Editor' },
   { id: 'textEditor.general', title: 'General', parent: 'textEditor', layout: 'form' },

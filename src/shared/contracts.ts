@@ -18,6 +18,7 @@ import type { SsisCatalogSetupRequest, SsisCatalogSetupResult, SsisDescribeReque
 import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/schema'
 import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions.ts'
 import type { RecentFile } from './files/recent'
+import type { UpdateState } from './updates'
 import type { RecoveredDocument, RecoveryEntry, RecoveryWrite } from './files/recovery'
 import type { LiveEnd, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from './live/schema'
 import type { ActivityDetailsRequest, ActivityDetailsResult, ActivityKillRequest, ActivityKillResult } from './activity/schema.ts'
@@ -542,4 +543,14 @@ export interface VariaApi {
   reloadThemes(): Promise<ApiResult<ThemeState>>
   openThemesFolder(): Promise<ApiResult<void>>
   onThemeChanged(callback: (state: ThemeState) => void): () => void
+  /** Updates (src/shared/updates.ts): main checks, downloads and installs; the page only asks and shows. */
+  getUpdateState(): Promise<ApiResult<UpdateState>>
+  /** Help › Check for Updates: resolves once the check (and any download it starts) has ended. */
+  checkForUpdates(): Promise<ApiResult<UpdateState>>
+  downloadUpdate(): Promise<ApiResult<UpdateState>>
+  /** Restart to Update: main closes the app as File › Exit does (unsaved queries ask first), then installs. False when nothing is ready. */
+  restartToUpdate(): Promise<ApiResult<boolean>>
+  /** Opens the releases page in the browser; main names the page, never the renderer. */
+  openReleasesPage(): Promise<ApiResult<void>>
+  onUpdateState(callback: (state: UpdateState) => void): () => void
 }

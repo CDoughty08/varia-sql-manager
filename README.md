@@ -20,6 +20,8 @@ Download a build from [GitHub Releases](https://github.com/CDoughty08/varia-sql-
 
 The Windows Setup opens a wizard where you choose installation for your account or all users and confirm the installation. For unattended deployment, run `Varia-SQL-Manager-<version>-Windows-x64-Setup.exe --silent` (the standard NSIS `/S` flag also works). Silent installations default to the current user for a fresh install; `/allusers` requests an all-users installation and may require elevation. The Portable executable runs without an installation; it extracts the application to a temporary directory and uses the normal user profile for settings and saved connections. The Linux AppImage and extracted macOS ZIP can likewise run without an installer.
 
+Installed, portable, AppImage and macOS builds check GitHub for new releases, download them in the background with their progress in the status bar, verify each file's SHA-512, and install on **Restart to Update** (macOS opens the new disk image instead). Behind a corporate proxy or filter, a failed check says why (proxy, certificate, DNS, blocked) and what to ask IT to allow: `github.com` and `release-assets.githubusercontent.com`. See [updates](docs/updates.md); **Tools › Options › Environment › Product Updates** turns automatic checks and downloads off.
+
 To run from source:
 
 Prerequisites: Node.js 24 or newer and the .NET 10 SDK. The SDK version is configured in `global.json`.
@@ -73,7 +75,7 @@ To run optional live tests, set `VARIA_TEST_SQL_SERVER` and, for SQL authenticat
 
 ## Creating a release
 
-Release builds run on pull requests and can also be run manually from the **Release builds** Actions workflow. Their installers are available as workflow artifacts for seven days. After merging the desired changes, update the version in `package.json` and `package-lock.json` together, then push a matching tag (for example, `v0.1.0` for version `0.1.0`). The tag triggers all platform builds; once they and their packaged-app smoke checks pass, the workflow publishes a GitHub Release with the installers and GitHub-generated release notes. A version with a prerelease suffix (such as `v0.2.0-beta.1`) is published as a prerelease. Existing releases are not overwritten: resolve or remove an existing release before rerunning its release job.
+Release builds run on pull requests and can also be run manually from the **Release builds** Actions workflow. Their installers are available as workflow artifacts for seven days. After merging the desired changes, update the version in `package.json` and `package-lock.json` together, then push a matching tag (for example, `v0.1.0` for version `0.1.0`). The tag triggers all platform builds; once they and their packaged-app smoke checks pass, the workflow publishes a GitHub Release with the installers, the update manifest (`varia-update.json`, which installed copies check) and GitHub-generated release notes. A version with a prerelease suffix (such as `v0.2.0-beta.1`) is published as a prerelease. Existing releases are not overwritten: resolve or remove an existing release before rerunning its release job.
 
 ## Architecture
 
@@ -86,4 +88,5 @@ The Electron application uses React, TypeScript, Monaco, and Dockview. A .NET si
 - [Scripting](docs/scripting.md) and [Table Designer](docs/table-designer.md)
 - [Activity Monitor](docs/activity-monitor.md), [live data](docs/live.md), and [Integration Services](docs/integration-services.md)
 - [Settings](docs/settings.md) and [themes](docs/themes/README.md)
+- [Updates](docs/updates.md)
 - [IPC and benchmarks](docs/ipc.md)
