@@ -56,15 +56,20 @@ The same search runs in two places, with the same options and results:
 - **A read that fails part way.** If a statement fails (a catalog view the login may not read, or one an edition lacks),
   the status lists the server or the database as skipped. A first build keeps what was read before the failure (the
   databases, or a database's tables and procedures); a rebuild keeps the earlier build's objects whole instead.
-- **Large databases.** A database that would take the connection past the objects limit with its children is read again
-  without its columns, indexes, statistics and parameters. It still counts as indexed, and the status says children were
-  left out (`CHILDREN_LEFT_OUT`). A database too large even without them is skipped as `TOO_LARGE`.
+- **Memory.** Every connection's index shares one memory budget (512 MiB). Each object is charged an estimate of what it
+  holds: its record, its name (a name several objects share, such as a schema or a common column name, is charged once
+  per database), and its definition. Definitions stop being kept once less than 128 MiB is free, so names always have
+  room. A rebuild may reuse the memory of the build it replaces, so a database that fitted before still fits when the
+  budget is full; the swap moves that share over rather than charging it twice.
+- **Large databases.** A database that does not fit in what is free with its children is read again without its columns,
+  indexes, statistics and parameters. It still counts as indexed, and the status says children were left out
+  (`CHILDREN_LEFT_OUT`). A database that does not fit even without them is skipped as `TOO_LARGE`.
 - **The resource database's objects.** The `sys` and `INFORMATION_SCHEMA` views, procedures and functions that every database
   shows (with their columns and parameters) come from SQL Server's hidden resource database, so they are the same in every database. The index reads them once
   per build, not once per database, and a search shows each of them once, as master's (or as the database a search names).
   Connections to servers whose resource objects have the same fingerprint (version, edition, and the count, latest change
-  and checksum of those objects) share one copy in memory. Definitions that two builds have in common are held and counted
-  against the definition budget once. A server whose objects differ never reuses another's copy, even with the same
+  and checksum of those objects) share one copy in memory, charged against the budget once. Definitions that two builds have
+  in common are held and charged once. A server whose objects differ never reuses another's copy, even with the same
   version string. If the read fails, the status lists it as skipped as `mssqlsystemresource`.
 - **Skipped databases.** A database the build could not read is reported as skipped, with a reason, and the build
   carries on: `TIMEOUT` (120 s per database), `NO_DB_ACCESS`, `DATABASE_UNAVAILABLE`, `CATALOG_ERROR` or `TOO_LARGE`.
@@ -75,9 +80,9 @@ The same search runs in two places, with the same options and results:
 
 | Limit | Value |
 |---|---|
-| Objects per connection (past it, a database is kept without its children, or skipped as `TOO_LARGE`) | 1,000,000 |
+| Memory across all connections (past it, a database is kept without its children, or skipped as `TOO_LARGE`) | 512 MiB |
+| Memory definitions leave free for names | 128 MiB |
 | Characters kept per definition (longer ones are cut and marked) | 1,000,000 |
-| Definition characters across all connections | 64 Mi |
 | Databases read at once | 2 |
 | Time per database | 120 s |
 | Search text | 1,000 UTF-16 code units |

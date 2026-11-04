@@ -17,27 +17,46 @@ internal sealed record IndexedObject(string Kind, string Folder, string? Schema,
 }
 
 /// <summary>One database's objects as one read of its catalog left them; replaced whole by the next read.</summary>
-internal sealed class DatabaseIndex(string database, IndexedObject[] objects, long definitionChars, int modules, int cut)
+internal sealed class DatabaseIndex(string database, IndexedObject[] objects, long bytes, int modules, int cut, long credited = 0, DatabaseIndex? creditFrom = null)
 {
     public string Database { get; } = database;
     public IndexedObject[] Objects { get; } = objects;
-    /// <summary>The characters of definitions held, charged against the index's budget until the database is replaced or dropped.</summary>
-    public long DefinitionChars { get; } = definitionChars;
+    /// <summary>The memory it holds (<see cref="IndexMemory"/>), charged against the index's budget until the database is
+    /// replaced or dropped.</summary>
+    public long Bytes { get; } = bytes;
+    /// <summary>The part of <see cref="Bytes"/> the read took from the share of the index it replaces (<see cref="CreditFrom"/>)
+    /// rather than from the budget: the swap moves that share over instead of giving it back.</summary>
+    public long Credited { get; } = credited;
+    public DatabaseIndex? CreditFrom { get; } = creditFrom;
     public int Modules { get; } = modules;
     /// <summary>Definitions cut at the per-module limit, or left out once the budget was spent.</summary>
     public int Cut { get; } = cut;
 }
 
+/// <summary>What the index charges for what it holds: a deterministic estimate of the managed memory of each record (with its
+/// slot in the array that holds it) and of each string it alone holds. A string shared by several records (a schema, a common
+/// column name, a parent's name) is charged once.</summary>
+internal static class IndexMemory
+{
+    /// <summary>An <see cref="IndexedObject"/> on 64-bit .NET: header and method table, eleven references, a nullable DateTime and
+    /// two flags, plus the array slot.</summary>
+    public const long RecordBytes = 136;
+
+    /// <summary>A string of <paramref name="length"/> UTF-16 code units: header, method table, length and terminator, 8-aligned.</summary>
+    public static long StringBytes(int length) => (22L + 2L * length + 7) & ~7L;
+}
+
 /// <summary>Bounds on the index and its searches (objectSearchLimits in src/shared/explorer/search.ts).</summary>
 internal sealed class ObjectIndexLimits
 {
-    /// <summary>Objects kept per connection; a database past it is read again without its children (CHILDREN_LEFT_OUT), and one
-    /// still past it is skipped as TOO_LARGE.</summary>
-    public int ObjectsPerConnection { get; init; } = 1_000_000;
+    /// <summary>The memory every connection's index holds together (<see cref="IndexMemory"/>): a database that would pass it is
+    /// read again without its children (CHILDREN_LEFT_OUT), and one that still would is skipped as TOO_LARGE.</summary>
+    public long MemoryBytes { get; init; } = 512L * 1024 * 1024;
+    /// <summary>The part of <see cref="MemoryBytes"/> definitions leave to names: a definition is left out (counted as cut) once
+    /// less than this is free.</summary>
+    public long NamesReserveBytes { get; init; } = 128L * 1024 * 1024;
     /// <summary>The longest part of one definition the index keeps.</summary>
     public int DefinitionChars { get; init; } = 1_000_000;
-    /// <summary>Definition characters held across every connection (twice that in bytes); past it, definitions are left out.</summary>
-    public long TotalDefinitionChars { get; init; } = 64L * 1024 * 1024;
     /// <summary>Databases indexed at once across every connection, and per connection.</summary>
     public int Total { get; init; } = 2;
     /// <summary>One database's read; a slower one is skipped as TIMEOUT.</summary>
@@ -54,21 +73,28 @@ internal sealed class ObjectIndexLimits
     public int PreviewChars { get; init; } = 160;
 }
 
-/// <summary>Definition characters held, shared by every connection's index.</summary>
+/// <summary>The memory held by every connection's index (<see cref="IndexMemory"/>), in bytes.</summary>
 internal sealed class IndexBudget(long limit)
 {
     private long used;
+    public long Limit => limit;
     public long Used => Interlocked.Read(ref used);
-    public bool TryTake(long chars)
+
+    /// <summary>Takes <paramref name="bytes"/> when that leaves at least <paramref name="keepFree"/> of the limit free.</summary>
+    public bool TryTake(long bytes, long keepFree = 0)
     {
         while (true)
         {
             var current = Interlocked.Read(ref used);
-            if (current + chars > limit) return false;
-            if (Interlocked.CompareExchange(ref used, current + chars, current) == current) return true;
+            if (current + bytes > limit - keepFree) return false;
+            if (Interlocked.CompareExchange(ref used, current + bytes, current) == current) return true;
         }
     }
-    public void Release(long chars) => Interlocked.Add(ref used, -chars);
+
+    /// <summary>Takes <paramref name="bytes"/> whatever the limit: memory already held that moves to a new owner, or the shared
+    /// system objects, which every connection needs and holds once.</summary>
+    public void Force(long bytes) => Interlocked.Add(ref used, bytes);
+    public void Release(long bytes) => Interlocked.Add(ref used, -bytes);
 }
 
 /// <summary>A connection's index: the server's own objects (its databases, logins, roles and other server objects) and its
@@ -89,15 +115,25 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
     public DatabaseIndex? Server { get { lock (gate) return server; } }
     public int Objects { get { lock (gate) return databases.Values.Sum(value => value.Objects.Length) + (resource?.Objects.Length ?? 0) + (server?.Objects.Length ?? 0); } }
 
-    /// <summary>Holds the server's objects in place of those held before, whose definitions' share goes back.</summary>
+    /// <summary>Holds the server's objects in place of those held before, whose share goes back (or over to the new read).</summary>
     public void PutServer(DatabaseIndex value)
     {
         lock (gate)
         {
-            if (Disposed) { budget.Release(value.DefinitionChars); return; }
-            if (server is not null) budget.Release(server.DefinitionChars);
+            if (Disposed) { budget.Release(value.Bytes - value.Credited); return; }
+            Settle(server, value);
             server = value;
         }
+    }
+
+    /// <summary>Gives back <paramref name="old"/>'s share, less what <paramref name="value"/>'s read took from it. When the read's
+    /// credit came from an index no longer held (a listing dropped it meanwhile, so its share went back), the new read takes it
+    /// from the budget instead.</summary>
+    private void Settle(DatabaseIndex? old, DatabaseIndex value)
+    {
+        if (old is not null && ReferenceEquals(old, value.CreditFrom)) { budget.Release(old.Bytes - value.Credited); return; }
+        if (old is not null) budget.Release(old.Bytes);
+        if (value.Credited > 0) budget.Force(value.Credited);
     }
 
     /// <summary>Holds <paramref name="value"/> (a reference already taken) in place of the set held before, whose reference goes back.</summary>
@@ -117,8 +153,9 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
     {
         lock (gate)
         {
-            if (Disposed) { budget.Release(value.DefinitionChars); return; }
-            if (databases.Remove(value.Database, out var old)) budget.Release(old.DefinitionChars);
+            if (Disposed) { budget.Release(value.Bytes - value.Credited); return; }
+            databases.Remove(value.Database, out var old);
+            Settle(old, value);
             databases[value.Database] = value;
         }
     }
@@ -128,7 +165,7 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
     {
         lock (gate)
             foreach (var name in databases.Keys.Where(name => !names.Contains(name)).ToList())
-                if (databases.Remove(name, out var old)) budget.Release(old.DefinitionChars);
+                if (databases.Remove(name, out var old)) budget.Release(old.Bytes);
     }
 
     public void Dispose()
@@ -137,9 +174,9 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
         lock (gate)
         {
             Disposed = true;
-            foreach (var value in databases.Values) budget.Release(value.DefinitionChars);
+            foreach (var value in databases.Values) budget.Release(value.Bytes);
             databases = new(StringComparer.Ordinal);
-            if (server is not null) budget.Release(server.DefinitionChars);
+            if (server is not null) budget.Release(server.Bytes);
             server = null;
             old = resource;
             resource = null;

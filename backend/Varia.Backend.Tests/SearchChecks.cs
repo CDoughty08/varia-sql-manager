@@ -162,7 +162,11 @@ internal static class SearchChecks
     private static void Budget(Action<bool, string> check)
     {
         var budget = new IndexBudget(100);
-        check(budget.TryTake(60) && !budget.TryTake(50) && budget.TryTake(40), "the definition budget refuses what would pass it");
+        check(budget.TryTake(60) && !budget.TryTake(50) && budget.TryTake(40), "the memory budget refuses what would pass it");
+        budget.Release(100);
+        check(budget.TryTake(60) && !budget.TryTake(30, keepFree: 20) && budget.TryTake(20, keepFree: 20) && budget.Used == 80, "a definition leaves names their reserve");
+        budget.Release(80);
+        budget.TryTake(100);
         var index = new ConnectionIndex(budget);
         index.Put(new DatabaseIndex("a", [], 60, 0, 0));
         index.Put(new DatabaseIndex("b", [], 40, 0, 0));
@@ -318,7 +322,7 @@ internal static class SearchChecks
         object?[][] stats = [[10, "_WA_Sys_1"], [900, "st_list"]];
         object?[][] parameters = [[17, "@top", false]];
         var budget = new IndexBudget(1 << 20);
-        var index = await new DatabaseReader("Sales", new ObjectIndexLimits(), budget, 1000).ReadAsync(Batch(true, objects, types, named, columns, indexes, stats, parameters), false, CancellationToken.None);
+        var index = await new DatabaseReader("Sales", new ObjectIndexLimits(), budget).ReadAsync(Batch(true, objects, types, named, columns, indexes, stats, parameters), false, CancellationToken.None);
         IndexedObject? Find(string name) => index?.Objects.SingleOrDefault(item => item.Name == name);
         check(Find("trg_orders") is { Kind: "trigger", ParentName: "Orders", ParentFolder: "tables", Schema: null }, "a child that comes before its parent in id order is placed under it");
         check(Find("Prices_History") is { Kind: "table", Subtype: "history", Via: { Name: "Prices", Folder: "tables" } }, "a history table names the table whose history row shows it");
@@ -332,10 +336,34 @@ internal static class SearchChecks
         check(Find("sales") is { Kind: "schema", Folder: "schemas", Schema: null } && Find("Shapes") is { Kind: "xmlSchemaCollection", Schema: "dbo" } && Find("unknown") is null
             && Find("pg_orders") is { Kind: "planGuide" } && Find("Phone") is { Kind: "type", Subtype: "alias" },
             "named database objects, plan guides and types are read; an unknown code is left out");
-        var tooSmall = await new DatabaseReader("Sales", new ObjectIndexLimits(), budget, 10).ReadAsync(Batch(true, objects, types, named, columns, indexes, stats, parameters), false, CancellationToken.None);
-        var withoutChildren = await new DatabaseReader("Sales", new ObjectIndexLimits(), budget, 20).ReadAsync(Batch(false, objects, types, named, [], [], [], []), false, CancellationToken.None, children: false);
-        check(tooSmall is null && withoutChildren is { } kept && kept.Objects.Any(item => item.Name == "Orders") && kept.Objects.All(item => item.Kind is not ("column" or "index" or "statistic" or "parameter")),
-            "a read past its room answers null, and the batch without children reads the rest");
+        check(index is { Bytes: > 0 } && budget.Used == index.Bytes && index.Credited == 0, "a read charges the budget exactly what its index holds");
+
+        // The budget is memory shared by every connection: a read that does not fit answers null and gives back what it took.
+        var measure = new IndexBudget(1 << 20);
+        var bare = (await new DatabaseReader("Sales", new ObjectIndexLimits(), measure).ReadAsync(Batch(false, objects, types, named, [], [], [], []), false, CancellationToken.None, children: false))!;
+        var small = new IndexBudget(bare.Bytes);
+        var tooSmall = await new DatabaseReader("Sales", new ObjectIndexLimits(), small).ReadAsync(Batch(true, objects, types, named, columns, indexes, stats, parameters), false, CancellationToken.None);
+        check(tooSmall is null && small.Used == 0, "a read past the memory budget answers null and gives back what it took");
+        var withoutChildren = await new DatabaseReader("Sales", new ObjectIndexLimits(), small).ReadAsync(Batch(false, objects, types, named, [], [], [], []), false, CancellationToken.None, children: false);
+        check(withoutChildren is { } kept && kept.Objects.Any(item => item.Name == "Orders") && kept.Objects.All(item => item.Kind is not ("column" or "index" or "statistic" or "parameter"))
+            && small.Used == small.Limit, "the batch without children fits where the one with them did not");
+
+        // A rebuild may use the share of the read it replaces, so it fits where the build before it did, even with the budget full.
+        var held = new ConnectionIndex(small);
+        held.Put(withoutChildren!);
+        var rebuild = await new DatabaseReader("Sales", new ObjectIndexLimits(), small, withoutChildren).ReadAsync(Batch(false, objects, types, named, [], [], [], []), false, CancellationToken.None, children: false);
+        check(rebuild is { Credited: > 0 } && rebuild.Credited == rebuild.Bytes && small.Used == small.Limit, "a rebuild with a full budget takes the replaced read's share");
+        held.Put(rebuild!);
+        check(small.Used == small.Limit && held.Databases.Single() == rebuild, "the swap moves the share over: nothing is charged twice or given back twice");
+        check(await new DatabaseReader("Other", new ObjectIndexLimits(), small).ReadAsync(Batch(false, objects, types, named, [], [], [], []), false, CancellationToken.None, children: false) is null,
+            "another database finds the budget full");
+        var late = await new DatabaseReader("Sales", new ObjectIndexLimits(), small, rebuild).ReadAsync(Batch(false, objects, types, named, [], [], [], []), false, CancellationToken.None, children: false);
+        held.Keep(new HashSet<string>());
+        check(small.Used == 0, "a listing that drops the database gives back its whole share");
+        held.Put(late!);
+        check(small.Used == late!.Bytes, "a read whose credit was dropped meanwhile takes its share from the budget instead");
+        held.Dispose();
+        check(small.Used == 0, "a disconnect gives back every database's share");
 
         // A database too large with its children is read again without them, and still counts as indexed.
         var asked = new List<bool>();
@@ -351,7 +379,7 @@ internal static class SearchChecks
         // A read that failed part way is held only when nothing was held before.
         var spare = new IndexBudget(1 << 20);
         DatabaseIndex? put = null;
-        var partial = new DatabaseReader("Sales", new ObjectIndexLimits(), spare, 1000);
+        var partial = new DatabaseReader("Sales", new ObjectIndexLimits(), spare);
         await partial.ReadAsync(Batch(false, objects, types, named, [], [], [], []), false, CancellationToken.None, children: false);
         ObjectSearchService.KeepPartial(partial, held: true, value => put = value);
         check(put is null, "a failed rebuild keeps the earlier read whole");
@@ -389,12 +417,14 @@ internal static class SearchChecks
         var first = await catalog.AcquireAsync(key, Read("CREATE PROCEDURE sys.sp_0 AS 1", "CREATE PROCEDURE sys.sp_1 AS 2"));
         var second = await catalog.AcquireAsync(key with { }, Read("never read"));
         check(reads == 1 && ReferenceEquals(first, second) && catalog.Sets == 1, "connections to servers with the same fingerprint share one read of the system objects");
-        check(budget.Used == "CREATE PROCEDURE sys.sp_0 AS 1".Length + "CREATE PROCEDURE sys.sp_1 AS 2".Length && first.Modules == 2, "a shared set charges its definitions once");
+        var text = IndexMemory.StringBytes("CREATE PROCEDURE sys.sp_0 AS 1".Length);
+        check(first.Bytes == 2 * IndexMemory.RecordBytes + 2 * IndexMemory.StringBytes(4) + IndexMemory.StringBytes(3), "a set's records are charged with each distinct name and schema once");
+        check(budget.Used == first.Bytes + 2 * text && first.Modules == 2, "a shared set charges its records and definitions once");
         // Another build (a cumulative update) changes one module: the other's text is held once for both sets.
         var other = await catalog.AcquireAsync(key with { Version = "16.0.4140.3", Checksum = 7 }, Read("CREATE PROCEDURE sys.sp_0 AS 1", "CREATE PROCEDURE sys.sp_1 AS 3"));
         check(reads == 2 && catalog.Sets == 2 && catalog.Texts == 3 && ReferenceEquals(other.Objects[0].Definition, first.Objects[0].Definition),
             "two builds' sets hold the definitions they share once");
-        check(budget.Used == 3 * "CREATE PROCEDURE sys.sp_0 AS 1".Length, "the budget is charged for distinct definitions only");
+        check(budget.Used == first.Bytes + other.Bytes + 3 * text, "the budget is charged for distinct definitions only");
         try { await catalog.AcquireAsync(key with { Checksum = 9 }, () => throw new InvalidOperationException("boom")); check(false, "a failed read throws"); }
         catch (InvalidOperationException) { check(catalog.Sets == 2, "a failed read keeps nothing, so the next build reads again"); }
 
@@ -409,7 +439,7 @@ internal static class SearchChecks
         check(index.Objects == 2, "a connection counts its share of the system objects once");
         index.Dispose();
         catalog.Release(second);
-        check(catalog.Sets == 1 && budget.Used == 2 * "CREATE PROCEDURE sys.sp_0 AS 1".Length,
+        check(catalog.Sets == 1 && budget.Used == other.Bytes + 2 * text,
             "the last connection to let a set go drops it, keeping the texts another set holds");
         catalog.Release(other);
         check(catalog.Sets == 0 && catalog.Texts == 0 && budget.Used == 0, "with no connection left, every system definition's share is given back");

@@ -6,9 +6,12 @@ internal sealed record ResourceKey(string Version, int Edition, long Count, Date
 
 /// <summary>The resource database's objects for one key: the sys and INFORMATION_SCHEMA views, procedures and functions that
 /// every database of every server with that key shows. Search lists them once per connection, not once per database.</summary>
-internal sealed class ResourceSet(ResourceKey key, IndexedObject[] objects, int modules, int cut)
+internal sealed class ResourceSet(ResourceKey key, IndexedObject[] objects, int modules, int cut, long bytes = 0)
 {
     public ResourceKey Key { get; } = key;
+    /// <summary>The memory its records and names hold, charged once whatever the connections that share it; its definitions are
+    /// charged by the catalog, once across sets.</summary>
+    public long Bytes { get; } = bytes;
     public IndexedObject[] Objects { get; } = objects;
     public int Modules { get; } = modules;
     public int Cut { get; } = cut;
@@ -17,9 +20,11 @@ internal sealed class ResourceSet(ResourceKey key, IndexedObject[] objects, int 
 /// <summary>
 /// The resource database's objects, shared by every connection whose server has the same key, reference counted and dropped
 /// when the last connection lets go. Definitions are interned across sets too: two builds whose system modules overlap (a
-/// cumulative update changes few of them) hold and charge each identical text once against the shared budget.
+/// cumulative update changes few of them) hold and charge each identical text once against the shared budget. A set's records
+/// are charged whatever the budget holds (every connection needs them, and they are a few MiB); a definition is left out when
+/// less than <paramref name="keepFree"/> is free.
 /// </summary>
-internal sealed class ResourceCatalog(IndexBudget budget)
+internal sealed class ResourceCatalog(IndexBudget budget, long keepFree = 0)
 {
     private readonly object gate = new();
     private readonly Dictionary<ResourceKey, Entry> sets = [];
@@ -83,11 +88,12 @@ internal sealed class ResourceCatalog(IndexBudget budget)
             if (!sets.TryGetValue(set.Key, out var entry) || !entry.Load.IsCompletedSuccessfully || !ReferenceEquals(entry.Load.Result, set)) return;
             if (--entry.Refs > 0) return;
             sets.Remove(set.Key);
+            budget.Release(set.Bytes);
             foreach (var item in set.Objects)
             {
                 if (item.Definition is not { } text || !texts.TryGetValue(text, out var shared) || --shared.Refs > 0) continue;
                 texts.Remove(text);
-                budget.Release(text.Length);
+                budget.Release(IndexMemory.StringBytes(text.Length));
             }
         }
     }
@@ -98,6 +104,15 @@ internal sealed class ResourceCatalog(IndexBudget budget)
     {
         var modules = 0;
         var cut = 0;
+        // Records, and each distinct name and schema string (children share theirs with their parents and one another).
+        var names = new HashSet<string>(ReferenceEqualityComparer.Instance);
+        var bytes = objects.Length * IndexMemory.RecordBytes;
+        foreach (var item in objects)
+        {
+            if (names.Add(item.Name)) bytes += IndexMemory.StringBytes(item.Name.Length);
+            if (item.Schema is { } schema && names.Add(schema)) bytes += IndexMemory.StringBytes(schema.Length);
+        }
+        budget.Force(bytes);
         lock (gate)
         {
             for (var at = 0; at < objects.Length; at++)
@@ -105,7 +120,7 @@ internal sealed class ResourceCatalog(IndexBudget budget)
                 if (objects[at].Definition is not { } text) continue;
                 if (!texts.TryGetValue(text, out var shared))
                 {
-                    if (!budget.TryTake(text.Length)) { objects[at] = objects[at] with { Definition = null, DefinitionCut = false }; cut++; continue; }
+                    if (!budget.TryTake(IndexMemory.StringBytes(text.Length), keepFree)) { objects[at] = objects[at] with { Definition = null, DefinitionCut = false }; cut++; continue; }
                     shared = new Shared(text);
                     texts[text] = shared;
                 }
@@ -115,6 +130,6 @@ internal sealed class ResourceCatalog(IndexBudget budget)
                 objects[at] = objects[at] with { Definition = shared.Value };
             }
         }
-        return new ResourceSet(key, objects, modules, cut);
+        return new ResourceSet(key, objects, modules, cut, bytes);
     }
 }

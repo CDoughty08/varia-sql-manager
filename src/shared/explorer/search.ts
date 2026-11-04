@@ -21,8 +21,11 @@ export const objectSearchLimits = {
   databaseMs: 120_000,
   /** The longest part of one definition the index keeps, in characters. */
   definitionChars: 1_000_000,
-  /** Definition characters held across every connection. */
-  totalDefinitionChars: 64 * 1024 * 1024,
+  /** The memory every connection's index holds together, in bytes (records, names and definitions, each charged once): a
+   *  database that would pass it is kept without its children (CHILDREN_LEFT_OUT), or skipped as TOO_LARGE. */
+  memoryBytes: 512 * 1024 * 1024,
+  /** The part of `memoryBytes` definitions leave to names: a definition is left out once less than this is free. */
+  namesReserveBytes: 128 * 1024 * 1024,
   /** Index progress pushed to the window, at most, per second. */
   progressPerSecond: 4,
   /** How long the Search Objects box waits after a key before it searches, in ms. */
@@ -46,7 +49,7 @@ export const searchScopes = ['all', 'names', 'definitions'] as const
 export type SearchScope = typeof searchScopes[number]
 
 /** Skip codes a status lists for a database the index still holds (ObjectSearchService.ChildrenLeftOut): its objects without
- *  their columns, indexes, statistics and parameters, which would have taken it past the objects per connection limit. */
+ *  their columns, indexes, statistics and parameters, which would have taken the index past its memory. */
 export const childrenLeftOut = 'CHILDREN_LEFT_OUT'
 
 export interface ObjectIndexParams { readonly connectionId: string; readonly requestId: string; readonly definitions?: boolean }

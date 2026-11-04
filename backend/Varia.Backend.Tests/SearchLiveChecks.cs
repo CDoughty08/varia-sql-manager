@@ -51,7 +51,7 @@ internal static class SearchLiveChecks
             "a build reads every database it can (" + built.Status.Indexed + " of " + built.Status.Databases + ", " + built.Status.Objects + " objects, " + built.ElapsedMs + " ms)");
         check(events.Count >= 2 && events[0].GetProperty("type").GetString() == "explorer.index.progress" && events[^1].GetProperty("done").GetInt32() == built.Status.Databases,
             "a build reports its progress, ending at every database");
-        check(service.Search.DefinitionChars > 0, "the build holds definitions against the budget");
+        check(service.Search.MemoryUsed > 0, "the build holds its objects and definitions against the memory budget");
 
         // Microsoft-shipped objects are indexed as Object Explorer lists them: master's own under System Tables, and the resource
         // database's (sys.sp_who) once per server, not once per database.

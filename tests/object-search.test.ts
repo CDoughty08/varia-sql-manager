@@ -31,8 +31,10 @@ describe('object search contracts', () => {
     expect(index).toContain(`SearchBudget { get; set; } = TimeSpan.FromSeconds(${objectSearchLimits.searchMs / 1000});`)
     expect(index).toContain(`DatabaseBudget { get; set; } = TimeSpan.FromSeconds(${objectSearchLimits.databaseMs / 1000});`)
     expect(index).toContain(`DefinitionChars { get; init; } = ${objectSearchLimits.definitionChars.toLocaleString('en-US').replaceAll(',', '_')};`)
-    expect(index).toContain('TotalDefinitionChars { get; init; } = 64L * 1024 * 1024;')
-    expect(objectSearchLimits.totalDefinitionChars).toBe(64 * 1024 * 1024)
+    expect(index).toContain('MemoryBytes { get; init; } = 512L * 1024 * 1024;')
+    expect(objectSearchLimits.memoryBytes).toBe(512 * 1024 * 1024)
+    expect(index).toContain('NamesReserveBytes { get; init; } = 128L * 1024 * 1024;')
+    expect(objectSearchLimits.namesReserveBytes).toBe(128 * 1024 * 1024)
   })
 
   it('indexes every kind Object Explorer lists but the server, return values and the SSIS Catalog\'s', () => {
