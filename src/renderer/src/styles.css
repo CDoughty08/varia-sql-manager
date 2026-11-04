@@ -379,8 +379,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .query-tab[data-drop="before"] { box-shadow: inset 2px 0 0 var(--varia-focusBorder); }
 .query-tab[data-drop="after"] { box-shadow: inset -2px 0 0 var(--varia-focusBorder); }
 @media (forced-colors: active) {
-  .query-tab[data-drop="before"] { border-left: 2px solid Highlight; }
-  .query-tab[data-drop="after"] { border-right: 2px solid Highlight; }
+  /* Box shadows are dropped here, so a border shows the side; the margin takes back its width and the tabs stay put. */
+  .query-tab[data-drop="before"] { border-left: 2px solid Highlight; margin-left: -2px; }
+  .query-tab[data-drop="after"] { border-right: 2px solid Highlight; margin-right: -1px; }
 }
 .query-tab.active { background: var(--varia-documentTabs-activeBackground); border-top-color: var(--varia-tab-activeBorderTop); color: var(--varia-documentTabs-activeForeground); }
 .tab-select { display: flex; align-items: center; gap: 8px; height: calc(var(--varia-bar) - 3px); border: 0; border-radius: 0; padding: 0 10px 0 13px; color: inherit; }

@@ -1,7 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { activeDocumentName, backendReady, documentTab, documentTabs, documentTabSlots, part, quickInput, quickInputActive } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, closeDocumentButton, documentTab, documentTabs, documentTabSlots, part, quickInput, quickInputActive } from './fixtures/ui.mjs'
 
 // SSMS's editing commands in the real query editor, over the fake backend (no SQL Server): Comment and Uncomment
 // Selection, Make Uppercase and Lowercase, Increase and Decrease Line Indent from Edit › Advanced, Go To Line, Bookmarks
@@ -191,7 +191,21 @@ try {
   // The last tab has nowhere further right to go.
   await page.keyboard.press('Control+Shift+PageDown')
   await expect.poll(pair).toEqual([firstTab, secondTab])
-  console.log(`Editor checks: query tabs reorder by Ctrl+Shift+PageUp and by dragging (${tabDragged}).`)
+  // On a strip too full to show every tab, the tab Ctrl+Shift+PageUp moves stays in view as it goes.
+  for (let opened = 0; opened < 12; opened++) await page.keyboard.press('Control+N')
+  await expect.poll(async () => (await order()).length).toBeGreaterThanOrEqual(14)
+  const moving = await activeDocumentName(page)
+  expect(await documentTabs(page).evaluate(strip => strip.scrollWidth > strip.clientWidth)).toBe(true)
+  await textbox().focus()
+  for (let step = 0; step < 14; step++) await page.keyboard.press('Control+Shift+PageUp')
+  await expect.poll(async () => (await order())[0]).toBe(moving)
+  const shown = () => documentTab(page, moving).evaluate(tab => { const box = tab.parentElement.getBoundingClientRect(), view = tab.closest('[role="tablist"]').getBoundingClientRect(); return box.left >= view.left - 1 && box.right <= view.right + 1 })
+  await expect.poll(shown).toBe(true)
+  for (const name of (await order()).filter(name => name !== firstTab && name !== secondTab)) await closeDocumentButton(page, name).click()
+  await expect.poll(pair).toEqual([firstTab, secondTab])
+  await documentTab(page, secondTab).click()
+  await expect.poll(() => activeDocumentName(page)).toBe(secondTab)
+  console.log(`Editor checks: query tabs reorder by Ctrl+Shift+PageUp and by dragging (${tabDragged}), and a moved tab stays in view on a full strip.`)
   await page.keyboard.press('Alt+e')
   await page.keyboard.press('k')
   await expect(menu('Bookmarks').getByRole('menuitem', { name: 'Next Bookmark', exact: true })).toHaveAttribute('aria-disabled', 'true')
