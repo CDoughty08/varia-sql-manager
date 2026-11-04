@@ -17,13 +17,16 @@ internal sealed record IndexedObject(string Kind, string Folder, string? Schema,
 }
 
 /// <summary>One database's objects as one read of its catalog left them; replaced whole by the next read.</summary>
-internal sealed class DatabaseIndex(string database, IndexedObject[] objects, long bytes, int modules, int cut, long credited = 0, DatabaseIndex? creditFrom = null)
+internal sealed class DatabaseIndex(string database, IndexedObject[] objects, long bytes, int modules, int cut, long credited = 0, DatabaseIndex? creditFrom = null,
+    string[]? pooled = null)
 {
     public string Database { get; } = database;
     public IndexedObject[] Objects { get; } = objects;
-    /// <summary>The memory it holds (<see cref="IndexMemory"/>), charged against the index's budget until the database is
-    /// replaced or dropped.</summary>
+    /// <summary>The memory its records hold (<see cref="IndexMemory"/>), charged against the index's budget until the database is
+    /// replaced or dropped. Its names and definitions are the pool's (<see cref="Pooled"/>).</summary>
     public long Bytes { get; } = bytes;
+    /// <summary>The distinct texts it holds a <see cref="StringPool"/> reference to, given back with it.</summary>
+    public string[] Pooled { get; } = pooled ?? [];
     /// <summary>The part of <see cref="Bytes"/> the read took from the share of the index it replaces (<see cref="CreditFrom"/>)
     /// rather than from the budget: the swap moves that share over instead of giving it back.</summary>
     public long Credited { get; } = credited;
@@ -34,13 +37,16 @@ internal sealed class DatabaseIndex(string database, IndexedObject[] objects, lo
 }
 
 /// <summary>What the index charges for what it holds: a deterministic estimate of the managed memory of each record (with its
-/// slot in the array that holds it) and of each string it alone holds. A string shared by several records (a schema, a common
-/// column name, a parent's name) is charged once.</summary>
+/// slot in the array that holds it), of each distinct text in the <see cref="StringPool"/> (charged once, whatever the records,
+/// databases and connections that share it), and of each database's slot for a text it holds a reference to.</summary>
 internal static class IndexMemory
 {
     /// <summary>An <see cref="IndexedObject"/> on 64-bit .NET: header and method table, eleven references, a nullable DateTime and
     /// two flags, plus the array slot.</summary>
     public const long RecordBytes = 136;
+
+    /// <summary>A database's reference to one pooled text (<see cref="DatabaseIndex.Pooled"/>).</summary>
+    public const long SlotBytes = 8;
 
     /// <summary>A string of <paramref name="length"/> UTF-16 code units: header, method table, length and terminator, 8-aligned.</summary>
     public static long StringBytes(int length) => (22L + 2L * length + 7) & ~7L;
@@ -100,8 +106,8 @@ internal sealed class IndexBudget(long limit)
 /// <summary>A connection's index: the server's own objects (its databases, logins, roles and other server objects) and its
 /// databases, each swapped in whole as its read completes, so a search during a rebuild sees every part either as it was or as
 /// it is now, and its share of the resource database's objects (<see cref="ResourceCatalog"/>), which every database shows and
-/// the index holds once.</summary>
-internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resources = null)
+/// the index holds once. Replacing or dropping a database gives back its records' share and its references to pooled texts.</summary>
+internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resources = null, StringPool? pool = null)
 {
     private readonly object gate = new();
     private Dictionary<string, DatabaseIndex> databases = new(StringComparer.Ordinal);
@@ -120,7 +126,7 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
     {
         lock (gate)
         {
-            if (Disposed) { budget.Release(value.Bytes - value.Credited); return; }
+            if (Disposed) { Drop(value, value.Bytes - value.Credited); return; }
             Settle(server, value);
             server = value;
         }
@@ -131,9 +137,16 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
     /// from the budget instead.</summary>
     private void Settle(DatabaseIndex? old, DatabaseIndex value)
     {
-        if (old is not null && ReferenceEquals(old, value.CreditFrom)) { budget.Release(old.Bytes - value.Credited); return; }
-        if (old is not null) budget.Release(old.Bytes);
+        // The new read already holds its own references, so texts both reads hold stay in the pool.
+        if (old is not null && ReferenceEquals(old, value.CreditFrom)) { Drop(old, old.Bytes - value.Credited); return; }
+        if (old is not null) Drop(old, old.Bytes);
         if (value.Credited > 0) budget.Force(value.Credited);
+    }
+
+    private void Drop(DatabaseIndex value, long bytes)
+    {
+        budget.Release(bytes);
+        pool?.Release(value.Pooled);
     }
 
     /// <summary>Holds <paramref name="value"/> (a reference already taken) in place of the set held before, whose reference goes back.</summary>
@@ -153,7 +166,7 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
     {
         lock (gate)
         {
-            if (Disposed) { budget.Release(value.Bytes - value.Credited); return; }
+            if (Disposed) { Drop(value, value.Bytes - value.Credited); return; }
             databases.Remove(value.Database, out var old);
             Settle(old, value);
             databases[value.Database] = value;
@@ -165,7 +178,7 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
     {
         lock (gate)
             foreach (var name in databases.Keys.Where(name => !names.Contains(name)).ToList())
-                if (databases.Remove(name, out var old)) budget.Release(old.Bytes);
+                if (databases.Remove(name, out var old)) Drop(old, old.Bytes);
     }
 
     public void Dispose()
@@ -174,9 +187,9 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
         lock (gate)
         {
             Disposed = true;
-            foreach (var value in databases.Values) budget.Release(value.Bytes);
+            foreach (var value in databases.Values) Drop(value, value.Bytes);
             databases = new(StringComparer.Ordinal);
-            if (server is not null) budget.Release(server.Bytes);
+            if (server is not null) Drop(server, server.Bytes);
             server = null;
             old = resource;
             resource = null;

@@ -9,8 +9,8 @@ internal sealed record ResourceKey(string Version, int Edition, long Count, Date
 internal sealed class ResourceSet(ResourceKey key, IndexedObject[] objects, int modules, int cut, long bytes = 0)
 {
     public ResourceKey Key { get; } = key;
-    /// <summary>The memory its records and names hold, charged once whatever the connections that share it; its definitions are
-    /// charged by the catalog, once across sets.</summary>
+    /// <summary>The memory its records hold, charged once whatever the connections that share it; its names and definitions are
+    /// the pool's.</summary>
     public long Bytes { get; } = bytes;
     public IndexedObject[] Objects { get; } = objects;
     public int Modules { get; } = modules;
@@ -19,32 +19,24 @@ internal sealed class ResourceSet(ResourceKey key, IndexedObject[] objects, int 
 
 /// <summary>
 /// The resource database's objects, shared by every connection whose server has the same key, reference counted and dropped
-/// when the last connection lets go. Definitions are interned across sets too: two builds whose system modules overlap (a
-/// cumulative update changes few of them) hold and charge each identical text once against the shared budget. A set's records
-/// are charged whatever the budget holds (every connection needs them, and they are a few MiB); a definition is left out when
-/// less than <paramref name="keepFree"/> is free.
+/// when the last connection lets go. Its names and definitions come from the <see cref="StringPool"/>, so two builds whose
+/// system modules overlap (a cumulative update changes few of them), and the databases that hold the same text, share each
+/// identical text. A set's records and names are charged whatever the budget holds (every connection needs them, and they are a
+/// few MiB); a definition is left out when less than <paramref name="keepFree"/> is free.
 /// </summary>
-internal sealed class ResourceCatalog(IndexBudget budget, long keepFree = 0)
+internal sealed class ResourceCatalog(StringPool pool, long keepFree = 0)
 {
     private readonly object gate = new();
     private readonly Dictionary<ResourceKey, Entry> sets = [];
-    private readonly Dictionary<string, Shared> texts = new(StringComparer.Ordinal);
 
     private sealed class Entry(Task<ResourceSet> load)
     {
         public Task<ResourceSet> Load { get; } = load;
         public int Refs;
     }
-    private sealed class Shared(string value)
-    {
-        public string Value { get; } = value;
-        public int Refs;
-    }
 
     /// <summary>Sets held (the checks read it).</summary>
     public int Sets { get { lock (gate) return sets.Count; } }
-    /// <summary>Distinct definition texts held (the checks read it).</summary>
-    public int Texts { get { lock (gate) return texts.Count; } }
 
     /// <summary>The set for <paramref name="key"/>, read by <paramref name="read"/> only when no connection holds it (or is reading
     /// it); a caller that shares a read waits for it. Each successful call takes a reference that <see cref="Release"/> gives back.</summary>
@@ -80,7 +72,7 @@ internal sealed class ResourceCatalog(IndexBudget budget, long keepFree = 0)
         }
     }
 
-    /// <summary>Gives back one reference; the last one drops the set and the definitions no other set holds.</summary>
+    /// <summary>Gives back one reference; the last one drops the set and its references to pooled texts.</summary>
     public void Release(ResourceSet set)
     {
         lock (gate)
@@ -88,47 +80,34 @@ internal sealed class ResourceCatalog(IndexBudget budget, long keepFree = 0)
             if (!sets.TryGetValue(set.Key, out var entry) || !entry.Load.IsCompletedSuccessfully || !ReferenceEquals(entry.Load.Result, set)) return;
             if (--entry.Refs > 0) return;
             sets.Remove(set.Key);
-            budget.Release(set.Bytes);
-            foreach (var item in set.Objects)
-            {
-                if (item.Definition is not { } text || !texts.TryGetValue(text, out var shared) || --shared.Refs > 0) continue;
-                texts.Remove(text);
-                budget.Release(IndexMemory.StringBytes(text.Length));
-            }
+            pool.Budget.Release(set.Bytes);
+            pool.Release(set.Objects.SelectMany(Texts));
         }
     }
 
-    /// <summary>The set with each definition swapped for the one already held, or charged to the budget when new; one the budget
-    /// refuses is left out and counted as cut.</summary>
+    /// <summary>The texts of an object a set holds one pool reference to each.</summary>
+    private static IEnumerable<string?> Texts(IndexedObject item) => [item.Name, item.Schema, item.ParentSchema, item.ParentName, item.Definition];
+
+    /// <summary>The set with each text swapped for the pool's copy, one reference per use; a definition the budget refuses is left
+    /// out and counted as cut.</summary>
     private ResourceSet Share(ResourceKey key, IndexedObject[] objects)
     {
         var modules = 0;
         var cut = 0;
-        // Records, and each distinct name and schema string (children share theirs with their parents and one another).
-        var names = new HashSet<string>(ReferenceEqualityComparer.Instance);
         var bytes = objects.Length * IndexMemory.RecordBytes;
-        foreach (var item in objects)
+        pool.Budget.Force(bytes);
+        string? Name(string? value) => value is null ? null : pool.TryAcquire(value, force: true);
+        for (var at = 0; at < objects.Length; at++)
         {
-            if (names.Add(item.Name)) bytes += IndexMemory.StringBytes(item.Name.Length);
-            if (item.Schema is { } schema && names.Add(schema)) bytes += IndexMemory.StringBytes(schema.Length);
-        }
-        budget.Force(bytes);
-        lock (gate)
-        {
-            for (var at = 0; at < objects.Length; at++)
+            var item = objects[at];
+            var definition = item.Definition is { } text ? pool.TryAcquire(text, keepFree) : null;
+            if (item.Definition is not null && definition is null) cut++;
+            else if (definition is not null) { modules++; if (item.DefinitionCut) cut++; }
+            objects[at] = item with
             {
-                if (objects[at].Definition is not { } text) continue;
-                if (!texts.TryGetValue(text, out var shared))
-                {
-                    if (!budget.TryTake(IndexMemory.StringBytes(text.Length), keepFree)) { objects[at] = objects[at] with { Definition = null, DefinitionCut = false }; cut++; continue; }
-                    shared = new Shared(text);
-                    texts[text] = shared;
-                }
-                shared.Refs++;
-                modules++;
-                if (objects[at].DefinitionCut) cut++;
-                objects[at] = objects[at] with { Definition = shared.Value };
-            }
+                Name = Name(item.Name)!, Schema = Name(item.Schema), ParentSchema = Name(item.ParentSchema), ParentName = Name(item.ParentName),
+                Definition = definition, DefinitionCut = definition is not null && item.DefinitionCut
+            };
         }
         return new ResourceSet(key, objects, modules, cut, bytes);
     }

@@ -56,9 +56,11 @@ The same search runs in two places, with the same options and results:
 - **A read that fails part way.** If a statement fails (a catalog view the login may not read, or one an edition lacks),
   the status lists the server or the database as skipped. A first build keeps what was read before the failure (the
   databases, or a database's tables and procedures); a rebuild keeps the earlier build's objects whole instead.
-- **Memory.** Every connection's index shares one memory budget (512 MiB). Each object is charged an estimate of what it
-  holds: its record, its name (a name several objects share, such as a schema or a common column name, is charged once
-  per database), and its definition. Definitions stop being kept once less than 128 MiB is free, so names always have
+- **Memory.** Every connection's index shares one memory budget (512 MiB). Each object is charged an estimate of its
+  record. Names and definitions live in one pool shared by every connection, each distinct text once, reference counted:
+  a text is charged when it first comes in and given back when the last database or system set holding it is dropped.
+  So msdb's procedures and their definitions, master's `spt_` objects, schemas and common column names are held once
+  however many servers are connected. Definitions stop being kept once less than 128 MiB is free, so names always have
   room. A rebuild may reuse the memory of the build it replaces, so a database that fitted before still fits when the
   budget is full; the swap moves that share over rather than charging it twice.
 - **Large databases.** A database that does not fit in what is free with its children is read again without its columns,
@@ -68,8 +70,8 @@ The same search runs in two places, with the same options and results:
   shows (with their columns and parameters) come from SQL Server's hidden resource database, so they are the same in every database. The index reads them once
   per build, not once per database, and a search shows each of them once, as master's (or as the database a search names).
   Connections to servers whose resource objects have the same fingerprint (version, edition, and the count, latest change
-  and checksum of those objects) share one copy in memory, charged against the budget once. Definitions that two builds have
-  in common are held and charged once. A server whose objects differ never reuses another's copy, even with the same
+  and checksum of those objects) share one copy in memory, charged against the budget once. Names and definitions that two
+  builds have in common are held and charged once, through the same pool. A server whose objects differ never reuses another's copy, even with the same
   version string. If the read fails, the status lists it as skipped as `mssqlsystemresource`.
 - **Skipped databases.** A database the build could not read is reported as skipped, with a reason, and the build
   carries on: `TIMEOUT` (120 s per database), `NO_DB_ACCESS`, `DATABASE_UNAVAILABLE`, `CATALOG_ERROR` or `TOO_LARGE`.

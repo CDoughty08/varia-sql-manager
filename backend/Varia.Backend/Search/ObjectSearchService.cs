@@ -31,6 +31,7 @@ internal sealed class ObjectSearchService : IDisposable
     private readonly IObjectSearchHost host;
     private readonly ConcurrentDictionary<string, State> states = new(StringComparer.Ordinal);
     private readonly IndexBudget budget;
+    private readonly StringPool pool;
     private readonly ResourceCatalog resources;
     private readonly SemaphoreSlim total;
     private readonly RequestRegistry running;
@@ -53,10 +54,10 @@ internal sealed class ObjectSearchService : IDisposable
     public const string ChildrenLeftOut = "CHILDREN_LEFT_OUT";
 
     /// <summary>One connection's index and its build.</summary>
-    private sealed class State(IndexBudget budget, ResourceCatalog resources)
+    private sealed class State(StringPool pool, ResourceCatalog resources)
     {
         public readonly object Gate = new();
-        public ConnectionIndex Index { get; } = new(budget, resources);
+        public ConnectionIndex Index { get; } = new(pool.Budget, resources, pool);
         public CancellationTokenSource? Build;
         public bool Building;
         public bool Built;
@@ -72,7 +73,8 @@ internal sealed class ObjectSearchService : IDisposable
         this.host = host;
         Limits = limits ?? new ObjectIndexLimits();
         budget = new IndexBudget(Limits.MemoryBytes);
-        resources = new ResourceCatalog(budget, Limits.NamesReserveBytes);
+        pool = new StringPool(budget);
+        resources = new ResourceCatalog(pool, Limits.NamesReserveBytes);
         total = new SemaphoreSlim(Limits.Total);
         running = new RequestRegistry(64, "object index");
     }
@@ -82,6 +84,8 @@ internal sealed class ObjectSearchService : IDisposable
     public long MemoryUsed => budget.Used;
     /// <summary>The shared resource sets and their distinct definitions (the checks read it).</summary>
     internal ResourceCatalog Resources => resources;
+    /// <summary>The names and definitions every connection shares (the checks read it).</summary>
+    internal StringPool Pool => pool;
 
     public async Task<ObjectIndexResult> IndexAsync(ObjectIndexArgs args, CancellationToken token, Action<object>? progress = null)
     {
@@ -92,7 +96,7 @@ internal sealed class ObjectSearchService : IDisposable
         var explorer = profile.Explorer(ExplorerCatalog.Current);
         var perDatabase = explorer.Cloud;
         var render = new SqlRender(explorer.Band);
-        var state = states.GetOrAdd(args.ConnectionId, _ => new State(budget, resources));
+        var state = states.GetOrAdd(args.ConnectionId, _ => new State(pool, resources));
         using var source = CancellationTokenSource.CreateLinkedTokenSource(token);
         var entry = running.Register(args.RequestId, args.ConnectionId, source);
         var definitions = args.Definitions ?? true;
@@ -247,7 +251,7 @@ internal sealed class ObjectSearchService : IDisposable
         using var budgetSource = CancellationTokenSource.CreateLinkedTokenSource(token);
         budgetSource.CancelAfter(Limits.DatabaseBudget);
         await total.WaitAsync(token);
-        var reader = new DatabaseReader(database, Limits, budget, state.Index.Databases.FirstOrDefault(value => value.Database == database));
+        var reader = new DatabaseReader(database, Limits, pool, state.Index.Databases.FirstOrDefault(value => value.Database == database));
         try
         {
             await using var connection = host.Connection(connectionId, perDatabase ? database : null);
@@ -304,7 +308,7 @@ internal sealed class ObjectSearchService : IDisposable
         using var budgetSource = CancellationTokenSource.CreateLinkedTokenSource(token);
         budgetSource.CancelAfter(Limits.DatabaseBudget);
         await total.WaitAsync(token);
-        var reader = new DatabaseReader(ServerScope, Limits, budget, state.Index.Server);
+        var reader = new DatabaseReader(ServerScope, Limits, pool, state.Index.Server);
         try
         {
             await using var connection = host.Connection(connectionId, null);
@@ -384,21 +388,25 @@ internal sealed class ObjectSearchService : IDisposable
 }
 
 /// <summary>Reads the server batch (<see cref="ObjectSearchSql.Server"/>) or one database's batch (<see cref="ObjectSearchSql.Batch"/>)
-/// into a <see cref="DatabaseIndex"/>, charging what it keeps (<see cref="IndexMemory"/>) against the shared budget: first against
+/// into a <see cref="DatabaseIndex"/>, charging its records (<see cref="IndexMemory"/>) against the shared budget: first against
 /// the share of the index it will replace (<paramref name="credit"/>), so a rebuild fits wherever the build before it did, then
-/// against what is free. A read past the budget answers null; a definition past it is left out. Children (columns, keys,
+/// against what is free. Names and definitions come from the <paramref name="pool"/>, one reference per distinct text per read,
+/// so a text another database or connection holds costs only its slot. A read past the budget answers null; a definition past
+/// it is left out. Children (columns, keys,
 /// constraints, triggers, indexes, statistics, parameters) are kept only under a parent Object Explorer lists them below, and share
 /// its strings; repeated names (schemas, common column names) are held once per read. A history table (and its children) names
 /// the table whose history row lists it.</summary>
-internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, IndexBudget budget, DatabaseIndex? credit = null)
+internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, StringPool pool, DatabaseIndex? credit = null)
 {
+    private readonly IndexBudget budget = pool.Budget;
     private long taken;
     private long credited;
     private long creditLeft = credit?.Bytes ?? 0;
     private int modules;
     private int cut;
     private readonly List<IndexedObject?> objects = [];
-    private readonly HashSet<string> strings = new(StringComparer.Ordinal);
+    /// <summary>The pool's copy of each distinct text the read holds a reference to.</summary>
+    private readonly Dictionary<string, string> held = new(StringComparer.Ordinal);
     /// <summary>Rows waiting for the object that lists them: children for their parent, history tables for their table.</summary>
     private readonly List<(int At, int Owner, bool History)> pending = [];
     private char[] buffer = new char[Math.Min(limits.DefinitionChars, 64 * 1024)];
@@ -409,6 +417,8 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     /// <summary>Gives back what a failed read took; the share it would have replaced stays with its owner.</summary>
     public void Abandon()
     {
+        pool.Release(held.Values);
+        held.Clear();
         budget.Release(taken);
         taken = 0;
         credited = 0;
@@ -432,7 +442,8 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     {
         foreach (var (at, _, _) in pending) objects[at] = null;
         pending.Clear();
-        var index = new DatabaseIndex(database, [.. objects.OfType<IndexedObject>()], taken + credited, modules, cut, credited, credited > 0 ? credit : null);
+        var index = new DatabaseIndex(database, [.. objects.OfType<IndexedObject>()], taken + credited, modules, cut, credited, credited > 0 ? credit : null, [.. held.Values]);
+        held.Clear();
         taken = 0;
         credited = 0;
         creditLeft = 0;
@@ -450,7 +461,7 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             {
                 var id = reader.GetInt32(0);
                 var schema = Intern(reader.GetString(1));
-                var name = reader.GetString(2);
+                var name = Intern(reader.GetString(2));
                 var type = reader.GetString(3).TrimEnd();
                 var modified = reader.GetDateTime(4);
                 var parent = reader.GetInt32(5);
@@ -474,7 +485,7 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             {
                 reader.GetInt32(0);
                 var schema = Intern(reader.GetString(1));
-                var name = reader.GetString(2);
+                var name = Intern(reader.GetString(2));
                 var table = reader.GetBoolean(3);
                 var assembly = reader.GetBoolean(4);
                 var at = Add(table ? new("tableType", "userDefinedTableTypes", schema, name) : new("type", assembly ? "userDefinedTypes" : "userDefinedDataTypes", schema, name, Subtype: assembly ? "clr" : "alias"));
@@ -486,7 +497,7 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             {
                 var code = reader.GetString(0);
                 var schema = reader.IsDBNull(1) ? null : Intern(reader.GetString(1));
-                var name = reader.GetString(2);
+                var name = Intern(reader.GetString(2));
                 DateTime? modified = reader.IsDBNull(3) ? null : reader.GetDateTime(3);
                 var system = reader.GetBoolean(4);
                 if (Named(code) is var (kind, folder)) Add(new(kind, folder, schema, name, Modified: modified, System: system));
@@ -495,12 +506,12 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             while (await reader.ReadAsync(token))
             {
                 var id = reader.GetInt32(0);
-                byId[id] = Add(new("databaseTrigger", "databaseTriggers", null, reader.GetString(1), Modified: reader.GetDateTime(2), System: reader.GetBoolean(3)));
+                byId[id] = Add(new("databaseTrigger", "databaseTriggers", null, Intern(reader.GetString(1)), Modified: reader.GetDateTime(2), System: reader.GetBoolean(3)));
             }
             await reader.NextResultAsync(token);
             while (await reader.ReadAsync(token))
             {
-                var name = reader.GetString(0);
+                var name = Intern(reader.GetString(0));
                 var modified = reader.GetDateTime(1);
                 var (text, longer) = definitions ? Text(reader, 2) : ("", false);
                 var guide = new IndexedObject("planGuide", "planGuides", null, name, Modified: modified);
@@ -571,7 +582,7 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
                 var (text, longer) = Text(reader, 2);
                 if (text.Length > 0) item = item with { Definition = text, DefinitionCut = longer };
             }
-            Add(item, nameShared: true);
+            Add(item);
         }
     }
 
@@ -583,7 +594,7 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
         {
             while (await reader.ReadAsync(token))
             {
-                var name = reader.GetString(0);
+                var name = Intern(reader.GetString(0));
                 var created = reader.GetDateTime(1);
                 var system = reader.GetBoolean(2);
                 var snapshot = reader.GetBoolean(3);
@@ -596,7 +607,7 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             while (await reader.ReadAsync(token))
             {
                 var principal = reader.GetInt32(0);
-                var name = reader.GetString(1);
+                var name = Intern(reader.GetString(1));
                 var type = reader.GetString(2).TrimEnd();
                 var modified = reader.GetDateTime(3);
                 var fixedRole = reader.GetBoolean(4);
@@ -608,7 +619,7 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             while (await reader.ReadAsync(token))
             {
                 var code = reader.GetString(0);
-                var name = reader.GetString(1);
+                var name = Intern(reader.GetString(1));
                 DateTime? modified = reader.IsDBNull(2) ? null : reader.GetDateTime(2);
                 if (ServerNamed(code) is var (kind, folder)) Add(new(kind, folder, null, name, Modified: modified));
             }
@@ -617,7 +628,7 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             while (await reader.ReadAsync(token))
             {
                 var id = reader.GetInt32(0);
-                byId[id] = Add(new("serverTrigger", "serverTriggers", null, reader.GetString(1), Modified: reader.GetDateTime(2), System: reader.GetBoolean(3)));
+                byId[id] = Add(new("serverTrigger", "serverTriggers", null, Intern(reader.GetString(1)), Modified: reader.GetDateTime(2), System: reader.GetBoolean(3)));
             }
             if (definitions && await reader.NextResultAsync(token))
                 while (await reader.ReadAsync(token))
@@ -679,21 +690,27 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
         return [.. objects];
     }
 
-    /// <summary>Keeps <paramref name="item"/>, charging its record and, unless <paramref name="nameShared"/> (interned), its name.</summary>
-    private int Add(IndexedObject item, bool nameShared = false)
+    /// <summary>Keeps <paramref name="item"/> (whose texts are the pool's), charging its record.</summary>
+    private int Add(IndexedObject item)
     {
-        if (!TryCharge(IndexMemory.RecordBytes + (nameShared ? 0 : IndexMemory.StringBytes(item.Name.Length)), 0)) throw new TooLarge();
+        if (!TryCharge(IndexMemory.RecordBytes, 0)) throw new TooLarge();
         objects.Add(item);
         return objects.Count - 1;
     }
 
-    /// <summary>The string held for <paramref name="value"/>, charged once per read when new.</summary>
-    private string Intern(string value)
+    /// <summary>The pool's copy of a name; a read past the budget stops.</summary>
+    private string Intern(string value) => Pooled(value, 0) ?? throw new TooLarge();
+
+    /// <summary>The pool's copy of <paramref name="value"/>, taking the read's one reference to it and charging its slot when the
+    /// read does not hold it yet; null when either would leave less than <paramref name="keepFree"/> free.</summary>
+    private string? Pooled(string value, long keepFree)
     {
-        if (strings.TryGetValue(value, out var held)) return held;
-        if (!TryCharge(IndexMemory.StringBytes(value.Length), 0)) throw new TooLarge();
-        strings.Add(value);
-        return value;
+        if (held.TryGetValue(value, out var copy)) return copy;
+        copy = pool.TryAcquire(value, keepFree);
+        if (copy is null) return null;
+        if (!TryCharge(IndexMemory.SlotBytes, keepFree)) { pool.Release([copy]); return null; }
+        held[value] = copy;
+        return copy;
     }
 
     /// <summary>A text column read only as far as the per-module limit and charged to the budget: empty when the budget is spent
@@ -703,10 +720,10 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
         if (reader.IsDBNull(ordinal)) return ("", false);
         var (text, longer) = ReadText(reader, ordinal, ref buffer, limits.DefinitionChars);
         if (text.Length == 0) return ("", false);
-        if (!TryCharge(IndexMemory.StringBytes(text.Length), limits.NamesReserveBytes)) { cut++; return ("", false); }
+        if (Pooled(text, limits.NamesReserveBytes) is not { } copy) { cut++; return ("", false); }
         modules++;
         if (longer) cut++;
-        return (text, longer);
+        return (copy, longer);
     }
 
     private static (string Text, bool Longer) ReadText(DbDataReader reader, int ordinal, ref char[] buffer, int limit)
