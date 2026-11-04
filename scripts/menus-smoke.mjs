@@ -24,12 +24,6 @@ let application
 let page
 const failures = []
 const watchdog = setTimeout(() => { console.error('Menus suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 540000)
-// The smoke window is hidden, so animation frames come once a second and Playwright's two-frame stability check costs
-// two seconds a click or hover. Nothing in the menus animates, so presses skip it; assertions still wait for each result.
-// Layout does wait for frames: after a zoom, a window resize, or a panel shown, hidden, floated, or docked, Dockview and
-// Monaco move things up to a second later, so the suite waits for that (`settle`, `rezoom`) before such a press, and
-// presses on a panel's tab, which Dockview moves, keep the checks.
-const fast = { force: true }
 
 const menubar = () => page.getByRole('menubar', { name: 'Application menu' })
 const menubarItem = name => menubar().getByRole('menuitem', { name, exact: true })
@@ -62,8 +56,8 @@ async function typeSql(sql) {
 }
 /** Opens a title-bar menu with the mouse and clicks an item, as a user would. */
 async function choose(name, label, role = 'menuitem') {
-  await menubarItem(name).click(fast)
-  await menu(name).getByRole(role, { name: label, exact: true }).click(fast)
+  await menubarItem(name).click()
+  await menu(name).getByRole(role, { name: label, exact: true }).click()
   await expect(openMenus()).toHaveCount(0)
 }
 /** Waits two animation frames, by which Dockview and Monaco have laid out a change of size. */
@@ -112,7 +106,7 @@ try {
   // 1. The menubar by mouse: a click opens a themed menu below its button, hovering another button switches menus, and
   // choosing an item runs it with focus back where it was.
   await textbox().focus()
-  await menubarItem('File').click(fast)
+  await menubarItem('File').click()
   const newQuery = menu('File').getByRole('menuitem', { name: 'New Query', exact: true })
   await expect(newQuery).toBeVisible()
   await expect(newQuery).toContainText('Ctrl+N')
@@ -131,24 +125,24 @@ try {
     return color
   }))
   await page.screenshot({ path: resolve('artifacts', 'menus-file-dark.png') })
-  await menubarItem('Edit').hover(fast)
+  await menubarItem('Edit').hover()
   await expect(menu('Edit')).toBeVisible()
   await expect(menu('File')).toHaveCount(0)
-  await menubarItem('File').hover(fast)
-  await menu('File').getByRole('menuitem', { name: 'New Query', exact: true }).click(fast)
+  await menubarItem('File').hover()
+  await menu('File').getByRole('menuitem', { name: 'New Query', exact: true }).click()
   await expect(tabs()).toHaveCount(2)
   await expect(openMenus()).toHaveCount(0)
   await expect(textbox()).toBeFocused()
   // A disabled item does nothing and the menu stays open; clicking its button again closes it, and focus never moved.
-  await menubarItem('Query').click(fast)
+  await menubarItem('Query').click()
   await menu('Query').getByRole('menuitem', { name: 'Cancel Executing Query', exact: true }).click({ force: true })
   await expect(menu('Query')).toBeVisible()
-  await menubarItem('Query').click(fast)
+  await menubarItem('Query').click()
   await expect(openMenus()).toHaveCount(0)
   await expect(textbox()).toBeFocused()
   // A press outside closes the menu.
-  await menubarItem('View').click(fast)
-  await statusBar(page).click(fast)
+  await menubarItem('View').click()
+  await statusBar(page).click()
   await expect(openMenus()).toHaveCount(0)
   console.log('Menus checks: mouse open, hover switching, item activation, disabled items, and outside clicks.')
 
@@ -275,7 +269,7 @@ try {
   // A pointer resting on Query highlights it, but not while the keyboard has File open: one button looks selected.
   const buttonBackground = name => menubarItem(name).evaluate(element => getComputedStyle(element).backgroundColor)
   const plainButton = await buttonBackground('Window')
-  await menubarItem('Query').hover(fast)
+  await menubarItem('Query').hover()
   await expect.poll(() => buttonBackground('Query')).not.toBe(plainButton)
   await page.keyboard.press('Alt+f')
   await expect(menu('File')).toBeVisible()
@@ -284,7 +278,7 @@ try {
   await page.keyboard.press('Escape')
   await page.keyboard.press('Escape')
   await expect(textbox()).toBeFocused()
-  await statusBar(page).hover(fast)
+  await statusBar(page).hover()
   await page.keyboard.press('Control+F')
   const findInput = page.locator('.find-widget .monaco-findInput .input').first()
   await expect(findInput).toBeFocused()
@@ -316,22 +310,22 @@ try {
   await page.keyboard.press('Escape')
   await page.keyboard.press('Escape')
   await expect(textbox()).toBeFocused()
-  await menubarItem('View').click(fast)
-  await menu('View').getByRole('menuitem', { name: 'Theme', exact: true }).hover(fast)
+  await menubarItem('View').click()
+  await menu('View').getByRole('menuitem', { name: 'Theme', exact: true }).hover()
   await expect(menu('Theme')).toBeVisible()
   await expect(menu('Theme').getByRole('menuitemradio', { name: 'Dark', exact: true })).toHaveAttribute('aria-checked', 'true')
-  await menu('Theme').getByRole('menuitemradio', { name: 'Light', exact: true }).click(fast)
+  await menu('Theme').getByRole('menuitemradio', { name: 'Light', exact: true }).click()
   await expect.poll(() => variable('editor.background')).toBe('#ffffff')
   await expect.poll(appearance).toContain('"mode": "light"')
   await expect(textbox()).toBeFocused()
-  await menubarItem('File').click(fast)
+  await menubarItem('File').click()
   await page.screenshot({ path: resolve('artifacts', 'menus-file-light.png') })
   await page.keyboard.press('Escape')
   await page.keyboard.press('Escape')
-  await menubarItem('View').click(fast)
-  await menu('View').getByRole('menuitem', { name: 'Theme', exact: true }).hover(fast)
+  await menubarItem('View').click()
+  await menu('View').getByRole('menuitem', { name: 'Theme', exact: true }).hover()
   await expect(menu('Theme').getByRole('menuitemradio', { name: 'Light', exact: true })).toHaveAttribute('aria-checked', 'true')
-  await menu('Theme').getByRole('menuitemradio', { name: 'Dark', exact: true }).click(fast)
+  await menu('Theme').getByRole('menuitemradio', { name: 'Dark', exact: true }).click()
   await expect.poll(appearance).toContain('"mode": "dark"')
   await expect.poll(() => variable('editor.background')).not.toBe('#ffffff')
   console.log('Menus checks: keyboard and hover submenus, and theme choices from View › Theme.')
@@ -456,11 +450,11 @@ try {
   await page.keyboard.press('Control+Shift+R')
   await settle()
   // Window › Show Results Pane is the same toggle, checked while the pane shows.
-  await menubarItem('Window').click(fast)
+  await menubarItem('Window').click()
   const showResults = menu('Window').getByRole('menuitemcheckbox', { name: 'Show Results Pane', exact: true })
   await expect(showResults).toHaveAttribute('aria-checked', 'true')
   await expect(showResults).toContainText('Ctrl+R')
-  await showResults.click(fast)
+  await showResults.click()
   await expect(outputButton).toBeHidden()
   await page.keyboard.press('Control+R')
   await expect(outputButton).toBeVisible()
@@ -470,7 +464,7 @@ try {
   await expect.poll(editorText).toContain('SELECT 2;')
   await settle()
   // View › Reload Window shows no key.
-  await menubarItem('View').click(fast)
+  await menubarItem('View').click()
   await expect(menu('View').getByRole('menuitem', { name: 'Reload Window', exact: true }).locator(part.menuKeybinding)).toHaveText('')
   await page.keyboard.press('Escape')
   await page.keyboard.press('Escape')
@@ -495,7 +489,7 @@ try {
   await page.keyboard.press('Control+A')
   // A right-click inside the selection keeps it.
   await selectToken.click({ button: 'right', force: true })
-  await editorMenu.getByRole('menuitem', { name: 'Copy', exact: true }).click(fast)
+  await editorMenu.getByRole('menuitem', { name: 'Copy', exact: true }).click()
   await expect.poll(clipboard).toBe('SELECT 7 AS seven')
   await expect(textbox()).toBeFocused()
   await page.keyboard.press('End')
@@ -534,19 +528,19 @@ try {
   await expect(queryTab()).not.toHaveAttribute('data-menu-target')
   await queryTab().getByRole('tab').click({ button: 'right', force: true })
   // Unsaved changes in the other queries are discarded (the stubbed prompt answers Don't Save).
-  await tabMenu.getByRole('menuitem', { name: 'Close All But This', exact: true }).click(fast)
+  await tabMenu.getByRole('menuitem', { name: 'Close All But This', exact: true }).click()
   await expect(tabs()).toHaveCount(1)
   await expect(page.locator('[data-menu-target]')).toHaveCount(0)
   await queryTab().click({ button: 'right', force: true })
   await expect(tabMenu.getByRole('menuitem', { name: 'Copy Full Path', exact: true })).toHaveAttribute('aria-disabled', 'true')
   await expect(tabMenu.getByRole('menuitem', { name: 'Open Containing Folder', exact: true })).toHaveAttribute('aria-disabled', 'true')
-  await tabMenu.getByRole('menuitem', { name: 'Save As…', exact: true }).click(fast)
+  await tabMenu.getByRole('menuitem', { name: 'Save As…', exact: true }).click()
   await expect(queryTab().getByRole('tab')).toHaveAttribute('aria-label', 'menus-saved.sql')
   await queryTab().click({ button: 'right', force: true })
-  await tabMenu.getByRole('menuitem', { name: 'Copy Full Path', exact: true }).click(fast)
+  await tabMenu.getByRole('menuitem', { name: 'Copy Full Path', exact: true }).click()
   await expect.poll(clipboard).toBe(savedPath)
   await queryTab().click({ button: 'right', force: true })
-  await tabMenu.getByRole('menuitem', { name: 'Open Containing Folder', exact: true }).click(fast)
+  await tabMenu.getByRole('menuitem', { name: 'Open Containing Folder', exact: true }).click()
   await expect.poll(() => application.evaluate(() => globalThis.variaRevealed)).toEqual([savedPath])
   // Main takes only a known file id and bounded clipboard text.
   for (const call of [() => window.varia.revealSqlFile('x'), () => window.varia.revealSqlFile(crypto.randomUUID()), () => window.varia.writeClipboardText(42), () => window.varia.writeClipboardText('x'.repeat(8_388_609))]) {
@@ -561,7 +555,7 @@ try {
   // and access keys shown, and Escape returns to the button. The button says whether its menu is open.
   const panelMenu = menu('Panel tab')
   await expect(outputButton).toHaveAttribute('aria-expanded', 'false')
-  await outputButton.click(fast)
+  await outputButton.click()
   await expect.poll(() => menuItemNames(panelMenu)).toEqual(['Dock Left', 'Dock Right', 'Dock Top', 'Dock Bottom', 'Tab with Object Explorer', 'Tab with Query Editor', 'Float', 'Close', 'Show Panel Tabs'])
   await expect(outputButton).toHaveAttribute('aria-expanded', 'true')
   await expect(activeMenuItem(page)).toHaveCount(0)
@@ -579,8 +573,8 @@ try {
   // Show Panel Tabs brings the dock tabs back, and stays on for the rest of the suite. Panel tab menus replace
   // Dockview's: Float, then Dock, then Close, by mouse and keyboard. Dockview moves the tab as it lays out each change, so
   // right-clicks on it keep Playwright's checks: one without them can land on the editor.
-  await outputButton.click(fast)
-  await panelMenu.getByRole('menuitemcheckbox', { name: 'Show Panel Tabs', exact: true }).click(fast)
+  await outputButton.click()
+  await panelMenu.getByRole('menuitemcheckbox', { name: 'Show Panel Tabs', exact: true }).click()
   await expect(outputTab).toBeVisible()
   await expect.poll(() => nativeItem('window.togglePanelTabs')).toMatchObject({ checked: true })
   const rightClickOutputTab = () => outputTab.click({ button: 'right' })
@@ -616,11 +610,11 @@ try {
   await expect(panelMenu).toHaveCount(0)
   await resizeTo(contentSize)
   await rightClickOutputTab()
-  await panelMenu.getByRole('menuitem', { name: 'Float', exact: true }).click(fast)
+  await panelMenu.getByRole('menuitem', { name: 'Float', exact: true }).click()
   await expect(page.locator('.dv-floating-titlebar')).toHaveCount(1)
   await rightClickOutputTab()
   await expect.poll(() => menuItemNames(panelMenu)).toEqual(['Dock Left', 'Dock Right', 'Dock Top', 'Dock Bottom', 'Tab with Object Explorer', 'Tab with Query Editor', 'Dock', 'Close', 'Show Panel Tabs'])
-  await panelMenu.getByRole('menuitem', { name: 'Dock', exact: true }).click(fast)
+  await panelMenu.getByRole('menuitem', { name: 'Dock', exact: true }).click()
   await expect(page.locator('.dv-floating-titlebar')).toHaveCount(0)
   await settle()
   const outputDockTab = page.locator('.dv-tab').filter({ has: outputTab })
@@ -631,7 +625,7 @@ try {
   await page.keyboard.press('Escape')
   await expect(outputDockTab).toBeFocused()
   await rightClickOutputTab()
-  await panelMenu.getByRole('menuitem', { name: 'Close', exact: true }).click(fast)
+  await panelMenu.getByRole('menuitem', { name: 'Close', exact: true }).click()
   await expect(outputTab).toHaveCount(0)
   await choose('Window', 'Query Output')
   await expect(outputTab).toBeVisible()
@@ -651,12 +645,12 @@ try {
   await expect(server).toHaveAttribute('data-menu-target', '')
   const fieldBox = await fieldMenu.boundingBox()
   expect(await page.evaluate(({ x, y }) => !!document.elementFromPoint(x, y)?.closest('[role="menu"]'), { x: fieldBox.x + fieldBox.width / 2, y: fieldBox.y + fieldBox.height / 2 })).toBe(true)
-  await fieldMenu.getByRole('menuitem', { name: 'Cut', exact: true }).click(fast)
+  await fieldMenu.getByRole('menuitem', { name: 'Cut', exact: true }).click()
   await expect(server).toHaveValue('')
   await expect(server).toBeFocused()
   await expect.poll(clipboard).toBe('menus-server')
   await server.click({ button: 'right', force: true })
-  await fieldMenu.getByRole('menuitem', { name: 'Paste', exact: true }).click(fast)
+  await fieldMenu.getByRole('menuitem', { name: 'Paste', exact: true }).click()
   await expect(server).toHaveValue('menus-server')
   await page.locator('#connect-auth').selectOption('sql')
   await password.fill('hunter2')
@@ -710,7 +704,7 @@ try {
   expect(flipped.y + flipped.height).toBeLessThanOrEqual(corner.y + 1)
   expect(flipped.x + flipped.width).toBeLessThanOrEqual(corner.x + 1)
   expect(flipped.x).toBeGreaterThanOrEqual(0)
-  await editorMenu.getByRole('menuitem', { name: 'Connection', exact: true }).hover(fast)
+  await editorMenu.getByRole('menuitem', { name: 'Connection', exact: true }).hover()
   await expect(menu('Connection')).toBeVisible()
   const submenu = await menu('Connection').boundingBox()
   expect(submenu.x + submenu.width).toBeLessThanOrEqual(1024)
@@ -729,7 +723,7 @@ try {
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   await choose('File', 'New Query')
   await reopen()
-  await tabs().first().click(fast)
+  await tabs().first().click()
   await expect(openMenus()).toHaveCount(0)
   await expect(tabs().first()).toHaveAttribute('aria-selected', 'true')
   console.log('Menus checks: context menus stay inside a 1024x700 window and close on scrolling, resizing, blur, and clicks elsewhere.')
@@ -747,10 +741,10 @@ try {
   await expect(explorerMenu).toBeVisible()
   expect(await labels()).toEqual(['Connect…', 'Refresh'])
   await expect(explorerMenu.getByRole('menuitem', { name: 'Refresh', exact: true })).toHaveAttribute('aria-disabled', 'true')
-  await explorerMenu.getByRole('menuitem', { name: 'Connect…', exact: true }).click(fast)
+  await explorerMenu.getByRole('menuitem', { name: 'Connect…', exact: true }).click()
   await page.getByLabel('Server Name', { exact: true }).fill('server-a')
   await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click(fast)
+  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
   // A server: its own items, and New Query on its connection with focus in the new query.
   const serverA = await row('server-a')
@@ -759,7 +753,7 @@ try {
   await expect(serverA).toHaveAttribute('data-menu-target', '')
   await expect(serverA).toHaveAttribute('aria-selected', 'true')
   const before = await tabs().count()
-  await explorerMenu.getByRole('menuitem', { name: 'New Query', exact: true }).click(fast)
+  await explorerMenu.getByRole('menuitem', { name: 'New Query', exact: true }).click()
   await expect(tabs()).toHaveCount(before + 1)
   await expect(page.locator('#query-server option:checked')).toHaveText('server-a')
   await expect(page.locator('#query-database')).toHaveValue('master')
@@ -769,7 +763,7 @@ try {
   const appData = await row('server-a', 'Databases', 'AppData')
   await appData.click({ button: 'right', force: true })
   expect(await labels()).toEqual(['New Database…', 'New Query', 'Script Database as', 'Tasks', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
-  await explorerMenu.getByRole('menuitem', { name: 'Copy Name', exact: true }).click(fast)
+  await explorerMenu.getByRole('menuitem', { name: 'Copy Name', exact: true }).click()
   await expect.poll(clipboard).toBe('[AppData]')
   await expect(tree).toBeFocused()
   await expect(appData).toHaveAttribute('aria-selected', 'true')
@@ -778,7 +772,7 @@ try {
   const orders = await row(...ordersPath)
   await orders.click({ button: 'right', force: true })
   expect(await labels()).toEqual(['Select Top 1000 Rows', 'Script Table as', 'Copy Name', 'Rename', 'Delete', 'Refresh'])
-  await explorerMenu.getByRole('menuitem', { name: 'Select Top 1000 Rows', exact: true }).click(fast)
+  await explorerMenu.getByRole('menuitem', { name: 'Select Top 1000 Rows', exact: true }).click()
   const selectTop = ['/****** Script for SelectTopNRows command from Varia SQL Manager ******/', 'SELECT TOP (1000) [Id]', '      ,[CustomerName]', '  FROM [AppData].[dbo].[Orders]'].join('\n')
   // New queries take the platform's line ending, as SSMS's do, so the SQL sent is CRLF on Windows; the editor's lines are not.
   const sqlEol = process.platform === 'win32' ? '\r\n' : '\n'
@@ -790,9 +784,9 @@ try {
   // Script Table as › CREATE To › Clipboard, then File… through the save dialog.
   const scriptTo = async destination => {
     await (await row(...ordersPath)).click({ button: 'right', force: true })
-    await explorerMenu.getByRole('menuitem', { name: 'Script Table as', exact: true }).click(fast)
-    await menu('Script Table as').getByRole('menuitem', { name: 'CREATE To', exact: true }).click(fast)
-    await menu('CREATE To').getByRole('menuitem', { name: destination, exact: true }).click(fast)
+    await explorerMenu.getByRole('menuitem', { name: 'Script Table as', exact: true }).click()
+    await menu('Script Table as').getByRole('menuitem', { name: 'CREATE To', exact: true }).click()
+    await menu('CREATE To').getByRole('menuitem', { name: destination, exact: true }).click()
     await expect(openMenus()).toHaveCount(0)
   }
   await scriptTo('Clipboard')
@@ -838,7 +832,7 @@ try {
   const listed = { tables: await loads('tables'), databases: await loads('databases') }
   await tables.click({ button: 'right', force: true })
   expect(await labels()).toEqual(['New', 'Filter Settings…', 'Refresh'])
-  await explorerMenu.getByRole('menuitem', { name: 'Refresh', exact: true }).click(fast)
+  await explorerMenu.getByRole('menuitem', { name: 'Refresh', exact: true }).click()
   await expect.poll(() => loads('tables')).toBe(listed.tables + 1)
   expect(await loads('databases')).toBe(listed.databases)
   // A table created meanwhile appears, and dbo.Orders keeps its row.
@@ -848,7 +842,7 @@ try {
   // The keyboard: Shift+F10 opens the selected table's menu below its row with its first item active; so does the
   // context-menu key. Focus stays on the tree, which names the row as its active descendant.
   const table = await row(...ordersPath)
-  await table.click(fast)
+  await table.click()
   await expect(tree).toBeFocused()
   await page.keyboard.press('Shift+F10')
   await expect(explorerMenu.getByRole('menuitem', { name: 'Select Top 1000 Rows', exact: true })).toBeFocused()
@@ -888,10 +882,10 @@ try {
   await expandExplorerPath(page, 'server-a', 'Security', 'Logins')
   await (await row('server-a', 'Security', 'Logins', 'sa')).click({ button: 'right', force: true })
   expect(await labels()).toEqual(['New Login…', 'Script Login as', 'Copy Name', 'Refresh'])
-  await explorerMenu.getByRole('menuitem', { name: 'Copy Name', exact: true }).click(fast)
+  await explorerMenu.getByRole('menuitem', { name: 'Copy Name', exact: true }).click()
   await expect.poll(clipboard).toBe('[sa]')
   await serverA.click({ button: 'right', force: true })
-  await explorerMenu.getByRole('menuitem', { name: 'Disconnect', exact: true }).click(fast)
+  await explorerMenu.getByRole('menuitem', { name: 'Disconnect', exact: true }).click()
   await expect(tree).toHaveCount(0)
   await expect(quickInput(page)).toHaveCount(0)
   expect(await calls('connections.disconnect')).toHaveLength(1)
@@ -902,7 +896,7 @@ try {
   await choose('File', 'Connect to Server…')
   await page.getByLabel('Server Name', { exact: true }).fill('server-b')
   await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click(fast)
+  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await typeSql('SELECT Id, Name, Note FROM dbo.Notes -- MENUS_GRID_FIXTURE')
   await page.keyboard.press('F5')
@@ -929,11 +923,11 @@ try {
   expect(await outputLabels()).toEqual(['Copy', 'Copy with Headers', 'Select All', 'Save Results As…'])
   await expect(selected()).toHaveCount(1)
   await expect(cell(1, 2)).toHaveAttribute('aria-selected', 'true')
-  await outputMenu.getByRole('menuitem', { name: 'Copy', exact: true }).click(fast)
+  await outputMenu.getByRole('menuitem', { name: 'Copy', exact: true }).click()
   await expect.poll(clipboard).toBe('n2')
   await expect(grid).toBeFocused()
   // Shift extends; a right-click inside the selection keeps it.
-  await cell(0, 0).click(fast)
+  await cell(0, 0).click()
   await cell(2, 1).click({ modifiers: ['Shift'], force: true })
   await expect(selected()).toHaveCount(6)
   // In forced colors (Windows High Contrast) the selection shows in the system's selection colors, focused or not.
@@ -953,7 +947,7 @@ try {
   await cell(1, 1).click({ button: 'right', force: true })
   await expect(selected()).toHaveCount(6)
   await page.screenshot({ path: resolve('artifacts', 'menus-grid-dark.png') })
-  await outputMenu.getByRole('menuitem', { name: 'Copy with Headers', exact: true }).click(fast)
+  await outputMenu.getByRole('menuitem', { name: 'Copy with Headers', exact: true }).click()
   await expect.poll(clipboard).toBe(['Id\t(No column name)', '1\ta', '2\tb', '3\tc'].join(eol))
   // Ctrl+click adds a block (⌘ on macOS, where Control+click opens the menu); blocks that share neither rows nor
   // columns are copied one after the other.
@@ -970,12 +964,12 @@ try {
   await page.keyboard.press('Control+Shift+C')
   await expect.poll(clipboard).toBe(['Id\t(No column name)\tNote', '1\ta\tNULL', '2\tb\tn2', '3\tc\tn3'].join(eol))
   // A column header selects the column; Edit › Copy goes through Electron's copy role to the grid.
-  await grid.getByRole('columnheader').nth(3).click(fast)
+  await grid.getByRole('columnheader').nth(3).click()
   await expect(selected()).toHaveCount(3)
   await choose('Edit', 'Copy')
   await expect.poll(clipboard).toBe(['NULL', 'n2', 'n3'].join(eol))
   // Shift+F10 opens the grid's menu below its active cell.
-  await cell(2, 0).click(fast)
+  await cell(2, 0).click()
   await expect(matching(cell(2, 0), gridPart.activeCell)).toHaveCount(1)
   await page.keyboard.press('Shift+F10')
   await expect(outputMenu.getByRole('menuitem', { name: 'Copy', exact: true })).toBeFocused()
@@ -984,16 +978,16 @@ try {
   await page.keyboard.press('Escape')
   await expect(grid).toBeFocused()
   // Messages: no Copy with Headers; Select All selects only the messages, which Copy then copies.
-  await outputView(page, /^Messages/).click(fast)
+  await outputView(page, /^Messages/).click()
   const messages = messagesOf(page)
   await expect(page.getByRole('log', { name: 'Messages', exact: true })).toBeVisible()
   await messages.locator('pre').first().click({ button: 'right', force: true })
   expect(await outputLabels()).toEqual(['Copy', 'Select All'])
   await expect(outputMenu.getByRole('menuitem', { name: 'Copy', exact: true })).toHaveAttribute('aria-disabled', 'true')
-  await outputMenu.getByRole('menuitem', { name: 'Select All', exact: true }).click(fast)
+  await outputMenu.getByRole('menuitem', { name: 'Select All', exact: true }).click()
   await expect(messages).toBeFocused()
   await page.keyboard.press('Shift+F10')
-  await outputMenu.getByRole('menuitem', { name: 'Copy', exact: true }).click(fast)
+  await outputMenu.getByRole('menuitem', { name: 'Copy', exact: true }).click()
   await expect.poll(clipboard).toContain('(3 rows affected)')
   expect(await clipboard()).toContain('Completion time: ')
   expect(await clipboard()).not.toContain('SELECT')
@@ -1001,21 +995,21 @@ try {
 
   // 14. Every surface, twice: each menu opens by mouse or keyboard, Escape closes all of it, the outline goes, and focus
   // returns where it was. Then the table's menu, with its submenus open, is captured in Dark and Light.
-  await toolbarButton(page, 'Connect').click(fast)
+  await toolbarButton(page, 'Connect').click()
   await page.getByLabel('Server Name', { exact: true }).fill('server-a')
   await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click(fast)
+  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await expandExplorerPath(page, ...ordersPath.slice(0, -1))
   await expandExplorerPath(page, 'server-a', 'Security', 'Logins')
   await expect(await row('server-a', 'Security', 'Logins', 'sa')).toBeVisible()
   await typeSql('SELECT Id, CustomerName FROM dbo.Orders -- MENUS_PLAN_FIXTURE')
   await page.keyboard.press('F5')
-  await outputView(page, /^Results/).click(fast)
+  await outputView(page, /^Results/).click()
   // The plan's result set is stacked below the first, as SSMS stacks them.
   const planGrid = page.locator('[data-result-grid][data-result-index="1"]')
   await expect(planGrid).toContainText('ShowPlanXML')
-  // These presses skip the stability check (see `fast`). An element out of view is scrolled first, and the menu opens
+  // These presses skip the stability check. An element out of view is scrolled first, and the menu opens
   // only after the scroll event, which would otherwise close it. The find widget slides in, so a press there waits for
   // it to settle.
   const tap = (locator, options = {}) => locator.click({ force: true, ...options })
@@ -1186,7 +1180,7 @@ try {
   await expect(nativeField).toBeFocused()
   await nativeField.fill('server-a')
   await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click(fast)
+  await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await expandExplorerPath(page, ...ordersPath.slice(0, -1))
   const nativeTree = explorerTree(page), nativeTable = await explorerRow(page, ...ordersPath)
@@ -1308,7 +1302,7 @@ try {
     await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
     // The typed query makes exit ask about saving; answer Don't Save.
     await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
-    await toolbarButton(page, 'Connect').click(fast)
+    await toolbarButton(page, 'Connect').click()
     const connect = page.getByRole('dialog', { name: 'Connect', exact: true })
     await expect(connect.getByText('Loading saved connections…')).toHaveCount(0)
     await connect.getByLabel('Server Name', { exact: true }).fill(process.env.VARIA_TEST_SQL_SERVER)
@@ -1318,7 +1312,7 @@ try {
       await connect.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
     } else await connect.getByLabel('Authentication', { exact: true }).selectOption('windows')
     await connect.getByLabel('Trust server certificate', { exact: true }).check()
-    await connect.getByRole('button', { name: 'Connect', exact: true }).click(fast)
+    await connect.getByRole('button', { name: 'Connect', exact: true }).click()
     await expect(connect).toHaveCount(0, { timeout: 30000 })
     const liveServer = serverRows(page).first()
     await expect(liveServer).toBeVisible({ timeout: 30000 })
@@ -1327,7 +1321,7 @@ try {
     const master = await explorerRow(page, liveName, 'Databases', 'System Databases', 'master', wait), masterRow = await master.getAttribute('id')
     const liveTabs = await tabs().count()
     await master.click({ button: 'right' })
-    await menu('Object Explorer').getByRole('menuitem', { name: 'New Query', exact: true }).click(fast)
+    await menu('Object Explorer').getByRole('menuitem', { name: 'New Query', exact: true }).click()
     await expect(tabs()).toHaveCount(liveTabs + 1)
     await expect(textbox()).toBeFocused()
     await expect(page.locator('#query-database')).toHaveValue('master')
@@ -1335,7 +1329,7 @@ try {
     await page.keyboard.press('F5')
     await expect(gridCell(anyResultGrid(page), 0, 0).first()).toHaveText('master', { timeout: 30000 })
     await liveServer.click({ button: 'right' })
-    await menu('Object Explorer').getByRole('menuitem', { name: 'Refresh', exact: true }).click(fast)
+    await menu('Object Explorer').getByRole('menuitem', { name: 'Refresh', exact: true }).click()
     // The server reconciles in place: what was expanded stays expanded and reloads, and master keeps its row.
     await expect.poll(async () => (await explorerRow(page, liveName, 'Databases', wait)).getAttribute('aria-expanded'), wait).toBe('true')
     await expect(await explorerRow(page, liveName, 'Databases', 'System Databases', wait)).toHaveAttribute('aria-expanded', 'true')

@@ -53,9 +53,8 @@ async function connect() {
 
 try {
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
-  // Smoke runs never show the window, and a hidden window draws about once a second: the crosshair's tooltip would then
-  // show up to a second after its key, when the sample it names no longer reads as "now". Show it, without focus.
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive())
+  // The window stays hidden, as in every suite (fixtures/smoke.mjs lifts its frame cap): shown, it took real pointer events,
+  // and a desktop's own mouse moved or cleared the crosshair this suite holds still.
   await expect.poll(() => page.evaluate(() => document.visibilityState)).toBe('visible')
   await connect()
   const id = await live('subscribeSynthetic', { tickMs: 100 })
