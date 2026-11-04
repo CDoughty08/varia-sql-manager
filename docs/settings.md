@@ -16,6 +16,7 @@ from Microsoft's documentation, so Varia keeps its own.
   - Documents (`environment.documents`)
   - Fonts and Colors (`environment.fontsAndColors`)
   - Keyboard (`environment.keyboard`)
+  - Product Updates (`environment.productUpdates`)
   - Live Data (`environment.liveData`)
 - Text Editor
   - General (`textEditor.general`)
@@ -83,6 +84,15 @@ Colors come from the color theme (View › Theme).
 Shortcuts follow SSMS's defaults and cannot be changed yet. The command palette (F1) shows each command's shortcut.
 
 _No settings yet._
+
+### Environment › Product Updates
+
+How Varia SQL Manager finds, downloads and installs new releases.
+
+| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `environment.updates.checkAutomatically` | Automatically check for updates | Boolean | True |  | All | At once | Checks Varia SQL Manager's releases on GitHub shortly after start-up and every four hours while it runs. Help › Check for Updates checks at any time. The check reads one small file from github.com through the system's proxy settings and sends nothing about you or your servers. |
+| `environment.updates.downloadAutomatically` | Automatically download updates | Boolean | True |  | All | At once | Downloads a new release in the background as soon as a check finds it, and verifies it against the release's checksum; the status bar shows its progress. Nothing installs until you choose Restart to Update. While it is False, the status bar offers the update and Help › Download Update downloads it. Not in SSMS. Greyed while `environment.updates.checkAutomatically` is False. |
 
 ### Environment › Live Data
 
@@ -264,4 +274,4 @@ How Varia follows the SSIS Catalog (SSISDB) as it changes. Not in SSMS.
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (89 today).
+A patch holds at most one entry per setting (91 today).

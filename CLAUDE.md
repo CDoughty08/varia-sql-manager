@@ -12,7 +12,10 @@ pages, limits, error codes, display formats, benchmarks).
 - `npm run dev`: Debug backend build, then electron-vite with renderer hot reload. Restart after C# changes.
 - `npm run check`: typecheck, Release .NET checks, vitest, production build. Run before every commit.
 - `npm run test:smoke`: the Electron suites listed in package.json's `test:smoke`. Needs the Release backend and `out/`
-  from `npm run check`.
+  from `npm run check` (or just those, from `npm run build:smoke`). `node scripts/smoke-shards.mjs 2/3`: one CI shard.
+  The fixture launches the hidden smoke window with `--disable-frame-rate-limit`: Chromium otherwise draws it at one
+  frame a second, and every Playwright press waits for frames. Set `VARIA_SMOKE_PROFILE=<dir>` to save a Playwright trace
+  of each launch there (it holds the environment, so never upload one from a run with secrets).
   Headless Linux: `xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke`.
 - `npm run test:electron`: `check` followed by `test:smoke`.
 - `npm run backend:test`: only the .NET checks. `npx vitest run tests/<name>.test.ts`: one vitest file
@@ -250,6 +253,11 @@ pages, limits, error codes, display formats, benchmarks).
   `SsisOptions.CreateScratch` of the dry run), never a request field; Stop cancels any statement but the restore (whose
   reply waits for it to end), and a Stop or failure after the restore removes exactly what the request made, waiting at
   most 30 s per lock. Never log names, values, SQL or messages.
+- Updates live in `src/shared/updates.ts` (feed, manifest schema, states, failure words); only main fetches (its own
+  in-memory session, `net` through the system proxy and certificate store), verifies size and SHA-512 against the
+  release's `varia-update.json` (written by `scripts/update-manifest.mjs` in the release job), and installs, only after
+  Restart to Update's quit has closed the windows and stopped the backend (`src/main/update-install.ts`). The page gets
+  only `UpdateState` and asks with argument-free calls; it never names a URL or path. docs/updates.md describes it.
 - Settings live only in `src/shared/settings/` (pages in `pages.ts`, definitions per area, aggregated by `catalog.ts`;
   the Scripting page's entries come from `src/shared/scripting/options.ts`), with defaults, bounds, platforms and zod
   schemas built from the definitions. Only main reads and writes `settings.json` (`SettingsStore`: overrides only, read
@@ -293,12 +301,14 @@ pages, limits, error codes, display formats, benchmarks).
   as errors. LF line endings (`.editorconfig`, `.gitattributes`). Comments explain why, sparingly.
 - One `claude/<topic>` branch per PR, off `main` or, for a stacked PR, off the branch it builds on. Merge with merge
   commits (never squash or rebase), so stacked branches need no rebase; imperative commit subjects.
-- CI (`.github/workflows/ci.yml`): the Linux job (live SQL Server service, sandboxed smoke tests under xvfb) and the
-  Windows and macOS jobs run on every PR, drafts included (any base branch, so stacked PRs are tested), every push to
-  main and manual runs; the repository is public, so their minutes cost nothing. macOS skips the smoke tests until they
-  cover its window chrome. Once `npm run check` passes, the smoke suites and the benchmarks each run even when the other
-  failed first, so one run reports both (`tests/ci-workflow.test.ts`). `sql-matrix.yml` (manual runs only) repeats the
-  .NET checks against SQL Server 2017, 2019, 2022 and 2025.
+- CI (`.github/workflows/ci.yml`) runs on every PR, drafts included (any base branch, so stacked PRs are tested), every
+  push to main and manual runs; the repository is public, so its minutes cost nothing. Every job starts at once and builds
+  what it needs, so one failure hides nothing and the run takes as long as its longest job: `npm run check` on Linux,
+  Windows and macOS; the live SQL Server checks (`npm test` against a SQL Server service, then Kerberos) on Linux; the smoke
+  suites in shards on Linux (sandboxed, under xvfb, with SQL Server) and Windows (`scripts/smoke-shards.mjs`, which splits
+  `test:smoke` by the times in its `suiteSeconds`; give a new suite one); and the benchmarks (floors enforced on Linux
+  only). macOS skips the smoke tests until they cover its window chrome. `tests/ci-workflow.test.ts` holds this layout.
+  `sql-matrix.yml` (manual runs only) repeats the .NET checks against SQL Server 2017, 2019, 2022 and 2025.
 - No license has been chosen; do not add one.
 
 ## Product direction (agreed with the owner)

@@ -92,9 +92,6 @@ const commandBanner = () => errorBanner(page)
 const warningBanner = () => warningBannerOf(page)
 const focusInDialog = () => dialog().evaluate(element => element.contains(document.activeElement))
 const quickInput = () => quickInputOf(page)
-// The smoke window is hidden, so animation frames come once a second; nothing in the menus animates, so presses skip
-// Playwright's stability wait, and assertions still wait for each result.
-const fast = { force: true }
 const ordersPath = ['server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders']
 /** Connects from the main toolbar: Windows authentication for the stub, the test login for a real server. */
 async function connect(server) {
@@ -116,7 +113,7 @@ async function scriptFrom(path, ...items) {
   await (await revealExplorerRow(page, ...path)).click({ button: 'right', force: true })
   let level = explorerMenu()
   for (const [index, name] of items.entries()) {
-    await level.getByRole('menuitem', { name, exact: true }).click(fast)
+    await level.getByRole('menuitem', { name, exact: true }).click()
     level = menuNamed(name)
     if (index === items.length - 1) await expect(openMenus()).toHaveCount(0)
   }
@@ -144,9 +141,9 @@ const activeTabInView = () => page.evaluate(documentTabs => {
 /** Opens Script Table as › CREATE To on dbo.Orders by mouse, with Clipboard under the pointer. */
 async function openNestedScriptMenu() {
   await (await revealExplorerRow(page, ...ordersPath)).click({ button: 'right', force: true })
-  await explorerMenu().getByRole('menuitem', { name: 'Script Table as', exact: true }).click(fast)
-  await menuNamed('Script Table as').getByRole('menuitem', { name: 'CREATE To', exact: true }).click(fast)
-  await menuNamed('CREATE To').getByRole('menuitem', { name: 'Clipboard', exact: true }).hover(fast)
+  await explorerMenu().getByRole('menuitem', { name: 'Script Table as', exact: true }).click()
+  await menuNamed('Script Table as').getByRole('menuitem', { name: 'CREATE To', exact: true }).click()
+  await menuNamed('CREATE To').getByRole('menuitem', { name: 'Clipboard', exact: true }).hover()
   await expect(menuNamed('CREATE To').getByRole('menuitem', { name: 'Clipboard', exact: true })).toBeFocused()
 }
 
@@ -233,14 +230,14 @@ try {
   const orders = await explorerRow(page, ...ordersPath)
   await orders.click({ button: 'right', force: true })
   expect(await menuItemNames(explorerMenu())).toEqual(['Select Top 1000 Rows', 'Script Table as', 'Copy Name', 'Rename', 'Delete', 'Refresh'])
-  await explorerMenu().getByRole('menuitem', { name: 'Script Table as', exact: true }).click(fast)
+  await explorerMenu().getByRole('menuitem', { name: 'Script Table as', exact: true }).click()
   const scriptMenu = menuNamed('Script Table as')
   expect(await menuItemNames(scriptMenu)).toEqual(['CREATE To', 'ALTER To', 'CREATE OR ALTER To', 'DROP To', 'DROP And CREATE To', 'SELECT To', 'INSERT To', 'UPDATE To', 'DELETE To', 'EXECUTE To'])
   await expect(scriptMenu.getByRole('separator')).toHaveCount(2)
   expect(await menuItemNames(scriptMenu, { disabled: true })).toEqual(['ALTER To', 'CREATE OR ALTER To', 'EXECUTE To'])
   const alter = scriptMenu.getByRole('menuitem', { name: 'ALTER To', exact: true })
   await expect(alter).toHaveAttribute('aria-haspopup', 'menu')
-  await alter.hover(fast)
+  await alter.hover()
   await expect(alter).toBeFocused()
   // Longer than the hover delay, so a submenu would have opened by now.
   await page.waitForTimeout(700)
@@ -288,10 +285,10 @@ try {
   await expandExplorerPath(page, ...procedurePath.slice(0, -1))
   await (await explorerRow(page, ...procedurePath)).click({ button: 'right', force: true })
   expect(await menuItemNames(explorerMenu())).toEqual(['Modify', 'Script Stored Procedure as', 'Copy Name', 'Rename', 'Delete', 'Refresh'])
-  await explorerMenu().getByRole('menuitem', { name: 'Script Stored Procedure as', exact: true }).click(fast)
+  await explorerMenu().getByRole('menuitem', { name: 'Script Stored Procedure as', exact: true }).click()
   expect(await menuItemNames(menuNamed('Script Stored Procedure as'))).toEqual(['CREATE To', 'ALTER To', 'CREATE OR ALTER To', 'DROP To', 'DROP And CREATE To', 'EXECUTE To'])
   await page.keyboard.press('ArrowLeft')
-  await explorerMenu().getByRole('menuitem', { name: 'Modify', exact: true }).click(fast)
+  await explorerMenu().getByRole('menuitem', { name: 'Modify', exact: true }).click()
   await expect.poll(editorText).toBe('-- alter dbo.ShipOrder')
   expect((await stubCalls('scripting.script')).at(-1)).toMatchObject({ verb: 'alter', targets: [{ kind: 'procedure', name: 'ShipOrder' }] })
   console.log('Scripting checks: Script View as, Script Stored Procedure as with EXECUTE and without SELECT, and Modify opening ALTER.')
@@ -379,6 +376,8 @@ try {
   await scriptFrom(ordersPath, 'Script Table as', 'CREATE To', 'New Query Editor Window')
   await expect(tabs()).toHaveCount(strip + 5)
   await expect.poll(activeTabInView).toEqual({ overflows: true, inView: true })
+  // The new query's editor takes focus a frame after it opens; focus moving while Alt is down would cancel Alt+T.
+  await expect(textbox()).toBeFocused()
   await openOptions()
   await expect(option('Script USE <database>')).toHaveValue('false')
   expect(await weight('Script USE <database>')).toBe('700')
