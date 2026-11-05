@@ -28,7 +28,7 @@ import GoToLineDialog from './editor/GoToLineDialog'
 import RecoveryDialog from './RecoveryDialog'
 import ScriptingStatus from './scripting/ScriptingStatus'
 import BackendBanner from './BackendBanner'
-import OutputPane from './results/OutputPane'
+import OutputPane, { OutputAnnouncer, OutputViewSync, outputViewOf } from './results/OutputPane'
 import MemoryIndicator from './results/MemoryIndicator'
 import IndexStatus from './search/IndexStatus'
 import ObjectSearch from './search/ObjectSearch'
@@ -124,11 +124,15 @@ export default function App() {
   const statusBar = shell.queryStatusBar ? queryStatus : null
 
   function activate(id: string) { documents.activate(id) }
+  /** The output view the active query shows, whose panel revealing the output shows. */
+  const activeOutputView = useStableCallback(() => outputViewOf(workbench.results.getSnapshot()[documents.getSnapshot().activeId]))
   const disconnectServer = useStableCallback((id: string) => disconnect(id))
   // Stable for the app's lifetime; it reaches the dock workspace through its ref.
   const shellHost = useMemo<ShellHost>(() => ({
     disconnect: disconnectServer,
     reveal: (pane, options) => workspaceRef.current?.reveal(pane, options),
+    revealOutput: options => workspaceRef.current?.revealOutput(activeOutputView(), options),
+    toggleOutput: () => workspaceRef.current?.toggleOutput(activeOutputView()) ?? 'shown',
     manageLayouts: mode => workspaceRef.current?.manage(mode),
     resetLayout: () => workspaceRef.current?.reset(),
     flushLayout: async () => { await workspaceRef.current?.flush() },
@@ -149,7 +153,7 @@ export default function App() {
     dockPane: pane => workspaceRef.current?.dock(pane),
     dockPaneAt: (pane, side) => workspaceRef.current?.dockAt(pane, side),
     tabPaneWith: (pane, other) => workspaceRef.current?.tabWith(pane, other)
-  }), [disconnectServer, workbench])
+  }), [disconnectServer, workbench, activeOutputView])
   // Dragging a tab along the strip reorders it (Move Left and Move Right do it by key).
   const tabDrag = useTabDrag(() => documents.getSnapshot().documents.map(document => document.id), (id, index) => { documents.move(id, index) })
   // One callback for every query tab: the tab names its query.
@@ -178,7 +182,7 @@ export default function App() {
   useEffect(() => {
     const subscription = workbench.events.subscribe(event => {
       // As in SSMS, executing shows the results (even when Ctrl+R hid them); background tabs must not steal the editor.
-      if ((event.type === 'query.started' || event.type === 'query.finished') && event.tabId === documents.getSnapshot().activeId) workspaceRef.current?.reveal('output')
+      if ((event.type === 'query.started' || event.type === 'query.finished') && event.tabId === documents.getSnapshot().activeId) workspaceRef.current?.revealOutput(activeOutputView())
       if (event.type === 'documents.activated' || event.type === 'documents.closed') workspaceRef.current?.reveal('editor')
       // Execute on a query with no connection: connect first, as SSMS does, then run it.
       if (event.type === 'query.connectRequested') { setReconnecting(undefined); setPendingExecute(event.tabId); setPendingMonitor(false); setShowConnect(true) }
@@ -315,7 +319,11 @@ export default function App() {
           {isRestore && <RestoreDatabase key={active.id} documentId={active.id} />}
           {!statusTop && statusBar}
         </> : <EmptyState className="workspace-empty" icon="file-code" title="No open queries" actions={[{ label: 'New query', run: () => run('file.new'), primary: true }, { label: 'Open SQL file', run: () => run('file.open') }]} />}
-      </main>} output={<OutputPane tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />} />
+      </main>} results={<OutputPane pane="results" tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />}
+      messages={<OutputPane pane="messages" tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />}
+      plan={<OutputPane pane="plan" tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />} />
+    <OutputViewSync tabId={active.id} />
+    <OutputAnnouncer tabId={active.id} />
     {/* Neutral until work runs: tinted while the active query executes, or while the backend is down. */}
     <footer className="status-bar" aria-label="Status bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !liveConnection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}>
       <span className="backend-status" title={backendState.status === 'ready' ? ['SQL backend: ' + backendState.runtime, versions].filter(Boolean).join('\n') : undefined}><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}</span>

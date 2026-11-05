@@ -1,7 +1,7 @@
 import { createContext, forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
-import { DockviewDefaultTab, DockviewReact, themeDark, themeLight, type DockviewApi, type DockviewReadyEvent, type IDockviewPanelHeaderProps, type IDockviewPanelProps } from 'dockview-react'
-import { dockReference, emptyLayoutState, hidesHeader, paneIds, paneTitles, parseWorkspaceLayout, withoutHeaderState, type LayoutLoad, type LayoutState, type PaneId, type WorkspaceLayout } from '../../shared/layouts'
+import { DockviewDefaultTab, DockviewReact, themeDark, themeLight, type DockviewApi, type DockviewReadyEvent, type FloatingGroupDragContext, type IDockviewPanelHeaderProps, type IDockviewPanelProps } from 'dockview-react'
+import { dockReference, emptyLayoutState, hidesHeader, isOutputPane, outputIndex, outputPaneIds, paneIds, paneTitles, parseWorkspaceLayout, withoutHeaderState, type LayoutLoad, type LayoutState, type OutputPaneId, type PaneId, type WorkspaceLayout } from '../../shared/layouts'
 import type { ThemeType } from '../../shared/theme/types'
 import { DockingGuides } from './docking-guides'
 import Icon from './Icon'
@@ -27,6 +27,10 @@ function Pane({ api }: IDockviewPanelProps) {
   return <div className="dock-slot" ref={slot} />
 }
 const components = { workbench: Pane }
+// A floating panel may hang past the window's edges, as far as keeps this much of it, titlebar included, to grab.
+const floatingBounds = { minimumWidthWithinViewport: 120, minimumHeightWithinViewport: 60 }
+// Never past the top edge, where its titlebar would go: it hangs off the left, right and bottom only.
+const keepTitlebar = ({ proposed }: FloatingGroupDragContext) => ({ top: Math.max(0, proposed.top), left: proposed.left })
 // Dockview splits className, so `varia-dock` lands on its shell next to the theme class (see styles.css).
 const dockThemes = {
   dark: { ...themeDark, name: 'varia-dark', className: 'dockview-theme-dark varia-dock' },
@@ -41,11 +45,14 @@ function EmptyWorkspace() {
 }
 function PaneTab(props: IDockviewPanelHeaderProps) {
   const commands = useContext(PaneCommandContext)!, element = useRef<HTMLDivElement>(null)
+  const { results, documents } = useWorkbench()
+  // An output panel's dock tab chosen by the user is the active query's view, as its toolbar tab is.
+  const choose = () => { const id = props.api.id, tabId = documents.getSnapshot().activeId; if (isOutputPane(id) && tabId) results.setView(tabId, id) }
   // The tab's menu (Float or Dock, and Close) replaces Dockview's own, which shows only when it has items.
   const menuTarget = useMenuTarget<HTMLDivElement>(() => ({ kind: 'dockTab', pane: props.api.id as PaneId, floating: props.api.location.type === 'floating' }))
   const ref = useCallback((node: HTMLDivElement | null) => { element.current = node; menuTarget(node) }, [menuTarget])
   useEffect(() => { element.current?.querySelector('button')?.setAttribute('aria-label', 'Close ' + paneTitles[props.api.id as PaneId]) }, [props.api.id])
-  return <div ref={ref} className="pane-tab" data-pane-tab={props.api.id}><DockviewDefaultTab {...props}
+  return <div ref={ref} className="pane-tab" data-pane-tab={props.api.id} onClick={event => { if (!(event.target as HTMLElement).closest('button')) choose() }}><DockviewDefaultTab {...props}
     closeActionOverride={() => commands.close(props.api.id as PaneId)} title="Drag to dock; Ctrl-drag to float; Ctrl-double-click to toggle docking"
     onDoubleClick={event => { if (event.ctrlKey && !(event.target as HTMLElement).closest('button')) commands.toggle(props.api.id as PaneId) }} /></div>
 }
@@ -67,6 +74,13 @@ export interface WorkspaceHandle {
   dockAt(id: PaneId, side: DockSide): void
   /** Moves a panel into another panel's group, as a tab beside it. */
   tabWith(id: PaneId, other: PaneId): void
+  /**
+   * Shows the query output: `view`'s panel if it is open, else an output panel already showing, else one open; with every
+   * output panel closed, it reopens the ones Ctrl+R hid (all three, if it hid none).
+   */
+  revealOutput(view: OutputPaneId | undefined, options?: { focus?: boolean }): void
+  /** SSMS's Ctrl+R: closes every open output panel while one shows, else reveals the output. */
+  toggleOutput(view: OutputPaneId | undefined): 'hidden' | 'shown'
   flush(): Promise<void>
 }
 
@@ -101,9 +115,12 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
   const dialog = useRef<HTMLElement | null>(null)
   const root = useRef<HTMLDivElement>(null)
   const parking = useRef<HTMLDivElement>(null)
-  const [paneHosts] = useState<PaneHosts>(() => ({ parking, hosts: { explorer: paneHost('explorer'), editor: paneHost('editor'), output: paneHost('output') } }))
+  const [paneHosts] = useState<PaneHosts>(() => ({ parking, hosts: Object.fromEntries(paneIds.map(id => [id, paneHost(id)])) as unknown as Record<PaneId, HTMLElement> }))
   const guides = useRef<DockingGuides | null>(null)
-  const returnLocations = useRef<Partial<Record<PaneId, { reference?: PaneId; position: 'center' | 'left' | 'right' | 'top' | 'bottom'; edge?: boolean; width: number; height: number }>>>({})
+  // `index` is the tab's place in its group, for a panel closed beside others.
+  const returnLocations = useRef<Partial<Record<PaneId, { reference?: PaneId; position: 'center' | 'left' | 'right' | 'top' | 'bottom'; index?: number; edge?: boolean; width: number; height: number }>>>({})
+  // The output panels Ctrl+R last closed, and which of them showed in their groups, for the Ctrl+R that brings them back.
+  const hiddenOutput = useRef<{ ids: OutputPaneId[]; shown: OutputPaneId[] } | null>(null)
   useLayoutEffect(() => { for (const host of Object.values(paneHosts.hosts)) if (!host.parentElement) parking.current?.append(host) }, [paneHosts])
 
   function rememberDock(id: PaneId) {
@@ -124,7 +141,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     const edge = position !== 'center' && (position === 'left' || position === 'right'
       ? Math.abs(box.y - workspace.y) < 2 && Math.abs(box.bottom - workspace.bottom) < 2
       : Math.abs(box.x - workspace.x) < 2 && Math.abs(box.right - workspace.right) < 2)
-    returnLocations.current[id] = { reference: reference?.id as PaneId | undefined, position, edge, width: box.width, height: box.height }
+    returnLocations.current[id] = { reference: reference?.id as PaneId | undefined, position, ...sibling ? { index: panel.group.panels.indexOf(panel) } : {}, edge, width: box.width, height: box.height }
   }
   function close(id: PaneId) { rememberDock(id); apiRef.current?.getPanel(id)?.api.close() }
   function location(id: PaneId): PaneLocation {
@@ -143,12 +160,15 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
   }
   function tabWith(id: PaneId, other: PaneId) {
     const panel = apiRef.current?.getPanel(id), target = apiRef.current?.getPanel(other)
-    if (panel && target && id !== other) panel.api.moveTo({ group: target.group, position: 'center' })
+    if (!panel || !target || id === other) return
+    // An output panel goes among the group's output panels in their order, Results, Messages, Execution plan; others go last.
+    const index = isOutputPane(id) ? outputIndex(id, target.group.panels.map(item => item.id).filter(item => item !== id)) : undefined
+    panel.api.moveTo({ group: target.group, position: 'center', ...index !== undefined ? { index } : {} })
   }
   /** Hides the header of each docked group that holds one panel, unless Window › Panel Tabs shows them; the panel's own header has its ⋯ menu. */
   function syncHeaders(api: DockviewApi) {
     for (const group of api.groups) {
-      const hidden = hidesHeader({ location: group.api.location.type, panels: group.panels.length }, panelTabsRef.current)
+      const hidden = hidesHeader({ location: group.api.location.type, panels: group.panels.map(panel => panel.id) }, panelTabsRef.current)
       // Dockview caches the header's height for the content below it; relayout measures it again at once rather than a frame later.
       if (group.header.hidden !== hidden) { group.header.hidden = hidden; group.relayout() }
     }
@@ -162,8 +182,8 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     if (previous?.edge) {
       const group = apiRef.current!.addGroup({ direction: previous.position === 'top' ? 'above' : previous.position === 'bottom' ? 'below' : previous.position === 'center' ? 'right' : previous.position })
       panel.api.moveTo({ group, position: 'center' })
-    } else if (reference?.api.location.type === 'grid') panel.api.moveTo({ group: reference.group, position: previous!.position })
-    else panel.group.api.moveTo({ position: id === 'explorer' ? 'left' : id === 'output' ? 'bottom' : 'right' })
+    } else if (reference?.api.location.type === 'grid') panel.api.moveTo({ group: reference.group, position: previous!.position, ...previous!.position === 'center' && previous!.index !== undefined ? { index: Math.min(previous!.index, reference.group.panels.length) } : {} })
+    else panel.group.api.moveTo({ position: id === 'explorer' ? 'left' : isOutputPane(id) ? 'bottom' : 'right' })
     if (previous && previous.position !== 'center') panel.api.setSize({ width: previous.width, height: previous.height })
   }
   function reveal(id: PaneId, options?: { focus?: boolean }) {
@@ -178,10 +198,17 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
       const previous = returnLocations.current[id], preferred = previous?.reference && api.getPanel(previous.reference)
       const explorer = api.getPanel('explorer')
       const fillEditor = id === 'editor' && !previous && explorer?.api.location.type === 'grid' && Math.abs(explorer.group.api.width - api.width) < 2
-      const reference = preferred ?? api.getPanel('editor') ?? api.panels.find(item => item.api.location.type === 'grid')
-      const position = reference ? { referencePanel: reference.id, direction: previous?.position === 'center' ? 'within' as const : previous?.position === 'top' ? 'above' as const : previous?.position === 'bottom' ? 'below' as const : previous?.position ?? (id === 'explorer' ? 'left' as const : id === 'output' ? 'below' as const : 'right' as const) } : undefined
+      // An output panel with nowhere to return to joins an open output panel docked in the grid, as a tab.
+      const outputPeer = !preferred && isOutputPane(id) ? outputPaneIds.map(other => api.getPanel(other)).find(other => other?.api.location.type === 'grid') : undefined
+      const reference = preferred || outputPeer || api.getPanel('editor') || api.panels.find(item => item.api.location.type === 'grid')
+      const direction = outputPeer || previous?.position === 'center' ? 'within' as const : previous?.position === 'top' ? 'above' as const : previous?.position === 'bottom' ? 'below' as const
+        : previous?.position ?? (id === 'explorer' ? 'left' as const : isOutputPane(id) ? 'below' as const : 'right' as const)
+      // Within a group, back at its tab's place, or among output panels at its place in Results, Messages, Execution plan.
+      const index = !reference || direction !== 'within' ? undefined : previous?.index !== undefined ? Math.min(previous.index, reference.group.panels.length)
+        : outputPeer && isOutputPane(id) ? outputIndex(id, reference.group.panels.map(item => item.id)) : undefined
+      const position = reference ? { referencePanel: reference.id, direction, ...index !== undefined ? { index } : {} } : undefined
       panel = api.addPanel({ id, title: paneTitles[id], component: 'workbench', renderer: 'always', minimumWidth: id === 'editor' ? 320 : 200, minimumHeight: id === 'editor' ? 180 : 100,
-        initialWidth: previous?.width ?? (id === 'explorer' ? 278 : undefined), initialHeight: previous?.height ?? (id === 'output' ? 240 : undefined), position })
+        initialWidth: previous?.width ?? (id === 'explorer' ? 278 : undefined), initialHeight: previous?.height ?? (isOutputPane(id) ? 240 : undefined), position })
       if (previous?.edge) panel.group.api.moveTo({ position: previous.position })
       if (fillEditor) explorer?.api.setSize({ width: 278 })
     }
@@ -202,6 +229,42 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     }
     // A panel that was closed mounts its content on a later frame.
     if (!attempt()) requestAnimationFrame(() => { attempt() })
+  }
+  /** Showing as `publishVisibility` means it: its tab selected in a visible group, not behind another maximized group. */
+  function showing(api: DockviewApi, id: PaneId) {
+    const panel = api.getPanel(id)
+    return !!panel && panel.group.activePanel?.id === id && panel.group.api.isVisible && (!api.hasMaximizedGroup() || panel.group.api.isMaximized())
+  }
+  function revealOutput(view: OutputPaneId | undefined, options?: { focus?: boolean }) {
+    const api = apiRef.current
+    if (!api || !ready.current) { reveal(view ?? 'results', options); return }
+    if (view && api.getPanel(view)) { reveal(view, options); return }
+    const open = outputPaneIds.filter(id => api.getPanel(id))
+    const target = open.find(id => showing(api, id)) ?? open[0]
+    if (target) { hiddenOutput.current = null; reveal(target, options); return }
+    const hidden = hiddenOutput.current
+    hiddenOutput.current = null
+    // Reopened in the reverse of the order they closed in, so each returns beside the one it was closed beside.
+    for (const id of [...hidden?.ids ?? outputPaneIds].reverse()) reveal(id)
+    for (const id of hidden?.shown ?? []) selectOutput(id)
+    const shown = view && api.getPanel(view) ? view : (hidden?.shown[0] ?? 'results')
+    if (api.getPanel(shown)) reveal(shown, options)
+  }
+  function toggleOutput(view: OutputPaneId | undefined): 'hidden' | 'shown' {
+    const api = apiRef.current
+    if (!api || !outputPaneIds.some(id => showing(api, id))) { revealOutput(view); return 'shown' }
+    const ids = outputPaneIds.filter(id => api.getPanel(id)), shown = ids.filter(id => api.getPanel(id)!.group.activePanel?.id === id)
+    for (const id of ids) close(id)
+    hiddenOutput.current = { ids, shown }
+    return 'hidden'
+  }
+  /** Shows an output panel's tab in its group when the group shows another output panel, without activating the group. */
+  function selectOutput(id: OutputPaneId) {
+    const panel = apiRef.current?.getPanel(id), current = panel?.group.activePanel
+    if (!panel || !current || current.id === id || !isOutputPane(current.id)) return
+    panel.group.model.openPanel(panel, { skipSetGroupActive: true })
+    publishVisibility(apiRef.current!)
+    changed()
   }
 
   function cancelTimer() { if (timer.current) clearTimeout(timer.current); timer.current = null }
@@ -255,17 +318,18 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
   useImperativeHandle(ref, () => ({ manage, flush, reset: () => {
     if (!defaultRef.current) return
     try { apply(defaultRef.current) } catch (error) { setError(message(error)) }
-  }, reveal, close, location, float, dock, dockAt, tabWith }))
+  }, reveal, close, location, float, dock, dockAt, tabWith, revealOutput, toggleOutput }))
   /** Showing: open, its tab selected in a visible group, and not behind another maximized group. */
   function publishVisibility(api: DockviewApi) {
-    const showing = (id: PaneId) => {
-      const panel = api.getPanel(id)
-      return !!panel && panel.group.activePanel?.id === id && panel.group.api.isVisible && (!api.hasMaximizedGroup() || panel.group.api.isMaximized())
-    }
     const where = (id: PaneId): PaneLocation => { const panel = api.getPanel(id); return !panel ? 'closed' : panel.api.location.type === 'floating' ? 'floating' : 'grid' }
-    shown.set({ explorer: showing('explorer'), editor: showing('editor'), output: showing('output') }, { explorer: where('explorer'), editor: where('editor'), output: where('output') })
+    const peers = (id: OutputPaneId) => api.getPanel(id)?.group.panels.map(panel => panel.id).filter(isOutputPane) ?? []
+    const each = <T,>(value: (id: PaneId) => T) => Object.fromEntries(paneIds.map(id => [id, value(id)])) as Record<PaneId, T>
+    shown.set(each(id => showing(api, id)), each(where), { results: peers('results'), messages: peers('messages'), plan: peers('plan') })
   }
-  useEffect(() => () => { cancelTimer(); subscription.current?.dispose(); guides.current?.dispose(); ready.current = false; apiRef.current = null }, [])
+  useEffect(() => {
+    const selector = shown.bindSelector(selectOutput)
+    return () => { selector.dispose(); cancelTimer(); subscription.current?.dispose(); guides.current?.dispose(); ready.current = false; apiRef.current = null }
+  }, [])
   useEffect(() => { if (apiRef.current) syncHeaders(apiRef.current) }, [panelTabs])
   useEffect(() => {
     if (!showManager) return
@@ -288,7 +352,10 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
       if (apiRef.current !== api) return
       api.addPanel({ id: 'editor', title: paneTitles.editor, component: 'workbench', renderer: 'always', minimumWidth: 320, minimumHeight: 180 })
       api.addPanel({ id: 'explorer', title: paneTitles.explorer, component: 'workbench', renderer: 'always', minimumWidth: 200, minimumHeight: 100, initialWidth: 278, position: { referencePanel: 'editor', direction: 'left' } })
-      api.addPanel({ id: 'output', title: paneTitles.output, component: 'workbench', renderer: 'always', minimumWidth: 200, minimumHeight: 100, initialHeight: Math.max(180, Math.round(api.height * .34)), position: { referencePanel: 'editor', direction: 'below' } })
+      // The output panels share one group below the editor, Results selected; their toolbar tabs between them.
+      api.addPanel({ id: 'results', title: paneTitles.results, component: 'workbench', renderer: 'always', minimumWidth: 200, minimumHeight: 100, initialHeight: Math.max(180, Math.round(api.height * .34)), position: { referencePanel: 'editor', direction: 'below' } })
+      for (const id of ['messages', 'plan'] as const) api.addPanel({ id, title: paneTitles[id], component: 'workbench', renderer: 'always', minimumWidth: 200, minimumHeight: 100, inactive: true, position: { referencePanel: 'results', direction: 'within' } })
+      api.getPanel('results')!.api.setActive()
       api.getPanel('editor')!.api.setActive()
       defaultRef.current = snapshot()
       update(loaded.state)
@@ -324,7 +391,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
       <div hidden ref={parking} />
       {paneIds.map(id => createPortal(panes[id], paneHosts.hosts[id], id))}
       <div className="workbench" ref={root}><DockviewReact className="dock-workbench" theme={dockThemes[themeType]} components={components} defaultTabComponent={PaneTab} watermarkComponent={EmptyWorkspace}
-        defaultRenderer="always" floatingGroupBounds="boundedWithinViewport" floatingGroupDragHandle="titlebar"
+        defaultRenderer="always" floatingGroupBounds={floatingBounds} transformFloatingGroupDrag={keepTitlebar} floatingGroupDragHandle="titlebar"
         dndStrategy="pointer" proportionalLayout={false} onReady={onReady} /></div>
     </RestoredContext.Provider></PaneCommandContext.Provider></PaneContext.Provider>
     {showManager && <div className="modal-backdrop" onKeyDown={event => {

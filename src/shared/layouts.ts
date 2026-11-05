@@ -1,14 +1,29 @@
 import { z } from 'zod'
 import type { SerializedDockview } from 'dockview-react'
 
-export const paneIds = ['explorer', 'editor', 'output'] as const
+export const paneIds = ['explorer', 'editor', 'results', 'messages', 'plan'] as const
 export type PaneId = typeof paneIds[number]
-export const paneTitles: Record<PaneId, string> = { explorer: 'Object Explorer', editor: 'Query editor', output: 'Query output' }
+/** The panels that show the active query's output; by default they share one group, tabbed, below the editor. */
+export const outputPaneIds = ['results', 'messages', 'plan'] as const
+export type OutputPaneId = typeof outputPaneIds[number]
+export const isOutputPane = (id: string): id is OutputPaneId => (outputPaneIds as readonly string[]).includes(id)
+/**
+ * Where an output panel goes among a group's tabs (`tabs`, without it): after the output panels that come before it in
+ * Results, Messages, Execution plan, else before those that follow it; undefined (last) when the group holds none.
+ */
+export function outputIndex(id: OutputPaneId, tabs: readonly string[]): number | undefined {
+  const order = (tab: string) => (outputPaneIds as readonly string[]).indexOf(tab)
+  const before = tabs.reduce((last, tab, index) => isOutputPane(tab) && order(tab) < order(id) ? index : last, -1)
+  const after = tabs.findIndex(tab => isOutputPane(tab) && order(tab) > order(id))
+  return before >= 0 ? before + 1 : after >= 0 ? after : undefined
+}
+export const paneTitles: Record<PaneId, string> = { explorer: 'Object Explorer', editor: 'Query editor', results: 'Results', messages: 'Messages', plan: 'Execution plan' }
 export type WorkspaceLayout = SerializedDockview
 export interface SavedLayout { id: string; name: string; layout: WorkspaceLayout }
-export interface LayoutState { version: 1; current: WorkspaceLayout | null; saved: SavedLayout[] }
+/** Version 2 split version 1's one Query output panel (`output`) into Results, Messages and Execution plan. */
+export interface LayoutState { version: 2; current: WorkspaceLayout | null; saved: SavedLayout[] }
 export interface LayoutLoad { state: LayoutState; warning?: string }
-export const emptyLayoutState = (): LayoutState => ({ version: 1, current: null, saved: [] })
+export const emptyLayoutState = (): LayoutState => ({ version: 2, current: null, saved: [] })
 export const maxLayoutFileBytes = 200_000
 export const maxLayoutStateBytes = 1_000_000
 
@@ -17,7 +32,7 @@ const maximum = dimension.nullish().transform(value => value ?? undefined)
 const identifier = z.string().min(1).max(64).refine(value => !['__proto__', 'constructor', 'prototype'].includes(value))
 const constraints = z.object({ minimumWidth: dimension.optional(), minimumHeight: dimension.optional(), maximumWidth: maximum, maximumHeight: maximum }).strict()
 const groupSchema = z.object({
-  id: identifier, views: z.array(z.enum(paneIds)).min(1).max(3), activeView: z.enum(paneIds).optional(),
+  id: identifier, views: z.array(z.enum(paneIds)).min(1).max(paneIds.length), activeView: z.enum(paneIds).optional(),
   hideHeader: z.boolean().optional(), locked: z.union([z.boolean(), z.literal('no-drop-target')]).optional(),
   headerPosition: z.enum(['top', 'bottom', 'left', 'right']).optional(), skipSetActive: z.boolean().optional(),
   constraints: constraints.optional(), initialWidth: dimension.optional(), initialHeight: dimension.optional()
@@ -26,7 +41,7 @@ type Group = z.infer<typeof groupSchema>
 type Node = { type: 'leaf'; data: Group; size?: number; visible?: boolean } | { type: 'branch'; data: Node[]; size?: number; visible?: boolean }
 const nodeSchema: z.ZodType<Node> = z.lazy(() => z.discriminatedUnion('type', [
   z.object({ type: z.literal('leaf'), data: groupSchema, size: dimension.optional(), visible: z.boolean().optional() }).strict(),
-  z.object({ type: z.literal('branch'), data: z.array(nodeSchema).max(3), size: dimension.optional(), visible: z.boolean().optional() }).strict()
+  z.object({ type: z.literal('branch'), data: z.array(nodeSchema).max(paneIds.length), size: dimension.optional(), visible: z.boolean().optional() }).strict()
 ]))
 const gridSchema = z.object({ root: nodeSchema, width: dimension, height: dimension, orientation: z.enum(['HORIZONTAL', 'VERTICAL']) }).strict()
 const panelSchema = z.object({
@@ -39,10 +54,10 @@ const positionSchema = z.object({ width: dimension.min(1), height: dimension.min
 }).strict().refine(value => (value.left === undefined) !== (value.right === undefined) && (value.top === undefined) !== (value.bottom === undefined), 'A floating panel needs one horizontal and one vertical anchor.')
 
 const layoutSchema = z.object({
-  grid: gridSchema, panels: z.object({ explorer: panelSchema.optional(), editor: panelSchema.optional(), output: panelSchema.optional() }).strict(),
+  grid: gridSchema, panels: z.object({ explorer: panelSchema.optional(), editor: panelSchema.optional(), results: panelSchema.optional(), messages: panelSchema.optional(), plan: panelSchema.optional() }).strict(),
   activeGroup: identifier.optional(),
   floatingGroups: z.array(z.object({ data: groupSchema.optional(), grid: gridSchema.optional(), position: positionSchema }).strict()
-    .refine(value => (value.data === undefined) !== (value.grid === undefined), 'A floating group needs exactly one layout.')).max(3).optional()
+    .refine(value => (value.data === undefined) !== (value.grid === undefined), 'A floating group needs exactly one layout.')).max(paneIds.length).optional()
 }).strict().superRefine((layout, context) => {
   const seen = new Set<string>()
   const groups = new Set<string>()
@@ -98,9 +113,41 @@ export function parseWorkspaceLayout(value: unknown): WorkspaceLayout {
   }
   return JSON.parse(JSON.stringify(parsed.data)) as WorkspaceLayout
 }
+const legacyPaneIds: ReadonlySet<unknown> = new Set(['explorer', 'editor', 'output'])
+/**
+ * A version 1 layout as version 2 reads it: its Query output panel becomes Results, Messages and Execution plan, tabbed in
+ * its place (in its group, docked or floating) with Results selected, keeping its constraints. The result is then
+ * validated as any version 2 layout is.
+ */
+export function migrateLayoutV1(value: unknown): unknown {
+  bounded(value, maxLayoutFileBytes)
+  const copy = JSON.parse(JSON.stringify(value) ?? 'null') as Record<string, unknown> | null
+  if (!copy || typeof copy !== 'object') return copy
+  const group = (data: unknown) => {
+    const item = data as { views?: unknown; activeView?: unknown } | undefined
+    if (!item || typeof item !== 'object' || !Array.isArray(item.views)) return
+    if (item.views.some(id => !legacyPaneIds.has(id))) throw new Error('Invalid or unsupported workspace layout: a version 1 layout names an unknown panel.')
+    item.views = item.views.flatMap(id => id === 'output' ? [...outputPaneIds] : [id])
+    if (item.activeView === 'output') item.activeView = 'results'
+  }
+  const node = (value: unknown): void => {
+    const item = value as { type?: unknown; data?: unknown } | undefined
+    if (item?.type === 'leaf') group(item.data)
+    else if (item?.type === 'branch' && Array.isArray(item.data)) item.data.forEach(node)
+  }
+  node((copy.grid as { root?: unknown } | undefined)?.root)
+  for (const floating of Array.isArray(copy.floatingGroups) ? copy.floatingGroups as ({ data?: unknown; grid?: { root?: unknown } } | null)[] : []) { group(floating?.data); node(floating?.grid?.root) }
+  const panels = copy.panels as Record<string, unknown> | undefined
+  if (panels && typeof panels === 'object' && Object.hasOwn(panels, 'output')) {
+    const { output, ...rest } = panels, legacy = output as { id?: unknown } | null
+    copy.panels = { ...rest, ...Object.fromEntries(outputPaneIds.map(id => [id, legacy && typeof legacy === 'object' ? { ...legacy, id: legacy.id === 'output' ? id : legacy.id } : legacy])) }
+  }
+  return copy
+}
+const layoutVersion = z.union([z.literal(1), z.literal(2)])
 export function parseLayoutState(value: unknown): LayoutState {
   bounded(value, maxLayoutStateBytes)
-  const parsed = z.object({ version: z.literal(1), current: z.unknown(), saved: z.array(z.object({
+  const parsed = z.object({ version: layoutVersion, current: z.unknown(), saved: z.array(z.object({
     id: z.uuid(), name: z.string().trim().min(1).max(64), layout: z.unknown()
   }).strict()).max(20) }).strict().parse(value)
   const ids = new Set<string>(), names = new Set<string>()
@@ -108,20 +155,23 @@ export function parseLayoutState(value: unknown): LayoutState {
     if (ids.has(saved.id) || names.has(saved.name.toLowerCase())) throw new Error('Saved layout names and IDs must be unique.')
     ids.add(saved.id); names.add(saved.name.toLowerCase())
   }
-  return { version: 1, current: parsed.current === null ? null : parseWorkspaceLayout(parsed.current),
-    saved: parsed.saved.map(saved => ({ ...saved, layout: parseWorkspaceLayout(saved.layout) })) }
+  const read = (layout: unknown) => parseWorkspaceLayout(parsed.version === 1 ? migrateLayoutV1(layout) : layout)
+  return { version: 2, current: parsed.current === null ? null : read(parsed.current), saved: parsed.saved.map(saved => ({ ...saved, layout: read(saved.layout) })) }
 }
-export function layoutFile(layout: WorkspaceLayout) { return { kind: 'varia-workspace-layout', version: 1, layout: parseWorkspaceLayout(layout) } }
+export function layoutFile(layout: WorkspaceLayout) { return { kind: 'varia-workspace-layout', version: 2, layout: parseWorkspaceLayout(layout) } }
 export function parseLayoutFile(value: unknown): WorkspaceLayout {
   bounded(value, maxLayoutFileBytes)
-  const file = z.object({ kind: z.literal('varia-workspace-layout'), version: z.literal(1), layout: z.unknown() }).strict().safeParse(value)
+  const file = z.object({ kind: z.literal('varia-workspace-layout'), version: layoutVersion, layout: z.unknown() }).strict().safeParse(value)
   if (!file.success) throw new Error('Invalid or unsupported Varia layout file.')
-  return parseWorkspaceLayout(file.data.layout)
+  return parseWorkspaceLayout(file.data.version === 1 ? migrateLayoutV1(file.data.layout) : file.data.layout)
 }
 
-/** Whether a dock group hides its header (its tabs): a docked group with one panel does, unless Window › Panel Tabs is on. */
-export function hidesHeader(group: { readonly location: string; readonly panels: number }, panelTabs: boolean): boolean {
-  return !panelTabs && group.location === 'grid' && group.panels === 1
+/**
+ * Whether a dock group hides its header (its tabs), unless Window › Panel Tabs is on: a docked group with one panel does,
+ * and so does a docked group of output panels only, whose own toolbar tabs between them.
+ */
+export function hidesHeader(group: { readonly location: string; readonly panels: readonly string[] }, panelTabs: boolean): boolean {
+  return !panelTabs && group.location === 'grid' && group.panels.length > 0 && (group.panels.length === 1 || group.panels.every(isOutputPane))
 }
 /**
  * The panel a ⋯ menu's Dock Left/Right/Top/Bottom docks `id` beside: the editor (the explorer, for the editor), else any

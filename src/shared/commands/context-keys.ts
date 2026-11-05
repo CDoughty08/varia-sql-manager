@@ -45,7 +45,7 @@ export const contextKeys = {
   editorTextFocus: { type: 'boolean', scope: 'focus', description: "The query editor's text has focus." },
   inputFocus: { type: 'boolean', scope: 'focus', description: 'Focus is on an input, text area, select, or editable element other than the editor text. The find widget\'s inputs count.' },
   textInputFocus: { type: 'boolean', scope: 'focus', description: '`editorTextFocus || inputFocus`.' },
-  activePanel: { type: 'enum', scope: 'focus', values: ['explorer', 'editor', 'output', ''], description: "The pane that holds focus: Object Explorer, the query editor, Query Output, or '' for none." },
+  activePanel: { type: 'enum', scope: 'focus', values: ['explorer', 'editor', 'output', ''], description: "The pane that holds focus: Object Explorer, the query editor, an output panel (Results, Messages or Execution plan), or '' for none." },
   outputGridFocus: { type: 'boolean', scope: 'focus', description: 'Focus is in a results grid, which copies its selected cells rather than text.' },
   designerFocus: { type: 'boolean', scope: 'focus', description: "Focus is in the active table designer; activePanel is then 'editor'." },
   queryBarFocus: { type: 'boolean', scope: 'focus', description: "Focus is in the active query's bar (Execute, Cancel and its server and database lists); activePanel is then 'editor'." },
@@ -91,7 +91,7 @@ export const contextKeys = {
   queryRunning: { type: 'boolean', scope: 'state', description: 'The active query is running.' },
   hasResults: { type: 'boolean', scope: 'state', description: 'The active query has result sets, and they were not closed (Close Results) or lost with a run the SQL backend stopped.' },
   anyDocumentConnected: { type: 'boolean', scope: 'state', description: "Some open query's server is connected." },
-  outputPaneVisible: { type: 'boolean', scope: 'state', description: 'The Query Output panel is open and showing: its tab is selected, and no other panel is maximized.' },
+  outputPaneVisible: { type: 'boolean', scope: 'state', description: 'An output panel (Results, Messages or Execution plan) is open and showing: its tab is selected, and no other panel is maximized.' },
   panelTabsVisible: { type: 'boolean', scope: 'state', description: 'Window › Panel Tabs is on: a panel alone in its dock group shows its tab.' },
   editorWordWrap: { type: 'boolean', scope: 'state', description: 'Word wrap is on in the query editor.' },
   editorWhitespace: { type: 'boolean', scope: 'state', description: 'View White Space is on in the query editor.' },
@@ -160,7 +160,7 @@ export const contextKeys = {
   },
   explorerServerLinux: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for a node on SQL Server on Linux.' },
   outputView: { type: 'enum', scope: 'target', menu: 'output.context', values: ['grid', 'messages', ''], description: 'The Query Output view the menu is for: a results grid or the messages.' },
-  pane: { type: 'enum', scope: 'target', menu: 'dockTab.context', values: ['explorer', 'editor', 'output', ''], description: "The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, or Query Output." },
+  pane: { type: 'enum', scope: 'target', menu: 'dockTab.context', values: ['explorer', 'editor', 'results', 'messages', 'plan', ''], description: "The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, Results, Messages, or Execution plan." },
   paneFloating: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel the menu is for is floating.' }
 } as const satisfies Record<string, ContextKeyDeclaration>
 

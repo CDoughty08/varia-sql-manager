@@ -436,8 +436,8 @@ try {
   // in a shown window, where the hidden menu's accelerators work.
   await page.evaluate(() => { window.variaSentinel = 42 })
   await typeSql('SELECT 2;')
-  // Alone in its group, the output panel shows no dock tab; its ⋯ button shows while it does.
-  const outputTab = paneTab(page, 'output'), outputButton = paneMenuButton(page, 'output')
+  // In a group of output panels only, Results shows no dock tab (its toolbar tabs between them); its ⋯ button shows while it does.
+  const outputTab = paneTab(page, 'results'), outputButton = paneMenuButton(page, 'results')
   await expect(outputButton).toBeVisible()
   await expect(outputTab).toBeHidden()
   await expect.poll(() => nativeItem('view.toggleResultsPane')).toMatchObject({ checked: true })
@@ -556,7 +556,7 @@ try {
   const panelMenu = menu('Panel tab')
   await expect(outputButton).toHaveAttribute('aria-expanded', 'false')
   await outputButton.click()
-  await expect.poll(() => menuItemNames(panelMenu)).toEqual(['Dock Left', 'Dock Right', 'Dock Top', 'Dock Bottom', 'Tab with Object Explorer', 'Tab with Query Editor', 'Float', 'Close', 'Show Panel Tabs'])
+  await expect.poll(() => menuItemNames(panelMenu)).toEqual(['Dock Left', 'Dock Right', 'Dock Top', 'Dock Bottom', 'Tab with Object Explorer', 'Tab with Query Editor', 'Tab with Messages', 'Tab with Execution Plan', 'Float', 'Close', 'Show Panel Tabs'])
   await expect(outputButton).toHaveAttribute('aria-expanded', 'true')
   await expect(activeMenuItem(page)).toHaveCount(0)
   await expect(page.locator(part.menuLayer)).toHaveAttribute('data-mnemonics', 'hidden')
@@ -579,7 +579,7 @@ try {
   await expect.poll(() => nativeItem('window.togglePanelTabs')).toMatchObject({ checked: true })
   const rightClickOutputTab = () => outputTab.click({ button: 'right' })
   await rightClickOutputTab()
-  await expect.poll(() => menuItemNames(panelMenu)).toEqual(['Dock Left', 'Dock Right', 'Dock Top', 'Dock Bottom', 'Tab with Object Explorer', 'Tab with Query Editor', 'Float', 'Close', 'Show Panel Tabs'])
+  await expect.poll(() => menuItemNames(panelMenu)).toEqual(['Dock Left', 'Dock Right', 'Dock Top', 'Dock Bottom', 'Tab with Object Explorer', 'Tab with Query Editor', 'Tab with Messages', 'Tab with Execution Plan', 'Float', 'Close', 'Show Panel Tabs'])
   // The tab's outline shows on every side, although the output tab has splitters above it and to its left.
   const outlineShows = async () => page.locator('.dv-tab[data-menu-target]').evaluate((tab, menuBox) => {
     const box = tab.getBoundingClientRect(), style = getComputedStyle(tab), inset = -parseFloat(style.outlineOffset) - parseFloat(style.outlineWidth) + 0.5
@@ -613,7 +613,7 @@ try {
   await panelMenu.getByRole('menuitem', { name: 'Float', exact: true }).click()
   await expect(page.locator('.dv-floating-titlebar')).toHaveCount(1)
   await rightClickOutputTab()
-  await expect.poll(() => menuItemNames(panelMenu)).toEqual(['Dock Left', 'Dock Right', 'Dock Top', 'Dock Bottom', 'Tab with Object Explorer', 'Tab with Query Editor', 'Dock', 'Close', 'Show Panel Tabs'])
+  await expect.poll(() => menuItemNames(panelMenu)).toEqual(['Dock Left', 'Dock Right', 'Dock Top', 'Dock Bottom', 'Tab with Object Explorer', 'Tab with Query Editor', 'Tab with Messages', 'Tab with Execution Plan', 'Dock', 'Close', 'Show Panel Tabs'])
   await panelMenu.getByRole('menuitem', { name: 'Dock', exact: true }).click()
   await expect(page.locator('.dv-floating-titlebar')).toHaveCount(0)
   await settle()
@@ -627,7 +627,7 @@ try {
   await rightClickOutputTab()
   await panelMenu.getByRole('menuitem', { name: 'Close', exact: true }).click()
   await expect(outputTab).toHaveCount(0)
-  await choose('Window', 'Query Output')
+  await choose('Window', 'Results')
   await expect(outputTab).toBeVisible()
   await settle()
   expect(await page.locator('.dv-context-menu').count()).toBe(0)
@@ -1050,7 +1050,7 @@ try {
     ['a query tab by mouse', () => rightClick(firstTab), firstTab],
     ['a query tab by Shift+F10', async () => { await firstTab.focus(); await page.keyboard.press('Shift+F10') }, firstTab],
     ['a panel tab by mouse', () => rightClick(paneTab(page, 'explorer')), dockTab('explorer')],
-    ['a panel tab by Shift+F10', async () => { await dockTab('output').focus(); await page.keyboard.press('Shift+F10') }, dockTab('output')],
+    ['a panel tab by Shift+F10', async () => { await dockTab('results').focus(); await page.keyboard.press('Shift+F10') }, dockTab('results')],
     // Object Explorer's rows are not focusable: focus stays on the tree, which names the selected row.
     ['a server', async () => rightClick(await row('server-a')), tree],
     ['the Databases folder', async () => rightClick(await row('server-a', 'Databases')), tree],

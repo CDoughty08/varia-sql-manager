@@ -50,6 +50,8 @@ export const part = {
   /** The kind icon before a tab's name (kindIcon finds it by name; page code needs its box and stroke). */
   tabIcon: '.tab-icon',
   // Query output
+  outputPanel: 'section[data-output-panel]',
+  outputAnnouncer: '[data-output-announcer]',
   outputToolbar: '.output-toolbar',
   outputStatus: '.output-status',
   jobProgress: '.job-strip:not(.job-notice)',
@@ -352,9 +354,11 @@ export const editorText = page => page.locator('.monaco-editor .view-lines').inn
 
 // Panes: the dock's panels, each with a tab in its group's header
 
-const paneTitles = { explorer: 'Object Explorer', editor: 'Query editor', output: 'Query output' }
+const paneTitles = { explorer: 'Object Explorer', editor: 'Query editor', results: 'Results', messages: 'Messages', plan: 'Execution plan' }
 /** The panel menu's names for the panels, in its Tab with items. */
-const paneMenuTitles = { explorer: 'Object Explorer', editor: 'Query Editor', output: 'Query Output' }
+const paneMenuTitles = { explorer: 'Object Explorer', editor: 'Query Editor', results: 'Results', messages: 'Messages', plan: 'Execution Plan' }
+/** The output panels, which share one group by default, its toolbar tabbing between them. */
+export const outputPaneIds = ['results', 'messages', 'plan']
 const paneMoves = { left: 'Dock Left', right: 'Dock Right', top: 'Dock Top', bottom: 'Dock Bottom', float: 'Float', dock: 'Dock', close: 'Close' }
 export const pane = (page, id) => page.locator(`[data-pane="${id}"]`)
 export const paneTab = (page, id) => page.locator(`[data-pane-tab="${id}"]`)
@@ -372,12 +376,16 @@ export const movePane = async (page, id, where) => {
 
 // Query output
 
-// Dockview names its active group's region after the panel too, so the pane's own region is the section.
-export const outputPane = page => page.locator('section[aria-label="Query output"]')
+// Dockview names its active group's region after the panel too, so a panel's own region is its section.
+/** The output panels showing (Results, Messages, Execution plan): in the default layout, the one their group shows. */
+export const outputPane = page => page.locator(part.outputPanel).filter({ visible: true })
+/** One output panel, shown or not: results, messages or plan. */
+export const outputPanel = (page, id) => page.locator(`${part.outputPanel}[data-output-panel="${id}"]`)
+/** The tabs of the output panels showing, each panel's toolbar listing the output panels of its group. */
 export const outputViews = page => page.getByRole('tablist', { name: 'Query output views', exact: true })
 export const outputView = (page, name) => outputViews(page).getByRole('tab', named(name))
-/** The pane's own live region, which announces how a run, a copy or a save ended. */
-export const outputAnnouncer = page => outputPane(page).locator(':scope > [role="status"]')
+/** The output's own live region, outside the dock, which announces how a run, a copy or a save ended. */
+export const outputAnnouncer = page => page.locator(part.outputAnnouncer)
 /** The strip above the output: the Results and Messages tabs, the status line and the copy and save strips. */
 export const outputToolbar = page => outputPane(page).locator(part.outputToolbar)
 export const outputStatus = page => outputPane(page).locator(part.outputStatus)

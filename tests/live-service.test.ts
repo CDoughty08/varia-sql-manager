@@ -294,7 +294,7 @@ describe('LiveService', () => {
   it('follows a tab: active and in the editor area, or hidden; closing the tab ends the view', async () => {
     makeService()
     let snapshot = { documents: [{ id: 'a', connectionId }, { id: 'b' }], activeId: 'a' } as unknown as ReturnType<Parameters<typeof documentOwner>[1]['getSnapshot']>
-    let panes = { explorer: true, editor: true, output: true }
+    let panes = { explorer: true, editor: true, results: true, messages: false, plan: false }
     const documentListeners = new Set<() => void>(), paneListeners = new Set<() => void>()
     const documents = { getSnapshot: () => snapshot, get: (id: string) => snapshot.documents.find(document => document.id === id), subscribe: (listener: () => void) => { documentListeners.add(listener); return () => { documentListeners.delete(listener) } } }
     const paneStore = { getSnapshot: () => panes, subscribe: (listener: () => void) => { paneListeners.add(listener); return () => { paneListeners.delete(listener) } } }
