@@ -198,19 +198,24 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
     }
 }
 
-/// <summary>Finds a search's text in a name or a definition: literally (ordinal, with or without case) or as a .NET regular
-/// expression under RegexOptions.NonBacktracking, whose time is linear in the input whatever the pattern; Whole word keeps
-/// only matches with no identifier character (a letter, digit, _, @, # or $) on either side.</summary>
+/// <summary>Finds a search's text in a name or a definition: literally (ordinal, with or without case, where * stands for any
+/// characters and ? for one) or as a .NET regular expression under RegexOptions.NonBacktracking, whose time is linear in the
+/// input whatever the pattern; Whole word keeps only matches with no identifier character (a letter, digit, _, @, # or $) on
+/// either side.</summary>
 internal sealed class SearchMatcher
 {
     private readonly string text;
     private readonly StringComparison comparison;
     private readonly Regex? regex;
     private readonly bool wholeWord;
+    /// <summary>For a plain search, the longest run of its text without a dot or wildcard: a name the search can match with a
+    /// dot must contain it, which spares building the qualified name of every object that cannot.</summary>
+    private readonly string hint;
 
-    private SearchMatcher(string text, bool caseSensitive, bool wholeWord, Regex? regex)
+    private SearchMatcher(string text, bool caseSensitive, bool wholeWord, Regex? regex, bool plain)
     {
         this.text = text;
+        hint = plain ? text.Split(['.', '*', '?']).MaxBy(part => part.Length) ?? "" : "";
         comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
         this.wholeWord = wholeWord;
         this.regex = regex;
@@ -219,11 +224,37 @@ internal sealed class SearchMatcher
     /// <summary>The matcher, or the reason the pattern cannot be one (a syntax error, or a construct NonBacktracking lacks).</summary>
     public static (SearchMatcher? Matcher, string? Problem) Create(string text, bool caseSensitive, bool wholeWord, bool regex, TimeSpan timeout)
     {
-        if (!regex) return (new SearchMatcher(text, caseSensitive, wholeWord, null), null);
         var options = RegexOptions.NonBacktracking | RegexOptions.CultureInvariant | RegexOptions.Multiline | (caseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase);
-        try { return (new SearchMatcher(text, caseSensitive, wholeWord, new Regex(text, options, timeout)), null); }
+        if (!regex)
+        {
+            var literal = wholeWord ? text : text.Trim('*');
+            if (literal.IndexOfAny(['*', '?']) < 0) return (new SearchMatcher(literal, caseSensitive, wholeWord, null, true), null);
+            return (new SearchMatcher(literal, caseSensitive, wholeWord, new Regex(Wildcard(literal), options, timeout), true), null);
+        }
+        try { return (new SearchMatcher(text, caseSensitive, wholeWord, new Regex(text, options, timeout), false), null); }
         catch (ArgumentException error) { return (null, Problem(error)); }
         catch (NotSupportedException) { return (null, "Regular expressions here cannot use lookarounds, backreferences, atomic groups or conditionals."); }
+    }
+
+    /// <summary>A plain search's wildcards as a pattern: * any characters on one line (as few as reach the rest), ? one character,
+    /// everything else literal. A search matches anywhere in a name, so a plain search trims its outer *s first; under Whole word
+    /// they are kept, and match the rest of the identifier (Cust* finds Customer).</summary>
+    internal static string Wildcard(string text)
+    {
+        var pattern = new System.Text.StringBuilder(text.Length + 16);
+        for (var at = 0; at < text.Length; at++)
+        {
+            var value = text[at];
+            if (value == '?') pattern.Append('.');
+            else if (value != '*') pattern.Append(Regex.Escape(value.ToString()));
+            else
+            {
+                var first = at;
+                while (at + 1 < text.Length && text[at + 1] == '*') at++;
+                pattern.Append(first == 0 || at == text.Length - 1 ?"[\\p{L}\\p{Nd}_@#$]*" : ".*?");
+            }
+        }
+        return pattern.ToString();
     }
 
     private static string Problem(ArgumentException error) =>
@@ -241,6 +272,10 @@ internal sealed class SearchMatcher
         RegexParseError.UnescapedEndingBackslash => "it ends with a \\",
         _ => "unexpected " + error
     };
+
+    /// <summary>Whether a plain search's longest literal run is in one of these names (always, for a regular expression).</summary>
+    public bool Might(string value, string? other) =>
+        hint.Length == 0 || value.Contains(hint, comparison) || (other is not null && other.Contains(hint, comparison));
 
     /// <summary>The first match at or after <paramref name="start"/>.</summary>
     public bool Find(string value, int start, out int index, out int length)
@@ -328,10 +363,23 @@ internal static class IndexSearch
                 range = [offset + at, length];
                 rank = length == item.Name.Length ? 0 : at == 0 ? 1 : 2;
             }
-            else if (dotted && matcher.Find(label, 0, out at, out length))
+            else if (dotted && query.Regex)
             {
-                range = [at, length];
-                rank = 2;
+                if (matcher.Find(label, 0, out at, out length)) (range, rank) = ([at, length], 2);
+            }
+            else if (dotted)
+            {
+                // A plain search with a dot matches the qualified name between dots, so a dot marks where a part starts or
+                // ends: .Sales finds the schema Sales and everything in it, Sales. too, and AppData.dbo.Orders the table in
+                // that database. Only the label's part of the match is marked.
+                var prefix = database is null ? 1 : database.Length + 2;
+                if (matcher.Might(label, database) && matcher.Find(database is null ? "." + label + "." : "." + database + "." + label + ".", 0, out at, out length))
+                {
+                    var start = Math.Clamp(at - prefix, 0, label.Length);
+                    var end = Math.Clamp(at + length - prefix, 0, label.Length);
+                    range = [start, end - start];
+                    rank = end == start ? 2 : start == 0 && end == label.Length ? 0 : start == 0 ? 1 : 2;
+                }
             }
         }
         DefinitionMatch? definition = null;

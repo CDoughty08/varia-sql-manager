@@ -6,10 +6,13 @@ inside definitions (procedures, functions, views and triggers, and constraint, c
 
 The same search runs in two places, with the same options and results:
 
-- **Object Explorer's search box**, at the top of the pane (Search in Object Explorer in the palette focuses it). It searches
-  the server of the tree's selection, or the first connected server. While the box has text, its hits show in a band above
-  the tree, which stays as it is; a hit reveals its object in the tree below. Escape clears the text, and Escape in an empty
-  box returns to the tree.
+- **Object Explorer's search box**, at the top of the pane. Search in Object Explorer (Ctrl+Shift+F, Cmd+Shift+F on macOS,
+  or the palette) focuses it and selects its text, so typing replaces it and End keeps it. It searches the server of the
+  tree's selection, or the first connected server. While the box has text, its hits show in a band above the tree, which
+  stays as it is; a hit reveals its object in the tree below. Enter reveals the first hit and keeps focus in the box, so
+  each further Enter reveals the next one, wrapping round (Shift+Enter goes back); an Enter typed before the search has
+  answered searches at once. ↓ moves into the hits, and Left and Right in the tree collapse and expand. Escape clears the
+  text, and Escape in an empty box returns to the tree.
 - **The Search Objects tab** (View › Search Objects…, a server or database node's menu, or the palette), with a server picker
   when more than one server is connected.
 
@@ -99,11 +102,22 @@ The same search runs in two places, with the same options and results:
 ## Searching
 
 - **Match Case.** Off by default; matching is ordinal and ignores case.
+- **Wildcards.** Without Use Regular Expression, `*` stands for any characters on one line and `?` for one character; the
+  rest is literal (use a regular expression to find a name with a `*` or `?` in it). A search matches anywhere in a name, so
+  `Cust*` and `Cust` find the same names; under Match Whole Word an outer `*` matches the rest of the identifier, so `Cust*`
+  finds `Customers`.
+- **Dots.** A name search with a dot matches the qualified name, `database.schema.name` (a column's or trigger's is
+  `database.schema.parent.name`), with a dot at each end, so a dot marks where a part starts or ends. `.Sales` and `Sales.`
+  find the schema `Sales` and everything in it (`.Sales` also finds names that start with `Sales`, such as `dbo.SalesOrders`),
+  `AppData.dbo.Orders` finds that table in AppData only, and `PartialSchema*.Orders` finds `Orders` in every schema whose name
+  starts with `PartialSchema`. Only the schema-qualified part shows marked. A regular expression with a dot matches
+  `schema.name` as it is.
 - **Match Whole Word.** A match must have no identifier character (a letter, a digit, `_`, `@`, `#` or `$`) on either side.
 - **Use Regular Expression.** Patterns run with .NET's `NonBacktracking` engine, which takes linear time. Lookarounds and
   backreferences are refused with a message instead of running.
 - **Scope.** Search names and definitions, names only, or definitions only.
-- **Ranking.** Exact name matches come first, then name prefixes, then other name matches, then definition-only matches.
+- **Ranking.** Exact name matches come first, then name prefixes, then other name matches, then definition-only matches. A
+  search with a dot counts the schema-qualified name: `dbo.Orders` matches `dbo.Orders` exactly and `dbo.Orders.id` by prefix.
   Within each group, hits are sorted by database and then by name.
 - **Definition hits.** A hit inside a definition shows the line, a preview with the match marked, and how many more
   matches the definition has.
