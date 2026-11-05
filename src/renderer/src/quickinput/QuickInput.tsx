@@ -42,6 +42,14 @@ export default function QuickInput() {
   const view = useServiceSnapshot(quickInput)
   // It opens in the window the user is in (a popout's, when F1 is pressed there) and stays there until it closes.
   const surface = useMemo(() => view.visible ? windows.activeDocument() ?? document : undefined, [view.visible])
+  // Its popout closing takes it too: left open, it would hold the keyboard with nothing on screen.
+  useEffect(() => {
+    const owner = surface?.defaultView
+    if (!owner || owner === window) return
+    const gone = () => quickInput.hide('blur')
+    owner.addEventListener('pagehide', gone)
+    return () => owner.removeEventListener('pagehide', gone)
+  }, [surface, quickInput])
   return view.visible && surface ? createPortal(<Widget view={view} />, surface.body) : null
 }
 

@@ -128,7 +128,12 @@ export function watchModals(doc: Document, opened: () => void): Disposable {
   if (!view || typeof view.MutationObserver !== 'function') return { dispose: () => {} }
   const selector = '[aria-modal="true"]'
   let open = !!doc.querySelector(selector)
-  const observer = new view.MutationObserver(() => {
+  // Only elements coming or going, or an aria-modal flipping, can change the answer; the editor's lines churn constantly.
+  const relevant = (record: MutationRecord) => record.type === 'attributes' || (
+    !(record.target as Partial<Element>).closest?.('.monaco-editor') &&
+    [...record.addedNodes, ...record.removedNodes].some(node => node.nodeType === 1))
+  const observer = new view.MutationObserver(records => {
+    if (!records.some(relevant)) return
     const now = !!doc.querySelector(selector)
     if (now && !open) opened()
     open = now

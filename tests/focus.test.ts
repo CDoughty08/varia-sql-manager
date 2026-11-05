@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { domFocusAdapter } from '../src/renderer/src/core/focus'
+import { domFocusAdapter, focusToReturn, returnFocusTo } from '../src/renderer/src/core/focus'
 import { focusWhenDrawn } from '../src/renderer/src/core/modal'
 import { fakeDocument, FakeElement } from './fixtures/elements'
 
@@ -101,5 +101,25 @@ describe('deferred focus in the workbench', () => {
     // A document service that focused itself through nextFrame and modalOpen alone pulled focus out of the palette.
     const source = readFileSync(new URL('../src/renderer/src/core/workbench.ts', import.meta.url), 'utf8')
     expect(source.match(/nextFrame\(\(\) =>[^\n]*/g) ?? []).toEqual([])
+  })
+})
+
+describe('focus returned by dialogs', () => {
+  /** An element in a window, recording who took focus. */
+  function element(view: { closed: boolean; focus(): void }, log: string[], name: string) {
+    return { nodeType: 1, isConnected: true, closest: () => null, focus: () => { log.push(name) }, ownerDocument: { defaultView: view } }
+  }
+  it('takes the focused element of the window the user is in, and gives focus back there, bringing a popout forward', () => {
+    const log: string[] = []
+    const main = { closed: false, focus: () => { log.push('main window') } }, popout = { closed: false, focus: () => { log.push('popout window') } }
+    const grid = element(popout, log, 'grid'), editor = element(main, log, 'editor')
+    expect(focusToReturn({ activeElement: () => grid as unknown as Element })).toBe(grid)
+    expect(focusToReturn({ activeElement: () => null })).toBeNull()
+    returnFocusTo(grid as unknown as HTMLElement, main as unknown as Window)
+    returnFocusTo(editor as unknown as HTMLElement, main as unknown as Window)
+    expect(log).toEqual(['popout window', 'grid', 'editor'])
+    // Gone with its window: nothing to give focus to.
+    returnFocusTo({ ...grid, isConnected: false } as unknown as HTMLElement, main as unknown as Window)
+    expect(log).toHaveLength(3)
   })
 })

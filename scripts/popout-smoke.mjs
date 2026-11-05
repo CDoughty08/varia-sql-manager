@@ -162,15 +162,31 @@ try {
   console.log('Popout checks: a tab dragged past the edge pops out, and a popout tab dropped on the main window docks there.')
 
   // 5. Closing its window docks a panel back, and its menu's Move Back does too.
+  // The palette open in it closes with it, rather than holding the keyboard with nothing on screen.
   let messages = await popsOut(() => movePane(page, 'results', 'window'))
+  await messages.keyboard.press('F1')
+  await expect(quickInput(messages)).toBeVisible()
   await messages.close()
   await expect(pane(page, 'results')).toBeVisible()
   await expect.poll(windowCount).toBe(1)
+  await expect(quickInput(page)).toBeHidden()
+  await page.keyboard.press('F1')
+  await expect(quickInput(page)).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(quickInput(page)).toBeHidden()
+  // So does a context menu open in it: it does not jump to the main window.
+  messages = await popsOut(() => movePane(page, 'results', 'window'))
+  await gridCell(resultGrid(messages), 1, 1).click({ button: 'right' })
+  await expect(openMenus(messages)).toBeVisible()
+  await messages.close()
+  await expect.poll(windowCount).toBe(1)
+  await expect(pane(page, 'results')).toBeVisible()
+  await expect(openMenus(page)).toHaveCount(0)
   messages = await popsOut(() => movePane(page, 'results', 'window'))
   await movePane(messages, 'results', 'main')
   await expect(pane(page, 'results')).toBeVisible()
   await expect.poll(windowCount).toBe(1)
-  console.log('Popout checks: closing a popout and its panel\'s Move Back dock the panel in the main window.')
+  console.log('Popout checks: closing a popout docks its panel back and takes its palette and context menu along, and Move Back docks the panel too.')
 
   // 6. A popout survives a restart: the layout keeps its window, and the next launch opens it again.
   await popsOut(() => movePane(page, 'explorer', 'window'))

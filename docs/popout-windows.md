@@ -16,7 +16,7 @@ nothing else changes:
 
 - **Only the trusted page's popouts.** `setWindowOpenHandler` on the main window answers `allow` only for `about:blank`,
   disposition `new-window`, a frame name `varia-popout-<uuid>` and features exactly `left=…,top=…,width=…,height=…` within
-  `popoutLimits` (`src/shared/popouts.ts`), at most 8 windows, on a display's work area (`popoutRequest`, `onDisplay` in
+  `popoutLimits` (`src/shared/popouts.ts`), at most 16 windows (counting those allowed but not yet created), on a display's work area (`popoutRequest`, `onDisplay` in
   `src/main/popout-windows.ts`). Everything else is denied as before.
 - **Explicit preferences, not inherited ones.** The child gets `preload: undefined`, `contextIsolation: true`,
   `nodeIntegration: false`, `sandbox: true`, `webviewTag: false` and no `additionalArguments` (no test seams).
@@ -39,7 +39,7 @@ into the popout's slot, so its React state, grid and live subscriptions survive 
 Each window is a full citizen (`core/windows.ts`, `workbench.attachWindow`):
 
 - `KeybindingService` and `MenuService` listen in every window; menus, the quick input and tooltips render in the window
-  the user is in (`windows.activeDocument()`).
+  the user is in (`windows.activeDocument()`), and close when that window does.
 - Focus tracking, context keys and `edit.*` commands read the active window's focused element.
 - ResizeObserver and IntersectionObserver are per window, so `observeResize` and `observeIntersection` bind again
   whenever content moves; the grid takes `devicePixelRatio` from its current window.
@@ -49,9 +49,12 @@ Each window is a full citizen (`core/windows.ts`, `workbench.attachWindow`):
 - While any popout is open the main window's background throttling is off, so its timers keep running when it is
   minimized. Work scheduled for the next frame (result pages, the results view, Object Explorer's updates) asks every
   open window for one and runs on whichever draws first (`requestFrame`), since a minimized or covered main window may
-  draw none.
+  draw none. Throttling off also keeps the page's own visibility at visible, so main tells the page when the main window
+  is minimized or hidden (`onMainWindowHidden`): live views in the main window pause then, and Object Explorer's status
+  views keep sampling only while Object Explorer is in a popout (`LiveOwner.popout`).
 - Chromium's own zoom (Ctrl+wheel, a pinch) in any window is given to every window.
-- A dialog opened from a popout opens in the main window, which comes to the front (`watchModals`).
+- A dialog opened from a popout opens in the main window, which comes to the front (`watchModals`); closing it gives
+  focus back to the popout element that had it, bringing the popout forward (`focusToReturn`, `returnFocusTo`).
 
 ## Layout
 
@@ -70,5 +73,6 @@ when their panels dock back.
   it out needs a second editor instance per window sharing the model, which is follow-up work.
 - Dialogs and toasts render in the main window (a dialog brings it to the front).
 - Live charts draw on the main window's animation frames.
+- Object Explorer's status views in a minimized popout keep sampling: only the main window's minimizing is reported.
 - F10 and Alt in a popout go to the system (no menu bar there); the menu bar's access keys work only in the main window.
 - **Reset Window Layout** leaves popped-out panels where they are.

@@ -225,6 +225,7 @@ export function updatesApi(initial: UpdateState = { status: 'idle', currentVersi
   return {
     pushUpdate: push,
     getUpdateState: vi.fn<VariaApi['getUpdateState']>(async () => ({ ok: true, value: current })),
+    onMainWindowHidden: vi.fn<VariaApi['onMainWindowHidden']>(() => () => {}),
     onUpdateState: vi.fn<VariaApi['onUpdateState']>(callback => { listeners.add(callback); return () => { listeners.delete(callback) } }),
     checkForUpdates: vi.fn<VariaApi['checkForUpdates']>(async () => ({ ok: true, value: current })),
     downloadUpdate: vi.fn<VariaApi['downloadUpdate']>(async () => ({ ok: true, value: current })),

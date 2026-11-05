@@ -18,6 +18,7 @@ import { NewLoginGeneralPage, NewLoginServerRolesPage, NewLoginStatusPage } from
 import SecurablesPage from './pages/SecurablesPage'
 import UserMappingPage from './pages/UserMappingPage'
 import UnlockLoginPage from './pages/UnlockLoginPage'
+import { findInWindows, returnFocusTo } from '../core/focus'
 
 /** A page of an object dialog: the open dialog's snapshot, and whether its controls may change now. */
 export interface PageProps { readonly open: OpenObjectDialog; readonly editable: boolean }
@@ -100,7 +101,7 @@ export default function ObjectDialog() {
     if (open) { shown.current = true; return }
     if (!shown.current) return
     shown.current = false
-    if (!document.activeElement || document.activeElement === document.body) document.querySelector<HTMLElement>('[data-explorer-tree]')?.focus()
+    if (!document.activeElement || document.activeElement === document.body) returnFocusTo(findInWindows('[data-explorer-tree]'))
   }, [open])
   if (!open) return null
   const close = () => {

@@ -23,17 +23,21 @@ class OutputPeerStore extends SnapshotStore<OutputPeers> {
 
 /**
  * Which panels are showing, as the dock workspace reports it; context keys and the pane toggles read it. Where each
- * panel is (docked, floating or closed) is kept beside it without notifying: a panel's ⋯ menu reads it when it opens.
+ * panel is (docked, floating, in a popout window or closed) is kept beside it, notifying only when a panel moves into or
+ * out of a popout window, which decides whether the main window's minimizing pauses its live views; a panel's ⋯ menu
+ * reads the rest when it opens.
  */
 export class PaneService extends SnapshotStore<PaneVisibility> implements Disposable {
   private locations: Readonly<Record<PaneId, PaneLocation>> = record(() => 'closed')
   readonly peers = new OutputPeerStore()
   constructor() { super(record(() => false)) }
   set(visible: PaneVisibility, locations?: Readonly<Record<PaneId, PaneLocation>>, peers?: OutputPeers): void {
+    const before = this.locations
     if (locations) this.locations = record(id => locations[id])
     if (peers) this.peers.set(peers)
     const current = this.getSnapshot()
-    if (paneIds.some(id => current[id] !== visible[id])) this.publish(record(id => visible[id]))
+    const moved = paneIds.some(id => (before[id] === 'window') !== (this.locations[id] === 'window'))
+    if (moved || paneIds.some(id => current[id] !== visible[id])) this.publish(record(id => visible[id]))
   }
   location(id: PaneId): PaneLocation { return this.locations[id] }
   private selector?: (id: OutputPaneId) => void

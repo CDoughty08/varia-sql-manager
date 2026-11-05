@@ -16,6 +16,7 @@ import PopoutFrame, { type PopoutCommands } from './popouts/PopoutFrame'
 import { placeHost } from './popouts/place'
 import { paneDrag } from './popouts/drag'
 import { watchModals, windows } from './core/windows'
+import { focusToReturn, returnFocusTo } from './core/focus'
 
 interface PaneHosts { hosts: Record<PaneId, HTMLElement>; parking: RefObject<HTMLDivElement | null> }
 interface PaneCommands { close(id: PaneId): void; float(id: PaneId): void; toggle(id: PaneId): void; reveal(id: PaneId): void }
@@ -495,7 +496,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     changed()
   }
   function manage(mode: 'save' | 'load' = 'load') {
-    previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    previousFocus.current = focusToReturn()
     setName(mode === 'save' ? '' : stateRef.current.saved[0]?.name ?? '')
     setSelected(stateRef.current.saved[0]?.id ?? '')
     setDialogError(''); setNotice(''); setShowManager(true)
@@ -551,7 +552,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
   useEffect(() => { if (apiRef.current) syncHeaders(apiRef.current) }, [panelTabs])
   useEffect(() => {
     if (!showManager) return
-    return () => { if (previousFocus.current?.isConnected) previousFocus.current.focus() }
+    return () => returnFocusTo(previousFocus.current)
   }, [showManager])
 
   function onReady(event: DockviewReadyEvent) {

@@ -74,8 +74,23 @@ describe('PopoutWindows', () => {
     const { popouts } = registry({ workAreas: [primary] })
     expect(popouts.open(request({ url: 'https://example.com/' }), base)).toEqual({ action: 'deny' })
     expect(popouts.open(request({ features: 'left=-1500,top=200,width=640,height=420' }), base)).toEqual({ action: 'deny' })
-    for (let id = 1; id <= 8; id++) popouts.adopt(fakeWindow(id).window)
+    for (let id = 1; id <= 16; id++) popouts.adopt(fakeWindow(id).window)
     expect(popouts.open(request(), base)).toEqual({ action: 'deny' })
+  })
+  it('counts windows it allowed that Electron has not created yet, until they arrive or a while has passed', () => {
+    let now = 0
+    const popouts = new PopoutWindows<PopoutWindow>({ platform: 'win32', workAreas: () => [primary], zoomLevel: () => 0, setZoomLevel: vi.fn(), changed: vi.fn(), now: () => now })
+    for (let id = 1; id <= 16; id++) expect(popouts.open(request(), base).action).toBe('allow')
+    expect(popouts.open(request(), base)).toEqual({ action: 'deny' })
+    // Created: still 16.
+    for (let id = 1; id <= 16; id++) popouts.adopt(fakeWindow(id).window)
+    expect(popouts.open(request(), base)).toEqual({ action: 'deny' })
+    popouts.closeAll()
+    for (let id = 1; id <= 16; id++) popouts.open(request(), base)
+    expect(popouts.open(request(), base)).toEqual({ action: 'deny' })
+    // Never created: they stop counting.
+    now = 10_000
+    expect(popouts.open(request(), base).action).toBe('allow')
   })
   it('adopts a popout: no popups, no navigation, its own input for Paste, the main window\'s zoom, and a hidden menu bar', () => {
     const { popouts, changed } = registry({ zoom: 1.5 })
@@ -134,6 +149,10 @@ describe('main process wiring', () => {
     expect(source).not.toMatch(/setWindowOpenHandler\([^)]*action: 'allow'/)
     expect(source).toMatch(/function resetRendererState[\s\S]*?popouts\.closeAll\(\)/)
     expect(source).toContain("contents.on('zoom-changed', () => setImmediate(() => { if (!contents.isDestroyed()) popouts.zoom(contents.getZoomLevel()) }))")
+
+    // Popouts turn background throttling off, so the page hears from main when its window is minimized or hidden.
+    expect(source).toContain("contents.send('varia:window-hidden', window.isMinimized() || !window.isVisible())")
+    expect(source).toContain("window.on('minimize', sendHidden); window.on('restore', sendHidden); window.on('hide', sendHidden); window.on('show', sendHidden)")
   })
   it('keeps trusting only the main window\'s main frame: popouts have no preload and send no IPC', () => {
     expect(source).toContain('if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) return false')

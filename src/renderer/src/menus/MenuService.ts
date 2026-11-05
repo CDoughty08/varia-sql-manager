@@ -272,6 +272,8 @@ export class MenuService implements Disposable {
     const resize = () => guard(() => this.close('resize'))
     const blur = () => guard(() => { this.access.disarm(); this.close('blur') })
     const visibility = () => guard(() => { if (target.document.visibilityState === 'hidden') this.close('blur') })
+    // A context menu in a popout that closes goes with it, rather than reappearing in the main window.
+    const gone = () => guard(() => { if (this.surface === target.document && this.controller.view.levels.length) this.close('blur') })
     const focusIn = (event: Event) => guard(() => {
       // Focus moving while Alt is down was something else (a window manager's Alt+drag moves it out and back).
       this.access.disarm()
@@ -298,7 +300,9 @@ export class MenuService implements Disposable {
     target.addEventListener('resize', resize)
     target.addEventListener('blur', blur)
     target.document.addEventListener('visibilitychange', visibility)
+    target.addEventListener('pagehide', gone)
     const detach = () => {
+      if (target !== windows.main) gone()
       target.removeEventListener('pointerdown', pointerDown, options)
       target.removeEventListener('pointerup', pointerUp, options)
       target.removeEventListener('wheel', wheel, options)
@@ -308,6 +312,7 @@ export class MenuService implements Disposable {
       target.removeEventListener('resize', resize)
       target.removeEventListener('blur', blur)
       target.document.removeEventListener('visibilitychange', visibility)
+      target.removeEventListener('pagehide', gone)
       this.detachers.delete(detach)
     }
     this.detachers.add(detach)

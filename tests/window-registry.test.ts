@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { requestFrame, WindowRegistry } from '../src/renderer/src/core/windows'
+import { requestFrame, watchModals, WindowRegistry } from '../src/renderer/src/core/windows'
 
 function fakeWindow() {
   const listeners = new Set<() => void>()
@@ -66,5 +66,31 @@ describe('WindowRegistry', () => {
     expect([runs, cancelled.length]).toEqual([1, 2])
     frames.get(main)![0]()
     expect(runs).toBe(1)
+  })
+})
+
+describe('watchModals', () => {
+  it('calls back when a dialog opens, and looks for one only when elements come or go outside the editor', () => {
+    let callback: (records: unknown[]) => void = () => {}
+    let modal = false, queries = 0, opened = 0
+    class Observer { constructor(listener: (records: unknown[]) => void) { callback = listener } observe() {} disconnect() {} }
+    const doc = { body: {}, defaultView: { MutationObserver: Observer }, querySelector: () => { queries++; return modal ? {} : null } }
+    const watch = watchModals(doc as unknown as Document, () => { opened++ })
+    const element = { nodeType: 1 }, text = { nodeType: 3 }
+    const editor = { closest: (selector: string) => selector.includes('.monaco-editor') ? {} : null }, pane = { closest: () => null }
+    queries = 0
+    callback([{ type: 'childList', target: editor, addedNodes: [element], removedNodes: [] }, { type: 'childList', target: pane, addedNodes: [text], removedNodes: [] }])
+    expect(queries).toBe(0)
+    modal = true
+    callback([{ type: 'childList', target: pane, addedNodes: [element], removedNodes: [] }])
+    expect([queries, opened]).toEqual([1, 1])
+    callback([{ type: 'attributes', target: pane, addedNodes: [], removedNodes: [] }])
+    expect([queries, opened]).toEqual([2, 1])
+    modal = false
+    callback([{ type: 'childList', target: pane, addedNodes: [], removedNodes: [element] }])
+    modal = true
+    callback([{ type: 'attributes', target: pane, addedNodes: [], removedNodes: [] }])
+    expect(opened).toBe(2)
+    watch.dispose()
   })
 })

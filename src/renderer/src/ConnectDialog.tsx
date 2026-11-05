@@ -14,6 +14,7 @@ import { trapFocus } from './trap-focus'
 import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import { IntegratedIdentityLookup } from './services/integrated-identity'
 import { authenticationCatalog, authenticationModes, requiresUser, showsIdentity, usesPassword, type AuthenticationMode } from '../../shared/auth'
+import { focusToReturn, returnFocusTo } from './core/focus'
 
 function unwrap<T>(result: ApiResult<T>): T { if (!result.ok) throw new Error(result.error); return result.value }
 function message(error: unknown) { return error instanceof Error ? error.message : 'The operation failed.' }
@@ -196,9 +197,9 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
     }
   }, [])
   useEffect(() => {
-    const active = document.activeElement
+    const active = focusToReturn()
     dialog.current?.querySelector<HTMLInputElement>('#connect-server')?.focus()
-    return () => { if (active instanceof HTMLElement && active.isConnected) active.focus() }
+    return () => returnFocusTo(active)
   }, [])
   useEffect(() => { identityLookup.authenticationChanged(options.authentication) }, [identityLookup, options.authentication])
   useEffect(() => {

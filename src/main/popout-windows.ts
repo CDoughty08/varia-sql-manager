@@ -62,8 +62,13 @@ export interface PopoutWindow {
  * of its own: `trusted()` still accepts only the main window's main frame), denies popups and navigation, and goes when
  * the page that opened it reloads, crashes or closes, since its content is that page's.
  */
+/** How long an allowed popout counts against the limit before Electron creates it. */
+const pendingMs = 10_000
+
 export class PopoutWindows<W extends PopoutWindow> {
   private readonly windows = new Map<number, { window: W; activation: UserActivation }>()
+  /** When each allowed window that Electron has not created yet was allowed: they count against the limit too. */
+  private pending: number[] = []
   constructor(private readonly options: {
     readonly platform: NodeJS.Platform
     /** The displays' work areas now, where a restored window must still land. */
@@ -74,7 +79,10 @@ export class PopoutWindows<W extends PopoutWindow> {
     setZoomLevel(level: number): void
     /** Called when the first popout opens and when the last one goes. */
     changed(open: number): void
+    /** The clock pending windows expire by (tests pass their own). */
+    now?(): number
   }) {}
+  private now(): number { return this.options.now?.() ?? Date.now() }
 
   /** `allow` with the window's options for a popout request on a display; `deny` for anything else. */
   open(details: OpenDetails, base: { readonly backgroundColor: string; readonly show: boolean }): { action: 'deny' } | { action: 'allow'; overrideBrowserWindowOptions: Record<string, unknown> } {
@@ -82,7 +90,11 @@ export class PopoutWindows<W extends PopoutWindow> {
     if (!requested) return { action: 'deny' }
     // The page measures in CSS pixels, which its zoom scales; windows are placed in screen DIPs.
     const bounds = scaleBounds(requested, zoomFactor(this.options.zoomLevel()))
-    if (this.windows.size >= popoutLimits.maxWindows || !onDisplay(bounds, this.options.workAreas())) return { action: 'deny' }
+    // An allowed window Electron failed to create never arrives: it stops counting after a while.
+    const now = this.now()
+    this.pending = this.pending.filter(at => now - at < pendingMs)
+    if (this.windows.size + this.pending.length >= popoutLimits.maxWindows || !onDisplay(bounds, this.options.workAreas())) return { action: 'deny' }
+    this.pending.push(now)
     return { action: 'allow', overrideBrowserWindowOptions: {
       ...bounds, useContentSize: true, minWidth: popoutLimits.minWidth, minHeight: popoutLimits.minHeight, show: base.show, backgroundColor: base.backgroundColor,
       autoHideMenuBar: false, title: 'Varia SQL Manager',
@@ -94,6 +106,7 @@ export class PopoutWindows<W extends PopoutWindow> {
   /** Takes a window `open` allowed: it denies popups and navigation, counts its own input for Paste, and shares the zoom. */
   adopt(window: W): void {
     const activation = new UserActivation()
+    this.pending.shift()
     this.windows.set(window.id, { window, activation })
     const contents = window.webContents
     contents.setWindowOpenHandler(() => ({ action: 'deny' }))
@@ -124,5 +137,6 @@ export class PopoutWindows<W extends PopoutWindow> {
   closeAll(): void {
     for (const { window } of [...this.windows.values()]) if (!window.isDestroyed()) window.destroy()
     this.windows.clear()
+    this.pending = []
   }
 }

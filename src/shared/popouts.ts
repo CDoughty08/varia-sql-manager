@@ -6,7 +6,7 @@
 export const popoutWindowName = /^varia-popout-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export const popoutLimits = {
   /** Popout windows open at once; there are fewer panels that can pop out than this. */
-  maxWindows: 8,
+  maxWindows: 16,
   minWidth: 240,
   minHeight: 160,
   maxSize: 16_000,

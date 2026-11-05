@@ -483,6 +483,9 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
   // The page may open only its own popout windows: same-origin about:blank children with Varia's popout name, on a display.
   contents.setWindowOpenHandler(details => popouts.open(details, { backgroundColor: appearance.windowChrome().backgroundColor, show: process.env.VARIA_SMOKE_TEST !== '1' }))
   contents.on('did-create-window', child => popouts.adopt(child))
+  // With popouts open the page's own visibility stays visible (no background throttling): main tells it instead.
+  const sendHidden = () => { if (!window.isDestroyed()) contents.send('varia:window-hidden', window.isMinimized() || !window.isVisible()) }
+  window.on('minimize', sendHidden); window.on('restore', sendHidden); window.on('hide', sendHidden); window.on('show', sendHidden)
   // Chromium's own zoom (Ctrl+wheel, a pinch) in the main window reaches the popouts too.
   contents.on('zoom-changed', () => setImmediate(() => { if (!contents.isDestroyed()) popouts.zoom(contents.getZoomLevel()) }))
   contents.on('will-navigate', event => event.preventDefault())

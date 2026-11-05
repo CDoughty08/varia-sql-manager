@@ -8,6 +8,7 @@ import {
 } from './options-form'
 import PropertyGrid, { controlId } from './PropertyGrid'
 import { highlightParts, searchPages } from './search'
+import { focusToReturn, returnFocusTo } from '../core/focus'
 
 const errorText = (error: unknown) => error instanceof Error && error.message ? error.message : 'The options could not be saved.'
 /** Fonts and Colors names the display item its rows are for, as SSMS's "Show settings for" list does (fixed for now). */
@@ -57,7 +58,7 @@ export default function OptionsDialog({ page: requested }: { page?: string }) {
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   // Read while rendering, before the search box takes focus.
-  const [returnFocus] = useState(() => document.activeElement instanceof HTMLElement ? document.activeElement : null)
+  const [returnFocus] = useState(focusToReturn)
   const search = useRef<HTMLInputElement>(null), tree = useRef<HTMLUListElement>(null), focusSetting = useRef<string>(undefined)
   const found = useMemo(() => searchPages(query, platform), [query, platform])
   const rows = treeRows(expanded, found?.shown)
@@ -75,7 +76,7 @@ export default function OptionsDialog({ page: requested }: { page?: string }) {
     document.getElementById(controlId(key))?.focus()
   })
 
-  const restoreFocus = () => { if (returnFocus?.isConnected) returnFocus.focus() }
+  const restoreFocus = () => returnFocusTo(returnFocus)
   // While OK's save is on its way the dialog stays: the changes cannot be cancelled any more.
   const close = () => {
     if (saving) return

@@ -166,6 +166,11 @@ const api: VariaApi = {
     const listener = (_event: Electron.IpcRendererEvent, state: UpdateState) => callback(state)
     ipcRenderer.on('varia:updates-changed', listener)
     return () => { ipcRenderer.removeListener('varia:updates-changed', listener) }
+  },
+  onMainWindowHidden: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, hidden: unknown) => callback(hidden === true)
+    ipcRenderer.on('varia:window-hidden', listener)
+    return () => { ipcRenderer.removeListener('varia:window-hidden', listener) }
   }
 }
 contextBridge.exposeInMainWorld('varia', api)
