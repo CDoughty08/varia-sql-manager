@@ -163,7 +163,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .pane-menu:focus-visible { outline-offset: -2px; }
 .explorer-header .pane-menu { color: var(--varia-objectExplorer-actionForeground); }
 .explorer-toolbar .icon-button { color: var(--varia-objectExplorer-actionForeground); }
+.explorer-toolbar .icon-button[aria-pressed="true"], .explorer-toolbar .icon-button[aria-pressed="true"]:hover:not(:disabled) { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); border-color: var(--varia-chip-activeBorder); transition: none; }
 .explorer-toolbar .icon-button:focus-visible { outline-offset: -2px; }
+@media (forced-colors: active) {
+  .explorer-toolbar .icon-button[aria-pressed="true"], .explorer-toolbar .icon-button[aria-pressed="true"]:hover:not(:disabled) { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+  .explorer-toolbar .icon-button[aria-pressed="true"]:focus-visible { outline-color: CanvasText; }
+}
 .explorer-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 /* Object Explorer's search box (SearchPanel's pane layout): the tab's search, compact, its hits in a band above the tree. */
 .object-search.object-search-pane { flex: 0 1 auto; height: auto; max-height: 50%; border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }

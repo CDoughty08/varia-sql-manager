@@ -168,6 +168,48 @@ try {
   await expect(emptyStateDetail(emptyExplorer)).toHaveText('Connect to SQL Server to browse databases and objects.')
   await expect(primaryAction(emptyExplorer)).toHaveText(['Connect to server'])
   await expect(emptyExplorer).toHaveCSS('justify-content', 'center')
+  // A toolbar toggle stays visibly selected after hover and focus leave, in both themes and Windows contrast themes.
+  const groupBySchema = toolbarButton('Group by Schema')
+  const toggleStyle = () => groupBySchema.evaluate(button => {
+    const style = getComputedStyle(button)
+    return { fill: style.backgroundColor, border: style.borderTopColor, borderStyle: style.borderTopStyle, width: style.borderTopWidth, color: style.color }
+  })
+  for (const mode of ['dark', 'light']) {
+    await page.evaluate(value => window.varia.setThemePreference({ mode: value }), mode)
+    await expect.poll(() => page.evaluate(() => document.documentElement.dataset.themeType)).toBe(mode)
+    await expect(groupBySchema).toHaveAttribute('aria-pressed', 'false')
+    await expect(groupBySchema).toHaveAttribute('title', 'Group by Schema: Off')
+    await toolbarButton('Connect Object Explorer').focus()
+    await page.mouse.move(0, 0)
+    const off = await toggleStyle()
+    await groupBySchema.click()
+    await expect(groupBySchema).toHaveAttribute('aria-pressed', 'true')
+    await expect(groupBySchema).toHaveAttribute('title', 'Group by Schema: On')
+    await toolbarButton('Connect Object Explorer').focus()
+    await page.mouse.move(0, 0)
+    const on = await toggleStyle()
+    expect(on.fill).not.toBe(off.fill)
+    expect(on.border).not.toBe(off.border)
+    expect(on.borderStyle).toBe('solid')
+    expect(on.width).toBe('1px')
+    await groupBySchema.hover()
+    expect(await toggleStyle()).toEqual(on)
+    await page.screenshot({ path: resolve('artifacts', `explorer-toolbar-toggle-${mode}.png`) })
+    await groupBySchema.focus()
+    await page.keyboard.press('Space')
+    await expect(groupBySchema).toHaveAttribute('aria-pressed', 'false')
+  }
+  await page.evaluate(() => window.varia.setThemePreference({ mode: 'dark' }))
+  await groupBySchema.click()
+  await expect(groupBySchema).toHaveAttribute('aria-pressed', 'true')
+  await page.emulateMedia({ forcedColors: 'active' })
+  const contrastToggle = await toggleStyle()
+  expect(contrastToggle.fill).not.toBe(contrastToggle.color)
+  expect(contrastToggle.border).toBe(contrastToggle.fill)
+  await expect(groupBySchema).toHaveCSS('forced-color-adjust', 'none')
+  await page.emulateMedia({ forcedColors: null })
+  await groupBySchema.click()
+  await expect(groupBySchema).toHaveAttribute('aria-pressed', 'false')
 
   // 1. One focusable ARIA tree: a new server is expanded, its folders are collapsed, and nothing below them is loaded.
   // Connecting the first server by keyboard from the empty state moves focus to the tree, which replaced the button.
@@ -188,7 +230,10 @@ try {
 
   // 2. The Windows tree's keys, type-ahead, and `*`.
   await select('server-a')
+  await expect(toolbarButton('Filter Settings')).toBeDisabled()
+  await expect(toolbarButton('Filter Settings')).toHaveAttribute('title', /Select a folder such as Tables, Views, Databases, or Logins/)
   await press('ArrowDown', 'Databases')
+  await expect(toolbarButton('Filter Settings')).toBeEnabled()
   await press('ArrowRight', 'Databases')
   await expect(await explorerRow(page, 'server-a', 'Databases')).toHaveAttribute('aria-expanded', 'true')
   await expect(await explorerRow(page, 'server-a', 'Databases', 'System Databases')).toBeVisible()
