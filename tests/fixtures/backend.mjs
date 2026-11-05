@@ -317,7 +317,7 @@ const searchObjects = [
 ]
 const indexStatus = definitions => ({ state: 'ready', databases: 1, indexed: 1, objects: searchObjects.length, modules: definitions ? 1 : 0, cut: 0, skipped: [], definitions, builtAt: '2026-11-03T12:00:00Z' })
 /** A search of the fixture index with the real backend's options (a regular expression as JavaScript reads it, enough here). */
-function searchFixture({ text, caseSensitive, wholeWord, regex, in: scope = 'all' }) {
+function searchFixture({ text, caseSensitive, wholeWord, regex, in: scope = 'all', kinds }) {
   let pattern
   try { pattern = new RegExp(regex ? text : text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), caseSensitive ? 'gm' : 'gim') }
   catch { return { hits: [], total: 0, partial: false, elapsedMs: 0, index: indexStatus(true), problem: 'The regular expression is not valid.' } }
@@ -328,6 +328,7 @@ function searchFixture({ text, caseSensitive, wholeWord, regex, in: scope = 'all
     }
   }
   const hits = searchObjects.flatMap(({ definition, ...item }) => {
+    if (kinds && !kinds.includes(item.object.kind)) return []
     const name = scope !== 'definitions' ? find(item.object.name) : undefined
     const body = scope !== 'names' && definition ? find(definition) : undefined
     if (!name && !body) return []

@@ -1,26 +1,22 @@
-import { useId, useLayoutEffect, useRef, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type Ref } from 'react'
+import { useLayoutEffect, useRef, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type Ref } from 'react'
 import { folderSpecs, kindSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
-import { childrenLeftOut, objectSearchLimits, type ObjectIndexStatus, type ObjectSearchHit, type SearchScope } from '../../../shared/explorer/search.ts'
+import { childrenLeftOut, objectSearchLimits, type ObjectIndexStatus, type ObjectSearchHit } from '../../../shared/explorer/search.ts'
 import type { ExplorerTarget } from '../../../shared/explorer/refs.ts'
 import { onUnexpectedError } from '../core/errors'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import ExplorerIcon from '../explorer/ExplorerIcon'
 import Icon from '../Icon'
 import EmptyState from '../kit/EmptyState'
-import Segmented from '../kit/Segmented'
 import type { IndexEntry, SearchQueryState } from './ObjectSearchService'
+import SearchFilters from './SearchFilters'
 import { paneBandDrag, paneBandKey, paneBandLimits } from './pane-band'
 
 const numbers = new Intl.NumberFormat('en-US')
 const count = (value: number, noun: string) => `${numbers.format(value)} ${noun}${value === 1 ? '' : 's'}`
-const scopes: readonly { readonly value: SearchScope; readonly label: string }[] = [{ value: 'all', label: 'Names and definitions' }, { value: 'names', label: 'Names' }, { value: 'definitions', label: 'Definitions' }]
 const dragEnds = ['pointerup', 'pointercancel', 'lostpointercapture'] as const
 /** The splitter's pane (Object Explorer's column) and the band's own box. */
 const paneBox = (band: HTMLElement) => band.parentElement?.getBoundingClientRect()
-
-/** The same scopes in a narrow pane, where "Names and definitions" would be cut. */
-const paneScopes: readonly { readonly value: SearchScope; readonly label: string }[] = [{ value: 'all', label: 'All' }, ...scopes.slice(1)]
 
 /** `text` with [start, length] marked; names keep displayText's markers for hidden characters. */
 function Marked({ text, range }: { readonly text: string; readonly range?: readonly [number, number] }): ReactNode {
@@ -72,13 +68,12 @@ export interface SearchPanelProps {
 
 /**
  * One object index search, as the Search Objects tab and Object Explorer's box both show it: the text with Match Case, Whole
- * Word and Use Regular Expression, the scope (names, definitions or both), what the index holds, and the hits, which reveal
+ * Word and Use Regular Expression, the filters (names, definitions or both, and the object types), what the index holds, and the hits, which reveal
  * their object in Object Explorer or script it to a new query.
  */
 export default function SearchPanel({ searchId, layout, inputRef, onLeave, options }: SearchPanelProps) {
   const { objectSearch, explorer, scripting, commands } = useWorkbench()
   const snapshot = useServiceSnapshot(objectSearch)
-  const scopeLabel = useId()
   const root = useRef<HTMLDivElement>(null)
   const list = useRef<HTMLUListElement>(null)
   const state = snapshot.documents[searchId]
@@ -176,17 +171,13 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
         {toggle('regex', 'Use Regular Expression', 'regex')}
       </div>
       {showHits && <>
-        <div className="object-search-options">
-          <span id={scopeLabel} className="visually-hidden">Search in</span>
-          <Segmented id={`${searchId}-scope`} labelledBy={scopeLabel} segments={pane ? paneScopes : scopes} value={state.scope} onChange={value => set({ scope: value as SearchScope })} />
-          {options}
-        </div>
+        <SearchFilters id={searchId} scope={state.scope} types={state.types} onScope={scope => set({ scope })} onTypes={types => set({ types })} options={options} />
         <p className="object-search-index">{indexSummary(entry, entry?.status ?? result?.index)}</p>
       </>}
       <p className={`object-search-summary${state.error || result?.problem ? ' error' : ''}`} role="status">{showHits ? summary : ''}</p>
     </div>
     {showHits && (asked && !result!.problem && result!.hits.length === 0 && !state.requestId
-      ? <EmptyState icon="search" title="No objects match" detail={entry?.requestId ? 'The index is still being built; results update when it finishes.' : 'Try another spelling, turn off Match Case or Whole Word, or search names and definitions.'} />
+      ? <EmptyState icon="search" title="No objects match" detail={entry?.requestId ? 'The index is still being built; results update when it finishes.' : `Try another spelling, turn off Match Case or Whole Word, or search names and definitions${state.types.length ? ' of every type' : ''}.`} />
       : <ul ref={list} className="object-search-hits" aria-label={pane ? 'Search results' : 'Results'} onKeyDown={onListKey}>
         {result?.hits.map((hit, index) => {
           const spec = kindSpecs[hit.object.kind]

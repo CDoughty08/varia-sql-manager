@@ -1756,6 +1756,19 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-search-toggle { width: 22px; height: 22px; color: var(--varia-objectExplorer-actionForeground); }
 .object-search-toggle[aria-pressed="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
 .object-search-options { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-3); }
+.object-search-filters { position: relative; display: flex; flex-direction: column; gap: var(--varia-space-1); min-width: 0; }
+.object-search-filters > .object-search-options { flex-wrap: nowrap; }
+.object-search-extra { display: flex; align-items: center; flex: none; }
+.object-search-types > .chip-group { flex-wrap: nowrap; overflow: hidden; }
+.object-search-types[data-wrap] { display: flex; flex-direction: column; align-items: start; gap: var(--varia-space-1); }
+.object-search-types[data-wrap] > .chip-group { flex-wrap: wrap; }
+.object-search-types .segmented { flex-wrap: wrap; }
+.object-search-more-types { color: var(--varia-descriptionForeground); }
+.object-search-more-types[data-chosen] { border-color: var(--varia-chip-activeBorder); }
+.object-search-filter-button { display: inline-flex; align-items: center; gap: var(--varia-space-1); flex: 0 1 auto; min-width: 0; height: var(--varia-control); padding: 0 var(--varia-space-2); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); background: transparent; color: inherit; font-size: var(--varia-size-sm); }
+.object-search-filter-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.object-search-measure { position: absolute; top: 0; inset-inline-start: 0; display: flex; width: max-content; height: 0; overflow: hidden; visibility: hidden; pointer-events: none; white-space: nowrap; }
+.object-search-measure > .chip-group { flex-wrap: nowrap; }
 .object-search-server { display: flex; align-items: center; gap: var(--varia-space-1); font-size: var(--varia-size-sm); color: var(--varia-descriptionForeground); }
 .object-search-index, .object-search-summary { margin: 0; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
 .object-search-summary.error { color: var(--varia-errorForeground); }

@@ -48,6 +48,38 @@ export type SearchKind = typeof searchKinds[number]
 export const searchScopes = ['all', 'names', 'definitions'] as const
 export type SearchScope = typeof searchScopes[number]
 
+/** Search Objects' type filters, in the order the chips show: each names a set of kinds, and together they name every kind the
+ *  index holds exactly once (tests/object-search.test.ts). A search with none chosen searches every kind; with some, the kinds
+ *  of those it names. */
+export const searchTypes = [
+  { id: 'tables', label: 'Tables', kinds: ['table'] },
+  { id: 'views', label: 'Views', kinds: ['view'] },
+  { id: 'columns', label: 'Columns', kinds: ['column'] },
+  { id: 'procedures', label: 'Procedures', kinds: ['procedure'] },
+  { id: 'functions', label: 'Functions', kinds: ['function'] },
+  { id: 'parameters', label: 'Parameters', kinds: ['parameter'] },
+  { id: 'triggers', label: 'Triggers', kinds: ['trigger', 'databaseTrigger', 'serverTrigger'] },
+  { id: 'indexes', label: 'Keys and indexes', kinds: ['key', 'constraint', 'index', 'statistic'] },
+  { id: 'schemas', label: 'Schemas', kinds: ['schema'] },
+  { id: 'types', label: 'Types', kinds: ['type', 'tableType', 'xmlSchemaCollection', 'rule', 'default'] },
+  { id: 'security', label: 'Security', kinds: [
+    'login', 'serverRole', 'credential', 'cryptographicProvider', 'audit', 'serverAuditSpecification', 'user', 'databaseRole', 'applicationRole', 'asymmetricKey',
+    'certificate', 'symmetricKey', 'columnMasterKey', 'columnEncryptionKey', 'databaseAuditSpecification', 'securityPolicy'
+  ] },
+  { id: 'other', label: 'Other', kinds: [
+    'synonym', 'sequence', 'database', 'assembly', 'backupDevice', 'linkedServer', 'externalDataSource', 'externalFileFormat', 'fullTextCatalog', 'fullTextStoplist',
+    'partitionScheme', 'partitionFunction', 'searchPropertyList', 'planGuide'
+  ] }
+] as const satisfies readonly { readonly id: string; readonly label: string; readonly kinds: readonly SearchKind[] }[]
+export type SearchType = typeof searchTypes[number]['id']
+
+/** The kinds a search with these type filters names, in the index's order; undefined (every kind) when none is chosen. */
+export function searchTypeKinds(types: readonly SearchType[]): SearchKind[] | undefined {
+  if (!types.length) return undefined
+  const chosen = new Set<SearchKind>(searchTypes.filter(type => types.includes(type.id)).flatMap(type => type.kinds))
+  return searchKinds.filter(kind => chosen.has(kind))
+}
+
 /** Skip codes a status lists for a database the index still holds (ObjectSearchService.ChildrenLeftOut): its objects without
  *  their columns, indexes, statistics and parameters, which would have taken the index past its memory. */
 export const childrenLeftOut = 'CHILDREN_LEFT_OUT'
