@@ -1,4 +1,4 @@
-import { useId, useRef, type KeyboardEvent, type ReactNode, type Ref } from 'react'
+import { useId, useLayoutEffect, useRef, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type Ref } from 'react'
 import { folderSpecs, kindSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import { childrenLeftOut, objectSearchLimits, type ObjectIndexStatus, type ObjectSearchHit, type SearchScope } from '../../../shared/explorer/search.ts'
@@ -10,10 +10,15 @@ import Icon from '../Icon'
 import EmptyState from '../kit/EmptyState'
 import Segmented from '../kit/Segmented'
 import type { IndexEntry, SearchQueryState } from './ObjectSearchService'
+import { paneBandDrag, paneBandKey, paneBandLimits } from './pane-band'
 
 const numbers = new Intl.NumberFormat('en-US')
 const count = (value: number, noun: string) => `${numbers.format(value)} ${noun}${value === 1 ? '' : 's'}`
 const scopes: readonly { readonly value: SearchScope; readonly label: string }[] = [{ value: 'all', label: 'Names and definitions' }, { value: 'names', label: 'Names' }, { value: 'definitions', label: 'Definitions' }]
+const dragEnds = ['pointerup', 'pointercancel', 'lostpointercapture'] as const
+/** The splitter's pane (Object Explorer's column) and the band's own box. */
+const paneBox = (band: HTMLElement) => band.parentElement?.getBoundingClientRect()
+
 /** The same scopes in a narrow pane, where "Names and definitions" would be cut. */
 const paneScopes: readonly { readonly value: SearchScope; readonly label: string }[] = [{ value: 'all', label: 'All' }, ...scopes.slice(1)]
 
@@ -77,6 +82,9 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   const root = useRef<HTMLDivElement>(null)
   const list = useRef<HTMLUListElement>(null)
   const state = snapshot.documents[searchId]
+  // The hit Enter reached stays in view in the list, as the tree below selects it.
+  const current = state?.current
+  useLayoutEffect(() => { if (current !== undefined) list.current?.querySelectorAll<HTMLElement>('[data-hit]')[current]?.scrollIntoView({ block: 'nearest' }) }, [current, state?.result])
   if (!state) return null
   const entry = snapshot.indexes[state.connectionId]
   const result = state.result
@@ -86,8 +94,11 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
     <button type="button" className="icon-button object-search-toggle" aria-pressed={state[key]} aria-label={label} title={label} onClick={() => set({ [key]: !state[key] })}><Icon name={icon} /></button>
   const rows = () => [...(list.current?.querySelectorAll<HTMLElement>('[data-hit]') ?? [])]
   const onInputKey = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.nativeEvent.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
-    if (event.key === 'Enter' && state.text.trim()) objectSearch.search(searchId)
+    if (event.nativeEvent.isComposing || event.ctrlKey || event.metaKey || event.altKey || (event.shiftKey && !(pane && event.key === 'Enter'))) return
+    // In Object Explorer's box Enter reveals the next hit (Shift+Enter the one before) in the tree below and keeps focus here,
+    // so Enter again goes on to the next one. The tab's Enter searches at once: revealing from it moves focus to the tree.
+    if (event.key === 'Enter' && state.text.trim() && pane) void objectSearch.step(searchId, event.shiftKey ? -1 : 1).then(hit => { if (hit) reveal(hit) }, onUnexpectedError)
+    else if (event.key === 'Enter' && state.text.trim()) void objectSearch.search(searchId)
     else if (event.key === 'ArrowDown' && rows().length) rows()[0]?.focus()
     else if (event.key === 'Escape' && state.text) set({ text: '' })
     else if (onLeave && (event.key === 'Escape' || event.key === 'ArrowDown' || event.key === 'Enter')) onLeave()
@@ -121,7 +132,39 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
     : result && asked ? `${count(result.total, 'result')}${result.total > result.hits.length ? `, showing the first ${numbers.format(result.hits.length)}` : ''}${result.partial ? ' (the search stopped early; narrow it to see everything)' : ''} · ${numbers.format(result.elapsedMs)} ms`
     : ''
   const showHits = !pane || !!state.text.trim()
-  return <div ref={root} className={`object-search object-search-${layout}`}>
+  // Object Explorer's band: a splitter under the hits sizes it; until it moves the band sizes by its content.
+  const sized = pane && showHits && snapshot.paneSize !== undefined
+  const share = () => {
+    const band = root.current, box = band && paneBox(band)
+    return band && box && box.height > 0 ? band.getBoundingClientRect().height / box.height : paneBandLimits.minimum
+  }
+  const drag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const band = root.current
+    if (event.button !== 0 || !band) return
+    event.preventDefault()
+    const target = event.currentTarget, pointer = event.pointerId
+    target.setPointerCapture(pointer)
+    const move = (moved: PointerEvent) => {
+      const box = paneBox(band)
+      if (moved.pointerId === pointer && box) objectSearch.setPaneSize(paneBandDrag(moved.clientY, band.getBoundingClientRect().top, box.top, box.bottom))
+    }
+    const end = (ended: PointerEvent) => {
+      if (ended.pointerId !== pointer) return
+      target.removeEventListener('pointermove', move)
+      for (const type of dragEnds) target.removeEventListener(type, end)
+    }
+    target.addEventListener('pointermove', move)
+    for (const type of dragEnds) target.addEventListener(type, end)
+  }
+  const splitterKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+    const next = paneBandKey(snapshot.paneSize ?? share(), event.key)
+    if (next === undefined) return
+    event.preventDefault()
+    event.stopPropagation()
+    objectSearch.setPaneSize(next)
+  }
+  return <div ref={root} className={`object-search object-search-${layout}`} data-sized={sized ? '' : undefined} style={sized ? { height: `${snapshot.paneSize! * 100}%` } : undefined}>
     <div className="object-search-query">
       <div className="object-search-field" role="search">
         <Icon name="search" />
@@ -145,12 +188,12 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
     {showHits && (asked && !result!.problem && result!.hits.length === 0 && !state.requestId
       ? <EmptyState icon="search" title="No objects match" detail={entry?.requestId ? 'The index is still being built; results update when it finishes.' : 'Try another spelling, turn off Match Case or Whole Word, or search names and definitions.'} />
       : <ul ref={list} className="object-search-hits" aria-label={pane ? 'Search results' : 'Results'} onKeyDown={onListKey}>
-        {result?.hits.map(hit => {
+        {result?.hits.map((hit, index) => {
           const spec = kindSpecs[hit.object.kind]
           const path = searchHitPath(hit)
           const key = JSON.stringify([hit.object, hit.folder])
-          return <li key={key} className="object-search-hit">
-            <button type="button" className="object-search-open" data-hit title={`Reveal in Object Explorer: ${displayText(hit.label)}`} onClick={() => reveal(hit)}>
+          return <li key={key} className="object-search-hit" {...index === current ? { 'aria-current': true } : {}}>
+            <button type="button" className="object-search-open" data-hit title={`Reveal in Object Explorer: ${displayText(hit.label)}`} onClick={() => { objectSearch.pick(searchId, index); reveal(hit) }}>
               <ExplorerIcon name={(hit.subtype && spec.subtypeIcons?.[hit.subtype]) || spec.icon} />
               <span className="object-search-name"><Marked text={hit.label} range={hit.range} /></span>
               <span className="object-search-path">{displayText(path)}</span>
@@ -166,5 +209,8 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
           </li>
         })}
       </ul>)}
+    {pane && showHits && <div className="object-search-splitter" role="separator" aria-orientation="horizontal" aria-label="Resize search results" tabIndex={0}
+      title="Drag to resize; double-click to fit the results" aria-valuemin={Math.round(paneBandLimits.minimum * 100)} aria-valuemax={Math.round(paneBandLimits.maximum * 100)}
+      aria-valuenow={snapshot.paneSize === undefined ? undefined : Math.round(snapshot.paneSize * 100)} aria-valuetext={snapshot.paneSize === undefined ? 'Fits the results' : undefined} onPointerDown={drag} onKeyDown={splitterKey} onDoubleClick={() => objectSearch.setPaneSize(undefined)} />}
   </div>
 }

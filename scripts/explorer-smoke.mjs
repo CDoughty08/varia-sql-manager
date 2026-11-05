@@ -6,7 +6,7 @@ import { expandExplorerPath, explorerLines, explorerRow, explorerTree, revealExp
 import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.mjs'
 import {
   activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
-  explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchField, explorerSearchHits, explorerSearchToggle, explorerServerCount, explorerSublabel, explorerToolbar, itemCount,
+  explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchSplitter, explorerSearchToggle, explorerServerCount, explorerSublabel, explorerToolbar, itemCount,
   messages, outputView, paneMenuButton, part, primaryAction, quickInput, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
 } from './fixtures/ui.mjs'
 
@@ -669,6 +669,36 @@ try {
   expect(await listings()).toBe(listed)
   expect(await active()).toMatchObject({ label: 'dbo.table1', selected: 'true' })
   await page.screenshot({ path: resolve('artifacts', 'explorer-search.png') })
+  // The splitter under the hits sizes the band: End gives it most of the pane, a drag moves it, Up shrinks it a step, and a
+  // double-click fits it to its results again. The tree keeps the rest.
+  const splitter = explorerSearchSplitter(page)
+  const band = () => page.locator(part.explorerSearch).evaluate(element => ({ share: element.getBoundingClientRect().height / element.parentElement.getBoundingClientRect().height, sized: element.hasAttribute('data-sized') }))
+  await expect(splitter).toHaveAttribute('aria-valuetext', 'Fits the results')
+  await splitter.focus()
+  await page.keyboard.press('End')
+  await expect(splitter).toHaveAttribute('aria-valuenow', '85')
+  expect((await band()).share).toBeGreaterThan(0.8)
+  await expect(tree()).toBeVisible()
+  // In a pane too short for the header, an 85% band and the footer, the band gives way and the footer stays in the pane.
+  const footerFits = () => page.locator(part.explorerSearch).evaluate(element => {
+    const pane = element.parentElement.getBoundingClientRect(), footer = element.parentElement.lastElementChild.getBoundingClientRect()
+    return footer.height > 0 && footer.bottom <= pane.bottom + 1
+  })
+  await page.locator(part.explorerSearch).evaluate(element => { element.parentElement.style.height = '160px' })
+  await expect.poll(footerFits).toBe(true)
+  await page.locator(part.explorerSearch).evaluate(element => { element.parentElement.style.height = '' })
+  await splitter.focus()
+  await page.keyboard.press('ArrowUp')
+  await expect(splitter).toHaveAttribute('aria-valuenow', '80')
+  const box = await splitter.boundingBox(), column = await page.locator(part.explorerSearch).evaluate(element => { const r = element.parentElement.getBoundingClientRect(); return { top: r.top, height: r.height } })
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width / 2, column.top + column.height * 0.5, { steps: 4 })
+  await page.mouse.up()
+  await expect.poll(async () => Number(await splitter.getAttribute('aria-valuenow'))).toBeLessThan(60)
+  await splitter.dblclick()
+  await expect(splitter).toHaveAttribute('aria-valuetext', 'Fits the results')
+  expect(await band()).toMatchObject({ sized: false })
   // Match Case, Whole Word and Regex are the tab's toggles: Whole Word leaves nothing for ORD, and says so.
   const wholeWord = explorerSearchToggle(page, 'Match Whole Word')
   await wholeWord.click()
@@ -695,6 +725,24 @@ try {
   await expect(searchBox()).toHaveValue('')
   await expect(searchBox()).toBeFocused()
   await expect(explorerSearchHits(page)).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await expect(tree()).toBeFocused()
+  // Enter in the box reveals the next hit in the tree and keeps focus in the box, wrapping round; Shift+Enter goes back.
+  await searchBox().focus()
+  await page.keyboard.type('table')
+  await expect(explorerSearchHits(page)).toHaveCount(2)
+  for (const [key, label] of [['Enter', 'dbo.table1'], ['Enter', 'dbo.table2'], ['Enter', 'dbo.table1'], ['Shift+Enter', 'dbo.table2']]) {
+    await page.keyboard.press(key)
+    await expect.poll(async () => (await active())?.label).toBe(label)
+    await expect(explorerSearchCurrent(page)).toHaveAttribute('title', `Reveal in Object Explorer: ${label}`)
+    await expect(searchBox()).toBeFocused()
+  }
+  // Search in Object Explorer's key, from the tree, selects the box's text, so typing replaces it.
+  await tree().focus()
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+F' : 'Control+Shift+F')
+  await expect(searchBox()).toBeFocused()
+  expect(await searchBox().evaluate(input => [input.selectionStart, input.selectionEnd])).toEqual([0, 5])
+  await page.keyboard.press('Escape')
   await page.keyboard.press('Escape')
   await expect(tree()).toBeFocused()
   if (process.platform !== 'darwin') {
@@ -853,7 +901,7 @@ try {
   expect(narrow.label, JSON.stringify(narrow)).toBeCloseTo(narrow.kept, 0)
   if (wasExpanded === 'false') { await select('server-a', 'Server Objects'); await press('ArrowLeft', 'Server Objects') }
   await page.screenshot({ path: resolve('artifacts', 'explorer-visuals.png') })
-  console.log('Object Explorer checks: 30 px server rows with version, login, connection dot and active-query glyph, muted item counts, the environment tag\'s slot, the footer\'s freshness, and the Filter loaded objects box by keyboard and from the palette.')
+  console.log('Object Explorer checks: 30 px server rows with version, login, connection dot and active-query glyph, muted item counts, the environment tag\'s slot, the footer\'s freshness, the Filter loaded objects box by keyboard and from the palette, and the search band\'s splitter by keyboard, drag and double-click.')
 
   // 11. Disconnecting a server while one of its folders streams cancels the load and removes its rows.
   await setStub({ tables: 120_000, pageDelayMs: 250 })

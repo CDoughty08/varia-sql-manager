@@ -21,6 +21,7 @@ internal static class SearchChecks
         Sql(check);
         Matcher(check);
         Ranking(check);
+        Qualified(check);
         Previews(check);
         Budget(check);
         SystemObjects(check);
@@ -89,6 +90,38 @@ internal static class SearchChecks
         var evil = Make("(a+)+$", regex: true).Find(new string('a', 50_000) + "!", 0, out _, out _);
         check(!evil && watch.Elapsed < TimeSpan.FromSeconds(2), "a pattern that backtracks exponentially elsewhere runs in linear time");
         check(!Make("x").Find("", 0, out _, out _) && Make("a").Find("a", 1, out _, out _) == false, "the matcher stops at the end of the text");
+        check(Make("ord*s").Find("usp_GetOrders", 0, out at, out length) && at == 7 && length == 6, "a plain search's * stands for any characters");
+        check(Make("*Orders*").Find("usp_GetOrders", 0, out at, out length) && at == 7 && length == 6, "a plain search's outer *s change nothing, since it matches anywhere");
+        check(Make("Cust*", wholeWord: true).Find("dbo.Customers x", 0, out at, out length) && at == 4 && length == 9, "under Whole Word an outer * matches the rest of the identifier");
+        check(Make("a?c").Find("xabcx", 0, out at, out length) && at == 1 && length == 3 && !Make("a?c").Find("ac", 0, out _, out _), "a plain search's ? stands for one character");
+        check(Make("a+b*c").Find("a+bXc", 0, out at, out _) && at == 0 && Make("[x]?").Find("[x]1", 0, out at, out _) && at == 0, "a wildcard search keeps every other character literal");
+        check(SearchMatcher.Wildcard("a**b?c") == "a.*?b.c" && SearchMatcher.Wildcard("*ab*") == "[\\p{L}\\p{Nd}_@#$]*ab[\\p{L}\\p{Nd}_@#$]*", "wildcards become a NonBacktracking pattern");
+    }
+
+    private static void Qualified(Action<bool, string> check)
+    {
+        var index = new ConnectionIndex(new IndexBudget(1 << 20));
+        index.Put(new DatabaseIndex("AppData", [
+            new("schema", "schemas", null, "Sales"),
+            new("table", "tables", "Sales", "Orders"),
+            new("table", "tables", "dbo", "SalesOrders"),
+            new("table", "tables", "PartialSchemaOne", "TableTable"),
+            new("table", "tables", "PartialSchemaTwo", "TableTable"),
+            new("table", "tables", "dbo", "TableTable")
+        ], 0, 0, 0));
+        index.Put(new DatabaseIndex("Archive", [new("table", "tables", "Sales", "Orders")], 0, 0, 0));
+        string Labels(ObjectSearchResult result) => string.Join(", ", result.Hits.Select(hit => hit.Object.Database + ":" + hit.Label));
+        var result = Search(index, ".sales", definitions: false);
+        check(Labels(result) == "AppData:Sales, AppData:Sales.Orders, Archive:Sales.Orders, AppData:dbo.SalesOrders" && result.Hits[0].Range is [0, 5],
+            "a leading dot finds a schema by its name, then what starts with it: " + Labels(result));
+        result = Search(index, "Sales.", definitions: false);
+        check(Labels(result) == "AppData:Sales, AppData:Sales.Orders, Archive:Sales.Orders", "a trailing dot finds the schema and its objects: " + Labels(result));
+        result = Search(index, "appdata.sales.orders", definitions: false);
+        check(Labels(result) == "AppData:Sales.Orders" && result.Hits[0].Range is [0, 12], "a database-qualified name finds the object in that database only: " + Labels(result));
+        result = Search(index, "PartialSchema*.TableTable", definitions: false);
+        check(Labels(result) == "AppData:PartialSchemaOne.TableTable, AppData:PartialSchemaTwo.TableTable", "a wildcard spans schemas: " + Labels(result));
+        result = Search(index, "Table?able", definitions: false);
+        check(result.Hits.Count == 3, "a wildcard search without a dot matches names");
     }
 
     private static ConnectionIndex Sample(IndexBudget budget)

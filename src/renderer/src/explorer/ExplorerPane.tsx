@@ -85,7 +85,7 @@ function ExplorerSearch({ connectionId }: { readonly connectionId: string | unde
   const input = useRef<HTMLInputElement>(null)
   useLayoutEffect(() => objectSearch.followExplorer(connectionId), [objectSearch, connectionId])
   // Search in Object Explorer asks for focus, perhaps before this pane was shown.
-  useLayoutEffect(() => { if (objectSearch.takePaneFocus()) input.current?.focus() }, [objectSearch, paneFocus])
+  useLayoutEffect(() => { if (objectSearch.takePaneFocus()) { input.current?.focus(); input.current?.select() } }, [objectSearch, paneFocus])
   return <SearchPanel searchId={explorerSearchId} layout="pane" inputRef={input} onLeave={() => document.querySelector<HTMLElement>('[data-explorer-tree]')?.focus()} />
 }
 

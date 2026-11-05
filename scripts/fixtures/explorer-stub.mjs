@@ -13,7 +13,8 @@ import { explorerStatics } from './explorer-tree.mjs'
  * - AppData › Views: `views` expandable views (dbo.view0…), paged the same way.
  * - Security › Audits fails with PERMISSION_DENIED until `auditsOk` is set.
  * - Server Objects › Linked Servers is held until `release()` or a cancel for its request.
- * - The object index (explorer.index, explorer.search) holds dbo.Orders, dbo.usp_ShipOrders and dbo.Orders.trg_Orders.
+ * - The object index (explorer.index, explorer.search) holds dbo.Orders, dbo.usp_ShipOrders, dbo.Orders.trg_Orders, dbo.table1 and
+ *   dbo.table2.
  */
 export function explorerStubData() {
   return { statics: explorerStatics() }
@@ -92,12 +93,15 @@ export function installExplorerStub({ ipcMain }, { statics }) {
       }
     }
   }
-  // The object index: AppData's dbo.Orders, a procedure that names it, and its trigger, searched with the real options.
+  // The object index: AppData's dbo.Orders, a procedure that names it, its trigger, and two tables Enter walks between,
+  // searched with the real options.
   const searchObjects = [
     { object: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' }, folder: 'tables', label: 'dbo.Orders' },
     { object: { kind: 'procedure', database: 'AppData', schema: 'dbo', name: 'usp_ShipOrders' }, folder: 'storedProcedures', label: 'dbo.usp_ShipOrders',
       definition: 'CREATE PROCEDURE dbo.usp_ShipOrders AS\n  UPDATE dbo.Orders SET shipped = 1;' },
-    { object: { kind: 'trigger', database: 'AppData', name: 'trg_Orders', parent: { kind: 'table', schema: 'dbo', name: 'Orders' } }, folder: 'tableTriggers', label: 'dbo.Orders.trg_Orders' }
+    { object: { kind: 'trigger', database: 'AppData', name: 'trg_Orders', parent: { kind: 'table', schema: 'dbo', name: 'Orders' } }, folder: 'tableTriggers', label: 'dbo.Orders.trg_Orders' },
+    { object: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'table1' }, folder: 'tables', label: 'dbo.table1' },
+    { object: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'table2' }, folder: 'tables', label: 'dbo.table2' }
   ]
   const indexStatus = definitions => ({ state: 'ready', databases: 2, indexed: 2, objects: searchObjects.length, modules: definitions ? 1 : 0, cut: 0, skipped: [], definitions, builtAt: '2026-11-03T12:00:00Z' })
   function search({ text, caseSensitive, wholeWord, regex, in: scope = 'all' }) {

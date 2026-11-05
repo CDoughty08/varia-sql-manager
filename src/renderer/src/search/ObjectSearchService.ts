@@ -10,6 +10,7 @@ import type { Disposable } from '../core/types'
 import type { ConnectionService, LiveConnection } from '../services/connections'
 import type { RevealPath, SeekOutcome } from '../explorer/ExplorerService'
 import type { CustomDocumentProvider, DocumentService } from '../services/documents'
+import { clampPaneBand } from './pane-band'
 
 /** One connection's index as the page knows it: a build running (with its progress) or the last build's status. */
 export interface IndexEntry {
@@ -39,6 +40,8 @@ export interface SearchDocumentState extends SearchQueryState {
   readonly result?: ObjectSearchResult
   readonly asked?: SearchQueryState
   readonly error?: string
+  /** The hit Enter in the box revealed last, by index in the result; a new result forgets it. */
+  readonly current?: number
 }
 export interface ObjectSearchSnapshot {
   readonly indexes: Readonly<Record<string, IndexEntry>>
@@ -46,6 +49,8 @@ export interface ObjectSearchSnapshot {
   readonly documents: Readonly<Record<string, SearchDocumentState>>
   /** Changes when Search in Object Explorer asks the box to take focus. */
   readonly paneFocus: number
+  /** Object Explorer's search band's share of the pane, once its splitter was moved (pane-band.ts); until then it sizes by content. */
+  readonly paneSize?: number
 }
 /** Object Explorer as Reveal uses it: its seek, and whether it groups objects by schema (the paths differ). */
 export interface RevealHost {
@@ -179,7 +184,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const document = this.o.documents.openCustom('objectSearch', searchTitle, connection.id, 'master')
     this.putDocument({ id: document.id, connectionId: connection.id, ...emptyQuery, ...text ? { text } : {} })
     if (!this.getSnapshot().indexes[connection.id]?.status && !this.getSnapshot().indexes[connection.id]?.requestId) this.build(connection.id)
-    if (text) this.search(document.id)
+    if (text) void this.search(document.id)
     this.o.focus?.(document.id)
     return document.id
   }
@@ -212,6 +217,14 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     return true
   }
 
+  /** Sizes Object Explorer's search band (its splitter); undefined goes back to sizing by content. */
+  setPaneSize(size: number | undefined): void {
+    if (this.disposed) return
+    const { paneSize: previous, ...rest } = this.getSnapshot()
+    const next = size === undefined ? undefined : clampPaneBand(size)
+    if (next !== previous) this.publish(next === undefined ? rest : { ...rest, paneSize: next })
+  }
+
   /** Changes what a tab asks; text changes search after a short pause, option changes at once. */
   setQuery(id: string, patch: Partial<SearchQueryState>): void {
     const document = this.getSnapshot().documents[id]
@@ -220,8 +233,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const pending = this.typing.get(id)
     if (pending !== undefined) this.timers.clearTimeout(pending)
     this.typing.delete(id)
-    if (patch.text !== undefined && patch.text.trim()) this.typing.set(id, this.timers.setTimeout(() => { this.typing.delete(id); this.search(id) }, objectSearchLimits.typingMs))
-    else this.search(id)
+    if (patch.text !== undefined && patch.text.trim()) this.typing.set(id, this.timers.setTimeout(() => { this.typing.delete(id); void this.search(id) }, objectSearchLimits.typingMs))
+    else void this.search(id)
   }
 
   /** Points a tab at another connected server. */
@@ -232,29 +245,58 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     this.putDocument({ id, connectionId, text: document.text, caseSensitive: document.caseSensitive, wholeWord: document.wholeWord, regex: document.regex, scope: document.scope })
     const entry = this.getSnapshot().indexes[connectionId]
     if (!entry?.status && !entry?.requestId) this.build(connectionId)
-    this.search(id)
+    void this.search(id)
   }
 
-  /** Runs a tab's search now (Enter); a search still on its way is cancelled. */
-  search(id: string): void {
+  /** Runs a tab's search now; a search still on its way is cancelled. Settles once it has answered. */
+  search(id: string): Promise<void> {
     const document = this.getSnapshot().documents[id]
-    if (!document || this.disposed) return
+    if (!document || this.disposed) return Promise.resolve()
     this.cancelSearch(document)
     const asked: SearchQueryState = { text: document.text, caseSensitive: document.caseSensitive, wholeWord: document.wholeWord, regex: document.regex, scope: document.scope }
-    if (!asked.text.trim()) { this.putDocument({ ...this.query(document), id, connectionId: document.connectionId }); return }
-    if (!live(this.o.connections.get(document.connectionId))) { this.putDocument({ ...document, requestId: undefined, error: 'The server is not connected.' }); return }
+    if (!asked.text.trim()) { this.putDocument({ ...this.query(document), id, connectionId: document.connectionId }); return Promise.resolve() }
+    if (!live(this.o.connections.get(document.connectionId))) { this.putDocument({ ...document, requestId: undefined, error: 'The server is not connected.' }); return Promise.resolve() }
     const requestId = this.newId()
     this.putDocument({ ...document, requestId, error: undefined })
-    void this.o.api.explorerSearch({
+    return this.o.api.explorerSearch({
       connectionId: document.connectionId, requestId, text: asked.text, caseSensitive: asked.caseSensitive, wholeWord: asked.wholeWord, regex: asked.regex, in: asked.scope
     }).then(result => {
       const current = this.getSnapshot().documents[id]
       if (this.disposed || current?.requestId !== requestId) return
       const { requestId: _done, ...rest } = current
-      if (result.ok) this.putDocument({ ...rest, result: result.value, asked, error: undefined })
+      if (result.ok) this.putDocument({ ...rest, result: result.value, asked, error: undefined, current: undefined })
       else if (result.code !== 'CANCELLED') this.putDocument({ ...rest, error: result.error })
       else this.putDocument(rest)
     }, onUnexpectedError)
+  }
+
+  /**
+   * Enter in the box: the hit after the one Enter revealed last (Shift+Enter: the one before), wrapping round, so repeated
+   * Enters walk the hits as Find Next walks matches. The first Enter after typing searches at once if the answer is not in yet,
+   * and takes the first hit (Shift+Enter: the last). Undefined when the search has no hits.
+   */
+  async step(id: string, delta: 1 | -1): Promise<ObjectSearchHit | undefined> {
+    const answered = (document: SearchDocumentState | undefined): document is SearchDocumentState & { readonly result: ObjectSearchResult } =>
+      !!document?.result && !document.requestId && !this.typing.has(id) && !!document.asked && JSON.stringify(document.asked) === JSON.stringify(this.query(document))
+    if (!answered(this.getSnapshot().documents[id])) {
+      const pending = this.typing.get(id)
+      if (pending !== undefined) this.timers.clearTimeout(pending)
+      this.typing.delete(id)
+      await this.search(id)
+    }
+    const document = this.getSnapshot().documents[id]
+    if (!answered(document) || this.disposed) return undefined
+    const hits = document.result.hits, count = hits.length
+    if (!count) return undefined
+    const current = document.current === undefined || document.current >= count ? (delta > 0 ? 0 : count - 1) : (document.current + delta + count) % count
+    this.putDocument({ ...document, current })
+    return hits[current]
+  }
+
+  /** A hit revealed from the list: the next Enter in the box goes on from it. */
+  pick(id: string, current: number): void {
+    const document = this.getSnapshot().documents[id]
+    if (document?.result && current >= 0 && current < document.result.hits.length) this.putDocument({ ...document, current })
   }
 
   /** Reveal in Object Explorer: walks the hit's path from the server down, loading what it needs, and selects its node. */
@@ -298,7 +340,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
 
   /** Re-runs the searches of a connection's tabs once its build ends, so they see the whole index. */
   private refresh(connectionId: string): void {
-    for (const document of Object.values(this.getSnapshot().documents)) if (document.connectionId === connectionId && document.text.trim()) this.search(document.id)
+    for (const document of Object.values(this.getSnapshot().documents)) if (document.connectionId === connectionId && document.text.trim()) void this.search(document.id)
   }
 
   /** A new connection gets a build (when Options says so); a disconnected or lost one's entry goes, as its index went. */
