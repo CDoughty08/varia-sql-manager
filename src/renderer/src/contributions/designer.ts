@@ -12,7 +12,7 @@ const frame = (callback: () => void) => { if (typeof requestAnimationFrame === '
 export function designerContribution({ commands, explorer, designers, documents, connections }: Pick<Workbench, 'commands' | 'explorer' | 'designers' | 'documents' | 'connections'>): Disposable {
   const tablesFolder = (args?: CommandArgs): ExplorerMenuNode | undefined => {
     const node = args?.target ? explorerNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
-    return node && node.kind === 'folder' && node.folder === 'tables' && !node.lost && node.ref.type === 'folder' && node.ref.owner.kind === 'database' && connections.isLive(node.connectionId) ? node : undefined
+    return node && node.kind === 'folder' && node.folder === 'tables' && !node.lost && node.ref.type === 'folder' && (node.ref.owner.kind === 'database' || node.ref.owner.kind === 'schema') && connections.isLive(node.connectionId) ? node : undefined
   }
   const designerOf = (args?: CommandArgs): string | undefined => { const id = args?.tabId ?? documents.getSnapshot().activeId; return designers.get(id) ? id : undefined }
   const editing = (args?: CommandArgs) => { const id = designerOf(args); return id && designers.canEdit(id) ? id : undefined }

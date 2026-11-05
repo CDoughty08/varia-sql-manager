@@ -7,7 +7,8 @@ import { describe, expect, it } from 'vitest'
 import {
   bandOf, childParentKinds, cloudEngineEditions, engineOf, explorerCatalogJson, explorerIcons, explorerLimits, filterProperties, folderGates, folderIds, folderOwnerKinds,
   folderServed, folderSpecs, foldersFor, kindScopes, kindSpecs, laterFolders, maxBand, maxNameOf, minBand, nodeKinds, nodeSubtypes, parentKinds, queryIds, refFields,
-  rootFolder, scopeFields, serverEngineOf, serverEngines, staticChildren, statusBadges, subfolders, type ExplorerProfile, type FolderId, type KindSpec, type NodeKind
+  rootFolder, scopeFields, serverEngineOf, serverEngines, staticChildren, statusBadges, subfolders, belowGroupedDatabase, belowSchema, folderFilterFor, ownedSubfolders,
+  schemaGroupFolders, schemaGroupList, schemaGroupRoots, schemaPlacement, type ExplorerProfile, type FolderId, type KindSpec, type NodeKind
 } from '../src/shared/explorer/catalog'
 import { renderExplorerDocs } from '../src/shared/explorer/docs'
 import { loginSubtypes } from '../src/shared/actions/logins'
@@ -127,7 +128,7 @@ describe('Object Explorer catalogue', () => {
   it('lists rows exactly in the folders and kinds that have a query, with filters only in folders', () => {
     const lists = [...folderIds.flatMap(id => folderSpecs[id].list ?? []), ...nodeKinds.flatMap(kind => kindSpecs[kind].list ?? [])]
     expect(unique(lists)).toBe(true)
-    expect([...lists, 'historyTable'].sort()).toEqual([...queryIds].sort())
+    expect([...lists, 'historyTable', schemaGroupList].sort()).toEqual([...queryIds].sort())
     for (const kind of nodeKinds) {
       const spec = kindSpecs[kind]
       expect(spec.rows !== undefined, kind).toBe(spec.list !== undefined)
@@ -179,12 +180,50 @@ describe('Object Explorer catalogue', () => {
     expect(nodeKinds.filter(kind => kindSpecs[kind].scope.startsWith('ssis'))).toEqual(ssisKinds)
     expect(nodeKinds.filter(kind => kindSpecs[kind].insert === 'raw')).toEqual(['parameter'])
   })
+  it('groups by schema exactly the folders of schema-scoped objects below Tables, Views, Synonyms and Programmability', () => {
+    const placed = folderIds.filter(id => schemaPlacement(id) !== undefined)
+    expect(placed.every(id => (schemaGroupRoots as readonly FolderId[]).includes(rootFolder(id)))).toBe(true)
+    expect(schemaGroupRoots.every(id => kindSpecs.database.folders.includes(id))).toBe(true)
+    // Every listing folder shows where its rows' scope says, and a static folder wherever any folder below it shows.
+    for (const id of placed) {
+      const { rows, list } = folderSpecs[id]
+      if (list) expect(schemaPlacement(id), id).toBe(rows!.every(kind => kindSpecs[kind].scope === 'schemaObject') ? 'schema' : 'database')
+      else {
+        const below = subfolders(id).map(child => schemaPlacement(child))
+        expect(schemaPlacement(id), id).toBe(below.includes('both') || (below.includes('schema') && below.includes('database')) ? 'both' : below[0])
+      }
+      // A listing below a schema row narrows to the schema through the folder's own Schema filter, which the user no longer sets.
+      if (belowSchema(id) && list) {
+        expect(folderSpecs[id].filter, id).toContain('schema')
+        expect(folderFilterFor(id, 'schema'), id).toEqual(folderSpecs[id].filter!.filter(property => property !== 'schema'))
+      }
+    }
+    expect(Object.fromEntries(['tables', 'views', 'synonyms', 'programmability', 'storedProcedures', 'functions', 'types', 'sequences', 'databaseTriggers', 'assemblies', 'planGuides']
+      .map(id => [id, schemaPlacement(id as FolderId)]))).toEqual({
+      tables: 'schema', views: 'schema', synonyms: 'schema', programmability: 'both', storedProcedures: 'schema', functions: 'schema', types: 'schema', sequences: 'schema',
+      databaseTriggers: 'database', assemblies: 'database', planGuides: 'database'
+    })
+    for (const id of ['externalResources', 'storage', 'databaseSecurity', 'securityPolicies', 'databases', 'columns'] as const) expect(schemaPlacement(id), id).toBeUndefined()
+    expect(folderFilterFor('tables', 'database')).toEqual(['name', 'schema', 'owner', 'created'])
+    // The tree each side shows, on the newest box server.
+    const newest = box(maxBand)
+    expect(schemaGroupFolders(newest)).toEqual(['tables', 'views', 'synonyms', 'programmability'])
+    expect(kindSpecs.database.folders.filter(belowGroupedDatabase)).toEqual(['externalResources', 'programmability', 'storage', 'databaseSecurity'])
+    expect(ownedSubfolders('programmability', 'schema', false)).toEqual(['storedProcedures', 'functions', 'types', 'rules', 'defaults', 'sequences'])
+    expect(ownedSubfolders('programmability', 'database', true)).toEqual(['databaseTriggers', 'assemblies', 'planGuides'])
+    expect(ownedSubfolders('programmability', 'database', false)).toEqual(subfolders('programmability'))
+    expect(ownedSubfolders('tables', 'schema', false)).toEqual(subfolders('tables'))
+    // Gates still apply: a 2014 server has no External Resources, Graph Tables or ledger folders, grouped or not.
+    expect(schemaGroupFolders(box(12))).toEqual(['tables', 'views', 'synonyms', 'programmability'])
+    expect(staticChildren({ folder: 'tables' }, box(12)).filter(belowSchema)).toEqual(['systemTables', 'fileTables'])
+  })
   it('lets every folder hang below some kind, and child kinds below the kinds that list them', () => {
     for (const id of folderIds) {
       const owners = folderOwnerKinds(id)
       expect(owners.length, id).toBeGreaterThan(0)
       const { owner } = folderSpecs[id]
-      if (owner === 'server' || owner === 'database') expect(owners, id).toEqual([owner])
+      // Group by Schema hangs the folders of schema-scoped objects below a schema row as well.
+      if (owner === 'server' || owner === 'database') expect(owners, id).toEqual(belowSchema(id) ? [owner, 'schema'] : [owner])
       // Object folders hang below the SQL objects that own child refs, or below SSIS folders and projects.
       else for (const kind of owners) expect([...parentKinds, 'ssisFolder', 'ssisProject'], id).toContain(kind)
     }
@@ -194,7 +233,9 @@ describe('Object Explorer catalogue', () => {
     expect(folderOwnerKinds('ssisPackages')).toEqual(['ssisProject'])
     expect(folderOwnerKinds('columns')).toEqual(['table', 'view', 'function', 'tableType'])
     expect(folderOwnerKinds('parameters')).toEqual(['procedure', 'function'])
-    expect(folderOwnerKinds('systemTables')).toEqual(['database'])
+    expect(folderOwnerKinds('systemTables')).toEqual(['database', 'schema'])
+    expect(folderOwnerKinds('databaseTriggers')).toEqual(['database'])
+    expect(folderOwnerKinds('securityPolicies')).toEqual(['database'])
     expect(Object.fromEntries(nodeKinds.filter(kind => childParentKinds(kind).length).map(kind => [kind, childParentKinds(kind)]))).toEqual({
       column: ['table', 'view', 'tableType', 'function'], key: ['table', 'tableType'], constraint: ['table', 'tableType'], trigger: ['table', 'view'],
       index: ['table', 'view', 'tableType'], statistic: ['table', 'view'], parameter: ['procedure', 'function'], returnValue: ['procedure', 'function']

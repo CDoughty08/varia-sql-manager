@@ -2,8 +2,17 @@ using System.Text.Json;
 
 namespace Varia.Backend.Explorer;
 
+/// <summary>SchemaPlacement: where Group by Schema shows the folder (schema, database or both), for the folders below the
+/// roots that move below schema rows; null for every other.</summary>
 internal sealed record CatalogFolder(string Id, string Label, string Owner, string? Parent, int Order, int? Since, IReadOnlyList<string> Engines, string? List,
-    IReadOnlyList<string> Rows, IReadOnlyList<string> Filter);
+    IReadOnlyList<string> Rows, IReadOnlyList<string> Filter, string? SchemaPlacement = null)
+{
+    public bool BelowSchema => SchemaPlacement is "schema" or "both";
+    /// <summary>Shown below a database while Group by Schema is on.</summary>
+    public bool BelowGroupedDatabase => Owner == "database" && SchemaPlacement != "schema";
+}
+/// <summary>Group by Schema's listing of a database's schemas.</summary>
+internal sealed record CatalogSchemaGroups(string List, IReadOnlyList<string> Rows);
 /// <summary>A node kind. List and Rows: the query whose rows follow the kind's static folders, and their kinds. MaxName: the
 /// longest name its refs may carry (128 unless the kind declares more, and then it owns no folders or rows).</summary>
 internal sealed record CatalogKind(string Kind, string Title, string Scope, string Icon, IReadOnlyList<string> Subtypes, IReadOnlyDictionary<string, string> SubtypeIcons,
@@ -34,12 +43,13 @@ internal sealed class ExplorerCatalog
         return Parse(stream);
     });
 
-    private sealed record FolderJson(string Id, string Label, string Owner, string? Parent, int Order, int? Since, List<string> Engines, string? List, List<string>? Rows, List<string> Filter);
+    private sealed record FolderJson(string Id, string Label, string Owner, string? Parent, int Order, int? Since, List<string> Engines, string? List, List<string>? Rows, List<string> Filter,
+        string? SchemaPlacement);
     private sealed record KindJson(string Kind, string Title, string Scope, string Icon, List<string> Subtypes, Dictionary<string, string> SubtypeIcons,
         Dictionary<string, string> VariantIcons, List<string> Folders, Dictionary<string, List<string>> SubtypeFolders, List<string> HistoryLookup, List<string> Parents,
         string? List, List<string> Rows, int MaxName);
     private sealed record CatalogJson(int Version, List<int> CloudEngineEditions, List<FolderJson> Folders, List<KindJson> Kinds, List<int> ManagedInstanceEngineEditions, List<string> Queries,
-        Dictionary<string, CatalogScope> Scopes);
+        CatalogSchemaGroups SchemaGroups, Dictionary<string, CatalogScope> Scopes);
 
     private readonly Dictionary<string, CatalogFolder> folders;
     private readonly Dictionary<string, CatalogKind> kinds;
@@ -52,7 +62,7 @@ internal sealed class ExplorerCatalog
         CloudEditions = json.CloudEngineEditions.ToHashSet();
         ManagedInstanceEditions = json.ManagedInstanceEngineEditions.ToHashSet();
         folders = json.Folders.ToDictionary(folder => folder.Id, folder => new CatalogFolder(folder.Id, folder.Label, folder.Owner, folder.Parent, folder.Order, folder.Since,
-            folder.Engines, folder.List, folder.Rows ?? [], folder.Filter), StringComparer.Ordinal);
+            folder.Engines, folder.List, folder.Rows ?? [], folder.Filter, folder.SchemaPlacement), StringComparer.Ordinal);
         kinds = json.Kinds.ToDictionary(kind => kind.Kind, kind => new CatalogKind(kind.Kind, kind.Title, kind.Scope, kind.Icon, kind.Subtypes, kind.SubtypeIcons, kind.VariantIcons,
             kind.Folders, kind.SubtypeFolders.ToDictionary(item => item.Key, item => (IReadOnlyList<string>)item.Value), kind.HistoryLookup, kind.Parents, kind.List, kind.Rows,
             kind.MaxName is >= ExplorerRefs.MaxIdentifier and <= ExplorerRefs.MaxName ? kind.MaxName : throw new InvalidOperationException("A kind's name bound is out of range.")),
@@ -62,13 +72,15 @@ internal sealed class ExplorerCatalog
         if (kinds.Values.FirstOrDefault(kind => kind.MaxName > ExplorerRefs.MaxIdentifier && OwnsChildren(kind)) is { } longNamed)
             throw new InvalidOperationException("A kind whose names exceed 128 code units cannot own folders or rows: " + longNamed.Kind + ".");
         Queries = [.. json.Queries];
+        SchemaGroups = json.SchemaGroups ?? throw new InvalidOperationException("The Object Explorer catalogue has no schema groups.");
         Scopes = json.Scopes;
         FolderIds = [.. json.Folders.Select(folder => folder.Id)];
         subfolders = folders.Keys.ToDictionary(id => id, id => (IReadOnlyList<string>)[.. folders.Values.Where(child => child.Parent == id).OrderBy(child => child.Order).Select(child => child.Id)], StringComparer.Ordinal);
         owners = folders.Keys.ToDictionary(id => id, id =>
         {
             var root = RootFolder(id);
-            return (IReadOnlyList<string>)[.. kinds.Values.Where(kind => kind.Folders.Contains(root) || kind.SubtypeFolders.Values.Any(set => set.Contains(root))).Select(kind => kind.Kind)];
+            IReadOnlyList<string> owners = [.. kinds.Values.Where(kind => kind.Folders.Contains(root) || kind.SubtypeFolders.Values.Any(set => set.Contains(root))).Select(kind => kind.Kind)];
+            return folders[id].BelowSchema ? [.. owners, "schema"] : owners;
         }, StringComparer.Ordinal);
     }
 
@@ -86,6 +98,7 @@ internal sealed class ExplorerCatalog
     public IReadOnlyList<string> Queries { get; }
     public IReadOnlyList<string> FolderIds { get; }
     public IReadOnlyDictionary<string, CatalogScope> Scopes { get; }
+    public CatalogSchemaGroups SchemaGroups { get; }
     public IEnumerable<CatalogKind> Kinds => kinds.Values;
 
     public CatalogFolder? Folder(string id) => folders.GetValueOrDefault(id);
@@ -125,6 +138,20 @@ internal sealed class ExplorerCatalog
 
     /// <summary>A folder's static subfolders served on this server, in SSMS order.</summary>
     public IReadOnlyList<string> Subfolders(string folder, ExplorerProfile profile) => [.. subfolders[folder].Where(id => Served(id, profile))];
+
+    /// <summary>A folder's served subfolders as its owner shows them: below a schema row those that list its objects, below a
+    /// database with Group by Schema on those that do not (src/shared/explorer/catalog.ts ownedSubfolders).</summary>
+    public IReadOnlyList<string> Subfolders(string folder, string owner, bool grouped, ExplorerProfile profile) =>
+        [.. Subfolders(folder, profile).Where(id => owner == "schema" ? folders[id].BelowSchema : owner != "database" || !grouped || folders[id].BelowGroupedDatabase)];
+
+    /// <summary>A database's served folders with Group by Schema on: those that stay below it.</summary>
+    public IReadOnlyList<string> GroupedDatabaseFolders(ExplorerProfile profile) => [.. StaticFolders("database", null, profile).Where(id => folders[id].BelowGroupedDatabase)];
+
+    /// <summary>A schema row's served folders with Group by Schema on.</summary>
+    public IReadOnlyList<string> SchemaGroupFolders(ExplorerProfile profile) => [.. StaticFolders("database", null, profile).Where(id => folders[id].BelowSchema)];
+
+    /// <summary>The filter properties a folder offers below its owner: below a schema row, not Schema.</summary>
+    public IReadOnlyList<string> FilterFor(CatalogFolder folder, string owner) => [.. folder.Filter.Where(property => owner != "schema" || property != "schema")];
 
     /// <summary>Whether an object node can expand: it has served static folders, a history row (temporal and ledger tables), or
     /// rows of its own (<see cref="CatalogKind.List"/>).</summary>

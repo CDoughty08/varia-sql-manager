@@ -127,6 +127,17 @@ internal static class ExplorerChecks
             "object folder sets follow the subtype");
         check(catalog.FolderOwnerKinds("columns").SequenceEqual(["table", "view", "function", "tableType"]) && catalog.FolderOwnerKinds("logins").SequenceEqual(["server"]),
             "folder owners come from the kinds' folder sets");
+        var box16 = new ExplorerProfile(16, false);
+        check(Names(catalog.GroupedDatabaseFolders(box16)) == "externalResources,programmability,storage,databaseSecurity" && Names(catalog.SchemaGroupFolders(box16)) == "tables,views,synonyms,programmability"
+            && Names(catalog.Subfolders("programmability", "schema", false, box16)) == "storedProcedures,functions,types,rules,defaults,sequences"
+            && Names(catalog.Subfolders("programmability", "database", true, box16)) == "databaseTriggers,assemblies,planGuides"
+            && Names(catalog.Subfolders("programmability", "database", false, box16)) == Names(catalog.Subfolders("programmability", box16))
+            && Names(catalog.Subfolders("tables", "schema", false, box12)) == "systemTables,fileTables"
+            && catalog.FolderOwnerKinds("tables").SequenceEqual(["database", "schema"]) && catalog.FolderOwnerKinds("databaseTriggers").SequenceEqual(["database"])
+            && catalog.FolderOwnerKinds("securityPolicies").SequenceEqual(["database"]) && catalog.SchemaGroups.List == "schemaGroups" && catalog.SchemaGroups.Rows.SequenceEqual(["schema"])
+            && catalog.FilterFor(catalog.Folder("tables")!, "schema").SequenceEqual(["name", "owner", "created"]) && catalog.FilterFor(catalog.Folder("tables")!, "database").Count == 4
+            && !catalog.HasChildren("schema", null, box16),
+            "Group by Schema: a grouped database keeps its database-scoped folders, a schema row has the schema-scoped ones (Programmability split between them), and a schema's folders offer no Schema filter");
     }
 
     /// <summary>Every node that lists rows: a folder with a query (its filters, gate and owner kinds), or a kind that lists rows
@@ -134,7 +145,8 @@ internal static class ExplorerChecks
     private static IEnumerable<(string Node, string Query, IReadOnlyList<string> Filter, int? Since, IReadOnlyList<string> Owners)> Listings(ExplorerCatalog catalog) =>
         catalog.FolderIds.Select(id => catalog.Folder(id)!).Where(folder => folder.List is not null)
             .Select(folder => (folder.Id, folder.List!, folder.Filter, folder.Since, catalog.FolderOwnerKinds(folder.Id)))
-            .Concat(catalog.Kinds.Where(kind => kind.List is not null).Select(kind => (kind.Kind, kind.List!, (IReadOnlyList<string>)[], (int?)null, (IReadOnlyList<string>)[kind.Kind])));
+            .Concat(catalog.Kinds.Where(kind => kind.List is not null).Select(kind => (kind.Kind, kind.List!, (IReadOnlyList<string>)[], (int?)null, (IReadOnlyList<string>)[kind.Kind])))
+            .Append(("database (grouped by schema)", catalog.SchemaGroups.List, (IReadOnlyList<string>)[], (int?)null, (IReadOnlyList<string>)["database"]));
 
     /// <summary>Renders every listed query for bands 12-17, both probe flags, every filter shape of its node and parent kind,
     /// and lints each rendering.</summary>
@@ -417,8 +429,34 @@ internal static class ExplorerChecks
             ("connection id", Args(Object(table)) with { ConnectionId = "x" }),
             ("request id", Args(Object(table)) with { RequestId = "x" })
         };
+        var sales = new ObjectRefDto("database", Name: "Sales");
+        var dbo = new ObjectRefDto("schema", "Sales", Name: "dbo");
+        invalid =
+        [
+            .. invalid,
+            ("groupBySchema false", Args(Object(sales)) with { GroupBySchema = false }),
+            ("groupBySchema on the server", Args(Object(new ObjectRefDto("server"))) with { GroupBySchema = true }),
+            ("groupBySchema on a schema", Args(Object(dbo)) with { GroupBySchema = true }),
+            ("groupBySchema below a schema", Args(Folder(dbo, "tables")) with { GroupBySchema = true }),
+            ("groupBySchema below a table", Args(Folder(table, "columns")) with { GroupBySchema = true }),
+            ("database triggers below a schema", Args(Folder(dbo, "databaseTriggers"))),
+            ("security policies below a schema", Args(Folder(dbo, "securityPolicies"))),
+            ("a schema filter below a schema", Args(Folder(dbo, "tables"), filter: new(Schema: new("equals", "dbo")))),
+            ("a database's own cursor while grouped", Args(Object(sales), cursor: ExplorerCursor.Encode("tables", new("a", "b", null))) with { GroupBySchema = true }),
+            ("a schema groups cursor while not grouped", Args(Object(sales), cursor: ExplorerCursor.Encode("schemaGroups", new("a", null, null))))
+        ];
         var accepted = invalid.Where(item => Valid(item.Args)).Select(item => item.Name).ToList();
-        check(accepted.Count == 0, "invalid refs, folders, subtypes, cursors, page sizes and filters are rejected: " + string.Join(", ", accepted));
+        check(accepted.Count == 0, "invalid refs, folders, subtypes, cursors, page sizes, filters and Group by Schema flags are rejected: " + string.Join(", ", accepted));
+        var grouped = ExplorerRefs.Validate(Args(Object(sales), cursor: ExplorerCursor.Encode("schemaGroups", new("a", null, null))) with { GroupBySchema = true }, catalog);
+        var below = ExplorerRefs.Validate(Args(Folder(dbo, "tables"), filter: new(Name: new("contains", "Ord"))), catalog);
+        var plain = ExplorerRefs.Validate(Args(Folder(dbo, "systemStoredProcedures")), catalog);
+        var programmabilityGrouped = ExplorerRefs.Validate(Args(Folder(sales, "programmability")) with { GroupBySchema = true }, catalog);
+        var values = ExplorerService.Parameters(below, null, true);
+        check(grouped is { Grouped: true, List: "schemaGroups", Database: "Sales" } && below is { Grouped: false, List: "tables", Database: "Sales" }
+            && below.Filter == new ExplorerFilterDto(Name: new("contains", "Ord"), Schema: new("equals", "dbo")) && plain.Filter == new ExplorerFilterDto(Schema: new("equals", "dbo"))
+            && FilterShape.From(below.Filter) == new FilterShape("contains", "equals") && values.Schema == "dbo" && values.Name == "Ord" && programmabilityGrouped.Grouped
+            && Valid(Args(Folder(sales, "tables")) with { GroupBySchema = true }) && Valid(Args(Object(dbo))),
+            "a grouped database lists schemaGroups, and a folder below a schema row lists that schema's objects through an equals filter on it, besides the user's (verbatim, never escaped)");
         var request = ExplorerRefs.Validate(Args(Folder(new ObjectRefDto("database", Name: "Sales"), "graphTables")), catalog);
         bool Served(ExplorerProfile profile)
         {
@@ -700,6 +738,23 @@ internal static class ExplorerChecks
         var programmability = await service.ChildrenAsync(Args(Folder(database, "programmability")), CancellationToken.None);
         check(programmability.Nodes.Select(node => node.Ref.Folder).SequenceEqual(["storedProcedures", "functions", "databaseTriggers", "assemblies", "types", "rules", "defaults", "planGuides", "sequences"])
             && programmability.Nodes.All(node => node.Ref.Owner == database) && host.Connections == 0, "static subfolders keep their owner and need no connection");
+        // Group by Schema: a grouped database checks its state before it lists anything (which fails here, as a value); a schema
+        // row and the grouped Programmability folders are static; a schema's Tables serves its subfolders, then queries.
+        var groupingHost = new FakeHost();
+        using var grouping = new ExplorerService(groupingHost);
+        var groupedDatabase = await grouping.ChildrenAsync(Args(Object(database)) with { GroupBySchema = true }, CancellationToken.None);
+        var dboRow = new ObjectRefDto("schema", "Sales", Name: "dbo");
+        var schemaRow = await grouping.ChildrenAsync(Args(Object(dboRow)), CancellationToken.None);
+        var schemaProgrammability = await grouping.ChildrenAsync(Args(Folder(dboRow, "programmability")), CancellationToken.None);
+        var databaseProgrammability = await grouping.ChildrenAsync(Args(Folder(database, "programmability")) with { GroupBySchema = true }, CancellationToken.None);
+        var schemaTables = await grouping.ChildrenAsync(Args(Folder(dboRow, "tables")), CancellationToken.None);
+        check(groupedDatabase.Error is not null && groupedDatabase.Nodes.Count == 0
+            && schemaRow.Nodes.Select(node => node.Label).SequenceEqual(["Tables", "Views", "Synonyms", "Programmability"]) && schemaRow.Nodes.All(node => node.Ref.Owner == dboRow)
+            && schemaProgrammability.Nodes.Select(node => node.Ref.Folder).SequenceEqual(["storedProcedures", "functions", "types", "rules", "defaults", "sequences"])
+            && databaseProgrammability.Nodes.Select(node => node.Ref.Folder).SequenceEqual(["databaseTriggers", "assemblies", "planGuides"])
+            && schemaTables.Nodes.Select(node => node.Ref.Folder).SequenceEqual(["systemTables", "fileTables", "externalTables", "graphTables", "droppedLedgerTables"]) && schemaTables.Error is not null
+            && groupingHost.Connections == 2,
+            "Group by Schema's static path: a schema row's folders and the grouped Programmability folders need no SQL; a grouped database (its state check) and a schema's Tables query the server");
         var table = new ObjectRefDto("table", "Sales", "dbo", "Orders");
         var folders = await service.ChildrenAsync(Args(Object(table), subtype: "history"), CancellationToken.None);
         check(folders.Nodes.Select(node => node.Label).SequenceEqual(["Columns", "Indexes", "Statistics"]) && host.Connections == 0, "a history table's folder set");

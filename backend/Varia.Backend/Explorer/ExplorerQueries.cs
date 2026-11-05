@@ -147,8 +147,10 @@ internal static class ExplorerQueries
     private static ExplorerNode DatabaseObject(Row row, string kind, string? subtype = null, string? detail = null, string? status = null, DateTime? created = null) =>
         Node(row.Context, new ObjectRefDto(kind, row.Context.Database, Name: row.Key(0)), row.Key(0), subtype, null, detail, status, created);
 
+    /// <summary>Labelled schema.name, or only name below a schema row (Group by Schema), which already says the schema.</summary>
     private static ExplorerNode SchemaObject(Row row, string kind, string? subtype = null, string? sublabel = null, string? detail = null, string? status = null, DateTime? created = null) =>
-        Node(row.Context, new ObjectRefDto(kind, row.Context.Database, row.Key(0), row.Key(1)), row.Key(0) + "." + row.Key(1), subtype, sublabel, detail, status, created);
+        Node(row.Context, new ObjectRefDto(kind, row.Context.Database, row.Key(0), row.Key(1)), row.Context.Owner.Kind == "schema" ? row.Key(1) : row.Key(0) + "." + row.Key(1),
+            subtype, sublabel, detail, status, created);
 
     private static ObjectRefDto Child(RowContext context, string kind, string? name) =>
         new(kind, context.Database, Name: name, Parent: new ParentRefDto(context.Owner.Kind, context.Owner.Schema!, context.Owner.Name!));
@@ -238,7 +240,9 @@ internal static class ExplorerQueries
         Id = id, Scope = QueryScope.Database, ChildFolder = true, From = from, Where = where is null ? null : _ => where, Keys = [key], Select = select, Map = map
     };
 
-    private static string ColumnVisibility(SqlRender r) =>
+    /// <summary>The columns the Columns folder shows (the object index keeps the same ones): not graph tables' hidden columns or
+    /// dropped ledger columns.</summary>
+    internal static string ColumnVisibility(SqlRender r) =>
         "NOT (" + r.Col(13, "c.is_hidden", "CONVERT(bit, 0)") + " = 1 AND " + r.Col(14, "c.graph_type", "CONVERT(int, NULL)") + " IS NOT NULL) AND "
         + r.Col(16, "c.is_dropped_ledger_column", "CONVERT(bit, 0)") + " = 0";
 
@@ -448,6 +452,12 @@ internal static class ExplorerQueries
         DatabaseList("applicationRoles", "sys.database_principals AS dp", "dp.name", "dp.create_date", row => DatabaseObject(row, "applicationRole", created: row.D(0)), "dp.type = 'A'"),
         DatabaseList("schemas", "sys.schemas AS sc", "sc.name", "own.name", row => DatabaseObject(row, "schema", detail: Owner(row.S(0))),
             filter: new(Name: "sc.name", Owner: "own.name"), ownerJoin: "LEFT JOIN sys.database_principals AS own ON own.principal_id = sc.principal_id"),
+        // Group by Schema's rows below a database: every schema but the fixed database roles' (ids 16384–16399), and guest,
+        // INFORMATION_SCHEMA and sys (2, 3, 4) only while they hold an object. Each expands into its folders.
+        DatabaseList("schemaGroups", "sys.schemas AS sc", "sc.name", "own.name",
+            row => Node(row.Context, new ObjectRefDto("schema", row.Context.Database, Name: row.Key(0)), row.Key(0), detail: Owner(row.S(0)), hasChildren: true),
+            "sc.schema_id NOT BETWEEN 16384 AND 16399 AND (sc.schema_id NOT IN (2, 3, 4) OR EXISTS (SELECT 1 FROM sys.all_objects AS so WHERE so.schema_id = sc.schema_id))",
+            ownerJoin: "LEFT JOIN sys.database_principals AS own ON own.principal_id = sc.principal_id"),
         DatabaseList("asymmetricKeys", "sys.asymmetric_keys AS k", "k.name", "k.algorithm_desc", row => DatabaseObject(row, "asymmetricKey", detail: row.S(0) is { } algorithm ? "Algorithm " + algorithm : null)),
         DatabaseList("certificates", "sys.certificates AS c", "c.name", "c.subject, c.expiry_date",
             row => DatabaseObject(row, "certificate", detail: ExplorerLabels.Join([row.S(0) is { Length: > 0 } subject ? "Subject " + subject : null,

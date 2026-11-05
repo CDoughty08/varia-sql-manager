@@ -135,6 +135,7 @@ export const contextKeys = {
   ...actionKeys,
   ...ssisVerbKeys,
   explorerLoading: { type: 'boolean', scope: 'state', description: 'Object Explorer is loading or waiting to load nodes.' },
+  explorerGroupBySchema: { type: 'boolean', scope: 'state', description: "Object Explorer groups each database's objects by schema (Group by Schema)." },
   scriptingRunning: { type: 'boolean', scope: 'state', description: 'A Script As request is running.' },
   hasNotifications: { type: 'boolean', scope: 'state', description: 'A notification toast is showing or waiting to show.' },
   explorerNode: {

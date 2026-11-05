@@ -351,6 +351,10 @@ export const commandCatalog = {
   },
   'explorer.stop': { title: 'Stop', category: 'Object Explorer', icon: 'debug-stop', keywords: ['cancel'], precondition: 'explorerLoading', unavailableHint: 'Nothing is loading.' },
   'explorer.collapseAll': { title: 'Collapse All', category: 'Object Explorer', icon: 'collapse-all', precondition: 'hasConnection', unavailableHint: noServer },
+  // SSMS 2022's Group by Schema: the toolbar button and the palette flip the objectExplorer.groupBySchema setting.
+  'explorer.groupBySchema': {
+    title: 'Group by Schema', category: 'Object Explorer', icon: 'symbol-namespace', keywords: ['schema', 'group', 'folders', 'tree'], toggled: 'explorerGroupBySchema'
+  },
   'explorer.newQuery': {
     title: 'New Query', category: 'Object Explorer', icon: 'new-file', precondition: '!documentBusy', unavailableHint: 'Select a server or database in Object Explorer.',
     menus: [{ menu: 'explorer.context', group: '1_query', order: 2, mnemonic: 'q', when: "(explorerNode == 'server' && !explorerServerLost) || explorerNode == 'database'" }]

@@ -6,14 +6,15 @@ import { requestSchemas } from '../src/main/validation'
 import { cancellableRequests } from '../src/main/backend/renderer-requests'
 import { indexProgressRelay } from '../src/main/index-progress'
 import {
-  objectIndexParamsSchema, objectIndexProgressEventSchema, objectSearchLimits, objectSearchParamsSchema, searchKinds,
+  childrenLeftOut, objectIndexParamsSchema, objectIndexProgressEventSchema, objectSearchLimits, objectSearchParamsSchema, searchKinds,
   type ObjectIndexProgress, type ObjectIndexResult, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult
 } from '../src/shared/explorer/search'
 import { SnapshotStore } from '../src/renderer/src/core/store'
 import type { Timers } from '../src/renderer/src/core/timers'
 import type { LiveConnection } from '../src/renderer/src/services/connections'
 import { explorerSearchId, ObjectSearchService, revealPaths, type ObjectSearchOptions, type RevealHost } from '../src/renderer/src/search/ObjectSearchService'
-import { indexSummary } from '../src/renderer/src/search/ObjectSearch'
+import { indexSummary, searchHitPath } from '../src/renderer/src/search/ObjectSearch'
+import { kindSpecs, nodeKinds } from '../src/shared/explorer/catalog'
 
 const csharp = (file: string) => readFileSync(new URL('../backend/Varia.Backend/Search/' + file, import.meta.url), 'utf8')
 
@@ -25,11 +26,21 @@ describe('object search contracts', () => {
     expect(service).toContain(`public const int DefaultLimit = ${objectSearchLimits.defaultHits};`)
     expect(service).toContain(`public const int MaxSkipped = ${objectSearchLimits.skipped};`)
     expect(service).toContain(`Kinds = [${searchKinds.map(kind => `"${kind}"`).join(', ')}]`)
+    expect(service).toContain(`public const int MaxKinds = ${objectSearchLimits.kinds};`)
+    expect(service).toContain(`public const string ChildrenLeftOut = "${childrenLeftOut}";`)
     expect(index).toContain(`SearchBudget { get; set; } = TimeSpan.FromSeconds(${objectSearchLimits.searchMs / 1000});`)
     expect(index).toContain(`DatabaseBudget { get; set; } = TimeSpan.FromSeconds(${objectSearchLimits.databaseMs / 1000});`)
     expect(index).toContain(`DefinitionChars { get; init; } = ${objectSearchLimits.definitionChars.toLocaleString('en-US').replaceAll(',', '_')};`)
-    expect(index).toContain('TotalDefinitionChars { get; init; } = 64L * 1024 * 1024;')
-    expect(objectSearchLimits.totalDefinitionChars).toBe(64 * 1024 * 1024)
+    expect(index).toContain('MemoryBytes { get; init; } = 512L * 1024 * 1024;')
+    expect(objectSearchLimits.memoryBytes).toBe(512 * 1024 * 1024)
+    expect(index).toContain('NamesReserveBytes { get; init; } = 128L * 1024 * 1024;')
+    expect(objectSearchLimits.namesReserveBytes).toBe(128 * 1024 * 1024)
+  })
+
+  it('indexes every kind Object Explorer lists but the server, return values and the SSIS Catalog\'s', () => {
+    const listed = nodeKinds.filter(kind => !['server', 'childUnnamed'].includes(kindSpecs[kind].scope) && !kindSpecs[kind].scope.startsWith('ssis'))
+    expect([...searchKinds].sort()).toEqual([...listed].sort())
+    expect(searchKinds.length).toBeLessThanOrEqual(objectSearchLimits.kinds)
   })
 
   it('validates requests strictly, in both directions of every bound', () => {
@@ -43,7 +54,8 @@ describe('object search contracts', () => {
     // Code units, as the backend counts them: 500 astral characters are 1000 units.
     expect(ok({ text: '😀'.repeat(500) })).toBe(true)
     expect(ok({ text: '😀'.repeat(501) })).toBe(false)
-    for (const bad of [{ text: '' }, { text: 'a\u0000' }, { in: 'columns' }, { kinds: [] }, { kinds: ['login'] }, { limit: 0 }, { limit: objectSearchLimits.hits + 1 }, { database: 'd'.repeat(129) }, { columns: true }])
+    expect(ok({ kinds: [...searchKinds] })).toBe(true)
+    for (const bad of [{ text: '' }, { text: 'a\u0000' }, { in: 'columns' }, { kinds: [] }, { kinds: ['ssisPackage'] }, { kinds: Array(objectSearchLimits.kinds + 1).fill('table') }, { limit: 0 }, { limit: objectSearchLimits.hits + 1 }, { database: 'd'.repeat(129) }, { columns: true }])
       expect(ok(bad), JSON.stringify(bad)).toBe(false)
     expect(requestSchemas['explorer.index']).toBe(objectIndexParamsSchema)
     expect(requestSchemas['explorer.search']).toBe(objectSearchParamsSchema)
@@ -248,6 +260,71 @@ describe('ObjectSearchService', () => {
     expect(revealPaths(onTable)[1]).toContainEqual({ type: 'folder', owner: msdb, folder: 'systemTables' })
   })
 
+  it('reveals a hit below its schema\'s row while Object Explorer groups by schema', async () => {
+    const { service } = harness()
+    const seeks: unknown[][] = []
+    const host: RevealHost = { groupBySchema: true, seek: async (connectionId, paths) => { seeks.push([connectionId, paths]); return { ok: true, nodeId: 9 } } }
+    await service.reveal(host, 'a', hit)
+    const server = { kind: 'server' }, sales = { kind: 'database', name: 'Sales' }, dbo = { kind: 'schema', database: 'Sales', name: 'dbo' }
+    const databases = { type: 'folder', owner: server, folder: 'databases' }
+    expect((seeks[0][1] as unknown[][])[0]).toEqual([databases, { type: 'object', object: sales }, { type: 'object', object: dbo }, { type: 'folder', owner: dbo, folder: 'tables' }, { type: 'object', object: hit.object }])
+    // Nested folders hang below the schema row too.
+    const fn: ObjectSearchHit = { object: { kind: 'function', database: 'Sales', schema: 'calc', name: 'f' }, folder: 'scalarValuedFunctions', label: 'calc.f' }
+    const calc = { kind: 'schema', database: 'Sales', name: 'calc' }
+    expect(revealPaths(fn, true)[0].slice(1)).toEqual([{ type: 'object', object: sales }, { type: 'object', object: calc },
+      ...['programmability', 'functions', 'scalarValuedFunctions'].map(folder => ({ type: 'folder', owner: calc, folder })), { type: 'object', object: fn.object }])
+    // A trigger's table is found below the table's schema, then in that schema's System Tables.
+    const trigger: ObjectSearchHit = { object: { kind: 'trigger', database: 'Sales', name: 't', parent: { kind: 'table', schema: 'hr', name: 'People' } }, folder: 'tableTriggers', label: 'hr.People.t' }
+    const hr = { kind: 'schema', database: 'Sales', name: 'hr' }, people = { kind: 'table', database: 'Sales', schema: 'hr', name: 'People' }
+    expect(revealPaths(trigger, true).slice(0, 2).map(path => path.slice(1))).toEqual([
+      [{ type: 'object', object: sales }, { type: 'object', object: hr }, { type: 'folder', owner: hr, folder: 'tables' }, { type: 'object', object: people }, { type: 'folder', owner: people, folder: 'tableTriggers' }, { type: 'object', object: trigger.object }],
+      [{ type: 'object', object: sales }, { type: 'object', object: hr }, { type: 'folder', owner: hr, folder: 'tables' }, { type: 'folder', owner: hr, folder: 'systemTables' }, { type: 'object', object: people },
+        { type: 'folder', owner: people, folder: 'tableTriggers' }, { type: 'object', object: trigger.object }]
+    ])
+    // Database-scoped objects stay below the database, in its own Programmability folder.
+    const ddl: ObjectSearchHit = { object: { kind: 'databaseTrigger', database: 'Sales', name: 'audit' }, folder: 'databaseTriggers', label: 'audit' }
+    expect(revealPaths(ddl, true)[0].slice(1)).toEqual([{ type: 'object', object: sales }, ...['programmability', 'databaseTriggers'].map(folder => ({ type: 'folder', owner: sales, folder })), { type: 'object', object: ddl.object }])
+    expect(revealPaths(ddl, true)).toEqual(revealPaths(ddl))
+  })
+
+  it('reveals server objects and databases below the server, and a child under the folder its hit names', () => {
+    const server = { kind: 'server' }
+    const login: ObjectSearchHit = { object: { kind: 'login', name: 'app' }, folder: 'logins', label: 'app', subtype: 'sql' }
+    expect(revealPaths(login)).toEqual([[{ type: 'folder', owner: server, folder: 'serverSecurity' }, { type: 'folder', owner: server, folder: 'logins' }, { type: 'object', object: login.object }]])
+    const database: ObjectSearchHit = { object: { kind: 'database', name: 'Sales' }, folder: 'databases', label: 'Sales' }
+    expect(revealPaths(database)).toEqual([[{ type: 'folder', owner: server, folder: 'databases' }, { type: 'object', object: database.object }]])
+    const snapshot: ObjectSearchHit = { object: { kind: 'database', name: 'Sales_snap' }, folder: 'databaseSnapshots', label: 'Sales_snap', subtype: 'snapshot' }
+    expect(revealPaths(snapshot)[0].map(step => step.type === 'folder' ? step.folder : 'object')).toEqual(['databases', 'databaseSnapshots', 'object'])
+    // A graph table's column: the hit names the table's folder, so only that path is walked.
+    const column: ObjectSearchHit = { object: { kind: 'column', database: 'Sales', name: 'id', parent: { kind: 'table', schema: 'dbo', name: 'Person' } }, folder: 'columns', label: 'dbo.Person.id', parentFolder: 'graphTables' }
+    const sales = { kind: 'database', name: 'Sales' }, table = { kind: 'table', database: 'Sales', schema: 'dbo', name: 'Person' }
+    expect(revealPaths(column)[0].slice(2)).toEqual([{ type: 'folder', owner: sales, folder: 'tables' }, { type: 'folder', owner: sales, folder: 'graphTables' }, { type: 'object', object: table },
+      { type: 'folder', owner: table, folder: 'columns' }, { type: 'object', object: column.object }])
+    expect(revealPaths(column)).toHaveLength(2)
+    // Without a parent folder a parameter's procedure is looked for under Stored Procedures, then System Stored Procedures.
+    const parameter: ObjectSearchHit = { object: { kind: 'parameter', database: 'Sales', name: '@id', parent: { kind: 'procedure', schema: 'dbo', name: 'p' } }, folder: 'parameters', label: 'dbo.p.@id' }
+    expect(revealPaths(parameter).slice(0, 2).map(path => path.flatMap(step => step.type === 'folder' ? [step.folder] : []))).toEqual([
+      ['databases', 'programmability', 'storedProcedures', 'parameters'], ['databases', 'programmability', 'storedProcedures', 'systemStoredProcedures', 'parameters']
+    ])
+    // A temporal history table is the history row below its table, and its columns are below it.
+    const prices = { kind: 'table', database: 'Sales', schema: 'dbo', name: 'Prices' }
+    const history: ObjectSearchHit = { object: { kind: 'table', database: 'Sales', schema: 'dbo', name: 'Prices_History' }, folder: 'tables', label: 'dbo.Prices_History', subtype: 'history',
+      via: { schema: 'dbo', name: 'Prices', folder: 'tables' } }
+    expect(revealPaths(history)[0].slice(2)).toEqual([{ type: 'folder', owner: sales, folder: 'tables' }, { type: 'object', object: prices }, { type: 'object', object: history.object }])
+    const historyColumn: ObjectSearchHit = { object: { kind: 'column', database: 'Sales', name: 'valid_from', parent: { kind: 'table', schema: 'dbo', name: 'Prices_History' } }, folder: 'columns',
+      label: 'dbo.Prices_History.valid_from', parentFolder: 'tables', via: { schema: 'dbo', name: 'Prices', folder: 'tables' } }
+    expect(revealPaths(historyColumn)[0].slice(2)).toEqual([{ type: 'folder', owner: sales, folder: 'tables' }, { type: 'object', object: prices }, { type: 'object', object: history.object },
+      { type: 'folder', owner: history.object, folder: 'columns' }, { type: 'object', object: historyColumn.object }])
+    const user: ObjectSearchHit = { object: { kind: 'user', database: 'Sales', name: 'app' }, folder: 'users', label: 'app' }
+    expect(revealPaths(user)[0].slice(2).map(step => step.type === 'folder' ? step.folder : 'object')).toEqual(['databaseSecurity', 'users', 'object'])
+  })
+
+  it('shows where a hit is: a server object\'s folders, else its database and folder', () => {
+    expect(searchHitPath({ object: { kind: 'login', name: 'app' }, folder: 'logins', label: 'app' })).toBe('Security › Logins')
+    expect(searchHitPath({ object: { kind: 'database', name: 'Sales' }, folder: 'systemDatabases', label: 'Sales' })).toBe('Databases › System Databases')
+    expect(searchHitPath({ object: { kind: 'column', database: 'Sales', name: 'id', parent: { kind: 'table', schema: 'dbo', name: 'T' } }, folder: 'columns', label: 'dbo.T.id' })).toBe('Sales › Columns')
+  })
+
   it('runs Object Explorer\'s box as one more search, on the selected server or the first connected one', () => {
     const { service, connections, calls } = harness({ indexOnConnect: false })
     service.followExplorer(undefined)
@@ -296,6 +373,8 @@ describe('Search Objects\' summary', () => {
     expect(indexSummary({ connectionId: 'a', requestId: 'r', done: 1, total: 3, objects: 1200 }, undefined)).toBe('Indexing 1 of 3 databases (1,200 objects so far)…')
     expect(indexSummary(undefined, status({ skipped: [{ database: 'x', code: 'NO_DB_ACCESS', message: 'm' }] }))).toBe('Index: 40 objects, 5 definitions in 2 databases · 1 database skipped')
     expect(indexSummary(undefined, status({ definitions: false, indexed: 1 }))).toBe('Index: 40 objects (names only) in 1 database')
+    expect(indexSummary(undefined, status({ skipped: [{ database: '', code: 'CATALOG_ERROR', message: 'm' }] }))).toBe('Index: 40 objects, 5 definitions in 2 databases · server objects skipped')
+    expect(indexSummary(undefined, status({ skipped: [{ database: 'Big', code: childrenLeftOut, message: 'm' }] }))).toBe('Index: 40 objects, 5 definitions in 2 databases · columns and other children left out of 1 large database')
     expect(indexSummary(undefined, undefined)).toBe('This server has no index yet.')
     expect(indexSummary({ connectionId: 'a', done: 0, total: 0, objects: 0, error: 'Denied.' }, undefined)).toBe('The index could not be built: Denied.')
   })

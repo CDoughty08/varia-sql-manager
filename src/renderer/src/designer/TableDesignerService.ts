@@ -44,6 +44,8 @@ export interface DesignerState {
   readonly model?: TableDesignerModel
   readonly name: string
   readonly schema: string
+  /** The schema row whose Tables folder it was opened from (Group by Schema): the table starts there when the login may use it. */
+  readonly folderSchema?: string
   /** Choose Name was answered: later saves keep the name (Properties changes it). */
   readonly nameChosen: boolean
   readonly rows: readonly DesignerRow[]
@@ -115,17 +117,21 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
 
   // --- Opening ---------------------------------------------------------------------------------------------------------
 
-  /** New › Table… on a Tables folder: the tab opens at once, loading, and the database is described. */
+  /**
+   * New › Table… on a Tables folder: the tab opens at once, loading, and the database is described. Below a schema row (Group
+   * by Schema) the new table starts in that schema.
+   */
   open(node: ExplorerMenuNode): string {
     if (this.disposed) throw new Error('The table designer is not available.')
     const owner = node.ref.type === 'folder' && node.ref.folder === 'tables' ? node.ref.owner : undefined
     const connection = this.options.connections.getSnapshot().find(item => item.id === node.connectionId && !item.lost)
-    if (!owner || owner.kind !== 'database' || !owner.name) throw new Error('Select the Tables folder of a database in Object Explorer.')
+    const database = owner?.kind === 'database' ? owner.name : owner?.kind === 'schema' ? owner.database : undefined
+    if (!owner || !database || !owner.name) throw new Error('Select the Tables folder of a database in Object Explorer.')
     if (!connection) throw new Error('Connect to the server first.')
-    const name = defaultTableName(++this.tables), database = owner.name
-    const document = this.options.documents.openCustom('tableDesigner', designerCaption(connection.server, database, 'dbo', name), connection.id, database)
+    const name = defaultTableName(++this.tables), schema = owner.kind === 'schema' ? owner.name : 'dbo'
+    const document = this.options.documents.openCustom('tableDesigner', designerCaption(connection.server, database, schema, name), connection.id, database)
     const state: DesignerState = {
-      id: document.id, server: connection.server, database, folderNodeId: node.id, phase: 'loading', name, schema: 'dbo', nameChosen: false, rows: [], primaryKey: [], selected: [],
+      id: document.id, server: connection.server, database, folderNodeId: node.id, phase: 'loading', name, schema, ...owner.kind === 'schema' ? { folderSchema: owner.name } : {}, nameChosen: false, rows: [], primaryKey: [], selected: [],
       current: { row: 0, column: 'name' }, revision: 0, dirty: false, propertiesVisible: false, identityExpanded: true, order: 'categorized', scripting: false
     }
     this.put(state)
@@ -144,7 +150,8 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
       this.patch(id, { phase: 'loadFailed', error: (result.ok ? result.value.error?.message : error(result)) ?? designerStrings.loadFailed })
       return
     }
-    this.patch(id, { phase: 'ready', model, schema: model.defaultSchema })
+    const folderSchema = state.folderSchema !== undefined && model.schemas.includes(state.folderSchema) ? state.folderSchema : undefined
+    this.patch(id, { phase: 'ready', model, schema: folderSchema ?? model.defaultSchema })
     this.caption(id)
   }
 

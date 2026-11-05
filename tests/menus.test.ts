@@ -347,7 +347,9 @@ describe('menu state', () => {
       // The SSISDB node's Active Operations and reports, and the Operations grid's menu and header; View has All Operations.
       'ssis.activeOperations', 'ssis.allExecutions', 'ssis.allValidations', 'ssis.stopOperation', 'ssis.refreshOperations', 'ssis.pauseOperations', 'ssis.copyOperations', 'ssis.copyOperationsWithHeaders',
       // Search Objects' header and status bar verbs; Search Objects… itself is in View.
-      'explorer.rebuildIndex', 'explorer.stopIndexing']
+      'explorer.rebuildIndex', 'explorer.stopIndexing',
+      // Object Explorer's Group by Schema: its toolbar button and the palette.
+      'explorer.groupBySchema']
     expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))
     // Query › Connection is a native submenu too.
     for (const id of ['preferences.colorTheme', 'connection.connect', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'file.closeAll', 'view.toggleResultsPane'] as const) expect(menuCommandIds).toContain(id)
@@ -355,7 +357,7 @@ describe('menu state', () => {
       const placed = commandDescriptor(id).menus?.some(placement => nativeMenuIds.includes(placement.menu)) ?? false
       expect(menuCommandIds.includes(id), id).toBe(placed && !commandDescriptor(id).role)
     }
-    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'ssis.pauseOperations', 'editor.toggleWordWrap', 'editor.toggleOvertype', 'editor.toggleWhitespace', 'editor.toggleLineNumbers', 'activity.togglePause', 'activity.toggleSplit', 'window.togglePanelTabs'])
+    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'explorer.groupBySchema', 'ssis.pauseOperations', 'editor.toggleWordWrap', 'editor.toggleOvertype', 'editor.toggleWhitespace', 'editor.toggleLineNumbers', 'activity.togglePause', 'activity.toggleSplit', 'window.togglePanelTabs'])
     // Main checks only toggles the schema names.
     expect(menuStateSchema.safeParse({ disabled: [], checked: ['editor.toggleWhitespace', 'editor.toggleLineNumbers'] }).success).toBe(true)
   })

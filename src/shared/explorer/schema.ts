@@ -3,8 +3,8 @@
 import { z } from 'zod'
 import { maxIdentifierLength } from '../sql/identifiers.ts'
 import {
-  childParentKinds, dateFilterOps, explorerLimits, filterProperties, folderIds, folderOwnerKinds, folderSpecs, kindSpecs, maxNameOf, nodeKinds, nodeSubtypes,
-  parentKinds, queryIds, scopeFields, textFilterOps, type FilterProperty, type KindSpec, type NodeKind, type RefField
+  childParentKinds, dateFilterOps, explorerLimits, filterProperties, folderFilterFor, folderIds, folderOwnerKinds, folderSpecs, kindSpecs, maxNameOf, nodeKinds, nodeSubtypes,
+  parentKinds, queryIds, schemaGroupList, scopeFields, textFilterOps, type FilterProperty, type KindSpec, type NodeKind, type RefField
 } from './catalog.ts'
 import type { ExplorerCancelParams, ExplorerChildrenParams, ExplorerFilter, ExplorerNodeRef, ObjectRef } from './refs.ts'
 
@@ -63,24 +63,27 @@ const cursorPattern = new RegExp(`^v1\\.(${queryIds.join('|')})\\.[A-Za-z0-9_-]{
 export const explorerChildrenParamsSchema = z.object({
   connectionId: z.uuid(), requestId: z.uuid(), node: nodeRefSchema, subtype: z.enum(nodeSubtypes).optional(),
   cursor: z.string().max(explorerLimits.cursorLength).regex(cursorPattern).optional(), pageSize: z.number().int().min(1).max(explorerLimits.pageSize).optional(),
-  filter: explorerFilterSchema.optional()
+  filter: explorerFilterSchema.optional(), groupBySchema: z.literal(true).optional()
 }).strict().superRefine((params, context) => {
   for (const [path, message] of childrenParamsProblems(params)) context.addIssue({ code: 'custom', path: [path], message })
 }) satisfies z.ZodType<ExplorerChildrenParams>
 
 /**
  * What a children request may carry for its node: a subtype of the object's kind, a cursor of the query the node lists (a
- * folder's, or a kind's whose rows follow its static folders), and a filter of the folder's properties.
+ * folder's, a kind's whose rows follow its static folders, or a grouped database's schemas), a filter of the folder's
+ * properties (below a schema row, not Schema), and Group by Schema only for a database and its folders.
  */
 export function childrenParamsProblems(params: ExplorerChildrenParams, specs: KindSpecs = kindSpecs): [path: string, message: string][] {
   const problems: [string, string][] = []
   const { node } = params
   if (params.subtype !== undefined && (node.type !== 'object' || !specs[node.object.kind].subtypes?.includes(params.subtype))) problems.push(['subtype', 'This node has no such subtype.'])
   const folder = node.type === 'folder' ? folderSpecs[node.folder] : undefined
-  const list = node.type === 'folder' ? folder?.list : specs[node.object.kind].list
+  const owner = node.type === 'folder' ? node.owner : node.object
+  if (params.groupBySchema && (owner.kind !== 'database' || (folder && folder.owner !== 'database'))) problems.push(['groupBySchema', 'Only a database and its folders group by schema.'])
+  const list = node.type === 'folder' ? folder?.list : params.groupBySchema ? schemaGroupList : specs[node.object.kind].list
   if (params.cursor !== undefined && (!list || params.cursor.split('.')[1] !== list)) problems.push(['cursor', 'The cursor is not for this node.'])
   if (params.filter) {
-    const allowed: readonly FilterProperty[] = folder?.filter ?? []
+    const allowed: readonly FilterProperty[] = folder ? folderFilterFor(folder.id, owner.kind) : []
     for (const property of filterProperties) if (params.filter[property] !== undefined && !allowed.includes(property)) problems.push(['filter', `This folder cannot be filtered by ${property}.`])
   }
   return problems

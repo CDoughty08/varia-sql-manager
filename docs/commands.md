@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (216)
+## Commands (217)
 
 ### File
 
@@ -143,6 +143,7 @@ keys it uses are listed below.
 | Login… (not in the palette) | `explorer.newLoginOnSecurity` | — | — | — | `backendReady && explorerSelectionFolder == 'serverSecurity' && (explorerSelectionServerEngine == 'box' \|\| explorerSelectionServerEngine == 'managedInstance')` | Object Explorer context menu › New › Login… |
 | Stop | `explorer.stop` | — | — | — | `explorerLoading` | — |
 | Collapse All | `explorer.collapseAll` | — | — | — | `hasConnection` | — |
+| Group by Schema | `explorer.groupBySchema` | — | — | — | Always; checked when `explorerGroupBySchema` | — |
 | New Query | `explorer.newQuery` | — | — | — | `!documentBusy` | Object Explorer context menu › New Query |
 | Select Top 1000 Rows | `explorer.selectTopRows` | — | — | — | `backendReady && explorerActionSelectTop == 'enabled' && !documentBusy` | Object Explorer context menu › Select Top 1000 Rows |
 | Rename | `explorer.rename` | F2 (`activePanel == 'explorer' && !textInputFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus`) | `backendReady && explorerActionRename == 'enabled'` | Object Explorer context menu › Rename |
@@ -759,7 +760,7 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 | `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
 | `8_view` | **P**ause | `ssis.pauseOperations` | Always |
 
-## Context keys (120)
+## Context keys (121)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -874,6 +875,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `ssisVerbPackageProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Package Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `ssisVerbEnvironmentProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Environment Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerLoading` | boolean | state | Object Explorer is loading or waiting to load nodes. |
+| `explorerGroupBySchema` | boolean | state | Object Explorer groups each database's objects by schema (Group by Schema). |
 | `scriptingRunning` | boolean | state | A Script As request is running. |
 | `hasNotifications` | boolean | state | A notification toast is showing or waiting to show. |
 | `explorerNode` | `'background'`, `'folder'`, `'server'`, `'login'`, `'serverRole'`, `'credential'`, `'cryptographicProvider'`, `'audit'`, `'serverAuditSpecification'`, `'backupDevice'`, `'linkedServer'`, `'serverTrigger'`, `'database'`, `'user'`, `'databaseRole'`, `'applicationRole'`, `'schema'`, `'assembly'`, `'asymmetricKey'`, `'certificate'`, `'symmetricKey'`, `'columnMasterKey'`, `'columnEncryptionKey'`, `'databaseAuditSpecification'`, `'databaseTrigger'`, `'externalDataSource'`, `'externalFileFormat'`, `'fullTextCatalog'`, `'fullTextStoplist'`, `'partitionScheme'`, `'partitionFunction'`, `'searchPropertyList'`, `'planGuide'`, `'table'`, `'view'`, `'synonym'`, `'procedure'`, `'function'`, `'sequence'`, `'type'`, `'tableType'`, `'xmlSchemaCollection'`, `'rule'`, `'default'`, `'securityPolicy'`, `'column'`, `'key'`, `'constraint'`, `'trigger'`, `'index'`, `'statistic'`, `'parameter'`, `'returnValue'`, `'ssisCatalog'`, `'ssisFolder'`, `'ssisProject'`, `'ssisPackage'`, `'ssisEnvironment'`, `''` | target | The kind of Object Explorer node the menu is for: 'folder', an object kind from `src/shared/explorer/catalog.ts`, or 'background' for the empty area below the servers. |
