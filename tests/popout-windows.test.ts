@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { onDisplay, popoutRequest, PopoutWindows, type OpenDetails, type PopoutWindow } from '../src/main/popout-windows'
+import { onDisplay, popoutRequest, PopoutWindows, scaleBounds, zoomFactor, type OpenDetails, type PopoutWindow } from '../src/main/popout-windows'
 import { popoutWindowName } from '../src/shared/popouts'
 
 const name = 'varia-popout-' + crypto.randomUUID()
@@ -17,14 +17,14 @@ function fakeWindow(id: number) {
   const window = {
     id, isDestroyed: () => destroyed, isFocused: () => focused, destroy: vi.fn(() => { destroyed = true; emit('closed') }),
     setMenuBarVisibility: vi.fn(), setAutoHideMenuBar: vi.fn(), on,
-    webContents: { setWindowOpenHandler: (handler: () => { action: 'deny' }) => { openHandler = handler }, on, setZoomLevel: (level: number) => { zoom = level } }
+    webContents: { setWindowOpenHandler: (handler: () => { action: 'deny' }) => { openHandler = handler }, on, setZoomLevel: (level: number) => { zoom = level }, getZoomLevel: () => zoom }
   }
-  return { window: window as unknown as PopoutWindow, emit, focus: (value: boolean) => { focused = value }, zoom: () => zoom, openHandler: () => openHandler?.() }
+  return { window: window as unknown as PopoutWindow, emit, focus: (value: boolean) => { focused = value }, zoom: () => zoom, setZoom: (level: number) => { zoom = level }, openHandler: () => openHandler?.() }
 }
 function registry(options: { workAreas?: { x: number; y: number; width: number; height: number }[]; zoom?: number; platform?: NodeJS.Platform } = {}) {
-  const changed = vi.fn()
-  const popouts = new PopoutWindows<PopoutWindow>({ platform: options.platform ?? 'win32', workAreas: () => options.workAreas ?? [primary, left], zoomLevel: () => options.zoom ?? 0, changed })
-  return { popouts, changed }
+  const changed = vi.fn(), setZoomLevel = vi.fn()
+  const popouts = new PopoutWindows<PopoutWindow>({ platform: options.platform ?? 'win32', workAreas: () => options.workAreas ?? [primary, left], zoomLevel: () => options.zoom ?? 0, setZoomLevel, changed })
+  return { popouts, changed, setZoomLevel }
 }
 const base = { backgroundColor: '#1e1e1e', show: false }
 
@@ -62,6 +62,14 @@ describe('PopoutWindows', () => {
     expect(options.webPreferences).toEqual({ preload: undefined, contextIsolation: true, nodeIntegration: false, sandbox: true, webviewTag: false, additionalArguments: [], devTools: true })
     expect(Object.hasOwn(options.webPreferences as object, 'preload')).toBe(true)
   })
+  it('places CSS pixels in screen DIPs at the zoom, and checks the display there', () => {
+    expect(scaleBounds({ x: 100, y: 80, width: 640, height: 420 }, zoomFactor(1))).toEqual({ x: 120, y: 96, width: 768, height: 504 })
+    expect(scaleBounds({ x: 10, y: 10, width: 300, height: 200 }, Number.NaN)).toEqual({ x: 10, y: 10, width: 300, height: 200 })
+    const zoomed = registry({ zoom: 1 }).popouts.open(request(), base) as { overrideBrowserWindowOptions: Record<string, unknown> }
+    expect(zoomed.overrideBrowserWindowOptions).toMatchObject({ x: 120, y: 96, width: 768, height: 504 })
+    // On the display at 100 %, but past its right edge once zoomed out of it.
+    expect(registry({ workAreas: [primary], zoom: 3 }).popouts.open(request({ features: 'left=1500,top=80,width=640,height=420' }), base)).toEqual({ action: 'deny' })
+  })
   it('denies everything else, windows off every display, and more than the limit', () => {
     const { popouts } = registry({ workAreas: [primary] })
     expect(popouts.open(request({ url: 'https://example.com/' }), base)).toEqual({ action: 'deny' })
@@ -95,6 +103,16 @@ describe('PopoutWindows', () => {
     popouts.zoom(-1)
     expect(child.zoom()).toBe(-1)
   })
+  it('gives every window the zoom Chromium set on one (Ctrl+wheel, a pinch)', async () => {
+    const { popouts, setZoomLevel } = registry()
+    const first = fakeWindow(1), second = fakeWindow(2)
+    popouts.adopt(first.window); popouts.adopt(second.window)
+    first.setZoom(2)
+    first.emit('zoom-changed')
+    await new Promise(resolve => setImmediate(resolve))
+    expect(setZoomLevel).toHaveBeenCalledWith(2)
+    expect(second.zoom()).toBe(2)
+  })
   it('closes every popout with the page that opened them, and reports when none is left', () => {
     const { popouts, changed } = registry({ platform: 'darwin' })
     const first = fakeWindow(1), second = fakeWindow(2)
@@ -115,6 +133,7 @@ describe('main process wiring', () => {
     expect(source).toContain("contents.on('did-create-window', child => popouts.adopt(child))")
     expect(source).not.toMatch(/setWindowOpenHandler\([^)]*action: 'allow'/)
     expect(source).toMatch(/function resetRendererState[\s\S]*?popouts\.closeAll\(\)/)
+    expect(source).toContain("contents.on('zoom-changed', () => setImmediate(() => { if (!contents.isDestroyed()) popouts.zoom(contents.getZoomLevel()) }))")
   })
   it('keeps trusting only the main window\'s main frame: popouts have no preload and send no IPC', () => {
     expect(source).toContain('if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) return false')

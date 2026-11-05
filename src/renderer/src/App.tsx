@@ -135,7 +135,8 @@ export default function App() {
     toggleOutput: () => workspaceRef.current?.toggleOutput(activeOutputView()) ?? 'shown',
     manageLayouts: mode => workspaceRef.current?.manage(mode),
     resetLayout: () => workspaceRef.current?.reset(),
-    flushLayout: async () => { await workspaceRef.current?.flush() },
+    flushLayout: async () => { await workspaceRef.current?.flush(true) },
+    layoutCloseCancelled: () => workspaceRef.current?.closeCancelled(),
     showConnect: () => { setReconnecting(undefined); setPendingExecute(undefined); setPendingMonitor(false); setShowConnect(true) },
     reconnect: id => {
       const lost = workbench.connections.get(id)

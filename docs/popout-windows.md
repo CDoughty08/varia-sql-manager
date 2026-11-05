@@ -46,23 +46,29 @@ Each window is a full citizen (`core/windows.ts`, `workbench.attachWindow`):
 - Main counts each popout's own input for Paste (`UserActivation` per window), runs roles (Copy, Paste, Select All…) in
   the focused popout, shows macOS context menus in it, and mirrors the main window's zoom into it. Reload and zoom act on
   the main window.
-- While any popout is open the main window's background throttling is off, so its timers and frames (which drive the
-  popouts' content) keep running when it is minimized.
+- While any popout is open the main window's background throttling is off, so its timers keep running when it is
+  minimized. Work scheduled for the next frame (result pages, the results view, Object Explorer's updates) asks every
+  open window for one and runs on whichever draws first (`requestFrame`), since a minimized or covered main window may
+  draw none.
+- Chromium's own zoom (Ctrl+wheel, a pinch) in any window is given to every window.
+- A dialog opened from a popout opens in the main window, which comes to the front (`watchModals`).
 
 ## Layout
 
 The workspace layout is version 3: Dockview's layout plus `windows`, each with an id, its panels (1 to 4), the selected
-one, and bounds within `popoutLimits` (`src/shared/layouts.ts`). A panel appears at most once across the dock and the
-windows. Versions 1 and 2 still load. On restore, a window whose bounds no longer land on a display (the monitor is gone)
-is denied by main and its panels dock back.
+one, and bounds within `popoutLimits` (`src/shared/layouts.ts`), in the page's CSS pixels: main scales them by the zoom
+to place the window in screen DIPs. A panel appears at most once across the dock and the windows. Versions 1 and 2 still
+load. On restore, a window whose bounds no longer land on a display (the monitor is gone) is denied by main and its
+panels dock back. A moved or resized window is saved within a second. The close flow's last write keeps the windows:
+popouts the close itself takes (a quit closes every window, in any order) change nothing, unless the close is cancelled,
+when their panels dock back.
 
 ## Limits
 
 - **The query editor stays in the main window.** Monaco binds its DOM, focus, clipboard, IME, accessibility and worker
   plumbing to the window it was created in; moving its element to another document breaks input and measuring. Popping
   it out needs a second editor instance per window sharing the model, which is follow-up work.
-- App-modal dialogs and toasts stay in the main window, which a popout's command raises.
+- Dialogs and toasts render in the main window (a dialog brings it to the front).
 - Live charts draw on the main window's animation frames.
-- Saved bounds are CSS pixels; a different zoom after restart moves them slightly.
 - F10 and Alt in a popout go to the system (no menu bar there); the menu bar's access keys work only in the main window.
 - **Reset Window Layout** leaves popped-out panels where they are.

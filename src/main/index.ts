@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, ipcMain, Menu, MessageChannelMain, dialog, nativeTheme, powerMonitor, safeStorage, screen, session, shell,type IpcMainEvent, type IpcMainInvokeEvent, type Rectangle } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, Menu, MessageChannelMain, dialog, nativeTheme, powerMonitor, safeStorage, screen, session, shell, type IpcMainEvent, type IpcMainInvokeEvent, type Rectangle } from 'electron'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { stat, writeFile } from 'node:fs/promises'
 import { z } from 'zod'
@@ -116,6 +116,7 @@ const popouts = new PopoutWindows<BrowserWindow>({
   platform: process.platform,
   workAreas: () => screen.getAllDisplays().map(display => display.workArea),
   zoomLevel: () => mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents.getZoomLevel() : 0,
+  setZoomLevel: level => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.setZoomLevel(level) },
   changed: open => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.setBackgroundThrottling(open === 0 && process.env.VARIA_SMOKE_TEST !== '1') }
 })
 /** The window the user is working in: a focused popout, else the main window. */
@@ -482,6 +483,8 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
   // The page may open only its own popout windows: same-origin about:blank children with Varia's popout name, on a display.
   contents.setWindowOpenHandler(details => popouts.open(details, { backgroundColor: appearance.windowChrome().backgroundColor, show: process.env.VARIA_SMOKE_TEST !== '1' }))
   contents.on('did-create-window', child => popouts.adopt(child))
+  // Chromium's own zoom (Ctrl+wheel, a pinch) in the main window reaches the popouts too.
+  contents.on('zoom-changed', () => setImmediate(() => { if (!contents.isDestroyed()) popouts.zoom(contents.getZoomLevel()) }))
   contents.on('will-navigate', event => event.preventDefault())
   const activation = userActivation = new UserActivation()
   contents.on('input-event', (_event, input) => activation.note(input.type))

@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import {
-  backendReady, gridCell, movePane, openMenus, pane, paneTab, part, popoutDockButton, popoutTab, popoutTabs, quickInput, resultGrid, toolbarButton
+  backendReady, explorerSearchBox, explorerTree, gridCell, movePane, openMenus, pane, paneTab, part, popoutDockButton, popoutTab, popoutTabs, quickInput, resultGrid, toolbarButton
 } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -86,6 +86,14 @@ try {
   await expect.poll(() => variable(page, background)).not.toBe(before)
   await expect.poll(() => variable(results, background)).toBe(await variable(page, background))
   await menu('theme.mode.dark')
+  // The main head changes for other reasons (its title follows the active query): the popout's sheets stay put.
+  await results.evaluate(() => {
+    const seen = globalThis.popoutSheetMoves = { count: 0 }
+    new MutationObserver(records => { seen.count += records.reduce((sum, record) => sum + record.addedNodes.length, 0) }).observe(document.head, { childList: true })
+  })
+  await page.evaluate(() => { document.title = 'Retitled - Varia SQL Manager' })
+  await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 100)))
+  expect(await results.evaluate(() => globalThis.popoutSheetMoves.count)).toBe(0)
   console.log('Popout checks: Results moved into its own window by its menu, without a preload, in the current theme.')
 
   // 2. It works there: the grid's selection and Ctrl+C, its context menu in that window, the palette in that window.
@@ -106,6 +114,14 @@ try {
   await expect(quickInput(page)).toBeHidden()
   await results.keyboard.press('Escape')
   await expect(quickInput(results)).toBeHidden()
+  // A dialog opened while the user works in the popout opens in the main window, which comes to the front.
+  await page.evaluate(() => { const focus = window.focus.bind(window); globalThis.mainRaised = 0; window.focus = () => { globalThis.mainRaised++; focus() } })
+  await gridCell(resultGrid(results), 0, 1).click()
+  await menu('layout.load')
+  await expect(page.getByRole('dialog', { name: 'Workspace layouts' })).toBeVisible()
+  await expect.poll(() => page.evaluate(() => globalThis.mainRaised)).toBeGreaterThan(0)
+  await page.getByRole('button', { name: 'Done', exact: true }).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
   await results.screenshot({ path: resolve('artifacts', 'popout-results.png') })
   console.log('Popout checks: the popped-out grid copies by keys and by its own context menu, and the palette opens in its window.')
 
@@ -126,6 +142,10 @@ try {
   })
   await expect(pane(page, 'explorer')).toHaveCount(0)
   await expect(pane(explorer, 'explorer')).toBeVisible()
+  // Escape in its empty search box returns to its tree, in its own window.
+  await explorerSearchBox(explorer).focus()
+  await explorer.keyboard.press('Escape')
+  await expect(explorerTree(explorer)).toBeFocused()
   const editor = await pane(page, 'editor').boundingBox()
   await popoutTab(explorer, 'explorer').dispatchEvent('dragstart', { dataTransfer: await explorer.evaluateHandle(() => new DataTransfer()) })
   // Over the editor the main window's compass shows; dropped on its right cell, the panel docks right of the editor.
@@ -154,6 +174,15 @@ try {
 
   // 6. A popout survives a restart: the layout keeps its window, and the next launch opens it again.
   await popsOut(() => movePane(page, 'explorer', 'window'))
+  // Moved without a resize (no DOM event says so), its place is saved all the same.
+  const layoutFile = () => readFile(resolve(profile, 'workspace-layouts.json'), 'utf8').then(JSON.parse).catch(() => undefined)
+  const moved = await application.evaluate(({ BrowserWindow }) => {
+    const popout = BrowserWindow.getAllWindows().find(window => window.webContents.getURL() === 'about:blank')
+    const [x, y] = popout.getPosition()
+    popout.setPosition(x + 40, y + 30)
+    return popout.getPosition()[0]
+  })
+  await expect.poll(async () => (await layoutFile())?.current?.windows?.[0]?.bounds.x, { timeout: 10000 }).toBe(moved)
   await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
   await application.close()
   const remembered = JSON.parse(await readFile(resolve(profile, 'workspace-layouts.json'), 'utf8'))

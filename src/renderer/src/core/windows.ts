@@ -12,12 +12,13 @@ export class WindowRegistry {
   constructor(readonly main: Window | undefined) {
     if (main) this.add(main)
   }
-  /** Tracks focus and input in `target`; the returned disposable forgets it. */
+  /** Tracks the user's input in `target`; the returned disposable forgets it. */
   add(target: Window): Disposable {
     this.windows.add(target)
-    // Input as well as focus: a click on something that takes no focus still says which window the user is in.
+    // The user's input, not focus: code focusing an element (a dialog opening in the main window) is not the user moving
+    // there, and the windows' own focus is read from document.hasFocus().
     const used = () => { this.last = target }
-    const events = ['focus', 'pointerdown', 'keydown'] as const
+    const events = ['pointerdown', 'keydown'] as const
     for (const event of events) target.addEventListener(event, used, true)
     return { dispose: () => {
       for (const event of events) target.removeEventListener(event, used, true)
@@ -101,3 +102,37 @@ export function observeIntersection(element: Element, callback: (entries: Inters
 
 /** The main window's document: this page's own, wherever its content is shown. */
 export function mainDocument(): Document | undefined { return typeof document === 'undefined' ? undefined : document }
+
+/**
+ * Runs `callback` once on the next frame of any of the workbench's windows. Content in a popout runs on this page's code,
+ * but a minimized or covered main window may draw no frames even with background throttling off; asking every open
+ * window lets whichever draws first run it, so a popped-out grid or tree keeps updating.
+ */
+export function requestFrame(callback: () => void, registry: WindowRegistry = windows): void {
+  const targets = registry.all()
+  if (!targets.length) { if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => callback()); else queueMicrotask(callback); return }
+  let done = false
+  const handles: [Window, number][] = []
+  const run = () => {
+    if (done) return
+    done = true
+    for (const [target, handle] of handles) if (!target.closed) target.cancelAnimationFrame(handle)
+    callback()
+  }
+  for (const target of targets) handles.push([target, target.requestAnimationFrame(run)])
+}
+
+/** Calls `opened` when a modal dialog appears in `doc` (one `[aria-modal="true"]` where there was none). */
+export function watchModals(doc: Document, opened: () => void): Disposable {
+  const view = doc.defaultView
+  if (!view || typeof view.MutationObserver !== 'function') return { dispose: () => {} }
+  const selector = '[aria-modal="true"]'
+  let open = !!doc.querySelector(selector)
+  const observer = new view.MutationObserver(() => {
+    const now = !!doc.querySelector(selector)
+    if (now && !open) opened()
+    open = now
+  })
+  observer.observe(doc.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-modal'] })
+  return { dispose: () => observer.disconnect() }
+}

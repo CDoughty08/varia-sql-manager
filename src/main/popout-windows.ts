@@ -29,6 +29,14 @@ export function onDisplay(bounds: Bounds, workAreas: readonly Bounds[]): boolean
   })
 }
 
+/** Electron's zoom factor for a zoom level (each level is 20 %). */
+export const zoomFactor = (level: number): number => Math.pow(1.2, level)
+/** Bounds in the page's CSS pixels as screen DIPs, at the page's zoom factor. */
+export function scaleBounds(bounds: Bounds, factor: number): Bounds {
+  const scale = Number.isFinite(factor) && factor > 0 ? factor : 1
+  return { x: Math.round(bounds.x * scale), y: Math.round(bounds.y * scale), width: Math.round(bounds.width * scale), height: Math.round(bounds.height * scale) }
+}
+
 /** The parts of a popout `BrowserWindow` the registry uses, so tests can pass a fake. */
 export interface PopoutWindow {
   readonly id: number
@@ -42,7 +50,9 @@ export interface PopoutWindow {
     setWindowOpenHandler(handler: () => { action: 'deny' }): void
     on(event: 'will-navigate' | 'will-frame-navigate' | 'will-redirect', listener: (event: { preventDefault(): void }) => void): void
     on(event: 'input-event', listener: (event: unknown, input: { type: string }) => void): void
+    on(event: 'zoom-changed', listener: () => void): void
     setZoomLevel(level: number): void
+    getZoomLevel(): number
   }
 }
 
@@ -60,14 +70,19 @@ export class PopoutWindows<W extends PopoutWindow> {
     workAreas(): readonly Bounds[]
     /** The main window's zoom, which every popout shares. */
     zoomLevel(): number
+    /** Sets the main window's zoom: a popout zoomed by Ctrl+wheel or a pinch takes the main window, and so every popout, with it. */
+    setZoomLevel(level: number): void
     /** Called when the first popout opens and when the last one goes. */
     changed(open: number): void
   }) {}
 
   /** `allow` with the window's options for a popout request on a display; `deny` for anything else. */
   open(details: OpenDetails, base: { readonly backgroundColor: string; readonly show: boolean }): { action: 'deny' } | { action: 'allow'; overrideBrowserWindowOptions: Record<string, unknown> } {
-    const bounds = popoutRequest(details)
-    if (!bounds || this.windows.size >= popoutLimits.maxWindows || !onDisplay(bounds, this.options.workAreas())) return { action: 'deny' }
+    const requested = popoutRequest(details)
+    if (!requested) return { action: 'deny' }
+    // The page measures in CSS pixels, which its zoom scales; windows are placed in screen DIPs.
+    const bounds = scaleBounds(requested, zoomFactor(this.options.zoomLevel()))
+    if (this.windows.size >= popoutLimits.maxWindows || !onDisplay(bounds, this.options.workAreas())) return { action: 'deny' }
     return { action: 'allow', overrideBrowserWindowOptions: {
       ...bounds, useContentSize: true, minWidth: popoutLimits.minWidth, minHeight: popoutLimits.minHeight, show: base.show, backgroundColor: base.backgroundColor,
       autoHideMenuBar: false, title: 'Varia SQL Manager',
@@ -87,6 +102,13 @@ export class PopoutWindows<W extends PopoutWindow> {
     // The application menu stays hidden, as on the main window; it still serves Electron's role keys there.
     if (this.options.platform !== 'darwin') { window.setAutoHideMenuBar(false); window.setMenuBarVisibility(false) }
     contents.setZoomLevel(this.options.zoomLevel())
+    // Chromium's own zoom (Ctrl+wheel, a pinch) changes one window: every window takes it, so they stay alike.
+    contents.on('zoom-changed', () => setImmediate(() => {
+      if (window.isDestroyed()) return
+      const level = contents.getZoomLevel()
+      this.options.setZoomLevel(level)
+      this.zoom(level)
+    }))
     window.on('closed', () => {
       this.windows.delete(window.id)
       this.options.changed(this.windows.size)

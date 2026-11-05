@@ -25,13 +25,17 @@ export function preparePopoutDocument(child: Window, main: Document, title: stri
   const syncStyles = () => {
     const sources = [...main.head.querySelectorAll(styleSelector)]
     for (const [source, clone] of clones) if (!source.isConnected) { clone.remove(); clones.delete(source) }
-    for (const source of sources) {
+    const wanted = sources.map(source => {
       let clone = clones.get(source)
       if (!clone) { clone = doc.importNode(source, true); clones.set(source, clone) }
       else if (source.tagName === 'STYLE' && clone.textContent !== source.textContent) clone.textContent = source.textContent
       else if (source.tagName === 'LINK' && clone.getAttribute('href') !== source.getAttribute('href')) clone.setAttribute('href', source.getAttribute('href') ?? '')
-      head.append(clone)
-    }
+      return clone
+    })
+    // Moved only when the order differs: re-inserting a sheet re-applies it, and the main head changes for many reasons
+    // (its title changes with the active query) that leave the sheets as they were.
+    const placed = [...head.children].filter(element => wanted.includes(element))
+    if (placed.length !== wanted.length || placed.some((element, index) => element !== wanted[index])) for (const clone of wanted) head.append(clone)
   }
   const syncRoot = () => {
     const from = main.documentElement, to = doc.documentElement

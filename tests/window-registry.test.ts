@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { WindowRegistry } from '../src/renderer/src/core/windows'
+import { requestFrame, WindowRegistry } from '../src/renderer/src/core/windows'
 
 function fakeWindow() {
   const listeners = new Set<() => void>()
@@ -44,5 +44,27 @@ describe('WindowRegistry', () => {
     listener.dispose()
     registry.adopted()
     expect(moves).toBe(1)
+  })
+  it('runs a frame callback once, on whichever window draws first', () => {
+    const frames = new Map<object, (() => void)[]>(), cancelled: number[] = []
+    const framed = () => {
+      const target = fakeWindow().window as unknown as Record<string, unknown>
+      const queue: (() => void)[] = []
+      frames.set(target, queue)
+      target.requestAnimationFrame = (callback: () => void) => queue.push(callback)
+      target.cancelAnimationFrame = (handle: number) => { cancelled.push(handle) }
+      return target as unknown as Window
+    }
+    // A minimized main window draws no frames; the popout does.
+    const main = framed(), popout = framed()
+    const registry = new WindowRegistry(main)
+    registry.add(popout)
+    let runs = 0
+    requestFrame(() => runs++, registry)
+    frames.get(popout)![0]()
+    // The other windows' requests are cancelled (the one that ran has nothing left to cancel).
+    expect([runs, cancelled.length]).toEqual([1, 2])
+    frames.get(main)![0]()
+    expect(runs).toBe(1)
   })
 })

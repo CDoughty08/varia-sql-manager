@@ -23,7 +23,10 @@ export interface ShellHost {
   toggleOutput(): 'hidden' | 'shown'
   manageLayouts(mode: 'save' | 'load'): void
   resetLayout(): void
+  /** The window's last layout write before it closes: popout windows the close takes leave the saved layout as it is. */
   flushLayout(): Promise<void>
+  /** The close `flushLayout` prepared for did not happen. */
+  layoutCloseCancelled(): void
   showConnect(): void
   /** Opens the Connect dialog filled in from a lost connection; connecting replaces it and retargets its queries. */
   reconnect(connectionId: string): void
@@ -97,7 +100,10 @@ export function shellContribution({ commands, documents, files, quickInput, conn
   const registrations = [
     // Remembering the layout is best-effort; a failed preferences write must never prevent exit.
     // A long run (Create Catalog, a restore) would be stopped part way by the close (its request is cancelled as the page unloads), so the close is refused.
-    commands.register('window.close', { run: () => files.closeWindow(async () => { await host.flushLayout().catch(() => {}) }, () => longRuns.closeRefusal()) }),
+    commands.register('window.close', { run: async () => {
+      try { await files.closeWindow(async () => { await host.flushLayout().catch(() => {}) }, () => longRuns.closeRefusal()) }
+      finally { if (!files.exiting) host.layoutCloseCancelled() }
+    } }),
     // Focus moves there too, so the F5 that follows refreshes Object Explorer rather than executing the query.
     commands.register('window.explorer', { run: () => host.reveal('explorer', { focus: true }) }),
     // The box asks for focus itself once shown, as revealing a hidden pane mounts it on a later render.

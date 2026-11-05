@@ -7,8 +7,8 @@ import { failureDetails } from '../ShellFailure'
 /** What the fault says, and what Copy details takes: the sentence, then the fault and its component stack. */
 export const explorerFault = (details?: string): ErrorReport => ({ message: 'Object Explorer stopped because of a rendering error.', extra: details })
 
-/** Focus went with an element that was removed. */
-export const focusLost = (): boolean => !document.activeElement || document.activeElement === document.body
+/** Focus went with an element that was removed, in `doc`: the window Object Explorer is in (a popout's, when it popped out). */
+export const focusLost = (doc: Document = document): boolean => !doc.activeElement || doc.activeElement === doc.body
 
 /**
  * Keeps a rendering fault in the tree inside Object Explorer: the pane says so and offers to reload the tree, which
@@ -26,7 +26,7 @@ export default class ExplorerErrorBoundary extends Component<{ readonly onReload
     onUnexpectedError(Object.assign(error instanceof Error ? error : new Error(String(error)), { componentStack: info.componentStack }))
   }
   componentDidUpdate(_props: unknown, previous: { readonly failed: boolean }): void {
-    if (this.state.failed && !previous.failed && focusLost()) this.reload.current?.focus()
+    if (this.state.failed && !previous.failed && focusLost(this.reload.current?.ownerDocument)) this.reload.current?.focus()
     if (!this.state.failed && previous.failed && this.reloading) { this.reloading = false; this.props.onReloaded?.() }
   }
   render(): ReactNode {

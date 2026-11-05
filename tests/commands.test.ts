@@ -219,6 +219,16 @@ describe('command execution', () => {
     expect(vi.mocked(host.reveal).mock.calls).toEqual([['explorer', { focus: true }], ['results', { raise: true }], ['messages', { raise: true }], ['plan', { raise: true }]])
     expect(vi.mocked(host.manageLayouts).mock.calls).toEqual([['save'], ['load']])
     expect(api.closeWindow).toHaveBeenCalledOnce()
+    // The window closed: its popouts' closing leaves the layout written before it.
+    expect(host.layoutCloseCancelled).not.toHaveBeenCalled()
+  })
+  it('tells the layout when a close it was written for does not happen', async () => {
+    const { commands, host, api } = fixture()
+    api.push(readyBackend())
+    vi.mocked(api.closeWindow).mockRejectedValueOnce(new Error('The window could not close.'))
+    await commands.execute('window.close', undefined, 'menu').catch(() => {})
+    expect(vi.mocked(host.flushLayout).mock.calls.length).toBe(1)
+    expect(host.layoutCloseCancelled).toHaveBeenCalledOnce()
   })
 })
 

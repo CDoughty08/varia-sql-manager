@@ -30,6 +30,9 @@ function ToolbarButton({ tool, enabled, tabbable, buttonRef, onFocus, onBlur }: 
   </button>
 }
 
+/** Focuses the tree in the window `near` is in: Object Explorer may be in a popout window (docs/popout-windows.md). */
+const focusTree = (near: Element | null | undefined) => (near?.ownerDocument ?? document).querySelector<HTMLElement>('[data-explorer-tree]')?.focus()
+
 /**
  * SSMS's toolbar as an ARIA toolbar: one tab stop (the button used last, or the first enabled one), and the arrow keys,
  * Home and End move between the enabled buttons. A focused button that turns disabled (Stop once loading ends,
@@ -43,12 +46,12 @@ function ExplorerToolbar({ tools }: { tools: readonly Tool[] }) {
   const focused = useRef(-1)
   const rescue = () => {
     const index = focused.current, button = buttons.current[index]
-    if (!button?.disabled || (document.activeElement !== button && !focusLost())) return
+    if (!button?.disabled || (button.ownerDocument.activeElement !== button && !focusLost(button.ownerDocument))) return
     focused.current = -1
     const count = buttons.current.length
     const next = Array.from({ length: count - 1 }, (_, step) => buttons.current[(index + 1 + step) % count]).find(candidate => candidate && !candidate.disabled)
     if (next) next.focus()
-    else document.querySelector<HTMLElement>('[data-explorer-tree]')?.focus()
+    else focusTree(button)
   }
   useLayoutEffect(rescue)
   // Chromium can also blur the button after this render; that blur has no related target.
@@ -58,7 +61,7 @@ function ExplorerToolbar({ tools }: { tools: readonly Tool[] }) {
   }
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const order = tools.map((_, index) => index).filter(index => enabled[index])
-    const at = order.indexOf(buttons.current.findIndex(button => button === document.activeElement))
+    const at = order.indexOf(buttons.current.findIndex(button => !!button && button === button.ownerDocument.activeElement))
     if (at < 0 || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
     const next = event.key === 'ArrowRight' ? order[(at + 1) % order.length] : event.key === 'ArrowLeft' ? order[(at - 1 + order.length) % order.length]
       : event.key === 'Home' ? order[0] : event.key === 'End' ? order[order.length - 1] : undefined
@@ -86,7 +89,7 @@ function ExplorerSearch({ connectionId }: { readonly connectionId: string | unde
   useLayoutEffect(() => objectSearch.followExplorer(connectionId), [objectSearch, connectionId])
   // Search in Object Explorer asks for focus, perhaps before this pane was shown.
   useLayoutEffect(() => { if (objectSearch.takePaneFocus()) { input.current?.focus(); input.current?.select() } }, [objectSearch, paneFocus])
-  return <SearchPanel searchId={explorerSearchId} layout="pane" inputRef={input} onLeave={() => document.querySelector<HTMLElement>('[data-explorer-tree]')?.focus()} />
+  return <SearchPanel searchId={explorerSearchId} layout="pane" inputRef={input} onLeave={() => focusTree(input.current)} />
 }
 
 /**
@@ -136,10 +139,12 @@ export default function ExplorerPane({ error, activeConnectionId }: { readonly e
   // When the last server goes, focus the tree held moves to the empty state's Connect button rather than the page; when
   // the first one comes, focus the Connect button or its dialog held moves to the tree, as SSMS focuses Object Explorer.
   const empty = !servers.length, connectButton = useRef<HTMLButtonElement>(null), wasEmpty = useRef(empty)
+  const header = useRef<HTMLDivElement>(null)
+  const paneDocument = () => header.current?.ownerDocument ?? document
   useLayoutEffect(() => {
-    if (empty !== wasEmpty.current && focusLost()) {
+    if (empty !== wasEmpty.current && focusLost(paneDocument())) {
       if (empty) connectButton.current?.focus()
-      else document.querySelector<HTMLElement>('[data-explorer-tree]')?.focus()
+      else focusTree(header.current)
     }
     wasEmpty.current = empty
   }, [empty])
@@ -147,13 +152,13 @@ export default function ExplorerPane({ error, activeConnectionId }: { readonly e
   // held when the last connection went moves to the tree.
   const searchable = live > 0
   useLayoutEffect(() => {
-    if (!searchable && !empty && focusLost()) document.querySelector<HTMLElement>('[data-explorer-tree]')?.focus()
+    if (!searchable && !empty && focusLost(paneDocument())) focusTree(header.current)
   }, [searchable, empty])
   return <>
-    <div className="explorer-header pane-header"><span className="pane-title">Object Explorer</span><ExplorerToolbar tools={tools} /><PaneMenuButton pane="explorer" /></div>
+    <div className="explorer-header pane-header" ref={header}><span className="pane-title">Object Explorer</span><ExplorerToolbar tools={tools} /><PaneMenuButton pane="explorer" /></div>
     {searchable && <ExplorerSearch connectionId={selectedServer} />}
     <div className="explorer-body" ref={background}>
-      {servers.length ? <ExplorerErrorBoundary onReload={() => explorer.reset()} onReloaded={() => document.querySelector<HTMLElement>('[data-explorer-tree]')?.focus()}>
+      {servers.length ? <ExplorerErrorBoundary onReload={() => explorer.reset()} onReloaded={() => focusTree(header.current)}>
         <FaultProbe /><ExplorerTree activeConnectionId={activeConnectionId} /></ExplorerErrorBoundary>
         : <EmptyState className="explorer-empty" icon="server" detail="Connect to SQL Server to browse databases and objects." actions={[{ label: 'Connect to server', run: () => void commands.execute('connection.connect', undefined, 'toolbar'), disabled: !connect, buttonRef: connectButton, primary: true }]} />}
       {error && <p className="explorer-error" role="alert">{error}</p>}

@@ -8,6 +8,7 @@ import { scriptContextValues, scriptMenuState, type ScriptContextValues } from '
 import { ssisVerbContextValues, ssisVerbMenuState, type SsisVerbContextValues } from '../../../shared/ssis/catalog.ts'
 import { onUnexpectedError } from '../core/errors'
 import type { EventBus } from '../core/events'
+import { requestFrame } from '../core/windows'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable, ExternalStore } from '../core/types'
@@ -234,7 +235,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.connections = options.connections
     this.events = options.events
     this.timers = options.timers ?? browserTimers
-    this.schedule = options.schedule ?? (callback => { if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => callback()); else queueMicrotask(callback) })
+    this.schedule = options.schedule ?? (callback => requestFrame(callback))
     this.limits = { ...explorerLimits, ...options.limits }
     this.now = options.now ?? Date.now
     this.loader = new ExplorerLoader({ api: options.api, timers: this.timers, newId: options.newId, limits: this.limits, onPendingChange: () => this.updateContext() })

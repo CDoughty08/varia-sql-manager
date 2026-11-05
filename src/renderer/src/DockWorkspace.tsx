@@ -15,6 +15,7 @@ import { preparePopoutDocument, type PopoutDocument } from './popouts/popout-doc
 import PopoutFrame, { type PopoutCommands } from './popouts/PopoutFrame'
 import { placeHost } from './popouts/place'
 import { paneDrag } from './popouts/drag'
+import { watchModals, windows } from './core/windows'
 
 interface PaneHosts { hosts: Record<PaneId, HTMLElement>; parking: RefObject<HTMLDivElement | null> }
 interface PaneCommands { close(id: PaneId): void; float(id: PaneId): void; toggle(id: PaneId): void; reveal(id: PaneId): void }
@@ -96,7 +97,13 @@ export interface WorkspaceHandle {
   revealOutput(view: OutputPaneId | undefined, options?: { focus?: boolean }): void
   /** SSMS's Ctrl+R: closes every open output panel while one shows, else reveals the output. */
   toggleOutput(view: OutputPaneId | undefined): 'hidden' | 'shown'
-  flush(): Promise<void>
+  /**
+   * Writes the layout now. With `closing` it is the window's last write before it closes: popout windows that close after
+   * it (a quit closes every window, in any order) leave the saved layout as it is, unless `closeCancelled` follows.
+   */
+  flush(closing?: boolean): Promise<void>
+  /** The close that `flush(true)` prepared for did not happen: panels whose windows closed meanwhile dock back. */
+  closeCancelled(): void
 }
 
 const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(function DockWorkspace(panes, ref) {
@@ -107,6 +114,9 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
   const [popouts, setPopouts] = useState<readonly PopoutRecord[]>([])
   // The page is going: its popout windows go with it and their panels stay where the saved layout put them.
   const unloading = useRef(false)
+  // The window's last layout write is done and it is closing: popouts closing now change nothing (`flush(true)`).
+  const closing = useRef(false)
+  const closedWhileClosing = useRef<PopoutPaneId[]>([])
   const themeType = useServiceSnapshot(theme).active.type
   const { panelTabs } = useServiceSnapshot(shellOptions)
   const panelTabsRef = useRef(panelTabs)
@@ -196,7 +206,9 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
   function openWindow(layout: PopoutLayout, restoring: boolean): boolean {
     const { x, y, width, height } = layout.bounds
     let child: Window | null = null
-    try { child = window.open('about:blank', 'varia-popout-' + layout.id, `left=${x},top=${y},width=${width},height=${height}`) } catch { child = null }
+    // A fresh name each time, never the layout's id: a window that had it may still be closing, and window.open would
+    // hand that window back instead of opening one.
+    try { child = window.open('about:blank', 'varia-popout-' + crypto.randomUUID(), `left=${x},top=${y},width=${width},height=${height}`) } catch { child = null }
     let prepared: PopoutDocument | undefined, attached: { dispose(): void } | undefined
     try {
       if (!child) throw new Error('The window was refused.')
@@ -212,10 +224,8 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     const closed = () => windowClosed(layout.id), resized = () => changed()
     target.addEventListener('pagehide', closed)
     target.addEventListener('resize', resized)
-    // A window torn down without its pagehide (by the OS, or a crash) is noticed here.
-    const poll = setInterval(() => { if (target.closed) closed() }, 500)
     const record: PopoutRecord = { id: layout.id, panes: [...layout.panes], active: layout.active, bounds: layout.bounds, window: target, root: frame.root, title: frame.setTitle,
-      dispose: () => { clearInterval(poll); target.removeEventListener('pagehide', closed); target.removeEventListener('resize', resized); listeners.dispose(); frame.dispose() } }
+      dispose: () => { target.removeEventListener('pagehide', closed); target.removeEventListener('resize', resized); listeners.dispose(); frame.dispose() } }
     setRecords([...popoutsRef.current, record])
     return true
   }
@@ -226,8 +236,23 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     record.dispose()
     // Their content comes home before the window's document goes.
     for (const pane of record.panes) parkFrom(record, pane)
+    if (closing.current) {
+      // Closed by the quit after the last write: the saved layout keeps the window, and the panels wait to see if the close happens.
+      popoutsRef.current = popoutsRef.current.filter(item => item !== record)
+      setPopouts(popoutsRef.current)
+      closedWhileClosing.current.push(...record.panes)
+      return
+    }
     setRecords(popoutsRef.current.filter(item => item !== record))
     for (const pane of record.panes) reveal(pane)
+  }
+  function closeCancelled() {
+    closing.current = false
+    const panes = closedWhileClosing.current
+    closedWhileClosing.current = []
+    for (const pane of panes) reveal(pane)
+    if (apiRef.current && ready.current) publishVisibility(apiRef.current)
+    changed()
   }
   /** Moves panels (the ones that can pop out) into a new window: where they were on screen, or at a screen point (a drag out). */
   function popOut(ids: readonly string[], at?: { x: number; y: number }): boolean {
@@ -445,7 +470,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     await persist(next)
   }
   function changed() {
-    if (restoring.current || !ready.current) return
+    if (restoring.current || !ready.current || closing.current) return
     cancelTimer()
     timer.current = setTimeout(() => {
       void flush().catch(error => setError('Could not remember workspace layout: ' + message(error)))
@@ -475,7 +500,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     setSelected(stateRef.current.saved[0]?.id ?? '')
     setDialogError(''); setNotice(''); setShowManager(true)
   }
-  useImperativeHandle(ref, () => ({ manage, flush, reset: () => {
+  useImperativeHandle(ref, () => ({ manage, flush: async closingNow => { if (closingNow) { cancelTimer(); closing.current = true } await flush() }, closeCancelled, reset: () => {
     if (!defaultRef.current) return
     try { apply(defaultRef.current) } catch (error) { setError(message(error)) }
   }, reveal, close, location, float, dock, moveToWindow, moveToMainWindow: id => moveToMainWindow(id), dockAt, tabWith, revealOutput, toggleOutput }))
@@ -502,6 +527,27 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
       popoutsRef.current = []
     }
   }, [])
+  // While popouts are open, one timer notices a window torn down without its pagehide (by the OS, or a crash) and a window
+  // moved, which no DOM event reports; a moved window's place is saved as a resize's is.
+  const anyPopout = popouts.length > 0
+  useEffect(() => {
+    if (!anyPopout) return
+    const places = new Map<PopoutRecord, string>()
+    const poll = setInterval(() => {
+      let moved = false
+      for (const record of popoutsRef.current) {
+        if (record.window.closed) { windowClosed(record.id); continue }
+        const place = record.window.screenX + ',' + record.window.screenY
+        if (places.has(record) && places.get(record) !== place) moved = true
+        places.set(record, place)
+      }
+      if (moved) changed()
+    }, 1000)
+    // Dialogs open in the main window: one opened from a popout brings the main window to the front, or the popout would
+    // look frozen behind it while the dialog holds the keyboard.
+    const raise = watchModals(document, () => { if (windows.active() !== window) window.focus() })
+    return () => { clearInterval(poll); raise.dispose() }
+  }, [anyPopout])
   useEffect(() => { if (apiRef.current) syncHeaders(apiRef.current) }, [panelTabs])
   useEffect(() => {
     if (!showManager) return

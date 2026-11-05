@@ -27,7 +27,7 @@ export const paneTitles: Record<PaneId, string> = { explorer: 'Object Explorer',
 export const popoutPaneIds = ['explorer', 'results', 'messages', 'plan'] as const
 export type PopoutPaneId = typeof popoutPaneIds[number]
 export const canPopOut = (id: string): id is PopoutPaneId => (popoutPaneIds as readonly string[]).includes(id)
-/** A popout window: its panels as tabs in order, the one it shows, and where it is on screen (content size, in DIPs). */
+/** A popout window: its panels as tabs in order, the one it shows, and where it is on screen (content size, in the page's CSS pixels; main scales them by the zoom). */
 export interface PopoutLayout { id: string; panes: PopoutPaneId[]; active: PopoutPaneId; bounds: { x: number; y: number; width: number; height: number } }
 /** Dockview's layout of the main window, plus Varia's popout windows (version 3). */
 export type WorkspaceLayout = SerializedDockview & { windows?: PopoutLayout[] }
