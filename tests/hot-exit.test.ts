@@ -121,6 +121,23 @@ describe('hot exit', () => {
     expect(kept[0].documents[0]).toMatchObject({ name: 'SQLQuery2.sql', dirty: true, text: 'SELECT unsaved' })
     expect(api.keepSession.mock.invocationCallOrder[0]).toBeLessThan(api.closeWindow.mock.invocationCallOrder[0])
   })
+  it('keeps the window open when a kept query changes while its session is written', async () => {
+    const { documents, model, api, files, kept } = fixture()
+    const tab = documents.create('SQLQuery2.sql', '', 'master')
+    model(tab.id).edit('SELECT unsaved')
+    let resolve!: () => void
+    api.keepSession.mockImplementationOnce(session => new Promise(done => { kept.push(session); resolve = () => done({ ok: true, value: undefined }) }))
+    const closing = files.closeWindow(async () => {})
+    await vi.waitFor(() => expect(api.keepSession).toHaveBeenCalled())
+    model(tab.id).edit('SELECT typed while kept')
+    resolve(); await closing
+    expect(api.closeWindow).not.toHaveBeenCalled()
+    expect(files.getSnapshot().error).toContain('changed while closing the window')
+    // Closing again keeps the latest text.
+    await files.closeWindow(async () => {})
+    expect(kept.at(-1)?.documents[0]).toMatchObject({ text: 'SELECT typed while kept' })
+    expect(api.closeWindow).toHaveBeenCalledTimes(1)
+  })
   it('asks as before while Restore open queries on startup is off', async () => {
     const { documents, model, api, files, kept, state } = fixture()
     state.hotExit = false

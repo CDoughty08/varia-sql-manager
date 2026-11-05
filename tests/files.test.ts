@@ -328,6 +328,19 @@ describe('file commands', () => {
     expect(api.closeQuerySession).not.toHaveBeenCalled()
     expect(files.getSnapshot().error).toContain('changed while confirming close')
   })
+  it('keeps a tab open when typing overlaps the open transaction prompt of its close', async () => {
+    const { documents, model, queries, api, commands, files } = fixture()
+    const tab = documents.active!
+    const pending = deferred<Awaited<ReturnType<QueryService['confirmSessions']>>>()
+    queries.confirmSessions.mockReturnValueOnce(pending.promise)
+    const closing = commands.run('file.close')
+    await vi.waitFor(() => expect(queries.confirmSessions).toHaveBeenCalled())
+    model(tab.id).edit('SELECT typed while asked')
+    pending.resolve(new Map()); await closing
+    expect(model(tab.id).disposed).toBe(false)
+    expect(api.closeQuerySession).not.toHaveBeenCalled()
+    expect(files.getSnapshot().error).toContain('changed while confirming close')
+  })
   it('keeps a tab open when typing overlaps the save requested by close', async () => {
     const { documents, model, api, commands, files } = fixture()
     const tab = documents.active!
@@ -418,6 +431,21 @@ describe('file commands', () => {
     expect(files.getSnapshot().error).toContain('changed while closing the window')
     await files.closeWindow(async () => {})
     expect(api.closeWindow).toHaveBeenCalledTimes(1)
+  })
+  it('rechecks approved revisions after committing open transactions before quitting', async () => {
+    const { documents, model, queries, api, files } = fixture()
+    const tab = documents.active!
+    queries.confirmSessions.mockResolvedValueOnce(new Map([[tab.id, 'commit']]))
+    const pending = deferred<Awaited<ReturnType<VariaApi['closeQuerySession']>>>()
+    api.closeQuerySession.mockReturnValueOnce(pending.promise)
+    const closing = files.closeWindow(async () => {})
+    await vi.waitFor(() => expect(api.closeQuerySession).toHaveBeenCalled())
+    model(tab.id).edit('SELECT typed while committing')
+    pending.resolve({ ok: true, value: { closed: true } }); await closing
+    expect(api.closeWindow).not.toHaveBeenCalled()
+    expect(files.exiting).toBe(false)
+    expect(model(tab.id).disposed).toBe(false)
+    expect(files.getSnapshot().error).toContain('changed while closing the window')
   })
   it('serializes window-close requests and flushes before the final close', async () => {
     const { api, files, documents, model, commands } = fixture()

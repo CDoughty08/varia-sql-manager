@@ -385,6 +385,9 @@ export class ResultsPortHost {
     }, error => {
       if (this.port !== port) return
       this.closing--
+      // The backend may not have released them (a TOO_MANY_REQUESTS refusal never reached it): the renderer may close
+      // them again, so they stay its own; closing a result the backend already released closes nothing.
+      this.own(ids.map(resultId => ({ generation: request.generation, resultId })))
       this.fail(rid, error)
     })
   }
