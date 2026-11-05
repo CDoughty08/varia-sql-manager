@@ -1,6 +1,6 @@
 {
   "name": "varia-sql-manager",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "description": "An Electron and Monaco SQL Server management workbench backed by .NET.",
   "main": "out/main/index.js",
