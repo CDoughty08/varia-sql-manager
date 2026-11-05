@@ -447,6 +447,8 @@ export const explorerSearchBox = page => page.getByRole('textbox', { name: 'Sear
 export const explorerSearchField = page => page.locator(part.explorerSearchField)
 /** Object Explorer's search hits, by their reveal buttons' accessible names. */
 export const explorerSearchHits = page => page.locator(part.explorerSearch).getByRole('list', { name: 'Search results', exact: true }).locator('[data-hit]')
+/** The hit Enter in the box revealed last. */
+export const explorerSearchCurrent = page => page.locator(part.explorerSearch).getByRole('list', { name: 'Search results', exact: true }).locator('[aria-current] [data-hit]')
 export const explorerSearchToggle = (page, name) => page.locator(part.explorerSearch).getByRole('button', { name, exact: true })
 export const explorerFooter = page => page.locator(part.explorerFooter)
 export const explorerFreshness = page => explorerFooter(page).locator(part.explorerFreshness)

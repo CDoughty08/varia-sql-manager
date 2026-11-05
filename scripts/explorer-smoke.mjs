@@ -6,7 +6,7 @@ import { expandExplorerPath, explorerLines, explorerRow, explorerTree, revealExp
 import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.mjs'
 import {
   activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
-  explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchField, explorerSearchHits, explorerSearchToggle, explorerServerCount, explorerSublabel, explorerToolbar, itemCount,
+  explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchToggle, explorerServerCount, explorerSublabel, explorerToolbar, itemCount,
   messages, outputView, paneMenuButton, part, primaryAction, quickInput, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
 } from './fixtures/ui.mjs'
 
@@ -695,6 +695,24 @@ try {
   await expect(searchBox()).toHaveValue('')
   await expect(searchBox()).toBeFocused()
   await expect(explorerSearchHits(page)).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await expect(tree()).toBeFocused()
+  // Enter in the box reveals the next hit in the tree and keeps focus in the box, wrapping round; Shift+Enter goes back.
+  await searchBox().focus()
+  await page.keyboard.type('table')
+  await expect(explorerSearchHits(page)).toHaveCount(2)
+  for (const [key, label] of [['Enter', 'dbo.table1'], ['Enter', 'dbo.table2'], ['Enter', 'dbo.table1'], ['Shift+Enter', 'dbo.table2']]) {
+    await page.keyboard.press(key)
+    await expect.poll(async () => (await active())?.label).toBe(label)
+    await expect(explorerSearchCurrent(page)).toHaveAttribute('title', `Reveal in Object Explorer: ${label}`)
+    await expect(searchBox()).toBeFocused()
+  }
+  // Search in Object Explorer's key, from the tree, selects the box's text, so typing replaces it.
+  await tree().focus()
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+F' : 'Control+Shift+F')
+  await expect(searchBox()).toBeFocused()
+  expect(await searchBox().evaluate(input => [input.selectionStart, input.selectionEnd])).toEqual([0, 5])
+  await page.keyboard.press('Escape')
   await page.keyboard.press('Escape')
   await expect(tree()).toBeFocused()
   if (process.platform !== 'darwin') {

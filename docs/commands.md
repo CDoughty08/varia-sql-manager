@@ -132,7 +132,7 @@ keys it uses are listed below.
 | --- | --- | --- | --- | --- | --- | --- |
 | Refresh | `explorer.refresh` | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | `hasConnection` | Object Explorer context menu › Refresh |
 | Filter Settings… | `explorer.filter` | — | — | — | `hasConnection` | Object Explorer context menu › Filter Settings… |
-| Search in Object Explorer | `explorer.focusSearch` | — | — | — | `hasConnection` | — |
+| Search in Object Explorer | `explorer.focusSearch` | Ctrl+Shift+F | Ctrl+Shift+F | ⇧⌘F | `hasConnection` | — |
 | Remove Filter | `explorer.removeFilter` | — | — | — | `hasConnection` | Object Explorer context menu › Remove Filter |
 | Create Catalog… | `explorer.createCatalog` | — | — | — | `backendReady && explorerSelectionFolder == 'integrationServicesCatalogs'` | Object Explorer context menu › Create Catalog… |
 | New Login… | `explorer.newLogin` | — | — | — | `backendReady && (explorerSelectionFolder == 'logins' \|\| explorerSelectionFolder == 'serverSecurity' \|\| explorerSelectionKind == 'login') && (explorerSelectionServerEngine == 'box' \|\| explorerSelectionServerEngine == 'managedInstance')` | Object Explorer context menu › New Login… |

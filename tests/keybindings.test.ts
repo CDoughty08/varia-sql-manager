@@ -198,11 +198,11 @@ describe('default keybindings', () => {
     for (const platform of ['win32', 'linux'] as const) {
       expect(defaultRules(platform).map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAll', 'file.close', 'file.close', 'window.close', 'edit.undo', 'edit.redo', 'edit.redo', ...clipboard,
         'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane', 'query.execute', 'query.execute', 'query.execute', 'query.cancel', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu',
-        'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.rename', 'explorer.delete', 'tableDesigner.properties', 'ssis.refreshOperations', 'ssis.refreshProperties',
+        'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.focusSearch', 'explorer.rename', 'explorer.delete', 'tableDesigner.properties', 'ssis.refreshOperations', 'ssis.refreshProperties',
         'query.changeDatabase', 'document.next', 'document.next', 'document.previous', 'document.previous', 'editor.toggleWordWrap', 'editor.toggleOvertype', ...native, ...editing, ...monitor, ...display, ...output, ...platform === 'win32' ? ['workbench.search'] : []])
     }
     expect(defaultRules('darwin').map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.saveAll', 'file.close', 'edit.undo', 'edit.redo', ...clipboard, 'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane',
-      'query.execute', 'query.execute', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.rename', 'explorer.delete', 'explorer.delete', 'explorer.properties', 'tableDesigner.properties', 'ssis.refreshOperations', 'ssis.refreshProperties', 'query.changeDatabase',
+      'query.execute', 'query.execute', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.focusSearch', 'explorer.rename', 'explorer.delete', 'explorer.delete', 'explorer.properties', 'tableDesigner.properties', 'ssis.refreshOperations', 'ssis.refreshProperties', 'query.changeDatabase',
       'document.next', 'document.previous', ...native, ...macEditing, 'activity.open', ...monitor,
       'preferences.options', ...display, ...output])
     expect(defaultRules('win32').find(rule => rule.command === 'window.close')?.chords).toEqual(['alt+f4'])
@@ -236,7 +236,8 @@ describe('default keybindings', () => {
     const legacy: Readonly<Record<string, CommandId>> = { n: 'file.new', o: 'file.open', s: 'file.save', w: 'file.close' }
     // SSMS's Save All took Ctrl+Shift+S from Save As, which keeps ⇧⌘S on macOS (where Save All is ⌥⌘S).
     const saveKeys: Readonly<Record<Platform, CommandId>> = { win32: 'file.saveAll', linux: 'file.saveAll', darwin: 'file.saveAs' }
-    const palette: Readonly<Record<string, CommandId>> = { p: 'workbench.quickOpen', 'shift+p': 'workbench.showCommands', u: 'query.changeDatabase', r: 'view.toggleResultsPane' }
+    // Ctrl/⌘+Shift+F focuses Object Explorer's search box (SSMS's Find in Files, which Varia lacks).
+    const palette: Readonly<Record<string, CommandId>> = { p: 'workbench.quickOpen', 'shift+p': 'workbench.showCommands', u: 'query.changeDatabase', r: 'view.toggleResultsPane', 'shift+f': 'explorer.focusSearch' }
     // Go To Line is Ctrl+G in the editor; Make Uppercase and Lowercase need its text focused, which editorFocus alone is not.
     const added: Readonly<Record<Platform, Readonly<Record<string, CommandId>>>> = { win32: { e: 'query.execute', g: 'edit.goToLine' }, linux: { e: 'query.execute', g: 'edit.goToLine' }, darwin: {} }
     // SSMS's search box key; Linux and macOS quit with it.

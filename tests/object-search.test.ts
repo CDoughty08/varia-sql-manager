@@ -221,6 +221,39 @@ describe('ObjectSearchService', () => {
     expect(calls.search).toHaveLength(3)
   })
 
+  it('walks the hits with Enter: searching at once when the answer is not in, wrapping round, and starting over on a new answer', async () => {
+    const { service, calls, pendingSearch, connections, timers } = harness()
+    connections.set([connection('a')])
+    const id = service.open('a')!
+    const hits = ['A', 'B', 'C'].map(name => ({ ...hit, label: `dbo.${name}`, object: { ...hit.object, name } }))
+    const answer = (value: ObjectSearchHit[]): ApiResult<ObjectSearchResult> => ({ ok: true, value: { hits: value, total: value.length, partial: false, elapsedMs: 1, index: status() } })
+    service.setQuery(id, { text: 'x' })
+    // Enter before the typing pause ends searches now, once, and takes the first hit when the answer comes.
+    const first = service.step(id, 1)
+    timers.run()
+    expect(calls.search).toHaveLength(1)
+    pendingSearch[0](answer(hits))
+    expect((await first)?.label).toBe('dbo.A')
+    expect((await service.step(id, 1))?.label).toBe('dbo.B')
+    expect((await service.step(id, 1))?.label).toBe('dbo.C')
+    expect((await service.step(id, 1))?.label).toBe('dbo.A')
+    expect((await service.step(id, -1))?.label).toBe('dbo.C')
+    expect(service.getSnapshot().documents[id].current).toBe(2)
+    expect(calls.search).toHaveLength(1)
+    // A hit picked from the list is where the next Enter goes on from.
+    service.pick(id, 0)
+    expect((await service.step(id, 1))?.label).toBe('dbo.B')
+    // New text: a new search, and Shift+Enter starts from the last hit.
+    service.setQuery(id, { text: 'y' })
+    const last = service.step(id, -1)
+    pendingSearch[1](answer(hits.slice(0, 2)))
+    expect((await last)?.label).toBe('dbo.B')
+    service.setQuery(id, { text: 'z' })
+    const none = service.step(id, 1)
+    pendingSearch[2](answer([]))
+    expect(await none).toBeUndefined()
+  })
+
   it('reports a failed search and clears results for empty text', async () => {
     const { service, pendingSearch, connections } = harness()
     connections.set([connection('a')])
