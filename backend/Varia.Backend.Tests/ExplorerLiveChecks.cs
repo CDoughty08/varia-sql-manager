@@ -25,15 +25,16 @@ internal static class ExplorerLiveChecks
         public int Requests;
 
         public async Task<ExplorerChildrenResult> Children(NodeRefDto node, string? subtype = null, string? cursor = null, int? pageSize = null, ExplorerFilterDto? filter = null,
-            RequestContext? context = null, string? connectionId = null)
+            RequestContext? context = null, string? connectionId = null, bool? grouped = null)
         {
             Interlocked.Increment(ref Requests);
-            var args = new ExplorerChildrenArgs(connectionId ?? ConnectionId, Guid.NewGuid().ToString(), node, subtype, cursor, pageSize, filter);
+            var args = new ExplorerChildrenArgs(connectionId ?? ConnectionId, Guid.NewGuid().ToString(), node, subtype, cursor, pageSize, filter, grouped);
             return (ExplorerChildrenResult)await service.DispatchAsync("explorer.children", JsonSerializer.SerializeToElement(args, json), json, context);
         }
 
         /// <summary>Every page of a node: the nodes, the first page's total, and how many pages it took.</summary>
-        public async Task<(List<ExplorerNode> Nodes, int? Total, int Pages, ExplorerError? Error)> All(NodeRefDto node, int? pageSize = null, ExplorerFilterDto? filter = null, string? subtype = null)
+        public async Task<(List<ExplorerNode> Nodes, int? Total, int Pages, ExplorerError? Error)> All(NodeRefDto node, int? pageSize = null, ExplorerFilterDto? filter = null, string? subtype = null,
+            bool? grouped = null)
         {
             var nodes = new List<ExplorerNode>();
             string? cursor = null;
@@ -41,7 +42,7 @@ internal static class ExplorerLiveChecks
             var pages = 0;
             do
             {
-                var page = await Children(node, subtype, cursor, pageSize, filter);
+                var page = await Children(node, subtype, cursor, pageSize, filter, grouped: grouped);
                 pages++;
                 if (page.Error is not null) return (nodes, total, pages, page.Error);
                 if (pages == 1) total = page.Total;
@@ -297,6 +298,60 @@ internal static class ExplorerLiveChecks
         catch (SqlException) { return true; }
     }
 
+    /// <summary>Group by Schema (SSMS 2022) on the scratch database: the database keeps the folders of its database-scoped
+    /// objects and lists its schemas; each schema row's folders list exactly what the ungrouped folder lists for that schema,
+    /// by name alone, paged and filtered, and its Programmability splits with the database's.</summary>
+    private static async Task GroupBySchemaAsync(Action<bool, string> check, Client client, ObjectRefDto db, Func<string, ExplorerFilterDto> schemaFilter)
+    {
+        var dbName = db.Name!;
+        static List<ExplorerNode> Rows(List<ExplorerNode> nodes) => [.. nodes.Where(node => node.Ref.Type == "object")];
+        static string Folders(List<ExplorerNode> nodes) => string.Join(",", nodes.Where(node => node.Ref.Type == "folder").Select(node => node.Ref.Folder));
+        var grouped = await client.All(Object(db), grouped: true);
+        var schemas = Rows(grouped.Nodes);
+        var names = schemas.Select(node => node.Label).ToList();
+        check(grouped.Error is null && Folders(grouped.Nodes) == "externalResources,programmability,storage,databaseSecurity"
+            && grouped.Nodes.SkipWhile(node => node.Ref.Type == "folder").All(node => node.Ref.Type == "object")
+            && new[] { "dbo", "Sales", "Odd]Schema", "bulk", "sys", "INFORMATION_SCHEMA" }.All(names.Contains) && !names.Contains("db_owner") && !names.Contains("guest")
+            && schemas.All(node => node is { HasChildren: true, Icon: "symbol-namespace", Ref.Object: { Kind: "schema" } } && node.Ref.Object.Database == dbName && node.Label == node.Ref.Object.Name)
+            && grouped.Total == grouped.Nodes.Count,
+            "Group by Schema: the database keeps External Resources, Programmability, Storage and Security, then lists its schemas (not the fixed roles' or an empty guest): " + string.Join(", ", names));
+        ObjectRefDto Row(string name) => new("schema", dbName, Name: name);
+        var sales = Row("Sales");
+        var salesFolders = await client.All(Object(sales));
+        var salesProgrammability = await client.All(Folder(sales, "programmability"));
+        var databaseProgrammability = await client.All(Folder(db, "programmability"), grouped: true);
+        check(Folders(salesFolders.Nodes) == "tables,views,synonyms,programmability" && salesFolders.Nodes.All(node => node.Ref.Owner == sales)
+            && Folders(salesProgrammability.Nodes) == "storedProcedures,functions,types,rules,defaults,sequences"
+            && Folders(databaseProgrammability.Nodes) == "databaseTriggers,assemblies,planGuides",
+            "a schema row has Tables, Views, Synonyms and Programmability, whose subfolders split with the grouped database's: " + Folders(salesProgrammability.Nodes) + " | " + Folders(databaseProgrammability.Nodes));
+        // Each schema's listing is the ungrouped listing filtered to it, labelled by name alone; bulk's 1,500 tables page.
+        var mismatches = new List<string>();
+        foreach (var (schema, folder, pageSize) in new[] { ("Sales", "tables", (int?)null), ("dbo", "tables", null), ("Odd]Schema", "tables", null), ("bulk", "tables", 400), ("dbo", "views", null),
+            ("dbo", "synonyms", null), ("Sales", "storedProcedures", null), ("dbo", "scalarValuedFunctions", null), ("Sales", "userDefinedTableTypes", null), ("dbo", "sequences", null),
+            ("sys", "systemViews", null), ("INFORMATION_SCHEMA", "systemViews", null) })
+        {
+            var below = await client.All(Folder(Row(schema), folder), pageSize: pageSize);
+            var flat = await client.All(Folder(db, folder), filter: schemaFilter(schema));
+            var (rows, expected) = (Rows(below.Nodes), Rows(flat.Nodes));
+            if (below.Error is not null || flat.Error is not null || rows.Count == 0 || !rows.Select(node => node.Ref).SequenceEqual(expected.Select(node => node.Ref))
+                || !rows.Select(Show).SequenceEqual(expected.Select(node => Show(node)[(schema.Length + 1)..])) || Folders(below.Nodes) != Folders(flat.Nodes))
+                mismatches.Add(schema + "." + folder + " (" + rows.Count + " of " + expected.Count + ", " + (below.Error ?? flat.Error)?.Code + ")");
+        }
+        var bulk = await client.All(Folder(Row("bulk"), "tables"), pageSize: 400);
+        check(mismatches.Count == 0 && bulk.Pages > 1 && bulk.Total == bulk.Nodes.Count,
+            "a schema row's folders list what the ungrouped folder lists for that schema, by name alone, paged by keyset: " + string.Join(", ", mismatches));
+        var filtered = Rows((await client.All(Folder(sales, "tables"), filter: new(Name: new("contains", "Ord")))).Nodes);
+        string? refused = null;
+        try { await client.Children(Folder(sales, "tables"), filter: schemaFilter("dbo")); }
+        catch (RequestException error) { refused = error.Code; }
+        check(filtered.Select(node => node.Label).SequenceEqual(["Orders"]) && refused == "INVALID_PARAMS",
+            "a schema's folder filters on its own (Name contains Ord), and refuses a Schema filter, which its row already fixes: " + string.Join(", ", filtered.Select(node => node.Label)));
+        // The objects below a schema row expand as they do anywhere else.
+        var orders = Rows((await client.All(Folder(sales, "tables"))).Nodes).Single(node => node.Label == "Orders");
+        check(orders.Ref.Object == new ObjectRefDto("table", dbName, "Sales", "Orders") && (await client.Labels(Object(orders.Ref.Object!))).SequenceEqual(["Columns", "Keys", "Constraints", "Triggers", "Indexes", "Statistics"]),
+            "a table below a schema row keeps its ref and folders");
+    }
+
     private static async Task ScratchAsync(Action<bool, string> check, SqlService service, Client client, Func<string, ConnectOptions> live, JsonSerializerOptions json,
         Func<string, string, Task<SqlRun>> sql)
     {
@@ -348,6 +403,8 @@ internal static class ExplorerLiveChecks
         }
         var folders = await client.Labels(Object(db));
         check(folders.SequenceEqual(["Tables", "Views", "External Resources", "Synonyms", "Programmability", "Storage", "Security"]), "the scratch database's folders: " + string.Join(", ", folders));
+
+        await GroupBySchemaAsync(check, client, db, Schema);
 
         // Tables: user tables only (history, graph and dropped ledger tables live elsewhere), in the database's case-sensitive order.
         var dbo = await Labels(db, "tables", Schema("dbo"));

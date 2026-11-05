@@ -33,6 +33,11 @@ export const objectExplorerSettings = [
     description: 'How many rows Select Top Rows reads, and the number its menu item shows.'
   },
   {
+    key: 'objectExplorer.groupBySchema', page: 'objectExplorer.commands', group: 'Object Explorer', label: 'Group by Schema', type: 'boolean', default: false,
+    keywords: ['schema', 'group', 'tree', 'folders'],
+    description: 'Lists each database\'s schemas after its own folders, with the Tables, Views, Synonyms and Programmability folders of each schema below it; Database Triggers, Assemblies and Plan Guides stay in the database\'s Programmability folder. A filter below a schema applies to that schema\'s folder only. The Object Explorer toolbar\'s Group by Schema button turns it on and off.'
+  },
+  {
     key: 'objectExplorer.search.indexOnConnect', page: 'objectExplorer.commands', group: 'Search Objects', label: 'Index objects when a server connects', type: 'boolean', default: true, varia: true,
     keywords: ['search', 'index', 'objects', 'find', 'definitions'],
     description: 'Reads the names of every object Object Explorer lists that you may see, from logins and databases down to columns and parameters, two databases at a time on a session of their own, so Search Objects finds them whether or not Object Explorer has loaded them. The index stays in memory and is dropped when the server disconnects. While it is False, Search Objects indexes a server the first time you search it.'

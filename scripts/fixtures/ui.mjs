@@ -449,6 +449,7 @@ export const explorerSearchField = page => page.locator(part.explorerSearchField
 export const explorerSearchHits = page => page.locator(part.explorerSearch).getByRole('list', { name: 'Search results', exact: true }).locator('[data-hit]')
 /** The hit Enter in the box revealed last. */
 export const explorerSearchCurrent = page => page.locator(part.explorerSearch).getByRole('list', { name: 'Search results', exact: true }).locator('[aria-current] [data-hit]')
+export const explorerSearchSplitter = page => page.locator(part.explorerSearch).getByRole('separator', { name: 'Resize search results', exact: true })
 export const explorerSearchToggle = (page, name) => page.locator(part.explorerSearch).getByRole('button', { name, exact: true })
 export const explorerFooter = page => page.locator(part.explorerFooter)
 export const explorerFreshness = page => explorerFooter(page).locator(part.explorerFreshness)

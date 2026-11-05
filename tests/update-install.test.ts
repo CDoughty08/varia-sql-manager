@@ -9,7 +9,7 @@ let dir: string
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'varia-update-install-')) })
 afterEach(async () => { await rm(dir, { recursive: true, force: true }) })
 
-const facts = (change: Partial<LaunchFacts>): LaunchFacts => ({ packaged: true, platform: 'win32', execPath: join(dir, 'Varia SQL Manager.exe'), env: {}, productName: 'Varia SQL Manager', userData: join(dir, 'profile'), ...change })
+const facts = (change: Partial<LaunchFacts>): LaunchFacts => ({ packaged: true, platform: 'win32', execPath: join(dir, 'Varia SQL Manager.exe'), env: {}, userData: join(dir, 'profile'), ...change })
 
 /** A spawn that starts (or fails to) on the next tick, as Node's does. */
 function fakeSpawn(fail?: Error) {
@@ -30,6 +30,8 @@ describe('installTargetFor', () => {
     expect(installTargetFor(facts({}))).toMatchObject({ kind: 'unsupported' })
     await writeFile(join(dir, 'Uninstall Varia SQL Manager.exe'), '')
     expect(installTargetFor(facts({}))).toEqual({ kind: 'nsis', downloadDir: join(dir, 'profile', 'updates'), privateDir: true })
+    // The uninstaller is matched to the executable's name, not app.getName() (the npm name in a packaged build).
+    expect(installTargetFor(facts({ execPath: join(dir, 'varia-sql-manager.exe') }))).toMatchObject({ kind: 'unsupported' })
     const portable = join(dir, 'usb', 'Varia-SQL-Manager-1.0.0-Windows-x64-Portable.exe')
     expect(installTargetFor(facts({ env: { PORTABLE_EXECUTABLE_FILE: portable } }))).toEqual({ kind: 'portable', downloadDir: join(dir, 'usb'), privateDir: false })
     const image = join(dir, 'apps', 'Varia-SQL-Manager-1.0.0-linux-x86_64.AppImage')

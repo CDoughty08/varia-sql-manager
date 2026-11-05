@@ -14,7 +14,8 @@ import { explorerSearchId } from '../search/ObjectSearchService'
 import ExplorerErrorBoundary, { FaultProbe, focusLost } from './ExplorerErrorBoundary'
 import ExplorerTree from './ExplorerTree'
 
-interface Tool { readonly id: CommandId; readonly icon: IconId; readonly label: string; readonly args?: CommandArgs }
+/** `pressed`: a toggle button's state (aria-pressed). */
+interface Tool { readonly id: CommandId; readonly icon: IconId; readonly label: string; readonly args?: CommandArgs; readonly pressed?: boolean }
 
 function ToolbarButton({ tool, enabled, tabbable, buttonRef, onFocus, onBlur }: {
   tool: Tool; enabled: boolean; tabbable: boolean; buttonRef: Ref<HTMLButtonElement>; onFocus: () => void; onBlur: (event: FocusEvent<HTMLButtonElement>) => void
@@ -23,6 +24,7 @@ function ToolbarButton({ tool, enabled, tabbable, buttonRef, onFocus, onBlur }: 
   const key = useKeybindingLabel(tool.id)
   const title = key ? `${tool.label} (${key.text})` : tool.label
   return <button ref={buttonRef} className="icon-button" aria-label={tool.label} title={title} disabled={!enabled} tabIndex={tabbable ? 0 : -1} onFocus={onFocus} onBlur={onBlur}
+    {...(tool.pressed !== undefined ? { 'aria-pressed': tool.pressed } : {})}
     onClick={() => void commands.execute(tool.id, tool.args, 'toolbar')}>
     <Icon name={tool.icon} />
   </button>
@@ -106,14 +108,14 @@ function ExplorerFooter({ servers, live }: { readonly servers: number; readonly 
 }
 
 /**
- * Object Explorer: SSMS's toolbar (Connect, Disconnect, Stop, Filter, Refresh, Collapse All) over the tree of connected
+ * Object Explorer: SSMS's toolbar (Connect, Disconnect, Stop, Filter, Refresh, Group by Schema, Collapse All) over the tree of connected
  * servers, or a prompt to connect. Disconnect acts on the selected node's server; with nothing selected it asks which.
  * Filter shows a filled funnel while the selected folder has a filter.
  */
 export default function ExplorerPane({ error, activeConnectionId }: { readonly error?: string; readonly activeConnectionId?: string }) {
   const { explorer, connections, commands } = useWorkbench()
   const { selected } = useServiceSnapshot(explorer)
-  const { explorerSelectionFiltered: filtered } = useServiceSnapshot(explorer.context)
+  const { explorerSelectionFiltered: filtered, explorerGroupBySchema: grouped } = useServiceSnapshot(explorer.context)
   const servers = useServiceSnapshot(connections)
   const connect = useCommandEnabled('connection.connect')
   const selectedServer = explorer.menuNode(selected)?.connectionId
@@ -128,6 +130,7 @@ export default function ExplorerPane({ error, activeConnectionId }: { readonly e
     { id: 'explorer.stop', icon: 'debug-stop', label: 'Stop' },
     { id: 'explorer.filter', icon: filtered ? 'filter-filled' : 'filter', label: 'Filter Settings' },
     { id: 'explorer.refresh', icon: 'refresh', label: 'Refresh' },
+    { id: 'explorer.groupBySchema', icon: 'symbol-namespace', label: 'Group by Schema', pressed: grouped },
     { id: 'explorer.collapseAll', icon: 'collapse-all', label: 'Collapse All' }
   ]
   // When the last server goes, focus the tree held moves to the empty state's Connect button rather than the page; when

@@ -56,6 +56,19 @@ describe('table designer', () => {
     // A second designer in the session is Table_2.
     expect(designers.get(designers.open(tables('c1')))?.name).toBe('Table_2')
   })
+  it('starts in the schema whose Tables folder it opened from (Group by Schema), when the login may use it', async () => {
+    const { designers, documents, api } = designer()
+    await settled()
+    const below = (schema: string): ExplorerMenuNode => ({ ...tables('c1'), id: 6, ref: { type: 'folder', owner: { kind: 'schema', database: 'AppData', name: schema }, folder: 'tables' } })
+    const sales = designers.open(below('sales'))
+    expect(documents.active).toMatchObject({ id: sales, name: 'c1.example.AppData - sales.Table_2', database: 'AppData' })
+    const hidden = designers.open(below('hidden'))
+    await settled()
+    expect(api.describeObject).toHaveBeenLastCalledWith(expect.objectContaining({ dialog: 'tableDesigner', target: { kind: 'database', name: 'AppData' } }))
+    expect(designers.get(sales)).toMatchObject({ phase: 'ready', schema: 'sales', folderNodeId: 6 })
+    // A schema the describe does not offer falls back to the login's default schema.
+    expect(designers.get(hidden)).toMatchObject({ phase: 'ready', schema: 'dbo' })
+  })
   it('adds a column from the empty last row with SSMS\'s defaults, and every edit is dirty and moves the revision', async () => {
     const { designers, documents, id, state } = designer()
     await settled()

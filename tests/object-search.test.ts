@@ -15,6 +15,7 @@ import type { LiveConnection } from '../src/renderer/src/services/connections'
 import { explorerSearchId, ObjectSearchService, revealPaths, type ObjectSearchOptions, type RevealHost } from '../src/renderer/src/search/ObjectSearchService'
 import { indexSummary, searchHitPath } from '../src/renderer/src/search/ObjectSearch'
 import { kindSpecs, nodeKinds } from '../src/shared/explorer/catalog'
+import { clampPaneBand, paneBandDrag, paneBandKey, paneBandLimits } from '../src/renderer/src/search/pane-band'
 
 const csharp = (file: string) => readFileSync(new URL('../backend/Varia.Backend/Search/' + file, import.meta.url), 'utf8')
 
@@ -293,6 +294,33 @@ describe('ObjectSearchService', () => {
     expect(revealPaths(onTable)[1]).toContainEqual({ type: 'folder', owner: msdb, folder: 'systemTables' })
   })
 
+  it('reveals a hit below its schema\'s row while Object Explorer groups by schema', async () => {
+    const { service } = harness()
+    const seeks: unknown[][] = []
+    const host: RevealHost = { groupBySchema: true, seek: async (connectionId, paths) => { seeks.push([connectionId, paths]); return { ok: true, nodeId: 9 } } }
+    await service.reveal(host, 'a', hit)
+    const server = { kind: 'server' }, sales = { kind: 'database', name: 'Sales' }, dbo = { kind: 'schema', database: 'Sales', name: 'dbo' }
+    const databases = { type: 'folder', owner: server, folder: 'databases' }
+    expect((seeks[0][1] as unknown[][])[0]).toEqual([databases, { type: 'object', object: sales }, { type: 'object', object: dbo }, { type: 'folder', owner: dbo, folder: 'tables' }, { type: 'object', object: hit.object }])
+    // Nested folders hang below the schema row too.
+    const fn: ObjectSearchHit = { object: { kind: 'function', database: 'Sales', schema: 'calc', name: 'f' }, folder: 'scalarValuedFunctions', label: 'calc.f' }
+    const calc = { kind: 'schema', database: 'Sales', name: 'calc' }
+    expect(revealPaths(fn, true)[0].slice(1)).toEqual([{ type: 'object', object: sales }, { type: 'object', object: calc },
+      ...['programmability', 'functions', 'scalarValuedFunctions'].map(folder => ({ type: 'folder', owner: calc, folder })), { type: 'object', object: fn.object }])
+    // A trigger's table is found below the table's schema, then in that schema's System Tables.
+    const trigger: ObjectSearchHit = { object: { kind: 'trigger', database: 'Sales', name: 't', parent: { kind: 'table', schema: 'hr', name: 'People' } }, folder: 'tableTriggers', label: 'hr.People.t' }
+    const hr = { kind: 'schema', database: 'Sales', name: 'hr' }, people = { kind: 'table', database: 'Sales', schema: 'hr', name: 'People' }
+    expect(revealPaths(trigger, true).slice(0, 2).map(path => path.slice(1))).toEqual([
+      [{ type: 'object', object: sales }, { type: 'object', object: hr }, { type: 'folder', owner: hr, folder: 'tables' }, { type: 'object', object: people }, { type: 'folder', owner: people, folder: 'tableTriggers' }, { type: 'object', object: trigger.object }],
+      [{ type: 'object', object: sales }, { type: 'object', object: hr }, { type: 'folder', owner: hr, folder: 'tables' }, { type: 'folder', owner: hr, folder: 'systemTables' }, { type: 'object', object: people },
+        { type: 'folder', owner: people, folder: 'tableTriggers' }, { type: 'object', object: trigger.object }]
+    ])
+    // Database-scoped objects stay below the database, in its own Programmability folder.
+    const ddl: ObjectSearchHit = { object: { kind: 'databaseTrigger', database: 'Sales', name: 'audit' }, folder: 'databaseTriggers', label: 'audit' }
+    expect(revealPaths(ddl, true)[0].slice(1)).toEqual([{ type: 'object', object: sales }, ...['programmability', 'databaseTriggers'].map(folder => ({ type: 'folder', owner: sales, folder })), { type: 'object', object: ddl.object }])
+    expect(revealPaths(ddl, true)).toEqual(revealPaths(ddl))
+  })
+
   it('reveals server objects and databases below the server, and a child under the folder its hit names', () => {
     const server = { kind: 'server' }
     const login: ObjectSearchHit = { object: { kind: 'login', name: 'app' }, folder: 'logins', label: 'app', subtype: 'sql' }
@@ -359,6 +387,31 @@ describe('ObjectSearchService', () => {
     service.focusPane()
     expect(service.takePaneFocus()).toBe(true)
     expect(service.takePaneFocus()).toBe(false)
+  })
+
+  it('sizes Object Explorer\'s search band by its splitter, within its limits, and back to its content', () => {
+    const { service } = harness()
+    expect(service.getSnapshot().paneSize).toBeUndefined()
+    service.setPaneSize(0.4)
+    expect(service.getSnapshot().paneSize).toBe(0.4)
+    service.setPaneSize(2)
+    expect(service.getSnapshot().paneSize).toBe(paneBandLimits.maximum)
+    service.setPaneSize(-1)
+    expect(service.getSnapshot().paneSize).toBe(paneBandLimits.minimum)
+    service.setPaneSize(undefined)
+    expect('paneSize' in service.getSnapshot()).toBe(false)
+    expect(clampPaneBand(Number.NaN)).toBe(paneBandLimits.minimum)
+    // A drag measures from the band's top over the whole pane: a pane 400 px tall, the band at its top + 40.
+    expect(paneBandDrag(240, 140, 100, 500)).toBe(0.25)
+    expect(paneBandDrag(600, 140, 100, 500)).toBe(paneBandLimits.maximum)
+    expect(paneBandDrag(120, 140, 100, 100)).toBe(paneBandLimits.minimum)
+    // Down moves the splitter down (a taller band), Up up; Home and End go to the ends; other keys do nothing.
+    expect(paneBandKey(0.4, 'ArrowDown')).toBe(0.45)
+    expect(paneBandKey(0.4, 'ArrowUp')).toBe(0.35)
+    expect(paneBandKey(paneBandLimits.maximum, 'ArrowDown')).toBe(paneBandLimits.maximum)
+    expect(paneBandKey(0.4, 'Home')).toBe(paneBandLimits.minimum)
+    expect(paneBandKey(0.4, 'End')).toBe(paneBandLimits.maximum)
+    expect(paneBandKey(0.4, 'PageDown')).toBeUndefined()
   })
 
   it('refuses a tab without a connected server, forgets a closed tab, and stops listening once disposed', () => {

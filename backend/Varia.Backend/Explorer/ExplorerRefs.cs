@@ -3,10 +3,11 @@ using System.Globalization;
 namespace Varia.Backend.Explorer;
 
 /// <summary>A validated explorer.children request: the node, its object (or the folder's owner), the folder, the query whose
-/// rows the node lists (the folder's, or the object kind's own), and the database the request reads (absent for server-scope
-/// nodes).</summary>
+/// rows the node lists (the folder's, the object kind's own, or a grouped database's schemas), the database the request reads
+/// (absent for server-scope nodes), and whether Group by Schema is on. Below a schema row, Filter carries the schema as an
+/// equals filter besides the user's.</summary>
 internal sealed record ExplorerRequest(string ConnectionId, string RequestId, NodeRefDto Node, ObjectRefDto Object, CatalogFolder? Folder, string? Database,
-    string? Subtype, string? Cursor, int PageSize, ExplorerFilterDto? Filter, string? List = null);
+    string? Subtype, string? Cursor, int PageSize, ExplorerFilterDto? Filter, string? List = null, bool Grouped = false);
 
 /// <summary>Re-validates what main's zod schemas (src/shared/explorer/schema.ts) accept, against the embedded catalogue.
 /// Every failure is INVALID_PARAMS; profile gates are checked once the connection is known (<see cref="CheckServed"/>).</summary>
@@ -50,12 +51,26 @@ internal static class ExplorerRefs
         }
         if (args.Subtype is { } subtype && (node.Type != "object" || !catalog.KindOf(target.Kind).Subtypes.Contains(subtype))) throw Invalid("subtype.");
         if (args.PageSize is < 1 or > MaxPageSize) throw Invalid("pageSize.");
-        var list = folder is null ? catalog.KindOf(target.Kind).List : folder.List;
+        // Group by Schema: true or absent, and only for a database and the folders below it.
+        var grouped = args.GroupBySchema switch
+        {
+            null => false,
+            true when target.Kind == "database" && (folder is null || folder.Owner == "database") => true,
+            _ => throw Invalid("groupBySchema.")
+        };
+        var list = folder is null ? grouped ? catalog.SchemaGroups.List : catalog.KindOf(target.Kind).List : folder.List;
         if (args.Cursor is not null && (list is null || args.Cursor.Length > ExplorerCursor.MaxLength || !args.Cursor.StartsWith("v1." + list + ".", StringComparison.Ordinal)))
             throw Invalid("cursor.");
-        if (args.Filter is { } filter) Filter(filter, folder);
+        if (args.Filter is { } filter) Filter(filter, folder is null ? [] : catalog.FilterFor(folder, target.Kind), folder);
         var database = target.Kind == "database" ? target.Name : target.Database;
-        return new(args.ConnectionId, args.RequestId, node, target, folder, database, args.Subtype, args.Cursor, args.PageSize ?? MaxPageSize, args.Filter, list);
+        var effective = args.Filter;
+        // A listing below a schema row lists that schema's objects: its own name, as an equals filter on the schema.
+        if (target.Kind == "schema" && folder?.List is not null)
+        {
+            if (!folder.Filter.Contains("schema")) throw new InvalidOperationException("A folder below a schema row cannot filter by schema: " + folder.Id + ".");
+            effective = (effective ?? new()) with { Schema = new("equals", target.Name!) };
+        }
+        return new(args.ConnectionId, args.RequestId, node, target, folder, database, args.Subtype, args.Cursor, args.PageSize ?? MaxPageSize, effective, list, grouped);
     }
 
     /// <summary>The ref's shape: the fields its kind's scope requires and forbids, identifiers (the name within the kind's
@@ -82,9 +97,9 @@ internal static class ExplorerRefs
         if (value.Parent is { } parent && (!kind.Parents.Contains(parent.Kind ?? "") || !Ident(parent.Schema) || !Ident(parent.Name))) throw Invalid("parent.");
     }
 
-    private static void Filter(ExplorerFilterDto filter, CatalogFolder? folder)
+    private static void Filter(ExplorerFilterDto filter, IReadOnlyList<string> properties, CatalogFolder? folder)
     {
-        var allowed = folder?.List is null ? [] : folder.Filter;
+        var allowed = folder?.List is null ? [] : properties;
         var present = new (string Property, object? Value)[] { ("name", filter.Name), ("schema", filter.Schema), ("owner", filter.Owner), ("created", filter.Created) }
             .Where(item => item.Value is not null).ToList();
         if (present.Count == 0 || present.Any(item => !allowed.Contains(item.Property))) throw Invalid("filter.");
