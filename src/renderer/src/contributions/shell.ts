@@ -1,4 +1,4 @@
-import type { PaneId } from '../../../shared/layouts'
+import { outputPaneIds, type PaneId } from '../../../shared/layouts'
 import { modalOpen } from '../core/modal'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
@@ -12,6 +12,10 @@ export interface ShellHost {
   disconnect(connectionId: string): Promise<void>
   /** Shows a pane; `focus` also moves keyboard focus into it, as SSMS's F8 does for Object Explorer. */
   reveal(pane: PaneId, options?: { focus?: boolean }): void
+  /** Shows the query output: the active query's view, else the output panel showing; with all closed, reopens them. */
+  revealOutput(options?: { focus?: boolean }): void
+  /** SSMS's Ctrl+R: closes the output panels while one shows, else shows the output. */
+  toggleOutput(): 'hidden' | 'shown'
   manageLayouts(mode: 'save' | 'load'): void
   resetLayout(): void
   flushLayout(): Promise<void>
@@ -62,7 +66,7 @@ const onPane = (action: (pane: PaneId) => void) => (args?: CommandArgs) => { con
  * main's exit flow (which waits for that subscription) always finds a `window.close` handler. The panel commands act on
  * the panel whose tab menu runs them.
  */
-export function shellContribution({ commands, documents, files, quickInput, connections, queries, panes, shellOptions, longRuns }: Pick<Workbench, 'commands' | 'documents' | 'files' | 'quickInput' | 'connections' | 'queries' | 'panes' | 'shellOptions' | 'longRuns'>, host: ShellHost): Disposable {
+export function shellContribution({ commands, documents, files, quickInput, connections, queries, shellOptions, longRuns }: Pick<Workbench, 'commands' | 'documents' | 'files' | 'quickInput' | 'connections' | 'queries' | 'panes' | 'shellOptions' | 'longRuns'>, host: ShellHost): Disposable {
   const located = (args: CommandArgs | undefined, location: PaneLocation) => { const pane = paneOf(args); return !!pane && host.paneLocation(pane) === location }
   const open = (args: CommandArgs | undefined) => { const pane = paneOf(args); return !!pane && host.paneLocation(pane) !== 'closed' }
   const dockAt = (side: DockSide) => ({ when: open, run: onPane(pane => host.dockPaneAt(pane, side)) })
@@ -87,22 +91,22 @@ export function shellContribution({ commands, documents, files, quickInput, conn
     commands.register('window.explorer', { run: () => host.reveal('explorer', { focus: true }) }),
     // The box asks for focus itself once shown, as revealing a hidden pane mounts it on a later render.
     commands.register('window.editor', { run: () => host.reveal('editor') }),
-    commands.register('window.output', { run: () => host.reveal('output') }),
+    commands.register('window.results', { run: () => host.reveal('results') }),
+    commands.register('window.messages', { run: () => host.reveal('messages') }),
+    commands.register('window.plan', { run: () => host.reveal('plan') }),
     // SSMS's Ctrl+R: hiding the results puts focus in the query editor; showing them leaves focus where it is.
     commands.register('view.toggleResultsPane', { run: () => {
-      if (!panes.getSnapshot().output) { host.reveal('output'); return }
-      host.closePane('output')
-      if (documents.getSnapshot().documents.length) documents.focusActive()
+      if (host.toggleOutput() === 'hidden' && documents.getSnapshot().documents.length) documents.focusActive()
     } }),
     // SSMS's F6: from Query Output back to the editor; from anywhere else to the results (DockWorkspace focuses the grid
     // that last had focus, else the first grid, else Messages).
     commands.register('window.switchPane', { run: () => {
-      if (typeof document !== 'undefined' && document.activeElement?.closest('[data-pane="output"]')) {
+      if (typeof document !== 'undefined' && document.activeElement?.closest(outputPaneIds.map(id => `[data-pane="${id}"]`).join())) {
         host.reveal('editor')
         documents.focusActive()
         return
       }
-      host.reveal('output', { focus: true })
+      host.revealOutput({ focus: true })
     } }),
     commands.register('layout.save', { run: () => host.manageLayouts('save') }),
     commands.register('layout.load', { run: () => host.manageLayouts('load') }),
@@ -172,7 +176,9 @@ export function shellContribution({ commands, documents, files, quickInput, conn
     commands.register('pane.dockBottom', dockAt('bottom')),
     commands.register('pane.tabWithExplorer', tabWith('explorer')),
     commands.register('pane.tabWithEditor', tabWith('editor')),
-    commands.register('pane.tabWithOutput', tabWith('output')),
+    commands.register('pane.tabWithResults', tabWith('results')),
+    commands.register('pane.tabWithMessages', tabWith('messages')),
+    commands.register('pane.tabWithPlan', tabWith('plan')),
     commands.register('window.togglePanelTabs', { run: () => shellOptions.togglePanelTabs() })
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }

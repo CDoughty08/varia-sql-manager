@@ -290,19 +290,19 @@ describe('document frame verbs in a workbench', () => {
     // No document is open: Save cannot run, and the results pane is hidden.
     expect(first.markup).toContain('<button type="button" class="document-verb primary" data-command="file.save" title="Save (Ctrl+S)" disabled="">')
     expect(first.markup).toContain('<button type="button" class="document-verb" data-command="view.toggleResultsPane" title="Toggle Results Pane (Ctrl+R)" aria-pressed="false">')
-    panes.set({ explorer: true, editor: true, output: true })
+    panes.set({ explorer: true, editor: true, results: true, messages: false, plan: false })
     const shown = render(verbs)
     expect(shown.markup).toContain('<button type="button" class="document-verb" data-command="view.toggleResultsPane" title="Toggle Results Pane (Ctrl+R)" aria-pressed="true">')
     const execute = vi.spyOn(commands, 'execute')
     shown.verbs[1].run()
     expect(execute).toHaveBeenLastCalledWith('view.toggleResultsPane', undefined, 'toolbar')
     await expect(execute.mock.results[0].value).resolves.toBe(true)
-    expect(host.closePane).toHaveBeenCalledWith('output')
+    expect(host.toggleOutput).toHaveBeenCalledOnce()
     // A verb is a user's action, so an open dialog holds it back, as it does the toolbar's.
     modal = true
     shown.verbs[1].run()
     await expect(execute.mock.results[1].value).resolves.toBe(false)
-    expect(host.closePane).toHaveBeenCalledOnce()
+    expect(host.toggleOutput).toHaveBeenCalledOnce()
   })
   it('words its verbs for the workbench\'s platform and settings', () => {
     const verbs: Verb[] = [{ command: 'file.revealInFolder' }, { command: 'explorer.selectTopRows' }]

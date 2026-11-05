@@ -13,11 +13,11 @@ describe('menu targets', () => {
     const input = inputTarget(element('input', { value: 'a' }).dom, () => true)
     const targets: MenuTarget[] = [
       { kind: 'editor', tabId: 't1' }, { kind: 'explorer', node: { id: 7, lost: false, kind: 'table', connectionId: 'c', label: 's.n', ref: { type: 'object', object: { kind: 'table', database: 'd', schema: 's', name: 'n' } } } }, { kind: 'tableDesigner', tabId: 't4' },
-      { kind: 'documentTab', tabId: 't2' }, { kind: 'output', tabId: 't3', view: 'messages', resultIndex: 0, selectedText: '', element: element('div').dom }, { kind: 'dockTab', pane: 'output', floating: true }, input, { kind: 'ssisOperations', tabId: 't5' }
+      { kind: 'documentTab', tabId: 't2' }, { kind: 'output', tabId: 't3', view: 'messages', resultIndex: 0, selectedText: '', element: element('div').dom }, { kind: 'dockTab', pane: 'results', floating: true }, input, { kind: 'ssisOperations', tabId: 't5' }
     ]
     expect(targets.map(target => menuForTarget[target.kind])).toEqual(contextMenuIds)
     const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, explorerFolder: '', explorerFolderInsertable: false, explorerNodeStatus: '', explorerServerEngine: '', explorerServerLinux: false, outputView: '', pane: '', paneFloating: false }
-    expect(targets.map(targetKeys)).toEqual([none, { ...none, explorerNode: 'table' }, none, none, { ...none, outputView: 'messages' }, { ...none, pane: 'output', paneFloating: true }, none, none])
+    expect(targets.map(targetKeys)).toEqual([none, { ...none, explorerNode: 'table' }, none, none, { ...none, outputView: 'messages' }, { ...none, pane: 'results', paneFloating: true }, none, none])
     expect(targetKeys(undefined)).toEqual(none)
     // The empty area below the servers, and a server lost with its backend generation.
     expect(targetKeys({ kind: 'explorer' })).toEqual({ ...none, explorerNode: 'background' })
@@ -79,7 +79,7 @@ function page() {
   const tabName = make('span', { className: 'tab-name' }), tabButton = make('button', { className: 'tab-select' }).append(tabName)
   const queryTab = make('div', { className: 'query-tab', attributes: { 'data-tab-id': 't1' } }).append(tabButton)
   const paneTitle = make('div', { className: 'dv-default-tab-content' }), paneClose = make('button')
-  const paneTab = make('div', { className: 'pane-tab', attributes: { 'data-pane-tab': 'output' } }).append(paneTitle, paneClose)
+  const paneTab = make('div', { className: 'pane-tab', attributes: { 'data-pane-tab': 'results' } }).append(paneTitle, paneClose)
   const dvTab = make('div', { className: 'dv-tab', attributes: { tabindex: '0' } }).append(paneTab)
   const line = make('span'), scrollbar = make('div', { className: 'scrollbar' }), findInput = make('textarea', { className: 'input', value: 'find' }), findToggle = make('div', { className: 'toggle' })
   const editContext = make('div', { className: 'native-edit-context' })
@@ -96,7 +96,7 @@ describe('menu target service', () => {
     const elements = page()
     const service = new MenuTargetService({ editor: () => ({ container: dom(elements.editor), tabId }), commandEnabled: () => true })
     service.register(dom(elements.queryTab), registered => ({ kind: 'documentTab', tabId: (registered as unknown as FakeElement).dataset.tabId }))
-    service.register(dom(elements.paneTab), () => ({ kind: 'dockTab', pane: 'output', floating: false }))
+    service.register(dom(elements.paneTab), () => ({ kind: 'dockTab', pane: 'results', floating: false }))
     return { service, ...elements }
   }
   it('finds registered elements from anything inside them, focusing the part that was clicked', () => {
@@ -107,7 +107,7 @@ describe('menu target service', () => {
   })
   it('resolves panel tabs inside Dockview\'s tab element, from the tab and from keyboard focus on it', () => {
     const { service, paneTitle, paneClose, dvTab } = setup()
-    const expected = { target: { kind: 'dockTab', pane: 'output', floating: false }, element: dvTab, mark: dvTab }
+    const expected = { target: { kind: 'dockTab', pane: 'results', floating: false }, element: dvTab, mark: dvTab }
     expect(service.targetFor(dom(paneTitle))).toEqual({ ...expected, focus: dvTab })
     expect(service.targetFor(dom(paneClose))).toEqual({ ...expected, focus: paneClose })
     expect(service.targetFor(dom(dvTab))).toEqual({ ...expected, focus: dvTab })

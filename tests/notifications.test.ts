@@ -162,7 +162,7 @@ describe('notifications in the workbench', () => {
     const fixture = workbenchFixture()
     fixtures.push(fixture)
     const { documents, events, notifications, commands, host, panes } = fixture
-    panes.set({ explorer: true, editor: true, output: true })
+    panes.set({ explorer: true, editor: true, results: true, messages: false, plan: false })
     documents.newQuery()
     const first = documents.getSnapshot().activeId
     expect(commands.isEnabled('notifications.clearAll')).toBe(false)
@@ -175,7 +175,7 @@ describe('notifications in the workbench', () => {
     expect(commands.isEnabled('notifications.clearAll') && commands.isEnabled('notifications.focus')).toBe(true)
     // Show results: back to that query, with the output pane shown.
     notifications.run(toast.id, toast.actions![0])
-    await vi.waitFor(() => expect(host.reveal).toHaveBeenCalledWith('output'))
+    await vi.waitFor(() => expect(host.reveal).toHaveBeenCalledWith('results'))
     expect(documents.getSnapshot().activeId).toBe(first)
     expect(notifications.getSnapshot().visible).toEqual([])
   })
@@ -186,11 +186,11 @@ describe('notifications in the workbench', () => {
     documents.newQuery()
     const tab = documents.getSnapshot().activeId
     // Ctrl+R hid the results while the save wrote: the toolbar notice it would get is out of sight.
-    panes.set({ explorer: true, editor: true, output: false })
+    panes.set({ explorer: true, editor: true, results: false, messages: false, plan: false })
     events.emit({ type: 'results.saved', tabId: tab, text: 'Saved 5 rows to a.csv.' })
     expect(notifications.getSnapshot().visible).toMatchObject([{ message: 'Saved 5 rows to a.csv.', actions: [{ label: 'Show results' }] }])
     notifications.clear()
-    panes.set({ explorer: true, editor: true, output: true })
+    panes.set({ explorer: true, editor: true, results: true, messages: false, plan: false })
     events.emit({ type: 'results.saved', tabId: tab, text: 'Saved 6 rows to a.csv.' })
     expect(notifications.getSnapshot().visible).toEqual([])
   })

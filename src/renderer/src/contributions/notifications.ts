@@ -1,3 +1,4 @@
+import { outputPaneIds } from '../../../shared/layouts'
 import type { Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 
@@ -18,11 +19,11 @@ export function notificationsContribution({ commands, notifications, events, doc
   const saved = events.subscribe(event => {
     if (event.type === 'documents.closed') notifications.dropActions(savedKey(event.tabId))
     // The editor shows one query at a time, and the results pane only the active query's output.
-    if (event.type !== 'results.saved' || (documents.getSnapshot().activeId === event.tabId && panes.getSnapshot().output)) return
+    if (event.type !== 'results.saved' || (documents.getSnapshot().activeId === event.tabId && outputPaneIds.some(id => panes.getSnapshot()[id]))) return
     const open = !!documents.get(event.tabId)
     notifications.notify({
       severity: 'info', message: event.text, key: savedKey(event.tabId),
-      actions: open ? [{ label: 'Show results', run: () => { documents.activate(event.tabId); void commands.execute('window.output', undefined, 'toolbar') } }] : []
+      actions: open ? [{ label: 'Show results', run: () => { documents.activate(event.tabId); void commands.execute('window.results', undefined, 'toolbar') } }] : []
     })
   })
   return { dispose: () => { saved.dispose(); registrations.forEach(registration => registration.dispose()) } }

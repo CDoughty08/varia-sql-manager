@@ -199,7 +199,7 @@ try {
   console.log('Theme checks: the font stacks are the ones drawn, the editor has no ligatures, and icons sit on the 16 px grid.')
 
   // Floating groups live outside .dock-workbench; they used to fall back to Dockview's own grey.
-  await movePane(page, 'output', 'float')
+  await movePane(page, 'results', 'float')
   await expect(page.locator('.dv-floating-titlebar')).toHaveCount(1)
   expect(await backgroundOf('.dv-floating-titlebar')).toBe('rgb(17, 19, 23)')
   await menu('layout.reset')

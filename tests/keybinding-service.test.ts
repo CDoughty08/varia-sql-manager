@@ -150,7 +150,7 @@ describe('keybinding dispatch', () => {
     }
   })
   it('consumes a macOS menu key equivalent where its rule does not apply, so the menu cannot run it there', () => {
-    const rules = (platform: Platform) => [resolveKeybinding('query.execute', { key: 'mod+j', when: 'editorFocus' }, platform)!, resolveKeybinding('window.output', { key: 'f6', when: 'editorFocus' }, platform)!]
+    const rules = (platform: Platform) => [resolveKeybinding('query.execute', { key: 'mod+j', when: 'editorFocus' }, platform)!, resolveKeybinding('window.results', { key: 'f6', when: 'editorFocus' }, platform)!]
     for (const platform of platforms) {
       const { press, ran } = service(platform, { values: { activePanel: 'output' }, rules: rules(platform) })
       // ⌘J reaches the page before the menu, and the Execute item would show it; F6 has no ⌘, so no menu shows it.

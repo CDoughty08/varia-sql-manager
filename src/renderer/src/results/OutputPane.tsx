@@ -1,4 +1,5 @@
-import { memo, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent } from 'react'
+import { memo, useEffect, useId, useLayoutEffect, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
+import { outputPaneIds, type OutputPaneId } from '../../../shared/layouts'
 import PaneMenuButton from '../PaneMenuButton'
 import Icon from '../Icon'
 import { useTicker } from '../core/useTicker'
@@ -11,7 +12,7 @@ import { setKey, type OutputViewName, type ResultJob, type ResultSetEntry, type 
 import { formatCount, messagesSummary, plural, runSummary } from './status'
 
 /** `query` is false for a value's document (XML, JSON, plan), which has no results of its own. */
-interface Props { tabId: string; query: boolean; connected: boolean; hint?: string }
+interface Props { pane: OutputPaneId; tabId: string; query: boolean; connected: boolean; hint?: string }
 
 /** Plans a plan set lists in the Execution plan view; more are opened from its grid in Results. */
 const planRowsShown = 16
@@ -35,12 +36,47 @@ function RunSummaryView({ tab, now }: { tab: TabResults; now: number }) {
 }
 
 /**
- * The pane's live region for one query tab (keyed by it): it reads out what that tab announces while it is shown. A
+ * The output's live region for one query tab (keyed by it): it reads out what that tab announces while it is shown. A
  * sentence from before it was shown stays unread, so switching query tabs repeats nothing.
  */
 function Announcer({ text, announced }: { text: string; announced: number }) {
   const [shownAt] = useState(announced)
-  return <div role="status" className="visually-hidden">{announced > shownAt ? text : ''}</div>
+  return <div role="status" className="visually-hidden" data-output-announcer>{announced > shownAt ? text : ''}</div>
+}
+
+/**
+ * The query output's one live region, outside the dock, so that it reads out how a run, a copy or a save ended wherever
+ * the output panels are and whichever of them shows.
+ */
+export function OutputAnnouncer({ tabId }: { tabId: string }) {
+  const { results } = useWorkbench()
+  const tab = useServiceSnapshot(results)[tabId]
+  return <Announcer key={tabId} text={tab?.announcement ?? ''} announced={tab?.announced ?? 0} />
+}
+
+/** The run's plan sets, which the Execution plan panel lists; closed results have none. */
+function plansOf(tab: TabResults | undefined): readonly ResultSetEntry[] {
+  return tab && tab.status !== 'closed' ? tab.sets.filter(set => set.descriptor.kind === 'executionPlan') : []
+}
+/**
+ * The output view a query tab shows: Messages until a set opens (a run without sets ends there), then Results, unless the
+ * user picked a view; Execution plan only while the run has a plan. Undefined for a tab that has not run.
+ */
+export function outputViewOf(tab: TabResults | undefined): OutputViewName | undefined {
+  if (!tab) return undefined
+  const hasSets = tab.sets.length > 0 || tab.status === 'closed'
+  return tab.view === 'plan' && plansOf(tab).length > 0 ? 'plan' : tab.view !== 'messages' && hasSets ? 'results' : 'messages'
+}
+
+/**
+ * Keeps the output panels on the active query's view: when the query or its view changes, that view's panel shows in
+ * place of the output panel its group shows. A group where the output panels share tabs with another panel stays as it is.
+ */
+export function OutputViewSync({ tabId }: { tabId: string }) {
+  const { results, panes } = useWorkbench()
+  const view = outputViewOf(useServiceSnapshot(results)[tabId])
+  useEffect(() => { if (view) panes.select(view) }, [panes, tabId, view])
+  return null
 }
 
 /**
@@ -106,73 +142,105 @@ function PlanView({ tabId, tab, plans }: { tabId: string; tab: TabResults; plans
   </ul>
 }
 
+const emptyTitles: Record<OutputPaneId, string> = { results: 'Query results', messages: 'Messages', plan: 'Execution plan' }
+const emptyIcons = { results: 'table', messages: 'output', plan: 'execution-plan' } as const
+const regionNames: Record<OutputPaneId, string> = { results: 'Query results', messages: 'Query messages', plan: 'Query execution plans' }
+const viewNames: Record<OutputPaneId, string> = { results: 'Results', messages: 'Messages', plan: 'Execution plan' }
+
 /**
- * Query Output for the active query: a segmented Results (stacked grids, once a set exists), Messages and Execution plan
- * (once the run returned a plan) control, the run summary, the copy and save strips (and how the last save ended), and
- * one live region for the pane. Results switch automatically (Messages until a set opens; a run without sets ends on
- * Messages) until the user picks a view; under Results, the Messages strip shows the messages too. The views follow the
- * ARIA tabs pattern: one Tab stop, arrow keys, Home and End move between them and show the one they reach.
+ * One output panel for the active query: Results (stacked grids, and the Messages strip under them), Messages, or
+ * Execution plan (the run's showplan sets). Each docks, floats and tabs on its own. Its toolbar's tabs are the output
+ * panels in its group (Results once a set exists, Execution plan once the run returned a plan), and choosing one shows it
+ * as the group's dock tab would. The views follow the ARIA tabs pattern: one Tab stop, arrow keys, Home and End move
+ * between them and show the one they reach. The first output panel showing (Results, else Messages, else Execution plan)
+ * also holds the run summary and the copy and save strips, so they show once, wherever the panels are.
  */
-function OutputPane({ tabId, query, connected, hint }: Props) {
-  const { results } = useWorkbench()
+function OutputPane({ pane, tabId, query, connected, hint }: Props) {
+  const { results, panes } = useWorkbench()
   const all = useServiceSnapshot(results)
+  const visible = useServiceSnapshot(panes)
+  const peers = useServiceSnapshot(panes.peers)[pane]
   const tab = tabId ? all[tabId] : undefined
-  const now = useTicker(tab?.status === 'running')
+  const leader = outputPaneIds.find(id => visible[id]) === pane
+  const now = useTicker(leader && tab?.status === 'running')
   const hasSets = !!tab && (tab.sets.length > 0 || tab.status === 'closed')
-  const plans = tab && tab.status !== 'closed' ? tab.sets.filter(set => set.descriptor.kind === 'executionPlan') : []
-  const view: OutputViewName | undefined = !tab ? undefined : tab.view === 'plan' && plans.length > 0 ? 'plan' : tab.view !== 'messages' && hasSets ? 'results' : 'messages'
+  const plans = plansOf(tab)
   const errors = !!tab?.messages.some(entry => entry.kind === 'error')
   // Closed results keep the tab, without a count of sets that are gone.
   const sets = tab && tab.status !== 'closed' ? tab.sets.length : 0, messages = tab?.messages.length ?? 0
   const jobs = tab?.jobs.filter(job => job.visible) ?? []
-  const id = useId(), panelId = id + 'panel', tabIds: Record<OutputViewName, string> = { results: id + 'results', messages: id + 'messages', plan: id + 'plan' }
-  const tabRefs = useRef<Record<OutputViewName, HTMLButtonElement | null>>({ results: null, messages: null, plan: null })
+  const id = useId(), panelId = id + 'panel', tabIds: Record<OutputPaneId, string> = { results: id + 'results', messages: id + 'messages', plan: id + 'plan' }
   const [viewRef, viewHeight] = useHeight()
+  const available: Record<OutputPaneId, boolean> = { results: hasSets, messages: !!tab, plan: plans.length > 0 }
+  // Only the panel its group shows lists the tabs: a hidden panel's tabs are gone, not merely out of sight.
+  const views = !tab || !visible[pane] ? [] : (peers.length ? peers : [pane]).filter(view => view === pane || available[view])
   // The strip line shows once there is something to read beyond row counts (or the user opened the strip); it opens itself
   // only when the stack keeps room for its sets at their floors.
   const stripSummary = tab ? messagesSummary(tab.messages) : undefined
-  const showStrip = !!tab && view === 'results' && messages > 0 && (stripSummary!.readable || tab.strip)
+  const showStrip = !!tab && pane === 'results' && hasSets && messages > 0 && (stripSummary!.readable || tab.strip)
   const need = tab && showStrip && tab.status !== 'closed' ? stackNeed(tab, results.viewState(tabId).collapsed) : 0
   const stripFits = viewHeight > 0 && viewHeight >= need + g.messagesStripOpen
   const stripMax = viewHeight > 0 ? Math.max(g.messagesStripOpen, Math.min(Math.floor(viewHeight * 0.4), viewHeight - need)) : undefined
-  const views: OutputViewName[] = [...hasSets ? ['results' as const] : [], 'messages', ...plans.length > 0 ? ['plan' as const] : []]
+  /** Shows another output panel of this group; with `focus` (a click or a key on these tabs), focus moves to its tab, since the one pressed leaves with its panel. */
+  const select = (view: OutputPaneId, focus = false) => {
+    if (view === pane) return
+    results.setView(tabId, view)
+    panes.select(view)
+    if (!focus) return
+    const attempt = () => {
+      const target = document.querySelector<HTMLElement>('[data-pane="' + view + '"] [data-output-tab="' + view + '"]')
+      target?.focus()
+      return !!target && document.activeElement === target
+    }
+    if (!attempt()) requestAnimationFrame(() => { attempt() })
+  }
   const tabKey = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (!view || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
-    const at = views.indexOf(view)
+    if (!views.length || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+    const at = Math.max(0, views.indexOf(pane))
     const next = event.key === 'ArrowRight' ? views[(at + 1) % views.length] : event.key === 'ArrowLeft' ? views[(at + views.length - 1) % views.length]
       : event.key === 'Home' ? views[0] : event.key === 'End' ? views[views.length - 1] : undefined
     if (!next) return
     event.preventDefault()
-    if (next !== view) results.setView(tabId, next)
-    tabRefs.current[next]?.focus()
+    select(next, true)
   }
-  const tabProps = (name: OutputViewName) => ({
-    ref: (element: HTMLButtonElement | null) => { tabRefs.current[name] = element }, id: tabIds[name], role: 'tab', 'data-output-tab': name, 'aria-selected': view === name, 'aria-controls': panelId,
-    tabIndex: view === name ? 0 : -1, className: view === name ? 'active' : '', onClick: () => results.setView(tabId, name)
+  const tabProps = (name: OutputPaneId) => ({
+    id: tabIds[name], role: 'tab', 'data-output-tab': name, 'aria-selected': name === pane, ...name === pane ? { 'aria-controls': panelId } : {},
+    tabIndex: name === pane ? 0 : -1, className: name === pane ? 'active' : '', onClick: () => select(name, true)
   })
-  return <section className="output-panel" aria-label="Query output">
+  const labels: Record<OutputPaneId, string> = {
+    results: sets > 0 ? `Results, ${formatCount(sets)} ${plural(sets, 'result set')}` : 'Results',
+    messages: errors ? 'Messages, contains errors' : messages > 0 ? `Messages, ${formatCount(messages)} ${plural(messages, 'message')}` : 'Messages',
+    plan: plans.length > 0 ? `Execution plan, ${formatCount(plans.length)} ${plural(plans.length, 'plan')}` : 'Execution plan'
+  }
+  const badges: Record<OutputPaneId, ReactNode> = {
+    results: sets > 0 && <span className="badge">{sets}</span>,
+    messages: errors ? <span className="badge error-count">!</span> : messages > 0 && <span className="badge">{messages}</span>,
+    plan: plans.length > 0 && <span className="badge">{plans.length}</span>
+  }
+  return <section className="output-panel" aria-label={regionNames[pane]} data-output-panel={pane}>
     <div className="output-toolbar">
       <div className="output-views" role="tablist" aria-label="Query output views" onKeyDown={tabKey}>
         {/* The badges are drawn; the names say what they mean ("!" alone is not spoken). */}
-        {hasSets && <button {...tabProps('results')} aria-label={sets > 0 ? `Results, ${formatCount(sets)} ${plural(sets, 'result set')}` : 'Results'}>Results{sets > 0 && <span className="badge">{sets}</span>}</button>}
-        {tab && <button {...tabProps('messages')} aria-label={errors ? 'Messages, contains errors' : messages > 0 ? `Messages, ${formatCount(messages)} ${plural(messages, 'message')}` : 'Messages'}>Messages{errors ? <span className="badge error-count">!</span> : messages > 0 && <span className="badge">{messages}</span>}</button>}
-        {plans.length > 0 && <button {...tabProps('plan')} aria-label={`Execution plan, ${formatCount(plans.length)} ${plural(plans.length, 'plan')}`}>Execution plan<span className="badge">{plans.length}</span></button>}
+        {views.map(view => <button key={view} {...tabProps(view)} aria-label={labels[view]}>{viewNames[view]}{badges[view]}</button>)}
       </div>
-      {tab ? <RunSummaryView tab={tab} now={now} /> : <span className="output-spacer" />}
-      {/* Visual progress only: the pane's live region announces how a copy or save ended. */}
-      {jobs.map(job => <div key={job.jobId} className="job-strip"><span>{jobText(job)}</span><button onClick={() => results.cancelJob(job.jobId)}>Cancel</button></div>)}
-      {/* The live region below announces it; this is the visible copy. */}
-      {tab?.jobNotice && <div className="job-strip job-notice">{tab.jobNotice}</div>}
-      <PaneMenuButton pane="output" />
+      {leader && tab ? <RunSummaryView tab={tab} now={now} /> : <span className="output-spacer" />}
+      {/* Visual progress only: the output's live region announces how a copy or save ended. */}
+      {leader && jobs.map(job => <div key={job.jobId} className="job-strip"><span>{jobText(job)}</span><button onClick={() => results.cancelJob(job.jobId)}>Cancel</button></div>)}
+      {/* The live region announces it; this is the visible copy. */}
+      {leader && tab?.jobNotice && <div className="job-strip job-notice">{tab.jobNotice}</div>}
+      <PaneMenuButton pane={pane} />
     </div>
-    {!tab ? <EmptyState className="output-empty" icon="table" title="Query results" detail={!query ? 'Query results appear here for query tabs.' : hint ?? (connected ? 'Execute a query to view results and messages.' : 'Connect this query to a server to execute it.')} />
-      : <div ref={viewRef} className="output-view" role="tabpanel" id={panelId} aria-labelledby={tabIds[view ?? 'messages']}>
-        {view === 'results' ? <>
-          {tab.status === 'closed' ? <EmptyState className="output-empty" detail="Results were closed to free memory. Execute the query again to see them." /> : <ResultsStack key={tab.queryId} tabId={tabId} tab={tab} />}
+    {!tab ? <EmptyState className="output-empty" icon={emptyIcons[pane]} title={emptyTitles[pane]} detail={!query ? 'Query results appear here for query tabs.' : hint ?? (connected ? 'Execute a query to view results and messages.' : 'Connect this query to a server to execute it.')} />
+      : <div ref={viewRef} className="output-view" role="tabpanel" id={panelId} aria-labelledby={tabIds[pane]}>
+        {pane === 'results' ? <>
+          {tab.status === 'closed' ? <EmptyState className="output-empty" detail="Results were closed to free memory. Execute the query again to see them." />
+            : hasSets ? <ResultsStack key={tab.queryId} tabId={tabId} tab={tab} />
+            : <EmptyState className="output-empty" icon="table" detail={tab.status === 'running' ? 'Result sets appear here as the query returns them.' : 'The query returned no result sets.'} />}
           {showStrip && <MessagesStrip tabId={tabId} tab={tab} fits={stripFits} maxHeight={stripMax} />}
-        </> : view === 'plan' ? <PlanView tabId={tabId} tab={tab} plans={plans} /> : <MessagesView tabId={tabId} tab={tab} />}
+        </> : pane === 'plan' ? plans.length > 0 ? <PlanView tabId={tabId} tab={tab} plans={plans} />
+          : <EmptyState className="output-empty" icon="execution-plan" detail="A plan appears here when the query returns one, as SET SHOWPLAN_XML ON and SET STATISTICS XML ON do." />
+          : <MessagesView tabId={tabId} tab={tab} />}
       </div>}
-    <Announcer key={tabId} text={tab?.announcement ?? ''} announced={tab?.announced ?? 0} />
   </section>
 }
 

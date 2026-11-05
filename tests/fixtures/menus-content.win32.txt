@@ -116,7 +116,9 @@ Tools
 Window
   &Object Explorer  F8  ++++
   Query &Editor  ++++
-  Q&uery Output  ++++
+  Res&ults  ++++
+  &Messages  ++++
+  E&xecution Plan  ++++
   S&how Results Pane  Ctrl+R [x]  ++++
   Panel &Tabs [ ]  ++++
   ---

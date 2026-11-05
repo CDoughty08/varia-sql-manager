@@ -41,7 +41,7 @@ describe('fuzzy matching', () => {
     expect(palette('new database').filter(label => label === 'Object Explorer: New Database…')).toHaveLength(1)
     expect(palette('object explorer', explorerCommands)).toEqual(['View: Show Object Explorer', ...palette('object explorer').filter(label => label !== 'View: Show Object Explorer')])
     expect(palette('object explorer', explorerCommands).slice(1).sort()).toEqual(explorerCommands.filter(label => palette('object explorer').includes(label)).sort())
-    expect(palette('exe').slice(0, 2)).toEqual(['Query: Execute', 'Query: Cancel Executing Query'])
+    expect(palette('exe').slice(0, 3)).toEqual(['Query: Execute', 'View: Show Execution Plan', 'Query: Cancel Executing Query'])
     // "cancel" finds Cancel Executing Query whether or not a query runs; a document's own Cancel comes first only where it is available.
     const paletteLabels = commandIds.filter(id => commandDescriptor(id).palette !== false).map(paletteLabel)
     expect(palette('cancel')[0]).toBe('Query: Cancel Executing Query')
@@ -106,8 +106,8 @@ describe('fuzzy matching', () => {
     expect(scoreQuery('ss', 'View: Show Query Output', ['results', 'messages'])).toBeUndefined()
     expect(scoreQuery('mess', 'View: Show Query Output', ['results', 'messages'])).toEqual({ score: 175 * 0.8, ranges: [] })
     expect(scoreQuery('nw', 'Query: Execute', ['new window'])).toMatchObject({ ranges: [] })
-    for (const query of ['sa', 'ss', 'ages']) expect(palette(query), query).not.toContain('View: Show Query Output')
-    expect(palette('messages')).toEqual(['View: Show Query Output'])
+    for (const query of ['rint', 'int']) expect(palette(query), query).not.toContain('View: Show Messages')
+    expect(palette('print')[0]).toBe('View: Show Messages')
   })
   it('gives the start bonus at the start of the title, after a category', () => {
     expect(scoreQuery('file', 'File: Save', [], 6)).toEqual({ score: 150, ranges: [[0, 4]] })

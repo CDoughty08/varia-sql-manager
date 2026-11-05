@@ -212,11 +212,11 @@ describe('command execution', () => {
     expect(commands.isEnabled('explorer.refresh')).toBe(false)
     connections.add(connectionInfo('server-a'), connectionOptions)
     await commands.execute('explorer.refresh', undefined, 'keybinding')
-    for (const id of ['window.explorer', 'window.output', 'layout.save', 'layout.load', 'layout.reset'] as const) await commands.execute(id, undefined, 'menu')
+    for (const id of ['window.explorer', 'window.results', 'window.messages', 'window.plan', 'layout.save', 'layout.load', 'layout.reset'] as const) await commands.execute(id, undefined, 'menu')
     await commands.execute('window.close', undefined, 'menu')
     expect([host.showConnect, host.resetLayout, host.flushLayout].map(fn => vi.mocked(fn).mock.calls.length)).toEqual([1, 1, 1])
     // Object Explorer also takes focus (SSMS's F8), so a following F5 refreshes it.
-    expect(vi.mocked(host.reveal).mock.calls).toEqual([['explorer', { focus: true }], ['output']])
+    expect(vi.mocked(host.reveal).mock.calls).toEqual([['explorer', { focus: true }], ['results'], ['messages'], ['plan']])
     expect(vi.mocked(host.manageLayouts).mock.calls).toEqual([['save'], ['load']])
     expect(api.closeWindow).toHaveBeenCalledOnce()
   })
@@ -264,9 +264,10 @@ describe('context keys', () => {
     expect(focusFacts(findInput, editor(false))).toEqual({ editorFocus: true, editorTextFocus: false, inputFocus: true, activePanel: 'editor', outputGridFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false })
     expect(focusFacts(element('button', { pane: 'explorer' }), editor(false))).toEqual({ editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: 'explorer', outputGridFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false })
     // Ctrl+Shift+C copies with headers only in a results grid, not in Messages.
-    expect(focusFacts(element('div', { pane: 'output', grid: true }), editor(false))).toEqual({ editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: 'output', outputGridFocus: true, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false })
-    expect(focusFacts(element('div', { pane: 'output' }), editor(false))).toMatchObject({ activePanel: 'output', outputGridFocus: false })
-    expect(focusFacts(element('div', { pane: 'output', editable: true }), undefined)).toMatchObject({ inputFocus: true, activePanel: 'output' })
+    expect(focusFacts(element('div', { pane: 'results', grid: true }), editor(false))).toEqual({ editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: 'output', outputGridFocus: true, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false })
+    // Each output panel (Results, Messages, Execution plan) is the output to the keybindings.
+    expect(focusFacts(element('div', { pane: 'messages' }), editor(false))).toMatchObject({ activePanel: 'output', outputGridFocus: false })
+    expect(focusFacts(element('div', { pane: 'plan', editable: true }), undefined)).toMatchObject({ inputFocus: true, activePanel: 'output' })
     expect(focusFacts(element('input', { pane: 'floating' }), undefined)).toMatchObject({ inputFocus: true, activePanel: '' })
     // A table designer's grid is in the editor pane, outside the query editor: F4 opens its Properties there.
     expect(focusFacts(element('div', { pane: 'editor', designer: true }), editor(false))).toEqual({ editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: 'editor', outputGridFocus: false, designerFocus: true, queryBarFocus: false, activityMonitorFocus: false })

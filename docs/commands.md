@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (213)
+## Commands (217)
 
 ### File
 
@@ -68,7 +68,9 @@ keys it uses are listed below.
 | --- | --- | --- | --- | --- | --- | --- |
 | Show Object Explorer | `window.explorer` | F8 | F8 | F8 | Always | Window › Object Explorer |
 | Show Query Editor | `window.editor` | — | — | — | Always | Window › Query Editor |
-| Show Query Output | `window.output` | — | — | — | Always | Window › Query Output |
+| Show Results | `window.results` | — | — | — | Always | Window › Results |
+| Show Messages | `window.messages` | — | — | — | Always | Window › Messages |
+| Show Execution Plan | `window.plan` | — | — | — | Always | Window › Execution Plan |
 | Toggle Results Pane | `view.toggleResultsPane` | Ctrl+R | Ctrl+R | ⌘R | Always; checked when `outputPaneVisible` | Window › Show Results Pane |
 | Switch Between Query and Results | `window.switchPane` | F6 (`!activityMonitorFocus`), Shift+F6 (`!activityMonitorFocus`) | F6 (`!activityMonitorFocus`), Shift+F6 (`!activityMonitorFocus`) | F6 (`!activityMonitorFocus`), ⇧F6 (`!activityMonitorFocus`) | `activeDocumentIsText` | — |
 | Save Layout… | `layout.save` | — | — | — | Always | View › Save Layout…; Window › Save Window Layout… |
@@ -91,7 +93,9 @@ keys it uses are listed below.
 | Dock Bottom (not in the palette) | `pane.dockBottom` | — | — | — | Always | Panel tab context menu › Dock Bottom |
 | Tab with Object Explorer (not in the palette) | `pane.tabWithExplorer` | — | — | — | Always | Panel tab context menu › Tab with Object Explorer |
 | Tab with Query Editor (not in the palette) | `pane.tabWithEditor` | — | — | — | Always | Panel tab context menu › Tab with Query Editor |
-| Tab with Query Output (not in the palette) | `pane.tabWithOutput` | — | — | — | Always | Panel tab context menu › Tab with Query Output |
+| Tab with Results (not in the palette) | `pane.tabWithResults` | — | — | — | Always | Panel tab context menu › Tab with Results |
+| Tab with Messages (not in the palette) | `pane.tabWithMessages` | — | — | — | Always | Panel tab context menu › Tab with Messages |
+| Tab with Execution Plan (not in the palette) | `pane.tabWithPlan` | — | — | — | Always | Panel tab context menu › Tab with Execution Plan |
 | Float (not in the palette) | `pane.float` | — | — | — | Always | Panel tab context menu › Float |
 | Dock (not in the palette) | `pane.dock` | — | — | — | Always | Panel tab context menu › Dock |
 | Close (not in the palette) | `pane.close` | — | — | — | Always | Panel tab context menu › Close |
@@ -467,7 +471,9 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | --- | --- | --- | --- |
 | `1_panes` | **O**bject Explorer | `window.explorer` | Always |
 | `1_panes` | Query **E**ditor | `window.editor` | Always |
-| `1_panes` | Q**u**ery Output | `window.output` | Always |
+| `1_panes` | Res**u**lts | `window.results` | Always |
+| `1_panes` | **M**essages | `window.messages` | Always |
+| `1_panes` | E**x**ecution Plan | `window.plan` | Always |
 | `1_panes` | S**h**ow Results Pane | `view.toggleResultsPane` | Always |
 | `1_panes` | Panel **T**abs | `window.togglePanelTabs` | Always |
 | `2_documents` | **N**ext Query | `document.next` | Always |
@@ -720,7 +726,9 @@ Right-click a panel's tab (Object Explorer, Query editor, or Query output), or p
 | `0_move` | Dock **B**ottom | `pane.dockBottom` | Always |
 | `0_tab` | Tab with **O**bject Explorer | `pane.tabWithExplorer` | `pane != 'explorer'` |
 | `0_tab` | Tab with Query **E**ditor | `pane.tabWithEditor` | `pane != 'editor'` |
-| `0_tab` | Tab with Q**u**ery Output | `pane.tabWithOutput` | `pane != 'output'` |
+| `0_tab` | Tab with Res**u**lts | `pane.tabWithResults` | `pane != 'results'` |
+| `0_tab` | Tab with **M**essages | `pane.tabWithMessages` | `pane != 'messages'` |
+| `0_tab` | Tab with E**x**ecution Plan | `pane.tabWithPlan` | `pane != 'plan'` |
 | `1_dock` | **F**loat | `pane.float` | `!paneFloating` |
 | `1_dock` | **D**ock | `pane.dock` | `paneFloating` |
 | `2_close` | **C**lose | `pane.close` | Always |
@@ -768,7 +776,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `editorTextFocus` | boolean | focus | The query editor's text has focus. |
 | `inputFocus` | boolean | focus | Focus is on an input, text area, select, or editable element other than the editor text. The find widget's inputs count. |
 | `textInputFocus` | boolean | focus | `editorTextFocus \|\| inputFocus`. |
-| `activePanel` | `'explorer'`, `'editor'`, `'output'`, `''` | focus | The pane that holds focus: Object Explorer, the query editor, Query Output, or '' for none. |
+| `activePanel` | `'explorer'`, `'editor'`, `'output'`, `''` | focus | The pane that holds focus: Object Explorer, the query editor, an output panel (Results, Messages or Execution plan), or '' for none. |
 | `outputGridFocus` | boolean | focus | Focus is in a results grid, which copies its selected cells rather than text. |
 | `designerFocus` | boolean | focus | Focus is in the active table designer; activePanel is then 'editor'. |
 | `queryBarFocus` | boolean | focus | Focus is in the active query's bar (Execute, Cancel and its server and database lists); activePanel is then 'editor'. |
@@ -814,7 +822,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `queryRunning` | boolean | state | The active query is running. |
 | `hasResults` | boolean | state | The active query has result sets, and they were not closed (Close Results) or lost with a run the SQL backend stopped. |
 | `anyDocumentConnected` | boolean | state | Some open query's server is connected. |
-| `outputPaneVisible` | boolean | state | The Query Output panel is open and showing: its tab is selected, and no other panel is maximized. |
+| `outputPaneVisible` | boolean | state | An output panel (Results, Messages or Execution plan) is open and showing: its tab is selected, and no other panel is maximized. |
 | `panelTabsVisible` | boolean | state | Window › Panel Tabs is on: a panel alone in its dock group shows its tab. |
 | `editorWordWrap` | boolean | state | Word wrap is on in the query editor. |
 | `editorWhitespace` | boolean | state | View White Space is on in the query editor. |
@@ -880,7 +888,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerServerEngine` | `''`, `'box'`, `'managedInstance'`, `'cloud'` | target | The kind of server the Object Explorer node the menu is for is on: 'box', 'managedInstance' or 'cloud', or '' for the empty area. |
 | `explorerServerLinux` | boolean | target | The menu is for a node on SQL Server on Linux. |
 | `outputView` | `'grid'`, `'messages'`, `''` | target | The Query Output view the menu is for: a results grid or the messages. |
-| `pane` | `'explorer'`, `'editor'`, `'output'`, `''` | target | The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, or Query Output. |
+| `pane` | `'explorer'`, `'editor'`, `'results'`, `'messages'`, `'plan'`, `''` | target | The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, Results, Messages, or Execution plan. |
 | `paneFloating` | boolean | target | The panel the menu is for is floating. |
 
 ## Reserved keys
