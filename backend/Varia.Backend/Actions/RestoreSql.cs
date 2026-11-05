@@ -45,8 +45,8 @@ internal static partial class RestoreSql
     /// their sessions where VIEW SERVER STATE shows them, and their backup family (a database of the same name from elsewhere is another).</summary>
     public const string Destinations = "SELECT TOP (@take) d.name AS name, d.database_id AS database_id, d.create_date AS create_date, d.state_desc AS state_desc, "
         + "d.recovery_model_desc AS recovery_model, CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 "
-        + "THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS s WHERE s.database_id = d.database_id) END AS sessions, CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 "
-        + "THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS s WHERE s.database_id = d.database_id AND s.open_transaction_count > 0) END AS with_transaction, rs.family_guid AS family_guid "
+        + "THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.database_id = d.database_id AND " + ActionSql.UserSession + ") END AS sessions, CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 "
+        + "THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.database_id = d.database_id AND " + ActionSql.UserSession + " AND es.open_transaction_count > 0) END AS with_transaction, rs.family_guid AS family_guid "
         + "FROM sys.databases AS d LEFT JOIN sys.database_recovery_status AS rs ON rs.database_id = d.database_id WHERE d.database_id > 2 AND d.source_database_id IS NULL ORDER BY d.name;";
 
     /// <summary>The run's preflight (D1f), in master on the action's own connection: the destination's row (identity, state, access,
