@@ -385,9 +385,13 @@ internal static partial class ActionSql
     /// TransactionSessions), never Database, which every database action runs.</summary>
     private const string InTransaction = "EXISTS (SELECT 1 FROM sys.dm_tran_session_transactions AS st JOIN sys.dm_tran_database_transactions AS dt ON dt.transaction_id = st.transaction_id "
         + "WHERE st.session_id = es.session_id AND dt.database_id = d.database_id)";
-    private const string UsesDatabase = "(es.database_id = d.database_id OR " + InTransaction + ")";
+    /// <summary>Only user sessions count: a database just brought ONLINE keeps SQL Server's own tasks in it for a moment (DB STARTUP,
+    /// UCS_TASK_NO_SPEC, probed on SQL Server 2025), sometimes with a transaction there. KILL refuses
+    /// them (6107) and Drop Connections does not end them, so counting them would show sessions the user cannot close.</summary>
+    internal const string UserSession = "es.is_user_process = 1";
+    private const string UsesDatabase = "(" + UserSession + " AND (es.database_id = d.database_id OR " + InTransaction + "))";
     /// <summary>A session that uses the database (UsesDatabase) with an open transaction, which closing its connections rolls back.</summary>
-    private const string HoldsTransaction = "((es.database_id = d.database_id AND es.open_transaction_count > 0) OR " + InTransaction + ")";
+    private const string HoldsTransaction = "(" + UserSession + " AND ((es.database_id = d.database_id AND es.open_transaction_count > 0) OR " + InTransaction + "))";
 
     /// <summary>A database's row in master: its identity (database_id, create_date), state, user access, read-only and standby,
     /// subtype, what blocks a DROP, SET OFFLINE or sp_detach_db (replication, an availability group, mirroring, its own database
@@ -412,9 +416,9 @@ internal static partial class ActionSql
         + "CONVERT(bit, CASE WHEN dm.mirroring_guid IS NULL THEN 0 ELSE 1 END) AS mirrored, "
         + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.databases AS s WHERE s.source_database_id = d.database_id) THEN 1 ELSE 0 END) AS has_snapshots, "
         + "COALESCE(sp.name, SUSER_SNAME(d.owner_sid)) AS owner_name, "
-        + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.database_id = d.database_id AND es.session_id <> @@SPID) END AS sessions, "
+        + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.database_id = d.database_id AND " + UserSession + " AND es.session_id <> @@SPID) END AS sessions, "
         + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.database_id = d.database_id "
-        + "AND es.open_transaction_count > 0 AND es.session_id <> @@SPID) END AS with_transaction, "
+        + "AND " + UserSession + " AND es.open_transaction_count > 0 AND es.session_id <> @@SPID) END AS with_transaction, "
         + "CONVERT(bit, ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'ALTER'), 1)) AS can_alter, "
         + "CONVERT(bit, CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'ALTER ANY DATABASE') = 1 OR d.owner_sid = SUSER_SID() "
         + "OR EXISTS (SELECT 1 FROM sys.login_token AS t WHERE t.type = N'SERVER ROLE' AND t.name = N'dbcreator') THEN 1 "
@@ -547,7 +551,7 @@ internal static partial class ActionSql
     /// is not in it, is visible), at most @take by session id, this process's query windows among them. Names are clipped in C#.</summary>
     public const string DatabaseSessions = "DECLARE @id int = (SELECT d.database_id FROM sys.databases AS d WHERE d.name = @name);\n"
         + "SELECT TOP (@take) es.session_id AS session_id, es.login_name AS login_name, es.program_name AS program_name, es.host_name AS host_name, "
-        + "es.open_transaction_count AS open_transactions FROM sys.dm_exec_sessions AS es WHERE es.database_id = @id AND es.session_id <> @@SPID "
+        + "es.open_transaction_count AS open_transactions FROM sys.dm_exec_sessions AS es WHERE es.database_id = @id AND " + UserSession + " AND es.session_id <> @@SPID "
         + "ORDER BY es.session_id;";
 
     /// <summary>How many logins have the database as their default (D3c): after a rename they cannot sign in with it (4064) until it
