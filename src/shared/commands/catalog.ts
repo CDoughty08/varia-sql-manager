@@ -437,6 +437,12 @@ export const commandCatalog = {
     keybindings: [{ key: 'ctrl+shift+pagedown', allowRepeat: true }],
     menus: [{ menu: 'documentTab.context', group: '4_move', order: 2, title: 'Move Right', mnemonic: 'r' }]
   },
+  // Names a tab without saving a file; hot exit keeps the name. F2 on a focused tab, as on a file in VS Code's explorer.
+  'document.rename': {
+    title: 'Rename Tab…', category: 'View', keywords: ['rename', 'tab', 'name', 'title', 'label'], precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    keybindings: [{ key: 'f2', when: 'documentTabFocus && !inputFocus' }],
+    menus: [{ menu: 'documentTab.context', group: '4_move', order: 3, mnemonic: 'n' }]
+  },
   // Edit › Advanced › Word Wrap, where SSMS has it.
   'editor.toggleWordWrap': {
     title: 'Toggle Word Wrap', category: 'View', icon: 'word-wrap', toggled: 'editorWordWrap',

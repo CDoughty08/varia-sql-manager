@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (219)
+## Commands (220)
 
 ### File
 
@@ -80,6 +80,7 @@ keys it uses are listed below.
 | Previous Query | `document.previous` | Ctrl+Shift+Tab, Ctrl+PageUp | Ctrl+Shift+Tab, Ctrl+PageUp | ⌃⇧⇥ | `multipleDocuments` | Window › Previous Query |
 | Move Query Left | `document.moveLeft` | Ctrl+Shift+PageUp | Ctrl+Shift+PageUp | ⌃⇧⇞ | `multipleDocuments` | Query tab context menu › Move Left |
 | Move Query Right | `document.moveRight` | Ctrl+Shift+PageDown | Ctrl+Shift+PageDown | ⌃⇧⇟ | `multipleDocuments` | Query tab context menu › Move Right |
+| Rename Tab… | `document.rename` | F2 (`documentTabFocus && !inputFocus`) | F2 (`documentTabFocus && !inputFocus`) | F2 (`documentTabFocus && !inputFocus`) | `hasActiveDocument` | Query tab context menu › Rename Tab… |
 | Toggle Word Wrap | `editor.toggleWordWrap` | Alt+Z | Alt+Z | — | Always; checked when `editorWordWrap` | Edit › Advanced › Word Wrap |
 | View White Space | `editor.toggleWhitespace` | — | — | — | Always; checked when `editorWhitespace` | Edit › Advanced › View White Space |
 | Toggle Line Numbers | `editor.toggleLineNumbers` | — | — | — | Always; checked when `editorLineNumbers` | — |
@@ -706,6 +707,7 @@ Right-click a query tab, or press Shift+F10 or the context-menu key on a focused
 | `3_file` | Reveal in Finder | `file.revealInFolder` | macOS only |
 | `4_move` | Mov**e** Left | `document.moveLeft` | Always |
 | `4_move` | Move **R**ight | `document.moveRight` | Always |
+| `4_move` | Re**n**ame Tab… | `document.rename` | Always |
 
 #### Query Output context menu (`output.context`)
 
@@ -764,7 +766,7 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 | `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
 | `8_view` | **P**ause | `ssis.pauseOperations` | Always |
 
-## Context keys (121)
+## Context keys (122)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -785,6 +787,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `designerFocus` | boolean | focus | Focus is in the active table designer; activePanel is then 'editor'. |
 | `queryBarFocus` | boolean | focus | Focus is in the active query's bar (Execute, Cancel and its server and database lists); activePanel is then 'editor'. |
 | `activityMonitorFocus` | boolean | focus | Focus is in the active Activity Monitor; activePanel is then 'editor'. |
+| `documentTabFocus` | boolean | focus | Focus is on a document tab in the strip, or in its rename box; activePanel is then 'editor'. |
 | `quickInputVisible` | boolean | state | The command palette or a picker is open. |
 | `backendStatus` | `'starting'`, `'ready'`, `'unresponsive'`, `'restarting'`, `'failed'`, `'stopped'`, `''` | state | The SQL backend's state; '' before the workbench has heard from main. |
 | `backendReady` | boolean | state | `backendStatus == 'ready'`. |

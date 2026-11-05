@@ -1,3 +1,4 @@
+import { basename, dirname, join } from 'node:path'
 import { scriptLimits } from '../shared/scripting/catalog.ts'
 
 // C0 and C1 controls, line and paragraph separators, bidi marks, embeddings, overrides and isolates, the BOM, and the
@@ -36,4 +37,16 @@ export function sanitizeFileName(name: string, suffix = ''): string {
   let safe = fit(stem, tail, scriptLimits.fileNameChars, maxBytes)
   if (reserved.test(safe)) safe = '_' + fit(stem, tail, scriptLimits.fileNameChars - 1, maxBytes - 1)
   return safe.replace(/^\.+$/, '') || fallback
+}
+
+/**
+ * Where the Save dialog starts. A document never saved suggests its tab's name in Documents; a saved one its file, unless
+ * the user renamed its tab (the name differs from the file's), when Save As suggests that name beside the file. A name
+ * without an extension gets the kind's (`extension`, without the dot).
+ */
+export function saveDefaultPath(registeredPath: string | undefined, name: string, documents: string, extension: string): string {
+  const withExtension = /\.[A-Za-z0-9]{1,8}$/.test(name.trim()) ? name : `${name}.${extension}`
+  if (!registeredPath) return join(documents, sanitizeFileName(withExtension))
+  if (name === basename(registeredPath)) return registeredPath
+  return join(dirname(registeredPath), sanitizeFileName(withExtension))
 }

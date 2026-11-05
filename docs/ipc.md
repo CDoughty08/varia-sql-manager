@@ -2157,6 +2157,12 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
   record is quarantined and never offered; records, quarantined records and interrupted writes older than Keep
   AutoRecover information for are deleted at startup, only once settings were read, and not when settings.json held a
   retention that was reset because the file or that value was invalid.
+- **Hot exit** (`varia:session-write`, `varia:session-take`, strict zod schemas; docs/hot-exit.md) writes the open text
+  tabs' names, text (for untitled and unsaved tabs), line endings, file paths (main's, from the page's opaque file ids),
+  server and database names to `<userData>/Session/session.json` as an approved close goes ahead: 0700/0600 on POSIX,
+  atomic, at most 64 tabs and 64 MB, never results, connections, logins or credentials, never logged. The next start takes
+  it and keeps it as `previous.json` until that run closes; an invalid file is quarantined. A close with hot exit off
+  deletes both.
 - **Secrets.** Passwords exist only inside REQUEST bodies on the private pipe: never in arguments, environment,
   `BackendState`, the fake backend's call log, traces or stderr. Lost connections keep their options without the
   password. A remembered password (Remember password) is Electron `safeStorage` ciphertext in `saved-passwords.json`,

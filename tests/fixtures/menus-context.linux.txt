@@ -33,6 +33,7 @@ documentTab.context, for a saved query's tab
   ---
   Mov&e Left  Ctrl+Shift+PageUp  ++++
   Move &Right  Ctrl+Shift+PageDown  ----
+  Re&name Tab…  F2  ++++
 documentTab.context, for an unsaved query's tab
   &Save  Ctrl+S  +++-
   Save &As…  +++-
@@ -46,6 +47,7 @@ documentTab.context, for an unsaved query's tab
   ---
   Mov&e Left  Ctrl+Shift+PageUp  ++++
   Move &Right  Ctrl+Shift+PageDown  ++++
+  Re&name Tab…  F2  ++++
 dockTab.context, for a docked panel's tab
   Dock &Left  ++++
   Dock &Right  ++++

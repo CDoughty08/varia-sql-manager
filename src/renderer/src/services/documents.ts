@@ -1,5 +1,6 @@
 import type { editor } from 'monaco-editor'
-import type { DocumentKind, LineEnding, VariaApi } from '../../../shared/contracts'
+import type { DocumentKind, LineEnding, RestoredDocument, VariaApi } from '../../../shared/contracts'
+import { cleanTabName } from '../../../shared/files/session'
 import type { SessionEnd } from '../../../shared/sessions'
 import type { SettingsValues } from '../../../shared/settings/catalog'
 import { afterClose, isCustomKind, isQueryDocument, kindInfo, type CustomDocumentKind, type QueryDocument } from '../documents'
@@ -18,7 +19,7 @@ interface DocumentEntry { model: editor.ITextModel; subscription: Disposable; vi
 /** A text document opened from a value: its tab name, its text, and what it holds. */
 export interface TextDocument { readonly name: string; readonly text: string; readonly kind: Exclude<DocumentKind, 'sql'> }
 export interface DocumentSnapshot { readonly documents: readonly QueryDocument[]; readonly activeId: string; readonly busy: boolean }
-type DocumentPatch = Partial<Pick<QueryDocument, 'name' | 'connectionId' | 'database' | 'file' | 'sessionNotice'>>
+type DocumentPatch = Partial<Pick<QueryDocument, 'name' | 'connectionId' | 'database' | 'file' | 'sessionNotice' | 'lastServer'>>
 type DocumentApi = Pick<VariaApi, 'saveSqlFile' | 'closeQuerySession'>
 /**
  * What a document without text in the editor (a table designer) needs from its owner: Save (true when it saved), why it
@@ -134,7 +135,31 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     const current = this.getSnapshot()
     this.changed({ ...current, documents: current.documents.map(document => document.id === id ? { ...document, ...patch } : document) })
   }
-  update(id: string, patch: DocumentPatch): void { this.replace(id, patch) }
+  /** A name change from the document's owner (a save, a designer's table name) goes under the user's rename, if any. */
+  update(id: string, patch: DocumentPatch): void {
+    const { name, ...rest } = patch
+    this.replace(id, name === undefined ? rest : { ...rest, ...this.named(id, name) })
+  }
+  private named(id: string, name: string): Pick<QueryDocument, 'name'> | Pick<QueryDocument, 'baseName'> {
+    return this.get(id)?.baseName !== undefined ? { baseName: name } : { name }
+  }
+  /**
+   * Rename Tab: the tab shows `value` (trimmed, without control characters, at most 128 characters) until it is renamed
+   * again; an empty name, or the name it would have anyway, takes the rename away. Returns whether the name changed.
+   */
+  rename(id: string, value: string): boolean {
+    const document = this.get(id)
+    if (!document || this.disposed) return false
+    const name = cleanTabName(value), base = document.baseName ?? document.name
+    if (!name || name === base) {
+      if (document.baseName === undefined) return false
+      this.replace(id, { name: base, baseName: undefined })
+      return true
+    }
+    if (name === document.name && document.baseName !== undefined) return false
+    this.replace(id, { name, baseName: base })
+    return true
+  }
   newQuery(sql = '', name?: string, connectionId = this.active?.connectionId, database = this.active?.database || 'master', unsaved = false): QueryDocument {
     return this.create(name ?? `SQLQuery${++this.queryCounter}.sql`, sql, database, connectionId, unsaved)
   }
@@ -162,7 +187,24 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     if (first < o.text.length) this.fill(document.id, o.text, first)
     return document
   }
-  private add(name: string, text: string, database: string, connectionId: string | undefined, unsaved: boolean, file: QueryDocument['file'], kind?: Exclude<DocumentKind, 'sql'>, plain = false, eol?: LineEnding): QueryDocument {
+  /**
+   * Opens a tab hot exit kept: its name (and the user's rename), text, line ending, file, unsaved state and database,
+   * with no connection; `lastServer` remembers its server. New queries are numbered after the reopened ones.
+   */
+  reopen(o: RestoredDocument): QueryDocument {
+    const kind = o.kind === 'sql' ? undefined : o.kind
+    const number = /^SQLQuery(\d+)\.sql$/i.exec(o.baseName ?? o.name)?.[1]
+    if (number && Number(number) < 1_000_000) this.queryCounter = Math.max(this.queryCounter, Number(number))
+    const extra = { ...o.baseName ? { baseName: o.baseName } : {}, ...!kind && o.server ? { lastServer: o.server } : {} }
+    const document = this.add(o.name, o.text, kind ? '' : o.database || 'master', undefined, o.dirty, o.file, kind, !!kind && o.text.length > gridLimits.documentBracketChars, o.eol, extra)
+    // A file whose text was all deleted is still a change to save.
+    if (o.dirty && !o.text && o.file) this.markUnsaved(document.id)
+    return this.get(document.id) ?? document
+  }
+  /** Whether a large value is still being appended to the document: its text is not all there yet. */
+  isFilling(id: string): boolean { return !!this.entries.get(id)?.fill }
+  private add(name: string, text: string, database: string, connectionId: string | undefined, unsaved: boolean, file: QueryDocument['file'], kind?: Exclude<DocumentKind, 'sql'>, plain = false, eol?: LineEnding,
+    extra: Pick<QueryDocument, 'baseName' | 'lastServer'> = {}): QueryDocument {
     if (this.disposed) throw new Error('The document service is disposed.')
     const id = crypto.randomUUID()
     const model = this.createModel(text, documentUri(id), kindInfo[kind ?? 'sql'].language)
@@ -170,7 +212,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     if (plain) model.updateOptions({ bracketColorizationOptions: { enabled: false, independentColorPoolPerBracketType: false } })
     // Before the saved version is read: setting the line ending is a change, though not one Undo reverts.
     if (eol) model.setEOL(eol === 'crlf' ? 1 : 0)
-    const document: QueryDocument = { id, name, database, connectionId, file, dirty: unsaved && !!text, savedVersionId: unsaved && text ? null : model.getAlternativeVersionId(), ...kind ? { kind } : {} }
+    const document: QueryDocument = { id, name, database, connectionId, file, dirty: unsaved && !!text, savedVersionId: unsaved && text ? null : model.getAlternativeVersionId(), ...kind ? { kind } : {}, ...extra }
     const subscription = model.onDidChangeContent(() => {
       const current = this.get(id), fill = this.entries.get(id)?.fill
       if (!current) return
@@ -298,7 +340,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
       model.pushEditOperations([], [{ range: { startLineNumber: from.lineNumber, startColumn: from.column, endLineNumber: to.lineNumber, endColumn: to.column }, text: next.slice(start, next.length - end) }], () => null)
     }
     model.pushStackElement()
-    this.replace(id, { file, name: file.name, savedVersionId: model.getAlternativeVersionId(), dirty: false })
+    this.replace(id, { file, ...this.named(id, file.name), savedVersionId: model.getAlternativeVersionId(), dirty: false })
   }
   /** The document's file was deleted outside: it has unsaved changes until Save writes the file again. */
   markUnsaved(id: string): void { this.replace(id, { savedVersionId: null, dirty: true }) }
@@ -314,7 +356,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     if (!result.ok) throw new Error(result.error)
     if (!result.value || this.disposed || this.entries.get(id)?.model !== model) return false
     model.pushStackElement()
-    this.replace(id, { file: result.value, name: result.value.name, savedVersionId, dirty: model.getAlternativeVersionId() !== savedVersionId })
+    this.replace(id, { file: result.value, ...this.named(id, result.value.name), savedVersionId, dirty: model.getAlternativeVersionId() !== savedVersionId })
     return true
   }
   /**
