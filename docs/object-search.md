@@ -13,6 +13,12 @@ The same search runs in two places, with the same options and results:
   each further Enter reveals the next one, wrapping round (Shift+Enter goes back); an Enter typed before the search has
   answered searches at once. ↓ moves into the hits, and Left and Right in the tree collapse and expand. Escape clears the
   text, and Escape in an empty box returns to the tree.
+  Search scope (All, Names, Definitions) stays visible. Object types opens a checkbox popover over the results; selected
+  types combine and a compact summary and Clear action stay beside the results. Narrow sidebars stack the type picker
+  below the scope, and the popover follows the pane's width without enlarging the search band. Search options holds
+  Match Case, Match Whole Word and Use Regular Expression; its button marks when any are on. The result count stays
+  concise, with index counts, result limits and timing under Search and index details. Index progress, errors and
+  incomplete indexes remain visible. Escape or a click outside dismisses a popover; Escape returns focus to its button.
 - **The Search Objects tab** (View › Search Objects…, a server or database node's menu, or the palette), with a server picker
   when more than one server is connected.
 

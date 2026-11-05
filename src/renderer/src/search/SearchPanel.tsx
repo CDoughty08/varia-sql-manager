@@ -10,6 +10,8 @@ import Icon from '../Icon'
 import EmptyState from '../kit/EmptyState'
 import type { IndexEntry, SearchQueryState } from './ObjectSearchService'
 import SearchFilters from './SearchFilters'
+import PaneSearchFilters from './PaneSearchFilters'
+import SearchPopover from './SearchPopover'
 import { paneBandDrag, paneBandKey, paneBandLimits } from './pane-band'
 
 const numbers = new Intl.NumberFormat('en-US')
@@ -126,6 +128,12 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
     : result?.problem ? result.problem
     : result && asked ? `${count(result.total, 'result')}${result.total > result.hits.length ? `, showing the first ${numbers.format(result.hits.length)}` : ''}${result.partial ? ' (the search stopped early; narrow it to see everything)' : ''} · ${numbers.format(result.elapsedMs)} ms`
     : ''
+  const index = entry?.status ?? result?.index
+  const indexText = indexSummary(entry, index)
+  // Progress and incomplete indexes stay visible; the healthy index's detail is available from the information button.
+  const indexNotice = !!entry?.requestId || !!entry?.error || !index || index.state !== 'ready' || !!index.skipped.length || !index.definitions
+  const paneSummary = result && asked && !state.requestId && !state.error && !result.problem && !result.partial
+    ? `${count(result.total, 'result')} · ${count(result.index.indexed, 'database')}` : summary
   const showHits = !pane || !!state.text.trim()
   // Object Explorer's band: a splitter under the hits sizes it; until it moves the band sizes by its content.
   const sized = pane && showHits && snapshot.paneSize !== undefined
@@ -166,15 +174,23 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
         <input ref={inputRef} type="text" data-object-search-focus aria-label={pane ? 'Search in Object Explorer' : 'Search objects'} placeholder={state.regex ? 'Regular expression' : pane ? 'Search objects' : 'Object name or text in definitions'}
           maxLength={objectSearchLimits.text} spellCheck={false} autoComplete="off" value={state.text} onChange={event => set({ text: event.target.value })} onKeyDown={onInputKey} />
         {pane && state.text && <button type="button" className="icon-button" tabIndex={-1} aria-label="Clear search" title="Clear search (Escape)" onClick={() => { set({ text: '' }); root.current?.querySelector<HTMLElement>('[data-object-search-focus]')?.focus() }}><Icon name="close" /></button>}
-        {toggle('caseSensitive', 'Match Case', 'case-sensitive')}
-        {toggle('wholeWord', 'Match Whole Word', 'whole-word')}
-        {toggle('regex', 'Use Regular Expression', 'regex')}
+        {pane ? <SearchPopover label={`Search options${state.caseSensitive || state.wholeWord || state.regex ? ': active' : ''}`} title="Search options" icon="settings-gear" compact active={state.caseSensitive || state.wholeWord || state.regex}>
+          {(['caseSensitive', 'wholeWord', 'regex'] as const).map((key, index) => <label key={key} className="object-search-check">
+            <input type="checkbox" checked={state[key]} onChange={() => set({ [key]: !state[key] })} /><span>{['Match Case', 'Match Whole Word', 'Use Regular Expression'][index]}</span>
+          </label>)}
+        </SearchPopover> : <>{toggle('caseSensitive', 'Match Case', 'case-sensitive')}{toggle('wholeWord', 'Match Whole Word', 'whole-word')}{toggle('regex', 'Use Regular Expression', 'regex')}</>}
       </div>
       {showHits && <>
-        <SearchFilters id={searchId} scope={state.scope} types={state.types} onScope={scope => set({ scope })} onTypes={types => set({ types })} options={options} />
-        <p className="object-search-index">{indexSummary(entry, entry?.status ?? result?.index)}</p>
+        {pane ? <PaneSearchFilters id={searchId} scope={state.scope} types={state.types} onScope={scope => set({ scope })} onTypes={types => set({ types })} />
+          : <SearchFilters id={searchId} scope={state.scope} types={state.types} onScope={scope => set({ scope })} onTypes={types => set({ types })} options={options} />}
+        {(!pane || indexNotice) && <p className="object-search-index">{indexText}</p>}
       </>}
-      <p className={`object-search-summary${state.error || result?.problem ? ' error' : ''}`} role="status">{showHits ? summary : ''}</p>
+      {pane ? <div className="object-search-pane-status">
+        <p className={`object-search-summary${state.error || result?.problem ? ' error' : ''}`} role="status">{showHits ? paneSummary : ''}</p>
+        {showHits && <SearchPopover label="Search and index details" title="Search details" icon="info" compact>
+          <p className="object-search-index">{indexText}</p>{summary && <p className="object-search-index">{summary}</p>}
+        </SearchPopover>}
+      </div> : <p className={`object-search-summary${state.error || result?.problem ? ' error' : ''}`} role="status">{showHits ? summary : ''}</p>}
     </div>
     {showHits && (asked && !result!.problem && result!.hits.length === 0 && !state.requestId
       ? <EmptyState icon="search" title="No objects match" detail={entry?.requestId ? 'The index is still being built; results update when it finishes.' : `Try another spelling, turn off Match Case or Whole Word, or search names and definitions${state.types.length ? ' of every type' : ''}.`} />
