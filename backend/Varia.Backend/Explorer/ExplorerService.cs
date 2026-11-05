@@ -133,9 +133,14 @@ internal sealed class ExplorerService : IDisposable
                 if (error is not null) return new(nodes, 0, Error: error);
                 if (history is not null) nodes.Add(history);
             }
-            nodes.AddRange(catalog.StaticFolders(target.Kind, request.Subtype, profile).Select(id => FolderNode(target, id)));
+            // Group by Schema: a database keeps the folders of its database-scoped objects and lists its schemas after them, and
+            // a schema row has the folders of the objects in it.
+            var folders = target.Kind == "database" && request.Grouped ? catalog.GroupedDatabaseFolders(profile)
+                : target.Kind == "schema" ? catalog.SchemaGroupFolders(profile)
+                : catalog.StaticFolders(target.Kind, request.Subtype, profile);
+            nodes.AddRange(folders.Select(id => FolderNode(target, id)));
         }
-        else if (key is null) nodes.AddRange(catalog.Subfolders(request.Folder!.Id, profile).Select(id => FolderNode(target, id)));
+        else if (key is null) nodes.AddRange(catalog.Subfolders(request.Folder!.Id, target.Kind, request.Grouped, profile).Select(id => FolderNode(target, id)));
         if (request.List is null) return new(nodes, 0, Total: nodes.Count);
         var query = queries[request.List];
         var render = new SqlRender(profile.Band, vector, FilterShape.From(request.Filter), query.ChildFolder ? target.Kind : null);

@@ -319,7 +319,10 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const bookmarks = new BookmarkService(documents, events), editorDialogs = new EditorDialogs()
   // Monaco's command and keybinding registries, for the editor chords the bridge registers.
   const monaco = { editor: { registerCommand: vi.fn<BridgeMonaco['editor']['registerCommand']>(() => ({ dispose: vi.fn() })), addKeybindingRules: vi.fn<BridgeMonaco['editor']['addKeybindingRules']>(() => ({ dispose: vi.fn() })) } }
-  const explorer = new ExplorerService({ api, connections, events, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
+  const explorer = new ExplorerService({
+    api, connections, events, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}),
+    groupBySchema: { get: () => settings.get('objectExplorer.groupBySchema'), subscribe: settings.subscribe }
+  })
   const databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
   const resultClient = fakeResultClient()

@@ -106,6 +106,50 @@ A database expands only while it is online (or in emergency mode). Expanding one
 | Security › Security Policies | `securityPolicies` | 2016 (13) | Yes | Security Policy (`securityPolicies`) | Name, Schema |
 | Security › Database Scoped Credentials | — | 2016 (13) | — | Planned | — |
 
+## Group by Schema
+
+SSMS 2022's Group by Schema (Options › SQL Server Object Explorer › Commands, `objectExplorer.groupBySchema`, or the
+toolbar's Group by Schema button) moves a database's schema-scoped folders below one row per schema. The database lists
+the folders that stay below it, then its schemas (query `schemaGroups`): every schema but the fixed database roles'
+ones, and `guest`, `INFORMATION_SCHEMA` and `sys` only while they hold an object. A schema row has the folders below,
+listing that schema's objects by name alone (the row already says the schema). A folder below a schema row is filtered on
+its own and offers every filter property of the folder but Schema. Children requests for a database and its folders say
+that grouping is on (`groupBySchema`); a schema row and its folders are named by their schema, so they need not.
+Search Objects' Reveal walks the grouped path while the option is on.
+
+| Folder | Id | Shows below |
+| --- | --- | --- |
+| Tables | `tables` | A schema row |
+| Tables › System Tables | `systemTables` | A schema row |
+| Tables › FileTables | `fileTables` | A schema row |
+| Tables › External Tables | `externalTables` | A schema row |
+| Tables › Graph Tables | `graphTables` | A schema row |
+| Tables › Dropped Ledger Tables | `droppedLedgerTables` | A schema row |
+| Views | `views` | A schema row |
+| Views › System Views | `systemViews` | A schema row |
+| Views › Dropped Ledger Views | `droppedLedgerViews` | A schema row |
+| Synonyms | `synonyms` | A schema row |
+| Programmability | `programmability` | A schema row and the database |
+| Programmability › Stored Procedures | `storedProcedures` | A schema row |
+| Programmability › Stored Procedures › System Stored Procedures | `systemStoredProcedures` | A schema row |
+| Programmability › Functions | `functions` | A schema row |
+| Programmability › Functions › Table-valued Functions | `tableValuedFunctions` | A schema row |
+| Programmability › Functions › Scalar-valued Functions | `scalarValuedFunctions` | A schema row |
+| Programmability › Functions › Aggregate Functions | `aggregateFunctions` | A schema row |
+| Programmability › Database Triggers | `databaseTriggers` | The database |
+| Programmability › Assemblies | `assemblies` | The database |
+| Programmability › Types | `types` | A schema row |
+| Programmability › Types › User-Defined Data Types | `userDefinedDataTypes` | A schema row |
+| Programmability › Types › User-Defined Table Types | `userDefinedTableTypes` | A schema row |
+| Programmability › Types › User-Defined Types | `userDefinedTypes` | A schema row |
+| Programmability › Types › XML Schema Collections | `xmlSchemaCollections` | A schema row |
+| Programmability › Rules | `rules` | A schema row |
+| Programmability › Defaults | `defaults` | A schema row |
+| Programmability › Plan Guides | `planGuides` | The database |
+| Programmability › Sequences | `sequences` | A schema row |
+
+The folders that move are those below Tables, Views, Synonyms, Programmability; every other database folder stays below the database.
+
 ## Object children
 
 Child folders list their rows by name, except Columns and Parameters, which keep the object's order, and an SSIS project's Packages,

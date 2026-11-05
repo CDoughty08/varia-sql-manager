@@ -1,7 +1,7 @@
 // Renders docs/object-explorer.md from the catalogue; tests/explorer-catalog.test.ts keeps the file in sync.
 import {
-  childParentKinds, explorerLimits, filterPropertyLabels, folderIds, folderOwnerKinds, folderServed, folderSpecs, kindScopes, kindSpecs, laterFolders, maxBand, nodeKinds, scopeFields, statusBadges,
-  statusChipKinds, subfolders, type FolderId, type InsertStyle, type KindSpec, type LaterFolder, type NodeKind, type NodeSubtype
+  childParentKinds, explorerLimits, filterPropertyLabels, folderIds, folderOwnerKinds, folderServed, folderSpecs, kindScopes, kindSpecs, laterFolders, maxBand, nodeKinds, schemaGroupList,
+  schemaGroupRoots, schemaPlacement, scopeFields, statusBadges, statusChipKinds, subfolders, type FolderId, type InsertStyle, type KindSpec, type LaterFolder, type NodeKind, type NodeSubtype
 } from './catalog.ts'
 import { loginChipDocs, statusChipDocs } from './status.ts'
 import { loginDetailWords, loginTypeSubtypes, type LoginType } from '../actions/logins.ts'
@@ -119,6 +119,26 @@ export function renderExplorerDocs(): string {
     'A database expands only while it is online (or in emergency mode). Expanding one the login cannot open shows why on a row below it. Snapshots have the same folders.',
     '',
     folderTable('database'),
+    '',
+    '## Group by Schema',
+    '',
+    'SSMS 2022\'s Group by Schema (Options › SQL Server Object Explorer › Commands, `objectExplorer.groupBySchema`, or the',
+    'toolbar\'s Group by Schema button) moves a database\'s schema-scoped folders below one row per schema. The database lists',
+    `the folders that stay below it, then its schemas (query ${code(schemaGroupList)}): every schema but the fixed database roles'`,
+    'ones, and `guest`, `INFORMATION_SCHEMA` and `sys` only while they hold an object. A schema row has the folders below,',
+    'listing that schema\'s objects by name alone (the row already says the schema). A folder below a schema row is filtered on',
+    'its own and offers every filter property of the folder but Schema. Children requests for a database and its folders say',
+    'that grouping is on (`groupBySchema`); a schema row and its folders are named by their schema, so they need not.',
+    'Search Objects\' Reveal walks the grouped path while the option is on.',
+    '',
+    table(['Folder', 'Id', 'Shows below'], folderIds.filter(id => schemaPlacement(id) !== undefined).map(id => {
+      const place = schemaPlacement(id)!
+      const path: string[] = []
+      for (let at: FolderId | undefined = id; at; at = folderSpecs[at].parent) path.unshift(folderSpecs[at].label)
+      return [path.join(' › '), code(id), place === 'both' ? 'A schema row and the database' : place === 'schema' ? 'A schema row' : 'The database']
+    })),
+    '',
+    `The folders that move are those below ${(schemaGroupRoots as readonly FolderId[]).map(id => folderSpecs[id].label).join(', ')}; every other database folder stays below the database.`,
     '',
     '## Object children',
     '',

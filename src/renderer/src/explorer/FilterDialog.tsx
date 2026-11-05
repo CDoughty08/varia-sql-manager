@@ -1,5 +1,5 @@
 import { useState, type KeyboardEvent } from 'react'
-import { dateFilterOps, filterPropertyLabels, folderSpecs, textFilterOps, type FilterProperty } from '../../../shared/explorer/catalog.ts'
+import { dateFilterOps, filterPropertyLabels, textFilterOps, type FilterProperty } from '../../../shared/explorer/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import { maxIdentifierLength } from '../../../shared/sql/identifiers.ts'
 import { useWorkbench } from '../core/WorkbenchContext'
@@ -16,7 +16,8 @@ import { dateOpLabels, draftFilter, filterDraft, isRange, textOpLabels, type Fil
 export default function FilterDialog({ folderId }: { readonly folderId: number }) {
   const { explorer } = useWorkbench()
   const node = explorer.node(folderId)
-  const allowed: readonly FilterProperty[] = node?.folder ? folderSpecs[node.folder].filter ?? [] : []
+  // Below a schema row (Group by Schema) the folder lists only that schema's objects, so Schema is not offered.
+  const allowed: readonly FilterProperty[] = node ? explorer.filterProperties(node) : []
   const [draft, setDraft] = useState(() => filterDraft(explorer.filter(folderId)))
   const [problems, setProblems] = useState<FilterProblems>({})
   const [error, setError] = useState('')

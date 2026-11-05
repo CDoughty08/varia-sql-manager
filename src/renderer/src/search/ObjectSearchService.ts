@@ -1,5 +1,5 @@
 import type { VariaApi } from '../../../shared/contracts'
-import { folderSpecs, kindSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
+import { belowSchema, folderSpecs, kindSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
 import type { ExplorerNodeRef, ObjectRef } from '../../../shared/explorer/refs.ts'
 import { objectSearchLimits, type ObjectIndexProgress, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult, type SearchScope } from '../../../shared/explorer/search.ts'
 import type { SettingKey, SettingValue } from '../../../shared/settings/catalog'
@@ -47,9 +47,10 @@ export interface ObjectSearchSnapshot {
   /** Changes when Search in Object Explorer asks the box to take focus. */
   readonly paneFocus: number
 }
-/** Object Explorer as Reveal uses it. */
+/** Object Explorer as Reveal uses it: its seek, and whether it groups objects by schema (the paths differ). */
 export interface RevealHost {
   seek(connectionId: string, paths: readonly RevealPath[]): Promise<SeekOutcome>
+  readonly groupBySchema?: boolean
 }
 export interface ObjectSearchOptions {
   readonly api: Pick<VariaApi, 'explorerIndex' | 'explorerSearch' | 'explorerCancel' | 'onExplorerIndexProgress'>
@@ -83,24 +84,31 @@ const parentFolders: { readonly [K in 'table' | 'view' | 'tableType' | 'procedur
  * tried first for master, model and msdb, and second for the rest: a distribution database is a system one too): the folders
  * above its listing, a child's parent in the folder the hit names (or, when it names none, under its kind's folders, then
  * their System ones), and the object. A temporal or ledger history table (or a child of one) is below the table whose history
- * row shows it.
+ * row shows it. With Group by Schema on (`grouped`), a schema-scoped listing hangs below its schema's row (the object's, its
+ * parent's or its history table's schema) rather than below the database.
  */
-export function revealPaths(hit: ObjectSearchHit): RevealPath[] {
+export function revealPaths(hit: ObjectSearchHit, grouped = false): RevealPath[] {
   const server: ObjectRef = { kind: 'server' }
   const scope = kindSpecs[hit.object.kind].scope
   if (scope === 'serverObject' || scope === 'database') return [[...folderChain(server, hit.folder), { type: 'object', object: hit.object }]]
   const name = hit.object.database ?? ''
   const database: ObjectRef = { kind: 'database', name }
+  /** The folders down to `folder` below the database, or below the schema row when grouped and the folder moved there. */
+  const listing = (folder: FolderId, schema: string | undefined): ExplorerNodeRef[] => {
+    if (!grouped || schema === undefined || !belowSchema(folder)) return folderChain(database, folder)
+    const row: ObjectRef = { kind: 'schema', database: name, name: schema }
+    return [{ type: 'object', object: row }, ...folderChain(row, folder)]
+  }
   const parent = hit.object.parent
   const owner: ObjectRef | undefined = parent && { kind: parent.kind, database: name, schema: parent.schema, name: parent.name }
   // Below a parent: the parent's node, then the folders down to the hit's.
   const belowOwner: ExplorerNodeRef[] = owner ? [{ type: 'object', object: owner }, ...folderChain(owner, hit.folder)] : []
   const belows: ExplorerNodeRef[][] = hit.via
-    ? [[...folderChain(database, hit.via.folder), { type: 'object', object: { kind: 'table', database: name, schema: hit.via.schema, name: hit.via.name } }, ...belowOwner]]
+    ? [[...listing(hit.via.folder, hit.via.schema), { type: 'object', object: { kind: 'table', database: name, schema: hit.via.schema, name: hit.via.name } }, ...belowOwner]]
     : parent
-      ? (hit.parentFolder ? [hit.parentFolder] : parentFolders[parent.kind]).map(folder => [...folderChain(database, folder), ...belowOwner])
-      : [folderChain(database, hit.folder)]
-  const under = (folder: FolderId): RevealPath[] => belows.map(below => [...folderChain({ kind: 'server' }, folder), { type: 'object', object: database }, ...below, { type: 'object', object: hit.object }])
+      ? (hit.parentFolder ? [hit.parentFolder] : parentFolders[parent.kind]).map(folder => [...listing(folder, parent.schema), ...belowOwner])
+      : [listing(hit.folder, hit.object.schema)]
+  const under = (folder: FolderId): RevealPath[] => belows.map(below => [...folderChain(server, folder), { type: 'object', object: database }, ...below, { type: 'object', object: hit.object }])
   return systemDatabases.has(name.toLowerCase()) ? [...under('systemDatabases'), ...under('databases')] : [...under('databases'), ...under('systemDatabases')]
 }
 const emptyQuery: SearchQueryState = { text: '', caseSensitive: false, wholeWord: false, regex: false, scope: 'all' }
@@ -251,7 +259,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
 
   /** Reveal in Object Explorer: walks the hit's path from the server down, loading what it needs, and selects its node. */
   reveal(host: RevealHost, connectionId: string, hit: ObjectSearchHit): Promise<SeekOutcome> {
-    return host.seek(connectionId, revealPaths(hit))
+    return host.seek(connectionId, revealPaths(hit, !!host.groupBySchema))
   }
 
   // --- CustomDocumentProvider ------------------------------------------------------------------------------------------

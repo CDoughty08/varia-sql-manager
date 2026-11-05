@@ -275,6 +275,28 @@ describe('explorer request schemas', () => {
     rejects(explorerChildrenParamsSchema, params(object(minimal('table')), { subtype: 'unknown' }))
     accepts(explorerChildrenParamsSchema, params(object({ kind: 'database', name: 'snap' }), { subtype: 'snapshot' }))
   })
+  it('groups by schema: schema rows own the folders of schema-scoped objects, and only databases and their folders take the flag', () => {
+    const dbo = { kind: 'schema', database: 'db', name: 'dbo' } as const
+    const below = (folder: string) => ({ type: 'folder', owner: dbo, folder }) as unknown as ExplorerNodeRef
+    for (const folder of ['tables', 'systemTables', 'views', 'synonyms', 'programmability', 'storedProcedures', 'functions', 'scalarValuedFunctions', 'types', 'sequences']) accepts(nodeRefSchema, below(folder))
+    for (const folder of ['databaseTriggers', 'assemblies', 'planGuides', 'securityPolicies', 'storage', 'databaseSecurity', 'externalResources', 'columns', 'logins']) rejects(nodeRefSchema, below(folder))
+    const database = object({ kind: 'database', name: 'db' })
+    const programmability: ExplorerNodeRef = { type: 'folder', owner: { kind: 'database', name: 'db' }, folder: 'programmability' }
+    accepts(explorerChildrenParamsSchema, params(database, { groupBySchema: true }))
+    accepts(explorerChildrenParamsSchema, params(programmability, { groupBySchema: true }))
+    accepts(explorerChildrenParamsSchema, params(database, { groupBySchema: true, cursor: 'v1.schemaGroups.AQ' }))
+    accepts(explorerChildrenParamsSchema, params(object(dbo)))
+    rejects(explorerChildrenParamsSchema, params(database, { groupBySchema: false }))
+    rejects(explorerChildrenParamsSchema, params(database, { cursor: 'v1.schemaGroups.AQ' }))
+    rejects(explorerChildrenParamsSchema, params(object({ kind: 'server' }), { groupBySchema: true }))
+    rejects(explorerChildrenParamsSchema, params(object(dbo), { groupBySchema: true }))
+    rejects(explorerChildrenParamsSchema, params(below('tables'), { groupBySchema: true }))
+    rejects(explorerChildrenParamsSchema, params({ type: 'folder', owner: minimal('table'), folder: 'columns' }, { groupBySchema: true }))
+    // Below a schema row the schema is the row's: Filter Settings offers the folder's other properties.
+    accepts(explorerChildrenParamsSchema, params(below('tables'), { filter: { name: { op: 'contains', value: 'Ord' }, owner: { op: 'equals', value: 'dbo' } } }))
+    expect(childrenParamsProblems(children(below('tables'), { filter: { schema: { op: 'equals', value: 'dbo' } } }))).toEqual([['filter', 'This folder cannot be filtered by schema.']])
+    accepts(explorerChildrenParamsSchema, params(tables, { filter: { schema: { op: 'equals', value: 'dbo' } } }))
+  })
   it('rejects cursors that are malformed or for another folder', () => {
     const payload = 'WyJkYm8iLCJPcmRlcnMiXQ'
     for (const cursor of ['', `v2.tables.${payload}`, `v1.nope.${payload}`, `v1.tables.${payload}+`, `v1.tables.${payload}=`, 'v1.tables.', `v1.tables.${'a'.repeat(1601)}`,

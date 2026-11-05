@@ -66,6 +66,12 @@ export interface ExplorerChildrenParams {
   readonly cursor?: string
   readonly pageSize?: number
   readonly filter?: ExplorerFilter
+  /**
+   * Group by Schema is on (`objectExplorer.groupBySchema`): a database lists its schemas after the folders that stay below
+   * it, and its Programmability folder only the subfolders of database-scoped objects. Only for a database and the folders
+   * below it.
+   */
+  readonly groupBySchema?: true
 }
 export interface ExplorerCancelParams { readonly requestIds: readonly string[] }
 

@@ -116,8 +116,9 @@ internal sealed record SsisOperationsLiveArgs(string[]? Kinds = null, int[]? Sta
     string? Caller = null, int? WindowHours = null, int? Limit = null);
 
 /// <summary>explorer.children: refs are flat records (no polymorphic converters), validated by ExplorerRefs against the catalogue.</summary>
+/// <summary>GroupBySchema: Group by Schema is on (true only), for a database and the folders below it.</summary>
 internal sealed record ExplorerChildrenArgs(string ConnectionId, string RequestId, NodeRefDto Node, string? Subtype = null, string? Cursor = null, int? PageSize = null,
-    ExplorerFilterDto? Filter = null);
+    ExplorerFilterDto? Filter = null, bool? GroupBySchema = null);
 /// <summary>An object node (Type "object", Object) or a folder below its nearest object (Type "folder", Owner, Folder).</summary>
 internal sealed record NodeRefDto(string Type, ObjectRefDto? Object = null, ObjectRefDto? Owner = null, string? Folder = null);
 /// <summary>SsisFolder and SsisProject name an SSIS Catalog object's folder and project (the ssis* scopes); null elsewhere.</summary>

@@ -13,7 +13,8 @@ const frame = (callback: () => void) => { if (typeof requestAnimationFrame === '
  * on a server that is still connected (not lost with a backend restart, even when the backend restarted while the menu
  * was open or the command was waiting).
  */
-export function explorerContribution({ commands, documents, connections, explorer, explorerStatus }: Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer'> & { explorerStatus?: Pick<Workbench['explorerStatus'], 'refresh'> },
+export function explorerContribution({ commands, documents, connections, explorer, explorerStatus, settings }: Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer'>
+  & { explorerStatus?: Pick<Workbench['explorerStatus'], 'refresh'>; settings?: Pick<Workbench['settings'], 'toggle'> },
   api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
   const nodeOf = (args?: CommandArgs): ExplorerMenuNode | undefined => args?.target ? explorerNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
   const live = (node: ExplorerMenuNode | undefined): node is ExplorerMenuNode => !!node && !node.lost && connections.isLive(node.connectionId)
@@ -36,6 +37,8 @@ export function explorerContribution({ commands, documents, connections, explore
       run: args => { const node = filterNode(args); if (node) explorer.setFilter(node.id, undefined) }
     }),
     commands.register('explorer.collapseAll', { run: () => explorer.collapseAll() }),
+    // The setting is the state: ExplorerService follows it, and its context key checks the button and the palette entry.
+    commands.register('explorer.groupBySchema', { when: () => !!settings, run: () => settings?.toggle('objectExplorer.groupBySchema') }),
     commands.register('explorer.newQuery', {
       when: args => !!queryNode(args),
       run: args => {
