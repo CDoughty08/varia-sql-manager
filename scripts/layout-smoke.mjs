@@ -68,13 +68,15 @@ async function menu(id) { await application.evaluate(({ Menu }, id) => Menu.getA
 async function windowPane(id) { await menu('window.' + id) }
 const x = async id => (await pane(id).boundingBox()).x
 /** Drags a locator from near its left end, which stays in the window while the rest of it hangs past the edge. */
+/** Moves a floating group by its titlebar, holding Ctrl so the move never ends on a docking guide (small windows put one
+ * under almost every point). */
 async function dragStart(locator, dx, dy) {
   const box = await locator.boundingBox()
   const x = box.x + 20, y = box.y + box.height / 2
-  await page.mouse.move(x, y); await page.mouse.down()
+  await page.mouse.move(x, y); await page.keyboard.down('Control'); await page.mouse.down()
   // Dockview starts the drag on the first move and measures from there: a 1 px nudge keeps the whole distance.
   await page.mouse.move(x + 1, y)
-  await page.mouse.move(x + dx, y + dy, { steps: 5 }); await page.mouse.up()
+  await page.mouse.move(x + dx, y + dy, { steps: 5 }); await page.mouse.up(); await page.keyboard.up('Control')
 }
 async function aimGuide(source, destination, position, scope = 'panel') {
   // Dockview finishes laying out a moved or redocked panel over the next frames; the drag starts where its tab ends up.
@@ -210,6 +212,7 @@ try {
   // Windows runners show 1024 px).
   const out = await pane('results').boundingBox()
   await dragStart(titlebar, Math.round(windowWidth * 0.75 - out.x - out.width), 120)
+  await expect(titlebar).toHaveCount(1)
   await expect.poll(async () => { const box = await pane('results').boundingBox(); return box.x + box.width }).toBeLessThan(windowWidth)
   await page.screenshot({ path: resolve('artifacts', 'floating-off-edge.png') })
   await aimGuide(page.locator('.dv-floating-titlebar'), 'editor', 'left')
