@@ -10,6 +10,7 @@ import type { Disposable } from '../core/types'
 import type { ConnectionService, LiveConnection } from '../services/connections'
 import type { RevealPath, SeekOutcome } from '../explorer/ExplorerService'
 import type { CustomDocumentProvider, DocumentService } from '../services/documents'
+import { clampPaneBand } from './pane-band'
 
 /** One connection's index as the page knows it: a build running (with its progress) or the last build's status. */
 export interface IndexEntry {
@@ -46,6 +47,8 @@ export interface ObjectSearchSnapshot {
   readonly documents: Readonly<Record<string, SearchDocumentState>>
   /** Changes when Search in Object Explorer asks the box to take focus. */
   readonly paneFocus: number
+  /** Object Explorer's search band's share of the pane, once its splitter was moved (pane-band.ts); until then it sizes by content. */
+  readonly paneSize?: number
 }
 /** Object Explorer as Reveal uses it: its seek, and whether it groups objects by schema (the paths differ). */
 export interface RevealHost {
@@ -210,6 +213,14 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     if (paneFocus === this.paneFocusTaken) return false
     this.paneFocusTaken = paneFocus
     return true
+  }
+
+  /** Sizes Object Explorer's search band (its splitter); undefined goes back to sizing by content. */
+  setPaneSize(size: number | undefined): void {
+    if (this.disposed) return
+    const { paneSize: previous, ...rest } = this.getSnapshot()
+    const next = size === undefined ? undefined : clampPaneBand(size)
+    if (next !== previous) this.publish(next === undefined ? rest : { ...rest, paneSize: next })
   }
 
   /** Changes what a tab asks; text changes search after a short pause, option changes at once. */
