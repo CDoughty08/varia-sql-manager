@@ -471,6 +471,8 @@ internal static partial class ScriptingLiveChecks
         var options = service.Scripting.Options;
         var failed = new List<string>();
         var filled = new HashSet<int>();
+        // A refused command is described as SqlClient held it: its text garbled already, or garbled after it (SqlErrorTrace).
+        using var trace = SqlErrorTrace.Start();
         try
         {
             for (var round = 0; round < Rounds; round++)
@@ -494,7 +496,8 @@ internal static partial class ScriptingLiveChecks
         }
         // Racing fills also leave the table corrupt (27 entries of 21, say), and SMO never fills it again in the process.
         check(failed.Count == 0 && types > 0 && filled.SetEquals([types]), "four scripts with dependent objects at once, two on each of two connections, discover their dependencies "
-            + "whatever runs first (" + Rounds + " rounds; " + string.Join(", ", filled) + " types of " + types + "): " + string.Join("; ", failed.Take(4)));
+            + "whatever runs first (" + Rounds + " rounds; " + string.Join(", ", filled) + " types of " + types + "): " + string.Join("; ", failed.Take(4))
+            + (failed.Count > 0 ? " (refused commands: " + trace.Summary() + ")" : ""));
     }
 
     /// <summary>Another session's uncommitted TRUNCATE holds a schema-modification lock that sys.tables does not wait for
