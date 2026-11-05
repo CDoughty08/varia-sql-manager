@@ -49,6 +49,15 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
 
     private readonly ConcurrentDictionary<string, string> connections = new();
     private readonly ConcurrentDictionary<string, RunningQuery> queries = new();
+    /// <summary>query.cancel requests that named a query not yet registered, by id, with when they came. Requests run on
+    /// their own tasks, so a Stop sent at once can overtake its query.execute while that one is still reading its
+    /// parameters (a script of up to 1M characters); the query cancels itself as it registers. Guarded by
+    /// <see cref="cancelGate"/>, with registration, so neither side misses the other.</summary>
+    private readonly Dictionary<string, long> earlyStops = new(StringComparer.Ordinal);
+    private readonly object cancelGate = new();
+    /// <summary>Main keeps at most 256 requests pending per generation, so more early Stops than that are stale.</summary>
+    internal const int MaxEarlyStops = 256;
+    internal static readonly TimeSpan EarlyStopLifetime = TimeSpan.FromMinutes(1);
     private readonly ConcurrentDictionary<string, QuerySession> sessions = new();
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> pools = new();
     private readonly ConcurrentDictionary<string, ServerProfile> profiles = new();
@@ -863,11 +872,19 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             || args.TimeoutSeconds is < 0 or > 86400 || args.StartLine is < 1 or > 1_000_000 || !Guid.TryParse(args.QueryId, out _) || !Guid.TryParse(args.SessionId, out _))
             throw new RequestException("INVALID_PARAMS", "Query text, ID, session, timeout, or row limit is invalid.");
         Name(args.Database);
-        // Validate the whole script before opening a session or submitting any SQL.
-        var batches = SqlScript.Parse(args.Sql, args.StartLine);
         using var cancellation = args.TimeoutSeconds == 0 ? new CancellationTokenSource() : new CancellationTokenSource(TimeSpan.FromSeconds(args.TimeoutSeconds));
         var running = new RunningQuery(args.ConnectionId, args.SessionId, cancellation);
-        if (!queries.TryAdd(args.QueryId, running)) throw new RequestException("DUPLICATE_QUERY", "This query is already running.");
+        // Registered before the script is parsed, so a Stop during parsing finds it; a Stop that came even earlier waits in
+        // earlyStops.
+        if (!Register(args.QueryId, running)) throw new RequestException("DUPLICATE_QUERY", "This query is already running.");
+        // Validate the whole script before opening a session or submitting any SQL.
+        List<SqlBatch> batches;
+        try { batches = SqlScript.Parse(args.Sql, args.StartLine); }
+        catch
+        {
+            queries.TryRemove(new(args.QueryId, running));
+            throw;
+        }
         // A CANCEL frame for this request: main's backstop means its deadline passed; any other reason stops it like query.cancel.
         using var cancelled = context?.Token.Register(() => { if (context.Reason == CancelReason.Deadline) TryCancel(cancellation); else running.Cancel(); });
         using var events = new QueryEventSink(context is null ? null : context.SendEvent);
@@ -1025,7 +1042,13 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                     // later execution in the tab would show the previous one's results. Cancel also stops the synchronous
                     // reads (ColumnPlan) that only check the token between chunks.
                     command.CommandTimeout = 0;
-                    using var stop = token.Register(Attention, command);
+                    // From another thread, SqlClient's cancel waits while the batch streams info messages (a loop of PRINT or
+                    // RAISERROR WITH NOWAIT) until they stop, and the batch's later statements run meanwhile; StatementStop
+                    // cancels inside the next message instead. So the token reaches no SqlClient call of the batch: SqlClient's
+                    // own registration would cancel from another thread too, and the two together deadlock.
+                    var statementStop = new ActionService.StatementStop(command, token);
+                    connection.InfoMessage += statementStop.OnMessage;
+                    using var stop = token.UnsafeRegister(static state => ((ActionService.StatementStop)state!).FromOtherThread(), statementStop);
                     command.StatementCompleted += (_, e) => { if (e.RecordCount >= 0) messages.Add(e.RecordCount == 1 ? "(1 row affected)" : "(" + e.RecordCount + " rows affected)"); };
                     SqlDataReader? reader = null;
                     // The token fired before the reader reported the batch's end.
@@ -1034,7 +1057,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                     {
                         // Sequential access streams each value once, in column order, so a huge value is never materialised
                         // (ColumnPlan reads past the rest of a truncated one).
-                        reader = await command.ExecuteReaderAsync(System.Data.CommandBehavior.SequentialAccess, token);
+                        // A Stop between the loop's check and here found no statement to cancel.
+                        token.ThrowIfCancellationRequested();
+                        reader = await command.ExecuteReaderAsync(System.Data.CommandBehavior.SequentialAccess, CancellationToken.None);
                         // Positioned on a result set not yet read, or on the batch's end.
                         var unread = true;
                         while (true)
@@ -1065,7 +1090,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                                     {
                                         // FOR XML and FOR JSON output: every row is a chunk of one value, stored as the set's one row.
                                         using var collector = new ForXmlCollector(store, budget!);
-                                        while (await reader.ReadAsync(token)) collector.AppendRow(reader, token);
+                                        while (await reader.ReadAsync(CancellationToken.None)) collector.AppendRow(reader, token);
                                         if (collector.Rows > 0)
                                         {
                                             currentSet.CountRow();
@@ -1093,14 +1118,14 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                                                 currentSet.Seal();
                                                 events.Sealed(currentSet);
                                             }
-                                            await SkipRowsAsync(reader, command, currentSet, events, token);
+                                            await SkipRowsAsync(reader, currentSet, events, token);
                                             break;
                                         }
-                                        var read = reader.ReadAsync(token);
+                                        var read = reader.ReadAsync(CancellationToken.None);
                                         // Rows waiting for the next one are sealed: the first page 20 ms after its first row, later
                                         // pages after 200 ms without a row, so a slow statement's rows become readable.
                                         if (!read.IsCompleted && currentSet?.SealDelay is { } delay
-                                            && (delay == TimeSpan.Zero || await Task.WhenAny(read, Task.Delay(delay, token)) != read))
+                                            && (delay == TimeSpan.Zero || await Task.WhenAny(read, Task.Delay(delay)) != read))
                                         {
                                             currentSet.Seal();
                                             events.Sealed(currentSet);
@@ -1129,7 +1154,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                                         currentSet = null;
                                     }
                                 }
-                                if (!await reader.NextResultAsync(token)) break;
+                                if (!await reader.NextResultAsync(CancellationToken.None)) break;
                                 unread = true;
                             }
                             catch (SqlException error) when (!reader.IsClosed && Continues(error, connection))
@@ -1172,6 +1197,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                     finally
                     {
                         if (reader is not null) await reader.DisposeAsync();
+                        connection.InfoMessage -= statementStop.OnMessage;
                     }
                     // Now and then (about once in 600 of the live check's timed WAITFORs under load) SqlClient ends a cancelled
                     // batch's reader as if the batch had finished and raises no "Operation cancelled", though SQL Server
@@ -1411,11 +1437,11 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// ReadAsync would skip each long value by buffering all of it, in time quadratic in its size and deaf to the token; a
     /// synchronous Read skips it in linear time, and Cancel stops it. That Read also blocks while the server is slow to
     /// send the next row (a lock, a slow plan, a remote server), so it runs on a thread of its own: on pool threads, a
-    /// few such queries delayed every other request, cancels included, by seconds.</summary>
-    private static Task SkipRowsAsync(SqlDataReader reader, SqlCommand command, ResultSetBuffer? set, QueryEventSink events, CancellationToken token) =>
+    /// few such queries delayed every other request, cancels included, by seconds. The batch's StatementStop cancels it;
+    /// a cancel of its own from another thread could deadlock with that one.</summary>
+    private static Task SkipRowsAsync(SqlDataReader reader, ResultSetBuffer? set, QueryEventSink events, CancellationToken token) =>
         Task.Factory.StartNew(() =>
         {
-            using var cancel = token.Register(Attention, command);
             while (true)
             {
                 token.ThrowIfCancellationRequested();
@@ -1435,12 +1461,44 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         catch (Exception error) when (error is InvalidOperationException or SqlException or ObjectDisposedException) { }
     }
 
+    /// <summary>query.cancel. `cancelled` says whether the query was running; a Stop for one not yet registered is kept
+    /// (earlyStops) and stops it as it registers, since main sends query.cancel only for a query it started.</summary>
     private object Cancel(CancelArgs args)
     {
-        var found = queries.TryGetValue(args.QueryId, out var query);
-        if (found) query!.Cancel();
-        return new { Cancelled = found };
+        RunningQuery? query;
+        lock (cancelGate)
+        {
+            if (!queries.TryGetValue(args.QueryId, out query) && Guid.TryParse(args.QueryId, out _)) RememberEarlyStop(args.QueryId, Environment.TickCount64);
+        }
+        // Outside the gate: cancelling runs the token's callbacks, which reach SqlClient.
+        query?.Cancel();
+        return new { Cancelled = query is not null };
     }
+
+    /// <summary>Adds a running query unless its id is taken; a Stop that came first cancels it at once.</summary>
+    private bool Register(string queryId, RunningQuery running)
+    {
+        bool early;
+        lock (cancelGate)
+        {
+            if (!queries.TryAdd(queryId, running)) return false;
+            early = earlyStops.Remove(queryId);
+        }
+        if (early) running.Cancel();
+        return true;
+    }
+
+    private void RememberEarlyStop(string queryId, long now)
+    {
+        foreach (var (id, at) in earlyStops)
+            if (now - at > EarlyStopLifetime.TotalMilliseconds) earlyStops.Remove(id);
+        if (earlyStops.Count >= MaxEarlyStops && !earlyStops.ContainsKey(queryId))
+            earlyStops.Remove(earlyStops.MinBy(entry => entry.Value).Key);
+        earlyStops[queryId] = now;
+    }
+
+    /// <summary>Test seam: the early Stops kept.</summary>
+    internal int EarlyStopCount { get { lock (cancelGate) return earlyStops.Count; } }
 
     private static void TryCancel(CancellationTokenSource source)
     {
