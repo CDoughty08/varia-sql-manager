@@ -168,6 +168,33 @@ internal static class ExecutionLiveChecks
             check(cancelled.Status == "cancelled" && cancelled.CompletedBatches == 1 && !Texts(cancelled).Contains("SHOULD_NOT_RUN")
                 && cancelled.Error!.Message.StartsWith("The script was cancelled.") && cancelled.Error.Message.Contains("Msg 8134"),
                 "a cancel ends the script even after a batch that raised an error: " + string.Join(" | ", Texts(cancelled)));
+            // A batch streaming info messages stops where the Stop finds it: SqlClient's cancel from another thread would wait
+            // for the loop to end, so the INSERT after it would run although the script reports cancelled.
+            var probeTab = Guid.NewGuid().ToString();
+            try
+            {
+                await Run("CREATE TABLE #VariaStopProbe (n int);", probeTab);
+                string? Probed(QueryResult probe) => probe.Status == "completed" ? LiveResultChecks.RowsOf(store, probe.ResultSets[0])[0][0] : probe.Error?.Message;
+                var floodId = Guid.NewGuid().ToString();
+                var flood = Run("DECLARE @until datetime2 = DATEADD(second, 20, SYSDATETIME());\nWHILE SYSDATETIME() < @until RAISERROR (N'Varia live check: heartbeat', 0, 1) WITH NOWAIT;\nINSERT #VariaStopProbe VALUES (1);",
+                    probeTab, queryId: floodId);
+                await Task.Delay(800);
+                var stopWatch = System.Diagnostics.Stopwatch.StartNew();
+                await Call("query.cancel", new CancelArgs(floodId));
+                var flooded = await flood;
+                stopWatch.Stop();
+                var afterFlood = Probed(await Run("SELECT COUNT(*) FROM #VariaStopProbe;", probeTab));
+                check(flooded.Status == "cancelled" && Texts(flooded).Contains("Varia live check: heartbeat") && afterFlood == "0",
+                    "a Stop ends a batch that streams info messages before its later statements run: " + flooded.Status + ", " + afterFlood + " rows, " + stopWatch.ElapsedMilliseconds + " ms");
+                // A Stop that overtakes its query.execute (main relays both at once) still stops it: nothing runs.
+                var earlyId = Guid.NewGuid().ToString();
+                await Call("query.cancel", new CancelArgs(earlyId));
+                var overtaken = await Run("INSERT #VariaStopProbe VALUES (2);", probeTab, queryId: earlyId);
+                var afterEarly = Probed(await Run("SELECT COUNT(*) FROM #VariaStopProbe;", probeTab));
+                check(overtaken.Status == "cancelled" && overtaken.CompletedBatches == 0 && afterEarly == "0",
+                    "a Stop that reaches the backend before its query runs nothing: " + overtaken.Status + ", " + afterEarly + " rows");
+            }
+            finally { await Call("query.session.close", new SessionArgs(probeTab)); }
             var expired = await Run("SELECT 1/0;\nGO\nWAITFOR DELAY '00:00:10';\nGO\nPRINT 'SHOULD_NOT_RUN';", timeout: 1);
             check(expired.Status == "timedOut" && expired.CompletedBatches == 1 && !Texts(expired).Contains("SHOULD_NOT_RUN"),
                 "the deadline ends the script even after a batch that raised an error");

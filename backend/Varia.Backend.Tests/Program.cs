@@ -294,6 +294,19 @@ if (liveGroup is null)
             catch (RequestException error) { return error.Code; }
         }
         Check(await StateError("invalid") == "INVALID_PARAMS" && await StateError(Guid.NewGuid().ToString()) == "SESSION_CLOSED", "an unknown session's state is an error value, at once");
+        // A Stop can overtake its query.execute (each request runs on its own task); the query takes it as it registers.
+        Task<object> Offline(string method, object args) => offline.DispatchAsync(method, JsonSerializer.SerializeToElement(args, json), json);
+        var earlyId = Guid.NewGuid().ToString();
+        var earlyAck = JsonSerializer.Serialize(await Offline("query.cancel", new CancelArgs(earlyId)), json);
+        var keptEarly = offline.EarlyStopCount;
+        string? earlyError = null;
+        try { await Offline("query.execute", new QueryArgs(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "master", "SELECT 1;\nGO 0", earlyId, 1000, 30)); }
+        catch (RequestException error) { earlyError = error.Code; }
+        Check(earlyAck == "{\"cancelled\":false}" && keptEarly == 1 && offline.EarlyStopCount == 0 && earlyError == "INVALID_SCRIPT",
+            "a Stop for a query not yet registered is kept until that query registers, and a query that fails validation leaves the registry: " + earlyAck + " " + keptEarly + " " + earlyError);
+        await Offline("query.cancel", new CancelArgs("not-a-guid"));
+        for (var i = 0; i < SqlService.MaxEarlyStops + 20; i++) await Offline("query.cancel", new CancelArgs(Guid.NewGuid().ToString()));
+        Check(offline.EarlyStopCount == SqlService.MaxEarlyStops, "early Stops are bounded, the oldest dropped first, and malformed ids are not kept: " + offline.EarlyStopCount);
     }
     // Live runs share one server with other runs: they leave each other's scratch objects alone and time cancels against the load.
     Check(new[] { "VariaScratch_20261018120000_0123abcd_su", "VariaScratch_x", "varia_scratch_0123456789ab", "VARIA_SCRATCH_x", "##VariaScratch_20261018120000_0123abcd_ls##" }.All(ScratchDatabase.IsScratchName)

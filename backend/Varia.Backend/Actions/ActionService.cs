@@ -1857,7 +1857,8 @@ internal sealed partial class ActionService : IDisposable
     /// <see cref="Fallback"/>, the Stop's thread cancels after all (it may then wait until the statement ends, as before),
     /// and the reader leaves it to that one. Either side cancels at most once. A statement a Stop cancelled ends in a
     /// SqlException, or now and then in a reader SqlClient ends silently (ReadAllAsync then throws), which the runner reads as
-    /// cancelled because the token is.</summary>
+    /// cancelled because the token is. SqlService's query batches stop the same way (a PRINT or RAISERROR WITH NOWAIT loop
+    /// streams messages just as a RESTORE does).</summary>
     internal sealed class StatementStop(SqlCommand command, CancellationToken token)
     {
         internal static TimeSpan Fallback { get; set; } = TimeSpan.FromSeconds(1);
