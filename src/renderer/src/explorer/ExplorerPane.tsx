@@ -15,14 +15,15 @@ import ExplorerErrorBoundary, { FaultProbe, focusLost } from './ExplorerErrorBou
 import ExplorerTree from './ExplorerTree'
 
 /** `pressed`: a toggle button's state (aria-pressed). */
-interface Tool { readonly id: CommandId; readonly icon: IconId; readonly label: string; readonly args?: CommandArgs; readonly pressed?: boolean }
+interface Tool { readonly id: CommandId; readonly icon: IconId; readonly label: string; readonly hint?: string; readonly args?: CommandArgs; readonly pressed?: boolean }
 
 function ToolbarButton({ tool, enabled, tabbable, buttonRef, onFocus, onBlur }: {
   tool: Tool; enabled: boolean; tabbable: boolean; buttonRef: Ref<HTMLButtonElement>; onFocus: () => void; onBlur: (event: FocusEvent<HTMLButtonElement>) => void
 }) {
   const { commands } = useWorkbench()
   const key = useKeybindingLabel(tool.id)
-  const title = key ? `${tool.label} (${key.text})` : tool.label
+  const state = tool.pressed === undefined ? '' : `: ${tool.pressed ? 'On' : 'Off'}`
+  const title = `${tool.label}${state}${key ? ` (${key.text})` : ''}${tool.hint ? `. ${tool.hint}` : ''}`
   return <button ref={buttonRef} className="icon-button" aria-label={tool.label} title={title} disabled={!enabled} tabIndex={tabbable ? 0 : -1} onFocus={onFocus} onBlur={onBlur}
     {...(tool.pressed !== undefined ? { 'aria-pressed': tool.pressed } : {})}
     onClick={() => void commands.execute(tool.id, tool.args, 'toolbar')}>
@@ -128,7 +129,7 @@ export default function ExplorerPane({ error, activeConnectionId }: { readonly e
     { id: 'connection.connect', icon: 'plug', label: 'Connect Object Explorer' },
     { id: 'connection.disconnect', icon: 'debug-disconnect', label: 'Disconnect', ...(disconnectArgs ? { args: disconnectArgs } : {}) },
     { id: 'explorer.stop', icon: 'debug-stop', label: 'Stop' },
-    { id: 'explorer.filter', icon: filtered ? 'filter-filled' : 'filter', label: 'Filter Settings' },
+    { id: 'explorer.filter', icon: filtered ? 'filter-filled' : 'filter', label: 'Filter Settings', hint: 'Filter the selected folder\'s contents. Select a folder such as Tables, Views, Databases, or Logins.' },
     { id: 'explorer.refresh', icon: 'refresh', label: 'Refresh' },
     { id: 'explorer.groupBySchema', icon: 'symbol-namespace', label: 'Group by Schema', pressed: grouped },
     { id: 'explorer.collapseAll', icon: 'collapse-all', label: 'Collapse All' }
