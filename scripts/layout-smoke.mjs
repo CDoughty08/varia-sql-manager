@@ -58,6 +58,8 @@ async function drag(locator, dx, dy) {
   expect(box).not.toBeNull()
   const x = box.x + box.width / 2, y = box.y + box.height / 2
   await page.mouse.move(x, y); await page.mouse.down()
+  // Dockview starts the drag on the first move and measures from there: a 1 px nudge keeps the whole distance.
+  await page.mouse.move(x + 1, y)
   await page.mouse.move(x + dx, y + dy, { steps: 5 }); await page.mouse.up()
 }
 async function manage() { await menu('layout.load'); await expect(page.getByRole('dialog', { name: 'Workspace layouts' })).toBeVisible() }
@@ -70,6 +72,8 @@ async function dragStart(locator, dx, dy) {
   const box = await locator.boundingBox()
   const x = box.x + 20, y = box.y + box.height / 2
   await page.mouse.move(x, y); await page.mouse.down()
+  // Dockview starts the drag on the first move and measures from there: a 1 px nudge keeps the whole distance.
+  await page.mouse.move(x + 1, y)
   await page.mouse.move(x + dx, y + dy, { steps: 5 }); await page.mouse.up()
 }
 async function aimGuide(source, destination, position, scope = 'panel') {
@@ -202,7 +206,10 @@ try {
   expect(hanging.x).toBeLessThan(windowWidth - 60)
   await dragStart(titlebar, 0, -2000)
   await expect.poll(async () => (await titlebar.boundingBox()).y - (await page.locator(part.workbench).boundingBox()).y).toBeGreaterThanOrEqual(-1)
-  await dragStart(titlebar, -Math.round(windowWidth / 2), 120)
+  // Back inside, aiming its right edge at three quarters of the window, so it fits whatever the window's width (CI's
+  // Windows runners show 1024 px).
+  const out = await pane('results').boundingBox()
+  await dragStart(titlebar, Math.round(windowWidth * 0.75 - out.x - out.width), 120)
   await expect.poll(async () => { const box = await pane('results').boundingBox(); return box.x + box.width }).toBeLessThan(windowWidth)
   await page.screenshot({ path: resolve('artifacts', 'floating-off-edge.png') })
   await aimGuide(page.locator('.dv-floating-titlebar'), 'editor', 'left')
