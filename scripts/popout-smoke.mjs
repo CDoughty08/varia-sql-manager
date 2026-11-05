@@ -19,7 +19,8 @@ const w1 = row => shapes.W1.row(row).map(value => value ?? 'NULL')
 const tsv = rows => rows.map(row => row.join('\t')).join(eol)
 let application = await electron.launch(launchOptions)
 let page
-const watchdog = setTimeout(() => { console.error('Popout suite exceeded its time limit.'); application.process().kill(); process.exitCode = 1 }, 180000)
+// Killing the app does not settle every pending Playwright wait, so the suite also exits on its own.
+const watchdog = setTimeout(() => { console.error('Popout suite exceeded its time limit.'); application.process().kill(); setTimeout(() => process.exit(1), 5000).unref() }, 180000)
 const failures = []
 const clipboard = () => application.evaluate(({ clipboard }) => clipboard.readText())
 const setClipboard = text => application.evaluate(({ clipboard }, value) => clipboard.writeText(value), text)
@@ -35,7 +36,7 @@ async function ready() {
 }
 /** Runs `move` and answers the popout window's page it opened. */
 async function popsOut(move) {
-  const opened = application.waitForEvent('window')
+  const opened = application.waitForEvent('window', { timeout: 30000 })
   await move()
   const popout = await opened
   popout.setDefaultTimeout(30000)
@@ -134,11 +135,20 @@ try {
   // 4. Object Explorer's tab dragged past the window's edge pops it out; dropped back on the main window, it docks there.
   await menu('window.togglePanelTabs')
   await expect(paneTab(page, 'explorer')).toBeVisible()
+  // The drop must land on a display, or main refuses the window: CI's displays are small, so the main window makes room.
+  await application.evaluate(({ BrowserWindow, screen }) => {
+    const area = screen.getPrimaryDisplay().workArea, main = BrowserWindow.getAllWindows()[0]
+    if (main.isMaximized()) main.unmaximize()
+    // Its minimum width fills a 1024 px display, which leaves no screen past its edge.
+    main.setMinimumSize(600, 500)
+    main.setBounds({ x: area.x, y: area.y, width: Math.min(900, area.width - 400), height: Math.min(700, area.height - 40) })
+  })
+  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBeLessThanOrEqual(900)
   const explorer = await popsOut(async () => {
     const tab = await paneTab(page, 'explorer').boundingBox(), width = await page.evaluate(() => window.innerWidth)
     await page.mouse.move(tab.x + 20, tab.y + tab.height / 2); await page.mouse.down()
     await page.mouse.move(tab.x + 21, tab.y + tab.height / 2)
-    await page.mouse.move(width + 200, tab.y + 60, { steps: 6 }); await page.mouse.up()
+    await page.mouse.move(width + 60, tab.y + 60, { steps: 6 }); await page.mouse.up()
   })
   await expect(pane(page, 'explorer')).toHaveCount(0)
   await expect(pane(explorer, 'explorer')).toBeVisible()
@@ -220,4 +230,12 @@ try {
 } catch (error) {
   if (page) await page.screenshot({ path: resolve('artifacts', 'popout-failure.png') }).catch(() => {})
   throw error
-} finally { clearTimeout(watchdog); await application.close().catch(() => {}); await rm(profile, { recursive: true, force: true }) }
+} finally {
+  // After a failure the query is still unsaved: its prompt would hold the close open, so it is answered (Don't Save), and a
+  // close that still hangs is cut short rather than waiting out CI's own limit.
+  await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) }).catch(() => {})
+  const closed = await Promise.race([application.close().then(() => true, () => true), new Promise(done => setTimeout(() => done(false), 20000).unref())])
+  if (!closed) application.process()?.kill()
+  clearTimeout(watchdog)
+  await rm(profile, { recursive: true, force: true })
+}
