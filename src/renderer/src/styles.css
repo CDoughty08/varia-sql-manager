@@ -380,6 +380,14 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .document-strip > .pane-menu { margin: 0 4px; }
 .query-tabs { display: flex; flex: 1 1 auto; min-width: 0; height: var(--varia-bar); background: var(--varia-documentTabs-background); overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
 .query-tab { position: relative; display: flex; align-items: center; flex-shrink: 0; border-right: 1px solid var(--varia-documentTabs-border); border-top: 2px solid transparent; color: var(--varia-documentTabs-inactiveForeground); }
+/* Where a dragged tab will drop: a bar on the side of the tab it goes to. */
+.query-tab[data-drop="before"] { box-shadow: inset 2px 0 0 var(--varia-focusBorder); }
+.query-tab[data-drop="after"] { box-shadow: inset -2px 0 0 var(--varia-focusBorder); }
+@media (forced-colors: active) {
+  /* Box shadows are dropped here, so a border shows the side; the margin takes back its width and the tabs stay put. */
+  .query-tab[data-drop="before"] { border-left: 2px solid Highlight; margin-left: -2px; }
+  .query-tab[data-drop="after"] { border-right: 2px solid Highlight; margin-right: -1px; }
+}
 .query-tab.active { background: var(--varia-documentTabs-activeBackground); border-top-color: var(--varia-tab-activeBorderTop); color: var(--varia-documentTabs-activeForeground); }
 .tab-select { display: flex; align-items: center; gap: 8px; height: calc(var(--varia-bar) - 3px); border: 0; border-radius: 0; padding: 0 10px 0 13px; color: inherit; }
 .tab-select:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }

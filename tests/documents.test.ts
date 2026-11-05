@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { editor } from 'monaco-editor'
 import { afterClose } from '../src/renderer/src/documents'
+import { dropIndex, dropSide } from '../src/renderer/src/tab-drag'
 import { gridLimits } from '../src/renderer/src/grid/constants'
 import { documentFixture, deferred, TestEditor, type SaveResponse } from './fixtures/documents'
 
@@ -29,6 +30,36 @@ describe('query documents', () => {
     expect(closed.activeId).toBe(right.id)
     expect(closed.tabs[0].connectionId).toBe('server-b')
     expect(afterClose(closed.tabs, right.id, right.id)).toEqual({ tabs: [], activeId: '' })
+  })
+  it('moves a tab to an index, clamped to the strip, keeping the active tab and every model', () => {
+    const { documents } = documentFixture()
+    const [a, b, c] = ['a.sql', 'b.sql', 'c.sql'].map(name => documents.create(name, '', 'master'))
+    documents.activate(b.id)
+    const order = () => documents.getSnapshot().documents.map(document => document.name)
+    expect(documents.move(a.id, 2)).toBe(true)
+    expect(order()).toEqual(['b.sql', 'c.sql', 'a.sql'])
+    expect(documents.getSnapshot().activeId).toBe(b.id)
+    expect(documents.move(a.id, -5)).toBe(true)
+    expect(order()).toEqual(['a.sql', 'b.sql', 'c.sql'])
+    expect(documents.move(c.id, 99)).toBe(false)
+    expect(documents.move('missing', 0)).toBe(false)
+    expect(documents.move(b.id, Number.NaN)).toBe(false)
+    const before = documents.getSnapshot()
+    expect(documents.move(b.id, 1)).toBe(false)
+    expect(documents.getSnapshot()).toBe(before)
+    expect(documents.get(c.id)).toBeDefined()
+  })
+  it('drops a dragged tab on the side of the tab under the pointer, and nowhere new next to itself', () => {
+    expect(dropSide(10, { left: 0, width: 100 })).toBe('before')
+    expect(dropSide(60, { left: 0, width: 100 })).toBe('after')
+    // Tabs a b c d: dragging a (0) after c (2) lands at 2; dragging d (3) before b (1) lands at 1.
+    expect(dropIndex(0, 2, 'after')).toBe(2)
+    expect(dropIndex(0, 2, 'before')).toBe(1)
+    expect(dropIndex(3, 1, 'before')).toBe(1)
+    expect(dropIndex(3, 1, 'after')).toBe(2)
+    expect(dropIndex(1, 1, 'after')).toBe(1)
+    expect(dropIndex(1, 0, 'after')).toBe(1)
+    expect(dropIndex(1, 2, 'before')).toBe(1)
   })
   it('owns models by URI and retains them and view state across switches and editor remounts', () => {
     const { documents, model, models } = documentFixture()

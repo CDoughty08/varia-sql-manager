@@ -422,7 +422,7 @@ describe('context menus', () => {
     expect(doc.activeElement).toBe(one.button)
     expect(menus.controller.view).toMatchObject({ source: 'context', mnemonics: false })
     expect(level(menus)).toMatchObject({ label: 'Query tab', active: -1, anchor: { kind: 'point', x: 120, y: 50 } })
-    expect(enablement(level(menus).items)).toEqual(['Save +', 'Save As… +', '-', 'Close +', 'Close All But This +', 'Close All +', '-', 'Copy Full Path -', 'Open Containing Folder -'])
+    expect(enablement(level(menus).items)).toEqual(['Save +', 'Save As… +', '-', 'Close +', 'Close All But This +', 'Close All +', '-', 'Copy Full Path -', 'Open Containing Folder -', '-', 'Move Left -', 'Move Right +'])
     expect(one.tab.hasAttribute('data-menu-target')).toBe(true)
     menus.close('escape')
     expect(one.tab.hasAttribute('data-menu-target')).toBe(false)

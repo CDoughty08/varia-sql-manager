@@ -38,6 +38,7 @@ import StandardToolbar, { CommandCentre } from './ShellToolbar'
 import QueryBar from './QueryBar'
 import { lostHint } from './query-context'
 import PaneMenuButton from './PaneMenuButton'
+import { useTabDrag } from './tab-drag'
 import DockWorkspace, { type WorkspaceHandle } from './DockWorkspace'
 import ConnectDialog from './ConnectDialog'
 import EnvironmentDialog from './EnvironmentDialog'
@@ -153,6 +154,8 @@ export default function App() {
     dockPaneAt: (pane, side) => workspaceRef.current?.dockAt(pane, side),
     tabPaneWith: (pane, other) => workspaceRef.current?.tabWith(pane, other)
   }), [disconnectServer, workbench, activeOutputView])
+  // Dragging a tab along the strip reorders it (Move Left and Move Right do it by key).
+  const tabDrag = useTabDrag(() => documents.getSnapshot().documents.map(document => document.id), (id, index) => { documents.move(id, index) })
   // One callback for every query tab: the tab names its query.
   const tabTarget = useMenuTarget<HTMLDivElement>(element => {
     const tabId = element.dataset.tabId
@@ -190,14 +193,16 @@ export default function App() {
   useEffect(() => {
     document.title = windowTitle
   }, [windowTitle])
-  // A query opened or chosen from elsewhere (Script As, Go to Query, a menu) must not stay hidden past the strip's edge.
+  // A query opened or chosen from elsewhere (Script As, Go to Query, a menu), or moved along the strip, must not stay hidden
+  // past the strip's edge.
+  const activeIndex = tabs.findIndex(tab => tab.id === activeId)
   useEffect(() => {
     const tab = activeId ? document.getElementById(`tab-${activeId}`)?.parentElement : undefined, strip = tab?.parentElement
     if (!tab || !strip) return
     const box = tab.getBoundingClientRect(), view = strip.getBoundingClientRect()
     if (box.left < view.left) strip.scrollLeft -= view.left - box.left
     else if (box.right > view.right) strip.scrollLeft += box.right - view.right
-  }, [activeId, tabs.length])
+  }, [activeId, activeIndex, tabs.length])
   // A tab is as wide as its name, so every tab after the first would start on a fractional pixel and blur its kind icon.
   // Each name's box is rounded up to whole pixels (the rest of a tab already is), measured from its text so that no tab
   // shrinks meanwhile and the strip keeps its scroll position. A strip parked while its panel is closed has no layout to
@@ -294,7 +299,7 @@ export default function App() {
       : <div className="global-error" role="alert"><span>{commandError}</span><button aria-label="Dismiss command error" onClick={() => commands.clearError()}><Icon name="close" /></button></div>)}
     <ThemeNotice />
     <DockWorkspace ref={workspaceRef} explorer={<aside className="explorer"><ExplorerPane error={explorerError} activeConnectionId={liveConnection?.id} /></aside>} editor={<main className="workspace">
-        <div className="document-strip pane-header"><div className="query-tabs" role="tablist" aria-label="Query documents" ref={strip}>{tabs.map((tab, index) => { const tabConnection = connections.find(value => value.id === tab.connectionId), environment = tabConnection?.options.environment; return <div className={`query-tab ${activeId === tab.id ? 'active' : ''}`} style={{ borderTopColor: workbench.theme.accent(tabConnection?.color) }} role="presentation" key={tab.id} ref={tabTarget} data-tab-id={tab.id} data-dirty={tab.dirty || undefined}>
+        <div className="document-strip pane-header"><div className="query-tabs" role="tablist" aria-label="Query documents" ref={strip} {...tabDrag.strip}>{tabs.map((tab, index) => { const tabConnection = connections.find(value => value.id === tab.connectionId), environment = tabConnection?.options.environment; return <div className={`query-tab ${activeId === tab.id ? 'active' : ''}`} style={{ borderTopColor: workbench.theme.accent(tabConnection?.color) }} role="presentation" key={tab.id} ref={tabTarget} data-tab-id={tab.id} data-dirty={tab.dirty || undefined} {...tabDrag.tab(tab.id)}>
           <button id={`tab-${tab.id}`} className="tab-select" role="tab" aria-label={tab.name} aria-description={environmentTag(environment)?.description} aria-selected={activeId === tab.id} tabIndex={activeId === tab.id ? 0 : -1} title={`${tab.file?.path ?? tab.name}${tab.file?.readOnly ? ' (read-only)' : ''}${tab.dirty ? ' (unsaved changes)' : ''}`} onClick={() => activate(tab.id)} onKeyDown={event => tabKey(event, index)}><Icon name={kindInfo[documentKind(tab)].icon} className="tab-icon" label={kindInfo[documentKind(tab)].label} /><span className="tab-name">{tab.name}</span><EnvironmentTag environment={environment} place="tab" />{tab.file?.readOnly && <Icon name="lock" className="tab-readonly" label="Read-only" />}{queryState[tab.id]?.running && <Icon name="loading" spin className="tab-running" label="Executing" />}{tab.dirty && <span className="dirty-dot" role="img" aria-label="Unsaved changes" />}</button>
           <button className="tab-close" aria-label={`Close ${tab.name}`} title={queryState[tab.id]?.running ? `Close ${tab.name} (its query is executing)` : `Close ${tab.name}`} disabled={documentBusy} onClick={() => void commands.execute('file.close', { tabId: tab.id }, 'toolbar')}><Icon name="close" /></button>
         </div> })}</div><PaneMenuButton pane="editor" /></div>

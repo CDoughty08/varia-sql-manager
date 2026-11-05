@@ -30,6 +30,9 @@ documentTab.context, for a saved query's tab
   ---
   Copy Full &Path  ++++
   &Open Containing Folder  ++++
+  ---
+  Mov&e Left  Ctrl+Shift+PageUp  ++++
+  Move &Right  Ctrl+Shift+PageDown  ----
 documentTab.context, for an unsaved query's tab
   &Save  Ctrl+S  +++-
   Save &As…  +++-
@@ -40,6 +43,9 @@ documentTab.context, for an unsaved query's tab
   ---
   Copy Full &Path  ----
   &Open Containing Folder  ----
+  ---
+  Mov&e Left  Ctrl+Shift+PageUp  ++++
+  Move &Right  Ctrl+Shift+PageDown  ++++
 dockTab.context, for a docked panel's tab
   Dock &Left  ++++
   Dock &Right  ++++

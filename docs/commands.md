@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (217)
+## Commands (219)
 
 ### File
 
@@ -78,6 +78,8 @@ keys it uses are listed below.
 | Reset Layout | `layout.reset` | — | — | — | Always | View › Reset Layout; Window › Reset Window Layout |
 | Next Query | `document.next` | Ctrl+Tab, Ctrl+PageDown | Ctrl+Tab, Ctrl+PageDown | ⌃⇥ | `multipleDocuments` | Window › Next Query |
 | Previous Query | `document.previous` | Ctrl+Shift+Tab, Ctrl+PageUp | Ctrl+Shift+Tab, Ctrl+PageUp | ⌃⇧⇥ | `multipleDocuments` | Window › Previous Query |
+| Move Query Left | `document.moveLeft` | Ctrl+Shift+PageUp | Ctrl+Shift+PageUp | ⌃⇧⇞ | `multipleDocuments` | Query tab context menu › Move Left |
+| Move Query Right | `document.moveRight` | Ctrl+Shift+PageDown | Ctrl+Shift+PageDown | ⌃⇧⇟ | `multipleDocuments` | Query tab context menu › Move Right |
 | Toggle Word Wrap | `editor.toggleWordWrap` | Alt+Z | Alt+Z | — | Always; checked when `editorWordWrap` | Edit › Advanced › Word Wrap |
 | View White Space | `editor.toggleWhitespace` | — | — | — | Always; checked when `editorWhitespace` | Edit › Advanced › View White Space |
 | Toggle Line Numbers | `editor.toggleLineNumbers` | — | — | — | Always; checked when `editorLineNumbers` | — |
@@ -702,6 +704,8 @@ Right-click a query tab, or press Shift+F10 or the context-menu key on a focused
 | `3_file` | Copy Full **P**ath | `file.copyPath` | Always |
 | `3_file` | **O**pen Containing Folder | `file.revealInFolder` | Windows, Linux only |
 | `3_file` | Reveal in Finder | `file.revealInFolder` | macOS only |
+| `4_move` | Mov**e** Left | `document.moveLeft` | Always |
+| `4_move` | Move **R**ight | `document.moveRight` | Always |
 
 #### Query Output context menu (`output.context`)
 
