@@ -33,6 +33,11 @@ export const objectExplorerSettings = [
     description: 'How many rows Select Top Rows reads, and the number its menu item shows.'
   },
   {
+    key: 'objectExplorer.groupBySchema', page: 'objectExplorer.commands', group: 'Object Explorer', label: 'Group by Schema', type: 'boolean', default: false,
+    keywords: ['schema', 'group', 'tree', 'folders'],
+    description: 'Lists each database\'s schemas after its own folders, with the Tables, Views, Synonyms and Programmability folders of each schema below it; Database Triggers, Assemblies and Plan Guides stay in the database\'s Programmability folder. A filter below a schema applies to that schema\'s folder only. The Object Explorer toolbar\'s Group by Schema button turns it on and off.'
+  },
+  {
     key: 'objectExplorer.search.indexOnConnect', page: 'objectExplorer.commands', group: 'Search Objects', label: 'Index objects when a server connects', type: 'boolean', default: true, varia: true,
     keywords: ['search', 'index', 'objects', 'find', 'definitions'],
     description: 'Reads the names of every table, view, procedure, function, synonym, sequence, trigger and type you may see in each database, one database at a time on a session of its own, so Search Objects finds them whether or not Object Explorer has loaded them. The index stays in memory and is dropped when the server disconnects. While it is False, Search Objects indexes a server the first time you search it.'
@@ -40,7 +45,7 @@ export const objectExplorerSettings = [
   {
     key: 'objectExplorer.search.definitions', page: 'objectExplorer.commands', group: 'Search Objects', label: 'Index module definitions', type: 'boolean', default: true, varia: true,
     keywords: ['search', 'index', 'definitions', 'procedures', 'text'],
-    description: 'Also keeps the text of procedures, functions, views and triggers you may VIEW DEFINITION of, so Search Objects can find text inside them (up to 1,000,000 characters of each, and 64 Mi characters in all). Applies to the next build.'
+    description: 'Also keeps the text of procedures, functions, views and triggers you may VIEW DEFINITION of, so Search Objects can find text inside them (up to 1,000,000 characters of each, within the index’s 512 MiB). Applies to the next build.'
   },
   ...scriptingSettingEntries()
 ] as const satisfies readonly SettingDef[]
