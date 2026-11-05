@@ -19,7 +19,7 @@ import { SsisRequests } from './backend/ssis-requests'
 import { ActivityRequests } from './backend/activity-requests'
 import { cancellableRequests, connectionRequestLimits, RendererRequests } from './backend/renderer-requests'
 import { dialogQueue } from './dialog-queue'
-import { sanitizeFileName } from './file-names'
+import { saveDefaultPath } from './file-names'
 import { connectionCancelSchema, validateRequest, validateResult } from './validation'
 import { SqlFileStore, fileKinds, reloadPromptSchema, saveDocument, saveFileSchema } from './sql-files'
 import { openRecentEntry, RecentFilesStore, systemRecentDocuments } from './recent-files-store'
@@ -35,6 +35,8 @@ import { connectionLibrary } from './connection-library'
 import { clearEntraPrompt, clearEntraTokenCache } from './entra'
 import { SettingsStore } from './settings-store'
 import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
+import { SessionStore, sessionWriteSchema, type SessionRecordDocument } from './session-store'
+import type { RestoredDocument, RestoredSession } from '../shared/files/session'
 import { lossDetails } from '../shared/files/recovery'
 import { commandTitle } from '../shared/settings/catalog'
 import { windowControls } from '../shared/theme/metrics'
@@ -139,6 +141,12 @@ const systemRecent = process.env.VARIA_SMOKE_TEST === '1' ? undefined : systemRe
 const recent = new RecentFilesStore(join(app.getPath('userData'), 'recent-files.json'), systemRecent ? { system: systemRecent } : {})
 // AutoRecover's copies of unsaved queries, user-only, in the profile; see recovery-store.ts.
 const recovery = new RecoveryStore(join(app.getPath('userData'), 'AutoRecover'))
+// Hot exit's copy of the open tabs, user-only, in the profile; see session-store.ts.
+const openSession = new SessionStore(join(app.getPath('userData'), 'Session'))
+// Whether a page of this process has taken the session: only the first also reopens what a crashed run restored.
+let sessionTaken = false
+// Smoke suites keep the quit prompts they check unless they ask for hot exit (VARIA_TEST_HOT_EXIT=1).
+const hotExitAvailable = !(testSeams && process.env.VARIA_TEST_HOT_EXIT === '0')
 /** The crash, hang and reload prompts' details for `generation`'s page: AutoRecover's wording once it kept that page's
  *  queries. A page has records only after a write, which waited for settings, so `current()` holds the loaded values. */
 function lossDetailsFor(generation: number) {
@@ -306,6 +314,24 @@ async function openPath(path: string): Promise<OpenSqlFile | undefined> {
 }
 const openFailure = (path: string, error: unknown) => `${basename(path)}: ${openError(error)}`.slice(0, 600)
 
+/**
+ * A tab hot exit kept, opened again: its text, with its file registered again when that still exists. A clean tab with a
+ * file reads it again (and fails, named, when it is gone); a tab with unsaved changes keeps its text whatever happened to
+ * its file, and opens without it when it is gone.
+ */
+async function reopenDocument(document: SessionRecordDocument): Promise<RestoredDocument> {
+  const { path, text, ...rest } = document
+  if (text !== undefined) {
+    const file = path ? await files.register(path) : undefined
+    return { ...rest, text, ...file ? { file } : {} }
+  }
+  if (!path) throw new Error(`${document.name} could not be reopened.`)
+  try {
+    const file = await files.read(path)
+    return { ...rest, eol: file.eol, text: file.content, dirty: false, file: { id: file.id, name: file.name, path: file.path, encoding: file.encoding, ...file.codePage ? { codePage: file.codePage } : {}, readOnly: file.readOnly } }
+  } catch (error) { throw new Error(`${basename(path)} could not be reopened: ${openError(error)}`.slice(0, 600)) }
+}
+
 function sendOpened(opened: OpenedFiles): void {
   if (mainWindow && !mainWindow.isDestroyed() && (opened.files.length || opened.errors.length)) mainWindow.webContents.send('varia:files-opened', opened)
 }
@@ -466,7 +492,7 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
     titleBarStyle: 'hidden',
     // The header is one --varia-header row; the traffic lights and the window-controls overlay are centred in it.
     ...(process.platform === 'darwin' ? { trafficLightPosition: controls.trafficLights } : { titleBarOverlay: { ...chrome.overlay, height: controls.overlayHeight } }),
-    webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1', additionalArguments: [menuStyleArgument(menuStyle), ...(testSeams ? ['--varia-test-mode'] : [])],
+    webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1', additionalArguments: [menuStyleArgument(menuStyle), ...(testSeams ? ['--varia-test-mode'] : []), ...(hotExitAvailable ? [] : ['--varia-no-hot-exit'])],
       // Every build has developer tools, as VS Code does; the page keeps its sandbox, isolation and CSP under them.
       devTools: true }
   })
@@ -837,7 +863,7 @@ app.whenReady().then(async () => {
     const saved = await saveDocument(files, options, encoding, {
       readOnly: askReadOnly, changed: askChanged, unicode: askUnicode,
       saveDialog: async registeredPath => {
-        const defaultPath = registeredPath ?? join(app.getPath('documents'), sanitizeFileName(options.name))
+        const defaultPath = saveDefaultPath(registeredPath, options.name, app.getPath('documents'), kind.filters[0]?.extensions[0] ?? 'sql')
         const selection = await pageDialog(window => dialog.showSaveDialog(window, { title: kind.title, defaultPath, filters: kind.filters, properties: ['showOverwriteConfirmation', 'createDirectory'] }), { canceled: true, filePath: '' })
         return selection.canceled || !selection.filePath ? undefined : selection.filePath
       }
@@ -876,6 +902,32 @@ app.whenReady().then(async () => {
     const generation = pageGeneration, record = await recovery.take(recoveryTakeSchema.parse(value).id, generation)
     const file = record.path && generation === rendererGeneration ? await files.register(record.path) : undefined
     return { text: record.text, name: record.name, kind: record.kind, eol: record.eol, ...file ? { file } : {} }
+  })
+  // Hot exit: the page's tabs as its close goes ahead, with main's paths in place of file ids, and the next start's restore.
+  handle('varia:session-write', async value => {
+    if (!hotExitAvailable) throw new Error('Restore open queries on startup is off.')
+    const request = sessionWriteSchema.parse(value)
+    const documents = request.documents.map(({ fileId, ...document }) => {
+      let path: string | undefined
+      try { path = fileId ? files.get(fileId).path : undefined } catch { /* Released: kept without a file. */ }
+      return { ...document, ...path ? { path } : {} }
+    })
+    await openSession.write({ documents, activeIndex: request.activeIndex }, pageGeneration)
+  })
+  handle('varia:session-take', async (): Promise<RestoredSession> => {
+    const generation = pageGeneration, first = !sessionTaken
+    sessionTaken = true
+    const record = hotExitAvailable ? await openSession.take(first) : undefined
+    const documents: RestoredDocument[] = [], problems: string[] = []
+    let activeIndex = -1
+    for (const [index, document] of (record?.documents ?? []).entries()) {
+      if (generation !== rendererGeneration) break
+      const restored = await reopenDocument(document).catch(error => { problems.push(error instanceof Error ? error.message : 'A query could not be reopened.'); return undefined })
+      if (!restored) continue
+      if (index === record?.activeIndex) activeIndex = documents.length
+      documents.push(restored)
+    }
+    return { documents, activeIndex, problems: problems.slice(0, 32) }
   })
   handle('varia:recent-files', () => recentFiles())
   handle('varia:recent-files-open', value => openRecent(z.uuid().parse(value)))
@@ -917,8 +969,10 @@ app.whenReady().then(async () => {
   ipcMain.handle('varia:close-window', async event => {
     if (!trusted(event)) return
     closeApproved = true
-    // Every query was saved or discarded, so AutoRecover's copies of this page's go, before the app can exit.
+    // Every query was saved, discarded or kept by hot exit, so AutoRecover's copies of this page's go, before the app can
+    // exit. A close that kept nothing (hot exit off) leaves nothing for the next start to reopen.
     await recovery.discardOwned(pageGeneration).catch(() => {})
+    if (!openSession.keptBy(pageGeneration)) await openSession.clear().catch(() => {})
     if (closeAction(process.platform, closeIntent) === 'closeWindow') mainWindow?.close()
     else app.quit()
   })

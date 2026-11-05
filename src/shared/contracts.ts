@@ -20,6 +20,7 @@ import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions
 import type { RecentFile } from './files/recent'
 import type { UpdateState } from './updates'
 import type { RecoveredDocument, RecoveryEntry, RecoveryWrite } from './files/recovery'
+import type { RestoredSession, SessionWrite } from './files/session'
 import type { LiveEnd, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from './live/schema'
 import type { ActivityDetailsRequest, ActivityDetailsResult, ActivityKillRequest, ActivityKillResult } from './activity/schema.ts'
 
@@ -373,6 +374,7 @@ export type ReloadAnswer = 'yes' | 'yesToAll' | 'no' | 'noToAll'
 export interface ReloadPrompt { fileId: string; dirty: boolean; more: boolean }
 export type { RecentFile }
 export type { RecoveredDocument, RecoveryEntry, RecoveryWrite }
+export type { RestoredDocument, RestoredSession, SessionDocumentWrite, SessionWrite } from './files/session'
 /** `kind` (default 'sql') picks the save dialog's filters and the size limit. */
 export interface SaveSqlFile { fileId?: string; name: string; content: string; saveAs: boolean; kind?: DocumentKind }
 
@@ -513,6 +515,12 @@ export interface VariaApi {
   listRecovery(): Promise<ApiResult<RecoveryEntry[]>>
   /** One offered copy with its text, now this page's; its original file is registered again when it still exists. */
   takeRecovery(id: string): Promise<ApiResult<RecoveredDocument>>
+  /** Hot exit: false only in smoke runs that keep the close prompts; Restore open queries on startup then does nothing. */
+  readonly hotExit: boolean
+  /** Hot exit: keeps the open tabs for the next start as this page's close goes ahead (main adds file paths). */
+  keepSession(session: SessionWrite): Promise<ApiResult<void>>
+  /** The tabs the last close kept, opened again; files that are gone are named in `problems`. */
+  takeSession(): Promise<ApiResult<RestoredSession>>
   /** Writes text to the clipboard through main, which works while the window is unfocused; there is no read. */
   writeClipboardText(text: string): Promise<ApiResult<void>>
   confirmClose(name: string): Promise<ApiResult<'save' | 'discard' | 'cancel'>>

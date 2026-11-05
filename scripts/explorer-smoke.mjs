@@ -6,7 +6,7 @@ import { expandExplorerPath, explorerLines, explorerRow, explorerTree, revealExp
 import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.mjs'
 import {
   activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
-  explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchSplitter, explorerSearchToggle, explorerServerCount, explorerSublabel, explorerToolbar, itemCount,
+  explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, explorerSublabel, explorerToolbar, itemCount,
   messages, outputView, paneMenuButton, part, primaryAction, quickInput, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
 } from './fixtures/ui.mjs'
 
@@ -47,9 +47,9 @@ const tabs = () => documentTabs(page).getByRole('tab')
 const toolbarButton = name => explorerToolbar(page).getByRole('button', { name, exact: true })
 const menu = name => page.getByRole('menu', { name, exact: true })
 const searchBox = () => page.getByRole('textbox', { name: 'Search in Object Explorer', exact: true })
-/** Shift+Tab from the tree to the search box, past its Match Case, Whole Word and Regex toggles; Tab from the box to the tree. */
-const backToSearchBox = async () => { for (let step = 0; step < 4; step++) await page.keyboard.press('Shift+Tab'); await expect(searchBox()).toBeFocused() }
-const searchBoxToTree = async () => { for (let step = 0; step < 4; step++) await page.keyboard.press('Tab'); await expect(tree()).toBeFocused() }
+/** With no search text, the closed Search options button is the only tab stop between the box and tree. */
+const backToSearchBox = async () => { for (let step = 0; step < 2; step++) await page.keyboard.press('Shift+Tab'); await expect(searchBox()).toBeFocused() }
+const searchBoxToTree = async () => { for (let step = 0; step < 2; step++) await page.keyboard.press('Tab'); await expect(tree()).toBeFocused() }
 const isFolder = (params, folder) => params.node.type === 'folder' && params.node.folder === folder
 /** The row `aria-activedescendant` names, as a screen reader finds it. */
 const active = () => page.evaluate(text => {
@@ -168,6 +168,48 @@ try {
   await expect(emptyStateDetail(emptyExplorer)).toHaveText('Connect to SQL Server to browse databases and objects.')
   await expect(primaryAction(emptyExplorer)).toHaveText(['Connect to server'])
   await expect(emptyExplorer).toHaveCSS('justify-content', 'center')
+  // A toolbar toggle stays visibly selected after hover and focus leave, in both themes and Windows contrast themes.
+  const groupBySchema = toolbarButton('Group by Schema')
+  const toggleStyle = () => groupBySchema.evaluate(button => {
+    const style = getComputedStyle(button)
+    return { fill: style.backgroundColor, border: style.borderTopColor, borderStyle: style.borderTopStyle, width: style.borderTopWidth, color: style.color }
+  })
+  for (const mode of ['dark', 'light']) {
+    await page.evaluate(value => window.varia.setThemePreference({ mode: value }), mode)
+    await expect.poll(() => page.evaluate(() => document.documentElement.dataset.themeType)).toBe(mode)
+    await expect(groupBySchema).toHaveAttribute('aria-pressed', 'false')
+    await expect(groupBySchema).toHaveAttribute('title', 'Group by Schema: Off')
+    await toolbarButton('Connect Object Explorer').focus()
+    await page.mouse.move(0, 0)
+    const off = await toggleStyle()
+    await groupBySchema.click()
+    await expect(groupBySchema).toHaveAttribute('aria-pressed', 'true')
+    await expect(groupBySchema).toHaveAttribute('title', 'Group by Schema: On')
+    await toolbarButton('Connect Object Explorer').focus()
+    await page.mouse.move(0, 0)
+    const on = await toggleStyle()
+    expect(on.fill).not.toBe(off.fill)
+    expect(on.border).not.toBe(off.border)
+    expect(on.borderStyle).toBe('solid')
+    expect(on.width).toBe('1px')
+    await groupBySchema.hover()
+    expect(await toggleStyle()).toEqual(on)
+    await page.screenshot({ path: resolve('artifacts', `explorer-toolbar-toggle-${mode}.png`) })
+    await groupBySchema.focus()
+    await page.keyboard.press('Space')
+    await expect(groupBySchema).toHaveAttribute('aria-pressed', 'false')
+  }
+  await page.evaluate(() => window.varia.setThemePreference({ mode: 'dark' }))
+  await groupBySchema.click()
+  await expect(groupBySchema).toHaveAttribute('aria-pressed', 'true')
+  await page.emulateMedia({ forcedColors: 'active' })
+  const contrastToggle = await toggleStyle()
+  expect(contrastToggle.fill).not.toBe(contrastToggle.color)
+  expect(contrastToggle.border).toBe(contrastToggle.fill)
+  await expect(groupBySchema).toHaveCSS('forced-color-adjust', 'none')
+  await page.emulateMedia({ forcedColors: null })
+  await groupBySchema.click()
+  await expect(groupBySchema).toHaveAttribute('aria-pressed', 'false')
 
   // 1. One focusable ARIA tree: a new server is expanded, its folders are collapsed, and nothing below them is loaded.
   // Connecting the first server by keyboard from the empty state moves focus to the tree, which replaced the button.
@@ -188,7 +230,10 @@ try {
 
   // 2. The Windows tree's keys, type-ahead, and `*`.
   await select('server-a')
+  await expect(toolbarButton('Filter Settings')).toBeDisabled()
+  await expect(toolbarButton('Filter Settings')).toHaveAttribute('title', /Select a folder such as Tables, Views, Databases, or Logins/)
   await press('ArrowDown', 'Databases')
+  await expect(toolbarButton('Filter Settings')).toBeEnabled()
   await press('ArrowRight', 'Databases')
   await expect(await explorerRow(page, 'server-a', 'Databases')).toHaveAttribute('aria-expanded', 'true')
   await expect(await explorerRow(page, 'server-a', 'Databases', 'System Databases')).toBeVisible()
@@ -603,7 +648,7 @@ try {
   await page.keyboard.press('Tab')
   await expect(searchBox()).toBeFocused()
   await searchBoxToTree()
-  // Back past the search box with its three toggles and ⋯ to the toolbar's remembered button, and forward again.
+  // Back past the search box, Search options and ⋯ to the toolbar's remembered button, and forward again.
   await backToSearchBox()
   await page.keyboard.press('Shift+Tab')
   await page.keyboard.press('Shift+Tab')
@@ -699,19 +744,93 @@ try {
   await splitter.dblclick()
   await expect(splitter).toHaveAttribute('aria-valuetext', 'Fits the results')
   expect(await band()).toMatchObject({ sized: false })
-  // Match Case, Whole Word and Regex are the tab's toggles: Whole Word leaves nothing for ORD, and says so.
-  const wholeWord = explorerSearchToggle(page, 'Match Whole Word')
-  await wholeWord.click()
-  await expect(wholeWord).toHaveAttribute('aria-pressed', 'true')
+  // The three match options share one popover and still run the same searches as the tab's toggles.
+  const optionsButton = explorerSearchOptions(page)
+  await optionsButton.click()
+  const wholeWord = explorerSearchCheck(page, 'Match Whole Word')
+  await wholeWord.check()
+  await expect(wholeWord).toBeChecked()
   await expect(explorerSearchHits(page)).toHaveCount(0)
   await expect(page.getByText('No objects match', { exact: true })).toBeVisible()
-  await wholeWord.click()
+  await expect(optionsButton).toHaveAccessibleName('Search options: active')
+  await wholeWord.uncheck()
   await expect(explorerSearchHits(page)).toHaveCount(3)
-  const matchCase = explorerSearchToggle(page, 'Match Case')
-  await matchCase.click()
+  const matchCase = explorerSearchCheck(page, 'Match Case')
+  await matchCase.check()
   await expect(explorerSearchHits(page)).toHaveCount(0)
-  await matchCase.click()
+  await matchCase.uncheck()
   await expect(explorerSearchHits(page)).toHaveCount(3)
+  await explorerSearchCheck(page, 'Use Regular Expression').check()
+  await expect(explorerSearchHits(page)).toHaveCount(3)
+  await explorerSearchCheck(page, 'Use Regular Expression').uncheck()
+  await page.keyboard.press('Escape')
+  await expect(optionsButton).toBeFocused()
+  await expect(optionsButton).toHaveAttribute('aria-expanded', 'false')
+  await expect(explorerSearchPopover(page, 'Search options')).toHaveCount(0)
+  // Types combine in a nonmodal popover, with a visible summary after it closes; no expanded chip wall.
+  const typesButton = explorerSearchTypes(page), typePicker = explorerSearchPopover(page, 'Object types')
+  const filter = name => explorerSearchCheck(page, name)
+  await typesButton.focus()
+  await page.keyboard.press('Enter')
+  await expect(filter('All types')).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(filter('Tables')).toBeFocused()
+  await page.keyboard.press('Space')
+  await expect(filter('All types')).not.toBeChecked()
+  await expect(explorerSearchHits(page)).toHaveCount(1)
+  await filter('Triggers').check()
+  await expect(explorerSearchHits(page)).toHaveCount(2)
+  await page.keyboard.press('Escape')
+  await expect(typesButton).toBeFocused()
+  await expect(typesButton).toHaveAccessibleName('Object types: Tables, Triggers')
+  await expect(explorerSearchTypeSummary(page)).toHaveText('Tables, TriggersClear')
+  // Scope stays available at every width. Opening the picker never changes the band height, even at 160 px, and its
+  // top-layer box stays within the viewport and the field's width; resizing an open picker moves and resizes it too.
+  for (const width of [420, 360, 280, 220, 160]) {
+    await page.locator(part.explorerSearch).evaluate((element, width) => { element.style.width = `${width}px` }, width)
+    await expect(page.locator(part.explorerSearch).getByRole('radio', { name: 'Definitions', exact: true })).toBeVisible()
+    expect(await page.locator(part.explorerSearch).evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+    const height = await page.locator(part.explorerSearch).evaluate(element => element.getBoundingClientRect().height)
+    await typesButton.click()
+    await expect(typePicker).toBeVisible()
+    const fits = await typePicker.evaluate((element, selector) => {
+      const box = element.getBoundingClientRect(), pane = element.closest(selector).getBoundingClientRect()
+      return box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight && box.width <= pane.width
+    }, part.explorerSearch)
+    expect(fits).toBe(true)
+    expect(await page.locator(part.explorerSearch).evaluate(element => element.getBoundingClientRect().height)).toBe(height)
+    await page.keyboard.press('Escape')
+    await expect(typesButton).toBeFocused()
+    await expect(typesButton).toHaveAttribute('aria-expanded', 'false')
+  }
+  await typesButton.click()
+  await page.locator(part.explorerSearch).evaluate(element => { element.style.width = '220px' })
+  const fieldWidth = (await explorerSearchField(page).boundingBox()).width
+  await expect.poll(async () => (await typePicker.boundingBox()).width).toBeCloseTo(fieldWidth, 0)
+  await page.screenshot({ path: resolve('artifacts', 'explorer-search-filters.png') })
+  await filter('Columns').check()
+  await filter('Functions').check()
+  await filter('Schemas').check()
+  await page.keyboard.press('Escape')
+  await expect(explorerSearchTypeSummary(page)).toHaveText('Tables + 4 moreClear')
+  // A click outside dismisses without stealing focus, and Clear restores every type in one action.
+  await typesButton.click()
+  await searchBox().click()
+  await expect(typePicker).toHaveCount(0)
+  await expect(searchBox()).toBeFocused()
+  await explorerSearchToggle(page, 'Clear object type filters').click()
+  await expect(typesButton).toBeFocused()
+  await expect(explorerSearchHits(page)).toHaveCount(3)
+  await expect(typesButton).toHaveAccessibleName('Object types: All types')
+  await expect(explorerSearchTypeSummary(page)).toHaveCount(0)
+  await typesButton.click()
+  await filter('Tables').check()
+  await filter('All types').check()
+  await expect(explorerSearchHits(page)).toHaveCount(3)
+  await typePicker.getByRole('button', { name: 'Close object types', exact: true }).click()
+  await expect(typesButton).toBeFocused()
+  await page.locator(part.explorerSearch).evaluate(element => { element.style.width = '' })
+  await expect(page.locator(part.explorerSearch).getByRole('radiogroup')).toHaveCount(1)
   // ↓ moves to the first hit; Enter reveals it in the tree below, which selects it.
   await searchBox().focus()
   await page.keyboard.press('ArrowDown')
@@ -901,7 +1020,7 @@ try {
   expect(narrow.label, JSON.stringify(narrow)).toBeCloseTo(narrow.kept, 0)
   if (wasExpanded === 'false') { await select('server-a', 'Server Objects'); await press('ArrowLeft', 'Server Objects') }
   await page.screenshot({ path: resolve('artifacts', 'explorer-visuals.png') })
-  console.log('Object Explorer checks: 30 px server rows with version, login, connection dot and active-query glyph, muted item counts, the environment tag\'s slot, the footer\'s freshness, the Filter loaded objects box by keyboard and from the palette, and the search band\'s splitter by keyboard, drag and double-click.')
+  console.log('Object Explorer checks: 30 px server rows with version, login, connection dot and active-query glyph, muted item counts, the environment tag\'s slot, the footer\'s freshness, the Filter loaded objects box by keyboard and from the palette, the search band\'s splitter, and compact search popovers at 160–420 px with keyboard focus, outside dismissal and combined type filters.')
 
   // 11. Disconnecting a server while one of its folders streams cancels the load and removes its rows.
   await setStub({ tables: 120_000, pageDelayMs: 250 })

@@ -13,6 +13,12 @@ The same search runs in two places, with the same options and results:
   each further Enter reveals the next one, wrapping round (Shift+Enter goes back); an Enter typed before the search has
   answered searches at once. ↓ moves into the hits, and Left and Right in the tree collapse and expand. Escape clears the
   text, and Escape in an empty box returns to the tree.
+  Search scope (All, Names, Definitions) stays visible. Object types opens a checkbox popover over the results; selected
+  types combine and a compact summary and Clear action stay beside the results. Narrow sidebars stack the type picker
+  below the scope, and the popover follows the pane's width without enlarging the search band. Search options holds
+  Match Case, Match Whole Word and Use Regular Expression; its button marks when any are on. The result count stays
+  concise, with index counts, result limits and timing under Search and index details. Index progress, errors and
+  incomplete indexes remain visible. Escape or a click outside dismisses a popover; Escape returns focus to its button.
 - **The Search Objects tab** (View › Search Objects…, a server or database node's menu, or the palette), with a server picker
   when more than one server is connected.
 
@@ -115,7 +121,15 @@ The same search runs in two places, with the same options and results:
 - **Match Whole Word.** A match must have no identifier character (a letter, a digit, `_`, `@`, `#` or `$`) on either side.
 - **Use Regular Expression.** Patterns run with .NET's `NonBacktracking` engine, which takes linear time. Lookarounds and
   backreferences are refused with a message instead of running.
-- **Scope.** Search names and definitions, names only, or definitions only.
+- **Scope.** Search names and definitions (All), names only, or definitions only.
+- **Object types.** Chips narrow a search to kinds of object: Tables, Views, Columns, Procedures, Functions, Parameters,
+  Triggers, Keys and indexes, Schemas, Types, Security and Other. Several can be on at once, and All types turns them all off.
+  Each kind the index holds is under exactly one chip (`searchTypes` in `src/shared/explorer/search.ts`), and the search
+  sends the chosen chips' kinds as `kinds`.
+- **Narrow panes.** The filters fit the width they have. Chips that do not fit in one line wait behind "+n more", which
+  shows them all; its outline marks when a hidden chip is on. When even the scope does not fit, Scope and the chips become
+  one Filters button that names what is chosen ("Filters: Names, Columns") and shows them on demand. The layout is worked
+  out from a hidden copy of the controls, so it follows the font, density and the check a chosen chip draws.
 - **Ranking.** Exact name matches come first, then name prefixes, then other name matches, then definition-only matches. A
   search with a dot counts the schema-qualified name: `dbo.Orders` matches `dbo.Orders` exactly and `dbo.Orders.id` by prefix.
   Within each group, hits are sorted by database and then by name.

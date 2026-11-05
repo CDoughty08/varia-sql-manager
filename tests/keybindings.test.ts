@@ -199,11 +199,11 @@ describe('default keybindings', () => {
       expect(defaultRules(platform).map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAll', 'file.close', 'file.close', 'window.close', 'edit.undo', 'edit.redo', 'edit.redo', ...clipboard,
         'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane', 'query.execute', 'query.execute', 'query.execute', 'query.cancel', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu',
         'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.focusSearch', 'explorer.rename', 'explorer.delete', 'tableDesigner.properties', 'ssis.refreshOperations', 'ssis.refreshProperties',
-        'query.changeDatabase', 'document.next', 'document.next', 'document.previous', 'document.previous', 'document.moveLeft', 'document.moveRight', 'editor.toggleWordWrap', 'editor.toggleOvertype', ...native, ...editing, ...monitor, ...display, ...output, ...platform === 'win32' ? ['workbench.search'] : []])
+        'query.changeDatabase', 'document.next', 'document.next', 'document.previous', 'document.previous', 'document.moveLeft', 'document.moveRight', 'document.rename', 'editor.toggleWordWrap', 'editor.toggleOvertype', ...native, ...editing, ...monitor, ...display, ...output, ...platform === 'win32' ? ['workbench.search'] : []])
     }
     expect(defaultRules('darwin').map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.saveAll', 'file.close', 'edit.undo', 'edit.redo', ...clipboard, 'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane',
       'query.execute', 'query.execute', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.focusSearch', 'explorer.rename', 'explorer.delete', 'explorer.delete', 'explorer.properties', 'tableDesigner.properties', 'ssis.refreshOperations', 'ssis.refreshProperties', 'query.changeDatabase',
-      'document.next', 'document.previous', 'document.moveLeft', 'document.moveRight', ...native, ...macEditing, 'activity.open', ...monitor,
+      'document.next', 'document.previous', 'document.moveLeft', 'document.moveRight', 'document.rename', ...native, ...macEditing, 'activity.open', ...monitor,
       'preferences.options', ...display, ...output])
     expect(defaultRules('win32').find(rule => rule.command === 'window.close')?.chords).toEqual(['alt+f4'])
     expect(defaultRules('linux').find(rule => rule.command === 'window.close')?.chords).toEqual(['ctrl+q'])

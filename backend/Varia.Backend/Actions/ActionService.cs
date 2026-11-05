@@ -1774,7 +1774,7 @@ internal sealed partial class ActionService : IDisposable
         + "CONVERT(bit, ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'ALTER'), 1)) AS can_alter, d.is_auto_create_stats_on AS auto_create, "
         + "CONVERT(int, SERVERPROPERTY('EngineEdition')) AS engine_edition, CONVERT(int, SERVERPROPERTY('ProductMajorVersion')) AS major, "
         + "CONVERT(bit, CASE WHEN @owner IS NULL OR EXISTS (SELECT 1 FROM sys.server_principals AS p WHERE p.name = @owner) THEN 1 ELSE 0 END) AS owner_exists, "
-        + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.database_id = d.database_id) END AS sessions "
+        + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.database_id = d.database_id AND " + ActionSql.UserSession + ") END AS sessions "
         + "FROM sys.databases AS d WHERE d.name = @name;";
 
     private async Task<ActionScriptResult> ScriptPropertiesJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, CancellationToken token)
@@ -1857,7 +1857,8 @@ internal sealed partial class ActionService : IDisposable
     /// <see cref="Fallback"/>, the Stop's thread cancels after all (it may then wait until the statement ends, as before),
     /// and the reader leaves it to that one. Either side cancels at most once. A statement a Stop cancelled ends in a
     /// SqlException, or now and then in a reader SqlClient ends silently (ReadAllAsync then throws), which the runner reads as
-    /// cancelled because the token is.</summary>
+    /// cancelled because the token is. SqlService's query batches stop the same way (a PRINT or RAISERROR WITH NOWAIT loop
+    /// streams messages just as a RESTORE does).</summary>
     internal sealed class StatementStop(SqlCommand command, CancellationToken token)
     {
         internal static TimeSpan Fallback { get; set; } = TimeSpan.FromSeconds(1);

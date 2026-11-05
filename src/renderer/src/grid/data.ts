@@ -23,6 +23,8 @@ export const portBusy = (error: unknown): boolean => (error as { code?: unknown 
  * A read refused while main's results port is full is tried again shortly, not marked. The active cell's tile is read
  * even when the cell is scrolled out of view, so its label has its text. A live table's row tone (a hidden last column,
  * `tone`) is read with the rows it colours: each row tile of the frame also reads the tile column that holds it.
+ * A tile is read again only from where its rows end: when its rows' pages do not fit the worker's cache together (large
+ * XML or JSON values), the worker answers with the rows it holds, and the tile's next part starts after them at once.
  */
 export class GridData {
   readonly counters: TileCounters = { hits: 0, misses: 0 }
@@ -38,6 +40,13 @@ export class GridData {
   private readonly errors = new Map<number, string>()
   /** Tiles that failed because the results worker stopped: read once more after it is recreated. */
   private readonly retried = new Set<number>()
+  /** Where each tile read in parts has a part (its first row, the tile's own first); a tile read whole has none. */
+  private readonly parts = new Map<number, number[]>()
+  /** The windows a multi-part tile's `peek` last joined, and the join. */
+  private readonly joined = new Map<number, { readonly windows: readonly RowWindow[]; readonly window: RowWindow }>()
+  /** Tiles whose last read brought rows but stopped short of rows already available: read on at once, not throttled. */
+  private readonly shortened = new Set<number>()
+  private rows = 0
   private refetches: number[] = []
   private settleUntil = 0
   /** Frames in a row that moved more than 3 views. */
@@ -57,10 +66,35 @@ export class GridData {
     this.now = o.now ?? (() => performance.now())
   }
 
-  /** The tile's window, if the cache has it (and now as its most recently used). */
+  /** The tile's window, if the cache has it (and now as its most recently used): from the tile's first row, its parts
+   *  joined up to the first one missing. */
   peek(key: number): RowWindow | undefined {
-    const colStart = tileColumnOf(key) * g.tileColumns
-    return this.handle.peekWindow(tileRowOf(key) * g.tileRows, g.tileRows, { colStart, colEnd: this.colEnd(colStart), maxCellChars: g.maxCellChars, display: true })
+    const first = tileRowOf(key) * g.tileRows, colStart = tileColumnOf(key) * g.tileColumns
+    const shape = { colStart, colEnd: this.colEnd(colStart), maxCellChars: g.maxCellChars, display: true }
+    const head = this.handle.peekWindow(first, g.tileRows, shape)
+    const starts = this.parts.get(key)
+    if (!starts) return head
+    const windows: RowWindow[] = []
+    let end = first
+    for (const start of starts) {
+      if (start > end) break
+      const window = start === first ? head : this.handle.peekWindow(start, first + g.tileRows - start, shape)
+      if (!window || window.first + window.count <= end) continue
+      windows.push(window)
+      end = window.first + window.count
+    }
+    if (windows.length === 0) {
+      // Every part left the cache: the tile is read from its start again.
+      this.parts.delete(key)
+      this.joined.delete(key)
+      return undefined
+    }
+    if (windows.length === 1) return windows[0]
+    const last = this.joined.get(key)
+    if (last && last.windows.length === windows.length && last.windows.every((window, index) => window === windows[index])) return last.window
+    const window = join(first, windows)
+    this.joined.set(key, { windows, window })
+    return window
   }
   /** The tile holding a row's tone, or undefined when the result has no tone column. */
   toneTile(row: number): number | undefined { return this.tone < 0 ? undefined : tileKey(Math.floor(row / g.tileRows), Math.floor(this.tone / g.tileColumns)) }
@@ -82,6 +116,7 @@ export class GridData {
    */
   ensure(range: VisibleRange, rows: number, rowDelta: number, visibleRows: number, active?: { readonly row: number; readonly column: number }): boolean {
     if (this.disposed) return false
+    this.rows = rows
     const plan = this.plan(range, rows)
     if (active && active.row >= 0 && active.row < rows && active.column >= 0 && active.column < this.columns) {
       const key = tileKey(Math.floor(active.row / g.tileRows), Math.floor(active.column / g.tileColumns))
@@ -113,10 +148,12 @@ export class GridData {
       if (window) {
         this.counters.hits++
         if (isFrontier(window, rows)) {
-          if (!this.refetchAllowed(now)) { this.wake(1000 / g.frontierPerSecond); continue }
+          // Rows that arrived since are read at most 10 times a second; rows the worker could not hold with the rest at once.
+          const shortened = this.shortened.has(key)
+          if (!shortened && !this.refetchAllowed(now)) { this.wake(1000 / g.frontierPerSecond); continue }
           if (!this.capacity()) continue
-          this.refetches.push(now)
-          this.read(key)
+          if (!shortened) this.refetches.push(now)
+          this.read(key, window.first + window.count)
           issued++
         }
         continue
@@ -154,6 +191,8 @@ export class GridData {
     this.disposed = true
     for (const tile of this.inflight.values()) tile.controller.abort()
     this.inflight.clear()
+    this.parts.clear()
+    this.joined.clear()
     if (this.timer !== undefined) this.timers.clearTimeout(this.timer)
     this.timer = undefined
   }
@@ -174,15 +213,24 @@ export class GridData {
     this.timer = this.timers.setTimeout(() => { this.timer = undefined; if (!this.disposed) this.changed() }, ms)
   }
 
-  private read(key: number): void {
+  /** Reads a tile from `from` (its first row, or where its rows end) to its end. */
+  private read(key: number, from = tileRowOf(key) * g.tileRows): void {
     const controller = new AbortController(), tile: Inflight = { controller, missed: 0 }
-    const colStart = tileColumnOf(key) * g.tileColumns
+    const first = tileRowOf(key) * g.tileRows, end = first + g.tileRows, colStart = tileColumnOf(key) * g.tileColumns
     this.inflight.set(key, tile)
-    this.handle.getWindow(tileRowOf(key) * g.tileRows, g.tileRows, {
+    this.shortened.delete(key)
+    if (from > first) {
+      const starts = this.parts.get(key) ?? [first]
+      if (!starts.includes(from)) { starts.push(from); starts.sort((a, b) => a - b) }
+      this.parts.set(key, starts)
+    }
+    this.handle.getWindow(from, end - from, {
       colStart, colEnd: this.colEnd(colStart), maxCellChars: g.maxCellChars, textBudget: g.textBudget, display: true, signal: controller.signal
-    }).then(() => {
+    }).then(window => {
       if (this.inflight.get(key) === tile) this.inflight.delete(key)
       this.retried.delete(key)
+      // Fewer rows than were there: the worker could not hold them all (a still arriving tile ends at the rows available).
+      if (window.count > 0 && window.first + window.count < Math.min(end, this.rows)) this.shortened.add(key)
       if (!this.disposed) this.changed()
     }, error => {
       if (this.inflight.get(key) === tile) this.inflight.delete(key)
@@ -208,4 +256,19 @@ export class GridData {
     this.prefetched = at
     this.handle.prefetch(first, last - first)
   }
+}
+
+/** A tile's parts as one window from `first`: each part's rows from where the ones before it end. */
+function join(first: number, windows: readonly RowWindow[]): RowWindow {
+  const { colStart, colEnd } = windows[0], width = colEnd - colStart
+  const last = windows.at(-1)!, count = last.first + last.count - first
+  const text = new Array<string>(count * width), flags = new Uint8Array(count * width)
+  let end = first
+  for (const window of windows) {
+    const skip = end - window.first, rows = window.count - skip
+    for (let index = 0; index < rows * width; index++) text[(end - first) * width + index] = window.text[skip * width + index]
+    flags.set(window.flags.subarray(skip * width, (skip + rows) * width), (end - first) * width)
+    end += rows
+  }
+  return { first, count, colStart, colEnd, text, flags }
 }

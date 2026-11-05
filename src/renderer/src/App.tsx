@@ -39,6 +39,7 @@ import QueryBar from './QueryBar'
 import { lostHint } from './query-context'
 import PaneMenuButton from './PaneMenuButton'
 import { useTabDrag } from './tab-drag'
+import TabRenameBox from './TabRenameBox'
 import DockWorkspace, { type WorkspaceHandle } from './DockWorkspace'
 import ConnectDialog from './ConnectDialog'
 import EnvironmentDialog from './EnvironmentDialog'
@@ -71,11 +72,19 @@ function useStableCallback<A extends unknown[], R>(callback: (...args: A) => R):
   return useCallback((...args: A) => latest.current(...args), [])
 }
 
+/** A tab's tooltip: its file's path (or the name it would have, when renamed), its state, and where a reopened query was. */
+function tabTooltip(tab: QueryTab): string {
+  const what = tab.file?.path ?? tab.baseName ?? tab.name
+  return `${what}${tab.file?.readOnly ? ' (read-only)' : ''}${tab.dirty ? ' (unsaved changes)' : ''}${tab.lastServer ? `
+Last connected to ${tab.lastServer}` : ''}`
+}
+
 export default function App() {
   const workbench = useWorkbench()
   const { documents, queries, commands, files, targets } = workbench
   const { documents: tabs, activeId, busy: documentBusy } = useServiceSnapshot(documents)
   const queryState = useServiceSnapshot(queries)
+  const { id: renamingId } = useServiceSnapshot(workbench.tabRename)
   const connections = useServiceSnapshot(workbench.connections)
   const { state: backendState } = useServiceSnapshot(workbench.backend)
   const [health, setHealth] = useState<BackendHealth>()
@@ -302,8 +311,9 @@ export default function App() {
       : <div className="global-error" role="alert"><span>{commandError}</span><button aria-label="Dismiss command error" onClick={() => commands.clearError()}><Icon name="close" /></button></div>)}
     <ThemeNotice />
     <DockWorkspace ref={workspaceRef} explorer={<aside className="explorer"><ExplorerPane error={explorerError} activeConnectionId={liveConnection?.id} /></aside>} editor={<main className="workspace">
-        <div className="document-strip pane-header"><div className="query-tabs" role="tablist" aria-label="Query documents" ref={strip} {...tabDrag.strip}>{tabs.map((tab, index) => { const tabConnection = connections.find(value => value.id === tab.connectionId), environment = tabConnection?.options.environment; return <div className={`query-tab ${activeId === tab.id ? 'active' : ''}`} style={{ borderTopColor: workbench.theme.accent(tabConnection?.color) }} role="presentation" key={tab.id} ref={tabTarget} data-tab-id={tab.id} data-dirty={tab.dirty || undefined} {...tabDrag.tab(tab.id)}>
-          <button id={`tab-${tab.id}`} className="tab-select" role="tab" aria-label={tab.name} aria-description={environmentTag(environment)?.description} aria-selected={activeId === tab.id} tabIndex={activeId === tab.id ? 0 : -1} title={`${tab.file?.path ?? tab.name}${tab.file?.readOnly ? ' (read-only)' : ''}${tab.dirty ? ' (unsaved changes)' : ''}`} onClick={() => activate(tab.id)} onKeyDown={event => tabKey(event, index)}><Icon name={kindInfo[documentKind(tab)].icon} className="tab-icon" label={kindInfo[documentKind(tab)].label} /><span className="tab-name">{tab.name}</span><EnvironmentTag environment={environment} place="tab" />{tab.file?.readOnly && <Icon name="lock" className="tab-readonly" label="Read-only" />}{queryState[tab.id]?.running && <Icon name="loading" spin className="tab-running" label="Executing" />}{tab.dirty && <span className="dirty-dot" role="img" aria-label="Unsaved changes" />}</button>
+        <div className="document-strip pane-header"><div className="query-tabs" role="tablist" aria-label="Query documents" ref={strip} {...tabDrag.strip}>{tabs.map((tab, index) => { const tabConnection = connections.find(value => value.id === tab.connectionId), environment = tabConnection?.options.environment; return <div className={`query-tab ${activeId === tab.id ? 'active' : ''}`} style={{ borderTopColor: workbench.theme.accent(tabConnection?.color) }} role="presentation" key={tab.id} ref={tabTarget} data-tab-id={tab.id} data-dirty={tab.dirty || undefined} {...renamingId === tab.id ? {} : tabDrag.tab(tab.id)}>
+          {renamingId === tab.id ? <div className="tab-select tab-renaming"><Icon name={kindInfo[documentKind(tab)].icon} className="tab-icon" label={kindInfo[documentKind(tab)].label} /><TabRenameBox tabId={tab.id} name={tab.name} service={workbench.tabRename} /></div>
+          : <button id={`tab-${tab.id}`} className="tab-select" role="tab" aria-label={tab.name} aria-description={environmentTag(environment)?.description} aria-selected={activeId === tab.id} tabIndex={activeId === tab.id ? 0 : -1} title={tabTooltip(tab)} onClick={() => activate(tab.id)} onKeyDown={event => tabKey(event, index)} onDoubleClick={() => workbench.tabRename.start(tab.id)} data-document-tab><Icon name={kindInfo[documentKind(tab)].icon} className="tab-icon" label={kindInfo[documentKind(tab)].label} /><span className="tab-name">{tab.name}</span><EnvironmentTag environment={environment} place="tab" />{tab.file?.readOnly && <Icon name="lock" className="tab-readonly" label="Read-only" />}{queryState[tab.id]?.running && <Icon name="loading" spin className="tab-running" label="Executing" />}{tab.dirty && <span className="dirty-dot" role="img" aria-label="Unsaved changes" />}</button>}
           <button className="tab-close" aria-label={`Close ${tab.name}`} title={queryState[tab.id]?.running ? `Close ${tab.name} (its query is executing)` : `Close ${tab.name}`} disabled={documentBusy} onClick={() => void commands.execute('file.close', { tabId: tab.id }, 'toolbar')}><Icon name="close" /></button>
         </div> })}</div><PaneMenuButton pane="editor" /></div>
         {active.id ? <>

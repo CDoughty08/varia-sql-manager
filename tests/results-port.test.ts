@@ -251,6 +251,21 @@ describe('ResultsPortHost', () => {
     expect(port().ends()).toEqual([{ t: 'end', rid: 2, ok: true, result: { closed: 0, usedBytes: 0 } }, { t: 'end', rid: 1, ok: true, result: { closed: 1, usedBytes: 0 } }])
     expect(host.ownedCount).toBe(1)
   })
+  it('keeps results it could not close owned, so a retry from the renderer releases them', async () => {
+    const { host, backend, port } = fixture()
+    host.own([descriptor(7)])
+    vi.mocked(backend.close).mockRejectedValueOnce(new BackendError('TOO_MANY_REQUESTS', 'Too many pending backend requests.'))
+    port().send({ t: 'close', rid: 1, generation: 1, resultIds: [7] })
+    await settle()
+    expect(codes(port())).toEqual([[1, 'TOO_MANY_REQUESTS']])
+    expect(host.owns(1, 7)).toBe(true)
+    port().send({ t: 'close', rid: 2, generation: 1, resultIds: [7] })
+    await settle()
+    expect(backend.close).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(backend.close).mock.calls[1]).toEqual([1, [7]])
+    expect(port().ends().at(-1)).toEqual({ t: 'end', rid: 2, ok: true, result: { closed: 1, usedBytes: 0 } })
+    expect(host.ownedCount).toBe(0)
+  })
 })
 
 const table = (resultId: number, revision: number, retired?: number[]) => ({

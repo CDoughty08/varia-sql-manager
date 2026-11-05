@@ -898,6 +898,12 @@ lost.
   With `stopOnError: true` (for SQLCMD's `:on error exit`), the first batch that raised an error ends the script
   instead. Nothing runs after a cancel, the script's deadline, an error of severity 20 or more, or any failure that
   closes the session.
+- **Stop.** A cancel stops a batch where it finds it, also while the batch streams messages (a loop of `PRINT` or
+  `RAISERROR … WITH NOWAIT`), where SqlClient's cancel from another thread would wait for the messages to stop: the
+  backend then cancels from inside the next message (`StatementStop`, as object actions do). A `query.cancel` that
+  overtakes its `query.execute` (each request runs on its own task, and a 1M-character script takes a while to read) is
+  kept, at most 256 for a minute, and the query stops as it registers, before any SQL; its answer says
+  `cancelled: false`, since nothing was running yet.
 
 | `status` | Meaning | Status line |
 | --- | --- | --- |
@@ -1837,7 +1843,10 @@ prefix, and reports `formatted`) and `close`, plus
 `onQueryEvent`, `onMemory`, `onGeneration` and `applySummary`. It forgets a result once it is released or its
 generation is gone (handles keep reporting `released` or `lost`). The grid reads tiles of 128 rows × 32 columns, at most
 512 characters per displayed cell, and every grid shares one window cache of 256 windows and 16,777,216 UTF-16 units
-(least recently used first, indexed by result so a result's windows go without a scan). `release(keys)` closes many
+(least recently used first, indexed by result so a result's windows go without a scan). A tile is read again only
+from where its rows end: rows that arrived since (at most 10 reads a second), or, when its rows' pages do not fit the
+worker's 64 MiB cache together (large XML or JSON values) and the worker answers with the rows it holds, the rest at
+once, so the grid joins a tile's parts rather than reading its first rows over and over. `release(keys)` closes many
 results at once, 1,024 ids a request: a run's sets close with one call when its tab runs again or closes, or Close
 Results runs, since one request each would run into the port's 64 outstanding requests. Ids wait while the port is
 down, and ones main refused as busy (`TOO_MANY_REQUESTS`) are sent again 250 ms later. A worker that fails is recreated
@@ -2157,6 +2166,12 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
   record is quarantined and never offered; records, quarantined records and interrupted writes older than Keep
   AutoRecover information for are deleted at startup, only once settings were read, and not when settings.json held a
   retention that was reset because the file or that value was invalid.
+- **Hot exit** (`varia:session-write`, `varia:session-take`, strict zod schemas; docs/hot-exit.md) writes the open text
+  tabs' names, text (for untitled and unsaved tabs), line endings, file paths (main's, from the page's opaque file ids),
+  server and database names to `<userData>/Session/session.json` as an approved close goes ahead: 0700/0600 on POSIX,
+  atomic, at most 64 tabs and 64 MB, never results, connections, logins or credentials, never logged. The next start takes
+  it and keeps it as `previous.json` until that run closes; an invalid file is quarantined. A close with hot exit off
+  deletes both.
 - **Secrets.** Passwords exist only inside REQUEST bodies on the private pipe: never in arguments, environment,
   `BackendState`, the fake backend's call log, traces or stderr. Lost connections keep their options without the
   password. A remembered password (Remember password) is Electron `safeStorage` ciphertext in `saved-passwords.json`,

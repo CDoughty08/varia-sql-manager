@@ -29,6 +29,7 @@ import { outputContribution } from '../../src/renderer/src/contributions/output'
 import { editorContribution } from '../../src/renderer/src/contributions/editor'
 import { editingContribution } from '../../src/renderer/src/contributions/editing'
 import { BookmarkService } from '../../src/renderer/src/editor/bookmarks'
+import { TabRenameService } from '../../src/renderer/src/services/tab-rename'
 import { EditorDialogs } from '../../src/renderer/src/editor/go-to-line'
 import type { BridgeMonaco } from '../../src/renderer/src/editor/keybinding-bridge'
 import { editContribution } from '../../src/renderer/src/contributions/edit'
@@ -317,7 +318,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const settings = new SettingsService(api, { ...defaultSettings, ...options.settings })
   settings.subscribe(() => documents.refreshOptions())
   const connections = new ConnectionService(), editorOptions = new EditorOptionsService(settings), shellOptions = new ShellOptionsService(settings), panes = new PaneService()
-  const bookmarks = new BookmarkService(documents, events), editorDialogs = new EditorDialogs()
+  const bookmarks = new BookmarkService(documents, events), editorDialogs = new EditorDialogs(), tabRename = new TabRenameService(documents)
   // Monaco's command and keybinding registries, for the editor chords the bridge registers.
   const monaco = { editor: { registerCommand: vi.fn<BridgeMonaco['editor']['registerCommand']>(() => ({ dispose: vi.fn() })), addKeybindingRules: vi.fn<BridgeMonaco['editor']['addKeybindingRules']>(() => ({ dispose: vi.fn() })) } }
   const explorer = new ExplorerService({
@@ -432,6 +433,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     bookmarks,
     editorDialogs,
     inputMode,
+    tabRename,
     connections,
     backend,
     targets,

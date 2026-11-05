@@ -342,6 +342,8 @@ export const activeDocument = page => documentTabs(page).getByRole('tab', { sele
 export const activeDocumentName = page => activeDocument(page).getAttribute('aria-label')
 /** A document's tab with its Close button: the target of the tab's menu. */
 export const documentTabSlots = page => documentTabs(page).locator('[data-tab-id]')
+/** Rename Tab's text box, in the tab being renamed. */
+export const tabNameBox = page => documentTabs(page).getByRole('textbox', { name: 'Tab name', exact: true })
 export const closeDocumentButton = (page, name) => documentTabs(page).getByRole('button', { name: 'Close ' + name, exact: true })
 /** The marks a document tab draws after its name. */
 export const unsavedMark = scope => scope.getByRole('img', { name: 'Unsaved changes', exact: true })
@@ -466,6 +468,11 @@ export const explorerSearchHits = page => page.locator(part.explorerSearch).getB
 export const explorerSearchCurrent = page => page.locator(part.explorerSearch).getByRole('list', { name: 'Search results', exact: true }).locator('[aria-current] [data-hit]')
 export const explorerSearchSplitter = page => page.locator(part.explorerSearch).getByRole('separator', { name: 'Resize search results', exact: true })
 export const explorerSearchToggle = (page, name) => page.locator(part.explorerSearch).getByRole('button', { name, exact: true })
+export const explorerSearchOptions = page => page.locator(part.explorerSearch).getByRole('button', { name: /^Search options/ })
+export const explorerSearchTypes = page => page.locator(part.explorerSearch).getByRole('button', { name: /^Object types:/ })
+export const explorerSearchPopover = (page, name) => page.locator(part.explorerSearch).getByRole('dialog', { name, exact: true })
+export const explorerSearchCheck = (page, name) => page.locator(part.explorerSearch).getByRole('checkbox', { name, exact: true })
+export const explorerSearchTypeSummary = page => page.locator(part.explorerSearch).locator('.object-search-chosen-types')
 export const explorerFooter = page => page.locator(part.explorerFooter)
 export const explorerFreshness = page => explorerFooter(page).locator(part.explorerFreshness)
 export const explorerFreshnessScope = page => explorerFooter(page).locator(part.explorerFreshnessScope)

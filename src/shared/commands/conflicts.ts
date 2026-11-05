@@ -9,6 +9,8 @@ export const focusSamples: readonly { readonly name: string; readonly keys: Part
   { name: 'editorFindInput', keys: { editorFocus: true, inputFocus: true, textInputFocus: true, activePanel: 'editor' } },
   { name: 'explorerTree', keys: { activePanel: 'explorer' } },
   { name: 'activityMonitor', keys: { activePanel: 'editor', activityMonitorFocus: true } },
+  { name: 'documentTab', keys: { activePanel: 'editor', documentTabFocus: true } },
+  { name: 'documentTabRename', keys: { activePanel: 'editor', documentTabFocus: true, inputFocus: true, textInputFocus: true } },
   { name: 'outputGrid', keys: { activePanel: 'output', outputGridFocus: true } },
   { name: 'outputMessages', keys: { activePanel: 'output' } },
   { name: 'toolbarSelect', keys: { inputFocus: true, textInputFocus: true } },

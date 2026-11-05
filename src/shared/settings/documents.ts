@@ -26,6 +26,11 @@ export const documentSettings = [
     description: 'How many files File › Recent Files lists. Varia SQL Manager remembers up to 50, so a larger number shows older files again.'
   },
   {
+    key: 'environment.documents.hotExit', page: 'environment.documents', label: 'Restore open queries on startup', type: 'boolean', default: true,
+    keywords: ['hot exit', 'restore', 'reopen', 'session', 'tabs', 'unsaved', 'quit', 'exit', 'startup'],
+    description: 'Closing Varia SQL Manager keeps every open query, its text (unsaved changes too), its tab name and the tab order in your profile folder, readable only by you, without asking to save, and the next start reopens them, disconnected. Results, connections and passwords are never kept. While it is False, closing asks about each query with unsaved changes. Not in SSMS; VS Code calls it hot exit.'
+  },
+  {
     key: 'environment.documents.detectExternalChanges', page: 'environment.documents', label: 'Detect when file is changed outside the environment', type: 'boolean', default: true,
     keywords: ['reload', 'external', 'modified', 'changed on disk', 'deleted'],
     description: 'When the window gets focus, checks whether another program changed or deleted an open file, and asks whether to reload a changed one. Save also asks before replacing such changes.'

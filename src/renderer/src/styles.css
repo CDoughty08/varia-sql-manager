@@ -178,7 +178,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .pane-menu:focus-visible { outline-offset: -2px; }
 .explorer-header .pane-menu { color: var(--varia-objectExplorer-actionForeground); }
 .explorer-toolbar .icon-button { color: var(--varia-objectExplorer-actionForeground); }
+.explorer-toolbar .icon-button[aria-pressed="true"], .explorer-toolbar .icon-button[aria-pressed="true"]:hover:not(:disabled) { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); border-color: var(--varia-chip-activeBorder); transition: none; }
 .explorer-toolbar .icon-button:focus-visible { outline-offset: -2px; }
+@media (forced-colors: active) {
+  .explorer-toolbar .icon-button[aria-pressed="true"], .explorer-toolbar .icon-button[aria-pressed="true"]:hover:not(:disabled) { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+  .explorer-toolbar .icon-button[aria-pressed="true"]:focus-visible { outline-color: CanvasText; }
+}
 .explorer-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 /* Object Explorer's search box (SearchPanel's pane layout): the tab's search, compact, its hits in a band above the tree. */
 .object-search.object-search-pane { flex: 0 1 auto; height: auto; max-height: 50%; border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
@@ -407,6 +412,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .tab-select { display: flex; align-items: center; gap: 8px; height: calc(var(--varia-bar) - 3px); border: 0; border-radius: 0; padding: 0 10px 0 13px; color: inherit; }
 .tab-select:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .tab-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.tab-renaming { padding-right: 6px; }
+.tab-rename { width: 180px; height: 20px; padding: 0 4px; border-color: var(--varia-focusBorder); }
 .tab-select .tab-readonly { font-size: var(--varia-glyph-sm); margin-left: -4px; }
 .tab-close { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 4px; margin-right: 6px; color: var(--varia-documentTabs-closeForeground); }
 .tab-close .codicon { font-size: var(--varia-glyph-sm); }
@@ -1779,6 +1786,53 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-search-toggle { width: 22px; height: 22px; color: var(--varia-objectExplorer-actionForeground); }
 .object-search-toggle[aria-pressed="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
 .object-search-options { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-3); }
+.object-search-filters { position: relative; display: flex; flex-direction: column; gap: var(--varia-space-1); min-width: 0; }
+.object-search-filters > .object-search-options { flex-wrap: nowrap; }
+.object-search-extra { display: flex; align-items: center; flex: none; }
+.object-search-types > .chip-group { flex-wrap: nowrap; overflow: hidden; }
+.object-search-types[data-wrap] { display: flex; flex-direction: column; align-items: start; gap: var(--varia-space-1); }
+.object-search-types[data-wrap] > .chip-group { flex-wrap: wrap; }
+.object-search-types .segmented { flex-wrap: wrap; }
+.object-search-more-types { color: var(--varia-descriptionForeground); }
+.object-search-more-types[data-chosen] { border-color: var(--varia-chip-activeBorder); }
+.object-search-filter-button { display: inline-flex; align-items: center; gap: var(--varia-space-1); flex: 0 1 auto; min-width: 0; height: var(--varia-control); padding: 0 var(--varia-space-2); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); background: transparent; color: inherit; font-size: var(--varia-size-sm); }
+.object-search-filter-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.object-search-measure { position: absolute; top: 0; inset-inline-start: 0; display: flex; width: max-content; height: 0; overflow: hidden; visibility: hidden; pointer-events: none; white-space: nowrap; }
+.object-search-measure > .chip-group { flex-wrap: nowrap; }
+/* Object Explorer's compact search: scope and type picker share a row where they fit, and stack at sidebar widths. */
+.object-search-pane .object-search-query { container-type: inline-size; }
+.object-search-pane-filters { min-width: 0; display: flex; flex-direction: column; gap: var(--varia-space-1); }
+.object-search-pane-filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); }
+.object-search-pane-filter-row > .segmented { flex: 1 1 180px; }
+.object-search-pane-filter-row .segmented-option { flex: 1 1 auto; padding-inline: var(--varia-space-1); }
+.object-search-type-button { flex: none; }
+.object-search-type-short { display: none; }
+.object-search-chosen-types { display: flex; align-items: center; gap: var(--varia-space-1); font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.object-search-chosen-types > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.object-search-chosen-types > button { flex: none; padding: 0 var(--varia-space-1); color: var(--varia-chip-activeForeground); font-size: inherit; }
+.object-search-pane-status { display: flex; align-items: center; gap: var(--varia-space-1); }
+.object-search-pane-status > .object-search-summary { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.object-search-pane-status:has(> .object-search-summary:empty):not(:has(button)) { display: none; }
+.object-search-popover-button { flex: none; color: var(--varia-objectExplorer-actionForeground); }
+.object-search-popover-button[data-active], .object-search-type-button[data-active], .object-search-type-button[aria-expanded="true"] { background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); box-shadow: inset 0 0 0 1px var(--varia-chip-activeBorder); }
+.object-search-popover { position: fixed; inset: auto; margin: 0; padding: var(--varia-space-2); overflow: auto; overscroll-behavior: contain; background: var(--varia-menu-background); color: var(--varia-menu-foreground); border: 1px solid var(--varia-menu-border); border-radius: var(--varia-radius-sm); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); font: var(--varia-size-sm) / var(--varia-line-sm) var(--varia-font-ui); }
+.object-search-popover-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--varia-space-1); margin-bottom: var(--varia-space-1); font-weight: 600; }
+.object-search-popover-heading .icon-button { width: 20px; height: 20px; }
+.object-search-type-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 136px), 1fr)); column-gap: var(--varia-space-2); }
+.object-search-check { display: flex; align-items: center; gap: var(--varia-space-2); min-width: 0; min-height: var(--varia-control); cursor: pointer; }
+.object-search-check > input { flex: none; margin: 0; accent-color: var(--varia-focusBorder); }
+.object-search-check > span { overflow-wrap: anywhere; }
+.object-search-check:has(input:focus-visible) { outline: 2px solid var(--varia-focusBorder); outline-offset: -2px; }
+.object-search-all-types { border-bottom: 1px solid var(--varia-menu-separatorBackground); padding-bottom: var(--varia-space-1); margin-bottom: var(--varia-space-1); }
+.object-search-popover > p + p { margin-top: var(--varia-space-2); }
+@container (min-width: 300px) {
+  .object-search-type-label { display: none; }
+  .object-search-type-short { display: inline; }
+}
+@media (forced-colors: active) {
+  .object-search-popover { border-color: ButtonText; }
+  .object-search-popover-button[data-active], .object-search-type-button[data-active], .object-search-type-button[aria-expanded="true"] { outline: 1px solid Highlight; outline-offset: -1px; }
+}
 .object-search-server { display: flex; align-items: center; gap: var(--varia-space-1); font-size: var(--varia-size-sm); color: var(--varia-descriptionForeground); }
 .object-search-index, .object-search-summary { margin: 0; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
 .object-search-summary.error { color: var(--varia-errorForeground); }

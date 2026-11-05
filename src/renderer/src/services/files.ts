@@ -5,12 +5,15 @@ import type { Disposable } from '../core/types'
 import type { QueryDocument } from '../documents'
 import { DocumentService } from './documents'
 import type { QueryService } from './queries'
+import type { KeptSession } from './session'
 
 type FileApi = Pick<VariaApi, 'openSqlFiles' | 'saveSqlFile' | 'releaseSqlFile' | 'confirmClose' | 'closeWindow' | 'closeWindowCancelled'>
-  & Partial<Pick<VariaApi, 'openRecentFile' | 'checkSqlFiles' | 'reloadSqlFile' | 'confirmReload'>>
+  & Partial<Pick<VariaApi, 'openRecentFile' | 'checkSqlFiles' | 'reloadSqlFile' | 'confirmReload' | 'keepSession'>>
 export interface FileServiceOptions {
   /** Tools › Options › Environment › Documents › Reload modified files unless there are unsaved changes. */
   readonly autoReload?: () => boolean
+  /** Hot exit (Restore open queries on startup): the tabs a close keeps instead of asking, or undefined while it is off. */
+  readonly hotExit?: () => KeptSession | undefined
 }
 /** The file banner: an error, or a warning that changes nothing (a file whose line endings were mixed). */
 export interface FileSnapshot { readonly error: string; readonly kind: 'error' | 'warning' }
@@ -248,8 +251,11 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     if (!this.canClose(id)) return
     await this.perform(async () => {
       if (!await this.confirmClose(id) || this.disposed) return
+      // The editor stays editable while the session prompt is read and answered; edits made meanwhile were not confirmed.
+      const approved = this.documents.revision(id)
       const plan = await this.queries.confirmSessions('close', [id])
       if (!plan || this.disposed || !this.documents.get(id)) return
+      if (this.documents.revision(id) !== approved) throw new Error('The query changed while confirming close. Review the latest changes before closing it.')
       const file = this.documents.get(id)?.file
       await this.documents.close(id, plan.get(id))
       if (!this.documents.get(id) && file) await this.releaseUnclaimed([file])
@@ -304,10 +310,13 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     await this.perform(async () => {
       const refuse = () => { const reason = refusal(); if (reason) throw new Error(reason) }
       refuse()
+      // Hot exit keeps the tabs it can instead of asking about them; the rest (a designer, a tab past its caps) still ask.
+      const keepSession = this.api.keepSession, kept = keepSession ? this.options.hotExit?.()?.kept : undefined
       // Each document's revision as approved: a text document's model version, a designer's own revision.
       const approved = new Map<string, number>()
       for (const document of this.documents.getSnapshot().documents) {
-        if (!await this.confirmClose(document.id) || this.disposed) return
+        if (!kept?.has(document.id) && !await this.confirmClose(document.id)) return
+        if (this.disposed) return
         if (this.documents.get(document.id)) approved.set(document.id, this.documents.revision(document.id))
       }
       const plan = await this.queries.confirmSessions('exit', [...approved.keys()])
@@ -315,11 +324,27 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
       refuse()
       await beforeClose()
       if (this.disposed) return
-      const current = this.documents.getSnapshot().documents
-      if (current.length !== approved.size || current.some(document => approved.get(document.id) !== this.documents.revision(document.id)))
-        throw new Error('A query changed while closing the window. Review the latest changes before closing it.')
+      const unchanged = () => {
+        const current = this.documents.getSnapshot().documents
+        if (current.length !== approved.size || current.some(document => approved.get(document.id) !== this.documents.revision(document.id)))
+          throw new Error('A query changed while closing the window. Review the latest changes before closing it.')
+      }
+      unchanged()
       // Each transaction ends in its own session as the user chose; a commit that fails is reported and the window stays.
       for (const [id, transaction] of plan) if (this.documents.get(id)) await this.documents.endSession(id, transaction)
+      if (this.disposed) return
+      // The editors stay editable while commits wait on SQL Server: an edit made meanwhile was never confirmed.
+      unchanged()
+      if (kept && keepSession) {
+        // Written last, with each tab's text as it is now; a tab whose prompt was skipped must still be kept.
+        const now = this.options.hotExit?.()
+        if (!now || [...kept].some(id => this.documents.get(id) && !now.kept.has(id))) throw new Error('A query changed while closing the window. Review the latest changes before closing it.')
+        const result = await keepSession(now.session)
+        if (!result.ok) throw new Error(`The open queries could not be kept for the next start: ${result.error} Save them, or turn off Restore open queries on startup (Tools › Options › Environment › Documents), and close again.`)
+        if (this.disposed) return
+        // What was kept is the text as it was when written; an edit made while writing it would be lost.
+        unchanged()
+      }
       // The user has confirmed every document, so unloading must no longer be blocked.
       this.exiting = true
       try { await this.api.closeWindow() } catch (error) { this.exiting = false; throw error }

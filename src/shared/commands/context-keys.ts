@@ -50,6 +50,7 @@ export const contextKeys = {
   designerFocus: { type: 'boolean', scope: 'focus', description: "Focus is in the active table designer; activePanel is then 'editor'." },
   queryBarFocus: { type: 'boolean', scope: 'focus', description: "Focus is in the active query's bar (Execute, Cancel and its server and database lists); activePanel is then 'editor'." },
   activityMonitorFocus: { type: 'boolean', scope: 'focus', description: "Focus is in the active Activity Monitor; activePanel is then 'editor'." },
+  documentTabFocus: { type: 'boolean', scope: 'focus', description: "Focus is on a document tab in the strip, or in its rename box; activePanel is then 'editor'." },
   quickInputVisible: { type: 'boolean', scope: 'state', description: 'The command palette or a picker is open.' },
   backendStatus: { type: 'enum', scope: 'state', values: ['starting', 'ready', 'unresponsive', 'restarting', 'failed', 'stopped', ''], description: "The SQL backend's state; '' before the workbench has heard from main." },
   backendReady: { type: 'boolean', scope: 'state', description: "`backendStatus == 'ready'`." },

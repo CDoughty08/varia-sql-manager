@@ -100,6 +100,13 @@ internal static class ActionChecks
         check(new[] { ActionSql.Database, ActionSql.DatabaseState, ActionSql.Login, ActionSql.LoginAlter, ActionSql.OwnSessions, ActionSql.DatabaseSessions, ActionSql.DatabaseAccess }.All(statement => !statement.Contains("dm_tran_", StringComparison.Ordinal))
             && new[] { ActionSql.DatabaseUse, ActionSql.DatabaseUseSessions, ActionSql.TransactionSessions }.All(statement => statement.Contains("sys.dm_tran_session_transactions", StringComparison.Ordinal)),
             "only Delete Object's session counts and lists read the transaction DMVs, never the statements every action runs");
+        // SQL Server's own tasks linger in a database just brought ONLINE, sometimes with a transaction there (the Detach live check saw
+        // "2 sessions, 2 with a transaction" for its one holder): every count and list of a database's sessions keeps to user sessions.
+        static int Occurrences(string text, string part) => (text.Length - text.Replace(part, "", StringComparison.Ordinal).Length) / part.Length;
+        check(new[] { ActionSql.Database, ActionSql.DatabaseSessions, ActionSql.DatabaseUse, ActionSql.DatabaseUseSessions, RestoreSql.Destinations,
+                DatabaseProperties.Master(ExplorerCatalog.MaxBand), ActionService.DatabasePropertiesPreflight }
+                .All(statement => Occurrences(statement, "sys.dm_exec_sessions") > 0 && Occurrences(statement, ActionSql.UserSession) >= Occurrences(statement, "sys.dm_exec_sessions")),
+            "Detach, Take Offline, Rename, Delete Object, Restore's destinations and Database Properties count and list only user sessions in a database, never SQL Server's own tasks");
         // The lint must catch what it is for: a name spliced into the text, a name parameter outside QUOTENAME, a metadata function.
         check(ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE ' + @p1;\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
             && ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE [dbo].[x]';\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0

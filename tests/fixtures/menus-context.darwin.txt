@@ -33,6 +33,7 @@ documentTab.context, for a saved query's tab
   ---
   Mov&e Left  ⌃⇧⇞  ++++
   Move &Right  ⌃⇧⇟  ----
+  Re&name Tab…  F2  ++++
 documentTab.context, for an unsaved query's tab
   &Save  ⌘S  +++-
   Save &As…  ⇧⌘S  +++-
@@ -46,6 +47,7 @@ documentTab.context, for an unsaved query's tab
   ---
   Mov&e Left  ⌃⇧⇞  ++++
   Move &Right  ⌃⇧⇟  ++++
+  Re&name Tab…  F2  ++++
 dockTab.context, for a docked panel's tab
   Dock &Left  ++++
   Dock &Right  ++++

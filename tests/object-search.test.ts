@@ -6,7 +6,7 @@ import { requestSchemas } from '../src/main/validation'
 import { cancellableRequests } from '../src/main/backend/renderer-requests'
 import { indexProgressRelay } from '../src/main/index-progress'
 import {
-  childrenLeftOut, objectIndexParamsSchema, objectIndexProgressEventSchema, objectSearchLimits, objectSearchParamsSchema, searchKinds,
+  childrenLeftOut, objectIndexParamsSchema, objectIndexProgressEventSchema, objectSearchLimits, objectSearchParamsSchema, searchKinds, searchTypeKinds, searchTypes,
   type ObjectIndexProgress, type ObjectIndexResult, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult
 } from '../src/shared/explorer/search'
 import { SnapshotStore } from '../src/renderer/src/core/store'
@@ -15,6 +15,8 @@ import type { LiveConnection } from '../src/renderer/src/services/connections'
 import { explorerSearchId, ObjectSearchService, revealPaths, type ObjectSearchOptions, type RevealHost } from '../src/renderer/src/search/ObjectSearchService'
 import { indexSummary, searchHitPath } from '../src/renderer/src/search/ObjectSearch'
 import { kindSpecs, nodeKinds } from '../src/shared/explorer/catalog'
+import { layoutFilters, minimumChips } from '../src/renderer/src/search/filter-layout'
+import { searchFilterSummary, toggleSearchType } from '../src/renderer/src/search/SearchFilters'
 import { clampPaneBand, paneBandDrag, paneBandKey, paneBandLimits } from '../src/renderer/src/search/pane-band'
 
 const csharp = (file: string) => readFileSync(new URL('../backend/Varia.Backend/Search/' + file, import.meta.url), 'utf8')
@@ -42,6 +44,10 @@ describe('object search contracts', () => {
     const listed = nodeKinds.filter(kind => !['server', 'childUnnamed'].includes(kindSpecs[kind].scope) && !kindSpecs[kind].scope.startsWith('ssis'))
     expect([...searchKinds].sort()).toEqual([...listed].sort())
     expect(searchKinds.length).toBeLessThanOrEqual(objectSearchLimits.kinds)
+    // The type filters name every kind the index holds exactly once, so a kind can neither be unreachable nor in two chips.
+    const typed = searchTypes.flatMap(type => [...type.kinds])
+    expect([...typed].sort()).toEqual([...searchKinds].sort())
+    expect(new Set(searchTypes.map(type => type.id)).size).toBe(searchTypes.length)
   })
 
   it('validates requests strictly, in both directions of every bound', () => {
@@ -205,6 +211,7 @@ describe('ObjectSearchService', () => {
     expect(calls.search).toHaveLength(0)
     timers.run()
     expect(calls.search).toEqual([expect.objectContaining({ connectionId: 'a', text: 'orders', caseSensitive: false, wholeWord: false, regex: false, in: 'all' })])
+    expect(calls.search[0]).not.toHaveProperty('kinds')
     service.setQuery(id, { caseSensitive: true })
     expect(calls.search[1]).toMatchObject({ text: 'orders', caseSensitive: true })
     expect(calls.cancel).toContainEqual([calls.search[0].requestId])
@@ -220,6 +227,11 @@ describe('ObjectSearchService', () => {
     pendingIndex[0]({ ok: true, value: { status: status(), elapsedMs: 1 } })
     await settle()
     expect(calls.search).toHaveLength(3)
+    // A type filter searches at once, naming the kinds of the types chosen; clearing them searches every kind again.
+    service.setQuery(id, { types: ['columns', 'schemas'] })
+    expect(calls.search[3]).toMatchObject({ text: 'orders', kinds: ['schema', 'column'] })
+    service.setQuery(id, { types: [] })
+    expect(calls.search[4]).not.toHaveProperty('kinds')
   })
 
   it('walks the hits with Enter: searching at once when the answer is not in, wrapping round, and starting over on a new answer', async () => {
@@ -365,7 +377,7 @@ describe('ObjectSearchService', () => {
     expect(service.getSnapshot().documents[explorerSearchId]).toBeUndefined()
     connections.set([connection('a'), connection('b')])
     service.followExplorer(undefined)
-    expect(service.getSnapshot().documents[explorerSearchId]).toMatchObject({ connectionId: 'a', text: '', caseSensitive: false, wholeWord: false, regex: false, scope: 'all' })
+    expect(service.getSnapshot().documents[explorerSearchId]).toMatchObject({ connectionId: 'a', text: '', caseSensitive: false, wholeWord: false, regex: false, scope: 'all', types: [] })
     expect(calls.index.map(call => call.connectionId)).toEqual(['a'])
     service.setQuery(explorerSearchId, { text: 'ord', wholeWord: true })
     service.search(explorerSearchId)
@@ -436,5 +448,40 @@ describe('Search Objects\' summary', () => {
     expect(indexSummary(undefined, status({ skipped: [{ database: 'Big', code: childrenLeftOut, message: 'm' }] }))).toBe('Index: 40 objects, 5 definitions in 2 databases · columns and other children left out of 1 large database')
     expect(indexSummary(undefined, undefined)).toBe('This server has no index yet.')
     expect(indexSummary({ connectionId: 'a', done: 0, total: 0, objects: 0, error: 'Denied.' }, undefined)).toBe('The index could not be built: Denied.')
+  })
+})
+
+describe('Search Objects type filters', () => {
+  it('names the kinds of the types chosen, in the index’s order, and every kind when none is', () => {
+    expect(searchTypeKinds([])).toBeUndefined()
+    expect(searchTypeKinds(['columns'])).toEqual(['column'])
+    expect(searchTypeKinds(['indexes', 'tables'])).toEqual(['table', 'key', 'constraint', 'index', 'statistic'])
+    expect(searchTypeKinds(searchTypes.map(type => type.id))).toEqual([...searchKinds])
+    expect(objectSearchParamsSchema.safeParse({ connectionId: crypto.randomUUID(), requestId: crypto.randomUUID(), text: 'x', kinds: searchTypeKinds(searchTypes.map(type => type.id)) }).success).toBe(true)
+  })
+
+  it('toggles a type in the chips’ order and sums up what is chosen', () => {
+    expect(toggleSearchType([], 'schemas')).toEqual(['schemas'])
+    expect(toggleSearchType(['schemas'], 'tables')).toEqual(['tables', 'schemas'])
+    expect(toggleSearchType(['tables', 'schemas'], 'tables')).toEqual(['schemas'])
+    expect(searchFilterSummary('all', [])).toBe('All')
+    expect(searchFilterSummary('names', [])).toBe('Names')
+    expect(searchFilterSummary('definitions', ['schemas', 'procedures'])).toBe('Definitions, Procedures, Schemas')
+  })
+
+  it('fits every chip, then as many as fit before "+n more", then collapses to the Filters button', () => {
+    const base = { options: 0, scope: 180, chips: [60, 50, 50, 70], more: 64, gap: 4 }
+    // 60 + 4 + 50 + 4 + 50 + 4 + 70 = 242.
+    expect(layoutFilters({ ...base, available: 242 })).toEqual({ collapsed: false, shown: 4 })
+    // Two chips and the more button: 60 + 4 + 50 + 4 + 64 = 182; a third would need 236.
+    expect(layoutFilters({ ...base, available: 235 })).toEqual({ collapsed: false, shown: 2 })
+    expect(layoutFilters({ ...base, available: 236 })).toEqual({ collapsed: false, shown: 3 })
+    // Too narrow for the scope's segments, or for minimumChips chips before the more button.
+    expect(layoutFilters({ ...base, available: 179 })).toEqual({ collapsed: true, shown: 0 })
+    expect(minimumChips).toBe(2)
+    expect(layoutFilters({ ...base, scope: 100, available: 181 })).toEqual({ collapsed: true, shown: 0 })
+    // The tab's server picker takes its share of the scope row.
+    expect(layoutFilters({ ...base, options: 100, available: 242 })).toEqual({ collapsed: true, shown: 0 })
+    expect(layoutFilters({ ...base, available: 0 })).toEqual({ collapsed: true, shown: 0 })
   })
 })

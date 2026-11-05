@@ -39,7 +39,7 @@ internal static class DatabaseProperties
             + "CONVERT(bit, CASE WHEN d.source_database_id IS NULL THEN 0 ELSE 1 END) AS is_snapshot, COALESCE(sp.name, SUSER_SNAME(d.owner_sid)) AS owner_name, "
             + "CONVERT(bit, ISNULL(CASE WHEN d.user_access = 1 THEN 1 ELSE HAS_DBACCESS(d.name) END, 0)) AS has_access, "
             + "CONVERT(bit, ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'ALTER'), 1)) AS can_alter, "
-            + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.database_id = d.database_id) END AS sessions, "
+            + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.database_id = d.database_id AND " + ActionSql.UserSession + ") END AS sessions, "
             + "(SELECT SUM(CONVERT(bigint, mf.size)) FROM sys.master_files AS mf WHERE mf.database_id = d.database_id AND mf.type IN (0, 1)) AS size_pages, "
             + "CONVERT(int, ISNULL(SERVERPROPERTY('FilestreamEffectiveLevel'), 0)) AS filestream_level, CONVERT(bit, ISNULL(IS_SRVROLEMEMBER(N'sysadmin'), 0)) AS sysadmin, "
             + "CONVERT(int, SERVERPROPERTY('EngineEdition')) AS engine_edition, CONVERT(int, SERVERPROPERTY('ProductMajorVersion')) AS major, "

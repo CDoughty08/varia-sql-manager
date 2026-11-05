@@ -13,6 +13,12 @@ export interface QueryDocument {
   /** The query's session ended without the user ending it (a Reconnect after the backend restarted, or a session found
    *  lost); its next execution says so before its own messages. */
   readonly sessionNotice?: SessionNotice
+  /** Set while the user has renamed the tab (Rename Tab): the name it would show otherwise, its file's name once saved.
+   *  `name` is then the user's name, which every prompt and Save As's suggested file name use. */
+  readonly baseName?: string
+  /** The server a query reopened by hot exit was connected to: shown in its tooltip, and its database is kept when it
+   *  connects to that server again. Cleared by its first connection. */
+  readonly lastServer?: string
   /** Absent for a query; an XML, JSON or plan value opened from the results has no connection and never executes; a table
    *  designer, Database Properties, an SSIS Catalog object's properties and an Activity Monitor have no text at all. */
   readonly kind?: Exclude<WorkbenchDocumentKind, 'sql'>

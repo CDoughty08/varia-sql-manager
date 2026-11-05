@@ -17,7 +17,7 @@ function fixture(columns = 40, inflight = { value: 0 }) {
         first, count, o, aborted: () => !!o.signal?.aborted, reject,
         resolve: (rows = count) => {
           const width = (o.colEnd ?? columns) - (o.colStart ?? 0)
-          const window = { first, count: rows, colStart: o.colStart ?? 0, colEnd: o.colEnd ?? columns, text: new Array(rows * width).fill('x'), flags: new Uint8Array(rows * width) }
+          const window = { first, count: rows, colStart: o.colStart ?? 0, colEnd: o.colEnd ?? columns, text: Array.from({ length: rows * width }, (_, index) => String(first + Math.floor(index / width))), flags: new Uint8Array(rows * width).fill(1) }
           cache.set(keyOf(first, count, o), window)
           resolve(window)
         }
@@ -136,7 +136,7 @@ describe('grid data', () => {
     second.data.ensure(range(0, 30), 10_000, 0, 30, { row: 3, column: 2 })
     expect(second.reads).toHaveLength(1)
   })
-  it('reads a tile again while its rows were still arriving, at most 10 times a second', async () => {
+  it('reads a tile on from where its rows end while its rows were still arriving, at most 10 times a second', async () => {
     const { data, reads, settle, advance, changed } = fixture(8)
     data.ensure(range(0, 40, 0, 7), 50, 0, 30)
     reads[0].resolve(50)
@@ -144,19 +144,50 @@ describe('grid data', () => {
     // Complete: no frontier.
     data.ensure(range(0, 40, 0, 7), 50, 0, 30)
     expect(reads).toHaveLength(1)
-    // More rows arrived: the 50-row tile is read again, keeping its window until the new one lands.
+    // More rows arrived: the rest of the tile is read, keeping the rows it has until the new ones land.
     for (let index = 0; index < 12; index++) {
-      data.ensure(range(0, 40, 0, 7), 60 + index, 0, 30)
-      reads.at(-1)!.resolve(50)
+      const before = reads.length, rows = 60 + index
+      data.ensure(range(0, 40, 0, 7), rows, 0, 30)
+      expect(data.peek(tileKey(0, 0))?.count).toBe(before === 1 ? 50 : Math.min(69, rows - 1))
+      if (reads.length > before) reads.at(-1)!.resolve(rows - reads.at(-1)!.first)
       await settle()
     }
-    expect(reads).toHaveLength(11)
+    expect(reads.map(read => [read.first, read.count])).toEqual([[0, 128], [50, 78], ...Array.from({ length: 9 }, (_, index) => [60 + index, 68 - index])])
     changed.mockClear()
     advance(100)
     expect(changed).toHaveBeenCalled()
     advance(1000)
     data.ensure(range(0, 40, 0, 7), 80, 0, 30)
-    expect(reads).toHaveLength(12)
+    expect(reads.map(read => read.first)).toHaveLength(12)
+    expect(reads[11].first).toBe(69)
+  })
+  it('reads on at once from where a tile\'s rows end when the worker could not hold them all, never from its start again', async () => {
+    // Large XML or JSON values: the worker's 64 MiB cache holds only a few rows' pages at a time and answers with those.
+    const { data, reads, cache, settle } = fixture(8)
+    const key = tileKey(0, 0)
+    for (let part = 0; part < 26; part++) {
+      data.ensure(range(0, 127, 0, 7), 128, 0, 30)
+      expect(reads).toHaveLength(part + 1)
+      reads[part].resolve(Math.min(5, 128 - reads[part].first))
+      await settle()
+    }
+    data.ensure(range(0, 127, 0, 7), 128, 0, 30)
+    expect(reads.map(read => read.first)).toEqual(Array.from({ length: 26 }, (_, index) => index * 5))
+    const joined = data.peek(key)!
+    expect([joined.first, joined.count, joined.text.length, joined.flags.length]).toEqual([0, 128, 128 * 8, 128 * 8])
+    expect([joined.text[0], joined.text[5 * 8], joined.text[127 * 8 + 7]]).toEqual(['0', '5', '127'])
+    expect(joined.flags.every(flag => flag === 1)).toBe(true)
+    expect(data.peek(key)).toBe(joined)
+    // A part that left the cache ends the tile's rows there; with the tile's first part gone, it is read from its start.
+    cache.delete('60:68:0:8:512:true')
+    expect(data.peek(key)!.count).toBe(60)
+    cache.delete('0:128:0:8:512:true')
+    expect(data.peek(key)).toBeUndefined()
+    data.ensure(range(0, 127, 0, 7), 128, 0, 30)
+    expect(reads.at(-1)).toMatchObject({ first: 0, count: 128 })
+    reads.at(-1)!.resolve()
+    await settle()
+    expect(data.peek(key)).toBe(cache.get('0:128:0:8:512:true'))
   })
   it('marks a tile whose read failed until Retry, and reads a tile once more after the worker restarts', async () => {
     const { data, reads, settle } = fixture(8)

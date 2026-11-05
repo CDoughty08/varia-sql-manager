@@ -5,6 +5,8 @@ import { unfinished, type FileService } from './files'
 import type { QueryService } from './queries'
 
 export type TargetPatch = Partial<Pick<QueryDocument, 'connectionId' | 'database'>>
+/** Whether two typed server names are the same server, as far as this side can tell. */
+const sameServer = (a: string, b: string | undefined) => a.trim().toLowerCase() === b?.trim().toLowerCase()
 const errorText = (error: unknown): string => error instanceof Error ? error.message : 'The operation failed.'
 
 /** Which server and database each query runs against. The toolbar, Object Explorer, and the pickers all go through it. */
@@ -23,7 +25,11 @@ export class TargetService {
     // The query's results stay, as in SSMS: they live until it runs again, closes, or the user closes them. A query moved
     // to another connection (or disconnected) starts afresh, so a notice about its old session no longer applies.
     const moved = current && 'connectionId' in patch && patch.connectionId !== current.connectionId
-    this.documents.update(tabId, moved ? { ...patch, sessionNotice: undefined } : patch)
+    // A query hot exit reopened keeps its database when it first connects to the server it was on.
+    const server = current?.lastServer !== undefined && patch.connectionId ? this.connections.get(patch.connectionId)?.server : undefined
+    const remembered = server !== undefined && sameServer(server, current?.lastServer) && current?.database ? { database: current.database } : {}
+    const first = server !== undefined ? { lastServer: undefined } : {}
+    this.documents.update(tabId, { ...patch, ...remembered, ...first, ...moved ? { sessionNotice: undefined } : {} })
   }
   /**
    * Moves a query to another server (or disconnects it), ending its session first so no transaction follows it: an open

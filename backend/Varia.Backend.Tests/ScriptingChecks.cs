@@ -22,6 +22,22 @@ internal static class ScriptingChecks
     };
     private static readonly ScriptingCatalog Catalog = ScriptingCatalog.Current;
 
+    /// <summary>The live checks' record of a refused command tells garbled text SqlClient was given from text that changed
+    /// after it, and never holds the SQL or its values.</summary>
+    private static void TraceRecords(Action<bool, string> check)
+    {
+        using var garbled = new SqlCommand("SELECT secret FROM t WHERE x = N'楀ᚌ';");
+        garbled.Parameters.Add(new SqlParameter("@name", System.Data.SqlDbType.NVarChar, 128) { Value = "café" });
+        garbled.Parameters.Add(new SqlParameter("@take", System.Data.SqlDbType.Int) { Value = 5 });
+        using var plain = new SqlCommand("SELECT secret;");
+        var error = new InvalidOperationException("x");
+        var records = new[] { SqlErrorTrace.Describe(garbled, error), SqlErrorTrace.Describe(plain, error) };
+        check(records[0] == "InvalidOperationException: a command of 37 characters with 2 parameters; beyond ASCII in its text: U+6940 U+168C, in its parameters: U+00E9"
+            && records[1] == "InvalidOperationException: a command of 14 characters with 0 parameters; beyond ASCII in its text: none, in its parameters: none"
+            && records.All(record => !record.Contains("secret", StringComparison.Ordinal)),
+            "a refused command's record names its code points beyond ASCII, in its text and parameters, and never its SQL: " + string.Join(" | ", records));
+    }
+
     public static async Task RunAsync(Action<bool, string> check)
     {
         CatalogChecks(check);
@@ -34,6 +50,7 @@ internal static class ScriptingChecks
         Errors(check);
         Culture(check);
         Registry(check);
+        TraceRecords(check);
         ScriptingTemplateChecks.Run(check);
         await ServiceAsync(check);
     }
