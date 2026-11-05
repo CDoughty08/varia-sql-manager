@@ -8,6 +8,8 @@ import { ConnectionService } from '../services/connections'
 import { FileService } from '../services/files'
 import { RecentFilesService } from '../services/recent-files'
 import { RecoveryService } from '../services/recovery'
+import { keptSession, restoreSession } from '../services/session'
+import { TabRenameService } from '../services/tab-rename'
 import { EditorOptionsService } from '../services/editor-options'
 import { ShellOptionsService } from '../services/shell-options'
 import { EditorStatusService } from '../services/editor-status'
@@ -130,6 +132,8 @@ export interface Workbench extends Disposable {
   readonly editorStatus: EditorStatusService
   /** Insert or overtype (the Insert key). */
   readonly inputMode: InputModeService
+  /** Rename Tab's inline edit in the document strip. */
+  readonly tabRename: TabRenameService
   readonly panes: PaneService
   /** Object Explorer's tree: its nodes, loads, selection, and context keys. */
   readonly explorer: ExplorerService
@@ -213,7 +217,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     { ...settingsDocumentOptions(() => settings.getSnapshot().values), newLineEnding: platformLineEnding(platform) })
   const editorStatus = new EditorStatusService(callback => { frame(callback) }), inputMode = new InputModeService()
   const refreshDocuments = settings.subscribe(() => documents.refreshOptions())
-  const bookmarks = new BookmarkService(documents, events), editorDialogs = new EditorDialogs()
+  const bookmarks = new BookmarkService(documents, events), editorDialogs = new EditorDialogs(), tabRename = new TabRenameService(documents)
   const resultClient = new ResultClient({ api, createWorker: () => new ResultsWorker(), window, schedule: callback => { frame(callback) } })
   const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => { frame(callback) } })
   const resultMemory = new ResultMemoryService(resultClient, events)
@@ -225,7 +229,11 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const ssisTree = new SsisTreeProbe({ explorer, live, settings, events, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe } })
   const gridStats = api.testMode ? new GridStats() : undefined
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
-  const files = new FileService(documents, queries, api, { autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'] })
+  const files = new FileService(documents, queries, api, {
+    autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'],
+    // Hot exit keeps a query's server name (never a login or connection string), so it keeps its database when it connects there again.
+    hotExit: () => api.hotExit && settings.getSnapshot().values['environment.documents.hotExit'] ? keptSession(documents, id => connections.get(id)?.server) : undefined
+  })
   const recentFiles = new RecentFilesService(api)
   const recovery = new RecoveryService({
     api, documents, files, settings, warn: message => commands.reportWarning(message),
@@ -377,6 +385,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     editorDialogs,
     editorStatus,
     inputMode,
+    tabRename,
     panes,
     explorer,
     explorerStatus,
@@ -498,8 +507,11 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // SettingsService.create started the load: services use the defaults until main's settings arrive. A warning about the
   // file, or a failed load, shows in the command banner, including one from before the workbench existed.
   settings.setReporter((message, kind) => kind === 'warning' ? commands.reportWarning(message) : commands.reportError(message))
-  documents.create('SQLQuery1.sql', '-- Connect this query to a server and press F5 to execute.\n\nSELECT\n    @@SERVERNAME AS server_name,\n    DB_NAME() AS database_name,\n    SYSDATETIME() AS server_time;\n', 'master')
-  // What an earlier run or page left unsaved is offered once the workbench is up.
+  // The tabs the last close kept (hot exit), else the welcome query; what an earlier run or page left unsaved is offered
+  // once the workbench is up.
+  const welcome = () => { if (!disposed) documents.create('SQLQuery1.sql', '-- Connect this query to a server and press F5 to execute.\n\nSELECT\n    @@SERVERNAME AS server_name,\n    DB_NAME() AS database_name,\n    SYSDATETIME() AS server_time;\n', 'master') }
+  if (api.hotExit) void restoreSession({ api, documents, files }).catch(() => 0).then(opened => { if (!opened) welcome() })
+  else welcome()
   void recovery.start()
   return workbench
 }

@@ -9,7 +9,7 @@ const editorActions = [
 ] as const
 
 /** Query editor commands: the Monaco action wrappers, word wrap, insert or overtype, and moving between open queries in tab-strip order. */
-export function editorContribution({ commands, documents, editorOptions, inputMode }: Pick<Workbench, 'commands' | 'documents' | 'editorOptions' | 'inputMode'>): Disposable {
+export function editorContribution({ commands, documents, editorOptions, inputMode, tabRename }: Pick<Workbench, 'commands' | 'documents' | 'editorOptions' | 'inputMode' | 'tabRename'>): Disposable {
   const step = (delta: 1 | -1) => {
     const { documents: list, activeId } = documents.getSnapshot()
     if (list.length < 2) return
@@ -34,7 +34,9 @@ export function editorContribution({ commands, documents, editorOptions, inputMo
     commands.register('document.next', { run: () => step(1) }),
     commands.register('document.previous', { run: () => step(-1) }),
     commands.register('document.moveLeft', { when: context => canMove(context?.tabId, -1), run: context => move(context?.tabId, -1) }),
-    commands.register('document.moveRight', { when: context => canMove(context?.tabId, 1), run: context => move(context?.tabId, 1) })
+    commands.register('document.moveRight', { when: context => canMove(context?.tabId, 1), run: context => move(context?.tabId, 1) }),
+    // The tab menu names its tab; F2 and the palette rename the active one (F2 runs only while a tab has focus, the active one).
+    commands.register('document.rename', { when: context => !!documents.get(context?.tabId ?? documents.getSnapshot().activeId), run: context => { tabRename.start(context?.tabId ?? documents.getSnapshot().activeId) } })
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }
 }

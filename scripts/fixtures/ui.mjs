@@ -342,6 +342,8 @@ export const activeDocument = page => documentTabs(page).getByRole('tab', { sele
 export const activeDocumentName = page => activeDocument(page).getAttribute('aria-label')
 /** A document's tab with its Close button: the target of the tab's menu. */
 export const documentTabSlots = page => documentTabs(page).locator('[data-tab-id]')
+/** Rename Tab's text box, in the tab being renamed. */
+export const tabNameBox = page => documentTabs(page).getByRole('textbox', { name: 'Tab name', exact: true })
 export const closeDocumentButton = (page, name) => documentTabs(page).getByRole('button', { name: 'Close ' + name, exact: true })
 /** The marks a document tab draws after its name. */
 export const unsavedMark = scope => scope.getByRole('img', { name: 'Unsaved changes', exact: true })

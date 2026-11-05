@@ -397,6 +397,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .tab-select { display: flex; align-items: center; gap: 8px; height: calc(var(--varia-bar) - 3px); border: 0; border-radius: 0; padding: 0 10px 0 13px; color: inherit; }
 .tab-select:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .tab-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.tab-renaming { padding-right: 6px; }
+.tab-rename { width: 180px; height: 20px; padding: 0 4px; border-color: var(--varia-focusBorder); }
 .tab-select .tab-readonly { font-size: var(--varia-glyph-sm); margin-left: -4px; }
 .tab-close { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 4px; margin-right: 6px; color: var(--varia-documentTabs-closeForeground); }
 .tab-close .codicon { font-size: var(--varia-glyph-sm); }
