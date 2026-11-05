@@ -1,7 +1,7 @@
 import type { VariaApi } from '../../../shared/contracts'
 import { belowSchema, folderSpecs, kindSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
 import type { ExplorerNodeRef, ObjectRef } from '../../../shared/explorer/refs.ts'
-import { objectSearchLimits, type ObjectIndexProgress, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult, type SearchScope } from '../../../shared/explorer/search.ts'
+import { objectSearchLimits, type ObjectIndexProgress, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult, type SearchScope, type SearchType, searchTypeKinds } from '../../../shared/explorer/search.ts'
 import type { SettingKey, SettingValue } from '../../../shared/settings/catalog'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
@@ -30,6 +30,8 @@ export interface SearchQueryState {
   readonly wholeWord: boolean
   readonly regex: boolean
   readonly scope: SearchScope
+  /** The type filters chosen (searchTypes); none searches every kind. */
+  readonly types: readonly SearchType[]
 }
 export interface SearchDocumentState extends SearchQueryState {
   readonly id: string
@@ -116,7 +118,7 @@ export function revealPaths(hit: ObjectSearchHit, grouped = false): RevealPath[]
   const under = (folder: FolderId): RevealPath[] => belows.map(below => [...folderChain(server, folder), { type: 'object', object: database }, ...below, { type: 'object', object: hit.object }])
   return systemDatabases.has(name.toLowerCase()) ? [...under('systemDatabases'), ...under('databases')] : [...under('databases'), ...under('systemDatabases')]
 }
-const emptyQuery: SearchQueryState = { text: '', caseSensitive: false, wholeWord: false, regex: false, scope: 'all' }
+const emptyQuery: SearchQueryState = { text: '', caseSensitive: false, wholeWord: false, regex: false, scope: 'all', types: [] }
 const live = (connection: LiveConnection | undefined): connection is LiveConnection => !!connection && !connection.lost
 
 /**
@@ -242,7 +244,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const document = this.getSnapshot().documents[id]
     if (!document || document.connectionId === connectionId || !live(this.o.connections.get(connectionId))) return
     this.cancelSearch(document)
-    this.putDocument({ id, connectionId, text: document.text, caseSensitive: document.caseSensitive, wholeWord: document.wholeWord, regex: document.regex, scope: document.scope })
+    this.putDocument({ id, connectionId, ...this.query(document) })
     const entry = this.getSnapshot().indexes[connectionId]
     if (!entry?.status && !entry?.requestId) this.build(connectionId)
     void this.search(id)
@@ -253,13 +255,14 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const document = this.getSnapshot().documents[id]
     if (!document || this.disposed) return Promise.resolve()
     this.cancelSearch(document)
-    const asked: SearchQueryState = { text: document.text, caseSensitive: document.caseSensitive, wholeWord: document.wholeWord, regex: document.regex, scope: document.scope }
+    const asked = this.query(document)
     if (!asked.text.trim()) { this.putDocument({ ...this.query(document), id, connectionId: document.connectionId }); return Promise.resolve() }
     if (!live(this.o.connections.get(document.connectionId))) { this.putDocument({ ...document, requestId: undefined, error: 'The server is not connected.' }); return Promise.resolve() }
     const requestId = this.newId()
     this.putDocument({ ...document, requestId, error: undefined })
+    const kinds = searchTypeKinds(asked.types)
     return this.o.api.explorerSearch({
-      connectionId: document.connectionId, requestId, text: asked.text, caseSensitive: asked.caseSensitive, wholeWord: asked.wholeWord, regex: asked.regex, in: asked.scope
+      connectionId: document.connectionId, requestId, text: asked.text, caseSensitive: asked.caseSensitive, wholeWord: asked.wholeWord, regex: asked.regex, in: asked.scope, ...kinds ? { kinds } : {}
     }).then(result => {
       const current = this.getSnapshot().documents[id]
       if (this.disposed || current?.requestId !== requestId) return
@@ -331,7 +334,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   }
 
   private query(document: SearchDocumentState): SearchQueryState {
-    return { text: document.text, caseSensitive: document.caseSensitive, wholeWord: document.wholeWord, regex: document.regex, scope: document.scope }
+    return { text: document.text, caseSensitive: document.caseSensitive, wholeWord: document.wholeWord, regex: document.regex, scope: document.scope, types: document.types }
   }
 
   private cancelSearch(document: SearchDocumentState): void {

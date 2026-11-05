@@ -757,6 +757,36 @@ try {
   await expect(explorerSearchHits(page)).toHaveCount(0)
   await matchCase.click()
   await expect(explorerSearchHits(page)).toHaveCount(3)
+  // The type chips narrow the search to the kinds they name, and combine; the chips that do not fit wait behind "+n more".
+  const filter = name => explorerSearchToggle(page, name)
+  await filter('Tables').click()
+  await expect(filter('Tables')).toHaveAttribute('aria-pressed', 'true')
+  await expect(filter('All types')).toHaveAttribute('aria-pressed', 'false')
+  await expect(explorerSearchHits(page)).toHaveCount(1)
+  await page.locator(part.explorerSearch).getByRole('button', { name: /^\+\d+ more/ }).click()
+  await filter('Triggers').click()
+  await expect(explorerSearchHits(page)).toHaveCount(2)
+  await filter('Fewer').click()
+  await expect(filter('Triggers')).toHaveCount(0)
+  await expect(page.locator(part.explorerSearch).getByRole('button', { name: /^\+\d+ more, 1 chosen$/ })).toBeVisible()
+  // Too narrow for the scope's segments, the filters become one button that names what is chosen and shows them on demand,
+  // and nothing in the row overflows the pane.
+  await page.locator(part.explorerSearch).evaluate(element => { element.style.width = '160px' })
+  const filters = page.locator(part.explorerSearch).getByRole('button', { name: /^Filters: / })
+  await expect(filters).toHaveAccessibleName('Filters: Tables, Triggers')
+  await expect(filter('Tables')).toHaveCount(0)
+  await expect(page.locator(part.explorerSearch).getByRole('radiogroup')).toHaveCount(0)
+  expect(await page.locator(part.explorerSearch).evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+  await filters.click()
+  await expect(filters).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.locator(part.explorerSearch).getByRole('radio', { name: 'Names', exact: true })).toBeVisible()
+  await page.screenshot({ path: resolve('artifacts', 'explorer-search-filters.png') })
+  await filter('All types').click()
+  await expect(explorerSearchHits(page)).toHaveCount(3)
+  await expect(filters).toHaveAccessibleName('Filters: All')
+  await filters.click()
+  await page.locator(part.explorerSearch).evaluate(element => { element.style.width = '' })
+  await expect(page.locator(part.explorerSearch).getByRole('radiogroup')).toHaveCount(1)
   // ↓ moves to the first hit; Enter reveals it in the tree below, which selects it.
   await searchBox().focus()
   await page.keyboard.press('ArrowDown')
@@ -946,7 +976,7 @@ try {
   expect(narrow.label, JSON.stringify(narrow)).toBeCloseTo(narrow.kept, 0)
   if (wasExpanded === 'false') { await select('server-a', 'Server Objects'); await press('ArrowLeft', 'Server Objects') }
   await page.screenshot({ path: resolve('artifacts', 'explorer-visuals.png') })
-  console.log('Object Explorer checks: 30 px server rows with version, login, connection dot and active-query glyph, muted item counts, the environment tag\'s slot, the footer\'s freshness, the Filter loaded objects box by keyboard and from the palette, and the search band\'s splitter by keyboard, drag and double-click.')
+  console.log('Object Explorer checks: 30 px server rows with version, login, connection dot and active-query glyph, muted item counts, the environment tag\'s slot, the footer\'s freshness, the Filter loaded objects box by keyboard and from the palette, and the search band\'s splitter by keyboard, drag and double-click, and its type filters, which fit the pane or collapse to one button.')
 
   // 11. Disconnecting a server while one of its folders streams cancels the load and removes its rows.
   await setStub({ tables: 120_000, pageDelayMs: 250 })

@@ -115,7 +115,15 @@ The same search runs in two places, with the same options and results:
 - **Match Whole Word.** A match must have no identifier character (a letter, a digit, `_`, `@`, `#` or `$`) on either side.
 - **Use Regular Expression.** Patterns run with .NET's `NonBacktracking` engine, which takes linear time. Lookarounds and
   backreferences are refused with a message instead of running.
-- **Scope.** Search names and definitions, names only, or definitions only.
+- **Scope.** Search names and definitions (All), names only, or definitions only.
+- **Object types.** Chips narrow a search to kinds of object: Tables, Views, Columns, Procedures, Functions, Parameters,
+  Triggers, Keys and indexes, Schemas, Types, Security and Other. Several can be on at once, and All types turns them all off.
+  Each kind the index holds is under exactly one chip (`searchTypes` in `src/shared/explorer/search.ts`), and the search
+  sends the chosen chips' kinds as `kinds`.
+- **Narrow panes.** The filters fit the width they have. Chips that do not fit in one line wait behind "+n more", which
+  shows them all; its outline marks when a hidden chip is on. When even the scope does not fit, Scope and the chips become
+  one Filters button that names what is chosen ("Filters: Names, Columns") and shows them on demand. The layout is worked
+  out from a hidden copy of the controls, so it follows the font, density and the check a chosen chip draws.
 - **Ranking.** Exact name matches come first, then name prefixes, then other name matches, then definition-only matches. A
   search with a dot counts the schema-qualified name: `dbo.Orders` matches `dbo.Orders` exactly and `dbo.Orders.id` by prefix.
   Within each group, hits are sorted by database and then by name.

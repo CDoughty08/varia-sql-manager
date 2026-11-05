@@ -104,7 +104,7 @@ export function installExplorerStub({ ipcMain }, { statics }) {
     { object: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'table2' }, folder: 'tables', label: 'dbo.table2' }
   ]
   const indexStatus = definitions => ({ state: 'ready', databases: 2, indexed: 2, objects: searchObjects.length, modules: definitions ? 1 : 0, cut: 0, skipped: [], definitions, builtAt: '2026-11-03T12:00:00Z' })
-  function search({ text, caseSensitive, wholeWord, regex, in: scope = 'all' }) {
+  function search({ text, caseSensitive, wholeWord, regex, in: scope = 'all', kinds }) {
     let pattern
     try { pattern = new RegExp(regex ? text : text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), caseSensitive ? 'gm' : 'gim') }
     catch { return { hits: [], total: 0, partial: false, elapsedMs: 0, index: indexStatus(true), problem: 'The regular expression is not valid.' } }
@@ -115,6 +115,7 @@ export function installExplorerStub({ ipcMain }, { statics }) {
       }
     }
     const hits = searchObjects.flatMap(({ definition, ...item }) => {
+      if (kinds && !kinds.includes(item.object.kind)) return []
       const name = scope !== 'definitions' ? find(item.object.name) : undefined
       const body = scope !== 'names' && definition ? find(definition) : undefined
       if (!name && !body) return []
