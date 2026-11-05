@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { SerializedDockview } from 'dockview-react'
+import { popoutLimits } from './popouts'
 
 export const paneIds = ['explorer', 'editor', 'results', 'messages', 'plan'] as const
 export type PaneId = typeof paneIds[number]
@@ -18,12 +19,26 @@ export function outputIndex(id: OutputPaneId, tabs: readonly string[]): number |
   return before >= 0 ? before + 1 : after >= 0 ? after : undefined
 }
 export const paneTitles: Record<PaneId, string> = { explorer: 'Object Explorer', editor: 'Query editor', results: 'Results', messages: 'Messages', plan: 'Execution plan' }
-export type WorkspaceLayout = SerializedDockview
+/**
+ * The panels that can move into a window of their own (Move into New Window). The query editor stays in the main window:
+ * Monaco keeps per-document state (its styles, hover and suggest widgets, IME text area and clipboard handling) that it
+ * does not move to a second document (docs/popout-windows.md).
+ */
+export const popoutPaneIds = ['explorer', 'results', 'messages', 'plan'] as const
+export type PopoutPaneId = typeof popoutPaneIds[number]
+export const canPopOut = (id: string): id is PopoutPaneId => (popoutPaneIds as readonly string[]).includes(id)
+/** A popout window: its panels as tabs in order, the one it shows, and where it is on screen (content size, in DIPs). */
+export interface PopoutLayout { id: string; panes: PopoutPaneId[]; active: PopoutPaneId; bounds: { x: number; y: number; width: number; height: number } }
+/** Dockview's layout of the main window, plus Varia's popout windows (version 3). */
+export type WorkspaceLayout = SerializedDockview & { windows?: PopoutLayout[] }
 export interface SavedLayout { id: string; name: string; layout: WorkspaceLayout }
-/** Version 2 split version 1's one Query output panel (`output`) into Results, Messages and Execution plan. */
-export interface LayoutState { version: 2; current: WorkspaceLayout | null; saved: SavedLayout[] }
+/**
+ * Version 2 split version 1's one Query output panel (`output`) into Results, Messages and Execution plan; version 3 adds
+ * popout windows (`windows`), which version 2 layouts have none of.
+ */
+export interface LayoutState { version: 3; current: WorkspaceLayout | null; saved: SavedLayout[] }
 export interface LayoutLoad { state: LayoutState; warning?: string }
-export const emptyLayoutState = (): LayoutState => ({ version: 2, current: null, saved: [] })
+export const emptyLayoutState = (): LayoutState => ({ version: 3, current: null, saved: [] })
 export const maxLayoutFileBytes = 200_000
 export const maxLayoutStateBytes = 1_000_000
 
@@ -53,11 +68,18 @@ const positionSchema = z.object({ width: dimension.min(1), height: dimension.min
   right: z.number().finite().min(-32_000).max(32_000).optional(), bottom: z.number().finite().min(-32_000).max(32_000).optional()
 }).strict().refine(value => (value.left === undefined) !== (value.right === undefined) && (value.top === undefined) !== (value.bottom === undefined), 'A floating panel needs one horizontal and one vertical anchor.')
 
+const coordinate = z.number().int().min(-32_000).max(32_000)
+const windowSchema = z.object({
+  id: z.uuid(), panes: z.array(z.enum(popoutPaneIds)).min(1).max(popoutPaneIds.length), active: z.enum(popoutPaneIds),
+  bounds: z.object({ x: coordinate, y: coordinate, width: z.number().int().min(popoutLimits.minWidth).max(popoutLimits.maxSize), height: z.number().int().min(popoutLimits.minHeight).max(popoutLimits.maxSize) }).strict()
+}).strict()
+
 const layoutSchema = z.object({
   grid: gridSchema, panels: z.object({ explorer: panelSchema.optional(), editor: panelSchema.optional(), results: panelSchema.optional(), messages: panelSchema.optional(), plan: panelSchema.optional() }).strict(),
   activeGroup: identifier.optional(),
   floatingGroups: z.array(z.object({ data: groupSchema.optional(), grid: gridSchema.optional(), position: positionSchema }).strict()
-    .refine(value => (value.data === undefined) !== (value.grid === undefined), 'A floating group needs exactly one layout.')).max(paneIds.length).optional()
+    .refine(value => (value.data === undefined) !== (value.grid === undefined), 'A floating group needs exactly one layout.')).max(paneIds.length).optional(),
+  windows: z.array(windowSchema).max(popoutPaneIds.length).optional()
 }).strict().superRefine((layout, context) => {
   const seen = new Set<string>()
   const groups = new Set<string>()
@@ -84,6 +106,16 @@ const layoutSchema = z.object({
   }
   grid(layout.grid)
   for (const floating of layout.floatingGroups ?? []) { if (floating.data) group(floating.data); else grid(floating.grid!) }
+  // A popped-out panel is in its window only: never also docked, floating, or in another window; it has no Dockview panel.
+  const windowIds = new Set<string>(), popped = new Set<string>()
+  for (const item of layout.windows ?? []) {
+    if (windowIds.has(item.id) || !item.panes.includes(item.active)) context.addIssue({ code: 'custom', message: 'Invalid popout window.' })
+    windowIds.add(item.id)
+    for (const id of item.panes) {
+      if (seen.has(id) || popped.has(id) || layout.panels[id]) context.addIssue({ code: 'custom', message: 'A panel is referenced more than once.' })
+      popped.add(id)
+    }
+  }
   for (const id of paneIds) {
     const panel = layout.panels[id]
     if (seen.has(id) !== !!panel || (panel && panel.id !== id)) context.addIssue({ code: 'custom', path: ['panels', id], message: 'Panel definitions and layout references must agree.' })
@@ -144,7 +176,7 @@ export function migrateLayoutV1(value: unknown): unknown {
   }
   return copy
 }
-const layoutVersion = z.union([z.literal(1), z.literal(2)])
+const layoutVersion = z.union([z.literal(1), z.literal(2), z.literal(3)])
 export function parseLayoutState(value: unknown): LayoutState {
   bounded(value, maxLayoutStateBytes)
   const parsed = z.object({ version: layoutVersion, current: z.unknown(), saved: z.array(z.object({
@@ -156,9 +188,9 @@ export function parseLayoutState(value: unknown): LayoutState {
     ids.add(saved.id); names.add(saved.name.toLowerCase())
   }
   const read = (layout: unknown) => parseWorkspaceLayout(parsed.version === 1 ? migrateLayoutV1(layout) : layout)
-  return { version: 2, current: parsed.current === null ? null : read(parsed.current), saved: parsed.saved.map(saved => ({ ...saved, layout: read(saved.layout) })) }
+  return { version: 3, current: parsed.current === null ? null : read(parsed.current), saved: parsed.saved.map(saved => ({ ...saved, layout: read(saved.layout) })) }
 }
-export function layoutFile(layout: WorkspaceLayout) { return { kind: 'varia-workspace-layout', version: 2, layout: parseWorkspaceLayout(layout) } }
+export function layoutFile(layout: WorkspaceLayout) { return { kind: 'varia-workspace-layout', version: 3, layout: parseWorkspaceLayout(layout) } }
 export function parseLayoutFile(value: unknown): WorkspaceLayout {
   bounded(value, maxLayoutFileBytes)
   const file = z.object({ kind: z.literal('varia-workspace-layout'), version: layoutVersion, layout: z.unknown() }).strict().safeParse(value)

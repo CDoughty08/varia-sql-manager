@@ -11,7 +11,7 @@ import Icon from './Icon'
 export default function PaneMenuButton({ pane }: { pane: PaneId }) {
   const { menus, panes } = useWorkbench()
   const button = useRef<HTMLButtonElement | null>(null)
-  const register = useMenuTarget<HTMLButtonElement>(() => ({ kind: 'dockTab', pane, floating: panes.location(pane) === 'floating' }))
+  const register = useMenuTarget<HTMLButtonElement>(() => ({ kind: 'dockTab', pane, floating: panes.location(pane) === 'floating', popout: panes.location(pane) === 'window' }))
   const ref = useCallback((element: HTMLButtonElement | null) => { button.current = element; register(element) }, [register])
   const menuFor = useServiceSnapshot(menus.menuFor)
   return <button type="button" ref={ref} className="icon-button pane-menu" aria-label={`${paneTitles[pane]} panel menu`}

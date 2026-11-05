@@ -8,6 +8,7 @@ import type { BookmarkSnapshot } from '../editor/bookmarks'
 import type { EditorOptions } from '../services/editor-options'
 import { isOutputPane, outputPaneIds } from '../../../shared/layouts'
 import type { PaneVisibility } from '../services/panes'
+import { windows } from './windows'
 import type { ShellOptions } from '../services/shell-options'
 import type { QuerySnapshot } from '../services/queries'
 import type { RecoverySnapshot } from '../services/recovery'
@@ -215,7 +216,8 @@ export class ContextKeyService implements Disposable {
   }
   /** Every key, focus included, for keybinding `when` clauses. */
   get(): ContextKeys {
-    const element = this.options.activeElement ? this.options.activeElement() : typeof document === 'undefined' ? null : document.activeElement
+    // The focused element of the window the user is in (a popout's, when one has focus).
+    const element = this.options.activeElement ? this.options.activeElement() : typeof document === 'undefined' ? null : windows.activeElement()
     return computeContextKeys(this.inputs(focusFacts(element, this.options.editor?.())))
   }
   private changed(): void {

@@ -180,7 +180,7 @@ function RenameBox({ rowId, name, title, actions }: { rowId: number; name: strin
     if (!await actions.commitRename(rowId, input.current?.value ?? '', refocus)) { settled.current = false; input.current?.focus() }
   }
   // The box's own context menu (Cut, Paste…) takes focus without leaving the box; focus comes back when it closes.
-  const blur = (event: FocusEvent<HTMLInputElement>) => { if (!(event.relatedTarget instanceof Element && event.relatedTarget.closest('.menu-layer'))) void commit(false) }
+  const blur = (event: FocusEvent<HTMLInputElement>) => { if (!(event.relatedTarget as Element | null)?.closest?.('.menu-layer')) void commit(false) }
   const keyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     event.stopPropagation()
     if (event.key === 'Enter') { event.preventDefault(); void commit(true) }

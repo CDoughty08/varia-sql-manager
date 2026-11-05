@@ -58,6 +58,7 @@ dockTab.context, for a docked panel's tab
   Tab with E&xecution Plan  ++++
   ---
   &Float  ++++
+  Move into New &Window  ++++
   ---
   &Close  ++++
   ---
@@ -74,6 +75,24 @@ dockTab.context, for a floating panel's tab
   Tab with E&xecution Plan  ++++
   ---
   &Dock  ++++
+  Move into New &Window  ++++
+  ---
+  &Close  ++++
+  ---
+  &Show Panel Tabs [ ]  ++++
+dockTab.context, for a popped-out panel's tab
+  Dock &Left  ++++
+  Dock &Right  ++++
+  Dock &Top  ++++
+  Dock &Bottom  ++++
+  ---
+  Tab with &Object Explorer  ++++
+  Tab with Query &Editor  ++++
+  Tab with Res&ults  ++++
+  Tab with &Messages  ++++
+  ---
+  &Float  ++++
+  Move B&ack into Main Window  ----
   ---
   &Close  ++++
   ---

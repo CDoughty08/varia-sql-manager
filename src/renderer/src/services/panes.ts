@@ -3,8 +3,8 @@ import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 
 export type PaneVisibility = Readonly<Record<PaneId, boolean>>
-/** Where a panel is: docked in the grid, floating inside the window, or closed. */
-export type PaneLocation = 'grid' | 'floating' | 'closed'
+/** Where a panel is: docked in the grid, floating inside the window, in a window of its own (a popout), or closed. */
+export type PaneLocation = 'grid' | 'floating' | 'window' | 'closed'
 /** For each open output panel, the output panels in its group in tab order (itself included); a closed one has none. */
 export type OutputPeers = Readonly<Record<OutputPaneId, readonly OutputPaneId[]>>
 

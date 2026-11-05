@@ -86,6 +86,7 @@ import { KeybindingService } from './keybindings'
 import { MenuStatePublisher } from './menu-state'
 import { focusHeld, focusWhenDrawn, modalOpen } from './modal'
 import { nextFrame as frame } from './frame'
+import { windows } from './windows'
 import type { Disposable } from './types'
 
 export interface Workbench extends Disposable {
@@ -178,6 +179,11 @@ export interface Workbench extends Disposable {
   readonly notifications: NotificationService
   /** Help › Check for Updates, as main reports it. */
   readonly updates: UpdateService
+  /**
+   * Makes a popout window a full part of the workbench while it is open: its keys reach `KeybindingService`, its right-clicks
+   * and presses `MenuService`, and its focus counts as the user's window (`windows`).
+   */
+  attachWindow(target: Window): Disposable
 }
 /**
  * The next animation frame, or 50 ms when frames are throttled: a hidden window (the smoke tests') gets one a second,
@@ -333,7 +339,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   } })
   // Menus label items with keys and the dispatcher routes keys to the menus; neither looks the other up before both exist.
   const menus = new MenuService({ platform, commands, context, keybindings: { lookup: id => keybindings.lookup(id) }, theme, recentFiles, settings: () => settings.getSnapshot().values, focus, modalOpen,
-    findWidgetFocused: () => !!document.activeElement?.closest('.monaco-editor .find-widget'),
+    findWidgetFocused: () => !!windows.activeElement()?.closest('.monaco-editor .find-widget'),
     menubarRect: id => document.getElementById('menubar-' + id)?.getBoundingClientRect(), targets: menuTargets, editorCaret: () => editorCaret(documents, monaco),
     modalContains: element => [...document.querySelectorAll('[aria-modal="true"]')].at(-1)?.contains(element) ?? false, style: api.menuStyle, api })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen, menus, editorHasTextFocus: () => documents.boundEditor?.hasTextFocus() ?? false,
@@ -402,6 +408,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     theme,
     notifications,
     updates,
+    attachWindow: target => {
+      const attached = [windows.add(target), keybindings.attach(target), menus.attach(target), trackWindowFocus(target, target.document.documentElement)]
+      return { dispose: () => attached.forEach(item => item.dispose()) }
+    },
     dispose: () => {
       if (disposed) return
       disposed = true

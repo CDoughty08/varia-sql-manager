@@ -18,7 +18,7 @@ export function smokeSuites() {
  */
 export const suiteSeconds = {
   linux: {
-    'scripts/electron-smoke.mjs': 20, 'scripts/layout-smoke.mjs': 15, 'scripts/connections-smoke.mjs': 22,
+    'scripts/electron-smoke.mjs': 20, 'scripts/layout-smoke.mjs': 15, 'scripts/popout-smoke.mjs': 12, 'scripts/connections-smoke.mjs': 22,
     'scripts/theme-smoke.mjs': 5, 'scripts/palette-smoke.mjs': 10, 'scripts/backend-smoke.mjs': 51,
     'scripts/live-smoke.mjs': 40, 'scripts/chart-smoke.mjs': 45, 'scripts/live-grid-smoke.mjs': 36,
     'scripts/activity-monitor-smoke.mjs': 51, 'scripts/menus-smoke.mjs': 79, 'scripts/explorer-smoke.mjs': 35,
@@ -28,7 +28,7 @@ export const suiteSeconds = {
     'scripts/ssis-smoke.mjs': 6, 'scripts/ssis-operations-smoke.mjs': 18, 'scripts/updates-smoke.mjs': 20
   },
   windows: {
-    'scripts/electron-smoke.mjs': 19, 'scripts/layout-smoke.mjs': 13, 'scripts/connections-smoke.mjs': 20,
+    'scripts/electron-smoke.mjs': 19, 'scripts/layout-smoke.mjs': 13, 'scripts/popout-smoke.mjs': 12, 'scripts/connections-smoke.mjs': 20,
     'scripts/theme-smoke.mjs': 6, 'scripts/palette-smoke.mjs': 6, 'scripts/backend-smoke.mjs': 48,
     'scripts/live-smoke.mjs': 39, 'scripts/chart-smoke.mjs': 45, 'scripts/live-grid-smoke.mjs': 36,
     'scripts/activity-monitor-smoke.mjs': 44, 'scripts/menus-smoke.mjs': 94, 'scripts/explorer-smoke.mjs': 25,

@@ -1,8 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import Keybinding from '../Keybinding'
+import { windows } from '../core/windows'
 import type { MatchRange } from './fuzzy'
 import type { QuickInputMessage, QuickInputRow, QuickInputView } from './QuickInputService'
 import { quickInputKeyAction, resultStatus } from './view-model'
@@ -39,7 +40,9 @@ const accessibleName = ({ item, group }: QuickInputRow): string => item.ariaLabe
 export default function QuickInput() {
   const { quickInput } = useWorkbench()
   const view = useServiceSnapshot(quickInput)
-  return view.visible ? createPortal(<Widget view={view} />, document.body) : null
+  // It opens in the window the user is in (a popout's, when F1 is pressed there) and stays there until it closes.
+  const surface = useMemo(() => view.visible ? windows.activeDocument() ?? document : undefined, [view.visible])
+  return view.visible && surface ? createPortal(<Widget view={view} />, surface.body) : null
 }
 
 function Widget({ view }: { view: QuickInputView }) {
@@ -63,7 +66,7 @@ function Widget({ view }: { view: QuickInputView }) {
     element.setSelectionRange(start, value.length)
     // Only a new request moves the selection; a prefix change from typing must leave the caret alone.
   }, [view.input])
-  useLayoutEffect(() => { if (document.activeElement !== input.current) input.current?.focus({ preventScroll: true }) }, [view.session])
+  useLayoutEffect(() => { if (input.current && input.current.ownerDocument.activeElement !== input.current) input.current.focus({ preventScroll: true }) }, [view.session])
   // The active row is always scrolled into the list (and so rendered), which keeps aria-activedescendant resolvable.
   useLayoutEffect(() => {
     const element = list.current
@@ -79,15 +82,16 @@ function Widget({ view }: { view: QuickInputView }) {
   useLayoutEffect(() => {
     const { anchor } = view, element = root.current
     if (!anchor || !element) { setPlacement(undefined); return }
+    const host = element.ownerDocument.defaultView ?? window
     const place = () => {
       const box = anchor.getBoundingClientRect(), width = element.offsetWidth
-      const left = Math.min(Math.max(windowMargin, (box.left + box.right - width) / 2), window.innerWidth - width - windowMargin)
+      const left = Math.min(Math.max(windowMargin, (box.left + box.right - width) / 2), host.innerWidth - width - windowMargin)
       // Whole pixels keep its text and icons sharp.
       setPlacement({ left: Math.round(Math.max(0, left)), top: Math.round(box.bottom + anchorGap) })
     }
     place()
-    window.addEventListener('resize', place)
-    return () => window.removeEventListener('resize', place)
+    host.addEventListener('resize', place)
+    return () => host.removeEventListener('resize', place)
   }, [view.anchor])
   const statusText = resultStatus(view)
   useEffect(() => {
@@ -149,9 +153,9 @@ function Widget({ view }: { view: QuickInputView }) {
         onKeyDown={keyDown}
         onBlur={event => {
           const next = event.relatedTarget
-          if (next instanceof Node && root.current?.contains(next)) return
+          if (next && root.current?.contains(next as Node)) return
           // Switching windows leaves the widget open; clicking elsewhere in the app closes it.
-          if (document.hasFocus()) quickInput.hide('blur')
+          if (event.currentTarget.ownerDocument.hasFocus()) quickInput.hide('blur')
         }} />
     </div>
     <div className={`quick-input-progress${view.busy ? ' busy' : ''}`} />

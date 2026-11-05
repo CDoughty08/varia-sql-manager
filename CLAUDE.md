@@ -80,6 +80,10 @@ pages, limits, error codes, display formats, benchmarks).
 - The renderer is untrusted: context isolation, sandbox, no Node integration, CSP, blocked navigation and popups.
   It reaches the system only through `window.varia` (`src/preload/index.ts`); never expose generic IPC or shell APIs,
   and never disable the Chromium sandbox. Main verifies every IPC sender (`trusted()` in `src/main/index.ts`).
+  The only window the page may open is a popout (`src/main/popout-windows.ts`, docs/popout-windows.md): a same-origin
+  `about:blank` child named `varia-popout-<uuid>` with exact bounds on a display, explicit preferences (no preload,
+  sandboxed, isolated), no popups or navigation of its own, closed with the page. Its content is the page's DOM through
+  React portals, so it sends no IPC, and `trusted()` still accepts only the main window's main frame.
 - A backend method must be added in all five places: `RpcMethods` in `src/shared/contracts.ts`, a strict zod schema in
   `requestSchemas` (`src/main/validation.ts`), a `methodPolicies` entry (`src/shared/ipc/methods.ts`), a preload method,
   and a `SqlService.DispatchAsync` case plus its `MethodNames` entry, with its record in `backend/Varia.Backend/Contracts.cs`.

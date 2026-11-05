@@ -147,6 +147,21 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .pane-tab { height: 100%; display: flex; flex: 1; min-width: 0; }
 .pane-tab .dv-default-tab { flex: 1; }
 .docking-guides { position: fixed; inset: 0; z-index: 15000; pointer-events: none; user-select: none; }
+/* A popout window (Move into New Window): its panels' tabs over the selected panel; the OS draws the title bar. */
+.popout-body { height: 100vh; overflow: hidden; background: var(--varia-dock-background); }
+.popout-root, .popout-window { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.popout-header { flex: none; display: flex; align-items: stretch; height: 28px; background: var(--varia-editorGroupHeader-tabsBackground); border-bottom: 1px solid var(--varia-editorGroup-border); }
+.popout-tabs { flex: 1; min-width: 0; display: flex; overflow: hidden; }
+.popout-tab { display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; padding: 0 var(--varia-space-1) 0 var(--varia-space-3); font-size: var(--varia-size-xs); color: var(--varia-tab-inactiveForeground); background: var(--varia-tab-inactiveBackground); border-right: 1px solid var(--varia-tab-border); cursor: default; }
+.popout-tab.active { color: var(--varia-tab-activeForeground); background: var(--varia-tab-activeBackground); }
+.popout-tab:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.popout-tab[data-menu-target] { outline: 1px solid var(--varia-focusBorder); outline-offset: -2px; }
+.popout-tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.popout-tab .popout-tab-close { width: 20px; height: 20px; visibility: hidden; }
+.popout-tab.active .popout-tab-close, .popout-tab:hover .popout-tab-close { visibility: visible; }
+.popout-header .popout-dock { align-self: center; margin-right: var(--varia-space-1); }
+.popout-content { flex: 1; min-height: 0; position: relative; }
+.popout-slot[hidden] { display: none; }
 .docking-guides[hidden], .docking-preview[hidden] { display: none; }
 .docking-guide-cell { position: fixed; display: grid; place-items: center; background: var(--varia-dock-guideBackground); color: var(--varia-dock-guideForeground); border: 1px solid var(--varia-dock-guideBorder); box-shadow: var(--varia-shadow-menu) var(--varia-dock-guideShadow); }
 .docking-guide-cell.active { background: var(--varia-dock-guideActiveBackground); border-color: var(--varia-dock-guideActiveBorder); box-shadow: 0 0 0 2px var(--varia-dock-guideActiveRing); }

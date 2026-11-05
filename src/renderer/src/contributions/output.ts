@@ -3,12 +3,13 @@ import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { resolveBlocks } from '../grid/selection'
 import { outputOf, type MenuTargetService, type OutputTarget } from '../menus/targets'
+import { windows } from '../core/windows'
 
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 
 /** The Query Output view that has focus, read as its menu would be: keys and the Edit menu act on it. */
 export function focusedOutput(menuTargets: Pick<MenuTargetService, 'targetFor'>): OutputTarget | undefined {
-  const hit = typeof document === 'undefined' ? undefined : menuTargets.targetFor(document.activeElement)
+  const hit = typeof document === 'undefined' ? undefined : menuTargets.targetFor(windows.activeElement())
   return hit?.target.kind === 'output' ? hit.target : undefined
 }
 
@@ -96,7 +97,7 @@ export function outputContribution({ commands, results, menuTargets, documents, 
         // Closing unmounts the grids and Messages, which would drop focus held in them to <body>, and selects the Results
         // tab, which stays (saying the results were closed): focus in the view or on its tabs moves there first. Focus
         // anywhere else stays put.
-        const view = typeof document === 'undefined' ? null : document.activeElement?.closest('.output-view, .output-toolbar [role="tablist"]')
+        const view = typeof document === 'undefined' ? null : windows.activeElement()?.closest('.output-view, .output-toolbar [role="tablist"]')
         view?.closest('.output-panel')?.querySelector<HTMLElement>('[role="tab"][data-output-tab="results"]')?.focus({ preventScroll: true })
         results.closeResults(tabId)
       }

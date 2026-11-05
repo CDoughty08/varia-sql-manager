@@ -175,7 +175,7 @@ describe('notifications in the workbench', () => {
     expect(commands.isEnabled('notifications.clearAll') && commands.isEnabled('notifications.focus')).toBe(true)
     // Show results: back to that query, with the output pane shown.
     notifications.run(toast.id, toast.actions![0])
-    await vi.waitFor(() => expect(host.reveal).toHaveBeenCalledWith('results'))
+    await vi.waitFor(() => expect(host.reveal).toHaveBeenCalledWith('results', { raise: true }))
     expect(documents.getSnapshot().activeId).toBe(first)
     expect(notifications.getSnapshot().visible).toEqual([])
   })

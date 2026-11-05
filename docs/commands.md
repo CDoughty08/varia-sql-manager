@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (219)
+## Commands (221)
 
 ### File
 
@@ -100,6 +100,8 @@ keys it uses are listed below.
 | Tab with Execution Plan (not in the palette) | `pane.tabWithPlan` | — | — | — | Always | Panel tab context menu › Tab with Execution Plan |
 | Float (not in the palette) | `pane.float` | — | — | — | Always | Panel tab context menu › Float |
 | Dock (not in the palette) | `pane.dock` | — | — | — | Always | Panel tab context menu › Dock |
+| Move into New Window (not in the palette) | `pane.moveToNewWindow` | — | — | — | Always | Panel tab context menu › Move into New Window |
+| Move Back into Main Window (not in the palette) | `pane.moveToMainWindow` | — | — | — | Always | Panel tab context menu › Move Back into Main Window |
 | Close (not in the palette) | `pane.close` | — | — | — | Always | Panel tab context menu › Close |
 | Toggle Panel Tabs | `window.togglePanelTabs` | — | — | — | Always; checked when `panelTabsVisible` | Window › Panel Tabs; Panel tab context menu › Show Panel Tabs |
 | Search… | `workbench.search` | Ctrl+Q | — | — | Always | View › Search… |
@@ -735,6 +737,8 @@ Right-click a panel's tab (Object Explorer, Query editor, or Query output), or p
 | `0_tab` | Tab with E**x**ecution Plan | `pane.tabWithPlan` | `pane != 'plan'` |
 | `1_dock` | **F**loat | `pane.float` | `!paneFloating` |
 | `1_dock` | **D**ock | `pane.dock` | `paneFloating` |
+| `1_dock` | Move into New **W**indow | `pane.moveToNewWindow` | `pane != 'editor' && !panePopout` |
+| `1_dock` | Move B**a**ck into Main Window | `pane.moveToMainWindow` | `panePopout` |
 | `2_close` | **C**lose | `pane.close` | Always |
 | `3_tabs` | **S**how Panel Tabs | `window.togglePanelTabs` | Always |
 
@@ -764,7 +768,7 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 | `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
 | `8_view` | **P**ause | `ssis.pauseOperations` | Always |
 
-## Context keys (121)
+## Context keys (122)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -894,6 +898,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `outputView` | `'grid'`, `'messages'`, `''` | target | The Query Output view the menu is for: a results grid or the messages. |
 | `pane` | `'explorer'`, `'editor'`, `'results'`, `'messages'`, `'plan'`, `''` | target | The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, Results, Messages, or Execution plan. |
 | `paneFloating` | boolean | target | The panel the menu is for is floating. |
+| `panePopout` | boolean | target | The panel the menu is for is in a window of its own (Move into New Window). |
 
 ## Reserved keys
 

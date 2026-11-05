@@ -59,7 +59,7 @@ export class KeybindingService implements Disposable {
   private readonly macKeyEquivalents: ReadonlySet<string>
   /** When a native chord prefix was pressed in editor text, while Monaco waits for the chord's second key. */
   private pendingNativePrefix?: number
-  private detach?: () => void
+  private readonly detachers = new Set<() => void>()
   constructor(private readonly options: KeybindingServiceOptions) {
     const { platform } = options
     this.rules = options.rules ?? defaultRules(platform)
@@ -87,8 +87,8 @@ export class KeybindingService implements Disposable {
     const rule = this.primaryRule(id) ?? this.rules.find(candidate => candidate.command === id)
     return rule && keybindingLabel(rule.chords, this.options.platform)
   }
+  /** Listens in `target`: the main window, and each popout window while it is open. */
   attach(target: Pick<EventTarget, 'addEventListener' | 'removeEventListener'>): Disposable {
-    this.detach?.()
     const keyDown = (event: Event) => this.handleKeyDown(event as KeyboardEvent)
     const keyUp = (event: Event) => this.handleKeyUp(event as KeyboardEvent)
     const reset = () => { this.pendingNativePrefix = undefined }
@@ -103,9 +103,9 @@ export class KeybindingService implements Disposable {
       target.removeEventListener('keyup', keyUp, true)
       target.removeEventListener('focusout', focusOut, true)
       target.removeEventListener('blur', reset)
-      if (this.detach === detach) this.detach = undefined
+      this.detachers.delete(detach)
     }
-    this.detach = detach
+    this.detachers.add(detach)
     return { dispose: detach }
   }
   handleKeyDown(event: KeyDownEvent): void {
@@ -150,5 +150,5 @@ export class KeybindingService implements Disposable {
   handleKeyUp(event: KeyDownEvent): void {
     try { this.options.menus?.handleKeyUp(event) } catch (error) { onUnexpectedError(error) }
   }
-  dispose(): void { this.detach?.() }
+  dispose(): void { for (const detach of [...this.detachers]) detach() }
 }

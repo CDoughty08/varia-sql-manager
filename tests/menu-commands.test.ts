@@ -258,7 +258,7 @@ describe('context menu commands', () => {
   })
   it('float, dock, and close the panel whose tab the menu is for', async () => {
     const { commands, host } = setup()
-    const tab = (pane: 'explorer' | 'messages'): CommandArgs => ({ target: { kind: 'dockTab', pane, floating: false } })
+    const tab = (pane: 'explorer' | 'messages'): CommandArgs => ({ target: { kind: 'dockTab', pane, floating: false, popout: false } })
     vi.mocked(host.paneLocation).mockImplementation(pane => pane === 'messages' ? 'floating' : 'grid')
     const enabled = (args?: CommandArgs) => (['pane.float', 'pane.dock', 'pane.close'] as const).filter(id => commands.isEnabled(id, args))
     expect(enabled(tab('explorer'))).toEqual(['pane.float', 'pane.close'])
@@ -273,7 +273,7 @@ describe('context menu commands', () => {
   })
   it('dock a panel at a side or as a tab beside another open panel, from its tab or its ⋯ button', async () => {
     const { commands, host, menus } = setup()
-    const tab = (pane: 'explorer' | 'editor' | 'results' | 'messages'): CommandArgs => ({ target: { kind: 'dockTab', pane, floating: false } })
+    const tab = (pane: 'explorer' | 'editor' | 'results' | 'messages'): CommandArgs => ({ target: { kind: 'dockTab', pane, floating: false, popout: false } })
     vi.mocked(host.paneLocation).mockImplementation(pane => pane === 'editor' || pane === 'plan' ? 'closed' : 'grid')
     const ids = ['pane.dockLeft', 'pane.dockRight', 'pane.dockTop', 'pane.dockBottom', 'pane.tabWithExplorer', 'pane.tabWithEditor', 'pane.tabWithResults', 'pane.tabWithMessages', 'pane.tabWithPlan'] as const
     const enabled = (args?: CommandArgs) => ids.filter(id => commands.isEnabled(id, args))
@@ -282,7 +282,7 @@ describe('context menu commands', () => {
     expect(enabled(tab('editor'))).toEqual([])
     expect(enabled()).toEqual([])
     // The menu hides the Tab with item that would name the panel itself.
-    const titles = (pane: 'explorer' | 'results') => menus.resolve('dockTab.context', { kind: 'dockTab', pane, floating: false }).flatMap(item => item.kind === 'command' && item.id.startsWith('pane.tabWith') ? [item.title] : [])
+    const titles = (pane: 'explorer' | 'results') => menus.resolve('dockTab.context', { kind: 'dockTab', pane, floating: false, popout: false }).flatMap(item => item.kind === 'command' && item.id.startsWith('pane.tabWith') ? [item.title] : [])
     expect(titles('explorer')).toEqual(['Tab with Query Editor', 'Tab with Results', 'Tab with Messages', 'Tab with Execution Plan'])
     expect(titles('results')).toEqual(['Tab with Object Explorer', 'Tab with Query Editor', 'Tab with Messages', 'Tab with Execution Plan'])
     await commands.execute('pane.dockRight', tab('explorer'), 'menu')

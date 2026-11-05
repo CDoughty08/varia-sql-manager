@@ -216,7 +216,7 @@ describe('command execution', () => {
     await commands.execute('window.close', undefined, 'menu')
     expect([host.showConnect, host.resetLayout, host.flushLayout].map(fn => vi.mocked(fn).mock.calls.length)).toEqual([1, 1, 1])
     // Object Explorer also takes focus (SSMS's F8), so a following F5 refreshes it.
-    expect(vi.mocked(host.reveal).mock.calls).toEqual([['explorer', { focus: true }], ['results'], ['messages'], ['plan']])
+    expect(vi.mocked(host.reveal).mock.calls).toEqual([['explorer', { focus: true }], ['results', { raise: true }], ['messages', { raise: true }], ['plan', { raise: true }]])
     expect(vi.mocked(host.manageLayouts).mock.calls).toEqual([['save'], ['load']])
     expect(api.closeWindow).toHaveBeenCalledOnce()
   })

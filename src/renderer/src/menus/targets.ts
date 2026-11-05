@@ -49,7 +49,8 @@ export type MenuTarget =
   /** An Integration Services Operations grid; its commands act on the selected operation. */
   | { readonly kind: 'ssisOperations'; readonly tabId: string }
   | OutputTarget
-  | { readonly kind: 'dockTab'; readonly pane: PaneId; readonly floating: boolean }
+  /** A panel's tab or ⋯ button; `popout` when the panel is in a window of its own. */
+  | { readonly kind: 'dockTab'; readonly pane: PaneId; readonly floating: boolean; readonly popout: boolean }
   | InputTarget
 
 export const menuForTarget: Readonly<Record<MenuTarget['kind'], ContextMenuId>> = {
@@ -78,7 +79,8 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
     explorerServerLinux: target?.kind === 'explorer' && !!target.node?.linux,
     outputView: target?.kind === 'output' ? target.view : '',
     pane: target?.kind === 'dockTab' ? target.pane : '',
-    paneFloating: target?.kind === 'dockTab' && target.floating
+    paneFloating: target?.kind === 'dockTab' && target.floating,
+    panePopout: target?.kind === 'dockTab' && target.popout
   }
 }
 /** The arguments a context menu's commands run with: the target, and the tab it is about, so the File commands act on that tab. */

@@ -21,6 +21,7 @@ import { MenubarAccess } from './menubar'
 import { NativeMenuPresenter } from './native'
 import { resolveMenu, type DynamicMenuItem, type ResolvedCommandItem, type ResolvedMenuItem } from './resolve'
 import { argsFor, contextMenuLabels, menuForTarget, targetKeys, type MenuTarget, type MenuTargetService, type TargetHit } from './targets'
+import { mainDocument, windows } from '../core/windows'
 
 /**
  * File › Recent Files' items: each file runs Open Recent File with its id, after a separator Clear Recent Files, and an
@@ -142,7 +143,9 @@ export class MenuService implements Disposable {
   private scrolled?: ReadonlyMap<EventTarget, readonly [number, number]>
   private readonly native?: NativeMenuPresenter
   private readonly subscriptions: Disposable[]
-  private detach?: () => void
+  private readonly detachers = new Set<() => void>()
+  /** The document an open context menu shows in: the window its element is in (a popout's, or the main window's). */
+  private surface?: Document
 
   constructor(private readonly options: MenuServiceOptions) {
     this.controller = new MenuController({
@@ -206,6 +209,7 @@ export class MenuService implements Disposable {
     if (this.options.platform === 'darwin') return false
     const menu = chord.startsWith('alt+') ? menuForMnemonic(chord.slice('alt+'.length)) : undefined
     if (chord !== 'f10' && !menu) return false
+    if (this.inPopout()) return false
     if (menu === 'window' && this.options.findWidgetFocused?.()) return false
     // Chromium hands keys the page leaves alone to Windows, where F10 and Alt+letter would enter the system menu.
     event.preventDefault()
@@ -250,7 +254,6 @@ export class MenuService implements Disposable {
    * focus, and the page being hidden. Focus is tracked so the menus know where to return it.
    */
   attach(target: Window): Disposable {
-    this.detach?.()
     const options = { capture: true }
     const pointerDown = (event: Event) => guard(() => {
       this.access.disarm()
@@ -305,14 +308,25 @@ export class MenuService implements Disposable {
       target.removeEventListener('resize', resize)
       target.removeEventListener('blur', blur)
       target.document.removeEventListener('visibilitychange', visibility)
-      if (this.detach === detach) this.detach = undefined
+      this.detachers.delete(detach)
     }
-    this.detach = detach
+    this.detachers.add(detach)
     return { dispose: detach }
   }
 
-  /** Behind a dialog the menubar stays shut. Over the quick input it opens (as F10 did before), and the quick input closes. */
-  private accessAllowed(): boolean { return !this.options.modalOpen() }
+  /**
+   * Where the menus render: a context menu in its element's window, the menubar's menus in the main window, whose title
+   * bar holds the menubar.
+   */
+  surfaceDocument(): Document | undefined {
+    return this.controller.view.source === 'context' && this.surface && !this.surface.defaultView?.closed ? this.surface : mainDocument()
+  }
+  /**
+   * Behind a dialog the menubar stays shut. Over the quick input it opens (as F10 did before), and the quick input closes.
+   * A popout window has no menubar: its F10 and Alt keys are the system's.
+   */
+  private accessAllowed(): boolean { return !this.options.modalOpen() && !this.inPopout() }
+  private inPopout(): boolean { return windows.activeDocument() !== mainDocument() }
   /**
    * Opens the context menu for `element`: at `anchor` for the pointer, else below the element (the caret in the query
    * editor) with its first item active. While a dialog is open only text fields in it have menus. Focus moves to what
@@ -331,7 +345,7 @@ export class MenuService implements Disposable {
     const target = targets.refresh(hit.target), menu = menuForTarget[target.kind]
     const items = this.resolve(menu, target)
     if (!hasItems(items)) return false
-    const at = anchor ?? this.keyboardAnchor(hit, widget), open = () => this.openContext(menu, items, at, keyboard, hit.mark)
+    const at = anchor ?? this.keyboardAnchor(hit, widget), open = () => this.openContext(menu, items, at, keyboard, hit.mark, hit.element.ownerDocument)
     if (!this.native) {
       const positions = scrollPositions(hit.element)
       if (!open()) return false
@@ -341,7 +355,8 @@ export class MenuService implements Disposable {
     this.showNative(this.native, menu, items, at, hit.mark, open)
     return true
   }
-  private openContext(menu: ContextMenuId, items: readonly ResolvedMenuItem[], anchor: Anchor, keyboard: boolean, mark: Element | undefined): boolean {
+  private openContext(menu: ContextMenuId, items: readonly ResolvedMenuItem[], anchor: Anchor, keyboard: boolean, mark: Element | undefined, surface?: Document): boolean {
+    this.surface = surface
     this.controller.openContext(items, anchor, { keyboard, label: contextMenuLabels[menu] })
     if (this.controller.view.source !== 'context') return false
     if (mark) { mark.setAttribute('data-menu-target', ''); this.marked = mark }
@@ -421,7 +436,7 @@ export class MenuService implements Disposable {
     if (reason !== 'activate' && reason !== 'focus') this.options.focus.restore(this.restoreTarget)
   }
   dispose(): void {
-    this.detach?.()
+    for (const detach of [...this.detachers]) detach()
     this.native?.dispose()
     this.unmarkNative()
     this.menuFor.clear()

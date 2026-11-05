@@ -3,6 +3,7 @@ import { explorerLimits } from '../../../shared/explorer/catalog.ts'
 import { ssisDefaultVerb, ssisVerbSpecs } from '../../../shared/ssis/catalog.ts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { onUnexpectedError } from '../core/errors'
+import { observeResize } from '../core/windows'
 import { useMenuTarget } from '../menus/useMenuTarget'
 import { explorerDragType, maxDropText } from './drop'
 import type { Announcement } from './ExplorerService'
@@ -54,9 +55,8 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
     }
     measure()
     tree.addEventListener('scroll', schedule, { passive: true })
-    const observer = new ResizeObserver(schedule)
-    observer.observe(tree)
-    return () => { tree.removeEventListener('scroll', schedule); observer.disconnect() }
+    const observer = observeResize(tree, schedule)
+    return () => { tree.removeEventListener('scroll', schedule); observer.dispose() }
   }, [])
   useEffect(() => {
     const next = snapshot.announcement

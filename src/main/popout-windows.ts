@@ -1,0 +1,106 @@
+import { popoutLimits, popoutWindowName } from '../shared/popouts'
+import { UserActivation } from './window-roles'
+
+export interface Bounds { x: number; y: number; width: number; height: number }
+/** The window-open details main sees for a page's `window.open` (Electron's `HandlerDetails`, the fields used here). */
+export interface OpenDetails { readonly url: string; readonly frameName: string; readonly features: string; readonly disposition: string }
+
+const featurePattern = /^left=(-?\d{1,6}),top=(-?\d{1,6}),width=(\d{1,5}),height=(\d{1,5})$/
+/**
+ * The bounds a popout request asks for, or undefined when it is not one: only a new `about:blank` window with Varia's
+ * popout name and exactly `left`, `top`, `width` and `height`, as `DockWorkspace` in the renderer opens it. Anything else the
+ * page opens is denied, as before.
+ */
+export function popoutRequest(details: OpenDetails): Bounds | undefined {
+  if (details.url !== 'about:blank' || details.disposition !== 'new-window' || !popoutWindowName.test(details.frameName)) return undefined
+  const match = featurePattern.exec(details.features)
+  if (!match) return undefined
+  const [x, y, width, height] = match.slice(1).map(Number)
+  if (width < popoutLimits.minWidth || height < popoutLimits.minHeight || width > popoutLimits.maxSize || height > popoutLimits.maxSize) return undefined
+  return { x, y, width, height }
+}
+
+/** Whether enough of `bounds` lies on one display's work area to grab the window there: its top strip, at least. */
+export function onDisplay(bounds: Bounds, workAreas: readonly Bounds[]): boolean {
+  return workAreas.some(area => {
+    const width = Math.min(bounds.x + bounds.width, area.x + area.width) - Math.max(bounds.x, area.x)
+    const top = bounds.y >= area.y && bounds.y < area.y + area.height - popoutLimits.grabHeight
+    return width >= popoutLimits.grabWidth && top
+  })
+}
+
+/** The parts of a popout `BrowserWindow` the registry uses, so tests can pass a fake. */
+export interface PopoutWindow {
+  readonly id: number
+  isDestroyed(): boolean
+  isFocused(): boolean
+  destroy(): void
+  setMenuBarVisibility(visible: boolean): void
+  setAutoHideMenuBar(hide: boolean): void
+  on(event: 'closed', listener: () => void): void
+  readonly webContents: {
+    setWindowOpenHandler(handler: () => { action: 'deny' }): void
+    on(event: 'will-navigate' | 'will-frame-navigate' | 'will-redirect', listener: (event: { preventDefault(): void }) => void): void
+    on(event: 'input-event', listener: (event: unknown, input: { type: string }) => void): void
+    setZoomLevel(level: number): void
+  }
+}
+
+/**
+ * The windows the trusted page opened for its popped-out panels. Each is the page's own same-origin `about:blank` child:
+ * it runs in the page's renderer, inside the same sandbox and isolation, has no preload (so no `window.varia` and no IPC
+ * of its own: `trusted()` still accepts only the main window's main frame), denies popups and navigation, and goes when
+ * the page that opened it reloads, crashes or closes, since its content is that page's.
+ */
+export class PopoutWindows<W extends PopoutWindow> {
+  private readonly windows = new Map<number, { window: W; activation: UserActivation }>()
+  constructor(private readonly options: {
+    readonly platform: NodeJS.Platform
+    /** The displays' work areas now, where a restored window must still land. */
+    workAreas(): readonly Bounds[]
+    /** The main window's zoom, which every popout shares. */
+    zoomLevel(): number
+    /** Called when the first popout opens and when the last one goes. */
+    changed(open: number): void
+  }) {}
+
+  /** `allow` with the window's options for a popout request on a display; `deny` for anything else. */
+  open(details: OpenDetails, base: { readonly backgroundColor: string; readonly show: boolean }): { action: 'deny' } | { action: 'allow'; overrideBrowserWindowOptions: Record<string, unknown> } {
+    const bounds = popoutRequest(details)
+    if (!bounds || this.windows.size >= popoutLimits.maxWindows || !onDisplay(bounds, this.options.workAreas())) return { action: 'deny' }
+    return { action: 'allow', overrideBrowserWindowOptions: {
+      ...bounds, useContentSize: true, minWidth: popoutLimits.minWidth, minHeight: popoutLimits.minHeight, show: base.show, backgroundColor: base.backgroundColor,
+      autoHideMenuBar: false, title: 'Varia SQL Manager',
+      // Explicit, not inherited: no preload, the same sandbox and isolation, no Node, and no test arguments.
+      webPreferences: { preload: undefined, contextIsolation: true, nodeIntegration: false, sandbox: true, webviewTag: false, additionalArguments: [], devTools: true }
+    } }
+  }
+
+  /** Takes a window `open` allowed: it denies popups and navigation, counts its own input for Paste, and shares the zoom. */
+  adopt(window: W): void {
+    const activation = new UserActivation()
+    this.windows.set(window.id, { window, activation })
+    const contents = window.webContents
+    contents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    for (const event of ['will-navigate', 'will-frame-navigate', 'will-redirect'] as const) contents.on(event, navigation => navigation.preventDefault())
+    contents.on('input-event', (_event, input) => activation.note(input.type))
+    // The application menu stays hidden, as on the main window; it still serves Electron's role keys there.
+    if (this.options.platform !== 'darwin') { window.setAutoHideMenuBar(false); window.setMenuBarVisibility(false) }
+    contents.setZoomLevel(this.options.zoomLevel())
+    window.on('closed', () => {
+      this.windows.delete(window.id)
+      this.options.changed(this.windows.size)
+    })
+    this.options.changed(this.windows.size)
+  }
+  /** The focused popout, if one is focused, with its own record of the user's input. */
+  focused(): { window: W; activation: UserActivation } | undefined { return [...this.windows.values()].find(item => !item.window.isDestroyed() && item.window.isFocused()) }
+  /** Every popout follows the main window's zoom. */
+  zoom(level: number): void { for (const { window } of this.windows.values()) if (!window.isDestroyed()) window.webContents.setZoomLevel(level) }
+  get size(): number { return this.windows.size }
+  /** The page that owns them is going (reload, crash, close): its popouts go at once, without asking. */
+  closeAll(): void {
+    for (const { window } of [...this.windows.values()]) if (!window.isDestroyed()) window.destroy()
+    this.windows.clear()
+  }
+}

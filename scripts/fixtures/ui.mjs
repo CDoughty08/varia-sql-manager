@@ -359,7 +359,7 @@ const paneTitles = { explorer: 'Object Explorer', editor: 'Query editor', result
 const paneMenuTitles = { explorer: 'Object Explorer', editor: 'Query Editor', results: 'Results', messages: 'Messages', plan: 'Execution Plan' }
 /** The output panels, which share one group by default, its toolbar tabbing between them. */
 export const outputPaneIds = ['results', 'messages', 'plan']
-const paneMoves = { left: 'Dock Left', right: 'Dock Right', top: 'Dock Top', bottom: 'Dock Bottom', float: 'Float', dock: 'Dock', close: 'Close' }
+const paneMoves = { left: 'Dock Left', right: 'Dock Right', top: 'Dock Top', bottom: 'Dock Bottom', float: 'Float', dock: 'Dock', close: 'Close', window: 'Move into New Window', main: 'Move Back into Main Window' }
 export const pane = (page, id) => page.locator(`[data-pane="${id}"]`)
 export const paneTab = (page, id) => page.locator(`[data-pane-tab="${id}"]`)
 /** The close button on a panel's dock tab, which shows only while the tab does (a group of several panels, a floating one, or Window › Panel Tabs). */
@@ -373,6 +373,13 @@ export const movePane = async (page, id, where) => {
   if (!name) throw new Error('No panel move ' + where)
   await page.getByRole('menu').getByRole('menuitem', { name, exact: true }).click()
 }
+
+// Popout windows: a popout's page holds its panels' tabs, the button that docks them all back, and the panels themselves.
+/** A popout window's tabs: the panels it holds. */
+export const popoutTabs = page => page.getByRole('tablist', { name: /^Panels in this window: / })
+/** A panel's tab in a popout window, which drags back onto the main window. */
+export const popoutTab = (page, id) => popoutTabs(page).locator(`[data-popout-tab="${id}"]`)
+export const popoutDockButton = page => page.getByRole('button', { name: 'Move back into main window', exact: true })
 
 // Query output
 
