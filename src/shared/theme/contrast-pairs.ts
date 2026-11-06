@@ -128,7 +128,8 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['panelTitle.activeForeground'], widget),
   ...text(['resultsGrid.headerForeground', 'resultsGrid.headerDescriptionForeground', 'resultsGrid.rowNumberForeground'], ['resultsGrid.headerBackground']),
   ...text(['resultsGrid.headerSelectionForeground'], ['resultsGrid.headerBackground', 'resultsGrid.headerSelectionBackground']),
-  ...text(['resultsGrid.rowNumberForeground', 'resultsGrid.nullForeground'], panel, striped),
+  // White space marks carry meaning (two values that look alike differ in them), so they are held to text contrast.
+  ...text(['resultsGrid.rowNumberForeground', 'resultsGrid.nullForeground', 'resultsGrid.whitespaceForeground'], panel, striped),
   // NULL cells are tinted, over the grid and over a striped row.
   ...text(['resultsGrid.nullForeground'], [...panel, 'resultsGrid.nullBackground'], [...striped, 'resultsGrid.nullBackground']),
   ...text(['resultsGrid.linkForeground'], ['resultsGrid.background'], ['resultsGrid.background', 'resultsGrid.alternateRowBackground']),

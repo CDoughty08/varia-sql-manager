@@ -9,16 +9,17 @@ export const tileKey = (rowTile: number, columnTile: number): number => rowTile 
 export const tileRowOf = (key: number): number => Math.floor(key / columnTiles)
 export const tileColumnOf = (key: number): number => key % columnTiles
 
-/** The worker window a tile asks for: display text capped at 512 characters, so 4,096 cells always fit the budget. */
+/** The worker window a tile asks for: text capped at 512 characters, so 4,096 cells always fit the budget. The text is
+ *  the value's own (`display: false`): GridView makes it one line, marking its white space when asked (whitespace.ts). */
 export interface TileRequest {
   readonly first: number; readonly count: number; readonly colStart: number; readonly colEnd: number
-  readonly maxCellChars: number; readonly textBudget: number; readonly display: true
+  readonly maxCellChars: number; readonly textBudget: number; readonly display: false
 }
 export function tileRequest(key: number, rows: number, columns: number): TileRequest {
   const first = tileRowOf(key) * g.tileRows, colStart = tileColumnOf(key) * g.tileColumns
   return {
     first, count: Math.max(0, Math.min(g.tileRows, rows - first)), colStart, colEnd: Math.min(colStart + g.tileColumns, columns),
-    maxCellChars: g.maxCellChars, textBudget: g.textBudget, display: true
+    maxCellChars: g.maxCellChars, textBudget: g.textBudget, display: false
   }
 }
 

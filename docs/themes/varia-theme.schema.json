@@ -1221,6 +1221,11 @@
           "description": "(Varia) Truncation notices and the marker on truncated values. Default @warningForeground (Dark #e4bb6a, Light #875800).",
           "markdownDescription": "(Varia) Truncation notices and the marker on truncated values. Default `@warningForeground` (Dark `#e4bb6a`, Light `#875800`)."
         },
+        "resultsGrid.whitespaceForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) White space marks in cells (results toolbar › White space): the dots, arrows and the names of line breaks and invisible characters. Default $textMuted (Dark #9298a4, Light #5c6370).",
+          "markdownDescription": "(Varia) White space marks in cells (results toolbar › White space): the dots, arrows and the names of line breaks and invisible characters. Default `$textMuted` (Dark `#9298a4`, Light `#5c6370`)."
+        },
         "resultsGrid.selectionBackground": {
           "$ref": "#/definitions/value",
           "description": "(Varia) Selected cells. Default @list.activeSelectionBackground (Dark #29314f, Light #d9e0fb).",

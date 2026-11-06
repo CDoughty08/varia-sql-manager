@@ -314,6 +314,9 @@ output.context, for a results grid with selected cells
   Select &All  ⌘A  ++++
   ---
   Sa&ve Results As…  ⌘S  ----
+  ---
+  Show S&paces and Tabs [ ]  ++++
+  Show All &White Space [ ]  ++++
 output.context, for a results grid without
   &Copy  ⌘C  ----
   Copy with &Headers  ⇧⌘C  ----
@@ -321,6 +324,9 @@ output.context, for a results grid without
   Select &All  ⌘A  ++++
   ---
   Sa&ve Results As…  ⌘S  ----
+  ---
+  Show S&paces and Tabs [ ]  ++++
+  Show All &White Space [ ]  ++++
 output.context, for Messages with selected text
   &Copy  ⌘C  ++++
   ---

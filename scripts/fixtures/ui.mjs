@@ -267,6 +267,9 @@ export const gridPart = {
   activeCell: '.rg-c.is-act',
   truncatedCell: '.rg-c.is-trunc',
   linkCell: '.rg-c.is-link',
+  /** White space marks (results toolbar › White space), drawn only and hidden from screen readers; a badge names one character (CR, LF, NBSP…). */
+  whitespaceMark: '.rg-ws',
+  whitespaceBadge: '.rg-wsb',
   borderHover: '.rg-border-hover',
   /** A live grid's row tones (LiveGrid), drawn with no ARIA of their own: the active cell's label names the tone. */
   toneError: '.tone-error',
@@ -397,6 +400,8 @@ export const outputView = (page, name) => outputViews(page).getByRole('tab', nam
 export const outputAnnouncer = page => page.locator(part.outputAnnouncer)
 /** The strip above the output: the Results and Messages tabs, the status line and the copy and save strips. */
 export const outputToolbar = page => outputPane(page).locator(part.outputToolbar)
+/** The tools above a run's grids (White space, and the result tools that follow). */
+export const resultsToolbar = page => page.getByRole('toolbar', { name: 'Results tools', exact: true })
 export const outputStatus = page => outputPane(page).locator(part.outputStatus)
 export const jobProgress = page => outputPane(page).locator(part.jobProgress)
 export const jobNotice = page => outputPane(page).locator(part.jobNotice)
