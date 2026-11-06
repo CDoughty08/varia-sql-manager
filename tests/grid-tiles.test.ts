@@ -7,10 +7,10 @@ const range = (firstRow: number, lastRow: number, firstColumn: number, lastColum
 const name = (key: number) => `${tileRowOf(key)}:${tileColumnOf(key)}`
 
 describe('grid tiles', () => {
-  it('name each tile by one number and ask for 128 rows × 32 columns of capped display text', () => {
+  it('name each tile by one number and ask for 128 rows × 32 columns of capped text', () => {
     expect([tileKey(0, 0), tileKey(0, 127), tileKey(1, 0), tileKey(16_777_215, 127)]).toEqual([0, 127, 128, 16_777_215 * 128 + 127])
     for (const key of [0, 1, 127, 128, 999_999, tileKey(16_777_215, 127)]) expect(tileKey(tileRowOf(key), tileColumnOf(key))).toBe(key)
-    expect(tileRequest(tileKey(2, 1), 1_000_000, 300)).toEqual({ first: 256, count: 128, colStart: 32, colEnd: 64, maxCellChars: 512, textBudget: 2_100_000, display: true })
+    expect(tileRequest(tileKey(2, 1), 1_000_000, 300)).toEqual({ first: 256, count: 128, colStart: 32, colEnd: 64, maxCellChars: 512, textBudget: 2_100_000, display: false })
     // The last tiles are short: rows up to what is available, columns up to the result's.
     expect(tileRequest(tileKey(7, 9), 1000, 300)).toMatchObject({ first: 896, count: 104, colStart: 288, colEnd: 300 })
     expect(tileRequest(tileKey(8, 0), 1000, 3).count).toBe(0)

@@ -21,6 +21,8 @@ import { columnTitle, covered, dragSelection, navigate, pressButton, pressSelect
 import type { GridStats } from './stats'
 import { remapSelection, remapTop, sameSelection, type RowMap } from './swap'
 import { tileKey } from './tiles'
+import { whitespaceRuns, type WhitespaceMode } from './whitespace'
+import { displayText } from '../../../shared/ipc/wire/cells'
 
 // A cell's look is one of 128 class strings, picked by these bits.
 const NULL = 1, TRUNC = 2, ERR = 4, LINK = 8, SEL = 16, ACT = 32, LOAD = 64
@@ -33,7 +35,8 @@ const rowClasses = [false, true].map(odd => ['', ...liveTones].map(tone => 'rg-r
 const markClasses = [false, true].map(sel => ['', ...liveTones].map(tone => 'rg-rn' + (sel ? ' sel' : '') + (tone ? ' tone-' + tone : '')))
 let nextGridId = 1
 
-interface CellSlot { readonly el: HTMLDivElement; readonly text: Text; column: number; bits: number; value: string; label: string; shown: boolean; left: number; width: number }
+/** `mode` is the white space mode `value` was written under; `marked`, that the cell shows marks (runs of nodes) in place of `text` alone. */
+interface CellSlot { readonly el: HTMLDivElement; readonly text: Text; column: number; bits: number; value: string; mode: WhitespaceMode; marked: boolean; label: string; shown: boolean; left: number; width: number }
 /**
  * A pooled row. `header` is its row header for screen readers, inside the row; `mark` draws the number in the sticky
  * row-number column (one composited layer for every row, where a sticky header in each row made a layer per row). The
@@ -73,6 +76,8 @@ export interface GridViewOptions {
   readonly stats?: GridStats
   /** Whether headers show each column's SQL type after its name (Tools › Options › Query Results › Results to Grid). */
   readonly showTypes?: boolean
+  /** How cells show spaces, tabs and line breaks (queryResults.grid.whitespace); `none` by default. */
+  readonly whitespace?: WhitespaceMode
   onSelection(selection: GridSelection): void
   /** Ctrl+C, and Edit › Copy (the copy event): runs Copy. */
   onCopy(): void
@@ -147,6 +152,7 @@ export class GridView {
   /** Each column's SQL type as its header shows it (of the result shown: a swap takes the new descriptor's). */
   private types: readonly string[]
   private showTypes: boolean
+  private whitespace: WhitespaceMode
   private rowHeader = 0
   private width = -1
   private spacerHeight = -1
@@ -211,6 +217,7 @@ export class GridView {
     this.typeWidth = measure.type
     this.types = o.descriptor.columns.map(sqlTypeLabel)
     this.showTypes = o.showTypes ?? true
+    this.whitespace = o.whitespace ?? 'none'
     this.capOverride = o.stats?.scrollCap
     this.cap = this.capOverride ?? scrollCap(windowOf(o.root).devicePixelRatio)
     // Widths belong to the grid's saved state; they are allocated on first mount, from the declared types.
@@ -299,10 +306,12 @@ export class GridView {
     this.setStatus({})
     this.schedule()
   }
-  update(o: { resultCount: number; showTypes?: boolean }): void {
-    const showTypes = o.showTypes ?? this.showTypes
-    if (o.resultCount === this.resultCount && showTypes === this.showTypes) return
+  update(o: { resultCount: number; showTypes?: boolean; whitespace?: WhitespaceMode }): void {
+    const showTypes = o.showTypes ?? this.showTypes, whitespace = o.whitespace ?? this.whitespace
+    if (o.resultCount === this.resultCount && showTypes === this.showTypes && whitespace === this.whitespace) return
     this.resultCount = o.resultCount
+    // Each cell compares its mode with this one as it paints, and writes its value again.
+    this.whitespace = whitespace
     if (showTypes !== this.showTypes) {
       // Widths stay as they are; every header writes its type again.
       this.showTypes = showTypes
@@ -795,7 +804,7 @@ export class GridView {
     el.style.display = 'none'
     el.append(text)
     parent.append(el)
-    const cell: CellSlot = { el, text, column: -1, bits: 0, value: '', label: '', shown: false, left: Number.NaN, width: -1 }
+    const cell: CellSlot = { el, text, column: -1, bits: 0, value: '', mode: 'none', marked: false, label: '', shown: false, left: Number.NaN, width: -1 }
     this.slots.set(el, { cell, ...row ? { row } : {} })
     return cell
   }
@@ -1049,7 +1058,7 @@ export class GridView {
       // A cell whose rows are still being read says so: an empty name reads as "blank", and the value that follows is a
       // name change some screen readers do not read for the active cell.
       const toned = this.o.toneLabel && active ? this.activeTone(active.row) : undefined
-      const label = bits & LOAD ? 'Loading' : activeCell.value + (bits & ERR ? ', could not be read' : bits & NULL ? ', null value' : '') + (bits & TRUNC ? ', truncated' : '') + (bits & LINK ? ', link, press Enter to open' : '') + (toned ? ', ' + toned : '')
+      const label = bits & LOAD ? 'Loading' : displayText(activeCell.value) + (bits & ERR ? ', could not be read' : bits & NULL ? ', null value' : '') + (bits & TRUNC ? ', truncated' : '') + (bits & LINK ? ', link, press Enter to open' : '') + (toned ? ', ' + toned : '')
       if (label !== activeCell.label) { activeCell.label = label; activeCell.el.setAttribute('aria-label', label) }
     }
   }
@@ -1156,7 +1165,35 @@ export class GridView {
       cell.bits = bits
       cell.el.className = classes[bits]
     }
-    if (value !== cell.value) { cell.value = value; cell.text.nodeValue = value }
+    if (value !== cell.value || this.whitespace !== cell.mode) {
+      cell.value = value
+      cell.mode = this.whitespace
+      const runs = bits & (NULL | ERR | LOAD) ? undefined : whitespaceRuns(value, this.whitespace)
+      if (runs) this.writeMarked(cell, runs)
+      else {
+        if (cell.marked) { cell.marked = false; cell.el.replaceChildren(cell.text) }
+        // Tiles hold the value's own text; a cell shows it on one line, as SSMS does (line breaks and tabs as spaces).
+        cell.text.nodeValue = displayText(value)
+      }
+    }
+  }
+  /**
+   * Writes a value with its white space marked: its text as Text nodes, and the marks in spans hidden from screen readers,
+   * which read the value itself in the active cell's label. Only cells with something to mark get more than one node.
+   */
+  private writeMarked(cell: CellSlot, runs: readonly { readonly kind: 'text' | 'mark' | 'badge'; readonly text: string }[]): void {
+    const doc = cell.el.ownerDocument
+    cell.marked = true
+    cell.el.replaceChildren(...runs.map(run => {
+      const text = doc.createTextNode('')
+      text.nodeValue = run.text
+      if (run.kind === 'text') return text
+      const span = doc.createElement('span')
+      span.className = run.kind === 'mark' ? 'rg-ws' : 'rg-ws rg-wsb'
+      span.setAttribute('aria-hidden', 'true')
+      span.append(text)
+      return span
+    }))
   }
 
   /** A slot out of use is hidden and forgets its position, so no stale row or column index stays in the DOM. */

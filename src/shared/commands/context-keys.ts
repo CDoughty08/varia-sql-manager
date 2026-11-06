@@ -97,6 +97,8 @@ export const contextKeys = {
   editorWordWrap: { type: 'boolean', scope: 'state', description: 'Word wrap is on in the query editor.' },
   editorWhitespace: { type: 'boolean', scope: 'state', description: 'View White Space is on in the query editor.' },
   editorLineNumbers: { type: 'boolean', scope: 'state', description: 'Line numbers show in the query editor.' },
+  resultsWhitespaceSpaces: { type: 'boolean', scope: 'state', description: 'The results grid marks spaces and tabs (Show Spaces and Tabs in Results).' },
+  resultsWhitespaceAll: { type: 'boolean', scope: 'state', description: 'The results grid marks every white space character, line breaks included (Show All White Space in Results).' },
   hasBookmarks: { type: 'boolean', scope: 'state', description: 'An open document has a bookmark.' },
   activeDocumentHasBookmarks: { type: 'boolean', scope: 'state', description: 'The active document has a bookmark.' },
   anyDocumentDirty: { type: 'boolean', scope: 'state', description: 'Some open document has unsaved changes.' },

@@ -200,6 +200,7 @@ const groups = {
     'resultsGrid.nullForeground': ['X', '$textMuted', 'NULL values, which are drawn in italics.', 'css'],
     'resultsGrid.nullBackground': ['X', '$text/0', 'NULL cells; untinted by default, so NULL reads as muted italic text.', 'css'],
     'resultsGrid.truncationForeground': ['X', '@warningForeground', 'Truncation notices and the marker on truncated values.', 'css'],
+    'resultsGrid.whitespaceForeground': ['X', '$textMuted', 'White space marks in cells (results toolbar › White space): the dots, arrows and the names of line breaks and invisible characters.', 'css'],
     'resultsGrid.selectionBackground': ['X', '@list.activeSelectionBackground', 'Selected cells.', 'css'],
     'resultsGrid.selectionForeground': ['X', '@list.activeSelectionForeground', 'Text of selected cells.', 'css'],
     'resultsGrid.inactiveSelectionBackground': ['X', '@list.inactiveSelectionBackground', 'Selected cells while the grid is not focused; their text keeps its color.', 'css'],

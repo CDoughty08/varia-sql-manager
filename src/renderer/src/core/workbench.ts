@@ -315,6 +315,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   })
   const context = new ContextKeyService({
     platform,
+    settings,
     documents,
     queries,
     connections,
