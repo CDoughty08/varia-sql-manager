@@ -1,5 +1,5 @@
-import type { BackendState, BackendStatus, QueryEvent, ResultDescriptor, ResultsCloseResult, ResultsReadParams, ResultsReadResult } from '../../shared/contracts'
-import { portRequestSchema, testPortRequestSchema, type PortMessage, type PortRequest } from '../../shared/ipc/port-messages'
+import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsReadParams, ResultsReadResult } from '../../shared/contracts'
+import { portRequestSchema, testPortRequestSchema, type MemoryFeature, type MemoryReport, type PortMessage, type PortRequest } from '../../shared/ipc/port-messages'
 import { liveDescriptors, liveRetired, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../../shared/live/schema'
 import { cancelReasons, limits as wire, type CancelReason, type ErrorCode } from '../../shared/ipc/wire/protocol'
 import type { StreamSink } from './connection'
@@ -71,6 +71,7 @@ export class ResultsPortHost {
   private readonly schema: typeof portRequestSchema
   /** Result ids the current generation holds for this renderer, oldest first. */
   private readonly owned = new Set<number>()
+  private readonly latestMemory = new Map<MemoryFeature, Extract<PortMessage, { t: 'memory' }>>()
   private port: PortMainLike | undefined
   private generation = 0
   private status: BackendStatus = 'stopped'
@@ -110,6 +111,7 @@ export class ResultsPortHost {
     port1.start()
     frame.postMessage('varia:results-port', { generation: this.generation }, [port2 as never])
     this.post({ t: 'backend', generation: this.generation, status: this.status })
+    for (const report of this.latestMemory.values()) this.post(report)
   }
 
   /** A new page load (reload, crash or window close): the port closes and earlier opens stop counting, so the rate
@@ -143,7 +145,9 @@ export class ResultsPortHost {
     if (generation !== this.generation) {
       this.generation = generation
       this.owned.clear()
+      this.latestMemory.clear()
     }
+    if (state.status === 'restarting') this.latestMemory.clear()
     this.status = state.status
     this.post({ t: 'backend', generation, status: state.status })
   }
@@ -188,9 +192,22 @@ export class ResultsPortHost {
     this.post({ t: 'query', queryId, event })
   }
 
-  /** A results.memory event of `generation`; the renderer orders it with the summaries by generation and seq. */
-  memory(generation: number, report: { usedBytes: number; globalBytes: number; seq: number }): void {
-    this.post({ t: 'memory', usedBytes: report.usedBytes, globalBytes: report.globalBytes, generation, seq: report.seq })
+  querySummary(summary: QueryResult): void {
+    this.own(summary.resultSets)
+    this.rememberMemory('results', summary.budget)
+  }
+
+  memory(feature: MemoryFeature, report: MemoryReport): void {
+    const message = this.rememberMemory(feature, report)
+    if (message) this.post(message)
+  }
+
+  /** Retain the newest samples for a port opened after the backend's initial reports or after a reload. */
+  private rememberMemory(feature: MemoryFeature, { generation, seq, usedBytes, globalBytes }: MemoryReport) {
+    if (generation !== this.generation || this.status === 'restarting' || seq <= (this.latestMemory.get(feature)?.seq ?? 0)) return
+    const message = { t: 'memory', feature, generation, seq, usedBytes, globalBytes } as const
+    this.latestMemory.set(feature, message)
+    return message
   }
 
   private receive(data: unknown): void {

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using Varia.Backend.Protocol;
 using Varia.Backend.Results;
+using Varia.Backend.Search;
 
 namespace Varia.Backend.Tests;
 
@@ -141,14 +142,19 @@ internal static class StoreChecks
         HostReads(check);
     }
 
-    /// <summary>results.memory waits for a 64 MiB rise or a new band, but reports every fall below what it last reported
-    /// or a summary last showed, and results.close reports its fall before it answers, so the status bar (which follows
-    /// only these events and the summaries) never keeps showing memory that a close or a finished lease returned.</summary>
+    /// <summary>results.memory reports small increases without a query summary, and reports memory released by
+    /// results.close before the response.</summary>
     private static void MemoryReports(Action<bool, string> check)
     {
         var reports = new List<long>();
         var store = new ResultStore(1L << 30, 1L << 29);
-        using var service = new SqlService(store, publish: value => { lock (reports) reports.Add(JsonSerializer.SerializeToElement(value, HostChecks.Json).GetProperty("usedBytes").GetInt64()); return true; });
+        using var service = new SqlService(store, publish: value =>
+        {
+            var report = JsonSerializer.SerializeToElement(value, HostChecks.Json);
+            if (report.GetProperty("type").GetString() == "results.memory")
+                lock (reports) reports.Add(report.GetProperty("usedBytes").GetInt64());
+            return true;
+        });
         long? Last() { lock (reports) return reports.Count > 0 ? reports[^1] : null; }
         var first = Open(store, store.BeginQuery("s1"));
         Fill(first, 0, 1000);
@@ -161,25 +167,64 @@ internal static class StoreChecks
         second.Complete();
         service.ReportMemory();
         var afterRise = Last();
+        var usedAfterRise = store.UsedBytes;
         var close = JsonSerializer.SerializeToElement(new { resultIds = new[] { first.ResultId, second.ResultId } }, HostChecks.Json);
         var closed = (ResultsCloseResult)service.DispatchAsync("results.close", close, HostChecks.Json).GetAwaiter().GetResult();
-        check(reported > 0 && afterFirst == reported && afterRise == reported && closed.Closed == 2 && Last() == 0,
-            "results.memory skips a small rise but reports the fall to 0 before results.close answers: " + afterFirst + ", " + afterRise + ", " + Last());
+        check(reported > 0 && afterFirst == reported && afterRise == usedAfterRise
+            && usedAfterRise > reported && usedAfterRise - reported < 64L * 1024 * 1024 && closed.Closed == 2 && Last() == 0,
+            "results.memory reports a small rise and the fall to 0 before results.close answers: " + afterFirst + ", " + afterRise + ", " + Last());
 
-        // A later run that grows by less than a step is shown only through its summary; closing it still reports 0.
+        // A summary counts as a report, so the same sample is deduplicated and a subsequent close still reports 0.
         int Count() { lock (reports) return reports.Count; }
         var third = Open(store, store.BeginQuery("s3"));
         Fill(third, 0, 1000);
         third.Complete();
-        service.ReportMemory();
-        var before = Count();
         var summary = service.SummaryBudget();
+        var before = Count();
         service.ReportMemory();
         var afterSummary = Count();
         close = JsonSerializer.SerializeToElement(new { resultIds = new[] { third.ResultId } }, HostChecks.Json);
         closed = (ResultsCloseResult)service.DispatchAsync("results.close", close, HostChecks.Json).GetAwaiter().GetResult();
-        check(summary.UsedBytes > 0 && summary.UsedBytes < 64L * 1024 * 1024 && afterSummary == before && closed.Closed == 1 && Count() == before + 1 && Last() == 0,
-            "after a close to 0, a small run shown only by its summary reports the fall to 0 when it is closed: " + before + ", " + afterSummary + ", " + Count() + ", " + Last());
+        check(summary.UsedBytes > 0 && afterSummary == before && closed.Closed == 1 && Count() == before + 1 && Last() == 0,
+            "results.memory deduplicates a summary's sample and reports the fall to 0 when the results are closed: " + before + ", " + afterSummary + ", " + Count() + ", " + Last());
+
+        MemoryBudgetReports(check);
+    }
+
+    private static void MemoryBudgetReports(Action<bool, string> check)
+    {
+        var reports = new List<(long Used, long Limit, long Seq)>();
+        var store = new ResultStore(1L << 30, 1L << 29);
+        long resultsUsed = -1;
+        using var service = new SqlService(store, publish: value =>
+        {
+            var report = JsonSerializer.SerializeToElement(value, HostChecks.Json);
+            var used = report.GetProperty("usedBytes").GetInt64();
+            if (report.GetProperty("type").GetString() == "results.memory")
+            {
+                Interlocked.Exchange(ref resultsUsed, used);
+                return true;
+            }
+            lock (reports)
+            {
+                reports.Add((used, report.GetProperty("globalBytes").GetInt64(), report.GetProperty("seq").GetInt64()));
+                return reports.Count != 1;
+            }
+        });
+        service.ReportMemory();
+        check(Interlocked.Read(ref resultsUsed) == 0, "results.memory reports the initial empty store");
+        var pool = service.Search.Pool;
+        service.ReportIndexMemory(); // Refused by the control lane.
+        service.ReportIndexMemory(); // Retried with the same sequence.
+        var name = pool.TryAcquire("dbo.Orders");
+        service.ReportIndexMemory();
+        service.ReportIndexMemory(); // No change to report.
+        pool.Release([name]);
+        service.ReportIndexMemory();
+        var limit = service.Search.Limits.MemoryBytes;
+        lock (reports)
+            check(reports.SequenceEqual([(0L, limit, 1L), (0L, limit, 1L), (StringPool.Cost("dbo.Orders"), limit, 2L), (0L, limit, 3L)]),
+                "explorer.index.memory reports the shared index budget, retries refused samples, and reports bytes released");
     }
 
     /// <summary>Released pages are large arrays that only a gen2 collection frees; the store triggers one itself.</summary>

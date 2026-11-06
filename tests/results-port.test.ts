@@ -7,6 +7,7 @@ import { buildPortRequestSchema, type PortMessage, type portRequestSchema } from
 import { buildLiveSchemas } from '../src/shared/live/schema'
 import type { LiveProbeSpec, LiveSourceSpec } from '../src/shared/live/catalog'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../src/shared/live/schema'
+import { summaryOf } from './fixtures/results'
 
 const MiB = 1024 * 1024
 
@@ -234,10 +235,31 @@ describe('ResultsPortHost', () => {
     const { host, read, reads, port } = fixture()
     const opened: QueryEvent = { type: 'resultSet.opened', descriptor: { generation: 1, resultId: 9, index: 0, batchNumber: 1, iteration: 1, kind: 'rows', columns: [{ name: 'a', dataType: 'int', wire: 'text', nullable: true }], rowsRead: 0, rowsStored: 0, rowsAvailable: 0, bytesStored: 0, truncatedCells: 0, state: 'open', incomplete: false } }
     host.queryEvent('query-1', opened)
-    host.memory(1, { usedBytes: 10, globalBytes: 100, seq: 7 })
-    expect(port().posted.slice(-2)).toEqual([{ t: 'query', queryId: 'query-1', event: opened }, { t: 'memory', usedBytes: 10, globalBytes: 100, generation: 1, seq: 7 }])
+    host.memory('results', { usedBytes: 10, globalBytes: 100, seq: 7, generation: 1 })
+    expect(port().posted.slice(-2)).toEqual([{ t: 'query', queryId: 'query-1', event: opened }, { t: 'memory', feature: 'results', usedBytes: 10, globalBytes: 100, generation: 1, seq: 7 }])
     read(1, 9)
     expect(reads).toHaveLength(1)
+  })
+
+  it('replays each feature’s newest sample when the port opens, and drops samples from a retired backend', () => {
+    const { host, frame, port } = fixture()
+    host.close()
+    host.memory('results', { usedBytes: 0, globalBytes: 200, generation: 1, seq: 1 })
+    host.memory('index', { usedBytes: 70, globalBytes: 100, generation: 1, seq: 1 })
+    host.querySummary(summaryOf([], { budget: { usedBytes: 80, globalBytes: 200, queryBytes: 100, generation: 1, seq: 3 } }))
+    host.memory('results', { usedBytes: 20, globalBytes: 200, generation: 1, seq: 2 })
+    host.open(frame)
+    expect(port().posted).toEqual([
+      { t: 'backend', generation: 1, status: 'ready' },
+      { t: 'memory', feature: 'results', usedBytes: 80, globalBytes: 200, generation: 1, seq: 3 },
+      { t: 'memory', feature: 'index', usedBytes: 70, globalBytes: 100, generation: 1, seq: 1 }
+    ])
+    host.backendState({ status: 'restarting', generation: 1, retryInMs: 10 })
+    host.memory('index', { usedBytes: 90, globalBytes: 100, generation: 1, seq: 2 })
+    host.backendState({ status: 'starting', generation: 2 })
+    host.memory('results', { usedBytes: 60, globalBytes: 200, generation: 1, seq: 4 })
+    host.open(frame)
+    expect(port().posted).toEqual([{ t: 'backend', generation: 2, status: 'starting' }])
   })
 
   it('closes only owned results of the current generation', async () => {

@@ -329,7 +329,7 @@ export class BackendConnection {
   /** RESPONSE, EVENT and DATA frames, by request id. */
   private route(frame: ParsedFrame): void {
     const id = frame.id
-    // A global event (results.memory) is advisory: an undecodable one is dropped, never fatal.
+    // Global memory events are advisory: an undecodable one is dropped, never fatal.
     if (id === 0 && frame.kind === FrameKind.EVENT) {
       const event = frame.oversize ? undefined : decoded(frame.body)
       if (event) this.onGlobalEvent?.(event.value, this.generation)

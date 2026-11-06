@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
 import { dialogLifecycle, longRunRefusals, rendererWatchdog } from './fixtures/dialog-lifecycle.mjs'
 import { sessionPrompts } from './fixtures/session-prompts.mjs'
-import { activeMenuItem, anyResultGrid, backendReady, banner, documentTabs, documentTabSlots, editorText as editorTextOf, errorMessages, explorerLabel, gridCell, gridPart, matching, menuItemNames, messages as messagesOf, openMenus as openMenusOf, outputPane, outputView, paneMenuButton, paneTab, part, quickInput, searchBox, serverRows, statusBar, titleBar, toolbarButton } from './fixtures/ui.mjs'
+import { activeMenuItem, anyResultGrid, backendReady, banner, documentTabs, documentTabSlots, editorText as editorTextOf, errorMessages, explorerLabel, gridCell, gridPart, matching, memoryBreakdown, memoryIndicator, menuItemNames, messages as messagesOf, openMenus as openMenusOf, outputPane, outputView, paneMenuButton, paneTab, part, quickInput, searchBox, serverRows, statusBar, titleBar, toolbarButton } from './fixtures/ui.mjs'
 
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
 if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
@@ -493,13 +493,22 @@ try {
   await expect.poll(clipboard).toBe('SELECT 7 AS seven')
   await expect(textbox()).toBeFocused()
   await page.keyboard.press('End')
+  // Keyboard-opened menus must dismiss even a pinned Memory breakdown and take priority over hover.
+  await memoryIndicator(page).click()
+  await expect(memoryBreakdown(page)).toBeVisible()
+  await textbox().focus()
   await page.keyboard.press('Shift+F10')
   await expect(editorMenu.getByRole('menuitem', { name: 'Insert Snippet…', exact: true })).toBeFocused()
+  await expect(memoryBreakdown(page)).toBeHidden()
   await expect(page.locator(part.menuLayer)).toHaveAttribute('data-mnemonics', 'visible')
   const caret = await page.locator('.monaco-editor .cursor').first().boundingBox(), below = await editorMenu.boundingBox()
   expect(below.y).toBeGreaterThanOrEqual(caret.y + caret.height - 1)
   expect(below.y).toBeLessThanOrEqual(caret.y + caret.height + 30)
   expect(Math.abs(below.x - caret.x)).toBeLessThanOrEqual(30)
+  await page.mouse.move(5, 80)
+  await memoryIndicator(page).hover()
+  await expect(memoryBreakdown(page)).toBeHidden()
+  await expect(editorMenu).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(textbox()).toBeFocused()
   await page.keyboard.press('ContextMenu')

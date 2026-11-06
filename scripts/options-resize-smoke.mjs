@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { electron, expect } from './fixtures/smoke.mjs'
 import { resizeContent, resizeWindow } from './fixtures/window-resize.mjs'
-import { backendReady, editorTextbox, editorText } from './fixtures/ui.mjs'
+import { backendReady, editorTextbox, editorText, memoryBreakdown, memoryIndicator } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'options-resize-profile-'))
@@ -76,10 +76,13 @@ try {
   expect(completed, 'resizeContent waits for the application resize event even after the viewport changed').toBe(false)
   await releaseResize()
   await resized
+  await memoryIndicator(page).click()
+  await expect(memoryBreakdown(page)).toBeVisible()
   await openTools()
   await page.keyboard.press('o')
   await expect(options()).toBeVisible()
-  await page.keyboard.press('Escape')
+  await expect(memoryBreakdown(page)).toBeHidden()
+  await options().getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(options()).toHaveCount(0)
   await expect.poll(text).toBe('SELECT 1')
   // Repeating the same size has no native event and must still complete.
