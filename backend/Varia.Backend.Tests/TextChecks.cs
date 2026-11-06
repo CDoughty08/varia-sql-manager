@@ -496,9 +496,13 @@ internal static class TextChecks
             "a reset feed starts a fresh window for the next cell (" + next + " bytes) and counts output from what it was at the reset (" + unchanged + " bytes)");
         var fallbacks = Enum.GetValues<CellCodec>().SelectMany(codec => new[] { (codec, WireKind.Text), (codec, WireKind.Binary) })
             .Select(pair => (pair.codec, pair.Item2, Fallback: ColumnPlan.FallbackOf(pair.codec, pair.Item2, true))).ToList();
-        check(fallbacks.All(item => item.Fallback is CellCodec.LongText or CellCodec.Xml or CellCodec.Stream) && ColumnPlan.FallbackOf(CellCodec.Xml, WireKind.Text, true) == CellCodec.Xml
+        check(fallbacks.All(item => item.Fallback is CellCodec.LongText or CellCodec.Xml or CellCodec.Json or CellCodec.Stream) && ColumnPlan.FallbackOf(CellCodec.Xml, WireKind.Text, true) == CellCodec.Xml
             && ColumnPlan.FallbackOf(CellCodec.Chars, WireKind.Text, false) == CellCodec.Value && ColumnPlan.FallbackOf(CellCodec.Bytes, WireKind.Binary, true) == CellCodec.Stream,
             "a long column whose value could not be read keeps a streaming reader, never GetValue");
+        // SqlClient 7.1.1 misreads json's UTF-8 under SequentialAccess: GetChars one byte a character, GetTextReader throws
+        // when a read ends inside a sequence. Varia decodes the bytes itself (the live checks read non-ASCII json).
+        var json = ColumnPlan.Choose(35, null, true, typeof(string), false);
+        check(json == (CellCodec.Json, WireKind.Text, "json", ColumnPlan.DocumentCap), "json is decoded from its UTF-8 bytes, not read with GetChars: " + json);
     }
 
     /// <summary>FOR XML and FOR JSON output arrives in rows of about 2,033 characters, joined into one value up to the cap.</summary>

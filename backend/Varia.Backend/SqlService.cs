@@ -27,7 +27,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
-        "results.read", "results.close", "explorer.children", "explorer.peek", "explorer.index", "explorer.search", "results.copy", "results.export",
+        "results.read", "results.close", "results.rowBytes", "explorer.children", "explorer.peek", "explorer.index", "explorer.search", "results.copy", "results.export",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
         "ssis.describe", "ssis.execute", "ssis.catalogSetup"
@@ -295,7 +295,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "live.subscribe" or "activity.details" => RequestLane.Live,
         // Kill Process takes no metadata slot: it runs at once under its own gates, as object actions do under theirs.
         "activity.kill" => RequestLane.Actions,
-        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "entra.cache.clear"
+        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "entra.cache.clear"
             or "live.update" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
         _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
@@ -340,6 +340,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "query.session.state" => await SessionStateAsync(Read<SessionStateArgs>(parameters, json), Token(context)),
         "results.read" => await ReadResultsAsync(Read<ResultsReadArgs>(parameters, json), context),
         "results.close" => CloseResults(Read<ResultsCloseArgs>(parameters, json)),
+        "results.rowBytes" => RowBytes(Read<ResultsRowBytesArgs>(parameters, json)),
         "results.copy" => await jobs.CopyAsync(Read<ResultsCopyArgs>(parameters, json), context),
         "results.export" => await jobs.ExportAsync(Read<ResultsExportArgs>(parameters, json), context),
         "explorer.children" => await explorer.ChildrenAsync(Read<ExplorerChildrenArgs>(parameters, json), Token(context)),
@@ -1079,7 +1080,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                                         if (sets.Count >= args.MaxResultSets) overflowSets++;
                                         else if (oversizeSets > 0) oversizeSets++;
                                         else if ((plan = ColumnPlan.From(reader)).DescriptorBytes + descriptorBytes > MaxSummaryDescriptorBytes) { oversizeSets++; plan = null; }
-                                        else if (store.Open(budget, sets.Count, batchNumber, iteration, plan.IsPlan ? "executionPlan" : "rows", plan.Columns, plan.Wires) is { } opened)
+                                        else if (store.Open(budget, sets.Count, batchNumber, iteration, plan.IsPlan ? "executionPlan" : "rows", plan.Columns, plan.Wires, lengths: plan.Lengths) is { } opened)
                                         {
                                             descriptorBytes += plan.DescriptorBytes;
                                             currentSet = opened;
@@ -1345,6 +1346,22 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         }
         var available = set.RowsAvailable;
         return new ResultsReadResult(next, available, set.IsComplete && next >= available, pages, rows);
+    }
+
+    /// <summary>The most rows one results.rowBytes answers (src/shared/ipc/wire/protocol.ts limits.rowSizes.maxRows).</summary>
+    public const int MaxRowBytesRows = 16_384;
+
+    /// <summary>Each row's bytes (the sum of DATALENGTH over its cells) for a range of a result's sealed rows; fewer than asked
+    /// past the rows available, as results.read serves them.</summary>
+    private ResultsRowBytesResult RowBytes(ResultsRowBytesArgs args)
+    {
+        if (args.ResultId == 0 || args.FirstRow is < 0 or > MaxSafeInteger || args.Count is < 1 or > MaxRowBytesRows)
+            throw new RequestException("INVALID_PARAMS", "The result range is invalid.");
+        var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        var estimated = new List<long>();
+        var bytes = set.RowBytes(args.FirstRow, args.Count, estimated);
+        if (set.IsReleased) throw Unavailable(args.ResultId);
+        return new ResultsRowBytesResult(args.FirstRow, bytes, set.RowsAvailable, [.. estimated]);
     }
 
     private RequestException Unavailable(uint resultId) => store.WasReleased(resultId)
