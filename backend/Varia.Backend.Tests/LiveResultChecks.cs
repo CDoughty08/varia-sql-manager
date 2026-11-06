@@ -587,7 +587,7 @@ internal static class LiveResultChecks
     {
         const int rows = 3;
         var cap = ColumnPlan.DocumentCap;
-        async Task<(List<PageCell[]> Rows, PageLengths? Lengths, List<string> Warnings, Exception? Error)> Read(Func<SqlDataReader, int, XmlReader> fallback)
+        async Task<(List<PageCell[]> Rows, PageLengths? Lengths, List<string> Warnings, Exception? Error)> Read(Func<SqlDataReader, int, XmlReader> fallback, CancellationToken token = default)
         {
             await using var connection = new SqlConnection(ConnectionSettings.Build(options).ConnectionString);
             await connection.OpenAsync();
@@ -603,7 +603,7 @@ internal static class LiveResultChecks
                 while (reader.Read())
                 {
                     builder.BeginRow();
-                    plan.ReadRow(reader, builder, warnings.Add);
+                    plan.ReadRow(reader, builder, warnings.Add, token);
                     builder.CommitRow();
                 }
             }
@@ -638,6 +638,12 @@ internal static class LiveResultChecks
             && estimated.SequenceEqual(Enumerable.Range(0, rows)) && failed.Warnings.Count == 1 && failed.Warnings[0].Contains("shown as NULL", StringComparison.Ordinal),
             "a cell that could not be read is NULL with the error flag, and its row's size is named an estimate ("
             + (failed.Error?.GetType().Name ?? string.Join(",", estimated) + "; " + string.Join(" | ", failed.Warnings)) + ")");
+
+        // Under a Stop, a value that parses as malformed is the Stop: no NULL, no warning.
+        var stopped = await Read((_, _) => XmlReader.Create(new StringReader("</b>"), settings), new CancellationToken(canceled: true));
+        check(stopped.Error is OperationCanceledException && stopped.Warnings.Count == 0,
+            "an xml value that parses as malformed under a Stop ends the read as the Stop, without a warning ("
+            + (stopped.Error?.GetType().Name ?? "no error") + "; " + string.Join(" | ", stopped.Warnings) + ")");
     }
 
     /// <summary>Rows that wait for a lock mid-statement are sealed after 200 ms, so they can be read before the statement
