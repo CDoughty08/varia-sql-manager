@@ -306,6 +306,30 @@ internal static class CellLengthChecks
         check(flagged.SequenceEqual([0L]) && allGuessed.SequenceEqual([1L, 2L]) && guessedSet.CellSize(0, 0) is { Exact: false },
             "row sizes name the rows whose sum includes an estimate: " + string.Join(",", flagged) + " / " + string.Join(",", allGuessed));
 
+        // Across pages (sealed at 4,096 rows), from a range that starts mid-page: estimates before and after the range are
+        // left out, a row with two estimated cells is named once, and an exact entry beside an estimated one still names it.
+        var paged = store.Open(store.BeginQuery("paged"), 0, 1, 1, "rows", [new("a", "nvarchar", "text"), new("b", "nvarchar", "text")], [WireKind.Text, WireKind.Text])!;
+        bool Estimate(long row) => row % 1000 == 7 || row is 4095 or 4096 or 8191;
+        for (long row = 0; row < 9000; row++)
+        {
+            paged.CountRow();
+            var rowBuilder = paged.BeginRow()!;
+            rowBuilder.AppendText("ab");
+            rowBuilder.Measure(2, 4, keep: row % 1000 == 7, exact: !Estimate(row));
+            rowBuilder.AppendText("cd");
+            rowBuilder.Measure(2, 4, keep: row == 4096, exact: row != 4095 && row != 7007);
+            paged.TryCommitRow();
+        }
+        paged.Complete();
+        var namedAcross = new List<long>();
+        var acrossBytes = paged.RowBytes(4000, 4200, namedAcross);
+        var none = new List<long>();
+        paged.RowBytes(4097, 900, none);
+        var pageCount = paged.PagesFor(0, 9000).Count;
+        check(acrossBytes.Length == 4200 && namedAcross.SequenceEqual([4007L, 4095L, 4096L, 5007L, 6007L, 7007L, 8007L, 8191L]) && none.Count == 0 && pageCount >= 3,
+            "estimated rows are named once each, in order, across pages, for a range starting mid-page and only within it: " + string.Join(",", namedAcross) + " (" + pageCount + " pages)");
+        store.Release(paged.ResultId);
+
         var leased = set.TryLease();
         var released = store.Release(set.ResultId);
         var whileLeased = set.RowBytes(0, 10).Length;
