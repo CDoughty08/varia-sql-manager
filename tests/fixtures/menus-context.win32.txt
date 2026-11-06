@@ -34,6 +34,12 @@ documentTab.context, for a saved query's tab
   Mov&e Left  Ctrl+Shift+PageUp  ++++
   Move &Right  Ctrl+Shift+PageDown  ----
   Re&name Tab…  F2  ++++
+  ---
+  Spl&it Right  Ctrl+\  ----
+  Split Do&wn  Ctrl+K Ctrl+\  ----
+  Move to Ne&xt Group  Ctrl+Alt+Right  ----
+  Mo&ve to Previous Group  Ctrl+Alt+Left  ----
+  &Float  ----
 documentTab.context, for an unsaved query's tab
   &Save  Ctrl+S  +++-
   Save &As…  +++-
@@ -48,6 +54,12 @@ documentTab.context, for an unsaved query's tab
   Mov&e Left  Ctrl+Shift+PageUp  ++++
   Move &Right  Ctrl+Shift+PageDown  ++++
   Re&name Tab…  F2  ++++
+  ---
+  Spl&it Right  Ctrl+\  ----
+  Split Do&wn  Ctrl+K Ctrl+\  ----
+  Move to Ne&xt Group  Ctrl+Alt+Right  ----
+  Mo&ve to Previous Group  Ctrl+Alt+Left  ----
+  &Float  ----
 dockTab.context, for a docked panel's tab
   Dock &Left  ++++
   Dock &Right  ++++

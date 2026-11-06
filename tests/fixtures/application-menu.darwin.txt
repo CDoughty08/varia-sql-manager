@@ -131,6 +131,10 @@
   {"id":"document.previous","label":"Previous Query","registerAccelerator":false,"type":"normal","click":[["command","document.previous"]]}
   {"id":"file.closeAll","label":"Close All Documents","registerAccelerator":false,"type":"normal","click":[["command","file.closeAll"]]}
   {"type":"separator"}
+  {"accelerator":"Cmd+\\","id":"editor.splitRight","label":"Split Editor Right","registerAccelerator":false,"type":"normal","click":[["command","editor.splitRight"]]}
+  {"id":"editor.splitDown","label":"Split Editor Down","registerAccelerator":false,"type":"normal","click":[["command","editor.splitDown"]]}
+  {"id":"editor.joinGroups","label":"Join All Editor Groups","registerAccelerator":false,"type":"normal","click":[["command","editor.joinGroups"]]}
+  {"type":"separator"}
   {"id":"layout.save@window","label":"Save Window Layout…","registerAccelerator":false,"type":"normal","click":[["command","layout.save"]]}
   {"id":"layout.load@window","label":"Load Window Layout…","registerAccelerator":false,"type":"normal","click":[["command","layout.load"]]}
   {"id":"layout.reset@window","label":"Reset Window Layout","registerAccelerator":false,"type":"normal","click":[["command","layout.reset"]]}

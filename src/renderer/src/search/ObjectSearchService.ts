@@ -42,7 +42,9 @@ export interface SearchDocumentState extends SearchQueryState {
   readonly result?: ObjectSearchResult
   readonly asked?: SearchQueryState
   readonly error?: string
-  /** The hit Enter in the box revealed last, by index in the result; a new result forgets it. */
+  /** The selected hit, by index in the result: the one Enter in the box revealed last, or the list's selection. A new result
+   *  forgets it, unless it answers the same query again (the build's end runs it again, or the user searches it again) and the
+   *  hit is still there. */
   readonly current?: number
 }
 export interface ObjectSearchSnapshot {
@@ -117,6 +119,19 @@ export function revealPaths(hit: ObjectSearchHit, grouped = false): RevealPath[]
       : [listing(hit.folder, hit.object.schema)]
   const under = (folder: FolderId): RevealPath[] => belows.map(below => [...folderChain(server, folder), { type: 'object', object: database }, ...below, { type: 'object', object: hit.object }])
   return systemDatabases.has(name.toLowerCase()) ? [...under('systemDatabases'), ...under('databases')] : [...under('databases'), ...under('systemDatabases')]
+}
+/** The hit's identity across answers: its object and the folder that lists it, as the list keys its rows. */
+export const hitKey = (hit: ObjectSearchHit): string => JSON.stringify([hit.object, hit.folder])
+/**
+ * Where the selected hit is in a new answer to the same query (a build's end runs it again, as may the user: Enter, or text
+ * typed and taken back), so the selection, and the focus on it, survive while the user walks the hits; undefined after any
+ * other query, or when the hit is gone.
+ */
+function keptHit(document: SearchDocumentState, asked: SearchQueryState, hits: readonly ObjectSearchHit[]): number | undefined {
+  const selected = document.current === undefined ? undefined : document.result?.hits[document.current]
+  if (!selected || JSON.stringify(document.asked) !== JSON.stringify(asked)) return undefined
+  const key = hitKey(selected), at = hits.findIndex(hit => hitKey(hit) === key)
+  return at < 0 ? undefined : at
 }
 const emptyQuery: SearchQueryState = { text: '', caseSensitive: false, wholeWord: false, regex: false, scope: 'all', types: [] }
 const live = (connection: LiveConnection | undefined): connection is LiveConnection => !!connection && !connection.lost
@@ -267,7 +282,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
       const current = this.getSnapshot().documents[id]
       if (this.disposed || current?.requestId !== requestId) return
       const { requestId: _done, ...rest } = current
-      if (result.ok) this.putDocument({ ...rest, result: result.value, asked, error: undefined, current: undefined })
+      if (result.ok) this.putDocument({ ...rest, result: result.value, asked, error: undefined, current: keptHit(current, asked, result.value.hits) })
       else if (result.code !== 'CANCELLED') this.putDocument({ ...rest, error: result.error })
       else this.putDocument(rest)
     }, onUnexpectedError)
@@ -296,7 +311,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     return hits[current]
   }
 
-  /** A hit revealed from the list: the next Enter in the box goes on from it. */
+  /** The hit selected in the list (clicked, reached with the arrows, or revealed): the next Enter in the box goes on from it. */
   pick(id: string, current: number): void {
     const document = this.getSnapshot().documents[id]
     if (document?.result && current >= 0 && current < document.result.hits.length) this.putDocument({ ...document, current })

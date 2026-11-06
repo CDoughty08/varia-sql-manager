@@ -16,7 +16,7 @@ describe('menu targets', () => {
       { kind: 'documentTab', tabId: 't2' }, { kind: 'output', tabId: 't3', view: 'messages', resultIndex: 0, selectedText: '', element: element('div').dom }, { kind: 'dockTab', pane: 'results', floating: true, popout: false }, input, { kind: 'ssisOperations', tabId: 't5' }
     ]
     expect(targets.map(target => menuForTarget[target.kind])).toEqual(contextMenuIds)
-    const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, explorerFolder: '', explorerFolderInsertable: false, explorerNodeStatus: '', explorerServerEngine: '', explorerServerLinux: false, outputView: '', pane: '', paneFloating: false, panePopout: false }
+    const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, explorerFolder: '', explorerFolderInsertable: false, explorerNodeStatus: '', explorerServerEngine: '', explorerServerLinux: false, outputView: '', pane: '', paneFloating: false, panePopout: false, documentTabFloating: false }
     expect(targets.map(targetKeys)).toEqual([none, { ...none, explorerNode: 'table' }, none, none, { ...none, outputView: 'messages' }, { ...none, pane: 'results', paneFloating: true }, none, none])
     expect(targetKeys(undefined)).toEqual(none)
     // The empty area below the servers, and a server lost with its backend generation.
@@ -25,6 +25,8 @@ describe('menu targets', () => {
     expect(targetKeys({ kind: 'explorer', node: lost })).toEqual({ ...none, explorerNode: 'server', explorerServerLost: true })
     expect(targetKeys({ kind: 'dockTab', pane: 'editor', floating: false, popout: false }).paneFloating).toBe(false)
     expect(targetKeys({ kind: 'dockTab', pane: 'results', floating: false, popout: true }).panePopout).toBe(true)
+    // A document tab in a floating editor group offers Dock rather than Float.
+    expect(targetKeys({ kind: 'documentTab', tabId: 't2', floating: true })).toEqual({ ...none, documentTabFloating: true })
     // Folders Filter Settings can narrow, with or without a filter; folders that list nothing to filter.
     const folder = (id: 'tables' | 'programmability', filtered?: boolean) => ({ id: 2, lost: false, kind: 'folder', folder: id, connectionId: 'c', label: id, ref: { type: 'folder', owner: { kind: 'database', name: 'd' }, folder: id }, ...(filtered ? { filtered } : {}) } as const)
     // explorerFolder names the folder, so only Tables offers New › Table….
@@ -100,6 +102,15 @@ describe('menu target service', () => {
     service.register(dom(elements.paneTab), () => ({ kind: 'dockTab', pane: 'results', floating: false, popout: false }))
     return { service, ...elements }
   }
+  it('finds the document tab of an editor group from the Dockview tab element around it (Shift+F10)', () => {
+    const doc = fakeDocument(), make = (tag: string, init?: ConstructorParameters<typeof FakeElement>[2]) => new FakeElement(doc, tag, init)
+    const documentTab = make('div', { className: 'query-tab', attributes: { 'data-tab-id': 't2' } })
+    const host = make('div', { className: 'dv-tab', attributes: { tabindex: '0', role: 'tab' } }).append(documentTab)
+    make('body').append(host)
+    const service = new MenuTargetService({ commandEnabled: () => true })
+    service.register(dom(documentTab), registered => ({ kind: 'documentTab', tabId: (registered as unknown as FakeElement).dataset.tabId }))
+    expect(service.targetFor(dom(host))).toEqual({ target: { kind: 'documentTab', tabId: 't2' }, element: host, mark: host, focus: host })
+  })
   it('finds registered elements from anything inside them, focusing the part that was clicked', () => {
     const { service, tabName, tabButton, queryTab } = setup()
     expect(service.targetFor(dom(tabName))).toEqual({ target: { kind: 'documentTab', tabId: 't1' }, element: queryTab, mark: queryTab, focus: tabButton })

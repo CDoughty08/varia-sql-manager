@@ -127,6 +127,10 @@ Window
   &Previous Query  Ctrl+Shift+Tab  ----
   C&lose All Documents  +++-
   ---
+  Spl&it Editor Right  Ctrl+\  ----
+  Split Editor Do&wn  Ctrl+K Ctrl+\  ----
+  &Join All Editor Groups  ----
+  ---
   &Save Window Layout…  ++++
   Lo&ad Window Layout…  ++++
   &Reset Window Layout  ++++

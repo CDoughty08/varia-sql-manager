@@ -18,6 +18,8 @@ export interface CommandContext {
   readonly cell?: { readonly resultIndex: number; readonly row: number; readonly column: number; readonly capturedPlan?: true }
   /** What the widget a command opens is placed below: the header's search box, for the Search it opens. */
   readonly anchor?: Element
+  /** A command that shows a pane leaves keyboard focus where it is: Search Objects' Reveal, so the arrows keep walking its hits. */
+  readonly keepFocus?: boolean
 }
 export type CommandArgs = CommandContext
 export type WorkbenchEvent =

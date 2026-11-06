@@ -82,6 +82,7 @@ export interface CommandDescriptor {
 }
 
 const openFirst = 'Open a query first.'
+const tabKeys = 'documentTabFocus && !inputFocus'
 const noServer = 'No server is connected.'
 const secondQuery = 'Open a second query first.'
 const noFile = 'Save this query to a file first.'
@@ -131,7 +132,8 @@ export const commandCatalog = {
   },
   'file.close': {
     title: 'Close Query', category: 'File', icon: 'close', precondition: 'hasActiveDocument && !documentBusy', unavailableHint: openFirst,
-    keybindings: [{ key: 'mod+w' }, { win: 'ctrl+f4', linux: 'ctrl+f4' }],
+    // Delete and Backspace on a focused tab, as Dockview's tabs close; a key pressed on a tab closes that tab.
+    keybindings: [{ key: 'mod+w' }, { win: 'ctrl+f4', linux: 'ctrl+f4' }, { key: 'delete', when: tabKeys }, { key: 'backspace', when: tabKeys }],
     menus: [{ menu: 'file', group: '2_close', order: 1, mnemonic: 'c' }, { menu: 'documentTab.context', group: '2_close', order: 1, title: 'Close', mnemonic: 'c' }]
   },
   // The query tab menu's commands act on the tab it was opened for (`tabId`), otherwise on the active query.
@@ -449,6 +451,50 @@ export const commandCatalog = {
     keybindings: [{ key: 'f2', when: 'documentTabFocus && !inputFocus' }],
     menus: [{ menu: 'documentTab.context', group: '4_move', order: 3, mnemonic: 'n' }]
   },
+  // VS Code's editor groups (docs/editor-groups.md) and its keys; Ctrl+1 to Ctrl+9 stay free for SSMS's query shortcuts.
+  // A document shows in one group at a time, so splitting moves it into the new group; its handler also needs another tab
+  // in the document's own group, and says so. The tab menu acts on its tab.
+  'editor.splitRight': {
+    title: 'Split Editor Right', category: 'View', icon: 'split-horizontal', keywords: ['group', 'side', 'tab', 'move'], precondition: 'multipleDocuments', unavailableHint: secondQuery,
+    keybindings: [{ key: 'mod+\\' }],
+    menus: [{ menu: 'window', group: '2_groups', order: 1, mnemonic: 'i' }, { menu: 'documentTab.context', group: '5_groups', order: 1, title: 'Split Right', mnemonic: 'i' }]
+  },
+  'editor.splitDown': {
+    title: 'Split Editor Down', category: 'View', keywords: ['group', 'below', 'tab', 'move'], precondition: 'multipleDocuments', unavailableHint: secondQuery,
+    keybindings: [{ key: 'mod+k mod+\\', native: true, bridge: true }],
+    menus: [{ menu: 'window', group: '2_groups', order: 2, mnemonic: 'w' }, { menu: 'documentTab.context', group: '5_groups', order: 2, title: 'Split Down', mnemonic: 'w' }]
+  },
+  'editor.moveToNextGroup': {
+    title: 'Move Editor into Next Group', category: 'View', keywords: ['group', 'split', 'tab'], precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    keybindings: [{ win: 'ctrl+alt+right', linux: 'ctrl+alt+right', mac: 'ctrl+mod+right' }],
+    menus: [{ menu: 'documentTab.context', group: '5_groups', order: 3, title: 'Move to Next Group', mnemonic: 'x' }]
+  },
+  'editor.moveToPreviousGroup': {
+    title: 'Move Editor into Previous Group', category: 'View', keywords: ['group', 'split', 'tab'], precondition: 'multipleEditorGroups', unavailableHint: 'Split the editor first.',
+    keybindings: [{ win: 'ctrl+alt+left', linux: 'ctrl+alt+left', mac: 'ctrl+mod+left' }],
+    menus: [{ menu: 'documentTab.context', group: '5_groups', order: 4, title: 'Move to Previous Group', mnemonic: 'v' }]
+  },
+  'editor.focusNextGroup': {
+    title: 'Focus Next Editor Group', category: 'View', keywords: ['group', 'split'], precondition: 'multipleEditorGroups', unavailableHint: 'Split the editor first.',
+    keybindings: [{ key: 'mod+k mod+right', native: true, bridge: true }]
+  },
+  'editor.focusPreviousGroup': {
+    title: 'Focus Previous Editor Group', category: 'View', keywords: ['group', 'split'], precondition: 'multipleEditorGroups', unavailableHint: 'Split the editor first.',
+    keybindings: [{ key: 'mod+k mod+left', native: true, bridge: true }]
+  },
+  'editor.joinGroups': {
+    title: 'Join All Editor Groups', category: 'View', keywords: ['group', 'split', 'merge', 'unsplit'], precondition: 'multipleEditorGroups', unavailableHint: 'Split the editor first.',
+    menus: [{ menu: 'window', group: '2_groups', order: 3, mnemonic: 'j' }]
+  },
+  // A floating group stays over the editor area; documents do not move into windows of their own (docs/editor-groups.md).
+  'editor.float': {
+    title: 'Float Editor', category: 'View', keywords: ['group', 'undock', 'tab'], precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    menus: [{ menu: 'documentTab.context', group: '5_groups', order: 5, title: 'Float', mnemonic: 'f', when: '!documentTabFloating' }]
+  },
+  'editor.dock': {
+    title: 'Dock Editor', category: 'View', keywords: ['group', 'float', 'tab'], precondition: 'hasActiveDocument', unavailableHint: openFirst,
+    menus: [{ menu: 'documentTab.context', group: '5_groups', order: 6, title: 'Dock', mnemonic: 'k', when: 'documentTabFloating' }]
+  },
   // Edit › Advanced › Word Wrap, where SSMS has it.
   'editor.toggleWordWrap': {
     title: 'Toggle Word Wrap', category: 'View', icon: 'word-wrap', toggled: 'editorWordWrap',
@@ -751,4 +797,9 @@ export const commandIds = Object.keys(commandCatalog) as CommandId[]
 export const isCommandId = (value: unknown): value is CommandId => typeof value === 'string' && Object.hasOwn(commandCatalog, value)
 /** Widens a catalogue entry so optional fields can be read without narrowing on the literal type. */
 export const commandDescriptor = (id: CommandId): CommandDescriptor => commandCatalog[id]
+/**
+ * Whether the query tab menu has the command, so it can act on a tab other than the shown one: a key pressed on a focused
+ * tab passes that tab to these alone. Every other command's keys follow the shown document, as their context keys do.
+ */
+export const actsOnTab = (id: CommandId): boolean => !!commandDescriptor(id).menus?.some(placement => placement.menu === 'documentTab.context')
 export const paletteLabel = (id: CommandId): string => { const command = commandDescriptor(id); return command.category ? `${command.category}: ${command.title}` : command.title }

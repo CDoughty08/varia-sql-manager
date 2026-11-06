@@ -174,17 +174,17 @@ try {
   // One header row: the Standard toolbar and the search box share it with the menus, and take clicks rather than drags.
   expect([titleBar.toolbar, titleBar.search]).toEqual([[true, 'no-drag'], 'no-drag'])
   expect(titleBar.height).toBe(40)
-  // The header keeps the file commands; each query has its own bar under the tab strip, with Execute (the filled button)
-  // Cancel and Actual Plan, then its server and database lists in the connection pill.
+  // The header keeps the file commands. The active query's bar sits above the editor groups' tab strips, with Execute
+  // (the filled button), Cancel and Actual Plan, then its server and database lists in the connection pill.
   expect(await toolbar(page).getByRole('button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label')))).toEqual(['Connect', 'New query', 'Open', 'Save', 'Save All', 'Activity Monitor'])
   await expect(toolbar(page).getByRole('combobox')).toHaveCount(0)
   await expect(queryConnection(page).getByLabel('Query server', { exact: true })).toBeVisible()
   await expect(queryConnection(page).getByLabel('Query database', { exact: true })).toBeDisabled()
   expect(await page.evaluate(part => {
     const bar = document.querySelector(part.queryBar), box = bar.getBoundingClientRect()
-    return { below: box.top >= document.querySelector(part.documentTabs).getBoundingClientRect().bottom - 0.5, above: box.bottom <= document.querySelector(part.editorPane).getBoundingClientRect().top + 0.5,
+    return { aboveTabs: box.bottom <= document.querySelector(part.documentTabs).getBoundingClientRect().top + 0.5, above: box.bottom <= document.querySelector(part.editorPane).getBoundingClientRect().top + 0.5,
       height: box.height, stops: [...bar.querySelectorAll('button, select')].filter(control => control.tabIndex === 0).length, primary: [...bar.querySelectorAll(part.primaryAction)].map(button => button.getAttribute('aria-label')) }
-  }, part)).toEqual({ below: true, above: true, height: 36, stops: 1, primary: ['Execute'] })
+  }, part)).toEqual({ aboveTabs: true, above: true, height: 36, stops: 1, primary: ['Execute'] })
   // One tab stop: the arrow keys move between the enabled controls (Cancel waits for a running query) and leave the
   // server list's value alone.
   await queryServer(page).focus()

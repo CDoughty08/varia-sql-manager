@@ -4,5 +4,5 @@
 export const uiFontFamily = "'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Ubuntu, Cantarell, 'Noto Sans', sans-serif"
 /** `--varia-font-mono` in styles.css: results, messages, plan XML, and the connection string preview. Cascadia Mono ships with Windows 11. */
 export const monoFontFamily = "'Cascadia Mono', Consolas, 'SF Mono', Menlo, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono', monospace"
-/** The SQL editor (Monaco takes a font family string, not a CSS variable), with ligatures off (QueryEditor.tsx). */
+/** The SQL editor (Monaco takes a font family string, not a CSS variable), with ligatures off (editor/create-editor.ts). */
 export const editorFontFamily = "'Cascadia Code', Consolas, 'SF Mono', Menlo, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono', monospace"

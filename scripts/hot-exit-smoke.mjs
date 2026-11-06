@@ -1,12 +1,12 @@
 // Hot exit and Rename Tab on the fake backend: tabs renamed by F2, a double-click and the tab menu (Escape keeps the old
 // name), Save As suggesting a renamed tab's name, then a quit that asks nothing and a relaunch on the same profile that
 // reopens every tab in order, with its text, unsaved state and name, the active one active, a clean file read again from
-// disk, and no Recover dialog. Native message boxes are stubbed in main and recorded; files live under artifacts/.
+// disk, the editor groups as they were, and no Recover dialog. Native message boxes are stubbed in main and recorded; files live under artifacts/.
 import { electron, expect } from './fixtures/smoke.mjs'
 import { crashRenderer } from './fixtures/dialog-lifecycle.mjs'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
-import { activeDocumentName, backendReady, documentShelf, documentTab, documentTabs, editorText, editorTextbox, gridCell, menubar, outputStatus, pinDocumentButton, queryStatus, quickInputBox, quickInputRows, resultGrid, tabNameBox, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocumentName, activeGroupEditorText, backendReady, documentTab, documentTabs, editorGroups, editorGroupTabs, editorTextbox, floatingEditorGroups, gridCell, menubar, outputStatus, pinDocumentButton, queryStatus, quickInputBox, quickInputRows, resultGrid, tabNameBox, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'hot-exit-profile-'))
@@ -63,11 +63,12 @@ async function launch(args, holdPath) {
   // Electron owns beforeunload and its native Reload dialog. Do not let Playwright dismiss it first.
   page.on('dialog', () => {})
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
-  if (!holdPath) await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+  if (!holdPath) await expect(page.locator('.monaco-editor').first()).toBeVisible({ timeout: 30000 })
 }
 const tabNames = () => documentTabs(page).getByRole('tab').evaluateAll(tabs => tabs.map(tab => tab.getAttribute('aria-label')))
 // Monaco draws spaces as no-break spaces.
-const text = async () => (await editorText(page)).replaceAll('\u00a0', ' ')
+const groupNames = index => editorGroupTabs(editorGroups(page).nth(index)).evaluateAll(tabs => tabs.map(tab => tab.getAttribute('aria-label')))
+const text = async () => (await activeGroupEditorText(page)).replaceAll('\u00a0', ' ')
 const prompts = () => application.evaluate(() => globalThis.variaHotExit.prompts)
 const typeInNew = async text => {
   await toolbarButton(page, 'New query').click()
@@ -78,13 +79,19 @@ const tabMenuItem = async (tab, name) => {
   await documentTab(page, tab).click({ button: 'right' })
   await page.getByRole('menuitem', { name, exact: true }).click()
 }
+// From the keyboard (Shift+F10 on a focused tab): floating groups may cover a strip on a small display, as Windows CI's.
+const tabMenuKey = async (tab, name) => {
+  await documentTab(page, tab).focus()
+  await page.keyboard.press('Shift+F10')
+  await page.getByRole('menuitem', { name, exact: true }).click()
+}
 
 const holdNextRead = path => application.evaluate((_electron, path) => globalThis.variaHotExit.holdNextRead(path), path)
 const waitForRead = () => expect.poll(() => application.evaluate(() => !!globalThis.variaHotExit.releaseRead)).toBe(true)
 const releaseRead = () => application.evaluate(() => globalThis.variaHotExit.restoreOpen())
 // Playwright's Page stays attached to a crashed renderer. Read the current renderer through main.
 const recoveredPins = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.executeJavaScript(`({
-  pins: Array.from(document.querySelectorAll('[data-tab-shelf="pinned"] [data-document-tab]'), tab => tab.getAttribute('aria-label')),
+  pins: Array.from(document.querySelectorAll('[data-tab-id][data-pinned]'), tab => tab.closest('[role=tab]')?.getAttribute('aria-label')),
   active: document.querySelector('[role=tablist][aria-label="Query documents"] [role=tab][aria-selected=true]')?.getAttribute('aria-label'),
   text: document.querySelector('.monaco-editor .view-lines')?.textContent
 })`).catch(() => undefined))
@@ -145,13 +152,22 @@ try {
   for (let step = 0; step < 3; step++) await page.keyboard.press('Control+Shift+PageUp')
   await documentTab(page, 'Month end').click()
   await pinDocumentButton(page, 'Totals').click()
-  await expect(documentShelf(page, true).getByRole('tab', { name: 'Totals', exact: true })).toBeFocused()
+  await expect(documentTab(page, 'Totals')).toBeFocused()
   expect(await activeDocumentName(page)).toBe('Month end')
   await page.keyboard.press('F2')
   await expect(tabNameBox(page)).toHaveValue('Totals')
   await page.keyboard.press('Escape')
   await expect(tabNameBox(page)).toHaveCount(0)
   expect(await tabNames()).toEqual(['Totals', 'Welcome', 'Orders report', 'Month end'])
+  // Two editor groups: Orders report splits to the right (Ctrl+\), and Month end follows it (Ctrl+Alt+Right).
+  await documentTab(page, 'Orders report').click()
+  await page.keyboard.press('Control+\\')
+  await expect(editorGroups(page)).toHaveCount(2)
+  await documentTab(page, 'Month end').click()
+  await page.keyboard.press('Control+Alt+ArrowRight')
+  await expect.poll(() => groupNames(1)).toEqual(['Orders report', 'Month end'])
+  expect(await groupNames(0)).toEqual(['Totals', 'Welcome'])
+  expect(await activeDocumentName(page)).toBe('Month end')
   const exited = new Promise(done => application.process().once('exit', done))
   await application.evaluate(({ app }) => app.quit())
   await exited
@@ -163,15 +179,19 @@ try {
   expect(kept.documents[2].path).toBe(orders)
   expect(kept.documents[0].pinned).toBe(true)
   expect(kept.activeIndex).toBe(3)
+  expect(kept.groups.root.children.map(group => group.views)).toEqual([[0, 1], [2, 3]])
+  expect(kept.groups.activeGroup).toBe(1)
   console.log('Hot exit checks: a quit asks nothing and keeps the tabs, in order, with their text and names.')
 
   // Changed on disk meanwhile: a clean file reopens with what is there now.
   await writeFile(orders, 'SELECT 2 AS orders')
   await launch([])
   await expect.poll(tabNames).toEqual(['Totals', 'Welcome', 'Orders report', 'Month end'])
-  await expect(documentShelf(page, true).getByRole('tab', { name: 'Totals', exact: true })).toBeVisible()
   await expect(pinDocumentButton(page, 'Totals', true)).toBeVisible()
   expect(await activeDocumentName(page)).toBe('Month end')
+  await expect(editorGroups(page)).toHaveCount(2)
+  expect(await groupNames(0)).toEqual(['Totals', 'Welcome'])
+  expect(await groupNames(1)).toEqual(['Orders report', 'Month end'])
   await expect.poll(text).toContain('SELECT 2 AS month_end')
   await expect(unsavedMark(documentTab(page, 'Month end'))).toBeVisible()
   await expect(unsavedMark(documentTab(page, 'Totals'))).toBeVisible()
@@ -183,9 +203,39 @@ try {
   // New queries are numbered after the reopened ones.
   await toolbarButton(page, 'New query').click()
   expect(await activeDocumentName(page)).toBe('SQLQuery4.sql')
-  console.log('Hot exit checks: a relaunch reopens every tab in order, with its text, unsaved state and name, and no Recover dialog.')
+  console.log('Hot exit checks: a relaunch reopens every tab in order, with its text, unsaved state and name, in its editor group, and no Recover dialog.')
 
   expect(await prompts()).toEqual([])
+
+  // Every query floating: the grid keeps an empty group, which a quit leaves out, and a relaunch brings the floating
+  // groups back as they were. The grid's last query moves into the first floating group (Move to Next Group).
+  for (const tab of ['Welcome', 'Orders report', 'Month end', 'SQLQuery4.sql']) await tabMenuKey(tab, 'Float')
+  await expect(floatingEditorGroups(page)).toHaveCount(4)
+  await documentTab(page, 'Totals').focus()
+  await page.keyboard.press('Control+Alt+ArrowRight')
+  await expect(page.getByText('All open queries float', { exact: true })).toBeVisible()
+  await expect(floatingEditorGroups(page)).toHaveCount(4)
+  const floated = new Promise(done => application.process().once('exit', done))
+  await application.evaluate(({ app }) => app.quit())
+  await floated
+  const floating = JSON.parse(await readFile(join(profile, 'Session', 'session.json'), 'utf8')).groups
+  expect(floating.root.children).toEqual([])
+  expect(floating.floating.map(group => group.root.views.length).sort()).toEqual([1, 1, 1, 2])
+  await launch([])
+  await expect(floatingEditorGroups(page)).toHaveCount(4)
+  await expect(page.getByText('All open queries float', { exact: true })).toBeVisible()
+  await expect(page.getByText('The editor groups could not be restored', { exact: false })).toHaveCount(0)
+  expect((await tabNames()).sort()).toEqual(['Month end', 'Orders report', 'SQLQuery4.sql', 'Totals', 'Welcome'])
+  // Join All Editor Groups docks every query in the restored grid's empty group, leaving no other group behind.
+  await page.keyboard.press('F1')
+  await quickInputBox(page).fill('>Join All Editor Groups')
+  await expect(quickInputRows(page).filter({ hasText: 'Join All Editor Groups' })).toBeVisible()
+  await quickInputBox(page).press('Enter')
+  await expect(floatingEditorGroups(page)).toHaveCount(0)
+  await expect(editorGroups(page)).toHaveCount(1)
+  await expect(page.getByText('All open queries float', { exact: true })).toHaveCount(0)
+  expect((await tabNames())[0]).toBe('Totals')
+  console.log('Hot exit checks: every query floating survives a relaunch, and joining them leaves no empty group.')
   // A canceled reload leaves the current page and its pins intact. An accepted reload reopens just the pins.
   await pinDocumentButton(page, 'Orders report').click()
   await documentTab(page, 'Orders report').click()
@@ -198,7 +248,8 @@ try {
   }
   await reload()
   await expect.poll(prompts).toEqual(['Reload Varia SQL Manager?'])
-  expect(await tabNames()).toEqual(['Totals', 'Orders report', 'Welcome', 'Month end', 'SQLQuery4.sql'])
+  expect((await tabNames()).slice(0, 2)).toEqual(['Totals', 'Orders report'])
+  expect((await tabNames()).slice(2).sort()).toEqual(['Month end', 'SQLQuery4.sql', 'Welcome'])
   // Hold the saved pin's read so the replacement page can issue another reload during the restore.
   await application.evaluate(() => {
     globalThis.variaHotExit.reloadAnswer = 0
@@ -301,7 +352,7 @@ try {
   const externalOrders = 'SELECT 5 AS external_orders'
   await writeFile(orders, externalOrders)
   await launch([])
-  await expect(documentShelf(page, true).getByRole('tab', { name: 'large-pin.xml', exact: true })).toBeVisible()
+  await expect(pinDocumentButton(page, 'large-pin.xml', true)).toBeVisible()
   expect(await activeDocumentName(page)).toBe('large-pin.xml')
   await expect(queryStatus(page)).toHaveText('XML document')
   await expect.poll(text).toContain('<pinnedRoot>')
