@@ -13,14 +13,13 @@ const frame = (callback: () => void) => { if (typeof requestAnimationFrame === '
  * File commands act on the tab a toolbar button or query tab menu names (`tabId`), otherwise on the active query. New
  * Query with Object Explorer focused opens on the selected node's server and database, as in SSMS.
  */
-export function filesContribution({ files, commands, documents, context, explorer, connections, recentFiles, quickInput, recovery, editorGroups }: Pick<Workbench, 'files' | 'commands' | 'documents'> & {
+export function filesContribution({ files, commands, documents, context, explorer, connections, recentFiles, quickInput, recovery }: Pick<Workbench, 'files' | 'commands' | 'documents'> & {
   readonly context: Pick<Workbench['context'], 'get'>; readonly explorer: Pick<Workbench['explorer'], 'queryTarget'>; readonly connections: Pick<Workbench['connections'], 'get'>
   readonly recentFiles?: ExternalStore<readonly RecentFile[]>; readonly quickInput?: Pick<Workbench['quickInput'], 'pick'>
   readonly recovery?: Pick<Workbench['recovery'], 'getSnapshot' | 'refresh' | 'openDialog'>
-  readonly editorGroups?: Pick<Workbench['editorGroups'], 'focusedDocument'>
 }, api: Pick<VariaApi, 'writeClipboardText' | 'revealSqlFile'> & Partial<Pick<VariaApi, 'clearRecentFiles'>>): Disposable {
-  // The tab menu names its tab; a key pressed on a focused tab (Delete, Ctrl+W) acts on that tab; otherwise the active document.
-  const tabOf = (context?: CommandArgs) => context?.tabId ?? editorGroups?.focusedDocument() ?? documents.getSnapshot().activeId
+  // The tab menu, or a key pressed on a focused tab (Delete, Ctrl+W), names its tab; otherwise the active document.
+  const tabOf = (context?: CommandArgs) => context?.tabId ?? documents.getSnapshot().activeId
   const fileOf = (context?: CommandArgs) => documents.get(tabOf(context))?.file
   const newQuery = () => {
     const target = context.get().activePanel === 'explorer' ? explorer.queryTarget() : undefined

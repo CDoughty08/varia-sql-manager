@@ -19,9 +19,9 @@ export function editorContribution({ commands, documents, editorOptions, editorG
     const index = Math.max(0, list.findIndex(document => document.id === activeId))
     documents.activate(list[(index + delta + list.length) % list.length].id)
   }
-  // The query tab menu names its tab (`tabId`); keys move the active one. The moved tab stays the one shown, in its own group.
-  // The tab menu names its tab; a key pressed on a focused tab acts on that tab; otherwise the active document.
-  const tab = (tabId: string | undefined) => tabId ?? editorGroups.focusedDocument() ?? documents.getSnapshot().activeId
+  // The query tab menu, or a key pressed on a focused tab, names its tab (`tabId`); otherwise the active document. The moved
+  // tab stays the one shown, in its own group.
+  const tab = (tabId: string | undefined) => tabId ?? documents.getSnapshot().activeId
   const move = (tabId: string | undefined, delta: 1 | -1) => editorGroups.moveInGroup(tab(tabId), delta)
   const canMove = (tabId: string | undefined, delta: 1 | -1) => editorGroups.canMoveInGroup(tab(tabId), delta)
   // Split needs another tab in the document's own group, which the precondition (two documents anywhere) cannot see.

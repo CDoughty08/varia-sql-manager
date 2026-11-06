@@ -1,7 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { activeDocumentName, backendReady, closeDocumentButton, documentTab, documentTabs, editorGroups, editorGroupTabs, floatingEditorGroups, part, quickInput, quickInputActive } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, closeDocumentButton, documentTab, documentTabs, editorGroups, editorGroupTabs, floatingEditorGroups, menubar, part, quickInput, quickInputActive } from './fixtures/ui.mjs'
 
 // SSMS's editing commands in the real query editor, over the fake backend (no SQL Server): Comment and Uncomment
 // Selection, Make Uppercase and Lowercase, Increase and Decrease Line Indent from Edit › Advanced, Go To Line, Bookmarks
@@ -324,6 +324,18 @@ try {
   await expect(documentTab(page, sixth)).toHaveCount(0)
   await expect(documentTab(page, seventh)).toHaveCount(1)
   expect(await activeDocumentName(page)).toBe(seventh)
+  // A title bar menu gives focus back to such a tab too, but its Close Query closes the query on screen, as it says.
+  await page.keyboard.press('Control+N')
+  await expect.poll(async () => (await order()).length).toBe(4)
+  const eighth = await activeDocumentName(page)
+  await documentTab(page, seventh).click({ button: 'right' })
+  await expect(menu('Query tab')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(documentTab(page, seventh)).toBeFocused()
+  await menubar(page).getByRole('menuitem', { name: 'File', exact: true }).click()
+  await menu('File').getByRole('menuitem', { name: 'Close Query', exact: true }).click()
+  await expect(documentTab(page, eighth)).toHaveCount(0)
+  await expect(documentTab(page, seventh)).toHaveCount(1)
   await closeDocumentButton(page, seventh).click()
   await expect.poll(async () => (await order()).length).toBe(2)
   // Dockview floats a group's last tab on a Shift-drag. With every query floating, the empty grid says so and offers
@@ -370,7 +382,7 @@ try {
     return label
   })
   expect(renamed).toBe('After sections')
-  console.log('Editor checks: Split Editor Right, focus between groups, Move Editor into Previous Group, a drag onto the compass, Join All Editor Groups, Float and Dock, a close showing its own group\'s next tab, tab keys, Delete on a focused tab (the shown one or not), and every query floating.')
+  console.log('Editor checks: Split Editor Right, focus between groups, Move Editor into Previous Group, a drag onto the compass, Join All Editor Groups, Float and Dock, a close showing its own group\'s next tab, tab keys, Delete on a focused tab (the shown one or not) while File › Close Query closes the shown one, and every query floating.')
   await page.keyboard.press('Alt+e')
   await page.keyboard.press('k')
   await expect(menu('Bookmarks').getByRole('menuitem', { name: 'Next Bookmark', exact: true })).toHaveAttribute('aria-disabled', 'true')

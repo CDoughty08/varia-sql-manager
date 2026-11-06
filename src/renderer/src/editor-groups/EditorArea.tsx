@@ -385,7 +385,8 @@ class EditorAreaController implements Area, EditorGroupHost {
   }
   /**
    * The grid keeps a group: when every document floats (Dockview floats a group's last tab), an empty one stays behind the
-   * floating groups, whose watermark says they float; it goes once another grid group shows a document.
+   * floating groups, whose watermark says they float; it goes once another grid group shows a document, or once no
+   * document is left (the area's own empty state). With no room under the cap for it, a floating group docks instead.
    */
   private keepGrid(): void {
     const api = this.api
@@ -393,10 +394,16 @@ class EditorAreaController implements Area, EditorGroupHost {
     const grid = api.groups.filter(group => group.api.location.type === 'grid')
     this.keepingGrid = true
     try {
-      if (!grid.length && api.groups.length) {
-        const active = api.activeGroup
-        api.addGroup({ direction: 'right' })
-        active?.api.setActive()
+      if (!api.groups.some(group => group.panels.length)) for (const group of grid) api.removeGroup(group)
+      else if (!grid.length) {
+        const active = api.activeGroup ?? api.groups[0]
+        if (api.groups.length >= editorGroupLimits.groups) {
+          active.api.moveTo({ position: 'right' })
+          this.workbench.commands.reportWarning(`The query editor shows at most ${editorGroupLimits.groups} editor groups.`)
+        } else {
+          api.addGroup({ direction: 'right' })
+          active.api.setActive()
+        }
       } else if (grid.some(group => group.panels.length)) for (const group of grid) if (!group.panels.length) api.removeGroup(group)
     } finally { this.keepingGrid = false }
   }

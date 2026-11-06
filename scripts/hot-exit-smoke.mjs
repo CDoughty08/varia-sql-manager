@@ -5,7 +5,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
-import { activeDocumentName, activeGroupEditorText, backendReady, documentTab, documentTabs, editorGroups, editorGroupTabs, editorTextbox, tabNameBox, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocumentName, activeGroupEditorText, backendReady, documentTab, documentTabs, editorGroups, editorGroupTabs, editorTextbox, floatingEditorGroups, tabNameBox, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'hot-exit-profile-'))
@@ -140,6 +140,39 @@ try {
   console.log('Hot exit checks: a relaunch reopens every tab in order, with its text, unsaved state and name, in its editor group, and no Recover dialog.')
 
   expect(await prompts()).toEqual([])
+
+  // Every query floating: the grid keeps an empty group, which a quit leaves out, and a relaunch brings the floating
+  // groups back as they were.
+  for (const tab of ['Welcome', 'Orders report', 'Month end', 'SQLQuery4.sql']) await tabMenuItem(tab, 'Float')
+  await expect(floatingEditorGroups(page)).toHaveCount(4)
+  const last = await documentTab(page, 'Totals').boundingBox()
+  await page.keyboard.down('Shift')
+  await page.mouse.move(last.x + 20, last.y + last.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(last.x + 120, last.y + 140, { steps: 6 })
+  await page.mouse.up()
+  await page.keyboard.up('Shift')
+  await expect(floatingEditorGroups(page)).toHaveCount(5)
+  await expect(page.getByText('All open queries float', { exact: true })).toBeVisible()
+  const floated = new Promise(done => application.process().once('exit', done))
+  await application.evaluate(({ app }) => app.quit())
+  await floated
+  const floating = JSON.parse(await readFile(join(profile, 'Session', 'session.json'), 'utf8')).groups
+  expect(floating.root.children).toEqual([])
+  expect(floating.floating.map(group => group.root.views.length)).toEqual([1, 1, 1, 1, 1])
+  await launch([])
+  await expect(floatingEditorGroups(page)).toHaveCount(5)
+  await expect(page.getByText('All open queries float', { exact: true })).toBeVisible()
+  await expect(page.getByText('The editor groups could not be restored', { exact: false })).toHaveCount(0)
+  expect((await tabNames()).sort()).toEqual(['Month end', 'Orders report', 'SQLQuery4.sql', 'Totals', 'Welcome'])
+  // Closing them all leaves the area's own empty state, with no empty group behind.
+  await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
+  await tabMenuItem('Totals', 'Close All')
+  await expect(page.getByText('No open queries', { exact: true })).toBeVisible()
+  await expect(editorGroups(page)).toHaveCount(0)
+  await expect(page.getByText('All open queries float', { exact: true })).toHaveCount(0)
+  console.log('Hot exit checks: every query floating survives a relaunch, and closing them leaves no empty group.')
+
   expect(failures).toEqual([])
   console.log('Hot exit suite passed.')
 } catch (error) {

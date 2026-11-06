@@ -6,7 +6,7 @@ import { menuCommandIds, menuMayShowChords } from '../../../shared/commands/menu
 import { evaluateWhen } from '../../../shared/commands/when'
 import type { CommandService } from './commands'
 import { onUnexpectedError } from './errors'
-import type { Disposable } from './types'
+import type { CommandArgs, Disposable } from './types'
 
 /** The parts of a `KeyboardEvent` the dispatcher reads and calls, so tests can pass plain objects. */
 export interface KeyDownEvent extends KeyEventLike {
@@ -41,6 +41,8 @@ export interface KeybindingServiceOptions {
   /** The clock for the chord prefix's lifetime; defaults to `Date.now`, as Monaco's. */
   readonly now?: () => number
   readonly menus?: MenuKeyRouter
+  /** What a key acts on, when focus names it (a focused query tab: `tabId`); menus and the palette act on the active document. */
+  readonly keyArgs?: () => CommandArgs | undefined
 }
 /** Monaco leaves chord mode 5 s after the prefix (`_scheduleLeaveChordMode`); from then on the next key is a plain key again. */
 export const nativeChordTimeout = 5000
@@ -144,7 +146,7 @@ export class KeybindingService implements Disposable {
       event.preventDefault()
       event.stopPropagation()
       if (event.repeat && !rule.allowRepeat) return
-      void this.options.commands.execute(rule.command, undefined, 'keybinding')
+      void this.options.commands.execute(rule.command, this.options.keyArgs?.(), 'keybinding')
     } catch (error) { onUnexpectedError(error) }
   }
   handleKeyUp(event: KeyDownEvent): void {

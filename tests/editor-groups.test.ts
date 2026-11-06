@@ -66,6 +66,26 @@ describe('the kept editor groups layout', () => {
     expect(partial.grid.root.data.map(node => node.data.views)).toEqual([['x', 'y']])
     expect(restoreEditorGroups(captured, () => undefined, id => ({ id }))).toBeUndefined()
   })
+
+  it('keeps every query floating: the grid’s empty group is left out, and the grid comes back as an empty split', () => {
+    const json = {
+      grid: { orientation: 'HORIZONTAL', width: 800, height: 600, root: { type: 'branch', data: [{ type: 'leaf', size: 800, data: { id: '9', views: [] } }] } },
+      floatingGroups: [
+        { data: { id: '1', views: ['a'], activeView: 'a' }, position: { left: 20, top: 30, width: 300, height: 200 } },
+        { data: { id: '2', views: ['b'], activeView: 'b' }, position: { left: 60, top: 70, width: 300, height: 200 } }
+      ],
+      panels: {}, activeGroup: '2'
+    } as unknown as SerializedDockview
+    const captured = captureEditorGroups(json, id => ({ a: 0, b: 1 } as Record<string, number>)[id])!
+    expect(captured.root).toEqual({ type: 'branch', children: [] })
+    expect(captured.floating?.map(group => group.root)).toEqual([{ type: 'leaf', views: [0], active: 0 }, { type: 'leaf', views: [1], active: 1 }])
+    expect(captured.activeGroup).toBe(1)
+    expect(editorGroupsLayoutSchema.safeParse(captured).success).toBe(true)
+    const restored = restoreEditorGroups(captured, place => ['x', 'y'][place], id => ({ id })) as unknown as { grid: { root: { type: string; data: unknown[] } }; floatingGroups: unknown[]; activeGroup: string }
+    expect(restored.grid.root).toMatchObject({ type: 'branch', data: [] })
+    expect(restored.floatingGroups).toHaveLength(2)
+    expect(restored.activeGroup).toBe('g2')
+  })
 })
 
 function service() {
