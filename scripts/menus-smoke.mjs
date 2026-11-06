@@ -556,7 +556,7 @@ try {
   const panelMenu = menu('Panel tab')
   await expect(outputButton).toHaveAttribute('aria-expanded', 'false')
   await outputButton.click()
-  await expect.poll(() => menuItemNames(panelMenu)).toEqual(['Dock Left', 'Dock Right', 'Dock Top', 'Dock Bottom', 'Tab with Object Explorer', 'Tab with Query Editor', 'Tab with Messages', 'Tab with Execution Plan', 'Float', 'Close', 'Show Panel Tabs'])
+  await expect.poll(() => menuItemNames(panelMenu)).toEqual(['Dock Left', 'Dock Right', 'Dock Top', 'Dock Bottom', 'Tab with Object Explorer', 'Tab with Query Editor', 'Tab with Messages', 'Tab with Execution Plan', 'Float', 'Move into New Window', 'Close', 'Show Panel Tabs'])
   await expect(outputButton).toHaveAttribute('aria-expanded', 'true')
   await expect(activeMenuItem(page)).toHaveCount(0)
   await expect(page.locator(part.menuLayer)).toHaveAttribute('data-mnemonics', 'hidden')
@@ -579,7 +579,7 @@ try {
   await expect.poll(() => nativeItem('window.togglePanelTabs')).toMatchObject({ checked: true })
   const rightClickOutputTab = () => outputTab.click({ button: 'right' })
   await rightClickOutputTab()
-  await expect.poll(() => menuItemNames(panelMenu)).toEqual(['Dock Left', 'Dock Right', 'Dock Top', 'Dock Bottom', 'Tab with Object Explorer', 'Tab with Query Editor', 'Tab with Messages', 'Tab with Execution Plan', 'Float', 'Close', 'Show Panel Tabs'])
+  await expect.poll(() => menuItemNames(panelMenu)).toEqual(['Dock Left', 'Dock Right', 'Dock Top', 'Dock Bottom', 'Tab with Object Explorer', 'Tab with Query Editor', 'Tab with Messages', 'Tab with Execution Plan', 'Float', 'Move into New Window', 'Close', 'Show Panel Tabs'])
   // The tab's outline shows on every side, although the output tab has splitters above it and to its left.
   const outlineShows = async () => page.locator('.dv-tab[data-menu-target]').evaluate((tab, menuBox) => {
     const box = tab.getBoundingClientRect(), style = getComputedStyle(tab), inset = -parseFloat(style.outlineOffset) - parseFloat(style.outlineWidth) + 0.5
@@ -613,7 +613,7 @@ try {
   await panelMenu.getByRole('menuitem', { name: 'Float', exact: true }).click()
   await expect(page.locator('.dv-floating-titlebar')).toHaveCount(1)
   await rightClickOutputTab()
-  await expect.poll(() => menuItemNames(panelMenu)).toEqual(['Dock Left', 'Dock Right', 'Dock Top', 'Dock Bottom', 'Tab with Object Explorer', 'Tab with Query Editor', 'Tab with Messages', 'Tab with Execution Plan', 'Dock', 'Close', 'Show Panel Tabs'])
+  await expect.poll(() => menuItemNames(panelMenu)).toEqual(['Dock Left', 'Dock Right', 'Dock Top', 'Dock Bottom', 'Tab with Object Explorer', 'Tab with Query Editor', 'Tab with Messages', 'Tab with Execution Plan', 'Dock', 'Move into New Window', 'Close', 'Show Panel Tabs'])
   await panelMenu.getByRole('menuitem', { name: 'Dock', exact: true }).click()
   await expect(page.locator('.dv-floating-titlebar')).toHaveCount(0)
   await settle()

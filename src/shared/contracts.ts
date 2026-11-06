@@ -561,4 +561,7 @@ export interface VariaApi {
   /** Opens the releases page in the browser; main names the page, never the renderer. */
   openReleasesPage(): Promise<ApiResult<void>>
   onUpdateState(callback: (state: UpdateState) => void): () => void
+  /** Whether the main window is minimized or hidden, as main sees it: popouts turn its background throttling off, so the
+   *  page's own visibility stays visible then. Sent on each change. */
+  onMainWindowHidden(callback: (hidden: boolean) => void): () => void
 }

@@ -698,6 +698,11 @@ export const commandCatalog = {
   'pane.tabWithPlan': { title: 'Tab with Execution Plan', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_tab', order: 5, mnemonic: 'x', when: "pane != 'plan'" }] },
   'pane.float': { title: 'Float', category: 'View', icon: 'multiple-windows', palette: false, menus: [{ menu: 'dockTab.context', group: '1_dock', order: 1, mnemonic: 'f', when: '!paneFloating' }] },
   'pane.dock': { title: 'Dock', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '1_dock', order: 2, mnemonic: 'd', when: 'paneFloating' }] },
+  // A panel in an OS window of its own, as VS Code's Move Editor into New Window (docs/popout-windows.md). The query
+  // editor stays in the main window. Dragging a panel's tab out of the window does the same; dragging the popout's tab
+  // onto the main window, or closing the popout, docks it back.
+  'pane.moveToNewWindow': { title: 'Move into New Window', category: 'View', icon: 'window', palette: false, menus: [{ menu: 'dockTab.context', group: '1_dock', order: 3, mnemonic: 'w', when: "pane != 'editor' && !panePopout" }] },
+  'pane.moveToMainWindow': { title: 'Move Back into Main Window', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '1_dock', order: 4, mnemonic: 'a', when: 'panePopout' }] },
   'pane.close': { title: 'Close', category: 'View', icon: 'close', palette: false, menus: [{ menu: 'dockTab.context', group: '2_close', order: 1, mnemonic: 'c' }] },
   // A panel alone in its dock group hides its tab, as VS Code's single views do; this shows those tabs again for dragging.
   'window.togglePanelTabs': {

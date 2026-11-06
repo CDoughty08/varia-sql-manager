@@ -31,7 +31,7 @@ export interface SsisTreeProbeOptions {
   readonly explorer: Pick<ExplorerService, 'getSnapshot' | 'subscribe' | 'rootIds' | 'node' | 'reconcile' | 'setNote'>
   readonly live: Pick<LiveService, 'open'>
   /** Whether Object Explorer shows: the views pause while it does not. */
-  readonly explorerVisible: { visible(): boolean; subscribe(listener: () => void): () => void }
+  readonly explorerVisible: { visible(): boolean; subscribe(listener: () => void): () => void; popout?(): boolean }
   /**
    * Whether an open SSISDB row shows, so its connection's view runs: `shownInExplorer` by default. A container that shows
    * the same ExplorerService tree scoped to the catalogs (F7's Integration Services) passes one that is true while either
@@ -215,6 +215,7 @@ export class SsisTreeProbe implements Disposable {
     const owner: LiveOwner = {
       key: 'explorer:ssis:' + connectionId,
       visible: () => this.o.explorerVisible.visible(),
+      popout: () => this.o.explorerVisible.popout?.() ?? false,
       // A server that left the tree, or lost its backend, ends the view; closing the SSISDB node disposes it here.
       connectionId: () => this.o.explorer.rootIds.some(id => { const root = this.o.explorer.node(id); return root?.connectionId === connectionId && !root.lost }) ? connectionId : undefined,
       subscribe: listener => {

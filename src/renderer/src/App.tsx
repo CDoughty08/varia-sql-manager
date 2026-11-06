@@ -144,7 +144,8 @@ export default function App() {
     toggleOutput: () => workspaceRef.current?.toggleOutput(activeOutputView()) ?? 'shown',
     manageLayouts: mode => workspaceRef.current?.manage(mode),
     resetLayout: () => workspaceRef.current?.reset(),
-    flushLayout: async () => { await workspaceRef.current?.flush() },
+    flushLayout: async () => { await workspaceRef.current?.flush(true) },
+    layoutCloseCancelled: () => workspaceRef.current?.closeCancelled(),
     showConnect: () => { setReconnecting(undefined); setPendingExecute(undefined); setPendingMonitor(false); setShowConnect(true) },
     reconnect: id => {
       const lost = workbench.connections.get(id)
@@ -161,7 +162,9 @@ export default function App() {
     floatPane: pane => workspaceRef.current?.float(pane),
     dockPane: pane => workspaceRef.current?.dock(pane),
     dockPaneAt: (pane, side) => workspaceRef.current?.dockAt(pane, side),
-    tabPaneWith: (pane, other) => workspaceRef.current?.tabWith(pane, other)
+    tabPaneWith: (pane, other) => workspaceRef.current?.tabWith(pane, other),
+    movePaneToWindow: pane => workspaceRef.current?.moveToWindow(pane),
+    movePaneToMainWindow: pane => workspaceRef.current?.moveToMainWindow(pane)
   }), [disconnectServer, workbench, activeOutputView])
   // Dragging a tab along the strip reorders it (Move Left and Move Right do it by key).
   const tabDrag = useTabDrag(() => documents.getSnapshot().documents.map(document => document.id), (id, index) => { documents.move(id, index) })

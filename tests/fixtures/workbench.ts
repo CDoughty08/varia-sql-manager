@@ -226,6 +226,7 @@ export function updatesApi(initial: UpdateState = { status: 'idle', currentVersi
   return {
     pushUpdate: push,
     getUpdateState: vi.fn<VariaApi['getUpdateState']>(async () => ({ ok: true, value: current })),
+    onMainWindowHidden: vi.fn<VariaApi['onMainWindowHidden']>(() => () => {}),
     onUpdateState: vi.fn<VariaApi['onUpdateState']>(callback => { listeners.add(callback); return () => { listeners.delete(callback) } }),
     checkForUpdates: vi.fn<VariaApi['checkForUpdates']>(async () => ({ ok: true, value: current })),
     downloadUpdate: vi.fn<VariaApi['downloadUpdate']>(async () => ({ ok: true, value: current })),
@@ -405,8 +406,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen: options.modal ?? (() => false), editorHasTextFocus: () => false })
   const host: ShellHost = {
-    disconnect: vi.fn(async () => {}), reveal: vi.fn(), manageLayouts: vi.fn(), resetLayout: vi.fn(), flushLayout: vi.fn(async () => {}), showConnect: vi.fn(), reconnect: vi.fn(), editEnvironment: vi.fn(), closePane: vi.fn(),
-    paneLocation: vi.fn<ShellHost['paneLocation']>(() => 'grid'), floatPane: vi.fn(), dockPane: vi.fn(), dockPaneAt: vi.fn(), tabPaneWith: vi.fn(),
+    disconnect: vi.fn(async () => {}), reveal: vi.fn(), manageLayouts: vi.fn(), resetLayout: vi.fn(), flushLayout: vi.fn(async () => {}), layoutCloseCancelled: vi.fn(), showConnect: vi.fn(), reconnect: vi.fn(), editEnvironment: vi.fn(), closePane: vi.fn(),
+    paneLocation: vi.fn<ShellHost['paneLocation']>(() => 'grid'), floatPane: vi.fn(), dockPane: vi.fn(), dockPaneAt: vi.fn(), tabPaneWith: vi.fn(), movePaneToWindow: vi.fn(), movePaneToMainWindow: vi.fn(),
     revealOutput: vi.fn(), toggleOutput: vi.fn<ShellHost['toggleOutput']>(() => 'hidden')
   }
   const history = new CommandHistory(options.storage ?? memoryStorage())

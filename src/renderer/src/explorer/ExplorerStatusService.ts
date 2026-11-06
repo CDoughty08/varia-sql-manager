@@ -40,7 +40,12 @@ export interface ExplorerStatusSnapshot { readonly servers: ReadonlyMap<string, 
 export interface DatabaseRuntimeSample { readonly at: number; readonly row: DatabaseStatusRow | undefined; readonly complete: boolean }
 /** Whether Object Explorer's tree can be seen. Today the explorer pane; once the rail puts other containers in that pane,
  *  the Object Explorer container's own visibility. */
-export interface StatusVisibility { get(): boolean; subscribe(listener: () => void): () => void }
+export interface StatusVisibility {
+  get(): boolean
+  subscribe(listener: () => void): () => void
+  /** The tree is in a popout window, which the main window's minimizing does not hide. */
+  popout?(): boolean
+}
 
 const probes = [...statusChipKinds.database, ...statusChipKinds.server] as LiveProbeId[]
 type TableProbe = 'explorer.databases' | 'explorer.progress' | 'explorer.availability'
@@ -252,7 +257,7 @@ export class ExplorerStatusService extends SnapshotStore<ExplorerStatusSnapshot>
   constructor(private readonly o: {
     live: LiveService
     connections: Pick<ConnectionService, 'getSnapshot' | 'subscribe'>
-    panes: Pick<PaneService, 'getSnapshot' | 'subscribe'>
+    panes: Pick<PaneService, 'getSnapshot' | 'subscribe'> & Partial<Pick<PaneService, 'location'>>
     settings: LiveSettingsSource
     /** Whether the tree can be seen; the explorer pane by default. */
     visibility?: StatusVisibility
@@ -260,7 +265,7 @@ export class ExplorerStatusService extends SnapshotStore<ExplorerStatusSnapshot>
     schedule?: (callback: () => void) => void
   }) {
     super({ servers: new Map() })
-    this.visibility = o.visibility ?? { get: () => o.panes.getSnapshot().explorer, subscribe: listener => o.panes.subscribe(listener) }
+    this.visibility = o.visibility ?? { get: () => o.panes.getSnapshot().explorer, subscribe: listener => o.panes.subscribe(listener), popout: () => o.panes.location?.('explorer') === 'window' }
     this.shown = this.visibility.get()
     this.stops.push(o.connections.subscribe(() => this.sync()), o.settings.subscribe(() => this.sync()), this.visibility.subscribe(() => this.visibilityChanged()))
     this.sync()
@@ -343,6 +348,7 @@ export class ExplorerStatusService extends SnapshotStore<ExplorerStatusSnapshot>
     return {
       key: 'explorer:' + first,
       visible: () => this.visibility.get(),
+      popout: () => this.visibility.popout?.() ?? false,
       // The oldest live connection of the key: when it goes, the view moves to the next, as after a Reconnect.
       connectionId: () => this.members(key)[0],
       closed: () => this.members(key).length === 0,

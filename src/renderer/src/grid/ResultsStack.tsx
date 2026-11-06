@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react'
 import { nextFrame } from '../core/frame'
+import { observeResize } from '../core/windows'
 import { useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import { setKey, type ResultSetEntry, type TabResults } from '../results/ResultsService'
@@ -99,10 +100,9 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
 
   useLayoutEffect(() => {
     const element = stackRef.current!
-    const observer = new ResizeObserver(() => setPaneHeight(element.clientHeight))
-    observer.observe(element)
+    const observer = observeResize(element, () => setPaneHeight(element.clientHeight))
     setPaneHeight(element.clientHeight)
-    return () => observer.disconnect()
+    return () => observer.dispose()
   }, [])
   // The saved scroll position, once the content is tall enough to take it.
   useLayoutEffect(() => {

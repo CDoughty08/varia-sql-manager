@@ -5,6 +5,7 @@ import EnvironmentTag from './EnvironmentTag'
 import Icon from './Icon'
 import { applyEnvironment, parseEnvironment } from './services/environments'
 import { trapFocus } from './trap-focus'
+import { focusToReturn, returnFocusTo } from './core/focus'
 
 interface FieldProps {
   /** The select's id; the custom label's box is `${id}-custom`. */
@@ -58,11 +59,11 @@ export default function EnvironmentDialog({ connectionId, onClose }: { readonly 
   const [value, setValue] = useState(connection?.options.environment)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [returnFocus] = useState(() => document.activeElement instanceof HTMLElement ? document.activeElement : null)
+  const [returnFocus] = useState(focusToReturn)
   const form = useRef<HTMLFormElement>(null)
   const alive = useRef(true)
   useEffect(() => { alive.current = true; form.current?.querySelector<HTMLSelectElement>('select')?.focus(); return () => { alive.current = false } }, [])
-  const close = () => { onClose(); if (returnFocus?.isConnected) returnFocus.focus() }
+  const close = () => { onClose(); returnFocusTo(returnFocus) }
   const parsed = parseEnvironment(value)
   const ok = async () => {
     if (busy || !parsed.ok) return

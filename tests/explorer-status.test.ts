@@ -279,6 +279,31 @@ describe('ExplorerStatusService', () => {
     expect(status.server(first)!.server).toBeUndefined()
   })
 
+  it('keeps sampling while the main window is minimized only when Object Explorer is in a popout window', async () => {
+    status.dispose(); live.dispose()
+    let hidden = false
+    const pageListeners = new Set<() => void>()
+    const page: PageVisibility = { hidden: () => hidden, subscribe: listener => { pageListeners.add(listener); return () => { pageListeners.delete(listener) } } }
+    live = new LiveService({ client, settings, page, schedule: callback => callback() })
+    status = new ExplorerStatusService({ live, connections, panes, settings, schedule: callback => callback() })
+    const shown = { explorer: true, editor: true, results: false, messages: false, plan: false }
+    const at = (explorer: 'grid' | 'window') => ({ explorer, editor: 'grid', results: 'closed', messages: 'closed', plan: 'closed' } as const)
+    panes.set(shown, at('window'))
+    connections.add(info(first), { server: 'a' } as never)
+    const fake = streamOf(first)
+    open(fake)
+    hidden = true
+    for (const listener of [...pageListeners]) listener()
+    vi.advanceTimersByTime(defaultSettings['liveData.pauseAfterSeconds'] * 1000)
+    await settle()
+    expect(fake.updates).toEqual([])
+    // Docked back into the minimized main window: it pauses, though Object Explorer still counts as shown.
+    panes.set(shown, at('grid'))
+    vi.advanceTimersByTime(defaultSettings['liveData.pauseAfterSeconds'] * 1000)
+    await settle()
+    expect(fake.updates).toEqual([{ paused: true }])
+  })
+
   it('pauses while Object Explorer is hidden, and ends every view when the setting is turned off', async () => {
     connections.add(info(first), { server: 'a' } as never)
     const fake = streamOf(first)

@@ -162,7 +162,8 @@ export const contextKeys = {
   explorerServerLinux: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for a node on SQL Server on Linux.' },
   outputView: { type: 'enum', scope: 'target', menu: 'output.context', values: ['grid', 'messages', ''], description: 'The Query Output view the menu is for: a results grid or the messages.' },
   pane: { type: 'enum', scope: 'target', menu: 'dockTab.context', values: ['explorer', 'editor', 'results', 'messages', 'plan', ''], description: "The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, Results, Messages, or Execution plan." },
-  paneFloating: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel the menu is for is floating.' }
+  paneFloating: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel the menu is for is floating.' },
+  panePopout: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel the menu is for is in a window of its own (Move into New Window).' }
 } as const satisfies Record<string, ContextKeyDeclaration>
 
 type Declarations = typeof contextKeys

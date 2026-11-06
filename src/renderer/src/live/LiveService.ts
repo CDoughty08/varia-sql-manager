@@ -3,7 +3,7 @@
 // polls; the only timers here are the hidden-view hysteresis, the 150 ms settings debounce, the moment a probe turns stale
 // and the back-off before an update the backend refused for now is sent again. Every frame is applied synchronously and
 // only then acknowledged, so the next one can come.
-import type { ApiResult, ResultDescriptor } from '../../../shared/contracts'
+import type { ApiResult, ResultDescriptor, VariaApi } from '../../../shared/contracts'
 import { limits, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import { liveProbes, liveSources, type LiveProbeId, type LiveProbeSpec, type LiveSourceId, type LiveSourceSpec } from '../../../shared/live/catalog'
 import type { LiveArgs, LiveEnd, LiveErrorCode, LiveEvent, LiveFilter, LiveOpenedEvent, LiveProbeError, LiveProbePatch, LiveSort, LiveSubscribeParams, LiveTick, LiveUpdateResult } from '../../../shared/live/schema'
@@ -44,6 +44,8 @@ export const liveServiceLimits = {
 export interface LiveOwner {
   readonly key: string
   visible(): boolean
+  /** Its content is in a popout window: the main window being minimized or hidden does not pause it. */
+  popout?(): boolean
   /** Called whenever visible(), connectionId() or closed() may have changed. */
   subscribe(listener: () => void): () => void
   /** The connection the owner now follows: a Reconnect moves a tab to the new connection, and the view follows it.
@@ -180,6 +182,28 @@ export function documentOwner(tabId: string, documents: Pick<DocumentService, 'g
       return () => { stopDocuments(); stopPanes() }
     }
   }
+}
+/** Hidden while any of `pages` is: the document's visibility and, while popouts keep it reporting visible, main's word. */
+export function eitherHidden(...pages: readonly PageVisibility[]): PageVisibility {
+  return {
+    hidden: () => pages.some(page => page.hidden()),
+    subscribe: listener => {
+      const stops = pages.map(page => page.subscribe(listener))
+      return () => { for (const stop of stops) stop() }
+    }
+  }
+}
+/** Main's word on whether the main window is minimized or hidden: while popouts are open main stops background
+ *  throttling, so the document reports visible however the window is. Shown until main says otherwise. */
+export function mainWindowPage(api: Pick<VariaApi, 'onMainWindowHidden'>): PageVisibility {
+  let hidden = false
+  const listeners = new Set<() => void>()
+  api.onMainWindowHidden(value => {
+    if (value === hidden) return
+    hidden = value
+    for (const listener of [...listeners]) listener()
+  })
+  return { hidden: () => hidden, subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener) } } }
 }
 /** The page's own visibility (document.visibilityState). */
 export function documentPage(target: Pick<Document, 'visibilityState' | 'addEventListener' | 'removeEventListener'>): PageVisibility {
@@ -801,7 +825,7 @@ class Handle implements LiveHandle {
   }
 
   private computeHidden(): boolean {
-    return this.service.pauseWhenHidden && (this.service.pageHidden() || !this.owner.visible())
+    return this.service.pauseWhenHidden && ((this.service.pageHidden() && !this.owner.popout?.()) || !this.owner.visible())
   }
 
   visibilityChanged(): void {

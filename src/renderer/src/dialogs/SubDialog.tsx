@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { trapFocus } from '../trap-focus'
+import { focusToReturn, returnFocusTo } from '../core/focus'
 
 export interface SubDialogProps {
   readonly title: string
@@ -27,12 +28,12 @@ export default function SubDialog({ title, okLabel = 'OK', cancelLabel = 'Cancel
   const titleId = useId()
   const form = useRef<HTMLFormElement>(null)
   // Read while rendering, before the dialog takes focus.
-  const returnFocus = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null)
+  const returnFocus = useRef(focusToReturn())
   useEffect(() => {
     const target = (initialFocus ? document.getElementById(initialFocus) : null) ?? form.current?.querySelector<HTMLElement>('input:not(:disabled), select:not(:disabled), button:not(:disabled)')
     target?.focus()
     const previous = returnFocus.current
-    return () => { if (previous?.isConnected) previous.focus() }
+    return () => returnFocusTo(previous)
   }, [initialFocus])
   const keyDown = (event: KeyboardEvent<HTMLFormElement>) => {
     // A portal's events still bubble to the dialog it opened over, which must not also act on them.

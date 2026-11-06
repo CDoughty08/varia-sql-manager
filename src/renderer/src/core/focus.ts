@@ -1,5 +1,6 @@
 import type { DocumentService } from '../services/documents'
 import { modalOpen, transientSurfaces as transient } from './modal'
+import { mainDocument, windows } from './windows'
 
 /** Where focus was before a menu or the quick input took it, and how to return there; the DOM version is `domFocusAdapter`. */
 export interface FocusAdapter { capture(): unknown; restore(target: unknown): void }
@@ -12,22 +13,51 @@ export interface FocusAdapter { capture(): unknown; restore(target: unknown): vo
  */
 export function domFocusAdapter(documents: Pick<DocumentService, 'getSnapshot' | 'focusActive'>): FocusAdapter {
   return {
+    // In the window the user is in: a popout's focused element is in its own document.
     capture: () => {
-      const element = document.activeElement
-      return element instanceof HTMLElement && element !== document.body && !element.closest(transient) ? element : undefined
+      const element = windows.activeElement()
+      return isElement(element) && element !== element.ownerDocument.body && !element.closest(transient) ? element : undefined
     },
     restore: target => {
-      if (target instanceof HTMLElement && target !== document.body && target.isConnected) {
+      if (isElement(target) && target !== target.ownerDocument.body && target.isConnected) {
         const modal = target.closest('[aria-modal="true"]'), open = [...document.querySelectorAll('[aria-modal="true"]')].at(-1)
         if (modal ? modal === open : !open) {
           target.focus({ preventScroll: true })
-          if (document.activeElement === target) return
+          if (target.ownerDocument.activeElement === target) return
         }
       }
       // The active document: the query editor, or a table designer's grid.
       if (!modalOpen() && documents.getSnapshot().documents.length) { documents.focusActive(); return }
-      const element = document.activeElement
-      if (element instanceof HTMLElement && element.closest('.menu-layer, .title-bar-menus')) element.blur()
+      const element = windows.activeElement()
+      if (isElement(element) && element.closest('.menu-layer, .title-bar-menus')) element.blur()
     }
   }
+}
+
+/** An HTML element of any of the workbench's windows: a popout's elements are not the main window's `HTMLElement`s. */
+export function isElement(value: unknown): value is HTMLElement {
+  if (typeof HTMLElement !== 'undefined' && value instanceof HTMLElement) return true
+  return !!value && typeof value === 'object' && (value as Node).nodeType === 1 && typeof (value as HTMLElement).focus === 'function' && typeof (value as HTMLElement).closest === 'function'
+}
+
+/** What a dialog gives focus back to when it closes: the focused element of the window the user is in, a popout's when
+ *  the dialog opened from one (dialogs render in the main window). */
+export function focusToReturn(registry: Pick<typeof windows, 'activeElement'> = windows): HTMLElement | null {
+  const active = registry.activeElement()
+  return isElement(active) ? active : null
+}
+/** Gives focus back to `element` in whichever window holds it, bringing a popout forward again. */
+export function returnFocusTo(element: HTMLElement | null | undefined, main: Window | undefined = typeof window === 'undefined' ? undefined : window): void {
+  if (!element?.isConnected) return
+  const view = element.ownerDocument.defaultView
+  if (view && view !== main && !view.closed) view.focus()
+  element.focus()
+}
+/** The first element matching `selector` in any of the workbench's windows: Object Explorer's tree may be in a popout. */
+export function findInWindows(selector: string): HTMLElement | null {
+  for (const target of windows.all()) {
+    const found = (target === windows.main ? mainDocument() : target.document)?.querySelector(selector)
+    if (isElement(found)) return found
+  }
+  return null
 }

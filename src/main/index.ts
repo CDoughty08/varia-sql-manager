@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, ipcMain, Menu, MessageChannelMain, dialog, nativeTheme, powerMonitor, safeStorage, session, shell, type IpcMainEvent, type IpcMainInvokeEvent, type Rectangle } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, Menu, MessageChannelMain, dialog, nativeTheme, powerMonitor, safeStorage, screen, session, shell, type IpcMainEvent, type IpcMainInvokeEvent, type Rectangle } from 'electron'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { stat, writeFile } from 'node:fs/promises'
 import { z } from 'zod'
@@ -43,7 +43,8 @@ import { windowControls } from '../shared/theme/metrics'
 import { AppearanceService, windowChromeFor } from './appearance'
 import { applicationMenuTemplate, type ApplicationMenuActions } from './application-menu'
 import { NativeMenuBridge } from './native-menu'
-import { runRole, UserActivation } from './window-roles'
+import { rendererRoleSchema, runRole, UserActivation } from './window-roles'
+import { PopoutWindows } from './popout-windows'
 import { closeAction, mergeCloseIntent, type CloseIntent } from './close-intent'
 import { processAlive, RendererWatchdog } from './renderer-watchdog'
 import { ContextMenuPopups } from './context-menu'
@@ -111,6 +112,19 @@ let backendStopped = false
 let windowActive = true
 // The user's last click or key press in the window: the page may run Paste only just after one.
 let userActivation = new UserActivation()
+// The page's popped-out panels, each in its own window (popout-windows.ts). While one is open, the main page keeps its
+// timers and frames running when its own window is minimized or hidden: the popouts' content runs in it.
+const popouts = new PopoutWindows<BrowserWindow>({
+  platform: process.platform,
+  workAreas: () => screen.getAllDisplays().map(display => display.workArea),
+  zoomLevel: () => mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents.getZoomLevel() : 0,
+  setZoomLevel: level => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.setZoomLevel(level) },
+  changed: open => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.setBackgroundThrottling(open === 0 && process.env.VARIA_SMOKE_TEST !== '1') }
+})
+/** The window the user is working in: a focused popout, else the main window. */
+function activeWindow(): { window: BrowserWindow; activation: UserActivation } | undefined {
+  return popouts.focused() ?? (mainWindow ? { window: mainWindow, activation: userActivation } : undefined)
+}
 let layouts: LayoutStore
 let appearance: AppearanceService
 // Help › Check for Updates; created once the app is ready (its network session needs that).
@@ -155,7 +169,7 @@ let rendererUnresponsive = false
 // comes from the focused window. Hidden smoke windows are never focused, so their menus need a click or key: no bypass.
 const menuStyle = menuStyleFor(process.platform, process.env)
 const contextMenus = new ContextMenuPopups<BrowserWindow>({
-  style: menuStyle, platform: process.platform, userCanAct: () => !!mainWindow?.isFocused() || userActivation.recent(), build: template => Menu.buildFromTemplate(template),
+  style: menuStyle, platform: process.platform, userCanAct: () => !!mainWindow?.isFocused() || userActivation.recent() || !!popouts.focused(), build: template => Menu.buildFromTemplate(template),
   title: (id, title) => menuTitle(id, title)
 })
 // Files named on the command line, from a second instance, by macOS (open-file) or by a drop, until the page takes them.
@@ -219,6 +233,8 @@ function resetRendererState(relaunch = true): void {
   reloadApproved = false
   rendererGeneration++
   longRuns = noLongRuns
+  // A popout's content belongs to the page that opened it.
+  popouts.closeAll()
   oneDialog.reset()
   menuBridge.reset()
   contextMenus.close()
@@ -394,7 +410,7 @@ function rendererCanConfirm(window: BrowserWindow): boolean {
 const menuActions: ApplicationMenuActions = {
   command,
   isChecked: id => menuBridge.isChecked(id),
-  pageHasKeyFocus: () => !!mainWindow?.isFocused() && !mainWindow.webContents.isDevToolsFocused(),
+  pageHasKeyFocus: () => (!!mainWindow?.isFocused() && !mainWindow.webContents.isDevToolsFocused()) || !!popouts.focused(),
   sendActionToFirstResponder: action => Menu.sendActionToFirstResponder(action),
   // A failed choice leaves Electron's radio item checked, so the menu is rebuilt from the unchanged state.
   setTheme: patch => { chooseTheme(patch).catch(error => { void appearance.notify(errorMessage(error, 'The theme could not be changed.')); buildMenu() }) },
@@ -490,7 +506,14 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
     window.on('focus', () => activate(true))
     window.on('blur', () => activate(false))
   }
-  contents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  // The page may open only its own popout windows: same-origin about:blank children with Varia's popout name, on a display.
+  contents.setWindowOpenHandler(details => popouts.open(details, { backgroundColor: appearance.windowChrome().backgroundColor, show: process.env.VARIA_SMOKE_TEST !== '1' }))
+  contents.on('did-create-window', child => popouts.adopt(child))
+  // With popouts open the page's own visibility stays visible (no background throttling): main tells it instead.
+  const sendHidden = () => { if (!window.isDestroyed()) contents.send('varia:window-hidden', window.isMinimized() || !window.isVisible()) }
+  window.on('minimize', sendHidden); window.on('restore', sendHidden); window.on('hide', sendHidden); window.on('show', sendHidden)
+  // Chromium's own zoom (Ctrl+wheel, a pinch) in the main window reaches the popouts too.
+  contents.on('zoom-changed', () => setImmediate(() => { if (!contents.isDestroyed()) popouts.zoom(contents.getZoomLevel()) }))
   contents.on('will-navigate', event => event.preventDefault())
   const activation = userActivation = new UserActivation()
   contents.on('input-event', (_event, input) => activation.note(input.type))
@@ -752,11 +775,17 @@ app.whenReady().then(async () => {
   })
   // Custom menus and the palette run Electron's roles on the trusted window: a fixed set of window methods, never quit.
   // Paste needs the focused window (smoke-test windows are hidden, so never focused) and a click or key just before.
+  // The editing, developer tools and full screen roles act on the window the user is in (a focused popout); Reload and
+  // zoom on the main window, whose zoom every popout follows.
   handle('varia:run-role', value => {
-    const window = mainWindow
-    if (window) runRole(value, window, () => (window.isFocused() || process.env.VARIA_SMOKE_TEST === '1') && userActivation.recent())
+    const role = rendererRoleSchema.parse(value), main = mainWindow
+    if (!main) return
+    const zoom = role === 'zoomIn' || role === 'zoomOut' || role === 'resetZoom'
+    const target = role === 'reload' || zoom ? { window: main, activation: userActivation } : activeWindow()!
+    runRole(role, target.window, () => (target.window.isFocused() || process.env.VARIA_SMOKE_TEST === '1') && target.activation.recent())
+    if (zoom) popouts.zoom(main.webContents.getZoomLevel())
   })
-  handle('varia:context-menu', value => { if (!mainWindow) throw new Error('The window is unavailable.'); return contextMenus.show(value, mainWindow) })
+  handle('varia:context-menu', value => { const target = activeWindow(); if (!target) throw new Error('The window is unavailable.'); return contextMenus.show(value, target.window) })
   // `context` (ConnectContext) only for connections.connect and .databases: the history entry whose remembered
   // password main may fill in (connection-requests.ts), and whether to remember the password.
   ipcMain.handle('varia:request', async (event, method: string, params: unknown, context: unknown): Promise<ApiResult<unknown>> => {

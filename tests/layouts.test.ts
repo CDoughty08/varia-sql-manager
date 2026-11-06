@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { LayoutStore } from '../src/main/layout-store'
-import { dockReference, emptyLayoutState, hidesHeader, layoutFile, outputIndex, paneIds, paneTitles, parseLayoutFile, parseLayoutState, parseWorkspaceLayout, withoutHeaderState, type PaneId, type WorkspaceLayout } from '../src/shared/layouts'
+import { canPopOut, dockReference, emptyLayoutState, hidesHeader, layoutFile, outputIndex, paneIds, paneTitles, parseLayoutFile, parseLayoutState, parseWorkspaceLayout, withoutHeaderState, type PaneId, type WorkspaceLayout } from '../src/shared/layouts'
 
 function fixture(): WorkspaceLayout {
   return parseWorkspaceLayout({
@@ -80,17 +80,60 @@ describe('workspace layout validation', () => {
   })
   it('rejects unsupported versions and duplicate saved names or IDs', () => {
     const saved = { id: crypto.randomUUID(), name: 'Analysis', layout: fixture() }
-    expect(() => parseLayoutState({ version: 3, current: fixture(), saved: [] })).toThrow()
+    expect(() => parseLayoutState({ version: 4, current: fixture(), saved: [] })).toThrow()
     expect(() => parseLayoutState({ version: 2, current: fixture(), saved: [saved, { ...saved, id: crypto.randomUUID(), name: 'analysis' }] })).toThrow('unique')
     expect(() => parseLayoutState({ version: 2, current: fixture(), saved: [saved, { ...saved, name: 'Other' }] })).toThrow('unique')
     expect(() => parseLayoutFile({ ...layoutFile(fixture()), kind: 'sql' })).toThrow()
   })
 })
 
+/** The fixture with `panes` taken out of the grid and its panels, into one popout window. */
+function popped(panes: PaneId[], bounds = { x: 1600, y: 80, width: 640, height: 420 }): Record<string, unknown> {
+  const layout = fixture() as unknown as { grid: { root: { data: { data: { views: string[] } }[] } }; panels: Record<string, unknown> }
+  layout.grid.root.data = layout.grid.root.data.filter(leaf => !panes.includes(leaf.data.views[0] as PaneId))
+  for (const id of panes) delete layout.panels[id]
+  return { ...layout, windows: [{ id: crypto.randomUUID(), panes, active: panes[0], bounds }] }
+}
+
+describe('popout windows (version 3)', () => {
+  it('keep panels popped out in their own windows, with bounds, through preferences and files', () => {
+    const layout = popped(['explorer', 'results'])
+    const parsed = parseWorkspaceLayout(layout)
+    expect(parsed.windows).toEqual(layout.windows)
+    expect(Object.keys(parsed.panels)).toEqual(['editor', 'messages', 'plan'])
+    expect(parseLayoutFile(layoutFile(parsed))).toEqual(parsed)
+    expect(parseLayoutState({ version: 3, current: parsed, saved: [] }).current?.windows).toEqual(layout.windows)
+    // On a monitor left of or above the primary one, coordinates are negative.
+    expect(parseWorkspaceLayout(popped(['plan'], { x: -1900, y: -400, width: 300, height: 200 })).windows?.[0].bounds.x).toBe(-1900)
+  })
+  it('read version 2 preferences and files, which have none', () => {
+    expect(parseLayoutState({ version: 2, current: fixture(), saved: [] })).toEqual({ version: 3, current: fixture(), saved: [] })
+    expect(parseLayoutFile({ kind: 'varia-workspace-layout', version: 2, layout: fixture() }).windows).toBeUndefined()
+  })
+  it('reject the query editor, a panel that is also docked or in two windows, and impossible windows', () => {
+    expect(canPopOut('editor')).toBe(false)
+    expect(['explorer', 'results', 'messages', 'plan'].every(canPopOut)).toBe(true)
+    const window = (layout: Record<string, unknown>) => (layout.windows as Record<string, unknown>[])[0]
+    const editor = popped(['explorer']); window(editor).panes = ['editor']; window(editor).active = 'editor'
+    expect(() => parseWorkspaceLayout(editor)).toThrow()
+    const docked = popped(['explorer']); window(docked).panes = ['explorer', 'plan']
+    expect(() => parseWorkspaceLayout(docked)).toThrow('more than once')
+    const twice = popped(['explorer']); twice.windows = [window(twice), { ...window(twice), id: crypto.randomUUID() }]
+    expect(() => parseWorkspaceLayout(twice)).toThrow('more than once')
+    const sameId = popped(['explorer', 'plan']); sameId.windows = [{ ...window(sameId), panes: ['explorer'], active: 'explorer' }, { ...window(sameId), panes: ['plan'], active: 'plan' }]
+    expect(() => parseWorkspaceLayout(sameId)).toThrow('Invalid popout window')
+    const inactive = popped(['explorer']); window(inactive).active = 'plan'
+    expect(() => parseWorkspaceLayout(inactive)).toThrow()
+    for (const bounds of [{ x: 0, y: 0, width: 100, height: 400 }, { x: 0, y: 0, width: 400, height: 20 }, { x: 99_999, y: 0, width: 400, height: 400 }, { x: 0.5, y: 0, width: 400, height: 400 }])
+      expect(() => parseWorkspaceLayout(popped(['explorer'], bounds))).toThrow()
+    expect(() => parseWorkspaceLayout({ ...popped(['explorer']), windows: [{ ...window(popped(['explorer'])), extra: 1 }] })).toThrow()
+  })
+})
+
 describe('version 1 layouts', () => {
   it('turn Query output into Results, Messages and Execution plan, tabbed where it was with Results selected', () => {
     const state = parseLayoutState({ version: 1, current: legacy(), saved: [{ id: crypto.randomUUID(), name: 'Analysis', layout: legacy() }] })
-    expect(state.version).toBe(2)
+    expect(state.version).toBe(3)
     for (const layout of [state.current!, state.saved[0].layout]) {
       const group = ((layout.grid.root.data as { data: unknown[] }[])[1].data[1] as { data: { views: string[]; activeView: string } }).data
       expect(group).toMatchObject({ views: ['results', 'messages', 'plan'], activeView: 'results' })
@@ -111,21 +154,21 @@ describe('version 1 layouts', () => {
     delete (closed.panels as Partial<ReturnType<typeof legacy>['panels']>).output
     expect(Object.keys(parseLayoutFile({ kind: 'varia-workspace-layout', version: 1, layout: closed }).panels)).toEqual(['explorer', 'editor'])
   })
-  it('migrate floating groups, imported files, and preferences read by the store, which then writes version 2', async () => {
+  it('migrate floating groups, imported files, and preferences read by the store, which then writes version 3', async () => {
     const floating = legacy({ type: 'leaf', size: 280, data: { id: '3', views: ['editor'], activeView: 'editor' } }) as Record<string, unknown>
     const branch = ((floating.grid as { root: { data: { data: unknown[] }[] } }).root.data[1])
     branch.data = [{ type: 'leaf', size: 520, data: { id: '2', views: ['editor'], activeView: 'editor' } }]
     floating.floatingGroups = [{ data: { id: '4', views: ['output'], activeView: 'output' }, position: { right: -200, bottom: 10, width: 500, height: 300 } }]
     const imported = parseLayoutFile({ kind: 'varia-workspace-layout', version: 1, layout: floating })
     expect(imported.floatingGroups?.[0]).toEqual({ data: { id: '4', views: ['results', 'messages', 'plan'], activeView: 'results' }, position: { right: -200, bottom: 10, width: 500, height: 300 } })
-    expect(layoutFile(imported).version).toBe(2)
+    expect(layoutFile(imported).version).toBe(3)
     const path = join(directory, 'preferences.json')
     await writeFile(path, JSON.stringify({ version: 1, current: legacy(), saved: [] }))
     const store = new LayoutStore(path), loaded = await store.load()
     expect(loaded.warning).toBeUndefined()
     expect(Object.keys(loaded.state.current!.panels)).toEqual(['explorer', 'editor', 'results', 'messages', 'plan'])
     await store.save(loaded.state)
-    expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({ version: 2, current: { panels: { results: { id: 'results' } } } })
+    expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({ version: 3, current: { panels: { results: { id: 'results' } } } })
   })
   it('reject version 2 panels in a version 1 layout, and quarantine a preferences file holding one', async () => {
     expect(() => parseLayoutState({ version: 1, current: fixture(), saved: [] })).toThrow('unknown panel')
@@ -188,7 +231,7 @@ describe('layout preferences and files', () => {
     const path = join(directory, 'preferences.json')
     const store = new LayoutStore(path)
     expect((await store.load()).state).toEqual(emptyLayoutState())
-    const first = { version: 2 as const, current: fixture(), saved: [{ id: crypto.randomUUID(), name: 'Analysis', layout: fixture() }] }
+    const first = { version: 3 as const, current: fixture(), saved: [{ id: crypto.randomUUID(), name: 'Analysis', layout: fixture() }] }
     const last = { ...first, saved: [{ ...first.saved[0], name: 'Last write' }] }
     await Promise.all([store.save(first), store.save(last)])
     expect((await new LayoutStore(path).load()).state).toEqual(last)

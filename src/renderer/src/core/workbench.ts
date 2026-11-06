@@ -18,7 +18,7 @@ import { BackendStateService } from '../services/backend'
 import { ResultClient } from '../results/ResultClient'
 import { ResultsService } from '../results/ResultsService'
 import { ResultMemoryService } from '../results/memory'
-import { documentOwner, documentPage, LiveService } from '../live/LiveService'
+import { documentOwner, documentPage, eitherHidden, LiveService, mainWindowPage } from '../live/LiveService'
 import { ActivityMonitorService } from '../activity/ActivityMonitorService'
 import { activityContribution } from '../contributions/activity'
 import { searchContribution } from '../contributions/search'
@@ -88,6 +88,7 @@ import { KeybindingService } from './keybindings'
 import { MenuStatePublisher } from './menu-state'
 import { focusHeld, focusWhenDrawn, modalOpen } from './modal'
 import { nextFrame as frame } from './frame'
+import { windows } from './windows'
 import type { Disposable } from './types'
 
 export interface Workbench extends Disposable {
@@ -182,6 +183,11 @@ export interface Workbench extends Disposable {
   readonly notifications: NotificationService
   /** Help › Check for Updates, as main reports it. */
   readonly updates: UpdateService
+  /**
+   * Makes a popout window a full part of the workbench while it is open: its keys reach `KeybindingService`, its right-clicks
+   * and presses `MenuService`, and its focus counts as the user's window (`windows`).
+   */
+  attachWindow(target: Window): Disposable
 }
 /**
  * The next animation frame, or 50 ms when frames are throttled: a hidden window (the smoke tests') gets one a second,
@@ -222,11 +228,11 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => { frame(callback) } })
   const resultMemory = new ResultMemoryService(resultClient, events)
   // The backend caps live views per server it reaches; a typed name is the closest this side knows.
-  const live = new LiveService({ client: resultClient, settings, page: documentPage(document), schedule: callback => { frame(callback) }, serverOf: id => connections.get(id)?.server.trim().toLowerCase() })
+  const live = new LiveService({ client: resultClient, settings, page: eitherHidden(documentPage(document), mainWindowPage(api)), schedule: callback => { frame(callback) }, serverOf: id => connections.get(id)?.server.trim().toLowerCase() })
   const explorerStatus = new ExplorerStatusService({ live, connections, panes, settings, schedule: callback => { frame(callback) } })
   // A database's menu follows its live state (Take Offline greys once a sample shows it offline), not only its listing.
   const explorerRuntime = explorer.useStatus(explorerStatus)
-  const ssisTree = new SsisTreeProbe({ explorer, live, settings, events, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe } })
+  const ssisTree = new SsisTreeProbe({ explorer, live, settings, events, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe, popout: () => panes.location('explorer') === 'window' } })
   const gridStats = api.testMode ? new GridStats() : undefined
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
   const files = new FileService(documents, queries, api, {
@@ -341,7 +347,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   } })
   // Menus label items with keys and the dispatcher routes keys to the menus; neither looks the other up before both exist.
   const menus = new MenuService({ platform, commands, context, keybindings: { lookup: id => keybindings.lookup(id) }, theme, recentFiles, settings: () => settings.getSnapshot().values, focus, modalOpen,
-    findWidgetFocused: () => !!document.activeElement?.closest('.monaco-editor .find-widget'),
+    findWidgetFocused: () => !!windows.activeElement()?.closest('.monaco-editor .find-widget'),
     menubarRect: id => document.getElementById('menubar-' + id)?.getBoundingClientRect(), targets: menuTargets, editorCaret: () => editorCaret(documents, monaco),
     modalContains: element => [...document.querySelectorAll('[aria-modal="true"]')].at(-1)?.contains(element) ?? false, style: api.menuStyle, api })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen, menus, editorHasTextFocus: () => documents.boundEditor?.hasTextFocus() ?? false,
@@ -411,6 +417,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     theme,
     notifications,
     updates,
+    attachWindow: target => {
+      const attached = [windows.add(target), keybindings.attach(target), menus.attach(target), trackWindowFocus(target, target.document.documentElement)]
+      return { dispose: () => attached.forEach(item => item.dispose()) }
+    },
     dispose: () => {
       if (disposed) return
       disposed = true

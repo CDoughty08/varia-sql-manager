@@ -67,7 +67,9 @@ function MenuLevelView({ view, depth, controller }: { view: MenuView; depth: num
   const innermost = depth === view.levels.length - 1
   useLayoutEffect(() => {
     const { width, height } = ref.current!.getBoundingClientRect()
-    setPlacement(placeMenu(level.anchor, { width, height }, { width: document.documentElement.clientWidth, height: document.documentElement.clientHeight }, controlsArea()))
+    // Inside the window the menu shows in; only the main window has the native controls over its title bar.
+    const root = ref.current!.ownerDocument.documentElement, main = ref.current!.ownerDocument === document
+    setPlacement(placeMenu(level.anchor, { width, height }, { width: root.clientWidth, height: root.clientHeight }, main ? controlsArea() : undefined))
   }, [level.anchor])
   const report = () => { const element = ref.current; if (element) controller.setLevelRect(depth, rectOf(element), [...element.children].map(rectOf)) }
   useLayoutEffect(() => { if (placement) report() })
@@ -104,6 +106,8 @@ export default function MenuLayer() {
   const { menus, commands } = useWorkbench()
   const view = useServiceSnapshot(menus.controller)
   const controller = menus.controller
+  // A context menu opens in the window its element is in; the menubar's in the main window.
+  const surface = menus.surfaceDocument() ?? document
   const failed = (error: unknown) => {
     onUnexpectedError(error)
     menus.close('dispose')
@@ -114,5 +118,5 @@ export default function MenuLayer() {
       onContextMenu={event => event.preventDefault()} onAuxClick={event => event.preventDefault()}>
       {view.levels.map((level, depth) => <MenuLevelView key={level.id} view={view} depth={depth} controller={controller} />)}
     </div>
-  </MenuErrorBoundary>, document.body)
+  </MenuErrorBoundary>, surface.body)
 }

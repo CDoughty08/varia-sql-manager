@@ -6,6 +6,7 @@ import Icon from '../Icon'
 import StepList from '../kit/StepList'
 import { trapFocus } from '../trap-focus'
 import type { OpenCreateCatalog } from './CreateCatalogService'
+import { findInWindows, returnFocusTo } from '../core/focus'
 
 /** The steps Create Catalog will run on this server: CLR only when it is off. */
 function plannedSteps(open: OpenCreateCatalog): readonly string[] {
@@ -27,7 +28,7 @@ export default function CreateCatalogDialog() {
     if (open) { shown.current = true; return }
     if (!shown.current) return
     shown.current = false
-    if (!document.activeElement || document.activeElement === document.body) document.querySelector<HTMLElement>('[data-explorer-tree]')?.focus()
+    if (!document.activeElement || document.activeElement === document.body) returnFocusTo(findInWindows('[data-explorer-tree]'))
   }, [open])
   if (!open) return null
   const close = () => {

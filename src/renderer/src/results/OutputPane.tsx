@@ -3,6 +3,7 @@ import { outputPaneIds, type OutputPaneId } from '../../../shared/layouts'
 import PaneMenuButton from '../PaneMenuButton'
 import Icon from '../Icon'
 import { useTicker } from '../core/useTicker'
+import { observeResize } from '../core/windows'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { gridLimits as g } from '../grid/constants'
 import ResultsStack, { batchText, stackNeed } from '../grid/ResultsStack'
@@ -109,10 +110,9 @@ function useHeight(): [(element: HTMLDivElement | null) => void, number] {
   const [height, setHeight] = useState(0)
   useLayoutEffect(() => {
     if (!element) return
-    const observer = new ResizeObserver(() => setHeight(element.clientHeight))
-    observer.observe(element)
+    const observer = observeResize(element, () => setHeight(element.clientHeight))
     setHeight(element.clientHeight)
-    return () => observer.disconnect()
+    return () => observer.dispose()
   }, [element])
   return [setElement, height]
 }

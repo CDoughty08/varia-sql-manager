@@ -11,6 +11,7 @@ import { chartCategorical, type ChartSeriesColor, type ChartSurface } from '../.
 import { typeScale } from '../../../shared/theme/metrics'
 import type { ColorKey } from '../../../shared/theme/registry'
 import type { Disposable } from '../core/types'
+import { observeIntersection, observeResize } from '../core/windows'
 import { uiFontFamily } from '../fonts'
 import { chartLabel, formatAgo, formatChartValue, formatClock, formatSpanShort, niceCeiling, type SeriesSummary } from './chart-format'
 import type { LiveHandle, LiveSnapshot, PageVisibility } from './LiveService'
@@ -112,17 +113,16 @@ export function browserChartEnvironment(): ChartEnvironment {
   return {
     requestFrame: callback => requestAnimationFrame(() => callback()),
     cancelFrame: handle => cancelAnimationFrame(handle),
+    // From the window the chart is in, which changes when its panel pops out or docks back.
     observeVisibility: (element, listener) => {
       if (typeof IntersectionObserver !== 'function') return () => {}
-      const observer = new IntersectionObserver(entries => { const entry = entries.at(-1); if (entry) listener(entry.isIntersecting) })
-      observer.observe(element)
-      return () => observer.disconnect()
+      const observer = observeIntersection(element, entries => { const entry = entries.at(-1); if (entry) listener(entry.isIntersecting) })
+      return () => observer.dispose()
     },
     observeSize: (element, listener) => {
       if (typeof ResizeObserver !== 'function') return () => {}
-      const observer = new ResizeObserver(() => listener())
-      observer.observe(element)
-      return () => observer.disconnect()
+      const observer = observeResize(element, listener)
+      return () => observer.dispose()
     },
     forcedColors: () => forced?.matches ?? false,
     systemColors: element => { const style = getComputedStyle(element); return { text: style.color, canvas: style.backgroundColor, gray: style.borderTopColor } },

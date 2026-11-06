@@ -6,6 +6,7 @@ import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protoco
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
 import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable } from '../core/types'
+import { requestFrame } from '../core/windows'
 import { gridLimits as g } from '../grid/constants'
 import type { ResultKey, ValueFormat, WorkerRequest, WorkerResponse } from './worker-protocol'
 
@@ -225,7 +226,7 @@ export class ResultClient implements Disposable {
     this.createWorker = o.createWorker
     this.window = o.window
     this.now = o.now ?? (() => Date.now())
-    this.schedule = o.schedule ?? (callback => { if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => callback()); else queueMicrotask(callback) })
+    this.schedule = o.schedule ?? (callback => requestFrame(callback))
     this.window.addEventListener('message', this.onWindowMessage)
     this.worker = this.startWorker()
     this.openPort()

@@ -4,7 +4,7 @@ import { limits } from '../src/shared/ipc/wire/protocol'
 import { liveProbes, liveSources, type LiveProbeId, type LiveProbeSpec, type LiveSourceSpec } from '../src/shared/live/catalog'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveTick, LiveUpdateResult } from '../src/shared/live/schema'
 import { defaultSettings, type SettingsValues } from '../src/shared/settings/catalog'
-import { documentOwner, LiveService, liveServiceLimits, type LiveCatalog, type LiveOwner, type LiveSpec, type PageVisibility } from '../src/renderer/src/live/LiveService'
+import { documentOwner, eitherHidden, LiveService, mainWindowPage, liveServiceLimits, type LiveCatalog, type LiveOwner, type LiveSpec, type PageVisibility } from '../src/renderer/src/live/LiveService'
 import { bindChart, ChartView, probeCurrent } from '../src/renderer/src/live/ChartView'
 import { ringGap } from '../src/renderer/src/live/ring'
 import { formatClock } from '../src/renderer/src/live/chart-format'
@@ -273,6 +273,41 @@ describe('LiveService', () => {
     await settle()
     expect(fake.updates.at(-1)).toEqual({ paused: true })
     expect(handle.getSnapshot().pausedBy).toBe('hidden')
+  })
+
+  it('keeps a view whose content is in a popout running while only the main window hides, and pauses it when its owner hides', async () => {
+    makeService()
+    const popped = owner()
+    const handle = service.open(spec(['debug.synthetic.status']), { ...popped.value, popout: () => true })
+    const fake = client.last
+    deliver(fake, opened(fake))
+    page.set(true)
+    vi.advanceTimersByTime(2000)
+    await settle()
+    expect([fake.updates, handle.getSnapshot().status]).toEqual([[], 'live'])
+    popped.show(false)
+    vi.advanceTimersByTime(2000)
+    await settle()
+    expect(fake.updates).toEqual([{ paused: true }])
+  })
+
+  it('takes the word of main that the main window is minimized, and is hidden while either page is', () => {
+    let send: (hidden: boolean) => void = () => {}
+    const main = mainWindowPage({ onMainWindowHidden: callback => { send = callback; return () => {} } })
+    const doc = Object.assign(new Flag(false), { hidden(this: Flag) { return this.value } }) as Flag & PageVisibility
+    const both = eitherHidden(doc, main)
+    let calls = 0
+    const stop = both.subscribe(() => { calls++ })
+    expect(both.hidden()).toBe(false)
+    send(true)
+    expect([both.hidden(), calls]).toEqual([true, 1])
+    send(true)
+    expect(calls).toBe(1)
+    send(false); doc.set(true)
+    expect([both.hidden(), calls]).toEqual([true, 3])
+    stop()
+    doc.set(false)
+    expect([both.hidden(), calls]).toEqual([false, 3])
   })
 
   it('tells charts when the window hides or shows, the test override included', () => {

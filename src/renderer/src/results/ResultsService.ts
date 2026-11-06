@@ -4,6 +4,7 @@ import type { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable, ExternalStore } from '../core/types'
+import { requestFrame } from '../core/windows'
 import { gridLimits as g } from '../grid/constants'
 import { copyPlan, selectAll, type GridSelection } from '../grid/selection'
 import { kindInfo } from '../documents'
@@ -189,7 +190,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.events = o.events
     this.api = o.api
     this.documents = o.documents
-    this.frame = o.frame ?? (callback => { requestAnimationFrame(() => callback()) })
+    this.frame = o.frame ?? (callback => requestFrame(callback))
     this.timers = o.timers ?? browserTimers
     this.now = o.now ?? (() => Date.now())
     this.newId = o.newId ?? (() => crypto.randomUUID())

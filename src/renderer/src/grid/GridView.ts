@@ -2,6 +2,7 @@ import type { Platform } from '../../../shared/commands/keybindings'
 import type { ResultDescriptor } from '../../../shared/contracts'
 import { liveTones, type LiveTone } from '../../../shared/live/catalog'
 import { nextFrame } from '../core/frame'
+import { observeResize, windowOf, windows } from '../core/windows'
 import { typeScale } from '../../../shared/theme/metrics'
 import { monoFontFamily, uiFontFamily } from '../fonts'
 import type { ResultHandle, RowWindow } from '../results/ResultClient'
@@ -211,7 +212,7 @@ export class GridView {
     this.types = o.descriptor.columns.map(sqlTypeLabel)
     this.showTypes = o.showTypes ?? true
     this.capOverride = o.stats?.scrollCap
-    this.cap = this.capOverride ?? scrollCap(devicePixelRatio)
+    this.cap = this.capOverride ?? scrollCap(windowOf(o.root).devicePixelRatio)
     // Widths belong to the grid's saved state; they are allocated on first mount, from the declared types.
     if (!o.state.widths || o.state.widths.length !== this.columns) {
       o.state.widths = Float64Array.from(o.descriptor.columns.slice(0, this.columns), (column, index) => initialWidth(this.headerTextWidth(index), typeHintChars(column), this.charWidth))
@@ -461,7 +462,7 @@ export class GridView {
   }
 
   private updateCap(): void {
-    const cap = this.capOverride ?? scrollCap(devicePixelRatio)
+    const cap = this.capOverride ?? scrollCap(windowOf(this.root).devicePixelRatio)
     if (cap === this.cap) return
     this.cap = cap
     this.layout.setMaxTotal(cap - this.rowHeader)
@@ -489,7 +490,8 @@ export class GridView {
     this.root.addEventListener('beforecopy', beforeCopy)
     this.cleanup.push(() => this.root.removeEventListener('beforecopy', beforeCopy))
     on(this.root, 'copy', event => { event.preventDefault(); this.o.onCopy() })
-    const resize = new ResizeObserver(() => {
+    // Observed from the window the grid is in, which changes when its panel pops out or docks back.
+    const resize = observeResize(this.scroller, () => {
       try {
         this.viewportWidth = this.scroller.clientWidth
         this.outerWidth = this.scroller.offsetWidth
@@ -498,17 +500,20 @@ export class GridView {
         this.schedule()
       } catch (error) { this.o.onError(error) }
     })
-    resize.observe(this.scroller)
-    this.cleanup.push(() => resize.disconnect())
+    this.cleanup.push(() => resize.dispose())
     // The cap depends on the pixel ratio, which zoom and moving between displays change.
+    // A popout on another display has its own ratio: the watch moves with the grid's window.
     let media: MediaQueryList | undefined
     const watchRatio = () => {
-      media = matchMedia(`(resolution: ${devicePixelRatio}dppx)`)
+      media?.removeEventListener('change', onRatio)
+      const view = windowOf(this.root)
+      media = view.matchMedia(`(resolution: ${view.devicePixelRatio}dppx)`)
       media.addEventListener('change', onRatio, { once: true })
     }
     const onRatio = () => { if (this.disposed) return; this.updateCap(); watchRatio() }
     watchRatio()
-    this.cleanup.push(() => media?.removeEventListener('change', onRatio))
+    const adoption = windows.onDidAdopt(() => { if (!this.disposed) { this.updateCap(); watchRatio() } })
+    this.cleanup.push(() => { media?.removeEventListener('change', onRatio); adoption.dispose() })
     const fonts = this.root.ownerDocument.fonts
     const onFonts = () => { if (this.disposed) return; this.charWidth = fontMeasure(true).charWidth; this.schedule() }
     fonts?.addEventListener('loadingdone', onFonts)

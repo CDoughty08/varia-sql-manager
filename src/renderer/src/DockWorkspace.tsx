@@ -1,7 +1,8 @@
 import { createContext, forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
-import { DockviewDefaultTab, DockviewReact, themeDark, themeLight, type DockviewApi, type DockviewReadyEvent, type FloatingGroupDragContext, type IDockviewPanelHeaderProps, type IDockviewPanelProps } from 'dockview-react'
-import { dockReference, emptyLayoutState, hidesHeader, isOutputPane, outputIndex, outputPaneIds, paneIds, paneTitles, parseWorkspaceLayout, withoutHeaderState, type LayoutLoad, type LayoutState, type OutputPaneId, type PaneId, type WorkspaceLayout } from '../../shared/layouts'
+import { DockviewDefaultTab, DockviewReact, themeDark, themeLight, type DockviewApi, type DockviewGroupPanel, type DockviewReadyEvent, type FloatingGroupDragContext, type IDockviewPanelHeaderProps, type IDockviewPanelProps, type Position } from 'dockview-react'
+import { canPopOut, dockReference, emptyLayoutState, hidesHeader, isOutputPane, outputIndex, outputPaneIds, paneIds, paneTitles, parseWorkspaceLayout, withoutHeaderState, type LayoutLoad, type LayoutState, type OutputPaneId, type PaneId, type PopoutLayout, type PopoutPaneId, type WorkspaceLayout } from '../../shared/layouts'
+import { popoutLimits } from '../../shared/popouts'
 import type { ThemeType } from '../../shared/theme/types'
 import { DockingGuides } from './docking-guides'
 import Icon from './Icon'
@@ -10,6 +11,12 @@ import { useMenuTarget } from './menus/useMenuTarget'
 import EmptyState from './kit/EmptyState'
 import type { PaneLocation } from './services/panes'
 import type { DockSide } from './contributions/shell'
+import { preparePopoutDocument, type PopoutDocument } from './popouts/popout-document'
+import PopoutFrame, { type PopoutCommands } from './popouts/PopoutFrame'
+import { placeHost } from './popouts/place'
+import { paneDrag } from './popouts/drag'
+import { watchModals, windows } from './core/windows'
+import { focusToReturn, returnFocusTo } from './core/focus'
 
 interface PaneHosts { hosts: Record<PaneId, HTMLElement>; parking: RefObject<HTMLDivElement | null> }
 interface PaneCommands { close(id: PaneId): void; float(id: PaneId): void; toggle(id: PaneId): void; reveal(id: PaneId): void }
@@ -20,9 +27,10 @@ const RestoredContext = createContext(false)
 function Pane({ api }: IDockviewPanelProps) {
   const content = useContext(PaneContext)!, slot = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
-    const host = content.hosts[api.id as PaneId]
-    slot.current?.append(host)
-    return () => { content.parking.current?.append(host) }
+    const host = content.hosts[api.id as PaneId], element = slot.current
+    if (element) placeHost(host, element)
+    // Parked only if it is still here: a panel moving into a popout window has already gone there.
+    return () => { const parking = content.parking.current; if (element && parking && host.parentElement === element) placeHost(host, parking) }
   }, [api.id, content])
   return <div className="dock-slot" ref={slot} />
 }
@@ -36,6 +44,11 @@ const dockThemes = {
   dark: { ...themeDark, name: 'varia-dark', className: 'dockview-theme-dark varia-dock' },
   light: { ...themeLight, name: 'varia-light', className: 'dockview-theme-light varia-dock' }
 } satisfies Record<ThemeType, typeof themeDark>
+/** A popout window, open: its layout, the window, and the root its frame renders into. */
+interface PopoutRecord extends PopoutLayout { readonly window: Window; readonly root: HTMLElement; title(value: string): void; dispose(): void }
+const clampSize = (value: number, min: number) => Math.min(popoutLimits.maxSize, Math.max(min, Math.round(Number.isFinite(value) ? value : min)))
+const clampCoordinate = (value: number) => Math.min(32_000, Math.max(-32_000, Math.round(Number.isFinite(value) ? value : 0)))
+const windowTitle = (pane: PaneId) => paneTitles[pane] + ' - Varia SQL Manager'
 const focusableSelector = 'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
 function paneHost(id: PaneId) { const host = document.createElement('div'); host.className = 'dock-pane'; host.dataset.pane = id; return host }
 function EmptyWorkspace() {
@@ -49,7 +62,7 @@ function PaneTab(props: IDockviewPanelHeaderProps) {
   // An output panel's dock tab chosen by the user is the active query's view, as its toolbar tab is.
   const choose = () => { const id = props.api.id, tabId = documents.getSnapshot().activeId; if (isOutputPane(id) && tabId) results.setView(tabId, id) }
   // The tab's menu (Float or Dock, and Close) replaces Dockview's own, which shows only when it has items.
-  const menuTarget = useMenuTarget<HTMLDivElement>(() => ({ kind: 'dockTab', pane: props.api.id as PaneId, floating: props.api.location.type === 'floating' }))
+  const menuTarget = useMenuTarget<HTMLDivElement>(() => ({ kind: 'dockTab', pane: props.api.id as PaneId, floating: props.api.location.type === 'floating', popout: false }))
   const ref = useCallback((node: HTMLDivElement | null) => { element.current = node; menuTarget(node) }, [menuTarget])
   useEffect(() => { element.current?.querySelector('button')?.setAttribute('aria-label', 'Close ' + paneTitles[props.api.id as PaneId]) }, [props.api.id])
   return <div ref={ref} className="pane-tab" data-pane-tab={props.api.id} onClick={event => { if (!(event.target as HTMLElement).closest('button')) choose() }}><DockviewDefaultTab {...props}
@@ -62,14 +75,18 @@ const message = (error: unknown) => error instanceof Error ? error.message : 'Th
 export interface WorkspaceHandle {
   manage(mode?: 'save' | 'load'): void
   reset(): void
-  /** Shows a pane, and with `focus` moves keyboard focus into it. */
-  reveal(id: PaneId, options?: { focus?: boolean }): void
+  /** Shows a pane, and with `focus` moves keyboard focus into it; `raise` (or `focus`) brings a popout window that holds it to the front. */
+  reveal(id: PaneId, options?: { focus?: boolean; raise?: boolean }): void
   /** Closes a panel as its × does, remembering where it was docked. */
   close(id: PaneId): void
   location(id: PaneId): PaneLocation
   float(id: PaneId): void
   /** Returns a floating panel to where it was docked. */
   dock(id: PaneId): void
+  /** Moves a panel into a new OS window of its own (Move into New Window); the query editor stays in the main window. */
+  moveToWindow(id: PaneId): void
+  /** Docks a popped-out panel back in the main window, where it was before it popped out. */
+  moveToMainWindow(id: PaneId): void
   /** Docks a panel at a side of the query editor (of Object Explorer, for the editor itself). */
   dockAt(id: PaneId, side: DockSide): void
   /** Moves a panel into another panel's group, as a tab beside it. */
@@ -81,11 +98,26 @@ export interface WorkspaceHandle {
   revealOutput(view: OutputPaneId | undefined, options?: { focus?: boolean }): void
   /** SSMS's Ctrl+R: closes every open output panel while one shows, else reveals the output. */
   toggleOutput(view: OutputPaneId | undefined): 'hidden' | 'shown'
-  flush(): Promise<void>
+  /**
+   * Writes the layout now. With `closing` it is the window's last write before it closes: popout windows that close after
+   * it (a quit closes every window, in any order) leave the saved layout as it is, unless `closeCancelled` follows.
+   */
+  flush(closing?: boolean): Promise<void>
+  /** The close that `flush(true)` prepared for did not happen: panels whose windows closed meanwhile dock back. */
+  closeCancelled(): void
 }
 
 const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(function DockWorkspace(panes, ref) {
-  const { theme, panes: shown, shellOptions } = useWorkbench()
+  const workbench = useWorkbench()
+  const { theme, panes: shown, shellOptions } = workbench
+  // Popout windows: a ref for the commands, state for rendering their frames.
+  const popoutsRef = useRef<readonly PopoutRecord[]>([])
+  const [popouts, setPopouts] = useState<readonly PopoutRecord[]>([])
+  // The page is going: its popout windows go with it and their panels stay where the saved layout put them.
+  const unloading = useRef(false)
+  // The window's last layout write is done and it is closing: popouts closing now change nothing (`flush(true)`).
+  const closing = useRef(false)
+  const closedWhileClosing = useRef<PopoutPaneId[]>([])
   const themeType = useServiceSnapshot(theme).active.type
   const { panelTabs } = useServiceSnapshot(shellOptions)
   const panelTabsRef = useRef(panelTabs)
@@ -143,13 +175,145 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
       : Math.abs(box.x - workspace.x) < 2 && Math.abs(box.right - workspace.right) < 2)
     returnLocations.current[id] = { reference: reference?.id as PaneId | undefined, position, ...sibling ? { index: panel.group.panels.indexOf(panel) } : {}, edge, width: box.width, height: box.height }
   }
-  function close(id: PaneId) { rememberDock(id); apiRef.current?.getPanel(id)?.api.close() }
+  function close(id: PaneId) {
+    if (recordOf(id)) { removeFromWindow(id); return }
+    rememberDock(id); apiRef.current?.getPanel(id)?.api.close()
+  }
   function location(id: PaneId): PaneLocation {
+    if (recordOf(id)) return 'window'
     const panel = apiRef.current?.getPanel(id)
     return !panel ? 'closed' : panel.api.location.type === 'floating' ? 'floating' : 'grid'
   }
+
+  // Popout windows (docs/popout-windows.md): each is the page's own same-origin about:blank child, so a panel's content
+  // (its pane host, with the React tree portalled into it) moves there as it is, and back.
+  const recordOf = (id: string) => popoutsRef.current.find(record => (record.panes as readonly string[]).includes(id))
+  function setRecords(next: readonly PopoutRecord[]) {
+    popoutsRef.current = next
+    setPopouts(next)
+    for (const record of next) record.title(windowTitle(record.active))
+    if (apiRef.current && ready.current) publishVisibility(apiRef.current)
+    changed()
+  }
+  function parkFrom(record: PopoutRecord, id: PaneId) {
+    const host = paneHosts.hosts[id]
+    if (record.root.contains(host) && parking.current) placeHost(host, parking.current)
+  }
+  function endWindow(record: PopoutRecord) {
+    record.dispose()
+    if (!record.window.closed) record.window.close()
+  }
+  /** Opens a popout window for `layout`; when main refuses it (off every display, too many) its panels dock back instead. */
+  function openWindow(layout: PopoutLayout, restoring: boolean): boolean {
+    const { x, y, width, height } = layout.bounds
+    let child: Window | null = null
+    // A fresh name each time, never the layout's id: a window that had it may still be closing, and window.open would
+    // hand that window back instead of opening one.
+    try { child = window.open('about:blank', 'varia-popout-' + crypto.randomUUID(), `left=${x},top=${y},width=${width},height=${height}`) } catch { child = null }
+    let prepared: PopoutDocument | undefined, attached: { dispose(): void } | undefined
+    try {
+      if (!child) throw new Error('The window was refused.')
+      prepared = preparePopoutDocument(child, document, windowTitle(layout.active))
+      attached = workbench.attachWindow(child)
+    } catch {
+      prepared?.dispose(); attached?.dispose(); if (child && !child.closed) child.close()
+      if (!restoring) setError('Could not open a new window for ' + layout.panes.map(id => paneTitles[id]).join(', ') + '. The panel stays in the main window.')
+      for (const id of layout.panes) reveal(id)
+      return false
+    }
+    const target = child, frame = prepared, listeners = attached
+    const closed = () => windowClosed(layout.id), resized = () => changed()
+    target.addEventListener('pagehide', closed)
+    target.addEventListener('resize', resized)
+    const record: PopoutRecord = { id: layout.id, panes: [...layout.panes], active: layout.active, bounds: layout.bounds, window: target, root: frame.root, title: frame.setTitle,
+      dispose: () => { target.removeEventListener('pagehide', closed); target.removeEventListener('resize', resized); listeners.dispose(); frame.dispose() } }
+    setRecords([...popoutsRef.current, record])
+    return true
+  }
+  /** The user closed a popout window: its panels dock back where they were. */
+  function windowClosed(id: string) {
+    const record = popoutsRef.current.find(item => item.id === id)
+    if (!record || unloading.current) return
+    record.dispose()
+    // Their content comes home before the window's document goes.
+    for (const pane of record.panes) parkFrom(record, pane)
+    if (closing.current) {
+      // Closed by the quit after the last write: the saved layout keeps the window, and the panels wait to see if the close happens.
+      popoutsRef.current = popoutsRef.current.filter(item => item !== record)
+      setPopouts(popoutsRef.current)
+      closedWhileClosing.current.push(...record.panes)
+      return
+    }
+    setRecords(popoutsRef.current.filter(item => item !== record))
+    for (const pane of record.panes) reveal(pane)
+  }
+  function closeCancelled() {
+    closing.current = false
+    const panes = closedWhileClosing.current
+    closedWhileClosing.current = []
+    for (const pane of panes) reveal(pane)
+    if (apiRef.current && ready.current) publishVisibility(apiRef.current)
+    changed()
+  }
+  /** Moves panels (the ones that can pop out) into a new window: where they were on screen, or at a screen point (a drag out). */
+  function popOut(ids: readonly string[], at?: { x: number; y: number }): boolean {
+    const api = apiRef.current
+    if (!api || !ready.current || popoutsRef.current.length >= popoutLimits.maxWindows) return false
+    const panes = ids.filter(canPopOut).filter(id => !recordOf(id) && api.getPanel(id))
+    if (!panes.length) return false
+    const first = api.getPanel(panes[0])!, box = first.group.element.getBoundingClientRect(), shownId = first.group.activePanel?.id
+    const bounds = { x: clampCoordinate(at ? at.x - 80 : window.screenX + box.x), y: clampCoordinate(at ? at.y - 16 : window.screenY + box.y),
+      width: clampSize(box.width, popoutLimits.minWidth), height: clampSize(box.height, popoutLimits.minHeight) }
+    const active = panes.find(id => id === shownId) ?? panes[0]
+    for (const id of panes) { rememberDock(id); api.getPanel(id)?.api.close() }
+    return openWindow({ id: crypto.randomUUID(), panes, active, bounds }, false)
+  }
+  function moveToWindow(id: PaneId) { popOut([id]) }
+  /** Takes a panel out of its window (closing the window when it was the last), its content back in the main window. */
+  function removeFromWindow(id: PaneId) {
+    const record = recordOf(id)
+    if (!record) return
+    parkFrom(record, id)
+    const panes = record.panes.filter(pane => pane !== id)
+    if (!panes.length) { endWindow(record); setRecords(popoutsRef.current.filter(item => item !== record)); return }
+    setRecords(popoutsRef.current.map(item => item === record ? { ...record, panes, active: panes.includes(record.active) ? record.active : panes[0] } : item))
+  }
+  /** Docks a popped-out panel back: where it was, or where a popout tab was dropped on the main window. */
+  function moveToMainWindow(id: PaneId, drop?: { group?: DockviewGroupPanel; position: Position }) {
+    if (!recordOf(id)) return
+    removeFromWindow(id)
+    reveal(id)
+    const api = apiRef.current, panel = api?.getPanel(id)
+    if (!drop || !api || !panel) return
+    try {
+      if (drop.group) { if (drop.group !== panel.group || drop.position !== 'center') panel.api.moveTo({ group: drop.group, position: drop.position }) }
+      else {
+        const group = api.addGroup({ direction: drop.position === 'top' ? 'above' : drop.position === 'bottom' ? 'below' : drop.position === 'center' ? 'right' : drop.position })
+        panel.api.moveTo({ group, position: 'center' })
+      }
+    } catch (error) { setError(message(error)) }
+  }
+  function selectInWindow(windowId: string, pane: PopoutPaneId) {
+    if (popoutsRef.current.some(record => record.id === windowId && record.active !== pane && record.panes.includes(pane)))
+      setRecords(popoutsRef.current.map(record => record.id === windowId ? { ...record, active: pane } : record))
+  }
+  /** Makes the open popout windows those of a layout being applied: the same windows stay, others close or open. */
+  function syncWindows(target: readonly PopoutLayout[]) {
+    const kept = popoutsRef.current.filter(record => target.some(item => item.id === record.id && item.panes.join() === record.panes.join()))
+    for (const record of popoutsRef.current) if (!kept.includes(record)) { for (const pane of record.panes) parkFrom(record, pane); endWindow(record) }
+    setRecords(kept.map(record => ({ ...record, active: target.find(item => item.id === record.id)!.active })))
+    for (const item of target) if (!kept.some(record => record.id === item.id)) openWindow(item, true)
+  }
+  /** Where a popout window is now (its content size), for the saved layout. */
+  function windowBounds(record: PopoutRecord): PopoutLayout['bounds'] {
+    const view = record.window
+    if (view.closed) return record.bounds
+    return { x: clampCoordinate(view.screenX), y: clampCoordinate(view.screenY), width: clampSize(view.innerWidth, popoutLimits.minWidth), height: clampSize(view.innerHeight, popoutLimits.minHeight) }
+  }
+
   function dock(id: PaneId) { if (location(id) === 'floating') toggle(id) }
   function dockAt(id: PaneId, side: DockSide) {
+    if (recordOf(id)) moveToMainWindow(id)
     const api = apiRef.current, panel = api?.getPanel(id)
     if (!api || !panel) return
     const reference = dockReference(id, api.panels.map(item => ({ id: item.id, location: item.api.location.type, panel: item })))?.panel
@@ -159,6 +323,8 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     panel.api.moveTo({ group, position: 'center' })
   }
   function tabWith(id: PaneId, other: PaneId) {
+    if (recordOf(other)) return
+    if (recordOf(id)) moveToMainWindow(id)
     const panel = apiRef.current?.getPanel(id), target = apiRef.current?.getPanel(other)
     if (!panel || !target || id === other) return
     // An output panel goes among the group's output panels in their order, Results, Messages, Execution plan; others go last.
@@ -173,8 +339,9 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
       if (group.header.hidden !== hidden) { group.header.hidden = hidden; group.relayout() }
     }
   }
-  function float(id: PaneId) { rememberDock(id); const panel = apiRef.current?.getPanel(id); if (panel) apiRef.current!.addFloatingGroup(panel, { width: 520, height: 360, x: 60, y: 60 }) }
+  function float(id: PaneId) { if (recordOf(id)) moveToMainWindow(id); rememberDock(id); const panel = apiRef.current?.getPanel(id); if (panel) apiRef.current!.addFloatingGroup(panel, { width: 520, height: 360, x: 60, y: 60 }) }
   function toggle(id: PaneId) {
+    if (recordOf(id)) { moveToMainWindow(id); return }
     const panel = apiRef.current?.getPanel(id)
     if (!panel) { reveal(id); return }
     if (panel.api.location.type === 'grid') { float(id); return }
@@ -186,8 +353,17 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     else panel.group.api.moveTo({ position: id === 'explorer' ? 'left' : isOutputPane(id) ? 'bottom' : 'right' })
     if (previous && previous.position !== 'center') panel.api.setSize({ width: previous.width, height: previous.height })
   }
-  function reveal(id: PaneId, options?: { focus?: boolean }) {
+  function reveal(id: PaneId, options?: { focus?: boolean; raise?: boolean }) {
     const api = apiRef.current
+    // In a popout window its tab is selected; the window comes to the front only when asked, since a query's output
+    // showing must not take focus from the editor.
+    const record = recordOf(id)
+    if (record) {
+      selectInWindow(record.id, id as PopoutPaneId)
+      if (options?.focus || options?.raise) record.window.focus()
+      if (options?.focus) focusPane(id)
+      return
+    }
     if (!api || !ready.current) {
       const focus = pendingReveals.current.get(id)?.focus || options?.focus
       pendingReveals.current.set(id, focus ? { focus } : {})
@@ -221,25 +397,28 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
   /** Moves focus into a pane unless it is already there: to its `data-pane-focus` element (the selected one first), else its first control. */
   function focusPane(id: PaneId) {
     const host = paneHosts.hosts[id]
+    // In the window the pane is in now.
     const attempt = () => {
-      if (host.contains(document.activeElement)) return true
+      if (host.contains(host.ownerDocument.activeElement)) return true
       const target = host.querySelector<HTMLElement>('[data-pane-focus="selected"]') ?? host.querySelector<HTMLElement>('[data-pane-focus]') ?? host.querySelector<HTMLElement>(focusableSelector)
       target?.focus()
-      return host.contains(document.activeElement)
+      return host.contains(host.ownerDocument.activeElement)
     }
     // A panel that was closed mounts its content on a later frame.
     if (!attempt()) requestAnimationFrame(() => { attempt() })
   }
   /** Showing as `publishVisibility` means it: its tab selected in a visible group, not behind another maximized group. */
   function showing(api: DockviewApi, id: PaneId) {
+    const record = recordOf(id)
+    if (record) return record.active === id
     const panel = api.getPanel(id)
     return !!panel && panel.group.activePanel?.id === id && panel.group.api.isVisible && (!api.hasMaximizedGroup() || panel.group.api.isMaximized())
   }
   function revealOutput(view: OutputPaneId | undefined, options?: { focus?: boolean }) {
     const api = apiRef.current
     if (!api || !ready.current) { reveal(view ?? 'results', options); return }
-    if (view && api.getPanel(view)) { reveal(view, options); return }
-    const open = outputPaneIds.filter(id => api.getPanel(id))
+    if (view && location(view) !== 'closed') { reveal(view, options); return }
+    const open = outputPaneIds.filter(id => location(id) !== 'closed')
     const target = open.find(id => showing(api, id)) ?? open[0]
     if (target) { hiddenOutput.current = null; reveal(target, options); return }
     const hidden = hiddenOutput.current
@@ -252,7 +431,8 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
   }
   function toggleOutput(view: OutputPaneId | undefined): 'hidden' | 'shown' {
     const api = apiRef.current
-    if (!api || !outputPaneIds.some(id => showing(api, id))) { revealOutput(view); return 'shown' }
+    // Panels in popout windows stay: Ctrl+R hides and shows the main window's output panels.
+    if (!api || !outputPaneIds.some(id => showing(api, id) && !recordOf(id))) { revealOutput(view); return 'shown' }
     const ids = outputPaneIds.filter(id => api.getPanel(id)), shown = ids.filter(id => api.getPanel(id)!.group.activePanel?.id === id)
     for (const id of ids) close(id)
     hiddenOutput.current = { ids, shown }
@@ -260,6 +440,8 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
   }
   /** Shows an output panel's tab in its group when the group shows another output panel, without activating the group. */
   function selectOutput(id: OutputPaneId) {
+    const record = recordOf(id)
+    if (record) { if (isOutputPane(record.active)) selectInWindow(record.id, id); return }
     const panel = apiRef.current?.getPanel(id), current = panel?.group.activePanel
     if (!panel || !current || current.id === id || !isOutputPane(current.id)) return
     panel.group.model.openPanel(panel, { skipSetGroupActive: true })
@@ -268,7 +450,10 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
   }
 
   function cancelTimer() { if (timer.current) clearTimeout(timer.current); timer.current = null }
-  function snapshot() { return withoutHeaderState(parseWorkspaceLayout(apiRef.current!.toJSON())) }
+  function snapshot() {
+    const popped = popoutsRef.current.map(record => ({ id: record.id, panes: [...record.panes], active: record.active, bounds: windowBounds(record) }))
+    return withoutHeaderState(parseWorkspaceLayout({ ...apiRef.current!.toJSON(), ...popped.length ? { windows: popped } : {} }))
+  }
   function update(next: LayoutState) { stateRef.current = next; setState(next) }
   async function persist(next = stateRef.current) {
     cancelTimer()
@@ -286,7 +471,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     await persist(next)
   }
   function changed() {
-    if (restoring.current || !ready.current) return
+    if (restoring.current || !ready.current || closing.current) return
     cancelTimer()
     timer.current = setTimeout(() => {
       void flush().catch(error => setError('Could not remember workspace layout: ' + message(error)))
@@ -307,22 +492,24 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
       api.fromJSON(previous, { reuseExistingPanels: true })
       throw error
     } finally { restoring.current = false }
+    syncWindows(validated.windows ?? [])
     changed()
   }
   function manage(mode: 'save' | 'load' = 'load') {
-    previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    previousFocus.current = focusToReturn()
     setName(mode === 'save' ? '' : stateRef.current.saved[0]?.name ?? '')
     setSelected(stateRef.current.saved[0]?.id ?? '')
     setDialogError(''); setNotice(''); setShowManager(true)
   }
-  useImperativeHandle(ref, () => ({ manage, flush, reset: () => {
+  useImperativeHandle(ref, () => ({ manage, flush: async closingNow => { if (closingNow) { cancelTimer(); closing.current = true } await flush() }, closeCancelled, reset: () => {
     if (!defaultRef.current) return
     try { apply(defaultRef.current) } catch (error) { setError(message(error)) }
-  }, reveal, close, location, float, dock, dockAt, tabWith, revealOutput, toggleOutput }))
+  }, reveal, close, location, float, dock, moveToWindow, moveToMainWindow: id => moveToMainWindow(id), dockAt, tabWith, revealOutput, toggleOutput }))
   /** Showing: open, its tab selected in a visible group, and not behind another maximized group. */
   function publishVisibility(api: DockviewApi) {
-    const where = (id: PaneId): PaneLocation => { const panel = api.getPanel(id); return !panel ? 'closed' : panel.api.location.type === 'floating' ? 'floating' : 'grid' }
-    const peers = (id: OutputPaneId) => api.getPanel(id)?.group.panels.map(panel => panel.id).filter(isOutputPane) ?? []
+    const where = (id: PaneId): PaneLocation => location(id)
+    // A popout window's own tabs switch its panels, so an output panel there lists only itself.
+    const peers = (id: OutputPaneId) => recordOf(id) ? [id] : api.getPanel(id)?.group.panels.map(panel => panel.id).filter(isOutputPane) ?? []
     const each = <T,>(value: (id: PaneId) => T) => Object.fromEntries(paneIds.map(id => [id, value(id)])) as Record<PaneId, T>
     shown.set(each(id => showing(api, id)), each(where), { results: peers('results'), messages: peers('messages'), plan: peers('plan') })
   }
@@ -330,10 +517,42 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     const selector = shown.bindSelector(selectOutput)
     return () => { selector.dispose(); cancelTimer(); subscription.current?.dispose(); guides.current?.dispose(); ready.current = false; apiRef.current = null }
   }, [])
+  useEffect(() => {
+    unloading.current = false
+    const unload = () => { unloading.current = true }
+    window.addEventListener('pagehide', unload)
+    return () => {
+      window.removeEventListener('pagehide', unload)
+      unloading.current = true
+      for (const record of popoutsRef.current) endWindow(record)
+      popoutsRef.current = []
+    }
+  }, [])
+  // While popouts are open, one timer notices a window torn down without its pagehide (by the OS, or a crash) and a window
+  // moved, which no DOM event reports; a moved window's place is saved as a resize's is.
+  const anyPopout = popouts.length > 0
+  useEffect(() => {
+    if (!anyPopout) return
+    const places = new Map<PopoutRecord, string>()
+    const poll = setInterval(() => {
+      let moved = false
+      for (const record of popoutsRef.current) {
+        if (record.window.closed) { windowClosed(record.id); continue }
+        const place = record.window.screenX + ',' + record.window.screenY
+        if (places.has(record) && places.get(record) !== place) moved = true
+        places.set(record, place)
+      }
+      if (moved) changed()
+    }, 1000)
+    // Dialogs open in the main window: one opened from a popout brings the main window to the front, or the popout would
+    // look frozen behind it while the dialog holds the keyboard.
+    const raise = watchModals(document, () => { if (windows.active() !== window) window.focus() })
+    return () => { clearInterval(poll); raise.dispose() }
+  }, [anyPopout])
   useEffect(() => { if (apiRef.current) syncHeaders(apiRef.current) }, [panelTabs])
   useEffect(() => {
     if (!showManager) return
-    return () => { if (previousFocus.current?.isConnected) previousFocus.current.focus() }
+    return () => returnFocusTo(previousFocus.current)
   }, [showManager])
 
   function onReady(event: DockviewReadyEvent) {
@@ -369,8 +588,36 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
       subscription.current = { dispose: () => { layout.dispose(); maximized.dispose(); panels.forEach(item => item.dispose()) } }
       syncHeaders(api)
       publishVisibility(api)
-      guides.current = new DockingGuides(api, root.current!, ids => ids.forEach(id => rememberDock(id as PaneId)), error => setError(message(error)))
+      guides.current = new DockingGuides(api, root.current!, ids => ids.forEach(id => rememberDock(id as PaneId)), error => setError(message(error)), (ids, at) => popOut(ids, at))
       api.updateOptions({ dropPositionResolver: guides.current })
+      // A popout window's tab dragged onto the workbench docks there (the compass shows where), or where it was.
+      const workbenchRoot = root.current!
+      const carried = (event: DragEvent) => { const pane = paneDrag.carried(event.dataTransfer); return pane && recordOf(pane) ? pane : undefined }
+      const over = (event: DragEvent) => {
+        const pane = carried(event)
+        if (!pane) return
+        event.preventDefault(); event.stopPropagation()
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+        guides.current?.dragOver([pane], event.clientX, event.clientY)
+      }
+      const leave = (event: DragEvent) => {
+        const box = workbenchRoot.getBoundingClientRect()
+        if (event.clientX <= box.left || event.clientY <= box.top || event.clientX >= box.right || event.clientY >= box.bottom) guides.current?.dragLeave()
+      }
+      const drop = (event: DragEvent) => {
+        const pane = carried(event)
+        if (!pane) return
+        event.preventDefault(); event.stopPropagation()
+        paneDrag.end()
+        moveToMainWindow(pane, guides.current?.dragDrop(event.clientX, event.clientY))
+        window.focus()
+      }
+      workbenchRoot.addEventListener('dragover', over, true)
+      workbenchRoot.addEventListener('dragleave', leave, true)
+      workbenchRoot.addEventListener('drop', drop, true)
+      const dragDispose = { dispose: () => { workbenchRoot.removeEventListener('dragover', over, true); workbenchRoot.removeEventListener('dragleave', leave, true); workbenchRoot.removeEventListener('drop', drop, true) } }
+      const previous = subscription.current
+      subscription.current = { dispose: () => { previous?.dispose(); dragDispose.dispose() } }
       setRestored(true)
       const pending = [...pendingReveals.current]
       pendingReveals.current.clear()
@@ -385,6 +632,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
   }
   // Pane commands only read refs, so stable identities keep dockview from re-applying options on every render.
   const paneCommands = useMemo<PaneCommands>(() => ({ close, float, toggle, reveal }), [])
+  const popoutCommands = useMemo<PopoutCommands>(() => ({ select: selectInWindow, moveToMain: id => moveToMainWindow(id), close: id => close(id), dragEnded: () => guides.current?.dragLeave() }), [])
   return <>
     {error && <div className="global-error layout-error" role="alert"><span>{error}</span><button aria-label="Dismiss layout error" onClick={() => setError('')}><Icon name="close" /></button></div>}
     <PaneContext.Provider value={paneHosts}><PaneCommandContext.Provider value={paneCommands}><RestoredContext.Provider value={restored}>
@@ -393,6 +641,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
       <div className="workbench" ref={root}><DockviewReact className="dock-workbench" theme={dockThemes[themeType]} components={components} defaultTabComponent={PaneTab} watermarkComponent={EmptyWorkspace}
         defaultRenderer="always" floatingGroupBounds={floatingBounds} transformFloatingGroupDrag={keepTitlebar} floatingGroupDragHandle="titlebar"
         dndStrategy="pointer" proportionalLayout={false} onReady={onReady} /></div>
+      {popouts.map(record => createPortal(<PopoutFrame view={record} hosts={paneHosts.hosts} parking={parking.current} commands={popoutCommands} />, record.root, record.id))}
     </RestoredContext.Provider></PaneCommandContext.Provider></PaneContext.Provider>
     {showManager && <div className="modal-backdrop" onKeyDown={event => {
       if (event.key === 'Escape' && !busy) { event.stopPropagation(); setShowManager(false) }

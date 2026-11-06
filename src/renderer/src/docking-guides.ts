@@ -45,13 +45,19 @@ export class DockingGuides implements PositionResolver {
   private sourceIds = new Set<string>()
   private target: DockviewGroupPanel | null = null
   private point = { x: 0, y: 0, ctrl: false }
+  /** The pointer on screen, for a panel dragged out of the window into a window of its own. */
+  private screen = { x: 0, y: 0 }
+  /** A popout tab dragged over the window (the browser's drag): the compass shows for it, without a Dockview source. */
+  private external = false
   private dropped = false
   private movingFloat = false
   private moved = false
   private startPoint = { x: 0, y: 0 }
   private disposed = false
   private disposables: { dispose(): void }[] = []
-  constructor(private api: DockviewApi, private root: HTMLElement, private beforeFloat: (ids: string[]) => void, private failed: (error: unknown) => void) {
+  constructor(private api: DockviewApi, private root: HTMLElement, private beforeFloat: (ids: string[]) => void, private failed: (error: unknown) => void,
+    /** Moves the dragged panels into a new window at a screen point; false when they cannot go (the query editor). */
+    private popOut: (ids: string[], at: { x: number; y: number }) => boolean = () => false) {
     this.layer.className = 'docking-guides'; this.layer.hidden = true; this.layer.setAttribute('aria-hidden', 'true')
     this.preview.className = 'docking-preview'; this.preview.hidden = true
     this.compass.className = 'docking-compass'
@@ -77,6 +83,7 @@ export class DockingGuides implements PositionResolver {
     this.dropped = false
     this.movingFloat = false; this.moved = true
     this.point = { x: event.clientX, y: event.clientY, ctrl: event.ctrlKey }
+    this.screen = { x: event.screenX, y: event.screenY }
     this.refresh()
   }
   private floatDown = (event: PointerEvent) => {
@@ -94,6 +101,7 @@ export class DockingGuides implements PositionResolver {
     if (!this.source) return
     if (this.movingFloat && Math.hypot(event.clientX - this.startPoint.x, event.clientY - this.startPoint.y) > 4) this.moved = true
     this.point = { x: event.clientX, y: event.clientY, ctrl: event.ctrlKey }
+    this.screen = { x: event.screenX, y: event.screenY }
     this.refresh()
   }
   private key = (event: KeyboardEvent) => {
@@ -103,7 +111,7 @@ export class DockingGuides implements PositionResolver {
   }
   private refresh() {
     this.preview.hidden = true
-    if (!this.source || !this.moved || this.point.ctrl || !contains(bounds(this.root), this.point.x, this.point.y)) { this.layer.hidden = true; this.cells = []; return }
+    if ((!this.source && !this.external) || !this.moved || this.point.ctrl || !contains(bounds(this.root), this.point.x, this.point.y)) { this.layer.hidden = true; this.cells = []; return }
     const groups = [...this.api.groups].reverse().sort((a, b) => Number(b.api.location.type === 'floating') - Number(a.api.location.type === 'floating'))
     this.target = groups.find(group => group.panels.some(panel => !this.sourceIds.has(panel.id)) && group.api.isVisible && contains(bounds(group.element), this.point.x, this.point.y)) ?? null
     // Keep the compass attached to the hovered destination, even while crossing its cells.
@@ -153,7 +161,10 @@ export class DockingGuides implements PositionResolver {
           this.api.updateOptions({ disableDnd: false })
           if (hit && target && 'panels' in source) source.api.moveTo({ group: hit.edge ? undefined : target, position: hit.position })
         } else if (!this.dropped && sourceIds.every(id => this.api.getPanel(id))) {
-          const root = bounds(this.root)
+          const root = bounds(this.root), view = this.root.ownerDocument.defaultView!
+          // Released outside the window: the panels move into a window of their own there, as VS Code's editors do.
+          const outside = point.x < 0 || point.y < 0 || point.x > view.innerWidth || point.y > view.innerHeight
+          if (outside && this.popOut(sourceIds, this.screen)) { this.source = null; this.cells = []; this.target = null; this.movingFloat = false; return }
           this.beforeFloat(sourceIds)
           this.api.addFloatingGroup(source, { x: Math.max(0, point.x - root.x - 80), y: Math.max(0, point.y - root.y - 16), width: 520, height: 360 })
         }
@@ -161,8 +172,25 @@ export class DockingGuides implements PositionResolver {
       this.source = null; this.cells = []; this.target = null; this.movingFloat = false
     }, 0)
   }
+  /** A popout tab dragged over the window at a client point: the compass shows over the panel under it. */
+  dragOver(ids: string[], x: number, y: number) {
+    this.external = true
+    this.sourceIds = new Set(ids)
+    this.moved = true
+    this.point = { x, y, ctrl: false }
+    this.refresh()
+  }
+  /** Where a popout tab dropped at a client point docks: a compass cell's group and side, or undefined (where it was). */
+  dragDrop(x: number, y: number): { group?: DockviewGroupPanel; position: Position } | undefined {
+    const hit = this.external ? this.cells.find(({ cell }) => contains(cell, x, y))?.cell : undefined, target = this.target
+    this.cancel()
+    return hit ? { group: hit.edge ? undefined : target ?? undefined, position: hit.position } : undefined
+  }
+  /** The popout tab's drag left the window, or ended elsewhere. */
+  dragLeave() { if (this.external) this.cancel() }
   private cancel = () => {
     if (this.movingFloat) this.api.updateOptions({ disableDnd: false })
+    this.external = false
     this.source = null; this.cells = []; this.target = null; this.layer.hidden = true; this.movingFloat = false
   }
   dispose() {

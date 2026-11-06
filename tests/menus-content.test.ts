@@ -88,7 +88,8 @@ async function resolveContexts(platform: Platform): Promise<{ labels: string[]; 
   const field = (facts: Partial<InputTarget>): MenuTarget => ({ kind: 'input', element: {} as HTMLElement, readOnly: false, secret: false, hasSelection: true, empty: false, canUndo: true, canRedo: false, ...facts })
   const targets: [string, MenuTarget][] = [
     ['the query editor', { kind: 'editor', tabId: saved.id }], ['a saved query\'s tab', { kind: 'documentTab', tabId: saved.id }], ['an unsaved query\'s tab', { kind: 'documentTab', tabId: unsaved.id }],
-    ['a docked panel\'s tab', { kind: 'dockTab', pane: 'explorer', floating: false }], ['a floating panel\'s tab', { kind: 'dockTab', pane: 'results', floating: true }],
+    ['a docked panel\'s tab', { kind: 'dockTab', pane: 'explorer', floating: false, popout: false }], ['a floating panel\'s tab', { kind: 'dockTab', pane: 'results', floating: true, popout: false }],
+    ['a popped-out panel\'s tab', { kind: 'dockTab', pane: 'plan', floating: false, popout: true }],
     ['a text field with selected text', field({})], ['a read-only text field', field({ readOnly: true })], ['a password field', field({ secret: true })],
     ['an empty text field', field({ empty: true, hasSelection: false, canUndo: false })],
     ['Object Explorer\'s empty area', { kind: 'explorer' }], ['a server', object(server, 'server-a.example')],
