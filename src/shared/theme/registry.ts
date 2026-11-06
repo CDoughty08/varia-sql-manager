@@ -297,11 +297,11 @@ const groups = {
   'Charts': {
     'charts.foreground': ['V', '$textTertiary', 'Chart labels, legends, and the crosshair.', 'css script'],
     'charts.lines': ['V', '$border', 'Chart grid lines and baseline.', 'script'],
-    'charts.blue': ['V', '$chart1', 'First series of a chart; series take blue, orange, green, yellow, then purple.', 'script'],
+    'charts.blue': ['V', '$chart1', 'First series of a chart; series take blue, orange, green, yellow, then purple.', 'css script'],
     'charts.orange': ['V', '$chart2', 'Second series of a chart.', 'script'],
     'charts.green': ['V', '$chart3', 'Third series of a chart.', 'script'],
     'charts.yellow': ['V', '$chart4', 'Fourth series of a chart.', 'script'],
-    'charts.purple': ['V', '$chart5', 'Fifth series of a chart.', 'script'],
+    'charts.purple': ['V', '$chart5', 'Fifth series of a chart.', 'css script'],
     'charts.red': ['V', '$error', 'A status mark on a chart, such as a failed execution on a timeline; never the color of a series.', 'script'],
     'charts.gray': ['X', '$neutral', '"Other" in a stacked chart: everything the named series leave out.', 'script']
   }

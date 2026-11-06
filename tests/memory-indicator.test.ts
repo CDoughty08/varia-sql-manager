@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { EventBus } from '../src/renderer/src/core/events'
-import { memoryWarning, ResultMemoryService } from '../src/renderer/src/results/memory'
-import type { MemoryReport } from '../src/renderer/src/results/ResultClient'
+import { memoryLevel, MemoryUsageService } from '../src/renderer/src/results/memory'
+import type { MemoryReport } from '../src/shared/ipc/port-messages'
 import { formatBytes } from '../src/renderer/src/results/status'
 import { summaryOf } from './fixtures/results'
 
@@ -14,14 +14,14 @@ describe('result memory', () => {
   it('follows the backend\'s pushes, each summary\'s budget, and closes; it warns from 90 %', () => {
     const listeners = new Set<(memory: MemoryReport) => void>()
     const events = new EventBus()
-    const service = new ResultMemoryService({ onMemory: listener => { listeners.add(listener); return { dispose: () => listeners.delete(listener) } } }, events)
+    const service = new MemoryUsageService({ onMemory: listener => { listeners.add(listener); return { dispose: () => listeners.delete(listener) } } }, 'results', events)
     const changes: unknown[] = []
     service.subscribe(() => changes.push(service.getSnapshot()))
     for (const listener of listeners) listener({ usedBytes: 10 * MB, globalBytes: 100 * MB, generation: 1, seq: 1 })
     expect(service.getSnapshot()).toEqual({ usedBytes: 10 * MB, globalBytes: 100 * MB })
-    expect(memoryWarning(service.getSnapshot())).toBe(false)
+    expect(memoryLevel(service.getSnapshot(), 'results')).toBe('normal')
     events.emit({ type: 'query.finished', tabId: 't', queryId: 'q', summary: summaryOf([], { budget: { usedBytes: 92 * MB, globalBytes: 100 * MB, queryBytes: 50 * MB, generation: 1, seq: 2 } }) })
-    expect(memoryWarning(service.getSnapshot())).toBe(true)
+    expect(memoryLevel(service.getSnapshot(), 'results')).toBe('warning')
     // A close reports only what is used; the budget stays.
     service.update({ usedBytes: 0, globalBytes: 0, generation: 1, seq: 3 })
     expect(service.getSnapshot()).toEqual({ usedBytes: 0, globalBytes: 100 * MB })
@@ -29,12 +29,12 @@ describe('result memory', () => {
     expect(changes).toHaveLength(3)
     service.dispose()
     expect(listeners.size).toBe(0)
-    expect(memoryWarning({ usedBytes: 1, globalBytes: 0 })).toBe(false)
+    expect(memoryLevel({ usedBytes: 1, globalBytes: 0 }, 'results')).toBe('unavailable')
   })
   it('never shows a figure older than the one it shows: a summary overtaken by a close, or a backend that was replaced', () => {
     const listeners = new Set<(memory: MemoryReport) => void>()
     const events = new EventBus()
-    const service = new ResultMemoryService({ onMemory: listener => { listeners.add(listener); return { dispose: () => listeners.delete(listener) } } }, events)
+    const service = new MemoryUsageService({ onMemory: listener => { listeners.add(listener); return { dispose: () => listeners.delete(listener) } } }, 'results', events)
     const push = (memory: MemoryReport) => { for (const listener of listeners) listener(memory) }
     const finish = (usedBytes: number, generation: number, seq: number) =>
       events.emit({ type: 'query.finished', tabId: 't', queryId: 'q', summary: summaryOf([], { budget: { usedBytes, globalBytes: 2048 * MB, queryBytes: 1024 * MB, generation, seq } }) })
@@ -52,7 +52,7 @@ describe('result memory', () => {
     expect(service.getSnapshot().usedBytes).toBe(11 * MB)
     // A new backend holds nothing, whatever the old one still sends; its own reports count from 1 again.
     push({ usedBytes: 0, globalBytes: 0, generation: 2, seq: 0 })
-    expect(service.getSnapshot()).toEqual({ usedBytes: 0, globalBytes: 2048 * MB })
+    expect(service.getSnapshot()).toEqual({ usedBytes: 0, globalBytes: 0 })
     finish(50 * MB, 1, 9)
     push({ usedBytes: 60 * MB, globalBytes: 2048 * MB, generation: 1, seq: 10 })
     expect(service.getSnapshot().usedBytes).toBe(0)
@@ -66,5 +66,13 @@ describe('result memory', () => {
     finish(5 * MB, 3, 1)
     expect(service.getSnapshot().usedBytes).toBe(5 * MB)
     service.dispose()
+  })
+
+  it('warns at 75% for index memory, at 90% for results, and turns critical at 95% for both', () => {
+    const usage = (usedBytes: number) => ({ usedBytes, globalBytes: 1000 })
+    expect([0, 749, 750, 949, 950, 1001].map(used => memoryLevel(usage(used), 'index')))
+      .toEqual(['normal', 'normal', 'warning', 'warning', 'critical', 'critical'])
+    expect([0, 899, 900, 949, 950, 1001].map(used => memoryLevel(usage(used), 'results')))
+      .toEqual(['normal', 'normal', 'warning', 'warning', 'critical', 'critical'])
   })
 })

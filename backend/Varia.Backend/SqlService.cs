@@ -93,6 +93,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private int reportedBand;
     /// <summary>Orders memory reports (events and summary budgets) for this process; main pairs it with the generation.</summary>
     private long memorySeq;
+    private long reportedIndexBytes = -1;
+    private long indexMemorySeq;
     private object? health;
 
     private sealed class RunningQuery(string connectionId, string sessionId, CancellationTokenSource source)
@@ -147,8 +149,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
 
     /// <param name="store">Defaults to the system budget (<see cref="ResultStore.FromSystem"/>).</param>
     /// <param name="hooks">Adds debug.results.synthesize (VARIA_BACKEND_TEST_HOOKS=1, set by main only for smoke tests).</param>
-    /// <param name="publish">Sends a global EVENT and says whether it was queued; result memory usage is reported through it
-    /// at most once a second.</param>
+    /// <param name="publish">Sends a global EVENT and says whether it was queued. Memory usage is sampled once a second
+    /// and after operations that release it.</param>
     /// <param name="actionsCatalog">The object actions' catalogue; the checks pass one that marks an action long (D1c) before D1f does.</param>
     public SqlService(ResultStore? store = null, bool hooks = false, Func<object, bool>? publish = null, ActionsCatalog? actionsCatalog = null)
     {
@@ -172,7 +174,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         ssisActions = new SsisActionService(this, ssis);
         live = new LiveService(this);
         sessionActions = new SessionActions(this, live);
-        if (publish is not null) memoryTimer = new Timer(_ => ReportMemory(), null, 1000, 1000);
+        if (publish is not null) memoryTimer = new Timer(_ => { ReportMemory(); ReportIndexMemory(); }, null, 1000, 1000);
     }
 
     /// <summary>The service as the backend process runs it. Test hooks, and the budget override VARIA_RESULT_BUDGET_BYTES,
@@ -555,6 +557,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         poolSessions.Forget(args.ConnectionId);
         explorer.Forget(args.ConnectionId);
         search.Forget(args.ConnectionId);
+        ReportIndexMemory();
         scripting.Forget(args.ConnectionId);
         actions.Forget(args.ConnectionId);
         ssis.Forget(args.ConnectionId);
@@ -1396,8 +1399,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private static MessageKind InformationalKind(SqlError error) => InformationalKind(error.Number);
     internal static MessageKind InformationalKind(int number) => number == 0 || number >= 50000 ? MessageKind.Print : MessageKind.Server;
 
-    /// <summary>A global results.memory EVENT, checked once a second and after each results.close: when usage crosses 50,
-    /// 75, 90 or 100 % of the budget, grows by 64 MiB, or falls below what the status bar was last shown (results were
+    /// <summary>A global results.memory EVENT, checked once a second and after each results.close: on the first sample,
+    /// when an empty store starts filling, usage crosses 50, 75, 90, 95 or 100 % of the budget, grows by 64 MiB, or
+    /// falls below what the status bar was last shown (results were
     /// closed, or a copy or save that leased them ended). An event the full control lane refused does not count as
     /// reported, so the next check sends it again.</summary>
     internal void ReportMemory()
@@ -1407,11 +1411,25 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             var used = store.UsedBytes;
             var global = store.GlobalBytes;
             var band = Band(used, global);
-            if (publish is null || (reportedBytes < 0 ? used == 0 : used >= reportedBytes && band == reportedBand && used - reportedBytes < MemoryReportStep)) return;
+            if (publish is null || used == reportedBytes ||
+                (reportedBytes > 0 && used > reportedBytes && band == reportedBand && used - reportedBytes < MemoryReportStep)) return;
             if (!publish(new { Type = "results.memory", UsedBytes = used, GlobalBytes = global, Seq = memorySeq + 1 })) return;
             memorySeq++;
             reportedBytes = used;
             reportedBand = band;
+        }
+    }
+
+    /// <summary>The shared index budget, sampled while builds run and after a disconnect releases an index.</summary>
+    internal void ReportIndexMemory()
+    {
+        lock (memoryGate)
+        {
+            var used = search.MemoryUsed;
+            if (publish is null || used == reportedIndexBytes) return;
+            if (!publish(new { Type = "explorer.index.memory", UsedBytes = used, GlobalBytes = search.Limits.MemoryBytes, Seq = indexMemorySeq + 1 })) return;
+            indexMemorySeq++;
+            reportedIndexBytes = used;
         }
     }
 
@@ -1431,7 +1449,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         }
     }
 
-    private static int Band(long used, long global) => used >= global ? 4 : used * 10 >= global * 9 ? 3 : used * 4 >= global * 3 ? 2 : used * 2 >= global ? 1 : 0;
+    private static int Band(long used, long global) => used >= global ? 5 : used * 20 >= global * 19 ? 4
+        : used * 10 >= global * 9 ? 3 : used * 4 >= global * 3 ? 2 : used * 2 >= global ? 1 : 0;
 
     /// <summary>Reads past the rest of a result set that stores no more rows and has a long column, counting its rows.
     /// ReadAsync would skip each long value by buffering all of it, in time quadratic in its size and deaf to the token; a

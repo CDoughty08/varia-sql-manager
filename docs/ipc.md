@@ -96,7 +96,7 @@ Every frame is a 16-byte little-endian header followed immediately by its body.
 | 1 | HELLO | both; the first frame each way, exactly once | map, see [Handshake](#handshake) |
 | 2 | REQUEST | main → backend | `{ method: str ≤ 64, params: map, credit?: uint }`; `credit` only for stream methods (64 KiB – 16 MiB) |
 | 3 | RESPONSE | backend → main | `{ result: any }` or `{ error: { code: str, message: str ≤ 16,384, details?: map } }` ([details](#error-codes-and-fixed-sentences)); exactly one per REQUEST |
-| 4 | EVENT | backend → main | id of a `query.execute` request: a [query event](#query-events). id 0: `{ type: 'results.memory', usedBytes, globalBytes, seq }` |
+| 4 | EVENT | backend → main | id of a `query.execute` request: a [query event](#query-events). id 0: `{ type: 'results.memory' or 'explorer.index.memory', usedBytes, globalBytes, seq }` |
 | 5 | DATA | backend → main | One [result page](#result-pages); id of a `results.read` request |
 | 6 | CANCEL | main → backend | Empty. arg: 1 user, 2 deadline backstop, 3 consumer gone, 4 shutdown |
 | 7 | CREDIT | main → backend | Empty. arg: bytes, 1 – 16,777,216 |
@@ -1017,13 +1017,23 @@ when no port is open).
 | `progress` | At most 10 times a second per query, latest value wins; up to 64 result sets with `rowsRead`, `rowsStored`, `rowsAvailable`, `bytesStored`. A sealed page is reported at once when no progress went out in the last 100 ms, and every set's first sealed page at once whatever the spacing, so the first rows of each set (one-row sets included) are readable without waiting for a tick |
 | `messages` | Every 100 ms or 64 KiB, only entries stored under the message caps: `{ text, kind: 'info' \| 'print' \| 'server' \| 'error' }` ([Messages](#messages)) |
 | `resultSet.closed` | Once per kept result set, with its final descriptor |
-| `results.memory` (id 0) | Checked once a second and after each `results.close` (before its answer): when usage crosses 50, 75, 90 or 100 % of the budget, grows by 64 MiB, or falls below the last report (results were closed, or a lease ended). The status bar follows these events and each summary's `budget`, not the `usedBytes` of a close's answer, which could arrive after a newer event; a summary's `budget` counts as a report, so closing results that only a summary showed still sends the fall. Events and summary budgets take their `seq` from one counter of the backend process, under the same lock as the usage they carry, and main pairs it with the generation: a summary is serialized after its figure is taken, so a close in another tab can send its fall first, and the status bar ignores any report older than the one it shows. Like any droppable event it is refused while the control lane is full (main not reading); a refused report does not count as sent and takes no `seq`, so the next check sends it once the lane drains |
 
 Progress and messages are droppable: when the backend's control lane holds 1,000 frames or 8 MiB, new ones are refused,
 and one over 256 KiB is dropped. `resultSet.opened` and `resultSet.closed` are essential: never refused, and up to
 4 MiB, enough for a descriptor of 4,096 columns with 128-character names (about 3.5 MB). RESPONSE, PONG and GOAWAY are
 never dropped. The UI treats the summary as authoritative and
 ignores a query's events once its summary has arrived.
+
+### Global memory events
+
+| type | Emitted |
+| --- | --- |
+| `results.memory` | Checked once a second and after `results.close`, before its answer. Reports the first sample, rises from zero, crossings of 50, 75, 90, 95 or 100 % of the budget, rises of at least 64 MiB, and any fall below the last report. Each query summary's `budget` counts as a report and shares this event's sequence. This lets the renderer discard an older summary when a close's event arrives first. |
+| `explorer.index.memory` | Checked once a second and after a disconnect drops a connection's index. Reports the first sample and changes to the usage charged to the shared index budget. This event has its own sequence. |
+
+Both events are droppable. A refused sample stays eligible for the next check and consumes no sequence number. Main
+pairs each sequence with the backend generation, retains the latest report for each feature, and replays both when a new
+results port opens.
 
 ## Result pages
 

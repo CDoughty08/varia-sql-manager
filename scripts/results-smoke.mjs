@@ -12,7 +12,7 @@ import { enlargeOutput, sizeResultStack } from './fixtures/results-pane.mjs'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, backendReady, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice,
-  jobProgress, kindIcon, lostServerRows, matching, memoryIndicator, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
+  jobProgress, kindIcon, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
   outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planList, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, resultToggle, statusBar,
   statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, unsavedMark
 } from './fixtures/ui.mjs'
@@ -1139,20 +1139,45 @@ try {
   await expect.poll(clipboard).toBe(tsv([0, 1, 2].map(w1)))
   console.log('Results checks: results are freed on re-run and tab close, and stay readable and copyable after Disconnect.')
 
-  // 12. Memory: the status bar shows what the backend holds against its budget, with a warning from 90 %.
+  // 12. Memory: both backend budgets, with a preview on hover and a pinned breakdown on click.
   await server().selectOption({ index: 1 })
   await run('-- varia-fake: sets=W1*10 memory=0.92')
   const memory = memoryIndicator(page)
-  // The warning icon is drawn; the words say it to screen readers.
-  await expect(memory).toHaveText('Warning: Results 236 MB / 256 MB. When it is full, new results are truncated.')
+  const memoryDetails = memoryBreakdown(page)
+  const resultsMemory = memoryUsage(page, 'results')
+  await expect(memory).toHaveAttribute('data-level', 'warning')
+  await expect(memory).toHaveAccessibleName(/Results 91%|Results 92%/)
   await expect(memory.locator('.codicon-warning')).toHaveCount(1)
-  await expect(memory).toHaveAttribute('title', /When it is full, new results are truncated\.$/)
+  await expect(memoryDetails).toBeHidden()
+  await memory.hover()
+  await expect(memoryDetails).toBeVisible()
+  await expect(memoryDetails).toContainText('New results may be truncated.')
+  await expect(memoryUsage(page, 'index')).toHaveText(/^[1-9]\d* MB \/ 512 MB$/)
+  await expect(resultsMemory).toHaveText('236 MB / 256 MB')
+  const triggerBox = await memory.boundingBox(), detailsBox = await memoryDetails.boundingBox()
+  expect(detailsBox.y + detailsBox.height).toBeCloseTo(triggerBox.y, 0)
+  expect(detailsBox.x).toBeGreaterThanOrEqual(0)
+  await memoryDetails.hover()
+  await expect(memoryDetails).toBeVisible()
+  await page.mouse.move(5, 80)
+  await expect(memoryDetails).toBeHidden()
+  await memory.click()
+  await page.mouse.move(5, 80)
+  await expect(memoryDetails).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(memoryDetails).toBeHidden()
+  await memory.press('Enter')
+  await expect(memoryDetails).toBeVisible()
+  await page.mouse.click(5, 80)
+  await expect(memoryDetails).toBeHidden()
+  await run('-- varia-fake: sets=W1*10 memory=0.96')
+  await expect(memory).toHaveAttribute('data-level', 'critical')
   // Script As's segment, then the query's facts, give way to a long text; the backend status, the editor's segments (Ln/Col,
   // INS, EOL, encoding) and the indicator keep their size. Every segment keeps one line (step 17 fits a long server name
   // into a small window).
   expect(await statusBar(page).locator(`:scope > :not(${part.statusSegment})`).evaluateAll(parts => parts.map(part => getComputedStyle(part).flexShrink + ' ' + getComputedStyle(part).whiteSpace)))
     .toEqual(['0 nowrap', '1 nowrap', '0 nowrap', '0 nowrap'])
-  // Closing the results releases them; the backend reports the fall before it answers, and the indicator hides. Run
+  // Closing the results releases them; the backend reports the fall before it answers, and the Results ring empties. Run
   // while a grid has focus, it moves focus to the Results tab, which stays, rather than dropping it with the grid.
   await cell(0, 0).click()
   await expect(grid()).toBeFocused()
@@ -1160,13 +1185,13 @@ try {
   await page.keyboard.type('close results')
   await expect(quickInputActive(page)).toContainText('Query: Close Results')
   await page.keyboard.press('Enter')
-  await expect(memory).toHaveCount(0)
+  await expect(resultsMemory).toHaveText('0 MB / 256 MB')
+  await expect(memory).not.toHaveAttribute('data-level', /warning|critical/)
   await expect(page.locator('[data-result-grid]')).toHaveCount(0)
   await expect(outputTab(/^Results/)).toBeFocused()
   await expect(outputTab(/^Results/)).toHaveAttribute('aria-selected', 'true')
   expect(await page.evaluate(() => document.activeElement !== document.body)).toBe(true)
-  // A run that grows by less than a report step is shown only by its summary, which the backend counts as reported, so
-  // closing it still sends the fall and the indicator hides.
+  // A small run after the store emptied shows up again and closing it empties the ring.
   const closeResults = async () => {
     await page.keyboard.press('F1')
     await page.keyboard.type('close results')
@@ -1175,37 +1200,37 @@ try {
     await expect(quickInput(page)).toHaveCount(0)
   }
   await run('-- varia-fake: sets=W1*10 memory=0.1')
-  await expect(memory).toHaveText(/^Results 26 MB \/ 256 MB$/)
+  await expect(resultsMemory).toHaveText('26 MB / 256 MB')
   await closeResults()
-  await expect(memory).toHaveCount(0)
+  await expect(resultsMemory).toHaveText('0 MB / 256 MB')
   // Two tabs' results add up, and closing one tab's leaves the other's.
   await run('-- varia-fake: sets=W1*10 memory=0.1')
-  await expect(memory).toHaveText(/^Results 26 MB \/ 256 MB$/)
+  await expect(resultsMemory).toHaveText('26 MB / 256 MB')
   await page.keyboard.press('Control+N')
   await expect(queryTabs()).toHaveCount(2)
   if (!(await server().inputValue())) await server().selectOption({ index: 1 })
   await run('-- varia-fake: sets=W1*10 memory=0.1')
-  await expect(memory).toHaveText(/^Results 51 MB \/ 256 MB$/)
+  await expect(resultsMemory).toHaveText('51 MB / 256 MB')
   await closeResults()
-  await expect(memory).toHaveText(/^Results 26 MB \/ 256 MB$/)
+  await expect(resultsMemory).toHaveText('26 MB / 256 MB')
   await page.keyboard.press('Control+W')
   await expect(queryTabs()).toHaveCount(1)
-  await expect(memory).toHaveText(/^Results 26 MB \/ 256 MB$/)
+  await expect(resultsMemory).toHaveText('26 MB / 256 MB')
   await closeResults()
-  await expect(memory).toHaveCount(0)
+  await expect(resultsMemory).toHaveText('0 MB / 256 MB')
   await run('-- varia-fake: sets=W1*10 memory=0')
-  await expect(memory).toHaveCount(0)
+  await expect(resultsMemory).toHaveText('0 MB / 256 MB')
   // Closing a tab of hundreds of sets frees every one of them: one request closes them all, where one request each ran
   // into main's limit of 64 outstanding and left most of them held.
   await page.keyboard.press('Control+N')
   await expect(queryTabs()).toHaveCount(2)
   if (!(await server().inputValue())) await server().selectOption({ index: 1 })
   await run('-- varia-fake: sets=M1*300 memory=0.5')
-  await expect(memory).toHaveText(/^Results 128 MB/)
+  await expect(resultsMemory).toHaveText('128 MB / 256 MB')
   await page.keyboard.press('Control+W')
   await expect(queryTabs()).toHaveCount(1)
-  await expect(memory).toHaveCount(0)
-  console.log('Results checks: the memory indicator warns from 90 %, and closing results or a tab of 300 sets frees them all.')
+  await expect(resultsMemory).toHaveText('0 MB / 256 MB')
+  console.log('Results checks: both memory rings, hover and click details, the 90 % and 95 % Results thresholds, and memory released on close.')
 
   // 13. Menu: Shift+F10 on the grid lists its commands; a right-click on an unselected cell selects it first.
   await cell(1, 1).click()
@@ -1526,7 +1551,7 @@ try {
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await server().selectOption({ label: longServer })
   await run('-- varia-fake: sets=W1*10 memory=0.5')
-  await expect(memoryIndicator(page)).toHaveText(/^Results 128 MB/)
+  await expect(memoryUsage(page, 'results')).toHaveText('128 MB / 256 MB')
   await expect(queryStatus(page)).toHaveAttribute('title', new RegExp(`^${longServer.replace(/[\\.]/g, '\\$&')}( \\(\\d+\\.\\d+\\))? \\| \\S`))
   expect(await page.evaluate(([part, facts]) => {
     const fits = bar => { const box = bar.getBoundingClientRect(); return [...bar.querySelectorAll(':scope > *, ' + part.querySegment)].every(child => { const rect = child.getBoundingClientRect(); return rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5 }) }
@@ -1686,7 +1711,7 @@ try {
     // before it is serialized, so the close's fall can arrive first; the indicator must still end on what the backend
     // holds, which the next summary (SELECT 1) reports.
     const memory = memoryIndicator(page)
-    const shown = async () => (await memory.count()) ? (await memory.textContent()).trim() : '(hidden)'
+    const shown = () => memoryUsage(page, 'results').textContent()
     const wideColumns = Array.from({ length: 30 }, (_, c) => `${c + 1} AS [c${String(c + 1).padStart(3, '0')}_${'x'.repeat(110)}]`).join(', ')
     const thousandSets = `SET NOCOUNT ON; DECLARE @i int = 0; WHILE @i < 1000 BEGIN SELECT ${wideColumns}; WAITFOR DELAY '00:00:00.002'; SET @i += 1; END`
     await page.evaluate(() => {

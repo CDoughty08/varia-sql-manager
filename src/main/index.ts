@@ -647,7 +647,7 @@ app.whenReady().then(async () => {
     power: powerMonitor,
     onGlobalEvent: (event, generation) => {
       const memory = memoryEventSchema.safeParse(event)
-      if (memory.success) resultsPort?.memory(generation, memory.data)
+      if (memory.success) resultsPort?.memory(memory.data.type === 'results.memory' ? 'results' : 'index', { ...memory.data, generation })
     },
     ...liveness
   })
@@ -822,7 +822,7 @@ app.whenReady().then(async () => {
       // History and remembered passwords for the connect methods; other methods pass through.
       outcome = await settleConnection(prepared, outcome, { savedPasswords, connections: connectionStore })
       if (!outcome.ok) return { ...failure(outcome.error, 'Backend request failed.'), ...(outcome.passwordForgotten ? { passwordForgotten: true as const } : {}) }
-      if (queryId !== undefined) results.own((result as QueryResult).resultSets)
+      if (queryId !== undefined) results.querySummary(result as QueryResult)
       return { ok: true, value: result }
     } catch (error) { return failure(error, 'Backend request failed.') }
   })

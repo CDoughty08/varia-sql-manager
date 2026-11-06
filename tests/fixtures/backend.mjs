@@ -127,6 +127,10 @@ function hello(value) {
   if (mode === 'no-read') process.stdin.pause()
   const methods = mode === 'missing-method' ? backendMethods.filter(method => method !== 'scripting.script') : backendMethods
   write(FrameKind.HELLO, 0, 0, { version: mode === 'wrong-version' ? 3 : 2, generation: value.generation, pid: process.pid, runtime: 'fake', platform: process.platform, sqlClientVersion: '0', maxFrameBytes: 4 * 1024 * 1024, methods })
+  if (mode === 'workbench') {
+    reportMemory()
+    reportIndexMemory()
+  }
 }
 
 function request(id, deadline, { method, params, credit }) {
@@ -428,15 +432,24 @@ function beginQuery(sessionId) {
   sessionResults.set(sessionId, [])
 }
 // What the status bar was last shown, by an event or a summary. As SqlService.ReportMemory does, an event goes out only
-// for a new band (50, 75, 90, 100 %), a 64 MiB rise, or any fall below it. Events and summary budgets share one sequence.
+// for the first sample, a rise from zero, a new band (50, 75, 90, 95, 100 %), a 64 MiB rise, or any fall below it.
 let reported = { bytes: -1, band: 0 }
 let memorySeq = 0
-const band = used => used >= globalBytes ? 4 : used * 10 >= globalBytes * 9 ? 3 : used * 4 >= globalBytes * 3 ? 2 : used * 2 >= globalBytes ? 1 : 0
+const band = used => used >= globalBytes ? 5 : used * 20 >= globalBytes * 19 ? 4 : used * 10 >= globalBytes * 9 ? 3 : used * 4 >= globalBytes * 3 ? 2 : used * 2 >= globalBytes ? 1 : 0
 function reportMemory() {
   const used = usedBytes()
-  if (reported.bytes < 0 ? used === 0 : used >= reported.bytes && band(used) === reported.band && used - reported.bytes < 64 * 1024 * 1024) return
+  if (used === reported.bytes || (reported.bytes > 0 && used > reported.bytes && band(used) === reported.band && used - reported.bytes < 64 * 1024 * 1024)) return
   reported = { bytes: used, band: band(used) }
   write(FrameKind.EVENT, 0, 0, { type: 'results.memory', usedBytes: used, globalBytes, seq: ++memorySeq })
+}
+const indexedConnections = new Set()
+let lastIndexBytes = -1
+let indexMemorySeq = 0
+function reportIndexMemory() {
+  const usedBytes = indexedConnections.size * 16 * 1024 * 1024
+  if (lastIndexBytes === usedBytes) return
+  lastIndexBytes = usedBytes
+  write(FrameKind.EVENT, 0, 0, { type: 'explorer.index.memory', usedBytes, globalBytes: 512 * 1024 * 1024, seq: ++indexMemorySeq })
 }
 /** A summary's budget, which counts as reported (SqlService.SummaryBudget). */
 function summaryBudget() {
@@ -955,6 +968,7 @@ async function workbench(id, method, params, credit) {
     case 'connections.disconnect':
       for (const [sessionId, session] of sessions) if (session.connectionId === params.connectionId) sessions.delete(sessionId)
       for (const live of [...lives.values()]) if (live.connectionId === params.connectionId) endLive(live, 'disconnected')
+      if (indexedConnections.delete(params.connectionId)) reportIndexMemory()
       return respond(id, { disconnected: workbenchConnections.delete(params.connectionId) })
     case 'query.session.close': {
       if (params.transaction === 'commit' && sessions.get(params.sessionId)?.transactions && await controlled('fail-commit')) {
@@ -1024,6 +1038,8 @@ async function workbench(id, method, params, credit) {
       const event = value => process.stdout.write(encodeFrame(FrameKind.EVENT, id, 0, encodeControl(value)))
       event({ type: 'explorer.index.progress', done: 0, total: 1, objects: 0 })
       event({ type: 'explorer.index.progress', done: 1, total: 1, objects: searchObjects.length })
+      indexedConnections.add(params.connectionId)
+      reportIndexMemory()
       return respond(id, { status: indexStatus(params.definitions !== false), elapsedMs: 2 })
     }
     case 'explorer.search': return respond(id, searchFixture(params))
