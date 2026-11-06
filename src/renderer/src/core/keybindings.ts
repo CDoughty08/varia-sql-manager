@@ -61,6 +61,10 @@ export class KeybindingService implements Disposable {
   private readonly macKeyEquivalents: ReadonlySet<string>
   /** When a native chord prefix was pressed in editor text, while Monaco waits for the chord's second key. */
   private pendingNativePrefix?: number
+  private controlHeld = false
+  private controlPress = 0
+  /** Identifies a physical Ctrl hold across wheel events. Trackpad pinches send ctrlKey without a key press. */
+  get controlWheelGesture(): number | undefined { return this.controlHeld ? this.controlPress : undefined }
   private readonly detachers = new Set<() => void>()
   constructor(private readonly options: KeybindingServiceOptions) {
     const { platform } = options
@@ -99,12 +103,13 @@ export class KeybindingService implements Disposable {
     target.addEventListener('keydown', keyDown, true)
     target.addEventListener('keyup', keyUp, true)
     target.addEventListener('focusout', focusOut, true)
-    target.addEventListener('blur', reset)
+    const blur = () => { reset(); this.controlHeld = false }
+    target.addEventListener('blur', blur)
     const detach = () => {
       target.removeEventListener('keydown', keyDown, true)
       target.removeEventListener('keyup', keyUp, true)
       target.removeEventListener('focusout', focusOut, true)
-      target.removeEventListener('blur', reset)
+      target.removeEventListener('blur', blur)
       this.detachers.delete(detach)
     }
     this.detachers.add(detach)
@@ -112,6 +117,7 @@ export class KeybindingService implements Disposable {
   }
   handleKeyDown(event: KeyDownEvent): void {
     try {
+      if (event.key === 'Control' && !this.controlHeld) { this.controlHeld = true; this.controlPress++ }
       if (event.defaultPrevented) return
       const { platform, menus } = this.options
       // Every press counts for a bare-Alt tap, even one the menus then consume (an Alt tap also leaves the menubar).
@@ -150,6 +156,7 @@ export class KeybindingService implements Disposable {
     } catch (error) { onUnexpectedError(error) }
   }
   handleKeyUp(event: KeyDownEvent): void {
+    if (!event.ctrlKey) this.controlHeld = false
     try { this.options.menus?.handleKeyUp(event) } catch (error) { onUnexpectedError(error) }
     try { this.options.keyUp?.(event) } catch (error) { onUnexpectedError(error) }
   }

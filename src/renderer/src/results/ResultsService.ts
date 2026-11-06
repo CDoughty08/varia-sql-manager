@@ -203,7 +203,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** A run starts: the tab's previous results are released, its copy cancelled and its selections cleared, and the
    *  run's events are followed from now on (before the script is sent). A running save goes on (the backend leases its
    *  result), so its strip moves to the new run. */
-  begin(tabId: string, queryId: string): void {
+  begin(tabId: string, queryId: string, onSession?: (session: Extract<QueryEvent, { type: 'session.opened' }>) => void): void {
     if (this.disposed) return
     this.disposeRun(tabId)
     this.clearJobNotice(tabId)
@@ -214,7 +214,11 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       completedBatches: 0, totalBatches: 0, view: 'messages', manualView: false, strip: this.stripChoices.get(tabId) === true, stripManual: false,
       settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: ''
     }
-    run.subscription = this.client.onQueryEvent(queryId, event => this.event(tabId, run, event))
+    run.subscription = this.client.onQueryEvent(queryId, event => {
+      if (event.type === 'session.opened') {
+        if (this.runs.get(tabId) === run && run.status === 'running') onSession?.(event)
+      } else this.event(tabId, run, event)
+    })
     this.runs.set(tabId, run)
     this.publishNow(tabId)
   }
@@ -498,7 +502,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.clearListeners()
   }
 
-  private event(tabId: string, run: Run, event: QueryEvent): void {
+  private event(tabId: string, run: Run, event: Exclude<QueryEvent, { type: 'session.opened' }>): void {
     if (this.runs.get(tabId) !== run || run.status !== 'running') return
     switch (event.type) {
       case 'resultSet.opened': case 'resultSet.closed':

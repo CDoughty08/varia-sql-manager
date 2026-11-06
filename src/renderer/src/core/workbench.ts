@@ -1,5 +1,5 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
-import type { VariaApi } from '../../../shared/contracts'
+import type { ReloadPins, VariaApi } from '../../../shared/contracts'
 import { toPlatform, type Platform } from '../../../shared/commands/keybindings'
 import { platformLineEnding } from '../../../shared/files/encoding'
 import { DocumentService, settingsDocumentOptions } from '../services/documents'
@@ -8,7 +8,7 @@ import { ConnectionService } from '../services/connections'
 import { FileService } from '../services/files'
 import { RecentFilesService } from '../services/recent-files'
 import { RecoveryService } from '../services/recovery'
-import { keptSession, restoreSession } from '../services/session'
+import { keptSession, requireKeptPins, restoreSession } from '../services/session'
 import { TabRenameService } from '../services/tab-rename'
 import { EditorOptionsService } from '../services/editor-options'
 import { ShellOptionsService } from '../services/shell-options'
@@ -124,6 +124,7 @@ export interface Workbench extends Disposable {
   readonly recentFiles: RecentFilesService
   /** AutoRecover: copies of unsaved queries, and the Recover dialog for those an earlier run or page left. */
   readonly recovery: RecoveryService
+  readonly reloadPins: () => ReloadPins | undefined
   readonly targets: TargetService
   readonly editorOptions: EditorOptionsService
   readonly shellOptions: ShellOptionsService
@@ -243,7 +244,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const files = new FileService(documents, queries, api, {
     autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'],
     // Hot exit keeps a query's server name (never a login or connection string), so it keeps its database when it connects there again.
-    hotExit: () => api.hotExit && settings.getSnapshot().values['environment.documents.hotExit'] ? keptSession(documents, id => connections.get(id)?.server) : undefined
+    hotExit: () => {
+      if (!api.hotExit) return
+      const pinnedOnly = !settings.getSnapshot().values['environment.documents.hotExit']
+      if (!pinnedOnly || documents.getSnapshot().documents.some(tab => tab.pinned))
+        return keptSession(documents, id => connections.get(id)?.server, { pinnedOnly })
+    }
   })
   const recentFiles = new RecentFilesService(api)
   const recovery = new RecoveryService({
@@ -369,7 +375,17 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   })
   const cleanup = events.subscribe(event => { if (event.type === 'documents.closed') queries.forget(event.tabId) })
   let disposed = false
+  const reloadPins = (): ReloadPins | undefined => {
+    const { documents: tabs, busy } = documents.getSnapshot()
+    if (!api.hotExit) return
+    if (busy) throw new Error('Wait for the current document operation to finish before reloading.')
+    if (!tabs.some(tab => tab.pinned)) return
+    const kept = keptSession(documents, id => connections.get(id)?.server, { pinnedOnly: true })
+    requireKeptPins(tabs, kept.kept)
+    return { session: kept.session, recoveryIds: [...kept.kept].map(id => recovery.copyId(id) ?? null) }
+  }
   const workbench: Workbench = {
+    reloadPins,
     platform,
     monaco,
     events,
@@ -498,10 +514,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const contributions = [
     queryContribution(workbench, api),
     filesContribution(workbench, api),
-    editorContribution(workbench),
+    editorContribution(workbench, () => document.activeElement?.closest('[data-document-tab]')?.closest<HTMLElement>('[data-tab-id]')?.dataset.tabId),
     editingContribution(workbench, monaco),
     editContribution(workbench, api),
-    windowContribution(workbench, api),
+    windowContribution(workbench, api, reloadPins),
     menusContribution(workbench),
     explorerContribution(workbench, api),
     outputContribution(workbench, api),
@@ -532,8 +548,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // The tabs the last close kept (hot exit), else the welcome query; what an earlier run or page left unsaved is offered
   // once the workbench is up.
   const welcome = () => { if (!disposed) documents.create('SQLQuery1.sql', '-- Connect this query to a server and press F5 to execute.\n\nSELECT\n    @@SERVERNAME AS server_name,\n    DB_NAME() AS database_name,\n    SYSDATETIME() AS server_time;\n', 'master') }
-  if (api.hotExit) void restoreSession({ api, documents, files }).catch(() => 0).then(opened => { if (!opened) welcome() })
-  else welcome()
-  void recovery.start()
+  if (api.hotExit) void restoreSession({ api, documents, files, resumeRecovery: (tabId, id) => recovery.resume(tabId, id) })
+    .catch(() => 0).then(opened => { if (!opened) welcome(); if (!disposed) void recovery.start() })
+  else { welcome(); void recovery.start() }
   return workbench
 }

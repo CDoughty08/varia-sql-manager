@@ -36,6 +36,7 @@ export interface SessionDocumentWrite {
   readonly kind: DocumentKind
   readonly eol: LineEnding
   readonly dirty: boolean
+  readonly pinned?: boolean
   readonly fileId?: string
   readonly server?: string
   readonly database?: string
@@ -44,6 +45,9 @@ export interface SessionDocumentWrite {
 /** The tabs in strip order and the active one's index (-1 when none of them is active). */
 export interface SessionWrite { readonly documents: readonly SessionDocumentWrite[]; readonly activeIndex: number }
 
+/** A one-use Reload Window snapshot and each pin's AutoRecover id, in the same order as the tabs. */
+export interface ReloadPins { readonly session: SessionWrite; readonly recoveryIds: readonly (string | null)[] }
+
 /** A kept tab reopened: its text (read again from its file when it was clean), and its file when that still opens. */
 export interface RestoredDocument {
   readonly name: string
@@ -51,10 +55,18 @@ export interface RestoredDocument {
   readonly kind: DocumentKind
   readonly eol: LineEnding
   readonly dirty: boolean
+  readonly pinned?: boolean
+  readonly recoveryId?: string
   readonly text: string
   readonly file?: SqlFile
   readonly server?: string
   readonly database?: string
 }
 /** What the next start reopens; `problems` are fixed sentences about tabs that could not reopen (their file is gone). */
-export interface RestoredSession { readonly documents: readonly RestoredDocument[]; readonly activeIndex: number; readonly problems: readonly string[] }
+export interface RestoredSession {
+  readonly documents: readonly RestoredDocument[]
+  readonly activeIndex: number
+  readonly problems: readonly string[]
+  /** The checkpoint is released once this page has reopened its tabs. */
+  readonly restoreGeneration?: number
+}

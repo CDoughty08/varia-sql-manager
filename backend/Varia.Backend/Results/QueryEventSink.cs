@@ -33,6 +33,11 @@ internal sealed class QueryEventSink : IDisposable
         if (emit is not null) timer = new Timer(_ => Tick(), null, TickMs, TickMs);
     }
 
+    public void SessionOpened(int spid, string? login)
+    {
+        lock (gate) Emit(new { Type = "session.opened", Spid = spid, Login = login }, false);
+    }
+
     public void Opened(ResultSetBuffer set)
     {
         lock (gate)

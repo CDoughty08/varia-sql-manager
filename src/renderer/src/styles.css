@@ -435,10 +435,30 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .explorer-tree:focus .explorer-row[aria-selected="true"] { outline: 2px solid HighlightText; outline-offset: -2px; }
 }
 .workspace { flex: 1; height: 100%; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
-.document-strip { display: flex; align-items: center; flex-shrink: 0; min-width: 0; background: var(--varia-documentTabs-background); }
-.document-strip > .pane-menu { margin: 0 4px; }
-.query-tabs { display: flex; flex: 1 1 auto; min-width: 0; height: var(--varia-bar); background: var(--varia-documentTabs-background); overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
-.query-tab { position: relative; display: flex; align-items: center; flex-shrink: 0; border-right: 1px solid var(--varia-documentTabs-border); border-top: 2px solid transparent; color: var(--varia-documentTabs-inactiveForeground); }
+.document-strip { display: flex; align-items: flex-start; flex-shrink: 0; min-width: 0; min-height: var(--varia-bar); background: var(--varia-documentTabs-background); }
+.document-strip > .pane-menu { margin: calc((var(--varia-bar) - var(--varia-control)) / 2) 4px 0; }
+.query-tabs { flex: 1 1 auto; min-width: 0; container-type: inline-size; }
+.query-shelf { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+.query-shelf[data-tab-shelf="pinned"] + .query-shelf { border-top: 1px solid var(--varia-documentTabs-border); }
+.query-shelf-tabs { display: grid; grid-template-columns: repeat(var(--tab-columns), minmax(0, round(down, min(236px, 100% / var(--tab-columns)), 1px))); }
+.query-shelf-controls { display: flex; align-items: center; align-self: start; padding-block: calc((var(--varia-bar) - var(--varia-control)) / 2); }
+.query-shelf-controls .icon-button { width: 20px; }
+.query-shelf-controls .codicon { font-size: var(--varia-glyph-sm); }
+.query-shelf-rows { min-width: 36px; color: var(--varia-documentTabs-inactiveForeground); text-align: center; font-size: var(--varia-size-xs); white-space: nowrap; }
+.query-shelf-controls .query-shelf-more { gap: 2px; width: 42px; padding: 0; font-size: var(--varia-size-xs); }
+.query-shelf-more:disabled { visibility: hidden; }
+@container (max-width: 290px) {
+  .query-shelf { grid-template-columns: minmax(0, 1fr); }
+  .query-shelf-controls { justify-self: end; padding-block: 0; }
+}
+.query-shelf-overflow {
+  position-area: block-end span-inline-start; position-try-fallbacks: flip-block, flip-inline; justify-self: end;
+  width: min(320px, 90vw); max-height: min(360px, 50vh); margin: 0; padding: 2px; overflow: auto;
+  color: var(--varia-menu-foreground); background: var(--varia-menu-background); border: 1px solid var(--varia-menu-border); border-radius: var(--varia-radius-sm);
+}
+.query-tab { position: relative; display: flex; align-items: center; min-width: 0; height: var(--varia-bar); border-right: 1px solid var(--varia-documentTabs-border); border-top: 2px solid transparent; color: var(--varia-documentTabs-inactiveForeground); }
+.query-shelf[data-tab-shelf="pinned"] .query-tab { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
+.query-shelf-overflow .query-tab { border-right: 0; }
 /* Where a dragged tab will drop: a bar on the side of the tab it goes to. */
 .query-tab[data-drop="before"] { box-shadow: inset 2px 0 0 var(--varia-focusBorder); }
 .query-tab[data-drop="after"] { box-shadow: inset -2px 0 0 var(--varia-focusBorder); }
@@ -447,21 +467,24 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .query-tab[data-drop="before"] { border-left: 2px solid Highlight; margin-left: -2px; }
   .query-tab[data-drop="after"] { border-right: 2px solid Highlight; margin-right: -1px; }
 }
-.query-tab.active { background: var(--varia-documentTabs-activeBackground); border-top-color: var(--varia-tab-activeBorderTop); color: var(--varia-documentTabs-activeForeground); }
-.tab-select { display: flex; align-items: center; gap: 8px; height: calc(var(--varia-bar) - 3px); border: 0; border-radius: 0; padding: 0 10px 0 13px; color: inherit; }
+.query-shelf .query-tab.active { background: var(--varia-documentTabs-activeBackground); border-top-color: var(--varia-tab-activeBorderTop); color: var(--varia-documentTabs-activeForeground); }
+.tab-select { display: flex; align-items: center; flex: 1; gap: 4px; min-width: 0; height: calc(var(--varia-bar) - 3px); overflow: hidden; border: 0; border-radius: 0; padding: 0 4px 0 8px; color: inherit; }
 .tab-select:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
-.tab-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.tab-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab-renaming { padding-right: 6px; }
-.tab-rename { width: 180px; height: 20px; padding: 0 4px; border-color: var(--varia-focusBorder); }
-.tab-select .tab-readonly { font-size: var(--varia-glyph-sm); margin-left: -4px; }
-.tab-close { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 4px; margin-right: 6px; color: var(--varia-documentTabs-closeForeground); }
+.tab-rename { flex: 1; min-width: 0; height: 20px; padding: 0 4px; border-color: var(--varia-focusBorder); }
+.tab-select .tab-readonly { font-size: var(--varia-glyph-sm); }
+.tab-sid { flex: none; margin-inline-start: auto; padding: 1px 4px; border-radius: var(--varia-radius-sm); background: var(--varia-badge-background); color: var(--varia-badge-foreground); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tab-pin, .tab-close { display: flex; align-items: center; justify-content: center; flex: none; width: 22px; height: 24px; padding: 0; color: var(--varia-documentTabs-closeForeground); }
+.tab-pin .codicon { font-size: var(--varia-glyph-sm); }
 .tab-close .codicon { font-size: var(--varia-glyph-sm); }
-.tab-close:focus-visible { outline-offset: -2px; }
-.tab-icon { color: var(--varia-documentTabs-iconForeground); }
+.tab-pin:focus-visible, .tab-close:focus-visible { outline-offset: -2px; }
+.query-shelf[data-tab-shelf="pinned"] .tab-pin { color: var(--varia-documentTabs-activeForeground); }
+.tab-icon { flex: none; color: var(--varia-documentTabs-iconForeground); }
 /* Running turns a spinner after the name; unsaved changes are a dot in the close button's place, which the pointer or
    keyboard focus on Close turns back into the X. */
-.tab-select .tab-running { font-size: var(--varia-glyph-sm); margin-left: -4px; }
-.query-tab .dirty-dot { position: absolute; top: calc(50% - 3px); right: 15px; pointer-events: none; }
+.tab-select .tab-running { font-size: var(--varia-glyph-sm); }
+.query-tab .dirty-dot { position: absolute; top: calc(50% - 3px); right: 8px; pointer-events: none; }
 .query-tab[data-dirty] .tab-close .codicon { visibility: hidden; }
 /* Transparent rather than hidden, so screen readers still hear that the query has unsaved changes. */
 .query-tab[data-dirty]:hover .dirty-dot, .query-tab[data-dirty]:has(.tab-close:focus-visible) .dirty-dot { opacity: 0; }

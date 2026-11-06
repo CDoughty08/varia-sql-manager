@@ -5,7 +5,7 @@ import { chooseExplorerMenuItem, expandExplorerPath, explorerMenuItems, explorer
 import { resizeWindow } from './fixtures/window-resize.mjs'
 import { actionsStubData, caution, dependentsMessage, detachFiles, detachScript, installActionsStub, longDatabase, longRole, offlineScript, offlineWarning, propertiesScript, restoreFilesScript, restoreScript, scriptText, stubServerFiles, stubSessions } from './fixtures/actions-stub.mjs'
 import {
-  addObjectDialogSteps, attachFileNameShown, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, editorTextbox,
+  activeDocument, activeDocumentName, addObjectDialogSteps, attachFileNameShown, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentVerb, editorText, editorTextbox, openDocument, openDocuments, selectOpenDocument,
   errorBanner, explorerLabel, fieldHint, frameSection, inputShowsEnd, objectDialogConnection, objectDialogMappedUsers, objectDialogPage, objectDialogProgress, objectDialogSessions, objectDialogSessionsToggle, objectDialogStepItems, objectDialogTabs, objectDialogWarningIcons, objectDialogWarnings, openMenus as openMenusOf, part,
   passwordField, propertyFact, propertyRow, queryDatabase, quickInput, quickInputActive, quickInputMessage, renameBox, scriptActions, scriptDrawer, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toastMessage, toasts, toolbarButton, unsavedMark,
   warningBanner as warningBannerOf
@@ -31,7 +31,7 @@ const openMenus = () => openMenusOf(page)
 const dialog = () => page.getByRole('dialog', { name: 'Delete Object', exact: true })
 const commandBanner = () => errorBanner(page)
 const warningBanner = () => warningBannerOf(page)
-const tabs = () => documentTabs(page).getByRole('tab')
+const tabs = () => openDocuments(page)
 const clipboard = () => application.evaluate(({ clipboard }) => clipboard.readText())
 const stubCalls = method => application.evaluate((_electron, name) => globalThis.variaStub.calls.filter(call => call.method === name).map(call => call.params), method)
 const appData = ['server-a', 'Databases', 'AppData']
@@ -406,7 +406,7 @@ try {
   // Monaco draws spaces as no-break spaces.
   await expect.poll(async () => (await editorText(page)).replaceAll('\u00a0', ' ')).toContain('ALTER DATABASE [AppData] SET AUTO_CLOSE ON WITH NO_WAIT')
   expect((await stubCalls('actions.script')).length).toBe(scriptRequests)
-  await propertiesTab().click()
+  await selectOpenDocument(page, 'Database Properties - AppData')
   await expect(sectionList().getByRole('button', { name: 'Options' })).toHaveAttribute('aria-current', 'location')
   await expect(drawerText(properties())).toHaveValue(shownScript)
   await expect(recovery.getByRole('radio', { name: 'Simple', exact: true })).toHaveAttribute('aria-checked', 'true')
@@ -796,7 +796,7 @@ try {
   await page.keyboard.press('Control+S')
   await expect(secondDatabase).toHaveCount(0)
   expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'createDatabase', target: { kind: 'database', name: 'Sales3' } })
-  await documentTab(page, 'New Database').click()
+  await selectOpenDocument(page, 'New Database')
   await expect(newDatabase()).toBeVisible()
   await databaseName.focus()
   await page.keyboard.press('Escape')
@@ -1362,6 +1362,7 @@ try {
   const queries = await tabs().count()
   await loginDialog().getByRole('button', { name: 'Script', exact: true }).click()
   await expect(tabs()).toHaveCount(queries + 1)
+  const scriptedQuery = await activeDocumentName(page)
   await expect(loginDialog()).toBeVisible()
   const loginScripts = (await stubCalls('actions.script')).filter(call => call.action === 'createLogin')
   expect(loginScripts).toHaveLength(2)
@@ -1410,10 +1411,10 @@ try {
   await page.keyboard.press('Escape')
   await expect(loginDialog()).toHaveCount(0)
   // AutoRecover keeps the scripted window once it has unsaved changes (a script alone is not unsaved), and no copy holds the password.
-  await tabs().nth(queries).click()
+  await selectOpenDocument(page, scriptedQuery)
   await editorTextbox(page).focus()
   await page.keyboard.insertText('-- kept\n')
-  await expect(unsavedMark(tabs().nth(queries))).toHaveCount(1)
+  await expect(unsavedMark(activeDocument(page))).toHaveCount(1)
   await page.evaluate(() => window.__variaRecovery.flush())
   const recovered = async folder => (await readdir(folder, { withFileTypes: true }).catch(() => [])).reduce(async (texts, entry) => [...await texts,
     ...entry.isDirectory() ? await recovered(resolve(folder, entry.name)) : [await readFile(resolve(folder, entry.name), 'utf8')]], Promise.resolve([]))
@@ -2092,7 +2093,7 @@ try {
   // Database Properties document follow the new name; renaming it back with no session asks nothing.
   // Billing is a name no database in the stub has (New Database made Sales, and the stub refuses a name in use, as the backend does).
   await chooseExplorerMenuItem(page, appData, 'Properties')
-  await expect(documentTab(page, 'Database Properties - AppData')).toHaveCount(1)
+  await expect(openDocument(page, 'Database Properties - AppData')).toHaveCount(1)
   await chooseExplorerMenuItem(page, appData, 'New Query')
   await expect(queryDatabase(page)).toHaveValue('AppData')
   const asked = (await application.evaluate(() => globalThis.variaStub.prompts)).length
@@ -2113,8 +2114,8 @@ try {
     newName: 'Billing', closeConnections: true, identity: { id: 7, created: '2026-01-02T03:04:05.000' } })
   await expect(explorerTree(page).getByRole('treeitem', { name: /^AppData\b/ })).toHaveCount(0)
   await expect(queryDatabase(page)).toHaveValue('Billing')
-  await expect(documentTab(page, 'Database Properties - Billing')).toHaveCount(1)
-  await expect(documentTab(page, 'Database Properties - AppData')).toHaveCount(0)
+  await expect(openDocument(page, 'Database Properties - Billing')).toHaveCount(1)
+  await expect(openDocument(page, 'Database Properties - AppData')).toHaveCount(0)
   await page.screenshot({ path: resolve('artifacts', 'object-actions-rename-database-dark.png') })
   // Back to AppData, which no other session uses: no prompt, and MODIFY NAME alone.
   await application.evaluate(() => { globalThis.variaStub.renameSessions = 0 })
@@ -2124,12 +2125,13 @@ try {
   await renameBox(page).fill('AppData')
   await page.keyboard.press('Enter')
   await expect(explorerTree(page).getByRole('treeitem', { name: /^AppData\b/ })).toHaveCount(1)
-  await expect(documentTab(page, 'Database Properties - AppData')).toHaveCount(1)
+  await expect(openDocument(page, 'Database Properties - AppData')).toHaveCount(1)
   await expect(queryDatabase(page)).toHaveValue('AppData')
   expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'rename', target: { kind: 'database', name: 'Billing' }, newName: 'AppData', closeConnections: false })
   expect((await application.evaluate(() => globalThis.variaStub.prompts)).length).toBe(asked + 1)
+  await selectOpenDocument(page, 'Database Properties - AppData')
   await closeDocumentButton(page, 'Database Properties - AppData').click()
-  await expect(documentTab(page, 'Database Properties - AppData')).toHaveCount(0)
+  await expect(openDocument(page, 'Database Properties - AppData')).toHaveCount(0)
   await expect(explorerTree(page)).toHaveAttribute('aria-busy', 'false')
   console.log('Object action checks: F2 on a database another session uses asks before closing connections, then the tree, a query window and Database Properties follow the new name; with no session it renames at once.')
 
@@ -2165,13 +2167,13 @@ try {
   expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'delete', target: { kind: 'database', name: 'Archive' }, closeConnections: false, deleteHistory: true })
   await expect(explorerTree(page).locator(part.explorerLabel, { hasText: /^Archive$/ })).toHaveCount(0)
   await expect(toastMessage(toasts(page).filter({ hasText: 'Archive' }))).toHaveText('1 query window was using Archive.')
-  await archiveTab().click()
+  await selectOpenDocument(page, 'Database Properties - Archive')
   await expect(documentBanner(archiveProperties())).toContainText('This database no longer exists on server-a.')
   await expect(documentBanner(archiveProperties()).getByRole('button', { name: 'Refresh', exact: true })).toHaveCount(0)
   await expect(documentState(archiveProperties())).toHaveCount(0)
   await page.screenshot({ path: resolve('artifacts', 'object-actions-properties-orphan-dark.png') })
   await documentBanner(archiveProperties()).getByRole('button', { name: 'Close', exact: true }).click()
-  await expect(archiveTab()).toHaveCount(0)
+  await expect(openDocument(page, 'Database Properties - Archive')).toHaveCount(0)
   console.log('Object action checks: an offline database\'s Delete Object warns that its files stay, and deleting it leaves a toast for its query window and an orphaned Properties document with Close.')
 
   // 6. A database: SSMS's two options (backup history checked, Close existing connections not), the sessions using it and

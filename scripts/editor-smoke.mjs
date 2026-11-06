@@ -1,7 +1,8 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { activeDocumentName, backendReady, closeDocumentButton, documentTab, documentTabs, documentTabSlots, part, quickInput, quickInputActive } from './fixtures/ui.mjs'
+import { resizeContent } from './fixtures/window-resize.mjs'
+import { activeDocumentName, backendReady, closeDocumentButton, documentShelf, documentTab, documentTabs, documentTabSlots, part, pinDocumentButton, quickInput, quickInputActive } from './fixtures/ui.mjs'
 
 // SSMS's editing commands in the real query editor, over the fake backend (no SQL Server): Comment and Uncomment
 // Selection, Make Uppercase and Lowercase, Increase and Decrease Line Indent from Edit › Advanced, Go To Line, Bookmarks
@@ -193,19 +194,74 @@ try {
   await expect.poll(pair).toEqual([firstTab, secondTab])
   // On a strip too full to show every tab, the tab Ctrl+Shift+PageUp moves stays in view as it goes.
   for (let opened = 0; opened < 12; opened++) await page.keyboard.press('Control+N')
-  await expect.poll(async () => (await order()).length).toBeGreaterThanOrEqual(14)
   const moving = await activeDocumentName(page)
-  expect(await documentTabs(page).evaluate(strip => strip.scrollWidth > strip.clientWidth)).toBe(true)
+  const unpinned = documentShelf(page), moreQueries = unpinned.getByRole('button', { name: /^Show \d+ more query tabs?$/ })
+  await expect(moreQueries).toBeVisible()
   await textbox().focus()
   for (let step = 0; step < 14; step++) await page.keyboard.press('Control+Shift+PageUp')
   await expect.poll(async () => (await order())[0]).toBe(moving)
   const shown = () => documentTab(page, moving).evaluate(tab => { const box = tab.parentElement.getBoundingClientRect(), view = tab.closest('[role="tablist"]').getBoundingClientRect(); return box.left >= view.left - 1 && box.right <= view.right + 1 })
   await expect.poll(shown).toBe(true)
-  for (const name of (await order()).filter(name => name !== firstTab && name !== secondTab)) await closeDocumentButton(page, name).click()
+  await moreQueries.click()
+  const hidden = unpinned.getByRole('group', { name: 'More query tabs', exact: true }).getByRole('button', { name: /^SQLQuery/ }).first()
+  const picked = await hidden.getAttribute('aria-label')
+  await hidden.click()
+  await expect(documentTab(page, picked)).toBeFocused()
+  expect(await activeDocumentName(page)).toBe(picked)
+
+  // Fill the pinned shelf too, so a real Ctrl+wheel can expand either without changing the other.
+  for (let opened = 0; opened < 8; opened++) {
+    await page.keyboard.press('Control+N')
+    await pinDocumentButton(page, await activeDocumentName(page)).click()
+  }
+  const pinned = documentShelf(page, true)
+  const pinnedRows = pinned.locator(part.tabRowCount), queryRows = unpinned.locator(part.tabRowCount)
+  const stack = async (shelf, delta) => {
+    await shelf.getByRole('tab').first().hover()
+    await page.keyboard.down('Control')
+    try { await page.mouse.wheel(0, delta) } finally { await page.keyboard.up('Control') }
+  }
+  await expect(pinnedRows).toHaveText('1 row')
+  await expect(queryRows).toHaveText('1 row')
+  await stack(pinned, 120)
+  await expect(pinnedRows).toHaveText('2 rows')
+  await expect(queryRows).toHaveText('1 row')
+  await stack(unpinned, 120)
+  await expect(queryRows).toHaveText('2 rows')
+  await expect(pinnedRows).toHaveText('2 rows')
+  // A scroll over the bottom pinned row moves the unpinned shelf under the pointer. The next tick must stay pinned.
+  const bottomPin = pinned.getByRole('tab').last()
+  await page.keyboard.down('Control')
+  const underneath = await bottomPin.evaluate(async tab => {
+    const rect = tab.getBoundingClientRect(), clientX = rect.left + rect.width / 2, clientY = rect.top + rect.height / 2
+    const wheel = { ctrlKey: true, deltaY: -120, clientX, clientY, bubbles: true, cancelable: true }
+    tab.dispatchEvent(new WheelEvent('wheel', wheel))
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    const target = document.elementFromPoint(clientX, clientY)
+    target?.dispatchEvent(new WheelEvent('wheel', wheel))
+    return target?.closest('[data-tab-shelf]')?.getAttribute('data-tab-shelf')
+  }).finally(() => page.keyboard.up('Control'))
+  expect(underneath).toBe('unpinned')
+  await expect(pinnedRows).toHaveText('1 row')
+  await expect(queryRows).toHaveText('2 rows')
+  // Use adjacent widths so at least one would give the tab grid fractional tracks before pixel snapping.
+  const [width, height] = await page.evaluate(() => [innerWidth, innerHeight])
+  for (const offset of [0, 1]) {
+    await resizeContent(application, page, width + offset, height)
+    const pixels = await documentTabSlots(page).locator(part.tabIcon).evaluateAll(icons => icons.map(icon => icon.getBoundingClientRect().left % 1))
+    expect(pixels.length).toBeGreaterThan(2)
+    expect(pixels.every(pixel => pixel === 0)).toBe(true)
+  }
+  for (let remaining = 20; remaining > 0; remaining--) {
+    const extra = (await order()).find(name => name !== firstTab && name !== secondTab)
+    if (!extra) break
+    await closeDocumentButton(page, extra).click()
+    await expect(documentTab(page, extra)).toHaveCount(0)
+  }
   await expect.poll(pair).toEqual([firstTab, secondTab])
   await documentTab(page, secondTab).click()
   await expect.poll(() => activeDocumentName(page)).toBe(secondTab)
-  console.log(`Editor checks: query tabs reorder by Ctrl+Shift+PageUp and by dragging (${tabDragged}), and a moved tab stays in view on a full strip.`)
+  console.log(`Editor checks: tabs reorder by Ctrl+Shift+PageUp and by dragging (${tabDragged}), hidden tabs can be brought into view, and Ctrl+scroll changes each shelf independently.`)
   await page.keyboard.press('Alt+e')
   await page.keyboard.press('k')
   await expect(menu('Bookmarks').getByRole('menuitem', { name: 'Next Bookmark', exact: true })).toHaveAttribute('aria-disabled', 'true')
