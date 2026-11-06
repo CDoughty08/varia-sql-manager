@@ -246,7 +246,7 @@ export default function App() {
       ? <div className="global-error warning" role="status"><span>{commandError}</span><button aria-label="Dismiss warning" onClick={() => commands.clearError()}><Icon name="close" /></button></div>
       : <div className="global-error" role="alert"><span>{commandError}</span><button aria-label="Dismiss command error" onClick={() => commands.clearError()}><Icon name="close" /></button></div>)}
     <ThemeNotice />
-    <DockWorkspace ref={workspaceRef} explorer={<aside className="explorer"><ExplorerPane error={explorerError} activeConnectionId={liveConnection?.id} /></aside>} editor={<main className="workspace">
+    <DockWorkspace ref={workspaceRef} explorer={<aside className="explorer"><ExplorerPane error={explorerError} activeConnectionId={liveConnection?.id} activeQueryId={isQuery ? active.id || undefined : undefined} /></aside>} editor={<main className="workspace">
         <DocumentTabs />
         {active.id ? <>
           {/* The query's own bar, unless the classic toolbar brings back the global lists (for one release). */}

@@ -238,7 +238,7 @@ export class MenuService implements Disposable {
    */
   openForElement(element: Element | null, how: { keyboard: boolean }): boolean {
     const item = activeDescendant(element)
-    if (item && element) this.reveal(element, item)
+    if (item && element && !this.options.targets?.reveal(element, item)) this.reveal(element, item)
     return this.openFor(item ?? element, undefined, how.keyboard, item ? element ?? undefined : undefined)
   }
 

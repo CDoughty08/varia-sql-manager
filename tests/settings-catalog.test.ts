@@ -22,6 +22,7 @@ const expectedTree = [
   '  Keyboard (environment.keyboard)',
   '  Product Updates (environment.productUpdates)',
   '  Live Data (environment.liveData)',
+  '  Object Explorer (environment.objectExplorer)',
   'Text Editor',
   '  General (textEditor.general)',
   '  Editor Tab and Status Bar (textEditor.editorTabAndStatusBar)',

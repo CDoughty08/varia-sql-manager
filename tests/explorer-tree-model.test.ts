@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { FolderId, NodeKind, NodeSubtype } from '../src/shared/explorer/catalog'
 import type { ExplorerNodeRef } from '../src/shared/explorer/refs'
 import {
-  computeWindow, flatten, layoutWindow, needsQuery, rowLayout, parentIndex, renderedIndices, revealScroll, rowIndex, rowKindOf, RowKind, rowOwner, siblingPlan, swallowedKey, syntheticId, treeKey, treeKeyOf, typeAhead,
+  computeWindow, flatten, layoutWindow, needsQuery, pinnedServerBands, rowLayout, parentIndex, renderedIndices, revealScroll, rowIndex, rowKindOf, RowKind, rowOwner, siblingPlan, swallowedKey, syntheticId, treeKey, treeKeyOf, typeAhead,
   TypeAheadBuffer, type TreeNode, type VisibleRows
 } from '../src/renderer/src/explorer/tree-model'
 import { meterWork } from './fixtures/work-meter'
@@ -152,6 +152,42 @@ describe('windowing', () => {
     expect(renderedIndices([10, 14], 12)).toEqual([10, 11, 12, 13])
     expect(renderedIndices([10, 14], 500)).toEqual([10, 11, 12, 13, 500])
     expect(renderedIndices([10, 14], -1)).toEqual([10, 11, 12, 13])
+  })
+})
+
+describe('pinned server bands', () => {
+  const layoutFor = (levels: number[]) => rowLayout({ count: levels.length, levels: Uint8Array.from(levels) })
+
+  it('keeps the closest headers and counts overflow independently at both edges', () => {
+    const layout = layoutFor([1, 1, 1, 1, ...Array<number>(30).fill(2), 1, 1, 1, 1])
+    const bands = pinnedServerBands(layout, 150, 450, 1, 3)
+    expect(bands.top).toEqual({ headers: [3], overflow: [0, 1, 2], height: 52 })
+    expect(bands.bottom).toEqual({ headers: [34, 35, 36], overflow: [37], height: 112 })
+    expect(bands.current).toBe(3)
+    expect(bands.height).toBe(286)
+    expect(pinnedServerBands(layout, 150, 450, 0, 2).top.height).toBe(0)
+    expect(pinnedServerBands(layout, 150, 450, 2, 0).bottom.height).toBe(0)
+  })
+
+  it('recomputes the lower edge after it reserves room and keeps a short tree usable', () => {
+    const layout = layoutFor([1, ...Array<number>(15).fill(2), 1, 1, 1])
+    const bands = pinnedServerBands(layout, 0, 380, 2, 2)
+    expect(bands.bottom.headers).toEqual([16, 17])
+    expect(bands.bottom.overflow).toEqual([18])
+    expect(layout.top(16)).toBeGreaterThanOrEqual(bands.height)
+    const short = pinnedServerBands(layout, 100, 100, 10, 10)
+    expect(short.top).toEqual({ headers: [], overflow: [0], height: 22 })
+    expect(short.height).toBe(56)
+  })
+
+  it('keeps the current server pinned after its row leaves, including with a single connection', () => {
+    const layout = layoutFor([1, ...Array<number>(50).fill(2)])
+    expect(pinnedServerBands(layout, 29, 400, 2, 2).top.headers).toEqual([])
+    const bands = pinnedServerBands(layout, 30, 400, 2, 2)
+    expect(bands.top.headers).toEqual([0])
+    expect(bands.current).toBe(0)
+    expect(bands.bottom.height).toBe(0)
+    expect(pinnedServerBands(layout, 30, 120, 2, 2).top.headers).toEqual([0])
   })
 })
 

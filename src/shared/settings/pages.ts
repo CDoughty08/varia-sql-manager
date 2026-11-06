@@ -2,7 +2,7 @@ import type { SettingPage } from './types'
 
 /**
  * The Options tree in SSMS 22's order, one node a line. Pages added later go where SSMS has them: Environment ›
- * General, AutoRecover, Documents, Fonts and Colors, Keyboard, then Varia's own Live Data; Text Editor › General, Editor
+ * General, AutoRecover, Documents, Fonts and Colors, Keyboard, then Varia's own Live Data and Object Explorer; Text Editor › General, Editor
  * Tab and Status Bar, Transact-SQL; Varia's own Activity Monitor last. tests/settings-catalog.test.ts's `expectedTree` lists the same tree.
  */
 export const settingPages = [
@@ -14,6 +14,7 @@ export const settingPages = [
   { id: 'environment.keyboard', title: 'Keyboard', parent: 'environment', layout: 'keyboard', description: 'Shortcuts follow SSMS\'s defaults and cannot be changed yet. The command palette (F1) shows each command\'s shortcut.' },
   { id: 'environment.productUpdates', title: 'Product Updates', parent: 'environment', layout: 'form', description: 'How Varia SQL Manager finds, downloads and installs new releases.' },
   { id: 'environment.liveData', title: 'Live Data', parent: 'environment', layout: 'form', description: 'Live views, such as the Activity Monitor: when they pause while hidden, and how much chart history they keep. Not in SSMS.' },
+  { id: 'environment.objectExplorer', title: 'Object Explorer', parent: 'environment', layout: 'form' },
   { id: 'textEditor', title: 'Text Editor' },
   { id: 'textEditor.general', title: 'General', parent: 'textEditor', layout: 'form' },
   { id: 'textEditor.editorTabAndStatusBar', title: 'Editor Tab and Status Bar', parent: 'textEditor', layout: 'propertyGrid', description: 'The query window\'s status bar: where it is, and what it shows.' },
