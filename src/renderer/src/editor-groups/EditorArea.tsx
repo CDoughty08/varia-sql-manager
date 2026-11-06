@@ -157,18 +157,21 @@ function DocumentTab({ api }: IDockviewPanelHeaderProps) {
     else host.removeAttribute('aria-description')
   }, [description, tooltip])
   const name = tab?.name
-  // A tab is as wide as its name, so every tab after the first would start on a fractional pixel and blur its kind icon.
-  // The name's box is rounded up to whole pixels (the rest of a tab already is), measured from its text so the tab never
-  // shrinks meanwhile; again once the fonts have loaded, and when its strip is laid out after being hidden.
+  // A tab is as wide as its name and SID chip, so every tab after the first would start on a fractional pixel and blur
+  // its kind icon. Their boxes are rounded up to whole pixels (the rest of a tab already is), measured from their text so
+  // the tab never shrinks meanwhile; again once the fonts have loaded, and when its strip is laid out after being hidden.
+  const sidText = tab && isQueryDocument(tab) ? String(spid ?? '') : undefined
   useLayoutEffect(() => {
-    const label = element.current?.querySelector<HTMLElement>('.tab-name'), strip = element.current?.closest('[role="tablist"]')
-    if (!label) return
+    const boxes = [...element.current?.querySelectorAll<HTMLElement>('.tab-name, .tab-sid') ?? []], strip = element.current?.closest('[role="tablist"]')
+    if (!boxes.length) return
     const snap = () => {
-      if (!label.getClientRects().length) return
-      const text = document.createRange()
-      text.selectNodeContents(label)
-      const width = text.getBoundingClientRect().width
-      if (width > 0) label.style.width = `${Math.ceil(width - 0.01)}px`
+      for (const box of boxes) {
+        if (!box.getClientRects().length) continue
+        const text = document.createRange(), style = getComputedStyle(box)
+        text.selectNodeContents(box)
+        const width = text.getBoundingClientRect().width
+        if (width > 0) box.style.width = `${Math.ceil(width + parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) - 0.01)}px`
+      }
     }
     snap()
     let current = true
@@ -176,7 +179,7 @@ function DocumentTab({ api }: IDockviewPanelHeaderProps) {
     const shown = typeof ResizeObserver === 'function' && strip ? new ResizeObserver(snap) : undefined
     if (strip) shown?.observe(strip)
     return () => { current = false; shown?.disconnect() }
-  }, [name])
+  }, [name, sidText, renaming])
   // The shown tab stays in view on a full strip. Dockview scrolls to a tab as it is chosen, which for a new document is
   // before React has drawn its name (and so its width); this scrolls again once it has, and when a rename widens it.
   useLayoutEffect(() => {
