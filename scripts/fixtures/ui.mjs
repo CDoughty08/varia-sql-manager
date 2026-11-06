@@ -267,6 +267,9 @@ export const gridPart = {
   activeCell: '.rg-c.is-act',
   truncatedCell: '.rg-c.is-trunc',
   linkCell: '.rg-c.is-link',
+  /** White space marks (results toolbar › White space), drawn only and hidden from screen readers; a badge names one character (CR, LF, NBSP…). */
+  whitespaceMark: '.rg-ws',
+  whitespaceBadge: '.rg-wsb',
   borderHover: '.rg-border-hover',
   /** A live grid's row tones (LiveGrid), drawn with no ARIA of their own: the active cell's label names the tone. */
   toneError: '.tone-error',
@@ -325,6 +328,8 @@ export const lineEndingStatus = page => editorStatus(page).getByTitle('Line endi
 export const encodingStatus = page => editorStatus(page).getByTitle('Encoding', { exact: true })
 export const readOnlyStatus = page => editorStatus(page).getByText('Read-only', { exact: true })
 export const memoryIndicator = page => statusBar(page).locator(part.memory)
+export const memoryBreakdown = page => page.getByRole('region', { name: 'Memory usage', includeHidden: true })
+export const memoryUsage = (page, feature) => page.locator(`.memory-details .memory-row[data-feature="${feature}"] .memory-usage`)
 /** The active document's status: its state sentence and connection facts, or a value document's kind. */
 export const queryStatus = page => page.getByRole('status', { name: 'Query status', exact: true })
 /** One query status fact by key: server, login, database, time or rows. */
@@ -397,6 +402,8 @@ export const outputView = (page, name) => outputViews(page).getByRole('tab', nam
 export const outputAnnouncer = page => page.locator(part.outputAnnouncer)
 /** The strip above the output: the Results and Messages tabs, the status line and the copy and save strips. */
 export const outputToolbar = page => outputPane(page).locator(part.outputToolbar)
+/** The tools above a run's grids (White space, and the result tools that follow). */
+export const resultsToolbar = page => page.getByRole('toolbar', { name: 'Results tools', exact: true })
 export const outputStatus = page => outputPane(page).locator(part.outputStatus)
 export const jobProgress = page => outputPane(page).locator(part.jobProgress)
 export const jobNotice = page => outputPane(page).locator(part.jobNotice)

@@ -315,6 +315,9 @@ output.context, for a results grid with selected cells
   Select &All  Ctrl+A  ++++
   ---
   Sa&ve Results As…  Ctrl+S  ----
+  ---
+  Show S&paces and Tabs [ ]  ++++
+  Show All &White Space [ ]  ++++
 output.context, for a results grid without
   &Copy  Ctrl+C  ----
   Copy with &Headers  Ctrl+Shift+C  ----
@@ -322,6 +325,9 @@ output.context, for a results grid without
   Select &All  Ctrl+A  ++++
   ---
   Sa&ve Results As…  Ctrl+S  ----
+  ---
+  Show S&paces and Tabs [ ]  ++++
+  Show All &White Space [ ]  ++++
 output.context, for Messages with selected text
   &Copy  Ctrl+C  ++++
   ---

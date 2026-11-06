@@ -20,7 +20,7 @@ describe('grid lint', () => {
   })
   it('writes cell and header text only through Text nodes', () => {
     const source = readFileSync('src/renderer/src/grid/GridView.ts', 'utf8')
-    expect(source).toMatch(/\.nodeValue = value/)
+    expect(source).toMatch(/\.nodeValue = displayText\(value\)/)
     expect(source).not.toMatch(/\.(innerText|textContent)\b/)
   })
   it('writes chart tooltips and announcements only through Text nodes', () => {

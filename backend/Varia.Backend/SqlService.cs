@@ -35,7 +35,6 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
     public const string SynthesizeMethod = "debug.results.synthesize";
     private const long MaxSafeInteger = 9_007_199_254_740_991;
-    private const long MemoryReportStep = 64L * 1024 * 1024;
     private const string CancelledSentence = "The script was cancelled. Remaining batches were not executed.";
     private const string TimedOutSentence = "The script exceeded its execution timeout. Remaining batches were not executed.";
     /// <summary>SSMS's query-window defaults, run when a tab's session opens. SqlClient's login already sets all but two
@@ -90,9 +89,10 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private readonly Timer? memoryTimer;
     private readonly object memoryGate = new();
     private long reportedBytes = -1;
-    private int reportedBand;
     /// <summary>Orders memory reports (events and summary budgets) for this process; main pairs it with the generation.</summary>
     private long memorySeq;
+    private long reportedIndexBytes = -1;
+    private long indexMemorySeq;
     private object? health;
 
     private sealed class RunningQuery(string connectionId, string sessionId, CancellationTokenSource source)
@@ -147,8 +147,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
 
     /// <param name="store">Defaults to the system budget (<see cref="ResultStore.FromSystem"/>).</param>
     /// <param name="hooks">Adds debug.results.synthesize (VARIA_BACKEND_TEST_HOOKS=1, set by main only for smoke tests).</param>
-    /// <param name="publish">Sends a global EVENT and says whether it was queued; result memory usage is reported through it
-    /// at most once a second.</param>
+    /// <param name="publish">Sends a global EVENT and says whether it was queued. Memory usage is sampled once a second
+    /// and after operations that release it.</param>
     /// <param name="actionsCatalog">The object actions' catalogue; the checks pass one that marks an action long (D1c) before D1f does.</param>
     public SqlService(ResultStore? store = null, bool hooks = false, Func<object, bool>? publish = null, ActionsCatalog? actionsCatalog = null)
     {
@@ -172,7 +172,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         ssisActions = new SsisActionService(this, ssis);
         live = new LiveService(this);
         sessionActions = new SessionActions(this, live);
-        if (publish is not null) memoryTimer = new Timer(_ => ReportMemory(), null, 1000, 1000);
+        if (publish is not null) memoryTimer = new Timer(_ => { ReportMemory(); ReportIndexMemory(); }, null, 1000, 1000);
     }
 
     /// <summary>The service as the backend process runs it. Test hooks, and the budget override VARIA_RESULT_BUDGET_BYTES,
@@ -556,6 +556,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         poolSessions.Forget(args.ConnectionId);
         explorer.Forget(args.ConnectionId);
         search.Forget(args.ConnectionId);
+        ReportIndexMemory();
         scripting.Forget(args.ConnectionId);
         actions.Forget(args.ConnectionId);
         ssis.Forget(args.ConnectionId);
@@ -1397,27 +1398,35 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private static MessageKind InformationalKind(SqlError error) => InformationalKind(error.Number);
     internal static MessageKind InformationalKind(int number) => number == 0 || number >= 50000 ? MessageKind.Print : MessageKind.Server;
 
-    /// <summary>A global results.memory EVENT, checked once a second and after each results.close: when usage crosses 50,
-    /// 75, 90 or 100 % of the budget, grows by 64 MiB, or falls below what the status bar was last shown (results were
-    /// closed, or a copy or save that leased them ended). An event the full control lane refused does not count as
-    /// reported, so the next check sends it again.</summary>
+    /// <summary>A global results.memory EVENT on the first sample and whenever sampled usage changes. The timer checks
+    /// once a second and results.close checks before it answers. A refused event is retried at the next check.</summary>
     internal void ReportMemory()
     {
         lock (memoryGate)
         {
             var used = store.UsedBytes;
             var global = store.GlobalBytes;
-            var band = Band(used, global);
-            if (publish is null || (reportedBytes < 0 ? used == 0 : used >= reportedBytes && band == reportedBand && used - reportedBytes < MemoryReportStep)) return;
+            if (publish is null || used == reportedBytes) return;
             if (!publish(new { Type = "results.memory", UsedBytes = used, GlobalBytes = global, Seq = memorySeq + 1 })) return;
             memorySeq++;
             reportedBytes = used;
-            reportedBand = band;
         }
     }
 
-    /// <summary>A summary's budget. The status bar shows it as it shows an event, so it counts as reported: otherwise a run
-    /// that grew by less than a report step, then closed, would leave the status bar showing memory already freed. The
+    /// <summary>The shared index budget, sampled while builds run and after a disconnect releases an index.</summary>
+    internal void ReportIndexMemory()
+    {
+        lock (memoryGate)
+        {
+            var used = search.MemoryUsed;
+            if (publish is null || used == reportedIndexBytes) return;
+            if (!publish(new { Type = "explorer.index.memory", UsedBytes = used, GlobalBytes = search.Limits.MemoryBytes, Seq = indexMemorySeq + 1 })) return;
+            indexMemorySeq++;
+            reportedIndexBytes = used;
+        }
+    }
+
+    /// <summary>A summary's budget counts as reported, so a subsequent close reports any fall from the summary. The
     /// summary is written only after this returns, so an event published meanwhile (a close in another tab) can reach main
     /// first; both take their sequence number under this lock with the usage they carry, and the status bar ignores a
     /// figure older than the one it shows.</summary>
@@ -1427,12 +1436,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         {
             var used = store.UsedBytes;
             reportedBytes = used;
-            reportedBand = Band(used, store.GlobalBytes);
             return new ResultBudget(used, store.GlobalBytes, store.QueryBytes, ++memorySeq);
         }
     }
-
-    private static int Band(long used, long global) => used >= global ? 4 : used * 10 >= global * 9 ? 3 : used * 4 >= global * 3 ? 2 : used * 2 >= global ? 1 : 0;
 
     /// <summary>Reads past the rest of a result set that stores no more rows and has a long column, counting its rows.
     /// ReadAsync would skip each long value by buffering all of it, in time quadratic in its size and deaf to the token; a
