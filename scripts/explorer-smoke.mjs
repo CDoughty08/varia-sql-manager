@@ -882,10 +882,15 @@ try {
     await page.keyboard.type('table')
     const tabHits = objectSearchHits(page)
     await expect(tabHits).toHaveCount(2)
+    // The tree's selection is elsewhere first, so a reveal of dbo.table1 would show.
+    await select('server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders')
     const revealed = (await active())?.label
+    expect(revealed).not.toBe('dbo.table1')
     await tabHits.first().click()
     await expect(tabHits.first()).toBeFocused()
     await expect(objectSearchSelected(page)).toHaveAttribute('title', 'Reveal in Object Explorer: dbo.table1')
+    // A seek down loaded rows selects at once, so two frames after the click a reveal would have moved the tree's selection.
+    await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))))
     expect((await active())?.label).toBe(revealed)
     // One tab stop: only the selected hit is in the tab order.
     expect(await tabHits.evaluateAll(buttons => buttons.map(button => button.tabIndex))).toEqual([0, -1])
@@ -897,8 +902,17 @@ try {
     await expect(tabHits.nth(1)).toBeFocused()
     await page.keyboard.press('Home')
     await expect(tabHits.first()).toBeFocused()
+    // Shift+Enter reveals as Enter does.
+    await page.keyboard.press('Shift+Enter')
+    await expect.poll(async () => (await active())?.label).toBe('dbo.table1')
+    await expect(tabHits.first()).toBeFocused()
+    await page.keyboard.press('PageDown')
+    await expect(tabHits.nth(1)).toBeFocused()
+    await page.keyboard.press('PageUp')
+    await expect(tabHits.first()).toBeFocused()
     await page.keyboard.press('End')
     await expect(tabHits.nth(1)).toBeFocused()
+    await select('server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders')
     await tabHits.first().dblclick()
     await expect.poll(async () => (await active())?.label).toBe('dbo.table1')
     await expect(tabHits.first()).toBeFocused()

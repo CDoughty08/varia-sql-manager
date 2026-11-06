@@ -14,9 +14,10 @@ export interface ShellHost {
   disconnect(connectionId: string): Promise<void>
   /**
    * Shows a pane; `focus` also moves keyboard focus into it, as SSMS's F8 does for Object Explorer. `raise` brings the popout
-   * window that holds it to the front.
+   * window that holds it to the front; `raiseHidden` only when that window is hidden (minimized, or covered where the system
+   * reports it), since raising a window gives it keyboard focus too.
    */
-  reveal(pane: PaneId, options?: { focus?: boolean; raise?: boolean }): void
+  reveal(pane: PaneId, options?: { focus?: boolean; raise?: boolean; raiseHidden?: boolean }): void
   /** Shows the query output: the active query's view, else the output panel showing; with all closed, reopens them. */
   revealOutput(options?: { focus?: boolean }): void
   /** SSMS's Ctrl+R: closes the output panels while one shows, else shows the output. */
@@ -104,9 +105,9 @@ export function shellContribution({ commands, documents, files, quickInput, conn
       try { await files.closeWindow(async () => { await host.flushLayout().catch(() => {}) }, () => longRuns.closeRefusal()) }
       finally { if (!files.exiting) host.layoutCloseCancelled() }
     } }),
-    // Focus moves there too, so the F5 that follows refreshes Object Explorer rather than executing the query; Search Objects'
-    // Reveal keeps it in its hits.
-    commands.register('window.explorer', { run: args => host.reveal('explorer', { focus: !args?.keepFocus }) }),
+    // Focus moves there too, so the F5 that follows refreshes Object Explorer rather than executing the query. Search Objects'
+    // Reveal keeps it in its hits, and brings a popout window that holds Object Explorer forward only when it cannot be seen.
+    commands.register('window.explorer', { run: args => host.reveal('explorer', args?.keepFocus ? { raiseHidden: true } : { focus: true }) }),
     // The box asks for focus itself once shown, as revealing a hidden pane mounts it on a later render.
     commands.register('window.editor', { run: () => host.reveal('editor') }),
     // A panel in a popout window: its window comes to the front.

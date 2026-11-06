@@ -76,7 +76,7 @@ export interface WorkspaceHandle {
   manage(mode?: 'save' | 'load'): void
   reset(): void
   /** Shows a pane, and with `focus` moves keyboard focus into it; `raise` (or `focus`) brings a popout window that holds it to the front. */
-  reveal(id: PaneId, options?: { focus?: boolean; raise?: boolean }): void
+  reveal(id: PaneId, options?: { focus?: boolean; raise?: boolean; raiseHidden?: boolean }): void
   /** Closes a panel as its × does, remembering where it was docked. */
   close(id: PaneId): void
   location(id: PaneId): PaneLocation
@@ -353,14 +353,14 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     else panel.group.api.moveTo({ position: id === 'explorer' ? 'left' : isOutputPane(id) ? 'bottom' : 'right' })
     if (previous && previous.position !== 'center') panel.api.setSize({ width: previous.width, height: previous.height })
   }
-  function reveal(id: PaneId, options?: { focus?: boolean; raise?: boolean }) {
+  function reveal(id: PaneId, options?: { focus?: boolean; raise?: boolean; raiseHidden?: boolean }) {
     const api = apiRef.current
     // In a popout window its tab is selected; the window comes to the front only when asked, since a query's output
     // showing must not take focus from the editor.
     const record = recordOf(id)
     if (record) {
       selectInWindow(record.id, id as PopoutPaneId)
-      if (options?.focus || options?.raise) record.window.focus()
+      if (options?.focus || options?.raise || (options?.raiseHidden && record.window.document.visibilityState === 'hidden')) record.window.focus()
       if (options?.focus) focusPane(id)
       return
     }

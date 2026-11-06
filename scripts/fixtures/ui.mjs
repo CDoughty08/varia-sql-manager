@@ -467,11 +467,11 @@ export const explorerSearchField = page => page.locator(part.explorerSearchField
 /** Object Explorer's search hits, by their reveal buttons' accessible names. */
 export const explorerSearchHits = page => page.locator(part.explorerSearch).getByRole('list', { name: 'Search results', exact: true }).locator('[data-hit]')
 /** The hit Enter in the box revealed last. */
-export const explorerSearchCurrent = page => page.locator(part.explorerSearch).getByRole('list', { name: 'Search results', exact: true }).locator('[aria-current] [data-hit]')
+export const explorerSearchCurrent = page => page.locator(part.explorerSearch).getByRole('list', { name: 'Search results', exact: true }).locator('[data-hit][aria-current]')
 /** The Search Objects tab's box, its hits by their buttons, and the selected hit. */
 export const objectSearchBox = page => page.locator(part.objectSearchTab).getByRole('textbox', { name: 'Search objects', exact: true })
 export const objectSearchHits = page => page.locator(part.objectSearchTab).getByRole('list', { name: 'Results', exact: true }).locator('[data-hit]')
-export const objectSearchSelected = page => page.locator(part.objectSearchTab).getByRole('list', { name: 'Results', exact: true }).locator('[aria-current] [data-hit]')
+export const objectSearchSelected = page => page.locator(part.objectSearchTab).getByRole('list', { name: 'Results', exact: true }).locator('[data-hit][aria-current]')
 export const explorerSearchSplitter = page => page.locator(part.explorerSearch).getByRole('separator', { name: 'Resize search results', exact: true })
 export const explorerSearchToggle = (page, name) => page.locator(part.explorerSearch).getByRole('button', { name, exact: true })
 export const explorerSearchOptions = page => page.locator(part.explorerSearch).getByRole('button', { name: /^Search options/ })
