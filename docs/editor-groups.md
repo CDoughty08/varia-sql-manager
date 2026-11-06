@@ -12,8 +12,8 @@ its own Monaco editor, and groups split side by side, stack, or float over the e
   documents". Left, Right, Home and End on a focused tab choose the tab they reach (focus restored by a closing menu,
   or a right-click, chooses nothing), and Delete or Backspace there is File › Close (catalogue keys, which KeybindingService takes
   before Dockview's own). Keys pressed on a focused tab (Delete, Ctrl+W, F2, Split Editor, the moves) act on that tab,
-  shown or not: KeybindingService passes the focused tab as the command's `tabId` (`keyArgs`,
-  `EditorGroupService.focusedDocument`). Menus and the palette act on the shown document, even when a closing menu put
+  shown or not: KeybindingService passes the focused tab as the command's `tabId` (`keyArgs`) to the query tab menu's commands
+  alone (`actsOnTab`, `EditorGroupService.focusedDocument`); other keys, such as F5, follow the shown document. Menus and the palette act on the shown document, even when a closing menu put
   focus back on another tab.
   Each group is a region named "Editor group: " and its shown document's name, apart from the document's own regions.
 - One view per document: a document is in exactly one group. Split Editor moves the document into a new group, so a
@@ -69,7 +69,7 @@ its own Monaco editor, and groups split side by side, stack, or float over the e
   not float. Dockview's own float (Shift-drag, a tab released outside the area) can still float it; the grid then keeps
   an empty group behind the floating ones, which says the open queries float and offers Dock query; it goes once another
   grid group shows a document, or once no document is left (the area's own empty state). At the 16-group cap there is
-  no room for it, so a floating group docks instead. Hot exit keeps such a layout as an empty grid and its floating
+  no room for it, so a floating group docks instead, once a Shift-drag that floated it is released. Hot exit keeps such a layout as an empty grid and its floating
   groups.
 - Documents do not pop out into OS windows. Monaco binds its DOM, focus, IME, clipboard and workers to the window that
   created it (docs/popout-windows.md, *Limits*). The tab menu therefore has no Move to New Window, and dragging a tab

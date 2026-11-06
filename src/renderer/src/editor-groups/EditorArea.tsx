@@ -280,6 +280,24 @@ function followFocus(root: HTMLElement, report: (inside: boolean) => void): { di
 }
 
 /**
+ * Runs `then` once the pointer is up and Dockview has handled its release (a Shift-drag float follows the pointer until
+ * then), or at once when no pointer is held.
+ */
+function afterPointer(): { held(): boolean; then(run: () => void): void; dispose(): void } {
+  let held = false, waiting: (() => void) | undefined
+  const down = () => { held = true }
+  const up = () => { held = false; const run = waiting; waiting = undefined; if (run) setTimeout(run) }
+  window.addEventListener('pointerdown', down, true)
+  window.addEventListener('pointerup', up, true)
+  window.addEventListener('pointercancel', up, true)
+  return {
+    held: () => held,
+    then: run => { if (held) waiting = run; else run() },
+    dispose: () => { waiting = undefined; window.removeEventListener('pointerdown', down, true); window.removeEventListener('pointerup', up, true); window.removeEventListener('pointercancel', up, true) }
+  }
+}
+
+/**
  * A tab that focus reaches from another tab of its strip shows its document, as the single strip's arrow keys did:
  * Dockview's roving focus (arrows, Home, End) then chooses tabs, and Close, Rename and Delete act on the focused tab,
  * which is the active one. Focus that comes from elsewhere (a closing menu restoring it) chooses nothing, and a press
@@ -320,6 +338,7 @@ class EditorAreaController implements Area, EditorGroupHost {
   private focusInArea = true
   private regions?: { refresh(): void }
   private keepingGrid = false
+  private pointer?: ReturnType<typeof afterPointer>
   private status?: { editor: QueryEditorInstance['instance']; binding: { dispose(): void } }
   constructor(private readonly workbench: Workbench) {}
 
@@ -338,6 +357,7 @@ class EditorAreaController implements Area, EditorGroupHost {
       { dispose: documents.subscribe(() => this.reconcile()) },
       editorGroups.attach(this),
       this.regions = nameGroupRegions(root),
+      this.pointer = afterPointer(),
       followFocus(root, inside => { this.focusInArea = inside; if (!inside) documents.dropPendingFocus() }),
       chooseFocusedTabs(root, id => { if (documents.getSnapshot().activeId !== id) api.getPanel(id)?.api.setActive() }))
     this.reconcile()
@@ -398,8 +418,12 @@ class EditorAreaController implements Area, EditorGroupHost {
       else if (!grid.length) {
         const active = api.activeGroup ?? api.groups[0]
         if (api.groups.length >= editorGroupLimits.groups) {
-          active.api.moveTo({ position: 'right' })
-          this.workbench.commands.reportWarning(`The query editor shows at most ${editorGroupLimits.groups} editor groups.`)
+          // A Shift-drag float is still following the pointer: the group docks once it lands, not under the drag.
+          if (this.pointer?.held()) this.pointer.then(() => { this.keepGrid(); this.publish() })
+          else {
+            active.api.moveTo({ position: 'right' })
+            this.workbench.commands.reportWarning(`The query editor shows at most ${editorGroupLimits.groups} editor groups.`)
+          }
         } else {
           api.addGroup({ direction: 'right' })
           active.api.setActive()

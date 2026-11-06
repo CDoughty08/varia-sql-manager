@@ -791,4 +791,9 @@ export const commandIds = Object.keys(commandCatalog) as CommandId[]
 export const isCommandId = (value: unknown): value is CommandId => typeof value === 'string' && Object.hasOwn(commandCatalog, value)
 /** Widens a catalogue entry so optional fields can be read without narrowing on the literal type. */
 export const commandDescriptor = (id: CommandId): CommandDescriptor => commandCatalog[id]
+/**
+ * Whether the query tab menu has the command, so it can act on a tab other than the shown one: a key pressed on a focused
+ * tab passes that tab to these alone. Every other command's keys follow the shown document, as their context keys do.
+ */
+export const actsOnTab = (id: CommandId): boolean => !!commandDescriptor(id).menus?.some(placement => placement.menu === 'documentTab.context')
 export const paletteLabel = (id: CommandId): string => { const command = commandDescriptor(id); return command.category ? `${command.category}: ${command.title}` : command.title }

@@ -1,5 +1,6 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import type { VariaApi } from '../../../shared/contracts'
+import { actsOnTab } from '../../../shared/commands/catalog'
 import { toPlatform, type Platform } from '../../../shared/commands/keybindings'
 import { platformLineEnding } from '../../../shared/files/encoding'
 import { DocumentService, settingsDocumentOptions } from '../services/documents'
@@ -361,7 +362,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     menubarRect: id => document.getElementById('menubar-' + id)?.getBoundingClientRect(), targets: menuTargets, editorCaret: () => editorCaret(documents, monaco),
     modalContains: element => [...document.querySelectorAll('[aria-modal="true"]')].at(-1)?.contains(element) ?? false, style: api.menuStyle, api })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen, menus,
-    keyArgs: () => { const tabId = editorGroups.focusedDocument(); return tabId ? { tabId } : undefined }, editorHasTextFocus: () => documents.boundEditor?.hasTextFocus() ?? false,
+    keyArgs: command => { const tabId = actsOnTab(command) ? editorGroups.focusedDocument() : undefined; return tabId ? { tabId } : undefined }, editorHasTextFocus: () => documents.boundEditor?.hasTextFocus() ?? false,
     editorContains: target => target instanceof Node && !!documents.boundEditor?.getContainerDomNode().contains(target) })
   const menuState = new MenuStatePublisher({ commands, context, send: state => api.setMenuState(state) })
   const actions = new ObjectActionService({

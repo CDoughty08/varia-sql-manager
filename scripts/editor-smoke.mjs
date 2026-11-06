@@ -369,6 +369,46 @@ try {
   await expect(editorGroups(page)).toHaveCount(1)
   await documentTab(page, secondTab).click()
   await expect.poll(() => activeDocumentName(page)).toBe(secondTab)
+  // At the 16-group cap the grid has no room for an empty group: Shift-dragging its last tab out floats it while the
+  // pointer is down, and it docks again once released. The tab menu (Shift+F10 on a focused tab) works under the floats.
+  const tabMenu = async (tab, item) => {
+    await documentTab(page, tab).focus()
+    await page.keyboard.press('Shift+F10')
+    await menu('Query tab').getByRole('menuitem', { name: item, exact: true }).click()
+  }
+  const extra = []
+  for (let step = 0; step < 14; step++) {
+    await page.keyboard.press('Control+N')
+    await expect.poll(async () => (await order()).length).toBe(3 + step)
+    extra.push(await activeDocumentName(page))
+  }
+  for (const [index, tab] of [firstTab, ...extra].entries()) {
+    await tabMenu(tab, 'Float')
+    await expect(floatingEditorGroups(page)).toHaveCount(index + 1)
+  }
+  await expect(editorGroups(page)).toHaveCount(16)
+  const lastBox = await documentTab(page, secondTab).boundingBox()
+  await page.keyboard.down('Shift')
+  await page.mouse.move(lastBox.x + 20, lastBox.y + lastBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(lastBox.x + 160, lastBox.y + 200, { steps: 6 })
+  await expect(floatingEditorGroups(page)).toHaveCount(16)
+  await page.mouse.up()
+  await page.keyboard.up('Shift')
+  await expect(floatingEditorGroups(page)).toHaveCount(15)
+  await expect(editorGroups(page)).toHaveCount(16)
+  await expect(page.getByText('The query editor shows at most 16 editor groups.', { exact: true })).toBeVisible()
+  expect(failures).toEqual([])
+  for (const tab of extra) {
+    await documentTab(page, tab).focus()
+    await page.keyboard.press('Delete')
+    await expect(documentTab(page, tab)).toHaveCount(0)
+  }
+  await tabMenu(firstTab, 'Dock')
+  await expect(floatingEditorGroups(page)).toHaveCount(0)
+  await expect(editorGroups(page)).toHaveCount(1)
+  await documentTab(page, secondTab).click()
+  await expect.poll(() => activeDocumentName(page)).toBe(secondTab)
   // A document's own regions keep their names as their titles change; only the groups are named "Editor group: …".
   const renamed = await page.locator(part.editorArea).evaluate(async root => {
     const region = document.createElement('div')
@@ -382,7 +422,7 @@ try {
     return label
   })
   expect(renamed).toBe('After sections')
-  console.log('Editor checks: Split Editor Right, focus between groups, Move Editor into Previous Group, a drag onto the compass, Join All Editor Groups, Float and Dock, a close showing its own group\'s next tab, tab keys, Delete on a focused tab (the shown one or not) while File › Close Query closes the shown one, and every query floating.')
+  console.log('Editor checks: Split Editor Right, focus between groups, Move Editor into Previous Group, a drag onto the compass, Join All Editor Groups, Float and Dock, a close showing its own group\'s next tab, tab keys, Delete on a focused tab (the shown one or not) while File › Close Query closes the shown one, every query floating, and the 16-group cap under a Shift-drag.')
   await page.keyboard.press('Alt+e')
   await page.keyboard.press('k')
   await expect(menu('Bookmarks').getByRole('menuitem', { name: 'Next Bookmark', exact: true })).toHaveAttribute('aria-disabled', 'true')
