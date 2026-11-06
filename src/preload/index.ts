@@ -139,6 +139,7 @@ const api: VariaApi = {
   takeSession: () => ipcRenderer.invoke('varia:session-take'),
   finishSessionRestore: generation => ipcRenderer.invoke('varia:session-restored', generation),
   writeClipboardText: text => ipcRenderer.invoke('varia:clipboard-write', text),
+  raisePopout: name => ipcRenderer.invoke('varia:popout-raise', name),
   confirmClose: name => ipcRenderer.invoke('varia:confirm-close', name),
   confirmOpenConnections: () => ipcRenderer.invoke('varia:confirm-open-connections'),
   confirmSessions: request => ipcRenderer.invoke('varia:confirm-sessions', request),

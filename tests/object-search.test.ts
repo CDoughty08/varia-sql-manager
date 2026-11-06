@@ -267,6 +267,37 @@ describe('ObjectSearchService', () => {
     expect(await none).toBeUndefined()
   })
 
+  it('keeps the selected hit when the same search runs again, and forgets it after another search or when the hit is gone', async () => {
+    const { service, pendingSearch, pendingIndex, connections, timers } = harness()
+    connections.set([connection('a')])
+    const id = service.open('a')!
+    const hits = ['A', 'B', 'C'].map(name => ({ ...hit, label: `dbo.${name}`, object: { ...hit.object, name } }))
+    const answer = (value: ObjectSearchHit[]): ApiResult<ObjectSearchResult> => ({ ok: true, value: { hits: value, total: value.length, partial: false, elapsedMs: 1, index: status() } })
+    service.setQuery(id, { text: 'x' })
+    timers.run()
+    pendingSearch[0](answer(hits))
+    await settle()
+    service.pick(id, 1)
+    // The build ends and searches again: dbo.B is still selected, at its new place.
+    pendingIndex[0]({ ok: true, value: { status: status(), elapsedMs: 1 } })
+    await settle()
+    pendingSearch[1](answer([hits[2]!, hits[0]!, hits[1]!]))
+    await settle()
+    expect(service.getSnapshot().documents[id].current).toBe(2)
+    // The same search again without dbo.B: nothing is selected.
+    void service.search(id)
+    pendingSearch[2](answer([hits[0]!, hits[2]!]))
+    await settle()
+    expect(service.getSnapshot().documents[id].current).toBeUndefined()
+    // Another search forgets the selection even when the hit is in its answer.
+    service.pick(id, 0)
+    service.setQuery(id, { text: 'y' })
+    timers.run()
+    pendingSearch[3](answer(hits))
+    await settle()
+    expect(service.getSnapshot().documents[id].current).toBeUndefined()
+  })
+
   it('reports a failed search and clears results for empty text', async () => {
     const { service, pendingSearch, connections } = harness()
     connections.set([connection('a')])

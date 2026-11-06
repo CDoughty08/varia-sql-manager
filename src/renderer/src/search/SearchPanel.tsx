@@ -8,13 +8,35 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import ExplorerIcon from '../explorer/ExplorerIcon'
 import Icon from '../Icon'
 import EmptyState from '../kit/EmptyState'
-import type { IndexEntry, SearchQueryState } from './ObjectSearchService'
+import { hitKey, type IndexEntry, type SearchQueryState } from './ObjectSearchService'
 import SearchFilters from './SearchFilters'
 import PaneSearchFilters from './PaneSearchFilters'
 import SearchPopover from './SearchPopover'
 import { paneBandDrag, paneBandKey, paneBandLimits } from './pane-band'
 
 const numbers = new Intl.NumberFormat('en-US')
+/** The hit Page Down (`direction` 1) or Page Up (-1) selects from `at`, as lists do: the last (first) hit fully in view, or when
+ *  `at` is already there, the furthest whose rows from `at` fit in the list's height, at least one away. Rows differ in height
+ *  (a definition hit has a second line), so it adds up the rows it passes. */
+function pageFrom(rows: readonly HTMLElement[], at: number, direction: 1 | -1): number {
+  const list = rows[at]?.closest('ul')
+  if (!list) return at
+  const top = list.getBoundingClientRect().top + list.clientTop, height = list.clientHeight, bottom = top + height
+  let edge = at
+  for (let index = at + direction; index >= 0 && index < rows.length; index += direction) {
+    const box = rows[index]!.parentElement!.getBoundingClientRect()
+    if (direction > 0 ? box.bottom > bottom + 0.5 : box.top < top - 0.5) break
+    edge = index
+  }
+  if (edge !== at) return edge
+  let to = at, used = rows[at]?.parentElement?.offsetHeight ?? 0
+  while (to + direction >= 0 && to + direction < rows.length) {
+    used += rows[to + direction]!.parentElement?.offsetHeight ?? 0
+    if (used > height && to !== at) break
+    to += direction
+  }
+  return to
+}
 const count = (value: number, noun: string) => `${numbers.format(value)} ${noun}${value === 1 ? '' : 's'}`
 const dragEnds = ['pointerup', 'pointercancel', 'lostpointercapture'] as const
 /** The splitter's pane (Object Explorer's column) and the band's own box. */
@@ -79,9 +101,27 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   const root = useRef<HTMLDivElement>(null)
   const list = useRef<HTMLUListElement>(null)
   const state = snapshot.documents[searchId]
-  // The hit Enter reached stays in view in the list, as the tree below selects it.
+  // The selected hit (the one Enter or the arrows reached) stays in view in the list.
   const current = state?.current
-  useLayoutEffect(() => { if (current !== undefined) list.current?.querySelectorAll<HTMLElement>('[data-hit]')[current]?.scrollIntoView({ block: 'nearest' }) }, [current, state?.result])
+  // Whether keyboard focus is on a hit (the list's focus and blur events keep it): a new answer that drops the focused hit hands
+  // focus to the list's tab stop, or to the box when no hits are left, rather than leaving it on the page, where keys reach nothing.
+  const focusInList = useRef(false)
+  const focusInput = () => root.current?.querySelector<HTMLElement>('[data-object-search-focus]')?.focus()
+  // The selected hit's identity: the list scrolls to the selection only when another hit is selected, so a search run again that
+  // keeps the selection (at whatever index) leaves the list where the user scrolled it, focused or not.
+  const selectedHit = current === undefined ? undefined : state?.result?.hits[current]
+  const selectedKey = selectedHit && hitKey(selectedHit)
+  const shownKey = useRef<string | undefined>(undefined)
+  useLayoutEffect(() => {
+    const hits = list.current, rows = hits?.querySelectorAll<HTMLElement>('[data-hit]')
+    const focused = !!hits && hits.contains(hits.ownerDocument.activeElement)
+    if (current !== undefined && selectedKey !== shownKey.current) rows?.[current]?.scrollIntoView({ block: 'nearest' })
+    shownKey.current = selectedKey
+    if (!focusInList.current || focused) return
+    const row = rows?.[current ?? 0]
+    if (row) row.focus()
+    else { focusInList.current = false; focusInput() }
+  }, [current, selectedKey, state?.result])
   if (!state) return null
   const entry = snapshot.indexes[state.connectionId]
   const result = state.result
@@ -93,30 +133,52 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   const onInputKey = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.nativeEvent.isComposing || event.ctrlKey || event.metaKey || event.altKey || (event.shiftKey && !(pane && event.key === 'Enter'))) return
     // In Object Explorer's box Enter reveals the next hit (Shift+Enter the one before) in the tree below and keeps focus here,
-    // so Enter again goes on to the next one. The tab's Enter searches at once: revealing from it moves focus to the tree.
+    // so Enter again goes on to the next one. The tab's Enter searches at once; its hits reveal with Enter or a double-click.
     if (event.key === 'Enter' && state.text.trim() && pane) void objectSearch.step(searchId, event.shiftKey ? -1 : 1).then(hit => { if (hit) reveal(hit) }, onUnexpectedError)
     else if (event.key === 'Enter' && state.text.trim()) void objectSearch.search(searchId)
-    else if (event.key === 'ArrowDown' && rows().length) rows()[0]?.focus()
+    else if (event.key === 'ArrowDown' && rows().length) (rows()[current ?? 0] ?? rows()[0])?.focus()
     else if (event.key === 'Escape' && state.text) set({ text: '' })
     else if (onLeave && (event.key === 'Escape' || event.key === 'ArrowDown' || event.key === 'Enter')) onLeave()
     else return
     event.preventDefault()
     event.stopPropagation()
   }
+  /** The list is one tab stop on the selected hit; the arrows, Page keys, Home and End move the selection and focus with it,
+   *  Enter reveals the selected hit (focus stays here), ↑ on the first hit and Escape return to the box. */
   const onListKey = (event: KeyboardEvent<HTMLUListElement>) => {
-    const all = rows(), at = all.findIndex(row => row === document.activeElement)
+    // Shift+Enter reveals too, as in the box (where it goes back a hit).
+    if (event.ctrlKey || event.metaKey || event.altKey || (event.shiftKey && event.key !== 'Enter')) return
+    const all = rows(), at = all.findIndex(row => row === event.target)
     if (at < 0) return
-    const next = event.key === 'ArrowDown' ? at + 1 : event.key === 'ArrowUp' ? at - 1 : event.key === 'Home' ? 0 : event.key === 'End' ? all.length - 1 : undefined
+    const next = event.key === 'ArrowDown' ? at + 1 : event.key === 'ArrowUp' ? at - 1 : event.key === 'PageDown' ? pageFrom(all, at, 1)
+      : event.key === 'PageUp' ? pageFrom(all, at, -1) : event.key === 'Home' ? 0 : event.key === 'End' ? all.length - 1 : undefined
+    if (event.key === 'Enter' || event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      if (event.key === 'Escape') focusInput()
+      else open(at)
+      return
+    }
     if (next === undefined) return
     event.preventDefault()
-    if (next < 0) root.current?.querySelector<HTMLElement>('[data-object-search-focus]')?.focus()
-    else all[Math.min(next, all.length - 1)]?.focus()
+    if (next < 0) { focusInput(); return }
+    const index = Math.min(next, all.length - 1)
+    objectSearch.pick(searchId, index)
+    all[index]?.focus()
   }
   const target = (hit: ObjectSearchHit): ExplorerTarget => ({ connectionId: state.connectionId, ref: { type: 'object', object: hit.object }, kind: hit.object.kind, label: hit.label, ...hit.subtype ? { subtype: hit.subtype } : {} })
   // Object Explorer shows at once and follows the seek as it expands and pages its way to the object.
+  // From the tab, Object Explorer is shown without taking focus, so the arrows go on walking the hits.
   const reveal = (hit: ObjectSearchHit) => {
-    if (!pane) void commands.execute('window.explorer', undefined, 'toolbar')
+    if (!pane) void commands.execute('window.explorer', { keepFocus: true }, 'toolbar')
     void objectSearch.reveal(explorer, state.connectionId, hit).then(outcome => { if (!outcome.ok && !outcome.cancelled) commands.reportError(outcome.message) }, onUnexpectedError)
+  }
+  /** Selects a hit and reveals it. */
+  const open = (index: number) => {
+    const hit = result?.hits[index]
+    if (!hit) return
+    objectSearch.pick(searchId, index)
+    reveal(hit)
   }
   const script = (hit: ObjectSearchHit) => {
     const verb = hit.definition && scripting.canRun('alter', target(hit)) ? 'alter' : 'create'
@@ -194,13 +256,24 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
     </div>
     {showHits && (asked && !result!.problem && result!.hits.length === 0 && !state.requestId
       ? <EmptyState icon="search" title="No objects match" detail={entry?.requestId ? 'The index is still being built; results update when it finishes.' : `Try another spelling, turn off Match Case or Whole Word, or search names and definitions${state.types.length ? ' of every type' : ''}.`} />
-      : <ul ref={list} className="object-search-hits" aria-label={pane ? 'Search results' : 'Results'} onKeyDown={onListKey}>
+      : <ul ref={list} className="object-search-hits" aria-label={pane ? 'Search results' : 'Results'} onKeyDown={onListKey} onFocus={() => { focusInList.current = true }}
+        onBlur={event => {
+          const next = event.relatedTarget
+          if (next && event.currentTarget.contains(next as Node)) return
+          // A hit a new answer removes may blur as it goes; focus that leaves with its element is still the list's, for the
+          // effect above to hand on.
+          const left = event.target
+          queueMicrotask(() => { if (left.isConnected) focusInList.current = false })
+        }}>
         {result?.hits.map((hit, index) => {
           const spec = kindSpecs[hit.object.kind]
           const path = searchHitPath(hit)
-          const key = JSON.stringify([hit.object, hit.folder])
-          return <li key={key} className="object-search-hit" {...index === current ? { 'aria-current': true } : {}}>
-            <button type="button" className="object-search-open" data-hit title={`Reveal in Object Explorer: ${displayText(hit.label)}`} onClick={() => { objectSearch.pick(searchId, index); reveal(hit) }}>
+          const key = hitKey(hit)
+          // A click selects; in the tab only a double-click (or Enter) reveals, so a click never takes focus away from the list.
+          // The selection is marked on the button, which has focus, so a screen reader announces it.
+          return <li key={key} className="object-search-hit">
+            <button type="button" className="object-search-open" data-hit tabIndex={index === (current ?? 0) ? 0 : -1} {...index === current ? { 'aria-current': true } : {}} title={`Reveal in Object Explorer: ${displayText(hit.label)}`}
+              onClick={() => { if (pane) open(index); else objectSearch.pick(searchId, index) }} onDoubleClick={pane ? undefined : () => open(index)}>
               <ExplorerIcon name={(hit.subtype && spec.subtypeIcons?.[hit.subtype]) || spec.icon} />
               <span className="object-search-name"><Marked text={hit.label} range={hit.range} /></span>
               <span className="object-search-path">{displayText(path)}</span>
