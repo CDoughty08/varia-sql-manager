@@ -45,6 +45,12 @@ internal sealed class ColumnPlan
     private long cellChars, cellBytes;
     // False when the reader could only estimate the cell's bytes; the cell then keeps an entry that says so.
     private bool cellExact;
+    // True when an xml cell was stored but the rest of its value, past the cap, failed to parse (the GetXmlReader fallback).
+    private bool cellTailFailed;
+
+    /// <summary>Test seam: when set, xml cells read through this reader instead of the column's own stream, as when
+    /// <see cref="SequentialXml.Open"/> finds none.</summary>
+    internal Func<SqlDataReader, int, XmlReader>? XmlFallback { get; set; }
 
     private sealed class Column(string name, string type, CellCodec codec, WireKind wire, int scale, int cap, bool isLong, ColumnLength length)
     {
@@ -58,6 +64,7 @@ internal sealed class ColumnPlan
         public CellCodec Codec = codec;
         public readonly CellCodec Fallback = FallbackOf(codec, wire, isLong);
         public bool Warned;
+        public bool TailWarned;
     }
 
     private ColumnPlan(Column[] columns, IReadOnlyList<ResultColumn> descriptors, bool isPlan, bool hasLong)
@@ -221,12 +228,23 @@ internal sealed class ColumnPlan
                 cellChars = 0;
                 cellBytes = column.Length.FixedBytes;
                 cellExact = true;
+                cellTailFailed = false;
                 if (Read(column, reader, i, builder, token)) truncated++;
                 if (cellBytes >= 0) builder.Measure(cellChars, cellBytes, column.Length.Rule == LengthRule.Recorded, cellExact);
+                // The cell is stored, so it stays; only the column says that some values ended in an error.
+                if (cellTailFailed && !column.TailWarned)
+                {
+                    column.TailWarned = true;
+                    warn("Column ‘" + column.Name + "’ (" + column.Type + "): some values could not be read to the end and show only the part read before the error.");
+                }
             }
             catch (Exception error) when (IsCellFailure(error))
             {
+                // A Stop can cut a value short, which may parse as malformed: that is the Stop, not a value to warn about.
+                token.ThrowIfCancellationRequested();
                 builder.AppendNull(error: true);
+                // The value was not NULL, and its bytes are unknown: the row's sum leaves them out, so it is an estimate.
+                builder.Measure(0, 0, exact: false);
                 if (!column.Warned)
                 {
                     column.Warned = true;
@@ -515,9 +533,9 @@ internal sealed class ColumnPlan
     {
         var sink = this.sink ??= new CharSink();
         sink.Reset(cap + 1);
-        if (SequentialXml.Open(reader, i) is not { } stream)
+        if ((XmlFallback is null ? SequentialXml.Open(reader, i) : null) is not { } stream)
         {
-            using var fallback = reader.GetXmlReader(i);
+            using var fallback = XmlFallback?.Invoke(reader, i) ?? reader.GetXmlReader(i);
             var truncated = Xml(fallback, sink, null, cap, builder, token);
             // Without the column's own stream the bytes SQL Server sent are unknown: the serialised text (whole, or kept
             // up to the cap) stands in, as an estimate.
@@ -525,11 +543,7 @@ internal sealed class ColumnPlan
             cellBytes = 2L * sink.Count;
             cellExact = false;
             // GetXmlReader owns its stream, so the rest is read past by parsing it.
-            while (fallback.Read())
-            {
-                token.ThrowIfCancellationRequested();
-                if (fallback.NodeType == XmlNodeType.Text) while (fallback.ReadValueChunk(chars, 0, Chunk) > 0) token.ThrowIfCancellationRequested();
-            }
+            cellTailFailed = !ReadPastXml(fallback, chars, token);
             return truncated;
         }
         using (stream)
@@ -559,6 +573,28 @@ internal sealed class ColumnPlan
             cellBytes = consumed + ReadPast(stream, token);
             cellChars = cellBytes / 2;
             return truncated;
+        }
+    }
+
+    /// <summary>Reads past the rest of an xml value that GetXmlReader parses, once its cell is stored. A parse failure (any
+    /// exception ReadRow counts as a cell failure) ends the read-past and returns false, so ReadRow warns for the column:
+    /// thrown, it would make ReadRow append the cell a second time.</summary>
+    internal static bool ReadPastXml(XmlReader xml, char[] buffer, CancellationToken token)
+    {
+        try
+        {
+            while (xml.Read())
+            {
+                token.ThrowIfCancellationRequested();
+                if (xml.NodeType == XmlNodeType.Text) while (xml.ReadValueChunk(buffer, 0, Math.Min(buffer.Length, Chunk)) > 0) token.ThrowIfCancellationRequested();
+            }
+            return true;
+        }
+        catch (Exception error) when (IsCellFailure(error))
+        {
+            // A Stop can cut the value short, which parses as a malformed end: that is the Stop, not a value to warn about.
+            token.ThrowIfCancellationRequested();
+            return false;
         }
     }
 
