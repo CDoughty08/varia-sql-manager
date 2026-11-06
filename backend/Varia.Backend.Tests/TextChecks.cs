@@ -476,8 +476,14 @@ internal static class TextChecks
         broken.Read();
         wellFormed.Read();
         var chunk = new char[4096];
-        check(!ColumnPlan.ReadPastXml(broken, chunk, default) && ColumnPlan.ReadPastXml(wellFormed, chunk, default),
-            "reading past the rest of an xml value after its cell is stored stops at a parse failure instead of failing the cell");
+        // A Stop still ends the read: cancellation is not a cell failure the read-past may swallow.
+        var stopped = Fragment("<a>kept</a><b>" + new string('t', 10_000) + "</b>");
+        stopped.Read();
+        var cancelledThrows = false;
+        try { ColumnPlan.ReadPastXml(stopped, chunk, new CancellationToken(canceled: true)); }
+        catch (OperationCanceledException) { cancelledThrows = true; }
+        check(!ColumnPlan.ReadPastXml(broken, chunk, default) && ColumnPlan.ReadPastXml(wellFormed, chunk, default) && cancelledThrows,
+            "reading past the rest of an xml value after its cell is stored stops at a parse failure instead of failing the cell, and a Stop still ends the read");
         var bytes = new byte[3 * XmlFeed.Window];
         var buffer = new byte[4096];
         long Drain(XmlFeed feed)
