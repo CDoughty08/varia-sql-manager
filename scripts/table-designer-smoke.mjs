@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { actionsStubData, designerScript, installActionsStub } from './fixtures/actions-stub.mjs'
-import { activeDocument, activeDocumentName, backendReady, closeDocumentButton, documentTabs, kindIcon, menuItemNames, part, queryBar, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocument, activeDocumentName, backendReady, closeDocumentButton, kindIcon, menuItemNames, openDocument, openDocuments, part, queryBar, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'table-designer-profile-'))
@@ -17,7 +17,7 @@ const failures = []
 const watchdog = setTimeout(() => { console.error('Table designer suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 300000)
 
 const menuNamed = name => page.getByRole('menu', { name, exact: true })
-const tabs = () => documentTabs(page).getByRole('tab')
+const tabs = () => openDocuments(page)
 const designer = () => page.locator(part.tableDesigner)
 const grid = () => designer().getByRole('grid', { name: 'Columns', exact: true })
 const rows = () => grid().getByRole('row').filter({ has: page.getByRole('rowheader') })
@@ -243,7 +243,8 @@ try {
   const unnamed = page.getByRole('tab', { name: 'server-a.AppData - dbo.Table_4', exact: true })
   await expect(unnamed).toHaveAttribute('aria-selected', 'true')
   await menu('file.new')
-  await expect(unnamed).toHaveAttribute('aria-selected', 'false')
+  await expect(activeDocument(page)).not.toHaveAttribute('aria-label', 'server-a.AppData - dbo.Table_4')
+  await expect(openDocument(page, 'server-a.AppData - dbo.Table_4')).toHaveCount(1)
   await menu('file.saveAll')
   await expect(unnamed).toHaveAttribute('aria-selected', 'true')
   await expect(chooseName.getByLabel('Enter a name for the table:', { exact: true })).toHaveValue('Table_4')

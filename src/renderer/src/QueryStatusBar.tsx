@@ -7,6 +7,7 @@ import EnvironmentTag from './EnvironmentTag'
 import Icon from './Icon'
 import { queryStatusModel } from './results/query-status'
 import type { LiveConnection } from './services/connections'
+import { liveQuerySession } from './services/queries'
 
 interface Props {
   readonly tab: QueryTab
@@ -42,7 +43,7 @@ export default function QueryStatusBar({ tab, connection, versions, variant = 's
   const edge: CSSProperties | undefined = bar && accent ? top ? { borderBottom: `3px solid ${accent}` } : { borderTop: `3px solid ${accent}` } : undefined
   const kind = documentKind(tab)
   if (kind !== 'sql') return <div className={className} role="status" aria-label="Query status" data-tone="value" data-location={location}><span>{kindInfo[kind].label}</span></div>
-  const session = query?.session && connection && !connection.lost && query.session.connectionId === connection.id && query.session.spid !== undefined ? { login: query.session.login, spid: query.session.spid } : undefined
+  const session = liveQuerySession(query, connection)
   const model = queryStatusModel({ connection, database: tab.database, session, run, running, now, settings: values, variant })
   return <div className={className} role="status" aria-label="Query status" data-tone={model.tone} data-location={location} style={edge} title={[model.place, versions].filter(Boolean).join('\n')}>
     <span className="query-status-state"><Icon name={model.icon} spin={model.icon === 'loading'} /><span className="query-status-text">{model.text}</span></span>

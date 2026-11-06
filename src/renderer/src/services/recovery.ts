@@ -90,6 +90,12 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
   openDialog(): void { if (!this.disposed) this.publish({ ...this.getSnapshot(), open: true }) }
   closeDialog(): void { if (!this.disposed && this.getSnapshot().open) this.publish({ ...this.getSnapshot(), open: false }) }
 
+  copyId(tabId: string): string | undefined { return this.kept.get(tabId)?.id }
+  /** Resumes a copy main verified against a pin that just reopened. Future edits replace it and closing removes it. */
+  resume(tabId: string, id: string): void {
+    this.kept.set(tabId, { id, version: this.options.documents.getModel(tabId)?.getAlternativeVersionId() })
+  }
+
   /**
    * Gives main a copy of every query with unsaved changes whose text changed since its last copy (the timer's work, and
    * the smoke tests' `__variaRecovery.flush()`). A failure is reported once a session; the rest are still written.
@@ -179,7 +185,7 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
           try { taken = unwrap(await this.options.api.takeRecovery(id)) } catch (error) { problems.push(failed(error)); continue }
           if (taken.file) files.push(taken.file)
           const document = this.options.documents.restore(taken.name, taken.text, taken.kind, taken.eol, taken.file)
-          this.kept.set(document.id, { id, version: this.options.documents.getModel(document.id)?.getAlternativeVersionId() })
+          this.resume(document.id, id)
         }
       } finally { await this.options.files.release(files) }
       if (problems.length) throw new Error(problems.join(' '))

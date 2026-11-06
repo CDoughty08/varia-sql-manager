@@ -165,11 +165,11 @@ try {
     }
     if (await has('cascadiamono.ttf')) expect([fonts.mono === fonts.cascadia, fonts.mono === fonts.consolas, fonts.cascadia === fonts.serif]).toEqual([true, false, false])
   }
-  // Icons come from the registry: Varia's SVGs and codicons share the 16 px grid, and a document tab shows an icon, not a badge.
+  // Icons come from the registry: Varia's SVGs and codicons share the 16 px grid, and a document tab keeps its kind icon.
   const icons = await page.evaluate(p => {
     const box = element => { const rect = element?.getBoundingClientRect(); return rect && [rect.width, rect.height] }
     const brand = document.querySelector(p.titleBarBrand + ' [data-icon]'), tab = document.querySelector(p.documentTabs + ' ' + p.tabIcon)
-    return { brand: [brand?.tagName.toLowerCase(), brand?.dataset.icon, box(brand), brand && getComputedStyle(brand.querySelector('path')).strokeLinecap], tab: [tab?.dataset.icon, box(tab), tab?.closest('[role="tab"]')?.textContent] }
+    return { brand: [brand?.tagName.toLowerCase(), brand?.dataset.icon, box(brand), brand && getComputedStyle(brand.querySelector('path')).strokeLinecap], tab: [tab?.dataset.icon, box(tab), tab?.closest('[role="tab"]')?.querySelector(p.tabName)?.textContent] }
   }, part)
   expect(icons).toEqual({ brand: ['svg', 'varia', [16, 16], 'round'], tab: ['database', [16, 16], expect.stringMatching(/^SQLQuery\d+\.sql$/)] })
   // Under forced colours an svg keeps a colour set on itself (Chromium's preserve-parent-color), so the tab's kind icon

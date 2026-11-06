@@ -19,7 +19,17 @@ const connectRequest = <M extends 'connections.connect' | 'connections.databases
 const api: VariaApi = {
   platform: process.platform,
   setMenuState: state => { ipcRenderer.send('varia:menu-state', state) },
-  runRole: role => ipcRenderer.invoke('varia:run-role', role),
+  runRole: (role, reloadPins) => ipcRenderer.invoke('varia:run-role', reloadPins ? { role, ...reloadPins } : role),
+  refreshReloadPins: capture => {
+    try {
+      if (!ipcRenderer.sendSync('varia:reload-pins-pending')) return { ok: true, value: undefined }
+      const pins = capture()
+      return ipcRenderer.sendSync('varia:reload-pins-refresh', pins ? { role: 'reload', ...pins } : null)
+    } catch (error) {
+      try { ipcRenderer.sendSync('varia:reload-pins-refresh', undefined) } catch { /* The outgoing page may already be gone. */ }
+      return { ok: false, error: error instanceof Error ? error.message : 'The pinned tabs could not be kept.' }
+    }
+  },
   // Main passes its choice as a renderer argument; anything else there means the platform's default.
   menuStyle: menuStyleFromArgv(process.argv, process.platform),
   showContextMenu: request => ipcRenderer.invoke('varia:context-menu', request),
@@ -127,6 +137,7 @@ const api: VariaApi = {
   hotExit: !process.argv.includes('--varia-no-hot-exit'),
   keepSession: session => ipcRenderer.invoke('varia:session-write', session),
   takeSession: () => ipcRenderer.invoke('varia:session-take'),
+  finishSessionRestore: generation => ipcRenderer.invoke('varia:session-restored', generation),
   writeClipboardText: text => ipcRenderer.invoke('varia:clipboard-write', text),
   confirmClose: name => ipcRenderer.invoke('varia:confirm-close', name),
   confirmOpenConnections: () => ipcRenderer.invoke('varia:confirm-open-connections'),

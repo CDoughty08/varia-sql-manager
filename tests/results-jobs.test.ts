@@ -375,7 +375,7 @@ describe('ResultsJobHost over the fake backend', () => {
     const summary = await running
     expect(summary).toMatchObject({ status: 'cancelled', resultSets: [{ state: 'complete', incomplete: true }] })
     expect(summary.resultSets[0].rowsRead).toBeLessThan(100_000)
-    expect(events[0]).toBe('resultSet.opened')
+    expect(events.slice(0, 2)).toEqual(['session.opened', 'resultSet.opened'])
     expect(summary.messages.at(-1)).toEqual({ text: 'The script was cancelled. Remaining batches were not executed.', kind: 'error' })
   })
 })
