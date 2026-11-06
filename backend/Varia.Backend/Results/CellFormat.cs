@@ -62,13 +62,18 @@ internal static class CellFormat
     }
 
     /// <summary>A vector as a JSON-style list of float32 values in shortest round-trip form, cut at
-    /// <paramref name="maxChars"/>.</summary>
-    public static string Vector(ReadOnlySpan<float> values, int maxChars, out bool truncated)
+    /// <paramref name="maxChars"/>; <paramref name="length"/> is the whole list's length.</summary>
+    public static string Vector(ReadOnlySpan<float> values, int maxChars, out bool truncated, out long length)
     {
         var text = new StringBuilder("[");
-        for (var i = 0; i < values.Length && text.Length <= maxChars; i++)
+        var i = 0;
+        for (; i < values.Length && text.Length <= maxChars; i++)
             text.Append(i == 0 ? "" : ",").Append(values[i].ToString(Invariant));
         text.Append(']');
+        length = text.Length;
+        Span<char> scratch = stackalloc char[32];
+        // The values past the cut are formatted only to count them.
+        for (; i < values.Length; i++) length += 1 + (values[i].TryFormat(scratch, out var written, default, Invariant) ? written : values[i].ToString(Invariant).Length);
         truncated = text.Length > maxChars;
         return truncated ? Prefix(text.ToString(), maxChars, out _).ToString() : text.ToString();
     }

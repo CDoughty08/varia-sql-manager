@@ -1,12 +1,16 @@
 import type { ApiResult, RestoredSession, SessionDocumentWrite, SessionWrite, SqlFile, VariaApi } from '../../../shared/contracts'
 import { sessionLimits } from '../../../shared/files/session'
-import { isCustomKind } from '../documents'
+import { isCustomKind, type QueryDocument } from '../documents'
 import type { DocumentService } from './documents'
 import type { FileService } from './files'
 import type { EditorGroupService } from './editor-groups'
 
 /** What hot exit keeps of the open tabs, and the tabs it keeps: a tab left out is asked about as without hot exit. */
 export interface KeptSession { readonly session: SessionWrite; readonly kept: ReadonlySet<string> }
+export function requireKeptPins(documents: readonly QueryDocument[], kept: ReadonlySet<string>): void {
+  const missing = documents.find(tab => tab.pinned && !kept.has(tab.id))
+  if (missing) throw new Error(`Pinned tab “${missing.name}” could not fit in the session restore limits. Unpin or close some tabs, or save large queries, and try again.`)
+}
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 const encoder = new TextEncoder()
 const bytes = (value: unknown) => encoder.encode(JSON.stringify(value)).length
@@ -19,18 +23,19 @@ const bytes = (value: unknown) => encoder.encode(JSON.stringify(value)).length
  * With editor groups, the documents are in group order, and the groups they are in are kept by each one's place.
  */
 export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'getModel' | 'isFilling'>, server: (connectionId: string) => string | undefined,
-  budget: number = sessionLimits.totalBytes - sessionLimits.slackBytes, groups?: Pick<EditorGroupService, 'capture'>): KeptSession {
+  { budget = sessionLimits.totalBytes - sessionLimits.slackBytes, pinnedOnly = false, groups }: { budget?: number; pinnedOnly?: boolean; groups?: Pick<EditorGroupService, 'capture'> } = {}): KeptSession {
   const { documents: tabs, activeId } = documents.getSnapshot(), written: SessionDocumentWrite[] = [], kept = new Set<string>()
   let used = 0, activeIndex = -1
   for (const document of tabs) {
     const model = documents.getModel(document.id)
     if (written.length >= sessionLimits.documents) break
-    if (!model || isCustomKind(document.kind) || documents.isFilling(document.id)) continue
+    if ((pinnedOnly && !document.pinned) || !model || isCustomKind(document.kind) || documents.isFilling(document.id)) continue
     const kind = document.kind && !isCustomKind(document.kind) ? document.kind : 'sql', connected = document.connectionId ? server(document.connectionId) : document.lastServer
     const at = kind === 'sql' && connected ? connected.slice(0, sessionLimits.serverChars) : undefined
     const entry: SessionDocumentWrite = {
       name: document.name.slice(0, sessionLimits.nameChars), ...document.baseName ? { baseName: document.baseName.slice(0, sessionLimits.nameChars) } : {}, kind,
       eol: model.getEOL() === '\r\n' ? 'crlf' : 'lf', dirty: document.dirty, ...document.file ? { fileId: document.file.id } : {},
+      ...document.pinned ? { pinned: true } : {},
       ...at ? { server: at } : {}, ...at && document.database ? { database: document.database.slice(0, sessionLimits.databaseChars) } : {},
       ...!document.file || document.dirty ? { text: model.getValue() } : {}
     }
@@ -47,18 +52,19 @@ export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'ge
 }
 
 export interface SessionRestoreOptions {
-  readonly api: Pick<VariaApi, 'hotExit' | 'takeSession'>
-  readonly documents: Pick<DocumentService, 'getSnapshot' | 'reopen' | 'activate'>
+  readonly api: Pick<VariaApi, 'hotExit' | 'takeSession' | 'finishSessionRestore'>
+  readonly documents: Pick<DocumentService, 'getSnapshot' | 'reopen' | 'activate' | 'setPinned'>
   readonly files: Pick<FileService, 'later' | 'release' | 'reportError'>
   /** Where the reopened tabs go back into their editor groups. */
   readonly groups?: Pick<EditorGroupService, 'restore'>
+  readonly resumeRecovery?: (tabId: string, recoveryId: string) => void
 }
 /**
  * The start's restore: the tabs the last close kept, in order, with the active one active again. A file already open in
  * a tab (one a second instance handed over first) is not opened twice. Resolves with how many tabs it opened; a failure
  * goes to the file banner, and files that are gone are named there as a warning.
  */
-export async function restoreSession({ api, documents, files, groups }: SessionRestoreOptions): Promise<number> {
+export async function restoreSession({ api, documents, files, groups, resumeRecovery }: SessionRestoreOptions): Promise<number> {
   if (!api.hotExit) return 0
   let opened = 0
   await files.later(async () => {
@@ -71,14 +77,17 @@ export async function restoreSession({ api, documents, files, groups }: SessionR
         if (document.file) registered.push(document.file)
         const open = document.file ? documents.getSnapshot().documents.find(tab => tab.file?.id === document.file?.id) : undefined
         const id = open?.id ?? documents.reopen(document).id
+        if (open && document.pinned) documents.setPinned(id, true)
+        if (!open && document.recoveryId) resumeRecovery?.(id, document.recoveryId)
         if (!open) opened++
         ids[index] = id
         if (index === restored.activeIndex) active = id
       }
+      // The groups first, then the active tab, which also makes its group the active one.
+      if (restored.groups && groups) groups.restore(restored.groups, place => ids[place])
+      if (active) documents.activate(active)
+      if (restored.restoreGeneration !== undefined) unwrap(await api.finishSessionRestore(restored.restoreGeneration))
     } finally { await files.release(registered) }
-    // The groups first, then the active tab, which also makes its group the active one.
-    if (restored.groups && groups) groups.restore(restored.groups, place => ids[place])
-    if (active) documents.activate(active)
     if (restored.problems.length) files.reportError(restored.problems.join(' '), 'warning')
   })
   return opened

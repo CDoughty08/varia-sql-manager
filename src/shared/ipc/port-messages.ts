@@ -1,7 +1,7 @@
 // The results port (docs/ipc.md): one MessagePort per renderer load between main and the results worker. The worker's
 // requests are validated with portRequestSchema; backend payloads main forwards are validated with the schemas below.
 import { z } from 'zod'
-import type { BackendStatus, MemoryOrder, QueryEvent, ResultsCloseResult, ResultsReadResult } from '../contracts'
+import type { BackendStatus, MemoryOrder, QueryEvent, ResultsCloseResult, ResultsReadResult, ResultsRowBytesResult } from '../contracts'
 import { liveSubscribeParamsSchema, liveUpdateParamsSchema, testLiveSubscribeParamsSchema, testLiveUpdateParamsSchema, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../live/schema'
 import { backendDescriptorSchema } from './descriptors'
 import { limits, type ErrorCode } from './wire/protocol'
@@ -19,6 +19,7 @@ export const buildPortRequestSchema = (live: { subscribe: z.ZodType<LiveSubscrib
   z.object({ t: z.literal('credit'), rid: u31, bytes: z.number().int().min(1).max(limits.credit.max) }).strict(),
   z.object({ t: z.literal('cancel'), rid: u31 }).strict(),
   z.object({ t: z.literal('close'), rid: u31, generation, resultIds: z.array(u32).min(1).max(1024) }).strict(),
+  z.object({ t: z.literal('rowBytes'), rid: u31, generation, resultId: u32, firstRow: count, count: z.number().int().min(1).max(limits.rowSizes.maxRows) }).strict(),
   // Live subscriptions (docs/ipc.md): a stream acknowledged with `credit`, ended with `cancel`, changed with liveUpdate.
   z.object({ t: z.literal('live'), rid: u31, generation, params: live.subscribe }).strict(),
   z.object({ t: z.literal('liveUpdate'), rid: u31, generation, params: live.update }).strict()
@@ -42,11 +43,15 @@ export type PortMessage =
   | { t: 'query'; queryId: string; event: QueryEvent }
   | ({ t: 'memory'; feature: MemoryFeature } & MemoryReport)
   | { t: 'live'; rid: number; bytes: number; event: LiveEvent }
-export type PortEndResult = ResultsReadResult | ResultsCloseResult | LiveEnd | LiveUpdateResult
+/** A results.rowBytes answer as the backend sends it; main also checks it answers the range asked before forwarding it. */
+export const rowBytesResultSchema = z.object({ firstRow: count, bytes: z.array(count).max(limits.rowSizes.maxRows), rowsAvailable: count, estimated: z.array(count).max(limits.rowSizes.maxRows) }).strict()
+export type PortEndResult = ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | LiveEnd | LiveUpdateResult
 
 const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'server', 'print', 'error']) }).strict()
+const session = { spid: z.number().int().min(0).max(32767), login: z.string().max(128).optional() }
 /** EVENT bodies for a query.execute request. */
 export const queryEventSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('session.opened'), ...session }).strict(),
   z.object({ type: z.literal('resultSet.opened'), descriptor: backendDescriptorSchema }).strict(),
   z.object({ type: z.literal('resultSet.closed'), descriptor: backendDescriptorSchema }).strict(),
   z.object({
@@ -63,7 +68,7 @@ export const queryResultSchema = z.object({
   completedBatches: count, totalBatches: count, database: z.string().max(256), messagesTruncated: z.boolean(),
   budget: z.object({ usedBytes: count, globalBytes: count, queryBytes: count, seq: count }).strict(), completedAt: z.string().max(40),
   // The session's @@SPID (a smallint) and SUSER_SNAME(), read when it opened.
-  spid: z.number().int().min(0).max(32767).optional(), login: z.string().max(128).optional()
+  ...session, spid: session.spid.optional()
 }).strict()
 /** EVENT bodies for a results.copy or results.export request; droppable, the latest wins. */
 export const jobProgressSchema = z.object({ type: z.literal('job.progress'), rowsDone: count, rowsTotal: count, bytes: count }).strict()

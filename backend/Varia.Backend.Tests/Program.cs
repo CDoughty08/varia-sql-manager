@@ -253,6 +253,7 @@ if (liveGroup is null)
     SessionChecks.Run(Check);
     await EntraChecks.RunAsync(Check);
     StoreChecks.Run(Check);
+    CellLengthChecks.Run(Check);
     await TextChecks.RunAsync(Check);
     await ExplorerChecks.RunAsync(Check);
     SearchChecks.Run(Check);
@@ -690,6 +691,7 @@ try
     await Suite("Execution", () => ExecutionLiveChecks.RunAsync(Check, service, info, json));
     await Suite("Transaction", () => TransactionLiveChecks.RunAsync(Check, service, info, json));
     await Suite("LiveResult", () => LiveResultChecks.RunAsync(Check, service, info, Live("master"), json));
+    await Suite("CellLength", () => CellLengthLiveChecks.RunAsync(Check, service, info, json));
     await Suite("Explorer", () => ExplorerLiveChecks.RunAsync(Check, service, info, Live, sqlUser, json));
     await Suite("Scripting", () => ScriptingLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("ScriptingInjection", () => ScriptingLiveChecks.InjectionMatrixAsync(Check, service, info, Live, json));

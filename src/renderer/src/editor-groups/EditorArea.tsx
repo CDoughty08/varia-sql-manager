@@ -6,7 +6,7 @@ import { isSsisDocumentKind } from '../../../shared/ssis/catalog.ts'
 import type { ThemeType } from '../../../shared/theme/types'
 import { useServiceSelector, useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import type { Workbench } from '../core/workbench'
-import { documentKind, isCustomKind, kindInfo, type QueryTab } from '../documents'
+import { documentKind, isCustomKind, isQueryDocument, isTextDocument, kindInfo, type QueryTab } from '../documents'
 import { DockingGuides } from '../docking-guides'
 import { afterPointer } from './pointer'
 import { createQueryEditor, type QueryEditorInstance } from '../editor/create-editor'
@@ -17,6 +17,7 @@ import { useMenuTarget } from '../menus/useMenuTarget'
 import PaneMenuButton from '../PaneMenuButton'
 import TabRenameBox from '../TabRenameBox'
 import type { EditorGroupHost, EditorGroupInfo, EditorMove } from '../services/editor-groups'
+import { liveQuerySession } from '../services/queries'
 import TableDesigner from '../designer/TableDesigner'
 import SsisProperties from '../ssis/SsisProperties'
 import DatabaseProperties from '../properties/DatabaseProperties'
@@ -128,7 +129,7 @@ function DocumentTab({ api }: IDockviewPanelHeaderProps) {
   const workbench = useWorkbench(), id = api.id
   const tab = useServiceSelector(workbench.documents, snapshot => snapshot.documents.find(document => document.id === id))
   const busy = useServiceSelector(workbench.documents, snapshot => snapshot.busy)
-  const running = useServiceSelector(workbench.queries, snapshot => !!snapshot[id]?.running)
+  const query = useServiceSelector(workbench.queries, snapshot => snapshot[id]), running = !!query?.running
   const renaming = useServiceSelector(workbench.tabRename, snapshot => snapshot.id === id)
   const connections = useServiceSnapshot(workbench.connections)
   // Re-renders when the theme changes, which the accent relies on.
@@ -142,7 +143,11 @@ function DocumentTab({ api }: IDockviewPanelHeaderProps) {
   const ref = useCallback((node: HTMLDivElement | null) => { element.current = node; menuTarget(node) }, [menuTarget])
   // Dockview's tab element is the tab (role, name, selection, roving focus): F2 renames while it has focus, and screen
   // readers hear its environment.
-  const description = environmentTag(environment)?.description, tooltip = tab ? tabTooltip(tab) : ''
+  // A query's live SQL session shows after its name, and screen readers hear it with the tab's environment and pin.
+  const spid = tab && isQueryDocument(tab) ? liveQuerySession(query, connection)?.spid : undefined
+  const session = spid === undefined ? 'No live SQL session' : `SQL session ID ${spid}`
+  const description = [environmentTag(environment)?.description, tab?.pinned && 'Pinned', spid !== undefined && session].filter(Boolean).join('. ') || undefined
+  const tooltip = tab ? tabTooltip(tab) : ''
   useEffect(() => {
     const host = element.current?.closest<HTMLElement>('.dv-tab')
     if (!host) return
@@ -186,16 +191,22 @@ function DocumentTab({ api }: IDockviewPanelHeaderProps) {
   useEffect(() => {
     const node = element.current
     if (!node) return
-    const own = (event: PointerEvent) => { if (event.target instanceof Element && event.target.closest('.tab-close, .tab-rename')) event.stopPropagation() }
+    const own = (event: PointerEvent) => { if (event.target instanceof Element && event.target.closest('.tab-close, .tab-pin, .tab-rename')) event.stopPropagation() }
     node.addEventListener('pointerdown', own)
     return () => node.removeEventListener('pointerdown', own)
   }, [])
   if (!tab) return null
-  const kind = kindInfo[documentKind(tab)]
-  return <div className={selected ? 'query-tab active' : 'query-tab'} ref={ref} data-tab-id={id} data-dirty={tab.dirty || undefined} style={{ borderTopColor: workbench.theme.accent(connection?.color) }}
-    onDoubleClick={event => { if (!(event.target as Element).closest('.tab-close')) workbench.tabRename.start(id) }}>
-    {renaming ? <div className="tab-select tab-renaming"><Icon name={kind.icon} className="tab-icon" label={kind.label} /><TabRenameBox tabId={id} name={tab.name} service={workbench.tabRename} /></div>
-      : <div className="tab-select"><Icon name={kind.icon} className="tab-icon" label={kind.label} /><span className="tab-name">{tab.name}</span><EnvironmentTag environment={environment} place="tab" />{tab.file?.readOnly && <Icon name="lock" className="tab-readonly" label="Read-only" />}{running && <Icon name="loading" spin className="tab-running" label="Executing" />}{tab.dirty && <span className="dirty-dot" role="img" aria-label="Unsaved changes" />}</div>}
+  const kind = kindInfo[documentKind(tab)], pin = `${tab.pinned ? 'Unpin' : 'Pin'} ${tab.name}`
+  const sid = isQueryDocument(tab) && <span className="tab-sid" title={session} aria-hidden="true">{spid === undefined ? '—' : `SID ${spid}`}</span>
+  return <div className={selected ? 'query-tab active' : 'query-tab'} ref={ref} data-tab-id={id} data-dirty={tab.dirty || undefined} data-pinned={tab.pinned || undefined} style={{ borderTopColor: workbench.theme.accent(connection?.color) }}
+    onDoubleClick={event => { if (!(event.target as Element).closest('.tab-close, .tab-pin')) workbench.tabRename.start(id) }}>
+    {renaming ? <div className="tab-select tab-renaming"><Icon name={kind.icon} className="tab-icon" label={kind.label} /><TabRenameBox tabId={id} name={tab.name} service={workbench.tabRename} />{sid}</div>
+      : <div className="tab-select"><Icon name={kind.icon} className="tab-icon" label={kind.label} /><span className="tab-name">{tab.name}</span><EnvironmentTag environment={environment} place="tab" />{tab.file?.readOnly && <Icon name="lock" className="tab-readonly" label="Read-only" />}{running && <Icon name="loading" spin className="tab-running" label="Executing" />}{sid}{tab.dirty && <span className="dirty-dot" role="img" aria-label="Unsaved changes" />}</div>}
+    {/* Pinned tabs come first in their group (EditorAreaController.keepPinsFirst); focus stays on the tab as it moves. */}
+    {isTextDocument(tab) && <button type="button" className="tab-pin" tabIndex={-1} aria-label={pin} title={pin} disabled={busy || workbench.documents.isFilling(id)}
+      onClick={() => { if (workbench.documents.setPinned(id, !tab.pinned)) requestAnimationFrame(() => document.querySelector<HTMLElement>(`.editor-groups .dv-tab [data-tab-id="${CSS.escape(id)}"]`)?.closest<HTMLElement>('.dv-tab')?.focus()) }}>
+      <Icon name={tab.pinned ? 'pinned' : 'pin'} />
+    </button>}
     <button type="button" className="tab-close" tabIndex={-1} aria-label={`Close ${tab.name}`} title={running ? `Close ${tab.name} (its query is executing)` : `Close ${tab.name}`} disabled={busy}
       onClick={() => void workbench.commands.execute('file.close', { tabId: id }, 'toolbar')}><Icon name="close" /></button>
   </div>
@@ -321,6 +332,7 @@ class EditorAreaController implements Area, EditorGroupHost {
   private focusInArea = true
   private regions?: { refresh(): void }
   private keepingGrid = false
+  private sortingPins = false
   private pointer?: ReturnType<typeof afterPointer>
   private status?: { editor: QueryEditorInstance['instance']; binding: { dispose(): void } }
   constructor(private readonly workbench: Workbench) {}
@@ -333,7 +345,7 @@ class EditorAreaController implements Area, EditorGroupHost {
     api.updateOptions({ dropPositionResolver: guides })
     this.disposables.push(guides,
       api.onDidActivePanelChange(event => { if (!this.reconciling && event.panel && documents.getSnapshot().activeId !== event.panel.id) documents.activate(event.panel.id); this.followStatus() }),
-      api.onDidLayoutChange(() => { this.keepGrid(); this.publish() }),
+      api.onDidLayoutChange(() => { this.keepGrid(); this.keepPinsFirst(); this.publish() }),
       api.onDidRemoveGroup(group => this.dropEditor(group.id)),
       // A group past the cap (a drop that would split once more) goes back: its documents join the active group.
       api.onDidAddGroup(group => { if (api.groups.length > editorGroupLimits.groups) queueMicrotask(() => this.mergeInto(group)) }),
@@ -365,6 +377,7 @@ class EditorAreaController implements Area, EditorGroupHost {
         else if (panel.title !== document.name) panel.api.setTitle(document.name)
       }
     } finally { this.reconciling = false }
+    this.keepPinsFirst()
     // The active document's panel becomes active: one chosen from a menu, Script As or Go to Query, and after a close the
     // next tab in the closed one's group, which DocumentService already made active (`EditorGroupService.successor`).
     if (activeId && api.activePanel?.id !== activeId) { this.reconciling = true; try { api.getPanel(activeId)?.api.setActive() } finally { this.reconciling = false } }
@@ -377,6 +390,27 @@ class EditorAreaController implements Area, EditorGroupHost {
     const panel = api.addPanel({ ...addOptions(id, title), ...group ? { position: { referenceGroup: group } } : {}, inactive })
     this.guard(panel)
     return panel
+  }
+  /**
+   * Pinned tabs come first in each group, in their own order, as VS Code's do: a pin or unpin, a pinned tab opened or moved
+   * into a group, and a drag past the pins all end with the pins first. Each group keeps the tab it shows, and the active
+   * group stays the active one.
+   */
+  private keepPinsFirst(): void {
+    const api = this.api
+    if (!api || this.disposed || this.sortingPins) return
+    const pinned = (panel: IDockviewPanel) => !!this.workbench.documents.get(panel.id)?.pinned
+    const reconciling = this.reconciling
+    this.sortingPins = this.reconciling = true
+    try {
+      for (const group of api.groups) {
+        const order = [...group.panels.filter(pinned), ...group.panels.filter(panel => !pinned(panel))]
+        if (order.every((panel, index) => group.panels[index] === panel)) continue
+        const shown = group.activePanel
+        order.forEach((panel, index) => { if (group.panels[index] !== panel) panel.api.moveTo({ group, position: 'center', index, skipSetActive: true }) })
+        if (shown && group.activePanel !== shown) group.model.openPanel(shown, { skipSetGroupActive: true })
+      }
+    } finally { this.sortingPins = false; this.reconciling = reconciling }
   }
   /**
    * Dockview's own close goes through File › Close, which asks about unsaved changes. Its tab keys never reach it: Delete

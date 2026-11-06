@@ -76,7 +76,9 @@ export async function start(root: Root): Promise<void> {
   // A confirmed exit has already handled each document, so it is never blocked here.
   window.addEventListener('beforeunload', event => {
     if (workbench.files.exiting) return
-    if (!workbench.documents.getSnapshot().documents.some(document => document.dirty) && !workbench.connections.live().length) return
+    const refreshed = window.varia.hotExit ? window.varia.refreshReloadPins(workbench.reloadPins) : undefined
+    if (refreshed && !refreshed.ok) workbench.commands.reportError(refreshed.error)
+    else if (!workbench.documents.getSnapshot().documents.some(document => document.dirty) && !workbench.connections.live().length) return
     event.preventDefault()
     event.returnValue = true
   })

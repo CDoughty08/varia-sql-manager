@@ -17,6 +17,8 @@ export const limits = {
   essentialEventBody: 4 * MiB,
   page: { maxRows: 4096, maxColumns: 4096, sealBytes: 256 * KiB, firstPageRows: 64, firstPageMs: 20, idleSealMs: 200 },
   rowBytes: 8 * MiB,
+  /** results.rowBytes: the most rows one request asks for (SqlService.MaxRowBytesRows in C#). */
+  rowSizes: { maxRows: 16_384 },
   /** Stored cell caps: characters for text, bytes for binary. */
   cell: { text: 65_535, document: 2_097_152, vector: 65_535, binary: 32_766 },
   maxResultSets: { min: 1, max: 1000, default: 10 },

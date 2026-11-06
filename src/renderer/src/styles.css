@@ -443,9 +443,16 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .tab-renaming { padding-right: 6px; }
 .tab-rename { width: 180px; height: 20px; padding: 0 4px; border-color: var(--varia-focusBorder); }
 .tab-select .tab-readonly { font-size: var(--varia-glyph-sm); margin-left: -4px; }
-.tab-close { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 4px; margin-right: 6px; color: var(--varia-documentTabs-closeForeground); }
+/* A query's live SQL session, after its name (SID and the server's session id, or a dash without one). */
+.tab-sid { flex: none; padding: 1px 4px; border-radius: var(--varia-radius-sm); background: var(--varia-badge-background); color: var(--varia-badge-foreground); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tab-pin, .tab-close { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 4px; color: var(--varia-documentTabs-closeForeground); }
+.tab-close { margin-right: 6px; }
+.tab-pin .codicon { font-size: var(--varia-glyph-sm); }
 .tab-close .codicon { font-size: var(--varia-glyph-sm); }
-.tab-close:focus-visible { outline-offset: -2px; }
+.tab-pin:focus-visible, .tab-close:focus-visible { outline-offset: -2px; }
+/* Pinned tabs come first in their group, filled as the pinned shelf was. */
+.query-tab[data-pinned]:not(.active) { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
+.query-tab[data-pinned] .tab-pin { color: var(--varia-documentTabs-activeForeground); }
 .tab-icon { color: var(--varia-documentTabs-iconForeground); }
 /* Running turns a spinner after the name; unsaved changes are a dot in the close button's place, which the pointer or
    keyboard focus on Close turns back into the X. */

@@ -53,6 +53,7 @@ export const part = {
   editorGroup: '.editor-groups .dv-groupview',
   activeEditorGroup: '.editor-groups .dv-groupview.dv-active-group',
   floatingEditorGroup: '.editor-groups .dv-resize-container .dv-groupview',
+  tabSid: '.tab-sid',
   /** The kind icon before a tab's name (kindIcon finds it by name; page code needs its box and stroke). */
   tabIcon: '.tab-icon',
   // Query output
@@ -362,6 +363,12 @@ export const floatingEditorGroups = page => page.locator(part.floatingEditorGrou
 export const documentTabSlots = page => documentTabs(page).locator('[data-tab-id]')
 /** The tab (Dockview's tab element, which has the role, name, selection and focus) around a slot. */
 export const slotTab = slot => slot.locator('xpath=ancestor::*[@role="tab"][1]')
+/** Every open document's tab, in any group. */
+export const openDocuments = documentTabSlots
+export const openDocument = documentTab
+/** Selects a document's tab in its group (Playwright scrolls a strip's hidden tab into view). */
+export const selectOpenDocument = (page, name) => documentTab(page, name).click()
+export const pinDocumentButton = (page, name, pinned = false) => documentTabs(page).getByRole('button', { name: `${pinned ? 'Unpin' : 'Pin'} ${name}`, exact: true })
 /** Rename Tab's text box, in the tab being renamed. */
 export const tabNameBox = page => documentTabs(page).getByRole('textbox', { name: 'Tab name', exact: true })
 export const closeDocumentButton = (page, name) => documentTabs(page).getByRole('button', { name: 'Close ' + name, exact: true })

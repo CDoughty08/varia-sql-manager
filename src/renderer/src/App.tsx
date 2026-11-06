@@ -98,7 +98,6 @@ export default function App() {
   const readyGeneration = backendState.status === 'ready' ? backendState.generation : 0
   const backendDown = backendState.status !== 'ready' && backendState.status !== 'starting'
   const activeRunning = queryState[active.id]?.running
-  // Also re-renders App when the theme changes, which the per-tab accents below rely on.
   const accent = useConnectionAccent(connection?.color)
   const versions = health ? `SMO ${health.smoVersion} / SqlClient ${health.sqlClientVersion}` : undefined
 

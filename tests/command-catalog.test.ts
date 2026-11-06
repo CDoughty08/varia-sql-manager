@@ -105,7 +105,7 @@ describe('command catalogue', () => {
   it('gives role-backed commands only native keys, and platform titles without access keys', () => {
     for (const id of commandIds) if (commandDescriptor(id).role) for (const spec of commandDescriptor(id).keybindings ?? []) expect(spec.native, id).toBe(true)
     expect(commandIds.filter(id => commandDescriptor(id).role)).toEqual(['window.close', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll',
-      'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.reloadWindow', 'developer.toggleDevTools'])
+      'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.toggleDevTools'])
     for (const id of commandIds) for (const title of Object.values(commandDescriptor(id).platformTitles ?? {})) expect(title.includes('&'), id).toBe(false)
     expect(commandDescriptor('window.close').platformTitles).toEqual({ win32: 'Exit', linux: 'Quit' })
     // Ctrl+R and ⌘R toggle the results pane, as in SSMS; reloading the window has no key.

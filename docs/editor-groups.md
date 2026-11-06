@@ -58,6 +58,10 @@ its own Monaco editor, and groups split side by side, stack, or float over the e
   Move Left and Move Right (Ctrl+Shift+PageUp/PageDown) move a tab along its own group's strip. Move Editor into Next
   Group past the last group opens a new group on the right, as VS Code does. Split Editor needs another tab in the
   document's group; the palette's greyed row says so.
+- Pinning works per group, as in VS Code: a text tab's pin button pins it, and pinned tabs come first in their own
+  group's strip (`EditorAreaController.keepPinsFirst`, after every layout change and reconcile). Move Left and Right
+  never take a tab across that boundary. A pinned tab dragged into another group stays pinned and goes first there.
+  Pins survive hot exit and Reload Window with the groups (docs/hot-exit.md).
 - Closing a group's shown document shows the next one in that group (the one before at the strip's end), as VS Code
   does: `DocumentService` asks `EditorGroupService.successor`, so the active document changes once. A group left empty
   goes, and the next document in order shows. A tab closed while it had focus hands focus to the tab shown next.

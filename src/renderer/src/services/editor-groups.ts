@@ -76,8 +76,9 @@ export class EditorGroupService extends SnapshotStore<EditorGroupSnapshot> imple
 
   /** Whether the document can move `delta` tabs along its group's strip. */
   canMoveInGroup(id: string, delta: 1 | -1): boolean {
-    const group = this.groupOf(id), index = group?.documents.indexOf(id) ?? -1
-    return !!group && index >= 0 && index + delta >= 0 && index + delta < group.documents.length
+    const group = this.groupOf(id), index = group?.documents.indexOf(id) ?? -1, target = group?.documents[index + delta]
+    // Pinned tabs come first in each group: a move stays on its own side of the pins.
+    return !!group && index >= 0 && !!target && !!this.documents.get(target)?.pinned === !!this.documents.get(id)?.pinned
   }
   /** Move Left and Move Right: along the document's own group's strip. */
   moveInGroup(id: string, delta: 1 | -1): void {
