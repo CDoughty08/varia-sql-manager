@@ -70,7 +70,7 @@ export class GridData {
    *  joined up to the first one missing. */
   peek(key: number): RowWindow | undefined {
     const first = tileRowOf(key) * g.tileRows, colStart = tileColumnOf(key) * g.tileColumns
-    const shape = { colStart, colEnd: this.colEnd(colStart), maxCellChars: g.maxCellChars, display: true }
+    const shape = { colStart, colEnd: this.colEnd(colStart), maxCellChars: g.maxCellChars, display: false }
     const head = this.handle.peekWindow(first, g.tileRows, shape)
     const starts = this.parts.get(key)
     if (!starts) return head
@@ -184,7 +184,7 @@ export class GridData {
   /** Reads a tile into the client's window cache as a frame would, outside this grid's own reads (a live swap's prepare). */
   fetch(key: number, signal?: AbortSignal): Promise<RowWindow> {
     const colStart = tileColumnOf(key) * g.tileColumns
-    return this.handle.getWindow(tileRowOf(key) * g.tileRows, g.tileRows, { colStart, colEnd: this.colEnd(colStart), maxCellChars: g.maxCellChars, textBudget: g.textBudget, display: true, signal })
+    return this.handle.getWindow(tileRowOf(key) * g.tileRows, g.tileRows, { colStart, colEnd: this.colEnd(colStart), maxCellChars: g.maxCellChars, textBudget: g.textBudget, display: false, signal })
   }
 
   dispose(): void {
@@ -225,7 +225,7 @@ export class GridData {
       this.parts.set(key, starts)
     }
     this.handle.getWindow(from, end - from, {
-      colStart, colEnd: this.colEnd(colStart), maxCellChars: g.maxCellChars, textBudget: g.textBudget, display: true, signal: controller.signal
+      colStart, colEnd: this.colEnd(colStart), maxCellChars: g.maxCellChars, textBudget: g.textBudget, display: false, signal: controller.signal
     }).then(window => {
       if (this.inflight.get(key) === tile) this.inflight.delete(key)
       this.retried.delete(key)

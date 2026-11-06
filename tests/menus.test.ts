@@ -351,7 +351,9 @@ describe('menu state', () => {
       // Object Explorer's Group by Schema: its toolbar button and the palette.
       'explorer.groupBySchema',
       // Focusing editor groups: keys in editor text and the palette.
-      'editor.focusNextGroup', 'editor.focusPreviousGroup']
+      'editor.focusNextGroup', 'editor.focusPreviousGroup',
+      // The results toolbar's White space choices, also in the grid's menu.
+      'output.showSpaces', 'output.showAllWhitespace']
     expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))
     // Query › Connection is a native submenu too.
     for (const id of ['preferences.colorTheme', 'connection.connect', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'file.closeAll', 'view.toggleResultsPane'] as const) expect(menuCommandIds).toContain(id)
@@ -359,7 +361,7 @@ describe('menu state', () => {
       const placed = commandDescriptor(id).menus?.some(placement => nativeMenuIds.includes(placement.menu)) ?? false
       expect(menuCommandIds.includes(id), id).toBe(placed && !commandDescriptor(id).role)
     }
-    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'explorer.groupBySchema', 'ssis.pauseOperations', 'editor.toggleWordWrap', 'editor.toggleOvertype', 'editor.toggleWhitespace', 'editor.toggleLineNumbers', 'activity.togglePause', 'activity.toggleSplit', 'window.togglePanelTabs'])
+    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'explorer.groupBySchema', 'ssis.pauseOperations', 'editor.toggleWordWrap', 'editor.toggleOvertype', 'editor.toggleWhitespace', 'editor.toggleLineNumbers', 'activity.togglePause', 'activity.toggleSplit', 'output.showSpaces', 'output.showAllWhitespace', 'window.togglePanelTabs'])
     // Main checks only toggles the schema names.
     expect(menuStateSchema.safeParse({ disabled: [], checked: ['editor.toggleWhitespace', 'editor.toggleLineNumbers'] }).success).toBe(true)
   })

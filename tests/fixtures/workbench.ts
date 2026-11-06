@@ -374,6 +374,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const databaseGone = databaseGoneHandler({ documents, properties, notify: toast => { notifications.notify(toast) }, copy: text => { void api.writeClipboardText(text) } })
   const context = new ContextKeyService({
     platform,
+    settings,
     documents,
     queries,
     connections,

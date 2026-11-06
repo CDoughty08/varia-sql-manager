@@ -729,6 +729,15 @@ export const commandCatalog = {
     title: 'Close Results', category: 'Query', icon: 'close', keywords: ['free', 'memory', 'release', 'clear'], precondition: 'hasResults && !queryRunning',
     unavailableHint: 'There are no results to close, or the query is still running.'
   },
+  // The results toolbar's White space choices; each turns the grid's marks off when it is already on (queryResults.grid.whitespace).
+  'output.showSpaces': {
+    title: 'Show Spaces and Tabs in Results', category: 'Query', icon: 'whitespace', keywords: ['whitespace', 'spaces', 'tabs', 'grid'], toggled: 'resultsWhitespaceSpaces',
+    menus: [{ menu: 'output.context', group: '4_view', order: 1, title: 'Show Spaces and Tabs', mnemonic: 'p', when: "outputView == 'grid'" }]
+  },
+  'output.showAllWhitespace': {
+    title: 'Show All White Space in Results', category: 'Query', icon: 'whitespace', keywords: ['whitespace', 'crlf', 'nbsp', 'invisible', 'grid'],
+    toggled: 'resultsWhitespaceAll', menus: [{ menu: 'output.context', group: '4_view', order: 2, title: 'Show All White Space', mnemonic: 'w', when: "outputView == 'grid'" }]
+  },
   // A click or Enter on an XML, JSON or plan cell opens its whole value, formatted, in a new tab (the grid runs it).
   'output.openValue': { title: 'Open Value in New Tab', category: 'Query', icon: 'go-to-file', palette: false },
   // A panel's menu, from its tab or its ⋯ button: the panel comes from the menu's target, so these have no keys and are

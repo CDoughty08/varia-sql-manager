@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (231)
+## Commands (233)
 
 ### File
 
@@ -131,6 +131,8 @@ keys it uses are listed below.
 | Select All (not in the palette) | `output.selectAll` | Ctrl+A * (`outputGridFocus`) | Ctrl+A * (`outputGridFocus`) | ⌘A * (`outputGridFocus`) | Always | Query Output context menu › Select All |
 | Save Results As… | `output.saveResultsAs` | Ctrl+S (`outputGridFocus`) | Ctrl+S (`outputGridFocus`) | ⌘S (`outputGridFocus`) | `hasResults` | Query Output context menu › Save Results As… |
 | Close Results | `output.closeResults` | — | — | — | `hasResults && !queryRunning` | — |
+| Show Spaces and Tabs in Results | `output.showSpaces` | — | — | — | Always; checked when `resultsWhitespaceSpaces` | Query Output context menu › Show Spaces and Tabs |
+| Show All White Space in Results | `output.showAllWhitespace` | — | — | — | Always; checked when `resultsWhitespaceAll` | Query Output context menu › Show All White Space |
 | Open Value in New Tab (not in the palette) | `output.openValue` | — | — | — | Always | — |
 
 ### Connection
@@ -739,6 +741,8 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | `1_copy` | Copy with **H**eaders | `output.copyWithHeaders` | `outputView == 'grid'` |
 | `2_select` | Select **A**ll | `output.selectAll` | Always |
 | `3_save` | Sa**v**e Results As… | `output.saveResultsAs` | `outputView == 'grid'` |
+| `4_view` | Show S**p**aces and Tabs | `output.showSpaces` | `outputView == 'grid'` |
+| `4_view` | Show All **W**hite Space | `output.showAllWhitespace` | `outputView == 'grid'` |
 
 #### Panel tab context menu (`dockTab.context`)
 
@@ -788,7 +792,7 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 | `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
 | `8_view` | **P**ause | `ssis.pauseOperations` | Always |
 
-## Context keys (126)
+## Context keys (128)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -858,6 +862,8 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `editorWordWrap` | boolean | state | Word wrap is on in the query editor. |
 | `editorWhitespace` | boolean | state | View White Space is on in the query editor. |
 | `editorLineNumbers` | boolean | state | Line numbers show in the query editor. |
+| `resultsWhitespaceSpaces` | boolean | state | The results grid marks spaces and tabs (Show Spaces and Tabs in Results). |
+| `resultsWhitespaceAll` | boolean | state | The results grid marks every white space character, line breaks included (Show All White Space in Results). |
 | `hasBookmarks` | boolean | state | An open document has a bookmark. |
 | `activeDocumentHasBookmarks` | boolean | state | The active document has a bookmark. |
 | `anyDocumentDirty` | boolean | state | Some open document has unsaved changes. |
