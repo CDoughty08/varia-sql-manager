@@ -8,7 +8,7 @@ import { createServer } from 'node:http'
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { backendReady, statusBar, toastMessage, toasts } from './fixtures/ui.mjs'
+import { backendReady, memoryBreakdown, memoryIndicator, statusBar, toastMessage, toasts } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'updates-profile-'))
@@ -59,11 +59,17 @@ try {
   const bar = statusBar(page)
 
   // A content filter's page where the manifest should be: the failure, its remedy and its details.
+  await memoryIndicator(page).click()
+  await expect(memoryBreakdown(page)).toBeVisible()
   await menu('help.checkForUpdates')
   const failed = toasts(page).filter({ hasText: 'not Varia\'s release manifest' })
   await expect(failed).toBeVisible()
   await expect(toastMessage(failed)).toContainText('release-assets.githubusercontent.com')
   await expect(failed.getByRole('button', { name: 'Open releases page' })).toBeVisible()
+  // Notifications retain their pointer targets even when Memory is pinned directly underneath.
+  await expect(memoryBreakdown(page)).toBeVisible()
+  await failed.getByRole('button', { name: 'Try again', exact: true }).click({ trial: true })
+  await failed.getByRole('button', { name: 'Open releases page', exact: true }).click({ trial: true })
   const retry = bar.getByRole('button', { name: 'Update check failed' })
   await expect(retry).toBeVisible()
   await expect(retry).toHaveAttribute('title', /content filter.*HTML page/)

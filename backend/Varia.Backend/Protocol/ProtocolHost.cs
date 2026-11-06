@@ -62,6 +62,7 @@ internal sealed class ProtocolHost
     private int responseLimit = ProtocolLimits.ResponseBody;
     private int exitCode = -1;
     private int helloState;
+    private bool helloSent;
 
     public ProtocolHost(Stream input, Stream output, Func<IRequestDispatcher> createDispatcher, JsonSerializerOptions json, HostOptions? options = null)
     {
@@ -134,6 +135,7 @@ internal sealed class ProtocolHost
             MaxFrameBytes = ProtocolLimits.RequestBody, ResultBudget = new { budget.GlobalBytes, budget.QueryBytes }, Methods = dispatcher.Methods
         };
         outbound.Control(Frames.Encode(FrameKind.Hello, 0, 0, JsonBridge.Encode(reply, json)));
+        Volatile.Write(ref helloSent, true);
         return null;
     }
 
@@ -391,7 +393,7 @@ internal sealed class ProtocolHost
 
     /// <summary>A global EVENT (id 0), such as results.memory. Always droppable: false when it was not queued (the control
     /// lane is full while main is not reading), so the publisher can send it again later.</summary>
-    public bool Publish(object value) => Event(0, value, droppable: true);
+    public bool Publish(object value) => Volatile.Read(ref helloSent) && Event(0, value, droppable: true);
 
     private bool Event(uint id, object value, bool droppable)
     {
