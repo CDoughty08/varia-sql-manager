@@ -217,6 +217,9 @@ describe('command execution', () => {
     expect([host.showConnect, host.resetLayout, host.flushLayout].map(fn => vi.mocked(fn).mock.calls.length)).toEqual([1, 1, 1])
     // Object Explorer also takes focus (SSMS's F8), so a following F5 refreshes it.
     expect(vi.mocked(host.reveal).mock.calls).toEqual([['explorer', { focus: true }], ['results', { raise: true }], ['messages', { raise: true }], ['plan', { raise: true }]])
+    // Search Objects' Reveal shows it and leaves focus in its hits, raising a popout that holds it without activating it.
+    await commands.execute('window.explorer', { keepFocus: true }, 'toolbar')
+    expect(vi.mocked(host.reveal).mock.lastCall).toEqual(['explorer', { raiseInactive: true }])
     expect(vi.mocked(host.manageLayouts).mock.calls).toEqual([['save'], ['load']])
     expect(api.closeWindow).toHaveBeenCalledOnce()
     // The window closed: its popouts' closing leaves the layout written before it.
@@ -246,6 +249,10 @@ describe('context keys', () => {
     // The active query's server was disconnected; a stale running entry for another tab does not count.
     expect(computeContextKeys({ ...base, documents: { ...documents, activeId: 'b' }, queries: running, connections: [connectionInfo('server-a')] })).toMatchObject({ activeDocumentConnected: false, queryRunning: false })
     expect(computeContextKeys({ ...base, documents: snapshot({ documents: [doc('a')], activeId: 'missing' }) })).toMatchObject({ hasActiveDocument: false })
+    // Editor groups: without them the documents are one group; with them, the active document's group decides.
+    expect(computeContextKeys({ ...base, documents })).toMatchObject({ multipleEditorGroups: false, activeDocumentFloating: false })
+    const editorGroups = { groups: [{ id: 'g1', documents: ['b'], floating: false }, { id: 'g2', documents: ['a'], active: 'a', floating: true }], activeGroup: 'g2' }
+    expect(computeContextKeys({ ...base, documents, editorGroups })).toMatchObject({ multipleEditorGroups: true, activeDocumentFloating: true })
     // Results are the active query's own.
     expect(computeContextKeys({ ...base, documents, results: { a: true } })).toMatchObject({ hasResults: true })
     expect(computeContextKeys({ ...base, documents, results: { b: true } })).toMatchObject({ hasResults: false })

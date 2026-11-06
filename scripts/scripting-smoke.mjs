@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { encryptedMessage, installScriptingStub, scriptingStubData, viewDefinitionWarning } from './fixtures/scripting-stub.mjs'
-import { activeDocument, backendReady, editorText as editorTextOf, errorBanner, errorMessages, explorerLabel, menuItemNames, messages, openDocuments, openMenus as openMenusOf, optionsDescription, optionsHeading, outputView, part, quickInput as quickInputOf, quickInputActive, serverRows, statusSegment, toolbarButton, unsavedMark, warningBanner as warningBannerOf } from './fixtures/ui.mjs'
+import { activeDocument, backendReady, documentTabs, editorText as editorTextOf, errorBanner, errorMessages, explorerLabel, menuItemNames, messages, openMenus as openMenusOf, optionsDescription, optionsHeading, outputView, part, quickInput as quickInputOf, quickInputActive, serverRows, statusSegment, toolbarButton, unsavedMark, warningBanner as warningBannerOf } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -84,7 +84,7 @@ const clipboard = () => application.evaluate(({ clipboard }) => clipboard.readTe
 const menuNamed = name => page.getByRole('menu', { name, exact: true })
 const explorerMenu = () => menuNamed('Object Explorer')
 const openMenus = () => openMenusOf(page)
-const tabs = () => openDocuments(page)
+const tabs = () => documentTabs(page).getByRole('tab')
 const nbsp = String.fromCharCode(160)
 const editorText = async () => (await editorTextOf(page)).replaceAll(nbsp, ' ')
 const scriptStatus = () => statusSegment(page)
@@ -132,11 +132,11 @@ const menusInside = () => page.evaluate(() => ({
   inside: [...document.querySelectorAll('[role="menu"]')].every(menu => { const box = menu.getBoundingClientRect(); return box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight }),
   count: document.querySelectorAll('[role="menu"]').length, overflow: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight
 }))
-/** Whether there are overflow tabs, and whether the active tab lies wholly inside the strip. */
+/** Whether the query tab strip scrolls, and whether the active tab lies wholly inside its visible part. */
 const activeTabInView = () => page.evaluate(documentTabs => {
-  const strip = document.querySelector(documentTabs), tab = strip.querySelector('[data-tab-id]:has([role="tab"][aria-selected="true"])')
+  const strip = document.querySelector(documentTabs), tab = strip.querySelector('[role="tab"][aria-selected="true"]')
   const box = tab.getBoundingClientRect(), view = strip.getBoundingClientRect()
-  return { overflows: !!strip.querySelector('button[popovertarget]:not(:disabled)'), inView: box.left >= view.left - 1 && box.right <= view.right + 1 }
+  return { overflows: strip.scrollWidth > strip.clientWidth, inView: box.left >= view.left - 1 && box.right <= view.right + 1 }
 }, part.documentTabs)
 /** Opens Script Table as › CREATE To on dbo.Orders by mouse, with Clipboard under the pointer. */
 async function openNestedScriptMenu() {

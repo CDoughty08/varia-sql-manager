@@ -11,8 +11,10 @@ The same search runs in two places, with the same options and results:
   tree's selection, or the first connected server. While the box has text, its hits show in a band above the tree, which
   stays as it is; a hit reveals its object in the tree below. Enter reveals the first hit and keeps focus in the box, so
   each further Enter reveals the next one, wrapping round (Shift+Enter goes back); an Enter typed before the search has
-  answered searches at once. ↓ moves into the hits, and Left and Right in the tree collapse and expand. Escape clears the
-  text, and Escape in an empty box returns to the tree.
+  answered searches at once. ↓ moves into the hits (to the selected one), and Left and Right in the tree collapse and expand. Escape clears the
+  text, and Escape in an empty box returns to the tree. The band's hits are one tab stop on the selected hit, walked as the
+  tab's are (↑ ↓, Page Up, Page Down, Home and End); a click or Enter reveals the hit with focus kept in the hits, and ↑ on
+  the first hit, or Escape, returns to the box.
   Search scope (All, Names, Definitions) stays visible. Object types opens a checkbox popover over the results; selected
   types combine and a compact summary and Clear action stay beside the results. Narrow sidebars stack the type picker
   below the scope, and the popover follows the pane's width without enlarging the search band. Search options holds
@@ -20,7 +22,9 @@ The same search runs in two places, with the same options and results:
   concise, with index counts, result limits and timing under Search and index details. Index progress, errors and
   incomplete indexes remain visible. Escape or a click outside dismisses a popover; Escape returns focus to its button.
 - **The Search Objects tab** (View › Search Objects…, a server or database node's menu, or the palette), with a server picker
-  when more than one server is connected.
+  when more than one server is connected. Its hits are one tab stop on the selected hit: a click selects a hit, ↑ ↓,
+  Page Up, Page Down (to the last hit in view first, then a page on), Home and End move the selection, and a double-click or Enter reveals the hit in Object Explorer, which
+  shows without taking focus, so the keys go on walking the hits. ↑ on the first hit, and Escape, return to the box.
 
 ## The index
 
@@ -135,8 +139,10 @@ The same search runs in two places, with the same options and results:
   Within each group, hits are sorted by database and then by name.
 - **Definition hits.** A hit inside a definition shows the line, a preview with the match marked, and how many more
   matches the definition has.
-- **While a build runs.** A search answers from what the index holds so far. Searches run again when the build ends.
-- **Using a hit.** Clicking a hit reveals the object in Object Explorer. The tree walks its path down from the server,
+- **While a build runs.** A search answers from what the index holds so far. Searches run again when the build ends, keeping
+  the selected hit when it is still there (as any new answer to the same query does) (so Enter in Object Explorer's box goes on from it) and the list where it was scrolled.
+- **Using a hit.** Clicking a hit in Object Explorer's box, or double-clicking one in the tab (or Enter on either), reveals the
+  object in Object Explorer. The tree walks its path down from the server,
   expanding each node on the way (the database, nested folders such as Programmability › Functions, a trigger's table or
   view) and loading a folder's later pages until the object's row arrives, past the node budget. It then selects the row
   and scrolls it into view. A database is looked for under Databases, then System Databases (the other way round for

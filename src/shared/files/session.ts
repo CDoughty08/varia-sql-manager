@@ -1,4 +1,5 @@
 import type { DocumentKind, LineEnding, SqlFile } from '../contracts'
+import type { EditorGroupsLayout } from '../editor-groups'
 
 /**
  * Hot exit (Tools › Options › Environment › Documents › Restore open queries on startup), as VS Code has it: a normal
@@ -42,8 +43,11 @@ export interface SessionDocumentWrite {
   readonly database?: string
   readonly text?: string
 }
-/** The tabs in strip order and the active one's index (-1 when none of them is active). */
-export interface SessionWrite { readonly documents: readonly SessionDocumentWrite[]; readonly activeIndex: number }
+/**
+ * The tabs in group order (each group's tabs in strip order), the active one's index (-1 when none of them is active),
+ * and the editor groups they are in, by index; without `groups`, one group holds them all.
+ */
+export interface SessionWrite { readonly documents: readonly SessionDocumentWrite[]; readonly activeIndex: number; readonly groups?: EditorGroupsLayout }
 
 /** A one-use Reload Window snapshot and each pin's AutoRecover id, in the same order as the tabs. */
 export interface ReloadPins { readonly session: SessionWrite; readonly recoveryIds: readonly (string | null)[] }
@@ -66,6 +70,8 @@ export interface RestoredDocument {
 export interface RestoredSession {
   readonly documents: readonly RestoredDocument[]
   readonly activeIndex: number
+  /** The editor groups as they were, by the restored documents' places. */
+  readonly groups?: EditorGroupsLayout
   readonly problems: readonly string[]
   /** The checkpoint is released once this page has reopened its tabs. */
   readonly restoreGeneration?: number

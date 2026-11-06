@@ -3,6 +3,7 @@ import { sessionLimits } from '../../../shared/files/session'
 import { isCustomKind, type QueryDocument } from '../documents'
 import type { DocumentService } from './documents'
 import type { FileService } from './files'
+import type { EditorGroupService } from './editor-groups'
 
 /** What hot exit keeps of the open tabs, and the tabs it keeps: a tab left out is asked about as without hot exit. */
 export interface KeptSession { readonly session: SessionWrite; readonly kept: ReadonlySet<string> }
@@ -19,9 +20,10 @@ const bytes = (value: unknown) => encoder.encode(JSON.stringify(value)).length
  * file's path, which main adds, counted too). An untitled tab or one with unsaved changes keeps its text; a clean tab with
  * a file keeps only the file. Table designers, Database Properties, monitors and the other custom tabs are not kept (a
  * designer with unsaved changes asks as before), and neither is a value still being appended or a tab past the caps.
+ * With editor groups, the documents are in group order, and the groups they are in are kept by each one's place.
  */
 export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'getModel' | 'isFilling'>, server: (connectionId: string) => string | undefined,
-  { budget = sessionLimits.totalBytes - sessionLimits.slackBytes, pinnedOnly = false }: { budget?: number; pinnedOnly?: boolean } = {}): KeptSession {
+  { budget = sessionLimits.totalBytes - sessionLimits.slackBytes, pinnedOnly = false, groups }: { budget?: number; pinnedOnly?: boolean; groups?: Pick<EditorGroupService, 'capture'> } = {}): KeptSession {
   const { documents: tabs, activeId } = documents.getSnapshot(), written: SessionDocumentWrite[] = [], kept = new Set<string>()
   let used = 0, activeIndex = -1
   for (const document of tabs) {
@@ -44,13 +46,17 @@ export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'ge
     written.push(entry)
     kept.add(document.id)
   }
-  return { session: { documents: written, activeIndex }, kept }
+  const places = new Map([...kept].map((id, index) => [id, index]))
+  const layout = groups?.capture(id => places.get(id))
+  return { session: { documents: written, activeIndex, ...layout ? { groups: layout } : {} }, kept }
 }
 
 export interface SessionRestoreOptions {
   readonly api: Pick<VariaApi, 'hotExit' | 'takeSession' | 'finishSessionRestore'>
   readonly documents: Pick<DocumentService, 'getSnapshot' | 'reopen' | 'activate' | 'setPinned'>
   readonly files: Pick<FileService, 'later' | 'release' | 'reportError'>
+  /** Where the reopened tabs go back into their editor groups. */
+  readonly groups?: Pick<EditorGroupService, 'restore'>
   readonly resumeRecovery?: (tabId: string, recoveryId: string) => void
 }
 /**
@@ -58,13 +64,13 @@ export interface SessionRestoreOptions {
  * a tab (one a second instance handed over first) is not opened twice. Resolves with how many tabs it opened; a failure
  * goes to the file banner, and files that are gone are named there as a warning.
  */
-export async function restoreSession({ api, documents, files, resumeRecovery }: SessionRestoreOptions): Promise<number> {
+export async function restoreSession({ api, documents, files, groups, resumeRecovery }: SessionRestoreOptions): Promise<number> {
   if (!api.hotExit) return 0
   let opened = 0
   await files.later(async () => {
     let restored: RestoredSession
     try { restored = unwrap(await api.takeSession()) } catch (error) { throw new Error(`The queries open when Varia SQL Manager last closed could not be reopened: ${error instanceof Error ? error.message : 'The operation failed.'}`) }
-    const registered: SqlFile[] = []
+    const registered: SqlFile[] = [], ids: string[] = []
     let active: string | undefined
     try {
       for (const [index, document] of restored.documents.entries()) {
@@ -74,8 +80,11 @@ export async function restoreSession({ api, documents, files, resumeRecovery }: 
         if (open && document.pinned) documents.setPinned(id, true)
         if (!open && document.recoveryId) resumeRecovery?.(id, document.recoveryId)
         if (!open) opened++
+        ids[index] = id
         if (index === restored.activeIndex) active = id
       }
+      // The groups first, then the active tab, which also makes its group the active one.
+      if (restored.groups && groups) groups.restore(restored.groups, place => ids[place])
       if (active) documents.activate(active)
       if (restored.restoreGeneration !== undefined) unwrap(await api.finishSessionRestore(restored.restoreGeneration))
     } finally { await files.release(registered) }

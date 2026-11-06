@@ -34,7 +34,8 @@ const monacoShadowAllowlist: Readonly<Record<string, string>> = {
   'ctrl+pagedown': 'Next Query (Windows and Linux only); Monaco binds ⌘PageDown only on macOS and Alt+PageDown elsewhere',
   'shift+f10': "workbench.showContextMenu replaces Monaco's menu (contextmenu: false), so Shift+F10 opens the workbench's editor menu",
   'contextmenu': 'the context-menu key, likewise (Windows and Linux)',
-  'delete': "Delete in Object Explorer's tree only (activePanel == 'explorer' && !textInputFocus); Monaco's deleteRight acts in editor text",
+  'delete': "Delete in Object Explorer's tree only (activePanel == 'explorer' && !textInputFocus), and Close Query on a focused document tab (documentTabFocus && !inputFocus); Monaco's deleteRight acts in editor text",
+  'backspace': "Close Query on a focused document tab (documentTabFocus && !inputFocus), as Dockview's tabs close; Monaco's deleteLeft acts in editor text",
   'cmd+backspace': "Delete in Object Explorer's tree on macOS, as in Finder; Monaco's deleteWordLeft acts in editor text",
   'ctrl+g': 'Go To Line, as in SSMS (Windows and Linux); Monaco binds ⌘G (next match) only on macOS',
   'f4': "The table designer's Properties (designerFocus): its grid is outside the editor, so Monaco's next reference keeps F4 in editor text",
@@ -154,7 +155,7 @@ describe('Monaco keybinding drift', () => {
     for (const rule of rules) expect([rule.chords.length, nativeChordPrefixes(platform).has(rule.chords[0])], rule.command).toEqual([2, true])
   })
   it("turns Monaco's own context menu off, so Shift+F10 and right-clicks show only the workbench's", () => {
-    expect(readFileSync(join('src', 'renderer', 'src', 'QueryEditor.tsx'), 'utf8')).toMatch(/\bcontextmenu: false\b/)
+    expect(readFileSync(join('src', 'renderer', 'src', 'editor', 'create-editor.ts'), 'utf8')).toMatch(/\bcontextmenu: false\b/)
     for (const platform of platforms) expect(workbenchRules(defaultRules(platform)).get('shift+f10')?.map(rule => [rule.command, rule.modal]), platform).toEqual([['workbench.showContextMenu', true]])
   })
   it('leaves Ctrl+R and ⌘R to the results pane toggle: Monaco binds neither', () => {

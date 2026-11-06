@@ -3,28 +3,16 @@ import type { ApiResult, BackendHealth, BackendState, ConnectionInfo, Connection
 import { isCommandId } from '../../shared/commands/catalog'
 import { shellContribution, type ShellHost } from './contributions/shell'
 import { documentKind, isCustomKind, isQueryDocument, type QueryTab } from './documents'
-import { isSsisDocumentKind } from '../../shared/ssis/catalog.ts'
 import { useConnectionAccent, useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
-import type { CommandArgs, CommandId } from './core/types'
-import QueryEditor from './QueryEditor'
 import QueryStatusBar from './QueryStatusBar'
-import DocumentTabs from './DocumentTabs'
 import EditorStatus from './EditorStatus'
 import Icon from './Icon'
-import EmptyState from './kit/EmptyState'
 import ExplorerPane from './explorer/ExplorerPane'
 import FilterDialog from './explorer/FilterDialog'
 import OptionsDialog from './settings/OptionsDialog'
 import ObjectDialog from './dialogs/ObjectDialog'
 import CreateCatalogDialog from './ssis/CreateCatalogDialog'
 import ServerFilePicker from './server-files/ServerFilePicker'
-import TableDesigner from './designer/TableDesigner'
-import SsisProperties from './ssis/SsisProperties'
-import DatabaseProperties from './properties/DatabaseProperties'
-import NewDatabase from './new-database/NewDatabase'
-import RestoreDatabase from './restore/RestoreDatabase'
-import ActivityMonitor from './activity/ActivityMonitor'
-import SsisOperations from './ssis/SsisOperations'
 import GoToLineDialog from './editor/GoToLineDialog'
 import RecoveryDialog from './RecoveryDialog'
 import ScriptingStatus from './scripting/ScriptingStatus'
@@ -32,12 +20,12 @@ import BackendBanner from './BackendBanner'
 import OutputPane, { OutputAnnouncer, OutputViewSync, outputViewOf } from './results/OutputPane'
 import MemoryIndicator from './results/MemoryIndicator'
 import IndexStatus from './search/IndexStatus'
-import ObjectSearch from './search/ObjectSearch'
 import UpdateStatus from './updates/UpdateStatus'
 import TitleBar from './TitleBar'
 import StandardToolbar, { CommandCentre } from './ShellToolbar'
 import QueryBar from './QueryBar'
 import { lostHint } from './query-context'
+import EditorArea from './editor-groups/EditorArea'
 import DockWorkspace, { type WorkspaceHandle } from './DockWorkspace'
 import ConnectDialog from './ConnectDialog'
 import EnvironmentDialog from './EnvironmentDialog'
@@ -98,12 +86,11 @@ export default function App() {
   const { error: fileError, kind: fileKind } = useServiceSnapshot(files)
   const { error: commandError, kind: commandKind } = useServiceSnapshot(commands)
   const workspaceRef = useRef<WorkspaceHandle | null>(null)
-  const run = (id: CommandId, args?: CommandArgs) => { void commands.execute(id, args, 'toolbar') }
   const active: QueryTab = tabs.find(tab => tab.id === activeId) ?? emptyTab
   // An XML, JSON or plan value opened from the results: no server, database, or results of its own. A table designer,
   // Database Properties, SSIS properties, an Activity Monitor and Integration Services Operations have a server, but it is their own: none has a query bar,
   // and the classic toolbar's lists do not change it.
-  const activeKind = documentKind(active), isQuery = activeKind === 'sql', isDesigner = activeKind === 'tableDesigner', isProperties = activeKind === 'databaseProperties', isNewDatabase = activeKind === 'newDatabase', isMonitor = activeKind === 'activityMonitor', isOperations = activeKind === 'ssisOperations', isRestore = activeKind === 'restoreDatabase', isSearch = activeKind === 'objectSearch'
+  const activeKind = documentKind(active), isQuery = activeKind === 'sql'
   const isCustom = isCustomKind(activeKind)
   const windowTitle = active.id ? `${active.dirty ? '* ' : ''}${active.name} — Varia SQL Manager` : 'Varia SQL Manager'
   const connection = connections.find(value => value.id === active.connectionId)
@@ -247,23 +234,12 @@ export default function App() {
       : <div className="global-error" role="alert"><span>{commandError}</span><button aria-label="Dismiss command error" onClick={() => commands.clearError()}><Icon name="close" /></button></div>)}
     <ThemeNotice />
     <DockWorkspace ref={workspaceRef} explorer={<aside className="explorer"><ExplorerPane error={explorerError} activeConnectionId={liveConnection?.id} activeQueryId={isQuery ? active.id || undefined : undefined} /></aside>} editor={<main className="workspace">
-        <DocumentTabs />
-        {active.id ? <>
-          {/* The query's own bar, unless the classic toolbar brings back the global lists (for one release). */}
-          {isQuery && !shell.classicToolbar && <QueryBar />}
-          {statusTop && statusBar}
-          {/* The query editor stays mounted (its Monaco instance is the bound editor) and hides while a designer, Database Properties, SSIS properties, a monitor or Operations shows. */}
-          <div className="editor-container" hidden={isCustom}><QueryEditor /></div>
-          {isDesigner && <TableDesigner key={active.id} documentId={active.id} />}
-          {isProperties && <DatabaseProperties key={active.id} documentId={active.id} />}
-          {isNewDatabase && <NewDatabase key={active.id} documentId={active.id} />}
-          {isSsisDocumentKind(activeKind) && <SsisProperties key={active.id} documentId={active.id} />}
-          {isMonitor && <ActivityMonitor key={active.id} documentId={active.id} />}
-          {isSearch && <ObjectSearch key={active.id} documentId={active.id} />}
-          {isOperations && <SsisOperations key={active.id} documentId={active.id} />}
-          {isRestore && <RestoreDatabase key={active.id} documentId={active.id} />}
-          {!statusTop && statusBar}
-        </> : <EmptyState className="workspace-empty" icon="file-code" title="No open queries" actions={[{ label: 'New query', run: () => run('file.new'), primary: true }, { label: 'Open SQL file', run: () => run('file.open') }]} />}
+        {/* The active query's own bar, unless the classic toolbar brings back the global lists (for one release). */}
+        {active.id && isQuery && !shell.classicToolbar && <QueryBar />}
+        {statusTop && statusBar}
+        {/* Editor groups: each with its tab strip and editor; designers, properties and monitors render in their own panels. */}
+        <EditorArea />
+        {!statusTop && statusBar}
       </main>} results={<OutputPane pane="results" tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />}
       messages={<OutputPane pane="messages" tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />}
       plan={<OutputPane pane="plan" tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />} />

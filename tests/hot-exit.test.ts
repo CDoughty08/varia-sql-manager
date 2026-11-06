@@ -222,6 +222,25 @@ describe('hot exit', () => {
     expect(await restoreSession({ api: { ...api, hotExit: false }, documents, files })).toBe(0)
     expect(api.takeSession).toHaveBeenCalledTimes(1)
   })
+  it('keeps and restores the editor groups by the place of each kept tab', async () => {
+    const { documents, files } = fixture()
+    const first = documents.create('SQLQuery2.sql', 'SELECT 2', 'master')
+    const second = documents.create('SQLQuery3.sql', 'SELECT 3', 'master')
+    const layout = { root: { type: 'branch' as const, children: [{ type: 'leaf' as const, views: [0] }, { type: 'leaf' as const, views: [1] }] }, orientation: 'HORIZONTAL' as const, width: 800, height: 600 }
+    const capture = vi.fn((place: (id: string) => number | undefined) => { expect([place(first.id), place(second.id), place('other')]).toEqual([0, 1, undefined]); return layout })
+    expect(keptSession(documents, () => undefined, { groups: { capture } }).session.groups).toEqual(layout)
+    expect(keptSession(documents, () => undefined).session).not.toHaveProperty('groups')
+    const restored: RestoredSession = { activeIndex: 1, problems: [], groups: layout, documents: [
+      { name: 'SQLQuery7.sql', kind: 'sql', eol: 'lf', dirty: true, text: 'SELECT 7' },
+      { name: 'SQLQuery8.sql', kind: 'sql', eol: 'lf', dirty: true, text: 'SELECT 8' }
+    ] }
+    const api = { hotExit: true, takeSession: vi.fn<VariaApi['takeSession']>(async () => ({ ok: true, value: restored })), finishSessionRestore: vi.fn<VariaApi['finishSessionRestore']>() }
+    const restore = vi.fn()
+    expect(await restoreSession({ api, documents, files, groups: { restore } })).toBe(2)
+    const reopened = documents.getSnapshot().documents.slice(2)
+    expect(restore).toHaveBeenCalledWith(layout, expect.any(Function))
+    expect([0, 1, 2].map(restore.mock.calls[0][1])).toEqual([reopened[0].id, reopened[1].id, undefined])
+  })
   it('does not open a second tab for a file already open, and releases what no tab holds', async () => {
     const { documents, files, api: fileApi } = fixture()
     documents.create('orders.sql', 'SELECT 3', 'master', undefined, false, file('orders.sql'))

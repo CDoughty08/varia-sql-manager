@@ -1,5 +1,6 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import type { ReloadPins, VariaApi } from '../../../shared/contracts'
+import { actsOnTab } from '../../../shared/commands/catalog'
 import { toPlatform, type Platform } from '../../../shared/commands/keybindings'
 import { platformLineEnding } from '../../../shared/files/encoding'
 import { DocumentService, settingsDocumentOptions } from '../services/documents'
@@ -25,6 +26,7 @@ import { searchContribution } from '../contributions/search'
 import ResultsWorker from '../results/results.worker.ts?worker'
 import { GridStats } from '../grid/stats'
 import { PaneService } from '../services/panes'
+import { EditorGroupService } from '../services/editor-groups'
 import { ExplorerService } from '../explorer/ExplorerService'
 import { ExplorerStatusService } from '../explorer/ExplorerStatusService'
 import { DatabaseListService } from '../services/database-list'
@@ -138,6 +140,8 @@ export interface Workbench extends Disposable {
   readonly inputMode: InputModeService
   /** Rename Tab's inline edit in the document strip. */
   readonly tabRename: TabRenameService
+  /** The query editor's editor groups (docs/editor-groups.md). */
+  readonly editorGroups: EditorGroupService
   readonly panes: PaneService
   /** Object Explorer's tree: its nodes, loads, selection, and context keys. */
   readonly explorer: ExplorerService
@@ -229,6 +233,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const editorStatus = new EditorStatusService(callback => { frame(callback) }), inputMode = new InputModeService()
   const refreshDocuments = settings.subscribe(() => documents.refreshOptions())
   const bookmarks = new BookmarkService(documents, events), editorDialogs = new EditorDialogs(), tabRename = new TabRenameService(documents)
+  const editorGroups = new EditorGroupService(documents)
+  // Closing the active document shows the next one in its own editor group.
+  const closeSuccessor = documents.useCloseSuccessor(id => editorGroups.successor(id))
   const resultClient = new ResultClient({ api, createWorker: () => new ResultsWorker(), window, schedule: callback => { frame(callback) } })
   const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => { frame(callback) } })
   const resultMemory = new MemoryUsageService(resultClient, 'results', events)
@@ -248,7 +255,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       if (!api.hotExit) return
       const pinnedOnly = !settings.getSnapshot().values['environment.documents.hotExit']
       if (!pinnedOnly || documents.getSnapshot().documents.some(tab => tab.pinned))
-        return keptSession(documents, id => connections.get(id)?.server, { pinnedOnly })
+        return keptSession(documents, id => connections.get(id)?.server, { pinnedOnly, groups: editorGroups })
     }
   })
   const recentFiles = new RecentFilesService(api)
@@ -314,11 +321,11 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     copy: text => { void api.writeClipboardText(text).then(result => { if (!result.ok) commands.reportWarning(result.error) }, onUnexpectedError) }
   })
   const activity = new ActivityMonitorService({
-    documents, connections, live, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values,
+    documents, connections, live, owner: id => documentOwner(id, documents, panes, editorGroups), settings: () => settings.getSnapshot().values,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-activity-monitor="${CSS.escape(id)}"] [data-activity-focus]`)?.focus())
   })
   const operations = new SsisOperationsService({
-    api, documents, panes, live, connections, settings,
+    api, documents, panes, groups: editorGroups, live, connections, settings,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-ssis-operations="${CSS.escape(id)}"] [role="grid"]`)?.focus())
   })
   const objectSearch = new ObjectSearchService({
@@ -351,6 +358,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     updates,
     activity: activity.context,
     ssis: operations.context,
+    editorGroups,
     editor: () => documents.boundEditor
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen })
@@ -363,7 +371,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     findWidgetFocused: () => !!windows.activeElement()?.closest('.monaco-editor .find-widget'),
     menubarRect: id => document.getElementById('menubar-' + id)?.getBoundingClientRect(), targets: menuTargets, editorCaret: () => editorCaret(documents, monaco),
     modalContains: element => [...document.querySelectorAll('[aria-modal="true"]')].at(-1)?.contains(element) ?? false, style: api.menuStyle, api })
-  const keybindings = new KeybindingService({ platform, commands, context, modalOpen, menus, editorHasTextFocus: () => documents.boundEditor?.hasTextFocus() ?? false,
+  const keybindings = new KeybindingService({ platform, commands, context, modalOpen, menus,
+    keyArgs: command => { const tabId = actsOnTab(command) ? editorGroups.focusedDocument() : undefined; return tabId ? { tabId } : undefined }, editorHasTextFocus: () => documents.boundEditor?.hasTextFocus() ?? false,
     editorContains: target => target instanceof Node && !!documents.boundEditor?.getContainerDomNode().contains(target),
     keyUp: event => peek.keyUp(event.key) })
   const menuState = new MenuStatePublisher({ commands, context, send: state => api.setMenuState(state) })
@@ -380,7 +389,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     if (!api.hotExit) return
     if (busy) throw new Error('Wait for the current document operation to finish before reloading.')
     if (!tabs.some(tab => tab.pinned)) return
-    const kept = keptSession(documents, id => connections.get(id)?.server, { pinnedOnly: true })
+    const kept = keptSession(documents, id => connections.get(id)?.server, { pinnedOnly: true, groups: editorGroups })
     requireKeptPins(tabs, kept.kept)
     return { session: kept.session, recoveryIds: [...kept.kept].map(id => recovery.copyId(id) ?? null) }
   }
@@ -417,6 +426,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     editorStatus,
     inputMode,
     tabRename,
+    editorGroups,
     panes,
     explorer,
     explorerStatus,
@@ -457,6 +467,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       contributions.forEach(contribution => contribution.dispose())
       cleanup.dispose()
       refreshDocuments()
+      closeSuccessor.dispose()
       commands.dispose()
       context.dispose()
       files.dispose()
@@ -502,6 +513,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       editorStatus.dispose()
       inputMode.dispose()
       panes.dispose()
+      editorGroups.dispose()
       resultSelection.dispose()
       peek.dispose()
       settings.dispose()
@@ -514,7 +526,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const contributions = [
     queryContribution(workbench, api),
     filesContribution(workbench, api),
-    editorContribution(workbench, () => document.activeElement?.closest('[data-document-tab]')?.closest<HTMLElement>('[data-tab-id]')?.dataset.tabId),
+    editorContribution(workbench),
     editingContribution(workbench, monaco),
     editContribution(workbench, api),
     windowContribution(workbench, api, reloadPins),
@@ -548,7 +560,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // The tabs the last close kept (hot exit), else the welcome query; what an earlier run or page left unsaved is offered
   // once the workbench is up.
   const welcome = () => { if (!disposed) documents.create('SQLQuery1.sql', '-- Connect this query to a server and press F5 to execute.\n\nSELECT\n    @@SERVERNAME AS server_name,\n    DB_NAME() AS database_name,\n    SYSDATETIME() AS server_time;\n', 'master') }
-  if (api.hotExit) void restoreSession({ api, documents, files, resumeRecovery: (tabId, id) => recovery.resume(tabId, id) })
+  if (api.hotExit) void restoreSession({ api, documents, files, groups: editorGroups, resumeRecovery: (tabId, id) => recovery.resume(tabId, id) })
     .catch(() => 0).then(opened => { if (!opened) welcome(); if (!disposed) void recovery.start() })
   else { welcome(); void recovery.start() }
   return workbench

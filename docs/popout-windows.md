@@ -53,6 +53,12 @@ Each window is a full citizen (`core/windows.ts`, `workbench.attachWindow`):
   is minimized or hidden (`onMainWindowHidden`): live views in the main window pause then, and Object Explorer's status
   views keep sampling only while Object Explorer is in a popout (`LiveOwner.popout`).
 - Chromium's own zoom (Ctrl+wheel, a pinch) in any window is given to every window.
+- A window name is the page's handle on its popout in main: `raisePopout(name)` (`varia:popout-raise`, the main page's
+  trusted IPC, a name that must match `varia-popout-<uuid>`) brings that popout to the top, restored if minimized, without
+  activating it (`moveTop`, `showInactive`). Where `showInactive` leaves a minimized window minimized (macOS, some Linux window
+  managers), main restores it and gives focus back to the main window, again if the popout takes focus within 2 s (`restoreFocusMs`), since
+  macOS activates it only once its animation ends. Search Objects' Reveal uses it, so a popped-out Object Explorer comes forward
+  while keyboard focus stays in the hits; a raise from the page itself (`window.focus()`) would take focus.
 - A dialog opened from a popout opens in the main window, which comes to the front (`watchModals`); closing it gives
   focus back to the popout element that had it, bringing the popout forward (`focusToReturn`, `returnFocusTo`).
 
@@ -70,7 +76,8 @@ when their panels dock back.
 
 - **The query editor stays in the main window.** Monaco binds its DOM, focus, clipboard, IME, accessibility and worker
   plumbing to the window it was created in; moving its element to another document breaks input and measuring. Popping
-  it out needs a second editor instance per window sharing the model, which is follow-up work.
+  it out needs a second editor instance per window sharing the model, which is follow-up work. The same holds for
+  single documents: they split and float within the editor area (docs/editor-groups.md) but do not pop out.
 - Dialogs and toasts render in the main window (a dialog brings it to the front).
 - Live charts draw on the main window's animation frames.
 - Object Explorer's status views in a minimized popout keep sampling: only the main window's minimizing is reported.

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { onDisplay, popoutRequest, PopoutWindows, scaleBounds, zoomFactor, type OpenDetails, type PopoutWindow } from '../src/main/popout-windows'
+import { onDisplay, popoutRequest, PopoutWindows, scaleBounds, zoomFactor, type OpenDetails, type PopoutWindow, restoreFocusMs } from '../src/main/popout-windows'
 import { popoutWindowName } from '../src/shared/popouts'
 
 const name = 'varia-popout-' + crypto.randomUUID()
@@ -11,15 +11,19 @@ const primary = { x: 0, y: 0, width: 1920, height: 1040 }, left = { x: -1600, y:
 function fakeWindow(id: number) {
   const listeners = new Map<string, ((...args: unknown[]) => void)[]>()
   const on = (event: string, listener: (...args: unknown[]) => void) => { listeners.set(event, [...listeners.get(event) ?? [], listener]) }
-  const emit = (event: string, ...args: unknown[]) => { for (const listener of listeners.get(event) ?? []) listener(...args) }
-  let destroyed = false, focused = false, zoom = 0
+  const emit = (event: string, ...args: unknown[]) => { for (const listener of [...listeners.get(event) ?? []]) listener(...args) }
+  const off = (event: string, listener: (...args: unknown[]) => void) => { listeners.set(event, (listeners.get(event) ?? []).filter(item => item !== listener && (item as { original?: unknown }).original !== listener)) }
+  let destroyed = false, focused = false, zoom = 0, minimized = false, stubborn = false
   let openHandler: (() => { action: string }) | undefined
   const window = {
     id, isDestroyed: () => destroyed, isFocused: () => focused, destroy: vi.fn(() => { destroyed = true; emit('closed') }),
+    isMinimized: () => minimized, showInactive: vi.fn(() => { if (!stubborn) minimized = false }), restore: vi.fn(() => { minimized = false }), moveTop: vi.fn(),
     setMenuBarVisibility: vi.fn(), setAutoHideMenuBar: vi.fn(), on,
+    once: (event: string, listener: () => void) => { const wrapped = () => { off(event, wrapped); listener() }; (wrapped as { original?: () => void }).original = listener; on(event, wrapped) },
+    removeListener: (event: string, listener: () => void) => off(event, listener),
     webContents: { setWindowOpenHandler: (handler: () => { action: 'deny' }) => { openHandler = handler }, on, setZoomLevel: (level: number) => { zoom = level }, getZoomLevel: () => zoom }
   }
-  return { window: window as unknown as PopoutWindow, emit, focus: (value: boolean) => { focused = value }, zoom: () => zoom, setZoom: (level: number) => { zoom = level }, openHandler: () => openHandler?.() }
+  return { window: window as unknown as PopoutWindow, emit, listening: (event: string) => listeners.get(event)?.length ?? 0, focus: (value: boolean) => { focused = value }, minimize: () => { minimized = true }, stubborn: () => { stubborn = true }, zoom: () => zoom, setZoom: (level: number) => { zoom = level }, openHandler: () => openHandler?.() }
 }
 function registry(options: { workAreas?: { x: number; y: number; width: number; height: number }[]; zoom?: number; platform?: NodeJS.Platform } = {}) {
   const changed = vi.fn(), setZoomLevel = vi.fn()
@@ -118,6 +122,48 @@ describe('PopoutWindows', () => {
     popouts.zoom(-1)
     expect(child.zoom()).toBe(-1)
   })
+  it('raises a popout by the name the page opened it with, restoring it if minimized, without activating it', () => {
+    const { popouts } = registry()
+    const child = fakeWindow(3), other = fakeWindow(4), unnamed = fakeWindow(5)
+    const otherName = 'varia-popout-' + crypto.randomUUID()
+    popouts.adopt(child.window, name); popouts.adopt(other.window, otherName); popouts.adopt(unnamed.window, '_blank')
+    expect(popouts.raise(name)).toBe(true)
+    expect(child.window.moveTop).toHaveBeenCalledOnce()
+    expect(child.window.showInactive).not.toHaveBeenCalled()
+    expect(other.window.moveTop).not.toHaveBeenCalled()
+    child.minimize()
+    expect(popouts.raise(name)).toBe(true)
+    expect(child.window.showInactive).toHaveBeenCalledOnce()
+    expect(child.window.moveTop).toHaveBeenCalledTimes(2)
+    expect(child.window.restore).not.toHaveBeenCalled()
+    // Where showInactive leaves it minimized (macOS), it is restored, focus goes back to the window the user was in, and then
+    // it goes on top.
+    child.stubborn(); child.minimize()
+    const order: string[] = []
+    vi.mocked(child.window.moveTop).mockImplementation(() => { order.push('top') })
+    vi.mocked(child.window.restore).mockImplementation(() => { order.push('restore') })
+    vi.useFakeTimers()
+    try {
+      expect(popouts.raise(name, () => order.push('refocus'))).toBe(true)
+      expect(order).toEqual(['restore', 'refocus', 'top'])
+      // The restore activates it later (macOS animates it up): focus goes back then, once, and it stays on top.
+      child.emit('focus')
+      expect(order).toEqual(['restore', 'refocus', 'top', 'refocus', 'top'])
+      child.emit('focus')
+      expect(order).toHaveLength(5)
+      // A popout that never takes focus stops listening after restoreFocusMs, so a later click into it keeps its focus.
+      child.minimize()
+      popouts.raise(name, () => order.push('refocus'))
+      expect(child.listening('focus')).toBe(1)
+      vi.advanceTimersByTime(restoreFocusMs)
+      expect(child.listening('focus')).toBe(0)
+    } finally { vi.useRealTimers() }
+    // A name it does not hold (one that is not a popout's is never stored), or a window that is gone, raises nothing.
+    expect(popouts.raise('_blank')).toBe(false)
+    expect(popouts.raise('varia-popout-' + crypto.randomUUID())).toBe(false)
+    child.window.destroy()
+    expect(popouts.raise(name)).toBe(false)
+  })
   it('gives every window the zoom Chromium set on one (Ctrl+wheel, a pinch)', async () => {
     const { popouts, setZoomLevel } = registry()
     const first = fakeWindow(1), second = fakeWindow(2)
@@ -145,7 +191,10 @@ describe('main process wiring', () => {
   const source = readFileSync('src/main/index.ts', 'utf8')
   it('lets the page open only popouts, never navigates, and ends popouts with the page', () => {
     expect(source).toContain('contents.setWindowOpenHandler(details => popouts.open(details,')
-    expect(source).toContain("contents.on('did-create-window', child => popouts.adopt(child))")
+    expect(source).toContain("contents.on('did-create-window', (child, details) => popouts.adopt(child, details.frameName))")
+    // The page raises only its own popouts, by a name that must be a popout's, through the trusted handler.
+    expect(source).toContain("const name = z.string().regex(popoutWindowName).parse(value), main = mainWindow")
+    expect(source).toContain("popouts.raise(name, () => { if (main && !main.isDestroyed() && !main.isFocused()) main.focus() })")
     expect(source).not.toMatch(/setWindowOpenHandler\([^)]*action: 'allow'/)
     expect(source).toMatch(/function resetRendererState[\s\S]*?popouts\.closeAll\(\)/)
     expect(source).toContain("contents.on('zoom-changed', () => setImmediate(() => { if (!contents.isDestroyed()) popouts.zoom(contents.getZoomLevel()) }))")

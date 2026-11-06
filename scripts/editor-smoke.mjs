@@ -1,8 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { resizeContent } from './fixtures/window-resize.mjs'
-import { activeDocumentName, backendReady, closeDocumentButton, documentShelf, documentTab, documentTabs, documentTabSlots, part, pinDocumentButton, quickInput, quickInputActive } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, closeDocumentButton, documentTab, documentTabs, editorGroups, editorGroupTabs, floatingEditorGroups, menubar, part, pinDocumentButton, quickInput, quickInputActive } from './fixtures/ui.mjs'
 
 // SSMS's editing commands in the real query editor, over the fake backend (no SQL Server): Comment and Uncomment
 // Selection, Make Uppercase and Lowercase, Increase and Decrease Line Indent from Edit › Advanced, Go To Line, Bookmarks
@@ -162,106 +161,289 @@ try {
   await chord('L')
   await expect(glyphs()).toHaveCount(0)
   // Query tabs reorder: Ctrl+Shift+PageUp moves the active tab left and keeps it shown, Ctrl+Tab follows the new order,
-  // and dragging a tab onto the left half of another drops it before that one, leaving the editor's text as it was.
-  const order = () => documentTabSlots(page).evaluateAll(slots => slots.map(slot => slot.querySelector('[role="tab"]').getAttribute('aria-label')))
+  // and dragging a tab onto the left part of another drops it before that one, showing it with its text as it was.
+  const order = () => documentTabs(page).getByRole('tab').evaluateAll(tabs => tabs.map(tab => tab.getAttribute('aria-label')))
   const pair = async () => (await order()).filter(name => name === firstTab || name === secondTab)
+  const groupNames = index => editorGroupTabs(editorGroups(page).nth(index)).evaluateAll(tabs => tabs.map(tab => tab.getAttribute('aria-label')))
   expect(await pair()).toEqual([firstTab, secondTab])
   await textbox().focus()
   await page.keyboard.press('Control+Shift+PageUp')
   await expect.poll(pair).toEqual([secondTab, firstTab])
   expect(await activeDocumentName(page)).toBe(secondTab)
-  const kept = await editorText()
-  const source = documentTab(page, firstTab), target = documentTab(page, secondTab)
-  await source.dragTo(target, { targetPosition: { x: 4, y: 8 } }).catch(() => {})
-  let tabDragged = 'dragTo'
-  if (!await expect.poll(pair, { timeout: 3000 }).toEqual([firstTab, secondTab]).then(() => true, () => false)) {
-    // Where the platform's drag does not reach the page, the same events with a real DataTransfer.
-    tabDragged = 'synthetic DragEvent'
-    await page.evaluate(([from, to]) => {
-      const tab = name => [...document.querySelectorAll('[data-tab-id]')].find(slot => slot.querySelector('[role="tab"]').getAttribute('aria-label') === name)
-      const row = tab(from), slot = tab(to), box = slot.getBoundingClientRect(), at = { clientX: box.left + 4, clientY: box.top + 8, bubbles: true, cancelable: true }
-      const dataTransfer = new DataTransfer()
-      row.dispatchEvent(new DragEvent('dragstart', { ...at, dataTransfer }))
-      for (const type of ['dragenter', 'dragover', 'drop']) slot.dispatchEvent(new DragEvent(type, { ...at, dataTransfer }))
-      row.dispatchEvent(new DragEvent('dragend', { ...at, dataTransfer }))
-    }, [firstTab, secondTab])
+  /** Drags with the pointer (Dockview's pointer strategy), in steps so its drag starts and its targets follow. */
+  const drag = async (from, to) => {
+    const start = await from.boundingBox(), x = start.x + start.width / 2, y = start.y + start.height / 2
+    await page.mouse.move(x, y)
+    await page.mouse.down()
+    for (let step = 1; step <= 10; step++) await page.mouse.move(x + (to.x - x) * step / 10, y + (to.y - y) * step / 10)
+    await page.mouse.up()
   }
+  const targetBox = await documentTab(page, secondTab).boundingBox()
+  await drag(documentTab(page, firstTab), { x: targetBox.x + 4, y: targetBox.y + targetBox.height / 2 })
   await expect.poll(pair).toEqual([firstTab, secondTab])
-  expect(await documentTabs(page).locator('[data-drop]').count()).toBe(0)
-  expect(await editorText()).toBe(kept)
+  expect(await editorGroups(page).count()).toBe(1)
+  await expect.poll(() => activeDocumentName(page)).toBe(firstTab)
+  expect(await editorText()).toBe('Wone\ntwo\n3Nthree')
   // The last tab has nowhere further right to go.
+  await documentTab(page, secondTab).click()
+  await textbox().focus()
   await page.keyboard.press('Control+Shift+PageDown')
   await expect.poll(pair).toEqual([firstTab, secondTab])
   // On a strip too full to show every tab, the tab Ctrl+Shift+PageUp moves stays in view as it goes.
   for (let opened = 0; opened < 12; opened++) await page.keyboard.press('Control+N')
   const moving = await activeDocumentName(page)
-  const unpinned = documentShelf(page), moreQueries = unpinned.getByRole('button', { name: /^Show \d+ more query tabs?$/ })
-  await expect(moreQueries).toBeVisible()
+  await expect.poll(async () => (await order()).length).toBeGreaterThanOrEqual(14)
+  expect(await documentTabs(page).evaluate(strip => strip.scrollWidth > strip.clientWidth)).toBe(true)
   await textbox().focus()
   for (let step = 0; step < 14; step++) await page.keyboard.press('Control+Shift+PageUp')
   await expect.poll(async () => (await order())[0]).toBe(moving)
-  const shown = () => documentTab(page, moving).evaluate(tab => { const box = tab.parentElement.getBoundingClientRect(), view = tab.closest('[role="tablist"]').getBoundingClientRect(); return box.left >= view.left - 1 && box.right <= view.right + 1 })
+  const shown = () => documentTab(page, moving).evaluate(tab => { const box = tab.getBoundingClientRect(), view = tab.closest('[role="tablist"]').getBoundingClientRect(); return box.left >= view.left - 1 && box.right <= view.right + 1 })
   await expect.poll(shown).toBe(true)
-  await moreQueries.click()
-  const hidden = unpinned.getByRole('group', { name: 'More query tabs', exact: true }).getByRole('button', { name: /^SQLQuery/ }).first()
-  const picked = await hidden.getAttribute('aria-label')
-  await hidden.click()
-  await expect(documentTab(page, picked)).toBeFocused()
-  expect(await activeDocumentName(page)).toBe(picked)
-
-  // Fill the pinned shelf too, so a real Ctrl+wheel can expand either without changing the other.
-  for (let opened = 0; opened < 8; opened++) {
-    await page.keyboard.press('Control+N')
-    await pinDocumentButton(page, await activeDocumentName(page)).click()
-  }
-  const pinned = documentShelf(page, true)
-  const pinnedRows = pinned.locator(part.tabRowCount), queryRows = unpinned.locator(part.tabRowCount)
-  const stack = async (shelf, delta) => {
-    await shelf.getByRole('tab').first().hover()
-    await page.keyboard.down('Control')
-    try { await page.mouse.wheel(0, delta) } finally { await page.keyboard.up('Control') }
-  }
-  await expect(pinnedRows).toHaveText('1 row')
-  await expect(queryRows).toHaveText('1 row')
-  await stack(pinned, 120)
-  await expect(pinnedRows).toHaveText('2 rows')
-  await expect(queryRows).toHaveText('1 row')
-  await stack(unpinned, 120)
-  await expect(queryRows).toHaveText('2 rows')
-  await expect(pinnedRows).toHaveText('2 rows')
-  // A scroll over the bottom pinned row moves the unpinned shelf under the pointer. The next tick must stay pinned.
-  const bottomPin = pinned.getByRole('tab').last()
-  await page.keyboard.down('Control')
-  const underneath = await bottomPin.evaluate(async tab => {
-    const rect = tab.getBoundingClientRect(), clientX = rect.left + rect.width / 2, clientY = rect.top + rect.height / 2
-    const wheel = { ctrlKey: true, deltaY: -120, clientX, clientY, bubbles: true, cancelable: true }
-    tab.dispatchEvent(new WheelEvent('wheel', wheel))
-    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
-    const target = document.elementFromPoint(clientX, clientY)
-    target?.dispatchEvent(new WheelEvent('wheel', wheel))
-    return target?.closest('[data-tab-shelf]')?.getAttribute('data-tab-shelf')
-  }).finally(() => page.keyboard.up('Control'))
-  expect(underneath).toBe('unpinned')
-  await expect(pinnedRows).toHaveText('1 row')
-  await expect(queryRows).toHaveText('2 rows')
-  // Use adjacent widths so at least one would give the tab grid fractional tracks before pixel snapping.
-  const [width, height] = await page.evaluate(() => [innerWidth, innerHeight])
-  for (const offset of [0, 1]) {
-    await resizeContent(application, page, width + offset, height)
-    const pixels = await documentTabSlots(page).locator(part.tabIcon).evaluateAll(icons => icons.map(icon => icon.getBoundingClientRect().left % 1))
-    expect(pixels.length).toBeGreaterThan(2)
-    expect(pixels.every(pixel => pixel === 0)).toBe(true)
-  }
-  for (let remaining = 20; remaining > 0; remaining--) {
-    const extra = (await order()).find(name => name !== firstTab && name !== secondTab)
-    if (!extra) break
-    await closeDocumentButton(page, extra).click()
-    await expect(documentTab(page, extra)).toHaveCount(0)
-  }
+  // Pinning, as in VS Code: a pinned tab goes first in its group's strip, an unpinned one cannot move before it, and
+  // unpinning leaves it first among the unpinned.
+  const last = (await order()).at(-1)
+  await pinDocumentButton(page, last).click()
+  await expect.poll(async () => (await order())[0]).toBe(last)
+  await expect(documentTab(page, last)).toBeFocused()
+  await expect(pinDocumentButton(page, last, true)).toBeVisible()
+  await documentTab(page, moving).click()
+  await textbox().focus()
+  await page.keyboard.press('Control+Shift+PageUp')
+  await expect.poll(async () => (await order()).slice(0, 2)).toEqual([last, moving])
+  await pinDocumentButton(page, last, true).click()
+  await expect(pinDocumentButton(page, last)).toBeVisible()
+  expect((await order())[0]).toBe(last)
+  for (const name of (await order()).filter(name => name !== firstTab && name !== secondTab)) await closeDocumentButton(page, name).click()
+  await expect.poll(pair).toEqual([firstTab, secondTab])
+  console.log('Editor checks: query tabs reorder by Ctrl+Shift+PageUp and by dragging, a moved tab stays in view on a full strip, and a pinned tab stays first in its strip.')
+  // Editor groups: Split Editor Right (Ctrl+\) moves the active query into a new group on the right, with its own strip
+  // and editor; Ctrl+K Ctrl+Left and Right focus the groups; Move Editor into Previous Group (Ctrl+Alt+Left) joins them
+  // again, and the empty group goes.
+  await documentTab(page, secondTab).click()
+  await expect.poll(() => activeDocumentName(page)).toBe(secondTab)
+  const groupText = index => editorGroups(page).nth(index).locator('.monaco-editor .view-lines').innerText()
+  // Monaco draws the shown query's lines on its next frame.
+  const drawnText = async index => (await groupText(index)).replace(/\s+/g, '')
+  await expect.poll(() => drawnText(0)).not.toBe('')
+  const secondText = await drawnText(0)
+  await textbox().focus()
+  await page.keyboard.press('Control+\\')
+  await expect(editorGroups(page)).toHaveCount(2)
+  expect(await groupNames(0)).toEqual([firstTab])
+  expect(await groupNames(1)).toEqual([secondTab])
+  await expect(page.locator(part.editorPane)).toHaveCount(2)
+  // Each group is a region named for its shown query, apart from the document frames named for theirs.
+  await expect(page.getByRole('region', { name: 'Editor group: ' + secondTab, exact: true })).toHaveCount(1)
+  await expect(page.getByRole('region', { name: secondTab, exact: true })).toHaveCount(0)
+  expect(await activeDocumentName(page)).toBe(secondTab)
+  const lefts = await editorGroups(page).evaluateAll(groups => groups.map(group => group.getBoundingClientRect().left))
+  expect(lefts[1]).toBeGreaterThan(lefts[0])
+  // Each group's editor shows its own query, side by side.
+  await expect.poll(() => drawnText(1)).toBe(secondText)
+  await chord('ArrowLeft')
+  await expect.poll(() => activeDocumentName(page)).toBe(firstTab)
+  await expect(editorGroups(page).nth(0).locator('.monaco-editor [role="textbox"]')).toBeFocused()
+  await chord('ArrowRight')
+  await expect.poll(() => activeDocumentName(page)).toBe(secondTab)
+  await page.keyboard.press('Control+Alt+ArrowLeft')
+  await expect(editorGroups(page)).toHaveCount(1)
+  await expect.poll(pair).toEqual([firstTab, secondTab])
+  expect(await activeDocumentName(page)).toBe(secondTab)
+  // Dragging a tab onto the docking compass's Dock right of panel splits its group there, as the workspace's panels
+  // dock; Window › Join All Editor Groups puts every query back in one group.
+  const area = await editorGroups(page).first().boundingBox(), tabBox = await documentTab(page, secondTab).boundingBox()
+  await page.mouse.move(tabBox.x + 20, tabBox.y + tabBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(area.x + area.width / 2 + 95, area.y + area.height / 2, { steps: 8 })
+  await expect(page.locator(part.dockingGuides).filter({ visible: true })).toHaveCount(1)
+  const guide = await page.locator('[data-guide-position="right"][data-guide-scope="panel"]').boundingBox()
+  await page.mouse.move(guide.x + guide.width / 2, guide.y + guide.height / 2, { steps: 3 })
+  await expect(page.locator(part.activeDockingGuideCell)).toHaveAttribute('data-guide-position', 'right')
+  await page.mouse.up()
+  await expect(editorGroups(page)).toHaveCount(2)
+  expect(await groupNames(1)).toEqual([secondTab])
+  await page.keyboard.press('Alt+w')
+  await menu('Window').getByRole('menuitem', { name: 'Join All Editor Groups', exact: true }).click()
+  await expect(editorGroups(page)).toHaveCount(1)
+  await expect.poll(pair).toEqual([firstTab, secondTab])
+  // Float from the tab's menu: the query floats over the editor area in a group of its own; Dock puts it back.
+  await documentTab(page, secondTab).click({ button: 'right' })
+  await menu('Query tab').getByRole('menuitem', { name: 'Float', exact: true }).click()
+  await expect(floatingEditorGroups(page)).toHaveCount(1)
+  await expect(editorGroupTabs(floatingEditorGroups(page))).toHaveCount(1)
+  await documentTab(page, secondTab).click({ button: 'right' })
+  await expect(menu('Query tab').getByRole('menuitem', { name: 'Float', exact: true })).toHaveCount(0)
+  await menu('Query tab').getByRole('menuitem', { name: 'Dock', exact: true }).click()
+  await expect(floatingEditorGroups(page)).toHaveCount(0)
+  // Docked, it joins the grid's group, as the last tab there.
+  await expect(editorGroups(page)).toHaveCount(1)
   await expect.poll(pair).toEqual([firstTab, secondTab])
   await documentTab(page, secondTab).click()
   await expect.poll(() => activeDocumentName(page)).toBe(secondTab)
-  console.log(`Editor checks: tabs reorder by Ctrl+Shift+PageUp and by dragging (${tabDragged}), hidden tabs can be brought into view, and Ctrl+scroll changes each shelf independently.`)
+  // Closing a group's shown query shows the next one in that group (the one before, at the strip's end), not the next in
+  // order, which is in another group.
+  await textbox().focus()
+  await page.keyboard.press('Control+N')
+  await expect.poll(async () => (await order()).length).toBe(3)
+  const third = await activeDocumentName(page)
+  await page.keyboard.press('Control+N')
+  await expect.poll(async () => (await order()).length).toBe(4)
+  const fourth = await activeDocumentName(page)
+  await page.keyboard.press('Control+\\')
+  await expect(editorGroups(page)).toHaveCount(2)
+  expect(await groupNames(1)).toEqual([fourth])
+  await documentTab(page, third).click()
+  await expect.poll(() => activeDocumentName(page)).toBe(third)
+  await page.keyboard.press('Control+W')
+  await expect(documentTab(page, third)).toHaveCount(0)
+  await expect.poll(() => activeDocumentName(page)).toBe(secondTab)
+  // Ctrl+W closed it while its tab had focus: the keyboard stays in the strip, on the tab shown next.
+  await expect(documentTab(page, secondTab)).toBeFocused()
+  await closeDocumentButton(page, fourth).click()
+  await expect(editorGroups(page)).toHaveCount(1)
+  // A focused tab is the chosen one: Home, End and the arrows (Dockview's roving focus) show the tab they reach.
+  await documentTab(page, secondTab).focus()
+  await page.keyboard.press('Home')
+  await expect(documentTab(page, firstTab)).toBeFocused()
+  await expect.poll(() => activeDocumentName(page)).toBe(firstTab)
+  await page.keyboard.press('End')
+  await expect.poll(() => activeDocumentName(page)).toBe(secondTab)
+  await page.keyboard.press('ArrowLeft')
+  await expect.poll(() => activeDocumentName(page)).toBe(firstTab)
+  // Delete on a focused tab is File › Close's catalogue key: the tab closes, and focus moves to the tab shown next.
+  await textbox().focus()
+  await page.keyboard.press('Control+N')
+  await expect.poll(async () => (await order()).length).toBe(3)
+  const fifth = await activeDocumentName(page)
+  await documentTab(page, fifth).focus()
+  await page.keyboard.press('Delete')
+  await expect(documentTab(page, fifth)).toHaveCount(0)
+  await expect(documentTab(page, secondTab)).toBeFocused()
+  await expect.poll(() => activeDocumentName(page)).toBe(secondTab)
+  // A closing menu gives focus back to the tab it was opened on without showing it: Delete there closes that tab, not
+  // the shown one.
+  await textbox().focus()
+  await page.keyboard.press('Control+N')
+  await expect.poll(async () => (await order()).length).toBe(3)
+  const sixth = await activeDocumentName(page)
+  await page.keyboard.press('Control+N')
+  await expect.poll(async () => (await order()).length).toBe(4)
+  const seventh = await activeDocumentName(page)
+  await documentTab(page, sixth).click({ button: 'right' })
+  await expect(menu('Query tab')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(documentTab(page, sixth)).toBeFocused()
+  expect(await activeDocumentName(page)).toBe(seventh)
+  await page.keyboard.press('Delete')
+  await expect(documentTab(page, sixth)).toHaveCount(0)
+  await expect(documentTab(page, seventh)).toHaveCount(1)
+  expect(await activeDocumentName(page)).toBe(seventh)
+  // A title bar menu gives focus back to such a tab too, but its Close Query closes the query on screen, as it says.
+  await page.keyboard.press('Control+N')
+  await expect.poll(async () => (await order()).length).toBe(4)
+  const eighth = await activeDocumentName(page)
+  await documentTab(page, seventh).click({ button: 'right' })
+  await expect(menu('Query tab')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(documentTab(page, seventh)).toBeFocused()
+  await menubar(page).getByRole('menuitem', { name: 'File', exact: true }).click()
+  await menu('File').getByRole('menuitem', { name: 'Close Query', exact: true }).click()
+  await expect(documentTab(page, eighth)).toHaveCount(0)
+  await expect(documentTab(page, seventh)).toHaveCount(1)
+  await closeDocumentButton(page, seventh).click()
+  await expect.poll(async () => (await order()).length).toBe(2)
+  // Dockview floats a group's last tab on a Shift-drag. With every query floating, the empty grid says so and offers
+  // Dock query rather than "No open queries".
+  await documentTab(page, secondTab).click({ button: 'right' })
+  await menu('Query tab').getByRole('menuitem', { name: 'Float', exact: true }).click()
+  await expect(floatingEditorGroups(page)).toHaveCount(1)
+  // The grid's only query does not float from the menu.
+  await documentTab(page, firstTab).click({ button: 'right' })
+  await expect(menu('Query tab').getByRole('menuitem', { name: 'Float', exact: true })).toBeDisabled()
+  await page.keyboard.press('Escape')
+  const firstBox = await documentTab(page, firstTab).boundingBox()
+  await page.keyboard.down('Shift')
+  await page.mouse.move(firstBox.x + 20, firstBox.y + firstBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(firstBox.x + 120, firstBox.y + 140, { steps: 6 })
+  await page.mouse.up()
+  await page.keyboard.up('Shift')
+  await expect(floatingEditorGroups(page)).toHaveCount(2)
+  await expect(page.getByText('All open queries float', { exact: true })).toBeVisible()
+  await expect(page.getByText('No open queries', { exact: true })).toHaveCount(0)
+  // The floating groups may cover it: its button works from the keyboard too.
+  await page.getByRole('button', { name: 'Dock query', exact: true }).focus()
+  await page.keyboard.press('Enter')
+  await expect(floatingEditorGroups(page)).toHaveCount(1)
+  await expect(page.getByText('All open queries float', { exact: true })).toHaveCount(0)
+  const floating = await editorGroupTabs(floatingEditorGroups(page)).first().getAttribute('aria-label')
+  await documentTab(page, floating).click({ button: 'right' })
+  await menu('Query tab').getByRole('menuitem', { name: 'Dock', exact: true }).click()
+  await expect(floatingEditorGroups(page)).toHaveCount(0)
+  await expect(editorGroups(page)).toHaveCount(1)
+  await documentTab(page, secondTab).click()
+  await expect.poll(() => activeDocumentName(page)).toBe(secondTab)
+  // At the 16-group cap the grid has no room for an empty group: Shift-dragging its last tab out floats it while the
+  // pointer is down, and it docks again once released. The tab menu (Shift+F10 on a focused tab) works under the floats.
+  const tabMenu = async (tab, item) => {
+    await documentTab(page, tab).focus()
+    await page.keyboard.press('Shift+F10')
+    await menu('Query tab').getByRole('menuitem', { name: item, exact: true }).click()
+  }
+  const extra = []
+  for (let step = 0; step < 14; step++) {
+    await page.keyboard.press('Control+N')
+    await expect.poll(async () => (await order()).length).toBe(3 + step)
+    extra.push(await activeDocumentName(page))
+  }
+  for (const [index, tab] of [firstTab, ...extra].entries()) {
+    await tabMenu(tab, 'Float')
+    await expect(floatingEditorGroups(page)).toHaveCount(index + 1)
+  }
+  await expect(editorGroups(page)).toHaveCount(16)
+  // The floating groups may cover the grid's strip on a small display (Windows CI's 1024x768), so the Shift-press goes to
+  // the tab itself; Dockview's float then follows the pointer until the window hears it go up.
+  const lastBox = await documentTab(page, secondTab).boundingBox()
+  const pointer = { pointerId: 1, pointerType: 'mouse', isPrimary: true, clientX: lastBox.x + 20, clientY: lastBox.y + lastBox.height / 2 }
+  await documentTab(page, secondTab).dispatchEvent('pointerdown', { ...pointer, shiftKey: true, button: 0, buttons: 1 })
+  // The float moves with the pointer, and the moves report the layout while the pointer is still down: the cap's dock
+  // must wait for the release (without that wait this check fails every run).
+  await page.evaluate(async init => {
+    for (let step = 1; step <= 6; step++) {
+      window.dispatchEvent(new PointerEvent('pointermove', { ...init, bubbles: true, buttons: 1, clientX: init.clientX + step * 20, clientY: init.clientY + step * 25 }))
+      await new Promise(resolve => requestAnimationFrame(resolve))
+    }
+  }, pointer)
+  await expect(floatingEditorGroups(page)).toHaveCount(16)
+  await page.evaluate(init => { window.dispatchEvent(new PointerEvent('pointerup', { ...init, bubbles: true, button: 0, buttons: 0 })) }, pointer)
+  await expect(floatingEditorGroups(page)).toHaveCount(15)
+  await expect(editorGroups(page)).toHaveCount(16)
+  await expect(page.getByText('The query editor shows at most 16 editor groups.', { exact: true })).toBeVisible()
+  expect(failures).toEqual([])
+  for (const tab of extra) {
+    await documentTab(page, tab).focus()
+    await page.keyboard.press('Delete')
+    await expect(documentTab(page, tab)).toHaveCount(0)
+  }
+  await tabMenu(firstTab, 'Dock')
+  await expect(floatingEditorGroups(page)).toHaveCount(0)
+  await expect(editorGroups(page)).toHaveCount(1)
+  await documentTab(page, secondTab).click()
+  await expect.poll(() => activeDocumentName(page)).toBe(secondTab)
+  // A document's own regions keep their names as their titles change; only the groups are named "Editor group: …".
+  const renamed = await page.locator(part.editorArea).evaluate(async root => {
+    const region = document.createElement('div')
+    region.setAttribute('role', 'region')
+    region.setAttribute('aria-label', 'Before sections')
+    root.append(region)
+    region.setAttribute('aria-label', 'After sections')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const label = region.getAttribute('aria-label')
+    region.remove()
+    return label
+  })
+  expect(renamed).toBe('After sections')
+  console.log('Editor checks: Split Editor Right, focus between groups, Move Editor into Previous Group, a drag onto the compass, Join All Editor Groups, Float and Dock, a close showing its own group\'s next tab, tab keys, Delete on a focused tab (the shown one or not) while File › Close Query closes the shown one, every query floating, and the 16-group cap under a Shift-drag.')
   await page.keyboard.press('Alt+e')
   await page.keyboard.press('k')
   await expect(menu('Bookmarks').getByRole('menuitem', { name: 'Next Bookmark', exact: true })).toHaveAttribute('aria-disabled', 'true')

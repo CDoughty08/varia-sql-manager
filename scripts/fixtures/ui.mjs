@@ -47,8 +47,13 @@ export const part = {
   querySegment: '.query-status-segment',
   // Document tabs
   tabName: '.tab-name',
+  /** Editor groups (src/renderer/src/editor-groups/): Dockview's groups inside the query editor panel, and the active one. */
+  /** The editor area in the Query editor panel: every editor group, under the active query's bar. */
+  editorArea: '.editor-groups-root',
+  editorGroup: '.editor-groups .dv-groupview',
+  activeEditorGroup: '.editor-groups .dv-groupview.dv-active-group',
+  floatingEditorGroup: '.editor-groups .dv-resize-container .dv-groupview',
   tabSid: '.tab-sid',
-  tabRowCount: '.query-shelf-rows',
   /** The kind icon before a tab's name (kindIcon finds it by name; page code needs its box and stroke). */
   tabIcon: '.tab-icon',
   // Query output
@@ -112,6 +117,8 @@ export const part = {
   explorerActive: '.oe-active',
   /** Object Explorer's search (SearchPanel's pane layout) and the field around its input. */
   explorerSearch: '.object-search-pane',
+  /** A Search Objects tab's document. */
+  objectSearchTab: '[data-object-search]',
   explorerSearchField: '.object-search-pane .object-search-field',
   /** The pane's footer: the selection's listing and its freshness, then the connected servers. */
   explorerFooter: '.explorer-footer',
@@ -208,10 +215,11 @@ export const part = {
   bookmarkGlyph: '.varia-bookmark',
   dropCaret: '.dnd-target',
   // Docking
-  dockingGuides: '.docking-guides',
+  /** The shown compass: the workspace and the editor area each have one, hidden while no drag is over it. */
+  dockingGuides: '.docking-guides:not([hidden])',
   dockingGuideCell: '.docking-guide-cell',
   activeDockingGuideCell: '.docking-guide-cell.active',
-  dockingPreview: '.docking-preview',
+  dockingPreview: '.docking-preview:not([hidden])',
   /** Varia's class on Dockview's shell, next to Dockview's theme class: the dock's colours hang off it. */
   dockShell: '.varia-dock',
   // Live charts (src/renderer/src/live/LiveChart.tsx): the crosshair's tooltip (hidden from assistive technology, as the
@@ -290,7 +298,8 @@ const named = (name, exact = true) => typeof name === 'string' ? { name, exact }
 
 export const titleBar = page => page.locator(part.titleBar)
 /** Dockview's theme classes on its shell, and whether Varia's own class sits beside them. */
-export const dockShell = page => page.locator('.dv-shell').evaluate((element, own) => ({ themes: [...element.classList].filter(name => name.startsWith('dockview-theme-')).sort(), varia: element.matches(own) }), part.dockShell)
+// The workspace's shell: the editor area nests a second Dockview inside it.
+export const dockShell = page => page.locator('.dv-shell').first().evaluate((element, own) => ({ themes: [...element.classList].filter(name => name.startsWith('dockview-theme-')).sort(), varia: element.matches(own) }), part.dockShell)
 export const menubar = page => page.getByRole('menubar', { name: 'Application menu', exact: true })
 /**
  * The Standard toolbar: in the header, icon buttons named Connect, New query, Open, Save, Save All and Activity Monitor;
@@ -345,23 +354,22 @@ export const querySession = page => queryStatus(page).locator(part.querySession)
 
 export const documentTabs = page => page.getByRole('tablist', { name: 'Query documents', exact: true })
 export const documentTab = (page, name) => documentTabs(page).getByRole('tab', named(name))
-export const activeDocument = page => documentTabs(page).getByRole('tab', { selected: true })
+/** The active document's tab: the tab its group shows, in the active group (each group has a tab strip and a selected tab). */
+export const activeDocument = page => page.locator(part.activeEditorGroup).getByRole('tablist', { name: 'Query documents', exact: true }).getByRole('tab', { selected: true })
 export const activeDocumentName = page => activeDocument(page).getAttribute('aria-label')
-/** Counts open documents, including the ones behind either shelf's overflow button. */
-export const openDocuments = page => documentTabs(page).locator('[data-tab-id]')
-export const openDocument = (page, name) => documentTabs(page).locator('[data-document-tab]').and(page.getByLabel(name, { exact: true }))
-export async function selectOpenDocument(page, name) {
-  const tab = openDocument(page, name)
-  await tab.waitFor({ state: 'attached' })
-  if (!await tab.isVisible()) {
-    const id = await tab.locator('xpath=ancestor::*[@popover][1]').getAttribute('id')
-    await documentTabs(page).locator(`button[popovertarget="${id}"]`).click()
-  }
-  await tab.click()
-}
+/** The editor groups, the grid's in order and then the floating ones, and the tabs of one. */
+export const editorGroups = page => page.locator(part.editorGroup)
+export const editorGroupTabs = group => group.getByRole('tablist', { name: 'Query documents', exact: true }).getByRole('tab')
+export const floatingEditorGroups = page => page.locator(part.floatingEditorGroup)
 /** A document's tab with its Close button: the target of the tab's menu. */
-export const documentTabSlots = page => documentTabs(page).locator('[data-tab-id]:has([role="tab"])')
-export const documentShelf = (page, pinned = false) => documentTabs(page).getByRole('group', { name: pinned ? 'Pinned tabs' : 'Unpinned tabs', exact: true })
+export const documentTabSlots = page => documentTabs(page).locator('[data-tab-id]')
+/** The tab (Dockview's tab element, which has the role, name, selection and focus) around a slot. */
+export const slotTab = slot => slot.locator('xpath=ancestor::*[@role="tab"][1]')
+/** Every open document's tab, in any group. */
+export const openDocuments = documentTabSlots
+export const openDocument = documentTab
+/** Selects a document's tab in its group (Playwright scrolls a strip's hidden tab into view). */
+export const selectOpenDocument = (page, name) => documentTab(page, name).click()
 export const pinDocumentButton = (page, name, pinned = false) => documentTabs(page).getByRole('button', { name: `${pinned ? 'Unpin' : 'Pin'} ${name}`, exact: true })
 /** Rename Tab's text box, in the tab being renamed. */
 export const tabNameBox = page => documentTabs(page).getByRole('textbox', { name: 'Tab name', exact: true })
@@ -374,6 +382,8 @@ export const executingMark = scope => scope.getByRole('img', { name: 'Executing'
 export const kindIcon = (tab, kind) => tab.getByRole('img', { name: kind, exact: true })
 export const editorTextbox = page => page.locator('.monaco-editor [role="textbox"]')
 export const editorText = page => page.locator('.monaco-editor .view-lines').innerText()
+/** The text of the active editor group's editor, where several groups each show a query. */
+export const activeGroupEditorText = page => page.locator(part.activeEditorGroup).locator('.monaco-editor .view-lines').innerText()
 
 // Panes: the dock's panels, each with a tab in its group's header
 
@@ -488,7 +498,11 @@ export const explorerSearchField = page => page.locator(part.explorerSearchField
 /** Object Explorer's search hits, by their reveal buttons' accessible names. */
 export const explorerSearchHits = page => page.locator(part.explorerSearch).getByRole('list', { name: 'Search results', exact: true }).locator('[data-hit]')
 /** The hit Enter in the box revealed last. */
-export const explorerSearchCurrent = page => page.locator(part.explorerSearch).getByRole('list', { name: 'Search results', exact: true }).locator('[aria-current] [data-hit]')
+export const explorerSearchCurrent = page => page.locator(part.explorerSearch).getByRole('list', { name: 'Search results', exact: true }).locator('[data-hit][aria-current]')
+/** The Search Objects tab's box, its hits by their buttons, and the selected hit. */
+export const objectSearchBox = page => page.locator(part.objectSearchTab).getByRole('textbox', { name: 'Search objects', exact: true })
+export const objectSearchHits = page => page.locator(part.objectSearchTab).getByRole('list', { name: 'Results', exact: true }).locator('[data-hit]')
+export const objectSearchSelected = page => page.locator(part.objectSearchTab).getByRole('list', { name: 'Results', exact: true }).locator('[data-hit][aria-current]')
 export const explorerSearchSplitter = page => page.locator(part.explorerSearch).getByRole('separator', { name: 'Resize search results', exact: true })
 export const explorerSearchToggle = (page, name) => page.locator(part.explorerSearch).getByRole('button', { name, exact: true })
 export const explorerSearchOptions = page => page.locator(part.explorerSearch).getByRole('button', { name: /^Search options/ })

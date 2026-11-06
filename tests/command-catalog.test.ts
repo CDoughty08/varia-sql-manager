@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
-import { commandCatalog, commandDescriptor, commandIds, isCommandId, paletteLabel, type CommandId } from '../src/shared/commands/catalog'
+import { actsOnTab, commandCatalog, commandDescriptor, commandIds, isCommandId, paletteLabel, type CommandId } from '../src/shared/commands/catalog'
 import { findConflicts, focusSamples } from '../src/shared/commands/conflicts'
 import { contextKeyNames, contextKeys, contextKeyValues, contextRecord, isContextKey, keysOfScope, targetKeyMenu, whenProblems, type ContextKey, type ContextKeys } from '../src/shared/commands/context-keys'
 import { defaultRules, platforms, resolveKeybinding, specForPlatform, type Platform, type ResolvedRule } from '../src/shared/commands/keybindings'
@@ -48,10 +48,15 @@ function showTogether(menu: MenuId, ...clauses: (string | undefined)[]): boolean
 }
 
 describe('command catalogue', () => {
+  it('lets keys on a focused tab name it only to the query tab menu’s commands', () => {
+    // Close, Rename and the moves act on the focused tab, as its menu would; Execute and the rest follow the shown query.
+    for (const id of ['file.close', 'file.save', 'document.rename', 'editor.splitRight', 'editor.float'] as const) expect(actsOnTab(id)).toBe(true)
+    for (const id of ['query.execute', 'file.new'] as const) expect(actsOnTab(id)).toBe(false)
+  })
   it('is the renderer\'s command id type', () => {
     expectTypeOf<CommandId>().toEqualTypeOf<RendererCommandId>()
-    // 110 commands (Create Catalog among them), Object Explorer's six object actions (Select Top keeps PR4's id; Unlock… is the sixth), Restore Files and Filegroups and the row commands of Restore Database and Restore Files and Filegroups (Tasks › Restore › Database… and Files and Filegroups…), New Table and the table designer's seven, then Script As's 30 generated ones (three keep the table menu's CREATE ids) and its palette pick, Modify, and Cancel, the two notification commands, the Database Properties document's four verbs, the Restore Database document's three, New Database (with its database menu's own command) and its document's three verbs, Attach Database, Search in Object Explorer, the SSIS Catalog's four Properties verbs and their documents' Refresh, the Activity Monitor's nine, Integration Services Operations' nine, New Login's two (its Logins menu item and palette entry, and Security › New › Login…), Tasks › Take Offline and Bring Online, Tasks › Detach… (D3b), a login's Disable and Enable (D4b), Help's four update commands, and Search Objects' three (Search Objects…, Rebuild Search Index, Stop Indexing), and Object Explorer's Group by Schema; the output panels' Window and Tab With commands are three each (Results, Messages, Execution plan), and the query tabs' Move Left, Move Right and Rename Tab, and a panel's Move into New Window and Move Back into Main Window, the results toolbar's two White space choices, and Object Explorer's Peek.
-    expect(commandIds).toHaveLength(225)
+    // 110 commands (Create Catalog among them), Object Explorer's six object actions (Select Top keeps PR4's id; Unlock… is the sixth), Restore Files and Filegroups and the row commands of Restore Database and Restore Files and Filegroups (Tasks › Restore › Database… and Files and Filegroups…), New Table and the table designer's seven, then Script As's 30 generated ones (three keep the table menu's CREATE ids) and its palette pick, Modify, and Cancel, the two notification commands, the Database Properties document's four verbs, the Restore Database document's three, New Database (with its database menu's own command) and its document's three verbs, Attach Database, Search in Object Explorer, the SSIS Catalog's four Properties verbs and their documents' Refresh, the Activity Monitor's nine, Integration Services Operations' nine, New Login's two (its Logins menu item and palette entry, and Security › New › Login…), Tasks › Take Offline and Bring Online, Tasks › Detach… (D3b), a login's Disable and Enable (D4b), Help's four update commands, and Search Objects' three (Search Objects…, Rebuild Search Index, Stop Indexing), and Object Explorer's Group by Schema; the output panels' Window and Tab With commands are three each (Results, Messages, Execution plan), and the query tabs' Move Left, Move Right and Rename Tab, and a panel's Move into New Window and Move Back into Main Window, and the editor groups' nine (Split Editor Right and Down, Move Editor into Next and Previous Group, Focus Next and Previous Editor Group, Join All Editor Groups, Float and Dock Editor), the results toolbar's two White space choices, and Object Explorer's Peek.
+    expect(commandIds).toHaveLength(234)
     expect(commandIds.filter(id => id.startsWith('explorer.script') && id.includes('To'))).toEqual([...scriptCommandIds])
   })
   it('has a handler for every command once all contributions have run', () => {
@@ -220,7 +225,7 @@ describe('context keys', () => {
     expect(contextRecord('linux', { explorerNode: 'table', paneFloating: true })).toMatchObject({ explorerNode: 'table', outputView: '', paneFloating: true })
     expect(keysOfScope('target')).toEqual([
       'explorerNode', 'explorerServerLost', 'explorerFolderFilterable', 'explorerFolderFiltered', 'explorerFolder', 'explorerFolderInsertable', 'explorerNodeStatus', 'explorerServerEngine', 'explorerServerLinux',
-      'outputView', 'pane', 'paneFloating', 'panePopout'
+      'outputView', 'pane', 'paneFloating', 'panePopout', 'documentTabFloating'
     ])
     expect(isContextKey('__proto__')).toBe(false)
     expect(isContextKey('constructor')).toBe(false)

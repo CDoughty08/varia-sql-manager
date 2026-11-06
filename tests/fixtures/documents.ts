@@ -109,6 +109,8 @@ export class TestEditor {
   selection: (IRange & ISelection & { isEmpty?(): boolean }) | null = null
   viewState: editor.ICodeEditorViewState | null = null
   readonly options: Record<string, unknown>[] = []
+  focused = 0
+  focus(): void { this.focused++ }
   updateOptions(options: Record<string, unknown>): void { this.options.push(options) }
   getModel(): editor.ITextModel | null { return this.model }
   setModel(model: editor.ITextModel | null): void { this.model = model; this.selection = null; this.viewState = null }

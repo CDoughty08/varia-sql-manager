@@ -6,7 +6,7 @@ import { menuCommandIds, menuMayShowChords } from '../../../shared/commands/menu
 import { evaluateWhen } from '../../../shared/commands/when'
 import type { CommandService } from './commands'
 import { onUnexpectedError } from './errors'
-import type { Disposable } from './types'
+import type { CommandArgs, Disposable } from './types'
 
 /** The parts of a `KeyboardEvent` the dispatcher reads and calls, so tests can pass plain objects. */
 export interface KeyDownEvent extends KeyEventLike {
@@ -41,6 +41,8 @@ export interface KeybindingServiceOptions {
   /** The clock for the chord prefix's lifetime; defaults to `Date.now`, as Monaco's. */
   readonly now?: () => number
   readonly menus?: MenuKeyRouter
+  /** What a key's command acts on, when focus names it (a focused query tab: `tabId`); menus and the palette act on the active document. */
+  readonly keyArgs?: (command: CommandId) => CommandArgs | undefined
   /** Every key release, after the menus': Peek forgets a Ctrl+hover when Ctrl goes up with the pointer still. Never consumes. */
   readonly keyUp?: (event: KeyDownEvent) => void
 }
@@ -61,10 +63,6 @@ export class KeybindingService implements Disposable {
   private readonly macKeyEquivalents: ReadonlySet<string>
   /** When a native chord prefix was pressed in editor text, while Monaco waits for the chord's second key. */
   private pendingNativePrefix?: number
-  private controlHeld = false
-  private controlPress = 0
-  /** Identifies a physical Ctrl hold across wheel events. Trackpad pinches send ctrlKey without a key press. */
-  get controlWheelGesture(): number | undefined { return this.controlHeld ? this.controlPress : undefined }
   private readonly detachers = new Set<() => void>()
   constructor(private readonly options: KeybindingServiceOptions) {
     const { platform } = options
@@ -103,13 +101,12 @@ export class KeybindingService implements Disposable {
     target.addEventListener('keydown', keyDown, true)
     target.addEventListener('keyup', keyUp, true)
     target.addEventListener('focusout', focusOut, true)
-    const blur = () => { reset(); this.controlHeld = false }
-    target.addEventListener('blur', blur)
+    target.addEventListener('blur', reset)
     const detach = () => {
       target.removeEventListener('keydown', keyDown, true)
       target.removeEventListener('keyup', keyUp, true)
       target.removeEventListener('focusout', focusOut, true)
-      target.removeEventListener('blur', blur)
+      target.removeEventListener('blur', reset)
       this.detachers.delete(detach)
     }
     this.detachers.add(detach)
@@ -117,7 +114,6 @@ export class KeybindingService implements Disposable {
   }
   handleKeyDown(event: KeyDownEvent): void {
     try {
-      if (event.key === 'Control' && !this.controlHeld) { this.controlHeld = true; this.controlPress++ }
       if (event.defaultPrevented) return
       const { platform, menus } = this.options
       // Every press counts for a bare-Alt tap, even one the menus then consume (an Alt tap also leaves the menubar).
@@ -152,11 +148,10 @@ export class KeybindingService implements Disposable {
       event.preventDefault()
       event.stopPropagation()
       if (event.repeat && !rule.allowRepeat) return
-      void this.options.commands.execute(rule.command, undefined, 'keybinding')
+      void this.options.commands.execute(rule.command, this.options.keyArgs?.(rule.command), 'keybinding')
     } catch (error) { onUnexpectedError(error) }
   }
   handleKeyUp(event: KeyDownEvent): void {
-    if (!event.ctrlKey) this.controlHeld = false
     try { this.options.menus?.handleKeyUp(event) } catch (error) { onUnexpectedError(error) }
     try { this.options.keyUp?.(event) } catch (error) { onUnexpectedError(error) }
   }

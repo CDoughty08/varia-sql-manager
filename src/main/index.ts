@@ -37,8 +37,10 @@ import { SettingsStore } from './settings-store'
 import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
 import { encodeSession, SessionStore, sessionWriteSchema, type SessionInput, type SessionRecord, type SessionRecordDocument } from './session-store'
 import { sessionLimits, type ReloadPins, type RestoredDocument, type RestoredSession, type SessionWrite } from '../shared/files/session'
+import { remapEditorGroups } from '../shared/editor-groups'
 import { lossDetails } from '../shared/files/recovery'
 import { commandTitle } from '../shared/settings/catalog'
+import { popoutWindowName } from '../shared/popouts'
 import { windowControls } from '../shared/theme/metrics'
 import { AppearanceService, windowChromeFor } from './appearance'
 import { applicationMenuTemplate, type ApplicationMenuActions } from './application-menu'
@@ -336,7 +338,7 @@ function sessionInput(request: SessionWrite): SessionInput {
   const documents = request.documents.map(({ fileId, ...document }) => ({
     ...document, ...fileId ? files.sessionFile(fileId) : undefined
   }))
-  return { documents, activeIndex: request.activeIndex }
+  return { documents, activeIndex: request.activeIndex, ...request.groups ? { groups: request.groups } : {} }
 }
 
 function reloadCheckpoint(pins?: ReloadPins): Extract<SessionCheckpoint, { kind: 'reload' }> {
@@ -542,7 +544,7 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
   }
   // The page may open only its own popout windows: same-origin about:blank children with Varia's popout name, on a display.
   contents.setWindowOpenHandler(details => popouts.open(details, { backgroundColor: appearance.windowChrome().backgroundColor, show: process.env.VARIA_SMOKE_TEST !== '1' }))
-  contents.on('did-create-window', child => popouts.adopt(child))
+  contents.on('did-create-window', (child, details) => popouts.adopt(child, details.frameName))
   // With popouts open the page's own visibility stays visible (no background throttling): main tells it instead.
   const sendHidden = () => { if (!window.isDestroyed()) contents.send('varia:window-hidden', window.isMinimized() || !window.isVisible()) }
   window.on('minimize', sendHidden); window.on('restore', sendHidden); window.on('hide', sendHidden); window.on('show', sendHidden)
@@ -998,7 +1000,7 @@ app.whenReady().then(async () => {
       if (sessionCheckpoint?.record === checkpoint.record) sessionCheckpoint = undefined
       throw error
     }
-    const documents: RestoredDocument[] = [], problems: string[] = []
+    const documents: RestoredDocument[] = [], problems: string[] = [], places = new Map<number, number>()
     let activeIndex = -1
     for (const [index, document] of (record?.documents ?? []).entries()) {
       if (generation !== rendererGeneration) break
@@ -1008,9 +1010,12 @@ app.whenReady().then(async () => {
       if (index === record?.activeIndex) activeIndex = documents.length
       const recoveryId = checkpoint.kind === 'reload' ? checkpoint.recoveryIds[index] : undefined
       const resumed = restored.dirty && checkpoint.kind === 'reload' && recoveryId && await recovery.resumeReloaded(recoveryId, checkpoint.sourceGeneration, generation, restored).catch(() => false)
+      places.set(index, documents.length)
       documents.push(resumed && recoveryId ? { ...restored, recoveryId } : restored)
     }
-    return { documents, activeIndex, problems: problems.slice(0, 32), restoreGeneration: generation }
+    // The editor groups follow the tabs that reopened; a group whose files are all gone goes.
+    const groups = record?.groups ? remapEditorGroups(record.groups, index => places.get(index)) : undefined
+    return { documents, activeIndex, ...groups ? { groups } : {}, problems: problems.slice(0, 32), restoreGeneration: generation }
   })
   handle('varia:session-restored', value => {
     const generation = z.int().parse(value)
@@ -1025,6 +1030,11 @@ app.whenReady().then(async () => {
   // Write only (the page's one path to clipboard contents is the Paste role, gated above); the length is bounded like
   // a full results grid copy.
   handle('varia:clipboard-write', value => { clipboard.writeText(z.string().max(maxClipboardText).parse(value)) })
+  // Raises one of the page's own popouts, named as it opened it, without activating it.
+  handle('varia:popout-raise', value => {
+    const name = z.string().regex(popoutWindowName).parse(value), main = mainWindow
+    popouts.raise(name, () => { if (main && !main.isDestroyed() && !main.isFocused()) main.focus() })
+  })
   handle('varia:confirm-close', async value => {
     const name = z.string().min(1).max(512).parse(value)
     const response = await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'question', title: 'Unsaved query', message: `Save changes to ${name}?`, buttons: ['Save', "Don't Save", 'Cancel'], defaultId: 0, cancelId: 2, noLink: true, signal }), { response: 2, checkboxChecked: false }, true)

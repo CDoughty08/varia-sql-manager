@@ -45,7 +45,8 @@ const dockThemes = {
   light: { ...themeLight, name: 'varia-light', className: 'dockview-theme-light varia-dock' }
 } satisfies Record<ThemeType, typeof themeDark>
 /** A popout window, open: its layout, the window, and the root its frame renders into. */
-interface PopoutRecord extends PopoutLayout { readonly window: Window; readonly root: HTMLElement; title(value: string): void; dispose(): void }
+/** A popout window as the page holds it; `name` is the window name it was opened with, by which main raises it. */
+interface PopoutRecord extends PopoutLayout { readonly window: Window; readonly name: string; readonly root: HTMLElement; title(value: string): void; dispose(): void }
 const clampSize = (value: number, min: number) => Math.min(popoutLimits.maxSize, Math.max(min, Math.round(Number.isFinite(value) ? value : min)))
 const clampCoordinate = (value: number) => Math.min(32_000, Math.max(-32_000, Math.round(Number.isFinite(value) ? value : 0)))
 const windowTitle = (pane: PaneId) => paneTitles[pane] + ' - Varia SQL Manager'
@@ -75,8 +76,9 @@ const message = (error: unknown) => error instanceof Error ? error.message : 'Th
 export interface WorkspaceHandle {
   manage(mode?: 'save' | 'load'): void
   reset(): void
-  /** Shows a pane, and with `focus` moves keyboard focus into it; `raise` (or `focus`) brings a popout window that holds it to the front. */
-  reveal(id: PaneId, options?: { focus?: boolean; raise?: boolean }): void
+  /** Shows a pane, and with `focus` moves keyboard focus into it; `raise` (or `focus`) brings a popout window that holds it to the front,
+   *  and `raiseInactive` brings it to the top without activating it, so keyboard focus stays where it is. */
+  reveal(id: PaneId, options?: { focus?: boolean; raise?: boolean; raiseInactive?: boolean }): void
   /** Closes a panel as its × does, remembering where it was docked. */
   close(id: PaneId): void
   location(id: PaneId): PaneLocation
@@ -209,7 +211,8 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     let child: Window | null = null
     // A fresh name each time, never the layout's id: a window that had it may still be closing, and window.open would
     // hand that window back instead of opening one.
-    try { child = window.open('about:blank', 'varia-popout-' + crypto.randomUUID(), `left=${x},top=${y},width=${width},height=${height}`) } catch { child = null }
+    const name = 'varia-popout-' + crypto.randomUUID()
+    try { child = window.open('about:blank', name, `left=${x},top=${y},width=${width},height=${height}`) } catch { child = null }
     let prepared: PopoutDocument | undefined, attached: { dispose(): void } | undefined
     try {
       if (!child) throw new Error('The window was refused.')
@@ -225,7 +228,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     const closed = () => windowClosed(layout.id), resized = () => changed()
     target.addEventListener('pagehide', closed)
     target.addEventListener('resize', resized)
-    const record: PopoutRecord = { id: layout.id, panes: [...layout.panes], active: layout.active, bounds: layout.bounds, window: target, root: frame.root, title: frame.setTitle,
+    const record: PopoutRecord = { id: layout.id, panes: [...layout.panes], active: layout.active, bounds: layout.bounds, window: target, name, root: frame.root, title: frame.setTitle,
       dispose: () => { target.removeEventListener('pagehide', closed); target.removeEventListener('resize', resized); listeners.dispose(); frame.dispose() } }
     setRecords([...popoutsRef.current, record])
     return true
@@ -353,7 +356,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     else panel.group.api.moveTo({ position: id === 'explorer' ? 'left' : isOutputPane(id) ? 'bottom' : 'right' })
     if (previous && previous.position !== 'center') panel.api.setSize({ width: previous.width, height: previous.height })
   }
-  function reveal(id: PaneId, options?: { focus?: boolean; raise?: boolean }) {
+  function reveal(id: PaneId, options?: { focus?: boolean; raise?: boolean; raiseInactive?: boolean }) {
     const api = apiRef.current
     // In a popout window its tab is selected; the window comes to the front only when asked, since a query's output
     // showing must not take focus from the editor.
@@ -361,6 +364,8 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     if (record) {
       selectInWindow(record.id, id as PopoutPaneId)
       if (options?.focus || options?.raise) record.window.focus()
+      // Main raises it (restored) without activating it, so keyboard focus stays where the user is.
+      else if (options?.raiseInactive) void window.varia.raisePopout(record.name).catch(() => {})
       if (options?.focus) focusPane(id)
       return
     }
@@ -590,6 +595,17 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
       publishVisibility(api)
       guides.current = new DockingGuides(api, root.current!, ids => ids.forEach(id => rememberDock(id as PaneId)), error => setError(message(error)), (ids, at) => popOut(ids, at))
       api.updateOptions({ dropPositionResolver: guides.current })
+      // The editor groups are a Dockview of their own inside the editor panel, whose drop targets would hide the editor
+      // panel's from a workbench panel dragged over it: while one is dragged, they let the pointer through (styles.css).
+      const workbenchElement = root.current!
+      const dragging = () => workbenchElement.classList.add('dock-dragging')
+      const dropped = () => { setTimeout(() => workbenchElement.classList.remove('dock-dragging'), 0) }
+      document.addEventListener('pointerup', dropped, true)
+      document.addEventListener('pointercancel', dropped, true)
+      const passThrough = [api.onWillDragPanel(dragging), api.onWillDragGroup(dragging),
+        { dispose: () => { document.removeEventListener('pointerup', dropped, true); document.removeEventListener('pointercancel', dropped, true) } }]
+      const beforePassThrough = subscription.current
+      subscription.current = { dispose: () => { beforePassThrough?.dispose(); passThrough.forEach(item => item.dispose()) } }
       // A popout window's tab dragged onto the workbench docks there (the compass shows where), or where it was.
       const workbenchRoot = root.current!
       const carried = (event: DragEvent) => { const pane = paneDrag.carried(event.dataTransfer); return pane && recordOf(pane) ? pane : undefined }

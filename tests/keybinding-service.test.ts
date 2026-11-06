@@ -276,6 +276,17 @@ describe('keybinding dispatch', () => {
       expect(cancel).not.toHaveBeenCalled()
     } finally { fixture.dispose() }
   })
+  it('passes the key the tab focus names, so a key on a focused tab acts on it and menus act on the active document', () => {
+    const execute = vi.fn<CommandService['execute']>(async () => true)
+    let focused: string | undefined = 'b'
+    const keybindings = new KeybindingService({ platform: 'win32', commands: { execute }, context: { get: () => contextRecord('win32') }, modalOpen: () => false, editorHasTextFocus: () => false,
+      keyArgs: () => focused ? { tabId: focused } : undefined })
+    keybindings.handleKeyDown(letter('n', 'win32'))
+    expect(execute).toHaveBeenLastCalledWith('file.new', { tabId: 'b' }, 'keybinding')
+    focused = undefined
+    keybindings.handleKeyDown(letter('n', 'win32'))
+    expect(execute).toHaveBeenLastCalledWith('file.new', undefined, 'keybinding')
+  })
   it('contains a failing command service', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const keybindings = new KeybindingService({ platform: 'win32', commands: { execute: () => { throw new Error('boom') } }, context: { get: () => contextRecord('win32') }, modalOpen: () => false, editorHasTextFocus: () => false })
