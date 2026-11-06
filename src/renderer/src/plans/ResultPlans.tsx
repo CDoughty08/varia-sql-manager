@@ -1,9 +1,13 @@
 import { useMemo } from 'react'
 import { maxQueryPlanDocuments } from '../../../shared/plans'
+import { limits } from '../../../shared/ipc/wire/protocol'
 import type { ResultSetEntry } from '../results/ResultsService'
 import PlanViewer from './PlanViewer'
 import type { PlanSource } from './sources'
 import { useWorkbench } from '../core/WorkbenchContext'
+
+// A native Showplan result has one document. Unusual multi-row plan results can open further rows from their grid.
+const maxXmlSources = limits.maxResultSets.max + maxQueryPlanDocuments
 
 export default function ResultPlans({ queryId, tabId, plans }: { queryId: string; tabId: string; plans: readonly ResultSetEntry[] }) {
   const { commands } = useWorkbench()
@@ -15,7 +19,7 @@ export default function ResultPlans({ queryId, tabId, plans }: { queryId: string
       if (snapshot.state === 'lost' || snapshot.state === 'released') continue
       const { batchNumber, iteration, generation, resultId } = entry.descriptor
       const batch = batchNumber ? ` · Batch ${batchNumber}${iteration > 1 ? `, repetition ${iteration}` : ''}` : ''
-      for (let row = 0; row < snapshot.rowsAvailable && sources.length <= maxQueryPlanDocuments; row++) {
+      for (let row = 0; row < snapshot.rowsAvailable && sources.length < maxXmlSources; row++) {
         sources.push({
           entry, row, key: `${generation}:${resultId}:${row}`,
           label: entry.capturedPlan ? `Plan ${entry.index + 1}${batch}` : `Result ${entry.index + 1}, plan ${row + 1}`,
@@ -27,7 +31,7 @@ export default function ResultPlans({ queryId, tabId, plans }: { queryId: string
           }
         })
       }
-      if (sources.length > maxQueryPlanDocuments) break
+      if (sources.length === maxXmlSources) break
     }
     return sources
   }, [key])

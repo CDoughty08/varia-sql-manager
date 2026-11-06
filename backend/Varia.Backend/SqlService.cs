@@ -140,6 +140,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// error partway through its rows on demand (those are resource errors such as 701 or 1105), and that path must still
     /// end the set as incomplete and go on with the batch.</summary>
     internal Func<Exception?>? RowFault { get; set; }
+    /// <summary>Only the live checks set this to fail the observer's read after the user's batches have run.</summary>
+    internal Func<Exception?>? PlanReadFault { get; set; }
     /// <summary>Called when a batch's reader has reported the batch's end, just before the script asks whether its token
     /// fired meanwhile. Only the live checks set it, to cancel there as SqlClient's rare silent cancel does (see the batch
     /// loop), which no server does on demand.</summary>
@@ -904,7 +906,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         ActualPlanCapture? capture = null;
         var omittedPlans = false;
         var lostPlanEvents = false;
-        var readPlans = false;
+        var noPlanEvents = false;
         ResultSetBuffer? currentSet = null;
         var token = cancellation.Token;
         var watch = Stopwatch.StartNew();
@@ -1053,7 +1055,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                         if (await capture.StartAsync(captureSpid, connection.ClientConnectionId, profile.Major, args.TimeoutSeconds, setup.Token) is { } unavailable)
                             messages.Add(unavailable);
                     }
-                    catch (Exception error) when (error is SqlException or RequestException or InvalidOperationException or OperationCanceledException)
+                    catch (Exception error) when (error is SqlException or RequestException or InvalidOperationException or OperationCanceledException or IOException)
                     {
                         token.ThrowIfCancellationRequested();
                         messages.Add("Actual plan capture could not start. Check Extended Events permissions and lightweight profiling support on this server.");
@@ -1307,59 +1309,70 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         {
             watch.Stop();
             queries.TryRemove(args.QueryId, out _);
-            // A set cut short keeps the rows it stored.
-            foreach (var set in sets.Where(set => set.IsOpen))
+            try
             {
-                set.Complete();
-                events.Closed(set);
-            }
-            if (capture is not null)
-            {
-                try
+                // A set cut short keeps the rows it stored.
+                foreach (var set in sets.Where(set => set.IsOpen))
                 {
-                    if (capture.Started)
+                    set.Complete();
+                    events.Closed(set);
+                }
+                if (capture is not null)
+                {
+                    try
                     {
-                        // Read plans after all grids have finished, even if cancellation stopped a later batch.
-                        using var collect = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                        var snapshot = await capture.ReadAsync(collect.Token);
-                        omittedPlans = StoreActualPlans(args.SessionId, snapshot.Plans, plans);
-                        lostPlanEvents = snapshot.Incomplete;
-                        readPlans = true;
+                        if (capture.Started)
+                        {
+                            // Read plans after all grids have finished, even if cancellation stopped a later batch.
+                            using var collect = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                            if (PlanReadFault?.Invoke() is { } fault) throw fault;
+                            var snapshot = await capture.ReadAsync(collect.Token);
+                            omittedPlans = StoreActualPlans(args.SessionId, PlanExecutionDeduplication.Unpaired(snapshot, sets, MaxActualPlanBytes), plans);
+                            lostPlanEvents = snapshot.Incomplete;
+                            noPlanEvents = snapshot.Plans.Count == 0;
+                        }
+                    }
+                    catch (Exception error) when (error is SqlException or InvalidOperationException or OperationCanceledException or System.Xml.XmlException or IOException)
+                    {
+                        // SqlClient's TextReader wraps a failed SQL read in IOException.
+                        messages.Add("Actual plans could not be read from the Extended Events session.");
+                    }
+                    finally
+                    {
+                        using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                        if (await capture.CloseAsync(cleanup.Token) is { } notice) messages.Add(notice);
                     }
                 }
-                catch (Exception error) when (error is SqlException or InvalidOperationException or OperationCanceledException or System.Xml.XmlException)
-                {
-                    messages.Add("Actual plans could not be read from the Extended Events session.");
-                }
-                finally
-                {
-                    using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                    if (await capture.CloseAsync(cleanup.Token) is { } notice) messages.Add(notice);
-                }
             }
-            if (entered && session is not null)
+            finally
             {
-                session.Connection.FireInfoMessageEventOnUserErrors = false;
-                session.Connection.InfoMessage -= onInfo;
-                var state = session.Connection.State;
-                // A severity 20 error ends the session even while its connection still reads Open (IsSessionLost).
-                var lost = state is System.Data.ConnectionState.Closed or System.Data.ConnectionState.Broken || ended is not null && IsSessionLost(ended, state);
-                if (!lost && state == System.Data.ConnectionState.Open)
+                if (entered && session is not null)
                 {
-                    // Nothing runs on the user's session after the script, preserving @@ROWCOUNT and @@ERROR.
-                    database = session.Connection.Database;
-                    spid = session.Spid;
-                    login = session.Login;
+                    try
+                    {
+                        session.Connection.FireInfoMessageEventOnUserErrors = false;
+                        session.Connection.InfoMessage -= onInfo;
+                        var state = session.Connection.State;
+                        // A severity 20 error ends the session even while its connection still reads Open (IsSessionLost).
+                        var lost = state is System.Data.ConnectionState.Closed or System.Data.ConnectionState.Broken || ended is not null && IsSessionLost(ended, state);
+                        if (!lost && state == System.Data.ConnectionState.Open)
+                        {
+                            // Nothing runs on the user's session after the script, preserving @@ROWCOUNT and @@ERROR.
+                            database = session.Connection.Database;
+                            spid = session.Spid;
+                            login = session.Login;
+                        }
+                        if (lost)
+                        {
+                            ((ICollection<KeyValuePair<string, QuerySession>>)sessions).Remove(new(args.SessionId, session));
+                            session.Close();
+                            // A session that failed to open had no state to lose.
+                            if (session.HasOpened)
+                                messages.Add("The SQL session closed. The next execution opens a new session; previous SET options and temporary objects will be lost.");
+                        }
+                    }
+                    finally { session.Exit(); }
                 }
-                if (lost)
-                {
-                    ((ICollection<KeyValuePair<string, QuerySession>>)sessions).Remove(new(args.SessionId, session));
-                    session.Close();
-                    // A session that failed to open (a missing database, a refused login) had no state to lose.
-                    if (session.HasOpened)
-                        messages.Add("The SQL session closed. The next execution opens a new session; previous SET options and temporary objects will be lost.");
-                }
-                session.Exit();
             }
         }
         var output = messages.Snapshot();
@@ -1378,7 +1391,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             Note("Some actual execution plans could not be stored in full within the plan capture or result memory limits.");
         if (lostPlanEvents)
             Note("SQL Server's actual plan event buffer did not retain every plan. Any collected plans are available in Execution Plan.");
-        else if (readPlans && !omittedPlans && plans.Count == 0 && status == "completed")
+        else if (noPlanEvents && status == "completed")
             Note("SQL Server did not return an actual execution plan for this run.");
         // Only when something stopped the script before a later batch: SQL Server may have run the failing batch to its end.
         if (failure is not null && batchNumber > 0 && completed + 1 < totalBatches)

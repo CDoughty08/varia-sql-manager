@@ -917,6 +917,8 @@ lost.
   and permission to create, enable, read and drop its event session. SQL Server 2025 and Azure SQL Database also set
   a maximum collector duration. If a process exits abruptly before cleanup, a collector's connection ID filter prevents
   a later session that reuses the SPID from being captured.
+  When `SET STATISTICS XML` also returned the same execution, Varia keeps the complete SQL-returned plan and pairs it with
+  one observer event in the same batch and repetition. This leaves the original grid and the other executions available.
 - **SET prologue.** When a session opens (and so whenever one is reopened after it closed or was lost), the backend
   runs SSMS's query-window defaults before the script: `SET ARITHABORT ON; SET ANSI_NULLS ON; SET ANSI_PADDING ON;
   SET ANSI_WARNINGS ON; SET ANSI_NULL_DFLT_ON ON; SET CONCAT_NULL_YIELDS_NULL ON; SET QUOTED_IDENTIFIER ON;

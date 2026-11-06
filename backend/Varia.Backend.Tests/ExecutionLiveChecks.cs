@@ -61,6 +61,24 @@ internal static class ExecutionLiveChecks
                 && LiveResultChecks.RowsOf(store, remaining)[0].SequenceEqual(["1", "42"]),
                 "toolbar capture leaves the tab's transaction and temp table in place");
 
+            QueryResult failedRead;
+            service.PlanReadFault = () => new IOException("Varia live check: the collector stream broke.",
+                ConnectionFailureChecks.Sql(0, 0, 20, "", "The transport closed."));
+            try
+            {
+                failedRead = await Run("CREATE TABLE #collector_fault (n int); INSERT #collector_fault VALUES (42); SELECT n FROM #collector_fault;",
+                    includeActualPlan: true);
+            }
+            finally { service.PlanReadFault = null; }
+            check(failedRead.Status == "completed" && failedRead.PlanSets is null
+                && failedRead.ResultSets is [{ RowsStored: 1 } retained] && LiveResultChecks.RowsOf(store, retained)[0][0] == "42"
+                && Texts(failedRead).Contains("Actual plans could not be read from the Extended Events session."),
+                "a collector stream failure preserves the completed execution and data grids");
+            var afterReadFault = await Run("SELECT n FROM #collector_fault; DROP TABLE #collector_fault;");
+            check(afterReadFault.Status == "completed" && afterReadFault.Spid == failedRead.Spid
+                && afterReadFault.ResultSets is [{ RowsStored: 1 } reused] && LiveResultChecks.RowsOf(store, reused)[0][0] == "42",
+                "the next execution reuses the same SQL session after a collector read failure");
+
             await Run("CREATE TABLE #capture_rowcount(n int);");
             const string InsertTwo = "INSERT #capture_rowcount VALUES (1), (2);";
             const string BranchOnRows = "IF @@ROWCOUNT = 2 PRINT 'two'; ELSE PRINT 'different';";
@@ -82,15 +100,30 @@ internal static class ExecutionLiveChecks
                 && LiveResultChecks.RowsOf(store, numeric)[0][0] == "42" && LiveResultChecks.RowsOf(store, text)[0][0] == new string('q', 3000),
                 "ordinary values under the Showplan column alias keep their types and content in Results");
 
-            await Run("SET STATISTICS XML ON;");
             const string QueryWithPlan = "SELECT name FROM sys.databases WHERE database_id = 1;";
-            var manualCapture = await Run(QueryWithPlan, includeActualPlan: true);
-            var manualStillOn = await Run(QueryWithPlan);
-            check(manualCapture.PlanSets is [{ Kind: "executionPlan" }, ..] && manualCapture.ResultSets is [{ Kind: "rows" }, { Kind: "executionPlan" }]
+            const string PairedQuery = "SELECT n FROM #capture_pair WHERE n < 3;";
+            await Run("CREATE TABLE #capture_pair (n int PRIMARY KEY); INSERT #capture_pair VALUES (1),(2),(3),(4);");
+            await Run(PairedQuery + "SELECT n FROM #capture_pair WHERE n < 4;");
+            await Run("SET STATISTICS XML ON;");
+            var manualCapture = await Run(PairedQuery + PairedQuery, includeActualPlan: true);
+            var manualStillOn = await Run(PairedQuery);
+            check(manualCapture.PlanSets is null
+                && manualCapture.ResultSets is [{ Kind: "rows" }, { Kind: "executionPlan" }, { Kind: "rows" }, { Kind: "executionPlan" }]
                 && manualStillOn.PlanSets is null && manualStillOn.ResultSets is [{ Kind: "rows" }, { Kind: "executionPlan" }],
-                "toolbar capture preserves STATISTICS XML already enabled by the user: " + manualCapture.PlanSets?.Count
-                + " captured, then " + string.Join(", ", manualStillOn.ResultSets.Select(set => set.Kind)) + " without the toggle");
+                "two identical native executions remain distinct with one representation each: " + manualCapture.PlanSets?.Count
+                + " additional captures, then " + string.Join(", ", manualStillOn.ResultSets.Select(set => set.Kind)) + " without the toggle");
             await Run("SET STATISTICS XML OFF;");
+            var mixedCapture = await Run("SET STATISTICS XML ON; " + PairedQuery
+                + " SET STATISTICS XML OFF; SELECT n FROM #capture_pair WHERE n < 4;", includeActualPlan: true);
+            check(mixedCapture.PlanSets is [{ Kind: "executionPlan" } observerOnly]
+                && LiveResultChecks.RowsOf(store, observerOnly)[0][0]?.Contains("ActualRows=\"3\"") == true
+                && mixedCapture.ResultSets is [{ Kind: "rows" }, { Kind: "executionPlan" }, { Kind: "rows" }],
+                "the paired native result stays in Results and the distinct observer-only execution stays in Execution Plan: " + mixedCapture.PlanSets?.Count);
+            var gridLimitedCapture = await Run("SET STATISTICS XML ON; " + PairedQuery + " SET STATISTICS XML OFF;",
+                includeActualPlan: true, maxResultSets: 1);
+            check(gridLimitedCapture.ResultSets is [{ Kind: "rows" }] && gridLimitedCapture.DiscardedResultSets == 1
+                && gridLimitedCapture.PlanSets is [{ Kind: "executionPlan", RowsStored: 1 }, ..],
+                "the collector copy is kept when the grid limit discarded the manual plan");
 
             var timedCapture = await Run(QueryWithPlan + "\nGO\nWAITFOR DELAY '00:00:10';", timeout: 2, includeActualPlan: true);
             var afterTimeout = await Run(QueryWithPlan);

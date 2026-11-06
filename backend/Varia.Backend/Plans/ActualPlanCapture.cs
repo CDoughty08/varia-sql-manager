@@ -117,26 +117,34 @@ internal sealed class ActualPlanCapture(SqlConnection observer, bool databaseSco
 
     public async Task<string?> CloseAsync(CancellationToken token)
     {
+        string? notice = null;
         try
         {
-            if (!attempted) return null;
-            if (observer.State != ConnectionState.Open)
+            if (attempted)
             {
-                observer.Close();
-                await observer.OpenAsync(token);
+                if (observer.State != ConnectionState.Open)
+                {
+                    observer.Close();
+                    await observer.OpenAsync(token);
+                }
+                await using var command = observer.CreateCommand();
+                command.CommandTimeout = 0;
+                command.CommandText = $"DROP EVENT SESSION [{name}] ON {Scope};";
+                await command.ExecuteNonQueryAsync(token);
             }
-            await using var command = observer.CreateCommand();
-            command.CommandTimeout = 0;
-            command.CommandText = $"DROP EVENT SESSION [{name}] ON {Scope};";
-            await command.ExecuteNonQueryAsync(token);
-            return null;
         }
-        catch (SqlException error) when (!Started && error.Number == 15151) { return null; }
-        catch (Exception error) when (error is SqlException or InvalidOperationException or OperationCanceledException)
+        catch (SqlException error) when (!Started && error.Number == 15151) { }
+        catch (Exception error) when (error is SqlException or InvalidOperationException or OperationCanceledException or IOException)
         {
-            return $"Actual plan capture could not remove its Extended Events session ({name}).";
+            notice = $"Actual plan capture could not remove its Extended Events session ({name}).";
         }
-        finally { await observer.DisposeAsync(); }
+        finally
+        {
+            try { await observer.DisposeAsync(); }
+            catch (Exception error) when (error is SqlException or InvalidOperationException or OperationCanceledException or IOException)
+            { notice ??= "Actual plan capture could not close its observer connection."; }
+        }
+        return notice;
     }
 
     internal sealed record Snapshot(List<CapturedPlan> Plans, bool Incomplete);

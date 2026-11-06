@@ -4,7 +4,7 @@ import ELK from 'elkjs/lib/elk.bundled.js'
 import { describe, expect, it } from 'vitest'
 import { preparePlan } from '../src/main/plan-request'
 import { validateRequest, validateResult } from '../src/main/validation'
-import { planLimits, type PlanStatement, type PlanNode } from '../src/shared/plans'
+import { maxQueryPlanDocuments, planLimits, type PlanStatement, type PlanNode } from '../src/shared/plans'
 import { SpatialIndex, fit, intersects, union, viewport, zoomAt } from '../src/renderer/src/plans/geometry'
 import { layoutPlans } from '../src/renderer/src/plans/layout'
 import { findOperators } from '../src/renderer/src/plans/PlanViewer'
@@ -31,6 +31,18 @@ describe('execution plans', () => {
     controller.abort()
     await expect(loadPlanSources([{ key: 'x', label: 'x', read: async () => '' }], async () => { throw new Error('Must not parse') }, controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
     await expect(loadPlanSources([{ key: 'x', label: 'x', read: async () => '' }], async () => ({ ok: false, error: 'Invalid XML' }), new AbortController().signal)).rejects.toThrow('Invalid XML')
+  })
+  it('graphs the first 64 documents and preserves the source index for opening XML', async () => {
+    const read: number[] = []
+    const sources = Array.from({ length: maxQueryPlanDocuments + 2 }, (_, index) => ({
+      key: String(index), label: String(index), read: async () => { read.push(index); return String(index) }
+    }))
+    const document = { version: '', build: '', notices: [], statements: [statement('s', [node('root')])] }
+    const result = await loadPlanSources(sources, async () => ({ ok: true, value: document }), new AbortController().signal)
+    expect(read).toEqual(Array.from({ length: maxQueryPlanDocuments }, (_, index) => index))
+    expect(result.statements).toHaveLength(maxQueryPlanDocuments)
+    expect(result.statements.at(-1)?.id).toBe('63:s')
+    expect(result.notices[0]).toContain('Choose an XML source to open any retained plan.')
   })
   it('allows large plans to save and recover while retaining ordinary SQL document limits', () => {
     const content = 'x'.repeat(5_000_001)

@@ -175,7 +175,7 @@ try {
   expect([titleBar.toolbar, titleBar.search]).toEqual([[true, 'no-drag'], 'no-drag'])
   expect(titleBar.height).toBe(40)
   // The header keeps the file commands; each query has its own bar under the tab strip, with Execute (the filled button)
-  // and Cancel, then its server and database lists in the connection pill.
+  // Cancel and Actual Plan, then its server and database lists in the connection pill.
   expect(await toolbar(page).getByRole('button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label')))).toEqual(['Connect', 'New query', 'Open', 'Save', 'Save All', 'Activity Monitor'])
   await expect(toolbar(page).getByRole('combobox')).toHaveCount(0)
   await expect(queryConnection(page).getByLabel('Query server', { exact: true })).toBeVisible()
@@ -189,11 +189,20 @@ try {
   // server list's value alone.
   await queryServer(page).focus()
   await page.keyboard.press('ArrowLeft')
+  const actualPlan = queryBarButton(page, 'Include Actual Execution Plan')
+  await expect(actualPlan).toBeFocused()
+  await page.keyboard.press('Space')
+  await expect(actualPlan).toHaveAttribute('aria-pressed', 'true')
+  await page.keyboard.press('Space')
+  await expect(actualPlan).toHaveAttribute('aria-pressed', 'false')
+  await page.keyboard.press('ArrowLeft')
   await expect(queryBarButton(page, 'Execute')).toBeFocused()
+  await page.keyboard.press('ArrowRight')
+  await expect(actualPlan).toBeFocused()
   await page.keyboard.press('ArrowRight')
   await expect(queryServer(page)).toBeFocused()
   await expect(queryServer(page)).toHaveValue('')
-  expect(await queryBar(page).evaluate(bar => [...bar.querySelectorAll('button, select')].map(control => control.tabIndex))).toEqual([-1, -1, 0, -1])
+  expect(await queryBar(page).evaluate(bar => [...bar.querySelectorAll('button, select')].map(control => control.tabIndex))).toEqual([-1, -1, -1, 0, -1])
   // Options › Show the classic toolbar puts the text toolbar, with Layouts, back on a row of its own below the header.
   expect(await page.evaluate(() => window.varia.updateSettings({ 'environment.layout.classicToolbar': true }))).toMatchObject({ ok: true })
   await expect(toolbarButton(page, 'Layouts')).toBeVisible()
@@ -525,7 +534,7 @@ try {
   // A plan's XML is a grid cell's text, never markup.
   await typeSql('XML_PLAN_FIXTURE')
   await queryBarButton(page, /Execute/).click()
-  await expect(resultGrid(page, 1)).toContainText('<ShowPlanXML>')
+  await expect(resultGrid(page, 1)).toContainText('<ShowPlanXML xmlns=')
   await expect(page.locator('ShowPlanXML')).toHaveCount(0)
   await typeSql('SELECT 1;')
   await queryBarButton(page, /Execute/).click()
