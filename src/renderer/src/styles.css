@@ -1582,6 +1582,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .document-script-splitter { background: CanvasText; forced-color-adjust: none; }
   .document-script-splitter:hover, .document-script-splitter:focus-visible { background: Highlight; outline: 2px solid Highlight; }
   .object-search-splitter { background: CanvasText; forced-color-adjust: none; }
+  /* Forced colors drop the selection's fill: an outline keeps the selected hit marked once focus leaves the list. */
+  .object-search-hit:has(> [aria-current]) { outline: 1px solid Highlight; outline-offset: -1px; }
   .object-search-splitter:hover, .object-search-splitter:focus-visible { background: Highlight; outline: 2px solid Highlight; }
 }
 /* What a document says under its header: its last action's progress or outcome, an inline error, or a note (an SSIS
@@ -1942,7 +1944,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-search-hits { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 0 0 var(--varia-space-2); list-style: none; }
 .object-search-hit { display: flex; align-items: start; gap: var(--varia-space-1); padding: 0 var(--varia-space-3) 0 var(--varia-space-2); }
 .object-search-hit:hover { background: var(--varia-list-hoverBackground); }
-.object-search-hit[aria-current] { color: var(--varia-list-inactiveSelectionForeground); background: var(--varia-list-inactiveSelectionBackground); }
+.object-search-hit:has(> [aria-current]) { color: var(--varia-list-inactiveSelectionForeground); background: var(--varia-list-inactiveSelectionBackground); }
+.object-search-hit:has(> [aria-current]:focus) { color: var(--varia-list-activeSelectionForeground); background: var(--varia-list-activeSelectionBackground); }
 .object-search-hit .icon-button { visibility: hidden; flex-shrink: 0; }
 .object-search-hit:hover .icon-button, .object-search-hit:focus-within .icon-button { visibility: visible; }
 .object-search-open { flex: 1; min-width: 0; display: grid; grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr); column-gap: var(--varia-space-2); align-items: center; padding: var(--varia-space-1); text-align: start; color: inherit; background: transparent; border: 0; border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); cursor: pointer; }

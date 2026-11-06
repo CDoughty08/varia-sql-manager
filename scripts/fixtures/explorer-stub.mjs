@@ -25,6 +25,8 @@ export function installExplorerStub({ ipcMain }, { statics }) {
   const stub = globalThis.variaStub = {
     calls: [], cancels: [], held: new Map(), connections: {},
     tables: 120_000, views: 10_000, pageSize: 2000, pageDelayMs: 0, holdTablePages: false, auditsOk: false, holdLinked: true, tablesError: undefined,
+    // holdSearch: explorer.search answers only on release(); searchHidden: names the index leaves out of its answers.
+    holdSearch: false, searchHidden: [],
     release() { for (const [id, resolve] of [...stub.held]) { stub.held.delete(id); resolve() } }
   }
   const ok = value => ({ ok: true, value })
@@ -119,7 +121,7 @@ export function installExplorerStub({ ipcMain }, { statics }) {
       }
     }
     const hits = searchObjects.flatMap(({ definition, ...item }) => {
-      if (kinds && !kinds.includes(item.object.kind)) return []
+      if ((kinds && !kinds.includes(item.object.kind)) || stub.searchHidden.includes(item.object.name)) return []
       const name = scope !== 'definitions' ? find(item.object.name) : undefined
       const body = scope !== 'names' && definition ? find(definition) : undefined
       if (!name && !body) return []
@@ -144,7 +146,9 @@ export function installExplorerStub({ ipcMain }, { statics }) {
       case 'databases.list': return ok([{ name: 'master', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }])
       case 'explorer.children': return children(params)
       case 'explorer.index': return ok({ status: indexStatus(params.definitions !== false), elapsedMs: 1 })
-      case 'explorer.search': return ok(search(params))
+      case 'explorer.search':
+        if (stub.holdSearch) await new Promise(resolve => { stub.held.set(params.requestId, resolve) })
+        return ok(search(params))
       case 'explorer.peek': return ok({
         facts: { schema: params.target.schema ?? null, created: '2024-01-02T03:04:05', modified: '2024-02-03T04:05:06', systemObject: false, replicated: false, lockEscalation: 'TABLE',
           memoryOptimized: false, temporal: 'NON_TEMPORAL_TABLE', ledger: 'NON_LEDGER_TABLE', rowCount: 12345, dataSpace: 2048, indexSpace: 64, filegroup: 'PRIMARY', textFilegroup: null,

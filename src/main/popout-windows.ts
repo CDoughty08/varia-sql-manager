@@ -42,10 +42,19 @@ export interface PopoutWindow {
   readonly id: number
   isDestroyed(): boolean
   isFocused(): boolean
+  isMinimized(): boolean
+  /** Shows (restores) the window without activating it. */
+  showInactive(): void
+  /** Restores a minimized window; macOS and some Linux window managers do it only this way, which may activate it. */
+  restore(): void
+  /** Puts the window on top of the others without activating it. */
+  moveTop(): void
   destroy(): void
   setMenuBarVisibility(visible: boolean): void
   setAutoHideMenuBar(hide: boolean): void
   on(event: 'closed', listener: () => void): void
+  once(event: 'focus', listener: () => void): void
+  removeListener(event: 'focus', listener: () => void): void
   readonly webContents: {
     setWindowOpenHandler(handler: () => { action: 'deny' }): void
     on(event: 'will-navigate' | 'will-frame-navigate' | 'will-redirect', listener: (event: { preventDefault(): void }) => void): void
@@ -64,9 +73,11 @@ export interface PopoutWindow {
  */
 /** How long an allowed popout counts against the limit before Electron creates it. */
 const pendingMs = 10_000
+/** How long after a restore a popout that takes focus gives it back: macOS activates it only once its animation ends. */
+export const restoreFocusMs = 2000
 
 export class PopoutWindows<W extends PopoutWindow> {
-  private readonly windows = new Map<number, { window: W; activation: UserActivation }>()
+  private readonly windows = new Map<number, { window: W; activation: UserActivation; name?: string }>()
   /** When each allowed window that Electron has not created yet was allowed: they count against the limit too. */
   private pending: number[] = []
   constructor(private readonly options: {
@@ -103,11 +114,12 @@ export class PopoutWindows<W extends PopoutWindow> {
     } }
   }
 
-  /** Takes a window `open` allowed: it denies popups and navigation, counts its own input for Paste, and shares the zoom. */
-  adopt(window: W): void {
+  /** Takes a window `open` allowed: it denies popups and navigation, counts its own input for Paste, and shares the zoom.
+   *  `name` is the frame name the page opened it with (`varia-popout-<uuid>`), by which the page asks to raise it. */
+  adopt(window: W, name?: string): void {
     const activation = new UserActivation()
     this.pending.shift()
-    this.windows.set(window.id, { window, activation })
+    this.windows.set(window.id, { window, activation, ...name !== undefined && popoutWindowName.test(name) ? { name } : {} })
     const contents = window.webContents
     contents.setWindowOpenHandler(() => ({ action: 'deny' }))
     for (const event of ['will-navigate', 'will-frame-navigate', 'will-redirect'] as const) contents.on(event, navigation => navigation.preventDefault())
@@ -130,6 +142,30 @@ export class PopoutWindows<W extends PopoutWindow> {
   }
   /** The focused popout, if one is focused, with its own record of the user's input. */
   focused(): { window: W; activation: UserActivation } | undefined { return [...this.windows.values()].find(item => !item.window.isDestroyed() && item.window.isFocused()) }
+  /**
+   * Brings the popout the page opened as `name` to the top, restoring it if minimized, without activating it: keyboard focus
+   * stays where the user is (Search Objects' Reveal, from its hits, into a popped-out Object Explorer). False when there is none.
+   * showInactive restores a minimized window on Windows, but macOS (and some Linux window managers) leave it minimized: there
+   * it is restored, which may activate it, so `refocus` gives focus back to the window the user was in. Those restores finish
+   * later (macOS animates, X11 reports its state late), so focus also goes back if the popout takes it within `restoreFocusMs`.
+   */
+  raise(name: string, refocus?: () => void): boolean {
+    const item = [...this.windows.values()].find(value => value.name === name && !value.window.isDestroyed())
+    if (!item) return false
+    const window = item.window
+    if (window.isMinimized()) window.showInactive()
+    if (window.isMinimized()) {
+      window.restore()
+      if (refocus) {
+        const back = () => { clearTimeout(timer); if (!window.isDestroyed()) { refocus(); window.moveTop() } }
+        const timer = setTimeout(() => { if (!window.isDestroyed()) window.removeListener('focus', back) }, restoreFocusMs)
+        window.once('focus', back)
+        refocus()
+      }
+    }
+    window.moveTop()
+    return true
+  }
   /** Every popout follows the main window's zoom. */
   zoom(level: number): void { for (const { window } of this.windows.values()) if (!window.isDestroyed()) window.webContents.setZoomLevel(level) }
   get size(): number { return this.windows.size }

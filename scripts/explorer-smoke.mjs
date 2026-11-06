@@ -7,7 +7,7 @@ import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.
 import {
   activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
   explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, explorerSublabel, explorerToolbar, itemCount,
-  messages, outputView, paneMenuButton, part, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
+  messages, movePane, objectSearchBox, objectSearchHits, objectSearchSelected, outputView, paneMenuButton, part, popoutDockButton, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
 } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
@@ -54,6 +54,17 @@ async function tabPastExplorerShortcuts(key) {
 }
 const backToSearchBox = async () => { await tabPastExplorerShortcuts('Shift+Tab'); await expect(searchBox()).toBeFocused() }
 const searchBoxToTree = async () => { await tabPastExplorerShortcuts('Tab'); await expect(tree()).toBeFocused() }
+/** Whether the stub holds a search for `text` (holdSearch), and that search's answer let through. A slow runner may search the
+ *  text typed on the way there too: only the search for `text` counts. */
+const heldSearchFor = text => application.evaluate((_electron, wanted) => {
+  const stub = globalThis.variaStub
+  return stub.calls.filter(call => call.method === 'explorer.search' && call.params.text === wanted).map(call => call.params.requestId).findLast(id => stub.held.has(id)) ?? null
+}, text)
+const searchHeld = async text => (await heldSearchFor(text)) !== null
+const releaseSearch = async text => {
+  const id = await heldSearchFor(text)
+  await application.evaluate((_electron, held) => { const stub = globalThis.variaStub; stub.held.get(held)(); stub.held.delete(held) }, id)
+}
 const isFolder = (params, folder) => params.node.type === 'folder' && params.node.folder === folder
 /** The row `aria-activedescendant` names, as a screen reader finds it. */
 const active = () => page.evaluate(text => {
@@ -69,7 +80,13 @@ async function press(key, label) {
 }
 /** Clicks a row's label, which selects it and focuses the tree without toggling it. */
 async function select(...path) {
-  const row = await explorerRow(page, ...path)
+  return selectRow(await explorerRow(page, ...path))
+}
+/** As select, for a row whose ancestors may be scrolled out of the tree's window (a short tree, as on a 1024×768 display). */
+async function selectRevealed(...path) {
+  return selectRow(await revealExplorerRow(page, ...path))
+}
+async function selectRow(row) {
   await row.locator(part.explorerRowText).first().click()
   await expect(tree()).toBeFocused()
   await expect.poll(async () => (await active())?.id).toBe(await row.getAttribute('id'))
@@ -876,9 +893,24 @@ try {
   await searchBox().focus()
   await page.keyboard.press('ArrowDown')
   await expect(explorerSearchHits(page).first()).toBeFocused()
+  // The band's hits are one tab stop that follows the selection, as the tab's are: End and Page Up walk them, Escape returns
+  // to the box, and ↓ comes back to the selected hit.
+  const bandStops = () => explorerSearchHits(page).evaluateAll(buttons => buttons.map(button => button.tabIndex))
+  expect(await bandStops()).toEqual([0, -1, -1])
+  await page.keyboard.press('End')
+  await expect(explorerSearchHits(page).nth(2)).toBeFocused()
+  expect(await bandStops()).toEqual([-1, -1, 0])
+  await page.keyboard.press('Escape')
+  await expect(searchBox()).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  await expect(explorerSearchHits(page).nth(2)).toBeFocused()
+  await page.keyboard.press('PageUp')
+  await expect(explorerSearchHits(page).first()).toBeFocused()
+  expect(await bandStops()).toEqual([0, -1, -1])
   await page.keyboard.press('Enter')
   await expect.poll(async () => (await active())?.label).toBe('dbo.Orders')
   expect((await active())?.selected).toBe('true')
+  await expect(explorerSearchHits(page).first()).toBeFocused()
   // Escape clears the text and hides the hits; Escape in the empty box returns to the tree.
   await searchBox().focus()
   await page.keyboard.press('Escape')
@@ -914,6 +946,165 @@ try {
     await expect(searchBox()).toBeFocused()
     await page.keyboard.press('Escape')
     await expect(tree()).toBeFocused()
+    // The Search Objects tab: a click selects a hit and keeps focus in the list, so the arrows walk the hits; Enter and a
+    // double-click reveal in Object Explorer without taking focus from the list. (A click used to reveal and focus the tree.)
+    await page.keyboard.press('F1')
+    await page.keyboard.type('search objects')
+    await quickInput(page).getByRole('option', { name: /^Object Explorer: Search Objects…/ }).click()
+    await expect(objectSearchBox(page)).toBeFocused()
+    await page.keyboard.type('table')
+    const tabHits = objectSearchHits(page)
+    await expect(tabHits).toHaveCount(2)
+    // The tree's selection is elsewhere first, so a reveal of dbo.table1 would show.
+    await selectRevealed('server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders')
+    const revealed = (await active())?.label
+    expect(revealed).not.toBe('dbo.table1')
+    await tabHits.first().click()
+    await expect(tabHits.first()).toBeFocused()
+    await expect(objectSearchSelected(page)).toHaveAttribute('title', 'Reveal in Object Explorer: dbo.table1')
+    // A seek down loaded rows selects at once, so two frames after the click a reveal would have moved the tree's selection.
+    await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))))
+    expect((await active())?.label).toBe(revealed)
+    // One tab stop: only the selected hit is in the tab order.
+    expect(await tabHits.evaluateAll(buttons => buttons.map(button => button.tabIndex))).toEqual([0, -1])
+    await page.keyboard.press('ArrowDown')
+    await expect(tabHits.nth(1)).toBeFocused()
+    await expect(objectSearchSelected(page)).toHaveAttribute('title', 'Reveal in Object Explorer: dbo.table2')
+    await page.keyboard.press('Enter')
+    await expect.poll(async () => (await active())?.label).toBe('dbo.table2')
+    await expect(tabHits.nth(1)).toBeFocused()
+    await page.keyboard.press('Home')
+    await expect(tabHits.first()).toBeFocused()
+    // Shift+Enter reveals as Enter does.
+    await page.keyboard.press('Shift+Enter')
+    await expect.poll(async () => (await active())?.label).toBe('dbo.table1')
+    await expect(tabHits.first()).toBeFocused()
+    await page.keyboard.press('PageDown')
+    await expect(tabHits.nth(1)).toBeFocused()
+    await page.keyboard.press('PageUp')
+    await expect(tabHits.first()).toBeFocused()
+    await page.keyboard.press('End')
+    await expect(tabHits.nth(1)).toBeFocused()
+    // Page Down goes to the last hit in view first, then a page on; Page Up to the first hit in view. Five hits, three in view.
+    await page.keyboard.press('Escape')
+    await page.keyboard.press('Control+A')
+    await page.keyboard.type('e')
+    await expect(tabHits).toHaveCount(5)
+    const hitList = page.locator(part.objectSearchTab).getByRole('list', { name: 'Results', exact: true })
+    await hitList.evaluate(list => { list.style.flex = 'none'; list.style.height = [...list.children].slice(0, 3).reduce((sum, row) => sum + row.offsetHeight, 0) + 'px' })
+    await tabHits.nth(1).click()
+    await page.keyboard.press('PageDown')
+    await expect(tabHits.nth(2)).toBeFocused()
+    await page.keyboard.press('PageDown')
+    await expect(tabHits.nth(4)).toBeFocused()
+    await page.keyboard.press('PageUp')
+    await expect(tabHits.nth(2)).toBeFocused()
+    await hitList.evaluate(list => { list.style.flex = ''; list.style.height = '' })
+    await page.keyboard.press('Escape')
+    await page.keyboard.press('Control+A')
+    await page.keyboard.type('table')
+    await expect(tabHits).toHaveCount(2)
+    await selectRevealed('server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders')
+    await tabHits.first().dblclick()
+    await expect.poll(async () => (await active())?.label).toBe('dbo.table1')
+    await expect(tabHits.first()).toBeFocused()
+    await page.keyboard.press('ArrowUp')
+    await expect(objectSearchBox(page)).toBeFocused()
+    await page.keyboard.press('ArrowDown')
+    await expect(tabHits.first()).toBeFocused()
+    await page.keyboard.press('Escape')
+    await expect(objectSearchBox(page)).toBeFocused()
+    // The same search run again keeps the selection; an answer that drops the focused hit hands focus to the list's tab stop,
+    // and one with no hits left hands it to the box.
+    const rerun = async () => { await page.keyboard.press('Backspace'); await page.keyboard.type('e'); await expect.poll(() => searchHeld('table')).toBe(true) }
+    await setStub({ holdSearch: true, searchHidden: ['table1'] })
+    await rerun()
+    await page.keyboard.press('ArrowDown')
+    await expect(tabHits.first()).toBeFocused()
+    await releaseSearch('table')
+    await expect(tabHits).toHaveCount(1)
+    await expect(tabHits.first()).toHaveAttribute('title', 'Reveal in Object Explorer: dbo.table2')
+    await expect(tabHits.first()).toBeFocused()
+    await page.keyboard.press('Escape')
+    await setStub({ searchHidden: ['table1', 'table2'] })
+    await rerun()
+    await page.keyboard.press('ArrowDown')
+    await expect(tabHits.first()).toBeFocused()
+    await releaseSearch('table')
+    await expect(tabHits).toHaveCount(0)
+    await expect(objectSearchBox(page)).toBeFocused()
+    await setStub({ holdSearch: false, searchHidden: [] })
+    await page.keyboard.press('Backspace')
+    await page.keyboard.type('e')
+    await expect(tabHits).toHaveCount(2)
+    // A search run again that keeps the selection leaves the list where the user scrolled it.
+    const results = page.locator(part.objectSearchTab).getByRole('list', { name: 'Results', exact: true })
+    await tabHits.first().click()
+    await objectSearchBox(page).focus()
+    const scrolled = await results.evaluate(list => { list.style.flex = 'none'; list.style.height = '30px'; list.scrollTop = list.scrollHeight; return list.scrollTop })
+    expect(scrolled).toBeGreaterThan(0)
+    await setStub({ holdSearch: true })
+    await rerun()
+    await releaseSearch('table')
+    await expect(page.locator(part.objectSearchTab).getByRole('status')).toHaveText(/^2 results/)
+    expect(await results.evaluate(list => list.scrollTop)).toBe(scrolled)
+    // With focus on the selected hit too: the search runs again while the hit has focus and the list is scrolled past it.
+    await page.keyboard.press('Backspace')
+    await page.keyboard.type('e')
+    await expect.poll(() => searchHeld('table')).toBe(true)
+    await objectSearchSelected(page).evaluate(button => button.focus({ preventScroll: true }))
+    await results.evaluate((list, top) => { list.scrollTop = top }, scrolled)
+    await releaseSearch('table')
+    await expect(page.locator(part.objectSearchTab).getByRole('status')).toHaveText(/^2 results/)
+    expect(await results.evaluate(list => list.scrollTop)).toBe(scrolled)
+    await objectSearchBox(page).focus()
+    await expect(objectSearchSelected(page)).toHaveAttribute('title', 'Reveal in Object Explorer: dbo.table1')
+    await results.evaluate(list => { list.style.flex = ''; list.style.height = '' })
+    await setStub({ holdSearch: false })
+    // Forced colors drop the selection's fill, so the selected hit keeps an outline once focus leaves the list.
+    await tabHits.first().click()
+    await objectSearchBox(page).focus()
+    await page.emulateMedia({ forcedColors: 'active' })
+    expect(await objectSearchSelected(page).evaluate(button => getComputedStyle(button.parentElement).outlineStyle)).toBe('solid')
+    await page.emulateMedia({ forcedColors: null })
+    // A reveal from the tab raises a popout that holds Object Explorer only while that window is hidden (raising it takes focus).
+    const opened = application.waitForEvent('window', { timeout: 30000 })
+    await movePane(page, 'explorer', 'window')
+    const popout = await opened
+    await expect(explorerTree(popout)).toBeVisible()
+    const popoutActive = () => popout.evaluate(text => {
+      const id = document.querySelector('[data-explorer-tree]')?.getAttribute('aria-activedescendant')
+      return (id && document.getElementById(id)?.querySelector(text)?.textContent) ?? ''
+    }, part.explorerRowText)
+    // Main raises it, restored when minimized, without activating it; the page never focuses the window itself.
+    await popout.evaluate(() => { globalThis.focused = 0; globalThis.ownFocus = window.focus; window.focus = () => { globalThis.focused++ } })
+    await application.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows().find(item => item.webContents.getURL() === 'about:blank')
+      globalThis.popoutRaise = { moved: 0, shown: 0, minimized: false }
+      window.moveTop = () => { globalThis.popoutRaise.moved++ }
+      window.showInactive = () => { globalThis.popoutRaise.shown++; globalThis.popoutRaise.minimized = false }
+      window.isMinimized = () => globalThis.popoutRaise.minimized
+    })
+    const raised = () => application.evaluate(() => ({ moved: globalThis.popoutRaise.moved, shown: globalThis.popoutRaise.shown }))
+    await tabHits.nth(1).dblclick()
+    await expect.poll(popoutActive).toBe('dbo.table2')
+    await expect.poll(raised).toEqual({ moved: 1, shown: 0 })
+    await application.evaluate(() => { globalThis.popoutRaise.minimized = true })
+    await tabHits.first().dblclick()
+    await expect.poll(popoutActive).toBe('dbo.table1')
+    await expect.poll(raised).toEqual({ moved: 2, shown: 1 })
+    expect(await popout.evaluate(() => globalThis.focused)).toBe(0)
+    await expect(tabHits.first()).toBeFocused()
+    // The spies go before the window does, so nothing else in the suite meets them.
+    await popout.evaluate(() => { window.focus = globalThis.ownFocus })
+    await application.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows().find(item => item.webContents.getURL() === 'about:blank')
+      delete window.moveTop; delete window.showInactive; delete window.isMinimized
+    })
+    await popoutDockButton(popout).click()
+    await expect(tree()).toBeVisible()
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+W' : 'Control+F4')
+    await expect(objectSearchBox(page)).toHaveCount(0)
   }
   // Forced colors: the dot keeps its shape, in the system's text colour. The reveal above scrolled the server row away.
   await explorerTree(page).evaluate(element => { for (let node = element; node; node = node.parentElement) if (node.scrollTop) { node.scrollTop = 0; break } element.scrollTop = 0 })
@@ -1061,7 +1252,7 @@ try {
   expect(narrow.label, JSON.stringify(narrow)).toBeCloseTo(narrow.kept, 0)
   if (wasExpanded === 'false') { await select('server-a', 'Server Objects'); await press('ArrowLeft', 'Server Objects') }
   await page.screenshot({ path: resolve('artifacts', 'explorer-visuals.png') })
-  console.log('Object Explorer checks: 30 px server rows with version, login, connection dot and active-query glyph, muted item counts, the environment tag\'s slot, the footer\'s freshness, the Filter loaded objects box by keyboard and from the palette, the search band\'s splitter, and compact search popovers at 160–420 px with keyboard focus, outside dismissal and combined type filters.')
+  console.log('Object Explorer checks: 30 px server rows with version, login, connection dot and active-query glyph, muted item counts, the environment tag\'s slot, the footer\'s freshness, the Filter loaded objects box by keyboard and from the palette, the search band\'s splitter, and compact search popovers at 160–420 px with keyboard focus, outside dismissal and combined type filters, and the Search Objects tab\'s hits walked by click, arrows, Enter and double-click with focus kept in the list.')
 
   // 11. Disconnecting a server while one of its folders streams cancels the load and removes its rows.
   await setStub({ tables: 120_000, pageDelayMs: 250 })

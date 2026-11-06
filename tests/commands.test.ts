@@ -217,6 +217,9 @@ describe('command execution', () => {
     expect([host.showConnect, host.resetLayout, host.flushLayout].map(fn => vi.mocked(fn).mock.calls.length)).toEqual([1, 1, 1])
     // Object Explorer also takes focus (SSMS's F8), so a following F5 refreshes it.
     expect(vi.mocked(host.reveal).mock.calls).toEqual([['explorer', { focus: true }], ['results', { raise: true }], ['messages', { raise: true }], ['plan', { raise: true }]])
+    // Search Objects' Reveal shows it and leaves focus in its hits, raising a popout that holds it without activating it.
+    await commands.execute('window.explorer', { keepFocus: true }, 'toolbar')
+    expect(vi.mocked(host.reveal).mock.lastCall).toEqual(['explorer', { raiseInactive: true }])
     expect(vi.mocked(host.manageLayouts).mock.calls).toEqual([['save'], ['load']])
     expect(api.closeWindow).toHaveBeenCalledOnce()
     // The window closed: its popouts' closing leaves the layout written before it.
