@@ -96,7 +96,7 @@ try {
   await expect(optionsNotes(dialog()).first()).toHaveText('Color theme: View › Theme')
   for (const name of ['Text Editor', 'Transact-SQL', 'Query Execution', 'Query Results', 'SQL Server Object Explorer']) await node(name).click()
   expect(await treeNames()).toEqual([
-    'Environment', '  General', '  AutoRecover', '  Documents', '  Fonts and Colors', '  Keyboard', '  Product Updates', '  Live Data', 'Text Editor', '  General', '  Editor Tab and Status Bar', '  Transact-SQL', '    General', '    Tabs', 'Query Execution', '  SQL Server', '    General', '    Advanced',
+    'Environment', '  General', '  AutoRecover', '  Documents', '  Fonts and Colors', '  Keyboard', '  Product Updates', '  Live Data', '  Object Explorer', 'Text Editor', '  General', '  Editor Tab and Status Bar', '  Transact-SQL', '    General', '    Tabs', 'Query Execution', '  SQL Server', '    General', '    Advanced',
     'Query Results', '  SQL Server', '    Results to Grid', 'SQL Server Object Explorer', '  Commands', '  Scripting', 'Activity Monitor',
     'SQL Server Integration Services'
   ])
@@ -166,7 +166,7 @@ try {
   await expect(dialog()).toHaveCount(0)
   console.log('Options checks: Ctrl+E focuses the search, which filters the tree and highlights matches; Escape clears it, then cancels.')
 
-  // 3. Changes on five pages, one OK: settings.json holds exactly the changed keys, and each takes effect.
+  // 3. Changes across pages, one OK: settings.json holds exactly the changed keys, and each takes effect.
   await openOptions()
   // The dialog opens on the page last shown.
   await expect(heading()).toHaveText('Query Execution › SQL Server › General')
@@ -184,9 +184,17 @@ try {
   await dialog().getByRole('radio', { name: 'Insert spaces', exact: true }).check()
   await showPage('SQL Server Object Explorer', 'Commands')
   await field('Value for Select Top <n> Rows command').fill('50')
+  await showPage('Environment', 'Object Explorer')
+  await expect(field('Follow active query')).toBeChecked()
+  await expect(field('Pinned server headers at top')).toHaveValue('2')
+  await expect(field('Pinned server headers at bottom')).toHaveValue('2')
+  await field('Follow active query').uncheck()
+  await field('Pinned server headers at top').fill('1')
+  await field('Pinned server headers at bottom').fill('3')
   await dialog().getByRole('button', { name: 'OK', exact: true }).click()
   await expect(dialog()).toHaveCount(0)
   await expect.poll(stored).toEqual({ version: 1, values: {
+    'objectExplorer.followActiveQuery': false, 'objectExplorer.pinnedServerHeadersBottom': 3, 'objectExplorer.pinnedServerHeadersTop': 1,
     'objectExplorer.selectTopRows': 50, 'queryExecution.executionTimeout': 7, 'queryExecution.stopOnError': true, 'textEditor.sql.indentSize': 2, 'textEditor.sql.tabSize': 2, 'textEditor.sql.tabs': 'spaces', 'textEditor.sql.wordWrap': true
   } })
   // Main refuses unknown keys and wrong types, and the file stays as it was.
@@ -223,7 +231,7 @@ try {
     await explorerMenu.getByRole('menuitem', { name: 'Select Top 50 Rows', exact: true }).click()
     await expect.poll(async () => (await calls('query.execute')).at(-1)?.sql).toContain('SELECT TOP (50) [Id]')
   }
-  console.log('Options checks: one OK saves five pages\' changes as overrides only; Tab, word wrap, F5\'s time-out and stop-on-error, and Select Top 50 Rows follow them.')
+  console.log('Options checks: one OK saves only the changed settings, including Follow active query and independent header limits under Environment › Object Explorer.')
 
   // 4. OK refuses an out-of-range value, shows why and focuses the field; Cancel discards a draft that spans two pages.
   await openOptions()
@@ -272,6 +280,10 @@ try {
   await openOptions()
   await showPage('Text Editor', 'Transact-SQL')
   await expect(field('Word wrap')).toBeChecked()
+  await showPage('Environment', 'Object Explorer')
+  await expect(field('Follow active query')).not.toBeChecked()
+  await expect(field('Pinned server headers at top')).toHaveValue('1')
+  await expect(field('Pinned server headers at bottom')).toHaveValue('3')
   await page.keyboard.press('Escape')
   if (!mac) {
     await textbox().focus()

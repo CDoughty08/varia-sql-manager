@@ -45,6 +45,7 @@ describe('Options search', () => {
     expect(searchPages('transact-sql', 'win32')!.pages).toEqual(['textEditor.transactSql.general', 'textEditor.transactSql.tabs'])
     expect(searchPages('color theme', 'win32')!.pages).toContain('environment.general')
     expect(searchPages('shortcut', 'win32')!.pages).toEqual(['environment.keyboard'])
+    expect(searchPages('follow active query', 'win32')!.pages).toEqual(['environment.objectExplorer'])
   })
   it('finds nothing for text nothing has, and filters nothing for an empty query', () => {
     expect(searchPages('zzz-no-such-setting', 'win32')).toEqual({ pages: [], shown: new Set() })

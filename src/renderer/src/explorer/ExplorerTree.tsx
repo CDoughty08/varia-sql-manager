@@ -1,34 +1,50 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type KeyboardEvent } from 'react'
+import { flushSync } from 'react-dom'
 import { explorerLimits } from '../../../shared/explorer/catalog.ts'
 import { ssisDefaultVerb, ssisVerbSpecs } from '../../../shared/ssis/catalog.ts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { onUnexpectedError } from '../core/errors'
-import { observeResize } from '../core/windows'
+import { observeResize, requestFrame } from '../core/windows'
 import { useMenuTarget } from '../menus/useMenuTarget'
 import { explorerDragType, maxDropText } from './drop'
 import type { Announcement } from './ExplorerService'
-import ExplorerRow, { type RowActions } from './ExplorerRow'
+import { focusLost } from './ExplorerErrorBoundary'
+import ExplorerPinnedBand from './ExplorerPinnedBand'
+import ExplorerRow, { PinnedServerRow, type RowActions } from './ExplorerRow'
 import { rowStatus } from './ExplorerStatusService'
-import { layoutWindow, renderedIndices, revealScroll, rowIndex, RowKind, rowLayout, swallowedKey, treeKey, treeKeyOf, TypeAheadBuffer, typeAhead, type RowLayout, type TreeAction, type VisibleRows } from './tree-model'
+import { layoutWindow, pinnedServerBands, renderedIndices, revealScroll, rowIndex, RowKind, rowLayout, swallowedKey, treeKey, treeKeyOf, TypeAheadBuffer, typeAhead, type TreeAction, type VisibleRows } from './tree-model'
 
 const { rowHeight } = explorerLimits
 /** The live region speaks the latest announcement once things settle, as a screen reader cannot keep up with every page. */
 const announceDelayMs = 500
+interface FollowedQuery {
+  readonly query: string
+  readonly connection: string
+  anchor?: { readonly rowTop: number; readonly top: number; readonly height: number }
+}
 
 /**
  * Object Explorer's tree: one focusable element with `aria-activedescendant` over windowed rows (the selected row is
  * always rendered), so a folder of 100,000 items renders about 60 rows. Its keys follow the Windows tree SSMS uses:
  * arrows, Home and End, Page Up and Down, Enter, `*`, Numpad plus and minus, and type-ahead.
  */
-export default function ExplorerTree({ activeConnectionId }: { readonly activeConnectionId?: string }) {
-  const workbench = useWorkbench(), { explorer, commands, connections, actions: objectActions, explorerStatus } = workbench
+export default function ExplorerTree({ activeConnectionId, activeQueryId }: { readonly activeConnectionId?: string; readonly activeQueryId?: string }) {
+  const { explorer, commands, connections, actions: objectActions, explorerStatus, settings, menuTargets } = useWorkbench()
   const snapshot = useServiceSnapshot(explorer)
   const { servers: statuses } = useServiceSnapshot(explorerStatus)
   const { explorerLoading } = useServiceSnapshot(explorer.context)
   const servers = useServiceSnapshot(connections)
+  const { 'objectExplorer.pinnedServerHeadersTop': topLimit, 'objectExplorer.pinnedServerHeadersBottom': bottomLimit,
+    'objectExplorer.followActiveQuery': follow } = useServiceSnapshot(settings).values
   const renaming = useServiceSnapshot(explorer.renaming)
   const element = useRef<HTMLDivElement | null>(null)
+  const frame = useRef<HTMLDivElement | null>(null)
+  const focusedPin = useRef<Element | undefined>(undefined)
+  const followed = useRef<FollowedQuery | undefined>(undefined)
+  const releaseFollow = useCallback(() => { if (followed.current) followed.current.anchor = undefined }, [])
   const [view, setView] = useState({ top: 0, height: 0 })
+  /** Commit a jump after the bands at its destination have reserved their space. */
+  const scrollTo = useRef<number | undefined>(undefined)
   const [announcement, setAnnouncement] = useState<Announcement | undefined>(undefined)
   // A sentence from before this tree mounted (a server since removed, or before a Reload) is not news.
   const heard = useRef(snapshot.announcement?.id)
@@ -38,26 +54,57 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
   const { rows, selected } = snapshot
   const selectedIndex = rowIndex(rows, selected)
   const layout = useMemo(() => rowLayout(rows), [rows])
-  const latest = useRef({ rows, selectedIndex, layout })
-  latest.current = { rows, selectedIndex, layout }
+  const latest = useRef({ rows, layout })
+  latest.current = { rows, layout }
+  const bands = pinnedServerBands(layout, view.top, view.height, topLimit, bottomLimit)
+
+  const measure = useCallback(() => {
+    const tree = element.current, outer = frame.current
+    if (!tree || !outer || scrollTo.current !== undefined) return
+    const top = tree.scrollTop, height = outer.clientHeight
+    setView(current => current.top === top && current.height === height ? current : { top, height })
+  }, [])
+  const scrollPinnedBand = useCallback((event: WheelEvent) => {
+    const tree = element.current
+    if (!tree || (event.target as Element).closest?.('.explorer-pin-menu') || event.ctrlKey || !event.deltaY) return
+    event.preventDefault()
+    const unit = event.deltaMode === 1 ? rowHeight : event.deltaMode === 2 ? tree.clientHeight : 1
+    tree.scrollTop += event.deltaY * unit
+  }, [])
 
   // Scrolling and resizing re-window on the next frame (or soon after, when frames are throttled).
   useLayoutEffect(() => {
-    const tree = element.current
-    if (!tree) return
+    const tree = element.current, outer = frame.current
+    if (!tree || !outer) return
     let pending = false
-    const measure = () => { pending = false; setView(current => current.top === tree.scrollTop && current.height === tree.clientHeight ? current : { top: tree.scrollTop, height: tree.clientHeight }) }
     const schedule = () => {
       if (pending) return
       pending = true
-      requestAnimationFrame(() => { if (pending) measure() })
-      setTimeout(() => { if (pending) measure() }, 50)
+      const flush = () => { if (pending) { pending = false; measure() } }
+      requestFrame(flush)
+      setTimeout(flush, 50)
     }
     measure()
     tree.addEventListener('scroll', schedule, { passive: true })
-    const observer = observeResize(tree, schedule)
-    return () => { tree.removeEventListener('scroll', schedule); observer.dispose() }
-  }, [])
+    const observer = observeResize(outer, schedule)
+    return () => { pending = false; tree.removeEventListener('scroll', schedule); observer.dispose() }
+  }, [measure])
+  useLayoutEffect(() => {
+    const tree = element.current
+    if (!tree) return
+    if (scrollTo.current === view.top) { scrollTo.current = undefined; tree.scrollTop = view.top }
+    // The browser can clamp scrollTop after a collapse, resize, or change to the band heights.
+    if (tree.scrollTop !== view.top || frame.current?.clientHeight !== view.height) measure()
+  }, [bands.height, layout.total, measure, view])
+  useLayoutEffect(() => {
+    if (!focusedPin.current || focusedPin.current.isConnected) return
+    focusedPin.current = undefined
+    const tree = element.current
+    if (!tree || !focusLost(tree.ownerDocument)) return
+    // Scrolling can remove a focused shortcut or overflow item. Keep focus in the explorer.
+    frame.current?.querySelector<HTMLElement>('.explorer-pin-menu:popover-open')?.hidePopover()
+    if (focusLost(tree.ownerDocument)) tree.focus({ preventScroll: true })
+  })
   useEffect(() => {
     const next = snapshot.announcement
     if (!next || next.id === heard.current) return
@@ -66,13 +113,54 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
   }, [snapshot.announcement])
 
   /** Scrolls row `index` of `rows` into view; rows published since the last render are laid out on the spot. */
-  const ensureVisible = useCallback((rows: VisibleRows, index: number) => {
+  const ensureVisible = useCallback((rows: VisibleRows, index: number, alignTop = false) => {
+    const tree = element.current, height = frame.current?.clientHeight ?? 0
+    if (!tree || !height || index < 0) return
+    const at = latest.current.rows === rows ? latest.current.layout : rowLayout(rows)
+    const scrollbar = tree.offsetHeight - tree.clientHeight
+    const body = (top: number) => Math.max(0, pinnedServerBands(at, top, height, topLimit, bottomLimit).height - scrollbar)
+    const top = tree.scrollTop, nearest = revealScroll(at, index, top, Math.min(tree.clientHeight, body(top)))
+    if (nearest === undefined) return
+    const destination = alignTop || revealScroll(at, index, nearest, body(nearest)) !== undefined ? at.top(index) : nearest
+    if (destination === top) return
+    scrollTo.current = destination
+    setView({ top: destination, height })
+  }, [bottomLimit, topLimit])
+
+  useLayoutEffect(() => {
     const tree = element.current
-    if (!tree || index < 0) return
-    const at: RowLayout = latest.current.rows === rows ? latest.current.layout : rowLayout(rows)
-    const scrollTop = revealScroll(at, index, tree.scrollTop, tree.clientHeight)
-    if (scrollTop !== undefined) tree.scrollTop = scrollTop
-  }, [])
+    if (!tree) return
+    return menuTargets.registerReveal(tree, item => {
+      releaseFollow()
+      const { rows } = latest.current
+      // Commit the destination's bands before MenuService reads the row's screen rectangle.
+      flushSync(() => {
+        measure()
+        ensureVisible(rows, rowIndex(rows, Number(item.getAttribute('data-row-id'))))
+      })
+    })
+  }, [ensureVisible, measure, menuTargets, releaseFollow])
+
+  useLayoutEffect(() => {
+    if (!activeQueryId || !activeConnectionId) { followed.current = undefined; return }
+    if (!follow) { followed.current = { query: activeQueryId, connection: activeConnectionId }; return }
+    const previous = followed.current
+    const same = previous?.query === activeQueryId && previous.connection === activeConnectionId
+    const anchor = same ? previous.anchor : undefined
+    if (same && !anchor) return
+    const tree = element.current
+    if (!tree || !tree.clientHeight) return
+    const index = layout.serverIndices.find(index => rows.nodes[index]?.connectionId === activeConnectionId)
+    if (index === undefined) return
+    const next = { rowTop: layout.top(index), top: tree.scrollTop, height: tree.clientHeight }
+    // Pages streaming in above the server move its offset. Follow it only while its old header was in view and the user has stayed there.
+    if (anchor && anchor.rowTop !== next.rowTop) {
+      const wasVisible = anchor.rowTop >= anchor.top && anchor.rowTop + layout.height(index) <= anchor.top + anchor.height
+      if (!wasVisible || anchor.top !== next.top) { previous!.anchor = undefined; return }
+      ensureVisible(rows, index, true)
+    } else if (!same) ensureVisible(rows, index, true)
+    followed.current = { query: activeQueryId, connection: activeConnectionId, anchor: next }
+  }, [activeQueryId, activeConnectionId, follow, layout, rows, ensureVisible, view, bands.height])
   // Selecting can publish rows that arrived since the last render, which moves the row: its index is read from them. A
   // selection made outside the tree (Filter Settings closing) asks for the same through the snapshot's `reveal`.
   const revealed = useRef(snapshot.reveal)
@@ -81,7 +169,7 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
     revealed.current = snapshot.reveal
     const id = reveal.current ?? (requested ? selected : undefined)
     reveal.current = undefined
-    if (id !== undefined) ensureVisible(rows, rowIndex(rows, id))
+    if (id !== undefined) { releaseFollow(); ensureVisible(rows, rowIndex(rows, id)) }
   })
   const run = useCallback((id: Parameters<typeof commands.execute>[0], rowId: number) => {
     const node = explorer.menuNode(rowId)
@@ -185,21 +273,44 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
 
   const accents = useMemo(() => new Map(servers.map(server => [server.id, server.color])), [servers])
   const environments = useMemo(() => new Map(servers.map(server => [server.id, server.options.environment])), [servers])
-  const indices = renderedIndices(layoutWindow(view.top, view.height, layout), selectedIndex)
+  const indices = renderedIndices(layoutWindow(view.top, bands.height, layout), selectedIndex)
   const active = selected !== undefined && selectedIndex >= 0 ? `oe-${selected}` : undefined
-  return <><div ref={element} className="explorer-tree" role="tree" aria-label="Object Explorer" tabIndex={0} data-explorer-tree data-pane-focus aria-activedescendant={active}
-    aria-busy={explorerLoading} onKeyDown={onKeyDown} onCopy={onCopy}>
-    <div className="explorer-spacer" style={{ height: layout.total }}>
-      {indices.map(index => {
-        const rowId = rows.ids[index], kind = rows.kinds[index] as RowKind, node = rows.nodes[index]
-        return <ExplorerRow key={rowId} rowId={rowId} kind={kind} top={layout.top(index)} level={rows.levels[index]} posinset={rows.posinset[index]} setsize={rows.setsize[index]}
-          node={node} rev={node?.rev ?? 0} text={kind === RowKind.Node ? '' : explorer.rowText(rowId)} selected={rowId === selected} draggable={kind === RowKind.Node && explorer.canInsert(rowId)}
-          active={!!node && node.parent === 0 && node.connectionId === activeConnectionId} color={node?.parent === 0 ? accents.get(node.connectionId) : undefined} environment={node?.parent === 0 ? environments.get(node.connectionId) : undefined}
-          actions={actions} menuTarget={rowTarget} renaming={renaming !== undefined && rowId === renaming}
-          status={kind === RowKind.Node && node ? rowStatus(statuses.get(node.connectionId), node) : undefined} />
-      })}
+  const pinned = (edge: 'top' | 'bottom') => {
+    const { headers, overflow, height } = bands[edge]
+    if (!height) return null
+    return <ExplorerPinnedBand edge={edge} headers={headers} overflow={overflow} onWheel={scrollPinnedBand} renderServer={(index, menu) => {
+      const node = rows.nodes[index]!
+      return <PinnedServerRow key={node.id} node={node} edge={edge} current={edge === 'top' && bands.current === index} menu={menu}
+        active={node.connectionId === activeConnectionId} color={accents.get(node.connectionId)} environment={environments.get(node.connectionId)}
+        status={rowStatus(statuses.get(node.connectionId), node)} jump={() => {
+          actions.select(node.id)
+          const now = explorer.getSnapshot().rows
+          ensureVisible(now, rowIndex(now, node.id), true)
+        }} />
+    }} />
+  }
+  return <div ref={frame} className="explorer-tree-frame" style={{ '--explorer-tree-height': `${bands.height}px` } as CSSProperties}
+    onPointerDownCapture={releaseFollow} onWheelCapture={releaseFollow} onKeyDownCapture={releaseFollow}
+    onFocusCapture={event => { focusedPin.current = event.target.closest('.explorer-pin-band') ? event.target : undefined }}
+    onBlurCapture={event => {
+      if (event.relatedTarget && event.relatedTarget !== event.currentTarget.ownerDocument.body) focusedPin.current = undefined
+    }}>
+    {pinned('top')}
+    <div ref={element} className="explorer-tree" role="tree" aria-label="Object Explorer" tabIndex={0} data-explorer-tree data-pane-focus aria-activedescendant={active}
+      aria-busy={explorerLoading} onKeyDown={onKeyDown} onCopy={onCopy}>
+      <div className="explorer-spacer" style={{ height: layout.total }}>
+        {indices.map(index => {
+          const rowId = rows.ids[index], kind = rows.kinds[index] as RowKind, node = rows.nodes[index]
+          return <ExplorerRow key={rowId} rowId={rowId} kind={kind} top={layout.top(index)} level={rows.levels[index]} posinset={rows.posinset[index]} setsize={rows.setsize[index]}
+            node={node} rev={node?.rev ?? 0} text={kind === RowKind.Node ? '' : explorer.rowText(rowId)} selected={rowId === selected} draggable={kind === RowKind.Node && explorer.canInsert(rowId)}
+            active={!!node && node.parent === 0 && node.connectionId === activeConnectionId} color={node?.parent === 0 ? accents.get(node.connectionId) : undefined} environment={node?.parent === 0 ? environments.get(node.connectionId) : undefined}
+            actions={actions} menuTarget={rowTarget} renaming={renaming !== undefined && rowId === renaming}
+            status={kind === RowKind.Node && node ? rowStatus(statuses.get(node.connectionId), node) : undefined} />
+        })}
+      </div>
     </div>
+    {/* Keyed by the announcement, so the same sentence again is a new node, which screen readers speak again. */}
+    <div className="visually-hidden" role="status">{announcement && <span key={announcement.id}>{announcement.text}</span>}</div>
+    {pinned('bottom')}
   </div>
-  {/* Keyed by the announcement, so the same sentence again is a new node, which screen readers speak again. */}
-  <div className="visually-hidden" role="status">{announcement && <span key={announcement.id}>{announcement.text}</span>}</div></>
 }
