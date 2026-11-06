@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { editor } from 'monaco-editor'
 import { afterClose } from '../src/renderer/src/documents'
 import { gridLimits } from '../src/renderer/src/grid/constants'
+import { pendingFocusMs } from '../src/renderer/src/services/documents'
 import { documentFixture, deferred, TestEditor, type SaveResponse } from './fixtures/documents'
 
 describe('query documents', () => {
@@ -108,6 +109,48 @@ describe('query documents', () => {
     documents.activate(left.id)
     documents.showIn(first.asEditor(), later.id)
     expect(first.focused).toBe(2)
+  })
+  it('lets a focus waiting for an editor lapse, so a group shown much later takes no focus from elsewhere', () => {
+    let now = 0
+    const { documents } = documentFixture({ now: () => now })
+    const first = new TestEditor()
+    const left = documents.create('left.sql', '', 'master')
+    documents.showIn(first.asEditor(), left.id)
+    const right = documents.create('right.sql', '', 'master')
+    documents.focusActive()
+    // The editor area was hidden (its panel closed): it shows the document long after the user went on elsewhere.
+    now += pendingFocusMs + 1
+    documents.showIn(first.asEditor(), right.id)
+    expect(first.focused).toBe(0)
+    // Within the bound (one render), the editor takes the focus as before.
+    const later = documents.create('later.sql', '', 'master')
+    documents.focusActive()
+    now += pendingFocusMs / 2
+    documents.showIn(first.asEditor(), later.id)
+    expect(first.focused).toBe(1)
+  })
+  it('hands a closing active document over to the successor its editor group names, and to the next in order without one', async () => {
+    const { documents } = documentFixture()
+    const [a, b, c, d] = ['a.sql', 'b.sql', 'c.sql', 'd.sql'].map(name => documents.create(name, '', 'master'))
+    // Groups [a, b] and [c, d]: closing b, the last in its group, shows a, not c (the next in order).
+    const groups = [[a.id, b.id], [c.id, d.id]]
+    const successor = documents.useCloseSuccessor(id => { const group = groups.find(ids => ids.includes(id))!; const index = group.indexOf(id); return group.length > 1 ? group[index + 1] ?? group[index - 1] : undefined })
+    documents.activate(b.id)
+    await documents.close(b.id)
+    expect(documents.getSnapshot().activeId).toBe(a.id)
+    groups[0] = [a.id]
+    // A closing document that is not active leaves the active one alone.
+    await documents.close(d.id)
+    expect(documents.getSnapshot().activeId).toBe(a.id)
+    groups[1] = [c.id]
+    // Its group's only document: DocumentService's own order decides.
+    await documents.close(a.id)
+    expect(documents.getSnapshot().activeId).toBe(c.id)
+    successor.dispose()
+    const e = documents.create('e.sql', '', 'master')
+    documents.activate(c.id)
+    await documents.close(c.id)
+    expect(documents.getSnapshot().activeId).toBe(e.id)
   })
   it('takes a closing document out of the group editor that shows it', async () => {
     const { documents } = documentFixture()

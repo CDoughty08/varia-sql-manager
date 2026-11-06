@@ -82,6 +82,7 @@ export interface CommandDescriptor {
 }
 
 const openFirst = 'Open a query first.'
+const tabKeys = 'documentTabFocus && !inputFocus'
 const noServer = 'No server is connected.'
 const secondQuery = 'Open a second query first.'
 const noFile = 'Save this query to a file first.'
@@ -131,7 +132,8 @@ export const commandCatalog = {
   },
   'file.close': {
     title: 'Close Query', category: 'File', icon: 'close', precondition: 'hasActiveDocument && !documentBusy', unavailableHint: openFirst,
-    keybindings: [{ key: 'mod+w' }, { win: 'ctrl+f4', linux: 'ctrl+f4' }],
+    // Delete and Backspace on a focused tab, as Dockview's tabs close (the focused tab is the active one).
+    keybindings: [{ key: 'mod+w' }, { win: 'ctrl+f4', linux: 'ctrl+f4' }, { key: 'delete', when: tabKeys }, { key: 'backspace', when: tabKeys }],
     menus: [{ menu: 'file', group: '2_close', order: 1, mnemonic: 'c' }, { menu: 'documentTab.context', group: '2_close', order: 1, title: 'Close', mnemonic: 'c' }]
   },
   // The query tab menu's commands act on the tab it was opened for (`tabId`), otherwise on the active query.
@@ -444,7 +446,8 @@ export const commandCatalog = {
     menus: [{ menu: 'documentTab.context', group: '4_move', order: 3, mnemonic: 'n' }]
   },
   // VS Code's editor groups (docs/editor-groups.md) and its keys; Ctrl+1 to Ctrl+9 stay free for SSMS's query shortcuts.
-  // A document shows in one group at a time, so splitting moves it into the new group. The tab menu acts on its tab.
+  // A document shows in one group at a time, so splitting moves it into the new group; its handler also needs another tab
+  // in the document's own group, and says so. The tab menu acts on its tab.
   'editor.splitRight': {
     title: 'Split Editor Right', category: 'View', icon: 'split-horizontal', keywords: ['group', 'side', 'tab', 'move'], precondition: 'multipleDocuments', unavailableHint: secondQuery,
     keybindings: [{ key: 'mod+\\' }],

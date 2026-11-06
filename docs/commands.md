@@ -23,7 +23,7 @@ keys it uses are listed below.
 | Open Recent File… | `file.openRecent` | — | — | — | `hasRecentFiles && !documentBusy` | File › Recent Files › each recent file |
 | Clear Recent Files | `file.clearRecent` | — | — | — | `hasRecentFiles` | File › Recent Files › Clear Recent Files |
 | Recover Unsaved Queries… | `file.recoverUnsaved` | — | — | — | `hasRecoveryFiles` | — |
-| Close Query | `file.close` | Ctrl+W, Ctrl+F4 | Ctrl+W, Ctrl+F4 | ⌘W | `hasActiveDocument && !documentBusy` | File › Close Query; Query tab context menu › Close |
+| Close Query | `file.close` | Ctrl+W, Ctrl+F4, Delete (`documentTabFocus && !inputFocus`), Backspace (`documentTabFocus && !inputFocus`) | Ctrl+W, Ctrl+F4, Delete (`documentTabFocus && !inputFocus`), Backspace (`documentTabFocus && !inputFocus`) | ⌘W, ⌦ (`documentTabFocus && !inputFocus`), ⌫ (`documentTabFocus && !inputFocus`) | `hasActiveDocument && !documentBusy` | File › Close Query; Query tab context menu › Close |
 | Close All But This | `file.closeOthers` | — | — | — | `multipleDocuments && !documentBusy` | Query tab context menu › Close All But This |
 | Close All | `file.closeAll` | — | — | — | `hasActiveDocument && !documentBusy` | Window › Close All Documents; Query tab context menu › Close All |
 | Copy Full Path | `file.copyPath` | — | — | — | `hasActiveDocument` | Query tab context menu › Copy Full Path |
@@ -788,7 +788,7 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 | `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
 | `8_view` | **P**ause | `ssis.pauseOperations` | Always |
 
-## Context keys (127)
+## Context keys (126)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -844,7 +844,6 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `activeDocumentIsQuery` | boolean | state | The active document is a query, not an XML, JSON, or execution plan value opened from the results. |
 | `multipleDocuments` | boolean | state | Two or more queries are open. |
 | `multipleEditorGroups` | boolean | state | The query editor shows two or more editor groups (split or floating). |
-| `activeEditorGroupHasMultipleDocuments` | boolean | state | The active document's editor group holds another document, so the active one can split into a group of its own. |
 | `activeDocumentFloating` | boolean | state | The active document's editor group floats over the editor area. |
 | `documentBusy` | boolean | state | A document task is in progress: opening, saving, or closing a query, or changing its connection. |
 | `hasConnection` | boolean | state | At least one server is connected (lost connections do not count). |

@@ -116,8 +116,24 @@ export class EditorGroupService extends SnapshotStore<EditorGroupSnapshot> imple
     this.host.focusGroup(next.id)
   }
   isFloating(id: string): boolean { return !!this.groupOf(id)?.floating }
-  /** Whether Float Editor can move the document into a floating group: it is docked, and the cap allows one more group. */
-  canFloat(id: string): boolean { return !!this.host && !!this.groupOf(id) && !this.isFloating(id) && this.count < editorGroupLimits.groups }
+  /**
+   * Whether Float Editor can move the document into a floating group: it is docked, the grid keeps another document (a
+   * floating query over an empty editor area would sit on "No open queries"), and the cap allows one more group.
+   */
+  canFloat(id: string): boolean {
+    const view = this.view(), group = groupOf(view, id)
+    if (!this.host || !group || group.floating || this.count >= editorGroupLimits.groups) return false
+    return group.documents.length > 1 || view.groups.some(other => other !== group && !other.floating && other.documents.length > 0)
+  }
+  /**
+   * The document that shows when `closing`, the active one, closes: the next tab in its own group (the one before at the
+   * strip's end), as VS Code does; undefined when it is its group's only document, so DocumentService's order decides.
+   */
+  successor(closing: string): string | undefined {
+    const documents = this.groupOf(closing)?.documents ?? [], index = documents.indexOf(closing)
+    if (!this.host || index < 0 || documents.length < 2) return undefined
+    return documents[index + 1] ?? documents[index - 1]
+  }
   /** Float Editor: the document moves into a floating group of its own over the editor area. */
   float(id: string): void { if (this.canFloat(id)) this.host!.move(id, { float: true }) }
   /** Dock Editor: a floating document goes back into the grid. */

@@ -85,7 +85,6 @@ export const contextKeys = {
   activeDocumentIsQuery: { type: 'boolean', scope: 'state', description: 'The active document is a query, not an XML, JSON, or execution plan value opened from the results.' },
   multipleDocuments: { type: 'boolean', scope: 'state', description: 'Two or more queries are open.' },
   multipleEditorGroups: { type: 'boolean', scope: 'state', description: 'The query editor shows two or more editor groups (split or floating).' },
-  activeEditorGroupHasMultipleDocuments: { type: 'boolean', scope: 'state', description: "The active document's editor group holds another document, so the active one can split into a group of its own." },
   activeDocumentFloating: { type: 'boolean', scope: 'state', description: "The active document's editor group floats over the editor area." },
   documentBusy: { type: 'boolean', scope: 'state', description: 'A document task is in progress: opening, saving, or closing a query, or changing its connection.' },
   hasConnection: { type: 'boolean', scope: 'state', description: 'At least one server is connected (lost connections do not count).' },

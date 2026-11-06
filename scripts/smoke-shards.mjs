@@ -24,7 +24,7 @@ export const suiteSeconds = {
     'scripts/activity-monitor-smoke.mjs': 51, 'scripts/menus-smoke.mjs': 79, 'scripts/explorer-smoke.mjs': 35,
     'scripts/scripting-smoke.mjs': 23, 'scripts/object-actions-smoke.mjs': 36, 'scripts/results-smoke.mjs': 83,
     'scripts/options-resize-smoke.mjs': 2, 'scripts/options-smoke.mjs': 11, 'scripts/files-smoke.mjs': 14, 'scripts/hot-exit-smoke.mjs': 6,
-    'scripts/editor-smoke.mjs': 15, 'scripts/table-designer-smoke.mjs': 5, 'scripts/document-frame-smoke.mjs': 18,
+    'scripts/editor-smoke.mjs': 17, 'scripts/table-designer-smoke.mjs': 5, 'scripts/document-frame-smoke.mjs': 18,
     'scripts/ssis-smoke.mjs': 6, 'scripts/ssis-operations-smoke.mjs': 18, 'scripts/updates-smoke.mjs': 20
   },
   windows: {
@@ -34,7 +34,7 @@ export const suiteSeconds = {
     'scripts/activity-monitor-smoke.mjs': 44, 'scripts/menus-smoke.mjs': 94, 'scripts/explorer-smoke.mjs': 25,
     'scripts/scripting-smoke.mjs': 15, 'scripts/object-actions-smoke.mjs': 68, 'scripts/results-smoke.mjs': 55,
     'scripts/options-resize-smoke.mjs': 2, 'scripts/options-smoke.mjs': 8, 'scripts/files-smoke.mjs': 15, 'scripts/hot-exit-smoke.mjs': 6,
-    'scripts/editor-smoke.mjs': 13, 'scripts/table-designer-smoke.mjs': 4, 'scripts/document-frame-smoke.mjs': 14,
+    'scripts/editor-smoke.mjs': 15, 'scripts/table-designer-smoke.mjs': 4, 'scripts/document-frame-smoke.mjs': 14,
     'scripts/ssis-smoke.mjs': 6, 'scripts/ssis-operations-smoke.mjs': 18, 'scripts/updates-smoke.mjs': 20
   }
 }

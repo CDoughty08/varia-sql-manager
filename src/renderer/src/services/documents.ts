@@ -50,7 +50,11 @@ export interface DocumentOptions {
   readonly matchBrackets?: () => boolean
   /** A new query's line ending (the platform's); without it, Monaco's default (LF). */
   readonly newLineEnding?: LineEnding
+  /** The clock a deferred focus is timed by (`performance.now` in the app). */
+  readonly now?: () => number
 }
+/** How long a focus asked for before an editor showed the document waits: one render, never a later show (a panel shown again). */
+export const pendingFocusMs = 1000
 /** The document options Tools › Options sets. Keep tabs (SSMS's default) inserts tab characters. */
 export function settingsDocumentOptions(values: () => SettingsValues): Required<Pick<DocumentOptions, 'modelOptions' | 'matchBrackets'>> {
   return {
@@ -73,8 +77,14 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
    */
   private readonly shown = new Map<editor.IStandaloneCodeEditor, string>()
   private follower?: editor.IStandaloneCodeEditor
-  /** A text document focus was asked for before an editor showed it (its group's editor moves in as React renders the panel). */
+  /**
+   * A text document focus was asked for before an editor showed it (its group's editor moves in as React renders the
+   * panel), and when. It lapses after `pendingFocusMs`, so an editor area shown much later takes no focus from elsewhere.
+   */
   private pendingFocus = ''
+  private pendingSince = 0
+  /** The document a closing active one hands over to: the next in its own editor group (`useCloseSuccessor`). */
+  private successor?: (closing: string) => string | undefined
   /** Whether bracket matching is on in each editor, so it changes only when it must. */
   private readonly matching = new Map<editor.IStandaloneCodeEditor, boolean>()
   private disposed = false
@@ -134,7 +144,19 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     if (provider) { provider.focus(id); return }
     const editor = this.boundEditor
     if (editor && (this.follower || this.shown.get(editor) === id)) { this.pendingFocus = ''; editor.focus() }
-    else this.pendingFocus = id
+    else { this.pendingFocus = id; this.pendingSince = this.now() }
+  }
+  private now(): number { return this.options.now?.() ?? performance.now() }
+  /** Which document shows after the active one closes; without one (or when it names none open), the next in order. */
+  useCloseSuccessor(successor: (closing: string) => string | undefined): Disposable {
+    this.successor = successor
+    return { dispose: () => { if (this.successor === successor) this.successor = undefined } }
+  }
+  private afterClose(id: string): { tabs: QueryDocument[]; activeId: string } {
+    const current = this.getSnapshot(), next = afterClose(current.documents, current.activeId, id)
+    if (current.activeId !== id) return next
+    const preferred = this.successor?.(id)
+    return preferred && preferred !== id && next.tabs.some(document => document.id === preferred) ? { ...next, activeId: preferred } : next
   }
   private changed(snapshot: DocumentSnapshot): void {
     this.publish(snapshot)
@@ -335,7 +357,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     if (this.shown.get(instance) === id && instance.getModel() === (this.entries.get(id)?.model ?? null)) return
     this.rememberView(instance)
     this.showModel(instance, id)
-    if (this.pendingFocus === id) { this.pendingFocus = ''; instance.focus() }
+    if (this.pendingFocus === id) { this.pendingFocus = ''; if (this.now() - this.pendingSince <= pendingFocusMs) instance.focus() }
   }
   /** The editor no longer shows documents (its group closed): where it was is kept, and it lets go of the model. */
   releaseEditor(instance: editor.IStandaloneCodeEditor): void {
@@ -428,7 +450,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     if (isQueryDocument(this.get(id))) await this.endSession(id, transaction)
     if (this.disposed || this.entries.get(id) !== entry) return
     if (version !== entry.model.getVersionId()) throw new Error('The query changed while closing. Close it again to review the latest changes.')
-    const current = this.getSnapshot(), next = afterClose(current.documents, current.activeId, id)
+    const current = this.getSnapshot(), next = this.afterClose(id)
     this.unshow(id, current.activeId === id ? next.activeId : undefined)
     entry.subscription.dispose()
     entry.model.dispose()
@@ -439,7 +461,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   }
   /** A custom document has no session to end and no model to dispose; its provider forgets it. */
   private closeCustom(id: string): void {
-    const provider = this.provider(id), current = this.getSnapshot(), next = afterClose(current.documents, current.activeId, id)
+    const provider = this.provider(id), current = this.getSnapshot(), next = this.afterClose(id)
     this.customs.delete(id)
     this.unshow(id, current.activeId === id ? next.activeId : undefined)
     this.changed({ ...current, documents: next.tabs, activeId: next.activeId })

@@ -137,7 +137,7 @@ function DocumentTab({ api }: IDockviewPanelHeaderProps) {
   // Selected in its group: the group shows it.
   const [selected, setSelected] = useState(api.isVisible)
   useEffect(() => { setSelected(api.isVisible); const visibility = api.onDidVisibilityChange(event => setSelected(event.isVisible)); return () => visibility.dispose() }, [api])
-  const menuTarget = useMenuTarget<HTMLDivElement>(() => workbench.documents.get(id) ? { kind: 'documentTab', tabId: id, floating: api.location.type === 'floating' } : null)
+  const menuTarget = useMenuTarget<HTMLDivElement>(() => workbench.documents.get(id) ? { kind: 'documentTab', tabId: id, floating: api.location.type === 'floating', shared: (workbench.editorGroups.groupOf(id)?.documents.length ?? 0) > 1 } : null)
   const ref = useCallback((node: HTMLDivElement | null) => { element.current = node; menuTarget(node) }, [menuTarget])
   // Dockview's tab element is the tab (role, name, selection, roving focus): F2 renames while it has focus, and screen
   // readers hear its environment.
@@ -247,14 +247,45 @@ export default function EditorArea() {
  * second region named as that document's own frame (New Database), so editor groups are named "Editor group: …". */
 const groupPrefix = 'Editor group: '
 function nameGroupRegions(root: HTMLElement): { dispose(): void } {
+  // Only Dockview's groups: a document's own regions ("… sections", a chart's table) keep their names as their titles change.
   const name = (element: Element) => {
     const label = element.getAttribute('aria-label')
-    if (element.getAttribute('role') === 'region' && label && !label.startsWith(groupPrefix)) element.setAttribute('aria-label', groupPrefix + label)
+    if (element.classList.contains('dv-groupview') && element.getAttribute('role') === 'region' && label && !label.startsWith(groupPrefix)) element.setAttribute('aria-label', groupPrefix + label)
   }
-  root.querySelectorAll('[role="region"]').forEach(name)
+  root.querySelectorAll('.dv-groupview[role="region"]').forEach(name)
   const observer = new MutationObserver(records => { for (const record of records) if (record.target instanceof Element) name(record.target) })
   observer.observe(root, { subtree: true, attributes: true, attributeFilter: ['aria-label', 'role'] })
   return { dispose: () => observer.disconnect() }
+}
+
+/** Menus, the palette and dialogs come and go over the editor area: focus there says nothing about where the user is. */
+const transientFocus = '.menu-layer, [role="dialog"], [role="alertdialog"]'
+/** Reports whether each element that takes focus (transient layers aside) is inside the editor area. */
+function followFocus(root: HTMLElement, report: (inside: boolean) => void): { dispose(): void } {
+  const focused = (event: FocusEvent) => { const target = event.target; if (target instanceof Element && !target.closest(transientFocus)) report(root.contains(target)) }
+  document.addEventListener('focusin', focused, true)
+  return { dispose: () => document.removeEventListener('focusin', focused, true) }
+}
+
+/**
+ * A tab that focus reaches from another tab of its strip shows its document, as the single strip's arrow keys did:
+ * Dockview's roving focus (arrows, Home, End) then chooses tabs, and Close, Rename and Delete act on the focused tab,
+ * which is the active one. Focus that comes from elsewhere (a closing menu restoring it) chooses nothing, and a press
+ * chooses a tab only when Dockview says (the primary button): a right-click leaves the shown document as it is.
+ */
+function chooseFocusedTabs(root: HTMLElement, choose: (id: string) => void): { dispose(): void } {
+  let pressed = false
+  const press = () => { pressed = true; setTimeout(() => { pressed = false }) }
+  const focused = (event: FocusEvent) => {
+    const target = event.target
+    const from = event.relatedTarget instanceof Element ? event.relatedTarget.closest('.dv-tab') : null
+    const roving = !pressed && target instanceof HTMLElement && target.classList.contains('dv-tab') && !!from && from !== target && from.parentElement === target.parentElement
+    const id = roving ? target.querySelector('[data-tab-id]')?.getAttribute('data-tab-id') : undefined
+    if (id) choose(id)
+  }
+  root.addEventListener('pointerdown', press, true)
+  root.addEventListener('focusin', focused)
+  return { dispose: () => { root.removeEventListener('pointerdown', press, true); root.removeEventListener('focusin', focused) } }
 }
 
 /**
@@ -270,6 +301,11 @@ class EditorAreaController implements Area, EditorGroupHost {
   private disposables: { dispose(): void }[] = []
   private reconciling = false
   private disposed = false
+  /**
+   * Whether the last element to take focus, menus, the palette and dialogs aside, was in the editor area. Focus on the
+   * body then means the area lost it (a hidden panel took its element), not that the user went elsewhere (a toast closed).
+   */
+  private focusInArea = true
   private status?: { editor: QueryEditorInstance['instance']; binding: { dispose(): void } }
   constructor(private readonly workbench: Workbench) {}
 
@@ -287,7 +323,9 @@ class EditorAreaController implements Area, EditorGroupHost {
       api.onDidAddGroup(group => { if (api.groups.length > editorGroupLimits.groups) queueMicrotask(() => this.mergeInto(group)) }),
       { dispose: documents.subscribe(() => this.reconcile()) },
       editorGroups.attach(this),
-      nameGroupRegions(root))
+      nameGroupRegions(root),
+      followFocus(root, inside => { this.focusInArea = inside }),
+      chooseFocusedTabs(root, id => { if (documents.getSnapshot().activeId !== id) api.getPanel(id)?.api.setActive() }))
     this.reconcile()
     this.publish()
   }
@@ -298,21 +336,22 @@ class EditorAreaController implements Area, EditorGroupHost {
     if (!api || this.disposed || this.reconciling) return
     const { documents: list, activeId } = this.workbench.documents.getSnapshot()
     const open = new Set(list.map(document => document.id))
+    // A tab closed while it had focus (Delete) hands focus to the tab that shows next, so the keyboard stays in the strip.
+    const focusedTab = document.activeElement?.closest('.dv-tab')?.querySelector('[data-tab-id]')?.getAttribute('data-tab-id')
+    const tabFocusLeaves = !!focusedTab && !open.has(focusedTab)
     this.reconciling = true
-    let closedActive = false
     try {
-      for (const panel of [...api.panels]) if (!open.has(panel.id)) { closedActive ||= api.activePanel === panel; api.removePanel(panel) }
+      for (const panel of [...api.panels]) if (!open.has(panel.id)) api.removePanel(panel)
       for (const document of list) {
         const panel = api.getPanel(document.id)
         if (!panel) this.add(document.id, document.name, document.id !== activeId)
         else if (panel.title !== document.name) panel.api.setTitle(document.name)
       }
     } finally { this.reconciling = false }
-    // Closing the active document shows the next one in its own group, as VS Code does; otherwise the active document's
-    // panel becomes active (a document chosen from a menu, Script As, Go to Query).
-    const shown = api.activePanel
-    if (closedActive && shown && shown.id !== activeId) this.workbench.documents.activate(shown.id)
-    else if (activeId && api.activePanel?.id !== activeId) { this.reconciling = true; try { api.getPanel(activeId)?.api.setActive() } finally { this.reconciling = false } }
+    // The active document's panel becomes active: one chosen from a menu, Script As or Go to Query, and after a close the
+    // next tab in the closed one's group, which DocumentService already made active (`EditorGroupService.successor`).
+    if (activeId && api.activePanel?.id !== activeId) { this.reconciling = true; try { api.getPanel(activeId)?.api.setActive() } finally { this.reconciling = false } }
+    if (tabFocusLeaves && activeId) this.root?.querySelector(`[data-tab-id="${CSS.escape(activeId)}"]`)?.closest<HTMLElement>('.dv-tab')?.focus()
     this.followStatus()
     this.publish()
   }
@@ -322,7 +361,10 @@ class EditorAreaController implements Area, EditorGroupHost {
     this.guard(panel)
     return panel
   }
-  /** Dockview's own close (Delete on a focused tab) goes through File › Close, which asks about unsaved changes. */
+  /**
+   * Dockview's own close goes through File › Close, which asks about unsaved changes. Its tab keys never reach it: Delete
+   * and Backspace on a focused tab are File › Close's catalogue keys, which KeybindingService takes first.
+   */
   private guard(panel: IDockviewPanel): void {
     const id = panel.id
     Object.defineProperty(panel.api, 'close', { configurable: true, value: () => { void this.workbench.commands.execute('file.close', { tabId: id }, 'keybinding') } })
@@ -363,9 +405,10 @@ class EditorAreaController implements Area, EditorGroupHost {
     }
     // Another group's editor left in this slot (a restore rebuilds the groups around the same panels) goes.
     for (const [other, value] of this.editors) if (other !== group && value.element.parentElement === slot) this.dropEditor(other)
-    // Moving the editor's element blurs it: it keeps the keyboard when it had it, or when nothing has it now (a menu or the
-    // palette closed onto the old panel, which a new document hid), as the single editor kept it across tab switches.
-    const active = document.activeElement, keep = editor.element.contains(active) || !active || active === document.body
+    // Moving the editor's element blurs it: it keeps the keyboard when it had it, or when nothing has it now and the editor
+    // area had it last (a menu or the palette closed onto the old panel, which a new document hid), as the single editor
+    // kept it across tab switches.
+    const active = document.activeElement, keep = editor.element.contains(active) || ((!active || active === document.body) && this.focusInArea)
     if (editor.element.parentElement !== slot) slot.append(editor.element)
     editor.shows = id
     this.workbench.documents.showIn(editor.editor.instance, id)

@@ -228,6 +228,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const refreshDocuments = settings.subscribe(() => documents.refreshOptions())
   const bookmarks = new BookmarkService(documents, events), editorDialogs = new EditorDialogs(), tabRename = new TabRenameService(documents)
   const editorGroups = new EditorGroupService(documents)
+  // Closing the active document shows the next one in its own editor group.
+  const closeSuccessor = documents.useCloseSuccessor(id => editorGroups.successor(id))
   const resultClient = new ResultClient({ api, createWorker: () => new ResultsWorker(), window, schedule: callback => { frame(callback) } })
   const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => { frame(callback) } })
   const resultMemory = new ResultMemoryService(resultClient, events)
@@ -437,6 +439,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       contributions.forEach(contribution => contribution.dispose())
       cleanup.dispose()
       refreshDocuments()
+      closeSuccessor.dispose()
       commands.dispose()
       context.dispose()
       files.dispose()

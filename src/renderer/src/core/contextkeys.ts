@@ -137,7 +137,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     activeDocumentIsActivityMonitor: active?.kind === 'activityMonitor', activityPaused: !!monitor?.paused, activitySplit: !!monitor?.split,
     activeDocumentIsSsisOperations: active?.kind === 'ssisOperations', ssisOperationStoppable: !!operations?.stoppable, ssisOperationsPaused: !!operations?.paused, ssisOperationsRefreshable: !!operations?.refreshable, ssisOperationsPausable: !!operations?.pausable,
     designerEditable: !!designer?.editable, designerRowSelected: !!designer?.rowSelected, designerPrimaryKeyRemovable: !!designer?.keyRemovable, designerSaving: !!inputs.designer?.saving, multipleDocuments: documents.documents.length > 1, multipleEditorGroups: groups.length > 1,
-    activeEditorGroupHasMultipleDocuments: activeGroup ? activeGroup.documents.length > 1 : documents.documents.length > 1, activeDocumentFloating: !!activeGroup?.floating, documentBusy: documents.busy,
+    activeDocumentFloating: !!activeGroup?.floating, documentBusy: documents.busy,
     hasConnection: connections.some(connection => !connection.lost), hasLostConnection: connections.some(connection => connection.lost),
     activeDocumentConnected: !!activeConnection && !activeConnection.lost, activeConnectionLost: !!activeConnection?.lost,
     anyDocumentConnected: documents.documents.some(document => isQueryDocument(document) && !!document.connectionId && connections.some(connection => connection.id === document.connectionId && !connection.lost)),
@@ -185,7 +185,7 @@ export interface ContextKeyOptions {
   readonly activity?: ExternalStore<ActivityContextState>
   /** The Integration Services Operations documents' keys. */
   readonly ssis?: ExternalStore<SsisOperationsContextState>
-  /** The editor groups (`multipleEditorGroups`, `activeEditorGroupHasMultipleDocuments`, `activeDocumentFloating`). */
+  /** The editor groups (`multipleEditorGroups`, `activeDocumentFloating`). */
   readonly editorGroups?: ExternalStore<EditorGroupSnapshot>
   readonly editor?: () => FocusEditor<Element> | undefined
   readonly activeElement?: () => Element | null

@@ -126,6 +126,29 @@ describe('the editor group service', () => {
     expect(groups.capture(() => 0)).toEqual(layout(split(leaf([0]), leaf([1]))))
   })
 
+  it('floats a document only while the grid keeps another, and names the next tab in its group as a closing one\'s successor', () => {
+    const { groups, host } = service()
+    // Without an editor area there are no groups to hand over within.
+    expect(groups.successor('b')).toBeUndefined()
+    groups.attach(host)
+    groups.update(twoGroups)
+    // c is its grid group's only document, but g1 stays in the grid: it can float.
+    expect(groups.canFloat('c')).toBe(true)
+    expect(groups.canFloat('a')).toBe(true)
+    expect(groups.successor('a')).toBe('b')
+    expect(groups.successor('b')).toBe('a')
+    expect(groups.successor('c')).toBeUndefined()
+    // One grid group with one document: floating it would leave the editor area empty behind it.
+    groups.update({ groups: [{ id: 'g1', documents: ['a'], active: 'a', floating: false }, { id: 'g2', documents: ['b', 'c'], active: 'b', floating: true }], activeGroup: 'g1' })
+    expect(groups.canFloat('a')).toBe(false)
+    groups.update({ groups: [{ id: 'g1', documents: ['a', 'b'], active: 'a', floating: false }], activeGroup: 'g1' })
+    expect(groups.canFloat('a')).toBe(true)
+    groups.update({ groups: [{ id: 'g1', documents: ['a'], active: 'a', floating: false }], activeGroup: 'g1' })
+    expect(groups.canFloat('a')).toBe(false)
+    groups.float('a')
+    expect(host.move).not.toHaveBeenCalledWith('a', { float: true })
+  })
+
   it('publishes only real changes, restores once the editor area attaches, and forgets the area when it goes', () => {
     const { groups, host } = service()
     const listener = vi.fn()
