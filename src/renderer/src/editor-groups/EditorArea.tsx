@@ -8,6 +8,7 @@ import { useServiceSelector, useServiceSnapshot, useWorkbench } from '../core/Wo
 import type { Workbench } from '../core/workbench'
 import { documentKind, isCustomKind, kindInfo, type QueryTab } from '../documents'
 import { DockingGuides } from '../docking-guides'
+import { afterPointer } from './pointer'
 import { createQueryEditor, type QueryEditorInstance } from '../editor/create-editor'
 import EnvironmentTag from '../EnvironmentTag'
 import Icon from '../Icon'
@@ -277,24 +278,6 @@ function followFocus(root: HTMLElement, report: (inside: boolean) => void): { di
   const focused = (event: FocusEvent) => { const target = event.target; if (target instanceof Element && !target.closest(transientFocus)) report(root.contains(target)) }
   document.addEventListener('focusin', focused, true)
   return { dispose: () => document.removeEventListener('focusin', focused, true) }
-}
-
-/**
- * Runs `then` once the pointer is up and Dockview has handled its release (a Shift-drag float follows the pointer until
- * then), or at once when no pointer is held.
- */
-function afterPointer(): { held(): boolean; then(run: () => void): void; dispose(): void } {
-  let held = false, waiting: (() => void) | undefined
-  const down = () => { held = true }
-  const up = () => { held = false; const run = waiting; waiting = undefined; if (run) setTimeout(run) }
-  window.addEventListener('pointerdown', down, true)
-  window.addEventListener('pointerup', up, true)
-  window.addEventListener('pointercancel', up, true)
-  return {
-    held: () => held,
-    then: run => { if (held) waiting = run; else run() },
-    dispose: () => { waiting = undefined; window.removeEventListener('pointerdown', down, true); window.removeEventListener('pointerup', up, true); window.removeEventListener('pointercancel', up, true) }
-  }
 }
 
 /**

@@ -392,6 +392,14 @@ try {
   const lastBox = await documentTab(page, secondTab).boundingBox()
   const pointer = { pointerId: 1, pointerType: 'mouse', isPrimary: true, clientX: lastBox.x + 20, clientY: lastBox.y + lastBox.height / 2 }
   await documentTab(page, secondTab).dispatchEvent('pointerdown', { ...pointer, shiftKey: true, button: 0, buttons: 1 })
+  // The float moves with the pointer, and the moves report the layout while the pointer is still down: the cap's dock
+  // must wait for the release (without that wait this check fails every run).
+  await page.evaluate(async init => {
+    for (let step = 1; step <= 6; step++) {
+      window.dispatchEvent(new PointerEvent('pointermove', { ...init, bubbles: true, buttons: 1, clientX: init.clientX + step * 20, clientY: init.clientY + step * 25 }))
+      await new Promise(resolve => requestAnimationFrame(resolve))
+    }
+  }, pointer)
   await expect(floatingEditorGroups(page)).toHaveCount(16)
   await page.evaluate(init => { window.dispatchEvent(new PointerEvent('pointerup', { ...init, bubbles: true, button: 0, buttons: 0 })) }, pointer)
   await expect(floatingEditorGroups(page)).toHaveCount(15)
