@@ -253,7 +253,13 @@ internal sealed class LiveTableSet(ResultStore store, string subscriptionId, Liv
         foreach (var cell in row.Cells)
         {
             if (cell.Text is null) builder.AppendNull();
-            else builder.AppendText(cell.Text, cell.Truncated);
+            else
+            {
+                builder.AppendText(cell.Text, cell.Truncated);
+                // A probe's text, counted as nvarchar; a cut cell's full length is not known, so its kept text stands in
+                // as an estimate, marked so in its entry.
+                builder.Measure(cell.Text.Length, 2L * cell.Text.Length, exact: !cell.Truncated);
+            }
             if (cell.Truncated) truncated++;
         }
         return set.TryCommitRow(truncated);

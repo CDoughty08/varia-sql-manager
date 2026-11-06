@@ -103,7 +103,9 @@ internal sealed class ResultStore
     /// <param name="transfer">The caller has just released a set with the same columns, whose bytes pay for this one's
     /// metadata, so it is charged without a check (an append table's restart, LiveAppendTable): no one else can take those
     /// bytes in between, and while a lease holds the released set the store is over by one set's metadata at most.</param>
-    public ResultSetBuffer? Open(QueryBudget query, int index, int batchNumber, int iteration, string kind, IReadOnlyList<ResultColumn> columns, IReadOnlyList<WireKind> wires, bool transfer = false)
+    /// <param name="lengths">Each column's byte rule (ColumnPlan.Lengths); without them text counts as UTF-16.</param>
+    public ResultSetBuffer? Open(QueryBudget query, int index, int batchNumber, int iteration, string kind, IReadOnlyList<ResultColumn> columns, IReadOnlyList<WireKind> wires, bool transfer = false,
+        IReadOnlyList<ColumnLength>? lengths = null)
     {
         // A live set's pages stay off the large object heap; see LiveBudget.
         var sealBytes = query.Live is null ? PageBuilder.SealBytes : LiveSealBytes;
@@ -122,7 +124,7 @@ internal sealed class ResultStore
                 Return(query, metadata);
                 throw new RequestException("BACKEND_ERROR", "Result identifiers are exhausted. Restart the SQL backend.");
             }
-            var set = new ResultSetBuffer(this, query, nextId++, index, batchNumber, iteration, kind, columns, wires, metadata, sealBytes);
+            var set = new ResultSetBuffer(this, query, nextId++, index, batchNumber, iteration, kind, columns, wires, metadata, sealBytes, lengths);
             sets[set.ResultId] = set;
             return set;
         }

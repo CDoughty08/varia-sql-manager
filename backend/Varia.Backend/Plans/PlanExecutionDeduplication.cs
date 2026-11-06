@@ -11,10 +11,11 @@ internal static class PlanExecutionDeduplication
 {
     private static readonly XNamespace Ns = PlanParser.ShowplanName.Namespace;
 
-    public static List<ActualPlanCapture.CapturedPlan> Unpaired(ActualPlanCapture.Snapshot snapshot, List<ResultSetBuffer> sets, long byteLimit)
+    /// <summary>Maps observer positions to the native result IDs that represent the same executions.</summary>
+    public static Dictionary<int, uint>? Pair(ActualPlanCapture.Snapshot snapshot, List<ResultSetBuffer> sets, long byteLimit)
     {
         // A dropped event or an unknown batch makes matching repeated executions ambiguous.
-        if (snapshot.Incomplete || snapshot.Plans.Count == 0 || !sets.Any(set => set.Kind == "executionPlan")) return snapshot.Plans;
+        if (snapshot.Incomplete || snapshot.Plans.Count == 0 || !sets.Any(set => set.Kind == "executionPlan")) return null;
         var available = new Dictionary<(int Batch, int Iteration, string Key), Queue<int>>();
         for (var index = 0; index < snapshot.Plans.Count; index++)
         {
@@ -24,9 +25,9 @@ internal static class PlanExecutionDeduplication
             if (!available.TryGetValue(position, out var matches)) available.Add(position, matches = new());
             matches.Enqueue(index);
         }
-        if (available.Count == 0) return snapshot.Plans;
+        if (available.Count == 0) return null;
 
-        var duplicates = new HashSet<int>();
+        var paired = new Dictionary<int, uint>();
         foreach (var set in sets)
         {
             if (set.Kind != "executionPlan") continue;
@@ -42,11 +43,11 @@ internal static class PlanExecutionDeduplication
             byteLimit -= xml.Length;
             if (Fingerprint(Encoding.UTF8.GetString(xml)) is not { } key
                 || !available.TryGetValue((descriptor.BatchNumber, descriptor.Iteration, key), out var matches)) continue;
-            duplicates.Add(matches.Dequeue());
+            paired.Add(matches.Dequeue(), descriptor.ResultId);
             if (matches.Count == 0) available.Remove((descriptor.BatchNumber, descriptor.Iteration, key));
             if (available.Count == 0) break;
         }
-        return duplicates.Count == 0 ? snapshot.Plans : [.. snapshot.Plans.Where((_, index) => !duplicates.Contains(index))];
+        return paired.Count > 0 ? paired : null;
     }
 
     private static string? Fingerprint(string xml)

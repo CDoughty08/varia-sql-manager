@@ -73,6 +73,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // Pages arrive as DATA frames within the stream's credit; the RESPONSE ends the stream.
   'results.read': { kind: 'stream', lane: 'results', deadlineMs: 60_000 },
   'results.close': control,
+  // Reads the lengths recorded beside stored pages: memory only, at most 16,384 numbers.
+  'results.rowBytes': control,
   // The backend answers its own 40 s budget as a TIMEOUT value; main cancels it from the renderer (varia:explorer-cancel).
   'explorer.children': { kind: 'unary', lane: 'explorer', deadlineMs: 45_000 },
   // A build reads every database (each within its own 120 s budget) and only Stop (varia:explorer-cancel), a newer build or a

@@ -1,5 +1,5 @@
-import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsReadParams, ResultsReadResult } from '../../shared/contracts'
-import { portRequestSchema, testPortRequestSchema, type MemoryFeature, type MemoryReport, type PortMessage, type PortRequest } from '../../shared/ipc/port-messages'
+import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult } from '../../shared/contracts'
+import { portRequestSchema, rowBytesResultSchema, testPortRequestSchema, type MemoryFeature, type MemoryReport, type PortMessage, type PortRequest } from '../../shared/ipc/port-messages'
 import { liveDescriptors, liveRetired, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../../shared/live/schema'
 import { cancelReasons, limits as wire, type CancelReason, type ErrorCode } from '../../shared/ipc/wire/protocol'
 import type { StreamSink } from './connection'
@@ -26,6 +26,7 @@ export interface ResultsBackend {
   readyGeneration(): number | undefined
   read(generation: number, params: ResultsReadParams, sink: StreamSink, credit: number): ReadStream
   close(generation: number, resultIds: number[]): Promise<ResultsCloseResult>
+  rowBytes(generation: number, params: ResultsRowBytesParams): Promise<ResultsRowBytesResult>
   live(generation: number, params: LiveSubscribeParams, onLive: (event: LiveEvent, bytes: number) => void, credit: number): LiveStreamHandle
   liveUpdate(generation: number, params: LiveUpdateParams): Promise<LiveUpdateResult>
 }
@@ -225,6 +226,7 @@ export class ResultsPortHost {
       case 'credit': return this.credit(request.rid, request.bytes)
       case 'cancel': (this.streams.get(request.rid) ?? this.lives.get(request.rid))?.handle?.cancel(cancelReasons.user); return
       case 'close': return this.closeResults(request)
+      case 'rowBytes': return this.rowBytes(request)
       case 'live': return this.live(request)
       case 'liveUpdate': return this.liveUpdate(request)
     }
@@ -410,6 +412,30 @@ export class ResultsPortHost {
     })
   }
 
+  /** Row sizes of a result this renderer owns in the current generation; counted with live updates against the 64. */
+  private rowBytes(request: Extract<PortRequest, { t: 'rowBytes' }>): void {
+    const { rid } = request
+    if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
+    if (request.generation !== this.generation || this.backend.readyGeneration() !== request.generation || !this.owned.has(request.resultId)) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
+    const port = this.port
+    this.updating++
+    this.backend.rowBytes(request.generation, { resultId: request.resultId, firstRow: request.firstRow, count: request.count }).then(result => {
+      if (this.port !== port) return
+      this.updating--
+      // Backend output is bounded before the renderer sees it: the range asked, at most as many rows as asked or as exist.
+      const parsed = rowBytesResultSchema.safeParse(result)
+      const answered = parsed.success ? parsed.data : undefined
+      const rowsIn = (rows: number[], from: number, to: number) => rows.every((row, index) => row >= from && row < to && (index === 0 || row > rows[index - 1]))
+      if (!answered || answered.firstRow !== request.firstRow || answered.bytes.length > Math.min(request.count, Math.max(0, answered.rowsAvailable - answered.firstRow))
+        || !rowsIn(answered.estimated, answered.firstRow, answered.firstRow + answered.bytes.length)) return this.end(rid, 'BACKEND_ERROR', 'The results could not be read.')
+      this.post({ t: 'end', rid, ok: true, result: answered })
+    }, error => {
+      if (this.port !== port) return
+      this.updating--
+      this.fail(rid, error)
+    })
+  }
+
   private fail(rid: number, error: unknown): void {
     if (error instanceof BackendError) this.end(rid, error.code, error.message)
     else this.end(rid, 'BACKEND_ERROR', 'The results could not be read.')
@@ -439,6 +465,7 @@ export function supervisorResults(supervisor: BackendSupervisor): ResultsBackend
       }
     },
     close: (generation, resultIds) => supervisor.request('results.close', { resultIds }, { generation }),
+    rowBytes: (generation, params) => supervisor.request('results.rowBytes', params, { generation }),
     live: (generation, params, onLive, credit) => {
       let id = 0
       const done = supervisor.request('live.subscribe', params, { generation, credit, onLive, onSent: sent => { id = sent } })

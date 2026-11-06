@@ -10,7 +10,8 @@ internal enum WireKind : byte { Text = 1, Binary = 2 }
 /// <summary>Builds columnar result pages (docs/ipc.md; src/shared/ipc/wire/pages.ts decodes them and its encodePage writes
 /// identical bytes). Cells are appended in column order, each column once per row, between BeginRow and CommitRow;
 /// AbortRow discards a partial row, so pages never hold one. Seal returns the exact-size page, which is both stored and
-/// written to stdout.</summary>
+/// written to stdout, and the page's lengths sidecar (<see cref="PageLengths"/>), which stays in the backend: each cell's
+/// reader reports its value's full characters and bytes with <see cref="Measure"/> right after appending it.</summary>
 internal sealed class PageBuilder
 {
     public const int MaxRows = 4096;
@@ -43,6 +44,15 @@ internal sealed class PageBuilder
     private int next = -1;
     private long rowBytes;
     private long dataBytes;
+    // The lengths sidecar: each committed row's DATALENGTH sum, the open row's, and the sparse entries (CellLengths.cs).
+    private uint[] rowLengths = new uint[FirstPageRows];
+    private long rowData;
+    private readonly List<CellLength> cells = [];
+    private readonly List<(int Row, long Bytes)> large = [];
+    private int openCells;
+    // The cell Measure applies to: the last one appended, until it is measured.
+    private int lastCell = -1;
+    private bool lastTruncated;
 
     private readonly int sealBytes;
 
@@ -68,15 +78,23 @@ internal sealed class PageBuilder
     public bool IsFull => rows >= MaxRows || ByteCount >= sealBytes;
     /// <summary>Cell bytes the open row has added so far.</summary>
     public long OpenRowBytes => next < 0 ? 0 : rowBytes;
+    /// <summary>What the open row adds to the lengths sidecar: its uint32 and its sparse entries (and a large row's entry).</summary>
+    public long OpenRowLengthBytes => next < 0 ? 0 : 4L + (long)PageLengths.CellBytes * openCells + (rowData >= uint.MaxValue ? PageLengths.LargeBytes : 0);
     /// <summary>Bytes held by the builder's buffers, for memory accounting.</summary>
-    public long WorkingBytes => columns.Sum(column => (long)column.Data.Length + 4L * column.Offsets.Length + (column.Nulls?.Length ?? 0) + (column.Truncated?.Length ?? 0) + (column.Errors?.Length ?? 0));
+    public long WorkingBytes => columns.Sum(column => (long)column.Data.Length + 4L * column.Offsets.Length + (column.Nulls?.Length ?? 0) + (column.Truncated?.Length ?? 0) + (column.Errors?.Length ?? 0))
+        + 4L * rowLengths.Length + (long)PageLengths.CellBytes * cells.Capacity + (long)PageLengths.LargeBytes * large.Capacity;
 
     public void BeginRow()
     {
         if (next >= 0) throw new InvalidOperationException("A row is already open.");
         if (rows >= MaxRows) throw new InvalidOperationException("The page is full; seal it first.");
+        // Grown here, not at commit, so the row's commit charges the growth with the row's other working space.
+        if (rows == rowLengths.Length) Array.Resize(ref rowLengths, Math.Min(MaxRows, rowLengths.Length * 2));
         next = 0;
         rowBytes = 0;
+        rowData = 0;
+        openCells = 0;
+        lastCell = -1;
     }
 
     private Column Cell()
@@ -90,7 +108,29 @@ internal sealed class PageBuilder
         if (truncated) Set(ref column.Truncated, rows);
         if (rows + 2 > column.Offsets.Length) Array.Resize(ref column.Offsets, Math.Min(MaxRows + 1, column.Offsets.Length * 2));
         column.Offsets[rows + 1] = (uint)column.Length;
+        lastCell = next;
+        lastTruncated = truncated;
         next++;
+    }
+
+    /// <summary>Records the value just appended: its bytes (DATALENGTH) add to the row's, and its full characters and bytes
+    /// are kept beside the page when the cell was stored truncated (by its reader's cap or the 8 MiB row limit) or when
+    /// <paramref name="keep"/> says its lengths do not follow from its text (LengthRule.Recorded), or when
+    /// <paramref name="exact"/> is false (the reader could only estimate its bytes; its entry says so). A cell that is not
+    /// measured adds nothing (NULL, or a caller that records no lengths).</summary>
+    public void Measure(long chars, long bytes, bool keep = false, bool exact = true)
+    {
+        // InvalidOperationException, not an ArgumentException: a reader treats those as a failed cell and would append the
+        // cell a second time, where a bug here should end the read.
+        if (lastCell < 0) throw new InvalidOperationException("Measure follows the cell it describes.");
+        if (chars < 0 || bytes < 0) throw new InvalidOperationException("A cell's lengths are never negative.");
+        rowData += bytes;
+        if (keep || lastTruncated || !exact)
+        {
+            cells.Add(new CellLength(rows, lastCell, chars, bytes, exact));
+            openCells++;
+        }
+        lastCell = -1;
     }
 
     private static void Set(ref byte[]? bitmap, int row)
@@ -178,8 +218,15 @@ internal sealed class PageBuilder
     {
         if (next != columns.Length) throw new InvalidOperationException("Every column needs a cell before the row is committed.");
         dataBytes += rowBytes;
+        if (rowData >= uint.MaxValue)
+        {
+            rowLengths[rows] = uint.MaxValue;
+            large.Add((rows, rowData));
+        }
+        else rowLengths[rows] = (uint)rowData;
         rows++;
         next = -1;
+        lastCell = -1;
     }
 
     /// <summary>Discards the open row's cells and flags.</summary>
@@ -194,7 +241,11 @@ internal sealed class PageBuilder
             Clear(column.Truncated, rows);
             Clear(column.Errors, rows);
         }
+        cells.RemoveRange(cells.Count - openCells, openCells);
+        openCells = 0;
+        rowData = 0;
         next = -1;
+        lastCell = -1;
     }
 
     private static bool Any(byte[]? bitmap, int rows)
@@ -205,7 +256,10 @@ internal sealed class PageBuilder
     }
 
     /// <summary>The page for the committed rows, in one exact-size array; the builder then starts the next page.</summary>
-    public byte[] Seal()
+    public byte[] Seal() => Seal(out _);
+
+    /// <summary><see cref="Seal()"/>, with the page's lengths sidecar in exact-size arrays.</summary>
+    public byte[] Seal(out PageLengths lengths)
     {
         if (next >= 0) throw new InvalidOperationException("Commit or abort the open row first.");
         if (rows == 0) throw new InvalidOperationException("A page needs at least one row.");
@@ -277,6 +331,7 @@ internal sealed class PageBuilder
                 }
             }
         }
+        lengths = new PageLengths(rowLengths.AsSpan(0, rows).ToArray(), [.. cells], [.. large]);
         Reset();
         return page;
     }
@@ -303,5 +358,7 @@ internal sealed class PageBuilder
         }
         rows = 0;
         dataBytes = 0;
+        cells.Clear();
+        large.Clear();
     }
 }

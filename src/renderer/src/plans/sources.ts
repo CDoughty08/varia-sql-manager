@@ -1,5 +1,14 @@
 import type { ApiResult } from '../../../shared/contracts'
 import { maxQueryPlanDocuments, planLimits, type PlanDocument, type PlanStatement } from '../../../shared/plans'
+import type { ResultDescriptor } from '../../../shared/contracts'
+
+/** Order both sources by batch and GO repetition, then by observer position wherever SQL matched the same execution. */
+export function orderPlanEntries<T extends { descriptor: Pick<ResultDescriptor, 'batchNumber' | 'iteration' | 'resultId'> }>(entries: readonly T[], order?: readonly number[]): T[] {
+  const rank = new Map(order?.map((id, index) => [id, index]))
+  const last = Number.MAX_SAFE_INTEGER
+  return entries.toSorted(({ descriptor: a }, { descriptor: b }) => (a.batchNumber || last) - (b.batchNumber || last)
+    || a.iteration - b.iteration || (rank.get(a.resultId) ?? last) - (rank.get(b.resultId) ?? last))
+}
 
 export interface PlanSource { key: string; label: string; read(signal: AbortSignal): Promise<string> }
 /** Treat a failed/truncated source separately so an earlier valid plan in the same run remains usable. */

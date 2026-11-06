@@ -45,6 +45,8 @@ export interface RowWindow {
 }
 /** One cell's whole value: `truncated` when the backend stored only a prefix (never formatted), `error` for a read error. */
 export interface CellValue { text: string; isNull: boolean; truncated: boolean; error: boolean; formatted: boolean }
+/** results.rowBytes: `bytes[k]` is row `first + k`'s size; `estimated` lists, in order, the rows whose size includes an estimate. */
+export interface RowBytes { first: number; bytes: readonly number[]; rowsAvailable: number; estimated: readonly number[] }
 export interface ResultSnapshot {
   rowsRead: number
   rowsStored: number
@@ -73,6 +75,8 @@ export interface ResultHandle extends Disposable {
   measure(first: number, count: number, colStart: number, colEnd: number, signal?: AbortSignal): Promise<{ rows: number; widths: Uint16Array }>
   /** The full stored value of one cell; with `format`, the worker pretty-prints it (`formatted`) when it can. */
   getCell(row: number, col: number, o?: { format?: ValueFormat; signal?: AbortSignal }): Promise<CellValue>
+  /** Each row's bytes (sum of DATALENGTH over its cells) for up to 16,384 rows from `first`, as far as rows are available. */
+  rowBytes(first: number, count: number, signal?: AbortSignal): Promise<RowBytes>
   /** Releases the result in the backend (results.close); queued while the results port is down. */
   close(): Promise<void>
 }
@@ -284,6 +288,15 @@ export class ResultClient implements Disposable {
         const response = await this.request(id => ({ type: 'cell', id, key: state.key, wires: state.wires, row, col, ...o?.format ? { format: o.format } : {} }), o?.signal)
         if (response.type !== 'cell') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
         return { text: response.text, isNull: response.isNull, truncated: response.truncated, error: response.error, formatted: response.formatted }
+      },
+      rowBytes: async (first, count, signal) => {
+        this.usable(state)
+        // Main counts a request its schema refuses toward closing the port, so a bad range never leaves the page.
+        if (!Number.isSafeInteger(first) || first < 0 || !Number.isInteger(count)) throw new ResultError('INVALID_PARAMS', 'The row range is invalid.')
+        if (count < 1) return { first, bytes: [], rowsAvailable: state.snapshot.rowsAvailable, estimated: [] }
+        const response = await this.request(id => ({ type: 'rowBytes', id, key: state.key, firstRow: first, count: Math.min(count, wire.rowSizes.maxRows) }), signal)
+        if (response.type !== 'rowBytes') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
+        return { first: response.firstRow, bytes: response.bytes, rowsAvailable: response.rowsAvailable, estimated: response.estimated }
       },
       close: () => this.release([{ generation: state.key.generation, resultId: state.key.resultId }]),
       dispose: () => {
@@ -567,7 +580,7 @@ export class ResultClient implements Disposable {
 
   private received(message: WorkerResponse): void {
     switch (message.type) {
-      case 'window': case 'cell': case 'closed': case 'measure': case 'stats': case 'liveUpdated': {
+      case 'window': case 'cell': case 'closed': case 'rowBytes': case 'measure': case 'stats': case 'liveUpdated': {
         const pending = this.pending.get(message.id)
         this.pending.delete(message.id)
         pending?.resolve(message)

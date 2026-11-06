@@ -10,13 +10,20 @@ import { layoutPlans } from '../src/renderer/src/plans/layout'
 import { findOperators } from '../src/renderer/src/plans/PlanViewer'
 import { recoveryWriteSchema } from '../src/main/recovery-store'
 import { saveFileSchema } from '../src/main/sql-files'
-import { loadPlanSources } from '../src/renderer/src/plans/sources'
+import { loadPlanSources, orderPlanEntries } from '../src/renderer/src/plans/sources'
 
 const node = (id: string, parentId: string | null = null): PlanNode => ({ id, parentId, nodeId: id, physicalOp: 'Index Scan', logicalOp: 'Scan', object: '[dbo].[Orders]',
   estimatedRows: 10, estimatedCost: 0.1, actualRows: null, elapsedMs: null, cpuMs: null, executions: null, warnings: [], properties: [] })
 const statement = (id: string, nodes: PlanNode[]): PlanStatement => ({ id, text: 'SELECT 1', type: 'SELECT', estimatedCost: 0.1, warnings: [], nodes })
 
 describe('execution plans', () => {
+  it('interleaves plan sources by batch, repetition, and known event position', () => {
+    const entries = [[6, 3, 1], [4, 1, 2], [5, 1, 1], [7, 0, 0], [1, 1, 1], [2, 1, 1], [3, 1, 2]]
+      .map(([resultId, batchNumber, iteration]) => ({ descriptor: { resultId, batchNumber, iteration } }))
+    const ids = (order?: number[]) => orderPlanEntries(entries, order).map(entry => entry.descriptor.resultId)
+    expect(ids([1, 5, 2, 3, 4, 6, 7])).toEqual([1, 5, 2, 3, 4, 6, 7])
+    expect(ids()).toEqual([5, 1, 2, 4, 3, 6, 7])
+  })
   it('keeps valid sources beside a failed source and scopes repeated node ids by source document', async () => {
     const document = { version: '', build: '', notices: [], statements: [statement('s', [node('root'), node('child', 'root')])] }
     const sources = ['first', 'broken', 'last'].map(key => ({ key, label: key, read: async () => key }))

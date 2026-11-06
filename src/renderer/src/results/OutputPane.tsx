@@ -214,7 +214,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
             : hasSets ? <ResultsStack key={tab.queryId} tabId={tabId} tab={tab} />
             : <EmptyState className="output-empty" icon="table" detail={tab.status === 'running' ? 'Result sets appear here as the query returns them.' : 'The query returned no result sets.'} />}
           {showStrip && <MessagesStrip tabId={tabId} tab={tab} fits={stripFits} maxHeight={stripMax} />}
-        </> : pane === 'plan' ? plans.length > 0 ? <ResultPlans tabId={tabId} queryId={tab.queryId} plans={plans} />
+        </> : pane === 'plan' ? plans.length > 0 ? <ResultPlans tabId={tabId} queryId={tab.queryId} plans={plans} order={tab.summary?.planOrder} />
           : <EmptyState className="output-empty" icon="execution-plan" detail="A plan appears here when the query returns one, as SET SHOWPLAN_XML ON and SET STATISTICS XML ON do." />
           : <MessagesView tabId={tabId} tab={tab} />}
       </div>}

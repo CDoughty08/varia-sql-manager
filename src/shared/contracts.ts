@@ -122,7 +122,16 @@ export interface ResultColumn {
   precision?: number
   scale?: number
   nullable: boolean
+  /** char, varchar, text, nchar, nvarchar and ntext: the collation SqlClient read from the result's metadata, when it could. */
+  collation?: ResultCollation
 }
+/**
+ * A character column's collation (docs/ipc.md, Cell lengths): its Windows locale id, SQL sort id (non-zero for SQL_
+ * collations), the code page char and varchar values use (0 for a _UTF8 collation), whether it is a _UTF8 collation, and
+ * its comparison flags as SqlCompareOptions bits: IgnoreCase 1, IgnoreNonSpace 2, IgnoreKanaType 8, IgnoreWidth 16,
+ * BinarySort2 16384, BinarySort 32768.
+ */
+export interface ResultCollation { lcid: number; sortId: number; codePage: number; utf8: boolean; options: number }
 /** Why a result stopped storing rows: execution always continues. */
 export type TruncationReason = 'rowLimit' | 'queryBudget' | 'globalBudget' | 'systemMemory'
 /**
@@ -160,6 +169,8 @@ export interface QueryResult {
   resultSets: ResultDescriptor[]
   /** Toolbar-captured plans are kept separately from the data grids. */
   planSets?: ResultDescriptor[]
+  /** Result IDs with a known order across toolbar and SQL-returned plans. */
+  planOrder?: number[]
   discardedResultSets: number
   messages: MessageEntry[]
   recordsAffected: number
@@ -196,6 +207,12 @@ export interface ResultsReadParams { resultId: number; firstRow: number; maxRows
 /** `nextRow` follows the last row sent; `complete` means no rows remain to be read. */
 export interface ResultsReadResult { nextRow: number; rowsAvailable: number; complete: boolean; pages: number; rows: number }
 export interface ResultsCloseResult { closed: number; usedBytes: number }
+/** Up to `limits.rowSizes.maxRows` rows' byte sizes from `firstRow`. */
+export interface ResultsRowBytesParams { resultId: number; firstRow: number; count: number }
+/** `bytes[k]` is row `firstRow + k`'s sum of DATALENGTH over its cells (NULL counts 0; xml and json as their
+ *  text, some sql_variant base types estimated: docs/ipc.md, Cell lengths and row sizes); it stops at the rows sealed so
+ *  far (`rowsAvailable`), as results.read does. */
+export interface ResultsRowBytesResult { firstRow: number; bytes: number[]; rowsAvailable: number; /** Rows, in order, whose sum includes an estimate. */ estimated: number[] }
 /** Inclusive row indexes; a last row of 2^53 − 1 runs to the end of the result. */
 export type RowRange = readonly [first: number, last: number]
 /** Inclusive column indexes, 0..4095. */
@@ -307,6 +324,8 @@ export type RpcMethod = keyof RpcMethods
 export interface PortMethods {
   'results.read': { params: ResultsReadParams; result: ResultsReadResult }
   'results.close': { params: { resultIds: number[] }; result: ResultsCloseResult }
+  /** Each row's bytes for a range of a stored result, from the lengths the backend recorded as it read the rows. */
+  'results.rowBytes': { params: ResultsRowBytesParams; result: ResultsRowBytesResult }
   /** A live subscription (docs/ipc.md): its EVENTs are credited, one unacknowledged at a time, and it ends only by CANCEL,
    *  a disconnect, a backend shutdown, a failure or its source ending. */
   'live.subscribe': { params: LiveSubscribeParams; result: LiveEnd }

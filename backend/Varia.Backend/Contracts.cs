@@ -44,7 +44,13 @@ internal sealed record CancelArgs(string QueryId);
 internal sealed record DatabaseInfo(string Name, bool IsSystem, bool IsSnapshot);
 /// <summary>A result column as the grid sees it: wire is "text" (SSMS display text) or "binary"; role marks documents
 /// (xml, json, plan), CLR UDTs and vectors.</summary>
-internal sealed record ResultColumn(string Name, string DataType, string Wire, string? Role = null, int? MaxLength = null, int? Precision = null, int? Scale = null, bool Nullable = true);
+internal sealed record ResultColumn(string Name, string DataType, string Wire, string? Role = null, int? MaxLength = null, int? Precision = null, int? Scale = null, bool Nullable = true,
+    ResultCollation? Collation = null);
+/// <summary>A char, varchar, text, nchar, nvarchar or ntext column's collation as SqlClient read it from the result's
+/// metadata (SqlClientCollation): its Windows locale id, SQL sort id (non-zero for SQL_ collations), the code page SqlClient
+/// decodes char and varchar with (0 for UTF-8), whether it is a _UTF8 collation, and its comparison flags, SqlCompareOptions'
+/// bits (IgnoreCase 1, IgnoreNonSpace 2, IgnoreKanaType 8, IgnoreWidth 16, BinarySort2 16384, BinarySort 32768).</summary>
+internal sealed record ResultCollation(int Lcid, int SortId, int CodePage, bool Utf8, int Options);
 /// <summary>A stored result set. rowsAvailable counts rows in sealed pages (what results.read can serve); main adds the
 /// backend generation before the renderer sees it.</summary>
 internal sealed record ResultDescriptor(uint ResultId, int Index, int BatchNumber, int Iteration, string Kind, IReadOnlyList<ResultColumn> Columns,
@@ -66,7 +72,7 @@ internal sealed record MessageEntry(string Text, string Kind);
 /// it opened; both are present while it is still open after the script.</summary>
 internal sealed record QueryResult(List<ResultDescriptor> ResultSets, int DiscardedResultSets, List<MessageEntry> Messages, long RecordsAffected, long ElapsedMs,
     string Status, QueryFailure? Error, int CompletedBatches, int TotalBatches, string Database, bool MessagesTruncated, ResultBudget Budget, string CompletedAt,
-    int? Spid = null, string? Login = null, List<ResultDescriptor>? PlanSets = null);
+    int? Spid = null, string? Login = null, List<ResultDescriptor>? PlanSets = null, List<uint>? PlanOrder = null);
 internal sealed record SessionStateArgs(string SessionId);
 /// <summary>query.session.state: an idle session's @@TRANCOUNT, read on demand before it ends. Checked is false when the
 /// session's SET options (SHOWPLAN_*, NOEXEC, PARSEONLY, FMTONLY) kept the SELECT from returning it; TransactionCount is
@@ -76,6 +82,11 @@ internal sealed record ResultsReadArgs(uint ResultId, long FirstRow, int MaxRows
 internal sealed record ResultsReadResult(long NextRow, long RowsAvailable, bool Complete, int Pages, int Rows);
 internal sealed record ResultsCloseArgs(uint[] ResultIds);
 internal sealed record ResultsCloseResult(int Closed, long UsedBytes);
+internal sealed record ResultsRowBytesArgs(uint ResultId, long FirstRow, int Count);
+/// <summary>results.rowBytes: Bytes[k] is row FirstRow + k's sum of DATALENGTH over its cells (NULL counts 0; xml and json
+/// as their text, some sql_variant base types estimated: docs/ipc.md, Cell lengths and row sizes); it stops at the rows sealed
+/// so far. Estimated lists, in order, the rows of the range whose sum includes an estimate.</summary>
+internal sealed record ResultsRowBytesResult(long FirstRow, long[] Bytes, long RowsAvailable, long[] Estimated);
 /// <summary>A piece of a copy: inclusive row ranges (a last row of 2^53 - 1 runs to the end) by inclusive column ranges.</summary>
 internal sealed record CopyPartArgs(long[][] Rows, int[][] Columns);
 /// <summary>results.copy (main only): the parts' text streams as DATA; eol is "crlf" or "lf".</summary>

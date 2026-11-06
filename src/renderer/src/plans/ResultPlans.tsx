@@ -3,18 +3,18 @@ import { maxQueryPlanDocuments } from '../../../shared/plans'
 import { limits } from '../../../shared/ipc/wire/protocol'
 import type { ResultSetEntry } from '../results/ResultsService'
 import PlanViewer from './PlanViewer'
-import type { PlanSource } from './sources'
+import { orderPlanEntries, type PlanSource } from './sources'
 import { useWorkbench } from '../core/WorkbenchContext'
 
 // A native Showplan result has one document. Unusual multi-row plan results can open further rows from their grid.
 const maxXmlSources = limits.maxResultSets.max + maxQueryPlanDocuments
 
-export default function ResultPlans({ queryId, tabId, plans }: { queryId: string; tabId: string; plans: readonly ResultSetEntry[] }) {
+export default function ResultPlans({ queryId, tabId, plans, order }: { queryId: string; tabId: string; plans: readonly ResultSetEntry[]; order?: readonly number[] }) {
   const { commands } = useWorkbench()
   const key = plans.map(entry => `${entry.descriptor.generation}:${entry.descriptor.resultId}:${entry.handle.getSnapshot().rowsAvailable}:${entry.handle.getSnapshot().state}`).join('|')
   const sources = useMemo(() => {
     const sources: (PlanSource & { entry: ResultSetEntry; row: number })[] = []
-    for (const entry of plans) {
+    for (const entry of orderPlanEntries(plans, order)) {
       const snapshot = entry.handle.getSnapshot()
       if (snapshot.state === 'lost' || snapshot.state === 'released') continue
       const { batchNumber, iteration, generation, resultId } = entry.descriptor
@@ -34,7 +34,7 @@ export default function ResultPlans({ queryId, tabId, plans }: { queryId: string
       if (sources.length === maxXmlSources) break
     }
     return sources
-  }, [key])
+  }, [key, order])
   return <PlanViewer key={queryId} sources={sources} identity={'query:' + queryId} openDocument={index => {
     const source = sources[index]
     if (source) void commands.execute('output.openValue', { tabId, cell: { resultIndex: source.entry.index, row: source.row, column: 0, capturedPlan: source.entry.capturedPlan } }, 'toolbar')

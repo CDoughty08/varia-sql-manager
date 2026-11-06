@@ -20,13 +20,13 @@ public static class LiveGroups
     /// Every live suite in the order Program.cs runs them, with the seconds it took in CI's Linux live job (the mean of PR
     /// #99's first two runs; each suite prints "Live suite name: n s"). Rough is fine, but a suite's time can swing by a
     /// minute between runs (Scripting took 151 s and 233 s), so a mean of runs beats one. A new suite needs an entry here,
-    /// or the live run fails. LoginProperties, Securables and LoginKinds have times from a local SQL Server 2025 run until CI
-    /// times them.
+    /// or the live run fails. LoginProperties, Securables, LoginKinds and CellLength have times from a local SQL Server 2025 run until
+    /// CI times them.
     /// </summary>
     public static readonly (string Name, int Seconds)[] Suites =
     [
         ("Query", 9), ("Live", 0), ("LiveData", 17), ("LiveTableData", 13), ("ExplorerStatus", 13), ("Execution", 4), ("Transaction", 5),
-        ("LiveResult", 62), ("Explorer", 36), ("Scripting", 150), ("ScriptingInjection", 42), ("Action", 32), ("ServerFiles", 1), ("Seam", 24), ("DatabaseState", 16),
+        ("LiveResult", 62), ("CellLength", 1), ("Explorer", 36), ("Scripting", 150), ("ScriptingInjection", 42), ("Action", 32), ("ServerFiles", 1), ("Seam", 24), ("DatabaseState", 16),
         ("RenameDatabase", 23), ("Detach", 25), ("ActionProgress", 4), ("Attach", 2), ("Restore", 28), ("Login", 11), ("LoginListing", 0), ("LoginAction", 3), ("LoginDelete", 2), ("Unlock", 3),
         ("LoginProperties", 5), ("Securables", 2), ("LoginKinds", 5), ("DatabaseProperties", 47),
         ("Designer", 8), ("NewDatabase", 1), ("Ssis", 111), ("Activity", 1), ("ActivitySource", 28), ("ActivityAction", 1), ("SsisCreate", 0),

@@ -27,6 +27,13 @@ internal static class ExecutionLiveChecks
             (QueryResult)await Call("query.execute", new QueryArgs(info.Id, sessionId ?? session, database, sql, queryId ?? Guid.NewGuid().ToString(), maxRows, timeout,
                 StopOnError: stopOnError, IncludeActualPlan: includeActualPlan, MaxResultSets: maxResultSets));
         List<string> Texts(QueryResult result) => LiveResultChecks.Texts(result);
+        bool MeasuresPlan(ResultDescriptor descriptor)
+        {
+            var text = LiveResultChecks.RowsOf(store, descriptor)[0][0];
+            var set = store.Find(descriptor.ResultId);
+            return text is not null && set?.CellSize(0, 0) is { Exact: true } size
+                && size.Chars == text.Length && size.Bytes == 2L * text.Length && set.RowBytes(0, 1).SequenceEqual([size.Bytes]);
+        }
         async Task<string?> Options(string? sessionId = null)
         {
             var result = await Run(OptionsQuery, sessionId);
@@ -117,8 +124,17 @@ internal static class ExecutionLiveChecks
                 + " SET STATISTICS XML OFF; SELECT n FROM #capture_pair WHERE n < 4;", includeActualPlan: true);
             check(mixedCapture.PlanSets is [{ Kind: "executionPlan" } observerOnly]
                 && LiveResultChecks.RowsOf(store, observerOnly)[0][0]?.Contains("ActualRows=\"3\"") == true
-                && mixedCapture.ResultSets is [{ Kind: "rows" }, { Kind: "executionPlan" }, { Kind: "rows" }],
+                && mixedCapture.ResultSets is [{ Kind: "rows" }, { Kind: "executionPlan" } native, { Kind: "rows" }]
+                && mixedCapture.PlanOrder?.SequenceEqual([native.ResultId, observerOnly.ResultId]) == true,
                 "the paired native result stays in Results and the distinct observer-only execution stays in Execution Plan: " + mixedCapture.PlanSets?.Count);
+            check(mixedCapture.ResultSets.Concat(mixedCapture.PlanSets ?? []).Where(set => set.Kind == "executionPlan").Count(MeasuresPlan) == 2,
+                "the stored native and observer plans report their full UTF-16 sizes, including the native plan's prefetched prefix");
+            var reverseMixed = await Run("SELECT n FROM #capture_pair WHERE n < 4; SET STATISTICS XML ON; "
+                + PairedQuery + " SET STATISTICS XML OFF;", includeActualPlan: true);
+            check(reverseMixed.PlanSets is [{ Kind: "executionPlan" } firstPlan]
+                && reverseMixed.ResultSets is [{ Kind: "rows" }, { Kind: "rows" }, { Kind: "executionPlan" } lastPlan]
+                && reverseMixed.PlanOrder?.SequenceEqual([firstPlan.ResultId, lastPlan.ResultId]) == true,
+                "within one batch, the observer-only execution can also precede the paired native result");
             var gridLimitedCapture = await Run("SET STATISTICS XML ON; " + PairedQuery + " SET STATISTICS XML OFF;",
                 includeActualPlan: true, maxResultSets: 1);
             check(gridLimitedCapture.ResultSets is [{ Kind: "rows" }] && gridLimitedCapture.DiscardedResultSets == 1

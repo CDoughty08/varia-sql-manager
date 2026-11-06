@@ -57,6 +57,8 @@ internal sealed class XmlFeed(Func<int> output) : Stream
     private long mark;
     private int seen;
 
+    /// <summary>Bytes read from the cell's stream since <see cref="Reset"/>.</summary>
+    public long Consumed => consumed;
     /// <summary>The feed stopped, so the value is cut before the node XmlReader was reading.</summary>
     public bool Starved { get; private set; }
 
