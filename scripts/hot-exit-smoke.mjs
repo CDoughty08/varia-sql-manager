@@ -47,6 +47,12 @@ const tabMenuItem = async (tab, name) => {
   await documentTab(page, tab).click({ button: 'right' })
   await page.getByRole('menuitem', { name, exact: true }).click()
 }
+// From the keyboard (Shift+F10 on a focused tab): floating groups may cover a strip on a small display, as Windows CI's.
+const tabMenuKey = async (tab, name) => {
+  await documentTab(page, tab).focus()
+  await page.keyboard.press('Shift+F10')
+  await page.getByRole('menuitem', { name, exact: true }).click()
+}
 
 try {
   await launch([orders])
@@ -142,32 +148,27 @@ try {
   expect(await prompts()).toEqual([])
 
   // Every query floating: the grid keeps an empty group, which a quit leaves out, and a relaunch brings the floating
-  // groups back as they were.
-  for (const tab of ['Welcome', 'Orders report', 'Month end', 'SQLQuery4.sql']) await tabMenuItem(tab, 'Float')
+  // groups back as they were. The grid's last query moves into the first floating group (Move to Next Group).
+  for (const tab of ['Welcome', 'Orders report', 'Month end', 'SQLQuery4.sql']) await tabMenuKey(tab, 'Float')
   await expect(floatingEditorGroups(page)).toHaveCount(4)
-  const last = await documentTab(page, 'Totals').boundingBox()
-  await page.keyboard.down('Shift')
-  await page.mouse.move(last.x + 20, last.y + last.height / 2)
-  await page.mouse.down()
-  await page.mouse.move(last.x + 120, last.y + 140, { steps: 6 })
-  await page.mouse.up()
-  await page.keyboard.up('Shift')
-  await expect(floatingEditorGroups(page)).toHaveCount(5)
+  await documentTab(page, 'Totals').focus()
+  await page.keyboard.press('Control+Alt+ArrowRight')
   await expect(page.getByText('All open queries float', { exact: true })).toBeVisible()
+  await expect(floatingEditorGroups(page)).toHaveCount(4)
   const floated = new Promise(done => application.process().once('exit', done))
   await application.evaluate(({ app }) => app.quit())
   await floated
   const floating = JSON.parse(await readFile(join(profile, 'Session', 'session.json'), 'utf8')).groups
   expect(floating.root.children).toEqual([])
-  expect(floating.floating.map(group => group.root.views.length)).toEqual([1, 1, 1, 1, 1])
+  expect(floating.floating.map(group => group.root.views.length).sort()).toEqual([1, 1, 1, 2])
   await launch([])
-  await expect(floatingEditorGroups(page)).toHaveCount(5)
+  await expect(floatingEditorGroups(page)).toHaveCount(4)
   await expect(page.getByText('All open queries float', { exact: true })).toBeVisible()
   await expect(page.getByText('The editor groups could not be restored', { exact: false })).toHaveCount(0)
   expect((await tabNames()).sort()).toEqual(['Month end', 'Orders report', 'SQLQuery4.sql', 'Totals', 'Welcome'])
   // Closing them all leaves the area's own empty state, with no empty group behind.
   await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
-  await tabMenuItem('Totals', 'Close All')
+  await tabMenuKey('Totals', 'Close All')
   await expect(page.getByText('No open queries', { exact: true })).toBeVisible()
   await expect(editorGroups(page)).toHaveCount(0)
   await expect(page.getByText('All open queries float', { exact: true })).toHaveCount(0)

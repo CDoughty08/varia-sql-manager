@@ -387,14 +387,13 @@ try {
     await expect(floatingEditorGroups(page)).toHaveCount(index + 1)
   }
   await expect(editorGroups(page)).toHaveCount(16)
+  // The floating groups may cover the grid's strip on a small display (Windows CI's 1024x768), so the Shift-press goes to
+  // the tab itself; Dockview's float then follows the pointer until the window hears it go up.
   const lastBox = await documentTab(page, secondTab).boundingBox()
-  await page.keyboard.down('Shift')
-  await page.mouse.move(lastBox.x + 20, lastBox.y + lastBox.height / 2)
-  await page.mouse.down()
-  await page.mouse.move(lastBox.x + 160, lastBox.y + 200, { steps: 6 })
+  const pointer = { pointerId: 1, pointerType: 'mouse', isPrimary: true, clientX: lastBox.x + 20, clientY: lastBox.y + lastBox.height / 2 }
+  await documentTab(page, secondTab).dispatchEvent('pointerdown', { ...pointer, shiftKey: true, button: 0, buttons: 1 })
   await expect(floatingEditorGroups(page)).toHaveCount(16)
-  await page.mouse.up()
-  await page.keyboard.up('Shift')
+  await page.evaluate(init => { window.dispatchEvent(new PointerEvent('pointerup', { ...init, bubbles: true, button: 0, buttons: 0 })) }, pointer)
   await expect(floatingEditorGroups(page)).toHaveCount(15)
   await expect(editorGroups(page)).toHaveCount(16)
   await expect(page.getByText('The query editor shows at most 16 editor groups.', { exact: true })).toBeVisible()
