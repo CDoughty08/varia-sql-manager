@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { onDisplay, popoutRequest, PopoutWindows, scaleBounds, zoomFactor, type OpenDetails, type PopoutWindow } from '../src/main/popout-windows'
+import { onDisplay, popoutRequest, PopoutWindows, scaleBounds, zoomFactor, type OpenDetails, type PopoutWindow, restoreFocusMs } from '../src/main/popout-windows'
 import { popoutWindowName } from '../src/shared/popouts'
 
 const name = 'varia-popout-' + crypto.randomUUID()
@@ -11,16 +11,19 @@ const primary = { x: 0, y: 0, width: 1920, height: 1040 }, left = { x: -1600, y:
 function fakeWindow(id: number) {
   const listeners = new Map<string, ((...args: unknown[]) => void)[]>()
   const on = (event: string, listener: (...args: unknown[]) => void) => { listeners.set(event, [...listeners.get(event) ?? [], listener]) }
-  const emit = (event: string, ...args: unknown[]) => { for (const listener of listeners.get(event) ?? []) listener(...args) }
+  const emit = (event: string, ...args: unknown[]) => { for (const listener of [...listeners.get(event) ?? []]) listener(...args) }
+  const off = (event: string, listener: (...args: unknown[]) => void) => { listeners.set(event, (listeners.get(event) ?? []).filter(item => item !== listener && (item as { original?: unknown }).original !== listener)) }
   let destroyed = false, focused = false, zoom = 0, minimized = false, stubborn = false
   let openHandler: (() => { action: string }) | undefined
   const window = {
     id, isDestroyed: () => destroyed, isFocused: () => focused, destroy: vi.fn(() => { destroyed = true; emit('closed') }),
     isMinimized: () => minimized, showInactive: vi.fn(() => { if (!stubborn) minimized = false }), restore: vi.fn(() => { minimized = false }), moveTop: vi.fn(),
     setMenuBarVisibility: vi.fn(), setAutoHideMenuBar: vi.fn(), on,
+    once: (event: string, listener: () => void) => { const wrapped = () => { off(event, wrapped); listener() }; (wrapped as { original?: () => void }).original = listener; on(event, wrapped) },
+    removeListener: (event: string, listener: () => void) => off(event, listener),
     webContents: { setWindowOpenHandler: (handler: () => { action: 'deny' }) => { openHandler = handler }, on, setZoomLevel: (level: number) => { zoom = level }, getZoomLevel: () => zoom }
   }
-  return { window: window as unknown as PopoutWindow, emit, focus: (value: boolean) => { focused = value }, minimize: () => { minimized = true }, stubborn: () => { stubborn = true }, zoom: () => zoom, setZoom: (level: number) => { zoom = level }, openHandler: () => openHandler?.() }
+  return { window: window as unknown as PopoutWindow, emit, listening: (event: string) => listeners.get(event)?.length ?? 0, focus: (value: boolean) => { focused = value }, minimize: () => { minimized = true }, stubborn: () => { stubborn = true }, zoom: () => zoom, setZoom: (level: number) => { zoom = level }, openHandler: () => openHandler?.() }
 }
 function registry(options: { workAreas?: { x: number; y: number; width: number; height: number }[]; zoom?: number; platform?: NodeJS.Platform } = {}) {
   const changed = vi.fn(), setZoomLevel = vi.fn()
@@ -139,8 +142,22 @@ describe('PopoutWindows', () => {
     const order: string[] = []
     vi.mocked(child.window.moveTop).mockImplementation(() => { order.push('top') })
     vi.mocked(child.window.restore).mockImplementation(() => { order.push('restore') })
-    expect(popouts.raise(name, () => order.push('refocus'))).toBe(true)
-    expect(order).toEqual(['restore', 'refocus', 'top'])
+    vi.useFakeTimers()
+    try {
+      expect(popouts.raise(name, () => order.push('refocus'))).toBe(true)
+      expect(order).toEqual(['restore', 'refocus', 'top'])
+      // The restore activates it later (macOS animates it up): focus goes back then, once, and it stays on top.
+      child.emit('focus')
+      expect(order).toEqual(['restore', 'refocus', 'top', 'refocus', 'top'])
+      child.emit('focus')
+      expect(order).toHaveLength(5)
+      // A popout that never takes focus stops listening after restoreFocusMs, so a later click into it keeps its focus.
+      child.minimize()
+      popouts.raise(name, () => order.push('refocus'))
+      expect(child.listening('focus')).toBe(1)
+      vi.advanceTimersByTime(restoreFocusMs)
+      expect(child.listening('focus')).toBe(0)
+    } finally { vi.useRealTimers() }
     // A name it does not hold (one that is not a popout's is never stored), or a window that is gone, raises nothing.
     expect(popouts.raise('_blank')).toBe(false)
     expect(popouts.raise('varia-popout-' + crypto.randomUUID())).toBe(false)

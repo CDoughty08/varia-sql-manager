@@ -12,7 +12,9 @@ The same search runs in two places, with the same options and results:
   stays as it is; a hit reveals its object in the tree below. Enter reveals the first hit and keeps focus in the box, so
   each further Enter reveals the next one, wrapping round (Shift+Enter goes back); an Enter typed before the search has
   answered searches at once. ↓ moves into the hits (to the selected one), and Left and Right in the tree collapse and expand. Escape clears the
-  text, and Escape in an empty box returns to the tree.
+  text, and Escape in an empty box returns to the tree. The band's hits are one tab stop on the selected hit, walked as the
+  tab's are (↑ ↓, Page Up, Page Down, Home and End); a click or Enter reveals the hit with focus kept in the hits, and ↑ on
+  the first hit, or Escape, returns to the box.
   Search scope (All, Names, Definitions) stays visible. Object types opens a checkbox popover over the results; selected
   types combine and a compact summary and Clear action stay beside the results. Narrow sidebars stack the type picker
   below the scope, and the popover follows the pane's width without enlarging the search band. Search options holds

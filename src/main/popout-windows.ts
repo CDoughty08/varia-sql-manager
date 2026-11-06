@@ -53,6 +53,8 @@ export interface PopoutWindow {
   setMenuBarVisibility(visible: boolean): void
   setAutoHideMenuBar(hide: boolean): void
   on(event: 'closed', listener: () => void): void
+  once(event: 'focus', listener: () => void): void
+  removeListener(event: 'focus', listener: () => void): void
   readonly webContents: {
     setWindowOpenHandler(handler: () => { action: 'deny' }): void
     on(event: 'will-navigate' | 'will-frame-navigate' | 'will-redirect', listener: (event: { preventDefault(): void }) => void): void
@@ -71,6 +73,8 @@ export interface PopoutWindow {
  */
 /** How long an allowed popout counts against the limit before Electron creates it. */
 const pendingMs = 10_000
+/** How long after a restore a popout that takes focus gives it back: macOS activates it only once its animation ends. */
+export const restoreFocusMs = 2000
 
 export class PopoutWindows<W extends PopoutWindow> {
   private readonly windows = new Map<number, { window: W; activation: UserActivation; name?: string }>()
@@ -142,14 +146,24 @@ export class PopoutWindows<W extends PopoutWindow> {
    * Brings the popout the page opened as `name` to the top, restoring it if minimized, without activating it: keyboard focus
    * stays where the user is (Search Objects' Reveal, from its hits, into a popped-out Object Explorer). False when there is none.
    * showInactive restores a minimized window on Windows, but macOS (and some Linux window managers) leave it minimized: there
-   * it is restored, which may activate it, so `refocus` gives focus back to the window the user was in before it goes on top.
+   * it is restored, which may activate it, so `refocus` gives focus back to the window the user was in. Those restores finish
+   * later (macOS animates, X11 reports its state late), so focus also goes back if the popout takes it within `restoreFocusMs`.
    */
   raise(name: string, refocus?: () => void): boolean {
     const item = [...this.windows.values()].find(value => value.name === name && !value.window.isDestroyed())
     if (!item) return false
-    if (item.window.isMinimized()) item.window.showInactive()
-    if (item.window.isMinimized()) { item.window.restore(); refocus?.() }
-    item.window.moveTop()
+    const window = item.window
+    if (window.isMinimized()) window.showInactive()
+    if (window.isMinimized()) {
+      window.restore()
+      if (refocus) {
+        const back = () => { clearTimeout(timer); if (!window.isDestroyed()) { refocus(); window.moveTop() } }
+        const timer = setTimeout(() => { if (!window.isDestroyed()) window.removeListener('focus', back) }, restoreFocusMs)
+        window.once('focus', back)
+        refocus()
+      }
+    }
+    window.moveTop()
     return true
   }
   /** Every popout follows the main window's zoom. */
