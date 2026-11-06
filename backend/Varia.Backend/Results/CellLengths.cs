@@ -245,11 +245,21 @@ internal sealed class PageLengths(uint[] rowBytes, CellLength[] cells, (int Row,
     /// <summary>Calls <paramref name="add"/> once for each row in [from, to) whose sum includes an estimated cell, in order.</summary>
     public void EstimatedRows(int from, int to, Action<int> add)
     {
-        var last = -1;
-        foreach (var cell in cells)
+        // Entries are in row order: start at the first of row `from`, so a short range costs no scan of a page's every
+        // entry (a recorded column keeps one per cell).
+        int low = 0, high = cells.Length;
+        while (low < high)
         {
+            var middle = (low + high) >>> 1;
+            if (cells[middle].Row < from) low = middle + 1;
+            else high = middle;
+        }
+        var last = -1;
+        for (var index = low; index < cells.Length; index++)
+        {
+            var cell = cells[index];
             if (cell.Row >= to) break;
-            if (cell.Row < from || cell.Exact || cell.Row == last) continue;
+            if (cell.Exact || cell.Row == last) continue;
             add(cell.Row);
             last = cell.Row;
         }

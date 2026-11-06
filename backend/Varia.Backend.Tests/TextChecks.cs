@@ -468,6 +468,29 @@ internal static class TextChecks
     private static void XmlCells(Action<bool, string> check)
     {
         check(SequentialXml.Available, "SqlClient still has the sequential stream internals that xml cells are read through (SequentialXml)");
+        // Without them, a cell is stored before the rest of its value is read past: a parse failure there must end the
+        // read-past, not fail the cell, which ReadRow would then append a second time.
+        static System.Xml.XmlReader Fragment(string text) => System.Xml.XmlReader.Create(new StringReader(text), new System.Xml.XmlReaderSettings { ConformanceLevel = System.Xml.ConformanceLevel.Fragment });
+        var broken = Fragment("<a>kept</a><b>" + new string('t', 10_000) + "</c>");
+        var wellFormed = Fragment("<a>kept</a><b>" + new string('t', 10_000) + "</b>");
+        broken.Read();
+        wellFormed.Read();
+        var chunk = new char[4096];
+        // A Stop still ends the read: cancellation is not a cell failure the read-past may swallow.
+        var stopped = Fragment("<a>kept</a><b>" + new string('t', 10_000) + "</b>");
+        stopped.Read();
+        var cancelledThrows = false;
+        try { ColumnPlan.ReadPastXml(stopped, chunk, new CancellationToken(canceled: true)); }
+        catch (OperationCanceledException) { cancelledThrows = true; }
+        // Positioned so that the next Read meets the bad end tag: a parse failure under a Stop is the Stop.
+        var cut = Fragment("<a>x</b>");
+        cut.Read();
+        cut.Read();
+        try { ColumnPlan.ReadPastXml(cut, chunk, new CancellationToken(canceled: true)); cancelledThrows = false; }
+        catch (OperationCanceledException) { }
+        catch (System.Xml.XmlException) { cancelledThrows = false; }
+        check(!ColumnPlan.ReadPastXml(broken, chunk, default) && ColumnPlan.ReadPastXml(wellFormed, chunk, default) && cancelledThrows,
+            "reading past the rest of an xml value after its cell is stored stops at a parse failure instead of failing the cell, and a Stop still ends the read, even where the value parses as cut short");
         var bytes = new byte[3 * XmlFeed.Window];
         var buffer = new byte[4096];
         long Drain(XmlFeed feed)
