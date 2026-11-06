@@ -215,6 +215,9 @@ try {
   expect(await groupNames(0)).toEqual([firstTab])
   expect(await groupNames(1)).toEqual([secondTab])
   await expect(page.locator(part.editorPane)).toHaveCount(2)
+  // Each group is a region named for its shown query, apart from the document frames named for theirs.
+  await expect(page.getByRole('region', { name: 'Editor group: ' + secondTab, exact: true })).toHaveCount(1)
+  await expect(page.getByRole('region', { name: secondTab, exact: true })).toHaveCount(0)
   expect(await activeDocumentName(page)).toBe(secondTab)
   const lefts = await editorGroups(page).evaluateAll(groups => groups.map(group => group.getBoundingClientRect().left))
   expect(lefts[1]).toBeGreaterThan(lefts[0])

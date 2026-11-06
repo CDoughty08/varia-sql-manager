@@ -243,6 +243,20 @@ export default function EditorArea() {
   </div>
 }
 
+/** Dockview names each group's region after its shown panel; an editor group showing a custom document would then be a
+ * second region named as that document's own frame (New Database), so editor groups are named "Editor group: …". */
+const groupPrefix = 'Editor group: '
+function nameGroupRegions(root: HTMLElement): { dispose(): void } {
+  const name = (element: Element) => {
+    const label = element.getAttribute('aria-label')
+    if (element.getAttribute('role') === 'region' && label && !label.startsWith(groupPrefix)) element.setAttribute('aria-label', groupPrefix + label)
+  }
+  root.querySelectorAll('[role="region"]').forEach(name)
+  const observer = new MutationObserver(records => { for (const record of records) if (record.target instanceof Element) name(record.target) })
+  observer.observe(root, { subtree: true, attributes: true, attributeFilter: ['aria-label', 'role'] })
+  return { dispose: () => observer.disconnect() }
+}
+
 /**
  * Keeps the editor area's Dockview and DocumentService in step: a document opened anywhere gets a panel in the active
  * group, a closed one loses its panel, and the active document is the active group's shown panel. Dockview's changes
@@ -272,7 +286,8 @@ class EditorAreaController implements Area, EditorGroupHost {
       // A group past the cap (a drop that would split once more) goes back: its documents join the active group.
       api.onDidAddGroup(group => { if (api.groups.length > editorGroupLimits.groups) queueMicrotask(() => this.mergeInto(group)) }),
       { dispose: documents.subscribe(() => this.reconcile()) },
-      editorGroups.attach(this))
+      editorGroups.attach(this),
+      nameGroupRegions(root))
     this.reconcile()
     this.publish()
   }

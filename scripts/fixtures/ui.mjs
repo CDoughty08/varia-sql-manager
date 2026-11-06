@@ -292,7 +292,8 @@ const named = (name, exact = true) => typeof name === 'string' ? { name, exact }
 
 export const titleBar = page => page.locator(part.titleBar)
 /** Dockview's theme classes on its shell, and whether Varia's own class sits beside them. */
-export const dockShell = page => page.locator('.dv-shell').evaluate((element, own) => ({ themes: [...element.classList].filter(name => name.startsWith('dockview-theme-')).sort(), varia: element.matches(own) }), part.dockShell)
+// The workspace's shell: the editor area nests a second Dockview inside it.
+export const dockShell = page => page.locator('.dv-shell').first().evaluate((element, own) => ({ themes: [...element.classList].filter(name => name.startsWith('dockview-theme-')).sort(), varia: element.matches(own) }), part.dockShell)
 export const menubar = page => page.getByRole('menubar', { name: 'Application menu', exact: true })
 /**
  * The Standard toolbar: in the header, icon buttons named Connect, New query, Open, Save, Save All and Activity Monitor;
