@@ -76,7 +76,8 @@ when their panels dock back.
 
 - **The query editor stays in the main window.** Monaco binds its DOM, focus, clipboard, IME, accessibility and worker
   plumbing to the window it was created in; moving its element to another document breaks input and measuring. Popping
-  it out needs a second editor instance per window sharing the model, which is follow-up work.
+  it out needs a second editor instance per window sharing the model, which is follow-up work. The same holds for
+  single documents: they split and float within the editor area (docs/editor-groups.md) but do not pop out.
 - Dialogs and toasts render in the main window (a dialog brings it to the front).
 - Live charts draw on the main window's animation frames.
 - Object Explorer's status views in a minimized popout keep sampling: only the main window's minimizing is reported.

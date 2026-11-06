@@ -16,6 +16,7 @@ import type { LivePatch, LiveStream, ResultClient, ResultHandle } from '../resul
 import type { ResultKey } from '../results/worker-protocol'
 import type { DocumentService } from '../services/documents'
 import type { PaneService } from '../services/panes'
+import type { EditorGroupService } from '../services/editor-groups'
 import { MetricRing, ringBytesPerSample, ringGap, ringMaxCapacity, ringReset } from './ring'
 
 const MiB = 1024 * 1024
@@ -171,15 +172,18 @@ export interface LiveServiceSnapshot { readonly handles: readonly LiveHandleSumm
 export interface LivePeek { readonly id: string; readonly connectionId: string; readonly snapshot: LiveSnapshot; readonly stale: boolean }
 
 /** A tab's visibility: it is the active document and the editor area shows. */
-export function documentOwner(tabId: string, documents: Pick<DocumentService, 'getSnapshot' | 'get' | 'subscribe'>, panes: Pick<PaneService, 'getSnapshot' | 'subscribe'>): LiveOwner {
+export function documentOwner(tabId: string, documents: Pick<DocumentService, 'getSnapshot' | 'get' | 'subscribe'>, panes: Pick<PaneService, 'getSnapshot' | 'subscribe'>,
+  groups?: Pick<EditorGroupService, 'getSnapshot' | 'subscribe'>): LiveOwner {
+  // Shown in its editor group, whether or not that group is the active one; without groups, while it is the active document.
+  const shown = () => { const list = groups?.getSnapshot().groups ?? []; return list.length ? list.some(group => group.active === tabId) : documents.getSnapshot().activeId === tabId }
   return {
     key: 'tab:' + tabId,
-    visible: () => documents.getSnapshot().activeId === tabId && panes.getSnapshot().editor,
+    visible: () => shown() && panes.getSnapshot().editor,
     connectionId: () => documents.get(tabId)?.connectionId,
     closed: () => !documents.get(tabId),
     subscribe: listener => {
-      const stopDocuments = documents.subscribe(listener), stopPanes = panes.subscribe(listener)
-      return () => { stopDocuments(); stopPanes() }
+      const stopDocuments = documents.subscribe(listener), stopPanes = panes.subscribe(listener), stopGroups = groups?.subscribe(listener)
+      return () => { stopDocuments(); stopPanes(); stopGroups?.() }
     }
   }
 }

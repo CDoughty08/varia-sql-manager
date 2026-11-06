@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { dialogLifecycle, longRunRefusals, rendererWatchdog } from './fixtures/dialog-lifecycle.mjs'
 import { sessionPrompts } from './fixtures/session-prompts.mjs'
-import { activeMenuItem, anyResultGrid, backendReady, banner, documentTabs, documentTabSlots, editorText as editorTextOf, errorMessages, explorerLabel, gridCell, gridPart, matching, memoryBreakdown, memoryIndicator, menuItemNames, messages as messagesOf, openMenus as openMenusOf, outputPane, outputView, paneMenuButton, paneTab, part, quickInput, searchBox, serverRows, statusBar, titleBar, toolbarButton } from './fixtures/ui.mjs'
+import { activeMenuItem, anyResultGrid, backendReady, banner, documentTabs, documentTabSlots, slotTab, editorText as editorTextOf, errorMessages, explorerLabel, gridCell, gridPart, matching, memoryBreakdown, memoryIndicator, menuItemNames, messages as messagesOf, openMenus as openMenusOf, outputPane, outputView, paneMenuButton, paneTab, part, quickInput, searchBox, serverRows, statusBar, titleBar, toolbarButton } from './fixtures/ui.mjs'
 
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
 if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
@@ -528,14 +528,14 @@ try {
   await choose('File', 'New Query')
   expect(await tabs().count()).toBeGreaterThanOrEqual(3)
   const queryTab = () => documentTabSlots(page).first(), tabMenu = menu('Query tab')
-  await queryTab().getByRole('tab').click({ button: 'right', force: true })
+  await slotTab(queryTab()).click({ button: 'right', force: true })
   await expect(tabMenu).toBeVisible()
-  await expect(queryTab()).toHaveAttribute('data-menu-target', '')
+  await expect(slotTab(queryTab())).toHaveAttribute('data-menu-target', '')
   // The tab took focus first, as in Windows Explorer, so closing the menu returns focus there.
   await page.keyboard.press('Escape')
-  await expect(queryTab().getByRole('tab')).toBeFocused()
-  await expect(queryTab()).not.toHaveAttribute('data-menu-target')
-  await queryTab().getByRole('tab').click({ button: 'right', force: true })
+  await expect(slotTab(queryTab())).toBeFocused()
+  await expect(slotTab(queryTab())).not.toHaveAttribute('data-menu-target')
+  await slotTab(queryTab()).click({ button: 'right', force: true })
   // Unsaved changes in the other queries are discarded (the stubbed prompt answers Don't Save).
   await tabMenu.getByRole('menuitem', { name: 'Close All But This', exact: true }).click()
   await expect(tabs()).toHaveCount(1)
@@ -544,7 +544,7 @@ try {
   await expect(tabMenu.getByRole('menuitem', { name: 'Copy Full Path', exact: true })).toHaveAttribute('aria-disabled', 'true')
   await expect(tabMenu.getByRole('menuitem', { name: 'Open Containing Folder', exact: true })).toHaveAttribute('aria-disabled', 'true')
   await tabMenu.getByRole('menuitem', { name: 'Save As…', exact: true }).click()
-  await expect(queryTab().getByRole('tab')).toHaveAttribute('aria-label', 'menus-saved.sql')
+  await expect(slotTab(queryTab())).toHaveAttribute('aria-label', 'menus-saved.sql')
   await queryTab().click({ button: 'right', force: true })
   await tabMenu.getByRole('menuitem', { name: 'Copy Full Path', exact: true }).click()
   await expect.poll(clipboard).toBe(savedPath)

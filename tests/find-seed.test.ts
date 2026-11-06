@@ -51,7 +51,7 @@ describe('Quick Find seed', () => {
 
 describe('the query editor', () => {
   it("lets Monaco seed only from a selection, since Monaco's 'always' also takes the word that ends at the caret", () => {
-    const source = readFileSync(join('src', 'renderer', 'src', 'QueryEditor.tsx'), 'utf8')
+    const source = readFileSync(join('src', 'renderer', 'src', 'editor', 'create-editor.ts'), 'utf8')
     expect(source).toMatch(/find: \{ autoFindInSelection: 'multiline', seedSearchStringFromSelection: 'selection',/)
   })
 })

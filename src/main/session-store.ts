@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import { documentKinds, type DocumentKind } from '../shared/contracts'
 import { sessionLimits, type SessionWrite } from '../shared/files/session'
+import { editorGroupsLayoutSchema, layoutViews, remapEditorGroups } from '../shared/editor-groups'
 import { quarantine, readJsonFile, replaceFile, writeBytesAtomic } from './json-file'
 import { fileKinds, maxSqlFileBytes } from './sql-files'
 
@@ -16,8 +17,9 @@ export const sessionWriteSchema = z.object({
   documents: z.array(z.object({ ...fields, fileId: z.uuid().optional() }).strict()
     .refine(fits, 'A query is too large to keep for the next start.')
     .refine(document => document.text !== undefined || (!!document.fileId && !document.dirty), 'A query without a file must keep its text.')).max(sessionLimits.documents),
-  activeIndex: z.int().min(-1).max(sessionLimits.documents - 1)
-}).strict()
+  activeIndex: z.int().min(-1).max(sessionLimits.documents - 1),
+  groups: editorGroupsLayoutSchema.optional()
+}).strict().refine(session => !session.groups || layoutViews(session.groups).every(view => view < session.documents.length), 'An editor group names a query that is not kept.')
 
 /** `session.json`: what main wrote at the last close, with each file's path in place of its id. */
 const recordSchema = z.object({
@@ -27,8 +29,9 @@ const recordSchema = z.object({
   }).strict().refine(fits)
     .refine(document => document.text !== undefined || (!!document.path && !document.dirty))
     .refine(document => document.fileSha256 === undefined || (!!document.path && document.text !== undefined))).max(sessionLimits.documents),
-  activeIndex: z.int().min(-1).max(sessionLimits.documents - 1)
-}).strict()
+  activeIndex: z.int().min(-1).max(sessionLimits.documents - 1),
+  groups: editorGroupsLayoutSchema.optional()
+}).strict().refine(session => !session.groups || layoutViews(session.groups).every(view => view < session.documents.length))
 export type SessionRecord = z.infer<typeof recordSchema>
 export type SessionRecordDocument = SessionRecord['documents'][number]
 /** What `write` takes: the page's request with main's paths and disk baselines in place of file ids. */
@@ -47,6 +50,9 @@ export function encodeSession(session: SessionInput, options: SessionStoreOption
     if (!reopen && document.pinned) throw new Error(`Pinned tab “${document.name}” has no file that can be reopened. Save it again or unpin it.`)
     return reopen
   })
+  // The groups follow their documents to their places in the record; a group of tabs left out goes.
+  const places = new Map(reopens.map(({ index }, place) => [index, place]))
+  const groups = session.groups ? remapEditorGroups(session.groups, index => places.get(index)) : undefined
   const record: SessionRecord = {
     version: 1, savedAt: (options.now?.() ?? new Date()).toISOString(), activeIndex: reopens.findIndex(({ index }) => index === session.activeIndex),
     documents: reopens.map(({ document }) => ({
@@ -57,7 +63,8 @@ export function encodeSession(session: SessionInput, options: SessionStoreOption
       } : {},
       ...document.server ? { server: document.server } : {}, ...document.database ? { database: document.database } : {},
       ...document.text !== undefined ? { text: document.text } : {}
-    }))
+    })),
+    ...groups ? { groups } : {}
   }
   const bytes = Buffer.from(JSON.stringify(record) + '\n')
   if (bytes.length > (options.totalBytes ?? sessionLimits.totalBytes)) throw new Error(sessionCapMessage)

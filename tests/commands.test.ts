@@ -249,6 +249,10 @@ describe('context keys', () => {
     // The active query's server was disconnected; a stale running entry for another tab does not count.
     expect(computeContextKeys({ ...base, documents: { ...documents, activeId: 'b' }, queries: running, connections: [connectionInfo('server-a')] })).toMatchObject({ activeDocumentConnected: false, queryRunning: false })
     expect(computeContextKeys({ ...base, documents: snapshot({ documents: [doc('a')], activeId: 'missing' }) })).toMatchObject({ hasActiveDocument: false })
+    // Editor groups: without them the documents are one group; with them, the active document's group decides.
+    expect(computeContextKeys({ ...base, documents })).toMatchObject({ multipleEditorGroups: false, activeDocumentFloating: false })
+    const editorGroups = { groups: [{ id: 'g1', documents: ['b'], floating: false }, { id: 'g2', documents: ['a'], active: 'a', floating: true }], activeGroup: 'g2' }
+    expect(computeContextKeys({ ...base, documents, editorGroups })).toMatchObject({ multipleEditorGroups: true, activeDocumentFloating: true })
     // Results are the active query's own.
     expect(computeContextKeys({ ...base, documents, results: { a: true } })).toMatchObject({ hasResults: true })
     expect(computeContextKeys({ ...base, documents, results: { b: true } })).toMatchObject({ hasResults: false })

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { editor } from 'monaco-editor'
 import { afterClose } from '../src/renderer/src/documents'
-import { dropIndex, dropSide } from '../src/renderer/src/tab-drag'
 import { gridLimits } from '../src/renderer/src/grid/constants'
 import { documentFixture, deferred, TestEditor, type SaveResponse } from './fixtures/documents'
 
@@ -49,17 +48,116 @@ describe('query documents', () => {
     expect(documents.getSnapshot()).toBe(before)
     expect(documents.get(c.id)).toBeDefined()
   })
-  it('drops a dragged tab on the side of the tab under the pointer, and nowhere new next to itself', () => {
-    expect(dropSide(10, { left: 0, width: 100 })).toBe('before')
-    expect(dropSide(60, { left: 0, width: 100 })).toBe('after')
-    // Tabs a b c d: dragging a (0) after c (2) lands at 2; dragging d (3) before b (1) lands at 1.
-    expect(dropIndex(0, 2, 'after')).toBe(2)
-    expect(dropIndex(0, 2, 'before')).toBe(1)
-    expect(dropIndex(3, 1, 'before')).toBe(1)
-    expect(dropIndex(3, 1, 'after')).toBe(2)
-    expect(dropIndex(1, 1, 'after')).toBe(1)
-    expect(dropIndex(1, 0, 'after')).toBe(1)
-    expect(dropIndex(1, 2, 'before')).toBe(1)
+  it('reorders documents to the editor groups order, keeping the active one and those left out at the end', () => {
+    const { documents } = documentFixture()
+    const [a, b, c, d] = ['a.sql', 'b.sql', 'c.sql', 'd.sql'].map(name => documents.create(name, '', 'master'))
+    documents.activate(b.id)
+    const order = () => documents.getSnapshot().documents.map(document => document.name)
+    expect(documents.reorder([c.id, a.id, b.id])).toBe(true)
+    expect(order()).toEqual(['c.sql', 'a.sql', 'b.sql', 'd.sql'])
+    expect(documents.getSnapshot().activeId).toBe(b.id)
+    const before = documents.getSnapshot()
+    expect(documents.reorder([c.id, a.id, b.id, d.id])).toBe(false)
+    expect(documents.getSnapshot()).toBe(before)
+  })
+  it('shows documents in several group editors at once, each keeping its own view, and releases them', () => {
+    const { documents } = documentFixture()
+    const left = documents.create('left.sql', 'SELECT 1', 'master'), right = documents.create('right.sql', 'SELECT 2', 'master')
+    const first = new TestEditor(), second = new TestEditor()
+    documents.showIn(first.asEditor(), left.id)
+    documents.showIn(second.asEditor(), right.id)
+    expect(first.model).toBe(documents.getModel(left.id))
+    expect(second.model).toBe(documents.getModel(right.id))
+    expect(documents.editorOf(left.id)).toBe(first.asEditor())
+    // The active document's editor is the group's that shows it.
+    documents.activate(left.id)
+    expect(documents.boundEditor).toBe(first.asEditor())
+    documents.activate(right.id)
+    expect(documents.boundEditor).toBe(second.asEditor())
+    // Activating does not swap models in a group's editor: the group shows what it shows.
+    expect(first.model).toBe(documents.getModel(left.id))
+    // Execute reads the selection of the editor that shows the document, whichever is active.
+    second.selection = { startLineNumber: 1, startColumn: 8, endLineNumber: 1, endColumn: 9, selectionStartLineNumber: 1, selectionStartColumn: 8, positionLineNumber: 1, positionColumn: 9 }
+    expect(documents.getExecuteText(right.id).sql).toBe('2')
+    expect(documents.getExecuteText(left.id).sql).toBe('SELECT 1')
+    // A group's editor keeps where it was in a document it shows again.
+    const view = { cursorState: [], viewState: { scrollTop: 40 }, contributionsState: {} } as unknown as editor.ICodeEditorViewState
+    first.viewState = view
+    documents.showIn(first.asEditor(), right.id)
+    documents.showIn(first.asEditor(), left.id)
+    expect(first.viewState).toBe(view)
+    documents.releaseEditor(first.asEditor())
+    expect(first.model).toBeNull()
+    expect(documents.editorOf(left.id)).toBeUndefined()
+  })
+  it('focuses a new document once its group editor shows it, and forgets the focus when another is chosen first', () => {
+    const { documents } = documentFixture()
+    const first = new TestEditor()
+    const left = documents.create('left.sql', '', 'master')
+    documents.showIn(first.asEditor(), left.id)
+    // The panel for a new document renders after it is created: focus waits for the editor to show it.
+    const right = documents.create('right.sql', '', 'master')
+    documents.focusActive()
+    expect(first.focused).toBe(0)
+    documents.showIn(first.asEditor(), right.id)
+    expect(first.focused).toBe(1)
+    documents.focusActive()
+    expect(first.focused).toBe(2)
+    const later = documents.create('later.sql', '', 'master')
+    documents.focusActive()
+    documents.activate(left.id)
+    documents.showIn(first.asEditor(), later.id)
+    expect(first.focused).toBe(2)
+  })
+  it('lets a focus waiting for an editor lapse once focus goes elsewhere, so a group shown later takes no focus from there', () => {
+    const { documents } = documentFixture()
+    const first = new TestEditor()
+    const left = documents.create('left.sql', '', 'master')
+    documents.showIn(first.asEditor(), left.id)
+    const right = documents.create('right.sql', '', 'master')
+    documents.focusActive()
+    // The editor area was hidden (its panel closed), and the user went on to Object Explorer before it showed again.
+    documents.dropPendingFocus()
+    documents.showIn(first.asEditor(), right.id)
+    expect(first.focused).toBe(0)
+    // However long the first render takes, a focus nothing took away waits for it.
+    const later = documents.create('later.sql', '', 'master')
+    documents.focusActive()
+    documents.showIn(first.asEditor(), later.id)
+    expect(first.focused).toBe(1)
+  })
+  it('hands a closing active document over to the successor its editor group names, and to the next in order without one', async () => {
+    const { documents } = documentFixture()
+    const [a, b, c, d] = ['a.sql', 'b.sql', 'c.sql', 'd.sql'].map(name => documents.create(name, '', 'master'))
+    // Groups [a, b] and [c, d]: closing b, the last in its group, shows a, not c (the next in order).
+    const groups = [[a.id, b.id], [c.id, d.id]]
+    const successor = documents.useCloseSuccessor(id => { const group = groups.find(ids => ids.includes(id))!; const index = group.indexOf(id); return group.length > 1 ? group[index + 1] ?? group[index - 1] : undefined })
+    documents.activate(b.id)
+    await documents.close(b.id)
+    expect(documents.getSnapshot().activeId).toBe(a.id)
+    groups[0] = [a.id]
+    // A closing document that is not active leaves the active one alone.
+    await documents.close(d.id)
+    expect(documents.getSnapshot().activeId).toBe(a.id)
+    groups[1] = [c.id]
+    // Its group's only document: DocumentService's own order decides.
+    await documents.close(a.id)
+    expect(documents.getSnapshot().activeId).toBe(c.id)
+    successor.dispose()
+    const e = documents.create('e.sql', '', 'master')
+    documents.activate(c.id)
+    await documents.close(c.id)
+    expect(documents.getSnapshot().activeId).toBe(e.id)
+  })
+  it('takes a closing document out of the group editor that shows it', async () => {
+    const { documents } = documentFixture()
+    const left = documents.create('left.sql', '', 'master'), right = documents.create('right.sql', '', 'master')
+    const first = new TestEditor(), second = new TestEditor()
+    documents.showIn(first.asEditor(), left.id); documents.showIn(second.asEditor(), right.id)
+    await documents.close(left.id)
+    expect(first.model).toBeNull()
+    expect(second.model).toBe(documents.getModel(right.id))
+    expect(documents.editorOf(left.id)).toBeUndefined()
   })
   it('owns models by URI and retains them and view state across switches and editor remounts', () => {
     const { documents, model, models } = documentFixture()
