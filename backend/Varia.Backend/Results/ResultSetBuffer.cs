@@ -1,12 +1,14 @@
 namespace Varia.Backend.Results;
 
-/// <summary>A sealed page: its first row, row count and the exact bytes that were (and will again be) written to main.</summary>
-internal sealed record StoredPage(long FirstRow, int Rows, byte[] Body);
+/// <summary>A sealed page: its first row, row count, the exact bytes that were (and will again be) written to main, and its
+/// lengths sidecar, which never leaves the backend except through results.rowBytes.</summary>
+internal sealed record StoredPage(long FirstRow, int Rows, byte[] Body, PageLengths Lengths);
 
 /// <summary>One stored result set: an append-only page directory that results.read serves, and, while the set is open,
 /// the page being built. One query task writes; readers, progress events and releases may run concurrently.
-/// Budget: each sealed page costs its length plus <see cref="ResultStore.PageOverhead"/>, and the builder's buffers are
-/// charged as they grow; both come from reservations taken in 256 KiB steps.
+/// Budget: each sealed page costs its length plus <see cref="ResultStore.PageOverhead"/> plus its lengths sidecar (4 bytes a
+/// row, 24 per sparse cell entry, <see cref="PageLengths.MemoryBytes"/>), and the builder's buffers are charged as they
+/// grow; both come from reservations taken in 256 KiB steps.
 /// Copy and export jobs lease the set: a release during a job ends reads and stops storing at once, but its pages and
 /// budget are freed only when the last lease ends, so re-executing or closing a tab never breaks a save.</summary>
 internal sealed class ResultSetBuffer
@@ -29,8 +31,9 @@ internal sealed class ResultSetBuffer
 
     /// <param name="metadata">Bytes already reserved for the column metadata; returned with everything else on release.</param>
     internal ResultSetBuffer(ResultStore store, QueryBudget budget, uint resultId, int index, int batchNumber, int iteration, string kind, IReadOnlyList<ResultColumn> columns,
-        IReadOnlyList<WireKind> wires, long metadata = 0, int sealBytes = PageBuilder.SealBytes)
+        IReadOnlyList<WireKind> wires, long metadata = 0, int sealBytes = PageBuilder.SealBytes, IReadOnlyList<ColumnLength>? lengths = null)
     {
+        Lengths = lengths ?? [.. wires.Select(wire => wire == WireKind.Binary ? ColumnLength.Binary : ColumnLength.Utf16)];
         this.store = store;
         charged = metadata;
         Budget = budget;
@@ -52,6 +55,8 @@ internal sealed class ResultSetBuffer
     public string Kind { get; }
     public IReadOnlyList<ResultColumn> Columns { get; }
     public IReadOnlyList<WireKind> Wires { get; }
+    /// <summary>Each column's byte rule (ColumnPlan's; a live table's text counts as UTF-16).</summary>
+    public IReadOnlyList<ColumnLength> Lengths { get; }
     /// <summary>The statement producing this set stopped early (an error, cancellation or timeout).</summary>
     public bool Incomplete { get => incomplete; set => incomplete = value; }
     public bool IsOpen => Volatile.Read(ref state) == 0;
@@ -107,7 +112,7 @@ internal sealed class ResultSetBuffer
         {
             if (builder is null) return false;
             var growth = Math.Max(0, builder.WorkingBytes - working);
-            var rowBytes = builder.OpenRowBytes + 4L * Wires.Count;
+            var rowBytes = builder.OpenRowBytes + 4L * Wires.Count + builder.OpenRowLengthBytes;
             var need = growth + rowBytes;
             if (state != 0 || (need > slack && !Reserve(need - slack)))
             {
@@ -143,8 +148,8 @@ internal sealed class ResultSetBuffer
         if (builder is null || !builder.HasRows) return;
         var first = builder.FirstRow;
         var rows = builder.RowCount;
-        var page = builder.Seal();
-        var cost = page.Length + ResultStore.PageOverhead;
+        var page = builder.Seal(out var lengths);
+        var cost = page.Length + ResultStore.PageOverhead + lengths.MemoryBytes;
         // The rows were reserved as they were committed; the page header and alignment add a little.
         var extra = cost - pending;
         if (extra <= slack) slack -= extra;
@@ -155,7 +160,7 @@ internal sealed class ResultSetBuffer
             slack = 0;
         }
         pending = 0;
-        pages.Add(new StoredPage(first, rows, page));
+        pages.Add(new StoredPage(first, rows, page, lengths));
         Volatile.Write(ref sealedPages, pages.Count);
         rowsAvailable += rows;
         bytesStored += page.Length;
@@ -270,6 +275,36 @@ internal sealed class ResultSetBuffer
             for (var i = low; i < pages.Count && pages[i].FirstRow < end; i++) result.Add(pages[i]);
             return result;
         }
+    }
+
+    /// <summary>The bytes (sum of DATALENGTH) of up to <paramref name="count"/> rows from <paramref name="firstRow"/>, as far
+    /// as sealed pages hold them; fewer, or none, past the rows available.</summary>
+    public long[] RowBytes(long firstRow, int count)
+    {
+        var result = new List<long>(Math.Min(count, 4096));
+        foreach (var page in PagesFor(firstRow, count))
+        {
+            var from = (int)Math.Max(0, firstRow + result.Count - page.FirstRow);
+            if (page.FirstRow + from != firstRow + result.Count) break;
+            for (var row = from; row < page.Rows && result.Count < count; row++) result.Add(page.Lengths.RowBytes(row));
+        }
+        return [.. result];
+    }
+
+    /// <summary>One stored cell's characters and bytes, truncated or not (CellLengths.cs); null for a NULL cell or a row
+    /// not in a sealed page. Later views (sort, filters, column statistics) read lengths only through this.</summary>
+    public CellSize? CellSize(long row, int column)
+    {
+        if ((uint)column >= (uint)Wires.Count) throw new ArgumentOutOfRangeException(nameof(column));
+        var found = PagesFor(row, 1);
+        if (found.Count == 0 || found[0].FirstRow > row) return null;
+        var page = found[0];
+        var at = (int)(row - page.FirstRow);
+        var view = PageView.Parse(page.Body, Wires.Count);
+        if (view.IsNull(column, at)) return null;
+        if (page.Lengths.TryCell(at, column, out var cell)) return new CellSize(cell.Chars, cell.Bytes, true);
+        var size = Lengths[column].Derive(view.Span(column, at), Wires[column]);
+        return view.IsTruncated(column, at) || Lengths[column].Rule == LengthRule.Recorded ? size with { Exact = false } : size;
     }
 
     public ResultDescriptor Describe()

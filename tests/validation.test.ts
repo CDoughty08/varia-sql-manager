@@ -8,6 +8,7 @@ import { deadlineFor, mainOnlyMethods, methodPolicies } from '../src/shared/ipc/
 import { scriptCancelSchema } from '../src/shared/scripting/schema'
 import { actionCancelSchema, type ActionDescribeRequest } from '../src/shared/actions/schema'
 import { defaultScriptingOptions } from '../src/shared/scripting/options'
+import { limits } from '../src/shared/ipc/wire/protocol'
 
 describe('IPC validation', () => {
   it('rejects arbitrary or inherited backend method names', () => {
@@ -208,6 +209,24 @@ describe('IPC validation', () => {
       { t: 'credit', rid: 1, bytes: 0 }, { t: 'cancel', rid: 1, reason: 3 }, { t: 'close', rid: 1, generation: 1, resultIds: [] }, { t: 'close', rid: 1, generation: 1, resultIds: Array.from({ length: 1025 }, (_, index) => index + 1) },
       { t: 'invoke', rid: 1 }, null, 'read'
     ]) expect(portRequestSchema.safeParse(message).success, JSON.stringify(message)).toBe(false)
+  })
+  it('takes row size requests for 1 to 16,384 rows of one result, on the control lane, as C# bounds them', () => {
+    const sizes = { t: 'rowBytes', rid: 1, generation: 1, resultId: 0xffffffff, firstRow: Number.MAX_SAFE_INTEGER, count: limits.rowSizes.maxRows }
+    expect(portRequestSchema.parse(sizes)).toEqual(sizes)
+    for (const message of [
+      { ...sizes, count: 0 }, { ...sizes, count: limits.rowSizes.maxRows + 1 }, { ...sizes, count: 1.5 }, { ...sizes, firstRow: -1 }, { ...sizes, resultId: 0 }, { ...sizes, generation: 0 },
+      { ...sizes, extra: 1 }, { t: 'rowBytes', rid: 1, generation: 1, resultId: 1, firstRow: 0 }
+    ]) expect(portRequestSchema.safeParse(message).success, JSON.stringify(message)).toBe(false)
+    expect(methodPolicies['results.rowBytes']).toMatchObject({ kind: 'unary', lane: 'control' })
+    expect(readFileSync('backend/Varia.Backend/SqlService.cs', 'utf8')).toContain(`public const int MaxRowBytesRows = ${limits.rowSizes.maxRows.toLocaleString('en-US').replace(',', '_')};`)
+  })
+  it('takes a character column\'s collation in a descriptor only in its strict shape', () => {
+    const column = { name: 'n', dataType: 'varchar', wire: 'text', nullable: true, collation: { lcid: 1041, sortId: 0, codePage: 932, utf8: false, options: 25 } }
+    const descriptor = { resultId: 1, index: 0, batchNumber: 1, iteration: 1, kind: 'rows', columns: [column], rowsRead: 0, rowsStored: 0, rowsAvailable: 0, bytesStored: 0, truncatedCells: 0, state: 'open', incomplete: false }
+    expect(queryEventSchema.safeParse({ type: 'resultSet.opened', descriptor }).success).toBe(true)
+    expect(queryEventSchema.safeParse({ type: 'resultSet.opened', descriptor: { ...descriptor, columns: [{ ...column, collation: { lcid: 1033, sortId: 52, codePage: 1252, utf8: false, options: 1 | 2 | 8 | 16 | 16384 | 32768 } }] } }).success).toBe(true)
+    for (const collation of [{ ...column.collation, extra: 1 }, { ...column.collation, options: 4 }, { ...column.collation, sortId: 256 }, { ...column.collation, codePage: 65536 }, { ...column.collation, utf8: 1 }, { lcid: 1033 }])
+      expect(queryEventSchema.safeParse({ type: 'resultSet.opened', descriptor: { ...descriptor, columns: [{ ...column, collation }] } }).success, JSON.stringify(collation)).toBe(false)
   })
   it('validates query events from the backend strictly', () => {
     expect(queryEventSchema.safeParse({ type: 'messages', messages: [{ text: 'a', kind: 'info' }, { text: 'printed', kind: 'print' }, { text: 'Warning: Null value is eliminated by an aggregate or other SET operation.', kind: 'server' }, { text: 'Msg 8134, Level 16, State 1, Line 1\nDivide by zero error encountered.', kind: 'error' }] }).success).toBe(true)

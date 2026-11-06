@@ -2,7 +2,7 @@
 // from main through the results port, validates and caches them (decodePage), and answers the UI's windows and cells
 // with display text decoded only for the cells asked for. It also relays live subscriptions between the page and main
 // without decoding anything, and grants each live event's bytes back only once the page says it applied the event.
-import type { BackendStatus, ResultsCloseResult, WireKind } from '../../../shared/contracts'
+import type { BackendStatus, ResultsCloseResult, ResultsRowBytesResult, WireKind } from '../../../shared/contracts'
 import type { PortEndResult, PortMessage, PortRequest } from '../../../shared/ipc/port-messages'
 import { decodePage, PageFormatError, type PageView } from '../../../shared/ipc/wire/pages'
 import { CELL_ERROR, CELL_NULL, cellFlags, cellSlice, cellText, displayText, runSlice, textRun, type TextRun } from '../../../shared/ipc/wire/cells'
@@ -95,6 +95,8 @@ export class ResultsWorkerCore {
   private readonly waiters = new Map<number, Waiter>()
   private readonly prefetches = new Set<Waiter>()
   private readonly closes = new Map<number, number>()
+  /** results.rowBytes requests in flight: the page's id by rid. */
+  private readonly sizes = new Map<number, number>()
   private readonly lives = new Map<number, Live>()
   private readonly liveIds = new Map<number, Live>()
   /** Live updates in flight: the page's id and the generation they were sent to, by rid. */
@@ -137,6 +139,7 @@ export class ResultsWorkerCore {
       case 'prefetch': return this.prefetch(request.key, request.wires, request.first, request.count)
       case 'cancel': return this.cancel(request.id)
       case 'close': return this.close(request.id, request.generation, request.resultIds)
+      case 'rowBytes': return this.rowBytes(request)
       case 'measure': return this.measure(request)
       case 'stats': this.post({ type: 'stats', id: request.id, bytes: this.cacheBytes, pages: this.cache.size }); return
       case 'live': return this.live(request)
@@ -163,7 +166,7 @@ export class ResultsWorkerCore {
   /** The next port rid, skipping those still in use (a live stream may outlive 2^31 reads). */
   private allocate(): number {
     let rid = this.nextRid
-    while (this.reads.has(rid) || this.closes.has(rid) || this.lives.has(rid) || this.updates.has(rid)) rid = rid >= 2 ** 31 - 1 ? 1 : rid + 1
+    while (this.reads.has(rid) || this.closes.has(rid) || this.sizes.has(rid) || this.lives.has(rid) || this.updates.has(rid)) rid = rid >= 2 ** 31 - 1 ? 1 : rid + 1
     this.nextRid = rid >= 2 ** 31 - 1 ? 1 : rid + 1
     return rid
   }
@@ -327,6 +330,14 @@ export class ResultsWorkerCore {
     this.send({ t: 'close', rid, generation, resultIds: [...resultIds] })
   }
 
+  private rowBytes(request: Extract<WorkerRequest, { type: 'rowBytes' }>): void {
+    if (!this.port) return this.error(request.id, 'PORT_CLOSED', portClosed)
+    if (request.key.generation !== this.generation) return this.error(request.id, 'RESULT_UNAVAILABLE', resultUnavailable)
+    const rid = this.allocate()
+    this.sizes.set(rid, request.id)
+    this.send({ t: 'rowBytes', rid, generation: request.key.generation, resultId: request.key.resultId, firstRow: request.firstRow, count: request.count })
+  }
+
   private backend(generation: number, status: BackendStatus): void {
     if (generation !== this.generation) {
       this.generation = generation
@@ -480,6 +491,13 @@ export class ResultsWorkerCore {
       this.post({ type: 'liveUpdated', id: update.id, result: result as LiveUpdateResult })
       return
     }
+    const sizes = this.sizes.get(rid)
+    if (sizes !== undefined) {
+      this.sizes.delete(rid)
+      const rows = result as ResultsRowBytesResult
+      this.post({ type: 'rowBytes', id: sizes, firstRow: rows.firstRow, bytes: rows.bytes, rowsAvailable: rows.rowsAvailable })
+      return
+    }
     const close = this.closes.get(rid)
     if (close !== undefined) {
       this.closes.delete(rid)
@@ -507,6 +525,11 @@ export class ResultsWorkerCore {
     if (update) {
       this.updates.delete(rid)
       return this.error(update.id, code, message)
+    }
+    const sizes = this.sizes.get(rid)
+    if (sizes !== undefined) {
+      this.sizes.delete(rid)
+      return this.error(sizes, code, message)
     }
     const close = this.closes.get(rid)
     if (close !== undefined) {

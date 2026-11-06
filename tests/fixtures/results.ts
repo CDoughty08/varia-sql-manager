@@ -48,6 +48,7 @@ export function fakeResultClient() {
         getWindow: async first => ({ first, count: 0, colStart: 0, colEnd: value.columns.length, text: [], flags: new Uint8Array(0) }),
         peekWindow: () => undefined, prefetch: () => {}, measure: async () => ({ rows: 0, widths: new Uint16Array(value.columns.length) }),
         getCell: vi.fn<ResultHandle['getCell']>(async () => ({ text: '', isNull: true, truncated: false, error: false, formatted: false })),
+        rowBytes: async first => ({ first, bytes: [], rowsAvailable: 0 }),
         close: vi.fn(async () => { handle.snapshot = { ...handle.snapshot, state: 'released' } }),
         dispose: vi.fn()
       }

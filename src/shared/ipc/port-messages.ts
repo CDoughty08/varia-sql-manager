@@ -1,7 +1,7 @@
 // The results port (docs/ipc.md): one MessagePort per renderer load between main and the results worker. The worker's
 // requests are validated with portRequestSchema; backend payloads main forwards are validated with the schemas below.
 import { z } from 'zod'
-import type { BackendStatus, QueryEvent, ResultsCloseResult, ResultsReadResult } from '../contracts'
+import type { BackendStatus, QueryEvent, ResultsCloseResult, ResultsReadResult, ResultsRowBytesResult } from '../contracts'
 import { liveSubscribeParamsSchema, liveUpdateParamsSchema, testLiveSubscribeParamsSchema, testLiveUpdateParamsSchema, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../live/schema'
 import { backendDescriptorSchema } from './descriptors'
 import { limits, type ErrorCode } from './wire/protocol'
@@ -19,6 +19,7 @@ export const buildPortRequestSchema = (live: { subscribe: z.ZodType<LiveSubscrib
   z.object({ t: z.literal('credit'), rid: u31, bytes: z.number().int().min(1).max(limits.credit.max) }).strict(),
   z.object({ t: z.literal('cancel'), rid: u31 }).strict(),
   z.object({ t: z.literal('close'), rid: u31, generation, resultIds: z.array(u32).min(1).max(1024) }).strict(),
+  z.object({ t: z.literal('rowBytes'), rid: u31, generation, resultId: u32, firstRow: count, count: z.number().int().min(1).max(limits.rowSizes.maxRows) }).strict(),
   // Live subscriptions (docs/ipc.md): a stream acknowledged with `credit`, ended with `cancel`, changed with liveUpdate.
   z.object({ t: z.literal('live'), rid: u31, generation, params: live.subscribe }).strict(),
   z.object({ t: z.literal('liveUpdate'), rid: u31, generation, params: live.update }).strict()
@@ -39,7 +40,7 @@ export type PortMessage =
   | { t: 'query'; queryId: string; event: QueryEvent }
   | { t: 'memory'; usedBytes: number; globalBytes: number; generation: number; seq: number }
   | { t: 'live'; rid: number; bytes: number; event: LiveEvent }
-export type PortEndResult = ResultsReadResult | ResultsCloseResult | LiveEnd | LiveUpdateResult
+export type PortEndResult = ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | LiveEnd | LiveUpdateResult
 
 const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'server', 'print', 'error']) }).strict()
 /** EVENT bodies for a query.execute request. */

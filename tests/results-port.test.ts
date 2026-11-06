@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ResultsPortHost, toExactArrayBuffer, type FrameLike, type LiveStreamHandle, type PortMainLike, type ReadStream, type ResultsBackend } from '../src/main/backend/results-port'
 import { BackendError } from '../src/main/backend/errors'
 import type { StreamSink } from '../src/main/backend/connection'
-import type { QueryEvent, ResultDescriptor, ResultsReadParams } from '../src/shared/contracts'
+import type { QueryEvent, ResultDescriptor, ResultsReadParams, ResultsRowBytesParams } from '../src/shared/contracts'
 import { buildPortRequestSchema, type PortMessage, type portRequestSchema } from '../src/shared/ipc/port-messages'
 import { buildLiveSchemas } from '../src/shared/live/schema'
 import type { LiveProbeSpec, LiveSourceSpec } from '../src/shared/live/catalog'
@@ -47,6 +47,7 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
       return { done, credit: bytes => read.credits.push(bytes), cancel: reason => read.cancels.push(reason) }
     },
     close: vi.fn(async (_generation: number, resultIds: number[]) => ({ closed: resultIds.length, usedBytes: 0 })),
+    rowBytes: vi.fn(async (_generation: number, params: ResultsRowBytesParams) => ({ firstRow: params.firstRow, bytes: [4, 8], rowsAvailable: 2 })),
     live: (generation, params, onLive, credit): LiveStreamHandle => {
       let resolve!: (value: LiveEnd) => void, reject!: (error: unknown) => void
       const done = new Promise<LiveEnd>((onResolve, onReject) => { resolve = onResolve; reject = onReject })
@@ -250,6 +251,21 @@ describe('ResultsPortHost', () => {
     expect(backend.close).toHaveBeenCalledWith(1, [7])
     expect(port().ends()).toEqual([{ t: 'end', rid: 2, ok: true, result: { closed: 0, usedBytes: 0 } }, { t: 'end', rid: 1, ok: true, result: { closed: 1, usedBytes: 0 } }])
     expect(host.ownedCount).toBe(1)
+  })
+  it('reads row sizes only of owned results of the current generation, within the schema bounds', async () => {
+    const { host, backend, port } = fixture()
+    host.own([descriptor(7)])
+    port().send({ t: 'rowBytes', rid: 1, generation: 1, resultId: 7, firstRow: 0, count: 2 })
+    port().send({ t: 'rowBytes', rid: 2, generation: 1, resultId: 8, firstRow: 0, count: 2 })
+    port().send({ t: 'rowBytes', rid: 3, generation: 2, resultId: 7, firstRow: 0, count: 2 })
+    port().send({ t: 'rowBytes', rid: 4, generation: 1, resultId: 7, firstRow: 0, count: 16_385 })
+    port().send({ t: 'rowBytes', rid: 5, generation: 1, resultId: 7, firstRow: -1, count: 1 })
+    port().send({ t: 'rowBytes', rid: 6, generation: 1, resultId: 7, firstRow: 0, count: 1, extra: true })
+    await settle()
+    expect(backend.rowBytes).toHaveBeenCalledTimes(1)
+    expect(backend.rowBytes).toHaveBeenCalledWith(1, { resultId: 7, firstRow: 0, count: 2 })
+    expect(codes(port())).toEqual([[2, 'RESULT_UNAVAILABLE'], [3, 'RESULT_UNAVAILABLE'], [4, 'INVALID_REQUEST'], [5, 'INVALID_REQUEST'], [6, 'INVALID_REQUEST'], [1, 'ok']])
+    expect(port().ends().at(-1)).toEqual({ t: 'end', rid: 1, ok: true, result: { firstRow: 0, bytes: [4, 8], rowsAvailable: 2 } })
   })
   it('keeps results it could not close owned, so a retry from the renderer releases them', async () => {
     const { host, backend, port } = fixture()
