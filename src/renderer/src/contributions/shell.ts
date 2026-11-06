@@ -104,8 +104,9 @@ export function shellContribution({ commands, documents, files, quickInput, conn
       try { await files.closeWindow(async () => { await host.flushLayout().catch(() => {}) }, () => longRuns.closeRefusal()) }
       finally { if (!files.exiting) host.layoutCloseCancelled() }
     } }),
-    // Focus moves there too, so the F5 that follows refreshes Object Explorer rather than executing the query.
-    commands.register('window.explorer', { run: () => host.reveal('explorer', { focus: true }) }),
+    // Focus moves there too, so the F5 that follows refreshes Object Explorer rather than executing the query; Search Objects'
+    // Reveal keeps it in its hits.
+    commands.register('window.explorer', { run: args => host.reveal('explorer', { focus: !args?.keepFocus }) }),
     // The box asks for focus itself once shown, as revealing a hidden pane mounts it on a later render.
     commands.register('window.editor', { run: () => host.reveal('editor') }),
     // A panel in a popout window: its window comes to the front.

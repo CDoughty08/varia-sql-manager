@@ -79,7 +79,7 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   const root = useRef<HTMLDivElement>(null)
   const list = useRef<HTMLUListElement>(null)
   const state = snapshot.documents[searchId]
-  // The hit Enter reached stays in view in the list, as the tree below selects it.
+  // The selected hit (the one Enter or the arrows reached) stays in view in the list.
   const current = state?.current
   useLayoutEffect(() => { if (current !== undefined) list.current?.querySelectorAll<HTMLElement>('[data-hit]')[current]?.scrollIntoView({ block: 'nearest' }) }, [current, state?.result])
   if (!state) return null
@@ -96,27 +96,50 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
     // so Enter again goes on to the next one. The tab's Enter searches at once: revealing from it moves focus to the tree.
     if (event.key === 'Enter' && state.text.trim() && pane) void objectSearch.step(searchId, event.shiftKey ? -1 : 1).then(hit => { if (hit) reveal(hit) }, onUnexpectedError)
     else if (event.key === 'Enter' && state.text.trim()) void objectSearch.search(searchId)
-    else if (event.key === 'ArrowDown' && rows().length) rows()[0]?.focus()
+    else if (event.key === 'ArrowDown' && rows().length) (rows()[current ?? 0] ?? rows()[0])?.focus()
     else if (event.key === 'Escape' && state.text) set({ text: '' })
     else if (onLeave && (event.key === 'Escape' || event.key === 'ArrowDown' || event.key === 'Enter')) onLeave()
     else return
     event.preventDefault()
     event.stopPropagation()
   }
+  const focusInput = () => root.current?.querySelector<HTMLElement>('[data-object-search-focus]')?.focus()
+  /** The list is one tab stop on the selected hit; the arrows, Page keys, Home and End move the selection and focus with it,
+   *  Enter reveals the selected hit (focus stays here), ↑ on the first hit and Escape return to the box. */
   const onListKey = (event: KeyboardEvent<HTMLUListElement>) => {
-    const all = rows(), at = all.findIndex(row => row === document.activeElement)
+    if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+    const all = rows(), at = all.findIndex(row => row === event.target)
     if (at < 0) return
-    const next = event.key === 'ArrowDown' ? at + 1 : event.key === 'ArrowUp' ? at - 1 : event.key === 'Home' ? 0 : event.key === 'End' ? all.length - 1 : undefined
+    const page = Math.max(1, Math.floor((list.current?.clientHeight ?? 0) / Math.max(1, all[at]!.getBoundingClientRect().height)) - 1)
+    const next = event.key === 'ArrowDown' ? at + 1 : event.key === 'ArrowUp' ? at - 1 : event.key === 'PageDown' ? Math.min(at + page, all.length - 1)
+      : event.key === 'PageUp' ? Math.max(at - page, 0) : event.key === 'Home' ? 0 : event.key === 'End' ? all.length - 1 : undefined
+    if (event.key === 'Enter' || event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      if (event.key === 'Escape') focusInput()
+      else open(at)
+      return
+    }
     if (next === undefined) return
     event.preventDefault()
-    if (next < 0) root.current?.querySelector<HTMLElement>('[data-object-search-focus]')?.focus()
-    else all[Math.min(next, all.length - 1)]?.focus()
+    if (next < 0) { focusInput(); return }
+    const index = Math.min(next, all.length - 1)
+    objectSearch.pick(searchId, index)
+    all[index]?.focus()
   }
   const target = (hit: ObjectSearchHit): ExplorerTarget => ({ connectionId: state.connectionId, ref: { type: 'object', object: hit.object }, kind: hit.object.kind, label: hit.label, ...hit.subtype ? { subtype: hit.subtype } : {} })
   // Object Explorer shows at once and follows the seek as it expands and pages its way to the object.
+  // From the tab, Object Explorer is shown without taking focus, so the arrows go on walking the hits.
   const reveal = (hit: ObjectSearchHit) => {
-    if (!pane) void commands.execute('window.explorer', undefined, 'toolbar')
+    if (!pane) void commands.execute('window.explorer', { keepFocus: true }, 'toolbar')
     void objectSearch.reveal(explorer, state.connectionId, hit).then(outcome => { if (!outcome.ok && !outcome.cancelled) commands.reportError(outcome.message) }, onUnexpectedError)
+  }
+  /** Selects a hit and reveals it. */
+  const open = (index: number) => {
+    const hit = result?.hits[index]
+    if (!hit) return
+    objectSearch.pick(searchId, index)
+    reveal(hit)
   }
   const script = (hit: ObjectSearchHit) => {
     const verb = hit.definition && scripting.canRun('alter', target(hit)) ? 'alter' : 'create'
@@ -199,8 +222,10 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
           const spec = kindSpecs[hit.object.kind]
           const path = searchHitPath(hit)
           const key = JSON.stringify([hit.object, hit.folder])
+          // A click selects; in the tab only a double-click (or Enter) reveals, so a click never takes focus away from the list.
           return <li key={key} className="object-search-hit" {...index === current ? { 'aria-current': true } : {}}>
-            <button type="button" className="object-search-open" data-hit title={`Reveal in Object Explorer: ${displayText(hit.label)}`} onClick={() => { objectSearch.pick(searchId, index); reveal(hit) }}>
+            <button type="button" className="object-search-open" data-hit tabIndex={index === (current ?? 0) ? 0 : -1} title={`Reveal in Object Explorer: ${displayText(hit.label)}`}
+              onClick={() => { if (pane) open(index); else objectSearch.pick(searchId, index) }} onDoubleClick={pane ? undefined : () => open(index)}>
               <ExplorerIcon name={(hit.subtype && spec.subtypeIcons?.[hit.subtype]) || spec.icon} />
               <span className="object-search-name"><Marked text={hit.label} range={hit.range} /></span>
               <span className="object-search-path">{displayText(path)}</span>

@@ -42,7 +42,7 @@ export interface SearchDocumentState extends SearchQueryState {
   readonly result?: ObjectSearchResult
   readonly asked?: SearchQueryState
   readonly error?: string
-  /** The hit Enter in the box revealed last, by index in the result; a new result forgets it. */
+  /** The selected hit, by index in the result: the one Enter in the box revealed last, or the list's selection; a new result forgets it. */
   readonly current?: number
 }
 export interface ObjectSearchSnapshot {
@@ -296,7 +296,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     return hits[current]
   }
 
-  /** A hit revealed from the list: the next Enter in the box goes on from it. */
+  /** The hit selected in the list (clicked, reached with the arrows, or revealed): the next Enter in the box goes on from it. */
   pick(id: string, current: number): void {
     const document = this.getSnapshot().documents[id]
     if (document?.result && current >= 0 && current < document.result.hits.length) this.putDocument({ ...document, current })

@@ -1841,6 +1841,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-search-hit { display: flex; align-items: start; gap: var(--varia-space-1); padding: 0 var(--varia-space-3) 0 var(--varia-space-2); }
 .object-search-hit:hover { background: var(--varia-list-hoverBackground); }
 .object-search-hit[aria-current] { color: var(--varia-list-inactiveSelectionForeground); background: var(--varia-list-inactiveSelectionBackground); }
+.object-search-hit[aria-current]:has(> .object-search-open:focus) { color: var(--varia-list-activeSelectionForeground); background: var(--varia-list-activeSelectionBackground); }
 .object-search-hit .icon-button { visibility: hidden; flex-shrink: 0; }
 .object-search-hit:hover .icon-button, .object-search-hit:focus-within .icon-button { visibility: visible; }
 .object-search-open { flex: 1; min-width: 0; display: grid; grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr); column-gap: var(--varia-space-2); align-items: center; padding: var(--varia-space-1); text-align: start; color: inherit; background: transparent; border: 0; border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); cursor: pointer; }

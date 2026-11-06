@@ -7,7 +7,7 @@ import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.
 import {
   activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
   explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, explorerSublabel, explorerToolbar, itemCount,
-  messages, outputView, paneMenuButton, part, primaryAction, quickInput, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
+  messages, objectSearchBox, objectSearchHits, objectSearchSelected, outputView, paneMenuButton, part, primaryAction, quickInput, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
 } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
@@ -873,6 +873,43 @@ try {
     await expect(searchBox()).toBeFocused()
     await page.keyboard.press('Escape')
     await expect(tree()).toBeFocused()
+    // The Search Objects tab: a click selects a hit and keeps focus in the list, so the arrows walk the hits; Enter and a
+    // double-click reveal in Object Explorer without taking focus from the list. (A click used to reveal and focus the tree.)
+    await page.keyboard.press('F1')
+    await page.keyboard.type('search objects')
+    await quickInput(page).getByRole('option', { name: /^Object Explorer: Search Objects…/ }).click()
+    await expect(objectSearchBox(page)).toBeFocused()
+    await page.keyboard.type('table')
+    const tabHits = objectSearchHits(page)
+    await expect(tabHits).toHaveCount(2)
+    const revealed = (await active())?.label
+    await tabHits.first().click()
+    await expect(tabHits.first()).toBeFocused()
+    await expect(objectSearchSelected(page)).toHaveAttribute('title', 'Reveal in Object Explorer: dbo.table1')
+    expect((await active())?.label).toBe(revealed)
+    // One tab stop: only the selected hit is in the tab order.
+    expect(await tabHits.evaluateAll(buttons => buttons.map(button => button.tabIndex))).toEqual([0, -1])
+    await page.keyboard.press('ArrowDown')
+    await expect(tabHits.nth(1)).toBeFocused()
+    await expect(objectSearchSelected(page)).toHaveAttribute('title', 'Reveal in Object Explorer: dbo.table2')
+    await page.keyboard.press('Enter')
+    await expect.poll(async () => (await active())?.label).toBe('dbo.table2')
+    await expect(tabHits.nth(1)).toBeFocused()
+    await page.keyboard.press('Home')
+    await expect(tabHits.first()).toBeFocused()
+    await page.keyboard.press('End')
+    await expect(tabHits.nth(1)).toBeFocused()
+    await tabHits.first().dblclick()
+    await expect.poll(async () => (await active())?.label).toBe('dbo.table1')
+    await expect(tabHits.first()).toBeFocused()
+    await page.keyboard.press('ArrowUp')
+    await expect(objectSearchBox(page)).toBeFocused()
+    await page.keyboard.press('ArrowDown')
+    await expect(tabHits.first()).toBeFocused()
+    await page.keyboard.press('Escape')
+    await expect(objectSearchBox(page)).toBeFocused()
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+W' : 'Control+F4')
+    await expect(objectSearchBox(page)).toHaveCount(0)
   }
   // Forced colors: the dot keeps its shape, in the system's text colour. The reveal above scrolled the server row away.
   await explorerTree(page).evaluate(element => { for (let node = element; node; node = node.parentElement) if (node.scrollTop) { node.scrollTop = 0; break } element.scrollTop = 0 })
@@ -1020,7 +1057,7 @@ try {
   expect(narrow.label, JSON.stringify(narrow)).toBeCloseTo(narrow.kept, 0)
   if (wasExpanded === 'false') { await select('server-a', 'Server Objects'); await press('ArrowLeft', 'Server Objects') }
   await page.screenshot({ path: resolve('artifacts', 'explorer-visuals.png') })
-  console.log('Object Explorer checks: 30 px server rows with version, login, connection dot and active-query glyph, muted item counts, the environment tag\'s slot, the footer\'s freshness, the Filter loaded objects box by keyboard and from the palette, the search band\'s splitter, and compact search popovers at 160–420 px with keyboard focus, outside dismissal and combined type filters.')
+  console.log('Object Explorer checks: 30 px server rows with version, login, connection dot and active-query glyph, muted item counts, the environment tag\'s slot, the footer\'s freshness, the Filter loaded objects box by keyboard and from the palette, the search band\'s splitter, and compact search popovers at 160–420 px with keyboard focus, outside dismissal and combined type filters, and the Search Objects tab's hits walked by click, arrows, Enter and double-click with focus kept in the list.')
 
   // 11. Disconnecting a server while one of its folders streams cancels the load and removes its rows.
   await setStub({ tables: 120_000, pageDelayMs: 250 })

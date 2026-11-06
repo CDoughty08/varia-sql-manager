@@ -110,6 +110,8 @@ export const part = {
   explorerActive: '.oe-active',
   /** Object Explorer's search (SearchPanel's pane layout) and the field around its input. */
   explorerSearch: '.object-search-pane',
+  /** A Search Objects tab's document. */
+  objectSearchTab: '[data-object-search]',
   explorerSearchField: '.object-search-pane .object-search-field',
   /** The pane's footer: the selection's listing and its freshness, then the connected servers. */
   explorerFooter: '.explorer-footer',
@@ -466,6 +468,10 @@ export const explorerSearchField = page => page.locator(part.explorerSearchField
 export const explorerSearchHits = page => page.locator(part.explorerSearch).getByRole('list', { name: 'Search results', exact: true }).locator('[data-hit]')
 /** The hit Enter in the box revealed last. */
 export const explorerSearchCurrent = page => page.locator(part.explorerSearch).getByRole('list', { name: 'Search results', exact: true }).locator('[aria-current] [data-hit]')
+/** The Search Objects tab's box, its hits by their buttons, and the selected hit. */
+export const objectSearchBox = page => page.locator(part.objectSearchTab).getByRole('textbox', { name: 'Search objects', exact: true })
+export const objectSearchHits = page => page.locator(part.objectSearchTab).getByRole('list', { name: 'Results', exact: true }).locator('[data-hit]')
+export const objectSearchSelected = page => page.locator(part.objectSearchTab).getByRole('list', { name: 'Results', exact: true }).locator('[aria-current] [data-hit]')
 export const explorerSearchSplitter = page => page.locator(part.explorerSearch).getByRole('separator', { name: 'Resize search results', exact: true })
 export const explorerSearchToggle = (page, name) => page.locator(part.explorerSearch).getByRole('button', { name, exact: true })
 export const explorerSearchOptions = page => page.locator(part.explorerSearch).getByRole('button', { name: /^Search options/ })
