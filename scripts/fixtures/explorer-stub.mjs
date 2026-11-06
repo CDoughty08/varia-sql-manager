@@ -25,6 +25,8 @@ export function installExplorerStub({ ipcMain }, { statics }) {
   const stub = globalThis.variaStub = {
     calls: [], cancels: [], held: new Map(), connections: {},
     tables: 120_000, views: 10_000, pageSize: 2000, pageDelayMs: 0, auditsOk: false, holdLinked: true, tablesError: undefined,
+    // holdSearch: explorer.search answers only on release(); searchHidden: names the index leaves out of its answers.
+    holdSearch: false, searchHidden: [],
     release() { for (const [id, resolve] of [...stub.held]) { stub.held.delete(id); resolve() } }
   }
   const ok = value => ({ ok: true, value })
@@ -115,7 +117,7 @@ export function installExplorerStub({ ipcMain }, { statics }) {
       }
     }
     const hits = searchObjects.flatMap(({ definition, ...item }) => {
-      if (kinds && !kinds.includes(item.object.kind)) return []
+      if ((kinds && !kinds.includes(item.object.kind)) || stub.searchHidden.includes(item.object.name)) return []
       const name = scope !== 'definitions' ? find(item.object.name) : undefined
       const body = scope !== 'names' && definition ? find(definition) : undefined
       if (!name && !body) return []
@@ -140,7 +142,9 @@ export function installExplorerStub({ ipcMain }, { statics }) {
       case 'databases.list': return ok([{ name: 'master', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }])
       case 'explorer.children': return children(params)
       case 'explorer.index': return ok({ status: indexStatus(params.definitions !== false), elapsedMs: 1 })
-      case 'explorer.search': return ok(search(params))
+      case 'explorer.search':
+        if (stub.holdSearch) await new Promise(resolve => { stub.held.set(params.requestId, resolve) })
+        return ok(search(params))
       case 'query.session.close': return ok({ closed: true })
       case 'query.session.state': return ok({ transactionCount: 0, checked: true })
       case 'query.execute': return ok({

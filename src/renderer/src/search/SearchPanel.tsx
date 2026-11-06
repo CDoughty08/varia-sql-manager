@@ -93,14 +93,21 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   const state = snapshot.documents[searchId]
   // The selected hit (the one Enter or the arrows reached) stays in view in the list.
   const current = state?.current
-  // Whether a hit had focus as this render began (the DOM is still the last commit's): a new answer that drops the focused hit
-  // hands focus to the list's tab stop rather than leaving it on the page, where the keys would reach nothing.
-  const hadFocus = useRef(false)
-  hadFocus.current = !!list.current?.contains(list.current.ownerDocument.activeElement)
+  // Whether keyboard focus is on a hit (the list's focus and blur events keep it): a new answer that drops the focused hit hands
+  // focus to the list's tab stop, or to the box when no hits are left, rather than leaving it on the page, where keys reach nothing.
+  const focusInList = useRef(false)
+  const shownCurrent = useRef<number | undefined>(undefined)
   useLayoutEffect(() => {
-    const rows = list.current?.querySelectorAll<HTMLElement>('[data-hit]'), row = rows?.[current ?? 0]
-    if (current !== undefined) row?.scrollIntoView({ block: 'nearest' })
-    if (hadFocus.current && list.current && !list.current.contains(list.current.ownerDocument.activeElement)) row?.focus()
+    const hits = list.current, rows = hits?.querySelectorAll<HTMLElement>('[data-hit]')
+    const focused = !!hits && hits.contains(hits.ownerDocument.activeElement)
+    // Only a selection that moved, or the focused one, is scrolled to: a search run again that keeps the selection leaves the
+    // list where the user scrolled it.
+    if (current !== undefined && (current !== shownCurrent.current || focused)) rows?.[current]?.scrollIntoView({ block: 'nearest' })
+    shownCurrent.current = current
+    if (!focusInList.current || focused) return
+    const row = rows?.[current ?? 0]
+    if (row) row.focus()
+    else { focusInList.current = false; root.current?.querySelector<HTMLElement>('[data-object-search-focus]')?.focus() }
   }, [current, state?.result])
   if (!state) return null
   const entry = snapshot.indexes[state.connectionId]
@@ -237,7 +244,15 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
     </div>
     {showHits && (asked && !result!.problem && result!.hits.length === 0 && !state.requestId
       ? <EmptyState icon="search" title="No objects match" detail={entry?.requestId ? 'The index is still being built; results update when it finishes.' : `Try another spelling, turn off Match Case or Whole Word, or search names and definitions${state.types.length ? ' of every type' : ''}.`} />
-      : <ul ref={list} className="object-search-hits" aria-label={pane ? 'Search results' : 'Results'} onKeyDown={onListKey}>
+      : <ul ref={list} className="object-search-hits" aria-label={pane ? 'Search results' : 'Results'} onKeyDown={onListKey} onFocus={() => { focusInList.current = true }}
+        onBlur={event => {
+          const next = event.relatedTarget
+          if (next && event.currentTarget.contains(next as Node)) return
+          // A hit a new answer removes may blur as it goes; focus that leaves with its element is still the list's, for the
+          // effect above to hand on.
+          const left = event.target
+          queueMicrotask(() => { if (left.isConnected) focusInList.current = false })
+        }}>
         {result?.hits.map((hit, index) => {
           const spec = kindSpecs[hit.object.kind]
           const path = searchHitPath(hit)

@@ -75,7 +75,8 @@ const message = (error: unknown) => error instanceof Error ? error.message : 'Th
 export interface WorkspaceHandle {
   manage(mode?: 'save' | 'load'): void
   reset(): void
-  /** Shows a pane, and with `focus` moves keyboard focus into it; `raise` (or `focus`) brings a popout window that holds it to the front. */
+  /** Shows a pane, and with `focus` moves keyboard focus into it; `raise` (or `focus`) brings a popout window that holds it to the front,
+   *  and `raiseHidden` does only while that window is hidden (raising a window gives it keyboard focus). */
   reveal(id: PaneId, options?: { focus?: boolean; raise?: boolean; raiseHidden?: boolean }): void
   /** Closes a panel as its × does, remembering where it was docked. */
   close(id: PaneId): void

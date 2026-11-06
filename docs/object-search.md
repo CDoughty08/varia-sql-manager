@@ -137,7 +137,8 @@ The same search runs in two places, with the same options and results:
   Within each group, hits are sorted by database and then by name.
 - **Definition hits.** A hit inside a definition shows the line, a preview with the match marked, and how many more
   matches the definition has.
-- **While a build runs.** A search answers from what the index holds so far. Searches run again when the build ends.
+- **While a build runs.** A search answers from what the index holds so far. Searches run again when the build ends, keeping
+  the selected hit when it is still there (so Enter in Object Explorer's box goes on from it) and the list where it was scrolled.
 - **Using a hit.** Clicking a hit in Object Explorer's box, or double-clicking one in the tab (or Enter on either), reveals the
   object in Object Explorer. The tree walks its path down from the server,
   expanding each node on the way (the database, nested folders such as Programmability › Functions, a trigger's table or
