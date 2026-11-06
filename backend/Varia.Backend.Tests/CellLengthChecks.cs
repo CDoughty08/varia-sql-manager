@@ -81,7 +81,7 @@ internal static class CellLengthChecks
             && utf8Rule.Derive(Encoding.UTF8.GetBytes("a�b"), WireKind.Text) is { Exact: false, Bytes: 5 }
             && utf8Rule.Derive("aé"u8, WireKind.Text) == new CellSize(2, 3, true) && replaced && !counter.Replaced,
             "a char column without its collation, and a _UTF8 value showing U+FFFD, give estimates");
-        check(ColumnPlan.FallbackOf(CellCodec.Json, WireKind.Text, true) == CellCodec.Json && ColumnPlan.FallbackOf(CellCodec.Xml, WireKind.Text, true) == CellCodec.Xml
+        check(ColumnPlan.FallbackOf(CellCodec.Json, WireKind.Text, true) == CellCodec.Json && ColumnPlan.FallbackOf(CellCodec.Json, WireKind.Text, false) == CellCodec.Json && ColumnPlan.FallbackOf(CellCodec.Xml, WireKind.Text, true) == CellCodec.Xml
             && ColumnPlan.FallbackOf(CellCodec.Chars, WireKind.Text, true) == CellCodec.LongText,
             "json keeps its own UTF-8 reader as its fallback, since GetTextReader throws inside a multi-byte sequence");
     }
@@ -124,6 +124,20 @@ internal static class CellLengthChecks
 
     private static void Sidecar(Action<bool, string> check)
     {
+        // The row lengths array grows when the row that needs it begins, so that row's commit charges the growth.
+        var growing = new PageBuilder(1, [WireKind.Text]);
+        for (var row = 0; row < PageBuilder.FirstPageRows; row++)
+        {
+            growing.BeginRow();
+            growing.AppendNull();
+            growing.CommitRow();
+        }
+        var full = growing.WorkingBytes;
+        growing.BeginRow();
+        var grown = growing.WorkingBytes;
+        growing.AbortRow();
+        check(grown >= full + 4L * PageBuilder.FirstPageRows, "the row lengths array grows as the row that needs it begins, inside its working space: " + full + " → " + grown);
+
         var builder = new PageBuilder(1, [WireKind.Text, WireKind.Text, WireKind.Binary]);
         check(Throws(() => builder.Measure(1, 1)), "Measure needs a cell to describe");
         builder.BeginRow();
@@ -273,12 +287,32 @@ internal static class CellLengthChecks
             && live.PagesFor(0, 2)[0].Lengths.Cells is [{ Row: 0, Column: 1, Exact: false }],
             "a live table's rows count their cells as nvarchar text, and a cut cell's kept text as an estimate marked inexact");
 
+        // results.rowBytes names the rows whose sum includes an estimate: rows with an inexact entry, or every row once a
+        // column's rule is a guess (no collation).
+        var flagged = new List<long>();
+        live.RowBytes(0, 2, flagged);
+        var guessedSet = store.Open(store.BeginQuery("guess"), 0, 1, 1, "rows", [new("v", "varchar", "text")], [WireKind.Text], lengths: [ColumnLength.Assumed])!;
+        for (var row = 0; row < 3; row++)
+        {
+            guessedSet.CountRow();
+            var rowBuilder = guessedSet.BeginRow()!;
+            rowBuilder.AppendText("abc");
+            rowBuilder.Measure(3, 3);
+            guessedSet.TryCommitRow();
+        }
+        guessedSet.Complete();
+        var allGuessed = new List<long>();
+        guessedSet.RowBytes(1, 5, allGuessed);
+        check(flagged.SequenceEqual([0L]) && allGuessed.SequenceEqual([1L, 2L]) && guessedSet.CellSize(0, 0) is { Exact: false },
+            "row sizes name the rows whose sum includes an estimate: " + string.Join(",", flagged) + " / " + string.Join(",", allGuessed));
+
         var leased = set.TryLease();
         var released = store.Release(set.ResultId);
         var whileLeased = set.RowBytes(0, 10).Length;
         set.ReleaseLease();
         store.Release(cutSet.ResultId);
         store.Release(live.ResultId);
+        store.Release(guessedSet.ResultId);
         check(leased && released && whileLeased == 10 && set.RowBytes(0, 10).Length == 0 && store.UsedBytes == 0,
             "the sidecar is freed with its pages: a lease keeps both, and the last release returns every byte");
     }
@@ -300,7 +334,7 @@ internal static class CellLengthChecks
         var range = Bytes(new { resultId = set.ResultId, firstRow = 4990, count = 16_384 });
         var first = Bytes(new { resultId = set.ResultId, firstRow = 0, count = 3 });
         check(SqlService.MethodNames.Contains("results.rowBytes") && range.FirstRow == 4990 && range.RowsAvailable == 5000 && range.Bytes.SequenceEqual(Enumerable.Range(4990, 10).Select(row => Expected(row)))
-            && first.Bytes.SequenceEqual([Expected(0), Expected(1), Expected(2)]),
+            && first.Bytes.SequenceEqual([Expected(0), Expected(1), Expected(2)]) && range.Estimated.Length == 0 && first.Estimated.Length == 0,
             "results.rowBytes answers each row's bytes for a range, stopping at the rows available, and HELLO offers it");
         var codes = new[]
         {

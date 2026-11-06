@@ -45,8 +45,8 @@ export interface RowWindow {
 }
 /** One cell's whole value: `truncated` when the backend stored only a prefix (never formatted), `error` for a read error. */
 export interface CellValue { text: string; isNull: boolean; truncated: boolean; error: boolean; formatted: boolean }
-/** results.rowBytes: `bytes[k]` is row `first + k`'s size. */
-export interface RowBytes { first: number; bytes: readonly number[]; rowsAvailable: number }
+/** results.rowBytes: `bytes[k]` is row `first + k`'s size; `estimated` lists, in order, the rows whose size includes an estimate. */
+export interface RowBytes { first: number; bytes: readonly number[]; rowsAvailable: number; estimated: readonly number[] }
 export interface ResultSnapshot {
   rowsRead: number
   rowsStored: number
@@ -293,10 +293,10 @@ export class ResultClient implements Disposable {
         this.usable(state)
         // Main counts a request its schema refuses toward closing the port, so a bad range never leaves the page.
         if (!Number.isSafeInteger(first) || first < 0 || !Number.isInteger(count)) throw new ResultError('INVALID_PARAMS', 'The row range is invalid.')
-        if (count < 1) return { first, bytes: [], rowsAvailable: state.snapshot.rowsAvailable }
+        if (count < 1) return { first, bytes: [], rowsAvailable: state.snapshot.rowsAvailable, estimated: [] }
         const response = await this.request(id => ({ type: 'rowBytes', id, key: state.key, firstRow: first, count: Math.min(count, wire.rowSizes.maxRows) }), signal)
         if (response.type !== 'rowBytes') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
-        return { first: response.firstRow, bytes: response.bytes, rowsAvailable: response.rowsAvailable }
+        return { first: response.firstRow, bytes: response.bytes, rowsAvailable: response.rowsAvailable, estimated: response.estimated }
       },
       close: () => this.release([{ generation: state.key.generation, resultId: state.key.resultId }]),
       dispose: () => {

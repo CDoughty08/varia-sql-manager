@@ -242,7 +242,7 @@ internal sealed class ColumnPlan
     /// columns keep a streaming reader: GetTextReader for text, and xml and json their own (GetTextReader rejects xml, and
     /// throws on json when a read ends inside a multi-byte sequence).</summary>
     internal static CellCodec FallbackOf(CellCodec codec, WireKind wire, bool isLong) =>
-        wire == WireKind.Binary ? CellCodec.Stream : !isLong ? CellCodec.Value : codec is CellCodec.Xml or CellCodec.Json ? codec : CellCodec.LongText;
+        wire == WireKind.Binary ? CellCodec.Stream : codec == CellCodec.Json ? codec : !isLong ? CellCodec.Value : codec == CellCodec.Xml ? codec : CellCodec.LongText;
 
     /// <summary>A value the provider cannot convert; anything else (SQL errors, a closed connection, cancellation) ends the read.</summary>
     private static bool IsCellFailure(Exception error) => error is InvalidCastException or OverflowException or FormatException or ArgumentException

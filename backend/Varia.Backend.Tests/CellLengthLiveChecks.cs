@@ -31,6 +31,8 @@ internal static class CellLengthLiveChecks
         new("nt", "ntext", ["N'ab '", Emoji, "N''", "REPLICATE(CAST(N'n ' AS nvarchar(max)), 40000)"], Chars: "DATALENGTH(nt) / 2"),
         new("vb", "varbinary(max)", ["0x0102", "0x", "0x00", "CONVERT(varbinary(max), REPLICATE(CAST('a' + CHAR(0) AS varchar(max)), 20000))"], Chars: "DATALENGTH(vb)"),
         new("d", "decimal(38,4)", ["1", "123456789012.3456", "0", "-9999999999999999999999999999999999.9999"]),
+        // Precision 28 or less reads as System.Decimal (its words, with SqlClient keeping the column's scale), above as SqlDecimal.
+        new("d18", "decimal(18,4)", ["1.5", "-12345678901234.5678", "0", "429496.7296"]),
         new("i", "int", ["42", "-1", "0", "2147483647"]),
         new("b", "bit", ["1", "0", "0", "1"]),
         new("m", "smallmoney", ["1.5", "-2", "0", "214748.3647"]),
@@ -95,7 +97,7 @@ internal static class CellLengthLiveChecks
 
             var expected = cells.Select(row => row[^1].Text is { } text ? long.Parse(text, CultureInfo.InvariantCulture) : -1).ToArray();
             var answer = (ResultsRowBytesResult)await service.DispatchAsync("results.rowBytes", JsonSerializer.SerializeToElement(new { resultId = values.ResultId, firstRow = 0, count = 100 }, json), json);
-            check(answer.Bytes.SequenceEqual(expected) && answer.RowsAvailable == 5,
+            check(answer.Bytes.SequenceEqual(expected) && answer.RowsAvailable == 5 && answer.Estimated.Length == 0,
                 "results.rowBytes answers each row's sum of DATALENGTH: " + string.Join(",", answer.Bytes) + " vs " + string.Join(",", expected));
 
             var collations = string.Join(" ", values.Columns.Take(7).Select(column => column.Collation is { } c ? c.Lcid + "/" + c.SortId + "/" + c.CodePage + "/" + (c.Utf8 ? "utf8" : "-") + "/" + c.Options : "none"));

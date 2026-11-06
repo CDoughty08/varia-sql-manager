@@ -205,7 +205,7 @@ export interface ResultsRowBytesParams { resultId: number; firstRow: number; cou
 /** `bytes[k]` is row `firstRow + k`'s sum of DATALENGTH over its cells (NULL counts 0; xml and json as their
  *  text, some sql_variant base types estimated: docs/ipc.md, Cell lengths and row sizes); it stops at the rows sealed so
  *  far (`rowsAvailable`), as results.read does. */
-export interface ResultsRowBytesResult { firstRow: number; bytes: number[]; rowsAvailable: number }
+export interface ResultsRowBytesResult { firstRow: number; bytes: number[]; rowsAvailable: number; /** Rows, in order, whose sum includes an estimate. */ estimated: number[] }
 /** Inclusive row indexes; a last row of 2^53 − 1 runs to the end of the result. */
 export type RowRange = readonly [first: number, last: number]
 /** Inclusive column indexes, 0..4095. */

@@ -1141,7 +1141,7 @@ the row-size bar) read these numbers; nothing re-reads SQL Server.
 - **One helper.** `ResultSetBuffer.CellSize(row, column)` answers `(chars, bytes, exact)` for any stored cell, or null for
   NULL. A cell with a sidecar entry answers it, with the entry's own `exact`; any other is derived from its stored UTF-8
   text or bytes by the column's rule, which is exact because the cell was stored whole. `exact` is false for an estimate
-  (below) and for a truncated cell without an entry.
+  (below), for every cell of a column whose rule is a guess (no collation), and for a truncated cell without an entry.
 - **Rules per type** (`ColumnLength`, chosen once per column in `ColumnPlan`): fixed sizes for bit and tinyint (1),
   smallint (2), int, smallmoney, real, smalldatetime (4), bigint, money, float, datetime (8), date (3), time (3–5),
   datetime2 (6–8), datetimeoffset (8–10) and uniqueidentifier (16), the fractional-second part by scale as SQL Server
@@ -1169,22 +1169,27 @@ the row-size bar) read these numbers; nothing re-reads SQL Server.
   every cell reported as an estimate; the live checks fail first.
 - **Storage.** Beside each sealed page, `PageLengths` holds a `uint32` per row (the sum of its cells' bytes; NULL counts
   0), a sorted sparse list of 24-byte `(row, column, chars, bytes)` entries for the cells whose stored text does not give
-  their length (truncated cells, every xml, vector and sql_variant cell, and estimates; an estimate is marked in the column's sign
-  bit), and a list of 16-byte `(row, bytes)` entries for rows
-  of 4 GiB or more, whose `uint32` holds `uint.MaxValue`: row sizes are always exact (a row of several `max` values can
-  pass 4 GiB), though a row's sum includes any estimate among its cells. The page builder's open row keeps its entries
-  until `CommitRow`; a rolled-back row leaves none.
+  their length (truncated cells, every xml, vector and sql_variant cell, and estimates; an estimate is marked in the
+  column's sign bit), and a list of 16-byte `(row, bytes)` entries for rows of 4 GiB or more, whose `uint32` holds
+  `uint.MaxValue`, so a sum never overflows (a row of several `max` values can pass 4 GiB). A row's sum is exact unless
+  one of its cells is an estimate, or a column's rule is a guess; `results.rowBytes` names those rows. The page
+  builder's open row keeps its entries until `CommitRow`, and a rolled-back row leaves none; the row-sizes array grows
+  when the row that needs it begins, so that row's commit charges the growth.
 - **Memory.** 4 bytes a row, 24 per entry, and 96 a page, charged to the result budget
   with the page (a page's cost is its length + 96 + its lengths' size) and freed with it; the open page's lengths count in
   the builder's working space.
 - **Reading.** `results.rowBytes { resultId, firstRow, count: 1..16,384 }` answers `{ firstRow, bytes: number[],
-  rowsAvailable }` for sealed rows only; fewer than `count` past `rowsAvailable` (none for a range past it). Main
-  forwards it only for a result the renderer owns in the current, ready generation (else `RESULT_UNAVAILABLE`), and only
-  an answer that passes `rowBytesResultSchema`, starts at `firstRow` and has at most `count` rows and no more than `rowsAvailable - firstRow` (else `BACKEND_ERROR`).
+  rowsAvailable, estimated: number[] }` for sealed rows only; fewer than `count` past `rowsAvailable` (none for a range
+  past it). `estimated` lists, in increasing order, the rows of the range whose sum includes an estimate. Main forwards
+  it only for a result the renderer owns in the current, ready generation (else `RESULT_UNAVAILABLE`), and only an
+  answer that passes `rowBytesResultSchema`, starts at `firstRow`, has at most `count` rows and no more than
+  `rowsAvailable - firstRow`, and lists estimated rows in order within them (else `BACKEND_ERROR`).
   `ResultHandle.rowBytes(first, count, signal)` answers an empty range itself and refuses a malformed one
   (`INVALID_PARAMS`) without sending it, since main closes the port after 100 invalid messages.
-- **Not measured exactly.** FOR XML and FOR JSON values count their joined text as nvarchar. Live tables count text as
-  nvarchar, and a cut cell, whose full text the probe never had, counts its kept text as an estimate. Without
+- **What SQL Server sent.** FOR XML and FOR JSON values count their joined text as nvarchar, which is how SQL Server
+  sends them; there is no stored value whose DATALENGTH could differ. json counts the UTF-8 bytes read, exact whatever
+  they hold (U+FFFD included).
+- **Not measured exactly.** Live tables count text as nvarchar, and a cut cell, whose full text the probe never had, counts its kept text as an estimate. Without
   `SequentialXml`'s internals, an xml cell counts its display text as an estimate. A value read through a column's
   fallback reader (after a typed read failed) counts as text: exact for character types, an estimate for decimal, vector
   and recorded types. A _UTF8 value holding bytes that are not UTF-8 arrives with U+FFFD (3 bytes) in their place, so a

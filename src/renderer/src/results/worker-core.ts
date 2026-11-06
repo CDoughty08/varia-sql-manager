@@ -511,7 +511,7 @@ export class ResultsWorkerCore {
     if (sizes !== undefined) {
       this.sizes.delete(rid)
       const rows = result as ResultsRowBytesResult
-      this.post({ type: 'rowBytes', id: sizes, firstRow: rows.firstRow, bytes: rows.bytes, rowsAvailable: rows.rowsAvailable })
+      this.post({ type: 'rowBytes', id: sizes, firstRow: rows.firstRow, bytes: rows.bytes, rowsAvailable: rows.rowsAvailable, estimated: rows.estimated })
       return
     }
     const close = this.closes.get(rid)

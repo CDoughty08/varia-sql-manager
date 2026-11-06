@@ -279,14 +279,21 @@ internal sealed class ResultSetBuffer
 
     /// <summary>The bytes (sum of DATALENGTH) of up to <paramref name="count"/> rows from <paramref name="firstRow"/>, as far
     /// as sealed pages hold them; fewer, or none, past the rows available.</summary>
-    public long[] RowBytes(long firstRow, int count)
+    public long[] RowBytes(long firstRow, int count, List<long>? estimated = null)
     {
         var result = new List<long>(Math.Min(count, 4096));
+        // A column whose rule is a guess (no collation) makes every row's sum an estimate.
+        var guessed = estimated is not null && Lengths.Any(length => length.Estimated);
         foreach (var page in PagesFor(firstRow, count))
         {
             var from = (int)Math.Max(0, firstRow + result.Count - page.FirstRow);
             if (page.FirstRow + from != firstRow + result.Count) break;
+            var start = result.Count;
             for (var row = from; row < page.Rows && result.Count < count; row++) result.Add(page.Lengths.RowBytes(row));
+            if (estimated is null) continue;
+            var to = from + result.Count - start;
+            if (guessed) for (var row = from; row < to; row++) estimated.Add(page.FirstRow + row);
+            else page.Lengths.EstimatedRows(from, to, row => estimated.Add(page.FirstRow + row));
         }
         return [.. result];
     }
