@@ -49,8 +49,10 @@ export const rowBytesResultSchema = z.object({ firstRow: count, bytes: z.array(c
 export type PortEndResult = ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | LiveEnd | LiveUpdateResult
 
 const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'server', 'print', 'error']) }).strict()
+const session = { spid: z.number().int().min(0).max(32767), login: z.string().max(128).optional() }
 /** EVENT bodies for a query.execute request. */
 export const queryEventSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('session.opened'), ...session }).strict(),
   z.object({ type: z.literal('resultSet.opened'), descriptor: backendDescriptorSchema }).strict(),
   z.object({ type: z.literal('resultSet.closed'), descriptor: backendDescriptorSchema }).strict(),
   z.object({
@@ -69,7 +71,7 @@ export const queryResultSchema = z.object({
   completedBatches: count, totalBatches: count, database: z.string().max(256), messagesTruncated: z.boolean(),
   budget: z.object({ usedBytes: count, globalBytes: count, queryBytes: count, seq: count }).strict(), completedAt: z.string().max(40),
   // The session's @@SPID (a smallint) and SUSER_SNAME(), read when it opened.
-  spid: z.number().int().min(0).max(32767).optional(), login: z.string().max(128).optional()
+  ...session, spid: session.spid.optional()
 }).strict()
 /** EVENT bodies for a results.copy or results.export request; droppable, the latest wins. */
 export const jobProgressSchema = z.object({ type: z.literal('job.progress'), rowsDone: count, rowsTotal: count, bytes: count }).strict()

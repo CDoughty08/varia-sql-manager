@@ -636,7 +636,7 @@ export const commandCatalog = {
     unavailableHint: 'There are no notifications.'
   },
   // No key: Ctrl+R and ⌘R toggle the results pane, as in SSMS.
-  'developer.reloadWindow': { title: 'Reload Window', category: 'Developer', role: 'reload', menus: [{ menu: 'view', group: 'z_developer', order: 1, mnemonic: 'e' }] },
+  'developer.reloadWindow': { title: 'Reload Window', category: 'Developer', menus: [{ menu: 'view', group: 'z_developer', order: 1, mnemonic: 'e' }] },
   'developer.toggleDevTools': {
     title: 'Toggle Developer Tools', category: 'Developer', icon: 'tools', role: 'toggleDevTools', keybindings: [{ win: 'ctrl+shift+i', linux: 'ctrl+shift+i', mac: 'alt+meta+i', native: true }],
     menus: [{ menu: 'view', group: 'z_developer', order: 2, mnemonic: 'd' }]

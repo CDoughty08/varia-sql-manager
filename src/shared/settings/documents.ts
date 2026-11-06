@@ -28,7 +28,7 @@ export const documentSettings = [
   {
     key: 'environment.documents.hotExit', page: 'environment.documents', label: 'Restore open queries on startup', type: 'boolean', default: true,
     keywords: ['hot exit', 'restore', 'reopen', 'session', 'tabs', 'unsaved', 'quit', 'exit', 'startup'],
-    description: 'Closing Varia SQL Manager keeps every open query, its text (unsaved changes too), its tab name and the tab order in your profile folder, readable only by you, without asking to save, and the next start reopens them, disconnected. Results, connections and passwords are never kept. While it is False, closing asks about each query with unsaved changes. Not in SSMS; VS Code calls it hot exit.'
+    description: 'Closing Varia SQL Manager keeps open queries, including unsaved text, tab names and tab order, in your profile folder. The next start reopens them disconnected. While it is False, only pinned tabs reopen, and closing asks about unsaved changes in unpinned queries. Results, connections and passwords are never kept.'
   },
   {
     key: 'environment.documents.detectExternalChanges', page: 'environment.documents', label: 'Detect when file is changed outside the environment', type: 'boolean', default: true,

@@ -39,7 +39,8 @@ export class PlanCanvas {
   private visible = true
   private width = 1
   private height = 1
-  private drag?: { id: number; x: number; y: number; moved: boolean }
+  private readonly pointers = new Map<number, { x: number; y: number; type: string }>()
+  private dragMoved = false
   private hovered?: PlacedNode
   private hoverDelay?: ReturnType<typeof setTimeout>
   private hoverExit?: ReturnType<typeof setTimeout>
@@ -147,33 +148,47 @@ export class PlanCanvas {
   }
   private down = (event: PointerEvent) => {
     if (event.button !== 0 && event.button !== 1) return
+    const first = this.pointers.values().next().value
+    if (this.pointers.size === 2 || first && (first.type !== 'touch' || event.pointerType !== 'touch')) return
     event.preventDefault()
     this.dismissHover()
-    this.options.root.focus({ preventScroll: true })
-    this.drag = { id: event.pointerId, x: event.clientX, y: event.clientY, moved: false }
+    if (!first) this.options.root.focus({ preventScroll: true })
+    this.dragMoved = !!first
+    this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, type: event.pointerType })
     this.options.root.setPointerCapture(event.pointerId)
   }
   private move = (event: PointerEvent) => {
-    if (!this.drag) {
-      if (this.ready && this.visible && !event.buttons && event.pointerType !== 'touch') this.hoverNode(this.hit(event))
+    const pointer = this.pointers.get(event.pointerId)
+    if (!pointer) {
+      if (!this.pointers.size && this.ready && this.visible && !event.buttons && event.pointerType !== 'touch') this.hoverNode(this.hit(event))
       return
     }
-    if (this.drag.id !== event.pointerId) return
-    const dx = event.clientX - this.drag.x, dy = event.clientY - this.drag.y
-    if (Math.abs(dx) + Math.abs(dy) > 2) this.drag.moved = true
-    if (this.drag.moved) this.setCamera({ ...this.camera, x: this.camera.x + dx, y: this.camera.y + dy })
-    this.drag.x = event.clientX; this.drag.y = event.clientY
+    const x = event.clientX, y = event.clientY
+    const dx = x - pointer.x, dy = y - pointer.y
+    if (this.pointers.size === 2) {
+      const [first, second] = this.pointers.values()
+      const other = first === pointer ? second : first
+      const bounds = this.options.root.getBoundingClientRect()
+      const before = Math.max(1, Math.hypot(pointer.x - other.x, pointer.y - other.y))
+      const after = Math.max(1, Math.hypot(x - other.x, y - other.y))
+      // Keep the world point under the fingers' midpoint as the gesture pans and scales.
+      const camera = zoomAt(this.camera, (pointer.x + other.x) / 2 - bounds.left, (pointer.y + other.y) / 2 - bounds.top, after / before)
+      this.setCamera({ ...camera, x: camera.x + dx / 2, y: camera.y + dy / 2 })
+    } else {
+      if (Math.abs(dx) + Math.abs(dy) > 2) this.dragMoved = true
+      if (this.dragMoved) this.setCamera({ ...this.camera, x: this.camera.x + dx, y: this.camera.y + dy })
+    }
+    pointer.x = x
+    pointer.y = y
   }
   private up = (event: PointerEvent) => {
-    if (!this.drag || this.drag.id !== event.pointerId) return
-    const moved = this.drag.moved
-    this.drag = undefined
+    if (!this.pointers.delete(event.pointerId)) return
     if (this.options.root.hasPointerCapture(event.pointerId)) this.options.root.releasePointerCapture(event.pointerId)
-    if (moved) return
+    if (this.dragMoved) return
     const node = this.hit(event)
     if (node) this.options.select(node.id)
   }
-  private cancelDrag = () => { this.drag = undefined }
+  private cancelDrag = (event: PointerEvent) => { this.pointers.delete(event.pointerId) }
   private hit(event: PointerEvent): PlacedNode | undefined {
     const rect = this.options.root.getBoundingClientRect()
     const x = (event.clientX - rect.left - this.camera.x) / this.camera.scale

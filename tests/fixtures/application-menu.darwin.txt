@@ -100,7 +100,7 @@
   {"accelerator":"Cmd+0","id":"view.resetZoom","label":"Reset Zoom","role":"resetZoom"}
   {"accelerator":"Cmd+Ctrl+F","id":"view.toggleFullScreen","label":"Full Screen","role":"togglefullscreen"}
   {"type":"separator"}
-  {"accelerator":"","id":"developer.reloadWindow","label":"Reload Window","role":"reload"}
+  {"id":"developer.reloadWindow","label":"Reload Window","registerAccelerator":false,"type":"normal","click":[["command","developer.reloadWindow"]]}
   {"accelerator":"Cmd+Alt+I","id":"developer.toggleDevTools","label":"Toggle Developer Tools","role":"toggleDevTools"}
 {"id":"menu.query","label":"Query"}
   {"id":"query.connection","label":"Connection"}

@@ -160,6 +160,16 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     this.replace(id, { name, baseName: base })
     return true
   }
+  /** Moves a text tab to the boundary between the shelves, keeping the rest in their current order. */
+  setPinned(id: string, pinned: boolean): boolean {
+    const current = this.getSnapshot(), document = this.get(id)
+    if (!document || !this.entries.has(id) || this.disposed || (pinned && this.isFilling(id)) || !!document.pinned === pinned) return false
+    const documents = current.documents.filter(tab => tab.id !== id)
+    const firstUnpinned = documents.findIndex(tab => !tab.pinned)
+    documents.splice(firstUnpinned < 0 ? documents.length : firstUnpinned, 0, { ...document, pinned })
+    this.changed({ ...current, documents })
+    return true
+  }
   newQuery(sql = '', name?: string, connectionId = this.active?.connectionId, database = this.active?.database || 'master', unsaved = false): QueryDocument {
     return this.create(name ?? `SQLQuery${++this.queryCounter}.sql`, sql, database, connectionId, unsaved)
   }
@@ -195,7 +205,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     const kind = o.kind === 'sql' ? undefined : o.kind
     const number = /^SQLQuery(\d+)\.sql$/i.exec(o.baseName ?? o.name)?.[1]
     if (number && Number(number) < 1_000_000) this.queryCounter = Math.max(this.queryCounter, Number(number))
-    const extra = { ...o.baseName ? { baseName: o.baseName } : {}, ...!kind && o.server ? { lastServer: o.server } : {} }
+    const extra = { ...o.baseName ? { baseName: o.baseName } : {}, ...!kind && o.server ? { lastServer: o.server } : {}, ...o.pinned ? { pinned: true } : {} }
     const document = this.add(o.name, o.text, kind ? '' : o.database || 'master', undefined, o.dirty, o.file, kind, !!kind && o.text.length > gridLimits.documentBracketChars, o.eol, extra)
     // A file whose text was all deleted is still a change to save.
     if (o.dirty && !o.text && o.file) this.markUnsaved(document.id)
@@ -204,7 +214,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   /** Whether a large value is still being appended to the document: its text is not all there yet. */
   isFilling(id: string): boolean { return !!this.entries.get(id)?.fill }
   private add(name: string, text: string, database: string, connectionId: string | undefined, unsaved: boolean, file: QueryDocument['file'], kind?: Exclude<DocumentKind, 'sql'>, plain = false, eol?: LineEnding,
-    extra: Pick<QueryDocument, 'baseName' | 'lastServer'> = {}): QueryDocument {
+    extra: Pick<QueryDocument, 'baseName' | 'lastServer' | 'pinned'> = {}): QueryDocument {
     if (this.disposed) throw new Error('The document service is disposed.')
     const id = crypto.randomUUID()
     const model = this.createModel(text, documentUri(id), kindInfo[kind ?? 'sql'].language)
@@ -222,7 +232,10 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
       if (dirty !== current.dirty) this.replace(id, { dirty })
     })
     this.entries.set(id, { model, subscription, plain })
-    this.changed({ ...this.getSnapshot(), documents: [...this.getSnapshot().documents, document] })
+    const current = this.getSnapshot(), documents = [...current.documents]
+    const firstUnpinned = document.pinned ? documents.findIndex(tab => !tab.pinned) : -1
+    documents.splice(firstUnpinned < 0 ? documents.length : firstUnpinned, 0, document)
+    this.changed({ ...current, documents })
     this.activate(id)
     return document
   }
@@ -273,14 +286,14 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     this.events.emit({ type: 'documents.activated', tabId: id })
   }
   /**
-   * Moves a tab to `index` in the strip (clamped to its ends), as dragging it or Move Left/Right does; the order is what
+   * Moves a tab to `index` in its shelf (clamped to the strip's ends), as dragging it or Move Left/Right does; the order is what
    * Next and Previous Query follow. Returns whether anything moved.
    */
   move(id: string, index: number): boolean {
     const current = this.getSnapshot(), from = current.documents.findIndex(document => document.id === id)
     if (from < 0 || this.disposed || !Number.isFinite(index)) return false
     const to = Math.min(current.documents.length - 1, Math.max(0, Math.trunc(index)))
-    if (to === from) return false
+    if (to === from || !!current.documents[to].pinned !== !!current.documents[from].pinned) return false
     const documents = current.documents.filter(document => document.id !== id)
     documents.splice(to, 0, current.documents[from])
     this.changed({ ...current, documents })

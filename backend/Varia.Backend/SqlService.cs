@@ -1036,6 +1036,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                 }
                 session.HasOpened = true;
             }
+            if (session.Spid is { } openedSpid) events.SessionOpened(openedSpid, session.Login);
             // ChangeDatabase must still throw for a missing database, so user errors become events only for script batches.
             if (!string.Equals(connection.Database, args.Database, StringComparison.Ordinal))
                 await connection.ChangeDatabaseAsync(args.Database, token);

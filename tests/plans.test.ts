@@ -29,8 +29,8 @@ describe('execution plans', () => {
     const sources = ['first', 'broken', 'last'].map(key => ({ key, label: key, read: async () => key }))
     const result = await loadPlanSources(sources, async xml => xml === 'broken' ? { ok: false, error: 'Truncated plan.' } : { ok: true, value: document }, new AbortController().signal)
     expect(result.statements).toHaveLength(2)
-    expect(result.statements.map(entry => entry.nodes[0].id)).toEqual(['0:root', '2:root'])
-    expect(result.statements[1].nodes[1].parentId).toBe('2:root')
+    expect(result.statements.map(entry => entry.nodes[0].id)).toEqual(['first:root', 'last:root'])
+    expect(result.statements[1].nodes[1].parentId).toBe('last:root')
     expect(result.notices[0]).toContain('broken: Truncated plan.')
   })
   it('stops loading after cancellation and reports a single invalid source without a misleading graph', async () => {
@@ -39,16 +39,16 @@ describe('execution plans', () => {
     await expect(loadPlanSources([{ key: 'x', label: 'x', read: async () => '' }], async () => { throw new Error('Must not parse') }, controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
     await expect(loadPlanSources([{ key: 'x', label: 'x', read: async () => '' }], async () => ({ ok: false, error: 'Invalid XML' }), new AbortController().signal)).rejects.toThrow('Invalid XML')
   })
-  it('graphs the first 64 documents and preserves the source index for opening XML', async () => {
+  it('graphs the first 64 documents and preserves their source keys for opening XML', async () => {
     const read: number[] = []
     const sources = Array.from({ length: maxQueryPlanDocuments + 2 }, (_, index) => ({
-      key: String(index), label: String(index), read: async () => { read.push(index); return String(index) }
+      key: `plan-${index}`, label: String(index), read: async () => { read.push(index); return String(index) }
     }))
     const document = { version: '', build: '', notices: [], statements: [statement('s', [node('root')])] }
     const result = await loadPlanSources(sources, async () => ({ ok: true, value: document }), new AbortController().signal)
     expect(read).toEqual(Array.from({ length: maxQueryPlanDocuments }, (_, index) => index))
     expect(result.statements).toHaveLength(maxQueryPlanDocuments)
-    expect(result.statements.at(-1)?.id).toBe('63:s')
+    expect(result.statements.at(-1)).toMatchObject({ id: 'plan-63:s', sourceKey: 'plan-63' })
     expect(result.notices[0]).toContain('Choose an XML source to open any retained plan.')
   })
   it('allows large plans to save and recover while retaining ordinary SQL document limits', () => {

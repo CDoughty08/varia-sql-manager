@@ -1,6 +1,5 @@
-import type { ApiResult } from '../../../shared/contracts'
+import type { ApiResult, ResultDescriptor } from '../../../shared/contracts'
 import { maxQueryPlanDocuments, planLimits, type PlanDocument, type PlanStatement } from '../../../shared/plans'
-import type { ResultDescriptor } from '../../../shared/contracts'
 
 /** Order both sources by batch and GO repetition, then by observer position wherever SQL matched the same execution. */
 export function orderPlanEntries<T extends { descriptor: Pick<ResultDescriptor, 'batchNumber' | 'iteration' | 'resultId'> }>(entries: readonly T[], order?: readonly number[]): T[] {
@@ -10,14 +9,15 @@ export function orderPlanEntries<T extends { descriptor: Pick<ResultDescriptor, 
     || a.iteration - b.iteration || (rank.get(a.resultId) ?? last) - (rank.get(b.resultId) ?? last))
 }
 
-export interface PlanSource { key: string; label: string; read(signal: AbortSignal): Promise<string> }
+export interface PlanSource { key: string; revision?: number; label: string; batchLabel?: string; read(signal: AbortSignal): Promise<string> }
+export type SourceStatement = PlanStatement & { sourceKey: string; batchLabel?: string }
 /** Treat a failed/truncated source separately so an earlier valid plan in the same run remains usable. */
-export async function loadPlanSources(sources: readonly PlanSource[], parse: (xml: string) => Promise<ApiResult<PlanDocument>>, signal: AbortSignal): Promise<{ statements: PlanStatement[]; notices: string[] }> {
-  const statements: PlanStatement[] = [], notices: string[] = [], errors: string[] = []
+export async function loadPlanSources(sources: readonly PlanSource[], parse: (xml: string) => Promise<ApiResult<PlanDocument>>, signal: AbortSignal): Promise<{ statements: SourceStatement[]; notices: string[] }> {
+  const statements: SourceStatement[] = [], notices: string[] = [], errors: string[] = []
   if (sources.length > maxQueryPlanDocuments)
     notices.push(`The canvas shows up to ${maxQueryPlanDocuments} plan documents. Choose an XML source to open any retained plan.`)
   let operators = 0, characters = 0
-  for (const [sourceIndex, source] of sources.slice(0, maxQueryPlanDocuments).entries()) {
+  for (const source of sources.slice(0, maxQueryPlanDocuments)) {
     try {
       signal.throwIfAborted()
       const xml = await source.read(signal)
@@ -32,8 +32,9 @@ export async function loadPlanSources(sources: readonly PlanSource[], parse: (xm
         throw new Error('The combined operator or statement limit was exceeded.')
       operators += count
       for (const entry of result.value.statements) {
-        const prefix = sourceIndex + ':'
-        statements.push({ ...entry, id: prefix + entry.id, nodes: entry.nodes.map(node => ({ ...node, id: prefix + node.id, parentId: node.parentId ? prefix + node.parentId : null })) })
+        const prefix = source.key + ':'
+        statements.push({ ...entry, sourceKey: source.key, batchLabel: source.batchLabel, id: prefix + entry.id,
+          nodes: entry.nodes.map(node => ({ ...node, id: prefix + node.id, parentId: node.parentId ? prefix + node.parentId : null })) })
       }
       for (const notice of result.value.notices) if (!notices.includes(notice) && notices.length < 7) notices.push(notice)
     } catch (error) {

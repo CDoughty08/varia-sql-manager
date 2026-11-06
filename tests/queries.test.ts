@@ -3,6 +3,7 @@ import type { ApiResult, ConnectionInfo, QueryResult, VariaApi } from '../src/sh
 import { cancelSettleMs, lostSessionMessage, newSessionMessage, QueryService, sessionRequests, stateBudgetMs, type QueryApi } from '../src/renderer/src/services/queries'
 import { CommandService } from '../src/renderer/src/core/commands'
 import type { WorkbenchEvent } from '../src/renderer/src/core/types'
+import type { ResultsService } from '../src/renderer/src/results/ResultsService'
 import { EventBus } from '../src/renderer/src/core/events'
 import { deferred, documentFixture } from './fixtures/documents'
 import { defaultSettings, type SettingsValues } from '../src/shared/settings/catalog'
@@ -26,7 +27,7 @@ function fixture(commandTimeout?: number, wait?: (ms: number) => Promise<void>, 
     querySessionState: vi.fn<VariaApi['querySessionState']>(async () => ({ ok: false, error: 'This query has no open SQL session.', code: 'SESSION_CLOSED' }))
   }
   const calls: string[] = []
-  const results = { begin: vi.fn((tabId: string, _queryId: string) => { calls.push('begin ' + tabId) }), finish: vi.fn() }
+  const results = { begin: vi.fn<ResultsService['begin']>(tabId => { calls.push('begin ' + tabId) }), finish: vi.fn() }
   api.execute.mockImplementation(async () => { calls.push('execute'); return { ok: true, value: output() } })
   const queries = new QueryService(docs.documents, api, id => id === connection.id ? connection : undefined, docs.events, results, () => 1000, wait, () => ({ ...defaultSettings, ...settings }))
   const tab = docs.documents.create('query.sql', 'SELECT 1', 'master', connection.id)
@@ -219,6 +220,20 @@ describe('query orchestration', () => {
     expect(queryApi.querySessionState).not.toHaveBeenCalled()
     documents.update(tab.id, { connectionId: 'server-a' })
     expect(queryApi.querySessionState).not.toHaveBeenCalled()
+  })
+  it('shows a first run\'s SID immediately and ignores its late event after the summary closed the session', async () => {
+    const { queries, queryApi, tab, results } = fixture()
+    const pending = deferred<ApiResult<QueryResult>>()
+    queryApi.execute.mockReturnValueOnce(pending.promise)
+    const running = queries.execute()
+    const opened = results.begin.mock.calls[0][2]!
+    const event = { type: 'session.opened', spid: 51, login: 'reader' } as const
+    opened(event)
+    expect(queries.getSnapshot()[tab.id]).toMatchObject({ running: expect.any(Object), session: { connectionId: 'server-a', spid: 51, login: 'reader' } })
+    pending.resolve({ ok: true, value: output({ status: 'failed' }) })
+    await running
+    opened(event)
+    expect(queries.getSnapshot()[tab.id].session).toBeUndefined()
   })
   it('reads an idle session\'s transaction on demand, and treats what it cannot read as one that may be open', async () => {
     const { queries, queryApi, tab, documents, connection } = fixture()

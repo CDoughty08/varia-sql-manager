@@ -5,11 +5,12 @@ import { observeResize } from '../core/windows'
 import EmptyState from '../kit/EmptyState'
 import type { CanvasColors, HoveredOperator, PlanCanvas } from './PlanCanvas'
 import type { Camera, PlanLayout } from './geometry'
-import { loadPlanSources, type PlanSource } from './sources'
+import { loadPlanSources, type PlanSource, type SourceStatement } from './sources'
 import { formatPlanMetric as amount, PlanHoverCard } from './PlanHoverCard'
 
-interface Content { statements: PlanStatement[]; notices: string[]; layout?: PlanLayout; error?: string; empty?: boolean }
-interface SavedView { camera?: Camera; selected: string; statement: number; query: string }
+interface Content { statements: SourceStatement[]; notices: string[]; layout?: PlanLayout; error?: string; empty?: boolean }
+type StatementSelection = Pick<SourceStatement, 'id' | 'sourceKey'>
+interface SavedView { camera?: Camera; selected: string; statement?: StatementSelection; xmlSource?: string; query: string }
 const views = new Map<string, SavedView>()
 const message = (error: unknown) => error instanceof Error ? error.message : 'The execution plan could not be opened.'
 
@@ -20,14 +21,14 @@ export function findOperators(statements: readonly PlanStatement[], query: strin
 }
 
 /** One shared world, a virtual operator outline and a text inspector. No statement owns a nested graph scroller. */
-export default function PlanViewer({ sources, identity, openDocument }: { sources: readonly PlanSource[]; identity: string; openDocument?(source: number): void }) {
+export default function PlanViewer({ sources, identity, openDocument }: { sources: readonly PlanSource[]; identity: string; openDocument?(sourceKey: string): void }) {
   const { theme } = useWorkbench()
   const colors = useServiceSnapshot(theme).active.colors
   const [content, setContent] = useState<Content>({ statements: [], notices: [] })
   const saved = views.get(identity)
   const [selected, setSelected] = useState(saved?.selected ?? '')
-  const [statement, setStatement] = useState(saved?.statement ?? 0)
-  const [xmlSource, setXmlSource] = useState<number>()
+  const [statement, setStatement] = useState(saved?.statement)
+  const [xmlSource, setXmlSource] = useState(saved?.xmlSource)
   const [query, setQuery] = useState(saved?.query ?? '')
   const [warningsOnly, setWarningsOnly] = useState(false)
   const [outline, setOutline] = useState(true)
@@ -40,11 +41,11 @@ export default function PlanViewer({ sources, identity, openDocument }: { source
   const [scroll, setScroll] = useState(0), [height, setHeight] = useState(400)
   const camera = useRef<Camera | undefined>(saved?.camera)
   const selection = useRef<(id: string) => void>(() => {})
-  const latest = useRef({ selected, statement, query })
-  latest.current = { selected, statement, query }
+  const latest = useRef({ selected, statement, xmlSource, query })
+  latest.current = { selected, statement, xmlSource, query }
   const sourceRef = useRef(sources)
   sourceRef.current = sources
-  const sourceKey = sources.map(source => source.key).join('|')
+  const sourceKey = useMemo(() => JSON.stringify(sources.map(({ key, revision }) => [key, revision])), [sources])
   const labelId = useId()
   useEffect(() => () => {
     views.delete(identity)
@@ -102,18 +103,21 @@ export default function PlanViewer({ sources, identity, openDocument }: { source
     return () => observer.dispose()
   }, [outline, content.statements])
   const matches = useMemo(() => findOperators(content.statements, query, warningsOnly), [content.statements, query, warningsOnly])
-  const shown = useMemo(() => query.trim() || warningsOnly ? matches : matches.filter(match => match.statement === statement), [matches, query, warningsOnly, statement])
   const allNodes = useMemo(() => new Map(content.statements.flatMap((entry, s) => entry.nodes.map(node => [node.id, { node, statement: s }] as const))), [content.statements])
   const hoveredNode = !gpuFailed && content.layout && hovered ? allNodes.get(hovered.id)?.node : undefined
   const selectedMatch = allNodes.get(selected)
   const selectedNode = selectedMatch?.node
-  const activeStatement = selectedMatch?.statement ?? Math.min(statement, Math.max(0, content.statements.length - 1))
+  const activeStatement = selectedMatch?.statement ?? Math.max(0, content.statements.findIndex(entry => entry.id === statement?.id))
   const current = content.statements[activeStatement]
+  const shown = useMemo(() => query.trim() || warningsOnly ? matches : matches.filter(match => match.statement === activeStatement), [matches, query, warningsOnly, activeStatement])
   const rowHeight = 32, first = Math.max(0, Math.floor(scroll / rowHeight) - 3), last = Math.min(shown.length, Math.ceil((scroll + height) / rowHeight) + 3)
   const choose = (id: string) => {
     setSelected(id)
     const match = allNodes.get(id)
-    if (match) setStatement(match.statement)
+    if (match) {
+      const { id, sourceKey } = content.statements[match.statement]
+      setStatement({ id, sourceKey })
+    }
     const index = shown.findIndex(match => match.node.id === id)
     const element = tree.current
     if (element && index >= 0) {
@@ -135,8 +139,18 @@ export default function PlanViewer({ sources, identity, openDocument }: { source
     else if (event.key === 'ArrowRight') next = shown.find(match => match.node.parentId === shown[at].node.id)?.node.id
     if (next && shown.some(match => match.node.id === next)) { event.preventDefault(); choose(next) }
   }
-  const selectStatement = (index: number) => { setStatement(index); setXmlSource(undefined); setSelected(''); setScroll(0); if (tree.current) tree.current.scrollTop = 0; canvas.current?.fit(index) }
-  const sourceIndex = xmlSource !== undefined && xmlSource < sources.length ? xmlSource : Number(current?.id.split(':')[0] ?? 0)
+  const selectStatement = (id: string) => {
+    const index = content.statements.findIndex(entry => entry.id === id)
+    if (index < 0) return
+    setStatement({ id, sourceKey: content.statements[index].sourceKey })
+    setXmlSource(undefined)
+    setSelected('')
+    setScroll(0)
+    if (tree.current) tree.current.scrollTop = 0
+    canvas.current?.fit(index)
+  }
+  const preferredSource = xmlSource ?? statement?.sourceKey ?? current?.sourceKey ?? sources[0]?.key
+  const selectedSource = sources.find(source => source.key === preferredSource)
   const warnings = useMemo(() => [...allNodes.values()].filter(({ node }) => node.warnings.length).length, [allNodes])
   return <section className="plan-viewer" aria-label="Execution plan viewer" onKeyDownCapture={event => {
     if (event.key !== 'Escape' || !hovered) return
@@ -147,14 +161,15 @@ export default function PlanViewer({ sources, identity, openDocument }: { source
     <div className="plan-tools" role="toolbar" aria-label="Plan navigation">
       <button type="button" aria-pressed={outline} onClick={() => setOutline(!outline)}>Outline</button>
       <button type="button" aria-pressed={inspector} onClick={() => setInspector(!inspector)}>Properties</button>
-      {openDocument && sources.length > 1 && <label>XML source <select aria-label="Plan XML source" value={sourceIndex} onChange={event => setXmlSource(Number(event.target.value))}>
-        {sources.map((source, index) => <option key={source.key} value={index}>{source.label}</option>)}
+      {openDocument && (sources.length > 1 || !selectedSource && sources.length > 0) && <label>XML source <select aria-label="Plan XML source" value={selectedSource?.key ?? ''} onChange={event => setXmlSource(event.target.value)}>
+        {!selectedSource && <option value="" disabled>Selected plan is unavailable</option>}
+        {sources.map(source => <option key={source.key} value={source.key}>{source.label}</option>)}
       </select></label>}
-      {openDocument && <button type="button" onClick={() => openDocument(sourceIndex)} disabled={!sources.length}>Open plan document</button>}
-      <label>Statement <select aria-label="Plan statement" value={Math.min(statement, Math.max(0, content.statements.length - 1))} onChange={event => selectStatement(Number(event.target.value))} disabled={!content.statements.length}>
-        {content.statements.map((entry, index) => <option key={entry.id} value={index}>{index + 1}. {entry.text.slice(0, 72) || entry.type}</option>)}
+      {openDocument && <button type="button" onClick={() => { if (selectedSource) openDocument(selectedSource.key) }} disabled={!selectedSource}>Open plan document</button>}
+      <label>Statement <select aria-label="Plan statement" value={current?.id ?? ''} onChange={event => selectStatement(event.target.value)} disabled={!content.statements.length}>
+        {content.statements.map((entry, index) => <option key={entry.id} value={entry.id}>{index + 1}. {entry.text.trim().slice(0, 72) || [entry.type || 'Statement', entry.batchLabel].filter(Boolean).join(' · ')}</option>)}
       </select></label>
-      <button type="button" onClick={() => canvas.current?.fit(statement)} disabled={!content.layout}>Fit statement</button>
+      <button type="button" onClick={() => canvas.current?.fit(activeStatement)} disabled={!content.layout}>Fit statement</button>
       <button type="button" onClick={() => canvas.current?.fit()} disabled={!content.layout}>Fit batch</button>
       <button type="button" aria-label="Zoom out plan" onClick={() => canvas.current?.zoom(1 / 1.2)} disabled={!content.layout}>Zoom out</button>
       <button type="button" aria-label="Reset plan zoom to 100%" onClick={() => canvas.current?.actualSize()} disabled={!content.layout}>{(zoom * 100).toLocaleString(undefined, { maximumFractionDigits: zoom < 0.01 ? 3 : 0 })}%</button>
@@ -169,9 +184,9 @@ export default function PlanViewer({ sources, identity, openDocument }: { source
         <div className="plan-outline-summary" role="status">{shown.length} {query.trim() || warningsOnly ? 'matching' : ''} operators</div>
         <div className="plan-operator-tree" ref={tree} role="tree" aria-label="Plan operators" tabIndex={0} onKeyDown={navigate} onScroll={event => setScroll(event.currentTarget.scrollTop)}
           aria-activedescendant={shown.slice(first, last).some(match => match.node.id === selected) ? labelId + selected : undefined}>
-          <div style={{ height: shown.length * rowHeight, position: 'relative' }}>{shown.slice(first, last).map(({ node, statement: s }, offset) => <div key={node.id} id={labelId + node.id}
+          <div style={{ height: shown.length * rowHeight, position: 'relative' }}>{shown.slice(first, last).map(({ node }, offset) => <div key={node.id} id={labelId + node.id}
             role="treeitem" aria-selected={selected === node.id} aria-level={1} aria-setsize={shown.length} aria-posinset={first + offset + 1}
-            className="plan-operator-item" style={{ top: (first + offset) * rowHeight, height: rowHeight }} onClick={() => { setStatement(s); choose(node.id); tree.current?.focus() }} title={[node.physicalOp, node.object, ...node.warnings].filter(Boolean).join(' · ')}>
+            className="plan-operator-item" style={{ top: (first + offset) * rowHeight, height: rowHeight }} onClick={() => { choose(node.id); tree.current?.focus() }} title={[node.physicalOp, node.object, ...node.warnings].filter(Boolean).join(' · ')}>
             <span>{node.physicalOp}</span><small>{node.warnings.length ? 'Warning · ' : ''}{node.object || `Node ${node.nodeId}`}</small>
           </div>)}</div>
         </div>
@@ -186,8 +201,9 @@ export default function PlanViewer({ sources, identity, openDocument }: { source
       {inspector && <aside className="plan-inspector" aria-label="Plan properties">
         <h3>{selectedNode?.physicalOp ?? 'Statement properties'}</h3>
         {current && <>
-          <details><summary>Statement SQL</summary><p className="plan-statement-text">{current.text || current.type}</p></details>
-          <dl><dt>Plan data</dt><dd>{current.nodes.some(node => node.actualRows !== null) ? 'Actual' : 'Estimated'}</dd><dt>Statement estimated cost</dt><dd>{amount(current.estimatedCost)}</dd></dl>
+          <details><summary>Statement SQL</summary><p className="plan-statement-text">{current.text.trim() ? current.text : 'SQL text unavailable'}</p></details>
+          <dl>{current.batchLabel && <><dt>Position</dt><dd>{current.batchLabel}</dd></>}
+            <dt>Plan data</dt><dd>{current.nodes.some(node => node.actualRows !== null) ? 'Actual' : 'Estimated'}</dd><dt>Statement estimated cost</dt><dd>{amount(current.estimatedCost)}</dd></dl>
           {current.warnings.map((warning, index) => <p className="plan-warning" key={index}>{warning}</p>)}
         </>}
         {selectedNode ? <>

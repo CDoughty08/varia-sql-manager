@@ -12,7 +12,7 @@ export default function PlanDocument({ documentId, source, onSource }: { documen
     const changed = model?.onDidChangeContent(() => { clearTimeout(timer); timer = setTimeout(() => { if (!documents.isFilling(documentId)) setVersion(model.getVersionId()) }, 150) })
     return () => { clearTimeout(timer); changed?.dispose() }
   }, [documents, documentId, model])
-  const sources = useMemo(() => version === undefined ? [] : [{ key: documentId + ':' + version, label: 'Execution plan', read: async () => model?.getValue() ?? '' }], [documentId, model, version])
+  const sources = useMemo(() => version === undefined ? [] : [{ key: documentId, revision: version, label: 'Execution plan', read: async () => model?.getValue() ?? '' }], [documentId, model, version])
   return <>
     <div className="plan-document-tools" role="group" aria-label="Execution plan document views">
       <button type="button" aria-pressed={!source} onClick={() => onSource(false)}>Graph</button>

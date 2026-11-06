@@ -176,6 +176,19 @@ export class RecoveryStore {
     })
   }
 
+  /** A reopened pin takes its matching copy from the source page or an interrupted restore of the same checkpoint. */
+  resumeReloaded(id: string, sourceGeneration: number, generation: number, document: Pick<RecoveryRecord, 'text' | 'kind' | 'eol'>): Promise<boolean> {
+    return this.serial(async () => {
+      const owner = this.owned.get(id)
+      if (owner === undefined || owner < sourceGeneration || owner > generation) return false
+      const record = await this.read(id)
+      if (!record || record.text !== document.text || record.kind !== document.kind || record.eol !== document.eol) return false
+      this.owned.set(id, generation)
+      this.offered.delete(id)
+      return true
+    })
+  }
+
   /** Deletes records `generation` owns or was offered; any other id is left alone. */
   discard(ids: readonly string[], generation: number): Promise<void> {
     return this.serial(async () => {

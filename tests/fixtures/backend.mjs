@@ -659,6 +659,15 @@ const fixtures = {
     const planSets = params.includeActualPlan ? [describe(storeResult(plan, 0)), describe(storeResult({ ...second, batchNumber: 2 }, 1))] : undefined
     return summary(id, params.database, [{ columns: [column('answer', 'int')], rows: [['42']] }], { planSets, completedBatches: 2, totalBatches: 2 })
   },
+  MIXED_PLAN_FIXTURE: async (id, params) => {
+    const plan = { columns: [{ ...column('Microsoft SQL Server 2005 XML Showplan', 'xml'), role: 'plan' }], rows: [[fixturePlanXml]], kind: 'executionPlan' }
+    const captured = { ...plan, iteration: 2, rows: [[fixturePlanXml.replaceAll(/ StatementText="[^"]*"/g, '')]] }
+    const planSets = [describe(storeResult(captured, 0))]
+    const result = summary(id, params.database, [{ ...plan, batchNumber: 2 },
+      { ...plan, batchNumber: 3, rows: [[fixturePlanXml.replace('dbo.Customers', 'dbo.PickedPlan')]] }], { planSets, completedBatches: 3, totalBatches: 3 })
+    while (await controlled(join('hold', 'mixed-plan-summary'))) await sleep(25)
+    return result
+  },
   // FOR XML output joined into one value (role xml), as ForXmlCollector stores it, and an xml cast.
   FOR_XML_FIXTURE: (id, params) => summary(id, params.database, [
     { columns: [{ ...column('XML_F52E2B61-18A1-11d1-B105-00805F49916B', 'ntext'), role: 'xml' }], rows: [['<objects><o><name>Orders</name><object_id>1</object_id></o><o><name>Customers</name><object_id>2</object_id></o></objects>']] }
@@ -955,7 +964,9 @@ async function workbench(id, method, params, credit) {
     case 'plans.parse': {
       const xml = gunzipSync(Buffer.from(params.xml, 'base64'), { maxOutputLength: 32 * 1024 * 1024 }).toString('utf8')
       if (xml.includes('<unavailable-plan')) return fail(id, 'INVALID_PARAMS', 'The plan XML could not be graphed.')
-      return respond(id, xml.includes('SUM(Amount)') ? fixturePlan : { version: '', build: '', notices: [], statements: [] })
+      if (xml.includes('StatementText=') && xml.includes('SUM(Amount)')) return respond(id, fixturePlan)
+      if (xml.includes('IX_Status')) return respond(id, { ...fixturePlan, statements: fixturePlan.statements.map(statement => ({ ...statement, text: '' })) })
+      return respond(id, { version: '', build: '', notices: [], statements: [] })
     }
     case 'connections.connect': {
       if (params.server === 'entra-wait') return entraWait(id, method)
@@ -1063,10 +1074,11 @@ async function workbench(id, method, params, credit) {
       if (await controlled('crash-next', true)) return exitAfter(encodeFrame(FrameKind.GOAWAY, 0, 0, encodeControl({ code: 'BACKEND_CRASH', message: 'The SQL backend failed unexpectedly (Exception).' })), 70)
       beginQuery(params.sessionId)
       runInSession(params)
+      write(FrameKind.EVENT, id, 0, { type: 'session.opened', ...probe(params.sessionId) })
       if (directive) return runDirective(id, params, directive)
       if (params.sql.includes('WAIT_FOR_CANCEL')) { waitingScripts.set(params.queryId, { id, database: params.database, sessionId: params.sessionId }); return }
       const fixture = Object.keys(fixtures).find(name => params.sql.includes(name))
-      if (fixture) return respond(id, { ...fixtures[fixture](id, params), ...probe(params.sessionId) })
+      if (fixture) return respond(id, { ...await fixtures[fixture](id, params), ...probe(params.sessionId) })
       return respond(id, summary(id, params.database, [{ columns: [column('server', 'nvarchar'), column('generation', 'int'), column('database', 'nvarchar')], rows: [[connection.server, String(generation), params.database]] }], probe(params.sessionId)))
     }
   }

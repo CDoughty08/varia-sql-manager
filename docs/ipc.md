@@ -1064,13 +1064,14 @@ when no port is open).
 
 | type | Emitted |
 | --- | --- |
+| `session.opened` | Before the first batch, once a live query session is acquired. Carries its `spid` and optional `login`. The final summary still describes whether the session survived execution |
 | `resultSet.opened` | When a kept result set's columns are known, before its first row; carries the descriptor |
 | `progress` | At most 10 times a second per query, latest value wins; up to 64 result sets with `rowsRead`, `rowsStored`, `rowsAvailable`, `bytesStored`. A sealed page is reported at once when no progress went out in the last 100 ms, and every set's first sealed page at once whatever the spacing, so the first rows of each set (one-row sets included) are readable without waiting for a tick |
 | `messages` | Every 100 ms or 64 KiB, only entries stored under the message caps: `{ text, kind: 'info' \| 'print' \| 'server' \| 'error' }` ([Messages](#messages)) |
 | `resultSet.closed` | Once per kept result set, with its final descriptor |
 
 Progress and messages are droppable: when the backend's control lane holds 1,000 frames or 8 MiB, new ones are refused,
-and one over 256 KiB is dropped. `resultSet.opened` and `resultSet.closed` are essential: never refused, and up to
+and one over 256 KiB is dropped. `session.opened`, `resultSet.opened` and `resultSet.closed` are essential: never refused, and up to
 4 MiB, enough for a descriptor of 4,096 columns with 128-character names (about 3.5 MB). RESPONSE, PONG and GOAWAY are
 never dropped. The UI treats the summary as authoritative and
 ignores a query's events once its summary has arrived.
@@ -2300,7 +2301,8 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
   server and database names to `<userData>/Session/session.json` as an approved close goes ahead: 0700/0600 on POSIX,
   atomic, at most 64 tabs and 64 MB, never results, connections, logins or credentials, never logged. The next start takes
   it and keeps it as `previous.json` until that run closes; an invalid file is quarantined. A close with hot exit off
-  deletes both.
+  keeps only pinned tabs, or deletes both when there are no pins. Startup and Reload Window hold their checkpoint
+  until a renderer has reopened the tabs and acknowledges it with `varia:session-restored`.
 - **Secrets.** Passwords exist only inside REQUEST bodies on the private pipe: never in arguments, environment,
   `BackendState`, the fake backend's call log, traces or stderr. Lost connections keep their options without the
   password. A remembered password (Remember password) is Electron `safeStorage` ciphertext in `saved-passwords.json`,

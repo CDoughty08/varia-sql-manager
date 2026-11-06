@@ -20,7 +20,7 @@ import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions
 import type { RecentFile } from './files/recent'
 import type { UpdateState } from './updates'
 import type { RecoveredDocument, RecoveryEntry, RecoveryWrite } from './files/recovery'
-import type { RestoredSession, SessionWrite } from './files/session'
+import type { ReloadPins, RestoredSession, SessionWrite } from './files/session'
 import type { LiveEnd, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from './live/schema'
 import type { ActivityDetailsRequest, ActivityDetailsResult, ActivityKillRequest, ActivityKillResult } from './activity/schema.ts'
 import type { PlanDocument } from './plans'
@@ -199,6 +199,7 @@ export interface MemoryOrder { generation: number; seq: number }
 export interface ResultProgress { resultId: number; rowsRead: number; rowsStored: number; rowsAvailable: number; bytesStored: number }
 /** Pushed while a script runs (EVENT frames, then the results port). The summary is authoritative once it arrives. */
 export type QueryEvent =
+  | { type: 'session.opened'; spid: number; login?: string }
   | { type: 'resultSet.opened'; descriptor: ResultDescriptor }
   | { type: 'resultSet.closed'; descriptor: ResultDescriptor }
   | { type: 'progress'; completedBatches: number; totalBatches: number; batchNumber: number; iteration: number; results: ResultProgress[] }
@@ -400,7 +401,7 @@ export type ReloadAnswer = 'yes' | 'yesToAll' | 'no' | 'noToAll'
 export interface ReloadPrompt { fileId: string; dirty: boolean; more: boolean }
 export type { RecentFile }
 export type { RecoveredDocument, RecoveryEntry, RecoveryWrite }
-export type { RestoredDocument, RestoredSession, SessionDocumentWrite, SessionWrite } from './files/session'
+export type { ReloadPins, RestoredDocument, RestoredSession, SessionDocumentWrite, SessionWrite } from './files/session'
 /** `kind` (default 'sql') picks the save dialog's filters and the size limit. */
 export interface SaveSqlFile { fileId?: string; name: string; content: string; saveAs: boolean; kind?: DocumentKind }
 
@@ -410,7 +411,9 @@ export interface VariaApi {
   /** Which native menu items are disabled and checked; main validates the ids against its own catalogue. */
   setMenuState(state: MenuState): void
   /** Runs an Electron role (Cut, Zoom In, Reload, …) on the window, for custom menus and the palette. */
-  runRole(role: RendererRole): Promise<ApiResult<void>>
+  runRole(role: RendererRole, reloadPins?: ReloadPins): Promise<ApiResult<void>>
+  /** Replaces an in-flight Reload Window checkpoint from the outgoing page's synchronous unload handler. */
+  refreshReloadPins(capture: () => ReloadPins | undefined): ApiResult<void>
   /** Main's choice of context menus: 'native' (macOS) shows them through `showContextMenu`. */
   readonly menuStyle: MenuStyle
   /** Shows a native context menu of catalogue command ids; resolves when it closes. A chosen item arrives on `onContextMenuCommand`. */
@@ -548,6 +551,7 @@ export interface VariaApi {
   keepSession(session: SessionWrite): Promise<ApiResult<void>>
   /** The tabs the last close kept, opened again; files that are gone are named in `problems`. */
   takeSession(): Promise<ApiResult<RestoredSession>>
+  finishSessionRestore(generation: number): Promise<ApiResult<void>>
   /** Writes text to the clipboard through main, which works while the window is unfocused; there is no read. */
   writeClipboardText(text: string): Promise<ApiResult<void>>
   confirmClose(name: string): Promise<ApiResult<'save' | 'discard' | 'cancel'>>

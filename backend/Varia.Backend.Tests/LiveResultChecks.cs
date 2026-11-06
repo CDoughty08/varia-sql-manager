@@ -621,7 +621,8 @@ internal static class LiveResultChecks
             check(blocked && available > PageBuilder.FirstPageRows && result.Status == "completed" && RowsOf(store, result.ResultSets[0]).Count == 3000,
                 "rows read before a lock wait are sealed and readable while the statement waits (" + Waited(blocked, available, result, kinds, waited) + ")");
             // The batch's own progress may go out on the sink's first tick, before the set opens; it names no set then.
-            check(kinds.First(kind => kind != "progress") == "resultSet.opened" && kinds.Last() == "resultSet.closed" && kinds.Count(kind => kind == "resultSet.closed") == 1,
+            check(kinds.First() == "session.opened" && kinds.First(kind => kind is not ("progress" or "session.opened")) == "resultSet.opened"
+                && kinds.Last() == "resultSet.closed" && kinds.Count(kind => kind == "resultSet.closed") == 1,
                 "query events report the result set as it opens and closes: " + string.Join(", ", kinds.Distinct()));
             (blocked, available, result, kinds, waited) = await WhileLocked("SELECT id, CAST(N'x' AS nvarchar(max)) AS note FROM " + table + " ORDER BY id;", 100, 100);
             check(blocked && available == 100 && result.Status == "completed" && result.ResultSets[0] is { RowsRead: 3000, RowsStored: 100 },
