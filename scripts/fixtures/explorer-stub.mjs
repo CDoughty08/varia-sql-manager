@@ -24,7 +24,7 @@ export function explorerStubData() {
 export function installExplorerStub({ ipcMain }, { statics }) {
   const stub = globalThis.variaStub = {
     calls: [], cancels: [], held: new Map(), connections: {},
-    tables: 120_000, views: 10_000, pageSize: 2000, pageDelayMs: 0, auditsOk: false, holdLinked: true, tablesError: undefined,
+    tables: 120_000, views: 10_000, pageSize: 2000, pageDelayMs: 0, holdTablePages: false, auditsOk: false, holdLinked: true, tablesError: undefined,
     release() { for (const [id, resolve] of [...stub.held]) { stub.held.delete(id); resolve() } }
   }
   const ok = value => ({ ok: true, value })
@@ -38,6 +38,10 @@ export function installExplorerStub({ ipcMain }, { statics }) {
   /** A listing folder: static subfolders first, then rows `0..count` in pages with a cursor. */
   async function paged(params, owner, count, row) {
     const offset = params.cursor ? Number(params.cursor.split('.')[2].slice(1)) : 0
+    if (params.cursor && params.node.folder === 'tables' && stub.holdTablePages) {
+      const cancelled = await new Promise(resolve => stub.held.set(params.requestId, resolve))
+      if (cancelled) return { ok: false, error: 'The operation was cancelled.', code: 'CANCELLED' }
+    }
     if (params.cursor && stub.pageDelayMs) await new Promise(resolve => setTimeout(resolve, stub.pageDelayMs))
     const fixed = params.cursor ? [] : folders(owner, statics.folders[params.node.folder] ?? [])
     // A name filter lists the first ten matches in one page; the synthetic names never contain "ord".

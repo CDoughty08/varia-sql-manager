@@ -117,7 +117,7 @@ function ExplorerFooter({ servers, live }: { readonly servers: number; readonly 
  * servers, or a prompt to connect. Disconnect acts on the selected node's server; with nothing selected it asks which.
  * Filter shows a filled funnel while the selected folder has a filter.
  */
-export default function ExplorerPane({ error, activeConnectionId }: { readonly error?: string; readonly activeConnectionId?: string }) {
+export default function ExplorerPane({ error, activeConnectionId, activeQueryId }: { readonly error?: string; readonly activeConnectionId?: string; readonly activeQueryId?: string }) {
   const { explorer, connections, commands } = useWorkbench()
   const { selected } = useServiceSnapshot(explorer)
   const { explorerSelectionFiltered: filtered, explorerGroupBySchema: grouped } = useServiceSnapshot(explorer.context)
@@ -161,7 +161,7 @@ export default function ExplorerPane({ error, activeConnectionId }: { readonly e
     {searchable && <ExplorerSearch connectionId={selectedServer} />}
     <div className="explorer-body" ref={background}>
       {servers.length ? <ExplorerErrorBoundary onReload={() => explorer.reset()} onReloaded={() => focusTree(header.current)}>
-        <FaultProbe /><ExplorerTree activeConnectionId={activeConnectionId} /><PeekCard /></ExplorerErrorBoundary>
+        <FaultProbe /><ExplorerTree activeConnectionId={activeConnectionId} activeQueryId={activeQueryId} /><PeekCard /></ExplorerErrorBoundary>
         : <EmptyState className="explorer-empty" icon="server" detail="Connect to SQL Server to browse databases and objects." actions={[{ label: 'Connect to server', run: () => void commands.execute('connection.connect', undefined, 'toolbar'), disabled: !connect, buttonRef: connectButton, primary: true }]} />}
       {error && <p className="explorer-error" role="alert">{error}</p>}
     </div>

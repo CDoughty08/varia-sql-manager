@@ -5,7 +5,7 @@ import { randomBytes } from 'node:crypto'
 import { expandExplorerPath, explorerLines, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.mjs'
 import {
-  activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
+  activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTab, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
   explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, explorerSublabel, explorerToolbar, itemCount,
   messages, outputView, paneMenuButton, part, primaryAction, quickInput, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
 } from './fixtures/ui.mjs'
@@ -47,9 +47,13 @@ const tabs = () => documentTabs(page).getByRole('tab')
 const toolbarButton = name => explorerToolbar(page).getByRole('button', { name, exact: true })
 const menu = name => page.getByRole('menu', { name, exact: true })
 const searchBox = () => page.getByRole('textbox', { name: 'Search in Object Explorer', exact: true })
-/** With no search text, the closed Search options button is the only tab stop between the box and tree. */
-const backToSearchBox = async () => { for (let step = 0; step < 2; step++) await page.keyboard.press('Shift+Tab'); await expect(searchBox()).toBeFocused() }
-const searchBoxToTree = async () => { for (let step = 0; step < 2; step++) await page.keyboard.press('Tab'); await expect(tree()).toBeFocused() }
+/** With no search text, the closed Search options button and any top-band shortcuts sit between the box and tree. */
+async function tabPastExplorerShortcuts(key) {
+  const count = await page.getByRole('group', { name: 'Servers above', exact: true }).getByRole('button').count()
+  for (let step = 0; step < count + 2; step++) await page.keyboard.press(key)
+}
+const backToSearchBox = async () => { await tabPastExplorerShortcuts('Shift+Tab'); await expect(searchBox()).toBeFocused() }
+const searchBoxToTree = async () => { await tabPastExplorerShortcuts('Tab'); await expect(tree()).toBeFocused() }
 const isFolder = (params, folder) => params.node.type === 'folder' && params.node.folder === folder
 /** The row `aria-activedescendant` names, as a screen reader finds it. */
 const active = () => page.evaluate(text => {
@@ -1173,7 +1177,97 @@ try {
   expect(failures).toEqual([])
   console.log('Object Explorer checks: 200 quick toggles, a rendering fault reloaded with focus kept, Dark and Light screenshots, the toolbar and rows at 1024×768, and focus after the last server goes.')
 
-  // 13. A real server: a scratch database's table and columns, and F5 after DDL in a query.
+  // 13. Pinned server headers, overflow jumps and following query tabs.
+  await setStub({ tables: 100 })
+  const pinQueries = []
+  for (const server of ['pin-a', 'pin-b', 'pin-c', 'pin-d', 'pin-e', 'pin-f']) {
+    await connect(server)
+    pinQueries.push(await activeDocumentName(page))
+  }
+  const setFollow = async value => {
+    const result = await page.evaluate(value => window.varia.updateSettings({ 'objectExplorer.followActiveQuery': value }), value)
+    expect(result.ok).toBe(true)
+  }
+  await expect(page.getByRole('checkbox', { name: 'Follow active query', exact: true })).toHaveCount(0)
+  await documentTab(page, pinQueries[2]).click()
+  const anchor = await explorerRow(page, 'pin-c')
+  const middle = await anchor.evaluate(row => {
+    const tree = row.closest('[role="tree"]')
+    return Math.round(row.getBoundingClientRect().top - tree.getBoundingClientRect().top + tree.scrollTop) + 260
+  })
+  await expandExplorerPath(page, 'pin-c', 'Databases', 'AppData', 'Tables')
+  await idle()
+  const scrollToMiddle = () => tree().evaluate((element, top) => { element.scrollTop = top }, middle)
+  await scrollToMiddle()
+  const upper = page.getByRole('group', { name: 'Servers above', exact: true })
+  const lower = page.getByRole('group', { name: 'Servers below', exact: true })
+  await expect(upper.getByRole('button', { name: /^Jump to/ })).toHaveCount(2)
+  await expect(lower.getByRole('button', { name: /^Jump to/ })).toHaveCount(2)
+  const moreAbove = upper.getByRole('button', { name: /1 more above/ })
+  const aboveMenu = menu('More servers above')
+  const openAbove = async () => {
+    await moreAbove.focus()
+    await page.keyboard.press('Enter')
+    await expect(aboveMenu.getByRole('menuitem', { name: /^Jump to pin-a/ })).toBeFocused()
+  }
+  await openAbove()
+  await page.keyboard.press('Shift+Tab')
+  await expect(aboveMenu).toBeHidden()
+  await openAbove()
+  await page.keyboard.press('Escape')
+  await expect(moreAbove).toBeFocused()
+  await openAbove()
+  const wheelTreeToStart = async () => {
+    const box = await tree().boundingBox()
+    await page.mouse.move(box.x + 20, box.y + box.height - 20)
+    await page.mouse.wheel(0, -20_000)
+    await expect(upper).toHaveCount(0)
+  }
+  await wheelTreeToStart()
+  await expect(tree()).toBeFocused()
+  await scrollToMiddle()
+  await expect(moreAbove).toBeVisible()
+  await lower.getByRole('button', { name: /1 more below/ }).click()
+  await menu('More servers below').getByRole('menuitem', { name: /^Jump to pin-f/ }).click()
+  await expect(await explorerRow(page, 'pin-f')).toBeInViewport({ ratio: 1 })
+  await expect(tree()).toBeFocused()
+  const selectionBeforeFollow = await tree().getAttribute('aria-activedescendant')
+  await documentTab(page, pinQueries[0]).click()
+  await expect(await explorerRow(page, 'pin-a')).toBeInViewport({ ratio: 1 })
+  await expect(tree()).toHaveAttribute('aria-activedescendant', selectionBeforeFollow)
+  await expect(tree()).not.toBeFocused()
+  await setFollow(false)
+  await scrollToMiddle()
+  await expect(moreAbove).toBeVisible()
+  await documentTab(page, pinQueries[5]).click()
+  expect(await tree().evaluate(element => element.scrollTop)).toBe(middle)
+  await setFollow(true)
+
+  // A streamed page can insert rows above the server after a tab switch. Hold each page so the jump and the scroll
+  // away both happen while a load can still move the server.
+  await documentTab(page, pinQueries[2]).click()
+  await setStub({ tables: 300, pageSize: 80, holdTablePages: true })
+  await reload('pin-c', 'Databases', 'AppData', 'Tables')
+  const heldPage = () => application.evaluate(() => {
+    const stub = globalThis.variaStub
+    return stub.calls.findLast(call => call.method === 'explorer.children' && stub.held.has(call.params.requestId))?.params.cursor ?? ''
+  })
+  await expect.poll(heldPage).toMatch(/^v1\.tables\./)
+  const firstHeldPage = await heldPage()
+  await documentTab(page, pinQueries[5]).click()
+  const followedServer = await explorerRow(page, 'pin-f')
+  await expect(followedServer).toBeInViewport({ ratio: 1 })
+  await application.evaluate(() => globalThis.variaStub.release())
+  await expect.poll(heldPage).toMatch(/^v1\.tables\.p160$/)
+  expect(await heldPage()).not.toBe(firstHeldPage)
+  await expect(followedServer).toBeInViewport({ ratio: 1 })
+  await wheelTreeToStart()
+  await application.evaluate(() => { globalThis.variaStub.holdTablePages = false; globalThis.variaStub.release() })
+  await idle()
+  expect(await tree().evaluate(element => element.scrollTop)).toBe(0)
+  console.log('Object Explorer checks: pinned bands, overflow focus recovery, and following a query through streamed pages until the user scrolls.')
+
+  // 14. A real server: a scratch database's table and columns, and F5 after DDL in a query.
   if (process.env.VARIA_TEST_SQL_SERVER && process.env.VARIA_TEST_SQL_SCRATCH === '1') {
     await application.close()
     application = undefined

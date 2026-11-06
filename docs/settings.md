@@ -18,6 +18,7 @@ from Microsoft's documentation, so Varia keeps its own.
   - Keyboard (`environment.keyboard`)
   - Product Updates (`environment.productUpdates`)
   - Live Data (`environment.liveData`)
+  - Object Explorer (`environment.objectExplorer`)
 - Text Editor
   - General (`textEditor.general`)
   - Editor Tab and Status Bar (`textEditor.editorTabAndStatusBar`)
@@ -106,6 +107,14 @@ Live views, such as the Activity Monitor: when they pause while hidden, and how 
 | `liveData.stopAfterHiddenMinutes` | Stop after hidden for | Integer 1–60 minutes | 5 minutes |  | All | At once | How long a paused, hidden live view keeps its subscription before it ends it and frees what the backend holds for it. Showing the view again starts a new subscription; its history is kept. Not in SSMS. Greyed while `liveData.pauseWhenHidden` is False. |
 | `liveData.explorerStatus` | Show live status in Object Explorer | Boolean | True |  | All | At once | While Object Explorer shows, reads each connected server's database states, restore progress, running SQL Server Agent jobs and availability group health every few seconds, on one session of its own per server, and shows them as chips on the nodes. It pauses while Object Explorer or the window is hidden, and never reloads the tree. While it is False, nodes show only what their list said when it loaded. Not in SSMS. |
 | `liveData.historyMinutes` | Keep chart history for | Integer 5–120 minutes | 60 minutes |  | All | At once | How far back each live view's charts reach. History is kept in memory only (at most 7,200 samples a chart, 4 MiB a view and 32 MiB in all; the newest samples are kept), never on disk, and is lost when the window reloads. Not in SSMS. |
+
+### Environment › Object Explorer
+
+| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `objectExplorer.followActiveQuery` | Follow active query | Boolean | True |  | All | At once | When switching query tabs, bring the server into view if its header is off-screen. Not in SSMS. |
+| `objectExplorer.pinnedServerHeadersTop` | Pinned server headers at top | Integer 0–10 | 2 |  | All | At once | Maximum number of off-screen server headers to show at the top of the tree. Choose 0 to hide this edge. A short pane may fit fewer headers. Not in SSMS. |
+| `objectExplorer.pinnedServerHeadersBottom` | Pinned server headers at bottom | Integer 0–10 | 2 |  | All | At once | Maximum number of off-screen server headers to show at the bottom of the tree. Choose 0 to hide this edge. A short pane may fit fewer headers. Not in SSMS. |
 
 ### Text Editor › General
 
@@ -279,4 +288,4 @@ How Varia follows the SSIS Catalog (SSISDB) as it changes. Not in SSMS.
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (96 today).
+A patch holds at most one entry per setting (99 today).
