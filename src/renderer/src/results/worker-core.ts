@@ -130,6 +130,8 @@ export class ResultsWorkerCore {
       // settle. A failed close goes back on the client's queue (ResultClient.flushCloses), and closing a result again
       // closes nothing; a window asked again reads on the new port.
       for (const read of [...this.reads.values()]) if (!read.cancelled) this.abandonRead(read, 'PORT_CLOSED', portClosed)
+      // A cancelled read waits for main's end to leave the map, which never comes for the old port.
+      this.reads.clear()
       for (const pending of [this.sizes, this.closes]) {
         for (const [rid, id] of [...pending]) {
           pending.delete(rid)

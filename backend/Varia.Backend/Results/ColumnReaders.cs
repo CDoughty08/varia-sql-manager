@@ -558,8 +558,9 @@ internal sealed class ColumnPlan
         }
     }
 
-    /// <summary>Reads past the rest of an xml value that GetXmlReader parses, once its cell is stored. A parse failure here
-    /// only ends the read-past: as a cell failure it would make ReadRow append the cell a second time. False when it
+    /// <summary>Reads past the rest of an xml value that GetXmlReader parses, once its cell is stored. A parse failure (any
+    /// exception ReadRow counts as a cell failure) only ends the read-past: there it would make ReadRow append the cell a
+    /// second time. False when it
     /// stopped early.</summary>
     internal static bool ReadPastXml(XmlReader xml, char[] buffer, CancellationToken token)
     {
@@ -572,7 +573,7 @@ internal sealed class ColumnPlan
             }
             return true;
         }
-        catch (XmlException)
+        catch (Exception error) when (IsCellFailure(error))
         {
             return false;
         }
