@@ -126,8 +126,10 @@ export class ResultsWorkerCore {
   attach(port: PortLike): void {
     if (this.port && this.port !== port) {
       this.endLives(() => true, 'PORT_CLOSED', portClosed)
-      // Main drops answers meant for the old port, so row sizes and closes asked on it would never settle. A failed close
-      // goes back on the client's queue (ResultClient.flushCloses), and closing a result again closes nothing.
+      // Main drops answers and pages meant for the old port, so reads, row sizes and closes asked on it would never
+      // settle. A failed close goes back on the client's queue (ResultClient.flushCloses), and closing a result again
+      // closes nothing; a window asked again reads on the new port.
+      for (const read of [...this.reads.values()]) if (!read.cancelled) this.abandonRead(read, 'PORT_CLOSED', portClosed)
       for (const pending of [this.sizes, this.closes]) {
         for (const [rid, id] of [...pending]) {
           pending.delete(rid)
