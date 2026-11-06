@@ -336,6 +336,8 @@ export const lineEndingStatus = page => editorStatus(page).getByTitle('Line endi
 export const encodingStatus = page => editorStatus(page).getByTitle('Encoding', { exact: true })
 export const readOnlyStatus = page => editorStatus(page).getByText('Read-only', { exact: true })
 export const memoryIndicator = page => statusBar(page).locator(part.memory)
+export const memoryBreakdown = page => page.getByRole('region', { name: 'Memory usage', includeHidden: true })
+export const memoryUsage = (page, feature) => page.locator(`.memory-details .memory-row[data-feature="${feature}"] .memory-usage`)
 /** The active document's status: its state sentence and connection facts, or a value document's kind. */
 export const queryStatus = page => page.getByRole('status', { name: 'Query status', exact: true })
 /** One query status fact by key: server, login, database, time or rows. */
