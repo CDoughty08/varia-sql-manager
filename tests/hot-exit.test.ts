@@ -207,7 +207,7 @@ describe('hot exit', () => {
       expect(documents.getSnapshot().documents.map(tab => tab.name)).toEqual(['SQLQuery7.sql', 'Month end', 'value.xml'])
       return { ok: true, value: undefined }
     })
-    const api = { hotExit: true, takeSession: vi.fn<VariaApi['takeSession']>(async () => ({ ok: true, value: { ...restored, reloadGeneration: 7 } })), finishSessionRestore }
+    const api = { hotExit: true, takeSession: vi.fn<VariaApi['takeSession']>(async () => ({ ok: true, value: { ...restored, restoreGeneration: 7 } })), finishSessionRestore }
     expect(await restoreSession({ api, documents, files })).toBe(3)
     expect(finishSessionRestore).toHaveBeenCalledExactlyOnceWith(7)
     const tabs = documents.getSnapshot().documents

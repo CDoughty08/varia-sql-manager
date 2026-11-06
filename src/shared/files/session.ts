@@ -67,6 +67,6 @@ export interface RestoredSession {
   readonly documents: readonly RestoredDocument[]
   readonly activeIndex: number
   readonly problems: readonly string[]
-  /** The reload checkpoint is released once this page has reopened its tabs. */
-  readonly reloadGeneration?: number
+  /** The checkpoint is released once this page has reopened its tabs. */
+  readonly restoreGeneration?: number
 }

@@ -2182,8 +2182,8 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
   server and database names to `<userData>/Session/session.json` as an approved close goes ahead: 0700/0600 on POSIX,
   atomic, at most 64 tabs and 64 MB, never results, connections, logins or credentials, never logged. The next start takes
   it and keeps it as `previous.json` until that run closes; an invalid file is quarantined. A close with hot exit off
-  keeps only pinned tabs, or deletes both when there are no pins. Reload Window keeps pins in memory until the
-  replacement renderer has reopened them and acknowledges its checkpoint with `varia:session-restored`.
+  keeps only pinned tabs, or deletes both when there are no pins. Startup and Reload Window hold their checkpoint
+  until a renderer has reopened the tabs and acknowledges it with `varia:session-restored`.
 - **Secrets.** Passwords exist only inside REQUEST bodies on the private pipe: never in arguments, environment,
   `BackendState`, the fake backend's call log, traces or stderr. Lost connections keep their options without the
   password. A remembered password (Remember password) is Electron `safeStorage` ciphertext in `saved-passwords.json`,

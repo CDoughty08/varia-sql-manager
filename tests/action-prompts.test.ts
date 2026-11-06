@@ -143,7 +143,7 @@ describe('long runs in main (varia:long-runs)', () => {
   it('names the current page\'s runs in its reload prompt and forgets them when the page resets', () => {
     const main = readFileSync('src/main/index.ts', 'utf8')
     expect(main).toContain("handle('varia:long-runs', value => { longRuns = parseLongRuns(value) })")
-    expect(main).toContain('detail: reloadDetail(longRuns, lossDetailsFor(pageGeneration, !!checkpoint).reload)')
+    expect(main).toContain("detail: reloadDetail(longRuns, lossDetailsFor(pageGeneration, checkpoint ? 'pins' : undefined).reload)")
     const reset = main.slice(main.indexOf('function resetRendererState('), main.indexOf('function resetRendererState(') + 2000)
     expect(reset).toContain('longRuns = noLongRuns')
     expect(readFileSync('src/preload/index.ts', 'utf8')).toContain("setLongRuns: state => ipcRenderer.invoke('varia:long-runs', state),")

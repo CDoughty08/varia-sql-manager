@@ -176,10 +176,11 @@ export class RecoveryStore {
     })
   }
 
-  /** A pin reopened on an approved reload owns its matching copy. Leave a different or newer copy available to recover. */
-  resumeReloaded(id: string, from: number, generation: number, document: Pick<RecoveryRecord, 'text' | 'kind' | 'eol'>): Promise<boolean> {
+  /** A reopened pin takes its matching copy from the source page or an interrupted restore of the same checkpoint. */
+  resumeReloaded(id: string, sourceGeneration: number, generation: number, document: Pick<RecoveryRecord, 'text' | 'kind' | 'eol'>): Promise<boolean> {
     return this.serial(async () => {
-      if (this.owned.get(id) !== from) return false
+      const owner = this.owned.get(id)
+      if (owner === undefined || owner < sourceGeneration || owner > generation) return false
       const record = await this.read(id)
       if (!record || record.text !== document.text || record.kind !== document.kind || record.eol !== document.eol) return false
       this.owned.set(id, generation)

@@ -3,6 +3,7 @@
 // reopens every tab in order, with its text, unsaved state and name, the active one active, a clean file read again from
 // disk, and no Recover dialog. Native message boxes are stubbed in main and recorded; files live under artifacts/.
 import { electron, expect } from './fixtures/smoke.mjs'
+import { crashRenderer } from './fixtures/dialog-lifecycle.mjs'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import { activeDocumentName, backendReady, documentShelf, documentTab, documentTabs, editorText, editorTextbox, gridCell, menubar, outputStatus, pinDocumentButton, queryStatus, quickInputBox, quickInputRows, resultGrid, tabNameBox, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
@@ -21,26 +22,46 @@ const failures = []
 const watchdog = setTimeout(() => { console.error('Hot exit suite exceeded its time limit.'); application?.process()?.kill(); process.exit(1) }, 180_000)
 
 /** Launches on the suite's profile, with main's message boxes recorded (and answered Cancel) and its Save dialog cancelled. */
-async function launch(args) {
+async function launch(args, holdPath) {
   application = await electron.launch({ args: ['.', ...args], env, chromiumSandbox })
-  await application.evaluate(({ dialog }) => {
-    const state = globalThis.variaHotExit = { prompts: [], saveDefaults: [], reloadAnswer: 1, savePath: '' }
+  await application.evaluate(({ dialog }, holdPath) => {
+    const state = globalThis.variaHotExit = { prompts: [], saveDefaults: [], reloadAnswer: 1, crashAnswer: 1, savePath: '' }
     dialog.showMessageBox = async (_window, options) => {
       const prompt = options ?? _window
       state.prompts.push(prompt.message)
-      return { response: prompt.title === 'Reload workbench' ? state.reloadAnswer : prompt.cancelId ?? 2, checkboxChecked: false }
+      const response = prompt.title === 'Reload workbench' ? state.reloadAnswer
+        : prompt.title === 'Workbench stopped' ? state.crashAnswer : prompt.cancelId ?? 2
+      return { response, checkboxChecked: false }
     }
     dialog.showSaveDialog = async (_window, options) => {
       state.saveDefaults.push((options ?? _window).defaultPath)
       return { canceled: !state.savePath, filePath: state.savePath }
     }
-  })
+    // Pause only the first read so a replacement can reopen it while the old read is still waiting.
+    state.holdNextRead = path => {
+      const fs = process.getBuiltinModule('node:fs/promises')
+      const { syncBuiltinESMExports } = process.getBuiltinModule('node:module')
+      const original = fs.open
+      fs.open = async (file, ...args) => {
+        if (file === path && !state.releaseRead) {
+          await new Promise(resolve => { state.releaseRead = resolve })
+        }
+        return original(file, ...args)
+      }
+      syncBuiltinESMExports()
+      state.restoreOpen = () => { fs.open = original; syncBuiltinESMExports(); state.releaseRead?.() }
+    }
+    if (holdPath) {
+      state.crashAnswer = 0
+      state.holdNextRead(holdPath)
+    }
+  }, holdPath)
   page = await application.firstWindow()
   page.on('pageerror', error => failures.push(error.message))
   // Electron owns beforeunload and its native Reload dialog. Do not let Playwright dismiss it first.
   page.on('dialog', () => {})
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
-  await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+  if (!holdPath) await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
 }
 const tabNames = () => documentTabs(page).getByRole('tab').evaluateAll(tabs => tabs.map(tab => tab.getAttribute('aria-label')))
 // Monaco draws spaces as no-break spaces.
@@ -54,6 +75,25 @@ const typeInNew = async text => {
 const tabMenuItem = async (tab, name) => {
   await documentTab(page, tab).click({ button: 'right' })
   await page.getByRole('menuitem', { name, exact: true }).click()
+}
+
+const holdNextRead = path => application.evaluate((_electron, path) => globalThis.variaHotExit.holdNextRead(path), path)
+const waitForRead = () => expect.poll(() => application.evaluate(() => !!globalThis.variaHotExit.releaseRead)).toBe(true)
+const releaseRead = () => application.evaluate(() => globalThis.variaHotExit.restoreOpen())
+// Playwright's Page stays attached to a crashed renderer. Read the current renderer through main.
+const recoveredPins = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.webContents.executeJavaScript(`({
+  pins: Array.from(document.querySelectorAll('[data-tab-shelf="pinned"] [data-document-tab]'), tab => tab.getAttribute('aria-label')),
+  active: document.querySelector('[role=tablist][aria-label="Query documents"] [role=tab][aria-selected=true]')?.getAttribute('aria-label'),
+  text: document.querySelector('.monaco-editor .view-lines')?.textContent
+})`).catch(() => undefined))
+async function crashWhileRestoringPins() {
+  await waitForRead()
+  expect(await tabNames()).toEqual([])
+  await crashRenderer(application)
+  await expect.poll(prompts, { timeout: 30000 }).toContain('The workbench stopped unexpectedly.')
+  await expect.poll(recoveredPins, { timeout: 30000 }).toMatchObject({
+    pins: ['Totals', 'Orders report', 'large-pin.xml'], active: 'Totals', text: expect.stringContaining('before_renderer_crash')
+  })
 }
 
 try {
@@ -158,25 +198,13 @@ try {
   await expect.poll(prompts).toEqual(['Reload Varia SQL Manager?'])
   expect(await tabNames()).toEqual(['Totals', 'Orders report', 'Welcome', 'Month end', 'SQLQuery4.sql'])
   // Hold the saved pin's read so the replacement page can issue another reload during the restore.
-  await application.evaluate((_electron, path) => {
-    const fs = process.getBuiltinModule('node:fs/promises')
-    const { syncBuiltinESMExports } = process.getBuiltinModule('node:module')
-    const original = fs.open, state = globalThis.variaHotExit
-    state.reloadAnswer = 0
-    fs.open = async (file, ...args) => {
-      if (file === path && !state.releaseRead) {
-        await new Promise(resolve => { state.releaseRead = resolve })
-      }
-      return original(file, ...args)
-    }
-    syncBuiltinESMExports()
-    state.restoreOpen = () => { fs.open = original; syncBuiltinESMExports(); state.releaseRead?.() }
-  }, orders)
+  await application.evaluate(() => { globalThis.variaHotExit.reloadAnswer = 0 })
+  await holdNextRead(orders)
   try {
     const reloaded = page.waitForEvent('domcontentloaded')
     await reload()
     await reloaded
-    await expect.poll(() => application.evaluate(() => !!globalThis.variaHotExit.releaseRead)).toBe(true)
+    await waitForRead()
     expect(await tabNames()).toEqual([])
     await reload()
     await expect(page.getByRole('alert').filter({ hasText: 'Wait for the current document operation to finish before reloading.' })).toBeVisible()
@@ -184,7 +212,7 @@ try {
       ok: false, error: 'Wait for the pinned tabs to reopen before reloading.'
     })
   } finally {
-    await application.evaluate(() => globalThis.variaHotExit.restoreOpen())
+    await releaseRead()
   }
   await expect.poll(tabNames).toEqual(['Totals', 'Orders report'])
   const recover = page.getByRole('dialog', { name: 'Recover Unsaved Queries', exact: true })
@@ -282,6 +310,41 @@ try {
   const afterReloadQuit = JSON.parse(await readFile(join(profile, 'Session', 'session.json'), 'utf8'))
   expect(afterReloadQuit.documents).toEqual(pinnedRecord.documents)
   console.log('Hot exit checks: quitting during a pinned reload keeps the pins for the next start.')
+
+  // Crash the replacement renderer before it acknowledges the checkpoint. The fresh text has no disk or recovery copy.
+  await launch([])
+  await expect.poll(tabNames).toEqual(['Totals', 'Orders report', 'large-pin.xml'])
+  const recoverBeforeCrash = page.getByRole('dialog', { name: 'Recover Unsaved Queries', exact: true })
+  await expect(recoverBeforeCrash.getByRole('checkbox', { name: 'Recover Month end', exact: true })).toBeVisible()
+  await recoverBeforeCrash.getByRole('button', { name: 'Later', exact: true }).click()
+  expect(await page.evaluate(() => window.varia.updateSettings({ 'environment.autoRecover.enabled': false }))).toMatchObject({ ok: true })
+  await documentTab(page, 'Totals').click()
+  await editorTextbox(page).focus()
+  await page.keyboard.press('Control+A')
+  await page.keyboard.insertText('SELECT 6 AS before_renderer_crash')
+  await expect.poll(text).toContain('SELECT 6 AS before_renderer_crash')
+  await application.evaluate(() => { globalThis.variaHotExit.reloadAnswer = 0; globalThis.variaHotExit.crashAnswer = 0 })
+  await holdNextRead(xmlPath)
+  try {
+    const reloaded = page.waitForEvent('domcontentloaded')
+    await reload()
+    await reloaded
+    await crashWhileRestoringPins()
+  } finally {
+    await releaseRead()
+  }
+  console.log('Hot exit checks: the crash dialog’s Reload retries an unfinished pin restore and keeps fresh unsaved text.')
+
+  const quitAfterCrash = new Promise(done => application.process().once('exit', done))
+  await application.evaluate(({ app }) => app.quit())
+  await quitAfterCrash
+  await launch([], xmlPath)
+  try {
+    await crashWhileRestoringPins()
+  } finally {
+    await releaseRead()
+  }
+  console.log('Hot exit checks: a crash during startup also retries the saved tabs on Reload.')
   expect(failures).toEqual([])
   console.log('Hot exit suite passed.')
 } catch (error) {

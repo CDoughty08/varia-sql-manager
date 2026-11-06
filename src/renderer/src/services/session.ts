@@ -77,7 +77,7 @@ export async function restoreSession({ api, documents, files, resumeRecovery }: 
         if (index === restored.activeIndex) active = id
       }
       if (active) documents.activate(active)
-      if (restored.reloadGeneration !== undefined) unwrap(await api.finishSessionRestore(restored.reloadGeneration))
+      if (restored.restoreGeneration !== undefined) unwrap(await api.finishSessionRestore(restored.restoreGeneration))
     } finally { await files.release(registered) }
     if (restored.problems.length) files.reportError(restored.problems.join(' '), 'warning')
   })

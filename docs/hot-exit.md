@@ -19,6 +19,8 @@ default. While it is off, pinned tabs still reopen, and a close asks about unsav
   A dash means there is no known live session. Restored queries start disconnected.
 - View › Reload Window keeps pinned tabs and reopens them disconnected. Unpinned tabs follow the workbench's existing
   reload and AutoRecover behavior.
+- If the renderer crashes while reopening tabs at startup or after Reload Window, choosing Reload in the crash dialog
+  retries the same checkpoint, including its unsaved text.
 
 ## What a close keeps
 
