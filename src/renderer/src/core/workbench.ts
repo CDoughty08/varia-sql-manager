@@ -501,8 +501,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     editContribution(workbench, api),
     windowContribution(workbench, api, () => {
       const { documents: tabs, busy } = documents.getSnapshot()
-      if (!api.hotExit || !tabs.some(tab => tab.pinned)) return
+      if (!api.hotExit) return
       if (busy) throw new Error('Wait for the current document operation to finish before reloading.')
+      if (!tabs.some(tab => tab.pinned)) return
       const kept = keptSession(documents, id => connections.get(id)?.server, { pinnedOnly: true })
       requireKeptPins(tabs, kept.kept)
       return { session: kept.session, recoveryIds: [...kept.kept].map(id => recovery.copyId(id) ?? null) }

@@ -203,8 +203,13 @@ describe('hot exit', () => {
         { name: 'value.xml', kind: 'xml', eol: 'lf', dirty: false, text: '<a/>' }
       ]
     }
-    const api = { hotExit: true, takeSession: vi.fn<VariaApi['takeSession']>(async () => ({ ok: true, value: restored })) }
+    const finishSessionRestore = vi.fn<VariaApi['finishSessionRestore']>(async () => {
+      expect(documents.getSnapshot().documents.map(tab => tab.name)).toEqual(['SQLQuery7.sql', 'Month end', 'value.xml'])
+      return { ok: true, value: undefined }
+    })
+    const api = { hotExit: true, takeSession: vi.fn<VariaApi['takeSession']>(async () => ({ ok: true, value: { ...restored, reloadGeneration: 7 } })), finishSessionRestore }
     expect(await restoreSession({ api, documents, files })).toBe(3)
+    expect(finishSessionRestore).toHaveBeenCalledExactlyOnceWith(7)
     const tabs = documents.getSnapshot().documents
     expect(tabs.map(tab => [tab.name, tab.dirty, tab.connectionId, tab.database])).toEqual([['SQLQuery7.sql', true, undefined, 'Sales'], ['Month end', false, undefined, 'master'], ['value.xml', false, undefined, '']])
     expect(tabs[0]).toMatchObject({ lastServer: 'sql01' })
@@ -220,14 +225,16 @@ describe('hot exit', () => {
   it('does not open a second tab for a file already open, and releases what no tab holds', async () => {
     const { documents, files, api: fileApi } = fixture()
     documents.create('orders.sql', 'SELECT 3', 'master', undefined, false, file('orders.sql'))
-    const api = { hotExit: true, takeSession: vi.fn<VariaApi['takeSession']>(async () => ({ ok: true, value: { activeIndex: 0, problems: [], documents: [{ name: 'orders.sql', kind: 'sql' as const, eol: 'lf' as const, dirty: false, text: 'SELECT 3', file: file('orders.sql') }] } })) }
+    const finishSessionRestore = vi.fn<VariaApi['finishSessionRestore']>()
+    const api = { hotExit: true, takeSession: vi.fn<VariaApi['takeSession']>(async () => ({ ok: true, value: { activeIndex: 0, problems: [], documents: [{ name: 'orders.sql', kind: 'sql' as const, eol: 'lf' as const, dirty: false, text: 'SELECT 3', file: file('orders.sql') }] } })), finishSessionRestore }
     expect(await restoreSession({ api, documents, files })).toBe(0)
+    expect(finishSessionRestore).not.toHaveBeenCalled()
     expect(documents.getSnapshot().documents).toHaveLength(1)
     expect(fileApi.releaseSqlFile).not.toHaveBeenCalled()
   })
   it('reports a session that could not be read in the file banner', async () => {
     const { documents, files } = fixture()
-    const api = { hotExit: true, takeSession: vi.fn<VariaApi['takeSession']>(async () => ({ ok: false, error: 'Access is denied.' })) }
+    const api = { hotExit: true, takeSession: vi.fn<VariaApi['takeSession']>(async () => ({ ok: false, error: 'Access is denied.' })), finishSessionRestore: vi.fn<VariaApi['finishSessionRestore']>() }
     expect(await restoreSession({ api, documents, files })).toBe(0)
     expect(files.getSnapshot().error).toBe('The queries open when Varia SQL Manager last closed could not be reopened: Access is denied.')
   })

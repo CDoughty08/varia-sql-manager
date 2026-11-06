@@ -48,7 +48,7 @@ export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'ge
 }
 
 export interface SessionRestoreOptions {
-  readonly api: Pick<VariaApi, 'hotExit' | 'takeSession'>
+  readonly api: Pick<VariaApi, 'hotExit' | 'takeSession' | 'finishSessionRestore'>
   readonly documents: Pick<DocumentService, 'getSnapshot' | 'reopen' | 'activate' | 'setPinned'>
   readonly files: Pick<FileService, 'later' | 'release' | 'reportError'>
   readonly resumeRecovery?: (tabId: string, recoveryId: string) => void
@@ -76,8 +76,9 @@ export async function restoreSession({ api, documents, files, resumeRecovery }: 
         if (!open) opened++
         if (index === restored.activeIndex) active = id
       }
+      if (active) documents.activate(active)
+      if (restored.reloadGeneration !== undefined) unwrap(await api.finishSessionRestore(restored.reloadGeneration))
     } finally { await files.release(registered) }
-    if (active) documents.activate(active)
     if (restored.problems.length) files.reportError(restored.problems.join(' '), 'warning')
   })
   return opened

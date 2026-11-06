@@ -335,12 +335,12 @@ function sessionInput(request: SessionWrite): SessionInput {
 async function reopenDocument(document: SessionRecordDocument): Promise<RestoredDocument> {
   const { path, text, ...rest } = document
   if (text !== undefined) {
-    const file = path ? await files.register(path) : undefined
+    const file = path ? await files.register(path, document.kind) : undefined
     return { ...rest, text, ...file ? { file } : {} }
   }
   if (!path) throw new Error(`${document.name} could not be reopened.`)
   try {
-    const file = await files.read(path)
+    const file = await files.read(path, false, document.kind)
     return { ...rest, eol: file.eol, text: file.content, dirty: false, file: { id: file.id, name: file.name, path: file.path, encoding: file.encoding, ...file.codePage ? { codePage: file.codePage } : {}, readOnly: file.readOnly } }
   } catch (error) { throw new Error(`${basename(path)} could not be reopened: ${openError(error)}`.slice(0, 600)) }
 }
@@ -378,7 +378,7 @@ function openRecent(id: string): Promise<OpenedFiles> {
 function requestClose(intent: CloseIntent): void {
   closePending = true
   closeIntent = mergeCloseIntent(closeIntent, intent)
-  command('window.close')
+  if (rendererReady) command('window.close')
 }
 
 /** Restarting closes every connection and rolls back open transactions, and stops a long run part way (the page lets
@@ -417,7 +417,8 @@ function confirmUnresponsiveClose(window: BrowserWindow, quit: boolean): void {
 }
 
 function rendererCanConfirm(window: BrowserWindow): boolean {
-  return rendererReady && !rendererUnresponsive && !window.webContents.isCrashed()
+  // A close during the page swap waits for the replacement to reopen its pins before the ordinary quit flow.
+  return (rendererReady || reloadSession?.generation === rendererGeneration) && !rendererUnresponsive && !window.webContents.isCrashed()
 }
 
 const menuActions: ApplicationMenuActions = {
@@ -551,7 +552,7 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
   contents.on('will-prevent-unload', event => {
     if (closeApproved || reloadApproved) { reloadApproved = false; event.preventDefault(); return }
     const generation = rendererGeneration
-    const checkpoint = reloadSession
+    const checkpoint = reloadSession?.generation === generation + 1 ? reloadSession : undefined
     const abandon = () => { if (reloadSession === checkpoint) reloadSession = undefined }
     void oneDialog(signal => window.isDestroyed() ? Promise.resolve({ response: 1 }) : dialog.showMessageBox(window, { type: 'warning', title: 'Reload workbench', message: 'Reload Varia SQL Manager?', detail: reloadDetail(longRuns, lossDetailsFor(pageGeneration, !!checkpoint).reload), buttons: ['Reload', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal }),
       { response: 1 }, true).then(({ response }) => {
@@ -796,7 +797,10 @@ app.whenReady().then(async () => {
     const request = typeof value === 'object' && value !== null ? reloadRequest.parse(value) : undefined
     const role = request?.role ?? rendererRoleSchema.parse(value), main = mainWindow
     if (!main) return
-    if (role === 'reload' && reloadSession?.generation === rendererGeneration + 1) return
+    if (role === 'reload' && reloadSession) {
+      if (reloadSession.generation === rendererGeneration + 1) return
+      throw new Error('Wait for the pinned tabs to reopen before reloading.')
+    }
     if (request) {
       if (!hotExitAvailable || pageGeneration !== rendererGeneration) throw new Error('The pinned tabs cannot be kept by this page.')
       reloadSession = { generation: rendererGeneration + 1, record: encodeSession(sessionInput(request.session)).record, recoveryIds: request.recoveryIds }
@@ -922,7 +926,7 @@ app.whenReady().then(async () => {
   handle('varia:recovery-list', () => recovery.list(pageGeneration))
   handle('varia:recovery-take', async (value): Promise<RecoveredDocument> => {
     const generation = pageGeneration, record = await recovery.take(recoveryTakeSchema.parse(value).id, generation)
-    const file = record.path && generation === rendererGeneration ? await files.register(record.path) : undefined
+    const file = record.path && generation === rendererGeneration ? await files.register(record.path, record.kind) : undefined
     return { text: record.text, name: record.name, kind: record.kind, eol: record.eol, ...file ? { file } : {} }
   })
   // Hot exit: the page's tabs as its close goes ahead, with main's paths in place of file ids, and the next start's restore.
@@ -934,7 +938,6 @@ app.whenReady().then(async () => {
     const generation = pageGeneration, first = !sessionTaken
     sessionTaken = true
     const checkpoint = reloadSession?.generation === generation ? reloadSession : undefined
-    if (checkpoint) reloadSession = undefined
     const record = checkpoint?.record ?? (hotExitAvailable ? await openSession.take(first) : undefined)
     const documents: RestoredDocument[] = [], problems: string[] = []
     let activeIndex = -1
@@ -947,7 +950,12 @@ app.whenReady().then(async () => {
       const resumed = restored.dirty && recoveryId && await recovery.resumeReloaded(recoveryId, generation - 1, generation, restored).catch(() => false)
       documents.push(resumed && recoveryId ? { ...restored, recoveryId } : restored)
     }
-    return { documents, activeIndex, problems: problems.slice(0, 32) }
+    return { documents, activeIndex, problems: problems.slice(0, 32), ...checkpoint ? { reloadGeneration: generation } : {} }
+  })
+  handle('varia:session-restored', value => {
+    const generation = z.int().parse(value)
+    if (generation === pageGeneration && generation === rendererGeneration && reloadSession?.generation === generation)
+      reloadSession = undefined
   })
   handle('varia:recent-files', () => recentFiles())
   handle('varia:recent-files-open', value => openRecent(z.uuid().parse(value)))

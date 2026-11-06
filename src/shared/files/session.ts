@@ -63,4 +63,10 @@ export interface RestoredDocument {
   readonly database?: string
 }
 /** What the next start reopens; `problems` are fixed sentences about tabs that could not reopen (their file is gone). */
-export interface RestoredSession { readonly documents: readonly RestoredDocument[]; readonly activeIndex: number; readonly problems: readonly string[] }
+export interface RestoredSession {
+  readonly documents: readonly RestoredDocument[]
+  readonly activeIndex: number
+  readonly problems: readonly string[]
+  /** The reload checkpoint is released once this page has reopened its tabs. */
+  readonly reloadGeneration?: number
+}

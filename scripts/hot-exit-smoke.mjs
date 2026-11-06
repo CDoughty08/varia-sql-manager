@@ -3,9 +3,9 @@
 // reopens every tab in order, with its text, unsaved state and name, the active one active, a clean file read again from
 // disk, and no Recover dialog. Native message boxes are stubbed in main and recorded; files live under artifacts/.
 import { electron, expect } from './fixtures/smoke.mjs'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
-import { activeDocumentName, backendReady, documentShelf, documentTab, documentTabs, editorText, editorTextbox, pinDocumentButton, quickInputBox, quickInputRows, tabNameBox, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, documentShelf, documentTab, documentTabs, editorText, editorTextbox, gridCell, menubar, outputStatus, pinDocumentButton, queryStatus, quickInputBox, quickInputRows, resultGrid, tabNameBox, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'hot-exit-profile-'))
@@ -24,13 +24,16 @@ const watchdog = setTimeout(() => { console.error('Hot exit suite exceeded its t
 async function launch(args) {
   application = await electron.launch({ args: ['.', ...args], env, chromiumSandbox })
   await application.evaluate(({ dialog }) => {
-    const state = globalThis.variaHotExit = { prompts: [], saveDefaults: [], reloadAnswer: 1 }
+    const state = globalThis.variaHotExit = { prompts: [], saveDefaults: [], reloadAnswer: 1, savePath: '' }
     dialog.showMessageBox = async (_window, options) => {
       const prompt = options ?? _window
       state.prompts.push(prompt.message)
       return { response: prompt.title === 'Reload workbench' ? state.reloadAnswer : 2, checkboxChecked: false }
     }
-    dialog.showSaveDialog = async (_window, options) => { state.saveDefaults.push((options ?? _window).defaultPath); return { canceled: true, filePath: '' } }
+    dialog.showSaveDialog = async (_window, options) => {
+      state.saveDefaults.push((options ?? _window).defaultPath)
+      return { canceled: !state.savePath, filePath: state.savePath }
+    }
   })
   page = await application.firstWindow()
   page.on('pageerror', error => failures.push(error.message))
@@ -154,10 +157,35 @@ try {
   await reload()
   await expect.poll(prompts).toEqual(['Reload Varia SQL Manager?'])
   expect(await tabNames()).toEqual(['Totals', 'Orders report', 'Welcome', 'Month end', 'SQLQuery4.sql'])
-  await application.evaluate(() => { globalThis.variaHotExit.reloadAnswer = 0 })
-  const reloaded = page.waitForEvent('domcontentloaded')
-  await reload()
-  await reloaded
+  // Hold the saved pin's read so the replacement page can issue another reload during the restore.
+  await application.evaluate((_electron, path) => {
+    const fs = process.getBuiltinModule('node:fs/promises')
+    const { syncBuiltinESMExports } = process.getBuiltinModule('node:module')
+    const original = fs.open, state = globalThis.variaHotExit
+    state.reloadAnswer = 0
+    fs.open = async (file, ...args) => {
+      if (file === path && !state.releaseRead) {
+        await new Promise(resolve => { state.releaseRead = resolve })
+      }
+      return original(file, ...args)
+    }
+    syncBuiltinESMExports()
+    state.restoreOpen = () => { fs.open = original; syncBuiltinESMExports(); state.releaseRead?.() }
+  }, orders)
+  try {
+    const reloaded = page.waitForEvent('domcontentloaded')
+    await reload()
+    await reloaded
+    await expect.poll(() => application.evaluate(() => !!globalThis.variaHotExit.releaseRead)).toBe(true)
+    expect(await tabNames()).toEqual([])
+    await reload()
+    await expect(page.getByRole('alert').filter({ hasText: 'Wait for the current document operation to finish before reloading.' })).toBeVisible()
+    expect(await page.evaluate(() => window.varia.runRole('reload'))).toMatchObject({
+      ok: false, error: 'Wait for the pinned tabs to reopen before reloading.'
+    })
+  } finally {
+    await application.evaluate(() => globalThis.variaHotExit.restoreOpen())
+  }
   await expect.poll(tabNames).toEqual(['Totals', 'Orders report'])
   const recover = page.getByRole('dialog', { name: 'Recover Unsaved Queries', exact: true })
   await expect(recover.getByRole('checkbox', { name: 'Recover Month end', exact: true })).toBeVisible()
@@ -168,7 +196,68 @@ try {
   await documentTab(page, 'Totals').click()
   await expect.poll(text).toContain('SELECT 3 AS totals')
   await expect(unsavedMark(documentTab(page, 'Totals'))).toBeVisible()
-  console.log('Hot exit checks: canceling Reload Window keeps the current page, and confirming it restores clean and dirty pins with their text.')
+  console.log('Hot exit checks: canceling Reload Window keeps the page, and a second reload during restore preserves both pins.')
+
+  // The value editor can save multibyte XML above the SQL file limit. A path-only pin must reopen it with its own limit.
+  expect(await page.evaluate(() => window.varia.updateSettings({ 'environment.documents.hotExit': false }))).toMatchObject({ ok: true })
+  await toolbarButton(page, 'Connect').click()
+  const connect = page.getByRole('dialog', { name: 'Connect', exact: true })
+  await expect(connect.getByText('Loading saved connections…')).toHaveCount(0)
+  await connect.getByLabel('Server Name', { exact: true }).fill('hot-exit-test')
+  await connect.getByLabel('Authentication', { exact: true }).selectOption('windows')
+  await connect.getByLabel('Trust server certificate', { exact: true }).check()
+  await connect.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(connect).toHaveCount(0)
+  await typeInNew('SELECT 1 -- FOR_XML_FIXTURE')
+  await page.keyboard.press('F5')
+  await expect(outputStatus(page)).toContainText(/^Completed/)
+  await gridCell(resultGrid(page), 0, 0).click()
+  await expect(queryStatus(page)).toHaveText('XML document')
+  const xmlPath = join(folder, 'large-pin.xml')
+  const xml = '<pinnedRoot>\r\n' + ('  <row>' + '\u6f22'.repeat(600) + '</row>\r\n').repeat(2830) + '</pinnedRoot>'
+  await application.evaluate(({ clipboard }, { xml, xmlPath }) => {
+    clipboard.writeText(xml)
+    globalThis.variaHotExit.savePath = xmlPath
+  }, { xml, xmlPath })
+  await editorTextbox(page).focus()
+  await page.keyboard.press('Control+A')
+  await page.keyboard.press('Control+V')
+  await expect(unsavedMark(documentTab(page, /\.xml$/))).toBeVisible()
+  await page.keyboard.press('Control+S')
+  await expect(documentTab(page, 'large-pin.xml')).toBeVisible()
+  expect((await stat(xmlPath)).size).toBeGreaterThan(5_000_000)
+  await pinDocumentButton(page, 'large-pin.xml').click()
+  // Close the unpinned test query without saving it. The close stub chooses Don't Save for a query prompt below.
+  await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
+  const restarted = new Promise(done => application.process().once('exit', done))
+  await application.evaluate(({ app }) => app.quit())
+  await restarted
+  const pinnedRecord = JSON.parse(await readFile(join(profile, 'Session', 'session.json'), 'utf8'))
+  expect(pinnedRecord.documents.map(tab => tab.name)).toEqual(['Totals', 'Orders report', 'large-pin.xml'])
+  expect(pinnedRecord.documents[2]).toMatchObject({ kind: 'xml', path: xmlPath, dirty: false, pinned: true })
+  expect(pinnedRecord.documents[2].text).toBeUndefined()
+  await launch([])
+  await expect(documentShelf(page, true).getByRole('tab', { name: 'large-pin.xml', exact: true })).toBeVisible()
+  expect(await activeDocumentName(page)).toBe('large-pin.xml')
+  await expect(queryStatus(page)).toHaveText('XML document')
+  await expect.poll(text).toContain('<pinnedRoot>')
+  console.log('Hot exit checks: a saved XML pin above 5 MB reopens with startup restore off.')
+
+  // A quit during navigation must reach the replacement page after it reopens the pins.
+  const recoverAgain = page.getByRole('dialog', { name: 'Recover Unsaved Queries', exact: true })
+  await expect(recoverAgain.getByRole('checkbox', { name: 'Recover Month end', exact: true })).toBeVisible()
+  await recoverAgain.getByRole('button', { name: 'Later', exact: true }).click()
+  await application.evaluate(({ app, BrowserWindow }) => {
+    globalThis.variaHotExit.reloadAnswer = 0
+    BrowserWindow.getAllWindows()[0].webContents.once('did-start-navigation', () => app.quit())
+  })
+  const quitDuringReload = new Promise(done => application.process().once('exit', done))
+  await menubar(page).getByRole('menuitem', { name: 'View', exact: true }).click()
+  await page.getByRole('menu', { name: 'View', exact: true }).getByRole('menuitem', { name: 'Reload Window', exact: true }).click()
+  await quitDuringReload
+  const afterReloadQuit = JSON.parse(await readFile(join(profile, 'Session', 'session.json'), 'utf8'))
+  expect(afterReloadQuit.documents).toEqual(pinnedRecord.documents)
+  console.log('Hot exit checks: quitting during a pinned reload keeps the pins for the next start.')
   expect(failures).toEqual([])
   console.log('Hot exit suite passed.')
 } catch (error) {

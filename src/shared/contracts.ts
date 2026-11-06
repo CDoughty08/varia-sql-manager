@@ -521,6 +521,7 @@ export interface VariaApi {
   keepSession(session: SessionWrite): Promise<ApiResult<void>>
   /** The tabs the last close kept, opened again; files that are gone are named in `problems`. */
   takeSession(): Promise<ApiResult<RestoredSession>>
+  finishSessionRestore(generation: number): Promise<ApiResult<void>>
   /** Writes text to the clipboard through main, which works while the window is unfocused; there is no read. */
   writeClipboardText(text: string): Promise<ApiResult<void>>
   confirmClose(name: string): Promise<ApiResult<'save' | 'discard' | 'cancel'>>

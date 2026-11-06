@@ -127,6 +127,7 @@ const api: VariaApi = {
   hotExit: !process.argv.includes('--varia-no-hot-exit'),
   keepSession: session => ipcRenderer.invoke('varia:session-write', session),
   takeSession: () => ipcRenderer.invoke('varia:session-take'),
+  finishSessionRestore: generation => ipcRenderer.invoke('varia:session-restored', generation),
   writeClipboardText: text => ipcRenderer.invoke('varia:clipboard-write', text),
   confirmClose: name => ipcRenderer.invoke('varia:confirm-close', name),
   confirmOpenConnections: () => ipcRenderer.invoke('varia:confirm-open-connections'),

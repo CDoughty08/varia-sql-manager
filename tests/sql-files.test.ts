@@ -137,6 +137,17 @@ describe('SQL file encodings and save hardening', () => {
     await writeFile(big, Buffer.alloc(5_000_001, 0x41))
     await expect(store.read(big)).rejects.toThrow('SQL files must be smaller than 5 MB.')
   })
+  it('uses the value kind limits when registering and refreshing a large saved XML file', async () => {
+    const store = new SqlFileStore(), path = join(directory, 'value.xml')
+    const content = '<a>' + '\u6f22'.repeat(1_700_000) + '</a>'
+    const saved = await store.save(content, undefined, path, 'xml')
+    expect((await store.reload(saved.id)).content).toBe(content)
+    store.clear()
+    const registered = await store.register(path, 'xml')
+    expect(registered?.path).toBe(path)
+    expect((await store.reload(registered!.id)).content).toBe(content)
+    await expect(store.read(path)).rejects.toThrow('SQL files must be smaller than 5 MB.')
+  })
   // Root can write any file, so the attribute means nothing there (cloud sessions).
   it.skipIf(process.getuid?.() === 0)('never replaces a read-only file without Overwrite, which clears the attribute first', async () => {
     const store = new SqlFileStore()
