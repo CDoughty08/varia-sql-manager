@@ -28,7 +28,7 @@ async function launch(args) {
     dialog.showMessageBox = async (_window, options) => {
       const prompt = options ?? _window
       state.prompts.push(prompt.message)
-      return { response: prompt.title === 'Reload workbench' ? state.reloadAnswer : 2, checkboxChecked: false }
+      return { response: prompt.title === 'Reload workbench' ? state.reloadAnswer : prompt.cancelId ?? 2, checkboxChecked: false }
     }
     dialog.showSaveDialog = async (_window, options) => {
       state.saveDefaults.push((options ?? _window).defaultPath)
@@ -198,8 +198,16 @@ try {
   await expect(unsavedMark(documentTab(page, 'Totals'))).toBeVisible()
   console.log('Hot exit checks: canceling Reload Window keeps the page, and a second reload during restore preserves both pins.')
 
+  expect(await page.evaluate(() => window.varia.updateSettings({
+    'environment.documents.hotExit': false, 'environment.documents.detectExternalChanges': true
+  }))).toMatchObject({ ok: true })
+  await documentTab(page, 'Orders report').click()
+  await editorTextbox(page).focus()
+  await page.keyboard.press('Control+A')
+  await page.keyboard.insertText('SELECT 4 AS pinned_orders')
+  await expect(unsavedMark(documentTab(page, 'Orders report'))).toBeVisible()
+
   // The value editor can save multibyte XML above the SQL file limit. A path-only pin must reopen it with its own limit.
-  expect(await page.evaluate(() => window.varia.updateSettings({ 'environment.documents.hotExit': false }))).toMatchObject({ ok: true })
   await toolbarButton(page, 'Connect').click()
   const connect = page.getByRole('dialog', { name: 'Connect', exact: true })
   await expect(connect.getByText('Loading saved connections…')).toHaveCount(0)
@@ -234,8 +242,13 @@ try {
   await restarted
   const pinnedRecord = JSON.parse(await readFile(join(profile, 'Session', 'session.json'), 'utf8'))
   expect(pinnedRecord.documents.map(tab => tab.name)).toEqual(['Totals', 'Orders report', 'large-pin.xml'])
+  expect(pinnedRecord.documents[1]).toMatchObject({
+    path: orders, dirty: true, text: 'SELECT 4 AS pinned_orders', fileSha256: expect.stringMatching(/^[0-9a-f]{64}$/)
+  })
   expect(pinnedRecord.documents[2]).toMatchObject({ kind: 'xml', path: xmlPath, dirty: false, pinned: true })
   expect(pinnedRecord.documents[2].text).toBeUndefined()
+  const externalOrders = 'SELECT 5 AS external_orders'
+  await writeFile(orders, externalOrders)
   await launch([])
   await expect(documentShelf(page, true).getByRole('tab', { name: 'large-pin.xml', exact: true })).toBeVisible()
   expect(await activeDocumentName(page)).toBe('large-pin.xml')
@@ -243,10 +256,21 @@ try {
   await expect.poll(text).toContain('<pinnedRoot>')
   console.log('Hot exit checks: a saved XML pin above 5 MB reopens with startup restore off.')
 
-  // A quit during navigation must reach the replacement page after it reopens the pins.
   const recoverAgain = page.getByRole('dialog', { name: 'Recover Unsaved Queries', exact: true })
   await expect(recoverAgain.getByRole('checkbox', { name: 'Recover Month end', exact: true })).toBeVisible()
   await recoverAgain.getByRole('button', { name: 'Later', exact: true }).click()
+
+  // Save from the restored dirty pin sees the disk change made while the app was closed.
+  await documentTab(page, 'Orders report').click()
+  await expect.poll(text).toContain('SELECT 4 AS pinned_orders')
+  await editorTextbox(page).focus()
+  await page.keyboard.press('Control+S')
+  await expect.poll(prompts).toContain(`The file ${orders} was changed outside Varia SQL Manager.`)
+  expect(await readFile(orders, 'utf8')).toBe(externalOrders)
+  await expect(unsavedMark(documentTab(page, 'Orders report'))).toBeVisible()
+  console.log('Hot exit checks: saving a restored dirty pin warns about external changes, and Cancel leaves both versions intact.')
+
+  // A quit during navigation must reach the replacement page after it reopens the pins.
   await application.evaluate(({ app, BrowserWindow }) => {
     globalThis.variaHotExit.reloadAnswer = 0
     BrowserWindow.getAllWindows()[0].webContents.once('did-start-navigation', () => app.quit())

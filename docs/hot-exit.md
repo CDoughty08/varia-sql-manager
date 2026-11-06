@@ -27,6 +27,8 @@ default. While it is off, pinned tabs still reopen, and a close asks about unsav
 - An untitled tab, or one with unsaved changes, keeps its text and unsaved state. A clean tab with a file keeps only
   its file's path and reopens by reading the file again (a file that is gone is named in a notice). An unsaved tab
   whose file is gone reopens with its text, without the file.
+- A kept buffer with a file carries the disk fingerprint it was based on. With external-change detection enabled,
+  saving asks before replacing newer disk contents. Older kept buffers without a fingerprint also ask before replacing an existing file.
 - The tab's name, the user's rename, its line ending, and for a connected query the server name and database.
 - Never results, connections, logins, passwords or connection strings.
 - Table designers, Database Properties, monitors and other custom tabs are not kept; one with unsaved changes still

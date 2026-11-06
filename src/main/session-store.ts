@@ -22,14 +22,17 @@ export const sessionWriteSchema = z.object({
 /** `session.json`: what main wrote at the last close, with each file's path in place of its id. */
 const recordSchema = z.object({
   version: z.literal(1), savedAt: z.iso.datetime(),
-  documents: z.array(z.object({ ...fields, path: z.string().min(1).max(sessionLimits.pathChars).optional() }).strict()
-    .refine(fits).refine(document => document.text !== undefined || (!!document.path && !document.dirty))).max(sessionLimits.documents),
+  documents: z.array(z.object({
+    ...fields, path: z.string().min(1).max(sessionLimits.pathChars).optional(), fileSha256: z.string().regex(/^[0-9a-f]{64}$/).optional()
+  }).strict().refine(fits)
+    .refine(document => document.text !== undefined || (!!document.path && !document.dirty))
+    .refine(document => document.fileSha256 === undefined || (!!document.path && document.text !== undefined))).max(sessionLimits.documents),
   activeIndex: z.int().min(-1).max(sessionLimits.documents - 1)
 }).strict()
 export type SessionRecord = z.infer<typeof recordSchema>
 export type SessionRecordDocument = SessionRecord['documents'][number]
-/** What `write` takes: the page's request with main's paths in place of file ids. */
-export type SessionInput = Omit<SessionWrite, 'documents'> & { readonly documents: readonly (Omit<SessionWrite['documents'][number], 'fileId'> & { readonly path?: string })[] }
+/** What `write` takes: the page's request with main's paths and disk baselines in place of file ids. */
+export type SessionInput = Omit<SessionWrite, 'documents'> & { readonly documents: readonly (Omit<SessionWrite['documents'][number], 'fileId'> & Pick<SessionRecordDocument, 'path' | 'fileSha256'>)[] }
 
 /** Why a write was refused at the cap; a fixed sentence, as the banner shows it. */
 export const sessionCapMessage = 'The open queries are too large to keep for the next start (64 MB in all).'
@@ -49,7 +52,9 @@ export function encodeSession(session: SessionInput, options: SessionStoreOption
     documents: reopens.map(({ document }) => ({
       name: document.name, ...document.baseName ? { baseName: document.baseName } : {}, kind: document.kind, eol: document.eol, dirty: document.dirty,
       ...document.pinned ? { pinned: true } : {},
-      ...document.path && document.path.length <= sessionLimits.pathChars ? { path: document.path } : {},
+      ...document.path && document.path.length <= sessionLimits.pathChars ? {
+        path: document.path, ...document.text !== undefined && document.fileSha256 ? { fileSha256: document.fileSha256 } : {}
+      } : {},
       ...document.server ? { server: document.server } : {}, ...document.database ? { database: document.database } : {},
       ...document.text !== undefined ? { text: document.text } : {}
     }))

@@ -558,4 +558,59 @@ describe('changes made outside', () => {
     expect(await saveDocument(store, request('SELECT 2', again.id), undefined, off.value, false)).toMatchObject({ name: 'ansi.sql' })
     expect(off.asked).toEqual([])
   })
+  it('keeps the disk baseline for a restored buffer after a check sees a newer version', async () => {
+    const store = new SqlFileStore(), path = join(directory, 'pinned.sql')
+    await writeFile(path, 'SELECT original')
+    const opened = await store.read(path)
+    const checkpoint = store.sessionFile(opened.id)!
+    await writeFile(path, 'SELECT external changes')
+    expect(await store.check()).toEqual([{ fileId: opened.id, change: 'modified' }])
+    expect(store.sessionFile(opened.id)).toEqual(checkpoint)
+
+    store.clear()
+    const restored = (await store.register(path, 'sql', { baseSha256: checkpoint.fileSha256 }))!
+    expect(store.sessionFile(restored.id)).toEqual(checkpoint)
+    expect(await store.check()).toEqual([])
+    const cancelled = prompts()
+    expect(await saveDocument(store, request('SELECT mine', restored.id), undefined, cancelled.value, true)).toBeNull()
+    expect(cancelled.asked).toEqual(['changed pinned.sql'])
+    expect(await readFile(path, 'utf8')).toBe('SELECT external changes')
+
+    const confirmed = prompts({ changed: true })
+    await saveDocument(store, request('SELECT mine', restored.id), undefined, confirmed.value, true)
+    expect(confirmed.asked).toEqual(['changed pinned.sql'])
+    expect(await readFile(path, 'utf8')).toBe('SELECT mine')
+    expect(store.sessionFile(restored.id)?.fileSha256).not.toBe(checkpoint.fileSha256)
+    expect(await store.changedOnDisk(restored.id)).toBe(false)
+  })
+  it('warns with a legacy restored buffer of unknown origin and skips the warning when the file is gone', async () => {
+    const store = new SqlFileStore(), path = join(directory, 'pinned.sql')
+    await writeFile(path, 'SELECT original')
+    const opened = await store.read(path)
+    const checkpoint = store.sessionFile(opened.id)!
+    store.release(opened.id)
+    const matching = (await store.register(path, 'sql', { baseSha256: checkpoint.fileSha256 }))!
+    expect(await store.changedOnDisk(matching.id)).toBe(false)
+    store.release(matching.id)
+    const legacy = (await store.register(path, 'sql', {}))!
+    expect(await store.changedOnDisk(legacy.id)).toBe(true)
+    await rm(path)
+    expect(await store.changedOnDisk(legacy.id)).toBe(false)
+    expect(await store.check()).toEqual([{ fileId: legacy.id, change: 'deleted' }])
+    expect(await store.changedOnDisk(legacy.id)).toBe(false)
+  })
+  it('verifies restored file bytes on save when a later external edit preserves the size and timestamp', async () => {
+    const store = new SqlFileStore(), path = join(directory, 'pinned.sql'), time = new Date('2026-01-01T00:00:00Z')
+    await writeFile(path, 'SELECT 1')
+    await utimes(path, time, time)
+    const opened = await store.read(path)
+    const { fileSha256 } = store.sessionFile(opened.id)!
+    store.release(opened.id)
+    const restored = (await store.register(path, 'sql', { baseSha256: fileSha256 }))!
+    const original = await stat(path)
+    await writeFile(path, 'SELECT 2')
+    await utimes(path, time, time)
+    expect(await stat(path)).toMatchObject({ size: original.size, mtimeMs: original.mtimeMs })
+    expect(await store.changedOnDisk(restored.id)).toBe(true)
+  })
 })

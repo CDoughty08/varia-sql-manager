@@ -84,6 +84,14 @@ describe('the hot exit session store', () => {
     expect(store.keptBy(1)).toBe(false)
   })
 
+  it('keeps a file baseline only with a path and buffered text', async () => {
+    const store = new SessionStore(folder), fileSha256 = '0'.repeat(64)
+    const dirty = { ...tabs.documents[0], path: tabs.documents[2].path, fileSha256 }
+    const clean = { ...tabs.documents[2], fileSha256 }
+    await store.write({ activeIndex: 0, documents: [dirty, clean, tabs.documents[0]] }, 1)
+    expect((await store.take(true))?.documents).toEqual([dirty, tabs.documents[2], tabs.documents[0]])
+  })
+
   it('quarantines an unreadable or invalid session rather than reopen it', async () => {
     await mkdir(folder, { recursive: true })
     await writeFile(join(folder, 'session.json'), '{ not json')
@@ -108,6 +116,7 @@ describe('the hot exit session store', () => {
     expect(refused({}, { kind: 'tableDesigner' })).toBe(false)
     expect(refused({}, { fileId: 'C:/a.sql' })).toBe(false)
     expect(refused({}, { path: 'C:/a.sql' })).toBe(false)
+    expect(refused({}, { fileSha256: '0'.repeat(64) })).toBe(false)
     expect(refused({}, { password: 'x' })).toBe(false)
     expect(refused({}, { server: 'x'.repeat(sessionLimits.serverChars + 1) })).toBe(false)
     expect(refused({}, { text: 'x'.repeat(4_194_305), kind: 'xml' })).toBe(false)

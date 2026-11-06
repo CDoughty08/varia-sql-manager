@@ -321,26 +321,24 @@ async function openPath(path: string): Promise<OpenSqlFile | undefined> {
 }
 const openFailure = (path: string, error: unknown) => `${basename(path)}: ${openError(error)}`.slice(0, 600)
 
-/** Resolves file ids from the page to paths owned by main before the file registry is reset. */
+/** Resolves file ids to main's paths and the disk versions under the buffers before the registry is reset. */
 function sessionInput(request: SessionWrite): SessionInput {
-  const documents = request.documents.map(({ fileId, ...document }) => {
-    let path: string | undefined
-    try { path = fileId ? files.get(fileId).path : undefined } catch { /* A released file cannot be reopened by path. */ }
-    return { ...document, ...path ? { path } : {} }
-  })
+  const documents = request.documents.map(({ fileId, ...document }) => ({
+    ...document, ...fileId ? files.sessionFile(fileId) : undefined
+  }))
   return { documents, activeIndex: request.activeIndex }
 }
 
 /** Reopens a kept tab. A clean file reads from disk again, and a dirty tab has its saved text even if the file is gone. */
 async function reopenDocument(document: SessionRecordDocument): Promise<RestoredDocument> {
-  const { path, text, ...rest } = document
+  const { path, text, fileSha256, ...rest } = document
   if (text !== undefined) {
-    const file = path ? await files.register(path, document.kind) : undefined
+    const file = path ? await files.register(path, document.kind, { baseSha256: fileSha256 }) : undefined
     return { ...rest, text, ...file ? { file } : {} }
   }
   if (!path) throw new Error(`${document.name} could not be reopened.`)
   try {
-    const file = await files.read(path, false, document.kind)
+    const file = await files.read(path, { kind: document.kind })
     return { ...rest, eol: file.eol, text: file.content, dirty: false, file: { id: file.id, name: file.name, path: file.path, encoding: file.encoding, ...file.codePage ? { codePage: file.codePage } : {}, readOnly: file.readOnly } }
   } catch (error) { throw new Error(`${basename(path)} could not be reopened: ${openError(error)}`.slice(0, 600)) }
 }

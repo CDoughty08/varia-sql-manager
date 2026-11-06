@@ -40,6 +40,14 @@ const ownershipCodes = new Set(['EPERM', 'EINVAL', 'ENOTSUP', 'EOPNOTSUPP', 'ENO
 /** What the last read or save saw of a registered file, so a change by another program is noticed, and reported once.
  *  `missing` keeps the last content's hash: a file deleted and then written back unchanged is no change. */
 interface Stamp { readonly size: number; readonly mtimeMs: number; readonly sha256: string; readonly missing?: true }
+interface FileBaseline { readonly baseSha256?: string }
+interface RegisteredFile extends FileBaseline { readonly file: SqlFile; readonly kind: DocumentKind; readonly restored?: true }
+interface FileReadOptions {
+  readonly reload?: boolean
+  readonly kind?: DocumentKind
+  /** The version under the restored buffer. An older checkpoint may not know it. */
+  readonly restore?: FileBaseline
+}
 type Comparison = { readonly change?: FileChange['change']; readonly stamp: Stamp } | undefined
 const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
 /**
@@ -74,7 +82,7 @@ export interface SaveOptions {
 
 /** Paths are granted by native dialogs, never accepted from renderer requests. */
 export class SqlFileStore {
-  private files = new Map<string, { file: SqlFile; kind: DocumentKind }>()
+  private files = new Map<string, RegisteredFile>()
   private stamps = new Map<string, Stamp>()
   /** Files a check reported changed that were not reloaded since: their next Save asks before replacing that change. */
   private conflicts = new Set<string>()
@@ -86,7 +94,7 @@ export class SqlFileStore {
    * Reads and registers the file at `path`. A file already registered keeps its id, and keeps what it was last read as:
    * an Open that finds its tab must not hide a change the tab has not seen (`reload` is the read that does show it).
    */
-  async read(path: string, reload = false, kind: DocumentKind = 'sql'): Promise<OpenSqlFile> {
+  async read(path: string, { reload = false, kind = 'sql', restore }: FileReadOptions = {}): Promise<OpenSqlFile> {
     const absolutePath = resolve(path), limits = fileKinds[kind]
     // A FIFO or device is refused without blocking; only a regular file is read, and at most one byte past the limit.
     const bytes = await readRegularFile(absolutePath, limits.maxBytes)
@@ -103,32 +111,42 @@ export class SqlFileStore {
       id: existing?.id ?? randomUUID(), name: existing?.name ?? basename(absolutePath), path: existing?.path ?? absolutePath, encoding: decoded.encoding,
       ...decoded.codePage ? { codePage: decoded.codePage } : {}, readOnly: await isReadOnly(absolutePath)
     }
-    if (!existing || reload) this.files.set(file.id, { file, kind })
-    if (reload) this.conflicts.delete(file.id)
     if (!existing || reload || !this.stamps.has(file.id)) {
+      const hash = sha256(bytes)
+      if (!existing || reload) this.files.set(file.id, restore
+        ? { file, kind, restored: true, baseSha256: restore.baseSha256 }
+        : { file, kind, baseSha256: hash })
       const info = await stat(absolutePath)
-      this.stamps.set(file.id, { size: info.size, mtimeMs: info.mtimeMs, sha256: sha256(bytes) })
+      this.stamps.set(file.id, { size: info.size, mtimeMs: info.mtimeMs, sha256: hash })
     }
+    if (reload) this.conflicts.delete(file.id)
     return { ...file, content: decoded.text, eol, mixedEol: mixed }
   }
 
   /**
-   * Registers the file at `path` again for a query AutoRecover kept, so its Save goes to that file: read as Open reads
-   * it (its encoding, and a stamp of what is there now), without its text. Undefined when a tab already has the file
-   * (one file, one tab) or it cannot be read; the query then opens without a file.
+   * Registers the file at `path` again for a kept query, with its current encoding and stamp. A session restore
+   * supplies the saved buffer's baseline separately. If the file cannot be read or is already open, the query
+   * reopens without a file.
    */
-  async register(path: string, kind: DocumentKind = 'sql'): Promise<SqlFile | undefined> {
+  async register(path: string, kind: DocumentKind = 'sql', restore?: FileBaseline): Promise<SqlFile | undefined> {
     if (await this.owner(resolve(path))) return undefined
     try {
-      const { id, name, path: registered, encoding, codePage, readOnly } = await this.read(path, false, kind)
+      const { id, name, path: registered, encoding, codePage, readOnly } = await this.read(path, { kind, restore })
       return { id, name, path: registered, encoding, ...codePage ? { codePage } : {}, readOnly }
     } catch { return undefined }
   }
 
-  get(fileId: string): SqlFile {
-    const entry = this.files.get(fileId)?.file
+  private registered(fileId: string): RegisteredFile {
+    const entry = this.files.get(fileId)
     if (!entry) throw new Error('This SQL file is no longer open. Use Save As to select a file.')
     return entry
+  }
+  get(fileId: string): SqlFile { return this.registered(fileId).file }
+
+  /** The disk version underlying the editor buffer. Change checks can observe new bytes without accepting them. */
+  sessionFile(fileId: string): { path: string; fileSha256?: string } | undefined {
+    const entry = this.files.get(fileId)
+    if (entry) return { path: entry.file.path, fileSha256: entry.baseSha256 }
   }
 
   /** Whether the registered file cannot be written now: its attribute may have changed since it was read. */
@@ -189,16 +207,18 @@ export class SqlFileStore {
       if (!replaced && restore !== undefined) await chmod(target, restore).catch(() => {})
     }
     const file: SqlFile = { id: existing?.id ?? randomUUID(), name: basename(path), path, encoding, readOnly: false }
-    this.files.set(file.id, { file, kind })
+    const hash = sha256(bytes)
+    this.files.set(file.id, { file, kind, baseSha256: hash })
     const info = await stat(target)
-    this.stamps.set(file.id, { size: info.size, mtimeMs: info.mtimeMs, sha256: sha256(bytes) })
+    this.stamps.set(file.id, { size: info.size, mtimeMs: info.mtimeMs, sha256: hash })
     this.conflicts.delete(file.id)
     return file
   }
 
   /** Reads a registered file again (Yes in File changed), keeping its id; what it sees becomes the file's stamp. */
   async reload(fileId: string): Promise<OpenSqlFile> {
-    const opened = await this.read(this.get(fileId).path, true, this.files.get(fileId)?.kind)
+    const { file, kind } = this.registered(fileId)
+    const opened = await this.read(file.path, { kind, reload: true })
     if (opened.id !== fileId) throw new Error('This SQL file is no longer open. Use Save As to select a file.')
     return opened
   }
@@ -239,22 +259,27 @@ export class SqlFileStore {
    *  reported and the user did not reload counts): Save asks before replacing that. A deleted file is no change here,
    *  since Save writes it again. */
   async changedOnDisk(fileId: string): Promise<boolean> {
-    this.get(fileId)
-    return this.conflicts.has(fileId) || (await this.compare(fileId).catch(() => undefined))?.change === 'modified'
+    const { baseSha256, restored } = this.registered(fileId)
+    // Verify the bytes before a restored buffer replaces them, even if a sync or copy preserved the file metadata.
+    const comparison = await this.compare(fileId, restored).catch(() => undefined)
+    if (restored && !comparison) return true
+    const stamp = comparison?.stamp ?? this.stamps.get(fileId)
+    return !!stamp && !stamp.missing && (this.conflicts.has(fileId) || stamp.sha256 !== baseSha256)
   }
 
   /** How the file differs from its stamp, and the stamp that records what was seen; undefined when it cannot tell. */
-  private async compare(fileId: string): Promise<Comparison> {
+  private async compare(fileId: string, verifyContents = false): Promise<Comparison> {
     const file = this.files.get(fileId)?.file, stamp = this.stamps.get(fileId)
     if (!file || !stamp) return undefined
     let info
     try { info = await (this.options.stat ?? stat)(file.path) }
     catch (error) {
       if (!missing(error)) return undefined
-      return stamp.missing ? undefined : { change: 'deleted', stamp: { ...stamp, missing: true } }
+      if (stamp.missing) return verifyContents ? { stamp } : undefined
+      return { change: 'deleted', stamp: { ...stamp, missing: true } }
     }
     if (!info.isFile()) return undefined
-    if (!stamp.missing && info.size === stamp.size && info.mtimeMs === stamp.mtimeMs) return undefined
+    if (!verifyContents && !stamp.missing && info.size === stamp.size && info.mtimeMs === stamp.mtimeMs) return undefined
     // Hashed up to the largest file a save writes: a 6 MB XML document touched by another program is no change.
     const bytes = await readRegularFile(file.path, maxStampBytes)
     if (!bytes) return undefined
