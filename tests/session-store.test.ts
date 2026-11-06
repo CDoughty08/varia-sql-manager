@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/
 import { join, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { SessionStore, sessionCapMessage, sessionWriteSchema, type SessionInput } from '../src/main/session-store'
+import { maxSqlFileBytes } from '../src/main/sql-files'
 import { saveDefaultPath } from '../src/main/file-names'
 import { cleanTabName, sessionLimits, tabNameChars } from '../src/shared/files/session'
 
@@ -29,6 +30,15 @@ const tabs: SessionInput = {
 }
 
 describe('the hot exit session store', () => {
+  it('round-trips a plan larger than the SQL file limit without widening the limit for queries', async () => {
+    const plan = { name: 'big.sqlplan', kind: 'sqlplan', eol: 'lf', dirty: true, text: 'x'.repeat(maxSqlFileBytes + 1) } as const
+    const session = { activeIndex: 0, documents: [plan] }
+    expect(sessionWriteSchema.safeParse({ ...session, documents: [{ ...plan, kind: 'sql' }] }).success).toBe(false)
+    const store = new SessionStore(folder)
+    await store.write(sessionWriteSchema.parse(session), 1)
+    expect((await new SessionStore(folder).take(true))?.documents[0]).toEqual(plan)
+  })
+
   it('keeps the tabs in order for the next start, which takes them once and keeps a copy until its own close', async () => {
     const store = new SessionStore(folder, { now: () => new Date('2026-11-04T09:00:00Z') })
     await store.write(tabs, 3)

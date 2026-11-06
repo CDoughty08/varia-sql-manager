@@ -57,6 +57,7 @@ import { confirmOpenConnectionsSchema, openConnectionsAnswer, openConnectionsBox
 import { actionMessageBox, actionPromptAnswer, confirmActionBox, noLongRuns, parseLongRuns, reloadDetail, restartDetail } from './action-prompts'
 import type { LongRunState } from '../shared/long-runs.ts'
 import type { ApiResult, OpenedFiles, OpenSqlFile, QueryResult, RecoveredDocument, ReloadAnswer, RpcMethod, RpcMethods } from '../shared/contracts'
+import { preparePlan } from './plan-request'
 import { memoryEventSchema } from '../shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../shared/explorer/schema.ts'
 import { scriptCancelSchema } from '../shared/scripting/schema.ts'
@@ -795,6 +796,8 @@ app.whenReady().then(async () => {
     try {
       const validated = validateRequest(method, params)
       const prepared = await prepareConnection(method, validated, context, { savedPasswords })
+      // Only main creates the compressed wire form; the renderer cannot supply compressed data or an encoding.
+      if (method === 'plans.parse') prepared.params = await preparePlan((validated as { xml: string }).xml)
       // A script's events reach the results worker; its results become readable by this renderer.
       const queryId = method === 'query.execute' ? (validated as RpcMethods['query.execute']['params']).queryId : undefined
       // An Object Explorer load, a script, an object action, an SSIS Catalog read or write, a session's Details or a connect
@@ -846,7 +849,7 @@ app.whenReady().then(async () => {
     clear: () => backend.request('entra.cache.clear', {})
   }))
   handle('varia:files-open', async () => {
-    const selected = await pageDialog(window => dialog.showOpenDialog(window, { title: 'Open SQL query', filters: [{ name: 'SQL files', extensions: ['sql'] }, { name: 'Text files', extensions: ['txt'] }], properties: ['openFile', 'multiSelections'] }), { canceled: true, filePaths: [] })
+    const selected = await pageDialog(window => dialog.showOpenDialog(window, { title: 'Open SQL query', filters: [{ name: 'SQL files', extensions: ['sql'] }, { name: 'Execution plans', extensions: ['sqlplan'] }, { name: 'Text files', extensions: ['txt'] }], properties: ['openFile', 'multiSelections'] }), { canceled: true, filePaths: [] })
     if (selected.canceled) return []
     if (selected.filePaths.length > maxLaunchFiles) throw new Error(`Select at most ${maxLaunchFiles} files at a time.`)
     const opened = await Promise.all(selected.filePaths.map(path => files.read(path)))

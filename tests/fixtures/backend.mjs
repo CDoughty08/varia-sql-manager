@@ -68,6 +68,10 @@ import { decodePage, encodePage } from '../../src/shared/ipc/wire/pages.ts'
 import { copyText, exportText } from './backend/text-writer.mjs'
 import { parseDirective, shapes } from './backend/shapes.mjs'
 import { backendMethods } from '../../src/shared/ipc/methods.ts'
+import { gunzipSync } from 'node:zlib'
+import { fixturePlan } from './plans/model.mjs'
+
+const fixturePlanXml = readFileSync(new URL('./plans/multiple.sqlplan', import.meta.url), 'utf8')
 import { folderSpecs, kindSpecs, staticChildren } from '../../src/shared/explorer/catalog.ts'
 import { loginDetail, loginStatusOf, loginSubtypeOf } from '../../src/shared/actions/logins.ts'
 import { liveProbes } from '../../src/shared/live/catalog.ts'
@@ -647,8 +651,14 @@ const fixtures = {
   ]),
   XML_PLAN_FIXTURE: (id, params) => summary(id, params.database, [
     { columns: [column('answer', 'int')], rows: [['1']], batchNumber: 2 },
-    { columns: [{ ...column('Microsoft SQL Server 2005 XML Showplan', 'nvarchar'), role: 'plan' }], rows: [['<ShowPlanXML><BatchSequence><Batch /></BatchSequence></ShowPlanXML>']], kind: 'executionPlan', batchNumber: 2 }
+    { columns: [{ ...column('Microsoft SQL Server 2005 XML Showplan', 'nvarchar'), role: 'plan' }], rows: [[fixturePlanXml]], kind: 'executionPlan', batchNumber: 2 }
   ], { completedBatches: 3, totalBatches: 3 }),
+  ACTUAL_PLAN_FIXTURE: (id, params) => {
+    const plan = { columns: [{ ...column('Microsoft SQL Server 2005 XML Showplan', 'xml'), role: 'plan' }], rows: [[fixturePlanXml]], kind: 'executionPlan' }
+    const second = params.sql.includes('UNREADABLE_PLAN') ? { ...plan, rows: [['<unavailable-plan />']] } : plan
+    const planSets = params.includeActualPlan ? [describe(storeResult(plan, 0)), describe(storeResult({ ...second, batchNumber: 2 }, 1))] : undefined
+    return summary(id, params.database, [{ columns: [column('answer', 'int')], rows: [['42']] }], { planSets, completedBatches: 2, totalBatches: 2 })
+  },
   // FOR XML output joined into one value (role xml), as ForXmlCollector stores it, and an xml cast.
   FOR_XML_FIXTURE: (id, params) => summary(id, params.database, [
     { columns: [{ ...column('XML_F52E2B61-18A1-11d1-B105-00805F49916B', 'ntext'), role: 'xml' }], rows: [['<objects><o><name>Orders</name><object_id>1</object_id></o><o><name>Customers</name><object_id>2</object_id></o></objects>']] }
@@ -942,6 +952,11 @@ async function workbench(id, method, params, credit) {
   if (!directive?.hold && method !== 'results.export' && method !== 'ssis.describe') while (await controlled(join('hold', method))) await sleep(25)
   switch (method) {
     case 'system.health': return respond(id, { protocolVersion: 2, runtime: 'fake', platform: process.platform, smoVersion: 'fake', sqlClientVersion: 'fake' })
+    case 'plans.parse': {
+      const xml = gunzipSync(Buffer.from(params.xml, 'base64'), { maxOutputLength: 32 * 1024 * 1024 }).toString('utf8')
+      if (xml.includes('<unavailable-plan')) return fail(id, 'INVALID_PARAMS', 'The plan XML could not be graphed.')
+      return respond(id, xml.includes('SUM(Amount)') ? fixturePlan : { version: '', build: '', notices: [], statements: [] })
+    }
     case 'connections.connect': {
       if (params.server === 'entra-wait') return entraWait(id, method)
       if (params.server === 'password-check' && !params.trustServerCertificate && await controlled('untrusted-certificate')) {

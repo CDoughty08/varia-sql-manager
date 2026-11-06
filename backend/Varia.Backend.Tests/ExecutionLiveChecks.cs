@@ -22,8 +22,10 @@ internal static class ExecutionLiveChecks
         var store = service.Results;
         var session = Guid.NewGuid().ToString();
         Task<object> Call(string method, object args) => service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, json), json);
-        async Task<QueryResult> Run(string sql, string? sessionId = null, string database = "master", bool stopOnError = false, int timeout = 30, string? queryId = null) =>
-            (QueryResult)await Call("query.execute", new QueryArgs(info.Id, sessionId ?? session, database, sql, queryId ?? Guid.NewGuid().ToString(), 1000, timeout, StopOnError: stopOnError));
+        async Task<QueryResult> Run(string sql, string? sessionId = null, string database = "master", bool stopOnError = false, int timeout = 30, string? queryId = null,
+            bool includeActualPlan = false, int maxRows = 1000, int maxResultSets = 10) =>
+            (QueryResult)await Call("query.execute", new QueryArgs(info.Id, sessionId ?? session, database, sql, queryId ?? Guid.NewGuid().ToString(), maxRows, timeout,
+                StopOnError: stopOnError, IncludeActualPlan: includeActualPlan, MaxResultSets: maxResultSets));
         List<string> Texts(QueryResult result) => LiveResultChecks.Texts(result);
         async Task<string?> Options(string? sessionId = null)
         {
@@ -43,6 +45,67 @@ internal static class ExecutionLiveChecks
             await Call("query.session.close", new SessionArgs(session));
             var reopened = await Options();
             check(reopened == Defaults, "a reopened session runs the prologue again: " + reopened);
+
+            // The toolbar capture shares the executing session and keeps plans even after the grid limits are reached.
+            var beforeCapture = await Run("CREATE TABLE #capture (n int); BEGIN TRAN;");
+            var captured = await Run("INSERT #capture VALUES (42);\nGO\nSELECT n FROM #capture;\nGO\nSELECT n + 1 FROM #capture;",
+                includeActualPlan: true, maxRows: 1, maxResultSets: 1);
+            check(captured.Status == "completed" && captured.Spid == beforeCapture.Spid && captured.DiscardedResultSets == 1
+                && captured.ResultSets is [{ Kind: "rows", RowsStored: 1 } data] && LiveResultChecks.RowsOf(store, data)[0][0] == "42"
+                && captured.PlanSets is { } capturedPlans && capturedPlans.Select(set => set.BatchNumber).Distinct().SequenceEqual([1, 2, 3])
+                && new[] { 1, 2, 3 }.All(batch => capturedPlans.Any(set => set.Kind == "executionPlan" && set.RowsStored == 1 && set.BatchNumber == batch
+                    && LiveResultChecks.RowsOf(store, set)[0][0] is { } xml && xml.Contains("ShowPlanXML") && xml.Contains("RunTimeCountersPerThread"))),
+                "toolbar capture returns actual plans in batch order outside the grid limits: " + string.Join(" | ", Texts(captured)));
+            var afterCapture = await Run("SELECT @@TRANCOUNT, n FROM #capture; ROLLBACK; DROP TABLE #capture;");
+            check(afterCapture.PlanSets is null && afterCapture.ResultSets is [{ Kind: "rows" } remaining]
+                && LiveResultChecks.RowsOf(store, remaining)[0].SequenceEqual(["1", "42"]),
+                "toolbar capture leaves the tab's transaction and temp table in place");
+
+            await Run("CREATE TABLE #capture_rowcount(n int);");
+            const string InsertTwo = "INSERT #capture_rowcount VALUES (1), (2);";
+            const string BranchOnRows = "IF @@ROWCOUNT = 2 PRINT 'two'; ELSE PRINT 'different';";
+            await Run(InsertTwo);
+            var beforeWithCapture = await Run(BranchOnRows, includeActualPlan: true);
+            await Run(InsertTwo, includeActualPlan: true);
+            var afterWithCapture = await Run(BranchOnRows);
+            check(Texts(beforeWithCapture).Contains("two") && Texts(afterWithCapture).Contains("two"),
+                "capture setup and collection preserve cross-execution @@ROWCOUNT");
+
+            var zeroUpdate = await Run("UPDATE #capture_rowcount SET n = 1 WHERE n = -1;", includeActualPlan: true);
+            check(zeroUpdate.PlanSets is [{ RowsStored: 1 }, ..] && zeroUpdate.RecordsAffected == 0 && Texts(zeroUpdate).SequenceEqual(["(0 rows affected)"]),
+                "capture does not add a synthetic row count to a zero-row update (" + zeroUpdate.PlanSets?.Count + " plans, "
+                + zeroUpdate.RecordsAffected + " affected): " + string.Join(" | ", Texts(zeroUpdate)));
+
+            var aliased = await Run("SELECT 42 AS [Microsoft SQL Server 2005 XML Showplan];"
+                + "SELECT CAST(REPLICATE(N'q', 3000) AS nvarchar(max)) AS [Microsoft SQL Server 2005 XML Showplan];", includeActualPlan: true);
+            check(aliased.ResultSets is [{ Kind: "rows" } numeric, { Kind: "rows" } text]
+                && LiveResultChecks.RowsOf(store, numeric)[0][0] == "42" && LiveResultChecks.RowsOf(store, text)[0][0] == new string('q', 3000),
+                "ordinary values under the Showplan column alias keep their types and content in Results");
+
+            await Run("SET STATISTICS XML ON;");
+            const string QueryWithPlan = "SELECT name FROM sys.databases WHERE database_id = 1;";
+            var manualCapture = await Run(QueryWithPlan, includeActualPlan: true);
+            var manualStillOn = await Run(QueryWithPlan);
+            check(manualCapture.PlanSets is [{ Kind: "executionPlan" }, ..] && manualCapture.ResultSets is [{ Kind: "rows" }, { Kind: "executionPlan" }]
+                && manualStillOn.PlanSets is null && manualStillOn.ResultSets is [{ Kind: "rows" }, { Kind: "executionPlan" }],
+                "toolbar capture preserves STATISTICS XML already enabled by the user: " + manualCapture.PlanSets?.Count
+                + " captured, then " + string.Join(", ", manualStillOn.ResultSets.Select(set => set.Kind)) + " without the toggle");
+            await Run("SET STATISTICS XML OFF;");
+
+            var timedCapture = await Run(QueryWithPlan + "\nGO\nWAITFOR DELAY '00:00:10';", timeout: 2, includeActualPlan: true);
+            var afterTimeout = await Run(QueryWithPlan);
+            check(timedCapture.Status == "timedOut" && timedCapture.PlanSets?.Any(set => set is { BatchNumber: 1, RowsStored: 1 }) == true
+                && afterTimeout.PlanSets is null && afterTimeout.ResultSets is [{ Kind: "rows" }],
+                "timeout keeps completed plans and leaves the session ready to reuse: " + timedCapture.Status
+                + ", plans in batches " + string.Join(", ", timedCapture.PlanSets?.Select(set => set.BatchNumber) ?? [])
+                + ", next " + afterTimeout.Status + " with " + afterTimeout.ResultSets.Count + " results. " + string.Join(" | ", Texts(timedCapture)));
+
+            await Run(QueryWithPlan + "\nGO\nSET NOEXEC ON;", includeActualPlan: true);
+            var noExecOff = await Run("SET NOEXEC OFF;\nGO\n" + QueryWithPlan);
+            var afterNoExec = await Run(QueryWithPlan);
+            check(noExecOff.Status == "completed" && noExecOff.PlanSets is null && noExecOff.ResultSets is [{ Kind: "rows" }]
+                && afterNoExec.PlanSets is null && afterNoExec.ResultSets is [{ Kind: "rows" }],
+                "a captured run that leaves NOEXEC on does not leak plan result sets into later grids");
 
             // A session that never opened did not close: no "session closed" note, and the tab's next execution opens one.
             var missingTab = Guid.NewGuid().ToString();

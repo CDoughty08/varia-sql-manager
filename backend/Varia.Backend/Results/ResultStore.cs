@@ -16,13 +16,14 @@ internal sealed class LiveBudget(long limit)
 }
 
 /// <summary>One query's share of the result budget, and the reason it stopped storing rows, if it did.</summary>
-internal sealed class QueryBudget(string sessionId, LiveBudget? live = null)
+internal sealed class QueryBudget(string sessionId, LiveBudget? live = null, long maxBytes = long.MaxValue)
 {
     internal long used;
     private int stopped;
     public string SessionId { get; } = sessionId;
     /// <summary>The live subscription this budget belongs to, or null for a query's.</summary>
     public LiveBudget? Live { get; } = live;
+    public long MaxBytes { get; } = maxBytes;
     public long UsedBytes => Interlocked.Read(ref used);
     /// <summary>Set by the first failed reservation: later rows and later result sets of the query store nothing.</summary>
     public TruncationReason Stopped => (TruncationReason)Volatile.Read(ref stopped);
@@ -133,7 +134,7 @@ internal sealed class ResultStore
     public bool TryReserve(QueryBudget query, long bytes, bool checkSystem, out TruncationReason reason)
     {
         if (checkSystem && IsSystemMemoryLow()) { reason = TruncationReason.SystemMemory; return false; }
-        if (Interlocked.Read(ref query.used) + bytes > QueryBytes) { reason = TruncationReason.QueryBudget; return false; }
+        if (Interlocked.Read(ref query.used) + bytes > Math.Min(QueryBytes, query.MaxBytes)) { reason = TruncationReason.QueryBudget; return false; }
         var live = query.Live;
         // Added first and taken back on a refusal, so concurrent reservations never pass a limit together.
         if (live is not null)

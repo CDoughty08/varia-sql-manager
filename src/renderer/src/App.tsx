@@ -7,6 +7,7 @@ import { isSsisDocumentKind } from '../../shared/ssis/catalog.ts'
 import { useConnectionAccent, useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import type { CommandArgs, CommandId } from './core/types'
 import QueryEditor from './QueryEditor'
+import PlanDocument from './plans/PlanDocument'
 import QueryStatusBar from './QueryStatusBar'
 import EditorStatus from './EditorStatus'
 import Icon from './Icon'
@@ -88,6 +89,7 @@ export default function App() {
   const connections = useServiceSnapshot(workbench.connections)
   const { state: backendState } = useServiceSnapshot(workbench.backend)
   const [health, setHealth] = useState<BackendHealth>()
+  const [planSource, setPlanSource] = useState(false)
   const filterFolder = useServiceSnapshot(workbench.explorer.filterDialog)
   const optionsDialog = useServiceSnapshot(workbench.settings.dialog)
   const editorDialogs = useServiceSnapshot(workbench.editorDialogs)
@@ -321,7 +323,8 @@ export default function App() {
           {isQuery && !shell.classicToolbar && <QueryBar />}
           {statusTop && statusBar}
           {/* The query editor stays mounted (its Monaco instance is the bound editor) and hides while a designer, Database Properties, SSIS properties, a monitor or Operations shows. */}
-          <div className="editor-container" hidden={isCustom}><QueryEditor /></div>
+          {activeKind === 'sqlplan' && <PlanDocument key={active.id} documentId={active.id} source={planSource} onSource={setPlanSource} />}
+          <div className="editor-container" hidden={isCustom || activeKind === 'sqlplan' && !planSource}><QueryEditor /></div>
           {isDesigner && <TableDesigner key={active.id} documentId={active.id} />}
           {isProperties && <DatabaseProperties key={active.id} documentId={active.id} />}
           {isNewDatabase && <NewDatabase key={active.id} documentId={active.id} />}

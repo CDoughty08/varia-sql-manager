@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { documentKinds, type DocumentKind, type FileChange, type FileEncoding, type OpenSqlFile, type SaveSqlFile, type SqlFile } from '../shared/contracts'
 import { readRegularFile, replaceFile } from './json-file'
 import { detectAndDecode, detectEol, encodeText, type DecoderFactory } from './text-encoding'
+import { planLimits } from '../shared/plans'
 
 export const maxSqlFileBytes = 5_000_000
 interface FileKind { readonly title: string; readonly filters: { name: string; extensions: string[] }[]; readonly maxChars: number; readonly maxBytes: number; readonly tooLarge: string }
@@ -15,10 +16,11 @@ export const fileKinds: Readonly<Record<DocumentKind, FileKind>> = {
   sql: { title: 'Save SQL query', filters: [{ name: 'SQL files', extensions: ['sql'] }], maxChars: maxSqlFileBytes, maxBytes: maxSqlFileBytes, tooLarge: 'SQL files must be smaller than 5 MB.' },
   xml: valueFile('Save XML document', [{ name: 'XML files', extensions: ['xml'] }]),
   json: valueFile('Save JSON document', [{ name: 'JSON files', extensions: ['json'] }]),
-  sqlplan: valueFile('Save execution plan', [{ name: 'Execution plans', extensions: ['sqlplan'] }, { name: 'XML files', extensions: ['xml'] }])
+  sqlplan: { ...valueFile('Save execution plan', [{ name: 'Execution plans', extensions: ['sqlplan'] }, { name: 'XML files', extensions: ['xml'] }]), maxChars: planLimits.characters }
 }
+export const maxDocumentCharacters = Math.max(...Object.values(fileKinds).map(kind => kind.maxChars))
 /** varia:files-save: the content's limit depends on the kind (a query by default). */
-export const saveFileSchema = z.object({ fileId: z.uuid().optional(), name: z.string().min(1).max(512), content: z.string().max(maxSqlFileBytes), saveAs: z.boolean(), kind: z.enum(documentKinds).optional() }).strict()
+export const saveFileSchema = z.object({ fileId: z.uuid().optional(), name: z.string().min(1).max(512), content: z.string().max(maxDocumentCharacters), saveAs: z.boolean(), kind: z.enum(documentKinds).optional() }).strict()
   .refine(value => value.content.length <= fileKinds[value.kind ?? 'sql'].maxChars, 'The document is too large to save.')
 /** varia:confirm-reload: main names the file from its own registration. */
 export const reloadPromptSchema = z.object({ fileId: z.uuid(), dirty: z.boolean(), more: z.boolean() }).strict()
@@ -88,11 +90,13 @@ export class SqlFileStore {
    */
   async read(path: string, reload = false): Promise<OpenSqlFile> {
     const absolutePath = resolve(path)
+    const kind = absolutePath.toLowerCase().endsWith('.sqlplan') ? fileKinds.sqlplan : fileKinds.sql
     // A FIFO or device is refused without blocking; only a regular file is read, and at most one byte past the limit.
-    const bytes = await readRegularFile(absolutePath, maxSqlFileBytes)
+    const bytes = await readRegularFile(absolutePath, kind.maxBytes)
     if (!bytes) throw new Error(`${basename(absolutePath)} is not a file.`)
-    if (bytes.length > maxSqlFileBytes) throw new Error('SQL files must be smaller than 5 MB.')
+    if (bytes.length > kind.maxBytes) throw new Error(kind.tooLarge)
     const decoded = detectAndDecode(bytes, this.options.legacyLabel?.() ?? 'windows-1252', this.options.decoder)
+    if (decoded.text.length > kind.maxChars) throw new Error('This document exceeds its character limit.')
     const { eol, mixed } = detectEol(decoded.text, this.platform)
     // One file keeps one registration, path and name, whatever case or link it is reached through, so the page finds
     // its tab instead of opening a second one that would save over the first.

@@ -321,6 +321,7 @@ export class ResultClient implements Disposable {
   /** The summary's descriptors are final; events for the script that arrive later change nothing. */
   applySummary(summary: QueryResult): void {
     for (const descriptor of summary.resultSets) this.update(this.state(descriptor), descriptor, true)
+    for (const descriptor of summary.planSets ?? []) this.update(this.state(descriptor), descriptor, true)
   }
 
   /** Releases results in the backend (results.close); their pages leave the worker's cache and their windows this

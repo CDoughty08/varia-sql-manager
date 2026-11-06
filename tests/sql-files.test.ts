@@ -14,6 +14,14 @@ afterEach(async () => {
 })
 
 describe('SQL documents', () => {
+  it('reads a sqlplan larger than the SQL file cap without raising that cap for query files', async () => {
+    const store = new SqlFileStore(), content = 'x'.repeat(5_000_001)
+    const plan = join(directory, 'large.sqlplan'), sql = join(directory, 'large.sql')
+    await writeFile(plan, content)
+    await writeFile(sql, content)
+    expect((await store.read(plan)).content.length).toBe(content.length)
+    await expect(store.read(sql)).rejects.toThrow('5 MB')
+  })
   it('opens, saves, and saves as without exposing paths as renderer capabilities', async () => {
     const store = new SqlFileStore()
     const path = join(directory, 'query.sql')

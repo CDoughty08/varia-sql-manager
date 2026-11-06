@@ -14,12 +14,27 @@ import { decodePage } from '../src/shared/ipc/wire/pages'
 import { CELL_NULL, cellFlags, cellText } from '../src/shared/ipc/wire/cells'
 import { fuzzSeed, mulberry32 } from './fuzz/prng'
 import { defaultScriptingOptions } from '../src/shared/scripting/options'
+import { preparePlan } from '../src/main/plan-request'
+import { planDocumentSchema } from '../src/shared/plans'
 import { liveEndSchema, liveEventSchema, liveUpdateResultSchema, type BackendLiveEvent } from '../src/shared/live/schema'
 
 // The Release build, as CI checks it: npm run check builds it before vitest runs.
 const dll = resolve('backend/Varia.Backend/bin/Release/net10.0/Varia.Backend.dll')
 const connections: BackendConnection[] = []
 const processes: ChildProcessWithoutNullStreams[] = []
+
+it('parses compressed Showplan through the real protocol, including inputs beyond the XML cell cap', async () => {
+  const connection = backend()
+  const fixture = readFileSync('tests/fixtures/plans/multiple.sqlplan', 'utf8')
+  const result = planDocumentSchema.parse(await call(connection, 'plans.parse', await preparePlan(fixture)))
+  expect(result.statements).toHaveLength(2)
+  expect(result.statements[0].nodes[1]).toMatchObject({ actualRows: 100, cpuMs: 18, elapsedMs: 40 })
+  const large = fixture.replace('SELECT Name FROM dbo.Customers', 'x'.repeat(2_200_000))
+  const bounded = planDocumentSchema.parse(await call(connection, 'plans.parse', await preparePlan(large)))
+  expect(bounded.statements).toHaveLength(2)
+  expect(bounded.notices).toHaveLength(1)
+  await expect(call(connection, 'plans.parse', await preparePlan('<ShowPlanXML/>'))).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+})
 afterEach(async () => {
   processes.splice(0).forEach(child => child.kill())
   await Promise.all(connections.splice(0).map(connection => connection.close()))

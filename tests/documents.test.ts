@@ -6,6 +6,18 @@ import { gridLimits } from '../src/renderer/src/grid/constants'
 import { documentFixture, deferred, TestEditor, type SaveResponse } from './fixtures/documents'
 
 describe('query documents', () => {
+  it('never saves an opening plan as a partial file, and a reload cancels its old pending chunks', async () => {
+    const { documents, model, api, frames, frame } = documentFixture()
+    const file = { id: 'plan-file', path: 'C:/large.sqlplan', name: 'large.sqlplan', encoding: 'utf8' as const, readOnly: false }
+    const value = documents.openText({ name: file.name, text: 'x'.repeat(gridLimits.documentChunk * 3), kind: 'sqlplan', file })
+    expect(documents.savable(value.id)).toBe(false)
+    await expect(documents.save(value.id)).rejects.toThrow('still loading')
+    expect(api.saveSqlFile).not.toHaveBeenCalled()
+    documents.reload(value.id, '<ShowPlanXML/>', 'lf', file)
+    while (frames.length) frame()
+    expect(model(value.id).getValue()).toBe('<ShowPlanXML/>')
+    expect(documents.savable(value.id)).toBe(true)
+  })
   it('marks edits dirty and clears the marker when undo returns to saved content', () => {
     const { documents, model } = documentFixture()
     const tab = documents.create('query.sql', 'SELECT 1', 'master')
@@ -187,6 +199,7 @@ describe('query documents', () => {
     const text = 'a'.repeat(first - 1) + '😀' + 'b'.repeat(chunk - 3) + '\r\n' + 'c'.repeat(2 * chunk + 10)
     const changes: boolean[] = []
     const value = documents.openText({ name: 'big.xml', text, kind: 'xml' })
+    expect(documents.isFilling(value.id)).toBe(true)
     documents.subscribe(() => changes.push(documents.get(value.id)!.dirty))
     expect(model(value.id).getValueLength()).toBe(first - 1)
     expect(frames).toHaveLength(1)
@@ -197,6 +210,7 @@ describe('query documents', () => {
     expect(model(value.id).getValueLength()).toBe(first + 2 * chunk - 2)
     expect(documents.get(value.id)?.dirty).toBe(false)
     while (frames.length) frame()
+    expect(documents.isFilling(value.id)).toBe(false)
     expect(model(value.id).getValue() === text).toBe(true)
     expect(documents.get(value.id)).toMatchObject({ dirty: false, savedVersionId: model(value.id).getAlternativeVersionId() })
     expect(changes.every(dirty => !dirty)).toBe(true)

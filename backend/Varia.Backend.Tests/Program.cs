@@ -251,6 +251,7 @@ if (liveGroup is null)
     await ConnectionFailureChecks.RunAsync(Check);
     await ConnectionFailureChecks.IdentityAsync(Check);
     SessionChecks.Run(Check);
+    PlanChecks.Run(Check);
     await EntraChecks.RunAsync(Check);
     StoreChecks.Run(Check);
     await TextChecks.RunAsync(Check);

@@ -15,7 +15,7 @@ import { completionSentence, formatCount, plural } from './status'
 
 export type RunStatus = 'running' | QueryStatus | 'lost' | 'closed'
 /** One result set of the run; `index` is its position in the stack (the grid's `data-result-index`). */
-export interface ResultSetEntry { readonly index: number; readonly descriptor: ResultDescriptor; readonly handle: ResultHandle }
+export interface ResultSetEntry { readonly index: number; readonly descriptor: ResultDescriptor; readonly handle: ResultHandle; readonly capturedPlan?: true }
 /** A set that has all its rows, for sizing the stack to them: its rows, and whether its grid shows a strip (truncated or incomplete). */
 export interface SettledSet { readonly rows: number; readonly strip: boolean }
 /** The output pane's views: the stacked grids, Messages, and the run's execution plans (shown only when it returned some). */
@@ -33,6 +33,7 @@ export interface ResultJob {
 /** What the output pane shows for one query tab. */
 export interface TabResults {
   readonly queryId: string; readonly startedAt: number; readonly status: RunStatus; readonly sets: readonly ResultSetEntry[]
+  readonly planSets: readonly ResultSetEntry[]
   readonly messages: readonly MessageEntry[]; readonly messagesTruncated: boolean; readonly rowsRead: number
   /** How many of `messages`, first, are Varia's own notices (a new session) rather than SQL Server's. */
   readonly notices: number
@@ -76,6 +77,7 @@ interface Run {
   readonly startedAt: number
   status: RunStatus
   sets: ResultSetEntry[]
+  planSets: ResultSetEntry[]
   /** The sets' keys, so a thousand sets open in linear time. */
   readonly setKeys: Set<string>
   /** `sets` is held by a published snapshot, so the next change copies it first. */
@@ -210,7 +212,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.selectionAnnounced.delete(tabId)
     this.views.set(tabId, emptyView())
     const run: Run = {
-      queryId, startedAt: this.now(), status: 'running', sets: [], setKeys: new Set(), setsPublished: false, rowsRead: new Map(), messages: [], notices: [], messagesTruncated: false,
+      queryId, startedAt: this.now(), status: 'running', sets: [], planSets: [], setKeys: new Set(), setsPublished: false, rowsRead: new Map(), messages: [], notices: [], messagesTruncated: false,
       completedBatches: 0, totalBatches: 0, view: 'messages', manualView: false, strip: this.stripChoices.get(tabId) === true, stripManual: false,
       settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: ''
     }
@@ -224,7 +226,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   finish(tabId: string, queryId: string, end: RunEnd): void {
     const run = this.runs.get(tabId)
     // The tab closed before its run ended: nothing will show or close the sets the summary describes, so they go now.
-    if (!run && end.summary?.resultSets.length && !this.disposed) void this.client.release(end.summary.resultSets.map(set => ({ generation: set.generation, resultId: set.resultId }))).catch(() => {})
+    if (!run && end.summary && !this.disposed) {
+      const sets = [...end.summary.resultSets, ...end.summary.planSets ?? []]
+      if (sets.length) void this.client.release(sets.map(set => ({ generation: set.generation, resultId: set.resultId }))).catch(() => {})
+    }
     if (!run || run.queryId !== queryId || run.status !== 'running') return
     run.subscription?.dispose()
     run.subscription = undefined
@@ -236,6 +241,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
         this.settle(run, descriptor)
         run.rowsRead.set(descriptor.resultId, descriptor.rowsRead)
       }
+      run.planSets = (summary.planSets ?? []).map((descriptor, index) => ({
+        index, descriptor, handle: this.client.open(descriptor), capturedPlan: true
+      }))
       if (!sameMessages(run.messages, summary.messages)) run.messages = summary.messages.slice(0, resultLimits.messages)
       // The error that ended the run is always in Messages, whatever the backend could keep there.
       if (summary.error && summary.status !== 'completed' && !run.messages.some(entry => entry.kind === 'error')) run.messages = [...run.messages, { text: summary.error.message, kind: 'error' }]
@@ -253,7 +261,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     run.endedAt = this.now()
     this.openStripFor(run, run.messages)
     // A run with sets stays on Results even when it failed: the strip under the grids shows its errors beside them.
-    if (!run.manualView) run.view = run.sets.length === 0 ? 'messages' : 'results'
+    if (!run.manualView) run.view = run.sets.length ? 'results' : run.status === 'completed' && run.planSets.length ? 'plan' : 'messages'
     this.announce(tabId, completionSentence(run.status, run.sets.length, this.totalRows(run)))
     this.publishNow(tabId)
   }
@@ -280,6 +288,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (!run || run.status === 'running' || run.status === 'closed') return
     this.closeHandles(run)
     run.sets = []
+    run.planSets = []
     run.setKeys.clear()
     run.closedFrom = run.status
     run.status = 'closed'
@@ -426,12 +435,13 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    * opens as a text document. A value the backend stored as a prefix opens unformatted, with a sentence saying so; a
    * NULL or unreadable value opens nothing.
    */
-  async openValue(tabId: string, index: number, row: number, column: number): Promise<OpenedValue> {
-    const set = this.runs.get(tabId)?.sets[index], info = set?.descriptor.columns[column], spec = info?.role ? valueKinds[info.role] : undefined
+  async openValue(tabId: string, index: number, row: number, column: number, capturedPlan = false): Promise<OpenedValue> {
+    const run = this.runs.get(tabId), set = (capturedPlan ? run?.planSets : run?.sets)?.[index]
+    const info = set?.descriptor.columns[column], spec = info?.role ? valueKinds[info.role] : undefined
     if (!set || !info || !spec || !this.documents) return { opened: false }
     const state = set.handle.getSnapshot().state
     if (state === 'lost' || state === 'released') return { opened: false, message: state === 'lost' ? unavailable : closedResults }
-    const key = `${tabId}:${index}:${row}:${column}`
+    const key = `${tabId}:${capturedPlan}:${index}:${row}:${column}`
     if (this.opening.has(key)) return { opened: false }
     this.opening.add(key)
     try {
@@ -615,10 +625,11 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** One release for all of a run's sets: main refuses requests past 64 at a time, and a request closes 1,024 ids. */
   private closeHandles(run: Run): void {
     if (this.copying && this.runs.get(this.copying.tabId) === run) this.cancelRunning(this.copying)
-    if (run.sets.length === 0) return
-    const keys: ResultKey[] = run.sets.map(set => set.handle.key)
+    const sets = [...run.sets, ...run.planSets]
+    if (sets.length === 0) return
+    const keys: ResultKey[] = sets.map(set => set.handle.key)
     void this.client.release(keys).catch(() => {})
-    for (const set of run.sets) set.handle.dispose()
+    for (const set of sets) set.handle.dispose()
   }
 
   private disposeRun(tabId: string): void {
@@ -663,7 +674,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const current = this.contextStore.getSnapshot(), next: Record<string, true> = {}
     let changed = false
     for (const [tabId, run] of this.runs) {
-      if (run.status === 'closed' || run.status === 'lost' || !run.sets.some(held)) continue
+      if (run.status === 'closed' || run.status === 'lost' || !(run.sets.some(held) || run.planSets.some(held))) continue
       next[tabId] = true
       if (!current[tabId]) changed = true
     }
@@ -674,7 +685,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     run.setsPublished = true
     run.settledPublished = true
     return {
-      queryId: run.queryId, startedAt: run.startedAt, status: run.status, sets: run.sets, messages: run.notices.length ? [...run.notices, ...run.messages] : run.messages, notices: run.notices.length,
+      queryId: run.queryId, startedAt: run.startedAt, status: run.status, sets: run.sets, planSets: run.planSets,
+      messages: run.notices.length ? [...run.notices, ...run.messages] : run.messages, notices: run.notices.length,
       messagesTruncated: run.messagesTruncated, rowsRead: this.totalRows(run), completedBatches: run.completedBatches, totalBatches: run.totalBatches,
       ...run.summary ? { summary: run.summary } : {}, ...run.error ? { error: run.error } : {}, view: run.view, manualView: run.manualView, strip: run.strip, stripChosen: run.stripManual, settled: run.settled,
       ...run.endedAt !== undefined ? { endedAt: run.endedAt } : {}, ...run.closedFrom ? { closedFrom: run.closedFrom } : {}, jobs: run.jobs, announcement: run.announcement, announced: run.announced,

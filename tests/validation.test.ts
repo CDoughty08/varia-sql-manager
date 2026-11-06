@@ -23,6 +23,8 @@ describe('IPC validation', () => {
     const valid = { connectionId: crypto.randomUUID(), sessionId: crypto.randomUUID(), queryId: crypto.randomUUID(), database: 'master', sql: 'SELECT 1', maxRows: 1000, timeoutSeconds: 30 }
     expect(validateRequest('query.execute', valid)).toEqual(valid)
     expect(validateRequest('query.execute', { ...valid, timeoutSeconds: 0 })).toMatchObject({ timeoutSeconds: 0 })
+    expect(validateRequest('query.execute', { ...valid, includeActualPlan: true })).toMatchObject({ includeActualPlan: true })
+    expect(() => validateRequest('query.execute', { ...valid, includeActualPlan: 'true' })).toThrow('Invalid request')
     // maxRows 0 stores up to the memory budget only; maxResultSets keeps 1 to 1000 result sets.
     // stopOnError (SQLCMD's :on error exit) is an optional boolean; without it the next batch runs after an error.
     for (const patch of [{ maxRows: 0 }, { maxRows: 2 ** 31 - 1 }, { maxResultSets: 1 }, { maxResultSets: 1000 }, { stopOnError: true }, { stopOnError: false }]) expect(validateRequest('query.execute', { ...valid, ...patch })).toEqual({ ...valid, ...patch })

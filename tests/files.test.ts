@@ -41,6 +41,14 @@ function fixture() {
 }
 
 describe('file commands', () => {
+  it('opens sqlplan files as disconnected XML documents and preserves their file registration and line endings', async () => {
+    const { documents, api, commands, model } = fixture()
+    api.openSqlFiles.mockResolvedValueOnce({ ok: true, value: [{ ...openedFile('plan', 'C:/Actual.SQLPLAN'), content: '<ShowPlanXML/>', eol: 'crlf' }] })
+    await commands.run('file.open')
+    expect(documents.active).toMatchObject({ kind: 'sqlplan', database: '', connectionId: undefined, file: { id: 'plan' }, dirty: false })
+    expect(model(documents.active!.id).language).toBe('xml')
+    expect(api.releaseSqlFile).not.toHaveBeenCalled()
+  })
   it('creates numbered queries with the active target and respects the document lock', async () => {
     const { documents, commands } = fixture()
     documents.update(documents.active!.id, { database: 'analytics' })

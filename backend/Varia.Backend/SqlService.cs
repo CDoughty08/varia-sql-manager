@@ -13,6 +13,7 @@ using Varia.Backend.Explorer;
 using Varia.Backend.Live;
 using Varia.Backend.Protocol;
 using Varia.Backend.Results;
+using Varia.Backend.Plans;
 using Varia.Backend.Search;
 using Varia.Backend.Scripting;
 using Varia.Backend.Ssis;
@@ -24,6 +25,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// <summary>Announced in HELLO; main refuses a backend that lacks any method it may call (a stale build).</summary>
     public static readonly string[] MethodNames =
     [
+        "plans.parse",
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
@@ -45,6 +47,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     // The summary must fit the 16 MiB response limit: descriptors get 8 MiB, messages (1,000,000 characters, with their
     // kinds) and the error text the rest, with room to spare.
     private const long MaxSummaryDescriptorBytes = 8L * 1024 * 1024;
+    private const int MaxActualPlans = 64;
+    private const long MaxActualPlanBytes = 8L * 1024 * 1024;
 
     private readonly ConcurrentDictionary<string, string> connections = new();
     private readonly ConcurrentDictionary<string, RunningQuery> queries = new();
@@ -335,6 +339,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "databases.list" => await DatabasesAsync(Read<ConnectionArgs>(parameters, json), Token(context)),
         "tables.columns" => await ColumnsAsync(Read<TableArgs>(parameters, json), Token(context)),
         "query.execute" => await ExecuteAsync(Read<QueryArgs>(parameters, json), context),
+        "plans.parse" => PlanParser.Read(Read<PlanParseArgs>(parameters, json), Token(context)),
         "query.cancel" => Cancel(Read<CancelArgs>(parameters, json)),
         "query.session.close" => await CloseSessionAsync(Read<SessionArgs>(parameters, json), Token(context)),
         "query.session.state" => await SessionStateAsync(Read<SessionStateArgs>(parameters, json), Token(context)),
@@ -895,6 +900,11 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         SqlException? ended = null;
         var messages = new QueryMessages(events.Message);
         var sets = new List<ResultSetBuffer>();
+        var plans = new List<ResultDescriptor>();
+        ActualPlanCapture? capture = null;
+        var omittedPlans = false;
+        var lostPlanEvents = false;
+        var readPlans = false;
         ResultSetBuffer? currentSet = null;
         var token = cancellation.Token;
         var watch = Stopwatch.StartNew();
@@ -1026,6 +1036,30 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             if (!string.Equals(connection.Database, args.Database, StringComparison.Ordinal))
                 await connection.ChangeDatabaseAsync(args.Database, token);
             database = connection.Database;
+            if (args.IncludeActualPlan && session.Spid is { } captureSpid)
+            {
+                var profile = Profile(args.ConnectionId);
+                if (profile.Major is > 0 and < 14 && profile.EngineEdition is not (5 or 8))
+                    messages.Add("This SQL Server does not support lightweight actual plan capture.");
+                else
+                {
+                    using var setup = CancellationTokenSource.CreateLinkedTokenSource(token);
+                    setup.CancelAfter(TimeSpan.FromSeconds(5));
+                    try
+                    {
+                        var observer = CreateConnection(args.ConnectionId, database, stateful: true);
+                        capture = new ActualPlanCapture(observer, profile.EngineEdition == 5);
+                        await Open(observer, setup.Token);
+                        if (await capture.StartAsync(captureSpid, connection.ClientConnectionId, profile.Major, args.TimeoutSeconds, setup.Token) is { } unavailable)
+                            messages.Add(unavailable);
+                    }
+                    catch (Exception error) when (error is SqlException or RequestException or InvalidOperationException or OperationCanceledException)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        messages.Add("Actual plan capture could not start. Check Extended Events permissions and lightweight profiling support on this server.");
+                    }
+                }
+            }
             connection.FireInfoMessageEventOnUserErrors = true;
             for (var b = 0; b < batches.Count && failure is null; b++)
             {
@@ -1060,6 +1094,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                         // (ColumnPlan reads past the rest of a truncated one).
                         // A Stop between the loop's check and here found no statement to cancel.
                         token.ThrowIfCancellationRequested();
+                        if (capture?.Started == true) capture.BatchSubmitted(batchNumber, iteration);
                         reader = await command.ExecuteReaderAsync(System.Data.CommandBehavior.SequentialAccess, CancellationToken.None);
                         // Positioned on a result set not yet read, or on the batch's end.
                         var unread = true;
@@ -1073,19 +1108,25 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                                     ColumnPlan? plan = null;
                                     bool? hasLong = null;
                                     var skipped = false;
+                                    var prefetched = false;
                                     if (reader.FieldCount > 0)
                                     {
                                         if (sets.Count >= args.MaxResultSets) overflowSets++;
                                         else if (oversizeSets > 0) oversizeSets++;
-                                        else if ((plan = ColumnPlan.From(reader)).DescriptorBytes + descriptorBytes > MaxSummaryDescriptorBytes) { oversizeSets++; plan = null; }
-                                        else if (store.Open(budget, sets.Count, batchNumber, iteration, plan.IsPlan ? "executionPlan" : "rows", plan.Columns, plan.Wires) is { } opened)
+                                        else
                                         {
-                                            descriptorBytes += plan.DescriptorBytes;
-                                            currentSet = opened;
-                                            sets.Add(opened);
-                                            events.Opened(opened);
+                                            prefetched = ColumnPlan.MayBeExecutionPlan(reader) && await reader.ReadAsync(CancellationToken.None);
+                                            plan = ColumnPlan.From(reader, prefetched ? ColumnPlan.ReadShowplanPrefix(reader) : null);
+                                            if (plan.DescriptorBytes + descriptorBytes > MaxSummaryDescriptorBytes) { oversizeSets++; plan = null; }
+                                            else if (store.Open(budget, sets.Count, batchNumber, iteration, plan.IsPlan ? "executionPlan" : "rows", plan.Columns, plan.Wires) is { } opened)
+                                            {
+                                                descriptorBytes += plan.DescriptorBytes;
+                                                currentSet = opened;
+                                                sets.Add(opened);
+                                                events.Opened(opened);
+                                            }
+                                            else { budgetSets++; plan = null; }
                                         }
-                                        else { budgetSets++; plan = null; }
                                     }
                                     if (plan?.ForXml is not null && currentSet is not null)
                                     {
@@ -1122,7 +1163,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                                             await SkipRowsAsync(reader, currentSet, events, token);
                                             break;
                                         }
-                                        var read = reader.ReadAsync(CancellationToken.None);
+                                        var read = prefetched ? Task.FromResult(true) : reader.ReadAsync(CancellationToken.None);
+                                        prefetched = false;
                                         // Rows waiting for the next one are sealed: the first page 20 ms after its first row, later
                                         // pages after 200 ms without a row, so a slow statement's rows become readable.
                                         if (!read.IsCompleted && currentSet?.SealDelay is { } delay
@@ -1271,17 +1313,40 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                 set.Complete();
                 events.Closed(set);
             }
+            if (capture is not null)
+            {
+                try
+                {
+                    if (capture.Started)
+                    {
+                        // Read plans after all grids have finished, even if cancellation stopped a later batch.
+                        using var collect = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                        var snapshot = await capture.ReadAsync(collect.Token);
+                        omittedPlans = StoreActualPlans(args.SessionId, snapshot.Plans, plans);
+                        lostPlanEvents = snapshot.Incomplete;
+                        readPlans = true;
+                    }
+                }
+                catch (Exception error) when (error is SqlException or InvalidOperationException or OperationCanceledException or System.Xml.XmlException)
+                {
+                    messages.Add("Actual plans could not be read from the Extended Events session.");
+                }
+                finally
+                {
+                    using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    if (await capture.CloseAsync(cleanup.Token) is { } notice) messages.Add(notice);
+                }
+            }
             if (entered && session is not null)
             {
                 session.Connection.FireInfoMessageEventOnUserErrors = false;
                 session.Connection.InfoMessage -= onInfo;
-                // Nothing runs in the session after the script: its @@ROWCOUNT, @@ERROR and most recent SQL stay the
-                // script's. Its transaction is read only when it is about to end (query.session.state), as SSMS does.
                 var state = session.Connection.State;
                 // A severity 20 error ends the session even while its connection still reads Open (IsSessionLost).
                 var lost = state is System.Data.ConnectionState.Closed or System.Data.ConnectionState.Broken || ended is not null && IsSessionLost(ended, state);
                 if (!lost && state == System.Data.ConnectionState.Open)
                 {
+                    // Nothing runs on the user's session after the script, preserving @@ROWCOUNT and @@ERROR.
                     database = session.Connection.Database;
                     spid = session.Spid;
                     login = session.Login;
@@ -1309,6 +1374,12 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         if (reasons.Contains("systemMemory")) Note("Results were truncated because the computer is low on memory. Execution continued.");
         if (overflowSets > 0) Note("Only the first " + (args.MaxResultSets == 10 ? "ten" : args.MaxResultSets.ToString("N0", CultureInfo.InvariantCulture)) + " result sets are displayed. Display limits do not stop script execution.");
         if (oversizeSets > 0) Note(oversizeSets + " later result sets are not displayed because their column lists are too large to return. Display limits do not stop script execution.");
+        if (omittedPlans || plans.Any(set => set.Truncated is not null || set.TruncatedCells > 0))
+            Note("Some actual execution plans could not be stored in full within the plan capture or result memory limits.");
+        if (lostPlanEvents)
+            Note("SQL Server's actual plan event buffer did not retain every plan. Any collected plans are available in Execution Plan.");
+        else if (readPlans && !omittedPlans && plans.Count == 0 && status == "completed")
+            Note("SQL Server did not return an actual execution plan for this run.");
         // Only when something stopped the script before a later batch: SQL Server may have run the failing batch to its end.
         if (failure is not null && batchNumber > 0 && completed + 1 < totalBatches)
         {
@@ -1317,10 +1388,35 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                 ? "Batch " + batchNumber + (repeated ? ", repetition " + iteration + "," : "") + " raised an error; later batches were not executed."
                 : "Stopped at batch " + batchNumber + (repeated ? ", repetition " + iteration : "") + "; " + completed + " of " + totalBatches + " batch executions completed.");
         }
-        if (context is not null) context.Unsent = () => store.Release(descriptors.Select(set => set.ResultId));
+        if (context is not null) context.Unsent = () => store.Release(descriptors.Concat(plans).Select(set => set.ResultId));
         var completedAt = DateTimeOffset.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz", CultureInfo.InvariantCulture);
         return new(descriptors, overflowSets + oversizeSets + budgetSets, output, recordsAffected, watch.ElapsedMilliseconds, status, failure, completed,
-            totalBatches, database, messages.Truncated, SummaryBudget(), completedAt, spid, login);
+            totalBatches, database, messages.Truncated, SummaryBudget(), completedAt, spid, login, plans.Count > 0 ? plans : null);
+    }
+
+    private bool StoreActualPlans(string sessionId, List<ActualPlanCapture.CapturedPlan> captured, List<ResultDescriptor> plans)
+    {
+        // A refused plan can only stop the plan budget. All grids were already stored on their own budget.
+        var budget = new QueryBudget(sessionId, maxBytes: MaxActualPlanBytes);
+        foreach (var plan in captured)
+        {
+            if (plans.Count == MaxActualPlans) return true;
+            var set = store.Open(budget, plans.Count, plan.Batch, plan.Iteration, "executionPlan",
+                [new(ColumnPlan.ShowplanColumn, "xml", "text", "plan", Nullable: false)], [WireKind.Text]);
+            if (set is null) return true;
+            set.CountRow();
+            var kept = false;
+            if (set.BeginRow() is { } row)
+            {
+                var length = Math.Min(plan.Xml.Length, ColumnPlan.DocumentCap);
+                row.AppendText(plan.Xml.AsSpan(0, length), truncated: length < plan.Xml.Length);
+                kept = set.TryCommitRow(length < plan.Xml.Length ? 1 : 0);
+            }
+            set.Complete();
+            if (!kept) { store.Release(set.ResultId); return true; }
+            plans.Add(set.Describe());
+        }
+        return false;
     }
 
     /// <summary>Streams the sealed pages that cover a row range, as stored (never copied), within the request's credit; rows

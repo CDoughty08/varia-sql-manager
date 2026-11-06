@@ -4,13 +4,13 @@ import { z } from 'zod'
 import { documentKinds, type DocumentKind } from '../shared/contracts'
 import { sessionLimits, type SessionWrite } from '../shared/files/session'
 import { quarantine, readJsonFile, replaceFile, writeBytesAtomic } from './json-file'
-import { fileKinds, maxSqlFileBytes } from './sql-files'
+import { fileKinds, maxDocumentCharacters } from './sql-files'
 
 const fits = (value: { kind: DocumentKind; text?: string }) => value.text === undefined || value.text.length <= fileKinds[value.kind].maxChars
 const name = z.string().min(1).max(sessionLimits.nameChars)
 const server = z.string().min(1).max(sessionLimits.serverChars)
 const database = z.string().min(1).max(sessionLimits.databaseChars)
-const fields = { name, baseName: name.optional(), kind: z.enum(documentKinds), eol: z.enum(['crlf', 'lf']), dirty: z.boolean(), server: server.optional(), database: database.optional(), text: z.string().max(maxSqlFileBytes).optional() }
+const fields = { name, baseName: name.optional(), kind: z.enum(documentKinds), eol: z.enum(['crlf', 'lf']), dirty: z.boolean(), server: server.optional(), database: database.optional(), text: z.string().max(maxDocumentCharacters).optional() }
 /** varia:session-write: the tabs in strip order. Only a clean tab with a file may leave its text out (it reopens from the file). */
 export const sessionWriteSchema = z.object({
   documents: z.array(z.object({ ...fields, fileId: z.uuid().optional() }).strict()

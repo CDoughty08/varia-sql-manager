@@ -17,9 +17,9 @@ interface Fill { appending: boolean; userEdited: boolean }
 /** `plain`: a large value document, shown without bracket matching and colours. */
 interface DocumentEntry { model: editor.ITextModel; subscription: Disposable; viewState?: editor.ICodeEditorViewState | null; fill?: Fill; plain?: boolean }
 /** A text document opened from a value: its tab name, its text, and what it holds. */
-export interface TextDocument { readonly name: string; readonly text: string; readonly kind: Exclude<DocumentKind, 'sql'> }
+export interface TextDocument { readonly name: string; readonly text: string; readonly kind: Exclude<DocumentKind, 'sql'>; readonly file?: QueryDocument['file']; readonly eol?: LineEnding }
 export interface DocumentSnapshot { readonly documents: readonly QueryDocument[]; readonly activeId: string; readonly busy: boolean }
-type DocumentPatch = Partial<Pick<QueryDocument, 'name' | 'connectionId' | 'database' | 'file' | 'sessionNotice' | 'lastServer'>>
+type DocumentPatch = Partial<Pick<QueryDocument, 'name' | 'connectionId' | 'database' | 'file' | 'sessionNotice' | 'lastServer' | 'includeActualPlan'>>
 type DocumentApi = Pick<VariaApi, 'saveSqlFile' | 'closeQuerySession'>
 /**
  * What a document without text in the editor (a table designer) needs from its owner: Save (true when it saved), why it
@@ -106,7 +106,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   /** Whether File › Save All saves the document: every text document, and the custom ones whose provider says so. */
   inSaveAll(id: string): boolean { return this.provider(id)?.inSaveAll ?? true }
   /** Whether File › Save means anything for the document: every text document does, a custom one unless its provider says not. */
-  savable(id: string): boolean { return this.provider(id)?.saves !== false }
+  savable(id: string): boolean { return !this.isFilling(id) && this.provider(id)?.saves !== false }
   /** Why the document cannot close now (a custom document saving), or undefined. */
   closeRefusal(id: string): string | undefined { return this.provider(id)?.canClose(id) }
   /**
@@ -183,7 +183,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
    */
   openText(o: TextDocument): QueryDocument {
     const first = chunkEnd(o.text, 0, gridLimits.documentFirstChunk)
-    const document = this.add(o.name, o.text.slice(0, first), '', undefined, false, undefined, o.kind, o.text.length > gridLimits.documentBracketChars)
+    const document = this.add(o.name, o.text.slice(0, first), '', undefined, false, o.file, o.kind, o.text.length > gridLimits.documentBracketChars, o.eol)
     if (first < o.text.length) this.fill(document.id, o.text, first)
     return document
   }
@@ -232,7 +232,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     if (!entry) return
     const fill: Fill = entry.fill = { appending: false, userEdited: false }
     const step = () => {
-      if (this.disposed || this.entries.get(id) !== entry) return
+      if (this.disposed || this.entries.get(id) !== entry || entry.fill !== fill) return
       const { model } = entry, end = chunkEnd(text, at), line = model.getLineCount(), column = model.getLineMaxColumn(line)
       fill.appending = true
       try { model.applyEdits([{ range: { startLineNumber: line, startColumn: column, endLineNumber: line, endColumn: column }, text: text.slice(at, end) }]) }
@@ -323,8 +323,9 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
    * changed, so the caret stays where it can, with the file's line ending; the document is clean afterwards.
    */
   reload(id: string, text: string, eol: LineEnding, file: NonNullable<QueryDocument['file']>): void {
-    const model = this.entries.get(id)?.model
+    const entry = this.entries.get(id), model = entry?.model
     if (!model || this.disposed) return
+    if (entry) entry.fill = undefined
     const sequence = eol === 'crlf' ? '\r\n' : '\n'
     model.pushStackElement()
     if (model.getEOL() !== sequence) model.pushEOL(eol === 'crlf' ? 1 : 0)
@@ -349,6 +350,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     if (provider) return provider.save(id, saveAs)
     const document = this.get(id), model = this.entries.get(id)?.model
     if (!document || !model) return false
+    if (this.isFilling(id)) throw new Error('This document is still loading. Save it once loading finishes.')
     model.pushStackElement()
     const content = model.getValue(), savedVersionId = model.getAlternativeVersionId()
     const kind = isCustomKind(document.kind) ? undefined : document.kind

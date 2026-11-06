@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, type FocusEvent, type KeyboardEvent, type PointerEvent } from 'react'
 import { documentKind, type QueryTab } from './documents'
 import { useConnectionAccent, useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
-import { useCommandEnabled, useKeybindingLabel } from './core/useCommand'
+import { useCommandEnabled, useCommandsToggled, useKeybindingLabel } from './core/useCommand'
 import { environmentTag } from '../../shared/environments'
 import EnvironmentTag from './EnvironmentTag'
 import Icon from './Icon'
@@ -53,14 +53,22 @@ const keepFocus = (event: PointerEvent<HTMLButtonElement>) => { if (event.button
 type Control = HTMLButtonElement | HTMLSelectElement
 const isControl = (target: EventTarget | null): target is Control => target instanceof HTMLButtonElement || target instanceof HTMLSelectElement
 
+export function ActualPlanToggle({ classic = false }: { classic?: boolean }) {
+  const { commands } = useWorkbench()
+  const id = 'query.includeActualPlan'
+  const enabled = useCommandEnabled(id), [pressed] = useCommandsToggled([id]), key = useKeybindingLabel(id)
+  return <button type="button" className={classic ? 'actual-plan-toggle' : 'query-bar-action actual-plan-toggle'}
+    aria-label="Include Actual Execution Plan" aria-keyshortcuts={key?.aria} aria-pressed={pressed} disabled={!enabled}
+    title={withKey('Include Actual Execution Plan', key)} onPointerDown={keepFocus} onClick={() => void commands.execute(id, undefined, 'toolbar')}>
+    <Icon name="execution-plan" /><span className="query-bar-label">Actual Plan</span>
+  </button>
+}
+
 /**
- * The query document's own bar (SSMS's SQL Editor toolbar): Execute, the only filled button, and Cancel, then at the
- * right the connection pill with the connection's colour, its environment tag (PROD), and the server and database lists
- * of this document. It is an ARIA toolbar with one tab stop: the arrow keys, Home and End move between its enabled
- * controls, from a list too (which keeps Up and Down, and opens with Alt+Down), so Home and End never pick a server or
- * database. When the focused control turns disabled, focus moves to the nearest enabled one; while a document task
- * disables them all, it waits and returns when the task ends. F5 runs the query from the bar as from the editor
- * (queryBarFocus). With the classic toolbar on (Tools › Options, for one release) the global lists replace it.
+ * The query document's own bar holds Execute, Cancel, Actual Plan and the connection pickers. One tab stop enters the
+ * toolbar, then the arrow keys, Home and End move between enabled controls. Pickers keep Up and Down and open with
+ * Alt+Down. When a control becomes disabled, focus moves to its nearest enabled neighbor. F5 runs the query from the
+ * bar or editor. With the classic toolbar enabled, it hosts these controls instead.
  */
 export default function QueryBar() {
   const { commands } = useWorkbench()
@@ -114,6 +122,7 @@ export default function QueryBar() {
       onPointerDown={keepFocus} onClick={() => void commands.execute('query.cancel', undefined, 'toolbar')}>
       <Icon name="debug-stop" /><span className="query-bar-label">Cancel</span>
     </button>
+    <ActualPlanToggle />
     <div className="query-connection" role="group" aria-label="Connection" data-lost={model.connection?.lost || undefined}>
       {accent && <span className="connection-swatch" style={{ background: accent }} aria-hidden="true" />}
       {tag && <span className="query-bar-environment"><span className="visually-hidden">Environment: </span><EnvironmentTag environment={environment} place="query" about={model.serverName} /></span>}
