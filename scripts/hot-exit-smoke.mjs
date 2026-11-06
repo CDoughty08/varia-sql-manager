@@ -29,6 +29,8 @@ async function launch(args, holdPath) {
     dialog.showMessageBox = async (_window, options) => {
       const prompt = options ?? _window
       state.prompts.push(prompt.message)
+      if (prompt.title === 'Reload workbench' && state.holdConfirmation)
+        await new Promise(resolve => { state.confirmReload = resolve })
       const response = prompt.title === 'Reload workbench' ? state.reloadAnswer
         : prompt.title === 'Workbench stopped' ? state.crashAnswer : prompt.cancelId ?? 2
       return { response, checkboxChecked: false }
@@ -198,11 +200,27 @@ try {
   await expect.poll(prompts).toEqual(['Reload Varia SQL Manager?'])
   expect(await tabNames()).toEqual(['Totals', 'Orders report', 'Welcome', 'Month end', 'SQLQuery4.sql'])
   // Hold the saved pin's read so the replacement page can issue another reload during the restore.
-  await application.evaluate(() => { globalThis.variaHotExit.reloadAnswer = 0 })
+  await application.evaluate(() => {
+    globalThis.variaHotExit.reloadAnswer = 0
+    globalThis.variaHotExit.holdConfirmation = true
+  })
   await holdNextRead(orders)
   try {
     const reloaded = page.waitForEvent('domcontentloaded')
     await reload()
+    await expect.poll(() => application.evaluate(() => !!globalThis.variaHotExit.confirmReload)).toBe(true)
+    // The first unload has reached the confirmation. A change now must reach the second unload's checkpoint.
+    await documentTab(page, 'Totals').click()
+    await editorTextbox(page).focus()
+    await page.keyboard.press('Control+End')
+    await page.keyboard.insertText('\nSELECT 33 AS before_reload_confirmation')
+    await expect.poll(text).toContain('SELECT 33 AS before_reload_confirmation')
+    await page.evaluate(() => window.__variaRecovery.flush())
+    await documentTab(page, 'Orders report').click()
+    await application.evaluate(() => {
+      globalThis.variaHotExit.holdConfirmation = false
+      globalThis.variaHotExit.confirmReload()
+    })
     await reloaded
     await waitForRead()
     expect(await tabNames()).toEqual([])
@@ -212,6 +230,10 @@ try {
       ok: false, error: 'Wait for the pinned tabs to reopen before reloading.'
     })
   } finally {
+    await application.evaluate(() => {
+      globalThis.variaHotExit.holdConfirmation = false
+      globalThis.variaHotExit.confirmReload?.()
+    })
     await releaseRead()
   }
   await expect.poll(tabNames).toEqual(['Totals', 'Orders report'])
@@ -223,8 +245,9 @@ try {
   await expect.poll(text).toContain('SELECT 2 AS orders')
   await documentTab(page, 'Totals').click()
   await expect.poll(text).toContain('SELECT 3 AS totals')
+  await expect.poll(text).toContain('SELECT 33 AS before_reload_confirmation')
   await expect(unsavedMark(documentTab(page, 'Totals'))).toBeVisible()
-  console.log('Hot exit checks: canceling Reload Window keeps the page, and a second reload during restore preserves both pins.')
+  console.log('Hot exit checks: canceling Reload Window keeps the page, edits before confirmation survive, and a second reload during restore preserves both pins.')
 
   expect(await page.evaluate(() => window.varia.updateSettings({
     'environment.documents.hotExit': false, 'environment.documents.detectExternalChanges': true

@@ -36,7 +36,7 @@ import { clearEntraPrompt, clearEntraTokenCache } from './entra'
 import { SettingsStore } from './settings-store'
 import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
 import { encodeSession, SessionStore, sessionWriteSchema, type SessionInput, type SessionRecord, type SessionRecordDocument } from './session-store'
-import { sessionLimits, type RestoredDocument, type RestoredSession, type SessionWrite } from '../shared/files/session'
+import { sessionLimits, type ReloadPins, type RestoredDocument, type RestoredSession, type SessionWrite } from '../shared/files/session'
 import { lossDetails } from '../shared/files/recovery'
 import { commandTitle } from '../shared/settings/catalog'
 import { windowControls } from '../shared/theme/metrics'
@@ -100,10 +100,12 @@ let restarting: Promise<boolean> | undefined
 let unresponsivePrompt: Promise<void> | undefined
 // The user chose Reload in the reload prompt: the next unload is allowed.
 let reloadApproved = false
+// The confirmed unload still needs a fresh checkpoint from the outgoing page.
+let reloadRefresh: 'waiting' | 'ready' | 'failed' = 'waiting'
 // Startup and Reload Window keep a checkpoint until a renderer acknowledges the restored tabs.
 type SessionCheckpoint = { generation: number } & (
   { kind: 'disk'; record: Promise<SessionRecord | undefined> } |
-  { kind: 'reload'; record: SessionRecord; sourceGeneration: number; recoveryIds: (string | null)[] }
+  { kind: 'reload'; record: SessionRecord; sourceGeneration: number; recoveryIds: readonly (string | null)[] }
 )
 let sessionCheckpoint: SessionCheckpoint | undefined
 const reloadRequest = z.object({
@@ -241,8 +243,11 @@ function handle<T>(channel: string, action: (value: unknown) => Promise<T> | T):
 function resetRendererState({ relaunch = true, replacePage = false } = {}): void {
   rendererReady = false
   reloadApproved = false
+  reloadRefresh = 'waiting'
   rendererGeneration++
-  sessionCheckpoint = replacePage && sessionCheckpoint ? { ...sessionCheckpoint, generation: rendererGeneration } : undefined
+  const checkpoint = sessionCheckpoint
+  sessionCheckpoint = replacePage && checkpoint && (checkpoint.kind === 'disk' || checkpoint.record.documents.length)
+    ? { ...checkpoint, generation: rendererGeneration } : undefined
   longRuns = noLongRuns
   // A popout's content belongs to the page that opened it.
   popouts.closeAll()
@@ -332,6 +337,18 @@ function sessionInput(request: SessionWrite): SessionInput {
     ...document, ...fileId ? files.sessionFile(fileId) : undefined
   }))
   return { documents, activeIndex: request.activeIndex }
+}
+
+function reloadCheckpoint(pins?: ReloadPins): Extract<SessionCheckpoint, { kind: 'reload' }> {
+  const session = pins?.session ?? { documents: [], activeIndex: -1 }
+  return {
+    kind: 'reload', generation: rendererGeneration + 1, sourceGeneration: rendererGeneration,
+    record: encodeSession(sessionInput(session)).record, recoveryIds: pins?.recoveryIds ?? []
+  }
+}
+
+function pendingReload(): boolean {
+  return pageGeneration === rendererGeneration && sessionCheckpoint?.kind === 'reload' && sessionCheckpoint.generation === rendererGeneration + 1
 }
 
 /** Reopens a kept tab. A clean file reads from disk again, and a dirty tab has its saved text even if the file is gone. */
@@ -553,16 +570,27 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
   // The renderer blocks unload only while queries are unsaved or servers are connected. This reload waits; the prompt
   // takes its turn after any open dialog, and Reload starts it again, allowed this time.
   contents.on('will-prevent-unload', event => {
+    if (!closeApproved && (reloadRefresh === 'failed' || (reloadApproved && pendingReload() && reloadRefresh !== 'ready'))) {
+      reloadRefresh = 'waiting'
+      reloadApproved = false
+      sessionCheckpoint = undefined
+      return
+    }
     if (closeApproved || reloadApproved) { reloadApproved = false; event.preventDefault(); return }
     const generation = rendererGeneration
     const checkpoint = sessionCheckpoint?.generation === generation + 1 ? sessionCheckpoint : undefined
+    const keepsPins = checkpoint?.kind === 'reload' && checkpoint.record.documents.length > 0
     const abandon = () => { if (sessionCheckpoint === checkpoint) sessionCheckpoint = undefined }
-    void oneDialog(signal => window.isDestroyed() ? Promise.resolve({ response: 1 }) : dialog.showMessageBox(window, { type: 'warning', title: 'Reload workbench', message: 'Reload Varia SQL Manager?', detail: reloadDetail(longRuns, lossDetailsFor(pageGeneration, checkpoint ? 'pins' : undefined).reload), buttons: ['Reload', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal }),
+    void oneDialog(signal => window.isDestroyed() ? Promise.resolve({ response: 1 }) : dialog.showMessageBox(window, { type: 'warning', title: 'Reload workbench', message: 'Reload Varia SQL Manager?', detail: reloadDetail(longRuns, lossDetailsFor(pageGeneration, keepsPins ? 'pins' : undefined).reload), buttons: ['Reload', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal }),
       { response: 1 }, true).then(({ response }) => {
       if (response !== 0 || window.isDestroyed() || generation !== rendererGeneration) { abandon(); return }
       reloadApproved = true
       // Once the page has finished cancelling this unload (a round trip to it): a reload asked for before then is dropped.
-      void contents.executeJavaScript('0').catch(() => {}).then(() => { if (!window.isDestroyed() && generation === rendererGeneration) contents.reload() })
+      void contents.executeJavaScript('0').catch(() => {}).then(() => {
+        if (window.isDestroyed() || generation !== rendererGeneration) return
+        reloadRefresh = 'waiting'
+        contents.reload()
+      })
     }, abandon)
   })
   // A lost renderer, from Chromium's report or the watchdog's (when Chromium cannot see it go), is handled once; the
@@ -805,18 +833,33 @@ app.whenReady().then(async () => {
       if (sessionCheckpoint.generation === rendererGeneration + 1) return
       throw new Error(sessionCheckpoint.kind === 'reload' ? 'Wait for the pinned tabs to reopen before reloading.' : 'Wait for the saved tabs to reopen before reloading.')
     }
-    if (request) {
+    if (request || (role === 'reload' && hotExitAvailable)) {
       if (!hotExitAvailable || pageGeneration !== rendererGeneration) throw new Error('The pinned tabs cannot be kept by this page.')
-      sessionCheckpoint = {
-        kind: 'reload', generation: rendererGeneration + 1, sourceGeneration: rendererGeneration,
-        record: encodeSession(sessionInput(request.session)).record, recoveryIds: request.recoveryIds
-      }
+      sessionCheckpoint = reloadCheckpoint(request)
+      reloadRefresh = 'waiting'
     }
     const zoom = role === 'zoomIn' || role === 'zoomOut' || role === 'resetZoom'
     const target = role === 'reload' || zoom ? { window: main, activation: userActivation } : activeWindow()!
     try { runRole(role, target.window, () => (target.window.isFocused() || process.env.VARIA_SMOKE_TEST === '1') && target.activation.recent()) }
-    catch (error) { if (request) sessionCheckpoint = undefined; throw error }
+    catch (error) { if (role === 'reload') sessionCheckpoint = undefined; throw error }
     if (zoom) popouts.zoom(main.webContents.getZoomLevel())
+  })
+  // Beforeunload cannot wait for an async handoff. Only the trusted page with a pending reload can replace its
+  // checkpoint here, and the handler does only bounded validation and encoding in memory.
+  ipcMain.on('varia:reload-pins-pending', event => { event.returnValue = trusted(event) && pendingReload() })
+  ipcMain.on('varia:reload-pins-refresh', (event, value: unknown) => {
+    if (!trusted(event) || !pendingReload()) {
+      event.returnValue = { ok: false, error: 'The pinned tabs cannot be kept by this page.' }
+      return
+    }
+    try {
+      sessionCheckpoint = reloadCheckpoint(value === null ? undefined : reloadRequest.parse(value))
+      reloadRefresh = 'ready'
+      event.returnValue = { ok: true, value: undefined }
+    } catch (error) {
+      reloadRefresh = 'failed'
+      event.returnValue = failure(error, 'The pinned tabs could not be kept.')
+    }
   })
   handle('varia:context-menu', value => { const target = activeWindow(); if (!target) throw new Error('The window is unavailable.'); return contextMenus.show(value, target.window) })
   // `context` (ConnectContext) only for connections.connect and .databases: the history entry whose remembered

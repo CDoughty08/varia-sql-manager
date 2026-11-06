@@ -384,6 +384,8 @@ export interface VariaApi {
   setMenuState(state: MenuState): void
   /** Runs an Electron role (Cut, Zoom In, Reload, …) on the window, for custom menus and the palette. */
   runRole(role: RendererRole, reloadPins?: ReloadPins): Promise<ApiResult<void>>
+  /** Replaces an in-flight Reload Window checkpoint from the outgoing page's synchronous unload handler. */
+  refreshReloadPins(capture: () => ReloadPins | undefined): ApiResult<void>
   /** Main's choice of context menus: 'native' (macOS) shows them through `showContextMenu`. */
   readonly menuStyle: MenuStyle
   /** Shows a native context menu of catalogue command ids; resolves when it closes. A chosen item arrives on `onContextMenuCommand`. */

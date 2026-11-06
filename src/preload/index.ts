@@ -20,6 +20,16 @@ const api: VariaApi = {
   platform: process.platform,
   setMenuState: state => { ipcRenderer.send('varia:menu-state', state) },
   runRole: (role, reloadPins) => ipcRenderer.invoke('varia:run-role', reloadPins ? { role, ...reloadPins } : role),
+  refreshReloadPins: capture => {
+    try {
+      if (!ipcRenderer.sendSync('varia:reload-pins-pending')) return { ok: true, value: undefined }
+      const pins = capture()
+      return ipcRenderer.sendSync('varia:reload-pins-refresh', pins ? { role: 'reload', ...pins } : null)
+    } catch (error) {
+      try { ipcRenderer.sendSync('varia:reload-pins-refresh', undefined) } catch { /* The outgoing page may already be gone. */ }
+      return { ok: false, error: error instanceof Error ? error.message : 'The pinned tabs could not be kept.' }
+    }
+  },
   // Main passes its choice as a renderer argument; anything else there means the platform's default.
   menuStyle: menuStyleFromArgv(process.argv, process.platform),
   showContextMenu: request => ipcRenderer.invoke('varia:context-menu', request),

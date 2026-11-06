@@ -1,5 +1,5 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
-import type { VariaApi } from '../../../shared/contracts'
+import type { ReloadPins, VariaApi } from '../../../shared/contracts'
 import { toPlatform, type Platform } from '../../../shared/commands/keybindings'
 import { platformLineEnding } from '../../../shared/files/encoding'
 import { DocumentService, settingsDocumentOptions } from '../services/documents'
@@ -123,6 +123,7 @@ export interface Workbench extends Disposable {
   readonly recentFiles: RecentFilesService
   /** AutoRecover: copies of unsaved queries, and the Recover dialog for those an earlier run or page left. */
   readonly recovery: RecoveryService
+  readonly reloadPins: () => ReloadPins | undefined
   readonly targets: TargetService
   readonly editorOptions: EditorOptionsService
   readonly shellOptions: ShellOptionsService
@@ -369,7 +370,17 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   })
   const cleanup = events.subscribe(event => { if (event.type === 'documents.closed') queries.forget(event.tabId) })
   let disposed = false
+  const reloadPins = (): ReloadPins | undefined => {
+    const { documents: tabs, busy } = documents.getSnapshot()
+    if (!api.hotExit) return
+    if (busy) throw new Error('Wait for the current document operation to finish before reloading.')
+    if (!tabs.some(tab => tab.pinned)) return
+    const kept = keptSession(documents, id => connections.get(id)?.server, { pinnedOnly: true })
+    requireKeptPins(tabs, kept.kept)
+    return { session: kept.session, recoveryIds: [...kept.kept].map(id => recovery.copyId(id) ?? null) }
+  }
   const workbench: Workbench = {
+    reloadPins,
     platform,
     monaco,
     events,
@@ -499,15 +510,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     editorContribution(workbench, () => document.activeElement?.closest('[data-document-tab]')?.closest<HTMLElement>('[data-tab-id]')?.dataset.tabId),
     editingContribution(workbench, monaco),
     editContribution(workbench, api),
-    windowContribution(workbench, api, () => {
-      const { documents: tabs, busy } = documents.getSnapshot()
-      if (!api.hotExit) return
-      if (busy) throw new Error('Wait for the current document operation to finish before reloading.')
-      if (!tabs.some(tab => tab.pinned)) return
-      const kept = keptSession(documents, id => connections.get(id)?.server, { pinnedOnly: true })
-      requireKeptPins(tabs, kept.kept)
-      return { session: kept.session, recoveryIds: [...kept.kept].map(id => recovery.copyId(id) ?? null) }
-    }),
+    windowContribution(workbench, api, reloadPins),
     menusContribution(workbench),
     explorerContribution(workbench, api),
     outputContribution(workbench, api),

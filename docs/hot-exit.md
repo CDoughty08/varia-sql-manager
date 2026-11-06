@@ -18,7 +18,8 @@ default. While it is off, pinned tabs still reopen, and a close asks about unsav
 - The SID badge to the right of a query name shows its SQL Server session ID as soon as execution acquires a session.
   A dash means there is no known live session. Restored queries start disconnected.
 - View › Reload Window keeps pinned tabs and reopens them disconnected. Unpinned tabs follow the workbench's existing
-  reload and AutoRecover behavior.
+  reload and AutoRecover behavior. The checkpoint uses the pinned text as the page unloads, including edits made
+  while a reload is pending.
 - If the renderer crashes while reopening tabs at startup or after Reload Window, choosing Reload in the crash dialog
   retries the same checkpoint, including its unsaved text.
 
