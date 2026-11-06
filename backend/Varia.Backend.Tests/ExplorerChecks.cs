@@ -684,7 +684,7 @@ internal static class ExplorerChecks
     }
 
     /// <summary>A host whose connections never reach a server; <see cref="Hold"/> blocks connection requests until released.</summary>
-    private sealed class FakeHost(int major = 16, int edition = 3, int catalogBand = ExplorerCatalog.MinBand) : IExplorerHost
+    internal sealed class FakeHost(int major = 16, int edition = 3, int catalogBand = ExplorerCatalog.MinBand) : IExplorerHost
     {
         public SemaphoreSlim? Hold { get; set; }
         public int Connections;

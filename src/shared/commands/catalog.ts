@@ -394,6 +394,15 @@ export const commandCatalog = {
     menus: [{ menu: 'explorer.context', group: '1_query', order: 4, mnemonic: 'y', when: "explorerSelectionModifiable && explorerNode != 'background'" }]
   },
   'explorer.cancelScripting': { title: 'Cancel Scripting', category: 'Object Explorer', icon: 'debug-stop', keywords: ['script', 'stop'], precondition: 'scriptingRunning', unavailableHint: 'Nothing is being scripted.' },
+  // Peek: the object's definition and properties in a card beside its row (src/shared/explorer/peek.ts). Space on the selected
+  // row and Ctrl+hover (⌘ on macOS) open it too; the tree handles those, as it handles its other keys.
+  'explorer.peek': {
+    title: 'Peek', category: 'Object Explorer', icon: 'eye', keywords: ['definition', 'properties', 'preview', 'describe'],
+    precondition: "backendReady && (explorerSelectionKind == 'table' || explorerSelectionKind == 'view' || explorerSelectionKind == 'procedure' || explorerSelectionKind == 'function')",
+    unavailableHint: 'Select a table, view, stored procedure, or function.',
+    keybindings: [{ key: 'alt+f12', when: "activePanel == 'explorer' && !inputFocus" }],
+    menus: [{ menu: 'explorer.context', group: '1_query', order: 7, mnemonic: 'k', when: "(explorerNode == 'table' || explorerNode == 'view' || explorerNode == 'procedure' || explorerNode == 'function') && !explorerServerLost" }]
+  },
   'explorer.copyName': {
     title: 'Copy Name', category: 'Object Explorer', icon: 'copy', precondition: 'hasConnection', unavailableHint: 'Select an object that has a name.',
     menus: [{ menu: 'explorer.context', group: '5_copy', order: 1, mnemonic: 'a', when: "(explorerNode != 'background' && explorerNode != 'folder' && explorerNode != 'returnValue' && !explorerServerLost) || explorerFolderInsertable" }]

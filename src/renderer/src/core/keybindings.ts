@@ -41,6 +41,8 @@ export interface KeybindingServiceOptions {
   /** The clock for the chord prefix's lifetime; defaults to `Date.now`, as Monaco's. */
   readonly now?: () => number
   readonly menus?: MenuKeyRouter
+  /** Every key release, after the menus': Peek forgets a Ctrl+hover when Ctrl goes up with the pointer still. Never consumes. */
+  readonly keyUp?: (event: KeyDownEvent) => void
 }
 /** Monaco leaves chord mode 5 s after the prefix (`_scheduleLeaveChordMode`); from then on the next key is a plain key again. */
 export const nativeChordTimeout = 5000
@@ -149,6 +151,7 @@ export class KeybindingService implements Disposable {
   }
   handleKeyUp(event: KeyDownEvent): void {
     try { this.options.menus?.handleKeyUp(event) } catch (error) { onUnexpectedError(error) }
+    try { this.options.keyUp?.(event) } catch (error) { onUnexpectedError(error) }
   }
   dispose(): void { for (const detach of [...this.detachers]) detach() }
 }

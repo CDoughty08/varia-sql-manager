@@ -20,12 +20,13 @@ const editorNode = new EventTarget()
 const mod = (platform: Platform) => platform === 'darwin' ? { meta: true } : { ctrl: true }
 const letter = (character: string, platform: Platform, extra: Parameters<typeof key>[2] = {}) => key(`Key${character.toUpperCase()}`, extra.shift ? character.toUpperCase() : character, { ...mod(platform), ...extra })
 
-function service(platform: Platform = 'win32', options: { values?: Partial<ContextKeys>; modal?: boolean; textFocus?: boolean; rules?: ReturnType<typeof defaultRules>; menus?: MenuKeyRouter } = {}) {
+function service(platform: Platform = 'win32', options: { values?: Partial<ContextKeys>; modal?: boolean; textFocus?: boolean; rules?: ReturnType<typeof defaultRules>; menus?: MenuKeyRouter; keyUp?: (event: FakeEvent) => void } = {}) {
   const state = { values: options.values ?? {}, modal: options.modal ?? false, textFocus: options.textFocus ?? false, now: 1_000_000 }
   const execute = vi.fn<CommandService['execute']>(async () => true)
   const keybindings = new KeybindingService({
     platform, commands: { execute }, context: { get: () => contextRecord(platform, state.values) }, modalOpen: () => state.modal, editorHasTextFocus: () => state.textFocus,
-    editorContains: target => target === editorNode, now: () => state.now, ...(options.rules ? { rules: options.rules } : {}), ...(options.menus ? { menus: options.menus } : {})
+    editorContains: target => target === editorNode, now: () => state.now, ...(options.rules ? { rules: options.rules } : {}), ...(options.menus ? { menus: options.menus } : {}),
+    ...(options.keyUp ? { keyUp: options.keyUp as never } : {})
   })
   const press = (event: FakeEvent) => { keybindings.handleKeyDown(event); return event }
   const ran = () => execute.mock.calls.map(call => call[0])
@@ -319,6 +320,13 @@ describe('keybinding dispatch', () => {
     calls.length = 0
     keybindings.handleKeyUp(key('AltLeft', 'Alt'))
     expect(calls).toEqual(['up Alt'])
+    // Releases also reach the workbench's keyUp (Peek forgets a Ctrl+hover there), after the menus, and consume nothing.
+    const released: string[] = []
+    const withKeyUp = service('win32', { menus, keyUp: event => { released.push(event.key) } })
+    calls.length = 0
+    withKeyUp.keybindings.handleKeyUp(key('ControlLeft', 'Control'))
+    expect(calls).toEqual(['up Control'])
+    expect(released).toEqual(['Control'])
     expect(ran()).toEqual(['file.new', 'file.new'])
   })
   it('labels primary keybindings per platform', () => {

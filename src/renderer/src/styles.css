@@ -379,6 +379,30 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .shell-failure-actions [role="status"] { color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); }
 .shell-failure-details { margin: 0; padding: 12px; max-height: 50vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; font: var(--varia-size-sm)/1.5 var(--varia-font-mono); background: var(--varia-panel-background); color: var(--varia-foreground); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); }
 .shell-failure-details:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
+/* Peek (PeekCard): a non-modal card beside Object Explorer, above the workbench and its floating groups, below toasts. */
+.peek-card { position: fixed; z-index: 13000; display: flex; flex-direction: column; min-width: 0; overflow: hidden; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); font: var(--varia-size-sm)/var(--varia-line-sm) var(--varia-font-ui); animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease); }
+.peek-card:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.peek-head { display: flex; flex-shrink: 0; align-items: center; gap: var(--varia-space-2); height: var(--varia-bar); padding: 0 var(--varia-space-1) 0 var(--varia-space-3); border-bottom: 1px solid var(--varia-editorWidget-border); }
+.peek-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-md); font-weight: 600; }
+.peek-kind { flex-shrink: 0; color: var(--varia-descriptionForeground); }
+.peek-spacer { flex: 1; }
+.peek-body { display: grid; flex: 1; min-height: 0; grid-template-columns: minmax(0, 1fr) minmax(220px, 300px); }
+.peek-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.peek-side { border-left: 1px solid var(--varia-editorWidget-border); }
+.peek-pane-title { display: flex; flex-shrink: 0; align-items: center; gap: var(--varia-space-1); padding: var(--varia-space-1) var(--varia-space-2) var(--varia-space-1) var(--varia-space-3); font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); text-transform: uppercase; letter-spacing: 0.04em; }
+.peek-action { padding: 0 var(--varia-space-2); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-xs); text-transform: none; letter-spacing: 0; color: var(--varia-button-secondaryForeground); }
+.peek-action:disabled { opacity: 0.5; }
+.peek-scroll { flex: 1; min-height: 0; overflow: auto; }
+.peek-definition { margin: 0; padding: var(--varia-space-1) var(--varia-space-3) var(--varia-space-3); min-height: 100%; font: var(--varia-size-sm)/var(--varia-line-sm) var(--varia-font-mono); white-space: pre; tab-size: 4; user-select: text; }
+.peek-definition:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.peek-note { margin: var(--varia-space-2) var(--varia-space-3); color: var(--varia-descriptionForeground); overflow-wrap: anywhere; }
+.peek-note.error { color: var(--varia-errorForeground); }
+.peek-properties { padding-bottom: var(--varia-space-3); }
+.peek-group { margin: var(--varia-space-2) var(--varia-space-3) var(--varia-space-0); font-size: var(--varia-size-xs); font-weight: 600; color: var(--varia-descriptionForeground); }
+.peek-facts { margin: 0; }
+.peek-fact { display: grid; grid-template-columns: minmax(96px, 46%) minmax(0, 1fr); gap: var(--varia-space-2); padding: 1px var(--varia-space-3); }
+.peek-fact dt { color: var(--varia-descriptionForeground); }
+.peek-fact dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; user-select: text; }
 .explorer-error { flex-shrink: 0; font-size: var(--varia-size-xs); color: var(--varia-errorForeground); line-height: 1.6; padding: 0 12px; margin: 5px 0 8px; overflow-wrap: anywhere; }
 @media (forced-colors: active) {
   .explorer-row[aria-selected="true"], .explorer-tree:focus .explorer-row[aria-selected="true"] { background: Highlight; color: HighlightText; forced-color-adjust: none; }

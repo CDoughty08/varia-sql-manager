@@ -78,6 +78,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // disconnect ends it; a search answers its own 5 s budget as a partial value.
   'explorer.index': { kind: 'unary', lane: 'explorer', deadlineMs: 0 },
   'explorer.search': { kind: 'unary', lane: 'explorer', deadlineMs: 15_000 },
+  // The backend answers its own 15 s budget (peekLimits.budgetMs) as a TIMEOUT value, inside this deadline.
+  'explorer.peek': { kind: 'unary', lane: 'explorer', deadlineMs: 20_000 },
   // Copy streams its text as DATA within credit; an export writes the file the user chose and only CANCEL ends it.
   'results.copy': { kind: 'stream', lane: 'results', deadlineMs: 120_000 },
   'results.export': { kind: 'unary', lane: 'results', deadlineMs: 0 },

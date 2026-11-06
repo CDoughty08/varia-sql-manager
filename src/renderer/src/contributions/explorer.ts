@@ -13,8 +13,8 @@ const frame = (callback: () => void) => { if (typeof requestAnimationFrame === '
  * on a server that is still connected (not lost with a backend restart, even when the backend restarted while the menu
  * was open or the command was waiting).
  */
-export function explorerContribution({ commands, documents, connections, explorer, explorerStatus, settings }: Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer'>
-  & { explorerStatus?: Pick<Workbench['explorerStatus'], 'refresh'>; settings?: Pick<Workbench['settings'], 'toggle'> },
+export function explorerContribution({ commands, documents, connections, explorer, explorerStatus, settings, peek }: Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer'>
+  & { explorerStatus?: Pick<Workbench['explorerStatus'], 'refresh'>; settings?: Pick<Workbench['settings'], 'toggle'>; peek?: Pick<Workbench['peek'], 'canPeek' | 'peek'> },
   api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
   const nodeOf = (args?: CommandArgs): ExplorerMenuNode | undefined => args?.target ? explorerNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
   const live = (node: ExplorerMenuNode | undefined): node is ExplorerMenuNode => !!node && !node.lost && connections.isLive(node.connectionId)
@@ -49,6 +49,11 @@ export function explorerContribution({ commands, documents, connections, explore
         // The menu returned focus to the tree; the new query's editor may mount only on a later frame.
         frame(() => documents.boundEditor?.focus())
       }
+    }),
+    // The context menu's Peek focuses the card; Alt+F12 and the palette open it on the selection, focused too.
+    commands.register('explorer.peek', {
+      when: args => !!peek?.canPeek(nodeOf(args)),
+      run: args => peek?.peek(nodeOf(args), args?.target ? 'menu' : 'keyboard')
     }),
     // A server's name as connected to, or the quoted object name.
     commands.register('explorer.copyName', {

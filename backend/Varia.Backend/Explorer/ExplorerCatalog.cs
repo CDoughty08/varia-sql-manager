@@ -19,6 +19,19 @@ internal sealed record CatalogKind(string Kind, string Title, string Scope, stri
     IReadOnlyDictionary<string, string> VariantIcons, IReadOnlyList<string> Folders, IReadOnlyDictionary<string, IReadOnlyList<string>> SubtypeFolders,
     IReadOnlyList<string> HistoryLookup, IReadOnlyList<string> Parents, string? List, IReadOnlyList<string> Rows, int MaxName);
 internal sealed record CatalogScope(IReadOnlyList<string> Required, IReadOnlyList<string> Forbidden);
+/// <summary>One of Peek's facts (src/shared/explorer/peek.ts): its id (the reply key and the batch's column alias), how its
+/// value travels (text, date, bool, count or kb), and the first band whose catalog has it (null: every band).</summary>
+internal sealed record PeekFactSpec(string Id, string Format, int? Since);
+/// <summary>A kind Peek describes: its facts in reply-column order, and where its definition comes from (module: the batch
+/// reads sys.all_sql_modules; script: the renderer asks Script As).</summary>
+internal sealed record PeekKindSpec(string Kind, string Definition, IReadOnlyList<PeekFactSpec> Facts)
+{
+    public bool Module => Definition == "module";
+    /// <summary>The facts a server of this band has, in reply order.</summary>
+    public IReadOnlyList<PeekFactSpec> FactsFor(int band) => [.. Facts.Where(fact => (fact.Since ?? ExplorerCatalog.MinBand) <= band)];
+}
+/// <summary>Peek's kinds and limits: module text kept (UTF-16 code units) and the backend's budget for one peek.</summary>
+internal sealed record CatalogPeek(IReadOnlyDictionary<string, PeekKindSpec> Kinds, int DefinitionChars, int BudgetMs);
 
 /// <summary>What a server can browse: its version band (12 below SQL Server 2016, else the major version up to 17, or the
 /// band of the catalog columns it has when that is higher), whether it is a cloud edition, whether it runs on Linux, and whether
@@ -48,8 +61,12 @@ internal sealed class ExplorerCatalog
     private sealed record KindJson(string Kind, string Title, string Scope, string Icon, List<string> Subtypes, Dictionary<string, string> SubtypeIcons,
         Dictionary<string, string> VariantIcons, List<string> Folders, Dictionary<string, List<string>> SubtypeFolders, List<string> HistoryLookup, List<string> Parents,
         string? List, List<string> Rows, int MaxName);
+    private sealed record PeekFactJson(string Id, string Format, int? Since);
+    private sealed record PeekKindJson(string Kind, string Definition, List<PeekFactJson> Facts);
+    private sealed record PeekJson(int BudgetMs, int DefinitionChars, List<PeekKindJson> Kinds);
     private sealed record CatalogJson(int Version, List<int> CloudEngineEditions, List<FolderJson> Folders, List<KindJson> Kinds, List<int> ManagedInstanceEngineEditions, List<string> Queries,
-        CatalogSchemaGroups SchemaGroups, Dictionary<string, CatalogScope> Scopes);
+        CatalogSchemaGroups SchemaGroups, Dictionary<string, CatalogScope> Scopes, PeekJson? Peek);
+    private static readonly string[] PeekFormats = ["text", "date", "bool", "count", "kb"];
 
     private readonly Dictionary<string, CatalogFolder> folders;
     private readonly Dictionary<string, CatalogKind> kinds;
@@ -74,6 +91,7 @@ internal sealed class ExplorerCatalog
         Queries = [.. json.Queries];
         SchemaGroups = json.SchemaGroups ?? throw new InvalidOperationException("The Object Explorer catalogue has no schema groups.");
         Scopes = json.Scopes;
+        Peek = ParsePeek(json.Peek, kinds);
         FolderIds = [.. json.Folders.Select(folder => folder.Id)];
         subfolders = folders.Keys.ToDictionary(id => id, id => (IReadOnlyList<string>)[.. folders.Values.Where(child => child.Parent == id).OrderBy(child => child.Order).Select(child => child.Id)], StringComparer.Ordinal);
         owners = folders.Keys.ToDictionary(id => id, id =>
@@ -82,6 +100,31 @@ internal sealed class ExplorerCatalog
             IReadOnlyList<string> owners = [.. kinds.Values.Where(kind => kind.Folders.Contains(root) || kind.SubtypeFolders.Values.Any(set => set.Contains(root))).Select(kind => kind.Kind)];
             return folders[id].BelowSchema ? [.. owners, "schema"] : owners;
         }, StringComparer.Ordinal);
+    }
+
+    /// <summary>Peek's block, checked once: fact ids become column aliases in PeekSql's batches, so they are plain words.</summary>
+    private static CatalogPeek ParsePeek(PeekJson? peek, Dictionary<string, CatalogKind> kinds)
+    {
+        if (peek is null) throw new InvalidOperationException("The Object Explorer catalogue has no peek block.");
+        if (peek.DefinitionChars is < 1 or > 4_000_000 || peek.BudgetMs is < 1000 or > 60_000) throw new InvalidOperationException("Peek's limits are out of range.");
+        var specs = new Dictionary<string, PeekKindSpec>(StringComparer.Ordinal);
+        foreach (var kind in peek.Kinds ?? throw new InvalidOperationException("Peek has no kinds."))
+        {
+            if (!kinds.TryGetValue(kind.Kind, out var spec) || spec.Scope != "schemaObject") throw new InvalidOperationException("Peek names a kind that is not a schema object: " + kind.Kind + ".");
+            if (kind.Definition is not ("module" or "script")) throw new InvalidOperationException("Peek's definition source is unknown for " + kind.Kind + ".");
+            if (kind.Facts is not { Count: > 0 } facts) throw new InvalidOperationException("Peek's " + kind.Kind + " has no facts.");
+            var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "definition" };
+            foreach (var fact in facts)
+            {
+                if (fact.Id is not { Length: >= 1 and <= 64 } id || !char.IsAsciiLetterLower(id[0]) || !id.All(char.IsAsciiLetter) || !ids.Add(id))
+                    throw new InvalidOperationException("Peek's " + kind.Kind + " has an invalid or repeated fact id.");
+                if (!PeekFormats.Contains(fact.Format) || fact.Since is { } since && (since <= MinBand || since > MaxBand))
+                    throw new InvalidOperationException("Peek's fact " + kind.Kind + "." + fact.Id + " has an unknown format or band.");
+            }
+            if (!specs.TryAdd(kind.Kind, new(kind.Kind, kind.Definition, [.. facts.Select(fact => new PeekFactSpec(fact.Id, fact.Format, fact.Since))])))
+                throw new InvalidOperationException("Peek names " + kind.Kind + " twice.");
+        }
+        return new(specs, peek.DefinitionChars, peek.BudgetMs);
     }
 
     private static bool OwnsChildren(CatalogKind kind) => kind.Folders.Count > 0 || kind.SubtypeFolders.Count > 0 || kind.HistoryLookup.Count > 0 || kind.List is not null;
@@ -99,6 +142,7 @@ internal sealed class ExplorerCatalog
     public IReadOnlyList<string> FolderIds { get; }
     public IReadOnlyDictionary<string, CatalogScope> Scopes { get; }
     public CatalogSchemaGroups SchemaGroups { get; }
+    public CatalogPeek Peek { get; }
     public IEnumerable<CatalogKind> Kinds => kinds.Values;
 
     public CatalogFolder? Folder(string id) => folders.GetValueOrDefault(id);

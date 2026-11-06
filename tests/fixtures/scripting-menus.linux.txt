@@ -1,5 +1,6 @@
 explorer.context, for a table
   Select Top 1000 Ro&ws
+  Pee&k (disabled)
   ---
   &Script Table as >
     &CREATE To >
@@ -53,6 +54,7 @@ explorer.context, for a table
   Re&fresh
 explorer.context, for a history table
   Select Top 1000 Ro&ws
+  Pee&k (disabled)
   ---
   &Script Table as >
     &CREATE To >
@@ -106,6 +108,7 @@ explorer.context, for a history table
   Re&fresh
 explorer.context, for a ledger history table
   Select Top 1000 Ro&ws
+  Pee&k (disabled)
   ---
   &Script Table as >
     &CREATE To > (disabled)
@@ -159,6 +162,7 @@ explorer.context, for a ledger history table
   Re&fresh
 explorer.context, for a view
   Select Top 1000 Ro&ws
+  Pee&k (disabled)
   ---
   &Script View as >
     &CREATE To >
@@ -212,6 +216,7 @@ explorer.context, for a view
   Re&fresh
 explorer.context, for a ledger view
   Select Top 1000 Ro&ws
+  Pee&k (disabled)
   ---
   &Script View as >
     &CREATE To >
@@ -265,6 +270,7 @@ explorer.context, for a ledger view
   Re&fresh
 explorer.context, for a T-SQL procedure
   Modif&y
+  Pee&k (disabled)
   ---
   &Script Stored Procedure as >
     &CREATE To >
@@ -300,6 +306,8 @@ explorer.context, for a T-SQL procedure
   ---
   Re&fresh
 explorer.context, for a CLR procedure
+  Pee&k (disabled)
+  ---
   &Script Stored Procedure as >
     &CREATE To >
       &New Query Editor Window
@@ -335,6 +343,7 @@ explorer.context, for a CLR procedure
   Re&fresh
 explorer.context, for an inline table-valued function
   Modif&y
+  Pee&k (disabled)
   ---
   &Script Function as >
     &CREATE To >
@@ -376,6 +385,7 @@ explorer.context, for an inline table-valued function
   Re&fresh
 explorer.context, for a scalar function
   Modif&y
+  Pee&k (disabled)
   ---
   &Script Function as >
     &CREATE To >
@@ -416,6 +426,8 @@ explorer.context, for a scalar function
   ---
   Re&fresh
 explorer.context, for an aggregate
+  Pee&k (disabled)
+  ---
   &Script Function as >
     &CREATE To >
       &New Query Editor Window
@@ -647,6 +659,8 @@ explorer.context, for a certificate (deferred)
   ---
   Re&fresh
 explorer.context, for an extended procedure (deferred)
+  Pee&k (disabled)
+  ---
   Copy N&ame
   ---
   Rena&me (disabled)

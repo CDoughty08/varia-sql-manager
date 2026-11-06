@@ -13,6 +13,7 @@ import SearchPanel from '../search/SearchPanel'
 import { explorerSearchId } from '../search/ObjectSearchService'
 import ExplorerErrorBoundary, { FaultProbe, focusLost } from './ExplorerErrorBoundary'
 import ExplorerTree from './ExplorerTree'
+import PeekCard from './PeekCard'
 
 /** `pressed`: a toggle button's state (aria-pressed). */
 interface Tool { readonly id: CommandId; readonly icon: IconId; readonly label: string; readonly hint?: string; readonly args?: CommandArgs; readonly pressed?: boolean }
@@ -160,7 +161,7 @@ export default function ExplorerPane({ error, activeConnectionId }: { readonly e
     {searchable && <ExplorerSearch connectionId={selectedServer} />}
     <div className="explorer-body" ref={background}>
       {servers.length ? <ExplorerErrorBoundary onReload={() => explorer.reset()} onReloaded={() => focusTree(header.current)}>
-        <FaultProbe /><ExplorerTree activeConnectionId={activeConnectionId} /></ExplorerErrorBoundary>
+        <FaultProbe /><ExplorerTree activeConnectionId={activeConnectionId} /><PeekCard /></ExplorerErrorBoundary>
         : <EmptyState className="explorer-empty" icon="server" detail="Connect to SQL Server to browse databases and objects." actions={[{ label: 'Connect to server', run: () => void commands.execute('connection.connect', undefined, 'toolbar'), disabled: !connect, buttonRef: connectButton, primary: true }]} />}
       {error && <p className="explorer-error" role="alert">{error}</p>}
     </div>

@@ -21,7 +21,7 @@ const announceDelayMs = 500
  * arrows, Home and End, Page Up and Down, Enter, `*`, Numpad plus and minus, and type-ahead.
  */
 export default function ExplorerTree({ activeConnectionId }: { readonly activeConnectionId?: string }) {
-  const workbench = useWorkbench(), { explorer, commands, connections, actions: objectActions, explorerStatus } = workbench
+  const workbench = useWorkbench(), { explorer, commands, connections, actions: objectActions, explorerStatus, peek, platform } = workbench
   const snapshot = useServiceSnapshot(explorer)
   const { servers: statuses } = useServiceSnapshot(explorerStatus)
   const { explorerLoading } = useServiceSnapshot(explorer.context)
@@ -117,8 +117,12 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
     cancelRename: refocus => {
       objectActions.cancelRename()
       if (refocus) element.current?.focus({ preventScroll: true })
+    },
+    peekHover: (rowId, held) => {
+      if (held && (platform === 'darwin' ? held.metaKey : held.ctrlKey)) peek.hover(explorer.menuNode(rowId))
+      else peek.cancelHover()
     }
-  }), [explorer, run, activate, objectActions])
+  }), [explorer, run, activate, objectActions, peek, platform])
   // Rows are menu targets: right-click has selected the row; Shift+F10 asks for the active descendant's menu.
   const rowTarget = useMenuTarget<HTMLDivElement>(row => {
     const node = explorer.menuNode(Number(row.getAttribute('data-row-id')))
@@ -161,9 +165,11 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
         return
       }
       if (event.key === 'Escape' && typing.value) { typing.clear(); event.preventDefault(); return }
+      if (event.key === 'Escape' && peek.getSnapshot().open) { peek.close(); event.preventDefault(); return }
       const text = typing.accept(event.nativeEvent)
       if (text === undefined) {
-        if (swallowedKey(event.nativeEvent)) event.preventDefault()
+        // Space, which the tree otherwise ignores, peeks the selected row (Peek's Alt+F12 does too).
+        if (swallowedKey(event.nativeEvent)) { event.preventDefault(); if (!event.shiftKey && index >= 0) peek.peek(explorer.menuNode(now.selected), 'keyboard') }
         return
       }
       event.preventDefault()

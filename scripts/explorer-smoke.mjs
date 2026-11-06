@@ -583,6 +583,43 @@ try {
   await expect.poll(clipboard).toBe('[Id], [CustomerName]')
   console.log('Object Explorer checks: Ctrl+C copies a column\'s quoted name, and Ctrl+C and Copy Name a loaded Columns folder\'s list.')
 
+  // 8b. Peek: Space opens the card on the selected table and focuses it; Esc closes it and returns to the tree. The menu's
+  // Peek opens it too, and Ctrl (Cmd on macOS) resting on a row opens it without taking focus.
+  const peekCard = page.getByRole('dialog', { name: 'Peek: dbo.Orders', exact: true })
+  const peekRow = await select('server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders')
+  await page.keyboard.press('Space')
+  await expect(peekCard).toBeVisible()
+  await expect(peekCard).toBeFocused()
+  await expect(peekCard.getByRole('region', { name: 'Storage', exact: true })).toContainText('12,345')
+  await expect(peekCard.getByRole('region', { name: 'General', exact: true })).toContainText('Non temporal table')
+  await expect(peekCard.getByLabel('Definition', { exact: true })).toContainText('CREATE TABLE [dbo].[Orders]')
+  const peeked = (await stubCalls('explorer.peek')).at(-1)
+  expect(peeked.target).toMatchObject({ kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' })
+  expect((await stubCalls('scripting.script')).at(-1)).toMatchObject({ verb: 'create', targets: [{ kind: 'table', name: 'Orders' }] })
+  // Tab wraps within the card, so Esc keeps reaching it.
+  await page.keyboard.press('Shift+Tab')
+  await expect(peekCard.getByLabel('Definition', { exact: true })).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(peekCard.getByRole('button', { name: 'Refresh', exact: true })).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(peekCard).toBeHidden()
+  await expect(tree()).toBeFocused()
+  await peekRow.click({ button: 'right' })
+  await menu('Object Explorer').getByRole('menuitem', { name: 'Peek', exact: true }).click()
+  await expect(peekCard).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(peekCard).toBeHidden()
+  const peekKey = process.platform === 'darwin' ? 'Meta' : 'Control'
+  await page.keyboard.down(peekKey)
+  await peekRow.locator(part.explorerRowText).first().hover()
+  await peekRow.locator(part.explorerRowText).first().hover({ position: { x: 4, y: 4 } })
+  await expect(peekCard).toBeVisible()
+  await page.keyboard.up(peekKey)
+  await expect(tree()).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(peekCard).toBeHidden()
+  console.log('Object Explorer checks: Peek opens on dbo.Orders by Space, the menu and Ctrl+hover, shows its properties and CREATE script, and Esc returns to the tree.')
+
   // 9. An offline database is listed, dimmed, with no chevron.
   await select('server-a', 'Databases', 'AppData')
   await press('ArrowLeft', 'AppData')

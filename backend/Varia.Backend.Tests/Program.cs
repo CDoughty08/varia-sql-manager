@@ -255,6 +255,7 @@ if (liveGroup is null)
     StoreChecks.Run(Check);
     await TextChecks.RunAsync(Check);
     await ExplorerChecks.RunAsync(Check);
+    await PeekChecks.RunAsync(Check);
     SearchChecks.Run(Check);
     await ScriptingChecks.RunAsync(Check);
     await ActionChecks.RunAsync(Check);
