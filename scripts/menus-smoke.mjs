@@ -1,7 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { expandExplorerPath, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
+import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { dialogLifecycle, longRunRefusals, rendererWatchdog } from './fixtures/dialog-lifecycle.mjs'
 import { sessionPrompts } from './fixtures/session-prompts.mjs'
 import { activeMenuItem, anyResultGrid, backendReady, banner, documentTabs, documentTabSlots, editorText as editorTextOf, errorMessages, explorerLabel, gridCell, gridPart, matching, memoryBreakdown, memoryIndicator, menuItemNames, messages as messagesOf, openMenus as openMenusOf, outputPane, outputView, paneMenuButton, paneTab, part, quickInput, searchBox, serverRows, statusBar, titleBar, toolbarButton } from './fixtures/ui.mjs'
@@ -889,7 +889,9 @@ try {
   await expect(tree).toBeFocused()
   // A login's name (New Login… first, as in SSMS); the server's Disconnect needs no picker.
   await expandExplorerPath(page, 'server-a', 'Security', 'Logins')
-  await (await row('server-a', 'Security', 'Logins', 'sa')).click({ button: 'right', force: true })
+  const login = await revealExplorerRow(page, 'server-a', 'Security', 'Logins', 'sa')
+  await login.click({ button: 'right' })
+  await expect(login).toHaveAttribute('data-menu-target', '')
   // The fixture's sa is disabled, so it offers Enable in place of Disable (D4b), as a SQL Server login Unlock… (D4d), and Delete
   // follows Rename as in SSMS (D4c); Properties, last, opens Login Properties (D2c).
   expect(await labels()).toEqual(['New Login…', 'Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])

@@ -1167,11 +1167,29 @@ try {
   await expect(upper.getByRole('button', { name: /^Jump to/ })).toHaveCount(2)
   await expect(lower.getByRole('button', { name: /^Jump to/ })).toHaveCount(2)
   const moreAbove = upper.getByRole('button', { name: /1 more above/ })
-  await moreAbove.focus()
-  await page.keyboard.press('Enter')
-  await expect(menu('More servers above').getByRole('menuitem', { name: /^Jump to pin-a/ })).toBeFocused()
+  const aboveMenu = menu('More servers above')
+  const openAbove = async () => {
+    await moreAbove.focus()
+    await page.keyboard.press('Enter')
+    await expect(aboveMenu.getByRole('menuitem', { name: /^Jump to pin-a/ })).toBeFocused()
+  }
+  await openAbove()
+  await page.keyboard.press('Shift+Tab')
+  await expect(aboveMenu).toBeHidden()
+  await openAbove()
   await page.keyboard.press('Escape')
   await expect(moreAbove).toBeFocused()
+  await openAbove()
+  const wheelTreeToStart = async () => {
+    const box = await tree().boundingBox()
+    await page.mouse.move(box.x + 20, box.y + box.height - 20)
+    await page.mouse.wheel(0, -20_000)
+    await expect(upper).toHaveCount(0)
+  }
+  await wheelTreeToStart()
+  await expect(tree()).toBeFocused()
+  await scrollToMiddle()
+  await expect(moreAbove).toBeVisible()
   await lower.getByRole('button', { name: /1 more below/ }).click()
   await menu('More servers below').getByRole('menuitem', { name: /^Jump to pin-f/ }).click()
   await expect(await explorerRow(page, 'pin-f')).toBeInViewport({ ratio: 1 })
@@ -1187,7 +1205,30 @@ try {
   await documentTab(page, pinQueries[5]).click()
   expect(await tree().evaluate(element => element.scrollTop)).toBe(middle)
   await setFollow(true)
-  console.log('Object Explorer checks: both pinned bands, keyboard and pointer overflow jumps, and following the active query without selecting its server.')
+
+  // A streamed page can insert rows above the server after a tab switch. Hold each page so the jump and the scroll
+  // away both happen while a load can still move the server.
+  await documentTab(page, pinQueries[2]).click()
+  await setStub({ tables: 300, pageSize: 80, holdTablePages: true })
+  await reload('pin-c', 'Databases', 'AppData', 'Tables')
+  const heldPage = () => application.evaluate(() => {
+    const stub = globalThis.variaStub
+    return stub.calls.findLast(call => call.method === 'explorer.children' && stub.held.has(call.params.requestId))?.params.cursor ?? ''
+  })
+  await expect.poll(heldPage).toMatch(/^v1\.tables\./)
+  const firstHeldPage = await heldPage()
+  await documentTab(page, pinQueries[5]).click()
+  const followedServer = await explorerRow(page, 'pin-f')
+  await expect(followedServer).toBeInViewport({ ratio: 1 })
+  await application.evaluate(() => globalThis.variaStub.release())
+  await expect.poll(heldPage).toMatch(/^v1\.tables\.p160$/)
+  expect(await heldPage()).not.toBe(firstHeldPage)
+  await expect(followedServer).toBeInViewport({ ratio: 1 })
+  await wheelTreeToStart()
+  await application.evaluate(() => { globalThis.variaStub.holdTablePages = false; globalThis.variaStub.release() })
+  await idle()
+  expect(await tree().evaluate(element => element.scrollTop)).toBe(0)
+  console.log('Object Explorer checks: pinned bands, overflow focus recovery, and following a query through streamed pages until the user scrolls.')
 
   // 14. A real server: a scratch database's table and columns, and F5 after DDL in a query.
   if (process.env.VARIA_TEST_SQL_SERVER && process.env.VARIA_TEST_SQL_SCRATCH === '1') {
