@@ -582,12 +582,14 @@ internal sealed class ColumnPlan
             while (xml.Read())
             {
                 token.ThrowIfCancellationRequested();
-                if (xml.NodeType == XmlNodeType.Text) while (xml.ReadValueChunk(buffer, 0, buffer.Length) > 0) token.ThrowIfCancellationRequested();
+                if (xml.NodeType == XmlNodeType.Text) while (xml.ReadValueChunk(buffer, 0, Math.Min(buffer.Length, Chunk)) > 0) token.ThrowIfCancellationRequested();
             }
             return true;
         }
         catch (Exception error) when (IsCellFailure(error))
         {
+            // A Stop can cut the value short, which parses as a malformed end: that is the Stop, not a value to warn about.
+            token.ThrowIfCancellationRequested();
             return false;
         }
     }
