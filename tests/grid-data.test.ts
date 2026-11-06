@@ -38,14 +38,14 @@ function fixture(columns = 40, inflight = { value: 0 }) {
 const range = (firstRow: number, lastRow: number, firstColumn = 0, lastColumn = 9) => ({ firstRow, lastRow, firstColumn, lastColumn })
 
 describe('grid data', () => {
-  it('reads the tiles a frame shows, centre first, at most 4 per grid, as display windows of 128 rows', async () => {
+  it('reads the tiles a frame shows, centre first, at most 4 per grid, as windows of 128 rows', async () => {
     const { data, reads, settle, changed } = fixture()
     // Rows 100–400 over columns 0–39: row tiles 0–3, column tiles 0–1; the centre is row tile 1 or 2, column tile 0 or 1.
     expect(data.ensure(range(100, 400, 0, 39), 10_000, 0, 30)).toBe(false)
     expect(reads).toHaveLength(4)
     expect(reads.map(read => [read.first, read.o.colStart])).toEqual(planTiles(range(100, 400, 0, 39), 10_000, 40).slice(0, 4).map(key => [tileRowOf(key) * 128, tileColumnOf(key) * 32]))
     expect(reads[0].first).toBe(128)
-    expect(reads[0]).toMatchObject({ count: 128, o: { colEnd: 32, maxCellChars: 512, textBudget: 2_100_000, display: true } })
+    expect(reads[0]).toMatchObject({ count: 128, o: { colEnd: 32, maxCellChars: 512, textBudget: 2_100_000, display: false } })
     expect(reads[1].o.colEnd).toBe(40)
     reads[0].resolve()
     await settle()
@@ -179,15 +179,15 @@ describe('grid data', () => {
     expect(joined.flags.every(flag => flag === 1)).toBe(true)
     expect(data.peek(key)).toBe(joined)
     // A part that left the cache ends the tile's rows there; with the tile's first part gone, it is read from its start.
-    cache.delete('60:68:0:8:512:true')
+    cache.delete('60:68:0:8:512:false')
     expect(data.peek(key)!.count).toBe(60)
-    cache.delete('0:128:0:8:512:true')
+    cache.delete('0:128:0:8:512:false')
     expect(data.peek(key)).toBeUndefined()
     data.ensure(range(0, 127, 0, 7), 128, 0, 30)
     expect(reads.at(-1)).toMatchObject({ first: 0, count: 128 })
     reads.at(-1)!.resolve()
     await settle()
-    expect(data.peek(key)).toBe(cache.get('0:128:0:8:512:true'))
+    expect(data.peek(key)).toBe(cache.get('0:128:0:8:512:false'))
   })
   it('marks a tile whose read failed until Retry, and reads a tile once more after the worker restarts', async () => {
     const { data, reads, settle } = fixture(8)

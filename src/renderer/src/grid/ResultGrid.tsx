@@ -38,9 +38,11 @@ function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: n
 /** The React shell of one grid: its root and scroller, strips and overlay. GridView renders and handles everything inside. */
 function ResultGridShell({ tabId, entry, count, focused, budget, onFocus, onWide }: ResultGridProps) {
   const { results, resultClient, commands, platform, gridStats, panes, settings } = useWorkbench()
-  const showTypes = useServiceSnapshot(settings).values['queryResults.grid.showColumnTypes']
-  const showTypesRef = useRef(showTypes)
+  const values = useServiceSnapshot(settings).values
+  const showTypes = values['queryResults.grid.showColumnTypes'], whitespace = values['queryResults.grid.whitespace']
+  const showTypesRef = useRef(showTypes), whitespaceRef = useRef(whitespace)
   showTypesRef.current = showTypes
+  whitespaceRef.current = whitespace
   const rootRef = useRef<HTMLDivElement>(null), scrollRef = useRef<HTMLDivElement>(null), viewRef = useRef<GridView | undefined>(undefined)
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
   const [status, setStatus] = useState<GridStatus>({})
@@ -53,7 +55,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, onFocus, onWide
   useLayoutEffect(() => {
     const view = new GridView({
       root: rootRef.current!, scroller: scrollRef.current!, handle: entry.handle, client: resultClient, descriptor: entry.descriptor, state: results.gridState(tabId, index),
-      resultIndex: index, resultCount: countRef.current, platform, stats: gridStats, showTypes: showTypesRef.current,
+      resultIndex: index, resultCount: countRef.current, platform, stats: gridStats, showTypes: showTypesRef.current, whitespace: whitespaceRef.current,
       onSelection: selection => {
         const current = entry.handle.getSnapshot()
         results.announceSelection(tabId, describeSelection(selection, current.rowsAvailable, entry.descriptor.columns.length))
@@ -77,7 +79,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, onFocus, onWide
       if (viewRef.current === view) viewRef.current = undefined
     }
   }, [tabId, index, entry, results, resultClient, commands, platform, gridStats, panes])
-  useEffect(() => { viewRef.current?.update({ resultCount: count, showTypes }) }, [count, showTypes])
+  useEffect(() => { viewRef.current?.update({ resultCount: count, showTypes, whitespace }) }, [count, showTypes, whitespace])
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.defaultPrevented || (event.target as Element).closest('button')) return
     if (viewRef.current?.key(event.nativeEvent)) { event.preventDefault(); event.stopPropagation() }

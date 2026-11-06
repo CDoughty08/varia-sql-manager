@@ -200,6 +200,7 @@ const groups = {
     'resultsGrid.nullForeground': ['X', '$textMuted', 'NULL values, which are drawn in italics.', 'css'],
     'resultsGrid.nullBackground': ['X', '$text/0', 'NULL cells; untinted by default, so NULL reads as muted italic text.', 'css'],
     'resultsGrid.truncationForeground': ['X', '@warningForeground', 'Truncation notices and the marker on truncated values.', 'css'],
+    'resultsGrid.whitespaceForeground': ['X', '$textMuted', 'White space marks in cells (results toolbar › White space): the dots, arrows and the names of line breaks and invisible characters.', 'css'],
     'resultsGrid.selectionBackground': ['X', '@list.activeSelectionBackground', 'Selected cells.', 'css'],
     'resultsGrid.selectionForeground': ['X', '@list.activeSelectionForeground', 'Text of selected cells.', 'css'],
     'resultsGrid.inactiveSelectionBackground': ['X', '@list.inactiveSelectionBackground', 'Selected cells while the grid is not focused; their text keeps its color.', 'css'],
@@ -297,11 +298,11 @@ const groups = {
   'Charts': {
     'charts.foreground': ['V', '$textTertiary', 'Chart labels, legends, and the crosshair.', 'css script'],
     'charts.lines': ['V', '$border', 'Chart grid lines and baseline.', 'script'],
-    'charts.blue': ['V', '$chart1', 'First series of a chart; series take blue, orange, green, yellow, then purple.', 'script'],
+    'charts.blue': ['V', '$chart1', 'First series of a chart; series take blue, orange, green, yellow, then purple.', 'css script'],
     'charts.orange': ['V', '$chart2', 'Second series of a chart.', 'script'],
     'charts.green': ['V', '$chart3', 'Third series of a chart.', 'script'],
     'charts.yellow': ['V', '$chart4', 'Fourth series of a chart.', 'script'],
-    'charts.purple': ['V', '$chart5', 'Fifth series of a chart.', 'script'],
+    'charts.purple': ['V', '$chart5', 'Fifth series of a chart.', 'css script'],
     'charts.red': ['V', '$error', 'A status mark on a chart, such as a failed execution on a timeline; never the color of a series.', 'script'],
     'charts.gray': ['X', '$neutral', '"Other" in a stacked chart: everything the named series leave out.', 'script']
   }

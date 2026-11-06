@@ -1,7 +1,7 @@
 // The results port (docs/ipc.md): one MessagePort per renderer load between main and the results worker. The worker's
 // requests are validated with portRequestSchema; backend payloads main forwards are validated with the schemas below.
 import { z } from 'zod'
-import type { BackendStatus, QueryEvent, ResultsCloseResult, ResultsReadResult } from '../contracts'
+import type { BackendStatus, MemoryOrder, QueryEvent, ResultsCloseResult, ResultsReadResult } from '../contracts'
 import { liveSubscribeParamsSchema, liveUpdateParamsSchema, testLiveSubscribeParamsSchema, testLiveUpdateParamsSchema, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../live/schema'
 import { backendDescriptorSchema } from './descriptors'
 import { limits, type ErrorCode } from './wire/protocol'
@@ -29,6 +29,9 @@ export const portRequestSchema = buildPortRequestSchema({ subscribe: liveSubscri
 export const testPortRequestSchema = buildPortRequestSchema({ subscribe: testLiveSubscribeParamsSchema, update: testLiveUpdateParamsSchema })
 export type PortRequest = z.infer<typeof portRequestSchema>
 
+export type MemoryFeature = 'results' | 'index'
+export type MemoryReport = { readonly usedBytes: number; readonly globalBytes: number } & MemoryOrder
+
 /** Main → worker. Page bodies are exact-size ArrayBuffers, never decoded by main. A live event carries the EVENT body's
  *  length, which the worker grants back once the page has applied it. */
 export type PortMessage =
@@ -37,7 +40,7 @@ export type PortMessage =
   | { t: 'end'; rid: number; ok: true; result: PortEndResult }
   | { t: 'end'; rid: number; ok: false; code: ErrorCode; message: string }
   | { t: 'query'; queryId: string; event: QueryEvent }
-  | { t: 'memory'; usedBytes: number; globalBytes: number; generation: number; seq: number }
+  | ({ t: 'memory'; feature: MemoryFeature } & MemoryReport)
   | { t: 'live'; rid: number; bytes: number; event: LiveEvent }
 export type PortEndResult = ResultsReadResult | ResultsCloseResult | LiveEnd | LiveUpdateResult
 
@@ -67,5 +70,7 @@ export const queryResultSchema = z.object({
 /** EVENT bodies for a results.copy or results.export request; droppable, the latest wins. */
 export const jobProgressSchema = z.object({ type: z.literal('job.progress'), rowsDone: count, rowsTotal: count, bytes: count }).strict()
 export type JobProgressEvent = z.infer<typeof jobProgressSchema>
-/** The global EVENT (id 0) for result memory; `seq` orders it with the summaries' budgets (QueryResult). */
-export const memoryEventSchema = z.object({ type: z.literal('results.memory'), usedBytes: count, globalBytes: count, seq: count }).strict()
+/** Global memory EVENTs (id 0). Each feature has its own sequence. Results shares its sequence with query summaries. */
+export const memoryEventSchema = z.object({
+  type: z.enum(['results.memory', 'explorer.index.memory']), usedBytes: count, globalBytes: count.min(1), seq: count.min(1)
+}).strict()
