@@ -1,3 +1,4 @@
+using System.Data.SqlTypes;
 using System.Text;
 
 namespace Varia.Backend.Results;
@@ -34,26 +35,31 @@ internal sealed class ColumnLength
     public static readonly ColumnLength Recorded = new(LengthRule.Recorded);
     public static readonly ColumnLength Decimal = new(LengthRule.Decimal);
     public static readonly ColumnLength SingleByte = new(LengthRule.SingleByte);
+    /// <summary>A char column whose collation SqlClient's metadata did not give: one byte a character, an estimate.</summary>
+    public static readonly ColumnLength Assumed = new(LengthRule.SingleByte, estimated: true);
     private static readonly ColumnLength[] Fixeds = [.. Enumerable.Range(0, 17).Select(bytes => new ColumnLength(LengthRule.Fixed, bytes))];
 
-    private ColumnLength(LengthRule rule, int fixedBytes = 0, Encoding? encoding = null)
+    private ColumnLength(LengthRule rule, int fixedBytes = 0, Encoding? encoding = null, bool estimated = false)
     {
         Rule = rule;
         FixedBytes = fixedBytes;
         Encoding = encoding;
+        Estimated = estimated;
     }
 
     public LengthRule Rule { get; }
     public int FixedBytes { get; }
     /// <summary>The encoding SqlClient decoded the column's text with (Utf8 and CodePage rules).</summary>
     public Encoding? Encoding { get; }
+    /// <summary>True when the rule is a guess (no collation): every cell's size is then reported inexact.</summary>
+    public bool Estimated { get; }
 
     public static ColumnLength Fixed(int bytes) => Fixeds[bytes];
 
     /// <summary>A char, varchar or text column's rule from the encoding SqlClient decodes it with; without one (SqlClient's
-    /// metadata unreadable) a single-byte code page is assumed.</summary>
+    /// metadata unreadable) a single-byte code page is assumed, as an estimate.</summary>
     public static ColumnLength Chars(Encoding? encoding, bool utf8) =>
-        utf8 ? Utf8 : encoding is null || encoding.IsSingleByte ? SingleByte : new ColumnLength(LengthRule.CodePage, encoding: encoding);
+        utf8 ? Utf8 : encoding is null ? Assumed : encoding.IsSingleByte ? SingleByte : new ColumnLength(LengthRule.CodePage, encoding: encoding);
 
     /// <summary>A counter for one value read in chunks; one counter serves a column's cells in turn.</summary>
     public ByteCounter Counter() => new(this);
@@ -85,7 +91,29 @@ internal sealed class ColumnLength
             LengthRule.Binary => stored.Length,
             _ => -1
         };
-        return bytes < 0 ? new CellSize(chars, 2L * chars, false) : new CellSize(chars, bytes, true);
+        // A _UTF8 value holding bytes that are not UTF-8 reaches the page as U+FFFD (3 bytes) whatever it held.
+        var exact = bytes >= 0 && !Estimated && !(Rule == LengthRule.Utf8 && stored.IndexOf(Replacement) >= 0);
+        return bytes < 0 ? new CellSize(chars, 2L * chars, false) : new CellSize(chars, bytes, exact);
+    }
+
+    private static ReadOnlySpan<byte> Replacement => [0xEF, 0xBF, 0xBD];
+
+    /// <summary>DATALENGTH of a decimal or numeric read as System.Decimal, from its unscaled value's 32-bit words.</summary>
+    public static int DecimalBytes(decimal value)
+    {
+        Span<int> bits = stackalloc int[4];
+        decimal.GetBits(value, bits);
+        return 1 + 4 * (bits[2] != 0 ? 3 : bits[1] != 0 ? 2 : 1);
+    }
+
+    /// <summary>DATALENGTH of a decimal or numeric read as SqlDecimal, from its unscaled value's 32-bit words.</summary>
+    public static int DecimalBytes(SqlDecimal value)
+    {
+        Span<uint> data = stackalloc uint[4];
+        value.WriteTdsValue(data);
+        var words = 4;
+        while (words > 1 && data[words - 1] == 0) words--;
+        return 1 + 4 * words;
     }
 
     /// <summary>DATALENGTH of a decimal or numeric from its display text ("-123.4500"): 1 byte plus 4 per 32-bit word of
@@ -107,18 +135,25 @@ internal sealed class ByteCounter(ColumnLength length)
 {
     private readonly Encoding? encoding = length.Rule is LengthRule.Utf8 or LengthRule.CodePage ? length.Encoding : null;
     private readonly int perChar = length.Rule == LengthRule.Utf16 ? 2 : 1;
+    private readonly bool utf8 = length.Rule == LengthRule.Utf8;
     private long bytes;
     private char carry;
+
+    /// <summary>True once a _UTF8 value showed U+FFFD, which SqlClient also writes for bytes that are not UTF-8: its
+    /// count is then an estimate. Read it before <see cref="Total"/>, which starts the next value.</summary>
+    public bool Replaced { get; private set; }
 
     public void Reset()
     {
         bytes = 0;
         carry = '\0';
+        Replaced = false;
     }
 
     public void Add(ReadOnlySpan<char> chunk)
     {
         if (chunk.IsEmpty) return;
+        if (utf8 && chunk.Contains('\uFFFD')) Replaced = true;
         if (encoding is null)
         {
             bytes += (long)perChar * chunk.Length;

@@ -302,7 +302,7 @@ internal sealed class ResultSetBuffer
         var at = (int)(row - page.FirstRow);
         var view = PageView.Parse(page.Body, Wires.Count);
         if (view.IsNull(column, at)) return null;
-        if (page.Lengths.TryCell(at, column, out var cell)) return new CellSize(cell.Chars, cell.Bytes, cell.Exact);
+        if (page.Lengths.TryCell(at, column, out var cell)) return new CellSize(cell.Chars, cell.Bytes, cell.Exact && !Lengths[column].Estimated);
         var size = Lengths[column].Derive(view.Span(column, at), Wires[column]);
         return view.IsTruncated(column, at) || Lengths[column].Rule == LengthRule.Recorded ? size with { Exact = false } : size;
     }

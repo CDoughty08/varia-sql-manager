@@ -239,9 +239,10 @@ internal sealed class ColumnPlan
     }
 
     /// <summary>The reader a column switches to after a value its own could not read. GetValue reads a whole value, so long
-    /// columns keep a streaming reader: GetTextReader for text, and xml its own (GetTextReader rejects xml).</summary>
+    /// columns keep a streaming reader: GetTextReader for text, and xml and json their own (GetTextReader rejects xml, and
+    /// throws on json when a read ends inside a multi-byte sequence).</summary>
     internal static CellCodec FallbackOf(CellCodec codec, WireKind wire, bool isLong) =>
-        wire == WireKind.Binary ? CellCodec.Stream : !isLong ? CellCodec.Value : codec == CellCodec.Xml ? CellCodec.Xml : CellCodec.LongText;
+        wire == WireKind.Binary ? CellCodec.Stream : !isLong ? CellCodec.Value : codec is CellCodec.Xml or CellCodec.Json ? codec : CellCodec.LongText;
 
     /// <summary>A value the provider cannot convert; anything else (SQL errors, a closed connection, cancellation) ends the read.</summary>
     private static bool IsCellFailure(Exception error) => error is InvalidCastException or OverflowException or FormatException or ArgumentException
@@ -259,12 +260,14 @@ internal sealed class ColumnPlan
             case CellCodec.Decimal:
             {
                 var span = builder.BeginFormatted();
-                return Decimal(builder, span, CellFormat.WriteDecimal(span, reader.GetDecimal(i)));
+                var value = reader.GetDecimal(i);
+                return Decimal(builder, CellFormat.WriteDecimal(span, value), ColumnLength.DecimalBytes(value));
             }
             case CellCodec.SqlDecimal:
             {
                 var span = builder.BeginFormatted();
-                return Decimal(builder, span, CellFormat.WriteSqlDecimal(span, reader.GetSqlDecimal(i)));
+                var value = reader.GetSqlDecimal(i);
+                return Decimal(builder, CellFormat.WriteSqlDecimal(span, value), ColumnLength.DecimalBytes(value));
             }
             case CellCodec.Money: builder.EndFormatted(CellFormat.WriteMoney(builder.BeginFormatted(), reader.GetDecimal(i))); return false;
             case CellCodec.Real: builder.EndFormatted(CellFormat.WriteReal(builder.BeginFormatted(), reader.GetFloat(i))); return false;
@@ -322,11 +325,12 @@ internal sealed class ColumnPlan
         return truncated;
     }
 
-    /// <summary>A formatted decimal: its bytes follow from its digits (ColumnLength.DecimalBytes).</summary>
-    private bool Decimal(PageBuilder builder, Span<byte> span, int written)
+    /// <summary>A formatted decimal: its bytes follow from its unscaled value's words (ColumnLength.DecimalBytes), read
+    /// from the value rather than parsed back from its digits.</summary>
+    private bool Decimal(PageBuilder builder, int written, int bytes)
     {
         cellChars = written;
-        cellBytes = ColumnLength.DecimalBytes(span[..written]);
+        cellBytes = bytes;
         builder.EndFormatted(written);
         return false;
     }
@@ -346,6 +350,7 @@ internal sealed class ColumnPlan
     private void Counted(Column column, long chars)
     {
         cellChars = chars;
+        if (column.Counter.Replaced) cellExact = false;
         var counted = column.Counter.Total();
         cellBytes = column.Length.Rule switch
         {
@@ -668,7 +673,7 @@ internal sealed class ColumnPlan
             case SqlDecimal number:
             {
                 var span = builder.BeginFormatted();
-                return Decimal(builder, span, number.Precision <= 28 ? CellFormat.WriteDecimal(span, number.Value) : CellFormat.WriteSqlDecimal(span, number));
+                return Decimal(builder, number.Precision <= 28 ? CellFormat.WriteDecimal(span, number.Value) : CellFormat.WriteSqlDecimal(span, number), ColumnLength.DecimalBytes(number));
             }
             case SqlMoney money: return Estimated(Formatted(builder, CellFormat.WriteMoney(builder.BeginFormatted(), money.Value), 8));
             case SqlSingle number: return Formatted(builder, CellFormat.WriteReal(builder.BeginFormatted(), number.Value), 4);

@@ -1165,11 +1165,11 @@ the row-size bar) read these numbers; nothing re-reads SQL Server.
   `DATALENGTH`. The descriptor's column gets `collation: { lcid, sortId, codePage, utf8, options }` (`options` are
   SqlCompareOptions bits: 1 IgnoreCase, 2 IgnoreNonSpace, 8 IgnoreKanaType, 16 IgnoreWidth, 16384 BinarySort2, 32768
   BinarySort; `codePage` 0 for a UTF-8 collation; `sortId` non-zero for SQL_ collations). If a SqlClient release moves
-  these internals, the reflection finds nothing, the column has no `collation`, and its bytes count one per character
-  (exact for single-byte code pages only); the live checks fail first.
+  these internals, the reflection finds nothing, the column has no `collation`, and its bytes count one per character,
+  every cell reported as an estimate; the live checks fail first.
 - **Storage.** Beside each sealed page, `PageLengths` holds a `uint32` per row (the sum of its cells' bytes; NULL counts
   0), a sorted sparse list of 24-byte `(row, column, chars, bytes)` entries for the cells whose stored text does not give
-  their length (truncated cells, every xml and sql_variant cell, and estimates; an estimate is marked in the column's sign
+  their length (truncated cells, every xml, vector and sql_variant cell, and estimates; an estimate is marked in the column's sign
   bit), and a list of 16-byte `(row, bytes)` entries for rows
   of 4 GiB or more, whose `uint32` holds `uint.MaxValue`: row sizes are always exact (a row of several `max` values can
   pass 4 GiB), though a row's sum includes any estimate among its cells. The page builder's open row keeps its entries
@@ -1180,14 +1180,16 @@ the row-size bar) read these numbers; nothing re-reads SQL Server.
 - **Reading.** `results.rowBytes { resultId, firstRow, count: 1..16,384 }` answers `{ firstRow, bytes: number[],
   rowsAvailable }` for sealed rows only; fewer than `count` past `rowsAvailable` (none for a range past it). Main
   forwards it only for a result the renderer owns in the current, ready generation (else `RESULT_UNAVAILABLE`), and only
-  an answer that passes `rowBytesResultSchema`, starts at `firstRow` and has at most `count` rows (else `BACKEND_ERROR`).
+  an answer that passes `rowBytesResultSchema`, starts at `firstRow` and has at most `count` rows and no more than `rowsAvailable - firstRow` (else `BACKEND_ERROR`).
   `ResultHandle.rowBytes(first, count, signal)` answers an empty range itself and refuses a malformed one
   (`INVALID_PARAMS`) without sending it, since main closes the port after 100 invalid messages.
 - **Not measured exactly.** FOR XML and FOR JSON values count their joined text as nvarchar. Live tables count text as
   nvarchar, and a cut cell, whose full text the probe never had, counts its kept text as an estimate. Without
   `SequentialXml`'s internals, an xml cell counts its display text as an estimate. A value read through a column's
   fallback reader (after a typed read failed) counts as text: exact for character types, an estimate for decimal, vector
-  and recorded types. Synthetic test rows are not measured.
+  and recorded types. A _UTF8 value holding bytes that are not UTF-8 arrives with U+FFFD (3 bytes) in their place, so a
+  value showing U+FFFD is an estimate; a code-page value holding bytes its code page does not map is counted as SqlClient
+  decodes it, which no client can tell from real text. Synthetic test rows are not measured.
 
 ## Messages
 

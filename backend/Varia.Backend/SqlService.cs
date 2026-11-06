@@ -1347,7 +1347,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         return new ResultsReadResult(next, available, set.IsComplete && next >= available, pages, rows);
     }
 
-    /// <summary>The most rows one results.rowBytes answers (src/shared/ipc/wire/protocol.ts limits.rowBytes).</summary>
+    /// <summary>The most rows one results.rowBytes answers (src/shared/ipc/wire/protocol.ts limits.rowSizes.maxRows).</summary>
     public const int MaxRowBytesRows = 16_384;
 
     /// <summary>Each row's bytes (the sum of DATALENGTH over its cells) for a range of a result's sealed rows; fewer than asked

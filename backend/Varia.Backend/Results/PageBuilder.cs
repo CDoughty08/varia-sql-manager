@@ -118,9 +118,10 @@ internal sealed class PageBuilder
     /// measured adds nothing (NULL, or a caller that records no lengths).</summary>
     public void Measure(long chars, long bytes, bool keep = false, bool exact = true)
     {
+        // InvalidOperationException, not an ArgumentException: a reader treats those as a failed cell and would append the
+        // cell a second time, where a bug here should end the read.
         if (lastCell < 0) throw new InvalidOperationException("Measure follows the cell it describes.");
-        ArgumentOutOfRangeException.ThrowIfNegative(chars);
-        ArgumentOutOfRangeException.ThrowIfNegative(bytes);
+        if (chars < 0 || bytes < 0) throw new InvalidOperationException("A cell's lengths are never negative.");
         rowData += bytes;
         if (keep || lastTruncated || !exact)
         {

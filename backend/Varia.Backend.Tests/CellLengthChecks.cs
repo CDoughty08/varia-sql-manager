@@ -62,6 +62,28 @@ internal static class CellLengthChecks
         };
         var decimalWrong = decimals.Where(item => ColumnLength.DecimalBytes(Encoding.ASCII.GetBytes(item.Text)) != item.Bytes).Select(item => item.Text + "=" + ColumnLength.DecimalBytes(Encoding.ASCII.GetBytes(item.Text))).ToList();
         check(decimalWrong.Count == 0, "decimal bytes are 1 plus 4 per 32-bit word of the unscaled value, whatever the precision, as DATALENGTH reports: " + string.Join(", ", decimalWrong));
+        // Readers take the words from the value itself (no parse per cell); both must agree with the text rule.
+        var fromValues = decimals.Where(item => ColumnLength.DecimalBytes(System.Data.SqlTypes.SqlDecimal.Parse(item.Text)) != item.Bytes
+            || (item.Text.TrimStart('-').Replace(".", "").Length <= 28 && ColumnLength.DecimalBytes(decimal.Parse(item.Text, System.Globalization.CultureInfo.InvariantCulture)) != item.Bytes))
+            .Select(item => item.Text).ToList();
+        check(fromValues.Count == 0, "decimal bytes read from a System.Decimal's or SqlDecimal's words equal those from its digits: " + string.Join(", ", fromValues));
+
+        // Without a collation the one-byte-a-character rule is a guess, and a _UTF8 value showing U+FFFD may have held bytes
+        // that are not UTF-8: both are reported as estimates.
+        var assumed = Chars(SqlDbType.VarChar, null);
+        var utf8Rule = Chars(SqlDbType.VarChar, utf8);
+        var counter = utf8Rule.Counter();
+        counter.Add("a�b");
+        var replaced = counter.Replaced;
+        counter.Total();
+        counter.Add("ab");
+        check(assumed.Estimated && !Chars(SqlDbType.VarChar, latin).Estimated && assumed.Derive("abc"u8, WireKind.Text) == new CellSize(3, 3, false)
+            && utf8Rule.Derive(Encoding.UTF8.GetBytes("a�b"), WireKind.Text) is { Exact: false, Bytes: 5 }
+            && utf8Rule.Derive("aé"u8, WireKind.Text) == new CellSize(2, 3, true) && replaced && !counter.Replaced,
+            "a char column without its collation, and a _UTF8 value showing U+FFFD, give estimates");
+        check(ColumnPlan.FallbackOf(CellCodec.Json, WireKind.Text, true) == CellCodec.Json && ColumnPlan.FallbackOf(CellCodec.Xml, WireKind.Text, true) == CellCodec.Xml
+            && ColumnPlan.FallbackOf(CellCodec.Chars, WireKind.Text, true) == CellCodec.LongText,
+            "json keeps its own UTF-8 reader as its fallback, since GetTextReader throws inside a multi-byte sequence");
     }
 
     private static void Counting(Action<bool, string> check)
@@ -104,6 +126,12 @@ internal static class CellLengthChecks
     {
         var builder = new PageBuilder(1, [WireKind.Text, WireKind.Text, WireKind.Binary]);
         check(Throws(() => builder.Measure(1, 1)), "Measure needs a cell to describe");
+        builder.BeginRow();
+        builder.AppendNull();
+        Exception? negative = null;
+        try { builder.Measure(-1, 1); } catch (Exception error) { negative = error; }
+        builder.AbortRow();
+        check(negative is InvalidOperationException, "a negative length ends the read (InvalidOperationException), never a cell failure that would append the cell twice: " + negative?.GetType().Name);
         // Row 0: an int, an nvarchar with trailing whitespace, and binary.
         builder.BeginRow();
         builder.EndFormatted(CellFormat.WriteInteger(builder.BeginFormatted(), 42));
