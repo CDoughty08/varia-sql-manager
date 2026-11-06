@@ -13,7 +13,7 @@ import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, backendReady, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice,
   jobProgress, kindIcon, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
-  outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planList, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, resultToggle, statusBar,
+  outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planList, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, resultsToolbar, resultToggle, statusBar,
   statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, unsavedMark
 } from './fixtures/ui.mjs'
 
@@ -1237,7 +1237,7 @@ try {
   await page.keyboard.press('Shift+F10')
   const outputMenu = page.getByRole('menu', { name: 'Query output', exact: true })
   await expect(outputMenu).toBeVisible()
-  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Select All', 'Save Results As…'])
+  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Select All', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space'])
   await page.keyboard.press('Escape')
   // Shift+F10 right after a click opens at the cell just clicked, though the grid paints it as active only on its next
   // frame: below it (or above, when there is no room), from its left edge (or to its right edge, near the window's).
@@ -1303,6 +1303,40 @@ try {
   await page.emulateMedia({ forcedColors: null })
   await page.evaluate(() => window.varia.setThemePreference({ mode: 'dark' }))
   console.log('Results checks: NULL, truncated, failed and selected cells take their theme tokens, and a theme change keeps the grid\'s nodes.')
+
+  // 14b. White space: the results toolbar marks spaces and tabs, then line breaks and invisible characters too. The marks
+  // are drawn only: the active cell's name and Copy keep the value, and the grid's menu checks the choice that is on.
+  const whitespace = resultsToolbar(page).getByRole('group', { name: 'White space', exact: true })
+  const choice = name => whitespace.getByRole('button', { name, exact: true })
+  const cellText = (row, column) => cell(row, column).evaluate(element => element.textContent)
+  await expect(choice('Off')).toHaveAttribute('aria-pressed', 'true')
+  expect(await cellText(3, 2)).toBe('😀 astral')
+  await choice('Spaces').click()
+  await expect(choice('Spaces')).toHaveAttribute('aria-pressed', 'true')
+  await expect.poll(() => cellText(3, 2)).toBe('😀·astral')
+  // A line break Spaces does not mark stays one line, as it shows when off.
+  expect(await cellText(5, 2)).toBe('tab→line quote"\\')
+  await choice('Spaces').press('ArrowRight')
+  await expect(choice('All')).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(choice('All')).toHaveAttribute('aria-pressed', 'true')
+  await expect.poll(() => cellText(5, 2)).toBe('tab→lineLFquote"\\')
+  await expect(cell(5, 2).locator(gridPart.whitespaceBadge)).toHaveText('LF')
+  expect(await cellText(4, 2)).toBe('BOMbom')
+  expect((await computed(cell(5, 2).locator(gridPart.whitespaceMark).first())).color).toBe(await tokenColor('resultsGrid.whitespaceForeground'))
+  await cell(3, 2).click()
+  await expect(cell(3, 2)).toHaveAttribute('aria-label', /^😀 astral/)
+  await setClipboard('')
+  await page.keyboard.press('Control+C')
+  await expect.poll(clipboard).toBe('😀 astral')
+  await page.keyboard.press('Shift+F10')
+  const shownAll = page.getByRole('menu', { name: 'Query output', exact: true }).getByRole('menuitemcheckbox', { name: /^Show All White Space/ })
+  await expect(shownAll).toHaveAttribute('aria-checked', 'true')
+  await shownAll.click()
+  await expect(choice('Off')).toHaveAttribute('aria-pressed', 'true')
+  await expect(grid().locator(gridPart.whitespaceMark)).toHaveCount(0)
+  expect(await cellText(5, 2)).toBe('tab line quote"\\')
+  console.log('Results checks: White space marks spaces, tabs, line breaks and a BOM, from the toolbar and the grid\'s menu, while Copy and the cell\'s name keep the value.')
 
   // 15. Panes and tabs: F6 goes to the results and back; Ctrl+R hides and shows them keeping scroll, selection and a
   // resized column; a tab switch restores all three.

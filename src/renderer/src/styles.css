@@ -485,6 +485,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .output-status[data-tone="error"] .codicon { color: var(--varia-errorForeground); }
 .output-spacer { flex: 1; }
 .output-view { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
+/* The results toolbar, in the Results head after its views: tools for every grid in the run, as segmented controls. */
+.results-toolbar { display: flex; flex-shrink: 0; align-items: center; gap: 4px; min-width: 0; padding-left: 8px; border-left: 1px solid var(--varia-panel-border); }
+.results-toolbar-label { display: inline-flex; align-items: center; gap: 5px; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); white-space: nowrap; }
+.results-segments { display: inline-flex; flex-shrink: 0; gap: 1px; padding: 1px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); }
+.results-segments button { height: 20px; padding: 0 8px; border-radius: var(--varia-radius-sm); color: var(--varia-panelTitle-inactiveForeground); font-size: var(--varia-size-xs); }
+.results-segments button[aria-pressed="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-panelTitle-activeForeground); font-weight: 600; transition: none; }
+@media (forced-colors: active) { .results-segments button[aria-pressed="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; } }
 .job-strip { display: flex; min-width: 0; align-items: center; gap: 6px; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); white-space: nowrap; }
 /* Strips give way to a narrow window: a long file name is cut short, while Cancel and the status line keep their room. */
 .output-toolbar > .job-strip { flex-shrink: 1; min-width: 72px; }
@@ -561,6 +568,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* Only the focused grid shows its active cell's outline, as in SSMS; the others show their selection. */
 .rg:focus-within .rg-c.is-act { outline: 1px solid var(--varia-resultsGrid-activeCellBorder); outline-offset: -1px; }
 .rg:focus-visible .rg-c.is-act { outline-width: 2px; outline-offset: -2px; }
+/* White space marks (GridView.writeMarked): dots and arrows in a muted colour, and each named character (CR, LF, NBSP…) as
+   a small outlined badge, so it never reads as the letters a value holds. In a selected cell they take its text colour. */
+.rg-ws { color: var(--varia-resultsGrid-whitespaceForeground); }
+.rg-wsb { display: inline-block; margin: 0 1px; padding: 0 2px; border: 1px solid currentColor; border-radius: var(--varia-radius-sm); font-size: var(--varia-size-xs); line-height: 14px; vertical-align: 1px; }
+.rg-c.is-sel .rg-ws { color: inherit; }
+@media (forced-colors: active) { .rg-ws { color: GrayText; } .rg-c.is-sel .rg-ws { color: inherit; } }
 /* One line (gridLimits.stripHeight), cut short with the sentence in its tooltip, so a set sized to its rows counts it exactly. An
    error strip wraps instead, keeping Retry in view; it comes after the set was sized. */
 .rg-strip { flex-shrink: 0; padding: 4px 8px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: var(--varia-size-xs)/16px var(--varia-font-ui); color: var(--varia-resultsGrid-truncationForeground); border-top: 1px solid var(--varia-panel-border); }

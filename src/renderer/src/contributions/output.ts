@@ -27,6 +27,8 @@ const baseName = (name: string) => name.replace(/\.[^.]*$/, '') || 'Results'
  * focus. Open Value opens the XML, JSON or plan cell a click or Enter names, else the focused grid's active cell.
  */
 export function outputContribution({ commands, results, menuTargets, documents, settings }: Pick<Workbench, 'commands' | 'results' | 'menuTargets' | 'documents' | 'settings'>, api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
+  const showWhitespace = (mode: 'spaces' | 'all') =>
+    settings.choose('queryResults.grid.whitespace', settings.getSnapshot().values['queryResults.grid.whitespace'] === mode ? 'none' : mode)
   const targetOf = (args?: CommandArgs) => outputOf(args) ?? (args?.target ? undefined : focusedOutput(menuTargets))
   /** The grid's result set, while its results are still readable. */
   const grid = (target: OutputTarget | undefined) => {
@@ -114,7 +116,10 @@ export function outputContribution({ commands, results, menuTargets, documents, 
         // Messages keep text selection; Chromium's Select All would select the whole window.
         else if (target) target.element.ownerDocument.getSelection()?.selectAllChildren(target.element)
       }
-    })
+    }),
+    // Saved, or applied for this session when the save fails (SettingsService.choose); a choice already on turns the marks off.
+    commands.register('output.showSpaces', { run: () => showWhitespace('spaces') }),
+    commands.register('output.showAllWhitespace', { run: () => showWhitespace('all') })
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }
 }

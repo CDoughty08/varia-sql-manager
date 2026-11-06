@@ -167,6 +167,7 @@
     "resultsGrid.nullForeground": "#5c6370",
     "resultsGrid.nullBackground": "#1c1f2600",
     "resultsGrid.truncationForeground": "#875800",
+    "resultsGrid.whitespaceForeground": "#5c6370",
     "resultsGrid.selectionBackground": "#d9e0fb",
     "resultsGrid.selectionForeground": "#1c1f26",
     "resultsGrid.inactiveSelectionBackground": "#e7ebfc",
