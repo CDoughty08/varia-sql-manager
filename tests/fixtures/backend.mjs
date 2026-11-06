@@ -1034,6 +1034,7 @@ async function workbench(id, method, params, credit) {
       if (await controlled('crash-next', true)) return exitAfter(encodeFrame(FrameKind.GOAWAY, 0, 0, encodeControl({ code: 'BACKEND_CRASH', message: 'The SQL backend failed unexpectedly (Exception).' })), 70)
       beginQuery(params.sessionId)
       runInSession(params)
+      write(FrameKind.EVENT, id, 0, { type: 'session.opened', ...probe(params.sessionId) })
       if (directive) return runDirective(id, params, directive)
       if (params.sql.includes('WAIT_FOR_CANCEL')) { waitingScripts.set(params.queryId, { id, database: params.database, sessionId: params.sessionId }); return }
       const fixture = Object.keys(fixtures).find(name => params.sql.includes(name))

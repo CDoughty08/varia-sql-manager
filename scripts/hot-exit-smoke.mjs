@@ -5,7 +5,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
-import { activeDocumentName, backendReady, documentShelf, documentTab, documentTabs, editorText, editorTextbox, pinDocumentButton, tabNameBox, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, documentShelf, documentTab, documentTabs, editorText, editorTextbox, pinDocumentButton, quickInputBox, quickInputRows, tabNameBox, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'hot-exit-profile-'))
@@ -24,12 +24,18 @@ const watchdog = setTimeout(() => { console.error('Hot exit suite exceeded its t
 async function launch(args) {
   application = await electron.launch({ args: ['.', ...args], env, chromiumSandbox })
   await application.evaluate(({ dialog }) => {
-    const state = globalThis.variaHotExit = { prompts: [], saveDefaults: [] }
-    dialog.showMessageBox = async (_window, options) => { state.prompts.push((options ?? _window).message); return { response: 2, checkboxChecked: false } }
+    const state = globalThis.variaHotExit = { prompts: [], saveDefaults: [], reloadAnswer: 1 }
+    dialog.showMessageBox = async (_window, options) => {
+      const prompt = options ?? _window
+      state.prompts.push(prompt.message)
+      return { response: prompt.title === 'Reload workbench' ? state.reloadAnswer : 2, checkboxChecked: false }
+    }
     dialog.showSaveDialog = async (_window, options) => { state.saveDefaults.push((options ?? _window).defaultPath); return { canceled: true, filePath: '' } }
   })
   page = await application.firstWindow()
   page.on('pageerror', error => failures.push(error.message))
+  // Electron owns beforeunload and its native Reload dialog. Do not let Playwright dismiss it first.
+  page.on('dialog', () => {})
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
 }
@@ -92,9 +98,14 @@ try {
   // Totals moves first, and Month end is the active tab as the app quits; nothing asks to save.
   await documentTab(page, 'Totals').click()
   for (let step = 0; step < 3; step++) await page.keyboard.press('Control+Shift+PageUp')
-  await pinDocumentButton(page, 'Totals').click()
-  await expect(documentShelf(page, true).getByRole('tab', { name: 'Totals', exact: true })).toBeVisible()
   await documentTab(page, 'Month end').click()
+  await pinDocumentButton(page, 'Totals').click()
+  await expect(documentShelf(page, true).getByRole('tab', { name: 'Totals', exact: true })).toBeFocused()
+  expect(await activeDocumentName(page)).toBe('Month end')
+  await page.keyboard.press('F2')
+  await expect(tabNameBox(page)).toHaveValue('Totals')
+  await page.keyboard.press('Escape')
+  await expect(tabNameBox(page)).toHaveCount(0)
   expect(await tabNames()).toEqual(['Totals', 'Welcome', 'Orders report', 'Month end'])
   const exited = new Promise(done => application.process().once('exit', done))
   await application.evaluate(({ app }) => app.quit())
@@ -130,6 +141,34 @@ try {
   console.log('Hot exit checks: a relaunch reopens every tab in order, with its text, unsaved state and name, and no Recover dialog.')
 
   expect(await prompts()).toEqual([])
+  // A canceled reload leaves the current page and its pins intact. An accepted reload reopens just the pins.
+  await pinDocumentButton(page, 'Orders report').click()
+  await documentTab(page, 'Orders report').click()
+  await page.evaluate(() => window.__variaRecovery.flush())
+  const reload = async () => {
+    await page.keyboard.press('F1')
+    await quickInputBox(page).fill('>Reload Window')
+    await expect(quickInputRows(page).filter({ hasText: 'Reload Window' })).toBeVisible()
+    await quickInputBox(page).press('Enter')
+  }
+  await reload()
+  await expect.poll(prompts).toEqual(['Reload Varia SQL Manager?'])
+  expect(await tabNames()).toEqual(['Totals', 'Orders report', 'Welcome', 'Month end', 'SQLQuery4.sql'])
+  await application.evaluate(() => { globalThis.variaHotExit.reloadAnswer = 0 })
+  const reloaded = page.waitForEvent('domcontentloaded')
+  await reload()
+  await reloaded
+  await expect.poll(tabNames).toEqual(['Totals', 'Orders report'])
+  const recover = page.getByRole('dialog', { name: 'Recover Unsaved Queries', exact: true })
+  await expect(recover.getByRole('checkbox', { name: 'Recover Month end', exact: true })).toBeVisible()
+  await expect(recover.getByRole('checkbox', { name: 'Recover Totals', exact: true })).toHaveCount(0)
+  await recover.getByRole('button', { name: 'Later', exact: true }).click()
+  expect(await activeDocumentName(page)).toBe('Orders report')
+  await expect.poll(text).toContain('SELECT 2 AS orders')
+  await documentTab(page, 'Totals').click()
+  await expect.poll(text).toContain('SELECT 3 AS totals')
+  await expect(unsavedMark(documentTab(page, 'Totals'))).toBeVisible()
+  console.log('Hot exit checks: canceling Reload Window keeps the current page, and confirming it restores clean and dirty pins with their text.')
   expect(failures).toEqual([])
   console.log('Hot exit suite passed.')
 } catch (error) {

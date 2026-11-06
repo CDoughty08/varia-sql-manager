@@ -37,6 +37,28 @@ const posix = process.platform !== 'win32'
 
 export interface SessionStoreOptions { readonly now?: () => Date; readonly totalBytes?: number }
 
+/** Prepares the same bounded record for disk on quit or a one-use in-memory reload checkpoint. */
+export function encodeSession(session: SessionInput, options: SessionStoreOptions = {}) {
+  const reopens = session.documents.map((document, index) => ({ document, index })).filter(({ document }) => {
+    const reopen = document.text !== undefined || (!!document.path && document.path.length <= sessionLimits.pathChars)
+    if (!reopen && document.pinned) throw new Error(`Pinned tab “${document.name}” has no file that can be reopened. Save it again or unpin it.`)
+    return reopen
+  })
+  const record: SessionRecord = {
+    version: 1, savedAt: (options.now?.() ?? new Date()).toISOString(), activeIndex: reopens.findIndex(({ index }) => index === session.activeIndex),
+    documents: reopens.map(({ document }) => ({
+      name: document.name, ...document.baseName ? { baseName: document.baseName } : {}, kind: document.kind, eol: document.eol, dirty: document.dirty,
+      ...document.pinned ? { pinned: true } : {},
+      ...document.path && document.path.length <= sessionLimits.pathChars ? { path: document.path } : {},
+      ...document.server ? { server: document.server } : {}, ...document.database ? { database: document.database } : {},
+      ...document.text !== undefined ? { text: document.text } : {}
+    }))
+  }
+  const bytes = Buffer.from(JSON.stringify(record) + '\n')
+  if (bytes.length > (options.totalBytes ?? sessionLimits.totalBytes)) throw new Error(sessionCapMessage)
+  return { record, bytes }
+}
+
 /**
  * `<userData>/Session/`: hot exit's copy of the open tabs, written once as a normal close goes ahead instead of asking to
  * save them. The folder is 0700 and the file 0600 on POSIX, written atomically; it holds text, names, paths, server and
@@ -75,20 +97,7 @@ export class SessionStore {
   /** Keeps `session` for the next start, for `generation`'s close, replacing whatever was kept before. */
   write(session: SessionInput, generation: number): Promise<void> {
     return this.serial(async () => {
-      // A clean tab whose file main no longer knows has no path and no text: there is nothing to reopen.
-      const reopens = session.documents.map((document, index) => ({ document, index })).filter(({ document }) => document.text !== undefined || document.path)
-      const record: SessionRecord = {
-        version: 1, savedAt: (this.options.now?.() ?? new Date()).toISOString(), activeIndex: reopens.findIndex(({ index }) => index === session.activeIndex),
-        documents: reopens.map(({ document }) => ({
-          name: document.name, ...document.baseName ? { baseName: document.baseName } : {}, kind: document.kind, eol: document.eol, dirty: document.dirty,
-          ...document.pinned ? { pinned: true } : {},
-          ...document.path && document.path.length <= sessionLimits.pathChars ? { path: document.path } : {},
-          ...document.server ? { server: document.server } : {}, ...document.database ? { database: document.database } : {},
-          ...document.text !== undefined ? { text: document.text } : {}
-        }))
-      }
-      const bytes = Buffer.from(JSON.stringify(record) + '\n')
-      if (bytes.length > (this.options.totalBytes ?? sessionLimits.totalBytes)) throw new Error(sessionCapMessage)
+      const { bytes } = encodeSession(session, this.options)
       await this.prepare()
       await writeBytesAtomic(this.current, bytes, { mode: 0o600 })
       await rm(this.previous, { force: true })

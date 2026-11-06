@@ -11,6 +11,8 @@ import { useTabDrag, type TabDragHandlers } from './tab-drag'
 import TabRenameBox from './TabRenameBox'
 
 const tabWidth = 172
+const wheelGestureMs = 220
+const shelfRowLimit = (count: number, columns: number, maxRows: number) => Math.max(1, Math.min(maxRows, Math.ceil(count / columns)))
 
 /** A tab's file (or original name), its unsaved state, and where a reopened query was. */
 function tabTooltip(tab: QueryTab): string {
@@ -20,14 +22,16 @@ function tabTooltip(tab: QueryTab): string {
 
 export default function DocumentTabs() {
   const workbench = useWorkbench()
-  const { documents, commands, queries, tabRename } = workbench
+  const { documents, commands, queries, tabRename, keybindings } = workbench
   const { documents: tabs, activeId, busy } = useServiceSnapshot(documents)
   const connections = useServiceSnapshot(workbench.connections)
   const queryState = useServiceSnapshot(queries)
   const { id: renamingId } = useServiceSnapshot(tabRename)
   const strip = useRef<HTMLDivElement>(null)
   const focusAfterRender = useRef<string>(undefined)
+  const wheelGesture = useRef<{ pinned: boolean; x: number; y: number; last: number; total: number; control?: number }>(undefined)
   const [space, setSpace] = useState({ columns: 4, rows: 4 })
+  const [pinnedRows, setPinnedRows] = useState(1), [queryRows, setQueryRows] = useState(1)
   const pinned = tabs.filter(tab => tab.pinned), unpinned = tabs.filter(tab => !tab.pinned)
   const rowsPerShelf = Math.max(1, Math.floor(space.rows / (pinned.length && unpinned.length ? 2 : 1)))
   const tabTarget = useMenuTarget<HTMLDivElement>(element => {
@@ -52,6 +56,37 @@ export default function DocumentTabs() {
     observer.observe(pane)
     return () => observer.disconnect()
   }, [])
+
+  const pinnedLimit = shelfRowLimit(pinned.length, space.columns, rowsPerShelf)
+  const queryLimit = shelfRowLimit(unpinned.length, space.columns, rowsPerShelf)
+  useEffect(() => {
+    const element = strip.current
+    if (!element) return
+    const wheel = (event: WheelEvent) => {
+      const shelf = (event.target as Element | null)?.closest('[data-tab-shelf]')
+      if (!event.ctrlKey || !shelf || !event.deltaY) return
+      event.preventDefault()
+      const now = performance.now(), control = keybindings.controlWheelGesture
+      const { clientX: x, clientY: y, deltaMode, deltaY } = event
+      // A shrinking shelf can move out from under a stationary pointer. Keep the original target until the
+      // pointer moves or Ctrl is released. Pinch events also carry ctrlKey, but have no keyup to end the gesture.
+      let gesture = wheelGesture.current
+      if (!gesture || gesture.x !== x || gesture.y !== y || gesture.control !== control || (control === undefined && now - gesture.last > wheelGestureMs))
+        gesture = wheelGesture.current = { pinned: shelf.getAttribute('data-tab-shelf') === 'pinned', x, y, last: now, total: 0, control }
+      const delta = deltaY * (deltaMode === 1 ? 16 : deltaMode === 2 ? 120 : 1)
+      if (now - gesture.last > wheelGestureMs || Math.sign(delta) !== Math.sign(gesture.total)) gesture.total = 0
+      gesture.last = now
+      gesture.total += delta
+      if (Math.abs(gesture.total) < 32) return
+      const step = Math.sign(gesture.total), limit = gesture.pinned ? pinnedLimit : queryLimit
+      gesture.total = 0
+      element.querySelector<HTMLElement>('[popover]:popover-open')?.hidePopover()
+      const setRows = gesture.pinned ? setPinnedRows : setQueryRows
+      setRows(value => Math.max(1, Math.min(limit, Math.min(value, limit) + step)))
+    }
+    element.addEventListener('wheel', wheel, { passive: false })
+    return () => element.removeEventListener('wheel', wheel)
+  }, [keybindings, pinnedLimit, queryLimit])
 
   function focusTab(id: string) {
     const button = document.getElementById(`tab-${id}`)
@@ -115,8 +150,10 @@ export default function DocumentTabs() {
 
   return <div className="document-strip pane-header">
     <div className="query-tabs" role="tablist" aria-label="Query documents" ref={strip}>
-      <TabShelf pinned tabs={pinned} columns={space.columns} maxRows={rowsPerShelf} activeId={activeId} renamingId={renamingId} renderTab={renderTab} activate={activate} />
-      <TabShelf tabs={unpinned} columns={space.columns} maxRows={rowsPerShelf} activeId={activeId} renamingId={renamingId} renderTab={renderTab} activate={activate} />
+      <TabShelf pinned tabs={pinned} columns={space.columns} rows={Math.min(pinnedRows, pinnedLimit)} limit={pinnedLimit} setRows={setPinnedRows}
+        activeId={activeId} renamingId={renamingId} renderTab={renderTab} activate={activate} />
+      <TabShelf tabs={unpinned} columns={space.columns} rows={Math.min(queryRows, queryLimit)} limit={queryLimit} setRows={setQueryRows}
+        activeId={activeId} renamingId={renamingId} renderTab={renderTab} activate={activate} />
     </div>
     <PaneMenuButton pane="editor" />
   </div>
@@ -126,19 +163,18 @@ interface ShelfProps {
   readonly pinned?: boolean
   readonly tabs: readonly QueryTab[]
   readonly columns: number
-  readonly maxRows: number
+  readonly rows: number
+  readonly limit: number
+  readonly setRows: (rows: number) => void
   readonly activeId: string
   readonly renamingId: string
   readonly renderTab: (tab: QueryTab, drag?: TabDragHandlers, selectHidden?: () => void) => ReactNode
   readonly activate: (id: string, focus?: boolean) => void
 }
 
-function TabShelf({ pinned = false, tabs, columns, maxRows, activeId, renamingId, renderTab, activate }: ShelfProps) {
+function TabShelf({ pinned = false, tabs, columns, rows, limit, setRows, activeId, renamingId, renderTab, activate }: ShelfProps) {
   const { documents } = useWorkbench()
-  const shelf = useRef<HTMLDivElement>(null), overflow = useRef<HTMLDivElement>(null)
-  const [wantedRows, setRows] = useState(1)
-  const limit = Math.max(1, Math.min(maxRows, Math.ceil(tabs.length / columns)))
-  const rows = Math.min(wantedRows, limit)
+  const overflow = useRef<HTMLDivElement>(null)
   const slots = rows * columns
   // Leave the order intact and use the last visible slot for a selected tab that would be hidden. While renaming,
   // the edit box takes priority so changing the pane's size does not dismiss it.
@@ -153,39 +189,16 @@ function TabShelf({ pinned = false, tabs, columns, maxRows, activeId, renamingId
   const shown = new Set(visible), hidden = tabs.filter(tab => !shown.has(tab))
   const name = pinned ? 'pinned' : 'query'
   const overflowId = `tab-overflow-${name}`
-  const hasTabs = tabs.length > 0
   const drag = useTabDrag(() => documents.getSnapshot().documents.filter(tab => !!tab.pinned === pinned).map(tab => tab.id), (id, index) => {
     const all = documents.getSnapshot().documents, target = all.filter(tab => !!tab.pinned === pinned)[index]
     if (target) documents.move(id, all.indexOf(target))
   })
 
-  useEffect(() => {
-    const element = shelf.current
-    if (!element) return
-    let total = 0, last = 0
-    const wheel = (event: WheelEvent) => {
-      if (!event.ctrlKey || !event.deltaY) return
-      event.preventDefault()
-      const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 120 : 1)
-      const now = performance.now()
-      if (now - last > 220 || Math.sign(delta) !== Math.sign(total)) total = 0
-      last = now
-      total += delta
-      if (Math.abs(total) < 32) return
-      const step = Math.sign(total)
-      total = 0
-      overflow.current?.hidePopover()
-      setRows(value => Math.max(1, Math.min(limit, Math.min(value, limit) + step)))
-    }
-    element.addEventListener('wheel', wheel, { passive: false })
-    return () => element.removeEventListener('wheel', wheel)
-  }, [hasTabs, limit])
-
   useLayoutEffect(() => { overflow.current?.hidePopover() }, [activeId, renamingId])
 
-  if (!hasTabs) return null
+  if (!tabs.length) return null
   const overflowLabel = `Show ${hidden.length} more ${name} ${hidden.length === 1 ? 'tab' : 'tabs'}`
-  return <div className="query-shelf" data-tab-shelf={pinned ? 'pinned' : 'unpinned'} role="group" aria-label={pinned ? 'Pinned tabs' : 'Unpinned tabs'} ref={shelf} {...drag.strip}>
+  return <div className="query-shelf" data-tab-shelf={pinned ? 'pinned' : 'unpinned'} role="group" aria-label={pinned ? 'Pinned tabs' : 'Unpinned tabs'} {...drag.strip}>
     <div className="query-shelf-tabs" style={{ '--tab-columns': columns } as CSSProperties}>
       {visible.map(tab => renderTab(tab, drag.tab(tab.id)))}
     </div>

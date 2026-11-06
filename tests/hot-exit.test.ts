@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RestoredSession, SessionWrite, SqlFile, VariaApi } from '../src/shared/contracts'
+import { sessionLimits } from '../src/shared/files/session'
 import { FileService } from '../src/renderer/src/services/files'
 import type { QueryService } from '../src/renderer/src/services/queries'
 import { keptSession, restoreSession } from '../src/renderer/src/services/session'
@@ -159,6 +160,25 @@ describe('hot exit', () => {
     await files.closeWindow(async () => {})
     expect(api.confirmClose.mock.calls).toEqual([['Draft.sql']])
     expect(kept).toEqual([{ activeIndex: 0, documents: [{ name: 'Keep.sql', kind: 'sql', eol: 'lf', dirty: true, pinned: true, text: 'SELECT 2' }] }])
+    expect(api.closeWindow).toHaveBeenCalledTimes(1)
+  })
+  it.each(['count', 'bytes'])('refuses to quit when the %s limit would drop a clean pin', async limit => {
+    const { documents, api, files, kept } = fixture({ hotExit: false, budget: limit === 'bytes' ? 200 : undefined })
+    const count = limit === 'count' ? sessionLimits.documents : 1
+    for (let index = 0; index < count; index++) {
+      const tab = documents.create(`Pinned ${index}.sql`, 'SELECT 1', 'master')
+      documents.setPinned(tab.id, true)
+    }
+    const extra = documents.create('Overflow.sql', 'x'.repeat(limit === 'bytes' ? 500 : 8), 'master')
+    documents.setPinned(extra.id, true)
+    await files.closeWindow(async () => {})
+    expect(kept).toEqual([])
+    expect(api.closeWindow).not.toHaveBeenCalled()
+    expect(api.closeWindowCancelled).toHaveBeenCalledTimes(1)
+    expect(files.getSnapshot().error).toContain('Pinned tab “Overflow.sql”')
+    documents.setPinned(extra.id, false)
+    await files.closeWindow(async () => {})
+    expect(kept[0].documents).toHaveLength(count)
     expect(api.closeWindow).toHaveBeenCalledTimes(1)
   })
   it('keeps the window open, losing nothing, when main cannot keep the session', async () => {

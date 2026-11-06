@@ -1,6 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { resizeContent } from './fixtures/window-resize.mjs'
 import { activeDocumentName, backendReady, closeDocumentButton, documentShelf, documentTab, documentTabs, documentTabSlots, part, pinDocumentButton, quickInput, quickInputActive } from './fixtures/ui.mjs'
 
 // SSMS's editing commands in the real query editor, over the fake backend (no SQL Server): Comment and Uncomment
@@ -228,9 +229,29 @@ try {
   await stack(unpinned, 120)
   await expect(queryRows).toHaveText('2 rows')
   await expect(pinnedRows).toHaveText('2 rows')
-  await stack(pinned, -120)
+  // A scroll over the bottom pinned row moves the unpinned shelf under the pointer. The next tick must stay pinned.
+  const bottomPin = pinned.getByRole('tab').last()
+  await page.keyboard.down('Control')
+  const underneath = await bottomPin.evaluate(async tab => {
+    const rect = tab.getBoundingClientRect(), clientX = rect.left + rect.width / 2, clientY = rect.top + rect.height / 2
+    const wheel = { ctrlKey: true, deltaY: -120, clientX, clientY, bubbles: true, cancelable: true }
+    tab.dispatchEvent(new WheelEvent('wheel', wheel))
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    const target = document.elementFromPoint(clientX, clientY)
+    target?.dispatchEvent(new WheelEvent('wheel', wheel))
+    return target?.closest('[data-tab-shelf]')?.getAttribute('data-tab-shelf')
+  }).finally(() => page.keyboard.up('Control'))
+  expect(underneath).toBe('unpinned')
   await expect(pinnedRows).toHaveText('1 row')
   await expect(queryRows).toHaveText('2 rows')
+  // Use adjacent widths so at least one would give the tab grid fractional tracks before pixel snapping.
+  const [width, height] = await page.evaluate(() => [innerWidth, innerHeight])
+  for (const offset of [0, 1]) {
+    await resizeContent(application, page, width + offset, height)
+    const pixels = await documentTabSlots(page).locator(part.tabIcon).evaluateAll(icons => icons.map(icon => icon.getBoundingClientRect().left % 1))
+    expect(pixels.length).toBeGreaterThan(2)
+    expect(pixels.every(pixel => pixel === 0)).toBe(true)
+  }
   for (let remaining = 20; remaining > 0; remaining--) {
     const extra = (await order()).find(name => name !== firstTab && name !== secondTab)
     if (!extra) break

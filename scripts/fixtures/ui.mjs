@@ -342,6 +342,18 @@ export const documentTabs = page => page.getByRole('tablist', { name: 'Query doc
 export const documentTab = (page, name) => documentTabs(page).getByRole('tab', named(name))
 export const activeDocument = page => documentTabs(page).getByRole('tab', { selected: true })
 export const activeDocumentName = page => activeDocument(page).getAttribute('aria-label')
+/** Counts open documents, including the ones behind either shelf's overflow button. */
+export const openDocuments = page => documentTabs(page).locator('[data-tab-id]')
+export const openDocument = (page, name) => documentTabs(page).locator('[data-document-tab]').and(page.getByLabel(name, { exact: true }))
+export async function selectOpenDocument(page, name) {
+  const tab = openDocument(page, name)
+  await tab.waitFor({ state: 'attached' })
+  if (!await tab.isVisible()) {
+    const id = await tab.locator('xpath=ancestor::*[@popover][1]').getAttribute('id')
+    await documentTabs(page).locator(`button[popovertarget="${id}"]`).click()
+  }
+  await tab.click()
+}
 /** A document's tab with its Close button: the target of the tab's menu. */
 export const documentTabSlots = page => documentTabs(page).locator('[data-tab-id]:has([role="tab"])')
 export const documentShelf = (page, pinned = false) => documentTabs(page).getByRole('group', { name: pinned ? 'Pinned tabs' : 'Unpinned tabs', exact: true })

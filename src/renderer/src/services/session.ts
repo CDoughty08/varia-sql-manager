@@ -1,11 +1,15 @@
 import type { ApiResult, RestoredSession, SessionDocumentWrite, SessionWrite, SqlFile, VariaApi } from '../../../shared/contracts'
 import { sessionLimits } from '../../../shared/files/session'
-import { isCustomKind } from '../documents'
+import { isCustomKind, type QueryDocument } from '../documents'
 import type { DocumentService } from './documents'
 import type { FileService } from './files'
 
 /** What hot exit keeps of the open tabs, and the tabs it keeps: a tab left out is asked about as without hot exit. */
 export interface KeptSession { readonly session: SessionWrite; readonly kept: ReadonlySet<string> }
+export function requireKeptPins(documents: readonly QueryDocument[], kept: ReadonlySet<string>): void {
+  const missing = documents.find(tab => tab.pinned && !kept.has(tab.id))
+  if (missing) throw new Error(`Pinned tab “${missing.name}” could not fit in the session restore limits. Unpin or close some tabs, or save large queries, and try again.`)
+}
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 const encoder = new TextEncoder()
 const bytes = (value: unknown) => encoder.encode(JSON.stringify(value)).length
@@ -47,13 +51,14 @@ export interface SessionRestoreOptions {
   readonly api: Pick<VariaApi, 'hotExit' | 'takeSession'>
   readonly documents: Pick<DocumentService, 'getSnapshot' | 'reopen' | 'activate' | 'setPinned'>
   readonly files: Pick<FileService, 'later' | 'release' | 'reportError'>
+  readonly resumeRecovery?: (tabId: string, recoveryId: string) => void
 }
 /**
  * The start's restore: the tabs the last close kept, in order, with the active one active again. A file already open in
  * a tab (one a second instance handed over first) is not opened twice. Resolves with how many tabs it opened; a failure
  * goes to the file banner, and files that are gone are named there as a warning.
  */
-export async function restoreSession({ api, documents, files }: SessionRestoreOptions): Promise<number> {
+export async function restoreSession({ api, documents, files, resumeRecovery }: SessionRestoreOptions): Promise<number> {
   if (!api.hotExit) return 0
   let opened = 0
   await files.later(async () => {
@@ -67,6 +72,7 @@ export async function restoreSession({ api, documents, files }: SessionRestoreOp
         const open = document.file ? documents.getSnapshot().documents.find(tab => tab.file?.id === document.file?.id) : undefined
         const id = open?.id ?? documents.reopen(document).id
         if (open && document.pinned) documents.setPinned(id, true)
+        if (!open && document.recoveryId) resumeRecovery?.(id, document.recoveryId)
         if (!open) opened++
         if (index === restored.activeIndex) active = id
       }

@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import electronPath from 'electron'
 import { codePageName, legacyCodePage } from '../src/main/text-encoding.ts'
-import { activeDocument, backendReady, banner as bannerOf, caretStatus, documentTab, documentTabs, encodingStatus, inputModeStatus, lineEndingStatus, outputStatus, part, queryFact, queryFacts, queryStatus, readOnlyMark, readOnlyStatus, statusBar, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocument, backendReady, banner as bannerOf, caretStatus, documentTabs, encodingStatus, inputModeStatus, lineEndingStatus, outputStatus, part, queryBarButton, queryFact, queryFacts, queryStatus, readOnlyMark, readOnlyStatus, selectOpenDocument, statusBar, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'files-profile-'))
@@ -247,7 +247,7 @@ try {
 
   // 8. Save All (Ctrl+Shift+S, ⌥⌘S) in tab order: the first, untitled query asks for its file, the saved one is saved,
   // and the last, untitled one asks in turn; all end clean.
-  await documentTab(page, 'mixed.sql').click()
+  await selectOpenDocument(page, 'mixed.sql')
   await typeAtEnd('\nSELECT 3')
   await toolbarButton(page, 'New query').click()
   await textbox().focus()
@@ -280,6 +280,13 @@ try {
   await expect(activeTab().locator(part.tabSid)).toHaveText('—')
   await textbox().focus()
   await page.keyboard.press(mac ? 'Meta+A' : 'Control+A')
+  await page.keyboard.insertText('WAIT_FOR_CANCEL')
+  await page.keyboard.press('F5')
+  await expect(activeTab().locator(part.tabSid)).toHaveText(/^SID \d+$/)
+  const firstSid = await activeTab().locator(part.tabSid).textContent()
+  await queryBarButton(page, 'Cancel').click()
+  await expect(queryBarButton(page, 'Cancel')).toBeDisabled()
+  await page.keyboard.press(mac ? 'Meta+A' : 'Control+A')
   await page.keyboard.insertText('-- varia-fake: sets=W1*10')
   await page.keyboard.press('F5')
   await expect(outputStatus(page)).toContainText(/^Completed · 10 rows · /)
@@ -288,7 +295,8 @@ try {
   await expect(queryFact(page, 'server')).toHaveText('Server: server-a (16.0)')
   await expect(queryFact(page, 'login')).toHaveText(/^Login: fake \(\d+\)$/)
   const spid = (await queryFact(page, 'login').textContent()).match(/\((\d+)\)$/)[1]
-  await expect(activeTab().locator(part.tabSid)).toHaveText(`SID ${spid}`)
+  expect(firstSid).toBe(`SID ${spid}`)
+  await expect(activeTab().locator(part.tabSid)).toHaveText(firstSid)
   await expect(queryFact(page, 'database')).toHaveText('Database: master')
   await expect(queryFact(page, 'time')).toHaveCount(0)
   await expect(queryFact(page, 'rows')).toHaveCount(0)
@@ -406,7 +414,7 @@ try {
   // 13. A change made outside: focus asks File changed, and Yes reloads the query, clean. With unsaved changes, No keeps
   // them, and the next Save asks before replacing the outside change.
   const focusWindow = () => page.evaluate(() => window.dispatchEvent(new Event('focus')))
-  await documentTab(page, 'second.sql').click()
+  await selectOpenDocument(page, 'second.sql')
   await expect(activeTab()).toHaveAttribute('aria-label', 'second.sql')
   await writeFile(second, 'SELECT 3 AS changed')
   await utimes(second, new Date(Date.now() + 10_000), new Date(Date.now() + 10_000))

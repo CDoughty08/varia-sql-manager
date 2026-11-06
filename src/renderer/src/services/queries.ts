@@ -10,7 +10,7 @@ import { isQueryDocument, type SessionNotice } from '../documents'
 import { DocumentService } from './documents'
 
 export interface RunningQuery { readonly queryId: string; readonly connectionId: string; readonly startedAt: number }
-/** The tab's SQL session as its last execution reported it: its SPID and login, read when it opened (SSMS's status bar
+/** The tab's SQL session as its execution reported it: its SPID and login, read when it opened (SSMS's status bar
  *  shows them). It belongs to the connection it ran on, so a query moved elsewhere (or a connection lost) no longer has
  *  it. Its open transaction is not kept here: it is read from the session only when the session is about to end. */
 export interface QuerySession { readonly connectionId: string; readonly spid?: number; readonly login?: string }
@@ -164,7 +164,11 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     let summary: QueryResult | undefined, error: string | undefined, code: ErrorCode | undefined
     try {
       // The run's events are followed before the script is sent, so no early result set is missed.
-      this.results.begin(tabId, queryId)
+      this.results.begin(tabId, queryId, ({ spid, login }) => {
+        const state = this.getSnapshot()[tabId]
+        if (state?.running?.queryId === queryId && this.documents.get(tabId)?.connectionId === connection.id && this.connected(tabId))
+          this.update(tabId, { ...state, session: { connectionId: connection.id, spid, login } })
+      })
       this.events.emit({ type: 'query.started', tabId, queryId })
       const response = await this.api.execute({ connectionId: connection.id, sessionId: tabId, database: document.database, sql, startLine, queryId, ...this.executionOptions(connection) })
       if (response.ok) summary = response.value
@@ -185,7 +189,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     // A summary carries the session's SPID and login while it is open (none when it was lost or never opened); a failure
     // that left no session ends it, and any other failure leaves the session as it was.
     const session: QuerySession | undefined = summary ? summary.spid === undefined ? undefined : { connectionId: connection.id, spid: summary.spid, login: summary.login }
-      : sessionGone.has(code) ? undefined : previous
+      : sessionGone.has(code) ? undefined : this.getSnapshot()[tabId]?.session
     this.results.finish(tabId, queryId, { summary, error, code, notice })
     this.update(tabId, { summary, error, session })
     this.events.emit({ type: 'query.finished', tabId, queryId, summary, error })

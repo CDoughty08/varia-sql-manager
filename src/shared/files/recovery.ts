@@ -53,18 +53,20 @@ export interface RecoveredDocument {
 
 /** The crash, hang and reload prompts' details: AutoRecover's wording once it has kept this page's queries. */
 export interface LossDetails { readonly stopped: string; readonly unresponsive: string; readonly reload: string }
-export function lossDetails(autoRecover: { readonly enabled: boolean; readonly minutes: number; readonly saved: boolean }): LossDetails {
+export function lossDetails(autoRecover: { readonly enabled: boolean; readonly minutes: number; readonly saved: boolean }, keepsPins = false): LossDetails {
+  const pinned = keepsPins ? 'Pinned tabs reopen with their text. ' : ''
+  const connections = 'Connections are closed and uncommitted transactions are rolled back.'
   if (!autoRecover.enabled || !autoRecover.saved) {
     return {
       stopped: 'Unsaved queries were lost. Connections were closed and uncommitted transactions were rolled back.',
       unresponsive: 'The workbench is not responding. Unsaved queries will be lost.',
-      reload: 'Unsaved queries will be lost. Connections are closed and uncommitted transactions are rolled back.'
+      reload: `${pinned}${keepsPins ? 'Unsaved changes in unpinned queries will be lost.' : 'Unsaved queries will be lost.'} ${connections}`
     }
   }
   const minutes = autoRecover.minutes === 1 ? 'minute' : `${autoRecover.minutes} minutes`
   return {
     stopped: `Queries saved by AutoRecover can be recovered after reloading; changes from the last ${minutes} may be lost. Connections were closed and uncommitted transactions were rolled back.`,
     unresponsive: 'The workbench is not responding. Changes since the last AutoRecover save will be lost; the rest is offered when Varia SQL Manager starts again.',
-    reload: 'Changes since the last AutoRecover save will be lost. Connections are closed and uncommitted transactions are rolled back.'
+    reload: `${pinned}${keepsPins ? 'Changes in unpinned queries since the last AutoRecover save will be lost.' : 'Changes since the last AutoRecover save will be lost.'} ${connections}`
   }
 }

@@ -15,8 +15,10 @@ default. While it is off, pinned tabs still reopen, and a close asks about unsav
   Drag or use Move Left and Move Right to reorder tabs within either shelf.
 - Hold Ctrl and scroll down over either shelf to add rows there. Scroll up to remove rows. The row buttons do the same,
   and the overflow button lists tabs that are out of view.
-- The SID badge to the right of a query name shows its SQL Server session ID once an execution reports it. A dash means
-  there is no known live session. Restored queries start disconnected.
+- The SID badge to the right of a query name shows its SQL Server session ID as soon as execution acquires a session.
+  A dash means there is no known live session. Restored queries start disconnected.
+- View › Reload Window keeps pinned tabs and reopens them disconnected. Unpinned tabs follow the workbench's existing
+  reload and AutoRecover behavior.
 
 ## What a close keeps
 
@@ -28,7 +30,8 @@ default. While it is off, pinned tabs still reopen, and a close asks about unsav
 - The tab's name, the user's rename, its line ending, and for a connected query the server name and database.
 - Never results, connections, logins, passwords or connection strings.
 - Table designers, Database Properties, monitors and other custom tabs are not kept; one with unsaved changes still
-  asks. Tabs past the caps (64 tabs, 64 MB as written) are not kept, and those with unsaved changes ask as before.
+  asks. Unpinned tabs past the caps (64 tabs, 64 MB as written) are skipped, and those with unsaved changes still ask.
+  If a pin cannot be kept, Varia leaves the window open and names the tab.
 - Open transactions and running queries are still asked about (the connections close either way).
 - If main cannot write the session, the window stays open and the banner says so; nothing is lost.
 

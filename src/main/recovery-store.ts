@@ -176,6 +176,18 @@ export class RecoveryStore {
     })
   }
 
+  /** A pin reopened on an approved reload owns its matching copy. Leave a different or newer copy available to recover. */
+  resumeReloaded(id: string, from: number, generation: number, document: Pick<RecoveryRecord, 'text' | 'kind' | 'eol'>): Promise<boolean> {
+    return this.serial(async () => {
+      if (this.owned.get(id) !== from) return false
+      const record = await this.read(id)
+      if (!record || record.text !== document.text || record.kind !== document.kind || record.eol !== document.eol) return false
+      this.owned.set(id, generation)
+      this.offered.delete(id)
+      return true
+    })
+  }
+
   /** Deletes records `generation` owns or was offered; any other id is left alone. */
   discard(ids: readonly string[], generation: number): Promise<void> {
     return this.serial(async () => {

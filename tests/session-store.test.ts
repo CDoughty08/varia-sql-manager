@@ -67,6 +67,15 @@ describe('the hot exit session store', () => {
     await store.write({ activeIndex: 0, documents: [{ name: 'gone.sql', kind: 'sql', eol: 'lf', dirty: false }, tabs.documents[0]] }, 1)
     expect((await store.take(true))?.activeIndex).toBe(-1)
   })
+  it('refuses to replace the session if a clean pin cannot reopen from its file', async () => {
+    const store = new SessionStore(folder)
+    await store.write(tabs, 1)
+    const before = await readFile(join(folder, 'session.json'), 'utf8')
+    const pinnedFile = { name: 'gone.sql', kind: 'sql', eol: 'lf', dirty: false, pinned: true } as const
+    await expect(store.write({ activeIndex: 0, documents: [pinnedFile] }, 2)).rejects.toThrow('Pinned tab “gone.sql”')
+    await expect(store.write({ activeIndex: 0, documents: [{ ...pinnedFile, path: 'x'.repeat(sessionLimits.pathChars + 1) }] }, 2)).rejects.toThrow('Pinned tab “gone.sql”')
+    expect(await readFile(join(folder, 'session.json'), 'utf8')).toBe(before)
+  })
 
   it('refuses a session past its byte cap, writing nothing', async () => {
     const store = new SessionStore(folder, { totalBytes: 1024 })

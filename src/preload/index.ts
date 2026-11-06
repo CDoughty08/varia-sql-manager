@@ -19,7 +19,7 @@ const connectRequest = <M extends 'connections.connect' | 'connections.databases
 const api: VariaApi = {
   platform: process.platform,
   setMenuState: state => { ipcRenderer.send('varia:menu-state', state) },
-  runRole: role => ipcRenderer.invoke('varia:run-role', role),
+  runRole: (role, reloadPins) => ipcRenderer.invoke('varia:run-role', reloadPins ? { role, ...reloadPins } : role),
   // Main passes its choice as a renderer argument; anything else there means the platform's default.
   menuStyle: menuStyleFromArgv(process.argv, process.platform),
   showContextMenu: request => ipcRenderer.invoke('varia:context-menu', request),

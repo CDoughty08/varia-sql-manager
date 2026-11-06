@@ -214,6 +214,8 @@ describe('IPC validation', () => {
     for (const messages of [[], ['a'], [{ text: 'a', kind: 'warning' }], [{ text: 'a', kind: 'info', extra: 1 }], [{ text: 'x'.repeat(1_000_001), kind: 'info' }]])
       expect(queryEventSchema.safeParse({ type: 'messages', messages }).success, JSON.stringify(messages).slice(0, 60)).toBe(false)
     expect(queryEventSchema.safeParse({ type: 'progress', completedBatches: 0, totalBatches: 1, batchNumber: 1, iteration: 1, results: [], extra: true }).success).toBe(false)
+    expect(queryEventSchema.safeParse({ type: 'session.opened', spid: 51, login: 'reader' }).success).toBe(true)
+    expect(queryEventSchema.safeParse({ type: 'session.opened', spid: 32768 }).success).toBe(false)
     expect(queryEventSchema.safeParse({ type: 'resultSet.opened', descriptor: { resultId: 1, generation: 1 } }).success).toBe(false)
   })
   it('accepts a summary with message entries and its completion time, and nothing looser', () => {
