@@ -429,6 +429,20 @@ describe('ResultClient', () => {
     await settle()
     expect(await stats).toEqual({ workerBytes: worker().core.cachedBytes, workerPages: 3, uiWindows: 1, uiUnits: 4, inflight: 0 })
   })
+
+  it('answers an empty row range itself and refuses a malformed one before it reaches the port', async () => {
+    const { client, handOver, worker } = fixture()
+    handOver()
+    const handle = client.open(descriptor({ rowsAvailable: 10 }))
+    await settle()
+    const before = worker().fromWorker.length
+    expect(await handle.rowBytes(10, 0)).toEqual({ first: 10, bytes: [], rowsAvailable: 10, estimated: [] })
+    for (const [first, count] of [[-1, 1], [0.5, 1], [0, 1.5], [Number.NaN, 1], [2 ** 53, 1]]) {
+      await expect(handle.rowBytes(first, count)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    }
+    await settle()
+    expect(worker().fromWorker.length).toBe(before)
+  })
 })
 
 describe('ResultClient live streams', () => {

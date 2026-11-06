@@ -228,6 +228,25 @@ describe('results worker core', () => {
     expect(posted.at(-1)).toMatchObject({ type: 'error', id: 60, code: 'PORT_CLOSED' })
   })
 
+  it('relays row size requests to main and their answers or failures to the page, refusing an earlier generation\'s', () => {
+    const { core, sent, posted } = fixture()
+    core.handle({ type: 'rowBytes', id: 70, key, firstRow: 10, count: 3 })
+    expect(sent.at(-1)).toEqual({ t: 'rowBytes', rid: 1, generation: 1, resultId: key.resultId, firstRow: 10, count: 3 })
+    core.receive({ t: 'end', rid: 1, ok: true, result: { firstRow: 10, bytes: [4, 0, 12], rowsAvailable: 13, estimated: [11] } })
+    expect(posted.at(-1)).toEqual({ type: 'rowBytes', id: 70, firstRow: 10, bytes: [4, 0, 12], rowsAvailable: 13, estimated: [11] })
+    core.handle({ type: 'rowBytes', id: 71, key, firstRow: 0, count: 1 })
+    core.receive({ t: 'end', rid: 2, ok: false, code: 'RESULT_RELEASED', message: 'These results were closed.' })
+    expect(posted.at(-1)).toMatchObject({ type: 'error', id: 71, code: 'RESULT_RELEASED' })
+    const sentBefore = sent.length
+    core.handle({ type: 'rowBytes', id: 72, key: { ...key, generation: 2 }, firstRow: 0, count: 1 })
+    expect(sent.length).toBe(sentBefore)
+    expect(posted.at(-1)).toMatchObject({ type: 'error', id: 72, code: 'RESULT_UNAVAILABLE' })
+    // Main drops answers meant for a replaced port, so a request asked on it fails at once instead of never settling.
+    core.handle({ type: 'rowBytes', id: 73, key, firstRow: 0, count: 1 })
+    core.attach({ postMessage: () => {} })
+    expect(posted.at(-1)).toMatchObject({ type: 'error', id: 73, code: 'PORT_CLOSED' })
+  })
+
   it('formats a whole XML or JSON value in the worker, but never a stored prefix, a NULL, a read error, or malformed text', () => {
     const documentWires: WireKind[] = ['text']
     const values: PageCell[] = ['<a><b>1</b><b>x</b></a>', '{"a":[1,2.50,{"b":null}]}', { value: '<a><b>', truncated: true }, null, { error: true }, '<a><b></a>', 'x'.repeat(70_000)]

@@ -34,6 +34,7 @@ The code is the reference implementation; this document describes it.
 - [Query events](#query-events)
 - [Result pages](#result-pages)
 - [Result store and memory budget](#result-store-and-memory-budget)
+- [Cell lengths and row sizes](#cell-lengths-and-row-sizes)
 - [Messages](#messages)
 - [Copy and Save Results As](#copy-and-save-results-as)
 - [Live subscriptions](#live-subscriptions)
@@ -225,6 +226,7 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `query.session.state` | invoke | unary | control | 5 s; answered locally `SESSION_LOST` for a session of an ended generation |
 | `results.read` | port | stream | results | 60 s |
 | `results.close` | port | unary | control | 10 s |
+| `results.rowBytes` | port | unary | control | 10 s; each row's bytes for 1 – 16,384 sealed rows ([Cell lengths and row sizes](#cell-lengths-and-row-sizes)) |
 | `live.subscribe` | port | stream of credited EVENTs ([Live subscriptions](#live-subscriptions)) | live (no slot) | none, and no backstop: only CANCEL, a disconnect, a shutdown, a failure or its source ending ends it |
 | `live.update` | port | unary | control | 10 s |
 | `explorer.children` | invoke; cancelled with `explorerCancel` | unary | explorer | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value |
@@ -1080,7 +1082,7 @@ Results stay in backend memory, never on disk (`ResultStore`).
   within 256 MiB – 2 GiB. One query may use half of it. Nothing more is stored while the operating system reports high
   memory load (checked at every page seal). `VARIA_RESULT_BUDGET_BYTES` replaces the global figure only with the test
   hooks.
-- **Charges.** Each sealed page costs its length plus 96 bytes; a result set's metadata 512 bytes plus 2 per name
+- **Charges.** Each sealed page costs its length plus 96 bytes plus its cell lengths ([Cell lengths and row sizes](#cell-lengths-and-row-sizes)); a result set's metadata 512 bytes plus 2 per name
   character and 64 per column, reserved like rows; the page builder's working space is reserved in 256 KiB steps and
   returned when the set ends. A failed reservation rolls back the current row, so pages never hold partial rows; later
   rows are still read and counted in `rowsRead` but not stored, later result sets of the query are not kept (they count
@@ -1128,6 +1130,71 @@ Notes appended to the summary's messages:
 
 A cell whose typed read fails becomes NULL with the error flag; that column switches to its fallback reader and the
 messages get "Column ‘{name}’ ({type}): some values could not be read and are shown as NULL."
+
+## Cell lengths and row sizes
+
+While it reads a result, the backend measures every stored cell (`Results/CellLengths.cs`): its full length in UTF-16
+characters (whitespace included, as `LEN(x + 'x') - 1` counts) and its bytes as SQL Server's `DATALENGTH` counts them,
+including the part of a truncated cell that was read past and not stored. Later views (sort by size, column statistics,
+the row-size bar) read these numbers; nothing re-reads SQL Server.
+
+- **One helper.** `ResultSetBuffer.CellSize(row, column)` answers `(chars, bytes, exact)` for any stored cell, or null for
+  NULL. A cell with a sidecar entry answers it, with the entry's own `exact`; any other is derived from its stored UTF-8
+  text or bytes by the column's rule, which is exact because the cell was stored whole. `exact` is false for an estimate
+  (below), for every cell of a column whose rule is a guess (no collation), and for a truncated cell without an entry.
+- **Rules per type** (`ColumnLength`, chosen once per column in `ColumnPlan`): fixed sizes for bit and tinyint (1),
+  smallint (2), int, smallmoney, real, smalldatetime (4), bigint, money, float, datetime (8), date (3), time (3–5),
+  datetime2 (6–8), datetimeoffset (8–10) and uniqueidentifier (16), the fractional-second part by scale as SQL Server
+  stores it; decimal and numeric by value, 1 byte plus 4 per 32-bit word of the unscaled value (`DATALENGTH` of a
+  decimal(38, 0) holding 1 is 5); nchar, nvarchar and ntext 2 bytes a UTF-16 unit; char, varchar and text by the column's
+  collation (below); binary, varbinary, image, timestamp and CLR types their byte count; json its UTF-8 text; vector 8 + 4
+  per dimension; xml and sql_variant record their bytes as they are read.
+- **xml** counts the BOM-less UTF-16 text SQL Server sends, `DATALENGTH(CONVERT(nvarchar(max), x))`; `DATALENGTH` of the
+  xml value itself is its binary storage, which no client can see. **json** counts UTF-8 text bytes; `DATALENGTH(json)`
+  is also binary storage. So for a row with xml or json cells, `results.rowBytes` is not `SUM(DATALENGTH(...))` as SQL
+  Server would compute it. An xml cell's characters are those of SQL Server's text too (bytes / 2), cut or not, so they
+  compare across a column; the display text may differ (SqlClient writes `<e />` for SQL Server's `<e/>`).
+  **sql_variant** counts its base value exactly where SqlClient tells the base type apart (integers, bit, decimal, real,
+  float, uniqueidentifier, binary). Elsewhere it is an estimate, and its entry says so: a string arrives as SqlString,
+  whether varchar or nvarchar, and is counted as nvarchar; smallmoney and smalldatetime bases arrive as money and datetime
+  (8); and date, time, datetime2 and datetimeoffset bases are counted at scale 7. Its characters are those of the display
+  text.
+- **Collation.** For char, varchar and text, the backend reads each column's collation from SqlClient's metadata
+  (`SqlClientCollation`, by reflection over `SqlDataReader.MetaData`, `SqlMetaDataPriv.collation` and `.encoding`, checked
+  against `_SqlMetaData.column`, the column's name): the encoding SqlClient itself decodes with, so a code page or UTF-8 byte count equals
+  `DATALENGTH`. The descriptor's column gets `collation: { lcid, sortId, codePage, utf8, options }` (`options` are
+  SqlCompareOptions bits: 1 IgnoreCase, 2 IgnoreNonSpace, 8 IgnoreKanaType, 16 IgnoreWidth, 16384 BinarySort2, 32768
+  BinarySort; `codePage` 0 for a UTF-8 collation; `sortId` non-zero for SQL_ collations). If a SqlClient release moves
+  these internals, the reflection finds nothing, the column has no `collation`, and its bytes count one per character,
+  every cell reported as an estimate; the live checks fail first.
+- **Storage.** Beside each sealed page, `PageLengths` holds a `uint32` per row (the sum of its cells' bytes; NULL counts
+  0), a sorted sparse list of 24-byte `(row, column, chars, bytes)` entries for the cells whose stored text does not give
+  their length (truncated cells, every xml, vector and sql_variant cell, and estimates; an estimate is marked in the
+  column's sign bit), and a list of 16-byte `(row, bytes)` entries for rows of 4 GiB or more, whose `uint32` holds
+  `uint.MaxValue`, so a sum never overflows (a row of several `max` values can pass 4 GiB). A row's sum is exact unless
+  one of its cells is an estimate, or a column's rule is a guess; `results.rowBytes` names those rows. The page
+  builder's open row keeps its entries until `CommitRow`, and a rolled-back row leaves none; the row-sizes array grows
+  when the row that needs it begins, so that row's commit charges the growth.
+- **Memory.** 4 bytes a row, 24 per entry, and 96 a page, charged to the result budget
+  with the page (a page's cost is its length + 96 + its lengths' size) and freed with it; the open page's lengths count in
+  the builder's working space.
+- **Reading.** `results.rowBytes { resultId, firstRow, count: 1..16,384 }` answers `{ firstRow, bytes: number[],
+  rowsAvailable, estimated: number[] }` for sealed rows only; fewer than `count` past `rowsAvailable` (none for a range
+  past it). `estimated` lists, in increasing order, the rows of the range whose sum includes an estimate. Main forwards
+  it only for a result the renderer owns in the current, ready generation (else `RESULT_UNAVAILABLE`), and only an
+  answer that passes `rowBytesResultSchema`, starts at `firstRow`, has at most `count` rows and no more than
+  `rowsAvailable - firstRow`, and lists estimated rows in order within them (else `BACKEND_ERROR`).
+  `ResultHandle.rowBytes(first, count, signal)` answers an empty range itself and refuses a malformed one
+  (`INVALID_PARAMS`) without sending it, since main closes the port after 100 invalid messages.
+- **What SQL Server sent.** FOR XML and FOR JSON values count their joined text as nvarchar, which is how SQL Server
+  sends them; there is no stored value whose DATALENGTH could differ. json counts the UTF-8 bytes read, exact whatever
+  they hold (U+FFFD included).
+- **Not measured exactly.** Live tables count text as nvarchar, and a cut cell, whose full text the probe never had, counts its kept text as an estimate. Without
+  `SequentialXml`'s internals, an xml cell counts its display text as an estimate. A value read through a column's
+  fallback reader (after a typed read failed) counts as text: exact for character types, an estimate for decimal, vector
+  and recorded types. A _UTF8 value holding bytes that are not UTF-8 arrives with U+FFFD (3 bytes) in their place, so a
+  value showing U+FFFD is an estimate; a code-page value holding bytes its code page does not map is counted as SqlClient
+  decodes it, which no client can tell from real text. Synthetic test rows are not measured.
 
 ## Messages
 
@@ -1802,11 +1869,12 @@ crash and window close; a backend loss ends its streams but keeps the port.
 { t: 'credit'; rid; bytes: 1..16_777_216 }
 { t: 'cancel'; rid }
 { t: 'close'; rid; generation; resultIds: u32[1..1024] }
+{ t: 'rowBytes'; rid; generation; resultId: u32; firstRow: 0..2^53-1; count: 1..16_384 }
 { t: 'live'; rid; generation; params: live.subscribe params }
 { t: 'liveUpdate'; rid; generation; params: live.update params }
 ```
 
-A read or close must name the current generation and a result the renderer owns (from a query summary or event, at most
+A read, close or rowBytes must name the current generation and a result the renderer owns (from a query summary or event, at most
 100,000 per generation), or it ends `RESULT_UNAVAILABLE`; at most 64 requests may be outstanding. A `live` request must name
 the current, ready generation (`RESULT_UNAVAILABLE`) and a subscription id not already running on the port
 (`DUPLICATE_REQUEST`); at most 16 live streams run per port (`TOO_MANY_REQUESTS`), counted apart from the 64. A
@@ -1986,6 +2054,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Messages | 1,000 entries / 1,000,000 characters, then up to 20 more errors; error text 16,384 characters | backend |
 | Descriptors per summary | 8 MiB (bounded per set by names, types and 96 bytes per column) | backend |
 | FOR XML / FOR JSON value | 2,097,152 characters, the rest marks it truncated | backend |
+| Row sizes a request | `results.rowBytes`: 1 – 16,384 rows (`rowSizes.maxRows`) | zod and backend |
 | Copy | 64 MiB of UTF-8 (estimated before any work; main cancels past 65 MiB received); DATA ≤ 1 MiB; 16 MiB initial credit; 120 s; one per window | backend and main |
 | Save Results As | one per window; 1 MiB writes; no deadline; suggested name ≤ 128 characters, path ≤ 32,767 | main and backend |
 | Job progress | EVENTs every ≥ 250 ms; pushed to the renderer ≤ 4 a second | backend and main |
@@ -2110,7 +2179,8 @@ formats SQL types. Every sample is a case in `tests/fixtures/sql-display.json`, 
 against SQL Server by the live type matrix. Reads use `CommandBehavior.SequentialAccess`, call `IsDBNull` first, and read
 each column once, in order, with a reader chosen once per result set from the schema table. A long value is kept up to
 its cap and the rest is read past in 8,192-unit chunks (text and ntext through `GetTextReader`: `GetChars` reads their
-whole value). The rows that are not stored (past `maxRows`, after the budget stops storing, or in a set that is not
+whole value; json as UTF-8 bytes through `GetBytes`, decoded by the backend, since SqlClient 7.1.1's `GetChars` decodes
+json one byte per character and its `GetTextReader` throws when a read ends inside a multi-byte sequence). The rows that are not stored (past `maxRows`, after the budget stops storing, or in a set that is not
 kept) are read past with a synchronous `Read` when their set has a long column, on a dedicated thread: that `Read` also
 waits for the server's next row (a lock, a slow plan), and on thread-pool threads a few such queries delayed every other
 request, cancels included, by seconds. Either way, nothing near a huge value's size is held, and a cancel stops it: left

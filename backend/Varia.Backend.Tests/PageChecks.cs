@@ -67,7 +67,7 @@ internal static class PageChecks
         };
         return written switch
         {
-            -1 => CellFormat.Vector([.. value.EnumerateArray().Select(item => item.GetSingle())], 65_535, out _),
+            -1 => CellFormat.Vector([.. value.EnumerateArray().Select(item => item.GetSingle())], 65_535, out _, out _),
             -2 => text,
             _ => Encoding.UTF8.GetString(buffer[..written])
         };
