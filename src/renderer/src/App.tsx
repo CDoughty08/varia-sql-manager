@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ApiResult, BackendHealth, BackendState, ConnectionInfo, ConnectionOptions } from '../../shared/contracts'
 import { isCommandId } from '../../shared/commands/catalog'
 import { shellContribution, type ShellHost } from './contributions/shell'
-import { documentKind, isCustomKind, isQueryDocument, kindInfo, type QueryTab } from './documents'
+import { documentKind, isCustomKind, isQueryDocument, type QueryTab } from './documents'
 import { isSsisDocumentKind } from '../../shared/ssis/catalog.ts'
 import { useConnectionAccent, useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import type { CommandArgs, CommandId } from './core/types'
 import QueryEditor from './QueryEditor'
 import QueryStatusBar from './QueryStatusBar'
+import DocumentTabs from './DocumentTabs'
 import EditorStatus from './EditorStatus'
 import Icon from './Icon'
 import EmptyState from './kit/EmptyState'
@@ -37,9 +38,6 @@ import TitleBar from './TitleBar'
 import StandardToolbar, { CommandCentre } from './ShellToolbar'
 import QueryBar from './QueryBar'
 import { lostHint } from './query-context'
-import PaneMenuButton from './PaneMenuButton'
-import { useTabDrag } from './tab-drag'
-import TabRenameBox from './TabRenameBox'
 import DockWorkspace, { type WorkspaceHandle } from './DockWorkspace'
 import ConnectDialog from './ConnectDialog'
 import EnvironmentDialog from './EnvironmentDialog'
@@ -49,7 +47,6 @@ import ThemeNotice from './ThemeNotice'
 import QuickInput from './quickinput/QuickInput'
 import MenuLayer from './menus/MenuLayer'
 import Toasts from './kit/Toasts'
-import { useMenuTarget } from './menus/useMenuTarget'
 import { connectionDefaults } from '../../shared/connections'
 
 const emptyTab: QueryTab = { id: '', name: '', dirty: false, savedVersionId: null, database: 'master' }
@@ -72,19 +69,11 @@ function useStableCallback<A extends unknown[], R>(callback: (...args: A) => R):
   return useCallback((...args: A) => latest.current(...args), [])
 }
 
-/** A tab's tooltip: its file's path (or the name it would have, when renamed), its state, and where a reopened query was. */
-function tabTooltip(tab: QueryTab): string {
-  const what = tab.file?.path ?? tab.baseName ?? tab.name
-  return `${what}${tab.file?.readOnly ? ' (read-only)' : ''}${tab.dirty ? ' (unsaved changes)' : ''}${tab.lastServer ? `
-Last connected to ${tab.lastServer}` : ''}`
-}
-
 export default function App() {
   const workbench = useWorkbench()
   const { documents, queries, commands, files, targets } = workbench
-  const { documents: tabs, activeId, busy: documentBusy } = useServiceSnapshot(documents)
+  const { documents: tabs, activeId } = useServiceSnapshot(documents)
   const queryState = useServiceSnapshot(queries)
-  const { id: renamingId } = useServiceSnapshot(workbench.tabRename)
   const connections = useServiceSnapshot(workbench.connections)
   const { state: backendState } = useServiceSnapshot(workbench.backend)
   const [health, setHealth] = useState<BackendHealth>()
@@ -122,7 +111,6 @@ export default function App() {
   const readyGeneration = backendState.status === 'ready' ? backendState.generation : 0
   const backendDown = backendState.status !== 'ready' && backendState.status !== 'starting'
   const activeRunning = queryState[active.id]?.running
-  // Also re-renders App when the theme changes, which the per-tab accents below rely on.
   const accent = useConnectionAccent(connection?.color)
   const versions = health ? `SMO ${health.smoVersion} / SqlClient ${health.sqlClientVersion}` : undefined
 
@@ -132,7 +120,6 @@ export default function App() {
   const queryStatus = active.id && !isCustom ? <QueryStatusBar tab={active} connection={connection} versions={versions} variant={shell.queryStatusBar ? 'bar' : 'segment'} /> : null
   const statusBar = shell.queryStatusBar ? queryStatus : null
 
-  function activate(id: string) { documents.activate(id) }
   /** The output view the active query shows, whose panel revealing the output shows. */
   const activeOutputView = useStableCallback(() => outputViewOf(workbench.results.getSnapshot()[documents.getSnapshot().activeId]))
   const disconnectServer = useStableCallback((id: string) => disconnect(id))
@@ -166,14 +153,6 @@ export default function App() {
     movePaneToWindow: pane => workspaceRef.current?.moveToWindow(pane),
     movePaneToMainWindow: pane => workspaceRef.current?.moveToMainWindow(pane)
   }), [disconnectServer, workbench, activeOutputView])
-  // Dragging a tab along the strip reorders it (Move Left and Move Right do it by key).
-  const tabDrag = useTabDrag(() => documents.getSnapshot().documents.map(document => document.id), (id, index) => { documents.move(id, index) })
-  // One callback for every query tab: the tab names its query.
-  const tabTarget = useMenuTarget<HTMLDivElement>(element => {
-    const tabId = element.dataset.tabId
-    return tabId && documents.get(tabId) ? { kind: 'documentTab', tabId } : null
-  })
-
   // Readiness comes from main's backend state; health only fills the status bar tooltip, once per generation.
   useEffect(() => {
     if (!readyGeneration) return
@@ -205,41 +184,6 @@ export default function App() {
   useEffect(() => {
     document.title = windowTitle
   }, [windowTitle])
-  // A query opened or chosen from elsewhere (Script As, Go to Query, a menu), or moved along the strip, must not stay hidden
-  // past the strip's edge.
-  const activeIndex = tabs.findIndex(tab => tab.id === activeId)
-  useEffect(() => {
-    const tab = activeId ? document.getElementById(`tab-${activeId}`)?.parentElement : undefined, strip = tab?.parentElement
-    if (!tab || !strip) return
-    const box = tab.getBoundingClientRect(), view = strip.getBoundingClientRect()
-    if (box.left < view.left) strip.scrollLeft -= view.left - box.left
-    else if (box.right > view.right) strip.scrollLeft += box.right - view.right
-  }, [activeId, activeIndex, tabs.length])
-  // A tab is as wide as its name, so every tab after the first would start on a fractional pixel and blur its kind icon.
-  // Each name's box is rounded up to whole pixels (the rest of a tab already is), measured from its text so that no tab
-  // shrinks meanwhile and the strip keeps its scroll position. A strip parked while its panel is closed has no layout to
-  // measure, so it is measured again once it is shown, and once the fonts have loaded.
-  const strip = useRef<HTMLDivElement>(null)
-  useLayoutEffect(() => {
-    const element = strip.current
-    if (!element) return
-    const snap = () => {
-      if (!element.getClientRects().length) return
-      for (const name of element.querySelectorAll<HTMLElement>('.tab-name')) {
-        const text = document.createRange()
-        text.selectNodeContents(name)
-        const width = text.getBoundingClientRect().width
-        if (width > 0) name.style.width = `${Math.ceil(width - 0.01)}px`
-      }
-    }
-    snap()
-    let current = true
-    void document.fonts?.ready.then(() => { if (current) snap() })
-    const shown = typeof ResizeObserver === 'function' ? new ResizeObserver(snap) : undefined
-    shown?.observe(element)
-    return () => { current = false; shown?.disconnect() }
-  }, [tabs])
-
   function connected(info: ConnectionInfo, chosen: ConnectionOptions) {
     setOptions(chosen)
     setExplorerError(info.historyWarning ?? '')
@@ -291,14 +235,6 @@ export default function App() {
     } catch (error) { setExplorerError(errorText(error)) }
   }
 
-  function tabKey(event: KeyboardEvent<HTMLButtonElement>, index: number) {
-    const destination = event.key === 'ArrowRight' ? (index + 1) % tabs.length : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : undefined
-    if (destination === undefined) return
-    event.preventDefault()
-    activate(tabs[destination].id)
-    document.getElementById(`tab-${tabs[destination].id}`)?.focus()
-  }
-
   return <div className="app">
     <TitleBar title={windowTitle} center={<CommandCentre />} actions={shell.classicToolbar ? null : <StandardToolbar variant="header" />} />
     {shell.classicToolbar && <StandardToolbar variant="classic" />}
@@ -311,11 +247,7 @@ export default function App() {
       : <div className="global-error" role="alert"><span>{commandError}</span><button aria-label="Dismiss command error" onClick={() => commands.clearError()}><Icon name="close" /></button></div>)}
     <ThemeNotice />
     <DockWorkspace ref={workspaceRef} explorer={<aside className="explorer"><ExplorerPane error={explorerError} activeConnectionId={liveConnection?.id} activeQueryId={isQuery ? active.id || undefined : undefined} /></aside>} editor={<main className="workspace">
-        <div className="document-strip pane-header"><div className="query-tabs" role="tablist" aria-label="Query documents" ref={strip} {...tabDrag.strip}>{tabs.map((tab, index) => { const tabConnection = connections.find(value => value.id === tab.connectionId), environment = tabConnection?.options.environment; return <div className={`query-tab ${activeId === tab.id ? 'active' : ''}`} style={{ borderTopColor: workbench.theme.accent(tabConnection?.color) }} role="presentation" key={tab.id} ref={tabTarget} data-tab-id={tab.id} data-dirty={tab.dirty || undefined} {...renamingId === tab.id ? {} : tabDrag.tab(tab.id)}>
-          {renamingId === tab.id ? <div className="tab-select tab-renaming"><Icon name={kindInfo[documentKind(tab)].icon} className="tab-icon" label={kindInfo[documentKind(tab)].label} /><TabRenameBox tabId={tab.id} name={tab.name} service={workbench.tabRename} /></div>
-          : <button id={`tab-${tab.id}`} className="tab-select" role="tab" aria-label={tab.name} aria-description={environmentTag(environment)?.description} aria-selected={activeId === tab.id} tabIndex={activeId === tab.id ? 0 : -1} title={tabTooltip(tab)} onClick={() => activate(tab.id)} onKeyDown={event => tabKey(event, index)} onDoubleClick={() => workbench.tabRename.start(tab.id)} data-document-tab><Icon name={kindInfo[documentKind(tab)].icon} className="tab-icon" label={kindInfo[documentKind(tab)].label} /><span className="tab-name">{tab.name}</span><EnvironmentTag environment={environment} place="tab" />{tab.file?.readOnly && <Icon name="lock" className="tab-readonly" label="Read-only" />}{queryState[tab.id]?.running && <Icon name="loading" spin className="tab-running" label="Executing" />}{tab.dirty && <span className="dirty-dot" role="img" aria-label="Unsaved changes" />}</button>}
-          <button className="tab-close" aria-label={`Close ${tab.name}`} title={queryState[tab.id]?.running ? `Close ${tab.name} (its query is executing)` : `Close ${tab.name}`} disabled={documentBusy} onClick={() => void commands.execute('file.close', { tabId: tab.id }, 'toolbar')}><Icon name="close" /></button>
-        </div> })}</div><PaneMenuButton pane="editor" /></div>
+        <DocumentTabs />
         {active.id ? <>
           {/* The query's own bar, unless the classic toolbar brings back the global lists (for one release). */}
           {isQuery && !shell.classicToolbar && <QueryBar />}

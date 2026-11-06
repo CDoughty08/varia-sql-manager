@@ -41,6 +41,8 @@ internal sealed class ForXmlCollector : IDisposable
     /// <summary>Set when the budget refused memory for more text: nothing is stored, for this reason.</summary>
     public TruncationReason Stopped { get; private set; }
     public int Length => length;
+    /// <summary>Characters of the whole value, kept or not: the stored cell's full length.</summary>
+    public long TotalChars { get; private set; }
     /// <summary>The characters the buffer holds, which the budget covers (the offline checks compare them).</summary>
     internal int Capacity => buffer.Length;
 
@@ -55,7 +57,7 @@ internal sealed class ForXmlCollector : IDisposable
         using var text = reader.GetTextReader(0);
         Keep(text, token);
         scratch ??= new char[Chunk];
-        while (text.Read(scratch, 0, Chunk) > 0) token.ThrowIfCancellationRequested();
+        for (int read; (read = text.Read(scratch, 0, Chunk)) > 0; TotalChars += read) token.ThrowIfCancellationRequested();
     }
 
     private void Keep(TextReader text, CancellationToken token)
@@ -70,6 +72,7 @@ internal sealed class ForXmlCollector : IDisposable
                 var read = text.Read(buffer, length, Chunk);
                 if (read <= 0) return;
                 length += read;
+                TotalChars += read;
                 continue;
             }
             // The last characters before the cap go through a full chunk: the provider's sequential reader fails on a
@@ -78,6 +81,7 @@ internal sealed class ForXmlCollector : IDisposable
             scratch ??= new char[Chunk];
             var tail = text.Read(scratch, 0, Chunk);
             if (tail <= 0) return;
+            TotalChars += tail;
             var keep = Math.Min(tail, room);
             scratch.AsSpan(0, keep).CopyTo(buffer.AsSpan(length));
             length += keep;
@@ -89,6 +93,7 @@ internal sealed class ForXmlCollector : IDisposable
     public void Append(ReadOnlySpan<char> text, bool newRow = true)
     {
         if (newRow) Rows++;
+        TotalChars += text.Length;
         while (!text.IsEmpty && !Full)
         {
             if (length == cap)
@@ -139,6 +144,8 @@ internal sealed class ForXmlCollector : IDisposable
         // A surrogate pair the cap splits is dropped whole.
         if (Truncated && text.Length > 0 && char.IsHighSurrogate(text[^1])) text = text[..^1];
         builder.AppendText(text, Truncated);
+        // The joined output counts as one nvarchar value.
+        builder.Measure(TotalChars, 2 * TotalChars);
         return Truncated;
     }
 

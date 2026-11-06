@@ -35,8 +35,8 @@ import { connectionLibrary } from './connection-library'
 import { clearEntraPrompt, clearEntraTokenCache } from './entra'
 import { SettingsStore } from './settings-store'
 import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
-import { SessionStore, sessionWriteSchema, type SessionRecordDocument } from './session-store'
-import type { RestoredDocument, RestoredSession } from '../shared/files/session'
+import { encodeSession, SessionStore, sessionWriteSchema, type SessionInput, type SessionRecord, type SessionRecordDocument } from './session-store'
+import { sessionLimits, type ReloadPins, type RestoredDocument, type RestoredSession, type SessionWrite } from '../shared/files/session'
 import { lossDetails } from '../shared/files/recovery'
 import { commandTitle } from '../shared/settings/catalog'
 import { popoutWindowName } from '../shared/popouts'
@@ -86,7 +86,8 @@ let testHooks: BackendTestHooks | undefined
 // How long a reload waits for Chromium to see a renderer only the watchdog saw go before the page gets a new window.
 const lostRendererGraceMs = 5000
 // The ANSI code page is read when a file needs it: the system locale is known only once the app is ready.
-const files = new SqlFileStore({ legacyLabel: () => legacyCodePage(app.getSystemLocale()) })
+const fileStoreOptions = { legacyLabel: () => legacyCodePage(app.getSystemLocale()) }
+let files = new SqlFileStore(fileStoreOptions)
 // Main's file dialogs and prompts, one at a time: a dialog asked for while another is open waits for it. A renderer reset
 // drops those not yet shown, and `rendererGeneration` tells a handler whose dialog was open then that its page is gone.
 const oneDialog = dialogQueue()
@@ -100,6 +101,18 @@ let restarting: Promise<boolean> | undefined
 let unresponsivePrompt: Promise<void> | undefined
 // The user chose Reload in the reload prompt: the next unload is allowed.
 let reloadApproved = false
+// The confirmed unload still needs a fresh checkpoint from the outgoing page.
+let reloadRefresh: 'waiting' | 'ready' | 'failed' = 'waiting'
+// Startup and Reload Window keep a checkpoint until a renderer acknowledges the restored tabs.
+type SessionCheckpoint = { generation: number } & (
+  { kind: 'disk'; record: Promise<SessionRecord | undefined> } |
+  { kind: 'reload'; record: SessionRecord; sourceGeneration: number; recoveryIds: readonly (string | null)[] }
+)
+let sessionCheckpoint: SessionCheckpoint | undefined
+const reloadRequest = z.object({
+  role: z.literal('reload'), session: sessionWriteSchema.refine(value => value.documents.length > 0 && value.documents.every(tab => tab.pinned)),
+  recoveryIds: z.array(recoveryTakeSchema.shape.id.nullable()).max(sessionLimits.documents)
+}).strict().refine(value => value.recoveryIds.length === value.session.documents.length)
 let closeApproved = false
 // Main asked the page to close (a quit or the window's close button) and the page has not said that its close ended
 // without closing. A page that reloads or crashes first cannot finish it, so it goes to the next page.
@@ -150,9 +163,9 @@ let sessionTaken = false
 const hotExitAvailable = !(testSeams && process.env.VARIA_TEST_HOT_EXIT === '0')
 /** The crash, hang and reload prompts' details for `generation`'s page: AutoRecover's wording once it kept that page's
  *  queries. A page has records only after a write, which waited for settings, so `current()` holds the loaded values. */
-function lossDetailsFor(generation: number) {
+function lossDetailsFor(generation: number, restores?: 'pins' | 'session') {
   const values = settings.current()
-  return lossDetails({ enabled: values['environment.autoRecover.enabled'], minutes: values['environment.autoRecover.intervalMinutes'], saved: recovery.hasRecords(generation) })
+  return lossDetails({ enabled: values['environment.autoRecover.enabled'], minutes: values['environment.autoRecover.intervalMinutes'], saved: recovery.hasRecords(generation) }, restores)
 }
 /** A command's title with its setting filled in (Select Top <n> Rows), from validated settings only. */
 const menuTitle = (id: CommandId, title: string) => commandTitle(id, settings.current(), title)
@@ -227,12 +240,15 @@ function handle<T>(channel: string, action: (value: unknown) => Promise<T> | T):
   })
 }
 
-/** A reloaded or crashed renderer can no longer address its sessions, so end them with the backend process. Without
- *  `relaunch` (the app is quitting) no new backend starts. */
-function resetRendererState(relaunch = true): void {
+/** End the old page's sessions. A replacement page can still retry an unacknowledged restore. */
+function resetRendererState({ relaunch = true, replacePage = false } = {}): void {
   rendererReady = false
   reloadApproved = false
+  reloadRefresh = 'waiting'
   rendererGeneration++
+  const checkpoint = sessionCheckpoint
+  sessionCheckpoint = replacePage && checkpoint && (checkpoint.kind === 'disk' || checkpoint.record.documents.length)
+    ? { ...checkpoint, generation: rendererGeneration } : undefined
   longRuns = noLongRuns
   // A popout's content belongs to the page that opened it.
   popouts.closeAll()
@@ -243,7 +259,8 @@ function resetRendererState(relaunch = true): void {
   resultsPort?.reset()
   resultsJobs?.reset()
   void (relaunch ? backend?.restart('reload') : backend?.stop())
-  files.clear()
+  // Reads still finishing for the old page can only register files in its own store.
+  files = new SqlFileStore(fileStoreOptions)
 }
 
 /** A dialog the page asked for, on the window, in turn. If the page reloads or crashes before the user answers, the
@@ -315,20 +332,36 @@ async function openPath(path: string): Promise<OpenSqlFile | undefined> {
 }
 const openFailure = (path: string, error: unknown) => `${basename(path)}: ${openError(error)}`.slice(0, 600)
 
-/**
- * A tab hot exit kept, opened again: its text, with its file registered again when that still exists. A clean tab with a
- * file reads it again (and fails, named, when it is gone); a tab with unsaved changes keeps its text whatever happened to
- * its file, and opens without it when it is gone.
- */
+/** Resolves file ids to main's paths and the disk versions under the buffers before the registry is reset. */
+function sessionInput(request: SessionWrite): SessionInput {
+  const documents = request.documents.map(({ fileId, ...document }) => ({
+    ...document, ...fileId ? files.sessionFile(fileId) : undefined
+  }))
+  return { documents, activeIndex: request.activeIndex }
+}
+
+function reloadCheckpoint(pins?: ReloadPins): Extract<SessionCheckpoint, { kind: 'reload' }> {
+  const session = pins?.session ?? { documents: [], activeIndex: -1 }
+  return {
+    kind: 'reload', generation: rendererGeneration + 1, sourceGeneration: rendererGeneration,
+    record: encodeSession(sessionInput(session)).record, recoveryIds: pins?.recoveryIds ?? []
+  }
+}
+
+function pendingReload(): boolean {
+  return pageGeneration === rendererGeneration && sessionCheckpoint?.kind === 'reload' && sessionCheckpoint.generation === rendererGeneration + 1
+}
+
+/** Reopens a kept tab. A clean file reads from disk again, and a dirty tab has its saved text even if the file is gone. */
 async function reopenDocument(document: SessionRecordDocument): Promise<RestoredDocument> {
-  const { path, text, ...rest } = document
+  const { path, text, fileSha256, ...rest } = document
   if (text !== undefined) {
-    const file = path ? await files.register(path) : undefined
+    const file = path ? await files.register(path, document.kind, { baseSha256: fileSha256 }) : undefined
     return { ...rest, text, ...file ? { file } : {} }
   }
   if (!path) throw new Error(`${document.name} could not be reopened.`)
   try {
-    const file = await files.read(path)
+    const file = await files.read(path, { kind: document.kind })
     return { ...rest, eol: file.eol, text: file.content, dirty: false, file: { id: file.id, name: file.name, path: file.path, encoding: file.encoding, ...file.codePage ? { codePage: file.codePage } : {}, readOnly: file.readOnly } }
   } catch (error) { throw new Error(`${basename(path)} could not be reopened: ${openError(error)}`.slice(0, 600)) }
 }
@@ -366,7 +399,7 @@ function openRecent(id: string): Promise<OpenedFiles> {
 function requestClose(intent: CloseIntent): void {
   closePending = true
   closeIntent = mergeCloseIntent(closeIntent, intent)
-  command('window.close')
+  if (rendererReady) command('window.close')
 }
 
 /** Restarting closes every connection and rolls back open transactions, and stops a long run part way (the page lets
@@ -405,7 +438,8 @@ function confirmUnresponsiveClose(window: BrowserWindow, quit: boolean): void {
 }
 
 function rendererCanConfirm(window: BrowserWindow): boolean {
-  return rendererReady && !rendererUnresponsive && !window.webContents.isCrashed()
+  // A close during a restore waits for the replacement to reopen its tabs before the ordinary quit flow.
+  return (rendererReady || sessionCheckpoint?.generation === rendererGeneration) && !rendererUnresponsive && !window.webContents.isCrashed()
 }
 
 const menuActions: ApplicationMenuActions = {
@@ -531,21 +565,34 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
   contents.on('did-finish-load', () => { rendererLoaded = true })
   // will-navigate cancels navigation elsewhere, so only a same-URL main-frame navigation is a reload (View › Reload Window, the palette, or dev HMR).
   contents.on('did-start-navigation', details => {
-    if (details.isMainFrame && !details.isSameDocument && rendererLoaded && details.url === contents.getURL()) resetRendererState()
+    if (details.isMainFrame && !details.isSameDocument && rendererLoaded && details.url === contents.getURL()) resetRendererState({ replacePage: true })
   })
   contents.on('did-navigate', () => { pageGeneration = rendererGeneration })
   // The renderer blocks unload only while queries are unsaved or servers are connected. This reload waits; the prompt
   // takes its turn after any open dialog, and Reload starts it again, allowed this time.
   contents.on('will-prevent-unload', event => {
+    if (!closeApproved && (reloadRefresh === 'failed' || (reloadApproved && pendingReload() && reloadRefresh !== 'ready'))) {
+      reloadRefresh = 'waiting'
+      reloadApproved = false
+      sessionCheckpoint = undefined
+      return
+    }
     if (closeApproved || reloadApproved) { reloadApproved = false; event.preventDefault(); return }
     const generation = rendererGeneration
-    void oneDialog(signal => window.isDestroyed() ? Promise.resolve({ response: 1 }) : dialog.showMessageBox(window, { type: 'warning', title: 'Reload workbench', message: 'Reload Varia SQL Manager?', detail: reloadDetail(longRuns, lossDetailsFor(pageGeneration).reload), buttons: ['Reload', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal }),
+    const checkpoint = sessionCheckpoint?.generation === generation + 1 ? sessionCheckpoint : undefined
+    const keepsPins = checkpoint?.kind === 'reload' && checkpoint.record.documents.length > 0
+    const abandon = () => { if (sessionCheckpoint === checkpoint) sessionCheckpoint = undefined }
+    void oneDialog(signal => window.isDestroyed() ? Promise.resolve({ response: 1 }) : dialog.showMessageBox(window, { type: 'warning', title: 'Reload workbench', message: 'Reload Varia SQL Manager?', detail: reloadDetail(longRuns, lossDetailsFor(pageGeneration, keepsPins ? 'pins' : undefined).reload), buttons: ['Reload', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal }),
       { response: 1 }, true).then(({ response }) => {
-      if (response !== 0 || window.isDestroyed() || generation !== rendererGeneration) return
+      if (response !== 0 || window.isDestroyed() || generation !== rendererGeneration) { abandon(); return }
       reloadApproved = true
       // Once the page has finished cancelling this unload (a round trip to it): a reload asked for before then is dropped.
-      void contents.executeJavaScript('0').catch(() => {}).then(() => { if (!window.isDestroyed() && generation === rendererGeneration) contents.reload() })
-    }, () => {})
+      void contents.executeJavaScript('0').catch(() => {}).then(() => {
+        if (window.isDestroyed() || generation !== rendererGeneration) return
+        reloadRefresh = 'waiting'
+        contents.reload()
+      })
+    }, abandon)
   })
   // A lost renderer, from Chromium's report or the watchdog's (when Chromium cannot see it go), is handled once; the
   // next page's navigation starts a new renderer to watch. The prompt waits for any open dialog (a Save dialog the page
@@ -562,8 +609,9 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
     // handle, so Chromium never sees the new renderer die and its crash leaves the window frozen.
     rendererLoaded = false
     const lostPage = pageGeneration
-    resetRendererState()
-    void oneDialog(() => window.isDestroyed() ? Promise.resolve({ response: -1 }) : dialog.showMessageBox(window, { type: 'error', title: 'Workbench stopped', message: 'The workbench stopped unexpectedly.', detail: lossDetailsFor(lostPage).stopped, buttons: ['Reload', 'Close'], defaultId: 0, cancelId: 1, noLink: true }),
+    resetRendererState({ replacePage: true })
+    const restores = sessionCheckpoint?.kind === 'reload' ? 'pins' : sessionCheckpoint ? 'session' : undefined
+    void oneDialog(() => window.isDestroyed() ? Promise.resolve({ response: -1 }) : dialog.showMessageBox(window, { type: 'error', title: 'Workbench stopped', message: 'The workbench stopped unexpectedly.', detail: lossDetailsFor(lostPage, restores).stopped, buttons: ['Reload', 'Close'], defaultId: 0, cancelId: 1, noLink: true }),
       { response: -1 }).then(({ response }) => {
       if (window.isDestroyed()) return
       if (response === 0) reloadLostRenderer(window)
@@ -608,7 +656,7 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
     watchdog.stop()
     if (mainWindow !== window) return
     mainWindow = null
-    resetRendererState(process.platform === 'darwin' && !quitting)
+    resetRendererState({ relaunch: process.platform === 'darwin' && !quitting })
   })
 }
 
@@ -779,12 +827,40 @@ app.whenReady().then(async () => {
   // The editing, developer tools and full screen roles act on the window the user is in (a focused popout); Reload and
   // zoom on the main window, whose zoom every popout follows.
   handle('varia:run-role', value => {
-    const role = rendererRoleSchema.parse(value), main = mainWindow
+    const request = typeof value === 'object' && value !== null ? reloadRequest.parse(value) : undefined
+    const role = request?.role ?? rendererRoleSchema.parse(value), main = mainWindow
     if (!main) return
+    if (role === 'reload' && sessionCheckpoint) {
+      if (sessionCheckpoint.generation === rendererGeneration + 1) return
+      throw new Error(sessionCheckpoint.kind === 'reload' ? 'Wait for the pinned tabs to reopen before reloading.' : 'Wait for the saved tabs to reopen before reloading.')
+    }
+    if (request || (role === 'reload' && hotExitAvailable)) {
+      if (!hotExitAvailable || pageGeneration !== rendererGeneration) throw new Error('The pinned tabs cannot be kept by this page.')
+      sessionCheckpoint = reloadCheckpoint(request)
+      reloadRefresh = 'waiting'
+    }
     const zoom = role === 'zoomIn' || role === 'zoomOut' || role === 'resetZoom'
     const target = role === 'reload' || zoom ? { window: main, activation: userActivation } : activeWindow()!
-    runRole(role, target.window, () => (target.window.isFocused() || process.env.VARIA_SMOKE_TEST === '1') && target.activation.recent())
+    try { runRole(role, target.window, () => (target.window.isFocused() || process.env.VARIA_SMOKE_TEST === '1') && target.activation.recent()) }
+    catch (error) { if (role === 'reload') sessionCheckpoint = undefined; throw error }
     if (zoom) popouts.zoom(main.webContents.getZoomLevel())
+  })
+  // Beforeunload cannot wait for an async handoff. Only the trusted page with a pending reload can replace its
+  // checkpoint here, and the handler does only bounded validation and encoding in memory.
+  ipcMain.on('varia:reload-pins-pending', event => { event.returnValue = trusted(event) && pendingReload() })
+  ipcMain.on('varia:reload-pins-refresh', (event, value: unknown) => {
+    if (!trusted(event) || !pendingReload()) {
+      event.returnValue = { ok: false, error: 'The pinned tabs cannot be kept by this page.' }
+      return
+    }
+    try {
+      sessionCheckpoint = reloadCheckpoint(value === null ? undefined : reloadRequest.parse(value))
+      reloadRefresh = 'ready'
+      event.returnValue = { ok: true, value: undefined }
+    } catch (error) {
+      reloadRefresh = 'failed'
+      event.returnValue = failure(error, 'The pinned tabs could not be kept.')
+    }
   })
   handle('varia:context-menu', value => { const target = activeWindow(); if (!target) throw new Error('The window is unavailable.'); return contextMenus.show(value, target.window) })
   // `context` (ConnectContext) only for connections.connect and .databases: the history entry whose remembered
@@ -901,34 +977,46 @@ app.whenReady().then(async () => {
   handle('varia:recovery-list', () => recovery.list(pageGeneration))
   handle('varia:recovery-take', async (value): Promise<RecoveredDocument> => {
     const generation = pageGeneration, record = await recovery.take(recoveryTakeSchema.parse(value).id, generation)
-    const file = record.path && generation === rendererGeneration ? await files.register(record.path) : undefined
+    const file = record.path && generation === rendererGeneration ? await files.register(record.path, record.kind) : undefined
     return { text: record.text, name: record.name, kind: record.kind, eol: record.eol, ...file ? { file } : {} }
   })
   // Hot exit: the page's tabs as its close goes ahead, with main's paths in place of file ids, and the next start's restore.
   handle('varia:session-write', async value => {
     if (!hotExitAvailable) throw new Error('Restore open queries on startup is off.')
-    const request = sessionWriteSchema.parse(value)
-    const documents = request.documents.map(({ fileId, ...document }) => {
-      let path: string | undefined
-      try { path = fileId ? files.get(fileId).path : undefined } catch { /* Released: kept without a file. */ }
-      return { ...document, ...path ? { path } : {} }
-    })
-    await openSession.write({ documents, activeIndex: request.activeIndex }, pageGeneration)
+    await openSession.write(sessionInput(sessionWriteSchema.parse(value)), pageGeneration)
   })
   handle('varia:session-take', async (): Promise<RestoredSession> => {
-    const generation = pageGeneration, first = !sessionTaken
-    sessionTaken = true
-    const record = hotExitAvailable ? await openSession.take(first) : undefined
+    const generation = pageGeneration
+    if (generation !== rendererGeneration || !hotExitAvailable) return { documents: [], activeIndex: -1, problems: [] }
+    let checkpoint = sessionCheckpoint
+    if (checkpoint?.generation !== generation) {
+      checkpoint = sessionCheckpoint = { kind: 'disk', generation, record: openSession.take(!sessionTaken) }
+      sessionTaken = true
+    }
+    let record: SessionRecord | undefined
+    try { record = await checkpoint.record } catch (error) {
+      // The same disk read may already have been handed to a replacement page.
+      if (sessionCheckpoint?.record === checkpoint.record) sessionCheckpoint = undefined
+      throw error
+    }
     const documents: RestoredDocument[] = [], problems: string[] = []
     let activeIndex = -1
     for (const [index, document] of (record?.documents ?? []).entries()) {
       if (generation !== rendererGeneration) break
       const restored = await reopenDocument(document).catch(error => { problems.push(error instanceof Error ? error.message : 'A query could not be reopened.'); return undefined })
+      if (generation !== rendererGeneration) break
       if (!restored) continue
       if (index === record?.activeIndex) activeIndex = documents.length
-      documents.push(restored)
+      const recoveryId = checkpoint.kind === 'reload' ? checkpoint.recoveryIds[index] : undefined
+      const resumed = restored.dirty && checkpoint.kind === 'reload' && recoveryId && await recovery.resumeReloaded(recoveryId, checkpoint.sourceGeneration, generation, restored).catch(() => false)
+      documents.push(resumed && recoveryId ? { ...restored, recoveryId } : restored)
     }
-    return { documents, activeIndex, problems: problems.slice(0, 32) }
+    return { documents, activeIndex, problems: problems.slice(0, 32), restoreGeneration: generation }
+  })
+  handle('varia:session-restored', value => {
+    const generation = z.int().parse(value)
+    if (generation === pageGeneration && generation === rendererGeneration && sessionCheckpoint?.generation === generation)
+      sessionCheckpoint = undefined
   })
   handle('varia:recent-files', () => recentFiles())
   handle('varia:recent-files-open', value => openRecent(z.uuid().parse(value)))
@@ -976,7 +1064,7 @@ app.whenReady().then(async () => {
     if (!trusted(event)) return
     closeApproved = true
     // Every query was saved, discarded or kept by hot exit, so AutoRecover's copies of this page's go, before the app can
-    // exit. A close that kept nothing (hot exit off) leaves nothing for the next start to reopen.
+    // exit. A close that kept nothing leaves nothing for the next start to reopen.
     await recovery.discardOwned(pageGeneration).catch(() => {})
     if (!openSession.keptBy(pageGeneration)) await openSession.clear().catch(() => {})
     if (closeAction(process.platform, closeIntent) === 'closeWindow') mainWindow?.close()

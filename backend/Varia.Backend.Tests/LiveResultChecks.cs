@@ -205,6 +205,15 @@ internal static class LiveResultChecks
                 result = await Run("SELECT CAST(N'{\"a\":1}' AS json) AS j;");
                 var json2025 = RowsOf(store, result.ResultSets[0])[0][0];
                 check(result.ResultSets[0].Columns[0].Role == "json" && json2025 == "{\"a\":1}", "SQL Server 2025 json values are read as text");
+                // json arrives as UTF-8: SqlClient 7.1.1's GetChars under SequentialAccess decoded it one byte a character
+                // (é as Ã©). The long value's two- and four-byte sequences straddle every 8,192-character chunk, and it
+                // passes the 2,097,152-character cap.
+                result = await Run("SELECT CAST(N'{\"a\":\"é😀\"}' AS json) AS j, CAST(N'[\"' + REPLICATE(CAST(N'é😀' AS nvarchar(max)), 800000) + N'\"]' AS json) AS l;");
+                var unicode = result.ResultSets.Count == 1 ? RowsOf(store, result.ResultSets[0])[0] : [null, null];
+                var pattern = string.Concat(Enumerable.Repeat("é😀", 800000));
+                check(unicode[0] == "{\"a\":\"é😀\"}" && unicode[1] is { } longJson && longJson.StartsWith("[\"", StringComparison.Ordinal)
+                    && longJson.Length >= ColumnPlan.DocumentCap - 1 && longJson.Length <= ColumnPlan.DocumentCap && pattern.StartsWith(longJson[2..], StringComparison.Ordinal),
+                    "SQL Server 2025 json decodes non-ASCII and surrogate pairs, across chunks and up to its cap: " + (unicode[0] ?? "(none)") + " " + (unicode[1]?.Length ?? -1));
             }
             else Console.WriteLine("SQL Server 2025 type checks (json, vector) skipped: the server's major version is " + major + ".");
         }
@@ -612,7 +621,8 @@ internal static class LiveResultChecks
             check(blocked && available > PageBuilder.FirstPageRows && result.Status == "completed" && RowsOf(store, result.ResultSets[0]).Count == 3000,
                 "rows read before a lock wait are sealed and readable while the statement waits (" + Waited(blocked, available, result, kinds, waited) + ")");
             // The batch's own progress may go out on the sink's first tick, before the set opens; it names no set then.
-            check(kinds.First(kind => kind != "progress") == "resultSet.opened" && kinds.Last() == "resultSet.closed" && kinds.Count(kind => kind == "resultSet.closed") == 1,
+            check(kinds.First() == "session.opened" && kinds.First(kind => kind is not ("progress" or "session.opened")) == "resultSet.opened"
+                && kinds.Last() == "resultSet.closed" && kinds.Count(kind => kind == "resultSet.closed") == 1,
                 "query events report the result set as it opens and closes: " + string.Join(", ", kinds.Distinct()));
             (blocked, available, result, kinds, waited) = await WhileLocked("SELECT id, CAST(N'x' AS nvarchar(max)) AS note FROM " + table + " ORDER BY id;", 100, 100);
             check(blocked && available == 100 && result.Status == "completed" && result.ResultSets[0] is { RowsRead: 3000, RowsStored: 100 },

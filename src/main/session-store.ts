@@ -10,7 +10,7 @@ const fits = (value: { kind: DocumentKind; text?: string }) => value.text === un
 const name = z.string().min(1).max(sessionLimits.nameChars)
 const server = z.string().min(1).max(sessionLimits.serverChars)
 const database = z.string().min(1).max(sessionLimits.databaseChars)
-const fields = { name, baseName: name.optional(), kind: z.enum(documentKinds), eol: z.enum(['crlf', 'lf']), dirty: z.boolean(), server: server.optional(), database: database.optional(), text: z.string().max(maxSqlFileBytes).optional() }
+const fields = { name, baseName: name.optional(), kind: z.enum(documentKinds), eol: z.enum(['crlf', 'lf']), dirty: z.boolean(), pinned: z.boolean().optional(), server: server.optional(), database: database.optional(), text: z.string().max(maxSqlFileBytes).optional() }
 /** varia:session-write: the tabs in strip order. Only a clean tab with a file may leave its text out (it reopens from the file). */
 export const sessionWriteSchema = z.object({
   documents: z.array(z.object({ ...fields, fileId: z.uuid().optional() }).strict()
@@ -22,20 +22,47 @@ export const sessionWriteSchema = z.object({
 /** `session.json`: what main wrote at the last close, with each file's path in place of its id. */
 const recordSchema = z.object({
   version: z.literal(1), savedAt: z.iso.datetime(),
-  documents: z.array(z.object({ ...fields, path: z.string().min(1).max(sessionLimits.pathChars).optional() }).strict()
-    .refine(fits).refine(document => document.text !== undefined || (!!document.path && !document.dirty))).max(sessionLimits.documents),
+  documents: z.array(z.object({
+    ...fields, path: z.string().min(1).max(sessionLimits.pathChars).optional(), fileSha256: z.string().regex(/^[0-9a-f]{64}$/).optional()
+  }).strict().refine(fits)
+    .refine(document => document.text !== undefined || (!!document.path && !document.dirty))
+    .refine(document => document.fileSha256 === undefined || (!!document.path && document.text !== undefined))).max(sessionLimits.documents),
   activeIndex: z.int().min(-1).max(sessionLimits.documents - 1)
 }).strict()
 export type SessionRecord = z.infer<typeof recordSchema>
 export type SessionRecordDocument = SessionRecord['documents'][number]
-/** What `write` takes: the page's request with main's paths in place of file ids. */
-export type SessionInput = Omit<SessionWrite, 'documents'> & { readonly documents: readonly (Omit<SessionWrite['documents'][number], 'fileId'> & { readonly path?: string })[] }
+/** What `write` takes: the page's request with main's paths and disk baselines in place of file ids. */
+export type SessionInput = Omit<SessionWrite, 'documents'> & { readonly documents: readonly (Omit<SessionWrite['documents'][number], 'fileId'> & Pick<SessionRecordDocument, 'path' | 'fileSha256'>)[] }
 
 /** Why a write was refused at the cap; a fixed sentence, as the banner shows it. */
 export const sessionCapMessage = 'The open queries are too large to keep for the next start (64 MB in all).'
 const posix = process.platform !== 'win32'
 
 export interface SessionStoreOptions { readonly now?: () => Date; readonly totalBytes?: number }
+
+/** Prepares the same bounded record for disk on quit or a one-use in-memory reload checkpoint. */
+export function encodeSession(session: SessionInput, options: SessionStoreOptions = {}) {
+  const reopens = session.documents.map((document, index) => ({ document, index })).filter(({ document }) => {
+    const reopen = document.text !== undefined || (!!document.path && document.path.length <= sessionLimits.pathChars)
+    if (!reopen && document.pinned) throw new Error(`Pinned tab “${document.name}” has no file that can be reopened. Save it again or unpin it.`)
+    return reopen
+  })
+  const record: SessionRecord = {
+    version: 1, savedAt: (options.now?.() ?? new Date()).toISOString(), activeIndex: reopens.findIndex(({ index }) => index === session.activeIndex),
+    documents: reopens.map(({ document }) => ({
+      name: document.name, ...document.baseName ? { baseName: document.baseName } : {}, kind: document.kind, eol: document.eol, dirty: document.dirty,
+      ...document.pinned ? { pinned: true } : {},
+      ...document.path && document.path.length <= sessionLimits.pathChars ? {
+        path: document.path, ...document.text !== undefined && document.fileSha256 ? { fileSha256: document.fileSha256 } : {}
+      } : {},
+      ...document.server ? { server: document.server } : {}, ...document.database ? { database: document.database } : {},
+      ...document.text !== undefined ? { text: document.text } : {}
+    }))
+  }
+  const bytes = Buffer.from(JSON.stringify(record) + '\n')
+  if (bytes.length > (options.totalBytes ?? sessionLimits.totalBytes)) throw new Error(sessionCapMessage)
+  return { record, bytes }
+}
 
 /**
  * `<userData>/Session/`: hot exit's copy of the open tabs, written once as a normal close goes ahead instead of asking to
@@ -45,7 +72,7 @@ export interface SessionStoreOptions { readonly now?: () => Date; readonly total
  * The next start takes `session.json` and keeps it as `previous.json` until that run closes: a run that crashes or is
  * killed before its own close leaves it, and the next process's first page reopens it again (AutoRecover offers what
  * changed since), so a restore never loses text. A close keeps a new session (and drops `previous.json`) or, with hot
- * exit off, drops both. A later page of the same process (a reload) takes only a session written since, as on macOS,
+ * exit off, keeps only pins or drops both if there are none. A later page of the same process (a reload) takes only a session written since, as on macOS,
  * where closing the window leaves the app running. Work runs one task at a time.
  */
 export class SessionStore {
@@ -75,19 +102,7 @@ export class SessionStore {
   /** Keeps `session` for the next start, for `generation`'s close, replacing whatever was kept before. */
   write(session: SessionInput, generation: number): Promise<void> {
     return this.serial(async () => {
-      // A clean tab whose file main no longer knows has no path and no text: there is nothing to reopen.
-      const reopens = session.documents.map((document, index) => ({ document, index })).filter(({ document }) => document.text !== undefined || document.path)
-      const record: SessionRecord = {
-        version: 1, savedAt: (this.options.now?.() ?? new Date()).toISOString(), activeIndex: reopens.findIndex(({ index }) => index === session.activeIndex),
-        documents: reopens.map(({ document }) => ({
-          name: document.name, ...document.baseName ? { baseName: document.baseName } : {}, kind: document.kind, eol: document.eol, dirty: document.dirty,
-          ...document.path && document.path.length <= sessionLimits.pathChars ? { path: document.path } : {},
-          ...document.server ? { server: document.server } : {}, ...document.database ? { database: document.database } : {},
-          ...document.text !== undefined ? { text: document.text } : {}
-        }))
-      }
-      const bytes = Buffer.from(JSON.stringify(record) + '\n')
-      if (bytes.length > (this.options.totalBytes ?? sessionLimits.totalBytes)) throw new Error(sessionCapMessage)
+      const { bytes } = encodeSession(session, this.options)
       await this.prepare()
       await writeBytesAtomic(this.current, bytes, { mode: 0o600 })
       await rm(this.previous, { force: true })
@@ -110,7 +125,7 @@ export class SessionStore {
     })
   }
 
-  /** Deletes what was kept: a close that asked about every tab (hot exit off) leaves nothing to reopen. */
+  /** Deletes what was kept when the close leaves no session to reopen. */
   clear(): Promise<void> {
     return this.serial(async () => {
       await rm(this.current, { force: true })

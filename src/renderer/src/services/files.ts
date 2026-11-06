@@ -5,7 +5,7 @@ import type { Disposable } from '../core/types'
 import type { QueryDocument } from '../documents'
 import { DocumentService } from './documents'
 import type { QueryService } from './queries'
-import type { KeptSession } from './session'
+import { requireKeptPins, type KeptSession } from './session'
 
 type FileApi = Pick<VariaApi, 'openSqlFiles' | 'saveSqlFile' | 'releaseSqlFile' | 'confirmClose' | 'closeWindow' | 'closeWindowCancelled'>
   & Partial<Pick<VariaApi, 'openRecentFile' | 'checkSqlFiles' | 'reloadSqlFile' | 'confirmReload' | 'keepSession'>>
@@ -312,6 +312,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
       refuse()
       // Hot exit keeps the tabs it can instead of asking about them; the rest (a designer, a tab past its caps) still ask.
       const keepSession = this.api.keepSession, kept = keepSession ? this.options.hotExit?.()?.kept : undefined
+      if (kept) requireKeptPins(this.documents.getSnapshot().documents, kept)
       // Each document's revision as approved: a text document's model version, a designer's own revision.
       const approved = new Map<string, number>()
       for (const document of this.documents.getSnapshot().documents) {
@@ -338,9 +339,10 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
       if (kept && keepSession) {
         // Written last, with each tab's text as it is now; a tab whose prompt was skipped must still be kept.
         const now = this.options.hotExit?.()
+        if (now) requireKeptPins(this.documents.getSnapshot().documents, now.kept)
         if (!now || [...kept].some(id => this.documents.get(id) && !now.kept.has(id))) throw new Error('A query changed while closing the window. Review the latest changes before closing it.')
         const result = await keepSession(now.session)
-        if (!result.ok) throw new Error(`The open queries could not be kept for the next start: ${result.error} Save them, or turn off Restore open queries on startup (Tools › Options › Environment › Documents), and close again.`)
+        if (!result.ok) throw new Error(`The open queries could not be kept for the next start: ${result.error} Try saving or closing some queries before closing the window again.`)
         if (this.disposed) return
         // What was kept is the text as it was when written; an edit made while writing it would be lost.
         unchanged()

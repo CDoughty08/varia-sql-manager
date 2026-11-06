@@ -5,9 +5,9 @@ import { randomBytes } from 'node:crypto'
 import { expandExplorerPath, explorerLines, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.mjs'
 import {
-  activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTab, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
+  activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
   explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, explorerSublabel, explorerToolbar, itemCount,
-  messages, movePane, objectSearchBox, objectSearchHits, objectSearchSelected, outputView, paneMenuButton, part, popoutDockButton, primaryAction, quickInput, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
+  messages, movePane, objectSearchBox, objectSearchHits, objectSearchSelected, outputView, paneMenuButton, part, popoutDockButton, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
 } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
@@ -1343,7 +1343,7 @@ try {
     expect(result.ok).toBe(true)
   }
   await expect(page.getByRole('checkbox', { name: 'Follow active query', exact: true })).toHaveCount(0)
-  await documentTab(page, pinQueries[2]).click()
+  await selectOpenDocument(page, pinQueries[2])
   const anchor = await explorerRow(page, 'pin-c')
   const middle = await anchor.evaluate(row => {
     const tree = row.closest('[role="tree"]')
@@ -1386,20 +1386,20 @@ try {
   await expect(await explorerRow(page, 'pin-f')).toBeInViewport({ ratio: 1 })
   await expect(tree()).toBeFocused()
   const selectionBeforeFollow = await tree().getAttribute('aria-activedescendant')
-  await documentTab(page, pinQueries[0]).click()
+  await selectOpenDocument(page, pinQueries[0])
   await expect(await explorerRow(page, 'pin-a')).toBeInViewport({ ratio: 1 })
   await expect(tree()).toHaveAttribute('aria-activedescendant', selectionBeforeFollow)
   await expect(tree()).not.toBeFocused()
   await setFollow(false)
   await scrollToMiddle()
   await expect(moreAbove).toBeVisible()
-  await documentTab(page, pinQueries[5]).click()
+  await selectOpenDocument(page, pinQueries[5])
   expect(await tree().evaluate(element => element.scrollTop)).toBe(middle)
   await setFollow(true)
 
   // A streamed page can insert rows above the server after a tab switch. Hold each page so the jump and the scroll
   // away both happen while a load can still move the server.
-  await documentTab(page, pinQueries[2]).click()
+  await selectOpenDocument(page, pinQueries[2])
   await setStub({ tables: 300, pageSize: 80, holdTablePages: true })
   await reload('pin-c', 'Databases', 'AppData', 'Tables')
   const heldPage = () => application.evaluate(() => {
@@ -1408,7 +1408,7 @@ try {
   })
   await expect.poll(heldPage).toMatch(/^v1\.tables\./)
   const firstHeldPage = await heldPage()
-  await documentTab(page, pinQueries[5]).click()
+  await selectOpenDocument(page, pinQueries[5])
   const followedServer = await explorerRow(page, 'pin-f')
   await expect(followedServer).toBeInViewport({ ratio: 1 })
   await application.evaluate(() => globalThis.variaStub.release())

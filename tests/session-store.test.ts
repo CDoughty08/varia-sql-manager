@@ -21,7 +21,7 @@ const files = async () => (await readdir(folder).catch(() => [] as string[])).so
 const tabs: SessionInput = {
   activeIndex: 1,
   documents: [
-    { name: 'SQLQuery2.sql', kind: 'sql', eol: 'crlf', dirty: true, text: 'SELECT 2', server: 'sql01', database: 'Sales' },
+    { name: 'SQLQuery2.sql', kind: 'sql', eol: 'crlf', dirty: true, pinned: true, text: 'SELECT 2', server: 'sql01', database: 'Sales' },
     { name: 'Month end', baseName: 'SQLQuery3.sql', kind: 'sql', eol: 'lf', dirty: false, text: 'SELECT 3' },
     { name: 'orders.sql', kind: 'sql', eol: 'crlf', dirty: false, path: 'C:\\Queries\\orders.sql' },
     { name: 'value.xml', kind: 'xml', eol: 'lf', dirty: false, text: '<a/>' }
@@ -67,12 +67,29 @@ describe('the hot exit session store', () => {
     await store.write({ activeIndex: 0, documents: [{ name: 'gone.sql', kind: 'sql', eol: 'lf', dirty: false }, tabs.documents[0]] }, 1)
     expect((await store.take(true))?.activeIndex).toBe(-1)
   })
+  it('refuses to replace the session if a clean pin cannot reopen from its file', async () => {
+    const store = new SessionStore(folder)
+    await store.write(tabs, 1)
+    const before = await readFile(join(folder, 'session.json'), 'utf8')
+    const pinnedFile = { name: 'gone.sql', kind: 'sql', eol: 'lf', dirty: false, pinned: true } as const
+    await expect(store.write({ activeIndex: 0, documents: [pinnedFile] }, 2)).rejects.toThrow('Pinned tab “gone.sql”')
+    await expect(store.write({ activeIndex: 0, documents: [{ ...pinnedFile, path: 'x'.repeat(sessionLimits.pathChars + 1) }] }, 2)).rejects.toThrow('Pinned tab “gone.sql”')
+    expect(await readFile(join(folder, 'session.json'), 'utf8')).toBe(before)
+  })
 
   it('refuses a session past its byte cap, writing nothing', async () => {
     const store = new SessionStore(folder, { totalBytes: 1024 })
     await expect(store.write({ activeIndex: 0, documents: [{ name: 'big.sql', kind: 'sql', eol: 'lf', dirty: true, text: 'x'.repeat(2048) }] }, 1)).rejects.toThrow(sessionCapMessage)
     expect(await files()).toEqual([])
     expect(store.keptBy(1)).toBe(false)
+  })
+
+  it('keeps a file baseline only with a path and buffered text', async () => {
+    const store = new SessionStore(folder), fileSha256 = '0'.repeat(64)
+    const dirty = { ...tabs.documents[0], path: tabs.documents[2].path, fileSha256 }
+    const clean = { ...tabs.documents[2], fileSha256 }
+    await store.write({ activeIndex: 0, documents: [dirty, clean, tabs.documents[0]] }, 1)
+    expect((await store.take(true))?.documents).toEqual([dirty, tabs.documents[2], tabs.documents[0]])
   })
 
   it('quarantines an unreadable or invalid session rather than reopen it', async () => {
@@ -91,6 +108,7 @@ describe('the hot exit session store', () => {
     expect(sessionWriteSchema.parse(valid)).toEqual(valid)
     const refused = (patch: object, document: object = {}) => sessionWriteSchema.safeParse({ ...valid, ...patch, documents: [{ ...valid.documents[0], ...document }] }).success
     expect(refused({}, { dirty: true })).toBe(false)
+    expect(refused({}, { pinned: 'true' })).toBe(false)
     expect(refused({}, { fileId: undefined })).toBe(false)
     expect(refused({}, { name: '' })).toBe(false)
     expect(refused({}, { name: 'x'.repeat(sessionLimits.nameChars + 1) })).toBe(false)
@@ -98,6 +116,7 @@ describe('the hot exit session store', () => {
     expect(refused({}, { kind: 'tableDesigner' })).toBe(false)
     expect(refused({}, { fileId: 'C:/a.sql' })).toBe(false)
     expect(refused({}, { path: 'C:/a.sql' })).toBe(false)
+    expect(refused({}, { fileSha256: '0'.repeat(64) })).toBe(false)
     expect(refused({}, { password: 'x' })).toBe(false)
     expect(refused({}, { server: 'x'.repeat(sessionLimits.serverChars + 1) })).toBe(false)
     expect(refused({}, { text: 'x'.repeat(4_194_305), kind: 'xml' })).toBe(false)

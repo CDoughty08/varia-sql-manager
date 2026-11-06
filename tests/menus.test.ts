@@ -272,7 +272,7 @@ describe('application menu template', () => {
       const roles = flatten(template(platform).items).filter(entry => entry.role && entry.id && commandIds.includes(entry.id.split('@')[0] as CommandId))
       // The macOS menu bar runs Delete and Select All through their handlers, which reach the query editor.
       expect(roles.map(entry => entry.id), platform).toEqual([...platform === 'darwin' ? [] : ['window.close'], 'edit.cut', 'edit.copy', 'edit.paste', ...platform === 'darwin' ? [] : ['edit.delete', 'edit.selectAll'],
-        'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.reloadWindow', 'developer.toggleDevTools'])
+        'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.toggleDevTools'])
       for (const entry of roles) {
         const id = entry.id as CommandId
         const label = menuTitle(id, platform, commandDescriptor(id).menus?.[0]?.title)
@@ -298,7 +298,7 @@ describe('application menu template', () => {
     for (const platform of platforms) {
       const entries = flatten(template(platform).items)
       const reload = entries.filter(entry => entry.role === 'reload' || entry.role === 'forceReload' || entry.id?.startsWith('developer.reloadWindow'))
-      expect(reload.map(entry => [entry.id, entry.role, entry.accelerator]), platform).toEqual([['developer.reloadWindow', 'reload', '']])
+      expect(reload.map(entry => [entry.id, entry.role, entry.accelerator]), platform).toEqual([['developer.reloadWindow', undefined, undefined]])
       const keyed = entries.filter(entry => typeof entry.accelerator === 'string' && reloadKeys.test(entry.accelerator))
       expect(keyed.map(entry => [entry.id, entry.role, entry.registerAccelerator]), platform).toEqual([['view.toggleResultsPane', undefined, false]])
     }
@@ -308,10 +308,11 @@ describe('application menu template', () => {
     const { items, actions } = template('linux', ['editor.toggleWordWrap'])
     click(item(items, 'layout.load@window'))
     click(item(items, 'query.execute'))
+    click(item(items, 'developer.reloadWindow'))
     const target: Partial<Electron.MenuItem> = { checked: false }
     click(item(items, 'editor.toggleWordWrap'), target)
     expect(target.checked).toBe(true)
-    expect(actions.command.mock.calls).toEqual([['layout.load'], ['query.execute'], ['editor.toggleWordWrap']])
+    expect(actions.command.mock.calls).toEqual([['layout.load'], ['query.execute'], ['developer.reloadWindow'], ['editor.toggleWordWrap']])
     const plain: Partial<Electron.MenuItem> = { checked: false }
     click(item(template('linux').items, 'editor.toggleWordWrap'), plain)
     expect(plain.checked).toBe(false)
@@ -321,7 +322,7 @@ describe('application menu template', () => {
 describe('menu state', () => {
   it('covers every command in a native menu, except Electron roles, and every toggle', () => {
     // The other theme commands are in the palette only: the native Theme submenu keeps PR1's items for them.
-    const roles = ['window.close', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll', 'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.reloadWindow', 'developer.toggleDevTools']
+    const roles = ['window.close', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll', 'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.toggleDevTools']
     // Context-menu commands and the keyboard-only ones are not in the native menu bar either.
     const unplaced = ['file.closeOthers', 'file.copyPath', 'file.revealInFolder', 'document.moveLeft', 'document.moveRight', 'document.rename', 'workbench.showContextMenu', 'explorer.refresh', 'preferences.createTheme', 'preferences.openThemesFolder',
       'preferences.reloadThemes', 'preferences.setTheme', 'pane.dockLeft', 'pane.dockRight', 'pane.dockTop', 'pane.dockBottom', 'pane.tabWithExplorer', 'pane.tabWithEditor', 'pane.tabWithResults', 'pane.tabWithMessages', 'pane.tabWithPlan', 'pane.float', 'pane.dock', 'pane.moveToNewWindow', 'pane.moveToMainWindow', 'pane.close', 'explorer.newQuery', 'explorer.selectTopRows', 'explorer.rename', 'explorer.delete', 'explorer.properties', 'explorer.disable', 'explorer.enable', 'explorer.unlock', 'explorer.restoreDatabase', 'explorer.tasks.restoreDatabase', 'explorer.restoreFiles', 'explorer.tasks.restoreFiles', 'explorer.newTable', 'explorer.newDatabase', 'explorer.newDatabaseOnDatabase', 'explorer.createCatalog', 'explorer.attachDatabase', 'explorer.takeOffline', 'explorer.bringOnline', 'explorer.detachDatabase', 'explorer.newLogin', 'explorer.newLoginOnSecurity', ...scriptCommandIds,

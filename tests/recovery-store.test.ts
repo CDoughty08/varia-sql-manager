@@ -85,6 +85,22 @@ describe('the AutoRecover store', () => {
     expect(store.hasRecords(3)).toBe(false)
   })
 
+  it('resumes a reloaded pin\'s matching copy and still offers a different or unrelated copy', async () => {
+    const store = new RecoveryStore(folder)
+    const pinned = query(), newer = query({ text: 'SELECT 2' }), unpinned = query()
+    for (const entry of [pinned, newer, unpinned]) await store.write(entry, 1)
+    expect(await store.resumeReloaded(pinned.id, 1, 2, pinned)).toBe(true)
+    expect(await store.resumeReloaded(newer.id, 1, 2, pinned)).toBe(false)
+    expect((await store.list(2)).map(entry => entry.id).sort()).toEqual([newer.id, unpinned.id].sort())
+    // If that renderer crashes mid-restore, its replacement can still take the matching copy.
+    expect(await store.resumeReloaded(pinned.id, 1, 4, pinned)).toBe(true)
+    expect(await store.resumeReloaded(pinned.id, 1, 3, pinned)).toBe(false)
+    expect((await store.list(4)).map(entry => entry.id).sort()).toEqual([newer.id, unpinned.id].sort())
+    await store.write({ ...pinned, text: 'SELECT 3' }, 4)
+    await store.discardOwned(4)
+    expect(await records()).toEqual([newer.id, unpinned.id].sort().map(id => id + '.json'))
+  })
+
   it('refuses a write past 64 records or 256 MB in all, counting the copy it replaces once', async () => {
     const store = new RecoveryStore(folder, { caps: { records: 3, totalBytes: 2000 } })
     const kept = [query(), query(), query()]
@@ -245,6 +261,8 @@ describe('the AutoRecover store', () => {
       reload: 'Changes since the last AutoRecover save will be lost. Connections are closed and uncommitted transactions are rolled back.'
     })
     expect(lossDetails({ enabled: true, minutes: 1, saved: true }).stopped).toContain('changes from the last minute may be lost')
+    expect(lossDetails({ enabled: false, minutes: 5, saved: false }, 'pins').stopped).toContain('Pinned tabs reopen with their text.')
+    expect(lossDetails({ enabled: false, minutes: 5, saved: false }, 'session').stopped).toContain('Reload retries opening the saved tabs.')
   })
 })
 
