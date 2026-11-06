@@ -186,6 +186,7 @@ export function flatten(nodes: NodeTable, roots: readonly number[], capacityHint
  */
 export interface RowLayout {
   readonly count: number
+  readonly serverIndices: readonly number[]
   /** The height of every row together: the spacer's. */
   readonly total: number
   top(index: number): number
@@ -205,6 +206,7 @@ export function rowLayout(rows: Pick<VisibleRows, 'count' | 'levels'>, rowHeight
   const top = (index: number) => index * rowHeight + above(index) * extra
   return {
     count: rows.count,
+    serverIndices: servers,
     total: rows.count * rowHeight + servers.length * extra,
     top,
     height: index => rows.levels[index] === 1 ? serverRowHeight : rowHeight,
@@ -214,6 +216,49 @@ export function rowLayout(rows: Pick<VisibleRows, 'count' | 'levels'>, rowHeight
       return low
     }
   }
+}
+
+const pinnedOverflowHeight = explorerLimits.rowHeight
+
+interface PinnedBand {
+  readonly headers: readonly number[]
+  readonly overflow: readonly number[]
+  readonly height: number
+}
+const emptyBand: PinnedBand = { headers: [], overflow: [], height: 0 }
+
+/** Server indices above and below the real scroll window, nearest ones shown at each edge in tree order. */
+export function pinnedServerBands(layout: RowLayout, scrollTop: number, viewport: number, topLimit: number, bottomLimit: number) {
+  const { serverIndices: servers } = layout, headerHeight = explorerLimits.serverRowHeight
+  // Each enabled edge leaves space for the tree even at the maximum setting or in a short pane.
+  const budget = Math.floor(viewport / (topLimit && bottomLimit ? 3 : 2))
+  const fit = (count: number, limit: number) => {
+    if (!limit || budget < pinnedOverflowHeight) return { shown: 0, height: 0 }
+    const slots = Math.min(limit, Math.floor(budget / headerHeight))
+    // Reserve an overflow row only when this set of servers could need one. Keep the height monotone as count grows.
+    const shown = Math.min(count, servers.length <= slots ? slots : Math.floor((budget - pinnedOverflowHeight) / headerHeight), limit)
+    return { shown, height: shown * headerHeight + (count > shown ? pinnedOverflowHeight : 0) }
+  }
+
+  let passed = 0
+  while (passed < servers.length && layout.top(servers[passed]) + headerHeight <= scrollTop) passed++
+  const upper = fit(passed, topLimit)
+  const top: PinnedBand = upper.height ? {
+    headers: servers.slice(passed - upper.shown, passed), overflow: servers.slice(0, passed - upper.shown), height: upper.height
+  } : emptyBand
+  const current = passed > 0 && (passed === servers.length || layout.top(servers[passed]) > scrollTop) ? servers[passed - 1] : undefined
+
+  const end = scrollTop + viewport - top.height
+  let firstBelow = servers.length, lower = fit(0, bottomLimit)
+  // A new row in the bottom band can push another header below the tree. Resolve that before reserving the space.
+  while (bottomLimit && budget >= pinnedOverflowHeight && firstBelow > passed && layout.top(servers[firstBelow - 1]) >= end - lower.height) {
+    firstBelow--
+    lower = fit(servers.length - firstBelow, bottomLimit)
+  }
+  const bottom: PinnedBand = lower.height ? {
+    headers: servers.slice(firstBelow, firstBelow + lower.shown), overflow: servers.slice(firstBelow + lower.shown), height: lower.height
+  } : emptyBand
+  return { top, bottom, current, height: viewport - top.height - bottom.height }
 }
 
 /** The rows to render, `[first, end)`: the viewport plus `overscan` rows on each side. */

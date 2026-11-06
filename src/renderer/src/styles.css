@@ -211,8 +211,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .explorer-freshness-scope { min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
 /* Alone on its line (no listing yet), the count may still ellipsize in a very narrow pane. */
 .explorer-servers { flex: 0 1 auto; min-width: 0; margin-left: auto; overflow: hidden; text-overflow: ellipsis; line-height: 20px; }
+.explorer-follow { flex: none; display: flex; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-3); font-size: var(--varia-size-sm); border-top: 1px solid var(--varia-sideBarSectionHeader-border); }
+.explorer-tree-frame { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 /* Windowed rows over a spacer as tall as every row: only the rows in view (and the selected one) are in the DOM. */
-.explorer-tree { position: relative; flex: 1; min-height: 0; overflow: auto; contain: strict; outline: none; padding: 0; }
+.explorer-tree { position: relative; flex: 1; min-height: 0; overflow: auto; overflow-anchor: none; contain: strict; outline: none; padding: 0; }
 .explorer-spacer { position: relative; width: 100%; }
 .explorer-row { position: absolute; top: 0; left: 0; right: 0; container-type: inline-size; height: var(--varia-row); display: flex; align-items: center; gap: 4px; padding-right: 6px; font-size: var(--varia-size-md); line-height: var(--varia-line-md); white-space: nowrap; cursor: default; }
 /* A server leads its tree: taller (explorerLimits.serverRowHeight), its name in semibold, its version and login after it. */
@@ -222,6 +224,20 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .explorer-row:hover { background: var(--varia-list-hoverBackground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
 .explorer-row[aria-selected="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
 .explorer-tree:focus .explorer-row[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); outline: 1px solid var(--varia-list-focusOutline); outline-offset: -1px; transition: none; }
+/* Pinned shortcuts reserve whole rows outside the scroll window. The overflow menu opens towards the tree. */
+.explorer-pin-band { flex: none; background: var(--varia-editorGroupHeader-tabsBackground); }
+.explorer-pin-band[data-edge="top"] { anchor-name: --explorer-pins-top; }
+.explorer-pin-band[data-edge="bottom"] { anchor-name: --explorer-pins-bottom; }
+.explorer-pinned-server.explorer-row, .explorer-pin-more { position: relative; width: 100%; padding: 0 var(--varia-space-2) 0 0; border: 0; border-radius: 0; color: inherit; text-align: start; cursor: pointer; }
+.explorer-pin-band > .explorer-pinned-server, .explorer-pin-more { box-shadow: inset 0 -1px var(--varia-sideBarSectionHeader-border); }
+.explorer-pin-band[data-edge="bottom"] > .explorer-pinned-server, .explorer-pin-band[data-edge="bottom"] > .explorer-pin-more { box-shadow: inset 0 1px var(--varia-sideBarSectionHeader-border); }
+.explorer-pin-band > .explorer-pinned-server[data-current-section] { background: var(--varia-list-inactiveSelectionBackground); border-inline-start: 2px solid var(--varia-focusBorder); padding-inline-end: 6px; }
+.explorer-pin-more { display: flex; align-items: center; justify-content: space-between; height: var(--varia-row); padding-inline-start: var(--varia-space-2); color: var(--varia-descriptionForeground); }
+.explorer-pinned-server.explorer-row:hover, .explorer-pin-more:hover:not(:disabled) { background: var(--varia-list-hoverBackground); color: inherit; }
+.explorer-pinned-server:focus-visible, .explorer-pin-more:focus-visible { outline-offset: -2px; }
+.explorer-pin-menu { position: fixed; inset: auto; margin: 0; width: anchor-size(width); max-height: var(--explorer-tree-height); padding: 2px 0; overflow: auto; overscroll-behavior: contain; color: var(--varia-menu-foreground); background: var(--varia-menu-background); border: 1px solid var(--varia-menu-border); border-radius: var(--varia-radius-sm); box-shadow: var(--varia-shadow-menu) var(--varia-widget-shadow); }
+.explorer-pin-band[data-edge="top"] .explorer-pin-menu { position-anchor: --explorer-pins-top; position-area: bottom; }
+.explorer-pin-band[data-edge="bottom"] .explorer-pin-menu { position-anchor: --explorer-pins-bottom; position-area: top; }
 .oe-accent { position: absolute; top: 0; bottom: 0; left: 0; width: 3px; }
 .oe-indent { flex: none; }
 .oe-twistie { flex: none; width: 16px; height: 16px; display: grid; place-items: center; margin-left: 4px; color: var(--varia-objectExplorer-chevronForeground); }

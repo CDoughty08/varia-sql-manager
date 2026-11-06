@@ -98,17 +98,21 @@ function ExplorerSearch({ connectionId }: { readonly connectionId: string | unde
  * a refresh failed and kept the old rows), and how many servers are connected.
  */
 function ExplorerFooter({ servers, live }: { readonly servers: number; readonly live: number }) {
-  const { explorer } = useWorkbench()
+  const { explorer, settings } = useWorkbench()
   const { selected } = useServiceSnapshot(explorer)
+  const follow = useServiceSnapshot(settings).values['objectExplorer.followActiveQuery']
   const fresh = explorer.listingFreshness(selected)
-  return <div className="explorer-footer">
+  return <>{servers > 0 && <label className="checkbox-label explorer-follow">
+    <input type="checkbox" checked={follow} onChange={() => void settings.toggle('objectExplorer.followActiveQuery')} />
+    Follow active query
+  </label>}<div className="explorer-footer">
     {fresh && <span className="explorer-freshness">
       <bdi className="explorer-freshness-scope">{displayText(fresh.label)}</bdi>
       <span aria-hidden="true">·</span>
       <StaleBadge updatedAt={fresh.updatedAt} {...(fresh.staleSince !== undefined ? { stale: { since: fresh.staleSince } } : {})} />
     </span>}
     <span className="explorer-servers">{live ? `${live} connected server${live === 1 ? '' : 's'}` : servers ? 'No connected servers' : 'Windows & SQL authentication'}</span>
-  </div>
+  </div></>
 }
 
 /**
@@ -116,7 +120,7 @@ function ExplorerFooter({ servers, live }: { readonly servers: number; readonly 
  * servers, or a prompt to connect. Disconnect acts on the selected node's server; with nothing selected it asks which.
  * Filter shows a filled funnel while the selected folder has a filter.
  */
-export default function ExplorerPane({ error, activeConnectionId }: { readonly error?: string; readonly activeConnectionId?: string }) {
+export default function ExplorerPane({ error, activeConnectionId, activeQueryId }: { readonly error?: string; readonly activeConnectionId?: string; readonly activeQueryId?: string }) {
   const { explorer, connections, commands } = useWorkbench()
   const { selected } = useServiceSnapshot(explorer)
   const { explorerSelectionFiltered: filtered, explorerGroupBySchema: grouped } = useServiceSnapshot(explorer.context)
@@ -160,7 +164,7 @@ export default function ExplorerPane({ error, activeConnectionId }: { readonly e
     {searchable && <ExplorerSearch connectionId={selectedServer} />}
     <div className="explorer-body" ref={background}>
       {servers.length ? <ExplorerErrorBoundary onReload={() => explorer.reset()} onReloaded={() => focusTree(header.current)}>
-        <FaultProbe /><ExplorerTree activeConnectionId={activeConnectionId} /></ExplorerErrorBoundary>
+        <FaultProbe /><ExplorerTree activeConnectionId={activeConnectionId} activeQueryId={activeQueryId} /></ExplorerErrorBoundary>
         : <EmptyState className="explorer-empty" icon="server" detail="Connect to SQL Server to browse databases and objects." actions={[{ label: 'Connect to server', run: () => void commands.execute('connection.connect', undefined, 'toolbar'), disabled: !connect, buttonRef: connectButton, primary: true }]} />}
       {error && <p className="explorer-error" role="alert">{error}</p>}
     </div>

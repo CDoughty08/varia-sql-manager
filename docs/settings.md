@@ -174,6 +174,9 @@ A property grid: True/False lists, values that differ from their default in bold
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `objectExplorer.selectTopRows` | Value for Select Top &lt;n> Rows command | Integer 1–2,147,483,647 | 1,000 |  | All | At once | How many rows Select Top Rows reads, and the number its menu item shows. |
 | `objectExplorer.groupBySchema` | Group by Schema | Boolean | False |  | All | At once | Lists each database's schemas after its own folders, with the Tables, Views, Synonyms and Programmability folders of each schema below it; Database Triggers, Assemblies and Plan Guides stay in the database's Programmability folder. A filter below a schema applies to that schema's folder only. The Object Explorer toolbar's Group by Schema button turns it on and off. |
+| `objectExplorer.pinnedServerHeadersTop` | Pinned server headers at top | Integer 0–10 | 2 |  | All | At once | Maximum number of off-screen server headers to show at the top of the tree. Choose 0 to hide this edge. A short pane may fit fewer headers. Not in SSMS. |
+| `objectExplorer.pinnedServerHeadersBottom` | Pinned server headers at bottom | Integer 0–10 | 2 |  | All | At once | Maximum number of off-screen server headers to show at the bottom of the tree. Choose 0 to hide this edge. A short pane may fit fewer headers. Not in SSMS. |
+| `objectExplorer.followActiveQuery` | Follow active query | Boolean | True |  | All | At once | Bring the active query tab’s server into view when its header is outside the tree viewport. The Object Explorer checkbox also changes this setting. Not in SSMS. |
 | `objectExplorer.search.indexOnConnect` | Index objects when a server connects | Boolean | True |  | All | At once | Reads the names of every object Object Explorer lists that you may see, from logins and databases down to columns and parameters, two databases at a time on a session of their own, so Search Objects finds them whether or not Object Explorer has loaded them. The index stays in memory and is dropped when the server disconnects. While it is False, Search Objects indexes a server the first time you search it. Not in SSMS. |
 | `objectExplorer.search.definitions` | Index module definitions | Boolean | True |  | All | At once | Also keeps the text of procedures, functions, views and triggers you may VIEW DEFINITION of, so Search Objects can find text inside them (up to 1,000,000 characters of each, within the index’s 512 MiB). Applies to the next build. Not in SSMS. |
 
@@ -279,4 +282,4 @@ How Varia follows the SSIS Catalog (SSISDB) as it changes. Not in SSMS.
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (96 today).
+A patch holds at most one entry per setting (99 today).

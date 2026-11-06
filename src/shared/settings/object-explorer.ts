@@ -38,6 +38,21 @@ export const objectExplorerSettings = [
     description: 'Lists each database\'s schemas after its own folders, with the Tables, Views, Synonyms and Programmability folders of each schema below it; Database Triggers, Assemblies and Plan Guides stay in the database\'s Programmability folder. A filter below a schema applies to that schema\'s folder only. The Object Explorer toolbar\'s Group by Schema button turns it on and off.'
   },
   {
+    key: 'objectExplorer.pinnedServerHeadersTop', page: 'objectExplorer.commands', group: 'Object Explorer', label: 'Pinned server headers at top',
+    type: 'integer', min: 0, max: 10, default: 2, varia: true, keywords: ['sticky', 'servers', 'scroll'],
+    description: 'Maximum number of off-screen server headers to show at the top of the tree. Choose 0 to hide this edge. A short pane may fit fewer headers.'
+  },
+  {
+    key: 'objectExplorer.pinnedServerHeadersBottom', page: 'objectExplorer.commands', group: 'Object Explorer', label: 'Pinned server headers at bottom',
+    type: 'integer', min: 0, max: 10, default: 2, varia: true, keywords: ['sticky', 'servers', 'scroll'],
+    description: 'Maximum number of off-screen server headers to show at the bottom of the tree. Choose 0 to hide this edge. A short pane may fit fewer headers.'
+  },
+  {
+    key: 'objectExplorer.followActiveQuery', page: 'objectExplorer.commands', group: 'Object Explorer', label: 'Follow active query',
+    type: 'boolean', default: true, varia: true, keywords: ['server', 'connection', 'scroll', 'query tab'],
+    description: 'Bring the active query tab’s server into view when its header is outside the tree viewport. The Object Explorer checkbox also changes this setting.'
+  },
+  {
     key: 'objectExplorer.search.indexOnConnect', page: 'objectExplorer.commands', group: 'Search Objects', label: 'Index objects when a server connects', type: 'boolean', default: true, varia: true,
     keywords: ['search', 'index', 'objects', 'find', 'definitions'],
     description: 'Reads the names of every object Object Explorer lists that you may see, from logins and databases down to columns and parameters, two databases at a time on a session of their own, so Search Objects finds them whether or not Object Explorer has loaded them. The index stays in memory and is dropped when the server disconnects. While it is False, Search Objects indexes a server the first time you search it.'
