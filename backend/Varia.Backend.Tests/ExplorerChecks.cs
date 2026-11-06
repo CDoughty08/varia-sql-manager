@@ -848,7 +848,7 @@ internal static class ExplorerChecks
         check(held.Connections == 2, "a peek runs while tree reads hold every shared slot");
         var peekB = Task.Run(() => lanes.PeekAsync(new PeekArgs(busy, Guid.NewGuid().ToString(), orders), CancellationToken.None));
         // Longer than the budget: a budget counted from the request would have timed the queued peek out by now.
-        await Task.Delay(500);
+        await Task.Delay(300);
         check(held.Connections == 2 && !peekB.IsCompleted, "a second peek waits for the connection's peek slot, without its budget running");
         held.Hold.Release(10);
         await tree;

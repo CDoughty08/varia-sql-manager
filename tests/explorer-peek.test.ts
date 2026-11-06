@@ -261,21 +261,27 @@ describe('PeekService script cache', () => {
       writeClipboardText: vi.fn(async () => ok(undefined))
     }
     let live = [{ id: connectionId }]
+    let options = { scriptExtendedProperties: true } as unknown as ScriptingOptions
+    const clock = { now: 1_000_000 }
     const connectionListeners = new Set<() => void>(), optionListeners = new Set<() => void>()
     let ids = 0
     const service = new PeekService({
       api: api as never,
       connections: { getSnapshot: () => live, subscribe: listener => { connectionListeners.add(listener); return () => connectionListeners.delete(listener) } },
-      scriptingOptions: { getSnapshot: () => ({ options: {} as ScriptingOptions }), subscribe: listener => { optionListeners.add(listener); return () => optionListeners.delete(listener) } },
+      // A fresh object per read, as the workbench's store gives, so only the values say whether the options changed.
+      scriptingOptions: { getSnapshot: () => ({ options: { ...options } }), subscribe: listener => { optionListeners.add(listener); return () => optionListeners.delete(listener) } },
       timers: { setTimeout: () => 1, clearTimeout: () => {} },
-      newId: () => `id-${++ids}`
+      newId: () => `id-${++ids}`, now: () => clock.now
     })
     const facts = (index: number, modified: string) => peeks[index]!(ok({ facts: { schema: 'dbo', modified }, elapsedMs: 1 }))
     const script = (index: number, text: string) => scripts[index]!(ok({ text, database: 'Sales', warnings: [], commands: 1, elapsedMs: 1 }))
     const definition = () => { const part = service.getSnapshot().open?.definition; return part?.status === 'ready' ? part.value.text : part?.status }
-    return { service, api, facts, script, definition, scriptsSent: () => scripts.length,
+    const announce = () => { for (const listener of optionListeners) listener() }
+    return { service, api, facts, script, definition, clock, scriptsSent: () => scripts.length,
       lose: () => { live = []; for (const listener of connectionListeners) listener() },
-      changeOptions: () => { for (const listener of optionListeners) listener() } }
+      changeOptions: () => { options = { scriptExtendedProperties: false } as unknown as ScriptingOptions; announce() },
+      changeOtherSetting: announce,
+      kept: () => (service as unknown as { scripts: Map<string, unknown> }).scripts.size }
   }
   const flush = () => new Promise(resolve => setTimeout(resolve, 0))
 
@@ -338,6 +344,66 @@ describe('PeekService script cache', () => {
     service.close()
     service.peek(node('table', 2, 'Other'), 'menu')
     expect(scriptsSent()).toBe(3)
+  })
+  it('keeps its scripts when another setting changes, and never keeps one asked with options since changed', async () => {
+    const { service, api, facts, script, changeOptions, changeOtherSetting, kept } = setup()
+    service.peek(node('table', 1), 'menu')
+    facts(0, '2024-01-02T03:04:05')
+    script(0, 'CREATE TABLE a')
+    await flush()
+    service.peek(node('table', 2, 'Other'), 'hover')
+    facts(1, '2024-01-02T03:04:05')
+    await flush()
+    service.peek(node('table', 3, 'Third'), 'menu')
+    // The settings store announces every setting; only a Scripting change empties the cache and stops background scripts.
+    changeOtherSetting()
+    expect(kept()).toBe(1)
+    expect(api.cancelScripting).not.toHaveBeenCalled()
+    changeOptions()
+    expect(kept()).toBe(0)
+    expect(api.cancelScripting).toHaveBeenCalledWith(['id-4'])
+    // The open card's script, asked before the change, still shows but is not kept.
+    facts(2, '2024-01-02T03:04:05')
+    script(2, 'CREATE TABLE third WITH old options')
+    await flush()
+    expect(kept()).toBe(0)
+  })
+  it('takes over the script still running for a table the pointer comes back to', async () => {
+    const { service, facts, script, definition, scriptsSent } = setup()
+    service.peek(node('table', 1), 'hover')
+    facts(0, '2024-01-02T03:04:05')
+    await flush()
+    service.peek(node('table', 2, 'Other'), 'hover')
+    service.peek(node('table', 1), 'hover')
+    expect(scriptsSent()).toBe(2)
+    facts(2, '2024-01-02T03:04:05')
+    script(0, 'CREATE TABLE [dbo].[Customer]')
+    await flush()
+    expect(definition()).toBe('CREATE TABLE [dbo].[Customer]')
+    expect(scriptsSent()).toBe(2)
+  })
+  it('scripts again when a taken-over script began before the table changed', async () => {
+    const { service, api, facts, scriptsSent } = setup()
+    service.peek(node('table', 1), 'hover')
+    facts(0, '2024-01-02T03:04:05')
+    await flush()
+    service.peek(node('table', 2, 'Other'), 'hover')
+    service.peek(node('table', 1), 'hover')
+    facts(2, '2024-05-06T07:08:09')
+    await flush()
+    expect(api.cancelScripting).toHaveBeenCalledWith(['id-2'])
+    expect(scriptsSent()).toBe(3)
+  })
+  it('lets a kept script expire, since the modified time misses some changes', async () => {
+    const { service, facts, script, clock, scriptsSent } = setup()
+    service.peek(node('table', 1), 'menu')
+    facts(0, '2024-01-02T03:04:05')
+    script(0, 'CREATE TABLE x')
+    await flush()
+    service.close()
+    clock.now += peekLimits.scriptCacheMs + 1
+    service.peek(node('table', 1), 'menu')
+    expect(scriptsSent()).toBe(2)
   })
   it('drops what it kept for a server that disconnects', async () => {
     const { service, facts, script, scriptsSent, lose } = setup()

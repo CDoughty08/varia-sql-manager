@@ -75,6 +75,11 @@ export const peekLimits = {
    */
   scriptCacheEntries: 32,
   scriptCacheChars: 4_000_000,
+  /**
+   * How long a kept script is good for. The modified time misses changes a script can include (extended properties, triggers,
+   * permissions) and counts whole seconds, so a kept script also expires; Refresh scripts the table again at once.
+   */
+  scriptCacheMs: 120_000,
   /** Table scripts a replaced card leaves running so they can be cached; one more cancels the oldest. */
   backgroundScripts: 2
 } as const
