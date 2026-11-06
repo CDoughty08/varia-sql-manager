@@ -27,6 +27,8 @@ export interface EditorGroupHost {
   capture(place: (id: string) => number | undefined): EditorGroupsLayout | undefined
   /** Arranges the open documents as `layout` says, each place's document by `id(place)`. */
   restore(layout: EditorGroupsLayout, id: (place: number) => string | undefined): void
+  /** The document whose tab has focus, if one does. */
+  focusedDocument(): string | undefined
 }
 
 /** The group holding document `id`. */
@@ -115,6 +117,11 @@ export class EditorGroupService extends SnapshotStore<EditorGroupSnapshot> imple
     const next = view.groups[((index < 0 ? 0 : index) + delta + view.groups.length) % view.groups.length]
     this.host.focusGroup(next.id)
   }
+  /**
+   * The document whose tab has focus. It is not always the active one (a closing menu gives focus back to the tab it was
+   * opened on without choosing it), so a key pressed on a tab acts on this one.
+   */
+  focusedDocument(): string | undefined { return this.host?.focusedDocument() }
   isFloating(id: string): boolean { return !!this.groupOf(id)?.floating }
   /**
    * Whether Float Editor can move the document into a floating group: it is docked, the grid keeps another document (a

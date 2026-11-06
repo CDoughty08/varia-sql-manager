@@ -132,7 +132,7 @@ export const commandCatalog = {
   },
   'file.close': {
     title: 'Close Query', category: 'File', icon: 'close', precondition: 'hasActiveDocument && !documentBusy', unavailableHint: openFirst,
-    // Delete and Backspace on a focused tab, as Dockview's tabs close (the focused tab is the active one).
+    // Delete and Backspace on a focused tab, as Dockview's tabs close; a key pressed on a tab closes that tab.
     keybindings: [{ key: 'mod+w' }, { win: 'ctrl+f4', linux: 'ctrl+f4' }, { key: 'delete', when: tabKeys }, { key: 'backspace', when: tabKeys }],
     menus: [{ menu: 'file', group: '2_close', order: 1, mnemonic: 'c' }, { menu: 'documentTab.context', group: '2_close', order: 1, title: 'Close', mnemonic: 'c' }]
   },

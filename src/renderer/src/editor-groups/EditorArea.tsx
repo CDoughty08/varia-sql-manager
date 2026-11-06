@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { DockviewReact, themeDark, themeLight, type DockviewApi, type DockviewGroupPanel, type DockviewReadyEvent, type FloatingGroupDragContext, type IDockviewHeaderActionsProps, type IDockviewPanel, type IDockviewPanelHeaderProps, type IDockviewPanelProps, type SerializedDockview } from 'dockview-react'
+import { DockviewReact, themeDark, themeLight, type DockviewApi, type DockviewGroupPanel, type DockviewReadyEvent, type FloatingGroupDragContext, type IDockviewHeaderActionsProps, type IDockviewPanel, type IDockviewPanelHeaderProps, type IDockviewPanelProps, type IWatermarkPanelProps, type SerializedDockview } from 'dockview-react'
 import { captureEditorGroups, editorGroupLimits, restoreEditorGroups, type EditorGroupsLayout } from '../../../shared/editor-groups'
 import { environmentTag } from '../../../shared/environments'
 import { isSsisDocumentKind } from '../../../shared/ssis/catalog.ts'
@@ -29,7 +29,7 @@ import ObjectSearch from '../search/ObjectSearch'
  * The query editor panel's editor groups (docs/editor-groups.md): a Dockview of its own inside the workbench's editor
  * panel, one panel per open document. Each group has its own tab strip and one Monaco editor, which moves into whichever
  * text document the group shows; DocumentService keeps the documents and their models. Tabs drag along a strip, into
- * another group, onto a group's side to split it (the compass shows where), or Ctrl-drag to float over the editor area.
+ * another group, onto a group's side to split it (the compass shows where), or Shift-drag to float over the editor area.
  */
 
 /** One editor group's Monaco editor and the element it lives in, which moves into the text document the group shows. */
@@ -137,7 +137,7 @@ function DocumentTab({ api }: IDockviewPanelHeaderProps) {
   // Selected in its group: the group shows it.
   const [selected, setSelected] = useState(api.isVisible)
   useEffect(() => { setSelected(api.isVisible); const visibility = api.onDidVisibilityChange(event => setSelected(event.isVisible)); return () => visibility.dispose() }, [api])
-  const menuTarget = useMenuTarget<HTMLDivElement>(() => workbench.documents.get(id) ? { kind: 'documentTab', tabId: id, floating: api.location.type === 'floating', shared: (workbench.editorGroups.groupOf(id)?.documents.length ?? 0) > 1 } : null)
+  const menuTarget = useMenuTarget<HTMLDivElement>(() => workbench.documents.get(id) ? { kind: 'documentTab', tabId: id, floating: api.location.type === 'floating' } : null)
   const ref = useCallback((node: HTMLDivElement | null) => { element.current = node; menuTarget(node) }, [menuTarget])
   // Dockview's tab element is the tab (role, name, selection, roving focus): F2 renames while it has focus, and screen
   // readers hear its environment.
@@ -215,11 +215,19 @@ function GroupActions({ group, containerApi }: IDockviewHeaderActionsProps) {
   return corner ? <div className="editor-group-actions"><PaneMenuButton pane="editor" /></div> : null
 }
 
-function EmptyEditor() {
-  const { commands } = useWorkbench(), restored = useContext(RestoredContext)
+function EmptyEditor({ group }: IWatermarkPanelProps) {
+  const { commands, documents } = useWorkbench(), restored = useContext(RestoredContext)
+  const open = useServiceSelector(documents, snapshot => snapshot.documents.length > 0)
   if (!restored) return null
-  // With no group there is no header: the editor panel's ⋯ menu stays at the top right.
-  return <div className="editor-empty"><div className="editor-group-actions"><PaneMenuButton pane="editor" /></div><EmptyState className="workspace-empty" icon="file-code" title="No open queries" actions={[{ label: 'New query', run: () => void commands.execute('file.new', undefined, 'toolbar'), primary: true }, { label: 'Open SQL file', run: () => void commands.execute('file.open', undefined, 'toolbar') }]} /></div>
+  const newQuery = { label: 'New query', run: () => void commands.execute('file.new', undefined, 'toolbar') }
+  // With no group there is no header: the editor panel's ⋯ menu stays at the top right; an empty group has its own. Dockview
+  // floats a group's last tab (Shift-drag, a tab released outside the area); the grid then keeps an empty group (`keepGrid`),
+  // which says the queries float.
+  const state = open
+    ? <EmptyState className="workspace-empty" icon="file-code" title="All open queries float" detail="Dock one to bring it back here, or drag its tab into this area."
+      actions={[{ label: 'Dock query', run: () => void commands.execute('editor.dock', undefined, 'toolbar'), primary: true }, newQuery]} />
+    : <EmptyState className="workspace-empty" icon="file-code" title="No open queries" actions={[{ ...newQuery, primary: true }, { label: 'Open SQL file', run: () => void commands.execute('file.open', undefined, 'toolbar') }]} />
+  return <div className="editor-empty">{!group && <div className="editor-group-actions"><PaneMenuButton pane="editor" /></div>}{state}</div>
 }
 
 const components = { document: DocumentPanel }
@@ -246,16 +254,20 @@ export default function EditorArea() {
 /** Dockview names each group's region after its shown panel; an editor group showing a custom document would then be a
  * second region named as that document's own frame (New Database), so editor groups are named "Editor group: …". */
 const groupPrefix = 'Editor group: '
-function nameGroupRegions(root: HTMLElement): { dispose(): void } {
+function nameGroupRegions(root: HTMLElement): { refresh(): void; dispose(): void } {
   // Only Dockview's groups: a document's own regions ("… sections", a chart's table) keep their names as their titles change.
   const name = (element: Element) => {
     const label = element.getAttribute('aria-label')
     if (element.classList.contains('dv-groupview') && element.getAttribute('role') === 'region' && label && !label.startsWith(groupPrefix)) element.setAttribute('aria-label', groupPrefix + label)
   }
-  root.querySelectorAll('.dv-groupview[role="region"]').forEach(name)
+  const refresh = () => root.querySelectorAll('.dv-groupview[role="region"]').forEach(name)
+  refresh()
+  // Dockview labels a group as its shown tab changes. A group that arrives already labelled (a floating group, groups a
+  // restore rebuilds) is named by `refresh`, which the controller runs on every layout change: watching added nodes
+  // would also watch every line Monaco draws.
   const observer = new MutationObserver(records => { for (const record of records) if (record.target instanceof Element) name(record.target) })
   observer.observe(root, { subtree: true, attributes: true, attributeFilter: ['aria-label', 'role'] })
-  return { dispose: () => observer.disconnect() }
+  return { refresh, dispose: () => observer.disconnect() }
 }
 
 /** Menus, the palette and dialogs come and go over the editor area: focus there says nothing about where the user is. */
@@ -306,6 +318,8 @@ class EditorAreaController implements Area, EditorGroupHost {
    * body then means the area lost it (a hidden panel took its element), not that the user went elsewhere (a toast closed).
    */
   private focusInArea = true
+  private regions?: { refresh(): void }
+  private keepingGrid = false
   private status?: { editor: QueryEditorInstance['instance']; binding: { dispose(): void } }
   constructor(private readonly workbench: Workbench) {}
 
@@ -317,14 +331,14 @@ class EditorAreaController implements Area, EditorGroupHost {
     api.updateOptions({ dropPositionResolver: guides })
     this.disposables.push(guides,
       api.onDidActivePanelChange(event => { if (!this.reconciling && event.panel && documents.getSnapshot().activeId !== event.panel.id) documents.activate(event.panel.id); this.followStatus() }),
-      api.onDidLayoutChange(() => this.publish()),
+      api.onDidLayoutChange(() => { this.keepGrid(); this.publish() }),
       api.onDidRemoveGroup(group => this.dropEditor(group.id)),
       // A group past the cap (a drop that would split once more) goes back: its documents join the active group.
       api.onDidAddGroup(group => { if (api.groups.length > editorGroupLimits.groups) queueMicrotask(() => this.mergeInto(group)) }),
       { dispose: documents.subscribe(() => this.reconcile()) },
       editorGroups.attach(this),
-      nameGroupRegions(root),
-      followFocus(root, inside => { this.focusInArea = inside }),
+      this.regions = nameGroupRegions(root),
+      followFocus(root, inside => { this.focusInArea = inside; if (!inside) documents.dropPendingFocus() }),
       chooseFocusedTabs(root, id => { if (documents.getSnapshot().activeId !== id) api.getPanel(id)?.api.setActive() }))
     this.reconcile()
     this.publish()
@@ -369,11 +383,29 @@ class EditorAreaController implements Area, EditorGroupHost {
     const id = panel.id
     Object.defineProperty(panel.api, 'close', { configurable: true, value: () => { void this.workbench.commands.execute('file.close', { tabId: id }, 'keybinding') } })
   }
+  /**
+   * The grid keeps a group: when every document floats (Dockview floats a group's last tab), an empty one stays behind the
+   * floating groups, whose watermark says they float; it goes once another grid group shows a document.
+   */
+  private keepGrid(): void {
+    const api = this.api
+    if (!api || this.disposed || this.keepingGrid) return
+    const grid = api.groups.filter(group => group.api.location.type === 'grid')
+    this.keepingGrid = true
+    try {
+      if (!grid.length && api.groups.length) {
+        const active = api.activeGroup
+        api.addGroup({ direction: 'right' })
+        active?.api.setActive()
+      } else if (grid.some(group => group.panels.length)) for (const group of grid) if (!group.panels.length) api.removeGroup(group)
+    } finally { this.keepingGrid = false }
+  }
   /** The groups for EditorGroupService, and the documents' order to match them. */
   private publish(): void {
     const api = this.api
     if (!api || this.disposed) return
     const groups = groupsOf(api.toJSON())
+    this.regions?.refresh()
     // Each group's tab strip (Dockview's tablist) is named as the one strip was.
     for (const strip of this.root?.querySelectorAll('.dv-tabs-container:not([aria-label])') ?? []) strip.setAttribute('aria-label', 'Query documents')
     this.workbench.editorGroups.update({ groups, activeGroup: api.activeGroup?.id ?? '' })
@@ -475,6 +507,10 @@ class EditorAreaController implements Area, EditorGroupHost {
     if (active) api.getPanel(active)?.api.setActive()
     this.publish()
     requestAnimationFrame(() => this.workbench.documents.focusActive())
+  }
+  focusedDocument(): string | undefined {
+    const tab = document.activeElement?.closest('.dv-tab')
+    return tab && this.root?.contains(tab) ? tab.querySelector('[data-tab-id]')?.getAttribute('data-tab-id') ?? undefined : undefined
   }
   capture(place: (id: string) => number | undefined): EditorGroupsLayout | undefined {
     return this.api ? captureEditorGroups(this.api.toJSON(), place) : undefined

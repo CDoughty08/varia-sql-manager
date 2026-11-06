@@ -11,7 +11,8 @@ its own Monaco editor, and groups split side by side, stack, or float over the e
   element is the document's tab (role `tab`, name, selection, roving focus). Each strip is a `tablist` named "Query
   documents". Left, Right, Home and End on a focused tab choose the tab they reach (focus restored by a closing menu,
   or a right-click, chooses nothing), and Delete or Backspace there is File › Close (catalogue keys, which KeybindingService takes
-  before Dockview's own).
+  before Dockview's own). Keys pressed on a focused tab (Delete, Ctrl+W, F2, Split Editor, the moves) act on that tab,
+  shown or not (`EditorGroupService.focusedDocument`).
   Each group is a region named "Editor group: " and its shown document's name, apart from the document's own regions.
 - One view per document: a document is in exactly one group. Split Editor moves the document into a new group, so a
   group must keep another tab to split. Two views of one model (VS Code's split of the same file) are follow-up work.
@@ -26,8 +27,8 @@ its own Monaco editor, and groups split side by side, stack, or float over the e
   Designer, properties, monitors, Object Search) render their own views in their panels.
 - The active document is the active group's shown document. Results, Messages, the query bar, the status bar's Ln and
   Col, and every editing command follow it.
-- Focus follows a new or moved document: a focus asked for before its group's editor shows it waits at most a second
-  (`pendingFocusMs`), and a group editor that moves into another panel takes the keyboard only when it had it, or when
+- Focus follows a new or moved document: a focus asked for before its group's editor shows it waits until it does, unless
+  focus goes elsewhere first (`dropPendingFocus`), and a group editor that moves into another panel takes the keyboard only when it had it, or when
   focus fell to the page from the editor area (menus, the palette and dialogs aside). Focus elsewhere, Object Explorer or
   a toast, stays where it is.
 - At most 16 groups (`editorGroupLimits`); a drop that would make a 17th puts its documents back in the active group,
@@ -37,7 +38,7 @@ its own Monaco editor, and groups split side by side, stack, or float over the e
 
 - Drag a tab along a strip to reorder it, onto another strip to move it, onto the docking compass (the workspace's
   SSMS-style guides, shown over the group under the pointer) to tab into that group or split it on a side, or
-  Ctrl-drag it to float. Dockview's pointer drag runs inside the window. While a workspace panel is being dragged, the
+  Shift-drag it to float. Dockview's pointer drag runs inside the window. While a workspace panel is being dragged, the
   editor area ignores the pointer, so the workspace's own docking guides are the ones that answer.
 - Commands (`src/shared/commands/catalog.ts`; keys avoid SSMS's: Ctrl+1–9 stay query shortcuts):
 
@@ -62,7 +63,10 @@ its own Monaco editor, and groups split side by side, stack, or float over the e
 ## Floating and popouts
 
 - Float Editor puts a document in a floating group over the editor area, inside the main window, with its own strip
-  and editor; Dock Editor puts it back into the grid. The grid keeps a document: the only one docked does not float.
+  and editor; Dock Editor puts it back into the grid. Float Editor keeps a document in the grid: the only one docked does
+  not float. Dockview's own float (Shift-drag, a tab released outside the area) can still float it; the grid then keeps
+  an empty group behind the floating ones, which says the open queries float and offers Dock query; it goes once another
+  grid group shows a document.
 - Documents do not pop out into OS windows. Monaco binds its DOM, focus, IME, clipboard and workers to the window that
   created it (docs/popout-windows.md, *Limits*). The tab menu therefore has no Move to New Window, and dragging a tab
   out of the window floats it inside the window instead.

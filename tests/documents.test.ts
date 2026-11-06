@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import type { editor } from 'monaco-editor'
 import { afterClose } from '../src/renderer/src/documents'
 import { gridLimits } from '../src/renderer/src/grid/constants'
-import { pendingFocusMs } from '../src/renderer/src/services/documents'
 import { documentFixture, deferred, TestEditor, type SaveResponse } from './fixtures/documents'
 
 describe('query documents', () => {
@@ -110,22 +109,20 @@ describe('query documents', () => {
     documents.showIn(first.asEditor(), later.id)
     expect(first.focused).toBe(2)
   })
-  it('lets a focus waiting for an editor lapse, so a group shown much later takes no focus from elsewhere', () => {
-    let now = 0
-    const { documents } = documentFixture({ now: () => now })
+  it('lets a focus waiting for an editor lapse once focus goes elsewhere, so a group shown later takes no focus from there', () => {
+    const { documents } = documentFixture()
     const first = new TestEditor()
     const left = documents.create('left.sql', '', 'master')
     documents.showIn(first.asEditor(), left.id)
     const right = documents.create('right.sql', '', 'master')
     documents.focusActive()
-    // The editor area was hidden (its panel closed): it shows the document long after the user went on elsewhere.
-    now += pendingFocusMs + 1
+    // The editor area was hidden (its panel closed), and the user went on to Object Explorer before it showed again.
+    documents.dropPendingFocus()
     documents.showIn(first.asEditor(), right.id)
     expect(first.focused).toBe(0)
-    // Within the bound (one render), the editor takes the focus as before.
+    // However long the first render takes, a focus nothing took away waits for it.
     const later = documents.create('later.sql', '', 'master')
     documents.focusActive()
-    now += pendingFocusMs / 2
     documents.showIn(first.asEditor(), later.id)
     expect(first.focused).toBe(1)
   })

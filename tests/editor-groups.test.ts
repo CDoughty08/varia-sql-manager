@@ -75,7 +75,7 @@ function service() {
     move: vi.fn((id: string, index: number) => { documents.list.splice(documents.list.indexOf(id), 1); documents.list.splice(index, 0, id); return true }),
     get: () => undefined
   }
-  const host: EditorGroupHost = { move: vi.fn(), focusGroup: vi.fn(), join: vi.fn(), capture: vi.fn(() => layout(split(leaf([0]), leaf([1])))), restore: vi.fn() }
+  const host: EditorGroupHost = { move: vi.fn(), focusGroup: vi.fn(), join: vi.fn(), capture: vi.fn(() => layout(split(leaf([0]), leaf([1])))), restore: vi.fn(), focusedDocument: vi.fn(() => 'c') }
   return { groups: new EditorGroupService(docs), docs, documents, host }
 }
 const twoGroups: EditorGroupSnapshot = { groups: [{ id: 'g1', documents: ['a', 'b'], active: 'b', floating: false }, { id: 'g2', documents: ['c'], active: 'c', floating: false }], activeGroup: 'g1' }
@@ -128,10 +128,13 @@ describe('the editor group service', () => {
 
   it('floats a document only while the grid keeps another, and names the next tab in its group as a closing one\'s successor', () => {
     const { groups, host } = service()
-    // Without an editor area there are no groups to hand over within.
+    // Without an editor area there are no groups to hand over within, and no tab has focus.
     expect(groups.successor('b')).toBeUndefined()
+    expect(groups.focusedDocument()).toBeUndefined()
     groups.attach(host)
     groups.update(twoGroups)
+    // The editor area says which tab has focus, which keys on a tab act on.
+    expect(groups.focusedDocument()).toBe('c')
     // c is its grid group's only document, but g1 stays in the grid: it can float.
     expect(groups.canFloat('c')).toBe(true)
     expect(groups.canFloat('a')).toBe(true)
