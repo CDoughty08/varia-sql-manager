@@ -520,11 +520,7 @@ internal sealed class ColumnPlan
             cellBytes = 2L * sink.Count;
             cellExact = false;
             // GetXmlReader owns its stream, so the rest is read past by parsing it.
-            while (fallback.Read())
-            {
-                token.ThrowIfCancellationRequested();
-                if (fallback.NodeType == XmlNodeType.Text) while (fallback.ReadValueChunk(chars, 0, Chunk) > 0) token.ThrowIfCancellationRequested();
-            }
+            ReadPastXml(fallback, chars, token);
             return truncated;
         }
         using (stream)
@@ -554,6 +550,26 @@ internal sealed class ColumnPlan
             cellBytes = consumed + ReadPast(stream, token);
             cellChars = cellBytes / 2;
             return truncated;
+        }
+    }
+
+    /// <summary>Reads past the rest of an xml value that GetXmlReader parses, once its cell is stored. A parse failure here
+    /// only ends the read-past: as a cell failure it would make ReadRow append the cell a second time. False when it
+    /// stopped early.</summary>
+    internal static bool ReadPastXml(XmlReader xml, char[] buffer, CancellationToken token)
+    {
+        try
+        {
+            while (xml.Read())
+            {
+                token.ThrowIfCancellationRequested();
+                if (xml.NodeType == XmlNodeType.Text) while (xml.ReadValueChunk(buffer, 0, buffer.Length) > 0) token.ThrowIfCancellationRequested();
+            }
+            return true;
+        }
+        catch (XmlException)
+        {
+            return false;
         }
     }
 

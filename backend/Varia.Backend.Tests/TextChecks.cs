@@ -468,6 +468,16 @@ internal static class TextChecks
     private static void XmlCells(Action<bool, string> check)
     {
         check(SequentialXml.Available, "SqlClient still has the sequential stream internals that xml cells are read through (SequentialXml)");
+        // Without them, a cell is stored before the rest of its value is read past: a parse failure there must end the
+        // read-past, not fail the cell, which ReadRow would then append a second time.
+        static System.Xml.XmlReader Fragment(string text) => System.Xml.XmlReader.Create(new StringReader(text), new System.Xml.XmlReaderSettings { ConformanceLevel = System.Xml.ConformanceLevel.Fragment });
+        var broken = Fragment("<a>kept</a><b>" + new string('t', 10_000) + "</c>");
+        var wellFormed = Fragment("<a>kept</a><b>" + new string('t', 10_000) + "</b>");
+        broken.Read();
+        wellFormed.Read();
+        var chunk = new char[4096];
+        check(!ColumnPlan.ReadPastXml(broken, chunk, default) && ColumnPlan.ReadPastXml(wellFormed, chunk, default),
+            "reading past the rest of an xml value after its cell is stored stops at a parse failure instead of failing the cell");
         var bytes = new byte[3 * XmlFeed.Window];
         var buffer = new byte[4096];
         long Drain(XmlFeed feed)
