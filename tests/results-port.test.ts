@@ -48,7 +48,7 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
       return { done, credit: bytes => read.credits.push(bytes), cancel: reason => read.cancels.push(reason) }
     },
     close: vi.fn(async (_generation: number, resultIds: number[]) => ({ closed: resultIds.length, usedBytes: 0 })),
-    rowBytes: vi.fn(async (_generation: number, params: ResultsRowBytesParams) => ({ firstRow: params.firstRow, bytes: [4, 8], rowsAvailable: 2 })),
+    rowBytes: vi.fn(async (_generation: number, params: ResultsRowBytesParams) => ({ firstRow: params.firstRow, bytes: [4, 8], rowsAvailable: 2, estimated: [1] })),
     live: (generation, params, onLive, credit): LiveStreamHandle => {
       let resolve!: (value: LiveEnd) => void, reject!: (error: unknown) => void
       const done = new Promise<LiveEnd>((onResolve, onReject) => { resolve = onResolve; reject = onReject })
@@ -287,23 +287,26 @@ describe('ResultsPortHost', () => {
     expect(backend.rowBytes).toHaveBeenCalledTimes(1)
     expect(backend.rowBytes).toHaveBeenCalledWith(1, { resultId: 7, firstRow: 0, count: 2 })
     expect(codes(port())).toEqual([[2, 'RESULT_UNAVAILABLE'], [3, 'RESULT_UNAVAILABLE'], [4, 'INVALID_REQUEST'], [5, 'INVALID_REQUEST'], [6, 'INVALID_REQUEST'], [1, 'ok']])
-    expect(port().ends().at(-1)).toEqual({ t: 'end', rid: 1, ok: true, result: { firstRow: 0, bytes: [4, 8], rowsAvailable: 2 } })
+    expect(port().ends().at(-1)).toEqual({ t: 'end', rid: 1, ok: true, result: { firstRow: 0, bytes: [4, 8], rowsAvailable: 2, estimated: [1] } })
   })
   it('forwards a row sizes answer only when it is well formed and answers the range asked', async () => {
     const { host, backend, port } = fixture()
     host.own([descriptor(7)])
     vi.mocked(backend.rowBytes)
-      .mockResolvedValueOnce({ firstRow: 0, bytes: [1, 2, 3], rowsAvailable: 3 })
-      .mockResolvedValueOnce({ firstRow: 5, bytes: [1], rowsAvailable: 9 })
-      .mockResolvedValueOnce({ firstRow: 0, bytes: [-1], rowsAvailable: 1 })
-      .mockResolvedValueOnce({ firstRow: 0, bytes: [1], rowsAvailable: 1, extra: true } as never)
-      .mockResolvedValueOnce({ firstRow: 0, bytes: [1, 2], rowsAvailable: 1 })
-    for (let rid = 1; rid <= 5; rid++) port().send({ t: 'rowBytes', rid, generation: 1, resultId: 7, firstRow: 0, count: 2 })
+      .mockResolvedValueOnce({ firstRow: 0, bytes: [1, 2, 3], rowsAvailable: 3, estimated: [] })
+      .mockResolvedValueOnce({ firstRow: 5, bytes: [1], rowsAvailable: 9, estimated: [] })
+      .mockResolvedValueOnce({ firstRow: 0, bytes: [-1], rowsAvailable: 1, estimated: [] })
+      .mockResolvedValueOnce({ firstRow: 0, bytes: [1], rowsAvailable: 1, estimated: [], extra: true } as never)
+      .mockResolvedValueOnce({ firstRow: 0, bytes: [1, 2], rowsAvailable: 1, estimated: [] })
+      .mockResolvedValueOnce({ firstRow: 0, bytes: [1, 2], rowsAvailable: 2, estimated: [2] })
+      .mockResolvedValueOnce({ firstRow: 0, bytes: [1, 2], rowsAvailable: 2, estimated: [1, 0] })
+      .mockResolvedValueOnce({ firstRow: 0, bytes: [1, 2], rowsAvailable: 2 } as never)
+    for (let rid = 1; rid <= 8; rid++) port().send({ t: 'rowBytes', rid, generation: 1, resultId: 7, firstRow: 0, count: 2 })
     await settle()
-    expect(codes(port())).toEqual([[1, 'BACKEND_ERROR'], [2, 'BACKEND_ERROR'], [3, 'BACKEND_ERROR'], [4, 'BACKEND_ERROR'], [5, 'BACKEND_ERROR']])
-    port().send({ t: 'rowBytes', rid: 6, generation: 1, resultId: 7, firstRow: 0, count: 2 })
+    expect(codes(port())).toEqual([[1, 'BACKEND_ERROR'], [2, 'BACKEND_ERROR'], [3, 'BACKEND_ERROR'], [4, 'BACKEND_ERROR'], [5, 'BACKEND_ERROR'], [6, 'BACKEND_ERROR'], [7, 'BACKEND_ERROR'], [8, 'BACKEND_ERROR']])
+    port().send({ t: 'rowBytes', rid: 9, generation: 1, resultId: 7, firstRow: 0, count: 2 })
     await settle()
-    expect(port().ends().at(-1)).toEqual({ t: 'end', rid: 6, ok: true, result: { firstRow: 0, bytes: [4, 8], rowsAvailable: 2 } })
+    expect(port().ends().at(-1)).toEqual({ t: 'end', rid: 9, ok: true, result: { firstRow: 0, bytes: [4, 8], rowsAvailable: 2, estimated: [1] } })
   })
   it('keeps results it could not close owned, so a retry from the renderer releases them', async () => {
     const { host, backend, port } = fixture()

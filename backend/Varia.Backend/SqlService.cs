@@ -1357,9 +1357,10 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         if (args.ResultId == 0 || args.FirstRow is < 0 or > MaxSafeInteger || args.Count is < 1 or > MaxRowBytesRows)
             throw new RequestException("INVALID_PARAMS", "The result range is invalid.");
         var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
-        var bytes = set.RowBytes(args.FirstRow, args.Count);
+        var estimated = new List<long>();
+        var bytes = set.RowBytes(args.FirstRow, args.Count, estimated);
         if (set.IsReleased) throw Unavailable(args.ResultId);
-        return new ResultsRowBytesResult(args.FirstRow, bytes, set.RowsAvailable);
+        return new ResultsRowBytesResult(args.FirstRow, bytes, set.RowsAvailable, [.. estimated]);
     }
 
     private RequestException Unavailable(uint resultId) => store.WasReleased(resultId)

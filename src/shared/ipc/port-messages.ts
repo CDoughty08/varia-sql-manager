@@ -44,7 +44,7 @@ export type PortMessage =
   | ({ t: 'memory'; feature: MemoryFeature } & MemoryReport)
   | { t: 'live'; rid: number; bytes: number; event: LiveEvent }
 /** A results.rowBytes answer as the backend sends it; main also checks it answers the range asked before forwarding it. */
-export const rowBytesResultSchema = z.object({ firstRow: count, bytes: z.array(count).max(limits.rowSizes.maxRows), rowsAvailable: count }).strict()
+export const rowBytesResultSchema = z.object({ firstRow: count, bytes: z.array(count).max(limits.rowSizes.maxRows), rowsAvailable: count, estimated: z.array(count).max(limits.rowSizes.maxRows) }).strict()
 export type PortEndResult = ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | LiveEnd | LiveUpdateResult
 
 const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'server', 'print', 'error']) }).strict()

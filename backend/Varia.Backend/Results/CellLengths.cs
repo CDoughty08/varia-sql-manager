@@ -30,7 +30,11 @@ internal enum LengthRule : byte
 internal sealed class ColumnLength
 {
     public static readonly ColumnLength Utf16 = new(LengthRule.Utf16);
+    /// <summary>json: UTF-8 Varia decodes itself and counts as read, so its bytes are exact whatever it holds.</summary>
     public static readonly ColumnLength Utf8 = new(LengthRule.Utf8, encoding: new UTF8Encoding(false));
+    /// <summary>A _UTF8 char column: SqlClient writes U+FFFD for bytes that are not UTF-8, so a value showing one is an
+    /// estimate (a genuine U+FFFD cannot be told apart).</summary>
+    public static readonly ColumnLength Utf8Chars = new(LengthRule.Utf8, encoding: new UTF8Encoding(false), lossy: true);
     public static readonly ColumnLength Binary = new(LengthRule.Binary);
     public static readonly ColumnLength Recorded = new(LengthRule.Recorded);
     public static readonly ColumnLength Decimal = new(LengthRule.Decimal);
@@ -39,12 +43,13 @@ internal sealed class ColumnLength
     public static readonly ColumnLength Assumed = new(LengthRule.SingleByte, estimated: true);
     private static readonly ColumnLength[] Fixeds = [.. Enumerable.Range(0, 17).Select(bytes => new ColumnLength(LengthRule.Fixed, bytes))];
 
-    private ColumnLength(LengthRule rule, int fixedBytes = 0, Encoding? encoding = null, bool estimated = false)
+    private ColumnLength(LengthRule rule, int fixedBytes = 0, Encoding? encoding = null, bool estimated = false, bool lossy = false)
     {
         Rule = rule;
         FixedBytes = fixedBytes;
         Encoding = encoding;
         Estimated = estimated;
+        Lossy = lossy;
     }
 
     public LengthRule Rule { get; }
@@ -53,13 +58,15 @@ internal sealed class ColumnLength
     public Encoding? Encoding { get; }
     /// <summary>True when the rule is a guess (no collation): every cell's size is then reported inexact.</summary>
     public bool Estimated { get; }
+    /// <summary>True when the text may hold U+FFFD for bytes SqlClient could not decode (<see cref="Utf8Chars"/>).</summary>
+    public bool Lossy { get; }
 
     public static ColumnLength Fixed(int bytes) => Fixeds[bytes];
 
     /// <summary>A char, varchar or text column's rule from the encoding SqlClient decodes it with; without one (SqlClient's
     /// metadata unreadable) a single-byte code page is assumed, as an estimate.</summary>
     public static ColumnLength Chars(Encoding? encoding, bool utf8) =>
-        utf8 ? Utf8 : encoding is null ? Assumed : encoding.IsSingleByte ? SingleByte : new ColumnLength(LengthRule.CodePage, encoding: encoding);
+        utf8 ? Utf8Chars : encoding is null ? Assumed : encoding.IsSingleByte ? SingleByte : new ColumnLength(LengthRule.CodePage, encoding: encoding);
 
     /// <summary>A counter for one value read in chunks; one counter serves a column's cells in turn.</summary>
     public ByteCounter Counter() => new(this);
@@ -92,7 +99,7 @@ internal sealed class ColumnLength
             _ => -1
         };
         // A _UTF8 value holding bytes that are not UTF-8 reaches the page as U+FFFD (3 bytes) whatever it held.
-        var exact = bytes >= 0 && !Estimated && !(Rule == LengthRule.Utf8 && stored.IndexOf(Replacement) >= 0);
+        var exact = bytes >= 0 && !Estimated && !(Lossy && stored.IndexOf(Replacement) >= 0);
         return bytes < 0 ? new CellSize(chars, 2L * chars, false) : new CellSize(chars, bytes, exact);
     }
 
@@ -135,7 +142,7 @@ internal sealed class ByteCounter(ColumnLength length)
 {
     private readonly Encoding? encoding = length.Rule is LengthRule.Utf8 or LengthRule.CodePage ? length.Encoding : null;
     private readonly int perChar = length.Rule == LengthRule.Utf16 ? 2 : 1;
-    private readonly bool utf8 = length.Rule == LengthRule.Utf8;
+    private readonly bool lossy = length.Lossy;
     private long bytes;
     private char carry;
 
@@ -153,7 +160,7 @@ internal sealed class ByteCounter(ColumnLength length)
     public void Add(ReadOnlySpan<char> chunk)
     {
         if (chunk.IsEmpty) return;
-        if (utf8 && chunk.Contains('\uFFFD')) Replaced = true;
+        if (lossy && chunk.Contains('\uFFFD')) Replaced = true;
         if (encoding is null)
         {
             bytes += (long)perChar * chunk.Length;
@@ -186,8 +193,9 @@ internal sealed class ByteCounter(ColumnLength length)
 }
 
 /// <summary>A cell's characters (UTF-16 units, whitespace included: not LEN, which drops trailing spaces) and bytes
-/// (DATALENGTH). Exact is false only for a truncated cell with no recorded lengths (a live table's) or a recorded
-/// column's cell without its entry, whose figures then describe the stored prefix.</summary>
+/// (DATALENGTH). Exact is false for an estimate: a cell its reader could only estimate (some sql_variant base types, a
+/// fallback read, a live table's cut cell, a _UTF8 value showing U+FFFD), any cell of a column whose collation was not
+/// read, and a truncated or recorded cell without its entry, whose figures then describe the stored prefix.</summary>
 internal readonly record struct CellSize(long Chars, long Bytes, bool Exact);
 
 /// <summary>The full lengths of one cell kept beside its page: a truncated cell, any cell of a Recorded column, or a cell
@@ -232,6 +240,19 @@ internal sealed class PageLengths(uint[] rowBytes, CellLength[] cells, (int Row,
         if (value != uint.MaxValue) return value;
         foreach (var (at, bytes) in large) if (at == row) return bytes;
         return value;
+    }
+
+    /// <summary>Calls <paramref name="add"/> once for each row in [from, to) whose sum includes an estimated cell, in order.</summary>
+    public void EstimatedRows(int from, int to, Action<int> add)
+    {
+        var last = -1;
+        foreach (var cell in cells)
+        {
+            if (cell.Row >= to) break;
+            if (cell.Row < from || cell.Exact || cell.Row == last) continue;
+            add(cell.Row);
+            last = cell.Row;
+        }
     }
 
     public bool TryCell(int row, int column, out CellLength cell)

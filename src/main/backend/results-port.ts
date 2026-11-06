@@ -423,8 +423,11 @@ export class ResultsPortHost {
       this.updating--
       // Backend output is bounded before the renderer sees it: the range asked, at most as many rows as asked or as exist.
       const parsed = rowBytesResultSchema.safeParse(result)
-      if (!parsed.success || parsed.data.firstRow !== request.firstRow || parsed.data.bytes.length > Math.min(request.count, Math.max(0, parsed.data.rowsAvailable - parsed.data.firstRow))) return this.end(rid, 'BACKEND_ERROR', 'The results could not be read.')
-      this.post({ t: 'end', rid, ok: true, result: parsed.data })
+      const answered = parsed.success ? parsed.data : undefined
+      const rowsIn = (rows: number[], from: number, to: number) => rows.every((row, index) => row >= from && row < to && (index === 0 || row > rows[index - 1]))
+      if (!answered || answered.firstRow !== request.firstRow || answered.bytes.length > Math.min(request.count, Math.max(0, answered.rowsAvailable - answered.firstRow))
+        || !rowsIn(answered.estimated, answered.firstRow, answered.firstRow + answered.bytes.length)) return this.end(rid, 'BACKEND_ERROR', 'The results could not be read.')
+      this.post({ t: 'end', rid, ok: true, result: answered })
     }, error => {
       if (this.port !== port) return
       this.updating--

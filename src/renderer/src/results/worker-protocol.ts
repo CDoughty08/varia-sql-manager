@@ -74,7 +74,7 @@ export type WorkerResponse =
   | { readonly type: 'measure'; readonly id: number; readonly rows: number; readonly widths: Uint16Array }
   | { readonly type: 'cell'; readonly id: number; readonly text: string; readonly isNull: boolean; readonly truncated: boolean; readonly error: boolean; readonly formatted: boolean }
   | { readonly type: 'closed'; readonly id: number; readonly closed: number; readonly usedBytes: number }
-  | { readonly type: 'rowBytes'; readonly id: number; readonly firstRow: number; readonly bytes: readonly number[]; readonly rowsAvailable: number }
+  | { readonly type: 'rowBytes'; readonly id: number; readonly firstRow: number; readonly bytes: readonly number[]; readonly rowsAvailable: number; readonly estimated: readonly number[] }
   | { readonly type: 'stats'; readonly id: number; readonly bytes: number; readonly pages: number }
   | { readonly type: 'error'; readonly id: number; readonly code: ErrorCode; readonly message: string }
   | { readonly type: 'query'; readonly queryId: string; readonly event: QueryEvent }

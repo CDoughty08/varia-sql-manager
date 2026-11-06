@@ -86,7 +86,8 @@ internal sealed record ResultsRowBytesArgs(uint ResultId, long FirstRow, int Cou
 /// <summary>results.rowBytes: Bytes[k] is row FirstRow + k's sum of DATALENGTH over its cells (NULL counts 0; xml and json
 /// as their text, some sql_variant base types estimated: docs/ipc.md, Cell lengths and row sizes); it stops at the rows sealed
 /// so far.</summary>
-internal sealed record ResultsRowBytesResult(long FirstRow, long[] Bytes, long RowsAvailable);
+/// Estimated lists, in order, the rows whose sum includes an estimate.
+internal sealed record ResultsRowBytesResult(long FirstRow, long[] Bytes, long RowsAvailable, long[] Estimated);
 /// <summary>A piece of a copy: inclusive row ranges (a last row of 2^53 - 1 runs to the end) by inclusive column ranges.</summary>
 internal sealed record CopyPartArgs(long[][] Rows, int[][] Columns);
 /// <summary>results.copy (main only): the parts' text streams as DATA; eol is "crlf" or "lf".</summary>

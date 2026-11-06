@@ -88,6 +88,8 @@ internal sealed class PageBuilder
     {
         if (next >= 0) throw new InvalidOperationException("A row is already open.");
         if (rows >= MaxRows) throw new InvalidOperationException("The page is full; seal it first.");
+        // Grown here, not at commit, so the row's commit charges the growth with the row's other working space.
+        if (rows == rowLengths.Length) Array.Resize(ref rowLengths, Math.Min(MaxRows, rowLengths.Length * 2));
         next = 0;
         rowBytes = 0;
         rowData = 0;
@@ -216,7 +218,6 @@ internal sealed class PageBuilder
     {
         if (next != columns.Length) throw new InvalidOperationException("Every column needs a cell before the row is committed.");
         dataBytes += rowBytes;
-        if (rows == rowLengths.Length) Array.Resize(ref rowLengths, Math.Min(MaxRows, rowLengths.Length * 2));
         if (rowData >= uint.MaxValue)
         {
             rowLengths[rows] = uint.MaxValue;

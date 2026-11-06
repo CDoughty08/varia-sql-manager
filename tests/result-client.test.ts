@@ -436,7 +436,7 @@ describe('ResultClient', () => {
     const handle = client.open(descriptor({ rowsAvailable: 10 }))
     await settle()
     const before = worker().fromWorker.length
-    expect(await handle.rowBytes(10, 0)).toEqual({ first: 10, bytes: [], rowsAvailable: 10 })
+    expect(await handle.rowBytes(10, 0)).toEqual({ first: 10, bytes: [], rowsAvailable: 10, estimated: [] })
     for (const [first, count] of [[-1, 1], [0.5, 1], [0, 1.5], [Number.NaN, 1], [2 ** 53, 1]]) {
       await expect(handle.rowBytes(first, count)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     }
