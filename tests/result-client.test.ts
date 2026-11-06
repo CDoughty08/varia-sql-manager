@@ -398,24 +398,6 @@ describe('ResultClient', () => {
     client.dispose()
   })
 
-  it('sends a close that failed with its port again shortly when a newer port is already attached', async () => {
-    const workers: FakeWorker[] = [], window = new FakeWindow(), { timers, advance } = manualTimers()
-    const client = new ResultClient({ api: { openResultsPort: async () => ({ ok: true, value: undefined }) }, window, createWorker: () => { const worker = new FakeWorker(); workers.push(worker); return worker }, timers })
-    window.dispatch({ source: window, data: { type: 'varia:results-port' }, ports: [new MessageChannel().port1] })
-    await client.ready()
-    const worker = workers[0]
-    const closing = client.release([{ generation: 1, resultId: 5 }])
-    await settle()
-    const first = worker.fromWorker.splice(0)
-    worker.toWorker({ t: 'end', rid: first[0].rid, ok: false, code: 'PORT_CLOSED', message: 'The results connection closed.' })
-    await closing
-    expect(client.queuedCloses).toBe(1)
-    advance(250)
-    await settle()
-    expect(worker.fromWorker.splice(0)).toEqual([expect.objectContaining({ t: 'close', resultIds: [5] })])
-    client.dispose()
-  })
-
   it('drops one result\'s windows without touching the others', () => {
     const cache = new WindowCache(10, 1000)
     const window = (text: string): RowWindow => ({ first: 0, count: 1, colStart: 0, colEnd: 1, text: [text], flags: new Uint8Array(1) })

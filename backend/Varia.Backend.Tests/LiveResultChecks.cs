@@ -3,6 +3,7 @@ using System.Text;
 using System.Data;
 using System.Globalization;
 using System.Text.Json;
+using System.Xml;
 using Microsoft.Data.SqlClient;
 using Varia.Backend.Protocol;
 using Varia.Backend.Results;
@@ -132,6 +133,7 @@ internal static class LiveResultChecks
             check(stopped.Status == "cancelled" && cancelMs < bound, "a cancel stops a script that is reading large xml cells (" + cancelMs + " ms, under " + bound + ")");
             await UnreadValues(check, store, (sql, context, maxRows, maxResultSets) => Run(sql, context, Guid.NewGuid().ToString(), maxRows: maxRows, maxResultSets: maxResultSets));
             await XmlCellCost(check, options);
+            await XmlFallbackCells(check, options);
 
             // maxRows 0 stores rows up to the budget only.
             await IdleSeal(check, store, json, sql => Run(sql), (sql, context, sessionId, maxRows) => Run(sql, context, sessionId, maxRows: maxRows), Close);
@@ -576,6 +578,54 @@ internal static class LiveResultChecks
             + perCell.ToString("N0", CultureInfo.InvariantCulture) + " bytes allocated per cell.");
         // About 28 KB now (XmlReader's and XmlWriter's own buffers), 33 KB through GetSqlXml, 45 KB with a fresh sink per cell.
         check(read == cells && truncated == 0 && !warned && perCell < 36 * 1024, "a small xml cell allocates under 36 KB (" + perCell + " bytes)");
+    }
+
+    /// <summary>xml read through GetXmlReader, as when SequentialXml.Open finds no stream of the column's own (forced here
+    /// through ColumnPlan.XmlFallback): each row keeps one cell per column, an estimate cut to the cap. A value whose rest past
+    /// the cap does not parse keeps its cell too, and the column warns once.</summary>
+    private static async Task XmlFallbackCells(Action<bool, string> check, ConnectOptions options)
+    {
+        const int rows = 3;
+        var cap = ColumnPlan.DocumentCap;
+        async Task<(List<PageCell[]> Rows, PageLengths? Lengths, List<string> Warnings, Exception? Error)> Read(Func<SqlDataReader, int, XmlReader> fallback)
+        {
+            await using var connection = new SqlConnection(ConnectionSettings.Build(options).ConnectionString);
+            await connection.OpenAsync();
+            await using var command = new SqlCommand("DECLARE @x xml = CAST('<a>' + REPLICATE(CAST('y' AS varchar(max)), " + (cap + 100_000)
+                + ") + '</a>' AS xml); SELECT @x AS doc, 7 AS after FROM (VALUES (1), (2), (3)) AS t(n);", connection);
+            using var reader = command.ExecuteReader(CommandBehavior.SequentialAccess);
+            var plan = ColumnPlan.From(reader);
+            plan.XmlFallback = fallback;
+            var builder = new PageBuilder(1, plan.Wires);
+            var warnings = new List<string>();
+            try
+            {
+                while (reader.Read())
+                {
+                    builder.BeginRow();
+                    plan.ReadRow(reader, builder, warnings.Add);
+                    builder.CommitRow();
+                }
+            }
+            catch (Exception error) { return ([], null, warnings, error); }
+            var body = builder.Seal(out var lengths);
+            return ([.. PageReader.Read(body, plan.Wires).Rows], lengths, warnings, null);
+        }
+        bool Cut(List<PageCell[]> read, PageLengths? lengths) => lengths is not null && read.Count == rows && read.Select((row, index) => row.Length == 2 && row[0].Text!.Length == cap
+            && row[0].Text!.StartsWith("<a>yyy", StringComparison.Ordinal) && (row[0].Flags & PageReader.Truncated) != 0 && row[1].Text == "7"
+            && lengths.TryCell(index, 0, out var cell) && !cell.Exact).All(ok => ok);
+
+        var whole = await Read((reader, i) => reader.GetXmlReader(i));
+        check(whole.Error is null && Cut(whole.Rows, whole.Lengths) && whole.Warnings.Count == 0,
+            "xml read through GetXmlReader keeps one cell per row, an estimate cut to the cap (" + (whole.Error?.Message ?? whole.Warnings.Count + " warnings") + ")");
+
+        // The column's value is skipped (SequentialAccess reads past it); this reader stands in with a malformed tail.
+        var settings = new XmlReaderSettings { ConformanceLevel = ConformanceLevel.Fragment };
+        var broken = await Read((_, _) => XmlReader.Create(new StringReader("<a>" + new string('y', cap + 100_000) + "</b>"), settings));
+        check(broken.Error is null && Cut(broken.Rows, broken.Lengths) && broken.Warnings.Count == 1 && broken.Warnings[0].Contains("‘doc’ (xml)", StringComparison.Ordinal)
+            && broken.Warnings[0].Contains("could not be read to the end", StringComparison.Ordinal),
+            "an xml value whose rest past the cap does not parse keeps its one cell per row, and the column warns once ("
+            + (broken.Error?.GetType().Name ?? string.Join(" | ", broken.Warnings)) + ")");
     }
 
     /// <summary>Rows that wait for a lock mid-statement are sealed after 200 ms, so they can be read before the statement

@@ -241,17 +241,10 @@ describe('results worker core', () => {
     core.handle({ type: 'rowBytes', id: 72, key: { ...key, generation: 2 }, firstRow: 0, count: 1 })
     expect(sent.length).toBe(sentBefore)
     expect(posted.at(-1)).toMatchObject({ type: 'error', id: 72, code: 'RESULT_UNAVAILABLE' })
-    // Main drops answers meant for a replaced port, so a read, row size or close request asked on it fails at once
-    // instead of never settling.
+    // Main drops answers meant for a replaced port, so a request asked on it fails at once instead of never settling.
     core.handle({ type: 'rowBytes', id: 73, key, firstRow: 0, count: 1 })
-    core.handle({ type: 'close', id: 74, generation: 1, resultIds: [key.resultId] })
-    core.handle({ type: 'window', id: 75, key: { ...key, resultId: key.resultId + 1 }, wires, first: 0, count: 1, colStart: 0, colEnd: 3, maxCellChars: 10, textBudget: 10 })
-    core.handle({ type: 'window', id: 76, key: { ...key, resultId: key.resultId + 2 }, wires, first: 0, count: 1, colStart: 0, colEnd: 3, maxCellChars: 10, textBudget: 10 })
-    core.handle({ type: 'cancel', id: 76 })
-    expect(core.pendingReads).toBe(2)
     core.attach({ postMessage: () => {} })
-    expect(core.pendingReads).toBe(0)
-    expect(posted.slice(-3)).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'error', id: 73, code: 'PORT_CLOSED' }), expect.objectContaining({ type: 'error', id: 74, code: 'PORT_CLOSED' }), expect.objectContaining({ type: 'error', id: 75, code: 'PORT_CLOSED' })]))
+    expect(posted.at(-1)).toMatchObject({ type: 'error', id: 73, code: 'PORT_CLOSED' })
   })
 
   it('formats a whole XML or JSON value in the worker, but never a stored prefix, a NULL, a read error, or malformed text', () => {

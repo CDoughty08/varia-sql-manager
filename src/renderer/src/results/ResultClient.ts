@@ -483,9 +483,7 @@ export class ResultClient implements Disposable {
             for (const resultId of resultIds) again.add(resultId)
             this.closeQueue.set(generation, again)
           }
-          // A port that closed while a newer one is already attached (the worker failed closes asked on the old one)
-          // sends them again shortly too, rather than waiting for the next port.
-          if ((code === 'TOO_MANY_REQUESTS' || (code === 'PORT_CLOSED' && this.portReady)) && this.closeRetry === undefined && !this.disposed) {
+          if (code === 'TOO_MANY_REQUESTS' && this.closeRetry === undefined && !this.disposed) {
             this.closeRetry = this.timers.setTimeout(() => { this.closeRetry = undefined; void this.flushCloses() }, g.busyRetryMs)
           }
         }
