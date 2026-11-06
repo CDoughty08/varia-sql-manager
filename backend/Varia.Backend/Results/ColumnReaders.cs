@@ -241,6 +241,8 @@ internal sealed class ColumnPlan
             catch (Exception error) when (IsCellFailure(error))
             {
                 builder.AppendNull(error: true);
+                // The value was not NULL, and its bytes are unknown: the row's sum leaves them out, so it is an estimate.
+                builder.Measure(0, 0, exact: false);
                 if (!column.Warned)
                 {
                     column.Warned = true;

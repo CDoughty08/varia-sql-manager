@@ -626,6 +626,18 @@ internal static class LiveResultChecks
             && broken.Warnings[0].Contains("could not be read to the end", StringComparison.Ordinal),
             "an xml value whose rest past the cap does not parse keeps its one cell per row, and the column warns once ("
             + (broken.Error?.GetType().Name ?? string.Join(" | ", broken.Warnings)) + ")");
+
+        // A value that fails before the cap is a failed cell: NULL with the error flag, whose unknown bytes make its row's
+        // size an estimate.
+        var failed = await Read((_, _) => XmlReader.Create(new StringReader("<a>x</b>"), settings));
+        var estimated = new List<int>();
+        failed.Lengths?.EstimatedRows(0, rows, estimated.Add);
+        check(failed.Error is null && failed.Lengths is not null && failed.Rows.Count == rows
+            && failed.Rows.Select((row, index) => row.Length == 2 && (row[0].Flags & PageReader.Error) != 0 && row[1].Text == "7"
+                && failed.Lengths.TryCell(index, 0, out var cell) && !cell.Exact && cell.Bytes == 0).All(ok => ok)
+            && estimated.SequenceEqual(Enumerable.Range(0, rows)) && failed.Warnings.Count == 1 && failed.Warnings[0].Contains("shown as NULL", StringComparison.Ordinal),
+            "a cell that could not be read is NULL with the error flag, and its row's size is named an estimate ("
+            + (failed.Error?.GetType().Name ?? string.Join(",", estimated) + "; " + string.Join(" | ", failed.Warnings)) + ")");
     }
 
     /// <summary>Rows that wait for a lock mid-statement are sealed after 200 ms, so they can be read before the statement

@@ -1159,10 +1159,11 @@ the row-size bar) read these numbers; nothing re-reads SQL Server.
   whether varchar or nvarchar, and is counted as nvarchar; smallmoney and smalldatetime bases arrive as money and datetime
   (8); and date, time, datetime2 and datetimeoffset bases are counted at scale 7. Its characters are those of the display
   text.
-- **Collation.** For char, varchar and text, the backend reads each column's collation from SqlClient's metadata
-  (`SqlClientCollation`, by reflection over `SqlDataReader.MetaData`, `SqlMetaDataPriv.collation` and `.encoding`, checked
-  against `_SqlMetaData.column`, the column's name): the encoding SqlClient itself decodes with, so a code page or UTF-8 byte count equals
-  `DATALENGTH`. The descriptor's column gets `collation: { lcid, sortId, codePage, utf8, options }` (`options` are
+- **Collation.** For char, varchar, text, nchar, nvarchar and ntext, the backend reads each column's collation from
+  SqlClient's metadata (`SqlClientCollation`, by reflection over `SqlDataReader.MetaData`, `SqlMetaDataPriv.collation` and
+  `.encoding`, checked against `_SqlMetaData.column`, the column's name). The char types count bytes with the encoding
+  SqlClient itself decodes with, so a code page or UTF-8 byte count equals `DATALENGTH`; the n types are UTF-16 whatever
+  their collation. The descriptor's column gets `collation: { lcid, sortId, codePage, utf8, options }` (`options` are
   SqlCompareOptions bits: 1 IgnoreCase, 2 IgnoreNonSpace, 8 IgnoreKanaType, 16 IgnoreWidth, 16384 BinarySort2, 32768
   BinarySort; `codePage` 0 for a UTF-8 collation; `sortId` non-zero for SQL_ collations). If a SqlClient release moves
   these internals, the reflection finds nothing, the column has no `collation`, and its bytes count one per character,
@@ -1172,7 +1173,8 @@ the row-size bar) read these numbers; nothing re-reads SQL Server.
   their length (truncated cells, every xml, vector and sql_variant cell, and estimates; an estimate is marked in the
   column's sign bit), and a list of 16-byte `(row, bytes)` entries for rows of 4 GiB or more, whose `uint32` holds
   `uint.MaxValue`, so a sum never overflows (a row of several `max` values can pass 4 GiB). A row's sum is exact unless
-  one of its cells is an estimate, or a column's rule is a guess; `results.rowBytes` names those rows. The page
+  one of its cells is an estimate (a cell that could not be read, stored as NULL with the error flag, counts 0 bytes as
+  one), or a column's rule is a guess; `results.rowBytes` names those rows. The page
   builder's open row keeps its entries until `CommitRow`, and a rolled-back row leaves none; the row-sizes array grows
   when the row that needs it begins, so that row's commit charges the growth.
 - **Memory.** 4 bytes a row, 24 per entry, and 96 a page, charged to the result budget
