@@ -45,7 +45,7 @@ function MemoryRow({ item }: { item: Reading }) {
 }
 
 export default function MemoryIndicator() {
-  const { indexMemory, resultMemory } = useWorkbench()
+  const { indexMemory, resultMemory, menus } = useWorkbench()
   const index = reading('index', useServiceSnapshot(indexMemory))
   const results = reading('results', useServiceSnapshot(resultMemory))
   const readings = [index, results]
@@ -56,7 +56,7 @@ export default function MemoryIndicator() {
   const group = useRef<HTMLDivElement>(null), panel = useRef<HTMLElement>(null)
   const id = useId(), heading = useId()
   const peek = (pin = false) => {
-    if (modalOpen()) return
+    if (modalOpen() || menus.ownsKeyboard()) return
     if (pin) pinned.current = true
     panel.current?.showPopover()
   }
@@ -65,11 +65,13 @@ export default function MemoryIndicator() {
   useLayoutEffect(() => {
     const details = panel.current
     if (!open || !details) return
-    // Workbench dialogs sit below Chromium's top layer. Dismiss Memory as soon as a modal opens.
-    if (modalOpen()) { details.hidePopover(); return }
-    const observer = watchModals(details.ownerDocument, () => details.hidePopover())
-    return () => observer.dispose()
-  }, [open])
+    // Workbench dialogs and menus sit below Chromium's top layer.
+    const dismiss = () => details.hidePopover()
+    if (modalOpen() || menus.ownsKeyboard()) { dismiss(); return }
+    const observer = watchModals(details.ownerDocument, dismiss)
+    const stopWatchingMenus = menus.controller.subscribe(() => { if (menus.ownsKeyboard()) dismiss() })
+    return () => { stopWatchingMenus(); observer.dispose() }
+  }, [menus, open])
 
   return <div ref={group} className="memory-status"
     onPointerEnter={event => { if (event.pointerType !== 'touch') peek() }}
