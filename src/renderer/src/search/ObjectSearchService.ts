@@ -43,7 +43,8 @@ export interface SearchDocumentState extends SearchQueryState {
   readonly asked?: SearchQueryState
   readonly error?: string
   /** The selected hit, by index in the result: the one Enter in the box revealed last, or the list's selection. A new result
-   *  forgets it, unless the same search ran again (its build ended) and the hit is still there. */
+   *  forgets it, unless it answers the same query again (the build's end runs it again, or the user searches it again) and the
+   *  hit is still there. */
   readonly current?: number
 }
 export interface ObjectSearchSnapshot {
@@ -122,8 +123,9 @@ export function revealPaths(hit: ObjectSearchHit, grouped = false): RevealPath[]
 /** The hit's identity across answers: its object and the folder that lists it, as the list keys its rows. */
 export const hitKey = (hit: ObjectSearchHit): string => JSON.stringify([hit.object, hit.folder])
 /**
- * Where the selected hit is in a new answer to the same search (the one a build's end runs again), so the selection, and the
- * focus on it, survive while the user walks the hits; undefined after any other search, or when the hit is gone.
+ * Where the selected hit is in a new answer to the same query (a build's end runs it again, as may the user: Enter, or text
+ * typed and taken back), so the selection, and the focus on it, survive while the user walks the hits; undefined after any
+ * other query, or when the hit is gone.
  */
 function keptHit(document: SearchDocumentState, asked: SearchQueryState, hits: readonly ObjectSearchHit[]): number | undefined {
   const selected = document.current === undefined ? undefined : document.result?.hits[document.current]

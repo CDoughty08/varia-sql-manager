@@ -939,7 +939,10 @@ app.whenReady().then(async () => {
   // a full results grid copy.
   handle('varia:clipboard-write', value => { clipboard.writeText(z.string().max(maxClipboardText).parse(value)) })
   // Raises one of the page's own popouts, named as it opened it, without activating it.
-  handle('varia:popout-raise', value => { popouts.raise(z.string().regex(popoutWindowName).parse(value)) })
+  handle('varia:popout-raise', value => {
+    const name = z.string().regex(popoutWindowName).parse(value), main = mainWindow
+    popouts.raise(name, () => { if (main && !main.isDestroyed() && !main.isFocused()) main.focus() })
+  })
   handle('varia:confirm-close', async value => {
     const name = z.string().min(1).max(512).parse(value)
     const response = await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'question', title: 'Unsaved query', message: `Save changes to ${name}?`, buttons: ['Save', "Don't Save", 'Cancel'], defaultId: 0, cancelId: 2, noLink: true, signal }), { response: 2, checkboxChecked: false }, true)

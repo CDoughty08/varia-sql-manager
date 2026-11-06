@@ -55,7 +55,8 @@ Each window is a full citizen (`core/windows.ts`, `workbench.attachWindow`):
 - Chromium's own zoom (Ctrl+wheel, a pinch) in any window is given to every window.
 - A window name is the page's handle on its popout in main: `raisePopout(name)` (`varia:popout-raise`, the main page's
   trusted IPC, a name that must match `varia-popout-<uuid>`) brings that popout to the top, restored if minimized, without
-  activating it (`moveTop`, `showInactive`). Search Objects' Reveal uses it, so a popped-out Object Explorer comes forward
+  activating it (`moveTop`, `showInactive`). Where `showInactive` leaves a minimized window minimized (macOS, some Linux window
+  managers), main restores it and gives focus back to the main window before it goes on top. Search Objects' Reveal uses it, so a popped-out Object Explorer comes forward
   while keyboard focus stays in the hits; a raise from the page itself (`window.focus()`) would take focus.
 - A dialog opened from a popout opens in the main window, which comes to the front (`watchModals`); closing it gives
   focus back to the popout element that had it, bringing the popout forward (`focusToReturn`, `returnFocusTo`).

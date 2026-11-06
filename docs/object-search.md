@@ -21,7 +21,7 @@ The same search runs in two places, with the same options and results:
   incomplete indexes remain visible. Escape or a click outside dismisses a popover; Escape returns focus to its button.
 - **The Search Objects tab** (View › Search Objects…, a server or database node's menu, or the palette), with a server picker
   when more than one server is connected. Its hits are one tab stop on the selected hit: a click selects a hit, ↑ ↓,
-  Page Up, Page Down, Home and End move the selection, and a double-click or Enter reveals the hit in Object Explorer, which
+  Page Up, Page Down (to the last hit in view first, then a page on), Home and End move the selection, and a double-click or Enter reveals the hit in Object Explorer, which
   shows without taking focus, so the keys go on walking the hits. ↑ on the first hit, and Escape, return to the box.
 
 ## The index
@@ -138,7 +138,7 @@ The same search runs in two places, with the same options and results:
 - **Definition hits.** A hit inside a definition shows the line, a preview with the match marked, and how many more
   matches the definition has.
 - **While a build runs.** A search answers from what the index holds so far. Searches run again when the build ends, keeping
-  the selected hit when it is still there (so Enter in Object Explorer's box goes on from it) and the list where it was scrolled.
+  the selected hit when it is still there (as any new answer to the same query does) (so Enter in Object Explorer's box goes on from it) and the list where it was scrolled.
 - **Using a hit.** Clicking a hit in Object Explorer's box, or double-clicking one in the tab (or Enter on either), reveals the
   object in Object Explorer. The tree walks its path down from the server,
   expanding each node on the way (the database, nested folders such as Programmability › Functions, a trigger's table or

@@ -15,10 +15,20 @@ import SearchPopover from './SearchPopover'
 import { paneBandDrag, paneBandKey, paneBandLimits } from './pane-band'
 
 const numbers = new Intl.NumberFormat('en-US')
-/** The hit a page away from `at` (`direction` 1 down, -1 up): the furthest whose rows from `at` fit in the list's height, at
- *  least one away. Rows differ in height (a definition hit has a second line), so it adds up the rows it passes. */
+/** The hit Page Down (`direction` 1) or Page Up (-1) selects from `at`, as lists do: the last (first) hit fully in view, or when
+ *  `at` is already there, the furthest whose rows from `at` fit in the list's height, at least one away. Rows differ in height
+ *  (a definition hit has a second line), so it adds up the rows it passes. */
 function pageFrom(rows: readonly HTMLElement[], at: number, direction: 1 | -1): number {
-  const height = rows[at]?.closest('ul')?.clientHeight ?? 0
+  const list = rows[at]?.closest('ul')
+  if (!list) return at
+  const top = list.getBoundingClientRect().top + list.clientTop, height = list.clientHeight, bottom = top + height
+  let edge = at
+  for (let index = at + direction; index >= 0 && index < rows.length; index += direction) {
+    const box = rows[index]!.parentElement!.getBoundingClientRect()
+    if (direction > 0 ? box.bottom > bottom + 0.5 : box.top < top - 0.5) break
+    edge = index
+  }
+  if (edge !== at) return edge
   let to = at, used = rows[at]?.parentElement?.offsetHeight ?? 0
   while (to + direction >= 0 && to + direction < rows.length) {
     used += rows[to + direction]!.parentElement?.offsetHeight ?? 0
@@ -96,6 +106,7 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   // Whether keyboard focus is on a hit (the list's focus and blur events keep it): a new answer that drops the focused hit hands
   // focus to the list's tab stop, or to the box when no hits are left, rather than leaving it on the page, where keys reach nothing.
   const focusInList = useRef(false)
+  const focusInput = () => root.current?.querySelector<HTMLElement>('[data-object-search-focus]')?.focus()
   // The selected hit's identity: the list scrolls to the selection only when another hit is selected, so a search run again that
   // keeps the selection (at whatever index) leaves the list where the user scrolled it, focused or not.
   const selectedHit = current === undefined ? undefined : state?.result?.hits[current]
@@ -109,7 +120,7 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
     if (!focusInList.current || focused) return
     const row = rows?.[current ?? 0]
     if (row) row.focus()
-    else { focusInList.current = false; root.current?.querySelector<HTMLElement>('[data-object-search-focus]')?.focus() }
+    else { focusInList.current = false; focusInput() }
   }, [current, selectedKey, state?.result])
   if (!state) return null
   const entry = snapshot.indexes[state.connectionId]
@@ -132,7 +143,6 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
     event.preventDefault()
     event.stopPropagation()
   }
-  const focusInput = () => root.current?.querySelector<HTMLElement>('[data-object-search-focus]')?.focus()
   /** The list is one tab stop on the selected hit; the arrows, Page keys, Home and End move the selection and focus with it,
    *  Enter reveals the selected hit (focus stays here), ↑ on the first hit and Escape return to the box. */
   const onListKey = (event: KeyboardEvent<HTMLUListElement>) => {

@@ -45,6 +45,8 @@ export interface PopoutWindow {
   isMinimized(): boolean
   /** Shows (restores) the window without activating it. */
   showInactive(): void
+  /** Restores a minimized window; macOS and some Linux window managers do it only this way, which may activate it. */
+  restore(): void
   /** Puts the window on top of the others without activating it. */
   moveTop(): void
   destroy(): void
@@ -139,11 +141,14 @@ export class PopoutWindows<W extends PopoutWindow> {
   /**
    * Brings the popout the page opened as `name` to the top, restoring it if minimized, without activating it: keyboard focus
    * stays where the user is (Search Objects' Reveal, from its hits, into a popped-out Object Explorer). False when there is none.
+   * showInactive restores a minimized window on Windows, but macOS (and some Linux window managers) leave it minimized: there
+   * it is restored, which may activate it, so `refocus` gives focus back to the window the user was in before it goes on top.
    */
-  raise(name: string): boolean {
+  raise(name: string, refocus?: () => void): boolean {
     const item = [...this.windows.values()].find(value => value.name === name && !value.window.isDestroyed())
     if (!item) return false
     if (item.window.isMinimized()) item.window.showInactive()
+    if (item.window.isMinimized()) { item.window.restore(); refocus?.() }
     item.window.moveTop()
     return true
   }
