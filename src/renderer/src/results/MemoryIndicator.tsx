@@ -1,4 +1,5 @@
 import { useId, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
+import { createPortal } from 'react-dom'
 import type { MemoryFeature } from '../../../shared/ipc/port-messages'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { modalOpen } from '../core/modal'
@@ -6,6 +7,9 @@ import { watchModals } from '../core/windows'
 import Icon from '../Icon'
 import { memoryLevel, type MemoryUsage } from './memory'
 import { formatBytes } from './status'
+
+// Chromium handles Escape through close requests, independently of the panel's visual layer.
+declare const CloseWatcher: new () => EventTarget & { destroy(): void }
 
 const labels = { index: 'Search Indexer', results: 'Results' }
 const levelLabels = { unavailable: 'Unavailable', normal: 'Normal', warning: 'Near limit', critical: 'Critical' }
@@ -51,53 +55,55 @@ export default function MemoryIndicator() {
   const readings = [index, results]
   const alert = readings.some(item => item.level === 'critical') ? 'critical' : readings.some(item => item.level === 'warning') ? 'warning' : undefined
   const summary = readings.map(item => `${labels[item.feature]} ${item.level === 'unavailable' ? 'unavailable' : item.percentage}`).join(', ')
-  const [open, setOpen] = useState(false)
-  const pinned = useRef(false)
+  const [mode, setMode] = useState<'preview' | 'pinned'>()
+  const open = mode !== undefined
   const group = useRef<HTMLDivElement>(null), panel = useRef<HTMLElement>(null)
   const id = useId(), heading = useId()
-  const peek = (pin = false) => {
-    if (modalOpen() || menus.ownsKeyboard()) return
-    if (pin) pinned.current = true
-    panel.current?.showPopover()
-  }
-  const endPreview = () => { if (!pinned.current) panel.current?.hidePopover() }
+  const peek = () => { if (!modalOpen() && !menus.ownsKeyboard()) setMode(current => current ?? 'preview') }
+  const endPreview = () => setMode(current => current === 'preview' ? undefined : current)
 
   useLayoutEffect(() => {
-    const details = panel.current
-    if (!open || !details) return
-    // Workbench dialogs and menus sit below Chromium's top layer.
-    const dismiss = () => details.hidePopover()
+    const trigger = group.current, details = panel.current
+    if (!open || !trigger || !details) return
+    const dismiss = () => setMode(undefined)
     if (modalOpen() || menus.ownsKeyboard()) { dismiss(); return }
-    const observer = watchModals(details.ownerDocument, dismiss)
+    const doc = details.ownerDocument
+    const outside = (event: PointerEvent) => {
+      const path = event.composedPath()
+      if (!path.includes(trigger) && !path.includes(details)) dismiss()
+    }
+    doc.addEventListener('pointerdown', outside, true)
+    const watcher = new CloseWatcher()
+    watcher.addEventListener('close', dismiss)
+    const observer = watchModals(doc, dismiss)
     const stopWatchingMenus = menus.controller.subscribe(() => { if (menus.ownsKeyboard()) dismiss() })
-    return () => { stopWatchingMenus(); observer.dispose() }
+    return () => {
+      doc.removeEventListener('pointerdown', outside, true)
+      watcher.destroy()
+      stopWatchingMenus()
+      observer.dispose()
+    }
   }, [menus, open])
 
   return <div ref={group} className="memory-status"
     onPointerEnter={event => { if (event.pointerType !== 'touch') peek() }}
-    onPointerLeave={() => { if (!group.current?.querySelector(':focus-visible')) endPreview() }}>
+    onPointerLeave={() => { if (!group.current?.querySelector(':focus-visible') && !panel.current?.matches(':focus-visible')) endPreview() }}
+    onBlur={event => {
+      if (group.current?.contains(event.relatedTarget) || panel.current?.contains(event.relatedTarget)) return
+      if (!group.current?.matches(':hover') && !panel.current?.matches(':hover')) endPreview()
+    }}>
     <button type="button" className="memory-indicator" data-level={alert}
-      aria-label={`Memory usage. ${summary}.${alert ? ` ${levelLabels[alert]}.` : ''}`} aria-expanded={open} aria-controls={id} popoverTarget={id}
+      aria-label={`Memory usage. ${summary}.${alert ? ` ${levelLabels[alert]}.` : ''}`} aria-expanded={open} aria-controls={id}
       onFocus={event => { if (event.currentTarget.matches(':focus-visible')) peek() }}
-      onBlur={() => { if (!group.current?.matches(':hover')) endPreview() }}
-      onClick={event => {
-        event.preventDefault()
-        if (pinned.current) panel.current?.hidePopover()
-        else peek(true)
-      }}>
+      onClick={() => { if (!modalOpen() && !menus.ownsKeyboard()) setMode(current => current === 'pinned' ? undefined : 'pinned') }}>
       {alert && <Icon name="warning" />}
       {readings.map(item => <Ring key={item.feature} reading={item} />)}
       <span>Memory</span>
     </button>
-    {/* The top layer escapes footer clipping and provides Escape and outside-click dismissal. */}
-    <section ref={panel} id={id} className="memory-details" popover="auto" aria-labelledby={heading}
-      onBeforeToggle={event => {
-        const opening = event.newState === 'open'
-        if (!opening) pinned.current = false
-        setOpen(opening)
-      }}>
+    {/* Escape the footer's clipping while letting other workbench surfaces take priority. */}
+    {createPortal(<section ref={panel} id={id} className="memory-details" hidden={!open} aria-labelledby={heading}>
       <div className="memory-heading"><h2 id={heading}>Memory usage</h2><span>SQL backend</span></div>
       {readings.map(item => <MemoryRow key={item.feature} item={item} />)}
-    </section>
+    </section>, document.body)}
   </div>
 }
