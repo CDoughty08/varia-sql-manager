@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (224)
+## Commands (229)
 
 ### File
 
@@ -152,7 +152,7 @@ keys it uses are listed below.
 | Collapse All | `explorer.collapseAll` | — | — | — | `hasConnection` | — |
 | Group by Schema | `explorer.groupBySchema` | — | — | — | Always; checked when `explorerGroupBySchema` | — |
 | New Query | `explorer.newQuery` | — | — | — | `!documentBusy` | Object Explorer context menu › New Query |
-| Select Top 1000 Rows | `explorer.selectTopRows` | — | — | — | `backendReady && explorerActionSelectTop == 'enabled' && !documentBusy` | Object Explorer context menu › Select Top 1000 Rows |
+| Select Top 1000 Rows | `explorer.selectTopRows` | — | — | — | `backendReady && explorerActionSelectTop == 'enabled' && !documentBusy` | Object Explorer context menu › Select Top 1000 Rows; Search Objects result context menu › Select Top 1000 Rows |
 | Rename | `explorer.rename` | F2 (`activePanel == 'explorer' && !textInputFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus`) | `backendReady && explorerActionRename == 'enabled'` | Object Explorer context menu › Rename |
 | Delete | `explorer.delete` | Delete (`activePanel == 'explorer' && !textInputFocus`) | Delete (`activePanel == 'explorer' && !textInputFocus`) | ⌘⌫ (`activePanel == 'explorer' && !textInputFocus`), ⌦ (`activePanel == 'explorer' && !textInputFocus`) | `backendReady && explorerActionDelete == 'enabled'` | Object Explorer context menu › Delete |
 | Properties | `explorer.properties` | — | — | ⌘I (`activePanel == 'explorer' && !textInputFocus`) | `backendReady && explorerActionProperties == 'enabled'` | Object Explorer context menu › Properties |
@@ -201,12 +201,17 @@ keys it uses are listed below.
 | Script as EXECUTE to File… (not in the palette) | `explorer.scriptExecuteToFile` | — | — | — | `backendReady && explorerScriptExecute == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › EXECUTE To › File… |
 | Script as EXECUTE to Clipboard (not in the palette) | `explorer.scriptExecuteToClipboard` | — | — | — | `backendReady && explorerScriptExecute == 'enabled'` | Object Explorer context menu › Script … as › EXECUTE To › Clipboard |
 | Script As… | `explorer.scriptAs` | — | — | — | `backendReady && explorerScriptTitle != ''` | — |
-| Modify | `explorer.modify` | — | — | — | `backendReady && explorerSelectionModifiable && explorerScriptAlter == 'enabled' && !documentBusy` | Object Explorer context menu › Modify |
+| Modify | `explorer.modify` | — | — | — | `backendReady && explorerSelectionModifiable && explorerScriptAlter == 'enabled' && !documentBusy` | Object Explorer context menu › Modify; Search Objects result context menu › Modify |
 | Cancel Scripting | `explorer.cancelScripting` | — | — | — | `scriptingRunning` | — |
 | Copy Name | `explorer.copyName` | — | — | — | `hasConnection` | Object Explorer context menu › Copy Name |
 | Search Objects… | `explorer.searchObjects` | — | — | — | `hasConnection` | View › Search Objects…; Object Explorer context menu › Search Objects… |
 | Rebuild Search Index | `explorer.rebuildIndex` | — | — | — | `hasConnection` | — |
 | Stop Indexing | `explorer.stopIndexing` | — | — | — | Always | — |
+| Reveal in Object Explorer (not in the palette) | `search.revealHit` | — | — | — | `hasConnection` | Search Objects result context menu › Reveal in Object Explorer |
+| Copy Name (not in the palette) | `search.copyName` | Ctrl+C * (`searchHitsFocus`) | Ctrl+C * (`searchHitsFocus`) | ⌘C * (`searchHitsFocus`) | `hasConnection` | Search Objects result context menu › Copy › Name |
+| Copy Schema-Qualified Name (not in the palette) | `search.copySchemaName` | — | — | — | `hasConnection` | Search Objects result context menu › Copy › Schema-Qualified Name |
+| Copy Fully Qualified Name (not in the palette) | `search.copyQualifiedName` | Ctrl+Shift+C (`searchHitsFocus`) | Ctrl+Shift+C (`searchHitsFocus`) | ⇧⌘C (`searchHitsFocus`) | `hasConnection` | Search Objects result context menu › Copy › Fully Qualified Name |
+| Copy Bracketed Name (not in the palette) | `search.copyBracketedName` | — | — | — | `hasConnection` | Search Objects result context menu › Copy › Bracketed Name |
 
 ### Table Designer
 
@@ -774,7 +779,28 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 | `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
 | `8_view` | **P**ause | `ssis.pauseOperations` | Always |
 
-## Context keys (125)
+#### Search Objects result context menu (`search.hit.context`)
+
+Right-click a Search Objects result (in the Search Objects tab or Object Explorer's search), which selects it, or press Shift+F10 or the context-menu key on the selected result. Items act on that object: Select Top N Rows, Modify and Script … as are Object Explorer's, for the object's kind; Rename, Delete and Properties are left to the tree (Reveal in Object Explorer first).
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `0_reveal` | **R**eveal in Object Explorer | `search.revealHit` | Always |
+| `1_query` | Select Top 1000 Ro**w**s | `explorer.selectTopRows` | `explorerActionSelectTop != ''` |
+| `1_query` | Modif**y** | `explorer.modify` | `explorerSelectionModifiable` |
+| `2_script` | **S**cript … as › | Submenu: Object Explorer context menu › Script … as | `explorerScriptTitle != ''` |
+| `5_copy` | **C**opy › | Submenu: Search Objects result context menu › Copy | Always |
+
+#### Search Objects result context menu › Copy
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_names` | **N**ame | `search.copyName` | Always |
+| `1_names` | **S**chema-Qualified Name | `search.copySchemaName` | `searchHitSchema` |
+| `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
+| `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
+
+## Context keys (127)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -792,6 +818,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `textInputFocus` | boolean | focus | `editorTextFocus \|\| inputFocus`. |
 | `activePanel` | `'explorer'`, `'editor'`, `'output'`, `''` | focus | The pane that holds focus: Object Explorer, the query editor, an output panel (Results, Messages or Execution plan), or '' for none. |
 | `outputGridFocus` | boolean | focus | Focus is in a results grid, which copies its selected cells rather than text. |
+| `searchHitsFocus` | boolean | focus | Focus is on a Search Objects result (the Search Objects tab's or Object Explorer's search), whose Copy copies the object's name. |
 | `designerFocus` | boolean | focus | Focus is in the active table designer; activePanel is then 'editor'. |
 | `queryBarFocus` | boolean | focus | Focus is in the active query's bar (Execute, Cancel and its server and database lists); activePanel is then 'editor'. |
 | `activityMonitorFocus` | boolean | focus | Focus is in the active Activity Monitor; activePanel is then 'editor'. |
@@ -908,6 +935,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `pane` | `'explorer'`, `'editor'`, `'results'`, `'messages'`, `'plan'`, `''` | target | The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, Results, Messages, or Execution plan. |
 | `paneFloating` | boolean | target | The panel the menu is for is floating. |
 | `panePopout` | boolean | target | The panel the menu is for is in a window of its own (Move into New Window). |
+| `searchHitSchema` | boolean | target | The Search Objects result the menu is for is in a schema (itself, or its parent for a column, key or trigger), so it has schema-qualified and fully qualified names. |
 
 ## Reserved keys
 

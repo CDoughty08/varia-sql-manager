@@ -1,7 +1,8 @@
-import type { TargetKeys } from '../../../shared/commands/context-keys'
+import type { ContextKeys, TargetKeys } from '../../../shared/commands/context-keys'
 import type { ContextMenuId } from '../../../shared/commands/menus'
 import { folderSpecs, nodeStatuses } from '../../../shared/explorer/catalog.ts'
 import type { ExplorerTarget } from '../../../shared/explorer/refs.ts'
+import { searchHitNames, type ObjectSearchHit } from '../../../shared/explorer/search.ts'
 import type { PaneId } from '../../../shared/layouts'
 import { onUnexpectedError } from '../core/errors'
 import type { CommandArgs } from '../core/types'
@@ -13,7 +14,23 @@ import { gridAnchor } from '../grid/anchor'
  * whose connection was lost with its backend generation, whether it is a folder with a filter, and whether it is a folder
  * with names to copy (a fully loaded Columns folder).
  */
-export interface ExplorerMenuNode extends ExplorerTarget { readonly id: number; readonly lost: boolean; readonly filtered?: boolean; readonly insertable?: boolean }
+export interface ExplorerMenuNode extends ObjectMenuNode { readonly id: number; readonly filtered?: boolean; readonly insertable?: boolean }
+/** An object a menu is for, with or without a tree row: whether its server's connection was lost with its backend generation. */
+export interface ObjectMenuNode extends ExplorerTarget { readonly lost: boolean }
+/**
+ * A Search Objects result, captured when its menu opened: the search and the hit's index in its result, the hit, whether it is
+ * Object Explorer's own search (`pane`), the object as a menu node, and the selection keys it stands in for the tree's
+ * (`selectionContextOf`), so Object Explorer's commands in its menu follow the result's kind, not the tree's selection.
+ */
+export interface SearchHitTarget {
+  readonly kind: 'searchHit'
+  readonly searchId: string
+  readonly index: number
+  readonly hit: ObjectSearchHit
+  readonly pane: boolean
+  readonly node: ObjectMenuNode
+  readonly state: Partial<ContextKeys>
+}
 /** A text field's state when its menu opened: what Cut, Copy, Paste, Delete, Select All, Undo, and Redo can do. */
 export interface InputTarget {
   readonly kind: 'input'
@@ -51,16 +68,18 @@ export type MenuTarget =
   | OutputTarget
   /** A panel's tab or ⋯ button; `popout` when the panel is in a window of its own. */
   | { readonly kind: 'dockTab'; readonly pane: PaneId; readonly floating: boolean; readonly popout: boolean }
+  | SearchHitTarget
   | InputTarget
 
 export const menuForTarget: Readonly<Record<MenuTarget['kind'], ContextMenuId>> = {
   editor: 'editor.context', explorer: 'explorer.context', tableDesigner: 'tableDesigner.context', documentTab: 'documentTab.context', output: 'output.context', dockTab: 'dockTab.context', input: 'input.context',
-  ssisOperations: 'ssis.operation.context'
+  ssisOperations: 'ssis.operation.context', searchHit: 'search.hit.context'
 }
 /** Each context menu's accessible name. */
 export const contextMenuLabels: Readonly<Record<ContextMenuId, string>> = {
   'editor.context': 'Query editor', 'explorer.context': 'Object Explorer', 'tableDesigner.context': 'Table Designer', 'documentTab.context': 'Query tab', 'output.context': 'Query output',
-  'dockTab.context': 'Panel tab', 'input.context': 'Text field', 'ssis.operation.context': 'Integration Services Operations'
+  'dockTab.context': 'Panel tab', 'input.context': 'Text field', 'ssis.operation.context': 'Integration Services Operations',
+  'search.hit.context': 'Search result'
 }
 
 /** A folder whose objects Filter Settings can narrow (Tables, Views, Databases, Logins…). */
@@ -80,18 +99,25 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
     outputView: target?.kind === 'output' ? target.view : '',
     pane: target?.kind === 'dockTab' ? target.pane : '',
     paneFloating: target?.kind === 'dockTab' && target.floating,
-    panePopout: target?.kind === 'dockTab' && target.popout
+    panePopout: target?.kind === 'dockTab' && target.popout,
+    searchHitSchema: target?.kind === 'searchHit' && searchHitNames(target.hit.object).schema !== undefined
   }
 }
-/** The arguments a context menu's commands run with: the target, and the tab it is about, so the File commands act on that tab. */
+/**
+ * The arguments a context menu's commands run with: the target, the tab it is about, so the File commands act on that tab, and
+ * the state keys a Search Objects result stands in for the selection's.
+ */
 export function argsFor(target: MenuTarget): CommandArgs {
   const tabId = target.kind === 'editor' || target.kind === 'documentTab' || target.kind === 'output' || target.kind === 'tableDesigner' || target.kind === 'ssisOperations' ? target.tabId : undefined
-  return { target, ...(tabId ? { tabId } : {}) }
+  return { target, ...(tabId ? { tabId } : {}), ...(target.kind === 'searchHit' ? { state: target.state } : {}) }
 }
 export const inputOf = (args: CommandArgs | undefined): InputTarget | undefined => args?.target?.kind === 'input' ? args.target : undefined
 /** The Object Explorer node a context menu was opened for; undefined for its empty area and for other targets. */
 export const explorerNodeOf = (args: CommandArgs | undefined): ExplorerMenuNode | undefined => args?.target?.kind === 'explorer' ? args.target.node : undefined
 export const outputOf = (args: CommandArgs | undefined): OutputTarget | undefined => args?.target?.kind === 'output' ? args.target : undefined
+export const searchHitOf = (args: CommandArgs | undefined): SearchHitTarget | undefined => args?.target?.kind === 'searchHit' ? args.target : undefined
+/** The object a menu was opened for: an Object Explorer node, or a Search Objects result's object. */
+export const objectNodeOf = (args: CommandArgs | undefined): ObjectMenuNode | undefined => explorerNodeOf(args) ?? searchHitOf(args)?.node
 
 const textTypes: ReadonlySet<string> = new Set(['text', 'search', 'email', 'url', 'tel', 'number', 'password'])
 /**

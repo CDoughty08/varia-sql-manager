@@ -7,7 +7,7 @@ import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.
 import {
   activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
   explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, explorerSublabel, explorerToolbar, itemCount,
-  messages, movePane, objectSearchBox, objectSearchHits, objectSearchSelected, outputView, paneMenuButton, part, popoutDockButton, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
+  menuItemNames, messages, movePane, objectSearchBox, objectSearchHits, objectSearchSelected, outputView, paneMenuButton, part, popoutDockButton, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
 } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
@@ -953,7 +953,7 @@ try {
     await page.keyboard.press('Control+A')
     await page.keyboard.type('e')
     await expect(tabHits).toHaveCount(5)
-    const hitList = page.locator(part.objectSearchTab).getByRole('list', { name: 'Results', exact: true })
+    const hitList = page.locator(part.objectSearchTab).getByRole('listbox', { name: 'Results', exact: true })
     await hitList.evaluate(list => { list.style.flex = 'none'; list.style.height = [...list.children].slice(0, 3).reduce((sum, row) => sum + row.offsetHeight, 0) + 'px' })
     await tabHits.nth(1).click()
     await page.keyboard.press('PageDown')
@@ -1001,7 +1001,7 @@ try {
     await page.keyboard.type('e')
     await expect(tabHits).toHaveCount(2)
     // A search run again that keeps the selection leaves the list where the user scrolled it.
-    const results = page.locator(part.objectSearchTab).getByRole('list', { name: 'Results', exact: true })
+    const results = page.locator(part.objectSearchTab).getByRole('listbox', { name: 'Results', exact: true })
     await tabHits.first().click()
     await objectSearchBox(page).focus()
     const scrolled = await results.evaluate(list => { list.style.flex = 'none'; list.style.height = '30px'; list.scrollTop = list.scrollHeight; return list.scrollTop })
@@ -1024,6 +1024,34 @@ try {
     await expect(objectSearchSelected(page)).toHaveAttribute('title', 'Reveal in Object Explorer: dbo.table1')
     await results.evaluate(list => { list.style.flex = ''; list.style.height = '' })
     await setStub({ holdSearch: false })
+    // A hit's menu is Object Explorer's for its kind, on the hit it opens on (which it selects), plus Reveal and Copy; it leaves
+    // Rename, Delete and Properties to the tree.
+    await tabHits.nth(1).click({ button: 'right' })
+    const hitMenu = menu('Search result')
+    await expect(hitMenu).toBeVisible()
+    await expect(objectSearchSelected(page)).toHaveAttribute('title', 'Reveal in Object Explorer: dbo.table2')
+    expect(await menuItemNames(hitMenu)).toEqual(['Reveal in Object Explorer', 'Select Top 1000 Rows', 'Script Table as', 'Copy'])
+    await page.keyboard.press('Escape')
+    await expect(hitMenu).toHaveCount(0)
+    await expect(tabHits.nth(1)).toBeFocused()
+    // Ctrl+C copies the name and Ctrl+Shift+C the fully qualified name; Shift+F10 opens the menu, whose Copy has the other forms.
+    await application.evaluate(({ clipboard }) => clipboard.writeText('before'))
+    await page.keyboard.press('Control+C')
+    await expect.poll(clipboard).toBe('table2')
+    await page.keyboard.press('Control+Shift+C')
+    await expect.poll(clipboard).toBe('AppData.dbo.table2')
+    await page.keyboard.press('Shift+F10')
+    await hitMenu.getByRole('menuitem', { name: 'Copy', exact: true }).click()
+    await menu('Copy').getByRole('menuitem', { name: 'Bracketed Name', exact: true }).click()
+    await expect.poll(clipboard).toBe('[AppData].[dbo].[table2]')
+    await expect(tabHits.nth(1)).toBeFocused()
+    // Reveal from the menu selects the object in the tree, and focus comes back to the hit.
+    await selectRevealed('server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders')
+    await tabHits.nth(1).click({ button: 'right' })
+    await hitMenu.getByRole('menuitem', { name: 'Reveal in Object Explorer', exact: true }).click()
+    await expect.poll(async () => (await active())?.label).toBe('dbo.table2')
+    await expect(tabHits.nth(1)).toBeFocused()
+    console.log('Object Explorer checks: a Search Objects hit menu offers the commands for its kind, Reveal and Copy; Ctrl+C and Ctrl+Shift+C copy its names.')
     // Forced colors drop the selection's fill, so the selected hit keeps an outline once focus leaves the list.
     await tabHits.first().click()
     await objectSearchBox(page).focus()

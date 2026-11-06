@@ -524,7 +524,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     designerContribution(workbench),
     ssisContribution(workbench),
     activityContribution(workbench),
-    searchContribution(workbench),
+    searchContribution(workbench, api),
     settingsContribution(workbench),
     notificationsContribution(workbench)
   ]

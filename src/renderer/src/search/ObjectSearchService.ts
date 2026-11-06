@@ -74,6 +74,8 @@ export interface ObjectSearchOptions {
 export const searchTitle = 'Search Objects'
 /** The search Object Explorer's box runs: the same search as a tab's, on the server of the explorer's selection. */
 export const explorerSearchId = 'explorer'
+/** A list's selected hit: its search, the search's server, and the hit's index in the result. */
+export interface FocusedHit { readonly searchId: string; readonly connectionId: string; readonly index: number; readonly hit: ObjectSearchHit }
 
 /** The folders from the owner down to `folder`, outermost first (Programmability › Functions › Scalar-valued Functions). */
 function folderChain(owner: ObjectRef, folder: FolderId): ExplorerNodeRef[] {
@@ -150,6 +152,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   private readonly timers: Timers
   private readonly newId: () => string
   private readonly typing = new Map<string, unknown>()
+  private focusedList: string | undefined
   private readonly registrations: Disposable[] = []
   private known = new Set<string>()
   private disposed = false
@@ -315,6 +318,18 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   pick(id: string, current: number): void {
     const document = this.getSnapshot().documents[id]
     if (document?.result && current >= 0 && current < document.result.hits.length) this.putDocument({ ...document, current })
+  }
+
+  /** The search whose hits have keyboard focus, as SearchPanel's list reports it: the keys that act on a result (Ctrl+Shift+C) act on its selected hit. */
+  listFocused(id: string, focused: boolean): void {
+    if (focused) this.focusedList = id
+    else if (this.focusedList === id) this.focusedList = undefined
+  }
+  /** The selected hit of the list that has focus, with its search's server. */
+  focusedHit(): FocusedHit | undefined {
+    const id = this.focusedList, document = id === undefined ? undefined : this.getSnapshot().documents[id]
+    const index = document?.current ?? 0, hit = document?.result?.hits[index]
+    return id !== undefined && document && hit ? { searchId: id, connectionId: document.connectionId, index, hit } : undefined
   }
 
   /** Reveal in Object Explorer: walks the hit's path from the server down, loading what it needs, and selects its node. */

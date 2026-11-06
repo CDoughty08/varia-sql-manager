@@ -1,3 +1,4 @@
+import type { ContextKeys } from '../../../shared/commands/context-keys'
 import type { QueryResult } from '../../../shared/contracts'
 import type { ThemePreferencePatch } from '../../../shared/theme/types'
 import type { MenuTarget } from '../menus/targets'
@@ -20,6 +21,9 @@ export interface CommandContext {
   readonly anchor?: Element
   /** A command that shows a pane leaves keyboard focus where it is: Search Objects' Reveal, so the arrows keep walking its hits. */
   readonly keepFocus?: boolean
+  /** State keys the menu's target stands in for the workbench's (a Search Objects result's, for the selection's): preconditions
+   *  and menu `when` clauses read them over the workbench's own. */
+  readonly state?: Partial<ContextKeys>
 }
 export type CommandArgs = CommandContext
 export type WorkbenchEvent =

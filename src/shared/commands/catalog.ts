@@ -391,7 +391,10 @@ export const commandCatalog = {
   'explorer.modify': {
     title: 'Modify', category: 'Object Explorer', icon: 'edit', precondition: "backendReady && explorerSelectionModifiable && explorerScriptAlter == 'enabled' && !documentBusy",
     unavailableHint: 'Select a stored procedure, function, or trigger.',
-    menus: [{ menu: 'explorer.context', group: '1_query', order: 4, mnemonic: 'y', when: "explorerSelectionModifiable && explorerNode != 'background'" }]
+    menus: [
+      { menu: 'explorer.context', group: '1_query', order: 4, mnemonic: 'y', when: "explorerSelectionModifiable && explorerNode != 'background'" },
+      { menu: 'search.hit.context', group: '1_query', order: 4, mnemonic: 'y', when: 'explorerSelectionModifiable' }
+    ]
   },
   'explorer.cancelScripting': { title: 'Cancel Scripting', category: 'Object Explorer', icon: 'debug-stop', keywords: ['script', 'stop'], precondition: 'scriptingRunning', unavailableHint: 'Nothing is being scripted.' },
   'explorer.copyName': {
@@ -737,7 +740,30 @@ export const commandCatalog = {
     title: 'Rebuild Search Index', category: 'Object Explorer', icon: 'refresh', keywords: ['search', 'objects', 'index', 'refresh'],
     precondition: 'hasConnection', unavailableHint: noServer
   },
-  'explorer.stopIndexing': { title: 'Stop Indexing', category: 'Object Explorer', icon: 'debug-stop', keywords: ['search', 'index', 'cancel'] }
+  'explorer.stopIndexing': { title: 'Stop Indexing', category: 'Object Explorer', icon: 'debug-stop', keywords: ['search', 'index', 'cancel'] },
+  // A Search Objects result's menu (search.hit.context) and keys. They act on the result the menu was opened for, else the
+  // selected result of the list that has focus; the palette offers none of them, since it has no result to act on.
+  'search.revealHit': {
+    title: 'Reveal in Object Explorer', category: 'Object Explorer', icon: 'list-tree', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result.',
+    menus: [{ menu: 'search.hit.context', group: '0_reveal', order: 1, mnemonic: 'r' }]
+  },
+  // Ctrl+C reaches the focused result's copy event (SearchPanel), as the results grid's does.
+  'search.copyName': {
+    title: 'Copy Name', category: 'Object Explorer', icon: 'copy', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result.',
+    keybindings: [{ key: 'mod+c', when: 'searchHitsFocus', native: true }], menus: [{ menu: 'search.copy', group: '1_names', order: 1, title: 'Name', mnemonic: 'n' }]
+  },
+  'search.copySchemaName': {
+    title: 'Copy Schema-Qualified Name', category: 'Object Explorer', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result in a schema.',
+    menus: [{ menu: 'search.copy', group: '1_names', order: 2, title: 'Schema-Qualified Name', mnemonic: 's', when: 'searchHitSchema' }]
+  },
+  'search.copyQualifiedName': {
+    title: 'Copy Fully Qualified Name', category: 'Object Explorer', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result in a schema.',
+    keybindings: [{ key: 'mod+shift+c', when: 'searchHitsFocus' }], menus: [{ menu: 'search.copy', group: '1_names', order: 3, title: 'Fully Qualified Name', mnemonic: 'f', when: 'searchHitSchema' }]
+  },
+  'search.copyBracketedName': {
+    title: 'Copy Bracketed Name', category: 'Object Explorer', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result.',
+    menus: [{ menu: 'search.copy', group: '2_brackets', order: 1, title: 'Bracketed Name', mnemonic: 'b' }]
+  }
 } as const satisfies Record<string, CommandDescriptor>
 
 export type CommandId = keyof typeof commandCatalog
