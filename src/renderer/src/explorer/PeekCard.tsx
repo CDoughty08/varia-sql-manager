@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { Component, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { kindSpecs } from '../../../shared/explorer/catalog.ts'
 import { peekSpecs } from '../../../shared/explorer/peek.ts'
@@ -97,11 +97,36 @@ function PaneTitle({ title, children }: { title: string; children?: ReactNode })
 }
 
 /**
+ * The card's own lifetime and faults: it closes the peek when Object Explorer's pane goes away (so no card or read outlives
+ * it), and a rendering fault in the card closes the card instead of taking the tree's error boundary, and with it the
+ * tree. The next peek (`peekId`) draws again.
+ */
+export class PeekBoundary extends Component<{ readonly peekId?: number; readonly close: () => void; readonly children: ReactNode }, { readonly failed: boolean }> {
+  state: { readonly failed: boolean } = { failed: false }
+  static getDerivedStateFromError(): { failed: boolean } { return { failed: true } }
+  componentDidCatch(error: unknown): void {
+    onUnexpectedError(error)
+    this.props.close()
+  }
+  componentDidUpdate(previous: { readonly peekId?: number }): void {
+    if (this.state.failed && previous.peekId !== this.props.peekId) this.setState({ failed: false })
+  }
+  componentWillUnmount(): void { this.props.close() }
+  render(): ReactNode { return this.state.failed ? null : this.props.children }
+}
+
+export default function PeekCard() {
+  const { peek: service } = useWorkbench()
+  const { open } = useServiceSnapshot(service)
+  return <PeekBoundary peekId={open?.id} close={() => service.close()}><PeekCardView /></PeekBoundary>
+}
+
+/**
  * The Peek card: the object's definition on the left, its properties on the right, floating beside Object Explorer in the
  * window the pane is in (docs/popout-windows.md), so it is drawn into that window's body. Esc, a click outside it or
  * another peek closes it; a peek from the keyboard or the menu focuses it, a hover does not.
  */
-export default function PeekCard() {
+function PeekCardView() {
   const { peek: service, commands } = useWorkbench()
   const { open } = useServiceSnapshot(service)
   const anchor = useRef<HTMLSpanElement>(null)

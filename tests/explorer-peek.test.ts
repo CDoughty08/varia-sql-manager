@@ -5,6 +5,7 @@ import { peekParamsSchema } from '../src/shared/explorer/schema'
 import { requestSchemas } from '../src/main/validation'
 import { methodPolicies } from '../src/shared/ipc/methods'
 import { cancellableRequests } from '../src/main/backend/renderer-requests'
+import { PeekBoundary } from '../src/renderer/src/explorer/PeekCard'
 import { formatPeekValue, placePeek, cardWidth } from '../src/renderer/src/explorer/peek-format'
 import { PeekService } from '../src/renderer/src/explorer/PeekService'
 import type { ApiResult } from '../src/shared/contracts'
@@ -221,5 +222,26 @@ describe('PeekService', () => {
     expect(service.getSnapshot().open).toBeUndefined()
     service.peek(node('table'), 'menu')
     expect(api.explorerPeek).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('PeekBoundary', () => {
+  it('closes the peek when Object Explorer\'s pane goes away or the card fails to render, and draws again for the next peek', () => {
+    const close = vi.fn()
+    const boundary = new PeekBoundary({ peekId: 1, close, children: null })
+    expect(PeekBoundary.getDerivedStateFromError()).toEqual({ failed: true })
+    const report = vi.spyOn(console, 'error').mockImplementation(() => {})
+    boundary.componentDidCatch(new Error('render fault'))
+    expect(close).toHaveBeenCalledTimes(1)
+    report.mockRestore()
+    boundary.state = { failed: true }
+    const setState = vi.spyOn(boundary, 'setState').mockImplementation(() => {})
+    boundary.componentDidUpdate({ peekId: 1 })
+    expect(setState).not.toHaveBeenCalled()
+    Object.assign(boundary, { props: { peekId: 2, close, children: null } })
+    boundary.componentDidUpdate({ peekId: 1 })
+    expect(setState).toHaveBeenCalledWith({ failed: false })
+    boundary.componentWillUnmount()
+    expect(close).toHaveBeenCalledTimes(2)
   })
 })
