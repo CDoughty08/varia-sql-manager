@@ -10,6 +10,7 @@ Varia is a cross-platform desktop workbench for Microsoft SQL Server. It combine
 - Search every object on a server by name or inside definitions, with Match Case, Whole Word, regular expressions and filters by object type.
 - View, copy, and export query results as CSV, tab-delimited text, or JSON.
 - Use the Table Designer, Activity Monitor, live data views, and Integration Services Catalog tools.
+- Split query tabs into editor groups side by side or floating, as in VS Code, and keep them across restarts with hot exit.
 - Customize themes and workspace layouts, and access commands through the command palette.
 
 Varia targets SQL Server 2016 through 2025 and runs on Windows, Linux, and macOS. Some features require specific server versions or permissions; see the [documentation](#documentation) for details.
@@ -84,6 +85,7 @@ The Electron application uses React, TypeScript, Monaco, and Dockview. A .NET si
 ## Documentation
 
 - [Commands and shortcuts](docs/commands.md)
+- [Editor groups](docs/editor-groups.md), [hot exit](docs/hot-exit.md) and [popout windows](docs/popout-windows.md)
 - [Object Explorer](docs/object-explorer.md), [object actions](docs/object-actions.md) and [Search Objects](docs/object-search.md)
 - [Scripting](docs/scripting.md) and [Table Designer](docs/table-designer.md)
 - [Activity Monitor](docs/activity-monitor.md), [live data](docs/live.md), and [Integration Services](docs/integration-services.md)

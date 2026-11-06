@@ -8,24 +8,21 @@ const editorActions = [
   ['edit.toggleLineComment', 'editor.action.commentLine'], ['edit.commentLines', 'editor.action.addCommentLine'], ['edit.uncommentLines', 'editor.action.removeCommentLine']
 ] as const
 
-/** Query editor commands: the Monaco action wrappers, word wrap, insert or overtype, and moving between open queries in tab-strip order. */
-export function editorContribution({ commands, documents, editorOptions, inputMode, tabRename }: Pick<Workbench, 'commands' | 'documents' | 'editorOptions' | 'inputMode' | 'tabRename'>): Disposable {
+/**
+ * Query editor commands: the Monaco action wrappers, word wrap, insert or overtype, moving between open queries in tab
+ * order (each editor group's tabs in turn), and the editor groups' splits and moves (docs/editor-groups.md).
+ */
+export function editorContribution({ commands, documents, editorOptions, editorGroups, inputMode, tabRename }: Pick<Workbench, 'commands' | 'documents' | 'editorOptions' | 'editorGroups' | 'inputMode' | 'tabRename'>): Disposable {
   const step = (delta: 1 | -1) => {
     const { documents: list, activeId } = documents.getSnapshot()
     if (list.length < 2) return
     const index = Math.max(0, list.findIndex(document => document.id === activeId))
     documents.activate(list[(index + delta + list.length) % list.length].id)
   }
-  // The query tab menu names its tab (`tabId`); keys move the active one. The moved tab stays the one shown.
-  const move = (tabId: string | undefined, delta: 1 | -1) => {
-    const { documents: list, activeId } = documents.getSnapshot(), id = tabId ?? activeId
-    const index = list.findIndex(document => document.id === id)
-    if (index >= 0) documents.move(id, index + delta)
-  }
-  const canMove = (tabId: string | undefined, delta: 1 | -1) => {
-    const { documents: list, activeId } = documents.getSnapshot(), index = list.findIndex(document => document.id === (tabId ?? activeId))
-    return index >= 0 && index + delta >= 0 && index + delta < list.length
-  }
+  // The query tab menu names its tab (`tabId`); keys move the active one. The moved tab stays the one shown, in its own group.
+  const tab = (tabId: string | undefined) => tabId ?? documents.getSnapshot().activeId
+  const move = (tabId: string | undefined, delta: 1 | -1) => editorGroups.moveInGroup(tab(tabId), delta)
+  const canMove = (tabId: string | undefined, delta: 1 | -1) => editorGroups.canMoveInGroup(tab(tabId), delta)
   const registrations = [
     ...editorActions.map(([id, action]) => commands.register(id, { run: () => triggerEditorAction(documents, action) })),
     commands.register('editor.toggleWordWrap', { run: () => editorOptions.toggleWordWrap() }),
@@ -36,6 +33,15 @@ export function editorContribution({ commands, documents, editorOptions, inputMo
     commands.register('document.moveLeft', { when: context => canMove(context?.tabId, -1), run: context => move(context?.tabId, -1) }),
     commands.register('document.moveRight', { when: context => canMove(context?.tabId, 1), run: context => move(context?.tabId, 1) }),
     // The tab menu names its tab; F2 and the palette rename the active one (F2 runs only while a tab has focus, the active one).
+    commands.register('editor.splitRight', { when: context => editorGroups.canSplit(tab(context?.tabId)), run: context => editorGroups.split(tab(context?.tabId), 'right') }),
+    commands.register('editor.splitDown', { when: context => editorGroups.canSplit(tab(context?.tabId)), run: context => editorGroups.split(tab(context?.tabId), 'down') }),
+    commands.register('editor.moveToNextGroup', { when: context => editorGroups.canMoveToGroup(tab(context?.tabId), 1), run: context => editorGroups.moveToGroup(tab(context?.tabId), 1) }),
+    commands.register('editor.moveToPreviousGroup', { when: context => editorGroups.canMoveToGroup(tab(context?.tabId), -1), run: context => editorGroups.moveToGroup(tab(context?.tabId), -1) }),
+    commands.register('editor.focusNextGroup', { run: () => editorGroups.focusGroup(1) }),
+    commands.register('editor.focusPreviousGroup', { run: () => editorGroups.focusGroup(-1) }),
+    commands.register('editor.joinGroups', { run: () => editorGroups.join() }),
+    commands.register('editor.float', { when: context => editorGroups.canFloat(tab(context?.tabId)), run: context => editorGroups.float(tab(context?.tabId)) }),
+    commands.register('editor.dock', { when: context => editorGroups.isFloating(tab(context?.tabId)), run: context => editorGroups.dock(tab(context?.tabId)) }),
     commands.register('document.rename', { when: context => !!documents.get(context?.tabId ?? documents.getSnapshot().activeId), run: context => { tabRename.start(context?.tabId ?? documents.getSnapshot().activeId) } })
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }

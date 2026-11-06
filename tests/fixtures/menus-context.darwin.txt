@@ -34,6 +34,12 @@ documentTab.context, for a saved query's tab
   Mov&e Left  ⌃⇧⇞  ++++
   Move &Right  ⌃⇧⇟  ----
   Re&name Tab…  F2  ++++
+  ---
+  Spl&it Right  ⌘\  ----
+  Split Do&wn  ⌘K ⌘\  ----
+  Move to Ne&xt Group  ⌃⌘→  ----
+  Mo&ve to Previous Group  ⌃⌘←  ----
+  &Float  ----
 documentTab.context, for an unsaved query's tab
   &Save  ⌘S  +++-
   Save &As…  ⇧⌘S  +++-
@@ -48,6 +54,12 @@ documentTab.context, for an unsaved query's tab
   Mov&e Left  ⌃⇧⇞  ++++
   Move &Right  ⌃⇧⇟  ++++
   Re&name Tab…  F2  ++++
+  ---
+  Spl&it Right  ⌘\  ----
+  Split Do&wn  ⌘K ⌘\  ----
+  Move to Ne&xt Group  ⌃⌘→  ----
+  Mo&ve to Previous Group  ⌃⌘←  ----
+  &Float  ----
 dockTab.context, for a docked panel's tab
   Dock &Left  ++++
   Dock &Right  ++++

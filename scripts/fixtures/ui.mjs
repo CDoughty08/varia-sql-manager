@@ -47,6 +47,12 @@ export const part = {
   querySegment: '.query-status-segment',
   // Document tabs
   tabName: '.tab-name',
+  /** Editor groups (src/renderer/src/editor-groups/): Dockview's groups inside the query editor panel, and the active one. */
+  /** The editor area in the Query editor panel: every editor group, under the active query's bar. */
+  editorArea: '.editor-groups-root',
+  editorGroup: '.editor-groups .dv-groupview',
+  activeEditorGroup: '.editor-groups .dv-groupview.dv-active-group',
+  floatingEditorGroup: '.editor-groups .dv-resize-container .dv-groupview',
   /** The kind icon before a tab's name (kindIcon finds it by name; page code needs its box and stroke). */
   tabIcon: '.tab-icon',
   // Query output
@@ -206,10 +212,11 @@ export const part = {
   bookmarkGlyph: '.varia-bookmark',
   dropCaret: '.dnd-target',
   // Docking
-  dockingGuides: '.docking-guides',
+  /** The shown compass: the workspace and the editor area each have one, hidden while no drag is over it. */
+  dockingGuides: '.docking-guides:not([hidden])',
   dockingGuideCell: '.docking-guide-cell',
   activeDockingGuideCell: '.docking-guide-cell.active',
-  dockingPreview: '.docking-preview',
+  dockingPreview: '.docking-preview:not([hidden])',
   /** Varia's class on Dockview's shell, next to Dockview's theme class: the dock's colours hang off it. */
   dockShell: '.varia-dock',
   // Live charts (src/renderer/src/live/LiveChart.tsx): the crosshair's tooltip (hidden from assistive technology, as the
@@ -338,10 +345,17 @@ export const querySession = page => queryStatus(page).locator(part.querySession)
 
 export const documentTabs = page => page.getByRole('tablist', { name: 'Query documents', exact: true })
 export const documentTab = (page, name) => documentTabs(page).getByRole('tab', named(name))
-export const activeDocument = page => documentTabs(page).getByRole('tab', { selected: true })
+/** The active document's tab: the tab its group shows, in the active group (each group has a tab strip and a selected tab). */
+export const activeDocument = page => page.locator(part.activeEditorGroup).getByRole('tablist', { name: 'Query documents', exact: true }).getByRole('tab', { selected: true })
 export const activeDocumentName = page => activeDocument(page).getAttribute('aria-label')
+/** The editor groups, the grid's in order and then the floating ones, and the tabs of one. */
+export const editorGroups = page => page.locator(part.editorGroup)
+export const editorGroupTabs = group => group.getByRole('tablist', { name: 'Query documents', exact: true }).getByRole('tab')
+export const floatingEditorGroups = page => page.locator(part.floatingEditorGroup)
 /** A document's tab with its Close button: the target of the tab's menu. */
 export const documentTabSlots = page => documentTabs(page).locator('[data-tab-id]')
+/** The tab (Dockview's tab element, which has the role, name, selection and focus) around a slot. */
+export const slotTab = slot => slot.locator('xpath=ancestor::*[@role="tab"][1]')
 /** Rename Tab's text box, in the tab being renamed. */
 export const tabNameBox = page => documentTabs(page).getByRole('textbox', { name: 'Tab name', exact: true })
 export const closeDocumentButton = (page, name) => documentTabs(page).getByRole('button', { name: 'Close ' + name, exact: true })
@@ -353,6 +367,8 @@ export const executingMark = scope => scope.getByRole('img', { name: 'Executing'
 export const kindIcon = (tab, kind) => tab.getByRole('img', { name: kind, exact: true })
 export const editorTextbox = page => page.locator('.monaco-editor [role="textbox"]')
 export const editorText = page => page.locator('.monaco-editor .view-lines').innerText()
+/** The text of the active editor group's editor, where several groups each show a query. */
+export const activeGroupEditorText = page => page.locator(part.activeEditorGroup).locator('.monaco-editor .view-lines').innerText()
 
 // Panes: the dock's panels, each with a tab in its group's header
 

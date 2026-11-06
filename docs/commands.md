@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (222)
+## Commands (231)
 
 ### File
 
@@ -81,6 +81,15 @@ keys it uses are listed below.
 | Move Query Left | `document.moveLeft` | Ctrl+Shift+PageUp | Ctrl+Shift+PageUp | ⌃⇧⇞ | `multipleDocuments` | Query tab context menu › Move Left |
 | Move Query Right | `document.moveRight` | Ctrl+Shift+PageDown | Ctrl+Shift+PageDown | ⌃⇧⇟ | `multipleDocuments` | Query tab context menu › Move Right |
 | Rename Tab… | `document.rename` | F2 (`documentTabFocus && !inputFocus`) | F2 (`documentTabFocus && !inputFocus`) | F2 (`documentTabFocus && !inputFocus`) | `hasActiveDocument` | Query tab context menu › Rename Tab… |
+| Split Editor Right | `editor.splitRight` | Ctrl+\ | Ctrl+\ | ⌘\ | `multipleDocuments` | Window › Split Editor Right; Query tab context menu › Split Right |
+| Split Editor Down | `editor.splitDown` | Ctrl+K Ctrl+\ * | Ctrl+K Ctrl+\ * | ⌘K ⌘\ * | `multipleDocuments` | Window › Split Editor Down; Query tab context menu › Split Down |
+| Move Editor into Next Group | `editor.moveToNextGroup` | Ctrl+Alt+Right | Ctrl+Alt+Right | ⌃⌘→ | `hasActiveDocument` | Query tab context menu › Move to Next Group |
+| Move Editor into Previous Group | `editor.moveToPreviousGroup` | Ctrl+Alt+Left | Ctrl+Alt+Left | ⌃⌘← | `multipleEditorGroups` | Query tab context menu › Move to Previous Group |
+| Focus Next Editor Group | `editor.focusNextGroup` | Ctrl+K Ctrl+Right * | Ctrl+K Ctrl+Right * | ⌘K ⌘→ * | `multipleEditorGroups` | — |
+| Focus Previous Editor Group | `editor.focusPreviousGroup` | Ctrl+K Ctrl+Left * | Ctrl+K Ctrl+Left * | ⌘K ⌘← * | `multipleEditorGroups` | — |
+| Join All Editor Groups | `editor.joinGroups` | — | — | — | `multipleEditorGroups` | Window › Join All Editor Groups |
+| Float Editor | `editor.float` | — | — | — | `hasActiveDocument` | Query tab context menu › Float |
+| Dock Editor | `editor.dock` | — | — | — | `hasActiveDocument` | Query tab context menu › Dock |
 | Toggle Word Wrap | `editor.toggleWordWrap` | Alt+Z | Alt+Z | — | Always; checked when `editorWordWrap` | Edit › Advanced › Word Wrap |
 | View White Space | `editor.toggleWhitespace` | — | — | — | Always; checked when `editorWhitespace` | Edit › Advanced › View White Space |
 | Toggle Line Numbers | `editor.toggleLineNumbers` | — | — | — | Always; checked when `editorLineNumbers` | — |
@@ -484,6 +493,9 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `2_documents` | **N**ext Query | `document.next` | Always |
 | `2_documents` | **P**revious Query | `document.previous` | Always |
 | `2_documents` | C**l**ose All Documents | `file.closeAll` | Always |
+| `2_groups` | Spl**i**t Editor Right | `editor.splitRight` | Always |
+| `2_groups` | Split Editor Do**w**n | `editor.splitDown` | Always |
+| `2_groups` | **J**oin All Editor Groups | `editor.joinGroups` | Always |
 | `3_layout` | **S**ave Window Layout… | `layout.save` | Always |
 | `3_layout` | Lo**a**d Window Layout… | `layout.load` | Always |
 | `3_layout` | **R**eset Window Layout | `layout.reset` | Always |
@@ -710,6 +722,12 @@ Right-click a query tab, or press Shift+F10 or the context-menu key on a focused
 | `4_move` | Mov**e** Left | `document.moveLeft` | Always |
 | `4_move` | Move **R**ight | `document.moveRight` | Always |
 | `4_move` | Re**n**ame Tab… | `document.rename` | Always |
+| `5_groups` | Spl**i**t Right | `editor.splitRight` | Always |
+| `5_groups` | Split Do**w**n | `editor.splitDown` | Always |
+| `5_groups` | Move to Ne**x**t Group | `editor.moveToNextGroup` | Always |
+| `5_groups` | Mo**v**e to Previous Group | `editor.moveToPreviousGroup` | Always |
+| `5_groups` | **F**loat | `editor.float` | `!documentTabFloating` |
+| `5_groups` | Doc**k** | `editor.dock` | `documentTabFloating` |
 
 #### Query Output context menu (`output.context`)
 
@@ -770,7 +788,7 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 | `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
 | `8_view` | **P**ause | `ssis.pauseOperations` | Always |
 
-## Context keys (123)
+## Context keys (127)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -825,6 +843,9 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `activitySplit` | boolean | state | The active Activity Monitor shows two panes (Split View). |
 | `activeDocumentIsQuery` | boolean | state | The active document is a query, not an XML, JSON, or execution plan value opened from the results. |
 | `multipleDocuments` | boolean | state | Two or more queries are open. |
+| `multipleEditorGroups` | boolean | state | The query editor shows two or more editor groups (split or floating). |
+| `activeEditorGroupHasMultipleDocuments` | boolean | state | The active document's editor group holds another document, so the active one can split into a group of its own. |
+| `activeDocumentFloating` | boolean | state | The active document's editor group floats over the editor area. |
 | `documentBusy` | boolean | state | A document task is in progress: opening, saving, or closing a query, or changing its connection. |
 | `hasConnection` | boolean | state | At least one server is connected (lost connections do not count). |
 | `activeDocumentConnected` | boolean | state | The active query's server is connected and its connection was not lost. |
@@ -902,6 +923,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `pane` | `'explorer'`, `'editor'`, `'results'`, `'messages'`, `'plan'`, `''` | target | The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, Results, Messages, or Execution plan. |
 | `paneFloating` | boolean | target | The panel the menu is for is floating. |
 | `panePopout` | boolean | target | The panel the menu is for is in a window of its own (Move into New Window). |
+| `documentTabFloating` | boolean | target | The document tab the menu is for is in a floating editor group. |
 
 ## Reserved keys
 

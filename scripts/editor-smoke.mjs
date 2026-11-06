@@ -1,7 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { activeDocumentName, backendReady, closeDocumentButton, documentTab, documentTabs, documentTabSlots, part, quickInput, quickInputActive } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, closeDocumentButton, documentTab, documentTabs, editorGroups, editorGroupTabs, floatingEditorGroups, part, quickInput, quickInputActive } from './fixtures/ui.mjs'
 
 // SSMS's editing commands in the real query editor, over the fake backend (no SQL Server): Comment and Uncomment
 // Selection, Make Uppercase and Lowercase, Increase and Decrease Line Indent from Edit › Advanced, Go To Line, Bookmarks
@@ -161,34 +161,32 @@ try {
   await chord('L')
   await expect(glyphs()).toHaveCount(0)
   // Query tabs reorder: Ctrl+Shift+PageUp moves the active tab left and keeps it shown, Ctrl+Tab follows the new order,
-  // and dragging a tab onto the left half of another drops it before that one, leaving the editor's text as it was.
-  const order = () => documentTabSlots(page).evaluateAll(slots => slots.map(slot => slot.querySelector('[role="tab"]').getAttribute('aria-label')))
+  // and dragging a tab onto the left part of another drops it before that one, showing it with its text as it was.
+  const order = () => documentTabs(page).getByRole('tab').evaluateAll(tabs => tabs.map(tab => tab.getAttribute('aria-label')))
   const pair = async () => (await order()).filter(name => name === firstTab || name === secondTab)
+  const groupNames = index => editorGroupTabs(editorGroups(page).nth(index)).evaluateAll(tabs => tabs.map(tab => tab.getAttribute('aria-label')))
   expect(await pair()).toEqual([firstTab, secondTab])
   await textbox().focus()
   await page.keyboard.press('Control+Shift+PageUp')
   await expect.poll(pair).toEqual([secondTab, firstTab])
   expect(await activeDocumentName(page)).toBe(secondTab)
-  const kept = await editorText()
-  const source = documentTab(page, firstTab), target = documentTab(page, secondTab)
-  await source.dragTo(target, { targetPosition: { x: 4, y: 8 } }).catch(() => {})
-  let tabDragged = 'dragTo'
-  if (!await expect.poll(pair, { timeout: 3000 }).toEqual([firstTab, secondTab]).then(() => true, () => false)) {
-    // Where the platform's drag does not reach the page, the same events with a real DataTransfer.
-    tabDragged = 'synthetic DragEvent'
-    await page.evaluate(([from, to]) => {
-      const tab = name => [...document.querySelectorAll('[data-tab-id]')].find(slot => slot.querySelector('[role="tab"]').getAttribute('aria-label') === name)
-      const row = tab(from), slot = tab(to), box = slot.getBoundingClientRect(), at = { clientX: box.left + 4, clientY: box.top + 8, bubbles: true, cancelable: true }
-      const dataTransfer = new DataTransfer()
-      row.dispatchEvent(new DragEvent('dragstart', { ...at, dataTransfer }))
-      for (const type of ['dragenter', 'dragover', 'drop']) slot.dispatchEvent(new DragEvent(type, { ...at, dataTransfer }))
-      row.dispatchEvent(new DragEvent('dragend', { ...at, dataTransfer }))
-    }, [firstTab, secondTab])
+  /** Drags with the pointer (Dockview's pointer strategy), in steps so its drag starts and its targets follow. */
+  const drag = async (from, to) => {
+    const start = await from.boundingBox(), x = start.x + start.width / 2, y = start.y + start.height / 2
+    await page.mouse.move(x, y)
+    await page.mouse.down()
+    for (let step = 1; step <= 10; step++) await page.mouse.move(x + (to.x - x) * step / 10, y + (to.y - y) * step / 10)
+    await page.mouse.up()
   }
+  const targetBox = await documentTab(page, secondTab).boundingBox()
+  await drag(documentTab(page, firstTab), { x: targetBox.x + 4, y: targetBox.y + targetBox.height / 2 })
   await expect.poll(pair).toEqual([firstTab, secondTab])
-  expect(await documentTabs(page).locator('[data-drop]').count()).toBe(0)
-  expect(await editorText()).toBe(kept)
+  expect(await editorGroups(page).count()).toBe(1)
+  await expect.poll(() => activeDocumentName(page)).toBe(firstTab)
+  expect(await editorText()).toBe('Wone\ntwo\n3Nthree')
   // The last tab has nowhere further right to go.
+  await documentTab(page, secondTab).click()
+  await textbox().focus()
   await page.keyboard.press('Control+Shift+PageDown')
   await expect.poll(pair).toEqual([firstTab, secondTab])
   // On a strip too full to show every tab, the tab Ctrl+Shift+PageUp moves stays in view as it goes.
@@ -199,13 +197,70 @@ try {
   await textbox().focus()
   for (let step = 0; step < 14; step++) await page.keyboard.press('Control+Shift+PageUp')
   await expect.poll(async () => (await order())[0]).toBe(moving)
-  const shown = () => documentTab(page, moving).evaluate(tab => { const box = tab.parentElement.getBoundingClientRect(), view = tab.closest('[role="tablist"]').getBoundingClientRect(); return box.left >= view.left - 1 && box.right <= view.right + 1 })
+  const shown = () => documentTab(page, moving).evaluate(tab => { const box = tab.getBoundingClientRect(), view = tab.closest('[role="tablist"]').getBoundingClientRect(); return box.left >= view.left - 1 && box.right <= view.right + 1 })
   await expect.poll(shown).toBe(true)
   for (const name of (await order()).filter(name => name !== firstTab && name !== secondTab)) await closeDocumentButton(page, name).click()
   await expect.poll(pair).toEqual([firstTab, secondTab])
+  console.log('Editor checks: query tabs reorder by Ctrl+Shift+PageUp and by dragging, and a moved tab stays in view on a full strip.')
+  // Editor groups: Split Editor Right (Ctrl+\) moves the active query into a new group on the right, with its own strip
+  // and editor; Ctrl+K Ctrl+Left and Right focus the groups; Move Editor into Previous Group (Ctrl+Alt+Left) joins them
+  // again, and the empty group goes.
   await documentTab(page, secondTab).click()
   await expect.poll(() => activeDocumentName(page)).toBe(secondTab)
-  console.log(`Editor checks: query tabs reorder by Ctrl+Shift+PageUp and by dragging (${tabDragged}), and a moved tab stays in view on a full strip.`)
+  const groupText = index => editorGroups(page).nth(index).locator('.monaco-editor .view-lines').innerText()
+  const secondText = (await groupText(0)).replace(/\s+/g, '')
+  await textbox().focus()
+  await page.keyboard.press('Control+\\')
+  await expect(editorGroups(page)).toHaveCount(2)
+  expect(await groupNames(0)).toEqual([firstTab])
+  expect(await groupNames(1)).toEqual([secondTab])
+  await expect(page.locator(part.editorPane)).toHaveCount(2)
+  expect(await activeDocumentName(page)).toBe(secondTab)
+  const lefts = await editorGroups(page).evaluateAll(groups => groups.map(group => group.getBoundingClientRect().left))
+  expect(lefts[1]).toBeGreaterThan(lefts[0])
+  // Each group's editor shows its own query, side by side.
+  expect((await groupText(1)).replace(/\s+/g, '')).toBe(secondText)
+  await chord('ArrowLeft')
+  await expect.poll(() => activeDocumentName(page)).toBe(firstTab)
+  await expect(editorGroups(page).nth(0).locator('.monaco-editor [role="textbox"]')).toBeFocused()
+  await chord('ArrowRight')
+  await expect.poll(() => activeDocumentName(page)).toBe(secondTab)
+  await page.keyboard.press('Control+Alt+ArrowLeft')
+  await expect(editorGroups(page)).toHaveCount(1)
+  await expect.poll(pair).toEqual([firstTab, secondTab])
+  expect(await activeDocumentName(page)).toBe(secondTab)
+  // Dragging a tab onto the docking compass's Dock right of panel splits its group there, as the workspace's panels
+  // dock; Window › Join All Editor Groups puts every query back in one group.
+  const area = await editorGroups(page).first().boundingBox(), tabBox = await documentTab(page, secondTab).boundingBox()
+  await page.mouse.move(tabBox.x + 20, tabBox.y + tabBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(area.x + area.width / 2 + 95, area.y + area.height / 2, { steps: 8 })
+  await expect(page.locator(part.dockingGuides).filter({ visible: true })).toHaveCount(1)
+  const guide = await page.locator('[data-guide-position="right"][data-guide-scope="panel"]').boundingBox()
+  await page.mouse.move(guide.x + guide.width / 2, guide.y + guide.height / 2, { steps: 3 })
+  await expect(page.locator(part.activeDockingGuideCell)).toHaveAttribute('data-guide-position', 'right')
+  await page.mouse.up()
+  await expect(editorGroups(page)).toHaveCount(2)
+  expect(await groupNames(1)).toEqual([secondTab])
+  await page.keyboard.press('Alt+w')
+  await menu('Window').getByRole('menuitem', { name: 'Join All Editor Groups', exact: true }).click()
+  await expect(editorGroups(page)).toHaveCount(1)
+  await expect.poll(pair).toEqual([firstTab, secondTab])
+  // Float from the tab's menu: the query floats over the editor area in a group of its own; Dock puts it back.
+  await documentTab(page, secondTab).click({ button: 'right' })
+  await menu('Query tab').getByRole('menuitem', { name: 'Float', exact: true }).click()
+  await expect(floatingEditorGroups(page)).toHaveCount(1)
+  await expect(editorGroupTabs(floatingEditorGroups(page))).toHaveCount(1)
+  await documentTab(page, secondTab).click({ button: 'right' })
+  await expect(menu('Query tab').getByRole('menuitem', { name: 'Float', exact: true })).toHaveCount(0)
+  await menu('Query tab').getByRole('menuitem', { name: 'Dock', exact: true }).click()
+  await expect(floatingEditorGroups(page)).toHaveCount(0)
+  // Docked, it joins the grid's group, as the last tab there.
+  await expect(editorGroups(page)).toHaveCount(1)
+  await expect.poll(pair).toEqual([firstTab, secondTab])
+  await documentTab(page, secondTab).click()
+  await expect.poll(() => activeDocumentName(page)).toBe(secondTab)
+  console.log('Editor checks: Split Editor Right, focus between groups, Move Editor into Previous Group, a drag onto the compass, Join All Editor Groups, and Float and Dock.')
   await page.keyboard.press('Alt+e')
   await page.keyboard.press('k')
   await expect(menu('Bookmarks').getByRole('menuitem', { name: 'Next Bookmark', exact: true })).toHaveAttribute('aria-disabled', 'true')

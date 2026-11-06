@@ -59,8 +59,8 @@ describe('key specs', () => {
   })
   it("list the bridge rules: Varia's own editor chords", () => {
     for (const platform of platforms) {
-      expect(bridgeRules(platform).map(rule => rule.command), platform).toEqual(['edit.toggleBookmark', 'edit.previousBookmark', 'edit.nextBookmark', 'edit.clearBookmarks', 'edit.insertSnippet', 'edit.surroundWith'])
-      expect(bridgeRules(platform).map(rule => rule.chords[1].split('+').at(-1)), platform).toEqual(['k', 'p', 'n', 'l', 'x', 's'])
+      expect(bridgeRules(platform).map(rule => rule.command), platform).toEqual(['editor.splitDown', 'editor.focusNextGroup', 'editor.focusPreviousGroup', 'edit.toggleBookmark', 'edit.previousBookmark', 'edit.nextBookmark', 'edit.clearBookmarks', 'edit.insertSnippet', 'edit.surroundWith'])
+      expect(bridgeRules(platform).map(rule => rule.chords[1].split('+').at(-1)), platform).toEqual(['\\', 'right', 'left', 'k', 'p', 'n', 'l', 'x', 's'])
     }
   })
   it('apply platform overrides, null meaning unbound', () => {
@@ -194,16 +194,17 @@ describe('default keybindings', () => {
     const macEditing = ['edit.findNext', 'edit.findNext', 'edit.findPrevious', 'edit.findPrevious', 'edit.goToLine', 'edit.makeUppercase', 'edit.makeLowercase', ...bookmarksAndSnippets]
     const clipboard = ['edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'], display = ['view.zoomIn', 'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.toggleDevTools']
     const output = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs']
+    const groups = ['editor.splitRight', 'editor.splitDown', 'editor.moveToNextGroup', 'editor.moveToPreviousGroup', 'editor.focusNextGroup', 'editor.focusPreviousGroup']
     const monitor = ['activity.refresh', 'activity.nextPane', 'activity.previousPane', 'activity.close']
     for (const platform of ['win32', 'linux'] as const) {
       expect(defaultRules(platform).map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAll', 'file.close', 'file.close', 'window.close', 'edit.undo', 'edit.redo', 'edit.redo', ...clipboard,
         'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane', 'query.execute', 'query.execute', 'query.execute', 'query.cancel', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu',
         'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.focusSearch', 'explorer.rename', 'explorer.delete', 'tableDesigner.properties', 'ssis.refreshOperations', 'ssis.refreshProperties',
-        'query.changeDatabase', 'document.next', 'document.next', 'document.previous', 'document.previous', 'document.moveLeft', 'document.moveRight', 'document.rename', 'editor.toggleWordWrap', 'editor.toggleOvertype', ...native, ...editing, ...monitor, ...display, ...output, ...platform === 'win32' ? ['workbench.search'] : []])
+        'query.changeDatabase', 'document.next', 'document.next', 'document.previous', 'document.previous', 'document.moveLeft', 'document.moveRight', 'document.rename', ...groups, 'editor.toggleWordWrap', 'editor.toggleOvertype', ...native, ...editing, ...monitor, ...display, ...output, ...platform === 'win32' ? ['workbench.search'] : []])
     }
     expect(defaultRules('darwin').map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.saveAll', 'file.close', 'edit.undo', 'edit.redo', ...clipboard, 'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane',
       'query.execute', 'query.execute', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.focusSearch', 'explorer.rename', 'explorer.delete', 'explorer.delete', 'explorer.properties', 'tableDesigner.properties', 'ssis.refreshOperations', 'ssis.refreshProperties', 'query.changeDatabase',
-      'document.next', 'document.previous', 'document.moveLeft', 'document.moveRight', 'document.rename', ...native, ...macEditing, 'activity.open', ...monitor,
+      'document.next', 'document.previous', 'document.moveLeft', 'document.moveRight', 'document.rename', ...groups, ...native, ...macEditing, 'activity.open', ...monitor,
       'preferences.options', ...display, ...output])
     expect(defaultRules('win32').find(rule => rule.command === 'window.close')?.chords).toEqual(['alt+f4'])
     expect(defaultRules('linux').find(rule => rule.command === 'window.close')?.chords).toEqual(['ctrl+q'])

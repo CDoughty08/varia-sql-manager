@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import { documentKinds, type DocumentKind } from '../shared/contracts'
 import { sessionLimits, type SessionWrite } from '../shared/files/session'
+import { editorGroupsLayoutSchema, layoutViews, remapEditorGroups } from '../shared/editor-groups'
 import { quarantine, readJsonFile, replaceFile, writeBytesAtomic } from './json-file'
 import { fileKinds, maxSqlFileBytes } from './sql-files'
 
@@ -16,16 +17,18 @@ export const sessionWriteSchema = z.object({
   documents: z.array(z.object({ ...fields, fileId: z.uuid().optional() }).strict()
     .refine(fits, 'A query is too large to keep for the next start.')
     .refine(document => document.text !== undefined || (!!document.fileId && !document.dirty), 'A query without a file must keep its text.')).max(sessionLimits.documents),
-  activeIndex: z.int().min(-1).max(sessionLimits.documents - 1)
-}).strict()
+  activeIndex: z.int().min(-1).max(sessionLimits.documents - 1),
+  groups: editorGroupsLayoutSchema.optional()
+}).strict().refine(session => !session.groups || layoutViews(session.groups).every(view => view < session.documents.length), 'An editor group names a query that is not kept.')
 
 /** `session.json`: what main wrote at the last close, with each file's path in place of its id. */
 const recordSchema = z.object({
   version: z.literal(1), savedAt: z.iso.datetime(),
   documents: z.array(z.object({ ...fields, path: z.string().min(1).max(sessionLimits.pathChars).optional() }).strict()
     .refine(fits).refine(document => document.text !== undefined || (!!document.path && !document.dirty))).max(sessionLimits.documents),
-  activeIndex: z.int().min(-1).max(sessionLimits.documents - 1)
-}).strict()
+  activeIndex: z.int().min(-1).max(sessionLimits.documents - 1),
+  groups: editorGroupsLayoutSchema.optional()
+}).strict().refine(session => !session.groups || layoutViews(session.groups).every(view => view < session.documents.length))
 export type SessionRecord = z.infer<typeof recordSchema>
 export type SessionRecordDocument = SessionRecord['documents'][number]
 /** What `write` takes: the page's request with main's paths in place of file ids. */
@@ -77,6 +80,9 @@ export class SessionStore {
     return this.serial(async () => {
       // A clean tab whose file main no longer knows has no path and no text: there is nothing to reopen.
       const reopens = session.documents.map((document, index) => ({ document, index })).filter(({ document }) => document.text !== undefined || document.path)
+      // The groups follow their documents to their places in the record; a group of tabs left out goes.
+      const places = new Map(reopens.map(({ index }, place) => [index, place]))
+      const groups = session.groups ? remapEditorGroups(session.groups, index => places.get(index)) : undefined
       const record: SessionRecord = {
         version: 1, savedAt: (this.options.now?.() ?? new Date()).toISOString(), activeIndex: reopens.findIndex(({ index }) => index === session.activeIndex),
         documents: reopens.map(({ document }) => ({
@@ -84,7 +90,8 @@ export class SessionStore {
           ...document.path && document.path.length <= sessionLimits.pathChars ? { path: document.path } : {},
           ...document.server ? { server: document.server } : {}, ...document.database ? { database: document.database } : {},
           ...document.text !== undefined ? { text: document.text } : {}
-        }))
+        })),
+        ...groups ? { groups } : {}
       }
       const bytes = Buffer.from(JSON.stringify(record) + '\n')
       if (bytes.length > (this.options.totalBytes ?? sessionLimits.totalBytes)) throw new Error(sessionCapMessage)

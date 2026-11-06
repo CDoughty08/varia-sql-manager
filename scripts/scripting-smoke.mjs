@@ -134,7 +134,7 @@ const menusInside = () => page.evaluate(() => ({
 }))
 /** Whether the query tab strip scrolls, and whether the active tab lies wholly inside its visible part. */
 const activeTabInView = () => page.evaluate(documentTabs => {
-  const strip = document.querySelector(documentTabs), tab = strip.querySelector('[data-tab-id]:has([role="tab"][aria-selected="true"])')
+  const strip = document.querySelector(documentTabs), tab = strip.querySelector('[role="tab"][aria-selected="true"]')
   const box = tab.getBoundingClientRect(), view = strip.getBoundingClientRect()
   return { overflows: strip.scrollWidth > strip.clientWidth, inView: box.left >= view.left - 1 && box.right <= view.right + 1 }
 }, part.documentTabs)

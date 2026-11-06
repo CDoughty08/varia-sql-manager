@@ -153,7 +153,7 @@ describe('Monaco keybinding drift', () => {
     for (const rule of rules) expect([rule.chords.length, nativeChordPrefixes(platform).has(rule.chords[0])], rule.command).toEqual([2, true])
   })
   it("turns Monaco's own context menu off, so Shift+F10 and right-clicks show only the workbench's", () => {
-    expect(readFileSync(join('src', 'renderer', 'src', 'QueryEditor.tsx'), 'utf8')).toMatch(/\bcontextmenu: false\b/)
+    expect(readFileSync(join('src', 'renderer', 'src', 'editor', 'create-editor.ts'), 'utf8')).toMatch(/\bcontextmenu: false\b/)
     for (const platform of platforms) expect(workbenchRules(defaultRules(platform)).get('shift+f10')?.map(rule => [rule.command, rule.modal]), platform).toEqual([['workbench.showContextMenu', true]])
   })
   it('leaves Ctrl+R and ⌘R to the results pane toggle: Monaco binds neither', () => {

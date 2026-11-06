@@ -1,11 +1,11 @@
 // Hot exit and Rename Tab on the fake backend: tabs renamed by F2, a double-click and the tab menu (Escape keeps the old
 // name), Save As suggesting a renamed tab's name, then a quit that asks nothing and a relaunch on the same profile that
 // reopens every tab in order, with its text, unsaved state and name, the active one active, a clean file read again from
-// disk, and no Recover dialog. Native message boxes are stubbed in main and recorded; files live under artifacts/.
+// disk, the editor groups as they were, and no Recover dialog. Native message boxes are stubbed in main and recorded; files live under artifacts/.
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
-import { activeDocumentName, backendReady, documentTab, documentTabs, editorText, editorTextbox, tabNameBox, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocumentName, activeGroupEditorText, backendReady, documentTab, documentTabs, editorGroups, editorGroupTabs, editorTextbox, tabNameBox, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'hot-exit-profile-'))
@@ -31,11 +31,12 @@ async function launch(args) {
   page = await application.firstWindow()
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
-  await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+  await expect(page.locator('.monaco-editor').first()).toBeVisible({ timeout: 30000 })
 }
 const tabNames = () => documentTabs(page).getByRole('tab').evaluateAll(tabs => tabs.map(tab => tab.getAttribute('aria-label')))
 // Monaco draws spaces as no-break spaces.
-const text = async () => (await editorText(page)).replaceAll('\u00a0', ' ')
+const groupNames = index => editorGroupTabs(editorGroups(page).nth(index)).evaluateAll(tabs => tabs.map(tab => tab.getAttribute('aria-label')))
+const text = async () => (await activeGroupEditorText(page)).replaceAll('\u00a0', ' ')
 const prompts = () => application.evaluate(() => globalThis.variaHotExit.prompts)
 const typeInNew = async text => {
   await toolbarButton(page, 'New query').click()
@@ -94,6 +95,15 @@ try {
   for (let step = 0; step < 3; step++) await page.keyboard.press('Control+Shift+PageUp')
   await documentTab(page, 'Month end').click()
   expect(await tabNames()).toEqual(['Totals', 'Welcome', 'Orders report', 'Month end'])
+  // Two editor groups: Orders report splits to the right (Ctrl+\), and Month end follows it (Ctrl+Alt+Right).
+  await documentTab(page, 'Orders report').click()
+  await page.keyboard.press('Control+\\')
+  await expect(editorGroups(page)).toHaveCount(2)
+  await documentTab(page, 'Month end').click()
+  await page.keyboard.press('Control+Alt+ArrowRight')
+  await expect.poll(() => groupNames(1)).toEqual(['Orders report', 'Month end'])
+  expect(await groupNames(0)).toEqual(['Totals', 'Welcome'])
+  expect(await activeDocumentName(page)).toBe('Month end')
   const exited = new Promise(done => application.process().once('exit', done))
   await application.evaluate(({ app }) => app.quit())
   await exited
@@ -104,6 +114,8 @@ try {
   ])
   expect(kept.documents[2].path).toBe(orders)
   expect(kept.activeIndex).toBe(3)
+  expect(kept.groups.root.children.map(group => group.views)).toEqual([[0, 1], [2, 3]])
+  expect(kept.groups.activeGroup).toBe(1)
   console.log('Hot exit checks: a quit asks nothing and keeps the tabs, in order, with their text and names.')
 
   // Changed on disk meanwhile: a clean file reopens with what is there now.
@@ -111,6 +123,9 @@ try {
   await launch([])
   await expect.poll(tabNames).toEqual(['Totals', 'Welcome', 'Orders report', 'Month end'])
   expect(await activeDocumentName(page)).toBe('Month end')
+  await expect(editorGroups(page)).toHaveCount(2)
+  expect(await groupNames(0)).toEqual(['Totals', 'Welcome'])
+  expect(await groupNames(1)).toEqual(['Orders report', 'Month end'])
   await expect.poll(text).toContain('SELECT 2 AS month_end')
   await expect(unsavedMark(documentTab(page, 'Month end'))).toBeVisible()
   await expect(unsavedMark(documentTab(page, 'Totals'))).toBeVisible()
@@ -122,7 +137,7 @@ try {
   // New queries are numbered after the reopened ones.
   await toolbarButton(page, 'New query').click()
   expect(await activeDocumentName(page)).toBe('SQLQuery4.sql')
-  console.log('Hot exit checks: a relaunch reopens every tab in order, with its text, unsaved state and name, and no Recover dialog.')
+  console.log('Hot exit checks: a relaunch reopens every tab in order, with its text, unsaved state and name, in its editor group, and no Recover dialog.')
 
   expect(await prompts()).toEqual([])
   expect(failures).toEqual([])

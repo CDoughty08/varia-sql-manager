@@ -19,7 +19,7 @@ const outline = (menu: MenuId, platform: Platform) => pruneMenu(buildMenuModel(m
 
 describe('menu model', () => {
   it('builds the menubar from the catalogue and the extras', () => {
-    const windowMenu = ['window.explorer', 'window.editor', 'window.results', 'window.messages', 'window.plan', 'view.toggleResultsPane', 'window.togglePanelTabs', '-', 'document.next', 'document.previous', 'file.closeAll', '-', 'layout.save@window', 'layout.load@window', 'layout.reset@window']
+    const windowMenu = ['window.explorer', 'window.editor', 'window.results', 'window.messages', 'window.plan', 'view.toggleResultsPane', 'window.togglePanelTabs', '-', 'document.next', 'document.previous', 'file.closeAll', '-', 'editor.splitRight', 'editor.splitDown', 'editor.joinGroups', '-', 'layout.save@window', 'layout.load@window', 'layout.reset@window']
     for (const platform of ['win32', 'linux'] as const) {
       // Exit (Windows) and Quit (Linux): macOS quits from its app menu.
       expect(outline('file', platform)).toEqual(['connection.connect', 'connection.disconnect', 'connection.reconnect', '-', 'file.new', 'file.open', 'file.save', 'file.saveAs', 'file.saveAll', '-', 'file.close', '-', 'submenu:file.recent', '-', 'window.close'])
@@ -196,7 +196,7 @@ describe('context menu model', () => {
     // The editor menu's Connection submenu is Query › Connection.
     expect(contextCommandIds('editor.context')).toEqual(['edit.cut', 'edit.copy', 'edit.paste', 'query.execute', 'query.cancel', 'workbench.showCommands', 'connection.connect', 'connection.environment', 'connection.reconnect',
       'query.changeConnection', 'query.disconnect', 'query.disconnectAll', 'edit.insertSnippet', 'edit.surroundWith'])
-    expect(contextCommandIds('documentTab.context')).toEqual(['file.save', 'file.saveAs', 'file.close', 'file.closeOthers', 'file.closeAll', 'file.copyPath', 'file.revealInFolder', 'document.moveLeft', 'document.moveRight', 'document.rename'])
+    expect(contextCommandIds('documentTab.context')).toEqual(['file.save', 'file.saveAs', 'file.close', 'file.closeOthers', 'file.closeAll', 'file.copyPath', 'file.revealInFolder', 'document.moveLeft', 'document.moveRight', 'document.rename', 'editor.splitRight', 'editor.splitDown', 'editor.moveToNextGroup', 'editor.moveToPreviousGroup', 'editor.float', 'editor.dock'])
     expect(contextCommandIds('dockTab.context')).toEqual(['pane.dockLeft', 'pane.dockRight', 'pane.dockTop', 'pane.dockBottom', 'pane.tabWithExplorer', 'pane.tabWithEditor', 'pane.tabWithResults', 'pane.tabWithMessages', 'pane.tabWithPlan', 'pane.float', 'pane.dock', 'pane.moveToNewWindow', 'pane.moveToMainWindow', 'pane.close', 'window.togglePanelTabs'])
     expect(contextCommandIds('input.context')).toEqual(['edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'])
     for (const menu of contextMenuIds) expect(contextCommandIds(menu), menu).toEqual(commandIds.filter(id => menuIds.some(inner => menuRoots(inner).includes(menu) && commandDescriptor(id).menus?.some(placement => placement.menu === inner))))
@@ -323,7 +323,7 @@ describe('menu state', () => {
     // The other theme commands are in the palette only: the native Theme submenu keeps PR1's items for them.
     const roles = ['window.close', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll', 'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.reloadWindow', 'developer.toggleDevTools']
     // Context-menu commands and the keyboard-only ones are not in the native menu bar either.
-    const unplaced = ['file.closeOthers', 'file.copyPath', 'file.revealInFolder', 'document.moveLeft', 'document.moveRight', 'document.rename', 'workbench.showContextMenu', 'explorer.refresh', 'preferences.createTheme', 'preferences.openThemesFolder',
+    const unplaced = ['file.closeOthers', 'file.copyPath', 'file.revealInFolder', 'document.moveLeft', 'document.moveRight', 'document.rename', 'editor.moveToNextGroup', 'editor.moveToPreviousGroup', 'editor.float', 'editor.dock', 'workbench.showContextMenu', 'explorer.refresh', 'preferences.createTheme', 'preferences.openThemesFolder',
       'preferences.reloadThemes', 'preferences.setTheme', 'pane.dockLeft', 'pane.dockRight', 'pane.dockTop', 'pane.dockBottom', 'pane.tabWithExplorer', 'pane.tabWithEditor', 'pane.tabWithResults', 'pane.tabWithMessages', 'pane.tabWithPlan', 'pane.float', 'pane.dock', 'pane.moveToNewWindow', 'pane.moveToMainWindow', 'pane.close', 'explorer.newQuery', 'explorer.selectTopRows', 'explorer.rename', 'explorer.delete', 'explorer.properties', 'explorer.disable', 'explorer.enable', 'explorer.unlock', 'explorer.restoreDatabase', 'explorer.tasks.restoreDatabase', 'explorer.restoreFiles', 'explorer.tasks.restoreFiles', 'explorer.newTable', 'explorer.newDatabase', 'explorer.newDatabaseOnDatabase', 'explorer.createCatalog', 'explorer.attachDatabase', 'explorer.takeOffline', 'explorer.bringOnline', 'explorer.detachDatabase', 'explorer.newLogin', 'explorer.newLoginOnSecurity', ...scriptCommandIds,
       'explorer.scriptAs', 'explorer.modify', 'explorer.cancelScripting', 'explorer.copyName', 'output.copy', 'output.copyWithHeaders', 'output.selectAll', 'backend.restart',
       'connection.removeLost', 'explorer.stop', 'explorer.collapseAll', 'explorer.filter', 'explorer.focusSearch', 'explorer.removeFilter', 'window.switchPane',
@@ -349,7 +349,9 @@ describe('menu state', () => {
       // Search Objects' header and status bar verbs; Search Objects… itself is in View.
       'explorer.rebuildIndex', 'explorer.stopIndexing',
       // Object Explorer's Group by Schema: its toolbar button and the palette.
-      'explorer.groupBySchema']
+      'explorer.groupBySchema',
+      // Focusing editor groups: keys in editor text and the palette.
+      'editor.focusNextGroup', 'editor.focusPreviousGroup']
     expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))
     // Query › Connection is a native submenu too.
     for (const id of ['preferences.colorTheme', 'connection.connect', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'file.closeAll', 'view.toggleResultsPane'] as const) expect(menuCommandIds).toContain(id)

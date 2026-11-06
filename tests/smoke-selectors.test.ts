@@ -142,7 +142,7 @@ describe('smoke selectors', () => {
     expect(literals(source).map(({ text, line, regex }) => `${line}:${regex ? '/' : ''}${text}`)).toEqual(['1:.toolbar', "2:/'.messages'", '2:x ', '2:.oe-label', '2: .query-tab', '3:it\'s'])
   })
   it('knows Varia\'s classes from the stylesheets and the code that writes them', () => {
-    for (const name of ['toolbar', 'query-tabs', 'dirty-dot', 'rg-c', 'is-load', 'query-status-text', 'status-session', 'lost', 'designer-editor', 'varia-dock']) expect(ownClasses.has(name), name).toBe(true)
+    for (const name of ['toolbar', 'query-tab', 'dirty-dot', 'rg-c', 'is-load', 'query-status-text', 'status-session', 'lost', 'designer-editor', 'varia-dock']) expect(ownClasses.has(name), name).toBe(true)
     for (const name of ['rg-c', 'is-load', 'designer-editor', 'varia-dock']) expect(declared.has(name), name).toBe(true)
     // Plain words in the renderer's strings are text, not classes the suites may rely on.
     for (const name of ['rows', 'of']) expect(declared.has(name), name).toBe(false)

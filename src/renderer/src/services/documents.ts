@@ -67,10 +67,18 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   /** Custom documents' ids, by kind; they have no model. */
   private readonly customs = new Map<string, CustomDocumentKind>()
   private readonly providers = new Map<CustomDocumentKind, CustomDocumentProvider>()
-  private editor?: editor.IStandaloneCodeEditor
+  /**
+   * The editors showing documents, and the document each shows ('' for none). Each editor group has one (`showIn`);
+   * `bindEditor`'s editor instead follows the active document (`follower`).
+   */
+  private readonly shown = new Map<editor.IStandaloneCodeEditor, string>()
+  private follower?: editor.IStandaloneCodeEditor
+  /** A text document focus was asked for before an editor showed it (its group's editor moves in as React renders the panel). */
+  private pendingFocus = ''
+  /** Whether bracket matching is on in each editor, so it changes only when it must. */
+  private readonly matching = new Map<editor.IStandaloneCodeEditor, boolean>()
   private disposed = false
   private queryCounter = 1
-  private matchingBrackets = true
   /** `frame` schedules the next chunk of a large text document: an animation frame in the app. */
   constructor(private createModel: ModelFactory, private api: DocumentApi, private events: EventBus, private frame: (callback: () => void) => void = callback => { requestAnimationFrame(() => callback()) },
     private readonly options: DocumentOptions = {}) {
@@ -123,8 +131,10 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   /** Focus to the active document: the editor's text, or the custom document's own element. */
   focusActive(): void {
     const id = this.getSnapshot().activeId, provider = this.provider(id)
-    if (provider) provider.focus(id)
-    else this.editor?.focus()
+    if (provider) { provider.focus(id); return }
+    const editor = this.boundEditor
+    if (editor && (this.follower || this.shown.get(editor) === id)) { this.pendingFocus = ''; editor.focus() }
+    else this.pendingFocus = id
   }
   private changed(snapshot: DocumentSnapshot): void {
     this.publish(snapshot)
@@ -245,21 +255,23 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     }
     this.frame(step)
   }
-  private rememberView(): void {
-    const entry = this.entries.get(this.getSnapshot().activeId)
-    if (entry && this.editor?.getModel() === entry.model) entry.viewState = this.editor.saveViewState()
+  /** Keeps where `instance` was in the document it shows (caret, selection, scroll), for when it shows it again. */
+  private rememberView(instance: editor.IStandaloneCodeEditor): void {
+    const entry = this.entries.get(this.shown.get(instance) ?? '')
+    if (entry && instance.getModel() === entry.model) entry.viewState = instance.saveViewState()
   }
   /** Matching is an editor option: on while the setting is and the document is not a large value. It changes before the
    *  model does, so it never runs over a large value. */
-  private matchBrackets(entry: DocumentEntry | undefined): void {
+  private matchBrackets(instance: editor.IStandaloneCodeEditor, entry: DocumentEntry | undefined): void {
     const matching = !entry?.plain && (this.options.matchBrackets?.() ?? true)
-    if (this.editor && matching !== this.matchingBrackets) { this.matchingBrackets = matching; this.editor.updateOptions({ matchBrackets: matching ? 'always' : 'never' }) }
+    if (matching !== (this.matching.get(instance) ?? true)) { this.matching.set(instance, matching); instance.updateOptions({ matchBrackets: matching ? 'always' : 'never' }) }
   }
-  private showModel(id: string): void {
+  private showModel(instance: editor.IStandaloneCodeEditor, id: string): void {
     const entry = this.entries.get(id)
-    this.matchBrackets(entry)
-    this.editor?.setModel(entry?.model ?? null)
-    if (entry?.viewState) this.editor?.restoreViewState(entry.viewState)
+    this.matchBrackets(instance, entry)
+    this.shown.set(instance, entry ? id : '')
+    instance.setModel(entry?.model ?? null)
+    if (entry?.viewState) instance.restoreViewState(entry.viewState)
   }
   activate(id: string): void {
     if (id && !this.entries.has(id) && !this.customs.has(id)) return
@@ -267,10 +279,22 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
       this.events.emit({ type: 'documents.activated', tabId: id })
       return
     }
-    this.rememberView()
-    this.showModel(id)
+    if (this.pendingFocus !== id) this.pendingFocus = ''
+    if (this.follower) { this.rememberView(this.follower); this.showModel(this.follower, id) }
     this.changed({ ...this.getSnapshot(), activeId: id })
     this.events.emit({ type: 'documents.activated', tabId: id })
+  }
+  /**
+   * Puts the documents in `ids`' order (documents it leaves out keep theirs, after it), as the editor groups show them:
+   * each group's tabs in turn. Returns whether anything moved.
+   */
+  reorder(ids: readonly string[]): boolean {
+    if (this.disposed) return false
+    const current = this.getSnapshot(), place = new Map(ids.map((id, index) => [id, index]))
+    const documents = [...current.documents].sort((a, b) => (place.get(a.id) ?? ids.length) - (place.get(b.id) ?? ids.length))
+    if (documents.every((document, index) => document === current.documents[index])) return false
+    this.changed({ ...current, documents })
+    return true
   }
   /**
    * Moves a tab to `index` in the strip (clamped to its ends), as dragging it or Move Left/Right does; the order is what
@@ -290,25 +314,50 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   refreshOptions(): void {
     const options = this.options.modelOptions?.()
     if (options) for (const entry of this.entries.values()) entry.model.updateOptions(options)
-    this.matchBrackets(this.entries.get(this.getSnapshot().activeId))
+    for (const [instance, id] of this.shown) this.matchBrackets(instance, this.entries.get(id))
   }
+  /** One editor that shows whichever document is active (the single-editor workbench, and tests). */
   bindEditor(instance: editor.IStandaloneCodeEditor): Disposable {
-    if (this.editor) throw new Error('A query editor is already bound.')
-    this.editor = instance
-    this.matchingBrackets = true
-    this.showModel(this.getSnapshot().activeId)
+    if (this.follower) throw new Error('A query editor is already bound.')
+    this.follower = instance
+    this.matching.set(instance, true)
+    this.showModel(instance, this.getSnapshot().activeId)
     return { dispose: () => {
-      if (this.editor !== instance) return
-      this.rememberView()
-      instance.setModel(null)
-      this.editor = undefined
+      if (this.follower !== instance) return
+      this.releaseEditor(instance)
+      this.follower = undefined
     } }
   }
-  get boundEditor(): editor.IStandaloneCodeEditor | undefined { return this.editor }
+  /** An editor group's editor shows `id` (a text document; anything else shows nothing), keeping where it was in the last one. */
+  showIn(instance: editor.IStandaloneCodeEditor, id: string): void {
+    if (this.disposed) return
+    if (!this.matching.has(instance)) this.matching.set(instance, true)
+    if (this.shown.get(instance) === id && instance.getModel() === (this.entries.get(id)?.model ?? null)) return
+    this.rememberView(instance)
+    this.showModel(instance, id)
+    if (this.pendingFocus === id) { this.pendingFocus = ''; instance.focus() }
+  }
+  /** The editor no longer shows documents (its group closed): where it was is kept, and it lets go of the model. */
+  releaseEditor(instance: editor.IStandaloneCodeEditor): void {
+    if (!this.shown.has(instance)) return
+    this.rememberView(instance)
+    instance.setModel(null)
+    this.shown.delete(instance)
+    this.matching.delete(instance)
+  }
+  /** The editor showing document `id`, if one does. */
+  editorOf(id: string): editor.IStandaloneCodeEditor | undefined {
+    if (!id) return undefined
+    for (const [instance, shown] of this.shown) if (shown === id) return instance
+    return undefined
+  }
+  /** The active document's editor: the one that follows it, else the editor group's that shows it. */
+  get boundEditor(): editor.IStandaloneCodeEditor | undefined { return this.follower ?? this.editorOf(this.getSnapshot().activeId) }
   getExecuteText(id = this.getSnapshot().activeId): { sql: string; startLine: number } {
     const model = this.entries.get(id)?.model
     if (!model) return { sql: '', startLine: 1 }
-    const selection = this.editor?.getModel() === model ? this.editor.getSelection() : null
+    const view = this.editorOf(id) ?? this.follower
+    const selection = view?.getModel() === model ? view.getSelection() : null
     // Any non-empty selection wins, even whitespace: an accidental one-character selection must not run the whole document.
     return selection && !selection.isEmpty() ? { sql: model.getValueInRange(selection), startLine: selection.startLineNumber } : { sql: model.getValue(), startLine: 1 }
   }
@@ -380,7 +429,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     if (this.disposed || this.entries.get(id) !== entry) return
     if (version !== entry.model.getVersionId()) throw new Error('The query changed while closing. Close it again to review the latest changes.')
     const current = this.getSnapshot(), next = afterClose(current.documents, current.activeId, id)
-    if (current.activeId === id) this.showModel(next.activeId)
+    this.unshow(id, current.activeId === id ? next.activeId : undefined)
     entry.subscription.dispose()
     entry.model.dispose()
     this.entries.delete(id)
@@ -392,17 +441,25 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   private closeCustom(id: string): void {
     const provider = this.provider(id), current = this.getSnapshot(), next = afterClose(current.documents, current.activeId, id)
     this.customs.delete(id)
-    if (current.activeId === id) this.showModel(next.activeId)
+    this.unshow(id, current.activeId === id ? next.activeId : undefined)
     this.changed({ ...current, documents: next.tabs, activeId: next.activeId })
     provider?.closed(id)
     this.events.emit({ type: 'documents.closed', tabId: id })
     if (current.activeId !== next.activeId) this.events.emit({ type: 'documents.activated', tabId: next.activeId })
   }
+  /** A closing document leaves the editors: the following one moves to `next`, a group's shows nothing until its group shows another. */
+  private unshow(id: string, next: string | undefined): void {
+    for (const [instance, shown] of this.shown) {
+      if (instance === this.follower) { if (next !== undefined) this.showModel(instance, next) }
+      else if (shown === id) this.showModel(instance, '')
+    }
+  }
   dispose(): void {
     this.disposed = true
     this.customs.clear()
-    this.editor?.setModel(null)
-    this.editor = undefined
+    for (const instance of this.shown.keys()) instance.setModel(null)
+    this.shown.clear()
+    this.follower = undefined
     for (const entry of this.entries.values()) { entry.subscription.dispose(); entry.model.dispose() }
     this.entries.clear()
     this.clearListeners()

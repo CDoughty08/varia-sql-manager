@@ -1,4 +1,5 @@
 import type { DocumentKind, LineEnding, SqlFile } from '../contracts'
+import type { EditorGroupsLayout } from '../editor-groups'
 
 /**
  * Hot exit (Tools › Options › Environment › Documents › Restore open queries on startup), as VS Code has it: a normal
@@ -41,8 +42,11 @@ export interface SessionDocumentWrite {
   readonly database?: string
   readonly text?: string
 }
-/** The tabs in strip order and the active one's index (-1 when none of them is active). */
-export interface SessionWrite { readonly documents: readonly SessionDocumentWrite[]; readonly activeIndex: number }
+/**
+ * The tabs in group order (each group's tabs in strip order), the active one's index (-1 when none of them is active),
+ * and the editor groups they are in, by index; without `groups`, one group holds them all.
+ */
+export interface SessionWrite { readonly documents: readonly SessionDocumentWrite[]; readonly activeIndex: number; readonly groups?: EditorGroupsLayout }
 
 /** A kept tab reopened: its text (read again from its file when it was clean), and its file when that still opens. */
 export interface RestoredDocument {
@@ -57,4 +61,4 @@ export interface RestoredDocument {
   readonly database?: string
 }
 /** What the next start reopens; `problems` are fixed sentences about tabs that could not reopen (their file is gone). */
-export interface RestoredSession { readonly documents: readonly RestoredDocument[]; readonly activeIndex: number; readonly problems: readonly string[] }
+export interface RestoredSession { readonly documents: readonly RestoredDocument[]; readonly activeIndex: number; readonly groups?: EditorGroupsLayout; readonly problems: readonly string[] }

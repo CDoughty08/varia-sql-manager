@@ -9,7 +9,8 @@ import type { TabRenameService } from './services/tab-rename'
 export default function TabRenameBox({ tabId, name, service }: { readonly tabId: string; readonly name: string; readonly service: TabRenameService }) {
   const input = useRef<HTMLInputElement>(null)
   useEffect(() => { input.current?.focus(); input.current?.select() }, [])
-  const refocus = () => requestAnimationFrame(() => document.getElementById(`tab-${tabId}`)?.focus())
+  // The tab is Dockview's tab element in the document's editor group.
+  const refocus = () => requestAnimationFrame(() => document.querySelector<HTMLElement>(`.dv-tab[data-tab-panel-id="${CSS.escape(tabId)}"]`)?.focus())
   function key(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === 'Enter') { event.preventDefault(); service.commit(tabId, event.currentTarget.value); refocus() }
     else if (event.key === 'Escape') { event.preventDefault(); service.cancel(); refocus() }

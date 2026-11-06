@@ -36,6 +36,7 @@ import { clearEntraPrompt, clearEntraTokenCache } from './entra'
 import { SettingsStore } from './settings-store'
 import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
 import { SessionStore, sessionWriteSchema, type SessionRecordDocument } from './session-store'
+import { remapEditorGroups } from '../shared/editor-groups'
 import type { RestoredDocument, RestoredSession } from '../shared/files/session'
 import { lossDetails } from '../shared/files/recovery'
 import { commandTitle } from '../shared/settings/catalog'
@@ -912,22 +913,25 @@ app.whenReady().then(async () => {
       try { path = fileId ? files.get(fileId).path : undefined } catch { /* Released: kept without a file. */ }
       return { ...document, ...path ? { path } : {} }
     })
-    await openSession.write({ documents, activeIndex: request.activeIndex }, pageGeneration)
+    await openSession.write({ documents, activeIndex: request.activeIndex, ...request.groups ? { groups: request.groups } : {} }, pageGeneration)
   })
   handle('varia:session-take', async (): Promise<RestoredSession> => {
     const generation = pageGeneration, first = !sessionTaken
     sessionTaken = true
     const record = hotExitAvailable ? await openSession.take(first) : undefined
-    const documents: RestoredDocument[] = [], problems: string[] = []
+    const documents: RestoredDocument[] = [], problems: string[] = [], places = new Map<number, number>()
     let activeIndex = -1
     for (const [index, document] of (record?.documents ?? []).entries()) {
       if (generation !== rendererGeneration) break
       const restored = await reopenDocument(document).catch(error => { problems.push(error instanceof Error ? error.message : 'A query could not be reopened.'); return undefined })
       if (!restored) continue
       if (index === record?.activeIndex) activeIndex = documents.length
+      places.set(index, documents.length)
       documents.push(restored)
     }
-    return { documents, activeIndex, problems: problems.slice(0, 32) }
+    // The editor groups follow the tabs that reopened; a group whose files are all gone goes.
+    const groups = record?.groups ? remapEditorGroups(record.groups, index => places.get(index)) : undefined
+    return { documents, activeIndex, ...groups ? { groups } : {}, problems: problems.slice(0, 32) }
   })
   handle('varia:recent-files', () => recentFiles())
   handle('varia:recent-files-open', value => openRecent(z.uuid().parse(value)))

@@ -396,19 +396,32 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .explorer-tree:focus .explorer-row[aria-selected="true"] { outline: 2px solid HighlightText; outline-offset: -2px; }
 }
 .workspace { flex: 1; height: 100%; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
-.document-strip { display: flex; align-items: center; flex-shrink: 0; min-width: 0; background: var(--varia-documentTabs-background); }
-.document-strip > .pane-menu { margin: 0 4px; }
-.query-tabs { display: flex; flex: 1 1 auto; min-width: 0; height: var(--varia-bar); background: var(--varia-documentTabs-background); overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
-.query-tab { position: relative; display: flex; align-items: center; flex-shrink: 0; border-right: 1px solid var(--varia-documentTabs-border); border-top: 2px solid transparent; color: var(--varia-documentTabs-inactiveForeground); }
-/* Where a dragged tab will drop: a bar on the side of the tab it goes to. */
-.query-tab[data-drop="before"] { box-shadow: inset 2px 0 0 var(--varia-focusBorder); }
-.query-tab[data-drop="after"] { box-shadow: inset -2px 0 0 var(--varia-focusBorder); }
-@media (forced-colors: active) {
-  /* Box shadows are dropped here, so a border shows the side; the margin takes back its width and the tabs stay put. */
-  .query-tab[data-drop="before"] { border-left: 2px solid Highlight; margin-left: -2px; }
-  .query-tab[data-drop="after"] { border-right: 2px solid Highlight; margin-right: -1px; }
-}
+/* Editor groups (docs/editor-groups.md): a Dockview inside the editor panel, each group's header its tab strip. A
+   workbench panel dragged over them passes through to the editor panel's own drop targets. */
+.editor-groups-root { flex: 1; position: relative; min-height: 0; min-width: 0; }
+.workbench.dock-dragging .editor-groups-root { pointer-events: none; }
+.editor-groups-dock { --dv-tabs-and-actions-container-height: var(--varia-bar); --dv-tab-font-size: var(--varia-size-sm); --dv-floating-titlebar-height: 16px; }
+.editor-groups .dv-tabs-and-actions-container { background: var(--varia-documentTabs-background); }
+.editor-groups .dv-tab { padding: 0; background: none; }
+/* A document tab's keyboard ring is a 1px inset outline, as the single strip drew it: the strip would clip the default ring,
+   and forced colours drop box shadows. */
+.editor-groups .dv-tab:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; box-shadow: none; }
+.editor-groups .dv-tab:focus-visible::after { display: none; }
+.editor-groups .dv-tab[data-menu-target] { outline-offset: -3px; }
+.editor-group-actions { display: flex; align-items: center; height: 100%; padding: 0 var(--varia-space-1); }
+.editor-groups .editor-container, .editor-host, .document-view { width: 100%; height: 100%; min-width: 0; min-height: 0; }
+.document-view { display: flex; flex-direction: column; overflow: hidden; }
+.editor-empty { position: relative; height: 100%; }
+.editor-empty > .editor-group-actions { position: absolute; top: 0; right: 0; height: var(--varia-bar); }
+.query-tab { position: relative; display: flex; align-items: center; flex-shrink: 0; height: 100%; border-right: 1px solid var(--varia-documentTabs-border); border-top: 2px solid transparent; color: var(--varia-documentTabs-inactiveForeground); }
 .query-tab.active { background: var(--varia-documentTabs-activeBackground); border-top-color: var(--varia-tab-activeBorderTop); color: var(--varia-documentTabs-activeForeground); }
+/* The selected tab of a group that is not the active one keeps its fill but not its top border. */
+.editor-groups .dv-groupview:not(.dv-active-group) .query-tab.active:not([style*="border-top-color"]) { border-top-color: transparent; }
+/* Forced colours: the active group's shown tab is marked with Highlight, another group's with GrayText. */
+@media (forced-colors: active) {
+  .query-tab.active { border-top-color: Highlight; forced-color-adjust: none; }
+  .editor-groups .dv-groupview:not(.dv-active-group) .query-tab.active { border-top-color: GrayText; }
+}
 .tab-select { display: flex; align-items: center; gap: 8px; height: calc(var(--varia-bar) - 3px); border: 0; border-radius: 0; padding: 0 10px 0 13px; color: inherit; }
 .tab-select:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .tab-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }

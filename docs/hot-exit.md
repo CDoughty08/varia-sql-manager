@@ -12,6 +12,8 @@ default. While it is off, a close asks about each query with unsaved changes as 
 ## What a close keeps
 
 - Every text tab (queries, and XML, JSON and plan values opened from results), in strip order, and which one is active.
+- The editor groups the kept tabs are in, when there are two or more (docs/editor-groups.md, *Persistence*): splits,
+  sizes, floating groups and each group's shown tab, naming tabs by their place in the kept list.
 - An untitled tab, or one with unsaved changes, keeps its text and unsaved state. A clean tab with a file keeps only
   its file's path and reopens by reading the file again (a file that is gone is named in a notice). An unsaved tab
   whose file is gone reopens with its text, without the file.
