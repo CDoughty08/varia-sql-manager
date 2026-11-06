@@ -12,6 +12,7 @@ internal sealed class ActualPlanCapture(SqlConnection observer, bool databaseSco
     private const string PlanEvent = "query_post_execution_plan_profile";
     private const string BatchEvent = "sql_batch_starting";
     private const int MaxTargetCharacters = 4 * 1024 * 1024;
+    private static readonly XName AggregateName = PlanParser.ShowplanName.Namespace + "Aggregate";
     private readonly string name = "VariaActual_" + Guid.NewGuid().ToString("N");
     private readonly List<(int Batch, int Iteration)> submitted = [];
     private string Scope => databaseScoped ? "DATABASE" : "SERVER";
@@ -105,6 +106,8 @@ internal sealed class ActualPlanCapture(SqlConnection observer, bool databaseSco
             if ((string?)entry.Attribute("name") != PlanEvent) continue;
             var value = entry.Elements("data").FirstOrDefault(data => (string?)data.Attribute("name") == "showplan_xml")?.Element("value");
             if (value?.Element(PlanParser.ShowplanName) is not { } showplan) { lost = true; continue; }
+            // Auto-statistics can run in the user session with is_system=0. Match the internal aggregate, not SQL text.
+            if (showplan.Descendants(AggregateName).Any(aggregate => (string?)aggregate.Attribute("AggType") == "STATMAN")) continue;
             var position = haveMarkers && batch >= 0 && batch < submitted.Count ? submitted[batch] : default;
             plans.Add(new(showplan.ToString(SaveOptions.DisableFormatting), position.Batch, position.Iteration));
         }

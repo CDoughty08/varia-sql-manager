@@ -41,9 +41,9 @@ function fixture() {
 }
 
 describe('file commands', () => {
-  it('opens sqlplan files as disconnected XML documents and preserves their file registration and line endings', async () => {
+  it.each(['Actual.SQLPLAN', 'Exported.xml'])('opens %s as a disconnected plan and keeps its file registration and line endings', async name => {
     const { documents, api, commands, model } = fixture()
-    api.openSqlFiles.mockResolvedValueOnce({ ok: true, value: [{ ...openedFile('plan', 'C:/Actual.SQLPLAN'), content: '<ShowPlanXML/>', eol: 'crlf' }] })
+    api.openSqlFiles.mockResolvedValueOnce({ ok: true, value: [{ ...openedFile('plan', 'C:/' + name), kind: 'sqlplan', content: '<ShowPlanXML/>', eol: 'crlf' }] })
     await commands.run('file.open')
     expect(documents.active).toMatchObject({ kind: 'sqlplan', database: '', connectionId: undefined, file: { id: 'plan' }, dirty: false })
     expect(model(documents.active!.id).language).toBe('xml')

@@ -1179,7 +1179,10 @@ Notes appended to the summary's messages:
 | a cancel or timeout skipped later batches | "Stopped at batch {b}; {c} of {t} batch executions completed." (", repetition {k}" for `GO n`) |
 
 A cell whose typed read fails becomes NULL with the error flag; that column switches to its fallback reader and the
-messages get "Column ‘{name}’ ({type}): some values could not be read and are shown as NULL."
+messages get "Column ‘{name}’ ({type}): some values could not be read and are shown as NULL." An xml value read through
+the `GetXmlReader` fallback whose rest past the cap fails to parse keeps its stored prefix (truncated, an estimate), and
+the messages get "Column ‘{name}’ ({type}): some values could not be read to the end and show only the part read before
+the error." Under a Stop, a value that parses as malformed ends the read as the Stop instead.
 
 ## Cell lengths and row sizes
 
@@ -1209,10 +1212,11 @@ the row-size bar) read these numbers; nothing re-reads SQL Server.
   whether varchar or nvarchar, and is counted as nvarchar; smallmoney and smalldatetime bases arrive as money and datetime
   (8); and date, time, datetime2 and datetimeoffset bases are counted at scale 7. Its characters are those of the display
   text.
-- **Collation.** For char, varchar and text, the backend reads each column's collation from SqlClient's metadata
-  (`SqlClientCollation`, by reflection over `SqlDataReader.MetaData`, `SqlMetaDataPriv.collation` and `.encoding`, checked
-  against `_SqlMetaData.column`, the column's name): the encoding SqlClient itself decodes with, so a code page or UTF-8 byte count equals
-  `DATALENGTH`. The descriptor's column gets `collation: { lcid, sortId, codePage, utf8, options }` (`options` are
+- **Collation.** For char, varchar, text, nchar, nvarchar and ntext, the backend reads each column's collation from
+  SqlClient's metadata (`SqlClientCollation`, by reflection over `SqlDataReader.MetaData`, `SqlMetaDataPriv.collation` and
+  `.encoding`, checked against `_SqlMetaData.column`, the column's name). The char types count bytes with the encoding
+  SqlClient itself decodes with, so a code page or UTF-8 byte count equals `DATALENGTH`; the n types are UTF-16 whatever
+  their collation. The descriptor's column gets `collation: { lcid, sortId, codePage, utf8, options }` (`options` are
   SqlCompareOptions bits: 1 IgnoreCase, 2 IgnoreNonSpace, 8 IgnoreKanaType, 16 IgnoreWidth, 16384 BinarySort2, 32768
   BinarySort; `codePage` 0 for a UTF-8 collation; `sortId` non-zero for SQL_ collations). If a SqlClient release moves
   these internals, the reflection finds nothing, the column has no `collation`, and its bytes count one per character,
@@ -1222,7 +1226,8 @@ the row-size bar) read these numbers; nothing re-reads SQL Server.
   their length (truncated cells, every xml, vector and sql_variant cell, and estimates; an estimate is marked in the
   column's sign bit), and a list of 16-byte `(row, bytes)` entries for rows of 4 GiB or more, whose `uint32` holds
   `uint.MaxValue`, so a sum never overflows (a row of several `max` values can pass 4 GiB). A row's sum is exact unless
-  one of its cells is an estimate, or a column's rule is a guess; `results.rowBytes` names those rows. The page
+  one of its cells is an estimate (a cell that could not be read, stored as NULL with the error flag, counts 0 bytes as
+  one), or a column's rule is a guess; `results.rowBytes` names those rows. The page
   builder's open row keeps its entries until `CommitRow`, and a rolled-back row leaves none; the row-sizes array grows
   when the row that needs it begins, so that row's commit charges the growth.
 - **Memory.** 4 bytes a row, 24 per entry, and 96 a page, charged to the result budget
@@ -2253,7 +2258,7 @@ unread, the next `ReadAsync` would buffer all of it, in time quadratic in its si
 | datetimeoffset(n) | n fractional digits and the offset | `2026-10-08 12:34:56.1234567 +05:30`, `2026-10-08 12:34:56 -08:00` |
 | uniqueidentifier | uppercase | `6F9619FF-8B86-D011-B42D-00C04FC964FF` |
 | char, varchar, text, nchar, nvarchar, ntext, sysname | the text; lone surrogates become U+FFFD; truncation never splits a pair | `héllo 😀` |
-| xml, the showplan column | the text as SqlClient serialises it, role `xml` / `plan`, up to 2,097,152 characters. Streamed (`Results/SequentialXml.cs`): XmlReader parses the column's sequential stream as UTF-16 as it arrives, a text node's value is copied out in 8,192-character chunks, and once the cap is reached the rest of the value is read past as bytes, without parsing, so a long text node costs a few MB whatever its length (a 200 MB value allocates under 32 MB in all). XmlReader holds a whole start tag (all of its attributes together), comment or processing instruction before returning it, so the stream reports its end once 8 MiB pass with no new output; a node just inside that window is read whole, growing XmlReader's buffer to about 50 MB allocated in all. A cut value keeps only what the writer had written before that node, marked truncated: the parent's start tag without its `>` (`<r`), text before it (`<r>hello`), or nothing when the node is the root element. Every xml cell of a set reuses one output buffer and one feed, so a small cell allocates about 28 KB, mostly XmlReader's and XmlWriter's own buffers (the live .NET suite reports it and checks it stays under 36 KB). SqlClient 7.1.1's `GetXmlReader` lets XmlReader guess the encoding (a value that starts with text throws or, for some characters, reads as other text; fixed after 7.1.1), so the stream is opened as `GetXmlReader` opens it, through SqlClient internals that an offline check pins, with `GetXmlReader` as the fallback. `GetChars` on xml holds each node whole and is quadratic in a large text node, `GetSqlXml` reads the whole value, and `GetStream` and `GetTextReader` reject xml | `abc`, `é<a b="1" />` |
+| xml, the showplan column | the text as SqlClient serialises it, role `xml` / `plan`, up to 2,097,152 characters. Streamed (`Results/SequentialXml.cs`): XmlReader parses the column's sequential stream as UTF-16 as it arrives, a text node's value is copied out in 8,192-character chunks, and once the cap is reached the rest of the value is read past as bytes, without parsing, so a long text node costs a few MB whatever its length (a 200 MB value allocates under 32 MB in all). XmlReader holds a whole start tag (all of its attributes together), comment or processing instruction before returning it, so the stream reports its end once 8 MiB pass with no new output; a node just inside that window is read whole, growing XmlReader's buffer to about 50 MB allocated in all. A cut value keeps only what the writer had written before that node, marked truncated: the parent's start tag without its `>` (`<r`), text before it (`<r>hello`), or nothing when the node is the root element. Every xml cell of a set reuses one output buffer and one feed, so a small cell allocates about 28 KB, mostly XmlReader's and XmlWriter's own buffers (the live .NET suite reports it and checks it stays under 36 KB). SqlClient 7.1.1's `GetXmlReader` lets XmlReader guess the encoding (a value that starts with text throws or, for some characters, reads as other text; fixed after 7.1.1), so the stream is opened as `GetXmlReader` opens it, through SqlClient internals that an offline check pins, with `GetXmlReader` as the fallback (a malformed tail past the cap keeps the stored prefix, with a column message). `GetChars` on xml holds each node whole and is quadratic in a large text node, `GetSqlXml` reads the whole value, and `GetStream` and `GetTextReader` reject xml | `abc`, `é<a b="1" />` |
 | json (SQL Server 2025) | the text, role `json`, up to 2,097,152 characters | — |
 | vector (SQL Server 2025) | float32 values, shortest form, role `vector` | `[0.1,2,-3.5]` |
 | binary, varbinary, image | `0x` + uppercase hex, up to 32,766 bytes | `0x0001FF`, `0x` |

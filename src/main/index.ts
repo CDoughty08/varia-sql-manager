@@ -925,7 +925,7 @@ app.whenReady().then(async () => {
     clear: () => backend.request('entra.cache.clear', {})
   }))
   handle('varia:files-open', async () => {
-    const selected = await pageDialog(window => dialog.showOpenDialog(window, { title: 'Open SQL query', filters: [{ name: 'SQL files', extensions: ['sql'] }, { name: 'Execution plans', extensions: ['sqlplan'] }, { name: 'Text files', extensions: ['txt'] }], properties: ['openFile', 'multiSelections'] }), { canceled: true, filePaths: [] })
+    const selected = await pageDialog(window => dialog.showOpenDialog(window, { title: 'Open SQL query', filters: [{ name: 'SQL files', extensions: ['sql'] }, ...fileKinds.sqlplan.filters, { name: 'Text files', extensions: ['txt'] }], properties: ['openFile', 'multiSelections'] }), { canceled: true, filePaths: [] })
     if (selected.canceled) return []
     if (selected.filePaths.length > maxLaunchFiles) throw new Error(`Select at most ${maxLaunchFiles} files at a time.`)
     const opened = await Promise.all(selected.filePaths.map(path => files.read(path)))

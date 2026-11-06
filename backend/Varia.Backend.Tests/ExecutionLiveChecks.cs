@@ -141,6 +141,17 @@ internal static class ExecutionLiveChecks
                 && gridLimitedCapture.PlanSets is [{ Kind: "executionPlan", RowsStored: 1 }, ..],
                 "the collector copy is kept when the grid limit discarded the manual plan");
 
+            await Run("CREATE TABLE #cold_capture (n int PRIMARY KEY); INSERT #cold_capture VALUES (1),(2),(3),(4);\nGO\n"
+                + "CREATE PROCEDURE #cold_capture_proc AS BEGIN SELECT n FROM #cold_capture WHERE n < 3; SELECT n FROM #cold_capture WHERE n < 4; END;");
+            var cold = await Run("SET STATISTICS XML ON; EXEC #cold_capture_proc; SET STATISTICS XML OFF;", includeActualPlan: true);
+            check(cold.Status == "completed" && cold.PlanSets is null
+                && cold.ResultSets is [{ Kind: "rows", RowsStored: 2 }, { Kind: "executionPlan" }, { Kind: "rows", RowsStored: 3 }, { Kind: "executionPlan" }],
+                "a cold procedure keeps its two user plans without exposing automatic statistics: " + cold.PlanSets?.Count + " additional plans");
+            var namedStatman = await Run("SELECT n AS STATMAN FROM #cold_capture WHERE n < 3;", includeActualPlan: true);
+            check(namedStatman.Status == "completed" && namedStatman.PlanSets is [{ RowsStored: 1 }]
+                && namedStatman.ResultSets is [{ Columns: [{ Name: "STATMAN" }], RowsStored: 2 }],
+                "a user statement with a STATMAN column name still returns its actual plan");
+
             var timedCapture = await Run(QueryWithPlan + "\nGO\nWAITFOR DELAY '00:00:10';", timeout: 2, includeActualPlan: true);
             var afterTimeout = await Run(QueryWithPlan);
             check(timedCapture.Status == "timedOut" && timedCapture.PlanSets?.Any(set => set is { BatchNumber: 1, RowsStored: 1 }) == true
