@@ -211,7 +211,6 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .explorer-freshness-scope { min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
 /* Alone on its line (no listing yet), the count may still ellipsize in a very narrow pane. */
 .explorer-servers { flex: 0 1 auto; min-width: 0; margin-left: auto; overflow: hidden; text-overflow: ellipsis; line-height: 20px; }
-.explorer-follow { flex: none; display: flex; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-3); font-size: var(--varia-size-sm); border-top: 1px solid var(--varia-sideBarSectionHeader-border); }
 .explorer-tree-frame { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 /* Windowed rows over a spacer as tall as every row: only the rows in view (and the selected one) are in the DOM. */
 .explorer-tree { position: relative; flex: 1; min-height: 0; overflow: auto; overflow-anchor: none; contain: strict; outline: none; padding: 0; }

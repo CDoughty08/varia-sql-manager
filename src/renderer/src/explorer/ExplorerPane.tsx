@@ -98,21 +98,17 @@ function ExplorerSearch({ connectionId }: { readonly connectionId: string | unde
  * a refresh failed and kept the old rows), and how many servers are connected.
  */
 function ExplorerFooter({ servers, live }: { readonly servers: number; readonly live: number }) {
-  const { explorer, settings } = useWorkbench()
+  const { explorer } = useWorkbench()
   const { selected } = useServiceSnapshot(explorer)
-  const follow = useServiceSnapshot(settings).values['objectExplorer.followActiveQuery']
   const fresh = explorer.listingFreshness(selected)
-  return <>{servers > 0 && <label className="checkbox-label explorer-follow">
-    <input type="checkbox" checked={follow} onChange={() => void settings.toggle('objectExplorer.followActiveQuery')} />
-    Follow active query
-  </label>}<div className="explorer-footer">
+  return <div className="explorer-footer">
     {fresh && <span className="explorer-freshness">
       <bdi className="explorer-freshness-scope">{displayText(fresh.label)}</bdi>
       <span aria-hidden="true">·</span>
       <StaleBadge updatedAt={fresh.updatedAt} {...(fresh.staleSince !== undefined ? { stale: { since: fresh.staleSince } } : {})} />
     </span>}
     <span className="explorer-servers">{live ? `${live} connected server${live === 1 ? '' : 's'}` : servers ? 'No connected servers' : 'Windows & SQL authentication'}</span>
-  </div></>
+  </div>
 }
 
 /**

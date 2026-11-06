@@ -1147,8 +1147,11 @@ try {
     await connect(server)
     pinQueries.push(await activeDocumentName(page))
   }
-  const follow = page.getByRole('checkbox', { name: 'Follow active query', exact: true })
-  await expect(follow).toBeChecked()
+  const setFollow = async value => {
+    const result = await page.evaluate(value => window.varia.updateSettings({ 'objectExplorer.followActiveQuery': value }), value)
+    expect(result.ok).toBe(true)
+  }
+  await expect(page.getByRole('checkbox', { name: 'Follow active query', exact: true })).toHaveCount(0)
   await documentTab(page, pinQueries[2]).click()
   const anchor = await explorerRow(page, 'pin-c')
   const middle = await anchor.evaluate(row => {
@@ -1178,14 +1181,12 @@ try {
   await expect(await explorerRow(page, 'pin-a')).toBeInViewport({ ratio: 1 })
   await expect(tree()).toHaveAttribute('aria-activedescendant', selectionBeforeFollow)
   await expect(tree()).not.toBeFocused()
-  await follow.click()
-  await expect(follow).not.toBeChecked()
+  await setFollow(false)
   await scrollToMiddle()
   await expect(moreAbove).toBeVisible()
   await documentTab(page, pinQueries[5]).click()
   expect(await tree().evaluate(element => element.scrollTop)).toBe(middle)
-  await follow.click()
-  await expect(follow).toBeChecked()
+  await setFollow(true)
   console.log('Object Explorer checks: both pinned bands, keyboard and pointer overflow jumps, and following the active query without selecting its server.')
 
   // 14. A real server: a scratch database's table and columns, and F5 after DDL in a query.
