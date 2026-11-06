@@ -18,6 +18,7 @@ from Microsoft's documentation, so Varia keeps its own.
   - Keyboard (`environment.keyboard`)
   - Product Updates (`environment.productUpdates`)
   - Live Data (`environment.liveData`)
+  - Object Explorer (`environment.objectExplorer`)
 - Text Editor
   - General (`textEditor.general`)
   - Editor Tab and Status Bar (`textEditor.editorTabAndStatusBar`)
@@ -107,6 +108,14 @@ Live views, such as the Activity Monitor: when they pause while hidden, and how 
 | `liveData.explorerStatus` | Show live status in Object Explorer | Boolean | True |  | All | At once | While Object Explorer shows, reads each connected server's database states, restore progress, running SQL Server Agent jobs and availability group health every few seconds, on one session of its own per server, and shows them as chips on the nodes. It pauses while Object Explorer or the window is hidden, and never reloads the tree. While it is False, nodes show only what their list said when it loaded. Not in SSMS. |
 | `liveData.historyMinutes` | Keep chart history for | Integer 5–120 minutes | 60 minutes |  | All | At once | How far back each live view's charts reach. History is kept in memory only (at most 7,200 samples a chart, 4 MiB a view and 32 MiB in all; the newest samples are kept), never on disk, and is lost when the window reloads. Not in SSMS. |
 
+### Environment › Object Explorer
+
+| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `objectExplorer.followActiveQuery` | Follow active query | Boolean | True |  | All | At once | When switching query tabs, bring the server into view if its header is off-screen. Not in SSMS. |
+| `objectExplorer.pinnedServerHeadersTop` | Pinned server headers at top | Integer 0–10 | 2 |  | All | At once | Maximum number of off-screen server headers to show at the top of the tree. Choose 0 to hide this edge. A short pane may fit fewer headers. Not in SSMS. |
+| `objectExplorer.pinnedServerHeadersBottom` | Pinned server headers at bottom | Integer 0–10 | 2 |  | All | At once | Maximum number of off-screen server headers to show at the bottom of the tree. Choose 0 to hide this edge. A short pane may fit fewer headers. Not in SSMS. |
+
 ### Text Editor › General
 
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
@@ -164,6 +173,7 @@ The query window's status bar: where it is, and what it shows. A property grid: 
 | `queryResults.grid.includeColumnHeaders` | Include column headers when copying or saving the results | Boolean | False |  | All | At once | Copy and Save Results As (CSV and tab-delimited text) start with a row of column names. JSON always names its keys, and Copy with Headers always includes them. |
 | `queryResults.grid.maxResultSets` | Maximum result sets kept per execution | Integer 1–1,000 | 1,000 |  | All | Next execution | Result sets after this many still run and are counted, but their rows are not kept; the Messages tab says so. Not in SSMS. |
 | `queryResults.grid.showColumnTypes` | Show column data types in the column headers | Boolean | True |  | All | At once | Each column header shows the column's SQL type after its name, in smaller text: int, nvarchar(50), decimal(18,2). The header's tooltip names the type either way. Column widths already set are kept when this changes. Not in SSMS. |
+| `queryResults.grid.whitespace` | Show white space in results | One of `none` (Off), `spaces` (Spaces and tabs), `all` (All white space) | Off |  | All | At once | Spaces show as a raised dot (·) and tabs as an arrow (→) in the results grid. All white space also names line breaks (CR, LF, CRLF) and the invisible characters that make values look alike: no-break and zero-width spaces, BOM and the other Unicode spaces. The marks are only drawn: Copy and Save Results As write the values as they are. The results toolbar changes this too. Not in SSMS. |
 
 ### SQL Server Object Explorer › Commands
 
@@ -278,4 +288,4 @@ How Varia follows the SSIS Catalog (SSISDB) as it changes. Not in SSMS.
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (95 today).
+A patch holds at most one entry per setting (99 today).

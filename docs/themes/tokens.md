@@ -79,7 +79,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `shadow` | Shadows. | `#00000085` | `#10182824` |
 | `backdrop` | Modal scrim. | `#0a0c10b3` | `#1c1f2652` |
 
-## Color keys (258)
+## Color keys (259)
 
 ### Base
 
@@ -284,6 +284,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `resultsGrid.nullForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | NULL values, which are drawn in italics. |
 | `resultsGrid.nullBackground` | Varia | `$text/0` | `#d9dce300` | `#1c1f2600` | NULL cells; untinted by default, so NULL reads as muted italic text. |
 | `resultsGrid.truncationForeground` | Varia | `@warningForeground` | `#e4bb6a` | `#875800` | Truncation notices and the marker on truncated values. |
+| `resultsGrid.whitespaceForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | White space marks in cells (results toolbar › White space): the dots, arrows and the names of line breaks and invisible characters. |
 | `resultsGrid.selectionBackground` | Varia | `@list.activeSelectionBackground` | `#29314f` | `#d9e0fb` | Selected cells. |
 | `resultsGrid.selectionForeground` | Varia | `@list.activeSelectionForeground` | `#d9dce3` | `#1c1f26` | Text of selected cells. |
 | `resultsGrid.inactiveSelectionBackground` | Varia | `@list.inactiveSelectionBackground` | `#21273b` | `#e7ebfc` | Selected cells while the grid is not focused; their text keeps its color. |

@@ -211,8 +211,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .explorer-freshness-scope { min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
 /* Alone on its line (no listing yet), the count may still ellipsize in a very narrow pane. */
 .explorer-servers { flex: 0 1 auto; min-width: 0; margin-left: auto; overflow: hidden; text-overflow: ellipsis; line-height: 20px; }
+.explorer-tree-frame { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 /* Windowed rows over a spacer as tall as every row: only the rows in view (and the selected one) are in the DOM. */
-.explorer-tree { position: relative; flex: 1; min-height: 0; overflow: auto; contain: strict; outline: none; padding: 0; }
+.explorer-tree { position: relative; flex: 1; min-height: 0; overflow: auto; overflow-anchor: none; contain: strict; outline: none; padding: 0; }
 .explorer-spacer { position: relative; width: 100%; }
 .explorer-row { position: absolute; top: 0; left: 0; right: 0; container-type: inline-size; height: var(--varia-row); display: flex; align-items: center; gap: 4px; padding-right: 6px; font-size: var(--varia-size-md); line-height: var(--varia-line-md); white-space: nowrap; cursor: default; }
 /* A server leads its tree: taller (explorerLimits.serverRowHeight), its name in semibold, its version and login after it. */
@@ -222,6 +223,20 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .explorer-row:hover { background: var(--varia-list-hoverBackground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
 .explorer-row[aria-selected="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
 .explorer-tree:focus .explorer-row[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); outline: 1px solid var(--varia-list-focusOutline); outline-offset: -1px; transition: none; }
+/* Pinned shortcuts reserve whole rows outside the scroll window. The overflow menu opens towards the tree. */
+.explorer-pin-band { flex: none; background: var(--varia-editorGroupHeader-tabsBackground); }
+.explorer-pin-band[data-edge="top"] { anchor-name: --explorer-pins-top; }
+.explorer-pin-band[data-edge="bottom"] { anchor-name: --explorer-pins-bottom; }
+.explorer-pinned-server.explorer-row, .explorer-pin-more { position: relative; width: 100%; padding: 0 var(--varia-space-2) 0 0; border: 0; border-radius: 0; color: inherit; text-align: start; cursor: pointer; }
+.explorer-pin-band > .explorer-pinned-server, .explorer-pin-more { box-shadow: inset 0 -1px var(--varia-sideBarSectionHeader-border); }
+.explorer-pin-band[data-edge="bottom"] > .explorer-pinned-server, .explorer-pin-band[data-edge="bottom"] > .explorer-pin-more { box-shadow: inset 0 1px var(--varia-sideBarSectionHeader-border); }
+.explorer-pin-band > .explorer-pinned-server[data-current-section] { background: var(--varia-list-inactiveSelectionBackground); border-inline-start: 2px solid var(--varia-focusBorder); padding-inline-end: 6px; }
+.explorer-pin-more { display: flex; align-items: center; justify-content: space-between; height: var(--varia-row); padding-inline-start: var(--varia-space-2); color: var(--varia-descriptionForeground); }
+.explorer-pinned-server.explorer-row:hover, .explorer-pin-more:hover:not(:disabled) { background: var(--varia-list-hoverBackground); color: inherit; }
+.explorer-pinned-server:focus-visible, .explorer-pin-more:focus-visible { outline-offset: -2px; }
+.explorer-pin-menu { position: fixed; inset: auto; margin: 0; width: anchor-size(width); max-height: var(--explorer-tree-height); padding: 2px 0; overflow: auto; overscroll-behavior: contain; color: var(--varia-menu-foreground); background: var(--varia-menu-background); border: 1px solid var(--varia-menu-border); border-radius: var(--varia-radius-sm); box-shadow: var(--varia-shadow-menu) var(--varia-widget-shadow); }
+.explorer-pin-band[data-edge="top"] .explorer-pin-menu { position-anchor: --explorer-pins-top; position-area: bottom; }
+.explorer-pin-band[data-edge="bottom"] .explorer-pin-menu { position-anchor: --explorer-pins-bottom; position-area: top; }
 .oe-accent { position: absolute; top: 0; bottom: 0; left: 0; width: 3px; }
 .oe-indent { flex: none; }
 .oe-twistie { flex: none; width: 16px; height: 16px; display: grid; place-items: center; margin-left: 4px; color: var(--varia-objectExplorer-chevronForeground); }
@@ -485,6 +500,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .output-status[data-tone="error"] .codicon { color: var(--varia-errorForeground); }
 .output-spacer { flex: 1; }
 .output-view { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
+/* The results toolbar, in the Results head after its views: tools for every grid in the run, as segmented controls. */
+.results-toolbar { display: flex; flex-shrink: 0; align-items: center; gap: 4px; min-width: 0; padding-left: 8px; border-left: 1px solid var(--varia-panel-border); }
+.results-toolbar-label { display: inline-flex; align-items: center; gap: 5px; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); white-space: nowrap; }
+.results-segments { display: inline-flex; flex-shrink: 0; gap: 1px; padding: 1px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); }
+.results-segments button { height: 20px; padding: 0 8px; border-radius: var(--varia-radius-sm); color: var(--varia-panelTitle-inactiveForeground); font-size: var(--varia-size-xs); }
+.results-segments button[aria-pressed="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-panelTitle-activeForeground); font-weight: 600; transition: none; }
+@media (forced-colors: active) { .results-segments button[aria-pressed="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; } }
 .job-strip { display: flex; min-width: 0; align-items: center; gap: 6px; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); white-space: nowrap; }
 /* Strips give way to a narrow window: a long file name is cut short, while Cancel and the status line keep their room. */
 .output-toolbar > .job-strip { flex-shrink: 1; min-width: 72px; }
@@ -561,6 +583,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* Only the focused grid shows its active cell's outline, as in SSMS; the others show their selection. */
 .rg:focus-within .rg-c.is-act { outline: 1px solid var(--varia-resultsGrid-activeCellBorder); outline-offset: -1px; }
 .rg:focus-visible .rg-c.is-act { outline-width: 2px; outline-offset: -2px; }
+/* White space marks (GridView.writeMarked): dots and arrows in a muted colour, and each named character (CR, LF, NBSP…) as
+   a small outlined badge, so it never reads as the letters a value holds. In a selected cell they take its text colour. */
+.rg-ws { color: var(--varia-resultsGrid-whitespaceForeground); }
+.rg-wsb { display: inline-block; margin: 0 1px; padding: 0 2px; border: 1px solid currentColor; border-radius: var(--varia-radius-sm); font-size: var(--varia-size-xs); line-height: 14px; vertical-align: 1px; }
+.rg-c.is-sel .rg-ws { color: inherit; }
+@media (forced-colors: active) { .rg-ws { color: GrayText; } .rg-c.is-sel .rg-ws { color: inherit; } }
 /* One line (gridLimits.stripHeight), cut short with the sentence in its tooltip, so a set sized to its rows counts it exactly. An
    error strip wraps instead, keeping Retry in view; it comes after the set was sized. */
 .rg-strip { flex-shrink: 0; padding: 4px 8px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: var(--varia-size-xs)/16px var(--varia-font-ui); color: var(--varia-resultsGrid-truncationForeground); border-top: 1px solid var(--varia-panel-border); }
@@ -615,8 +643,35 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .output-views button.active { outline: 2px solid Highlight; outline-offset: -2px; }
   .output-views button.active:focus-visible { outline: 2px solid CanvasText; outline-offset: 2px; }
 }
-.memory-indicator { display: flex; align-items: center; gap: 4px; margin-left: 12px; white-space: nowrap; }
+.memory-status { margin-left: var(--varia-space-2); }
+.memory-indicator { anchor-name: --status-memory; display: flex; align-items: center; gap: var(--varia-space-1); padding: 0 var(--varia-space-2); color: inherit; font-size: inherit; }
+.memory-indicator:focus-visible { outline-offset: -2px; }
+.memory-status > .memory-indicator[aria-expanded="true"] { background: var(--varia-menu-selectionBackground); color: var(--varia-menu-selectionForeground); }
 .memory-indicator .codicon { font-size: var(--varia-glyph-sm); }
+.memory-status > .memory-indicator[data-level="warning"] { background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); }
+.memory-status > .memory-indicator[data-level="critical"] { background: var(--varia-banner-errorBackground); color: var(--varia-banner-errorForeground); }
+.memory-ring { display: grid; flex: none; width: 14px; height: 14px; border-radius: 50%; background: conic-gradient(currentColor var(--memory-fill), transparent 0); mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), currentColor calc(100% - 2px)); }
+.memory-ring::before { content: ''; background: currentColor; opacity: .3; }
+.memory-ring[data-feature="index"] { color: var(--varia-charts-blue); }
+.memory-ring[data-feature="results"] { color: var(--varia-charts-purple); }
+.memory-ring[data-level="unavailable"] { color: var(--varia-disabledForeground); }
+/* Over the dock and below notifications, quick input, dialogs, and menus. */
+.memory-details { position: fixed; z-index: 13000; position-anchor: --status-memory; inset: auto max(8px, anchor(right)) anchor(top) auto; margin: 0; width: min(350px, calc(100% - 16px)); max-height: calc(100vh - var(--varia-status) - 8px); overflow: auto; padding: var(--varia-space-3); background: var(--varia-menu-background); color: var(--varia-menu-foreground); border: 1px solid var(--varia-widget-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); font-size: var(--varia-size-sm); font-variant-numeric: tabular-nums; line-height: var(--varia-line-sm); white-space: normal; }
+.memory-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--varia-space-2); padding-bottom: var(--varia-space-2); }
+.memory-heading h2, .memory-row h3 { margin: 0; font-size: inherit; font-weight: 600; }
+.memory-heading span, .memory-level, .memory-remaining, .memory-row p { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.memory-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--varia-space-0) var(--varia-space-2); padding: var(--varia-space-2) 0; border-top: 1px solid var(--varia-menu-separatorBackground); }
+.memory-row:last-child { padding-bottom: 0; }
+.memory-row[data-level="warning"] .memory-level { color: var(--varia-warningForeground); }
+.memory-row[data-level="critical"] .memory-level { color: var(--varia-errorForeground); }
+.memory-level, .memory-remaining { text-align: end; white-space: nowrap; }
+.memory-usage { grid-column: 2; }
+.memory-remaining { grid-column: 3; }
+.memory-row p { grid-column: 2 / -1; margin: 0; }
+@media (forced-colors: active) {
+  .memory-indicator:is([data-level="warning"], [data-level="critical"]) { border-color: ButtonText; }
+  .memory-ring[data-feature] { forced-color-adjust: none; color: CanvasText; }
+}
 .update-status { display: flex; align-items: center; margin-left: 12px; white-space: nowrap; }
 .update-status > button, .update-status > span { display: flex; align-items: center; gap: 4px; }
 .update-status > button { color: inherit; border-color: transparent; padding: 0 4px; font-size: var(--varia-size-xs); line-height: 14px; cursor: pointer; }

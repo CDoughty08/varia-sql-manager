@@ -216,6 +216,28 @@ export function RowEnd({ count, connection, active, children, actions }: { count
   </span>
 }
 
+/** A shortcut to the server's real tree row, with the same connection indicators. */
+export function PinnedServerRow({ node, edge, current, active, color, environment, status, menu, jump }: {
+  node: TreeNode; edge: 'top' | 'bottom'; current: boolean; active: boolean; color: string | undefined; environment?: string; status?: RowStatus; menu: boolean; jump(): void
+}) {
+  const sublabel = shownSublabel(node), tag = environmentTag(environment)
+  const facts = [status?.words && displayText(status.words), tag?.description]
+  const name = [`Jump to ${rowName(node)}`, ...facts, active && 'server of the active query', current && 'current section'].filter(Boolean).join(', ')
+  return <button type="button" className={`explorer-row server explorer-pinned-server${active ? ' active-connection' : ''}${node.lost ? ' lost dimmed' : ''}`}
+    data-current-section={current || undefined} role={menu ? 'menuitem' : undefined} tabIndex={menu ? -1 : undefined}
+    aria-label={name} title={clip([rowTooltip(node), ...facts].filter(Boolean).join('\n'))} onClick={jump}>
+    <Accent color={color} />
+    <span className="oe-twistie"><Icon name={edge === 'top' ? 'chevron-up' : 'chevron-down'} /></span>
+    <ExplorerIcon name={node.icon} badge={badgeOf(node)} />
+    <Label text={node.label} />
+    {sublabel && <span className="oe-sublabel">{displayText(sublabel)}</span>}
+    <RowEnd connection={connectionState(node)} active={active}>
+      {!!status?.chips.length && <StatusChips chips={status.chips} />}
+      {tag && <EnvironmentTag environment={environment} place="explorer" />}
+    </RowEnd>
+  </button>
+}
+
 /** One windowed row of the tree: a node, or a loading, error, progress, stopped, capped, or paused row. */
 function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed, text, selected, draggable, active, color, environment, actions, menuTarget, renaming, status }: RowProps) {
   const style = { transform: `translateY(${top}px)` }

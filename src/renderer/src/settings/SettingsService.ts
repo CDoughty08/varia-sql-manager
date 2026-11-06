@@ -134,16 +134,23 @@ export class SettingsService extends SnapshotStore<SettingsSnapshot> implements 
   async toggle(key: BooleanSettingKey): Promise<void> {
     const next = !(this.toggling.get(key) ?? this.get(key))
     this.toggling.set(key, next)
-    try { await this.update({ [key]: next }) }
+    try { await this.choose(key, next) } finally { if (this.toggling.get(key) === next) this.toggling.delete(key) }
+  }
+  /**
+   * Sets one setting from a command or a toolbar and saves it. Never throws: when the save fails the value applies for
+   * this session only, and the first such failure is reported.
+   */
+  async choose<K extends SettingKey>(key: K, value: SettingValue<K>): Promise<void> {
+    try { await this.update({ [key]: value } as SettingsPatch) }
     catch (error) {
       if (this.disposed) return
-      this.session.set(key, next)
+      this.session.set(key, value)
       this.accept(undefined)
       if (!this.toggleWarned) {
         this.toggleWarned = true
         this.notify(`Settings could not be saved: ${errorText(error).replace(/\.$/, '')}. The change applies until you close Varia SQL Manager.`, 'warning')
       }
-    } finally { if (this.toggling.get(key) === next) this.toggling.delete(key) }
+    }
   }
 
   get dialog(): ExternalStore<OptionsDialogState> { return this.dialogStore }
