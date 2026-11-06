@@ -130,6 +130,7 @@ function hello(value) {
   if (mode === 'workbench') {
     reportMemory()
     reportIndexMemory()
+    setInterval(reportMemory, 1000).unref()
   }
 }
 
@@ -431,15 +432,13 @@ function beginQuery(sessionId) {
   for (const resultId of sessionResults.get(sessionId) ?? []) heldBytes.delete(resultId)
   sessionResults.set(sessionId, [])
 }
-// What the status bar was last shown, by an event or a summary. As SqlService.ReportMemory does, an event goes out only
-// for the first sample, a rise from zero, a new band (50, 75, 90, 95, 100 %), a 64 MiB rise, or any fall below it.
-let reported = { bytes: -1, band: 0 }
+// The last sample sent in an event or summary. Report changes on the timer and after a close.
+let reportedBytes = -1
 let memorySeq = 0
-const band = used => used >= globalBytes ? 5 : used * 20 >= globalBytes * 19 ? 4 : used * 10 >= globalBytes * 9 ? 3 : used * 4 >= globalBytes * 3 ? 2 : used * 2 >= globalBytes ? 1 : 0
 function reportMemory() {
   const used = usedBytes()
-  if (used === reported.bytes || (reported.bytes > 0 && used > reported.bytes && band(used) === reported.band && used - reported.bytes < 64 * 1024 * 1024)) return
-  reported = { bytes: used, band: band(used) }
+  if (used === reportedBytes) return
+  reportedBytes = used
   write(FrameKind.EVENT, 0, 0, { type: 'results.memory', usedBytes: used, globalBytes, seq: ++memorySeq })
 }
 const indexedConnections = new Set()
@@ -454,7 +453,7 @@ function reportIndexMemory() {
 /** A summary's budget, which counts as reported (SqlService.SummaryBudget). */
 function summaryBudget() {
   const used = usedBytes()
-  reported = { bytes: used, band: band(used) }
+  reportedBytes = used
   return { usedBytes: used, globalBytes, queryBytes: globalBytes / 2, seq: ++memorySeq }
 }
 const column = (name, dataType) => ({ name, dataType, wire: 'text', nullable: true })
@@ -594,7 +593,6 @@ async function runDirective(id, params, directive) {
       if (share > 0) {
         heldBytes.set(result.resultId, Math.floor(share / kept) + (index === 0 ? share % kept : 0))
         sessionResults.get(params.sessionId)?.push(result.resultId)
-        reportMemory()
       }
       write(FrameKind.EVENT, id, 0, { type: 'resultSet.opened', descriptor: describe(result) })
       while (result.read < set.rows) {

@@ -142,9 +142,8 @@ internal static class StoreChecks
         HostReads(check);
     }
 
-    /// <summary>results.memory waits for a 64 MiB rise or a new band, but reports every fall below what it last reported
-    /// or a summary last showed, and results.close reports its fall before it answers, so the status bar (which follows
-    /// only these events and the summaries) never keeps showing memory that a close or a finished lease returned.</summary>
+    /// <summary>results.memory reports small increases without a query summary, and reports memory released by
+    /// results.close before the response.</summary>
     private static void MemoryReports(Action<bool, string> check)
     {
         var reports = new List<long>();
@@ -168,31 +167,26 @@ internal static class StoreChecks
         second.Complete();
         service.ReportMemory();
         var afterRise = Last();
+        var usedAfterRise = store.UsedBytes;
         var close = JsonSerializer.SerializeToElement(new { resultIds = new[] { first.ResultId, second.ResultId } }, HostChecks.Json);
         var closed = (ResultsCloseResult)service.DispatchAsync("results.close", close, HostChecks.Json).GetAwaiter().GetResult();
-        check(reported > 0 && afterFirst == reported && afterRise == reported && closed.Closed == 2 && Last() == 0,
-            "results.memory skips a small rise but reports the fall to 0 before results.close answers: " + afterFirst + ", " + afterRise + ", " + Last());
+        check(reported > 0 && afterFirst == reported && afterRise == usedAfterRise
+            && usedAfterRise > reported && usedAfterRise - reported < 64L * 1024 * 1024 && closed.Closed == 2 && Last() == 0,
+            "results.memory reports a small rise and the fall to 0 before results.close answers: " + afterFirst + ", " + afterRise + ", " + Last());
 
-        // A small rise from a nonempty store is shown only through its summary; closing both still reports 0.
+        // A summary counts as a report, so the same sample is deduplicated and a subsequent close still reports 0.
         int Count() { lock (reports) return reports.Count; }
         var third = Open(store, store.BeginQuery("s3"));
         Fill(third, 0, 1000);
         third.Complete();
-        service.ReportMemory();
-        var shown = Last();
-        var fourth = Open(store, store.BeginQuery("s4"));
-        Fill(fourth, 0, 1000);
-        fourth.Complete();
-        service.ReportMemory();
-        var before = Count();
         var summary = service.SummaryBudget();
+        var before = Count();
         service.ReportMemory();
         var afterSummary = Count();
-        close = JsonSerializer.SerializeToElement(new { resultIds = new[] { third.ResultId, fourth.ResultId } }, HostChecks.Json);
+        close = JsonSerializer.SerializeToElement(new { resultIds = new[] { third.ResultId } }, HostChecks.Json);
         closed = (ResultsCloseResult)service.DispatchAsync("results.close", close, HostChecks.Json).GetAwaiter().GetResult();
-        check(shown > 0 && summary.UsedBytes > shown && summary.UsedBytes < 64L * 1024 * 1024
-            && afterSummary == before && closed.Closed == 2 && Count() == before + 1 && Last() == 0,
-            "a small run shown only by its summary reports the fall to 0 when the results are closed: " + before + ", " + afterSummary + ", " + Count() + ", " + Last());
+        check(summary.UsedBytes > 0 && afterSummary == before && closed.Closed == 1 && Count() == before + 1 && Last() == 0,
+            "results.memory deduplicates a summary's sample and reports the fall to 0 when the results are closed: " + before + ", " + afterSummary + ", " + Count() + ", " + Last());
 
         MemoryBudgetReports(check);
     }
@@ -219,15 +213,6 @@ internal static class StoreChecks
         });
         service.ReportMemory();
         check(Interlocked.Read(ref resultsUsed) == 0, "results.memory reports the initial empty store");
-        // Cross 95% with less than a 64 MiB increase and without a query summary.
-        var charged = store.BeginQuery("charged");
-        store.Force(charged, store.GlobalBytes * 94 / 100);
-        service.ReportMemory();
-        store.Force(charged, store.GlobalBytes / 50);
-        service.ReportMemory();
-        check(Interlocked.Read(ref resultsUsed) == store.UsedBytes, "results.memory sends a small rise across the 95% band");
-        store.Return(charged, store.UsedBytes);
-
         var pool = service.Search.Pool;
         service.ReportIndexMemory(); // Refused by the control lane.
         service.ReportIndexMemory(); // Retried with the same sequence.

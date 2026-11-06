@@ -1,6 +1,8 @@
-import { useId, useRef, useState, type CSSProperties } from 'react'
+import { useId, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import type { MemoryFeature } from '../../../shared/ipc/port-messages'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
+import { modalOpen } from '../core/modal'
+import { watchModals } from '../core/windows'
 import Icon from '../Icon'
 import { memoryLevel, type MemoryUsage } from './memory'
 import { formatBytes } from './status'
@@ -53,8 +55,21 @@ export default function MemoryIndicator() {
   const pinned = useRef(false)
   const group = useRef<HTMLDivElement>(null), panel = useRef<HTMLElement>(null)
   const id = useId(), heading = useId()
-  const peek = () => panel.current?.showPopover()
+  const peek = (pin = false) => {
+    if (modalOpen()) return
+    if (pin) pinned.current = true
+    panel.current?.showPopover()
+  }
   const endPreview = () => { if (!pinned.current) panel.current?.hidePopover() }
+
+  useLayoutEffect(() => {
+    const details = panel.current
+    if (!open || !details) return
+    // Workbench dialogs sit below Chromium's top layer. Dismiss Memory as soon as a modal opens.
+    if (modalOpen()) { details.hidePopover(); return }
+    const observer = watchModals(details.ownerDocument, () => details.hidePopover())
+    return () => observer.dispose()
+  }, [open])
 
   return <div ref={group} className="memory-status"
     onPointerEnter={event => { if (event.pointerType !== 'touch') peek() }}
@@ -66,7 +81,7 @@ export default function MemoryIndicator() {
       onClick={event => {
         event.preventDefault()
         if (pinned.current) panel.current?.hidePopover()
-        else { pinned.current = true; peek() }
+        else peek(true)
       }}>
       {alert && <Icon name="warning" />}
       {readings.map(item => <Ring key={item.feature} reading={item} />)}

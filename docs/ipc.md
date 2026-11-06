@@ -1028,7 +1028,7 @@ ignores a query's events once its summary has arrived.
 
 | type | Emitted |
 | --- | --- |
-| `results.memory` | Checked once a second and after `results.close`, before its answer. Reports the first sample, rises from zero, crossings of 50, 75, 90, 95 or 100 % of the budget, rises of at least 64 MiB, and any fall below the last report. Each query summary's `budget` counts as a report and shares this event's sequence. This lets the renderer discard an older summary when a close's event arrives first. |
+| `results.memory` | Checked once a second and after `results.close`, before its answer. Reports the first sample and any change since the last report. Each query summary's `budget` counts as a report and shares this event's sequence. This lets the renderer discard an older summary when a close's event arrives first. |
 | `explorer.index.memory` | Checked once a second and after a disconnect drops a connection's index. Reports the first sample and changes to the usage charged to the shared index budget. This event has its own sequence. |
 
 Both events are droppable. A refused sample stays eligible for the next check and consumes no sequence number. Main
