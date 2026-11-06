@@ -21,7 +21,7 @@ const files = async () => (await readdir(folder).catch(() => [] as string[])).so
 const tabs: SessionInput = {
   activeIndex: 1,
   documents: [
-    { name: 'SQLQuery2.sql', kind: 'sql', eol: 'crlf', dirty: true, text: 'SELECT 2', server: 'sql01', database: 'Sales' },
+    { name: 'SQLQuery2.sql', kind: 'sql', eol: 'crlf', dirty: true, pinned: true, text: 'SELECT 2', server: 'sql01', database: 'Sales' },
     { name: 'Month end', baseName: 'SQLQuery3.sql', kind: 'sql', eol: 'lf', dirty: false, text: 'SELECT 3' },
     { name: 'orders.sql', kind: 'sql', eol: 'crlf', dirty: false, path: 'C:\\Queries\\orders.sql' },
     { name: 'value.xml', kind: 'xml', eol: 'lf', dirty: false, text: '<a/>' }
@@ -91,6 +91,7 @@ describe('the hot exit session store', () => {
     expect(sessionWriteSchema.parse(valid)).toEqual(valid)
     const refused = (patch: object, document: object = {}) => sessionWriteSchema.safeParse({ ...valid, ...patch, documents: [{ ...valid.documents[0], ...document }] }).success
     expect(refused({}, { dirty: true })).toBe(false)
+    expect(refused({}, { pinned: 'true' })).toBe(false)
     expect(refused({}, { fileId: undefined })).toBe(false)
     expect(refused({}, { name: '' })).toBe(false)
     expect(refused({}, { name: 'x'.repeat(sessionLimits.nameChars + 1) })).toBe(false)

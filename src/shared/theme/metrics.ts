@@ -81,7 +81,7 @@ export type GlyphSizeName = keyof typeof glyphSizes
 export const glyphUse: Readonly<Record<GlyphSizeName, readonly string[]>> = {
   badge: ['.oe-icon .oe-badge'],
   sm: [
-    '.tab-close .codicon', '.tab-select .tab-readonly', '.tab-select .tab-running', '.connection-save-actions .codicon', '.query-status-state .codicon', '.output-status .codicon', '.memory-indicator .codicon', '.update-status .codicon', '.oe-active > .codicon',
+    '.tab-close .codicon', '.tab-pin .codicon', '.query-shelf-controls .codicon', '.tab-select .tab-readonly', '.tab-select .tab-running', '.connection-save-actions .codicon', '.query-status-state .codicon', '.output-status .codicon', '.memory-indicator .codicon', '.update-status .codicon', '.oe-active > .codicon',
     '.editor-status .codicon', '.index-status .codicon', '.status-pill > .codicon', '.status-pill > .icon', '.chip > .codicon', '.chip > .icon', '.live-pill > .codicon', '.stale-badge > .codicon',
     '.tile-caption > .codicon'
   ],
@@ -117,7 +117,7 @@ export const densityPlanned: Readonly<Record<keyof DensityMetrics, string>> = {
  */
 export const densityUse: Readonly<Record<keyof DensityMetrics, readonly string[]>> = {
   header: ['.title-bar'],
-  bar: ['.query-tabs', '.explorer-header', '.query-bar', '.output-toolbar', '.document-script-head', '.activity-pane-tabs [role="tab"]'],
+  bar: ['.query-tab', '.explorer-header', '.query-bar', '.output-toolbar', '.document-script-head', '.activity-pane-tabs [role="tab"]'],
   control: ['.icon-button', '.object-search-field', '.object-search-filter-button', '.command-centre', '.query-bar-action', '.query-connection', '.document-verb', '.property-input', '.property-field-control > .property-input-action > .property-input', '.property-value.restore-to', '.activity-select', '.activity-tile-toggle'],
   row: ['.explorer-row', '.skeleton-row', '.document-nav-item', '.server-files-head', '.server-files-row', '.new-database-cell', '.attach-database-grid .attach-database-cell', '.user-mapping-head', '.new-login-credentials-grid th', '.new-login-credentials-grid td'],
   status: ['.status-bar', '.query-status-bar']

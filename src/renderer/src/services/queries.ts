@@ -18,6 +18,12 @@ export interface QuerySession { readonly connectionId: string; readonly spid?: n
 export interface QueryState { readonly running?: RunningQuery; readonly summary?: QueryResult; readonly error?: string; readonly session?: QuerySession }
 export type QueryApi = Pick<VariaApi, 'execute' | 'cancel' | 'confirmSessions' | 'querySessionState'>
 export type QuerySnapshot = Readonly<Record<string, QueryState>>
+/** The last reported session only belongs to a tab while it is still on that live connection. */
+export function liveQuerySession(query: QueryState | undefined, connection: { readonly id: string; readonly lost?: true } | undefined): { spid: number; login?: string } | undefined {
+  const session = query?.session
+  if (connection && !connection.lost && session?.connectionId === connection.id && session.spid !== undefined)
+    return { spid: session.spid, login: session.login }
+}
 /** How each tab's session ends after the user answered: its open transaction committed or rolled back first. Tabs it does
  *  not name have nothing to end. */
 export type SessionPlan = ReadonlyMap<string, SessionEnd>

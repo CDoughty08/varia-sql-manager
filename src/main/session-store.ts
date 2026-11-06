@@ -10,7 +10,7 @@ const fits = (value: { kind: DocumentKind; text?: string }) => value.text === un
 const name = z.string().min(1).max(sessionLimits.nameChars)
 const server = z.string().min(1).max(sessionLimits.serverChars)
 const database = z.string().min(1).max(sessionLimits.databaseChars)
-const fields = { name, baseName: name.optional(), kind: z.enum(documentKinds), eol: z.enum(['crlf', 'lf']), dirty: z.boolean(), server: server.optional(), database: database.optional(), text: z.string().max(maxSqlFileBytes).optional() }
+const fields = { name, baseName: name.optional(), kind: z.enum(documentKinds), eol: z.enum(['crlf', 'lf']), dirty: z.boolean(), pinned: z.boolean().optional(), server: server.optional(), database: database.optional(), text: z.string().max(maxSqlFileBytes).optional() }
 /** varia:session-write: the tabs in strip order. Only a clean tab with a file may leave its text out (it reopens from the file). */
 export const sessionWriteSchema = z.object({
   documents: z.array(z.object({ ...fields, fileId: z.uuid().optional() }).strict()
@@ -45,7 +45,7 @@ export interface SessionStoreOptions { readonly now?: () => Date; readonly total
  * The next start takes `session.json` and keeps it as `previous.json` until that run closes: a run that crashes or is
  * killed before its own close leaves it, and the next process's first page reopens it again (AutoRecover offers what
  * changed since), so a restore never loses text. A close keeps a new session (and drops `previous.json`) or, with hot
- * exit off, drops both. A later page of the same process (a reload) takes only a session written since, as on macOS,
+ * exit off, keeps only pins or drops both if there are none. A later page of the same process (a reload) takes only a session written since, as on macOS,
  * where closing the window leaves the app running. Work runs one task at a time.
  */
 export class SessionStore {
@@ -81,6 +81,7 @@ export class SessionStore {
         version: 1, savedAt: (this.options.now?.() ?? new Date()).toISOString(), activeIndex: reopens.findIndex(({ index }) => index === session.activeIndex),
         documents: reopens.map(({ document }) => ({
           name: document.name, ...document.baseName ? { baseName: document.baseName } : {}, kind: document.kind, eol: document.eol, dirty: document.dirty,
+          ...document.pinned ? { pinned: true } : {},
           ...document.path && document.path.length <= sessionLimits.pathChars ? { path: document.path } : {},
           ...document.server ? { server: document.server } : {}, ...document.database ? { database: document.database } : {},
           ...document.text !== undefined ? { text: document.text } : {}
@@ -110,7 +111,7 @@ export class SessionStore {
     })
   }
 
-  /** Deletes what was kept: a close that asked about every tab (hot exit off) leaves nothing to reopen. */
+  /** Deletes what was kept when the close leaves no session to reopen. */
   clear(): Promise<void> {
     return this.serial(async () => {
       await rm(this.current, { force: true })

@@ -26,7 +26,8 @@ function fixture(options: { hotExit?: boolean; budget?: number } = {}) {
   const queries = { isRunning: () => false, mayHaveTransaction: async () => false, confirmSessions: vi.fn<QueryService['confirmSessions']>(async () => new Map()) }
   const servers: Record<string, string> = { 'server-a': 'sql01' }
   const state = { hotExit: options.hotExit ?? true }
-  const files = new FileService(doc.documents, queries, api, { hotExit: () => state.hotExit ? keptSession(doc.documents, id => servers[id], options.budget) : undefined })
+  const files = new FileService(doc.documents, queries, api, { hotExit: () => state.hotExit || doc.documents.getSnapshot().documents.some(tab => tab.pinned)
+    ? keptSession(doc.documents, id => servers[id], { budget: options.budget, pinnedOnly: !state.hotExit }) : undefined })
   cleanups.push(() => { files.dispose(); doc.documents.dispose() })
   return { ...doc, api, files, kept, state, queries }
 }
@@ -146,6 +147,18 @@ describe('hot exit', () => {
     await files.closeWindow(async () => {})
     expect(api.confirmClose).toHaveBeenCalledWith('SQLQuery2.sql')
     expect(kept).toEqual([])
+    expect(api.closeWindow).toHaveBeenCalledTimes(1)
+  })
+  it('keeps pinned tabs when startup restore is off and still asks about unpinned edits', async () => {
+    const { documents, api, files, kept } = fixture({ hotExit: false })
+    const unpinned = documents.create('Draft.sql', 'SELECT 1', 'master', undefined, true)
+    const pinned = documents.create('Keep.sql', 'SELECT 2', 'master', undefined, true)
+    expect(documents.setPinned(pinned.id, true)).toBe(true)
+    expect(documents.move(pinned.id, 1)).toBe(false)
+    expect(documents.getSnapshot().documents.map(tab => tab.id)).toEqual([pinned.id, unpinned.id])
+    await files.closeWindow(async () => {})
+    expect(api.confirmClose.mock.calls).toEqual([['Draft.sql']])
+    expect(kept).toEqual([{ activeIndex: 0, documents: [{ name: 'Keep.sql', kind: 'sql', eol: 'lf', dirty: true, pinned: true, text: 'SELECT 2' }] }])
     expect(api.closeWindow).toHaveBeenCalledTimes(1)
   })
   it('keeps the window open, losing nothing, when main cannot keep the session', async () => {

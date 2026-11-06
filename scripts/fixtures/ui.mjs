@@ -47,6 +47,8 @@ export const part = {
   querySegment: '.query-status-segment',
   // Document tabs
   tabName: '.tab-name',
+  tabSid: '.tab-sid',
+  tabRowCount: '.query-shelf-rows',
   /** The kind icon before a tab's name (kindIcon finds it by name; page code needs its box and stroke). */
   tabIcon: '.tab-icon',
   // Query output
@@ -341,7 +343,9 @@ export const documentTab = (page, name) => documentTabs(page).getByRole('tab', n
 export const activeDocument = page => documentTabs(page).getByRole('tab', { selected: true })
 export const activeDocumentName = page => activeDocument(page).getAttribute('aria-label')
 /** A document's tab with its Close button: the target of the tab's menu. */
-export const documentTabSlots = page => documentTabs(page).locator('[data-tab-id]')
+export const documentTabSlots = page => documentTabs(page).locator('[data-tab-id]:has([role="tab"])')
+export const documentShelf = (page, pinned = false) => documentTabs(page).getByRole('group', { name: pinned ? 'Pinned tabs' : 'Unpinned tabs', exact: true })
+export const pinDocumentButton = (page, name, pinned = false) => documentTabs(page).getByRole('button', { name: `${pinned ? 'Unpin' : 'Pin'} ${name}`, exact: true })
 /** Rename Tab's text box, in the tab being renamed. */
 export const tabNameBox = page => documentTabs(page).getByRole('textbox', { name: 'Tab name', exact: true })
 export const closeDocumentButton = (page, name) => documentTabs(page).getByRole('button', { name: 'Close ' + name, exact: true })

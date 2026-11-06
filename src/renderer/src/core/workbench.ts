@@ -238,7 +238,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const files = new FileService(documents, queries, api, {
     autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'],
     // Hot exit keeps a query's server name (never a login or connection string), so it keeps its database when it connects there again.
-    hotExit: () => api.hotExit && settings.getSnapshot().values['environment.documents.hotExit'] ? keptSession(documents, id => connections.get(id)?.server) : undefined
+    hotExit: () => {
+      if (!api.hotExit) return
+      const pinnedOnly = !settings.getSnapshot().values['environment.documents.hotExit']
+      if (!pinnedOnly || documents.getSnapshot().documents.some(tab => tab.pinned))
+        return keptSession(documents, id => connections.get(id)?.server, { pinnedOnly })
+    }
   })
   const recentFiles = new RecentFilesService(api)
   const recovery = new RecoveryService({

@@ -5,7 +5,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
-import { activeDocumentName, backendReady, documentTab, documentTabs, editorText, editorTextbox, tabNameBox, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, documentShelf, documentTab, documentTabs, editorText, editorTextbox, pinDocumentButton, tabNameBox, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'hot-exit-profile-'))
@@ -92,6 +92,8 @@ try {
   // Totals moves first, and Month end is the active tab as the app quits; nothing asks to save.
   await documentTab(page, 'Totals').click()
   for (let step = 0; step < 3; step++) await page.keyboard.press('Control+Shift+PageUp')
+  await pinDocumentButton(page, 'Totals').click()
+  await expect(documentShelf(page, true).getByRole('tab', { name: 'Totals', exact: true })).toBeVisible()
   await documentTab(page, 'Month end').click()
   expect(await tabNames()).toEqual(['Totals', 'Welcome', 'Orders report', 'Month end'])
   const exited = new Promise(done => application.process().once('exit', done))
@@ -103,6 +105,7 @@ try {
     ['Orders report', 'orders.sql', false, undefined], ['Month end', 'SQLQuery2.sql', true, 'SELECT 2 AS month_end']
   ])
   expect(kept.documents[2].path).toBe(orders)
+  expect(kept.documents[0].pinned).toBe(true)
   expect(kept.activeIndex).toBe(3)
   console.log('Hot exit checks: a quit asks nothing and keeps the tabs, in order, with their text and names.')
 
@@ -110,6 +113,8 @@ try {
   await writeFile(orders, 'SELECT 2 AS orders')
   await launch([])
   await expect.poll(tabNames).toEqual(['Totals', 'Welcome', 'Orders report', 'Month end'])
+  await expect(documentShelf(page, true).getByRole('tab', { name: 'Totals', exact: true })).toBeVisible()
+  await expect(pinDocumentButton(page, 'Totals', true)).toBeVisible()
   expect(await activeDocumentName(page)).toBe('Month end')
   await expect.poll(text).toContain('SELECT 2 AS month_end')
   await expect(unsavedMark(documentTab(page, 'Month end'))).toBeVisible()

@@ -24,7 +24,8 @@ export function editorContribution({ commands, documents, editorOptions, inputMo
   }
   const canMove = (tabId: string | undefined, delta: 1 | -1) => {
     const { documents: list, activeId } = documents.getSnapshot(), index = list.findIndex(document => document.id === (tabId ?? activeId))
-    return index >= 0 && index + delta >= 0 && index + delta < list.length
+    const target = list[index + delta]
+    return index >= 0 && !!target && !!target.pinned === !!list[index].pinned
   }
   const registrations = [
     ...editorActions.map(([id, action]) => commands.register(id, { run: () => triggerEditorAction(documents, action) })),

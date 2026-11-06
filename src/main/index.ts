@@ -970,7 +970,7 @@ app.whenReady().then(async () => {
     if (!trusted(event)) return
     closeApproved = true
     // Every query was saved, discarded or kept by hot exit, so AutoRecover's copies of this page's go, before the app can
-    // exit. A close that kept nothing (hot exit off) leaves nothing for the next start to reopen.
+    // exit. A close that kept nothing leaves nothing for the next start to reopen.
     await recovery.discardOwned(pageGeneration).catch(() => {})
     if (!openSession.keptBy(pageGeneration)) await openSession.clear().catch(() => {})
     if (closeAction(process.platform, closeIntent) === 'closeWindow') mainWindow?.close()

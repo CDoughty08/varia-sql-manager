@@ -277,6 +277,7 @@ try {
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await expect(queryBar()).toHaveAttribute('role', 'status')
   await expect(queryBar().locator(part.queryStatusText)).toHaveText('Connected.')
+  await expect(activeTab().locator(part.tabSid)).toHaveText('—')
   await textbox().focus()
   await page.keyboard.press(mac ? 'Meta+A' : 'Control+A')
   await page.keyboard.insertText('-- varia-fake: sets=W1*10')
@@ -286,6 +287,8 @@ try {
   await expect(queryBar()).toHaveAttribute('data-tone', 'ready')
   await expect(queryFact(page, 'server')).toHaveText('Server: server-a (16.0)')
   await expect(queryFact(page, 'login')).toHaveText(/^Login: fake \(\d+\)$/)
+  const spid = (await queryFact(page, 'login').textContent()).match(/\((\d+)\)$/)[1]
+  await expect(activeTab().locator(part.tabSid)).toHaveText(`SID ${spid}`)
   await expect(queryFact(page, 'database')).toHaveText('Database: master')
   await expect(queryFact(page, 'time')).toHaveCount(0)
   await expect(queryFact(page, 'rows')).toHaveCount(0)

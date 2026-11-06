@@ -6,6 +6,7 @@ export interface QueryDocument {
   readonly id: string
   readonly name: string
   readonly dirty: boolean
+  readonly pinned?: boolean
   readonly savedVersionId: number | null
   readonly connectionId?: string
   readonly database: string

@@ -17,18 +17,19 @@ const bytes = (value: unknown) => encoder.encode(JSON.stringify(value)).length
  * designer with unsaved changes asks as before), and neither is a value still being appended or a tab past the caps.
  */
 export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'getModel' | 'isFilling'>, server: (connectionId: string) => string | undefined,
-  budget: number = sessionLimits.totalBytes - sessionLimits.slackBytes): KeptSession {
+  { budget = sessionLimits.totalBytes - sessionLimits.slackBytes, pinnedOnly = false }: { budget?: number; pinnedOnly?: boolean } = {}): KeptSession {
   const { documents: tabs, activeId } = documents.getSnapshot(), written: SessionDocumentWrite[] = [], kept = new Set<string>()
   let used = 0, activeIndex = -1
   for (const document of tabs) {
     const model = documents.getModel(document.id)
     if (written.length >= sessionLimits.documents) break
-    if (!model || isCustomKind(document.kind) || documents.isFilling(document.id)) continue
+    if ((pinnedOnly && !document.pinned) || !model || isCustomKind(document.kind) || documents.isFilling(document.id)) continue
     const kind = document.kind && !isCustomKind(document.kind) ? document.kind : 'sql', connected = document.connectionId ? server(document.connectionId) : document.lastServer
     const at = kind === 'sql' && connected ? connected.slice(0, sessionLimits.serverChars) : undefined
     const entry: SessionDocumentWrite = {
       name: document.name.slice(0, sessionLimits.nameChars), ...document.baseName ? { baseName: document.baseName.slice(0, sessionLimits.nameChars) } : {}, kind,
       eol: model.getEOL() === '\r\n' ? 'crlf' : 'lf', dirty: document.dirty, ...document.file ? { fileId: document.file.id } : {},
+      ...document.pinned ? { pinned: true } : {},
       ...at ? { server: at } : {}, ...at && document.database ? { database: document.database.slice(0, sessionLimits.databaseChars) } : {},
       ...!document.file || document.dirty ? { text: model.getValue() } : {}
     }
@@ -44,7 +45,7 @@ export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'ge
 
 export interface SessionRestoreOptions {
   readonly api: Pick<VariaApi, 'hotExit' | 'takeSession'>
-  readonly documents: Pick<DocumentService, 'getSnapshot' | 'reopen' | 'activate'>
+  readonly documents: Pick<DocumentService, 'getSnapshot' | 'reopen' | 'activate' | 'setPinned'>
   readonly files: Pick<FileService, 'later' | 'release' | 'reportError'>
 }
 /**
@@ -65,6 +66,7 @@ export async function restoreSession({ api, documents, files }: SessionRestoreOp
         if (document.file) registered.push(document.file)
         const open = document.file ? documents.getSnapshot().documents.find(tab => tab.file?.id === document.file?.id) : undefined
         const id = open?.id ?? documents.reopen(document).id
+        if (open && document.pinned) documents.setPinned(id, true)
         if (!open) opened++
         if (index === restored.activeIndex) active = id
       }

@@ -36,6 +36,7 @@ export interface SessionDocumentWrite {
   readonly kind: DocumentKind
   readonly eol: LineEnding
   readonly dirty: boolean
+  readonly pinned?: boolean
   readonly fileId?: string
   readonly server?: string
   readonly database?: string
@@ -51,6 +52,7 @@ export interface RestoredDocument {
   readonly kind: DocumentKind
   readonly eol: LineEnding
   readonly dirty: boolean
+  readonly pinned?: boolean
   readonly text: string
   readonly file?: SqlFile
   readonly server?: string

@@ -340,7 +340,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
         const now = this.options.hotExit?.()
         if (!now || [...kept].some(id => this.documents.get(id) && !now.kept.has(id))) throw new Error('A query changed while closing the window. Review the latest changes before closing it.')
         const result = await keepSession(now.session)
-        if (!result.ok) throw new Error(`The open queries could not be kept for the next start: ${result.error} Save them, or turn off Restore open queries on startup (Tools › Options › Environment › Documents), and close again.`)
+        if (!result.ok) throw new Error(`The open queries could not be kept for the next start: ${result.error} Try saving or closing some queries before closing the window again.`)
         if (this.disposed) return
         // What was kept is the text as it was when written; an edit made while writing it would be lost.
         unchanged()
