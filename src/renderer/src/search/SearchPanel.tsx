@@ -96,19 +96,21 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   // Whether keyboard focus is on a hit (the list's focus and blur events keep it): a new answer that drops the focused hit hands
   // focus to the list's tab stop, or to the box when no hits are left, rather than leaving it on the page, where keys reach nothing.
   const focusInList = useRef(false)
-  const shownCurrent = useRef<number | undefined>(undefined)
+  // The selected hit's identity: the list scrolls to the selection only when another hit is selected, so a search run again that
+  // keeps the selection (at whatever index) leaves the list where the user scrolled it, focused or not.
+  const selectedHit = current === undefined ? undefined : state?.result?.hits[current]
+  const selectedKey = selectedHit && hitKey(selectedHit)
+  const shownKey = useRef<string | undefined>(undefined)
   useLayoutEffect(() => {
     const hits = list.current, rows = hits?.querySelectorAll<HTMLElement>('[data-hit]')
     const focused = !!hits && hits.contains(hits.ownerDocument.activeElement)
-    // Only a selection that moved, or the focused one, is scrolled to: a search run again that keeps the selection leaves the
-    // list where the user scrolled it.
-    if (current !== undefined && (current !== shownCurrent.current || focused)) rows?.[current]?.scrollIntoView({ block: 'nearest' })
-    shownCurrent.current = current
+    if (current !== undefined && selectedKey !== shownKey.current) rows?.[current]?.scrollIntoView({ block: 'nearest' })
+    shownKey.current = selectedKey
     if (!focusInList.current || focused) return
     const row = rows?.[current ?? 0]
     if (row) row.focus()
     else { focusInList.current = false; root.current?.querySelector<HTMLElement>('[data-object-search-focus]')?.focus() }
-  }, [current, state?.result])
+  }, [current, selectedKey, state?.result])
   if (!state) return null
   const entry = snapshot.indexes[state.connectionId]
   const result = state.result

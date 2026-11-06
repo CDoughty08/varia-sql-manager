@@ -42,6 +42,11 @@ export interface PopoutWindow {
   readonly id: number
   isDestroyed(): boolean
   isFocused(): boolean
+  isMinimized(): boolean
+  /** Shows (restores) the window without activating it. */
+  showInactive(): void
+  /** Puts the window on top of the others without activating it. */
+  moveTop(): void
   destroy(): void
   setMenuBarVisibility(visible: boolean): void
   setAutoHideMenuBar(hide: boolean): void
@@ -66,7 +71,7 @@ export interface PopoutWindow {
 const pendingMs = 10_000
 
 export class PopoutWindows<W extends PopoutWindow> {
-  private readonly windows = new Map<number, { window: W; activation: UserActivation }>()
+  private readonly windows = new Map<number, { window: W; activation: UserActivation; name?: string }>()
   /** When each allowed window that Electron has not created yet was allowed: they count against the limit too. */
   private pending: number[] = []
   constructor(private readonly options: {
@@ -103,11 +108,12 @@ export class PopoutWindows<W extends PopoutWindow> {
     } }
   }
 
-  /** Takes a window `open` allowed: it denies popups and navigation, counts its own input for Paste, and shares the zoom. */
-  adopt(window: W): void {
+  /** Takes a window `open` allowed: it denies popups and navigation, counts its own input for Paste, and shares the zoom.
+   *  `name` is the frame name the page opened it with (`varia-popout-<uuid>`), by which the page asks to raise it. */
+  adopt(window: W, name?: string): void {
     const activation = new UserActivation()
     this.pending.shift()
-    this.windows.set(window.id, { window, activation })
+    this.windows.set(window.id, { window, activation, ...name !== undefined && popoutWindowName.test(name) ? { name } : {} })
     const contents = window.webContents
     contents.setWindowOpenHandler(() => ({ action: 'deny' }))
     for (const event of ['will-navigate', 'will-frame-navigate', 'will-redirect'] as const) contents.on(event, navigation => navigation.preventDefault())
@@ -130,6 +136,17 @@ export class PopoutWindows<W extends PopoutWindow> {
   }
   /** The focused popout, if one is focused, with its own record of the user's input. */
   focused(): { window: W; activation: UserActivation } | undefined { return [...this.windows.values()].find(item => !item.window.isDestroyed() && item.window.isFocused()) }
+  /**
+   * Brings the popout the page opened as `name` to the top, restoring it if minimized, without activating it: keyboard focus
+   * stays where the user is (Search Objects' Reveal, from its hits, into a popped-out Object Explorer). False when there is none.
+   */
+  raise(name: string): boolean {
+    const item = [...this.windows.values()].find(value => value.name === name && !value.window.isDestroyed())
+    if (!item) return false
+    if (item.window.isMinimized()) item.window.showInactive()
+    item.window.moveTop()
+    return true
+  }
   /** Every popout follows the main window's zoom. */
   zoom(level: number): void { for (const { window } of this.windows.values()) if (!window.isDestroyed()) window.webContents.setZoomLevel(level) }
   get size(): number { return this.windows.size }

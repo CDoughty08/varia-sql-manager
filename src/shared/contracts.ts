@@ -523,6 +523,9 @@ export interface VariaApi {
   takeSession(): Promise<ApiResult<RestoredSession>>
   /** Writes text to the clipboard through main, which works while the window is unfocused; there is no read. */
   writeClipboardText(text: string): Promise<ApiResult<void>>
+  /** Brings one of the page's popout windows (by the `varia-popout-<uuid>` name it opened it with) to the top, restored, without
+   *  activating it, so keyboard focus stays in the main window. */
+  raisePopout(name: string): Promise<ApiResult<void>>
   confirmClose(name: string): Promise<ApiResult<'save' | 'discard' | 'cancel'>>
   /** Database Properties' Open Connections prompt in main's message box: true only for Yes (No is the default). */
   confirmOpenConnections(): Promise<ApiResult<boolean>>

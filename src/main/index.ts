@@ -39,6 +39,7 @@ import { SessionStore, sessionWriteSchema, type SessionRecordDocument } from './
 import type { RestoredDocument, RestoredSession } from '../shared/files/session'
 import { lossDetails } from '../shared/files/recovery'
 import { commandTitle } from '../shared/settings/catalog'
+import { popoutWindowName } from '../shared/popouts'
 import { windowControls } from '../shared/theme/metrics'
 import { AppearanceService, windowChromeFor } from './appearance'
 import { applicationMenuTemplate, type ApplicationMenuActions } from './application-menu'
@@ -508,7 +509,7 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
   }
   // The page may open only its own popout windows: same-origin about:blank children with Varia's popout name, on a display.
   contents.setWindowOpenHandler(details => popouts.open(details, { backgroundColor: appearance.windowChrome().backgroundColor, show: process.env.VARIA_SMOKE_TEST !== '1' }))
-  contents.on('did-create-window', child => popouts.adopt(child))
+  contents.on('did-create-window', (child, details) => popouts.adopt(child, details.frameName))
   // With popouts open the page's own visibility stays visible (no background throttling): main tells it instead.
   const sendHidden = () => { if (!window.isDestroyed()) contents.send('varia:window-hidden', window.isMinimized() || !window.isVisible()) }
   window.on('minimize', sendHidden); window.on('restore', sendHidden); window.on('hide', sendHidden); window.on('show', sendHidden)
@@ -937,6 +938,8 @@ app.whenReady().then(async () => {
   // Write only (the page's one path to clipboard contents is the Paste role, gated above); the length is bounded like
   // a full results grid copy.
   handle('varia:clipboard-write', value => { clipboard.writeText(z.string().max(maxClipboardText).parse(value)) })
+  // Raises one of the page's own popouts, named as it opened it, without activating it.
+  handle('varia:popout-raise', value => { popouts.raise(z.string().regex(popoutWindowName).parse(value)) })
   handle('varia:confirm-close', async value => {
     const name = z.string().min(1).max(512).parse(value)
     const response = await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'question', title: 'Unsaved query', message: `Save changes to ${name}?`, buttons: ['Save', "Don't Save", 'Cancel'], defaultId: 0, cancelId: 2, noLink: true, signal }), { response: 2, checkboxChecked: false }, true)

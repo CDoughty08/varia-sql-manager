@@ -50,9 +50,17 @@ const searchBox = () => page.getByRole('textbox', { name: 'Search in Object Expl
 /** With no search text, the closed Search options button is the only tab stop between the box and tree. */
 const backToSearchBox = async () => { for (let step = 0; step < 2; step++) await page.keyboard.press('Shift+Tab'); await expect(searchBox()).toBeFocused() }
 const searchBoxToTree = async () => { for (let step = 0; step < 2; step++) await page.keyboard.press('Tab'); await expect(tree()).toBeFocused() }
-/** Whether the tab's latest search is held by the stub (holdSearch), and its answer let through. */
-const searchHeld = () => application.evaluate(() => { const stub = globalThis.variaStub, last = stub.calls.filter(call => call.method === 'explorer.search').at(-1); return !!last && stub.held.has(last.params.requestId) })
-const releaseSearch = () => application.evaluate(() => { const stub = globalThis.variaStub, id = stub.calls.filter(call => call.method === 'explorer.search').at(-1).params.requestId; stub.held.get(id)(); stub.held.delete(id) })
+/** Whether the stub holds a search for `text` (holdSearch), and that search's answer let through. A slow runner may search the
+ *  text typed on the way there too: only the search for `text` counts. */
+const heldSearchFor = text => application.evaluate((_electron, wanted) => {
+  const stub = globalThis.variaStub
+  return stub.calls.filter(call => call.method === 'explorer.search' && call.params.text === wanted).map(call => call.params.requestId).findLast(id => stub.held.has(id)) ?? null
+}, text)
+const searchHeld = async text => (await heldSearchFor(text)) !== null
+const releaseSearch = async text => {
+  const id = await heldSearchFor(text)
+  await application.evaluate((_electron, held) => { const stub = globalThis.variaStub; stub.held.get(held)(); stub.held.delete(held) }, id)
+}
 const isFolder = (params, folder) => params.node.type === 'folder' && params.node.folder === folder
 /** The row `aria-activedescendant` names, as a screen reader finds it. */
 const active = () => page.evaluate(text => {
@@ -927,12 +935,12 @@ try {
     await expect(objectSearchBox(page)).toBeFocused()
     // The same search run again keeps the selection; an answer that drops the focused hit hands focus to the list's tab stop,
     // and one with no hits left hands it to the box.
-    const rerun = async () => { await page.keyboard.press('Backspace'); await page.keyboard.type('e'); await expect.poll(searchHeld).toBe(true) }
+    const rerun = async () => { await page.keyboard.press('Backspace'); await page.keyboard.type('e'); await expect.poll(() => searchHeld('table')).toBe(true) }
     await setStub({ holdSearch: true, searchHidden: ['table1'] })
     await rerun()
     await page.keyboard.press('ArrowDown')
     await expect(tabHits.first()).toBeFocused()
-    await releaseSearch()
+    await releaseSearch('table')
     await expect(tabHits).toHaveCount(1)
     await expect(tabHits.first()).toHaveAttribute('title', 'Reveal in Object Explorer: dbo.table2')
     await expect(tabHits.first()).toBeFocused()
@@ -941,7 +949,7 @@ try {
     await rerun()
     await page.keyboard.press('ArrowDown')
     await expect(tabHits.first()).toBeFocused()
-    await releaseSearch()
+    await releaseSearch('table')
     await expect(tabHits).toHaveCount(0)
     await expect(objectSearchBox(page)).toBeFocused()
     await setStub({ holdSearch: false, searchHidden: [] })
@@ -956,9 +964,19 @@ try {
     expect(scrolled).toBeGreaterThan(0)
     await setStub({ holdSearch: true })
     await rerun()
-    await releaseSearch()
+    await releaseSearch('table')
     await expect(page.locator(part.objectSearchTab).getByRole('status')).toHaveText(/^2 results/)
     expect(await results.evaluate(list => list.scrollTop)).toBe(scrolled)
+    // With focus on the selected hit too: the search runs again while the hit has focus and the list is scrolled past it.
+    await page.keyboard.press('Backspace')
+    await page.keyboard.type('e')
+    await expect.poll(() => searchHeld('table')).toBe(true)
+    await objectSearchSelected(page).evaluate(button => button.focus({ preventScroll: true }))
+    await results.evaluate((list, top) => { list.scrollTop = top }, scrolled)
+    await releaseSearch('table')
+    await expect(page.locator(part.objectSearchTab).getByRole('status')).toHaveText(/^2 results/)
+    expect(await results.evaluate(list => list.scrollTop)).toBe(scrolled)
+    await objectSearchBox(page).focus()
     await expect(objectSearchSelected(page)).toHaveAttribute('title', 'Reveal in Object Explorer: dbo.table1')
     await results.evaluate(list => { list.style.flex = ''; list.style.height = '' })
     await setStub({ holdSearch: false })
@@ -977,20 +995,31 @@ try {
       const id = document.querySelector('[data-explorer-tree]')?.getAttribute('aria-activedescendant')
       return (id && document.getElementById(id)?.querySelector(text)?.textContent) ?? ''
     }, part.explorerRowText)
-    await popout.evaluate(() => {
-      globalThis.raised = 0
-      globalThis.hidden = false
-      window.focus = () => { globalThis.raised++ }
-      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => globalThis.hidden ? 'hidden' : 'visible' })
+    // Main raises it, restored when minimized, without activating it; the page never focuses the window itself.
+    await popout.evaluate(() => { globalThis.focused = 0; globalThis.ownFocus = window.focus; window.focus = () => { globalThis.focused++ } })
+    await application.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows().find(item => item.webContents.getURL() === 'about:blank')
+      globalThis.popoutRaise = { moved: 0, shown: 0, minimized: false }
+      window.moveTop = () => { globalThis.popoutRaise.moved++ }
+      window.showInactive = () => { globalThis.popoutRaise.shown++; globalThis.popoutRaise.minimized = false }
+      window.isMinimized = () => globalThis.popoutRaise.minimized
     })
+    const raised = () => application.evaluate(() => ({ moved: globalThis.popoutRaise.moved, shown: globalThis.popoutRaise.shown }))
     await tabHits.nth(1).dblclick()
     await expect.poll(popoutActive).toBe('dbo.table2')
-    expect(await popout.evaluate(() => globalThis.raised)).toBe(0)
-    await popout.evaluate(() => { globalThis.hidden = true })
+    await expect.poll(raised).toEqual({ moved: 1, shown: 0 })
+    await application.evaluate(() => { globalThis.popoutRaise.minimized = true })
     await tabHits.first().dblclick()
     await expect.poll(popoutActive).toBe('dbo.table1')
-    expect(await popout.evaluate(() => globalThis.raised)).toBe(1)
+    await expect.poll(raised).toEqual({ moved: 2, shown: 1 })
+    expect(await popout.evaluate(() => globalThis.focused)).toBe(0)
     await expect(tabHits.first()).toBeFocused()
+    // The spies go before the window does, so nothing else in the suite meets them.
+    await popout.evaluate(() => { window.focus = globalThis.ownFocus })
+    await application.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows().find(item => item.webContents.getURL() === 'about:blank')
+      delete window.moveTop; delete window.showInactive; delete window.isMinimized
+    })
     await popoutDockButton(popout).click()
     await expect(tree()).toBeVisible()
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+W' : 'Control+F4')
