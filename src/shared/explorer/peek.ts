@@ -68,7 +68,15 @@ export const peekLimits = {
   /** The backend's own budget for a peek; past it the reply is a TIMEOUT value. */
   budgetMs: 15_000,
   /** How long the pointer rests on a row with Ctrl (Cmd on macOS) held before the card opens. */
-  hoverMs: 350
+  hoverMs: 350,
+  /**
+   * A table's CREATE scripts the window keeps (in memory only), and their UTF-16 code units in all: a script is reused while
+   * the table's modified time is the one it was made at, so peeking a table again starts no SMO job.
+   */
+  scriptCacheEntries: 32,
+  scriptCacheChars: 4_000_000,
+  /** Table scripts a replaced card leaves running so they can be cached; one more cancels the oldest. */
+  backgroundScripts: 2
 } as const
 
 export type PeekValue = string | number | boolean | null

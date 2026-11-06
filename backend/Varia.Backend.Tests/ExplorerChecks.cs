@@ -834,5 +834,26 @@ internal static class ExplorerChecks
         try { await first; check(false, "a forgotten connection's running request completed"); }
         catch (RequestException error) { check(error.Code == "CANCELLED", "disconnect cancels the connection's running requests"); }
         check((await other).Error is not null && limited.RunningCount == 0, "another connection's request is unaffected, and every request unregisters when it ends");
+
+        // Peek has a slot of its own per connection: it runs while tree reads hold every shared slot, and its budget starts only
+        // once it has its slot, so a peek queued behind another is not timed out by the wait.
+        var held = new FakeHost { Hold = new SemaphoreSlim(0) };
+        using var lanes = new ExplorerService(held, new ExplorerOptions { PerConnection = 1, Total = 1, PeekBudget = TimeSpan.FromMilliseconds(200) });
+        var busy = Guid.NewGuid().ToString();
+        var orders = new ObjectRefDto("table", "Sales", "dbo", "Orders");
+        var tree = Task.Run(() => lanes.ChildrenAsync(Args(Folder(server, "logins")) with { ConnectionId = busy }, CancellationToken.None));
+        SpinWait.SpinUntil(() => held.Connections == 1, 5000);
+        var peekA = Task.Run(() => lanes.PeekAsync(new PeekArgs(busy, Guid.NewGuid().ToString(), orders), CancellationToken.None));
+        SpinWait.SpinUntil(() => held.Connections == 2, 5000);
+        check(held.Connections == 2, "a peek runs while tree reads hold every shared slot");
+        var peekB = Task.Run(() => lanes.PeekAsync(new PeekArgs(busy, Guid.NewGuid().ToString(), orders), CancellationToken.None));
+        // Longer than the budget: a budget counted from the request would have timed the queued peek out by now.
+        await Task.Delay(500);
+        check(held.Connections == 2 && !peekB.IsCompleted, "a second peek waits for the connection's peek slot, without its budget running");
+        held.Hold.Release(10);
+        await tree;
+        await peekA;
+        var queued = await peekB;
+        check(held.Connections == 3, "the queued peek runs once the slot is free instead of timing out in the queue: " + queued.Error?.Code);
     }
 }

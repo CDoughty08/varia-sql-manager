@@ -57,8 +57,9 @@ describe('explorer.peek requests', () => {
   })
   it('is validated by main, runs on the explorer lane within its deadline, and is cancellable', () => {
     expect(requestSchemas['explorer.peek']).toBe(peekParamsSchema)
-    expect(methodPolicies['explorer.peek']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 20_000 })
-    expect((methodPolicies['explorer.peek'] as { deadlineMs: number }).deadlineMs).toBeGreaterThan(peekLimits.budgetMs)
+    expect(methodPolicies['explorer.peek']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 30_000 })
+    // Room for a peek that waits for the connection's peek slot, then runs its whole budget.
+    expect((methodPolicies['explorer.peek'] as { deadlineMs: number }).deadlineMs).toBeGreaterThanOrEqual(2 * peekLimits.budgetMs)
     expect(cancellableRequests('explorer.peek', { explorer: 'explorer', scripting: 'scripting', actions: 'actions', ssis: 'ssis', activity: 'activity', connections: 'connections' })).toBe('explorer')
   })
 })
@@ -243,5 +244,110 @@ describe('PeekBoundary', () => {
     expect(setState).toHaveBeenCalledWith({ failed: false })
     boundary.componentWillUnmount()
     expect(close).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('PeekService script cache', () => {
+  const ok = <T>(value: T): ApiResult<T> => ({ ok: true, value })
+  type ScriptReply = ApiResult<{ text?: string; database: string; warnings: string[]; commands: number; elapsedMs: number }>
+  /** Every call's resolver, in order, so a test answers any request it chose. */
+  function setup() {
+    const peeks: ((value: ApiResult<PeekResult>) => void)[] = [], scripts: ((value: ScriptReply) => void)[] = []
+    const api = {
+      explorerPeek: vi.fn(() => new Promise<ApiResult<PeekResult>>(resolve => { peeks.push(resolve) })),
+      explorerCancel: vi.fn(async () => ok({ cancelled: 1 })),
+      scriptObjects: vi.fn(() => new Promise<never>(resolve => { scripts.push(resolve as never) })),
+      cancelScripting: vi.fn(async () => ok({ cancelled: 1 })),
+      writeClipboardText: vi.fn(async () => ok(undefined))
+    }
+    let live = [{ id: connectionId }]
+    const connectionListeners = new Set<() => void>(), optionListeners = new Set<() => void>()
+    let ids = 0
+    const service = new PeekService({
+      api: api as never,
+      connections: { getSnapshot: () => live, subscribe: listener => { connectionListeners.add(listener); return () => connectionListeners.delete(listener) } },
+      scriptingOptions: { getSnapshot: () => ({ options: {} as ScriptingOptions }), subscribe: listener => { optionListeners.add(listener); return () => optionListeners.delete(listener) } },
+      timers: { setTimeout: () => 1, clearTimeout: () => {} },
+      newId: () => `id-${++ids}`
+    })
+    const facts = (index: number, modified: string) => peeks[index]!(ok({ facts: { schema: 'dbo', modified }, elapsedMs: 1 }))
+    const script = (index: number, text: string) => scripts[index]!(ok({ text, database: 'Sales', warnings: [], commands: 1, elapsedMs: 1 }))
+    const definition = () => { const part = service.getSnapshot().open?.definition; return part?.status === 'ready' ? part.value.text : part?.status }
+    return { service, api, facts, script, definition, scriptsSent: () => scripts.length,
+      lose: () => { live = []; for (const listener of connectionListeners) listener() },
+      changeOptions: () => { for (const listener of optionListeners) listener() } }
+  }
+  const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+
+  it('lets a replaced card\'s table script finish, and reuses it while the table\'s modified time is unchanged', async () => {
+    const { service, api, facts, script, definition, scriptsSent } = setup()
+    service.peek(node('table', 1), 'hover')
+    facts(0, '2024-01-02T03:04:05')
+    await flush()
+    // Replaced before its script came back: the script keeps running, so it can be kept.
+    service.peek(node('procedure', 2, 'Ship'), 'hover')
+    expect(api.cancelScripting).not.toHaveBeenCalled()
+    script(0, 'CREATE TABLE [dbo].[Customer]')
+    await flush()
+    service.peek(node('table', 1), 'keyboard')
+    expect(scriptsSent()).toBe(1)
+    expect(definition()).toBe('loading')
+    facts(2, '2024-01-02T03:04:05')
+    await flush()
+    expect(definition()).toBe('CREATE TABLE [dbo].[Customer]')
+    expect(api.scriptObjects).toHaveBeenCalledTimes(1)
+  })
+  it('scripts the table again when it changed, when its facts fail, and on Refresh', async () => {
+    const { service, facts, script, definition, scriptsSent } = setup()
+    service.peek(node('table', 1), 'menu')
+    facts(0, '2024-01-02T03:04:05')
+    script(0, 'CREATE TABLE v1')
+    await flush()
+    service.close()
+    service.peek(node('table', 1), 'menu')
+    facts(1, '2024-05-06T07:08:09')
+    await flush()
+    expect(scriptsSent()).toBe(2)
+    script(1, 'CREATE TABLE v2')
+    await flush()
+    expect(definition()).toBe('CREATE TABLE v2')
+    service.refresh()
+    expect(scriptsSent()).toBe(3)
+  })
+  it('keeps at most backgroundScripts running for replaced cards, cancelling the oldest', async () => {
+    const { service, api, facts } = setup()
+    for (let index = 0; index <= peekLimits.backgroundScripts; index++) {
+      service.peek(node('table', index + 1, `T${index}`), 'hover')
+      facts(index, '2024-01-02T03:04:05')
+      await flush()
+    }
+    service.close()
+    // The first table's script (id-2) gave way to the newer ones.
+    expect(api.cancelScripting).toHaveBeenCalledTimes(1)
+    expect(api.cancelScripting).toHaveBeenCalledWith(['id-2'])
+  })
+  it('cancels a replaced card\'s script whose facts are not in, and forgets kept scripts on disconnect or an options change', async () => {
+    const { service, api, facts, script, scriptsSent, changeOptions } = setup()
+    service.peek(node('table', 1), 'menu')
+    service.peek(node('table', 2, 'Other'), 'menu')
+    expect(api.cancelScripting).toHaveBeenCalledWith(['id-2'])
+    facts(1, '2024-01-02T03:04:05')
+    script(1, 'CREATE TABLE [dbo].[Other]')
+    await flush()
+    changeOptions()
+    service.close()
+    service.peek(node('table', 2, 'Other'), 'menu')
+    expect(scriptsSent()).toBe(3)
+  })
+  it('drops what it kept for a server that disconnects', async () => {
+    const { service, facts, script, scriptsSent, lose } = setup()
+    service.peek(node('table', 1), 'menu')
+    facts(0, '2024-01-02T03:04:05')
+    script(0, 'CREATE TABLE x')
+    await flush()
+    lose()
+    expect(service.getSnapshot().open).toBeUndefined()
+    expect((service as unknown as { scripts: Map<string, unknown> }).scripts.size).toBe(0)
+    expect(scriptsSent()).toBe(1)
   })
 })

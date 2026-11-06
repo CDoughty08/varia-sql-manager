@@ -38,14 +38,34 @@ export const peekMessages = {
   noDefinition: 'The definition is encrypted, or the login does not have VIEW DEFINITION permission on it.'
 } as const
 
+/** A table's finished CREATE script, good while the table's modified time is still `modified`. */
+interface CachedScript { readonly connectionId: string; readonly text: string; readonly modified: string }
+/** A table's script request: the open card's, or one a replaced card left running so that its script can be cached. */
+interface ScriptJob {
+  readonly requestId: string
+  readonly connectionId: string
+  readonly key: string
+  /** The table's modified time, from the peek's facts, once they are in. */
+  modified?: string
+  /** The script, when it came before the facts did. */
+  text?: string
+  done: boolean
+}
+
 /**
  * Object Explorer's Peek: at most one card, on one object. It reads the object's properties (explorer.peek) and its
- * definition (a module's text comes with them; a table's from Script As CREATE), cancels both when the card closes or
- * another peek replaces it, and closes the card when its server disconnects.
+ * definition (a module's text comes with them; a table's from Script As CREATE), and closes the card when its server
+ * disconnects. A closed or replaced card cancels its reads, but a table's script whose modified time is known finishes in
+ * the background (at most `peekLimits.backgroundScripts`), so that peeking the table again while it is unchanged takes the
+ * script from the window's cache instead of starting another SMO job.
  */
 export class PeekService extends SnapshotStore<PeekSnapshot> {
   private next = 0
-  private requests: { peek?: string; script?: string } = {}
+  private requests: { peek?: string; script?: ScriptJob } = {}
+  private background: ScriptJob[] = []
+  /** Least recently used first. */
+  private readonly scripts = new Map<string, CachedScript>()
+  private scriptChars = 0
   private hoverTimer: unknown
   private hoverRow: number | undefined
   private disposed = false
@@ -57,10 +77,14 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
     super({})
     this.timers = options.timers ?? { setTimeout: (callback, ms) => setTimeout(callback, ms), clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>) }
     this.newId = options.newId ?? (() => crypto.randomUUID())
-    this.unsubscribe = options.connections.subscribe(() => {
+    const connections = options.connections.subscribe(() => {
       const open = this.getSnapshot().open
       if (open && !this.isLive(open.node.connectionId)) this.close()
+      this.forget(connectionId => !this.isLive(connectionId))
     })
+    // Scripts follow Tools > Options > Scripting: a change makes every kept or background script stale.
+    const scripting = options.scriptingOptions.subscribe(() => this.forget(() => true))
+    this.unsubscribe = () => { connections(); scripting() }
   }
 
   /** Whether a node can be peeked: a table, view, procedure or function on a live server. */
@@ -77,7 +101,7 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
       if (source !== 'hover' && open.source === 'hover') this.publish({ open: { ...open, source } })
       return
     }
-    this.load(node, isPeekKindOf(node), source)
+    this.load(node, isPeekKindOf(node), source, false)
   }
 
   /** The pointer rests on a row with Ctrl (⌘ on macOS) held: the card opens after `peekLimits.hoverMs`. */
@@ -104,10 +128,10 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
     if (key === (this.options.platform === 'darwin' ? 'Meta' : 'Control')) this.cancelHover()
   }
 
-  /** Reads the open card's object again. */
+  /** Reads the open card's object again, its script included: Refresh never takes a kept script. */
   refresh(): void {
     const open = this.getSnapshot().open
-    if (open) this.load(open.node, open.kind, open.source)
+    if (open) this.load(open.node, open.kind, open.source, true)
   }
 
   /** Copies the open card's definition, once it has all of it: a cut module is copied whole by Script to New Query. */
@@ -120,13 +144,16 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
 
   close(): void {
     this.cancelHover()
-    this.cancelRequests()
+    this.release(true)
     if (this.getSnapshot().open) this.publish({})
   }
 
   dispose(): void {
     if (this.disposed) return
-    this.close()
+    this.cancelHover()
+    this.release(false)
+    this.forget(() => true)
+    if (this.getSnapshot().open) this.publish({})
     this.disposed = true
     this.unsubscribe()
     this.clearListeners()
@@ -136,49 +163,126 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
     return this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost)
   }
 
-  private load(node: ExplorerMenuNode, kind: PeekKind, source: PeekSource): void {
+  private load(node: ExplorerMenuNode, kind: PeekKind, source: PeekSource, fresh: boolean): void {
     if (node.ref.type !== 'object') return
-    this.cancelRequests()
+    // A refresh asks for the same script again, so the one running is not worth keeping.
+    this.release(!fresh)
     const id = ++this.next, object = node.ref.object, connectionId = node.connectionId
-    const script = peekSpecs[kind].definition === 'script'
-    const peekId = this.newId(), scriptId = script ? this.newId() : undefined
-    this.requests = { peek: peekId, script: scriptId }
+    const key = peekSpecs[kind].definition === 'script' ? scriptKey(connectionId, object) : undefined
+    const cached = key === undefined || fresh ? undefined : this.scripts.get(key)
+    const peekId = this.newId()
+    this.requests = { peek: peekId }
     this.publish({ open: { id, rowId: node.id, node, kind, source, facts: { status: 'loading' }, definition: { status: 'loading' } } })
     const current = () => !this.disposed && this.getSnapshot().open?.id === id
     const update = (change: Partial<Pick<OpenPeek, 'facts' | 'definition'>>) => { const open = this.getSnapshot().open; if (open && open.id === id) this.publish({ open: { ...open, ...change } }) }
+    const startScript = (key: string, modified?: string): ScriptJob => {
+      const job: ScriptJob = { requestId: this.newId(), connectionId, key, ...(modified === undefined ? {} : { modified }), done: false }
+      this.requests = { ...this.requests, script: job }
+      const options = this.options.scriptingOptions.getSnapshot().options
+      void settle(this.options.api.scriptObjects({ connectionId, requestId: job.requestId, targets: [object], verb: 'create', options })).then(result => {
+        job.done = true
+        this.background = this.background.filter(other => other !== job)
+        if (this.requests.script === job) this.requests = { ...this.requests, script: undefined }
+        if (result.ok && !result.value.error && result.value.text !== undefined) {
+          if (job.modified === undefined) job.text = result.value.text
+          else this.keep(job, result.value.text)
+        }
+        if (!current()) return
+        if (!result.ok) { update({ definition: { status: 'error', message: result.error } }); return }
+        const value = result.value
+        if (value.error) { update({ definition: { status: 'error', message: value.error.message } }); return }
+        update({ definition: { status: 'ready', value: value.text === undefined ? {} : { text: value.text } } })
+      }).catch(onUnexpectedError)
+      return job
+    }
+    // Without a kept script the table is scripted at once; with one, the facts' modified time says whether it still holds.
+    const job = key !== undefined && !cached ? startScript(key) : undefined
     void settle(this.options.api.explorerPeek({ connectionId, requestId: peekId, target: object })).then(result => {
       if (!current()) return
       if (this.requests.peek === peekId) this.requests = { ...this.requests, peek: undefined }
-      if (!result.ok) { update({ facts: { status: 'error', message: result.error }, ...(script ? {} : { definition: { status: 'error', message: result.error } }) }); return }
-      const value = result.value
-      if (value.error) { update({ facts: { status: 'error', message: value.error.message }, ...(script ? {} : { definition: { status: 'error', message: value.error.message } }) }); return }
+      if (!result.ok || result.value.error) {
+        const message = result.ok ? result.value.error?.message ?? '' : result.error
+        update({ facts: { status: 'error', message }, ...(key === undefined ? { definition: { status: 'error', message } } : {}) })
+        // A kept script cannot be checked without the facts, so the table is scripted again.
+        if (key !== undefined && cached) startScript(key)
+        return
+      }
+      const value = result.value, modified = typeof value.facts.modified === 'string' ? value.facts.modified : undefined
       update({ facts: { status: 'ready', value: value.facts },
-        ...(script ? {} : { definition: { status: 'ready', value: value.definition === undefined ? {} : { text: value.definition, ...(value.definitionTruncated ? { truncated: true } : {}) } } }) })
-    }).catch(onUnexpectedError)
-    if (!scriptId) return
-    const options = this.options.scriptingOptions.getSnapshot().options
-    void settle(this.options.api.scriptObjects({ connectionId, requestId: scriptId, targets: [object], verb: 'create', options })).then(result => {
-      if (!current()) return
-      if (this.requests.script === scriptId) this.requests = { ...this.requests, script: undefined }
-      if (!result.ok) { update({ definition: { status: 'error', message: result.error } }); return }
-      const value = result.value
-      if (value.error) { update({ definition: { status: 'error', message: value.error.message } }); return }
-      update({ definition: { status: 'ready', value: value.text === undefined ? {} : { text: value.text } } })
+        ...(key === undefined ? { definition: { status: 'ready', value: value.definition === undefined ? {} : { text: value.definition, ...(value.definitionTruncated ? { truncated: true } : {}) } } } : {}) })
+      if (key === undefined) return
+      if (job && modified !== undefined) {
+        job.modified = modified
+        if (job.text !== undefined) { this.keep(job, job.text); job.text = undefined }
+      }
+      if (!cached) return
+      if (modified !== undefined && cached.modified === modified) {
+        this.touch(key, cached)
+        update({ definition: { status: 'ready', value: { text: cached.text } } })
+      } else startScript(key, modified)
     }).catch(onUnexpectedError)
   }
 
-  /** Requests still running are cancelled on the backend: their answers would be dropped anyway. */
-  private cancelRequests(): void {
+  /** Keeps a finished script, least recently used out first, within `peekLimits`' entries and characters. */
+  private keep(job: ScriptJob, text: string): void {
+    if (this.disposed || job.modified === undefined || !this.isLive(job.connectionId)) return
+    this.drop(job.key)
+    if (text.length > peekLimits.scriptCacheChars) return
+    this.scripts.set(job.key, { connectionId: job.connectionId, text, modified: job.modified })
+    this.scriptChars += text.length
+    for (const [key] of [...this.scripts]) {
+      if (this.scripts.size <= peekLimits.scriptCacheEntries && this.scriptChars <= peekLimits.scriptCacheChars) break
+      this.drop(key)
+    }
+  }
+
+  private touch(key: string, entry: CachedScript): void {
+    this.scripts.delete(key)
+    this.scripts.set(key, entry)
+  }
+
+  private drop(key: string): void {
+    const entry = this.scripts.get(key)
+    if (!entry) return
+    this.scripts.delete(key)
+    this.scriptChars -= entry.text.length
+  }
+
+  /** Drops kept scripts and cancels background ones for the connections `stale` names. */
+  private forget(stale: (connectionId: string) => boolean): void {
+    for (const [key, entry] of [...this.scripts]) if (stale(entry.connectionId)) this.drop(key)
+    const ended = this.background.filter(job => stale(job.connectionId))
+    this.background = this.background.filter(job => !stale(job.connectionId))
+    for (const job of ended) this.cancelScript(job)
+  }
+
+  /**
+   * The card's reads end: the properties read is cancelled, and so is the table's script unless `keep` and the facts gave
+   * its modified time, when it finishes in the background to be cached (the oldest background script gives way past the limit).
+   */
+  private release(keep: boolean): void {
     const { peek, script } = this.requests
     this.requests = {}
-    const report = (result: Promise<ApiResult<unknown>>) => { void result.then(value => { if (!value.ok) onUnexpectedError(new Error(value.error)) }, onUnexpectedError) }
     try {
       if (peek) report(this.options.api.explorerCancel([peek]))
-      if (script) report(this.options.api.cancelScripting([script]))
+      if (!script || script.done) return
+      if (!keep || script.modified === undefined) { this.cancelScript(script); return }
+      this.background.push(script)
+      while (this.background.length > peekLimits.backgroundScripts) this.cancelScript(this.background.shift()!)
     } catch (error) { onUnexpectedError(error) }
+  }
+
+  private cancelScript(job: ScriptJob): void {
+    if (job.done) return
+    try { report(this.options.api.cancelScripting([job.requestId])) } catch (error) { onUnexpectedError(error) }
   }
 }
 
 const isPeekKindOf = (node: ExplorerMenuNode): PeekKind => node.kind as PeekKind
+/** A table's place in the cache: its connection and its three-part name. */
+const scriptKey = (connectionId: string, object: { readonly database?: string; readonly schema?: string; readonly name?: string }) =>
+  JSON.stringify([connectionId, object.database ?? null, object.schema ?? null, object.name ?? null])
+/** Cancels are fire and forget: a failure is reported, never shown. */
+const report = (result: Promise<ApiResult<unknown>>) => { void result.then(value => { if (!value.ok) onUnexpectedError(new Error(value.error)) }, onUnexpectedError) }
 /** A request that throws (a lost IPC channel) settles as a failure value, as every other failure does. */
 const settle = <T>(request: Promise<ApiResult<T>>): Promise<ApiResult<T>> => request.catch((error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) }) as ApiResult<T>)

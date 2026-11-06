@@ -30,6 +30,9 @@ internal sealed class ExplorerOptions
 {
     public int PerConnection { get; init; } = 4;
     public int Total { get; init; } = 8;
+    /// <summary>Peek's own slots per connection, outside PerConnection and Total: a peek is one small read the user waits on, so
+    /// it never queues behind the tree's paging.</summary>
+    public int PeekPerConnection { get; init; } = 1;
     public int MaxRegistered { get; init; } = 1024;
     public TimeSpan Budget { get; set; } = TimeSpan.FromSeconds(40);
     /// <summary>Stop reading a page once its estimated size passes this many bytes.</summary>
@@ -54,6 +57,7 @@ internal sealed class ExplorerService : IDisposable
     private readonly IReadOnlyDictionary<string, ExplorerQuery> queries;
     private readonly RequestRegistry running;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> gates = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> peekGates = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim total;
 
     /// <param name="catalog">A catalogue other than the embedded one, with <paramref name="queries"/> for the ids it lists
@@ -103,8 +107,9 @@ internal sealed class ExplorerService : IDisposable
         finally { running.Unregister(request.RequestId, entry); }
     }
 
-    /// <summary>explorer.peek: one constant batch (PeekSql) in the object's database under the same gates, pools and error values
-    /// as explorer.children, within the catalogue's budget (a TIMEOUT value past it).</summary>
+    /// <summary>explorer.peek: one constant batch (PeekSql) in the object's database on the same pools and with the same error
+    /// values as explorer.children, under the connection's peek slot rather than the tree's gates, within the catalogue's budget
+    /// from the moment it has its slot (a TIMEOUT value past it).</summary>
     public async Task<PeekResult> PeekAsync(PeekArgs args, CancellationToken token)
     {
         var watch = Stopwatch.StartNew();
@@ -119,13 +124,13 @@ internal sealed class ExplorerService : IDisposable
         try
         {
             token.ThrowIfCancellationRequested();
-            source.CancelAfter(budget);
+            var lane = peekGates.GetOrAdd(args.ConnectionId, _ => new SemaphoreSlim(Options.PeekPerConnection));
             var values = new Values(target.Schema, target.Name, null, false, 0, null, null, null, null, null, null, null);
             var result = await RunAsync(args.ConnectionId, target.Database, target.Schema + "." + target.Name, profile, QueryScope.Database, batch.Text, values, async (_, reader) =>
                 await ParentExistsAsync(reader, source.Token) && await reader.ReadAsync(source.Token)
                     ? PeekSql.Read(reader, spec, batch, profile.Band, catalog.Peek.DefinitionChars)
                     : new PeekResult([], 0, Error: NotFound(target)),
-                error => new PeekResult([], 0, Error: error), source.Token);
+                error => new PeekResult([], 0, Error: error), source.Token, lane, () => source.CancelAfter(budget));
             return result with { ElapsedMs = watch.ElapsedMilliseconds };
         }
         catch (Exception error) when (error is OperationCanceledException or SqlException && source.IsCancellationRequested && !token.IsCancellationRequested)
@@ -142,12 +147,14 @@ internal sealed class ExplorerService : IDisposable
     {
         running.Forget(connectionId);
         gates.TryRemove(connectionId, out _);
+        peekGates.TryRemove(connectionId, out _);
     }
 
     public void Dispose()
     {
         running.ForgetAll();
         gates.Clear();
+        peekGates.Clear();
     }
 
     private async Task<ExplorerChildrenResult> LoadAsync(ExplorerRequest request, ExplorerProfile profile, bool vector, CursorKey? key, CancellationToken token)
@@ -301,24 +308,27 @@ internal sealed class ExplorerService : IDisposable
         Func<SqlCommand, SqlDataReader, Task<ExplorerChildrenResult>> read, CancellationToken token, List<ExplorerNode> partial) =>
         RunAsync(request.ConnectionId, request.Database, Subject(request), profile, scope, statement, values, read, error => new ExplorerChildrenResult(partial, 0, Error: error), token);
 
-    /// <summary>Takes the connection's gate and then the global one, runs one batch, and reads it; SQL errors become values
-    /// (<paramref name="failed"/>).</summary>
+    /// <summary>Takes the connection's gate and then the global one (or only <paramref name="lane"/>, a slot of its own), runs
+    /// one batch, and reads it; SQL errors become values (<paramref name="failed"/>).</summary>
     /// <param name="requestDatabase">The database the request reads (absent for server-scope statements).</param>
     /// <param name="subject">The folder or object being read, as the tree labels it, for error messages.</param>
+    /// <param name="started">Runs once the slots are taken, before the connection opens (Peek starts its budget there).</param>
     private async Task<T> RunAsync<T>(string connectionId, string? requestDatabase, string subject, ExplorerProfile profile, QueryScope scope, string statement, Values values,
-        Func<SqlCommand, SqlDataReader, Task<T>> read, Func<ExplorerError, T> failed, CancellationToken token)
+        Func<SqlCommand, SqlDataReader, Task<T>> read, Func<ExplorerError, T> failed, CancellationToken token, SemaphoreSlim? lane = null, Action? started = null)
     {
         var perDatabase = scope == QueryScope.Database && (profile.Cloud || Options.ForcePerDatabaseScope);
         var database = scope == QueryScope.Ssis ? host.SsisCatalog : requestDatabase;
         // Inside EXEC [db].sys.sp_executesql, a missing procedure can only be the wrapper's: the database is gone.
         var phase = scope == QueryScope.Database && !perDatabase ? ErrorPhase.Scope : ErrorPhase.Statement;
-        var gate = gates.GetOrAdd(connectionId, _ => new SemaphoreSlim(Options.PerConnection));
+        var shared = lane is null;
+        var gate = lane ?? gates.GetOrAdd(connectionId, _ => new SemaphoreSlim(Options.PerConnection));
         await gate.WaitAsync(token);
         try
         {
-            await total.WaitAsync(token);
+            if (shared) await total.WaitAsync(token);
             try
             {
+                started?.Invoke();
                 await using var connection = scope == QueryScope.Ssis ? host.SsisConnection(connectionId) : host.Connection(connectionId, perDatabase ? requestDatabase : null);
                 try { await host.OpenAsync(connection, token); }
                 // 4060 says the login cannot open the catalog's database, whether it is gone, offline, restoring or closed to the
@@ -343,7 +353,7 @@ internal sealed class ExplorerService : IDisposable
                 await using var reader = await command.ExecuteReaderAsync(token);
                 return await read(command, reader);
             }
-            finally { total.Release(); }
+            finally { if (shared) total.Release(); }
         }
         catch (SqlException error) when (!token.IsCancellationRequested)
         {
