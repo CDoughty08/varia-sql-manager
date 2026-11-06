@@ -80,7 +80,13 @@ async function press(key, label) {
 }
 /** Clicks a row's label, which selects it and focuses the tree without toggling it. */
 async function select(...path) {
-  const row = await explorerRow(page, ...path)
+  return selectRow(await explorerRow(page, ...path))
+}
+/** As select, for a row whose ancestors may be scrolled out of the tree's window (a short tree, as on a 1024×768 display). */
+async function selectRevealed(...path) {
+  return selectRow(await revealExplorerRow(page, ...path))
+}
+async function selectRow(row) {
   await row.locator(part.explorerRowText).first().click()
   await expect(tree()).toBeFocused()
   await expect.poll(async () => (await active())?.id).toBe(await row.getAttribute('id'))
@@ -913,7 +919,7 @@ try {
     const tabHits = objectSearchHits(page)
     await expect(tabHits).toHaveCount(2)
     // The tree's selection is elsewhere first, so a reveal of dbo.table1 would show.
-    await select('server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders')
+    await selectRevealed('server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders')
     const revealed = (await active())?.label
     expect(revealed).not.toBe('dbo.table1')
     await tabHits.first().click()
@@ -961,7 +967,7 @@ try {
     await page.keyboard.press('Control+A')
     await page.keyboard.type('table')
     await expect(tabHits).toHaveCount(2)
-    await select('server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders')
+    await selectRevealed('server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders')
     await tabHits.first().dblclick()
     await expect.poll(async () => (await active())?.label).toBe('dbo.table1')
     await expect(tabHits.first()).toBeFocused()
