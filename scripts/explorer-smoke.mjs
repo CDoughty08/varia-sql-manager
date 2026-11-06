@@ -1057,7 +1057,7 @@ try {
   expect(narrow.label, JSON.stringify(narrow)).toBeCloseTo(narrow.kept, 0)
   if (wasExpanded === 'false') { await select('server-a', 'Server Objects'); await press('ArrowLeft', 'Server Objects') }
   await page.screenshot({ path: resolve('artifacts', 'explorer-visuals.png') })
-  console.log('Object Explorer checks: 30 px server rows with version, login, connection dot and active-query glyph, muted item counts, the environment tag\'s slot, the footer\'s freshness, the Filter loaded objects box by keyboard and from the palette, the search band\'s splitter, and compact search popovers at 160–420 px with keyboard focus, outside dismissal and combined type filters, and the Search Objects tab's hits walked by click, arrows, Enter and double-click with focus kept in the list.')
+  console.log('Object Explorer checks: 30 px server rows with version, login, connection dot and active-query glyph, muted item counts, the environment tag\'s slot, the footer\'s freshness, the Filter loaded objects box by keyboard and from the palette, the search band\'s splitter, and compact search popovers at 160–420 px with keyboard focus, outside dismissal and combined type filters, and the Search Objects tab\'s hits walked by click, arrows, Enter and double-click with focus kept in the list.')
 
   // 11. Disconnecting a server while one of its folders streams cancels the load and removes its rows.
   await setStub({ tables: 120_000, pageDelayMs: 250 })
