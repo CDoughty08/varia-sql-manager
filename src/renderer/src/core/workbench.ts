@@ -17,7 +17,7 @@ import { TargetService } from '../services/targets'
 import { BackendStateService } from '../services/backend'
 import { ResultClient } from '../results/ResultClient'
 import { ResultsService } from '../results/ResultsService'
-import { ResultMemoryService } from '../results/memory'
+import { MemoryUsageService } from '../results/memory'
 import { documentOwner, documentPage, eitherHidden, LiveService, mainWindowPage } from '../live/LiveService'
 import { ActivityMonitorService } from '../activity/ActivityMonitorService'
 import { activityContribution } from '../contributions/activity'
@@ -112,7 +112,8 @@ export interface Workbench extends Disposable {
   /** Each query tab's results: its result sets, Messages, view state, and copy jobs. */
   readonly results: ResultsService
   /** What the backend holds for results, for the status bar. */
-  readonly resultMemory: ResultMemoryService
+  readonly resultMemory: MemoryUsageService
+  readonly indexMemory: MemoryUsageService
   /** Live views (Activity Monitor, SSIS monitoring): their subscriptions, pauses while hidden, and history. */
   readonly live: LiveService
   /** Test mode only: the grids' frame times and counters (`window.__variaGrid`). */
@@ -226,7 +227,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const bookmarks = new BookmarkService(documents, events), editorDialogs = new EditorDialogs(), tabRename = new TabRenameService(documents)
   const resultClient = new ResultClient({ api, createWorker: () => new ResultsWorker(), window, schedule: callback => { frame(callback) } })
   const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => { frame(callback) } })
-  const resultMemory = new ResultMemoryService(resultClient, events)
+  const resultMemory = new MemoryUsageService(resultClient, 'results', events)
+  const indexMemory = new MemoryUsageService(resultClient, 'index')
   // The backend caps live views per server it reaches; a typed name is the closest this side knows.
   const live = new LiveService({ client: resultClient, settings, page: eitherHidden(documentPage(document), mainWindowPage(api)), schedule: callback => { frame(callback) }, serverOf: id => connections.get(id)?.server.trim().toLowerCase() })
   const explorerStatus = new ExplorerStatusService({ live, connections, panes, settings, schedule: callback => { frame(callback) } })
@@ -315,6 +317,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   })
   const context = new ContextKeyService({
     platform,
+    settings,
     documents,
     queries,
     connections,
@@ -379,6 +382,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     resultClient,
     results,
     resultMemory,
+    indexMemory,
     live,
     ...gridStats ? { gridStats } : {},
     files,
@@ -438,6 +442,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       queries.dispose()
       results.dispose()
       resultMemory.dispose()
+      indexMemory.dispose()
       actionProgress.dispose()
       // Before the live views: its documents' views and stops are cancelled while the service still runs them.
       objectSearch.dispose()

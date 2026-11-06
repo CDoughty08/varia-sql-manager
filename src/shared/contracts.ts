@@ -186,8 +186,7 @@ export interface QueryResult {
 /** An idle session's open transaction as `query.session.state` read it: `checked` is false when its SET options (SHOWPLAN_*,
  *  NOEXEC, PARSEONLY or FMTONLY ON) kept the SELECT from returning @@TRANCOUNT, so it may hold one. */
 export interface SessionState { transactionCount: number; checked: boolean }
-/** Orders what the backend reports about result memory (results.memory events and summaries): `seq` counts within the
- *  backend process that main numbered `generation`, so a figure overtaken by a newer one is never shown after it. */
+/** Orders each feature's memory reports. Results events and summaries share a sequence within a backend generation. */
 export interface MemoryOrder { generation: number; seq: number }
 /** Rows read so far for one result set of a running script. */
 export interface ResultProgress { resultId: number; rowsRead: number; rowsStored: number; rowsAvailable: number; bytesStored: number }

@@ -1,6 +1,7 @@
 // Messages between the UI thread (ResultClient) and the results worker. The worker also owns the results port to main
 // (src/shared/ipc/port-messages.ts).
 import type { BackendStatus, QueryEvent, WireKind } from '../../../shared/contracts'
+import type { MemoryFeature, MemoryReport } from '../../../shared/ipc/port-messages'
 import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
 
@@ -77,7 +78,7 @@ export type WorkerResponse =
   | { readonly type: 'stats'; readonly id: number; readonly bytes: number; readonly pages: number }
   | { readonly type: 'error'; readonly id: number; readonly code: ErrorCode; readonly message: string }
   | { readonly type: 'query'; readonly queryId: string; readonly event: QueryEvent }
-  | { readonly type: 'memory'; readonly usedBytes: number; readonly globalBytes: number; readonly generation: number; readonly seq: number }
+  | ({ readonly type: 'memory'; readonly feature: MemoryFeature } & MemoryReport)
   | { readonly type: 'backend'; readonly generation: number; readonly status: BackendStatus }
   /** A live event as main validated it, with its EVENT body's length, which the page acknowledges with `liveAck`. */
   | { readonly type: 'live'; readonly id: number; readonly bytes: number; readonly event: LiveEvent }
