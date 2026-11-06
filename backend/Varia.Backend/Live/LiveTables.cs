@@ -256,8 +256,9 @@ internal sealed class LiveTableSet(ResultStore store, string subscriptionId, Liv
             else
             {
                 builder.AppendText(cell.Text, cell.Truncated);
-                // A probe's text, counted as nvarchar; a cut cell's full length is not known, so it keeps no entry.
-                if (!cell.Truncated) builder.Measure(cell.Text.Length, 2L * cell.Text.Length);
+                // A probe's text, counted as nvarchar; a cut cell's full length is not known, so its kept text stands in
+                // as an estimate, marked so in its entry.
+                builder.Measure(cell.Text.Length, 2L * cell.Text.Length, exact: !cell.Truncated);
             }
             if (cell.Truncated) truncated++;
         }

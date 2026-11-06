@@ -43,6 +43,8 @@ internal sealed class ColumnPlan
     // The cell just read: its full characters and bytes, which ReadRow reports to the builder (PageBuilder.Measure); a
     // negative byte count measures nothing (a rowversion read as NULL).
     private long cellChars, cellBytes;
+    // False when the reader could only estimate the cell's bytes; the cell then keeps an entry that says so.
+    private bool cellExact;
 
     private sealed class Column(string name, string type, CellCodec codec, WireKind wire, int scale, int cap, bool isLong, ColumnLength length)
     {
@@ -218,8 +220,9 @@ internal sealed class ColumnPlan
             {
                 cellChars = 0;
                 cellBytes = column.Length.FixedBytes;
+                cellExact = true;
                 if (Read(column, reader, i, builder, token)) truncated++;
-                if (cellBytes >= 0) builder.Measure(cellChars, cellBytes, column.Length.Rule == LengthRule.Recorded);
+                if (cellBytes >= 0) builder.Measure(cellChars, cellBytes, column.Length.Rule == LengthRule.Recorded, cellExact);
             }
             catch (Exception error) when (IsCellFailure(error))
             {
@@ -339,7 +342,7 @@ internal sealed class ColumnPlan
 
     /// <summary>Sets the cell's lengths once its whole text has passed through the column's counter. A column whose rule is
     /// not text (one read through a fallback reader) keeps its fixed size; a decimal or recorded one counts 2 bytes a
-    /// character.</summary>
+    /// character as an estimate, kept in an entry so the row's sum and the cell's size agree.</summary>
     private void Counted(Column column, long chars)
     {
         cellChars = chars;
@@ -350,6 +353,7 @@ internal sealed class ColumnPlan
             LengthRule.Utf16 or LengthRule.Utf8 or LengthRule.SingleByte or LengthRule.CodePage => counted,
             _ => 2 * chars
         };
+        if (column.Length.Rule is not (LengthRule.Fixed or LengthRule.Utf16 or LengthRule.Utf8 or LengthRule.SingleByte or LengthRule.CodePage)) cellExact = false;
     }
 
     private Span<char> Chars(int length)
@@ -510,9 +514,11 @@ internal sealed class ColumnPlan
         {
             using var fallback = reader.GetXmlReader(i);
             var truncated = Xml(fallback, sink, null, cap, builder, token);
-            // Without the column's own stream the rest of a cut value is parsed, not counted: its kept text stands in.
+            // Without the column's own stream the bytes SQL Server sent are unknown: the serialised text (whole, or kept
+            // up to the cap) stands in, as an estimate.
             cellChars = sink.Count;
             cellBytes = 2L * sink.Count;
+            cellExact = false;
             // GetXmlReader owns its stream, so the rest is read past by parsing it.
             while (fallback.Read())
             {
@@ -543,9 +549,10 @@ internal sealed class ColumnPlan
                 feed.Reset(Stream.Null);
             }
             // The stream is the value's UTF-16 text as SQL Server sends it (no byte order mark): its bytes are the cell's,
-            // and of a cut value its characters too, since the serialised text past the cap is never produced.
+            // and so are its characters, cut or not, so that lengths compare across a column (the display text may differ:
+            // SqlClient's serialisation writes <e /> for SQL Server's <e/>).
             cellBytes = consumed + ReadPast(stream, token);
-            cellChars = truncated ? cellBytes / 2 : sink.Count;
+            cellChars = cellBytes / 2;
             return truncated;
         }
     }
@@ -629,9 +636,10 @@ internal sealed class ColumnPlan
     }
 
     /// <summary>sql_variant: formatted by its base type as the rows above would; binary values become 0x text. Its bytes are
-    /// the base value's, as DATALENGTH reports them, as far as SqlClient tells the base type: a varchar value arrives as the
-    /// same SqlString as an nvarchar one and counts 2 bytes a character, smallmoney and smalldatetime count as money and
-    /// datetime (8), and date, time, datetime2 and datetimeoffset as at scale 7 (8, 5, 8 and 10).</summary>
+    /// the base value's, as DATALENGTH reports them, where SqlClient tells the base type apart. Where it does not, the bytes
+    /// are an estimate and the cell's entry says so: a varchar value arrives as the same SqlString as an nvarchar one and
+    /// counts 2 bytes a character, smallmoney and smalldatetime count as money and datetime (8), and date, time, datetime2
+    /// and datetimeoffset as at scale 7 (8, 5, 8 and 10).</summary>
     private bool Variant(object value, PageBuilder builder)
     {
         switch (value)
@@ -646,16 +654,16 @@ internal sealed class ColumnPlan
                 var span = builder.BeginFormatted();
                 return Decimal(builder, span, number.Precision <= 28 ? CellFormat.WriteDecimal(span, number.Value) : CellFormat.WriteSqlDecimal(span, number));
             }
-            case SqlMoney money: return Formatted(builder, CellFormat.WriteMoney(builder.BeginFormatted(), money.Value), 8);
+            case SqlMoney money: return Estimated(Formatted(builder, CellFormat.WriteMoney(builder.BeginFormatted(), money.Value), 8));
             case SqlSingle number: return Formatted(builder, CellFormat.WriteReal(builder.BeginFormatted(), number.Value), 4);
             case SqlDouble number: return Formatted(builder, CellFormat.WriteFloat(builder.BeginFormatted(), number.Value), 8);
-            case SqlDateTime date: return Formatted(builder, CellFormat.WriteDateTime(builder.BeginFormatted(), date.Value), 8);
+            case SqlDateTime date: return Estimated(Formatted(builder, CellFormat.WriteDateTime(builder.BeginFormatted(), date.Value), 8));
             // date, time, datetime2 and datetimeoffset have no Sql* type; their scale is not reported, so all 7 digits show.
-            case DateTime date: return Formatted(builder, CellFormat.WriteDateTime2(builder.BeginFormatted(), date, 7), 8);
-            case TimeSpan time: return Formatted(builder, CellFormat.WriteTime(builder.BeginFormatted(), time, 7), 5);
-            case DateTimeOffset date: return Formatted(builder, CellFormat.WriteDateTimeOffset(builder.BeginFormatted(), date, 7), 10);
+            case DateTime date: return Estimated(Formatted(builder, CellFormat.WriteDateTime2(builder.BeginFormatted(), date, 7), 8));
+            case TimeSpan time: return Estimated(Formatted(builder, CellFormat.WriteTime(builder.BeginFormatted(), time, 7), 5));
+            case DateTimeOffset date: return Estimated(Formatted(builder, CellFormat.WriteDateTimeOffset(builder.BeginFormatted(), date, 7), 10));
             case SqlGuid guid: return Formatted(builder, CellFormat.WriteGuid(builder.BeginFormatted(), guid.Value), 16);
-            case SqlString text: return Unicode(text.Value, builder);
+            case SqlString text: return Estimated(Unicode(text.Value, builder));
             case SqlBinary binary:
             {
                 var bytes = binary.Value;
@@ -665,8 +673,14 @@ internal sealed class ColumnPlan
                 cellBytes = bytes.Length;
                 return fits < bytes.Length;
             }
-            default: return Unicode(Convert.ToString(value, Invariant) ?? "", builder);
+            default: return Estimated(Unicode(Convert.ToString(value, Invariant) ?? "", builder));
         }
+    }
+
+    private bool Estimated(bool truncated)
+    {
+        cellExact = false;
+        return truncated;
     }
 
     private bool Formatted(PageBuilder builder, int written, long bytes)

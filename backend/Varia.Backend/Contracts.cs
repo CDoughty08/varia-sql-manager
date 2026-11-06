@@ -83,8 +83,9 @@ internal sealed record ResultsReadResult(long NextRow, long RowsAvailable, bool 
 internal sealed record ResultsCloseArgs(uint[] ResultIds);
 internal sealed record ResultsCloseResult(int Closed, long UsedBytes);
 internal sealed record ResultsRowBytesArgs(uint ResultId, long FirstRow, int Count);
-/// <summary>results.rowBytes: Bytes[k] is row FirstRow + k's sum of DATALENGTH over its cells (NULL counts 0); it stops at
-/// the rows sealed so far.</summary>
+/// <summary>results.rowBytes: Bytes[k] is row FirstRow + k's sum of DATALENGTH over its cells (NULL counts 0; xml and json
+/// as their text, some sql_variant base types estimated: docs/ipc.md, Cell lengths and row sizes); it stops at the rows sealed
+/// so far.</summary>
 internal sealed record ResultsRowBytesResult(long FirstRow, long[] Bytes, long RowsAvailable);
 /// <summary>A piece of a copy: inclusive row ranges (a last row of 2^53 - 1 runs to the end) by inclusive column ranges.</summary>
 internal sealed record CopyPartArgs(long[][] Rows, int[][] Columns);

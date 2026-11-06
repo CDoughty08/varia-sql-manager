@@ -241,6 +241,10 @@ describe('results worker core', () => {
     core.handle({ type: 'rowBytes', id: 72, key: { ...key, generation: 2 }, firstRow: 0, count: 1 })
     expect(sent.length).toBe(sentBefore)
     expect(posted.at(-1)).toMatchObject({ type: 'error', id: 72, code: 'RESULT_UNAVAILABLE' })
+    // Main drops answers meant for a replaced port, so a request asked on it fails at once instead of never settling.
+    core.handle({ type: 'rowBytes', id: 73, key, firstRow: 0, count: 1 })
+    core.attach({ postMessage: () => {} })
+    expect(posted.at(-1)).toMatchObject({ type: 'error', id: 73, code: 'PORT_CLOSED' })
   })
 
   it('formats a whole XML or JSON value in the worker, but never a stored prefix, a NULL, a read error, or malformed text', () => {

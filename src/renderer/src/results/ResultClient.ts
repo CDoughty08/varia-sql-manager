@@ -293,6 +293,9 @@ export class ResultClient implements Disposable {
       },
       rowBytes: async (first, count, signal) => {
         this.usable(state)
+        // Main counts a request its schema refuses toward closing the port, so a bad range never leaves the page.
+        if (!Number.isSafeInteger(first) || first < 0 || !Number.isInteger(count)) throw new ResultError('INVALID_PARAMS', 'The row range is invalid.')
+        if (count < 1) return { first, bytes: [], rowsAvailable: state.snapshot.rowsAvailable }
         const response = await this.request(id => ({ type: 'rowBytes', id, key: state.key, firstRow: first, count: Math.min(count, wire.rowSizes.maxRows) }), signal)
         if (response.type !== 'rowBytes') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
         return { first: response.firstRow, bytes: response.bytes, rowsAvailable: response.rowsAvailable }

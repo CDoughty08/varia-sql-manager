@@ -155,6 +155,22 @@ internal static class CellLengthChecks
         builder.Seal(out lengths);
         check(lengths.Cells is [{ Row: 0, Column: 0 } entry] && entry.Chars == big.Length && lengths.RowBytes(0) == big.Length,
             "a cell the 8 MiB row limit cuts keeps the full lengths its reader measured");
+
+        // An estimate (a sql_variant SqlClient does not tell apart, a fallback reader) keeps an entry that says so, in the
+        // same 24 bytes, so the row's sum and the cell's size agree and neither claims to be exact.
+        builder.BeginRow();
+        builder.AppendText("ab");
+        builder.Measure(2, 4, exact: false);
+        builder.AppendText("cd");
+        builder.Measure(2, 4, keep: true);
+        builder.AppendNull();
+        builder.CommitRow();
+        builder.Seal(out lengths);
+        var packed = new CellLength(1, int.MaxValue, 1, 2, exact: false);
+        check(lengths.Cells is [{ Row: 0, Column: 0, Exact: false, Bytes: 4 }, { Row: 0, Column: 1, Exact: true }] && lengths.RowBytes(0) == 8
+            && lengths.TryCell(0, 0, out var estimated) && !estimated.Exact && packed.Column == int.MaxValue && !packed.Exact
+            && System.Runtime.CompilerServices.Unsafe.SizeOf<CellLength>() == PageLengths.CellBytes,
+            "an estimated cell keeps a 24-byte entry marked inexact, and a kept exact one stays exact");
     }
 
     private static ResultSetBuffer Measured(ResultStore store, QueryBudget query, long rows, int textCap = int.MaxValue)
@@ -219,13 +235,15 @@ internal static class CellLengthChecks
             && cutSet.CellSize(20, 0) is null && Throws(() => cutSet.CellSize(0, 3)) && cutSet.PagesFor(0, 20)[0].Lengths.Cells.Count == cutCells,
             "one helper sizes any stored cell: a truncated one from its recorded entry, others from their text and type, NULL and missing rows as null: " + cell + " " + whole + " " + data + " " + id);
 
-        // Live tables count their cells as nvarchar text; a cut cell, whose full text the probe never had, keeps no entry.
+        // Live tables count their cells as nvarchar text; a cut cell, whose full text the probe never had, counts its kept
+        // text in the row's sum and keeps an entry marked inexact.
         var live = store.Open(store.BeginQuery("live"), 0, 1, 1, "rows", [new("a", "nvarchar", "text"), new("b", "nvarchar", "text")], [WireKind.Text, WireKind.Text])!;
         LiveTableSet.Write(live, new LiveRow([LiveCell.Of("ab "), new LiveCell(null, "cut", Truncated: true)]));
         LiveTableSet.Write(live, new LiveRow([LiveCell.Of((string?)null), LiveCell.Of("x")]));
         live.Complete();
-        check(live.RowBytes(0, 2).SequenceEqual([6L, 2L]) && live.CellSize(0, 1) == new CellSize(3, 6, false) && live.CellSize(0, 0) == new CellSize(3, 6, true),
-            "a live table's rows count their uncut cells as nvarchar text, and a cut cell's size is marked inexact");
+        check(live.RowBytes(0, 2).SequenceEqual([12L, 2L]) && live.CellSize(0, 1) == new CellSize(3, 6, false) && live.CellSize(0, 0) == new CellSize(3, 6, true)
+            && live.PagesFor(0, 2)[0].Lengths.Cells is [{ Row: 0, Column: 1, Exact: false }],
+            "a live table's rows count their cells as nvarchar text, and a cut cell's kept text as an estimate marked inexact");
 
         var leased = set.TryLease();
         var released = store.Release(set.ResultId);

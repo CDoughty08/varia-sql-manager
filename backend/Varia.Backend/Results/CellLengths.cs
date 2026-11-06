@@ -155,8 +155,23 @@ internal sealed class ByteCounter(ColumnLength length)
 /// column's cell without its entry, whose figures then describe the stored prefix.</summary>
 internal readonly record struct CellSize(long Chars, long Bytes, bool Exact);
 
-/// <summary>The full lengths of one cell kept beside its page: a truncated cell, or any cell of a Recorded column.</summary>
-internal readonly record struct CellLength(int Row, int Column, long Chars, long Bytes);
+/// <summary>The full lengths of one cell kept beside its page: a truncated cell, any cell of a Recorded column, or a cell
+/// whose reader could only estimate its bytes (a sql_variant whose base type SqlClient does not tell apart, a value read
+/// through a fallback reader). Exact is packed into the column's sign bit so an entry stays 24 bytes.</summary>
+internal readonly struct CellLength(int row, int column, long chars, long bytes, bool exact = true) : IEquatable<CellLength>
+{
+    private readonly int key = exact ? column : column | int.MinValue;
+    public int Row { get; } = row;
+    public int Column => key & int.MaxValue;
+    public bool Exact => key >= 0;
+    public long Chars { get; } = chars;
+    public long Bytes { get; } = bytes;
+
+    public bool Equals(CellLength other) => Row == other.Row && key == other.key && Chars == other.Chars && Bytes == other.Bytes;
+    public override bool Equals(object? obj) => obj is CellLength other && Equals(other);
+    public override int GetHashCode() => HashCode.Combine(Row, key, Chars, Bytes);
+    public override string ToString() => $"({Row}, {Column}, {Chars}, {Bytes}{(Exact ? "" : ", estimated")})";
+}
 
 /// <summary>The lengths sidecar of a sealed page: every row's bytes (the sum of DATALENGTH over its cells, NULL counting
 /// 0) as a uint32, a row of 4 GiB or more stored as uint.MaxValue with its exact figure in <see cref="Large"/>, and the

@@ -1129,8 +1129,9 @@ including the part of a truncated cell that was read past and not stored. Later 
 the row-size bar) read these numbers; nothing re-reads SQL Server.
 
 - **One helper.** `ResultSetBuffer.CellSize(row, column)` answers `(chars, bytes, exact)` for any stored cell, or null for
-  NULL. A cell with a sidecar entry answers it; any other is derived from its stored UTF-8 text or bytes by the column's
-  rule, which is exact because the cell was stored whole. `exact` is false only for a truncated cell without an entry.
+  NULL. A cell with a sidecar entry answers it, with the entry's own `exact`; any other is derived from its stored UTF-8
+  text or bytes by the column's rule, which is exact because the cell was stored whole. `exact` is false for an estimate
+  (below) and for a truncated cell without an entry.
 - **Rules per type** (`ColumnLength`, chosen once per column in `ColumnPlan`): fixed sizes for bit and tinyint (1),
   smallint (2), int, smallmoney, real, smalldatetime (4), bigint, money, float, datetime (8), date (3), time (3–5),
   datetime2 (6–8), datetimeoffset (8–10) and uniqueidentifier (16), the fractional-second part by scale as SQL Server
@@ -1140,13 +1141,17 @@ the row-size bar) read these numbers; nothing re-reads SQL Server.
   per dimension; xml and sql_variant record their bytes as they are read.
 - **xml** counts the BOM-less UTF-16 text SQL Server sends, `DATALENGTH(CONVERT(nvarchar(max), x))`; `DATALENGTH` of the
   xml value itself is its binary storage, which no client can see. **json** counts UTF-8 text bytes; `DATALENGTH(json)`
-  is also binary storage. **sql_variant** counts its base value (nvarchar 2 a character, int 4, datetime 8, binary its
-  length); a varchar or char base type arrives as a string and is counted as nvarchar, smallmoney and smalldatetime bases
-  arrive as money and datetime (8), and date and time bases at scale 7, since SqlClient's `GetValue` does not say more.
-  Characters of xml and sql_variant are those of the display text.
+  is also binary storage. So for a row with xml or json cells, `results.rowBytes` is not `SUM(DATALENGTH(...))` as SQL
+  Server would compute it. An xml cell's characters are those of SQL Server's text too (bytes / 2), cut or not, so they
+  compare across a column; the display text may differ (SqlClient writes `<e />` for SQL Server's `<e/>`).
+  **sql_variant** counts its base value exactly where SqlClient tells the base type apart (integers, bit, decimal, real,
+  float, uniqueidentifier, binary). Elsewhere it is an estimate, and its entry says so: a string arrives as SqlString,
+  whether varchar or nvarchar, and is counted as nvarchar; smallmoney and smalldatetime bases arrive as money and datetime
+  (8); and date, time, datetime2 and datetimeoffset bases are counted at scale 7. Its characters are those of the display
+  text.
 - **Collation.** For char, varchar and text, the backend reads each column's collation from SqlClient's metadata
-  (`SqlClientCollation`, by reflection over `SqlDataReader.MetaData`, `_SqlMetaData.collation` and `.encoding`, checked
-  against the column's name): the encoding SqlClient itself decodes with, so a code page or UTF-8 byte count equals
+  (`SqlClientCollation`, by reflection over `SqlDataReader.MetaData`, `SqlMetaDataPriv.collation` and `.encoding`, checked
+  against `_SqlMetaData.column`, the column's name): the encoding SqlClient itself decodes with, so a code page or UTF-8 byte count equals
   `DATALENGTH`. The descriptor's column gets `collation: { lcid, sortId, codePage, utf8, options }` (`options` are
   SqlCompareOptions bits: 1 IgnoreCase, 2 IgnoreNonSpace, 8 IgnoreKanaType, 16 IgnoreWidth, 16384 BinarySort2, 32768
   BinarySort; `codePage` 0 for a UTF-8 collation; `sortId` non-zero for SQL_ collations). If a SqlClient release moves
@@ -1154,18 +1159,25 @@ the row-size bar) read these numbers; nothing re-reads SQL Server.
   (exact for single-byte code pages only); the live checks fail first.
 - **Storage.** Beside each sealed page, `PageLengths` holds a `uint32` per row (the sum of its cells' bytes; NULL counts
   0), a sorted sparse list of 24-byte `(row, column, chars, bytes)` entries for the cells whose stored text does not give
-  their length (truncated cells, and every xml and sql_variant cell), and a list of 16-byte `(row, bytes)` entries for rows
+  their length (truncated cells, every xml and sql_variant cell, and estimates; an estimate is marked in the column's sign
+  bit), and a list of 16-byte `(row, bytes)` entries for rows
   of 4 GiB or more, whose `uint32` holds `uint.MaxValue`: row sizes are always exact (a row of several `max` values can
-  pass 4 GiB). The page builder's open row keeps its entries until `CommitRow`; a rolled-back row leaves none.
-- **Memory.** 4 bytes a row, 24 per truncated cell, xml or sql_variant cell, and 96 a page, charged to the result budget
+  pass 4 GiB), though a row's sum includes any estimate among its cells. The page builder's open row keeps its entries
+  until `CommitRow`; a rolled-back row leaves none.
+- **Memory.** 4 bytes a row, 24 per entry, and 96 a page, charged to the result budget
   with the page (a page's cost is its length + 96 + its lengths' size) and freed with it; the open page's lengths count in
   the builder's working space.
 - **Reading.** `results.rowBytes { resultId, firstRow, count: 1..16,384 }` answers `{ firstRow, bytes: number[],
-  rowsAvailable }` for sealed rows only; fewer than `count` past `rowsAvailable` (none for a range past it).
-  `ResultHandle.rowBytes(first, count, signal)` asks through the worker and main with the same ownership and generation
-  checks as `close`.
-- **Not measured exactly.** FOR XML and FOR JSON values count their joined text as nvarchar; live tables count text as
-  nvarchar and keep no entries for cut cells (their tables are small); synthetic test rows are not measured.
+  rowsAvailable }` for sealed rows only; fewer than `count` past `rowsAvailable` (none for a range past it). Main
+  forwards it only for a result the renderer owns in the current, ready generation (else `RESULT_UNAVAILABLE`), and only
+  an answer that passes `rowBytesResultSchema`, starts at `firstRow` and has at most `count` rows (else `BACKEND_ERROR`).
+  `ResultHandle.rowBytes(first, count, signal)` answers an empty range itself and refuses a malformed one
+  (`INVALID_PARAMS`) without sending it, since main closes the port after 100 invalid messages.
+- **Not measured exactly.** FOR XML and FOR JSON values count their joined text as nvarchar. Live tables count text as
+  nvarchar, and a cut cell, whose full text the probe never had, counts its kept text as an estimate. Without
+  `SequentialXml`'s internals, an xml cell counts its display text as an estimate. A value read through a column's
+  fallback reader (after a typed read failed) counts as text: exact for character types, an estimate for decimal, vector
+  and recorded types. Synthetic test rows are not measured.
 
 ## Messages
 

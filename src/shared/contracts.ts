@@ -203,8 +203,9 @@ export interface ResultsReadResult { nextRow: number; rowsAvailable: number; com
 export interface ResultsCloseResult { closed: number; usedBytes: number }
 /** Up to `limits.rowSizes.maxRows` rows' byte sizes from `firstRow`. */
 export interface ResultsRowBytesParams { resultId: number; firstRow: number; count: number }
-/** `bytes[k]` is row `firstRow + k`'s sum of DATALENGTH over its cells (NULL counts 0); it stops at the rows sealed so far
- *  (`rowsAvailable`), as results.read does. */
+/** `bytes[k]` is row `firstRow + k`'s sum of DATALENGTH over its cells (NULL counts 0; xml and json as their
+ *  text, some sql_variant base types estimated: docs/ipc.md, Cell lengths and row sizes); it stops at the rows sealed so
+ *  far (`rowsAvailable`), as results.read does. */
 export interface ResultsRowBytesResult { firstRow: number; bytes: number[]; rowsAvailable: number }
 /** Inclusive row indexes; a last row of 2^53 − 1 runs to the end of the result. */
 export type RowRange = readonly [first: number, last: number]

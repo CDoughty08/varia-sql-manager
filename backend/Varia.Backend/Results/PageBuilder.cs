@@ -113,17 +113,18 @@ internal sealed class PageBuilder
 
     /// <summary>Records the value just appended: its bytes (DATALENGTH) add to the row's, and its full characters and bytes
     /// are kept beside the page when the cell was stored truncated (by its reader's cap or the 8 MiB row limit) or when
-    /// <paramref name="keep"/> says its lengths do not follow from its text (LengthRule.Recorded). A cell that is not
+    /// <paramref name="keep"/> says its lengths do not follow from its text (LengthRule.Recorded), or when
+    /// <paramref name="exact"/> is false (the reader could only estimate its bytes; its entry says so). A cell that is not
     /// measured adds nothing (NULL, or a caller that records no lengths).</summary>
-    public void Measure(long chars, long bytes, bool keep = false)
+    public void Measure(long chars, long bytes, bool keep = false, bool exact = true)
     {
         if (lastCell < 0) throw new InvalidOperationException("Measure follows the cell it describes.");
         ArgumentOutOfRangeException.ThrowIfNegative(chars);
         ArgumentOutOfRangeException.ThrowIfNegative(bytes);
         rowData += bytes;
-        if (keep || lastTruncated)
+        if (keep || lastTruncated || !exact)
         {
-            cells.Add(new CellLength(rows, lastCell, chars, bytes));
+            cells.Add(new CellLength(rows, lastCell, chars, bytes, exact));
             openCells++;
         }
         lastCell = -1;
