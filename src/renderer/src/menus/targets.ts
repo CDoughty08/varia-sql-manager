@@ -172,9 +172,21 @@ export function outputTarget(element: Element): OutputTarget | undefined {
  */
 export class MenuTargetService {
   private readonly providers = new WeakMap<Element, TargetProvider>()
+  private readonly revealers = new WeakMap<Element, (item: Element) => void>()
   constructor(private readonly options: MenuTargetOptions = {}) {}
 
   register(element: Element, provider: TargetProvider): void { this.providers.set(element, provider) }
+  /** A widget with its own layout reveals its active descendant before the menu measures it. */
+  registerReveal(widget: Element, reveal: (item: Element) => void): () => void {
+    this.revealers.set(widget, reveal)
+    return () => { this.revealers.delete(widget) }
+  }
+  reveal(widget: Element, item: Element): boolean {
+    const reveal = this.revealers.get(widget)
+    if (!reveal) return false
+    reveal(item)
+    return true
+  }
   /** Reads a text field's facts again, once it has focus. */
   refresh(target: MenuTarget): MenuTarget { return target.kind === 'input' ? inputTarget(target.element, this.options.commandEnabled ?? documentCommandEnabled) : target }
 

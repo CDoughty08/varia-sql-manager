@@ -1,7 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { expandExplorerPath, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
+import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { dialogLifecycle, longRunRefusals, rendererWatchdog } from './fixtures/dialog-lifecycle.mjs'
 import { sessionPrompts } from './fixtures/session-prompts.mjs'
 import { activeMenuItem, anyResultGrid, backendReady, banner, documentTabs, documentTabSlots, slotTab, editorText as editorTextOf, errorMessages, explorerLabel, gridCell, gridPart, matching, memoryBreakdown, memoryIndicator, menuItemNames, messages as messagesOf, openMenus as openMenusOf, outputPane, outputView, paneMenuButton, paneTab, part, quickInput, searchBox, serverRows, statusBar, titleBar, toolbarButton } from './fixtures/ui.mjs'
@@ -743,6 +743,14 @@ try {
   await forgetCalls()
   const explorerMenu = menu('Object Explorer'), labels = () => menuItemNames(explorerMenu)
   const tree = explorerTree(page), row = (...path) => explorerRow(page, ...path)
+  // A reveal can move both pinned bands on the next frame. Verify the actual row before running its menu command.
+  const openExplorerRowMenu = async (...path) => {
+    const target = await revealExplorerRow(page, ...path)
+    await settle()
+    await target.click({ button: 'right' })
+    await expect(target).toHaveAttribute('data-menu-target', '')
+    return target
+  }
   const ordersPath = ['server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders']
   const loads = async folder => (await calls('explorer.children')).filter(params => params.node.type === 'folder' && params.node.folder === folder).length
   // The empty area offers Connect… and Refresh, which needs a server.
@@ -756,10 +764,8 @@ try {
   await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
   // A server: its own items, and New Query on its connection with focus in the new query.
-  const serverA = await row('server-a')
-  await serverA.click({ button: 'right', force: true })
+  const serverA = await openExplorerRowMenu('server-a')
   expect(await labels()).toEqual(['Connect…', 'Disconnect', 'Environment…', 'New Query', 'Activity Monitor', 'Search Objects…', 'Copy Name', 'Refresh'])
-  await expect(serverA).toHaveAttribute('data-menu-target', '')
   await expect(serverA).toHaveAttribute('aria-selected', 'true')
   const before = await tabs().count()
   await explorerMenu.getByRole('menuitem', { name: 'New Query', exact: true }).click()
@@ -769,8 +775,7 @@ try {
   await expect(textbox()).toBeFocused()
   // A database's name, quoted. Right-click selected it, and focus went back to the tree.
   await expandExplorerPath(page, 'server-a', 'Databases')
-  const appData = await row('server-a', 'Databases', 'AppData')
-  await appData.click({ button: 'right', force: true })
+  const appData = await openExplorerRowMenu('server-a', 'Databases', 'AppData')
   expect(await labels()).toEqual(['New Database…', 'New Query', 'Search Objects…', 'Script Database as', 'Tasks', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await explorerMenu.getByRole('menuitem', { name: 'Copy Name', exact: true }).click()
   await expect.poll(clipboard).toBe('[AppData]')
@@ -778,8 +783,7 @@ try {
   await expect(appData).toHaveAttribute('aria-selected', 'true')
   // A table: Select Top 1000 Rows opens SSMS's script on its database and runs it there.
   await expandExplorerPath(page, ...ordersPath.slice(0, -1))
-  const orders = await row(...ordersPath)
-  await orders.click({ button: 'right', force: true })
+  await openExplorerRowMenu(...ordersPath)
   expect(await labels()).toEqual(['Select Top 1000 Rows', 'Script Table as', 'Copy Name', 'Rename', 'Delete', 'Refresh'])
   await explorerMenu.getByRole('menuitem', { name: 'Select Top 1000 Rows', exact: true }).click()
   const selectTop = ['/****** Script for SelectTopNRows command from Varia SQL Manager ******/', 'SELECT TOP (1000) [Id]', '      ,[CustomerName]', '  FROM [AppData].[dbo].[Orders]'].join('\n')
@@ -792,7 +796,7 @@ try {
   await expect(anyResultGrid(page)).toContainText('Contoso')
   // Script Table as › CREATE To › Clipboard, then File… through the save dialog.
   const scriptTo = async destination => {
-    await (await row(...ordersPath)).click({ button: 'right', force: true })
+    await openExplorerRowMenu(...ordersPath)
     await explorerMenu.getByRole('menuitem', { name: 'Script Table as', exact: true }).click()
     await menu('Script Table as').getByRole('menuitem', { name: 'CREATE To', exact: true }).click()
     await menu('CREATE To').getByRole('menuitem', { name: destination, exact: true }).click()
@@ -835,11 +839,11 @@ try {
   await expect(toolbarButton(page, 'Open')).toBeEnabled()
   // Refresh on Tables reconciles that folder only. Tables can be filtered (explorer-smoke.mjs covers Filter Settings) and
   // offers New › Table… (table-designer-smoke.mjs).
-  const tables = await row(...ordersPath.slice(0, -1)), kept = await (await row(...ordersPath)).getAttribute('id')
+  const kept = await (await row(...ordersPath)).getAttribute('id')
   await mkdir(join(control, 'extra'), { recursive: true })
   await writeFile(join(control, 'extra', 'tables'), '')
   const listed = { tables: await loads('tables'), databases: await loads('databases') }
-  await tables.click({ button: 'right', force: true })
+  const tables = await openExplorerRowMenu(...ordersPath.slice(0, -1))
   expect(await labels()).toEqual(['New', 'Filter Settings…', 'Refresh'])
   await explorerMenu.getByRole('menuitem', { name: 'Refresh', exact: true }).click()
   await expect.poll(() => loads('tables')).toBe(listed.tables + 1)
@@ -889,13 +893,13 @@ try {
   await expect(tree).toBeFocused()
   // A login's name (New Login… first, as in SSMS); the server's Disconnect needs no picker.
   await expandExplorerPath(page, 'server-a', 'Security', 'Logins')
-  await (await row('server-a', 'Security', 'Logins', 'sa')).click({ button: 'right', force: true })
+  await openExplorerRowMenu('server-a', 'Security', 'Logins', 'sa')
   // The fixture's sa is disabled, so it offers Enable in place of Disable (D4b), as a SQL Server login Unlock… (D4d), and Delete
   // follows Rename as in SSMS (D4c); Properties, last, opens Login Properties (D2c).
   expect(await labels()).toEqual(['New Login…', 'Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await explorerMenu.getByRole('menuitem', { name: 'Copy Name', exact: true }).click()
   await expect.poll(clipboard).toBe('[sa]')
-  await serverA.click({ button: 'right', force: true })
+  await openExplorerRowMenu('server-a')
   await explorerMenu.getByRole('menuitem', { name: 'Disconnect', exact: true }).click()
   await expect(tree).toHaveCount(0)
   await expect(quickInput(page)).toHaveCount(0)
@@ -1061,19 +1065,19 @@ try {
     ['a panel tab by mouse', () => rightClick(paneTab(page, 'explorer')), dockTab('explorer')],
     ['a panel tab by Shift+F10', async () => { await dockTab('results').focus(); await page.keyboard.press('Shift+F10') }, dockTab('results')],
     // Object Explorer's rows are not focusable: focus stays on the tree, which names the selected row.
-    ['a server', async () => rightClick(await row('server-a')), tree],
-    ['the Databases folder', async () => rightClick(await row('server-a', 'Databases')), tree],
-    ['a database', async () => rightClick(await row('server-a', 'Databases', 'AppData')), tree],
-    ['a Tables folder', async () => rightClick(await row(...ordersPath.slice(0, -1))), tree],
+    ['a server', () => openExplorerRowMenu('server-a'), tree],
+    ['the Databases folder', () => openExplorerRowMenu('server-a', 'Databases'), tree],
+    ['a database', () => openExplorerRowMenu('server-a', 'Databases', 'AppData'), tree],
+    ['a Tables folder', () => openExplorerRowMenu(...ordersPath.slice(0, -1)), tree],
     ['a table\'s Script Table as › CREATE To', async () => {
-      await rightClick(await row(...ordersPath))
+      await openExplorerRowMenu(...ordersPath)
       await tap(explorerMenu.getByRole('menuitem', { name: 'Script Table as', exact: true }))
       await tap(menu('Script Table as').getByRole('menuitem', { name: 'CREATE To', exact: true }))
       await expect(menu('CREATE To')).toBeVisible()
     }, tree],
-    ['a table by Shift+F10', async () => { await tap(await row(...ordersPath)); await page.keyboard.press('Shift+F10') }, tree],
-    ['the Logins folder', async () => rightClick(await row('server-a', 'Security', 'Logins')), tree],
-    ['a login', async () => rightClick(await row('server-a', 'Security', 'Logins', 'sa')), tree],
+    ['a table by Shift+F10', async () => { await (await revealExplorerRow(page, ...ordersPath)).click(); await page.keyboard.press('Shift+F10') }, tree],
+    ['the Logins folder', () => openExplorerRowMenu('server-a', 'Security', 'Logins'), tree],
+    ['a login', () => openExplorerRowMenu('server-a', 'Security', 'Logins', 'sa'), tree],
     ['a results grid cell', async () => { await tap(outputView(page, /^Results/)); await rightClick(cell(0, 1)) }, grid],
     ['the results grid by Shift+F10', async () => { await grid.focus(); await page.keyboard.press('Shift+F10') }, grid],
     ['the second result set\'s grid', async () => { await rightClick(cell(0, 0, planGrid)) }, planGrid],
@@ -1104,7 +1108,7 @@ try {
     await page.evaluate(value => window.varia.setThemePreference({ mode: value }), mode)
     await expect.poll(appearance).toContain(`"mode": "${mode}"`)
     await expect.poll(async () => await variable('editor.background') === '#ffffff').toBe(mode === 'light')
-    await rightClick(await row(...ordersPath))
+    await openExplorerRowMenu(...ordersPath)
     await tap(explorerMenu.getByRole('menuitem', { name: 'Script Table as', exact: true }))
     await tap(menu('Script Table as').getByRole('menuitem', { name: 'CREATE To', exact: true }))
     await point(menu('CREATE To').getByRole('menuitem', { name: 'Clipboard', exact: true }))
