@@ -1165,9 +1165,7 @@ the row-size bar) read these numbers; nothing re-reads SQL Server.
   `ResultHandle.rowBytes(first, count, signal)` asks through the worker and main with the same ownership and generation
   checks as `close`.
 - **Not measured exactly.** FOR XML and FOR JSON values count their joined text as nvarchar; live tables count text as
-  nvarchar and keep no entries for cut cells (their tables are small); synthetic test rows are not measured. SqlClient
-  7.1.1's `GetChars` under `SequentialAccess` decodes json one byte per character, so a non-ASCII json value is
-  shown and counted wrong (a SqlClient bug; `GetString` is right).
+  nvarchar and keep no entries for cut cells (their tables are small); synthetic test rows are not measured.
 
 ## Messages
 
@@ -2152,7 +2150,8 @@ formats SQL types. Every sample is a case in `tests/fixtures/sql-display.json`, 
 against SQL Server by the live type matrix. Reads use `CommandBehavior.SequentialAccess`, call `IsDBNull` first, and read
 each column once, in order, with a reader chosen once per result set from the schema table. A long value is kept up to
 its cap and the rest is read past in 8,192-unit chunks (text and ntext through `GetTextReader`: `GetChars` reads their
-whole value). The rows that are not stored (past `maxRows`, after the budget stops storing, or in a set that is not
+whole value; json as UTF-8 bytes through `GetBytes`, decoded by the backend, since SqlClient 7.1.1's `GetChars` decodes
+json one byte per character and its `GetTextReader` throws when a read ends inside a multi-byte sequence). The rows that are not stored (past `maxRows`, after the budget stops storing, or in a set that is not
 kept) are read past with a synchronous `Read` when their set has a long column, on a dedicated thread: that `Read` also
 waits for the server's next row (a lock, a slow plan), and on thread-pool threads a few such queries delayed every other
 request, cancels included, by seconds. Either way, nothing near a huge value's size is held, and a cancel stops it: left
