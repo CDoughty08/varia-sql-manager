@@ -113,21 +113,25 @@ internal static class CellLengthLiveChecks
             if (major >= 17)
             {
                 // json's own DATALENGTH is its binary storage too: the UTF-8 text SQL Server sends is compared. A vector is
-                // 8 bytes of header and 4 per dimension, as DATALENGTH reports. The json is ASCII: SqlClient 7.1.1's GetChars
-                // under sequential access decodes json's UTF-8 one byte a character (é shows as Ã©), so its non-ASCII text,
-                // and the lengths counted from it, are wrong until that is fixed (docs/ipc.md).
-                result = await Run("DECLARE @j json = N'{\"a\":\"b  c\" , \"d\":[1, 2]}'; DECLARE @v vector(3) = '[1,2.5,-3]';"
-                    + " SELECT @j AS j, @v AS v; SELECT DATALENGTH(CONVERT(varchar(max), CAST(@j AS nvarchar(max)) COLLATE Latin1_General_100_CI_AS_SC_UTF8)),"
-                    + " DATALENGTH(CAST(@j AS nvarchar(max))) / 2, DATALENGTH(@v);");
+                // 8 bytes of header and 4 per dimension, as DATALENGTH reports. The json holds two-, three- and four-byte
+                // UTF-8 (SqlClient 7.1.1's GetChars decoded it one byte a character), and the long one passes the cap, so
+                // its lengths are counted across chunks while it is read past.
+                result = await Run("DECLARE @j json = N'{\"a\":\"b  é\" , \"d\":[1, 2], \"€\":\"😀\"}'; DECLARE @v vector(3) = '[1,2.5,-3]';"
+                    + " DECLARE @l json = N'[\"' + REPLICATE(CAST(N'é€😀' AS nvarchar(max)), 600000) + N'\"]';"
+                    + " SELECT @j AS j, @v AS v, @l AS l; SELECT DATALENGTH(CONVERT(varchar(max), CAST(@j AS nvarchar(max)) COLLATE Latin1_General_100_CI_AS_SC_UTF8)),"
+                    + " DATALENGTH(CAST(@j AS nvarchar(max))) / 2, DATALENGTH(@v),"
+                    + " DATALENGTH(CONVERT(varchar(max), CAST(@l AS nvarchar(max)) COLLATE Latin1_General_100_CI_AS_SC_UTF8)), DATALENGTH(CAST(@l AS nvarchar(max))) / 2;");
                 check(result.ResultSets.Count == 2, "the json and vector batch runs: " + result.Status + " " + result.Error?.Message);
                 if (result.ResultSets.Count != 2) return;
                 var modern = store.Find(result.ResultSets[0].ResultId)!;
                 var refs = LiveResultChecks.RowsOf(store, result.ResultSets[1])[0];
                 var json2 = modern.CellSize(0, 0);
                 var vector = modern.CellSize(0, 1);
+                var longJson = modern.CellSize(0, 2);
                 check(json2 is { Exact: true } j && j.Bytes.ToString(CultureInfo.InvariantCulture) == refs[0] && j.Chars.ToString(CultureInfo.InvariantCulture) == refs[1]
-                    && vector is { Exact: true } v && v.Bytes.ToString(CultureInfo.InvariantCulture) == refs[2] && v.Chars == "[1,2.5,-3]".Length,
-                    "json counts its UTF-8 text and vector its stored size: " + json2 + " " + vector + " vs " + string.Join(",", refs));
+                    && vector is { Exact: true } v && v.Bytes.ToString(CultureInfo.InvariantCulture) == refs[2] && v.Chars == "[1,2.5,-3]".Length
+                    && longJson is { Exact: true } l && l.Bytes.ToString(CultureInfo.InvariantCulture) == refs[3] && l.Chars.ToString(CultureInfo.InvariantCulture) == refs[4],
+                    "json counts its UTF-8 text, past its cap too, and vector its stored size: " + json2 + " " + vector + " " + longJson + " vs " + string.Join(",", refs));
             }
         }
         finally

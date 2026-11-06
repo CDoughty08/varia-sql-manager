@@ -12,7 +12,7 @@ namespace Varia.Backend.Results;
 internal enum CellCodec : byte
 {
     Bit, Byte, Int16, Int32, Int64, Decimal, SqlDecimal, Money, Real, Float, Date, Time, SmallDateTime, DateTime, DateTime2, DateTimeOffset, Guid,
-    Chars, Xml, Bytes, Timestamp, Stream, Variant, Vector, Value, LongText, Unreadable
+    Chars, Xml, Bytes, Timestamp, Stream, Variant, Vector, Value, LongText, Json, Unreadable
 }
 
 /// <summary>The codecs for one result set, chosen once from its schema (never by catching exceptions per cell). Reads
@@ -36,6 +36,7 @@ internal sealed class ColumnPlan
     private readonly Column[] columns;
     private char[] chars = new char[Chunk];
     private byte[] bytes = new byte[Chunk];
+    private readonly Decoder utf8 = new UTF8Encoding(false).GetDecoder();
     // Reused by every xml cell: a fresh sink and feed per cell made a small cell cost about 45 KB instead of 28 KB.
     private CharSink? sink;
     private XmlFeed? feed;
@@ -163,7 +164,7 @@ internal sealed class ColumnPlan
 
     private static int? Int(DataRow row, string column) => row.Table.Columns.Contains(column) && row[column] is not DBNull and var value ? Convert.ToInt32(value, Invariant) : null;
 
-    private static (CellCodec Codec, WireKind Wire, string? Role, int Cap) Choose(int provider, int? precision, bool isLong, Type? clrType, bool isPlan)
+    internal static (CellCodec Codec, WireKind Wire, string? Role, int Cap) Choose(int provider, int? precision, bool isLong, Type? clrType, bool isPlan)
     {
         const WireKind text = WireKind.Text, binary = WireKind.Binary;
         if (isPlan) return (provider == (int)SqlDbType.Xml ? CellCodec.Xml : CellCodec.Chars, text, "plan", DocumentCap);
@@ -189,7 +190,7 @@ internal sealed class ColumnPlan
             // GetChars on text and ntext reads the whole value at its first call; GetTextReader streams it.
             (int)SqlDbType.Text or (int)SqlDbType.NText => (CellCodec.LongText, text, null, TextCap),
             (int)SqlDbType.Xml => (CellCodec.Xml, text, "xml", DocumentCap),
-            JsonType => (CellCodec.Chars, text, "json", DocumentCap),
+            JsonType => (CellCodec.Json, text, "json", DocumentCap),
             VectorType => (CellCodec.Vector, text, "vector", VectorCap),
             (int)SqlDbType.Binary or (int)SqlDbType.VarBinary or (int)SqlDbType.Image => (CellCodec.Bytes, binary, null, BinaryCap),
             (int)SqlDbType.Timestamp => (CellCodec.Timestamp, binary, null, BinaryCap),
@@ -301,6 +302,7 @@ internal sealed class ColumnPlan
                 return cut;
             }
             case CellCodec.Value: return Whole(column, Convert.ToString(reader.GetValue(i), Invariant) ?? "", builder);
+            case CellCodec.Json: return Json(reader, i, column.Cap, builder, token);
             case CellCodec.LongText:
             {
                 using var text = reader.GetTextReader(i);
@@ -394,6 +396,34 @@ internal sealed class ColumnPlan
         }
         Counted(column, full);
         return Text(chars.AsSpan(0, total), cap, builder);
+    }
+
+    /// <summary>json arrives as UTF-8, which it is decoded from here: SqlClient 7.1.1's GetChars under SequentialAccess
+    /// decodes it one byte a character (é reads as Ã©), and its GetTextReader throws when a read ends inside a multi-byte
+    /// sequence. The decoder carries a sequence split between chunks. Up to cap + 1 characters (and at most one chunk's
+    /// more) are kept; the rest is decoded into the buffer after them only to be counted. The bytes are the UTF-8 read.</summary>
+    private bool Json(SqlDataReader reader, int i, int cap, PageBuilder builder, CancellationToken token)
+    {
+        utf8.Reset();
+        var limit = cap + 1;
+        var kept = 0;
+        long full = 0, offset = 0;
+        Bytes(Chunk);
+        while (true)
+        {
+            token.ThrowIfCancellationRequested();
+            var read = (int)reader.GetBytes(i, offset, bytes, 0, Chunk);
+            var input = bytes.AsSpan(0, Math.Max(read, 0));
+            // A chunk decodes to at most one character a byte, plus one for a sequence carried from the last chunk.
+            var decoded = utf8.GetChars(input, Chars(kept + input.Length + 1).Slice(kept, input.Length + 1), flush: read <= 0);
+            full += decoded;
+            if (kept < limit) kept += decoded;
+            if (read <= 0) break;
+            offset += read;
+        }
+        cellChars = full;
+        cellBytes = offset;
+        return Text(chars.AsSpan(0, kept), cap, builder);
     }
 
     private bool Chars(TextReader reader, Column column, PageBuilder builder, CancellationToken token)
