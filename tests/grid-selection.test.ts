@@ -172,7 +172,7 @@ describe('keyboard navigation', () => {
   it('moves, extends, and selects rows, columns, or everything with each grid key on every platform', () => {
     for (const platform of platforms) for (const [key, code, modifiers, anchor, focus, kind] of table) {
       const name = `${platform} ${JSON.stringify(modifiers)} ${key}`
-      const action = gridKeyAction(press(platform, key, code, modifiers), platform)
+      const action = gridKeyAction(press(platform, key, code, modifiers), platform, true)
       expect(action, name).toBeDefined()
       const next = navigate(start, action!, options)
       expect(next.blocks, name).toEqual([{ kind, anchor: { row: anchor[0], column: anchor[1] }, focus: { row: focus[0], column: focus[1] } }])

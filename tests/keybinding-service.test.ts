@@ -150,6 +150,49 @@ describe('keybinding dispatch', () => {
       expect(ran(), platform).toEqual(['file.save', 'output.saveResultsAs', 'file.save'])
     }
   })
+  it.each(platforms)('runs a results grid’s Copy and Select All, and Select All in Messages, from the catalogue on %s', platform => {
+    const { press, execute, ran, state } = service(platform, { values: { activePanel: 'output', outputGridFocus: true } })
+    expect(press(letter('c', platform)).consumed).toBe(true)
+    expect(execute).toHaveBeenLastCalledWith('output.copy', undefined, 'keybinding')
+    expect(press(letter('a', platform)).consumed).toBe(true)
+    // Messages: Select All selects only their text; Ctrl+C stays Chromium's copy of the selected text.
+    state.values = { activePanel: 'output', messagesFocus: true }
+    expect(press(letter('a', platform)).consumed).toBe(true)
+    expect(press(letter('c', platform)).consumed).toBe(false)
+    // Anywhere else the keys are Chromium's and Monaco's (the Edit roles).
+    for (const values of [editorText, { activePanel: 'output' }, { activePanel: 'explorer', explorerFocus: true }] as Partial<ContextKeys>[]) {
+      state.values = values
+      expect(press(letter('a', platform)).consumed, JSON.stringify(values)).toBe(false)
+      expect(press(letter('c', platform)).consumed, JSON.stringify(values)).toBe(false)
+    }
+    expect(ran()).toEqual(['output.copy', 'output.selectAll', 'output.selectAll'])
+  })
+  it.each(platforms)('runs Peek on Space in the Object Explorer tree, but not while type-ahead collects a name or in a text field, on %s', platform => {
+    const { press, execute, ran, state } = service(platform, { values: { activePanel: 'explorer', explorerFocus: true } })
+    expect(press(key('Space', ' ')).consumed).toBe(true)
+    expect(execute).toHaveBeenLastCalledWith('explorer.peek', undefined, 'keybinding')
+    // Shift+Space and a held Space do not peek again; the tree swallows Shift+Space itself.
+    expect(press(key('Space', ' ', { shift: true })).consumed).toBe(false)
+    expect(press(key('Space', ' ', { repeat: true })).consumed).toBe(true)
+    for (const values of [{ activePanel: 'explorer', explorerFocus: true, explorerTypeAhead: true }, { activePanel: 'explorer', inputFocus: true, textInputFocus: true },
+      { activePanel: 'explorer' }, editorText, { activePanel: 'output', outputGridFocus: true }] as Partial<ContextKeys>[]) {
+      state.values = values
+      expect(press(key('Space', ' ')).consumed, JSON.stringify(values)).toBe(false)
+    }
+    expect(ran()).toEqual(['explorer.peek'])
+  })
+  it.each(platforms)('focuses the Options search on Ctrl+E (⌘E) over the modal Options dialog only, on %s', platform => {
+    const { press, execute, ran, state } = service(platform, { modal: true, values: { optionsDialogFocus: true } })
+    expect(press(letter('e', platform)).consumed).toBe(true)
+    expect(execute).toHaveBeenLastCalledWith('options.focusSearch', undefined, 'keybinding')
+    state.values = { optionsDialogFocus: true, inputFocus: true, textInputFocus: true }
+    expect(press(letter('e', platform)).consumed).toBe(true)
+    // Another dialog keeps its keys.
+    state.values = {}
+    expect(press(letter('e', platform)).consumed).toBe(false)
+    expect(press(letter('e', platform, { shift: true })).consumed).toBe(false)
+    expect(ran()).toEqual(['options.focusSearch', 'options.focusSearch'])
+  })
   it('consumes a macOS menu key equivalent where its rule does not apply, so the menu cannot run it there', () => {
     const rules = (platform: Platform) => [resolveKeybinding('query.execute', { key: 'mod+j', when: 'editorFocus' }, platform)!, resolveKeybinding('window.results', { key: 'f6', when: 'editorFocus' }, platform)!]
     for (const platform of platforms) {

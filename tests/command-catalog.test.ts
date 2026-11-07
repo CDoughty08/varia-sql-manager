@@ -56,7 +56,7 @@ describe('command catalogue', () => {
   it('is the renderer\'s command id type', () => {
     expectTypeOf<CommandId>().toEqualTypeOf<RendererCommandId>()
     // Includes generated Script As commands and internal lifecycle commands.
-    expect(commandIds).toHaveLength(236)
+    expect(commandIds).toHaveLength(237)
     expect(commandIds.filter(id => id.startsWith('explorer.script') && id.includes('To'))).toEqual([...scriptCommandIds])
   })
   it('has a handler for every command once all contributions have run', () => {
@@ -94,13 +94,14 @@ describe('command catalogue', () => {
     // tests/icons.test.ts checks the registry against the bundled codicon font.
     expect(commandIds.filter(id => commandDescriptor(id).icon !== undefined && !isIconId(commandDescriptor(id).icon))).toEqual([])
   })
-  it('lets exactly window close, the text-editing commands, the context-menu key and main’s AutoRecover save run behind a modal', () => {
+  it('lets exactly window close, the text-editing commands, the context-menu key, main’s AutoRecover save and the Options search run behind a modal', () => {
     // Text fields in dialogs keep Undo, Redo, the clipboard, and their context menu. A Windows session end saves AutoRecover's copies whatever is open.
+    // The Options dialog's Ctrl+E (⌘E) focuses its search box.
     expect(commandIds.filter(id => commandDescriptor(id).allowInModal)).toEqual(['file.autoRecoverNow', 'window.close', 'edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll',
-      'workbench.showContextMenu'])
+      'workbench.showContextMenu', 'options.focusSearch'])
     for (const platform of platforms) for (const rule of defaultRules(platform).filter(rule => rule.modal)) expect(commandDescriptor(rule.command).allowInModal, rule.command).toBe(true)
-    expect(defaultRules('win32').filter(rule => rule.modal).map(rule => rule.chords.join(' '))).toEqual(['shift+f10', 'contextmenu'])
-    expect(defaultRules('darwin').filter(rule => rule.modal).map(rule => rule.chords.join(' '))).toEqual(['shift+f10'])
+    expect(defaultRules('win32').filter(rule => rule.modal).map(rule => rule.chords.join(' '))).toEqual(['shift+f10', 'contextmenu', 'ctrl+e'])
+    expect(defaultRules('darwin').filter(rule => rule.modal).map(rule => rule.chords.join(' '))).toEqual(['shift+f10', 'meta+e'])
   })
   it('gives role-backed commands only native keys, and platform titles without access keys', () => {
     for (const id of commandIds) if (commandDescriptor(id).role) for (const spec of commandDescriptor(id).keybindings ?? []) expect(spec.native, id).toBe(true)

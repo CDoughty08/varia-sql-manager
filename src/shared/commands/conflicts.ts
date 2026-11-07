@@ -1,21 +1,24 @@
 import { commandDescriptor, type CommandId } from './catalog'
 import { contextKeyValues, contextRecord, keysOfScope, type ContextKey, type ContextKeys, type FocusKeys } from './context-keys'
-import { reservedReason, splitChord, workbenchRules, type Platform, type ResolvedRule } from './keybindings'
+import { reservedReason, reservedWhere, splitChord, workbenchRules, type Platform, type ResolvedRule } from './keybindings'
 import { evaluateWhen, referencedKeys } from './when'
 
 /** Representative places focus can be. Each fixes every focus key; keys it does not list are false or ''. */
 export const focusSamples: readonly { readonly name: string; readonly keys: Partial<FocusKeys> }[] = [
   { name: 'editorText', keys: { editorFocus: true, editorTextFocus: true, textInputFocus: true, activePanel: 'editor' } },
   { name: 'editorFindInput', keys: { editorFocus: true, inputFocus: true, textInputFocus: true, activePanel: 'editor' } },
-  { name: 'explorerTree', keys: { activePanel: 'explorer' } },
+  { name: 'explorerTree', keys: { activePanel: 'explorer', explorerFocus: true } },
+  { name: 'explorerTypeAhead', keys: { activePanel: 'explorer', explorerFocus: true, explorerTypeAhead: true } },
   { name: 'activityMonitor', keys: { activePanel: 'editor', activityMonitorFocus: true } },
   { name: 'documentTab', keys: { activePanel: 'editor', documentTabFocus: true } },
   { name: 'documentTabRename', keys: { activePanel: 'editor', documentTabFocus: true, inputFocus: true, textInputFocus: true } },
   { name: 'outputGrid', keys: { activePanel: 'output', outputGridFocus: true } },
-  { name: 'outputMessages', keys: { activePanel: 'output' } },
+  { name: 'outputMessages', keys: { activePanel: 'output', messagesFocus: true } },
   { name: 'toolbarSelect', keys: { inputFocus: true, textInputFocus: true } },
   { name: 'queryBarButton', keys: { activePanel: 'editor', queryBarFocus: true } },
   { name: 'queryBarSelect', keys: { activePanel: 'editor', queryBarFocus: true, inputFocus: true, textInputFocus: true } },
+  { name: 'optionsDialog', keys: { optionsDialogFocus: true } },
+  { name: 'optionsSearch', keys: { optionsDialogFocus: true, inputFocus: true, textInputFocus: true } },
   { name: 'titleBar', keys: {} },
   { name: 'quickInput', keys: { inputFocus: true, textInputFocus: true } },
   { name: 'body', keys: {} }
@@ -58,7 +61,7 @@ function findContext(rules: readonly ResolvedRule[], platform: Platform, holds: 
 const active = (rule: ResolvedRule, context: Context) => !rule.when || evaluateWhen(rule.when, context)
 
 /**
- * Problems with workbench keybindings on `platform`: two commands that can both match one key press, reserved chords,
+ * Problems with workbench keybindings on `platform`: two commands that can both match one key press, reserved chords (clipboard and editor keys only where text or the editor can have focus),
  * typing keys that are not limited to `!textInputFocus`, and keys on commands that also run while a modal is open
  * unless the key is marked `modal` (a dialog's own keys must win otherwise), or a `modal` key on a command that does
  * not. Native rules belong to Monaco and are not checked.
@@ -67,8 +70,10 @@ export function findConflicts(rules: readonly ResolvedRule[], platform: Platform
   const conflicts: Conflict[] = []
   for (const [chord, list] of workbenchRules(rules)) {
     for (const rule of list) {
-      const reason = reservedReason(chord, platform)
-      if (reason) conflicts.push({ kind: 'reserved', chord, commands: [rule.command], message: `${rule.command}: ${chord} is reserved (${reason}).` })
+      const reason = reservedReason(chord, platform), where = reservedWhere(chord, platform)
+      // A clipboard or editor key is free for a rule that never matches where text or the query editor has focus.
+      const owner = where && findContext([rule], platform, context => (where === 'text' ? context.textInputFocus || context.editorFocus : context.editorFocus) && active(rule, context))
+      if (reason && (!where || owner)) conflicts.push({ kind: 'reserved', chord, commands: [rule.command], message: `${rule.command}: ${chord} is reserved (${reason}).` })
       const { allowInModal } = commandDescriptor(rule.command)
       if (rule.modal && !allowInModal) conflicts.push({ kind: 'modal', chord, commands: [rule.command], message: `${rule.command}: ${chord} is marked modal, but the command does not run while a modal is open.` })
       else if (allowInModal && !rule.modal) conflicts.push({ kind: 'modal', chord, commands: [rule.command], message: `${rule.command} runs while a modal is open, so its workbench key ${chord} must be marked modal or it would take the key from the dialog.` })

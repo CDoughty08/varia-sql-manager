@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (236)
+## Commands (237)
 
 ### File
 
@@ -128,9 +128,9 @@ keys it uses are listed below.
 | Disconnect | `query.disconnect` | — | — | — | `activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy` | Query › Connection › Disconnect |
 | Disconnect All Queries | `query.disconnectAll` | — | — | — | `anyDocumentConnected && !documentBusy` | Query › Connection › Disconnect All Queries |
 | Change Database… | `query.changeDatabase` | Ctrl+U | Ctrl+U | ⌘U | `activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy` | Query › Change Database… |
-| Copy (not in the palette) | `output.copy` | Ctrl+C * (`outputGridFocus`) | Ctrl+C * (`outputGridFocus`) | ⌘C * (`outputGridFocus`) | Always | Query Output context menu › Copy |
+| Copy (not in the palette) | `output.copy` | Ctrl+C (`outputGridFocus`) | Ctrl+C (`outputGridFocus`) | ⌘C (`outputGridFocus`) | Always | Query Output context menu › Copy |
 | Copy with Headers (not in the palette) | `output.copyWithHeaders` | Ctrl+Shift+C (`outputGridFocus`) | Ctrl+Shift+C (`outputGridFocus`) | ⇧⌘C (`outputGridFocus`) | Always | Query Output context menu › Copy with Headers |
-| Select All (not in the palette) | `output.selectAll` | Ctrl+A * (`outputGridFocus`) | Ctrl+A * (`outputGridFocus`) | ⌘A * (`outputGridFocus`) | Always | Query Output context menu › Select All |
+| Select All (not in the palette) | `output.selectAll` | Ctrl+A (`outputGridFocus \|\| messagesFocus`) | Ctrl+A (`outputGridFocus \|\| messagesFocus`) | ⌘A (`outputGridFocus \|\| messagesFocus`) | Always | Query Output context menu › Select All |
 | Save Results As… | `output.saveResultsAs` | Ctrl+S (`outputGridFocus`) | Ctrl+S (`outputGridFocus`) | ⌘S (`outputGridFocus`) | `hasResults` | Query Output context menu › Save Results As… |
 | Close Results | `output.closeResults` | — | — | — | `hasResults && !queryRunning` | — |
 | Show Spaces and Tabs in Results | `output.showSpaces` | — | — | — | Always; checked when `resultsWhitespaceSpaces` | Query Output context menu › Show Spaces and Tabs |
@@ -214,7 +214,7 @@ keys it uses are listed below.
 | Script As… | `explorer.scriptAs` | — | — | — | `backendReady && explorerScriptTitle != ''` | — |
 | Modify | `explorer.modify` | — | — | — | `backendReady && explorerSelectionModifiable && explorerScriptAlter == 'enabled' && !documentBusy` | Object Explorer context menu › Modify |
 | Cancel Scripting | `explorer.cancelScripting` | — | — | — | `scriptingRunning` | — |
-| Peek | `explorer.peek` | Alt+F12 (`activePanel == 'explorer' && !inputFocus`) | Alt+F12 (`activePanel == 'explorer' && !inputFocus`) | ⌥F12 (`activePanel == 'explorer' && !inputFocus`) | `backendReady && (explorerSelectionKind == 'table' \|\| explorerSelectionKind == 'view' \|\| explorerSelectionKind == 'procedure' \|\| explorerSelectionKind == 'function')` | Object Explorer context menu › Peek |
+| Peek | `explorer.peek` | Alt+F12 (`activePanel == 'explorer' && !inputFocus`), Space (`explorerFocus && !textInputFocus && !explorerTypeAhead`) | Alt+F12 (`activePanel == 'explorer' && !inputFocus`), Space (`explorerFocus && !textInputFocus && !explorerTypeAhead`) | ⌥F12 (`activePanel == 'explorer' && !inputFocus`), Space (`explorerFocus && !textInputFocus && !explorerTypeAhead`) | `backendReady && (explorerSelectionKind == 'table' \|\| explorerSelectionKind == 'view' \|\| explorerSelectionKind == 'procedure' \|\| explorerSelectionKind == 'function')` | Object Explorer context menu › Peek |
 | Copy Name | `explorer.copyName` | — | — | — | `hasConnection` | Object Explorer context menu › Copy Name |
 | Search Objects… | `explorer.searchObjects` | — | — | — | `hasConnection` | View › Search Objects…; Object Explorer context menu › Search Objects… |
 | Rebuild Search Index | `explorer.rebuildIndex` | — | — | — | `hasConnection` | — |
@@ -305,6 +305,7 @@ keys it uses are listed below.
 | Reload Themes | `preferences.reloadThemes` | — | — | — | Always | View › Theme › Reload Themes |
 | Set Color Theme (not in the palette) | `preferences.setTheme` | — | — | — | Always | View › Theme › Dark, Light, Follow System, and each theme under Dark Theme and Light Theme |
 | Options… | `preferences.options` | — | — | ⌘, | Always | Tools › Options… |
+| Search Options (not in the palette) | `options.focusSearch` | Ctrl+E (`optionsDialogFocus`) | Ctrl+E (`optionsDialogFocus`) | ⌘E (`optionsDialogFocus`) | Always | — |
 
 ### Developer
 
@@ -797,7 +798,7 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 | `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
 | `8_view` | **P**ause | `ssis.pauseOperations` | Always |
 
-## Context keys (129)
+## Context keys (133)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -815,6 +816,10 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `textInputFocus` | boolean | focus | `editorTextFocus \|\| inputFocus`. |
 | `activePanel` | `'explorer'`, `'editor'`, `'output'`, `''` | focus | The pane that holds focus: Object Explorer, the query editor, an output panel (Results, Messages or Execution plan), or '' for none. |
 | `outputGridFocus` | boolean | focus | Focus is in a results grid, which copies its selected cells rather than text. |
+| `messagesFocus` | boolean | focus | Focus is in a query's Messages, whose Select All selects only their text; activePanel is then 'output'. |
+| `explorerFocus` | boolean | focus | Focus is on Object Explorer's tree, not its search box, toolbar or Peek card; activePanel is then 'explorer'. |
+| `explorerTypeAhead` | boolean | focus | Object Explorer's tree is collecting a type-ahead name, so Space types a space rather than peeking. |
+| `optionsDialogFocus` | boolean | focus | Focus is in the Options dialog. |
 | `designerFocus` | boolean | focus | Focus is in the active table designer; activePanel is then 'editor'. |
 | `queryBarFocus` | boolean | focus | Focus is in the active query's bar (Execute, Cancel and its server and database lists); activePanel is then 'editor'. |
 | `activityMonitorFocus` | boolean | focus | Focus is in the active Activity Monitor; activePanel is then 'editor'. |

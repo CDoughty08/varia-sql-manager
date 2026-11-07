@@ -273,6 +273,20 @@ const reservedByPlatform: Readonly<Record<Platform, ReadonlyMap<string, string>>
 /** Chords listed as never available to workbench keybindings on `platform`, with the reason. */
 export const reservedChords = (platform: Platform): ReadonlyMap<string, string> => reservedByPlatform[platform]
 
+/**
+ * Reasons that hold only where their owner can have focus: clipboard and text-editing keys in text fields and editor text
+ * (`text`), and the query editor's find and comment keys (`editor`). A workbench rule that never matches there may use
+ * the chord, as a results grid's Copy and Select All and the Options dialog's ⌘E do (`findConflicts`).
+ */
+const localReasons: ReadonlyMap<string, 'text' | 'editor'> = new Map([
+  ['clipboard or text editing', 'text'], ['clipboard or undo', 'text'], ['an emacs editing key', 'text'], ['find or comment in the editor', 'editor']
+])
+/** Where a reserved chord's reason holds (`localReasons`); undefined when it holds everywhere, or the chord is free. */
+export function reservedWhere(chord: string, platform: Platform): 'text' | 'editor' | undefined {
+  const listed = reservedByPlatform[platform].get(chord)
+  return listed === undefined ? undefined : localReasons.get(listed)
+}
+
 /** Why a workbench keybinding may not use `chord` on `platform`, or undefined when it may. */
 export function reservedReason(chord: string, platform: Platform): string | undefined {
   const listed = reservedByPlatform[platform].get(chord)
