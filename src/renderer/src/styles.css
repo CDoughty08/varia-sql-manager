@@ -536,6 +536,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .query-bar-label { display: none; }
   .query-bar-action { padding: 0 2px; }
   .query-connection { gap: var(--varia-space-0); padding-left: var(--varia-space-1); }
+  /* Reserve compact space for the environment label and both selectors. The divider still separates the lists. */
+  .query-connection-icon { display: none; }
 }
 @container (min-width: 310px) {
   .query-bar-environment:has(.environment-tag:not([data-custom])) { flex-shrink: 0; }

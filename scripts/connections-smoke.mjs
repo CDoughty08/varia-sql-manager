@@ -965,6 +965,10 @@ async function environmentLabels() {
   let widen = await narrowBar(330)
   expect(await barFit()).toEqual({ clear: true, inside: true, lists: true, cut: false })
   await widen()
+  // Check below the 330 px width that overflowed with Linux font metrics too.
+  widen = await narrowBar(320)
+  expect(await barFit(), '320 px query bar').toEqual({ clear: true, inside: true, lists: true, cut: false })
+  await widen()
   await page.screenshot({ path: resolve('artifacts', 'environment-production.png') })
   // (2) From the server's menu: a Custom label left blank cannot be saved; one typed is saved and shown everywhere.
   let labelling = await serverMenu(row)
