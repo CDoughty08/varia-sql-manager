@@ -523,6 +523,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .query-bar { display: flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-bar); padding: 0 var(--varia-space-2); flex-shrink: 0; min-width: 0; overflow: hidden; container-type: inline-size; font-size: var(--varia-size-sm); background: var(--varia-editor-background); border-bottom: 1px solid var(--varia-editorGroup-border); }
 /* Activating a sibling editor group must leave its controls under the pointer. */
 .query-bar-spacer { flex: 0 0 var(--varia-bar); }
+.query-bar-actions { display: flex; align-items: center; flex-shrink: 0; gap: var(--varia-space-1); }
 .query-bar-action { display: inline-flex; align-items: center; gap: 6px; height: var(--varia-control); padding: 0 10px; flex-shrink: 0; }
 .query-bar-action.execute kbd { color: inherit; border-color: currentColor; }
 .query-bar .actual-plan-toggle[aria-pressed="true"], .toolbar .actual-plan-toggle[aria-pressed="true"] {
@@ -554,10 +555,11 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .query-connection-icon { display: none; }
 }
 @container (max-width: 400px) {
-  .query-bar-action { padding: 0 1px; }
+  .query-bar-actions { gap: 0; }
+  .query-bar-action { padding: 0; }
   .query-connection-divider, .query-connection .connection-swatch { display: none; }
 }
-@container (min-width: 310px) {
+@container (min-width: 300px) {
   .query-bar-environment:has(.environment-tag:not([data-custom])) { flex-shrink: 0; }
 }
 @media (forced-colors: active) { .query-connection .connection-swatch { forced-color-adjust: none; } .query-connection { border-color: CanvasText; } }
