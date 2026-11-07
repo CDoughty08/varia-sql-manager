@@ -163,6 +163,7 @@ export default function App() {
     const subscription = workbench.events.subscribe(event => {
       // As in SSMS, executing shows the results (even when Ctrl+R hid them); background tabs must not steal the editor.
       if ((event.type === 'query.started' || event.type === 'query.finished') && event.tabId === documents.getSnapshot().activeId) workspaceRef.current?.revealOutput(activeOutputView())
+      if (event.type === 'query.estimateStarted' && event.tabId === documents.getSnapshot().activeId) workspaceRef.current?.revealOutput('plan')
       if (event.type === 'documents.activated' || event.type === 'documents.closed') workspaceRef.current?.reveal('editor')
       // Execute on a query with no connection: connect first, as SSMS does, then run it.
       if (event.type === 'query.connectRequested') { setReconnecting(undefined); setPendingExecute(event.tabId); setPendingMonitor(false); setShowConnect(true) }

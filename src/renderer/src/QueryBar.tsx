@@ -64,6 +64,16 @@ export function ActualPlanToggle({ classic = false }: { classic?: boolean }) {
   </button>
 }
 
+export function EstimatedPlanButton({ classic = false }: { classic?: boolean }) {
+  const { commands } = useWorkbench()
+  const id = 'query.estimatePlan', enabled = useCommandEnabled(id), key = useKeybindingLabel(id)
+  return <button type="button" className={classic ? undefined : 'query-bar-action estimated-plan-button'} aria-label="Display Estimated Execution Plan"
+    aria-keyshortcuts={key?.aria} disabled={!enabled} title={withKey('Display Estimated Execution Plan', key)}
+    onPointerDown={keepFocus} onClick={() => void commands.execute(id, undefined, 'toolbar')}>
+    <Icon name="execution-plan" /><span className="query-bar-label">Estimated Plan</span>
+  </button>
+}
+
 /**
  * The query document's own bar holds Execute, Cancel, Actual Plan and the connection pickers. One tab stop enters the
  * toolbar, then the arrow keys, Home and End move between enabled controls. Pickers keep Up and Down and open with
@@ -123,6 +133,7 @@ export default function QueryBar() {
       <Icon name="debug-stop" /><span className="query-bar-label">Cancel</span>
     </button>
     <ActualPlanToggle />
+    <EstimatedPlanButton />
     <div className="query-connection" role="group" aria-label="Connection" data-lost={model.connection?.lost || undefined}>
       {accent && <span className="connection-swatch" style={{ background: accent }} aria-hidden="true" />}
       {tag && <span className="query-bar-environment"><span className="visually-hidden">Environment: </span><EnvironmentTag environment={environment} place="query" about={model.serverName} /></span>}

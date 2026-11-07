@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (241)
+## Commands (242)
 
 ### File
 
@@ -124,6 +124,7 @@ keys it uses are listed below.
 | Execute | `query.execute` | F5 (`editorFocus \|\| queryBarFocus`), Ctrl+Enter (`editorFocus \|\| queryBarFocus`), Ctrl+E (`editorFocus \|\| queryBarFocus`) | F5 (`editorFocus \|\| queryBarFocus`), Ctrl+Enter (`editorFocus \|\| queryBarFocus`), Ctrl+E (`editorFocus \|\| queryBarFocus`) | F5 (`editorFocus \|\| queryBarFocus`), ⌘↩ (`editorFocus \|\| queryBarFocus`) | `activeDocumentIsQuery && !queryRunning && !documentBusy && (activeDocumentConnected \|\| (backendReady && !activeConnectionLost))` | Query › Execute; Editor context menu › Execute |
 | Cancel Executing Query | `query.cancel` | Alt+Pause | Alt+Pause | — | `queryRunning` | Query › Cancel Executing Query; Editor context menu › Cancel Executing Query |
 | Include Actual Execution Plan | `query.includeActualPlan` | Ctrl+M (`editorFocus \|\| queryBarFocus`) | Ctrl+M (`editorFocus \|\| queryBarFocus`) | — | `activeDocumentIsQuery && !queryRunning && !documentBusy`; checked when `includeActualPlan` | Query › Include Actual Execution Plan |
+| Display Estimated Execution Plan | `query.estimatePlan` | Ctrl+L (`editorFocus \|\| queryBarFocus`) | Ctrl+L (`editorFocus \|\| queryBarFocus`) | ⌘L (`editorFocus \|\| queryBarFocus`) | `activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy` | Query › Display Estimated Execution Plan; Editor context menu › Display Estimated Execution Plan |
 | Change Connection… | `query.changeConnection` | — | — | — | `hasActiveDocument && activeDocumentIsQuery && !queryRunning && !documentBusy` | Query › Connection › Change Connection… |
 | Disconnect | `query.disconnect` | — | — | — | `activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy` | Query › Connection › Disconnect |
 | Disconnect All Queries | `query.disconnectAll` | — | — | — | `anyDocumentConnected && !documentBusy` | Query › Connection › Disconnect All Queries |
@@ -472,6 +473,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_execute` | E**x**ecute | `query.execute` | Always |
 | `1_execute` | **C**ancel Executing Query | `query.cancel` | Always |
 | `1_execute` | **I**nclude Actual Execution Plan | `query.includeActualPlan` | Always |
+| `1_execute` | Display **E**stimated Execution Plan | `query.estimatePlan` | Always |
 
 #### Query › Connection
 
@@ -535,6 +537,7 @@ Right-click the query editor, or press Shift+F10 or the context-menu key in it. 
 | `1_connection` | C**o**nnection › | Submenu: Query › Connection | Always |
 | `2_execute` | E**x**ecute | `query.execute` | Always |
 | `2_execute` | Ca**n**cel Executing Query | `query.cancel` | Always |
+| `2_execute` | **D**isplay Estimated Execution Plan | `query.estimatePlan` | Always |
 | `3_clipboard` | Cu**t** | `edit.cut` | Always |
 | `3_clipboard` | **C**opy | `edit.copy` | Always |
 | `3_clipboard` | **P**aste | `edit.paste` | Always |

@@ -252,6 +252,7 @@ if (liveGroup is null)
     await ConnectionFailureChecks.IdentityAsync(Check);
     SessionChecks.Run(Check);
     PlanChecks.Run(Check);
+    EstimatedPlanChecks.Run(Check);
     await EntraChecks.RunAsync(Check);
     StoreChecks.Run(Check);
     CellLengthChecks.Run(Check);
@@ -691,6 +692,7 @@ try
     await Suite("LiveTableData", () => LiveTableDataChecks.RunAsync(Check, service, Live, json));
     await Suite("ExplorerStatus", () => ExplorerStatusLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("Execution", () => ExecutionLiveChecks.RunAsync(Check, service, info, json));
+    await Suite("EstimatedPlans", () => EstimatedPlanChecks.RunAsync(Check, service, info, json));
     await Suite("Transaction", () => TransactionLiveChecks.RunAsync(Check, service, info, json));
     await Suite("LiveResult", () => LiveResultChecks.RunAsync(Check, service, info, Live("master"), json));
     await Suite("CellLength", () => CellLengthLiveChecks.RunAsync(Check, service, info, json));

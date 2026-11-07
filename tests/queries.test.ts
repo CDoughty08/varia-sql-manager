@@ -20,6 +20,7 @@ function fixture(commandTimeout?: number, wait?: (ms: number) => Promise<void>, 
     id: 'server-a', server: 'localhost', database: 'master', serverVersion: '17', commandTimeout: commandTimeout ?? 0, generation: 1, options: commandTimeout === undefined ? {} : { advanced: { commandTimeout } }
   }
   const api = {
+    estimatePlan: vi.fn<VariaApi['estimatePlan']>(async () => ({ ok: true, value: { plans: [], database: 'master' } })),
     execute: vi.fn<QueryApi['execute']>(async () => ({ ok: true, value: output() })),
     cancel: vi.fn<VariaApi['cancel']>(async () => ({ ok: true, value: { cancelled: true } })),
     confirmSessions: vi.fn<VariaApi['confirmSessions']>(async () => ({ ok: true, value: 'cancel' })),
@@ -36,6 +37,73 @@ function fixture(commandTimeout?: number, wait?: (ms: number) => Promise<void>, 
   return { ...docs, bus: docs.events, queries, queryApi: api, connection, tab, events, results, calls }
 }
 describe('query orchestration', () => {
+  it('estimates the selected text without streaming results or changing the ordinary session and actual-plan toggle', async () => {
+    const f = fixture()
+    await f.queries.execute()
+    f.documents.update(f.tab.id, { includeActualPlan: true })
+    vi.spyOn(f.documents, 'getExecuteText').mockReturnValue({ sql: 'SELECT selected', startLine: 9 })
+    f.results.begin.mockClear(); f.results.finish.mockClear(); f.queryApi.execute.mockClear()
+    const previous = f.queries.getSnapshot()[f.tab.id]
+    const deferredPlan = deferred<Awaited<ReturnType<VariaApi['estimatePlan']>>>()
+    f.queryApi.estimatePlan.mockReturnValue(deferredPlan.promise)
+    const pending = f.queries.estimate()
+    expect(f.queries.isRunning(f.tab.id)).toBe(true)
+    expect(f.queries.canExecute()).toBe(false)
+    await f.queries.estimate(); await f.queries.execute()
+    expect(f.queryApi.estimatePlan).toHaveBeenCalledTimes(1)
+    expect(f.queryApi.estimatePlan).toHaveBeenCalledWith({ connectionId: f.connection.id, sessionId: f.tab.id, database: 'master', sql: 'SELECT selected', startLine: 9, requestId: expect.any(String) })
+    await f.queries.cancel()
+    expect(f.queryApi.cancel).toHaveBeenCalledWith(f.queryApi.estimatePlan.mock.calls[0][0].requestId)
+    expect(f.queries.isRunning(f.tab.id)).toBe(true)
+    deferredPlan.resolve({ ok: true, value: { plans: [{ xml: '<ShowPlanXML/>', batchNumber: 1, iteration: 1 }], database: 'tempdb' } })
+    await pending
+    expect(f.queries.getSnapshot()[f.tab.id]).toMatchObject({ summary: previous.summary, session: previous.session, estimated: { result: { database: 'tempdb' } } })
+    expect(f.documents.active).toMatchObject({ database: 'master', includeActualPlan: true })
+    expect(f.results.begin).not.toHaveBeenCalled(); expect(f.results.finish).not.toHaveBeenCalled(); expect(f.queryApi.execute).not.toHaveBeenCalled()
+    await f.queries.execute()
+    expect(f.queries.getSnapshot()[f.tab.id].estimated).toBeUndefined()
+    expect(f.queryApi.execute).toHaveBeenCalledWith(expect.objectContaining({ includeActualPlan: true }))
+  })
+  it('shows estimate failures separately and skips blank SQL', async () => {
+    const f = fixture()
+    f.queryApi.estimatePlan.mockResolvedValue({ ok: false, error: 'SHOWPLAN permission denied', code: 'SQL_ERROR' })
+    await f.queries.estimate()
+    expect(f.queries.getSnapshot()[f.tab.id].estimated?.error).toBe('SHOWPLAN permission denied')
+    expect(f.queries.isRunning(f.tab.id)).toBe(false)
+    vi.spyOn(f.documents, 'getExecuteText').mockReturnValue({ sql: '  ', startLine: 1 })
+    await f.queries.estimate()
+    expect(f.queryApi.estimatePlan).toHaveBeenCalledTimes(1)
+    f.queries.dispose()
+  })
+  it('does not resurrect a closed tab when its cancelled estimate answers late', async () => {
+    const f = fixture(undefined, async () => {})
+    const pending = deferred<Awaited<ReturnType<VariaApi['estimatePlan']>>>()
+    f.queryApi.estimatePlan.mockReturnValue(pending.promise)
+    const run = f.queries.estimate()
+    f.queryApi.confirmSessions.mockResolvedValueOnce({ ok: true, value: 'proceed' })
+    await f.queries.confirmSessions('close', [f.tab.id])
+    await f.documents.runTask(() => f.documents.close(f.tab.id, 'rollback'))
+    f.queries.forget(f.tab.id)
+    pending.resolve({ ok: true, value: { plans: [], database: 'master' } })
+    await run
+    expect(f.queries.getSnapshot()[f.tab.id]).toBeUndefined()
+    expect(f.results.begin).not.toHaveBeenCalled(); expect(f.results.finish).not.toHaveBeenCalled()
+  })
+  it('caps retained estimate XML across tabs while preserving ordinary results and the newest estimate', async () => {
+    const f = fixture()
+    await f.queries.execute()
+    const summary = f.queries.getSnapshot()[f.tab.id].summary
+    f.queryApi.estimatePlan.mockResolvedValue({ ok: true, value: { database: 'master', plans: [{ xml: 'x'.repeat(2_097_152), batchNumber: 1, iteration: 1 }] } })
+    await f.queries.estimate(f.tab.id)
+    for (let i = 0; i < 8; i++) {
+      const tab = f.documents.create(`q${i}.sql`, 'SELECT 1', 'master', f.connection.id)
+      await f.queries.estimate(tab.id)
+    }
+    const states = Object.values(f.queries.getSnapshot())
+    expect(states.filter(state => state.estimated?.result)).toHaveLength(8)
+    expect(f.queries.getSnapshot()[f.tab.id]).toMatchObject({ summary, estimated: { error: expect.stringContaining('released to limit memory') } })
+    expect(f.queries.getSnapshot()[f.documents.active!.id].estimated?.result).toBeDefined()
+  })
   it.each([0, 7, undefined])('uses the document session and preserves timeout %s', async timeout => {
     const { queries, queryApi, tab } = fixture(timeout)
     await queries.execute()

@@ -1,4 +1,5 @@
 import type { LayoutLoad, LayoutState, WorkspaceLayout } from './layouts'
+import type { EstimatedPlanRequest, EstimatedPlanResult } from './estimated-plans'
 import type { ConnectContext, ConnectionEnvironmentInput, ConnectionLibraryView, ConnectionProfileInput, SecretStorageState } from './connections'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
 import type { CommandId, RendererRole } from './commands/catalog'
@@ -282,6 +283,7 @@ export interface ExplorerChildrenResult {
 export interface IntegratedIdentity { principal?: string }
 export interface RpcMethods {
   'plans.parse': { params: { xml: string }; result: PlanDocument }
+  'plans.estimate': { params: EstimatedPlanRequest; result: EstimatedPlanResult }
   'system.health': { params: Record<string, never>; result: BackendHealth }
   'connections.connect': { params: ConnectionOptions; result: ConnectionInfo }
   'connections.databases': { params: ConnectionOptions; result: DatabaseInfo[] }
@@ -413,6 +415,8 @@ export interface SaveSqlFile { fileId?: string; name: string; content: string; s
 
 export interface VariaApi {
   parsePlan(xml: string): Promise<ApiResult<PlanDocument>>
+  /** Compile only, on a bounded isolated connection; cancel with cancel(requestId). */
+  estimatePlan(params: EstimatedPlanRequest): Promise<ApiResult<EstimatedPlanResult>>
   readonly platform: string
   /** Which native menu items are disabled and checked; main validates the ids against its own catalogue. */
   setMenuState(state: MenuState): void

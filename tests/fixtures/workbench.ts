@@ -248,6 +248,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const api = {
     ...doc.api,
     execute: vi.fn<QueryApi['execute']>(async () => ({ ok: true, value: queryOutput })),
+    estimatePlan: vi.fn<VariaApi['estimatePlan']>(async () => ({ ok: true, value: { plans: [], database: 'master' } })),
     copyResults: vi.fn<VariaApi['copyResults']>(async () => ({ ok: true, value: { rows: 0, bytes: 0, truncatedCells: 0, partial: false } })),
     saveResults: vi.fn<VariaApi['saveResults']>(async () => ({ ok: true, value: null })),
     cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(async () => ({ ok: true, value: { cancelled: true } })),
