@@ -20,6 +20,7 @@ import { ResultClient } from '../results/ResultClient'
 import { ResultsService } from '../results/ResultsService'
 import { MemoryUsageService } from '../results/memory'
 import { documentOwner, documentPage, eitherHidden, LiveService, mainWindowPage } from '../live/LiveService'
+import { QueryPlansService } from '../plans/QueryPlansService'
 import { ActivityMonitorService } from '../activity/ActivityMonitorService'
 import { activityContribution } from '../contributions/activity'
 import { searchContribution } from '../contributions/search'
@@ -119,6 +120,7 @@ export interface Workbench extends Disposable {
   readonly indexMemory: MemoryUsageService
   /** Live views (Activity Monitor, SSIS monitoring): their subscriptions, pauses while hidden, and history. */
   readonly live: LiveService
+  readonly queryPlans: QueryPlansService
   /** Test mode only: the grids' frame times and counters (`window.__variaGrid`). */
   readonly gridStats?: GridStats
   readonly files: FileService
@@ -248,6 +250,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const ssisTree = new SsisTreeProbe({ explorer, live, settings, events, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe, popout: () => panes.location('explorer') === 'window' } })
   const gridStats = api.testMode ? new GridStats() : undefined
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
+  const queryPlans = new QueryPlansService(live, documents, queries, panes, results)
   const files = new FileService(documents, queries, api, {
     autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'],
     // Hot exit keeps a query's server name (never a login or connection string), so it keeps its database when it connects there again.
@@ -414,6 +417,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     resultMemory,
     indexMemory,
     live,
+    queryPlans,
     ...gridStats ? { gridStats } : {},
     files,
     recentFiles,
@@ -472,6 +476,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       context.dispose()
       files.dispose()
       recentFiles.dispose()
+      queryPlans.dispose()
       queries.dispose()
       results.dispose()
       resultMemory.dispose()

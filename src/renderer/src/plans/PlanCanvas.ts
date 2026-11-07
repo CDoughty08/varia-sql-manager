@@ -139,6 +139,7 @@ export class PlanCanvas {
     this.invalidate()
   }
   colors(colors: CanvasColors): void { this.options.colors = colors; this.invalidate() }
+  update(statements: readonly PlanStatement[]): void { this.options.statements = statements; if (this.fittedLabels.size > 4000) this.fittedLabels.clear(); this.invalidate() }
   private wheel = (event: WheelEvent) => {
     event.preventDefault()
     const bounds = this.options.root.getBoundingClientRect()
@@ -293,7 +294,7 @@ export class PlanCanvas {
     for (const placed of this.index.query(area)) {
       const node = this.options.statements[placed.statement].nodes[placed.index]
       const selected = placed.id === this.selected
-      const highlighted = selected || placed === this.hovered
+      const highlighted = selected || placed === this.hovered || node.liveActivity
       const stroke = highlighted ? colors.accent : node.warnings.length ? colors.warning : colors.border
       this.cards.roundRect(placed.x, placed.y, placed.width, placed.height, radii.sm.px).fill(colors.card).stroke({ color: stroke, width: highlighted ? 2 : 1 })
       if (this.camera.scale < 0.35) continue
@@ -301,7 +302,7 @@ export class PlanCanvas {
       label(this.fitLabel(node.physicalOp, labelWidth, this.textStyle), placed.x + 10, placed.y + 8)
       if (this.camera.scale < 0.55) continue
       const rows = node.actualRows ?? node.estimatedRows
-      const caption = node.object || (rows === null ? node.logicalOp : `${node.actualRows === null ? 'Est.' : 'Actual'} rows ${rowCountFormat.format(rows)}`)
+      const caption = node.actualRows !== null ? `Rows ${rowCountFormat.format(node.actualRows)}` : node.object || (rows === null ? node.logicalOp : `Est. rows ${rowCountFormat.format(rows)}`)
       if (caption) label(this.fitLabel(caption, labelWidth, this.mutedStyle, !!node.object), placed.x + 10, placed.y + 28, true)
     }
     for (let i = used; i < this.pool.length; i++) this.pool[i].visible = false

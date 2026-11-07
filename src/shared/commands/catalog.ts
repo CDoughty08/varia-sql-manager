@@ -258,6 +258,11 @@ export const commandCatalog = {
     keybindings: [{ win: 'ctrl+m', linux: 'ctrl+m', when: 'editorFocus || queryBarFocus' }],
     menus: [{ menu: 'query', group: '1_execute', order: 3, mnemonic: 'i' }]
   },
+  'query.includeLivePlan': {
+    title: 'Include Live Execution Plan', category: 'Query', icon: 'execution-plan', keywords: ['profiling', 'statistics', 'progress'],
+    precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy', toggled: 'includeLivePlan',
+    menus: [{ menu: 'query', group: '1_execute', order: 4, mnemonic: 'l' }]
+  },
   'workbench.showCommands': {
     title: 'Show All Commands', palette: false,
     keybindings: [{ key: 'mod+shift+p' }, { key: 'f1' }],

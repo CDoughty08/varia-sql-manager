@@ -15,7 +15,7 @@ export interface RunningQuery { readonly queryId: string; readonly connectionId:
  *  it. Its open transaction is not kept here: it is read from the session only when the session is about to end. */
 export interface QuerySession { readonly connectionId: string; readonly spid?: number; readonly login?: string }
 /** A tab's last run: its summary (the rows stay in the backend; ResultsService shows them) or main's failure. */
-export interface QueryState { readonly running?: RunningQuery; readonly summary?: QueryResult; readonly error?: string; readonly session?: QuerySession }
+export interface QueryState { readonly running?: RunningQuery; readonly summary?: QueryResult; readonly error?: string; readonly session?: QuerySession; readonly livePlan?: { queryId: string; connectionId: string } }
 export type QueryApi = Pick<VariaApi, 'execute' | 'cancel' | 'confirmSessions' | 'querySessionState'>
 export type QuerySnapshot = Readonly<Record<string, QueryState>>
 /** The last reported session only belongs to a tab while it is still on that live connection. */
@@ -160,7 +160,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     if (!sql.trim()) return
     const queryId = crypto.randomUUID(), previous = this.getSnapshot()[tabId]?.session
     // Reserve before the first await so repeated commands cannot start a second script.
-    this.update(tabId, { running: { queryId, connectionId: connection.id, startedAt: this.now() }, session: previous })
+    const livePlan = document.includeLivePlan ? { queryId, connectionId: connection.id } : undefined
+    this.update(tabId, { running: { queryId, connectionId: connection.id, startedAt: this.now() }, session: previous, ...livePlan ? { livePlan } : {} })
     let summary: QueryResult | undefined, error: string | undefined, code: ErrorCode | undefined
     try {
       // The run's events are followed before the script is sent, so no early result set is missed.
@@ -171,7 +172,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       })
       this.events.emit({ type: 'query.started', tabId, queryId })
       const response = await this.api.execute({ connectionId: connection.id, sessionId: tabId, database: document.database, sql, startLine, queryId,
-        ...this.executionOptions(connection), ...document.includeActualPlan ? { includeActualPlan: true } : {} })
+        ...this.executionOptions(connection), ...document.includeActualPlan ? { includeActualPlan: true } : {}, ...document.includeLivePlan ? { includeLivePlan: true } : {} })
       if (response.ok) summary = response.value
       else { error = response.error; code = response.code }
     } catch (failure) { error = errorText(failure) }
@@ -192,7 +193,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const session: QuerySession | undefined = summary ? summary.spid === undefined ? undefined : { connectionId: connection.id, spid: summary.spid, login: summary.login }
       : sessionGone.has(code) ? undefined : this.getSnapshot()[tabId]?.session
     this.results.finish(tabId, queryId, { summary, error, code, notice })
-    this.update(tabId, { summary, error, session })
+    this.update(tabId, { summary, error, session, ...livePlan ? { livePlan } : {} })
     this.events.emit({ type: 'query.finished', tabId, queryId, summary, error })
   }
   /** Cancels the active query, or the one running in `tabId`. */

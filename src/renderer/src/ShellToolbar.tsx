@@ -60,6 +60,7 @@ export default function StandardToolbar({ variant }: { variant: 'header' | 'clas
         <Icon name="play" />Execute{keys.execute && <kbd>{keys.execute.text}</kbd>}</button>
       <button disabled={!enabled.cancel} onClick={() => run('query.cancel')}><Icon name="debug-stop" />Cancel</button>
       <ActualPlanToggle classic />
+      <ActualPlanToggle classic live />
       <span className="toolbar-divider" />
       {/* SSMS's toolbar button: the server of the active query, else the one selected in Object Explorer. */}
       <button disabled={!enabled.monitor} onClick={() => run('activity.open')} aria-label="Activity Monitor" title={withKey('Activity Monitor', keys.monitor)}><Icon name="pulse" /></button>

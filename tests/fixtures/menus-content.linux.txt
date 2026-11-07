@@ -112,6 +112,7 @@ Query
   E&xecute  F5  ++--
   &Cancel Executing Query  Alt+Pause  --+-
   &Include Actual Execution Plan  Ctrl+M [ ]  ++--
+  Include &Live Execution Plan [ ]  ++--
 Tools
   &Options…  ++++
 Window

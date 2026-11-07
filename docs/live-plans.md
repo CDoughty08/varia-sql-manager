@@ -1,0 +1,35 @@
+# Live execution plans
+
+Enable **Include Live Execution Plan** for a query tab using its toolbar, Query menu or command palette, then execute normally (F5, Execute or selection execution). Initial scope is queries executed in Varia. The single Execution Plan output contains Live and Actual modes. Completion selects Actual automatically. A cancelled, timed out or failed statement can retain a partial live snapshot alongside captured completed statements. Partial snapshots are identified in the inspector; they are never presented as captured actual statistics.
+
+The query session executes the user's batches with its existing SET, transaction, temporary-table and row-count semantics. Enabling Live also requests the existing lightweight actual-plan capture. No profiling SET option, query hint, trace flag or database configuration is injected. The session-opening prologue records the server's connection identifier from its own request, alongside the existing login. SqlClient's ClientConnectionId is an Extended Events identifier and differs from the DMV connection_id; it remains in use for actual capture.
+
+`query.plan` / `query.plan.operators` uses the existing live.subscribe/live.update protocol, statement gates, backend scheduler, adaptive load guard, stop-and-wait credit and hidden-view lifecycle. Its only argument is the executing query UUID. The host resolves that UUID only for its owning connection. Each sample checks the SPID and server connection identifier and discards the result if the immutable batch/GO-iteration token changed during the read. An observer uses the existing monitor pool and prologue (master where permitted), and reads `sys.dm_exec_query_statistics_xml`; operator rows and CPU are summed over threads and elapsed time uses the maximum, through the existing Showplan parser. Permission checking occurs on the observer in the same round trip. No renderer polling loop exists.
+
+The first sample, or a changed plan/batch, carries a bounded parsed document. Subsequent frames carry operator counters only. Applying counters is linear in retained operators. StatementId, QueryHash, NodeId, batch number and GO iteration match live and completed documents across different XML document boundaries. Additional occurrences stay distinct. If SQL Server supplies no StatementId, bounded SQL-text hashing and occurrence order provide a fallback. Unknown batch identity is deliberately kept separate. Recompilations with different structure require a new layout; camera coordinates and matching selections persist.
+
+The Pixi canvas updates its statement data and invalidates one frame without rebuilding spatial indexes, the scene or ELK layout for counter-only updates. It still culls to the viewport, pools text objects, bounds its fitted-label cache, and draws nothing while hidden. Selection and camera are retained when an output panel unmounts. Active highlighting means output rows increased since the previous sample; a blocked operator or an operator that consumed work without producing rows is not inferred to be active. There is no continuous animation ticker.
+
+Live XML is limited to 1,048,576 characters, 2,000 operators and a 192 KiB serialized payload. The renderer retains at most 512 statements, 10,000 operators and 4 MiB of parsed live data per run, with at most eight live snapshots retained in a window (older inactive snapshots are released; their actual plans stay in the result store). Closing results, replacing the run or closing the tab releases that data; finishing disposes the subscription while retaining the last sample. The existing actual-plan budgets and XML-document path remain independent. Sampling is at most once a second, bounded by the scheduler's time budget, renderer acknowledgements and load backoff. Statements that finish between samples are visible through actual capture when available. SQL Server can return NULL for unavailable profiling and plans beyond its XML nesting limit. Permissions, unsupported versions/editions, budget failures and backend loss appear as view states while execution keeps its own outcome.
+
+## Profiling support
+
+- Live Plan is gated to SQL Server 2017 and later and Azure SQL / Managed Instance. Automatic lightweight actual capture requires the `query_post_execution_plan_profile` event (2017 CU14+). SQL Server 2016 is reported unsupported for this combined feature.
+- SQL Server 2019+ enables lightweight profiling by default, but it can be disabled at database scope. On SQL Server 2017, starting the existing lightweight actual-capture event enables lightweight profiling. Varia does not change a global trace flag or database setting.
+- The observer requires VIEW SERVER STATE through 2019 and VIEW SERVER PERFORMANCE STATE from 2022. Azure SQL requires VIEW DATABASE STATE or administrator access according to service tier. Actual capture additionally requires creating, enabling, reading and dropping its Extended Events session. Without those rights, an already profiled query can still provide transient data but completed actual capture is unavailable.
+- Standard profiling and runtime parameter collection are never enabled. The latter has documented overhead and version-specific limitations. Runtime parameter values are shown only if SQL Server supplies them.
+
+Official references: [live XML API and permissions](https://learn.microsoft.com/en-us/sql/relational-databases/system-dynamic-management-views/sys-dm-exec-query-statistics-xml-transact-sql), [profiling infrastructure and activation](https://learn.microsoft.com/en-us/sql/relational-databases/performance/query-profiling-infrastructure), [server connection identity](https://learn.microsoft.com/en-us/sql/relational-databases/system-dynamic-management-views/sys-dm-exec-connections-transact-sql), [SqlClient connection identifier](https://learn.microsoft.com/en-us/dotnet/api/microsoft.data.sqlclient.sqlconnection.clientconnectionid).
+
+## Validation
+
+`npm run check` includes protocol schemas, counter-only topology stability, actual/live identity matching, GO repetitions, partial data, bounded retention and lifecycle regression tests. The existing Execution SQL suite now includes Live Plan, real changing counters, withheld credit, paused sampling, cancellation and completed repeated-batch plans, a restricted observer, a mismatched server connection and simulated unsupported version gating:
+
+```powershell
+$env:VARIA_TEST_SQL_SERVER='localhost'
+dotnet run --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --live-suite Execution
+npm run build:smoke
+node scripts/live-plan-smoke.mjs
+```
+
+The Electron check uses a fresh isolated profile, real toolbar and output controls, a CPU-bound aggregate, and asserts canvas identity, zoom, statement/operator selection, actual transition, cancellation and GO repetitions. Screenshots are written to artifacts. The standard `npm run test:smoke` also runs this check when SQL Server is configured (including the Linux CI smoke jobs); without a configured server it skips only this real-SQL check.

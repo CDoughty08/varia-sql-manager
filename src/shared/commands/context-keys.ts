@@ -94,6 +94,7 @@ export const contextKeys = {
   activeConnectionLost: { type: 'boolean', scope: 'state', description: "The active query's connection was lost when the SQL backend restarted." },
   queryRunning: { type: 'boolean', scope: 'state', description: 'The active query is running.' },
   includeActualPlan: { type: 'boolean', scope: 'state', description: 'The active query will capture actual execution plans.' },
+  includeLivePlan: { type: 'boolean', scope: 'state', description: 'The active query will show live execution plans.' },
   hasResults: { type: 'boolean', scope: 'state', description: 'The active query has result sets, and they were not closed (Close Results) or lost with a run the SQL backend stopped.' },
   anyDocumentConnected: { type: 'boolean', scope: 'state', description: "Some open query's server is connected." },
   outputPaneVisible: { type: 'boolean', scope: 'state', description: 'An output panel (Results, Messages or Execution plan) is open and showing: its tab is selected, and no other panel is maximized.' },

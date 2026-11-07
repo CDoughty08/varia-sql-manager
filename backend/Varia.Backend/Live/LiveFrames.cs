@@ -19,7 +19,7 @@ internal sealed record LiveAppendSample(int Table, ResultDescriptor Descriptor, 
 /// <summary>Value is a whole number or a string of at most 128 characters.</summary>
 internal sealed record LiveStatus(string Id, object Value);
 internal sealed record LiveSample(string Probe, int CostMs, int EffectiveIntervalMs, long? ElapsedMs = null, string? Gap = null, int? Skipped = null, double?[]? Metrics = null,
-    IReadOnlyList<LiveSnapshotSample>? Tables = null, IReadOnlyList<LiveAppendSample>? Append = null, IReadOnlyList<LiveStatus>? Status = null);
+    IReadOnlyList<LiveSnapshotSample>? Tables = null, IReadOnlyList<LiveAppendSample>? Append = null, IReadOnlyList<LiveStatus>? Status = null, Plans.LivePlanFrame? Plan = null);
 /// <summary>A probe's failure as a value: Message is a complete sentence, never SQL text, names or values.</summary>
 internal sealed record LiveProbeError(string Probe, string Code, string Message, int? Number, int RetryInMs, bool Terminal, int[]? Tables = null, int[]? Series = null);
 internal sealed record LiveTickEvent(string Type, long Seq, long SampledAt, int? Spid, string? Resume, IReadOnlyList<LiveSample> Samples, IReadOnlyList<LiveProbeError>? Errors);
