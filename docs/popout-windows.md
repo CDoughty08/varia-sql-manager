@@ -20,8 +20,9 @@ nothing else changes:
   `src/main/popout-windows.ts`). Everything else is denied as before.
 - **Explicit preferences, not inherited ones.** The child gets `preload: undefined`, `contextIsolation: true`,
   `nodeIntegration: false`, `sandbox: true`, `webviewTag: false` and no `additionalArguments` (no test seams).
-- **Same origin, same process, same CSP.** An `about:blank` child of the page is the page's origin and inherits its CSP;
-  it runs in the page's renderer process, so the sandbox is unchanged.
+- **Same origin, same process, same CSP.** An `about:blank` child of the page is the page's origin (`app://varia` in a
+  built app, never `file:`; the development server's origin in `npm run dev`) and inherits its CSP; it runs in the page's
+  renderer process, so the sandbox is unchanged.
 - **No IPC of its own.** It has no preload, so no `window.varia`. Its content is the main page's DOM, rendered through
   React portals: every call still comes from the main window's main frame, and `trusted()` is unchanged.
 - **No popups and no navigation.** Each popout's own window-open handler denies, and `will-navigate`,

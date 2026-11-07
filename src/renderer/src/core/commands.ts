@@ -61,7 +61,7 @@ export class CommandService extends SnapshotStore<CommandSnapshot> implements Di
     if (!handler) return false
     try {
       const { precondition } = commandDescriptor(id)
-      if (precondition !== undefined && !evaluateWhen(compileWhen(precondition), this.state())) return false
+      if (precondition !== undefined && !evaluateWhen(compileWhen(precondition), this.stateFor(args))) return false
       return handler.when?.(args) ?? true
     } catch (error) { onUnexpectedError(error); return false }
   }
@@ -74,6 +74,8 @@ export class CommandService extends SnapshotStore<CommandSnapshot> implements Di
     if (toggled === undefined) return false
     try { return evaluateWhen(compileWhen(toggled), this.state()) } catch (error) { onUnexpectedError(error); return false }
   }
+  /** The keys a command's precondition reads: the workbench's, with those its menu target stands in (`CommandArgs.state`). */
+  private stateFor(args: CommandArgs | undefined) { return args?.state ? { ...this.state(), ...args.state } : this.state() }
   async run(id: CommandId, args?: CommandArgs): Promise<void> {
     const handler = this.handlers.get(id)
     if (!handler) throw new Error(`Unknown command: ${id}`)

@@ -14,7 +14,7 @@ import { ssisVerbContextKey, ssisVerbs, ssisVerbSpecs, type SsisVerbContextKey }
 export type ContextKeyScope = 'static' | 'state' | 'focus' | 'target'
 interface Declared { readonly scope: Exclude<ContextKeyScope, 'target'>; readonly description: string; readonly menu?: undefined }
 /** A target key describes one kind of context-menu target, so it may appear only in that context menu's placements. */
-interface DeclaredTarget { readonly scope: 'target'; readonly description: string; readonly menu: 'explorer.context' | 'output.context' | 'dockTab.context' | 'documentTab.context' }
+interface DeclaredTarget { readonly scope: 'target'; readonly description: string; readonly menu: 'explorer.context' | 'output.context' | 'dockTab.context' | 'documentTab.context' | 'search.hit.context' }
 export type ContextKeyDeclaration =
   | ({ readonly type: 'boolean' } & (Declared | DeclaredTarget))
   | ({ readonly type: 'enum'; readonly values: readonly string[] } & (Declared | DeclaredTarget))
@@ -48,6 +48,7 @@ export const contextKeys = {
   activePanel: { type: 'enum', scope: 'focus', values: ['explorer', 'editor', 'output', ''], description: "The pane that holds focus: Object Explorer, the query editor, an output panel (Results, Messages or Execution plan), or '' for none." },
   outputGridFocus: { type: 'boolean', scope: 'focus', description: 'Focus is in a results grid, which copies its selected cells rather than text.' },
   messagesFocus: { type: 'boolean', scope: 'focus', description: "Focus is in a Messages view; activePanel is then 'output'." },
+  searchHitsFocus: { type: 'boolean', scope: 'focus', description: "Focus is on a Search Objects result (the Search Objects tab's or Object Explorer's search), whose Copy copies the object's name." },
   designerFocus: { type: 'boolean', scope: 'focus', description: "Focus is in the active table designer; activePanel is then 'editor'." },
   queryBarFocus: { type: 'boolean', scope: 'focus', description: "Focus is in the active query's bar (Execute, Cancel and its server and database lists); activePanel is then 'editor'." },
   activityMonitorFocus: { type: 'boolean', scope: 'focus', description: "Focus is in the active Activity Monitor; activePanel is then 'editor'." },
@@ -170,7 +171,8 @@ export const contextKeys = {
   pane: { type: 'enum', scope: 'target', menu: 'dockTab.context', values: ['explorer', 'editor', 'results', 'messages', 'plan', ''], description: "The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, Results, Messages, or Execution plan." },
   paneFloating: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel the menu is for is floating.' },
   panePopout: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel the menu is for is in a window of its own (Move into New Window).' },
-  documentTabFloating: { type: 'boolean', scope: 'target', menu: 'documentTab.context', description: "The document tab the menu is for is in a floating editor group." }
+  documentTabFloating: { type: 'boolean', scope: 'target', menu: 'documentTab.context', description: "The document tab the menu is for is in a floating editor group." },
+  searchHitSchema: { type: 'boolean', scope: 'target', menu: 'search.hit.context', description: 'The Search Objects result the menu is for is in a schema (itself, or its parent for a column, key or trigger), so it has schema-qualified and fully qualified names.' }
 } as const satisfies Record<string, ContextKeyDeclaration>
 
 type Declarations = typeof contextKeys

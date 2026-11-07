@@ -12,7 +12,7 @@ import { requestFrame } from '../core/windows'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable, ExternalStore } from '../core/types'
-import type { ExplorerMenuNode } from '../menus/targets'
+import type { ExplorerMenuNode, ObjectMenuNode } from '../menus/targets'
 import type { LiveConnection } from '../services/connections'
 import { ExplorerLoader, type ExplorerLimitValues, type LoaderLimits, type LoadOutcome, type LoadPriority, type LoadTask } from './loader'
 import { emptyRows, flatten, rowIndex, rowKindOf, rowOwner, RowKind, siblingPlan, type NodeError, type NodeNote, type NodeTable, type TreeNode, type VisibleRows } from './tree-model'
@@ -53,6 +53,30 @@ export const noExplorerContext: ExplorerContextState = {
   explorerHasSelection: false, explorerSelectionKind: '', explorerSelectionFolder: '', explorerSelectionFilterable: false, explorerSelectionFiltered: false,
   explorerSelectionInsertable: false, explorerSelectionStatus: '', explorerSelectionServerEngine: '', explorerSelectionServerLinux: false, ...scriptContextValues(scriptMenuState(undefined)), ...actionContextValues(actionMenuState(undefined)), ...ssisVerbContextValues(ssisVerbMenuState(undefined)),
   explorerLoading: false, explorerGroupBySchema: false
+}
+/** The selection's keys, without the pane's own (loading, Group by Schema). */
+export type SelectionContext = Omit<ExplorerContextState, 'explorerLoading' | 'explorerGroupBySchema'>
+/**
+ * The selection keys for `target` as if it were selected: the tree's selection publishes them, and a Search Objects result's
+ * menu stands them in for the selection's (`argsFor`), so its Select Top N Rows, Modify and Script as follow the result's kind.
+ * What only a loaded row knows (a folder's filter, a Columns folder's loaded names) comes in `row`.
+ */
+export function selectionContextOf(target: ExplorerTarget | undefined, row: { readonly filtered?: boolean; readonly insertable?: boolean } = {}): SelectionContext {
+  const folder = target?.folder ? folderSpecs[target.folder] : undefined
+  return {
+    explorerHasSelection: !!target,
+    explorerSelectionKind: target?.kind ?? '',
+    explorerSelectionFolder: target?.folder ?? '',
+    explorerSelectionFilterable: !!target && !!folder?.filter?.length,
+    explorerSelectionFiltered: !!row.filtered,
+    explorerSelectionInsertable: !!row.insertable,
+    explorerSelectionStatus: target?.status && (nodeStatuses as readonly string[]).includes(target.status) ? target.status : '',
+    explorerSelectionServerEngine: target?.engine ?? '',
+    explorerSelectionServerLinux: !!target?.linux,
+    ...scriptContextValues(scriptMenuState(target && { kind: target.kind, subtype: target.subtype, parentKind: target.ref.type === 'object' ? target.ref.object.parent?.kind : undefined })),
+    ...actionContextValues(actionMenuState(target)),
+    ...ssisVerbContextValues(ssisVerbMenuState(target?.kind))
+  }
 }
 export type RefreshScope = 'server' | 'databases' | 'other'
 export type ExplorerServiceLimits = LoaderLimits & ExplorerLimitValues<'pageSize' | 'folderCap' | 'nodeBudget' | 'siblingLoads' | 'filters' | 'loadingRowDelayMs' | 'deleteSlice'>
@@ -444,6 +468,18 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     return node && this.attached(node)
       ? { ...this.targetOf(node), id: node.id, lost: node.lost, ...(node.filtered ? { filtered: true } : {}), ...(node.kind === 'folder' && this.insertable(node) ? { insertable: true } : {}) }
       : undefined
+  }
+  /**
+   * An object Object Explorer has not necessarily loaded (a Search Objects result) as a context menu's node: what it is, and the
+   * server it is on as the connection's profile reports it. It has no row, so commands that need one (Refresh, Rename,
+   * Properties) are not offered on it.
+   */
+  objectNode(connectionId: string, object: ObjectRef, label: string, subtype?: ExplorerTarget['subtype']): ObjectMenuNode {
+    const connection = this.connectionOf(connectionId)
+    return {
+      connectionId, ref: { type: 'object', object }, kind: object.kind, label, ...(subtype ? { subtype } : {}),
+      engine: serverEngineOf(connection?.engineEdition), linux: !!connection?.linux, lost: !connection || !!connection.lost
+    }
   }
   private connectionOf(connectionId: string): LiveConnection | undefined {
     return this.connections.getSnapshot().find(connection => connection.id === connectionId)
@@ -1473,21 +1509,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private updateContext(): void {
     if (this.disposed) return
     const node = this.selectedNode()
-    const folder = node?.folder ? folderSpecs[node.folder] : undefined
-    const target = node && this.targetOf(node)
     const next: ExplorerContextState = {
-      explorerHasSelection: !!node,
-      explorerSelectionKind: node?.kind ?? '',
-      explorerSelectionFolder: node?.folder ?? '',
-      explorerSelectionFilterable: !!node && !!folder?.filter?.length,
-      explorerSelectionFiltered: !!node?.filtered,
-      explorerSelectionInsertable: !!node && (node.kind === 'server' || this.insertable(node)),
-      explorerSelectionStatus: target?.status && (nodeStatuses as readonly string[]).includes(target.status) ? target.status : '',
-      explorerSelectionServerEngine: target?.engine ?? '',
-      explorerSelectionServerLinux: !!target?.linux,
-      ...scriptContextValues(scriptMenuState(node && { kind: node.kind, subtype: node.subtype, parentKind: node.ref.type === 'object' ? node.ref.object.parent?.kind : undefined })),
-      ...actionContextValues(actionMenuState(target)),
-      ...ssisVerbContextValues(ssisVerbMenuState(node?.kind)),
+      ...selectionContextOf(node && this.targetOf(node), { filtered: !!node?.filtered, insertable: !!node && (node.kind === 'server' || this.insertable(node)) }),
       explorerLoading: this.loader.pending > 0,
       explorerGroupBySchema: this.grouped
     }
