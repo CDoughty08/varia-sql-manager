@@ -50,7 +50,7 @@ export function searchContribution(workbench: Pick<Workbench, 'commands' | 'obje
       run: args => {
         const hit = hitOf(args)
         if (!hit) return
-        objectSearch.pick(hit.searchId, hit.index)
+        objectSearch.pickHit(hit.searchId, hit.hit)
         revealHit(workbench, hit.connectionId, hit.hit, hit.searchId === explorerSearchId)
       }
     }),

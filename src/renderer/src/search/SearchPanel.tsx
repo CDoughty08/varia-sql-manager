@@ -9,7 +9,7 @@ import Icon from '../Icon'
 import EmptyState from '../kit/EmptyState'
 import { useMenuTarget } from '../menus/useMenuTarget'
 import { hitKey, type IndexEntry, type SearchQueryState } from './ObjectSearchService'
-import { revealHit, searchHitTarget } from './hit-actions'
+import { isCopyKey, revealHit, searchHitTarget } from './hit-actions'
 import SearchFilters from './SearchFilters'
 import PaneSearchFilters from './PaneSearchFilters'
 import SearchPopover from './SearchPopover'
@@ -98,7 +98,7 @@ export interface SearchPanelProps {
  */
 export default function SearchPanel({ searchId, layout, inputRef, onLeave, options }: SearchPanelProps) {
   const workbench = useWorkbench()
-  const { objectSearch, explorer, commands } = workbench
+  const { objectSearch, explorer, commands, platform } = workbench
   const snapshot = useServiceSnapshot(objectSearch)
   const root = useRef<HTMLDivElement>(null)
   const list = useRef<HTMLUListElement>(null)
@@ -140,6 +140,11 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   const toggle = (key: 'caseSensitive' | 'wholeWord' | 'regex', label: string, icon: 'case-sensitive' | 'whole-word' | 'regex') =>
     <button type="button" className="icon-button object-search-toggle" aria-pressed={state[key]} aria-label={label} title={label} onClick={() => set({ [key]: !state[key] })}><Icon name={icon} /></button>
   const rows = () => [...(list.current?.querySelectorAll<HTMLElement>('[data-hit]') ?? [])]
+  /** Copy on a focused hit (its key, or Edit › Copy's copy event) copies the hit's name; hits have no text to select. */
+  const copyName = (event: { preventDefault(): void }) => {
+    event.preventDefault()
+    void commands.execute('search.copyName', undefined, 'keybinding')
+  }
   const onInputKey = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.nativeEvent.isComposing || event.ctrlKey || event.metaKey || event.altKey || (event.shiftKey && !(pane && event.key === 'Enter'))) return
     // In Object Explorer's box Enter reveals the next hit (Shift+Enter the one before) in the tree below and keeps focus here,
@@ -159,11 +164,7 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   const onListKey = (event: KeyboardEvent<HTMLUListElement>) => {
     const all = rows(), at = all.findIndex(row => row === event.target)
     if (at < 0) return
-    if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'c') {
-      event.preventDefault()
-      void commands.execute('search.copyName', undefined, 'keybinding')
-      return
-    }
+    if (isCopyKey(event, platform)) { copyName(event); return }
     // Shift+Enter reveals too, as in the box (where it goes back a hit).
     if (event.ctrlKey || event.metaKey || event.altKey || (event.shiftKey && event.key !== 'Enter')) return
     const next = event.key === 'ArrowDown' ? at + 1 : event.key === 'ArrowUp' ? at - 1 : event.key === 'PageDown' ? pageFrom(all, at, 1)
@@ -263,6 +264,7 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
     {showHits && (asked && !result!.problem && result!.hits.length === 0 && !state.requestId
       ? <EmptyState icon="search" title="No objects match" detail={entry?.requestId ? 'The index is still being built; results update when it finishes.' : `Try another spelling, turn off Match Case or Whole Word, or search names and definitions${state.types.length ? ' of every type' : ''}.`} />
       : <ul ref={list} role="listbox" data-search-hits className="object-search-hits" aria-label={pane ? 'Search results' : 'Results'} onKeyDown={onListKey}
+        onCopy={event => { if (rows().some(row => row.contains(event.target as Node))) copyName(event) }}
         onFocus={() => { focusInList.current = true; objectSearch.listFocused(searchId, true) }}
         onBlur={event => {
           const next = event.relatedTarget

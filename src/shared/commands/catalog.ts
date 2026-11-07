@@ -793,7 +793,7 @@ export const commandCatalog = {
     title: 'Reveal in Object Explorer', category: 'Object Explorer', icon: 'list-tree', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result.',
     menus: [{ menu: 'search.hit.context', group: '0_reveal', order: 1, mnemonic: 'r' }]
   },
-  // Ctrl+C reaches the focused result's copy event (SearchPanel), as the results grid's does.
+  // Ctrl+C (and Edit › Copy) on a focused result runs it from SearchPanel's list, as the results grid's does; the rule only labels the key.
   'search.copyName': {
     title: 'Copy Name', category: 'Object Explorer', icon: 'copy', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result.',
     keybindings: [{ key: 'mod+c', when: 'searchHitsFocus', native: true }], menus: [{ menu: 'search.copy', group: '1_names', order: 1, title: 'Name', mnemonic: 'n' }]

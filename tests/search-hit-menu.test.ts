@@ -4,7 +4,7 @@ import { searchHitNames, type ObjectSearchHit } from '../src/shared/explorer/sea
 import type { ObjectRef } from '../src/shared/explorer/refs'
 import type { ResolvedMenuItem } from '../src/renderer/src/menus/resolve'
 import { argsFor } from '../src/renderer/src/menus/targets'
-import { searchHitTarget } from '../src/renderer/src/search/hit-actions'
+import { isCopyKey, searchHitTarget } from '../src/renderer/src/search/hit-actions'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
@@ -77,5 +77,21 @@ describe('a Search Objects result\'s context menu', () => {
     expect(vi.mocked(api.writeClipboardText).mock.calls.at(-1)).toEqual(['AppData.dbo.Orders'])
     connections.remove('server-a')
     expect(commands.isEnabled('search.copyQualifiedName')).toBe(false)
+  })
+})
+
+describe('a Search Objects result\'s Copy key', () => {
+  const key = (init: Partial<{ ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean }>, value = 'c') => ({ key: value, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...init })
+  it('is ⌘C on macOS, where Ctrl+C is not Copy, and Ctrl+C elsewhere', () => {
+    expect(isCopyKey(key({ metaKey: true }), 'darwin')).toBe(true)
+    expect(isCopyKey(key({ ctrlKey: true }), 'darwin')).toBe(false)
+    for (const platform of ['win32', 'linux'] as const) {
+      expect(isCopyKey(key({ ctrlKey: true }), platform)).toBe(true)
+      expect(isCopyKey(key({ ctrlKey: true }, 'C'), platform)).toBe(true)
+      expect(isCopyKey(key({ metaKey: true }), platform)).toBe(false)
+      // Ctrl+Shift+C is Copy Fully Qualified Name, a keybinding of its own.
+      expect(isCopyKey(key({ ctrlKey: true, shiftKey: true }), platform)).toBe(false)
+      expect(isCopyKey(key({ ctrlKey: true, altKey: true }), platform)).toBe(false)
+    }
   })
 })

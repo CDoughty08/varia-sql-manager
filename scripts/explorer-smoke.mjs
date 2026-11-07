@@ -1045,6 +1045,10 @@ try {
     await menu('Copy').getByRole('menuitem', { name: 'Bracketed Name', exact: true }).click()
     await expect.poll(clipboard).toBe('[AppData].[dbo].[table2]')
     await expect(tabHits.nth(1)).toBeFocused()
+    // Edit › Copy is Electron's copy role: its copy event on the focused hit copies the name too.
+    await application.evaluate(({ clipboard }) => clipboard.writeText('before'))
+    await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.copy())
+    await expect.poll(clipboard).toBe('table2')
     // Reveal from the menu selects the object in the tree, and focus comes back to the hit.
     await selectRevealed('server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders')
     await tabHits.nth(1).click({ button: 'right' })

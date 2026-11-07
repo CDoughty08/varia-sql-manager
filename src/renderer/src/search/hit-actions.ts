@@ -1,5 +1,6 @@
 import { insertTextFor } from '../../../shared/explorer/refs.ts'
 import type { ObjectSearchHit } from '../../../shared/explorer/search.ts'
+import type { Platform } from '../../../shared/commands/keybindings'
 import { onUnexpectedError } from '../core/errors'
 import type { Workbench } from '../core/workbench'
 import { selectionContextOf } from '../explorer/ExplorerService'
@@ -22,4 +23,10 @@ export function searchHitTarget(explorer: Pick<Workbench['explorer'], 'objectNod
 export function revealHit({ commands, objectSearch, explorer }: Pick<Workbench, 'commands' | 'objectSearch' | 'explorer'>, connectionId: string, hit: ObjectSearchHit, pane: boolean): void {
   if (!pane) void commands.execute('window.explorer', { keepFocus: true }, 'toolbar')
   void objectSearch.reveal(explorer, connectionId, hit).then(outcome => { if (!outcome.ok && !outcome.cancelled) commands.reportError(outcome.message) }, onUnexpectedError)
+}
+
+/** The clipboard's Copy key on `platform`: ⌘C on macOS, where Ctrl+C is not Copy, and Ctrl+C elsewhere. */
+export function isCopyKey(event: { readonly key: string; readonly ctrlKey: boolean; readonly metaKey: boolean; readonly altKey: boolean; readonly shiftKey: boolean }, platform: Platform): boolean {
+  const mac = platform === 'darwin'
+  return event.key.toLowerCase() === 'c' && !event.altKey && !event.shiftKey && (mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)
 }

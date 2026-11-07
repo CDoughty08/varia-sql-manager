@@ -319,6 +319,11 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const document = this.getSnapshot().documents[id]
     if (document?.result && current >= 0 && current < document.result.hits.length) this.putDocument({ ...document, current })
   }
+  /** Selects `hit` wherever the search's current result has it: a menu's hit may have moved, or gone, since the menu opened. */
+  pickHit(id: string, hit: ObjectSearchHit): void {
+    const key = hitKey(hit), at = this.getSnapshot().documents[id]?.result?.hits.findIndex(other => hitKey(other) === key) ?? -1
+    this.pick(id, at)
+  }
 
   /** The search whose hits have keyboard focus, as SearchPanel's list reports it: the keys that act on a result (Ctrl+Shift+C) act on its selected hit. */
   listFocused(id: string, focused: boolean): void {
