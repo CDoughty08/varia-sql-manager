@@ -166,17 +166,19 @@ internal sealed record ObjectIndexSkip(string Database, string Code, string Mess
 /// <summary>The index as a search finds it. State: none (never built), building, or ready. BuiltAt: UTC, when the last build ended.</summary>
 internal sealed record ObjectIndexStatus(string State, int Databases, int Indexed, int Objects, int Modules, int Cut, List<ObjectIndexSkip> Skipped, bool Definitions, string? BuiltAt = null);
 internal sealed record ObjectIndexResult(ObjectIndexStatus Status, long ElapsedMs);
-/// <summary>explorer.search: In is names, definitions or all; Kinds and Database narrow it; Limit is at most 1000 hits.</summary>
+/// <summary>explorer.search: In is names, definitions or all; Kinds and Database narrow it; Limit is at most 1000 hits; Match is
+/// exact (the default) or fuzzy, which adds approximate name matches and cannot go with Regex.</summary>
 internal sealed record ObjectSearchArgs(string ConnectionId, string RequestId, string Text, bool? CaseSensitive = null, bool? WholeWord = null, bool? Regex = null, string? In = null,
-    List<string>? Kinds = null, string? Database = null, int? Limit = null);
+    List<string>? Kinds = null, string? Database = null, int? Limit = null, string? Match = null);
 /// <summary>A definition's first match: its line and column (1-based), part of its line with the match's [start, length] in it,
 /// whether the line goes on before or after the part, the matches counted (at most 999), and whether the definition was cut.</summary>
 internal sealed record DefinitionMatch(int Line, int Column, string Preview, int[] Range, bool Before, bool After, int Matches, bool Cut);
 /// <summary>One object found: Range is the name match's [start, length] in Label; Modified is server local time; Subtype is its
 /// node's where the index knows it; ParentFolder is the folder that lists a child's parent (Tables › Graph Tables, say); Via is
-/// the table (in its database, in Folder) that shows a history table, or a history table's parent, as its history row.</summary>
+/// the table (in its database, in Folder) that shows a history table, or a history table's parent, as its history row;
+/// Approximate marks a Fuzzy Match name hit, whose Range spans its first to last matched word.</summary>
 internal sealed record ObjectSearchHit(ObjectRefDto Object, string Folder, string Label, int[]? Range, string? Modified, DefinitionMatch? Definition, string? Subtype = null,
-    string? ParentFolder = null, ViaRefDto? Via = null);
+    string? ParentFolder = null, ViaRefDto? Via = null, bool? Approximate = null);
 internal sealed record ViaRefDto(string Schema, string Name, string Folder);
 /// <summary>The best Limit hits of Total; Partial when the search stopped at its budget or candidate cap. Problem: why the
 /// pattern cannot be searched for (no hits then).</summary>

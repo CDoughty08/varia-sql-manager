@@ -307,10 +307,13 @@ internal sealed class SearchMatcher
     internal static bool Word(char value) => char.IsLetterOrDigit(value) || value is '_' or '@' or '#' or '$';
 }
 
-/// <summary>What a search asks: its text and options, where to look, and how many hits to answer.</summary>
-internal sealed record SearchQuery(string Text, bool CaseSensitive, bool WholeWord, bool Regex, bool Names, bool Definitions, IReadOnlySet<string>? Kinds, string? Database, int Limit);
+/// <summary>What a search asks: its text and options, where to look, and how many hits to answer. Fuzzy adds approximate name
+/// matches (<see cref="FuzzyName"/>) below the exact ones; it never applies to a regular expression or to definitions.</summary>
+internal sealed record SearchQuery(string Text, bool CaseSensitive, bool WholeWord, bool Regex, bool Names, bool Definitions, IReadOnlySet<string>? Kinds, string? Database, int Limit,
+    bool Fuzzy = false);
 
-/// <summary>Searches a connection's index. Names rank first (an exact name, then one that starts with the text, then any),
+/// <summary>Searches a connection's index. Names rank first (an exact name, then one that starts with the text, then any, then
+/// under Fuzzy Match the approximate ones: every word found but apart, within edits, then by sound, each by fewest edits),
 /// definition matches after them; within each, user objects before system ones, then by database, schema and name. The
 /// resource database's objects are searched once, as master's (or the database the search names); the server's own objects
 /// (which name no database) only by a search of the whole server.</summary>
@@ -319,7 +322,10 @@ internal static class IndexSearch
     public static ObjectSearchResult Run(ConnectionIndex index, SearchQuery query, SearchMatcher matcher, ObjectIndexLimits limits, ObjectIndexStatus status, CancellationToken token)
     {
         var watch = Stopwatch.StartNew();
-        var found = new List<(int Rank, bool System, ObjectSearchHit Hit)>();
+        // The candidates, worst first: past the cap a better hit takes the worst one's place, so approximate or definition hits
+        // scanned early never push out an exact one scanned later.
+        var found = new PriorityQueue<(int Rank, int Score, bool System, ObjectSearchHit Hit), (int Rank, int Score)>(Comparer<(int Rank, int Score)>.Create((a, b) => b.CompareTo(a)));
+        var fuzzy = query.Fuzzy && query.Names && !query.Regex ? FuzzyName.Create(query.Text, query.WholeWord) : null;
         var total = 0;
         var scanned = 0;
         var partial = false;
@@ -343,23 +349,33 @@ internal static class IndexSearch
                     if (watch.Elapsed > limits.SearchBudget) { partial = true; goto done; }
                 }
                 if (query.Kinds is not null && !query.Kinds.Contains(item.Kind)) continue;
-                var hit = Match(name, item, query, matcher, limits, dotted, out var rank);
+                var hit = Match(name, item, query, matcher, fuzzy, limits, dotted, out var rank, out var score);
                 if (hit is null) continue;
                 total++;
-                if (found.Count < limits.Candidates) found.Add((rank, item.System, hit));
-                else partial = true;
+                if (found.Count < limits.Candidates) found.Enqueue((rank, score, item.System, hit), (rank, score));
+                else
+                {
+                    partial = true;
+                    if (found.TryPeek(out _, out var worst) && (rank, score).CompareTo(worst) < 0) found.DequeueEnqueue((rank, score, item.System, hit), (rank, score));
+                }
             }
         }
     done:
-        var hits = found.OrderBy(value => value.Rank).ThenBy(value => value.System).ThenBy(value => value.Hit.Object.Database ?? "", StringComparer.OrdinalIgnoreCase)
+        var hits = found.UnorderedItems.Select(value => value.Element).OrderBy(value => value.Rank).ThenBy(value => value.Score).ThenBy(value => value.System).ThenBy(value => value.Hit.Object.Database ?? "", StringComparer.OrdinalIgnoreCase)
             .ThenBy(value => value.Hit.Label, StringComparer.OrdinalIgnoreCase).ThenBy(value => value.Hit.Label, StringComparer.Ordinal)
             .Take(query.Limit).Select(value => value.Hit).ToList();
         return new(hits, total, partial, watch.ElapsedMilliseconds, status);
     }
 
-    private static ObjectSearchHit? Match(string? database, IndexedObject item, SearchQuery query, SearchMatcher matcher, ObjectIndexLimits limits, bool dotted, out int rank)
+    /// <summary>The rank of a hit only its definition matched.</summary>
+    internal const int DefinitionRank = 6;
+
+    private static ObjectSearchHit? Match(string? database, IndexedObject item, SearchQuery query, SearchMatcher matcher, FuzzyName? fuzzy, ObjectIndexLimits limits, bool dotted,
+        out int rank, out int score)
     {
-        rank = 3;
+        rank = DefinitionRank;
+        score = 0;
+        var approximate = false;
         var label = item.Label;
         int[]? range = null;
         if (query.Names)
@@ -388,6 +404,11 @@ internal static class IndexSearch
                     rank = end == start ? 2 : start == 0 && end == label.Length ? 0 : start == 0 ? 1 : 2;
                 }
             }
+            if (range is null && fuzzy is not null && fuzzy.Match(item.Name, item.Schema ?? item.ParentSchema, item.ParentName, out var tier, out var cost, out var from, out var span))
+            {
+                range = [label.Length - item.Name.Length + from, span];
+                (rank, score, approximate) = (3 + (int)tier, cost, true);
+            }
         }
         DefinitionMatch? definition = null;
         if (query.Definitions && item.Definition is { } text && matcher.Find(text, 0, out var first, out var size))
@@ -400,7 +421,7 @@ internal static class IndexSearch
         if (range is null && definition is null) return null;
         var value = new ObjectRefDto(item.Kind, database, item.Schema, item.Name, item.ParentName is null ? null : new ParentRefDto(item.ParentKind!, item.ParentSchema!, item.ParentName));
         return new(value, item.Folder, label, range, item.Modified?.ToString("yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture), definition, item.Subtype, item.ParentFolder,
-            item.Via is { } via ? new ViaRefDto(via.Schema!, via.Name, via.Folder) : null);
+            item.Via is { } via ? new ViaRefDto(via.Schema!, via.Name, via.Folder) : null, approximate ? true : null);
     }
 
     /// <summary>The match's line (1-based) and column, and up to <paramref name="chars"/> characters of that line around it.</summary>

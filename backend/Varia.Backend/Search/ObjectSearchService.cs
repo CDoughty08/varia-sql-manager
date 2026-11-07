@@ -195,6 +195,7 @@ internal sealed class ObjectSearchService : IDisposable
         var scope = args.In ?? "all";
         if (scope is not ("names" or "definitions" or "all")) throw Invalid("in.");
         if (args.Limit is < 1 or > MaxLimit) throw Invalid("limit.");
+        if (args.Match is not (null or "exact" or "fuzzy") || (args.Match == "fuzzy" && args.Regex == true)) throw Invalid("match.");
         if (args.Database is { } database && !ExplorerRefs.Ident(database)) throw Invalid("database.");
         HashSet<string>? kinds = null;
         if (args.Kinds is { } list)
@@ -202,7 +203,7 @@ internal sealed class ObjectSearchService : IDisposable
             if (list.Count is < 1 or > MaxKinds || list.Any(kind => Array.IndexOf(Kinds, kind) < 0)) throw Invalid("kinds.");
             kinds = list.ToHashSet(StringComparer.Ordinal);
         }
-        return new(args.Text, args.CaseSensitive ?? false, args.WholeWord ?? false, args.Regex ?? false, scope != "definitions", scope != "names", kinds, args.Database, args.Limit ?? DefaultLimit);
+        return new(args.Text, args.CaseSensitive ?? false, args.WholeWord ?? false, args.Regex ?? false, scope != "definitions", scope != "names", kinds, args.Database, args.Limit ?? DefaultLimit, args.Match == "fuzzy");
     }
 
     private static RequestException Invalid(string what) => new("INVALID_PARAMS", "Invalid object search request: " + what);

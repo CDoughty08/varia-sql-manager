@@ -29,6 +29,8 @@ export interface SearchQueryState {
   readonly caseSensitive: boolean
   readonly wholeWord: boolean
   readonly regex: boolean
+  /** Fuzzy Match: names also match approximately (typos, sound-alikes); off in effect while Regex is on. */
+  readonly fuzzy: boolean
   readonly scope: SearchScope
   /** The type filters chosen (searchTypes); none searches every kind. */
   readonly types: readonly SearchType[]
@@ -135,7 +137,7 @@ function keptHit(document: SearchDocumentState, asked: SearchQueryState, hits: r
   const key = hitKey(selected), at = hits.findIndex(hit => hitKey(hit) === key)
   return at < 0 ? undefined : at
 }
-const emptyQuery: SearchQueryState = { text: '', caseSensitive: false, wholeWord: false, regex: false, scope: 'all', types: [] }
+const emptyQuery: SearchQueryState = { text: '', caseSensitive: false, wholeWord: false, regex: false, fuzzy: false, scope: 'all', types: [] }
 const live = (connection: LiveConnection | undefined): connection is LiveConnection => !!connection && !connection.lost
 
 /**
@@ -280,7 +282,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     this.putDocument({ ...document, requestId, error: undefined })
     const kinds = searchTypeKinds(asked.types)
     return this.o.api.explorerSearch({
-      connectionId: document.connectionId, requestId, text: asked.text, caseSensitive: asked.caseSensitive, wholeWord: asked.wholeWord, regex: asked.regex, in: asked.scope, ...kinds ? { kinds } : {}
+      connectionId: document.connectionId, requestId, text: asked.text, caseSensitive: asked.caseSensitive, wholeWord: asked.wholeWord, regex: asked.regex, in: asked.scope, ...kinds ? { kinds } : {},
+      ...asked.fuzzy && !asked.regex ? { match: 'fuzzy' as const } : {}
     }).then(result => {
       const current = this.getSnapshot().documents[id]
       if (this.disposed || current?.requestId !== requestId) return
@@ -369,7 +372,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   }
 
   private query(document: SearchDocumentState): SearchQueryState {
-    return { text: document.text, caseSensitive: document.caseSensitive, wholeWord: document.wholeWord, regex: document.regex, scope: document.scope, types: document.types }
+    return { text: document.text, caseSensitive: document.caseSensitive, wholeWord: document.wholeWord, regex: document.regex, fuzzy: document.fuzzy, scope: document.scope, types: document.types }
   }
 
   private cancelSearch(document: SearchDocumentState): void {
