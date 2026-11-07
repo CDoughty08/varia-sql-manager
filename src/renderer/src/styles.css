@@ -417,6 +417,20 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .peek-facts { margin: 0; }
 .peek-fact { display: grid; grid-template-columns: minmax(96px, 46%) minmax(0, 1fr); gap: var(--varia-space-2); padding: 1px var(--varia-space-3); }
 .peek-fact dt { color: var(--varia-descriptionForeground); }
+.peek-tabs { display: flex; gap: var(--varia-space-1); text-transform: none; letter-spacing: 0; }
+.peek-tab { padding: 0 var(--varia-space-1); border-bottom: 2px solid transparent; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.peek-tab[aria-selected="true"] { border-bottom-color: var(--varia-tab-activeBorderTop); color: var(--varia-editorWidget-foreground); }
+.peek-tab:focus-visible, .peek-follow:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.peek-list { margin: 0; padding: var(--varia-space-0) 0 var(--varia-space-2); list-style: none; }
+.peek-item { display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; padding: 1px var(--varia-space-3); white-space: nowrap; }
+.peek-item-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; user-select: text; }
+.peek-item-note { flex-shrink: 0; color: var(--varia-descriptionForeground); }
+.peek-follow { display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; padding: 0; color: var(--varia-list-highlightForeground); }
+.peek-follow:hover .peek-item-name { text-decoration: underline; }
+.peek-rows { border-collapse: collapse; margin: var(--varia-space-1) var(--varia-space-3) var(--varia-space-2); font: var(--varia-size-sm)/var(--varia-line-sm) var(--varia-font-mono); color: var(--varia-resultsGrid-foreground); }
+.peek-rows th, .peek-rows td { max-width: 240px; padding: 0 var(--varia-space-2); overflow: hidden; text-overflow: ellipsis; white-space: pre; border: 1px solid var(--varia-resultsGrid-gridlines); text-align: left; user-select: text; }
+.peek-rows th { position: sticky; top: 0; background: var(--varia-resultsGrid-headerBackground); color: var(--varia-resultsGrid-headerForeground); font: 600 var(--varia-size-xs)/var(--varia-line-sm) var(--varia-font-ui); }
+.peek-rows .peek-null { background: var(--varia-resultsGrid-nullBackground); color: var(--varia-resultsGrid-nullForeground); }
 .peek-fact dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; user-select: text; }
 .explorer-error { flex-shrink: 0; font-size: var(--varia-size-xs); color: var(--varia-errorForeground); line-height: 1.6; padding: 0 12px; margin: 5px 0 8px; overflow-wrap: anywhere; }
 @media (forced-colors: active) {
