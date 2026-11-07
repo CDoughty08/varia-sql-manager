@@ -58,16 +58,23 @@ export interface SessionRestoreOptions {
   /** Where the reopened tabs go back into their editor groups. */
   readonly groups?: Pick<EditorGroupService, 'restore'>
   readonly resumeRecovery?: (tabId: string, recoveryId: string) => void
+  /** Runs inside the restore's own file task when it reopened nothing (also when it failed): the welcome query, which
+   *  must come before a file the command line hands over meanwhile, since that open waits for this task. */
+  readonly otherwise?: () => void
 }
 /**
  * The start's restore: the tabs the last close kept, in order, with the active one active again. A file already open in
  * a tab (one a second instance handed over first) is not opened twice. Resolves with how many tabs it opened; a failure
  * goes to the file banner, and files that are gone are named there as a warning.
  */
-export async function restoreSession({ api, documents, files, groups, resumeRecovery }: SessionRestoreOptions): Promise<number> {
+export async function restoreSession({ api, documents, files, groups, resumeRecovery, otherwise }: SessionRestoreOptions): Promise<number> {
   if (!api.hotExit) return 0
   let opened = 0
   await files.later(async () => {
+    try { await restore() } finally { if (!opened) otherwise?.() }
+  })
+  return opened
+  async function restore(): Promise<void> {
     let restored: RestoredSession
     try { restored = unwrap(await api.takeSession()) } catch (error) { throw new Error(`The queries open when Varia SQL Manager last closed could not be reopened: ${error instanceof Error ? error.message : 'The operation failed.'}`) }
     const registered: SqlFile[] = [], ids: string[] = []
@@ -89,6 +96,5 @@ export async function restoreSession({ api, documents, files, groups, resumeReco
       if (restored.restoreGeneration !== undefined) unwrap(await api.finishSessionRestore(restored.restoreGeneration))
     } finally { await files.release(registered) }
     if (restored.problems.length) files.reportError(restored.problems.join(' '), 'warning')
-  })
-  return opened
+  }
 }
