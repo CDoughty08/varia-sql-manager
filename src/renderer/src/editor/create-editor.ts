@@ -31,7 +31,8 @@ export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorO
     find: { autoFindInSelection: 'multiline', seedSearchStringFromSelection: 'selection', loop: true, addExtraSpaceOnTop: false },
     // The workbench's editor menu (MenuService) replaces Monaco's; right-click still moves the caret first.
     contextmenu: false,
-    // Linux's PRIMARY selection is never pasted (core/primary-selection.ts): a middle-drag selects a column, as elsewhere.
+    // A middle-drag selects a column on Linux too, as elsewhere. Not a paste guard (standalone Monaco has no selection
+    // clipboard): core/primary-selection.ts keeps Linux's PRIMARY selection out.
     selectionClipboard: false,
     // OVR (the Insert key) shows a block caret, as Visual Studio does.
     overtypeCursorStyle: 'block'

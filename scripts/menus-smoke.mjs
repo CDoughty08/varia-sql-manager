@@ -40,22 +40,26 @@ const setPrimary = async text => {
   await application.evaluate(({ clipboard }, value) => clipboard.writeText(value, 'selection'), text)
   expect(await application.evaluate(({ clipboard }) => clipboard.readText('selection'))).toBe(text)
 }
-/** Middle-clicks `locator` (or runs `press` on its box) and reports the paste events (with the text they could read), mouseups and auxclicks the page saw. */
+/**
+ * Middle-clicks `locator` (or runs `press` on its box) and reports the paste events the page saw (with the text they could
+ * read), each middle-button pointerup, mouseup and pointermove as it bubbled out (" open" if nothing cancelled it, so
+ * Blink would paste), and the auxclicks.
+ */
 const middleClick = async (locator, press) => {
   await page.evaluate(() => {
-    const seen = window.__variaMiddleClick ??= { pastes: [], mouseups: 0, auxclicks: 0 }
+    const seen = window.__variaMiddleClick ??= { pastes: [], releases: [], auxclicks: 0 }
     if (!seen.listening) {
       seen.listening = true
       window.addEventListener('paste', event => seen.pastes.push(event.clipboardData?.getData('text/plain') ?? ''), true)
-      window.addEventListener('mouseup', event => { if (event.button === 1) seen.mouseups++ }, true)
+      for (const type of ['pointerup', 'mouseup', 'pointermove']) window.addEventListener(type, event => { if (event.button === 1) seen.releases.push(type + (event.defaultPrevented ? '' : ' open')) })
       window.addEventListener('auxclick', event => { if (event.button === 1) seen.auxclicks++ }, true)
     }
-    Object.assign(seen, { pastes: [], mouseups: 0, auxclicks: 0 })
+    Object.assign(seen, { pastes: [], releases: [], auxclicks: 0 })
   })
   // Blink pastes PRIMARY while it handles the release, which the click awaits.
   if (press) await press(await locator.boundingBox())
   else await locator.click({ button: 'middle' })
-  return page.evaluate(() => { const { pastes, mouseups, auxclicks } = window.__variaMiddleClick; return { pastes, mouseups, auxclicks } })
+  return page.evaluate(() => { const { pastes, releases, auxclicks } = window.__variaMiddleClick; return { pastes, releases, auxclicks } })
 }
 const zoomLevel = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getZoomLevel())
 const variable = key => page.evaluate(name => getComputedStyle(document.documentElement).getPropertyValue(name).trim(), '--varia-' + key.replaceAll('.', '-'))
@@ -379,17 +383,17 @@ try {
     return { ok: result.ok, value }
   })).toEqual({ ok: false, value: '' })
   if (primarySelection) {
-    // Nor can a middle-click paste the PRIMARY selection into the editor: the page cancels that mouseup's default action, and
-    // Monaco's selectionClipboard is off. The click still reaches the page, auxclick included (middle-click closes tabs).
+    // Nor can a middle-click paste the PRIMARY selection into the editor: the page cancels the release's default action, and
+    // the paste is hidden as a second layer. The click still reaches the page, auxclick included (middle-click closes tabs).
     await setPrimary('primary-into-editor')
     const before = await editorText()
-    expect(await middleClick(page.locator('.monaco-editor .view-lines'))).toEqual({ pastes: [], mouseups: 1, auxclicks: 1 })
+    expect(await middleClick(page.locator('.monaco-editor .view-lines'))).toEqual({ pastes: [], releases: ['pointerup', 'mouseup'], auxclicks: 1 })
     expect(await editorText()).toBe(before)
     // The title bar's menus cancel every pointerdown so focus stays put, which leaves the click no mouseup: with the editor
     // focused, a middle-click on File still pastes nothing (the pointerup is cancelled too), and opens no menu.
     await textbox().focus()
     await setPrimary('primary-through-menubar')
-    expect((await middleClick(menubarItem('File'))).pastes).toEqual([])
+    expect(await middleClick(menubarItem('File'))).toEqual({ pastes: [], releases: ['pointerup'], auxclicks: 1 })
     expect(await editorText()).toBe(before)
     await expect(openMenus()).toHaveCount(0)
     await expect(textbox()).toBeFocused()
@@ -402,7 +406,8 @@ try {
       await page.mouse.up({ button: 'middle' })
       await page.mouse.up()
     })
-    expect(chord).toEqual({ pastes: [], mouseups: 0, auxclicks: 1 })
+    // Both the chorded press and the release come as middle-button pointermoves, and both are cancelled.
+    expect(chord).toEqual({ pastes: [], releases: ['pointermove', 'pointermove'], auxclicks: 1 })
     await page.keyboard.press('Escape')
     await expect(openMenus()).toHaveCount(0)
     await textbox().focus()
@@ -718,7 +723,7 @@ try {
   if (primarySelection) {
     // A text field takes no PRIMARY paste either; only the field menu's Paste, above, reads the clipboard.
     await setPrimary('primary-into-field')
-    expect(await middleClick(server)).toEqual({ pastes: [], mouseups: 1, auxclicks: 1 })
+    expect(await middleClick(server)).toEqual({ pastes: [], releases: ['pointerup', 'mouseup'], auxclicks: 1 })
     await expect(server).toHaveValue('menus-server')
   }
   await page.locator('#connect-auth').selectOption('sql')
