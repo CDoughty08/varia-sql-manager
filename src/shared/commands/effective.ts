@@ -1,5 +1,5 @@
 import { validateShortcut, type RefusalReason } from './conflicts'
-import { defaultRules, KeySpecError, parseKeySpec, type Platform, type ResolvedRule } from './keybindings'
+import { defaultRules, KeySpecError, parseKeySpec, platforms, type Platform, type ResolvedRule } from './keybindings'
 import { defaultSchemeId, shortcutScheme, shortcutSchemes, type ShortcutScheme } from './schemes'
 import { scopeOfWhen } from './scopes'
 import { bindingApplies, emptyShortcutFile, type ShortcutBinding, type ShortcutFile } from './shortcut-schema'
@@ -23,6 +23,16 @@ export interface EffectiveShortcuts {
   readonly scheme: ShortcutScheme
   readonly gestures: Readonly<Record<string, string>>
   readonly problems: readonly ShortcutProblem[]
+}
+
+/** Whether some platform's catalogue has the default `binding` removes. */
+function matchesElsewhere(binding: ShortcutBinding): boolean {
+  return platforms.some(platform => {
+    try {
+      const chords = parseKeySpec(binding.key, platform)
+      return defaultRules(platform).some(rule => rule.command === binding.command && sameChords(rule.chords, chords))
+    } catch { return false }
+  })
 }
 
 const memo = new WeakMap<ShortcutFile, Map<Platform, EffectiveShortcuts>>()
@@ -56,7 +66,12 @@ export function effectiveRules(platform: Platform, file: ShortcutFile = emptySho
       }
       const matches = (rule: ResolvedRule) => rule.command === binding.command && sameChords(rule.chords, chords)
       const taken = [...base.filter(matches), ...additions.filter(entry => entry.source === 'scheme' && matches(entry.rule)).map(entry => entry.rule)]
-      if (!taken.length) { problems.push({ source, index, code: 'unmatched', message: 'This removal matches no default shortcut.' }); return }
+      if (!taken.length) {
+        // A removal without a platform also travels to platforms where its default does not exist; report only one that
+        // matches no default anywhere.
+        if (!matchesElsewhere(binding)) problems.push({ source, index, code: 'unmatched', message: 'This removal matches no default shortcut.' })
+        return
+      }
       const lock = ruleLock(taken[0])
       if (lock) { problems.push({ source, index, code: 'locked', message: lock.reason }); return }
       base = base.filter(rule => !matches(rule))
@@ -65,7 +80,7 @@ export function effectiveRules(platform: Platform, file: ShortcutFile = emptySho
     })
     bindings.forEach((binding, index) => {
       if (binding.remove || !bindingApplies(binding, platform)) return
-      const verdict = validateShortcut([...additions.map(entry => entry.rule), ...base], binding, platform)
+      const verdict = validateShortcut([...additions.map(entry => entry.rule), ...base], binding, platform, { narrowerScopes: false })
       if (verdict.verdict === 'refused' || verdict.verdict === 'conflict' || !verdict.rule) {
         problems.push({ source, index, code: verdict.reason ?? 'conflict', message: verdict.message }); return
       }

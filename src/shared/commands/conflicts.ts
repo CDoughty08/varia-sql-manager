@@ -5,7 +5,8 @@ import { altGrReason, defaultRules, formatLabel, KeySpecError, parseKeySpec, res
 import { osKeyVerdict } from './os-keys'
 import { isScopeId, scopeOfWhen, shortcutScope, shortcutScopes, type ScopeId } from './scopes'
 import { resolveShortcut, ruleLock, sameChords, shortcutLock, typesText } from './shortcut-rules'
-import { evaluateWhen, referencedKeys } from './when'
+import { menuMayShowChords } from './menus'
+import { compileWhen, evaluateWhen, referencedKeys } from './when'
 
 /** Representative places focus can be. Each fixes every focus key; keys it does not list are false or ''. */
 export const focusSamples: readonly { readonly name: string; readonly keys: Partial<FocusKeys> }[] = [
@@ -35,6 +36,8 @@ export interface Conflict {
   readonly chord: string
   readonly commands: readonly CommandId[]
   readonly message: string
+  /** A `reserved` conflict's reason, from `reservedReason`. */
+  readonly reason?: string
 }
 
 // Both `when` clauses together may read this many state keys; 2^12 contexts per focus sample is still instant.
@@ -83,7 +86,7 @@ export function findConflicts(rules: readonly ResolvedRule[], platform: Platform
   for (const [chord, list] of workbenchRules(rules)) {
     for (const rule of list) {
       const reason = reservedReason(chord, platform)
-      if (reason) conflicts.push({ kind: 'reserved', chord, commands: [rule.command], message: `${rule.command}: ${chord} is reserved (${reason}).` })
+      if (reason) conflicts.push({ kind: 'reserved', chord, commands: [rule.command], reason, message: `${rule.command}: ${chord} is reserved (${reason}).` })
       const { allowInModal } = commandDescriptor(rule.command)
       if (rule.modal && !allowInModal) conflicts.push({ kind: 'modal', chord, commands: [rule.command], message: `${rule.command}: ${chord} is marked modal, but the command does not run while a modal is open.` })
       else if (allowInModal && !rule.modal) conflicts.push({ kind: 'modal', chord, commands: [rule.command], message: `${rule.command} runs while a modal is open, so its workbench key ${chord} must be marked modal or it would take the key from the dialog.` })
@@ -105,10 +108,17 @@ export function findConflicts(rules: readonly ResolvedRule[], platform: Platform
   return conflicts
 }
 
+/**
+ * Whether a `findConflicts` result makes a rule set wrong. Shadows are how a narrower scope overrides a Global shortcut,
+ * and Linux reports AltGr as its own key, so a user's Ctrl+Alt+letter there (which `validateShortcut` only warns about)
+ * is allowed; the catalogue itself still keeps those keys free.
+ */
+export const isBlockingConflict = (conflict: Conflict, platform: Platform): boolean =>
+  conflict.kind !== 'shadow' && !(conflict.kind === 'reserved' && conflict.reason === altGrReason && platform === 'linux')
+
 /** Why `validateShortcut` refuses a shortcut. */
-export type RefusalReason =
-  | 'unknownCommand' | 'locked' | 'scope' | 'parse' | 'chord' | 'role' | 'reserved' | 'system' | 'navigation' | 'typing' | 'taken' | 'duplicate' | 'complex'
-export const refusalReasons: readonly RefusalReason[] = ['unknownCommand', 'locked', 'scope', 'parse', 'chord', 'role', 'reserved', 'system', 'navigation', 'typing', 'taken', 'duplicate', 'complex']
+export const refusalReasons = ['unknownCommand', 'locked', 'scope', 'parse', 'chord', 'role', 'reserved', 'system', 'navigation', 'typing', 'taken', 'duplicate', 'complex'] as const
+export type RefusalReason = typeof refusalReasons[number]
 
 /** A rule the candidate shares a key with: it overrides the rule (`overrides`), or the rule overrides it. */
 export interface ShortcutShadow { readonly rule: ResolvedRule; readonly overrides: boolean }
@@ -143,8 +153,8 @@ const ruleScopeTitle = (rule: ResolvedRule) => rule.bridge ? shortcutScope('quer
  * and again in main on save. Never throws. Effective rules keep zero overlap, except a preset scope shadowing a Global
  * shortcut.
  */
-export function validateShortcut(draft: readonly ResolvedRule[], candidate: ShortcutDraft, platform: Platform): ShortcutVerdict {
-  return validate(draft, candidate, platform, true)
+export function validateShortcut(draft: readonly ResolvedRule[], candidate: ShortcutDraft, platform: Platform, options: { readonly narrowerScopes?: boolean } = {}): ShortcutVerdict {
+  return validate(draft, candidate, platform, options.narrowerScopes ?? true)
 }
 
 function validate(draft: readonly ResolvedRule[], candidate: ShortcutDraft, platform: Platform, offerScopes: boolean): ShortcutVerdict {
@@ -168,10 +178,12 @@ function validate(draft: readonly ResolvedRule[], candidate: ShortcutDraft, plat
   if (chords.length > 1 && (scope !== 'queryEditor' || chords[0] !== prefix))
     return refuse('chord', `Two-part shortcuts must start with ${formatLabel(prefix, platform)} and apply in the ${shortcutScope('queryEditor').title}.`)
   if (descriptor.role && scope !== 'global') return refuse('role', `${descriptor.title} works everywhere, so its shortcuts are Global.`)
-  if (descriptor.role && !toAccelerator(chords, platform)) return refuse('role', `The menu cannot register ${label} for ${descriptor.title}.`)
+  // A role key works only as the menu's accelerator, and macOS menus take only ⌘ keys from the page.
+  if (descriptor.role && (!toAccelerator(chords, platform) || !menuMayShowChords(chords, platform))) return refuse('role', `The menu cannot register ${label} for ${descriptor.title}.`)
 
-  // A command's own default key is never refused: restoring it is always allowed.
-  const isDefault = defaultRules(platform).some(rule => rule.command === command && sameChords(rule.chords, chords))
+  // A command's own default key, in its own scope, is never refused: restoring it is always allowed.
+  const ruleScope = (rule: ResolvedRule) => rule.bridge ? 'queryEditor' : scopeOfWhen(rule.whenSource).id
+  const isDefault = defaultRules(platform).some(rule => rule.command === command && sameChords(rule.chords, chords) && ruleScope(rule) === scope)
   if (chords.length === 1 && !isDefault) {
     const chord = chords[0], { modifiers, key: name } = splitChord(chord)
     const os = osKeyVerdict(chord, platform)
@@ -189,12 +201,19 @@ function validate(draft: readonly ResolvedRule[], candidate: ShortcutDraft, plat
   const conflicts: ResolvedRule[] = [], shadows: ShortcutShadow[] = []
   for (const other of draft) {
     if (!sameChords(other.chords, chords)) continue
-    let overlap: string | undefined
-    try { overlap = findContext([rule, other], platform, context => active(rule, context) && active(other, context)) } catch {
+    let overlap: string | undefined, adds: string | undefined
+    try {
+      overlap = findContext([rule, other], platform, context => active(rule, context) && active(other, context))
+      // The same command's key in another scope: allowed when the new one reaches somewhere the old one does not.
+      if (overlap && other.command === command) adds = findContext([rule, other], platform, context => active(rule, context) && !active(other, context))
+    } catch {
       return refuse('complex', `${label} is used by ${title(other.command)} in a way Varia cannot check.`)
     }
     if (!overlap) continue
-    if (other.command === command) return refuse('duplicate', `${label} is already a shortcut for ${descriptor.title} there.`)
+    if (other.command === command) {
+      if (!adds) return refuse('duplicate', `${label} is already a shortcut for ${descriptor.title} there.`)
+      continue
+    }
     // The workbench sees a key before Monaco and Chromium, so a one-part shortcut may take a locked native key where it
     // applies (as Close does with Delete on a tab); a two-part key Monaco itself dispatches cannot be shared.
     if (ruleLock(other)) {
@@ -209,7 +228,7 @@ function validate(draft: readonly ResolvedRule[], candidate: ShortcutDraft, plat
   if (chords.length === 1) for (const preset of shortcutScopes) {
     const id = preset.id
     const builtIn = intrinsicChords(id, platform).get(chords[0])
-    if (builtIn && findContext([rule], platform, context => active(rule, context) && (preset.when === undefined || evaluateWhen(scopeRule(id).when!, context))))
+    if (builtIn && findContext([rule], platform, context => active(rule, context) && (preset.when === undefined || evaluateWhen(compileWhen(preset.when), context))))
       warnings.push(`In the ${preset.title}, ${label} also does its own “${builtIn}”.`)
   }
 
@@ -232,6 +251,3 @@ function validate(draft: readonly ResolvedRule[], candidate: ShortcutDraft, plat
   if (warnings.length) return { ...done, verdict: 'warning', message: warnings[0] }
   return { ...done, verdict: 'ok', message: scope === 'global' ? `${label} is not used.` : `${label} is not used in the ${scopeTitle}.` }
 }
-
-/** A rule carrying `scope`'s bare clause, for asking where the scope applies. */
-const scopeRule = (scope: ScopeId): ResolvedRule => resolveShortcut({ command: 'file.new', key: 'f24', scope }, 'linux')

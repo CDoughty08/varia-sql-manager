@@ -70,6 +70,11 @@ describe('effective rules', () => {
     expect(execute(buildMenuModel('query', 'win32', rules))?.accelerator).toBe('Ctrl+Shift+E')
     expect(dispatch(rules, 'f5', editor)).toBeUndefined()
   })
+  it('apply a removal without a platform where its default exists, and stay quiet where it does not', () => {
+    const user = file([{ command: 'file.close', key: 'ctrl+f4', remove: true }])
+    expect(effectiveRules('win32', user).removed.map(rule => rule.chords[0])).toEqual(['ctrl+f4'])
+    expect(effectiveRules('darwin', user)).toMatchObject({ removed: [], problems: [] })
+  })
   it('apply platform entries only on their platform, and keep them for the others', () => {
     const user = file([{ command: 'file.new', key: 'shift+alt+f9', platform: 'linux' }])
     expect(effectiveRules('linux', user).userRules.map(rule => rule.chords[0])).toEqual(['shift+alt+f9'])

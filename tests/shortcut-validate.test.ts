@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { refusalReasons, validateShortcut, type RefusalReason, type ShortcutDraft } from '../src/shared/commands/conflicts'
+import { findConflicts, isBlockingConflict, refusalReasons, validateShortcut, type RefusalReason, type ShortcutDraft } from '../src/shared/commands/conflicts'
 import { effectiveRules } from '../src/shared/commands/effective'
 import { intrinsicChords, intrinsicKeys } from '../src/shared/commands/intrinsic'
 import { defaultRules, keyNames, parseKeySpec, platforms, resolveKeybinding, type KeyEventLike, type Platform, type ResolvedRule } from '../src/shared/commands/keybindings'
@@ -58,6 +58,13 @@ describe('validateShortcut', () => {
     expect(global).toMatchObject({ verdict: 'shadow', message: 'Properties overrides this in the Table Designer.' })
     expect(global.shadows.map(shadow => [shadow.rule.command, shadow.overrides])).toEqual([['tableDesigner.properties', false]])
   })
+  it('lets a command’s key reach a wider scope, but not repeat where it already works', () => {
+    expect(check({ command: 'query.execute', key: 'mod+e' })).toMatchObject({ verdict: 'ok', rule: { command: 'query.execute', chords: ['ctrl+e'] } })
+    expect(check({ command: 'query.execute', key: 'mod+e' }).rule?.when).toBeUndefined()
+    expectRefused('duplicate', { command: 'query.execute', key: 'mod+e', scope: 'queryEditor' })
+    const widened = [check({ command: 'query.execute', key: 'mod+e' }).rule!, ...defaults('win32')]
+    expectRefused('duplicate', { command: 'query.execute', key: 'mod+e', scope: 'resultsGrid' }, 'win32', widened)
+  })
   it('reports conflicts with the narrower scopes that would avoid them', () => {
     const open = check({ command: 'file.new', key: 'mod+o' })
     expect(open).toMatchObject({ verdict: 'conflict', message: 'Ctrl+O is already used by Open File… (Global).' })
@@ -95,6 +102,16 @@ describe('validateShortcut', () => {
     expectRefused('typing', { command: 'file.new', key: 'shift+space', scope: 'queryEditor' })
     expect(expectRefused('taken', { command: 'file.new', key: 'mod+k mod+c', scope: 'queryEditor' }).message).toBe('Ctrl+K Ctrl+C belongs to Comment Selection, which cannot be changed.')
     expectRefused('duplicate', { command: 'query.execute', key: 'f5', scope: 'queryEditor' })
+    // The default-key exemption holds only in the default's own scope: Close's Delete stays a tab key.
+    const noTabDelete = removing('win32', { command: 'file.close', key: 'delete', remove: true })
+    expectRefused('navigation', { command: 'file.close', key: 'delete' }, 'win32', noTabDelete)
+    expect(check({ command: 'file.close', key: 'delete', scope: 'documentTabs' }, 'win32', noTabDelete).verdict).not.toBe('refused')
+    const noZoom = removing('win32', { command: 'view.zoomIn', key: 'mod+=', remove: true })
+    expect(check({ command: 'view.zoomIn', key: 'mod+=' }, 'win32', noZoom).verdict).toBe('ok')
+    // macOS menus take only ⌘ keys from the page, and role keys work only through the menu.
+    expectRefused('role', { command: 'view.zoomIn', key: 'f12' }, 'darwin')
+    expect(check({ command: 'view.zoomIn', key: 'mod+f12' }, 'darwin').verdict).toBe('ok')
+    expect(check({ command: 'view.zoomIn', key: 'f12' }, 'win32').verdict).toBe('ok')
     // findConflicts enumerates at most 12 state keys; a clause reading more cannot be checked.
     const busy = resolveKeybinding('file.open', { key: 'f9', when: 'queryRunning && hasConnection && hasResults && hasActiveDocument && documentBusy && multipleDocuments && editorWordWrap && editorWhitespace && editorLineNumbers && hasBookmarks && anyDocumentDirty && editorOvertype && hasRecentFiles' }, 'win32')!
     expectRefused('complex', { command: 'file.new', key: 'f9' }, 'win32', [busy])
@@ -119,6 +136,16 @@ describe('validateShortcut', () => {
 describe('system keys', () => {
   it('list canonical chords', () => {
     for (const platform of platforms) for (const [chord] of osKeys[platform]) expect(parseKeySpec(chord, platform), `${platform} ${chord}`).toEqual([chord])
+  })
+  it('do not block the rule sets validateShortcut allows', () => {
+    const [shadow] = findConflicts(removing('win32', { command: 'file.new', key: 'f4' }), 'win32')
+    expect(shadow.kind).toBe('shadow')
+    expect(isBlockingConflict(shadow, 'win32')).toBe(false)
+    const altGr = (platform: Platform) => findConflicts([resolveKeybinding('file.new', { key: 'ctrl+alt+n' }, platform)!], platform)
+    expect(altGr('linux')).toMatchObject([{ kind: 'reserved', reason: 'AltGr types characters with Ctrl+Alt' }])
+    expect(altGr('linux').filter(conflict => isBlockingConflict(conflict, 'linux'))).toEqual([])
+    expect(altGr('win32').filter(conflict => isBlockingConflict(conflict, 'win32'))).toHaveLength(1)
+    expect(findConflicts([resolveKeybinding('file.new', { key: 'ctrl+c' }, 'linux')!], 'linux').filter(conflict => isBlockingConflict(conflict, 'linux'))).toHaveLength(1)
   })
   it('refuse AltGr characters on Windows only', () => {
     for (const key of ['n', '1', '=', '[']) {
