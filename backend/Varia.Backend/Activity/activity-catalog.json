@@ -33,7 +33,7 @@
   ],
   "tones": {"blocked":"error","blocking":"warning","departed":"muted","latencyError":"error","latencyWarning":"warning","rollback":"running","system":"muted"},
   "unavailableMessage": "Activity Monitor isn't available for this kind of server.",
-  "variaSessions": [{"kind":"queryTab","label":"Query tab","suffix":""},{"kind":"pool","label":"Varia Object Explorer","suffix":" - Object Explorer"},{"kind":"pool","label":"Varia Scripting","suffix":" - Scripting"},{"kind":"pool","label":"Varia Object Actions","suffix":" - Object Actions"},{"kind":"pool","label":"Varia Activity Monitor","suffix":" - Activity Monitor"},{"kind":"pool","label":"Varia Integration Services","suffix":" - Integration Services"},{"kind":"pool","label":"Varia Integration Services Actions","suffix":" - Integration Services Actions"}],
+  "variaSessions": [{"kind":"queryTab","label":"Query tab","suffix":""},{"kind":"pool","label":"Varia Object Explorer","suffix":" - Object Explorer"},{"kind":"pool","label":"Varia Scripting","suffix":" - Scripting"},{"kind":"pool","label":"Varia Object Search","suffix":" - Object Search"},{"kind":"pool","label":"Varia Object Actions","suffix":" - Object Actions"},{"kind":"pool","label":"Varia Activity Monitor","suffix":" - Activity Monitor"},{"kind":"pool","label":"Varia Integration Services","suffix":" - Integration Services"},{"kind":"pool","label":"Varia Integration Services Actions","suffix":" - Integration Services Actions"}],
   "version": 1,
   "views": ["all","active","blocked","blocking","idleOpenTransaction","rollingBack"],
   "waits": [

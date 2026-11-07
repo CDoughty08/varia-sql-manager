@@ -564,6 +564,7 @@ dialog's database list or a column list, which no tab holds and which shows as "
 | (none) | Query tab | Query tab |
 | " - Object Explorer" | Pool | Varia Object Explorer |
 | " - Scripting" | Pool | Varia Scripting |
+| " - Object Search" | Pool | Varia Object Search |
 | " - Object Actions" | Pool | Varia Object Actions |
 | " - Activity Monitor" | Pool | Varia Activity Monitor |
 | " - Integration Services" | Pool | Varia Integration Services |
@@ -632,7 +633,7 @@ the session too: without it every other session answers `ended`, and nothing is 
 | `changed` | The id now belongs to another session (its login time or host process id differs). Nothing was killed. |
 | `own` | The session Kill itself runs on. Nothing was killed. |
 | `system` | A SQL Server system session: only user sessions can be killed. Nothing was killed. |
-| `varia` | One of this window's own pool sessions (Object Explorer, Scripting, Object Actions, Activity Monitor or Integration Services). Nothing was killed. |
+| `varia` | One of this window's own pool sessions (Object Explorer, Scripting, Object Search, Object Actions, Activity Monitor or Integration Services). Nothing was killed. |
 | `denied` | The login lacks ALTER ANY CONNECTION (sysadmin or processadmin). Nothing was killed. |
 | `failed` | Another error, which the message gives; when the connection broke during KILL, whether the session ended is unknown. |
 

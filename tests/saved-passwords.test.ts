@@ -7,6 +7,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { SavedPasswordStore, savedPasswordMessages } from '../src/main/saved-passwords'
 import { safeStorageCipher, testCipher, type SafeStorageApi, type SecretCipher } from '../src/main/secret-cipher'
 import { ConnectionStore } from '../src/main/connection-store'
+import { connectionLibrary } from '../src/main/connection-library'
 import { credentialBinding, type ConnectionLibrary, type ConnectionProfile } from '../src/shared/connections'
 import type { ConnectionOptions } from '../src/shared/contracts'
 
@@ -335,6 +336,29 @@ describe('secret storage lint', () => {
       expect(text, name).not.toMatch(/safeStorage\./)
     }
     expect(readFileSync(cipher, 'utf8')).not.toMatch(/from 'electron'/)
+  })
+  it('keeps every remembered password when connections.json is invalid, until a later start reads the restored file', async () => {
+    const { store: saved, directory } = await store()
+    const path = join(directory, 'connections.json')
+    const connections = new ConnectionStore(path)
+    const ids = [(await connections.rememberEntry(options)).id, (await connections.rememberEntry({ ...options, database: 'Sales' })).id]
+    for (const id of ids) await saved.set(id, options)
+    const good = await readFile(path, 'utf8')
+    await writeFile(path, '{ not json')
+    const view = await connectionLibrary({ connections, savedPasswords: saved }).load()
+    expect(view.warning).toMatch(/invalid/)
+    expect(view.library.profiles).toEqual([])
+    expect(new Set(view.savedPasswords)).toEqual(new Set(ids))
+    // The run goes on: a new connection writes a fresh library, which still prunes nothing this run.
+    const added = await connectionLibrary({ connections, savedPasswords: saved }).save({ options: { ...options, database: 'New' }, favorite: true })
+    expect(added.library.profiles).toHaveLength(1)
+    expect(new Set((await saved.load()).ids)).toEqual(new Set(ids))
+    // The user restores the quarantined file and starts again: both entries still have their passwords.
+    await writeFile(path, good)
+    const restarted = await connectionLibrary({ connections: new ConnectionStore(path), savedPasswords: saved }).load()
+    expect(restarted.warning).toBeUndefined()
+    expect(new Set(restarted.savedPasswords)).toEqual(new Set(ids))
+    for (const id of ids) expect(await saved.get(id, { ...options, password: '' })).toBe(marker)
   })
   it('keeps passwords out of connections.json while remembering them beside it', async () => {
     const directory = await folder()

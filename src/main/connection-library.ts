@@ -13,7 +13,8 @@ export interface ConnectionLibraryDeps {
  * entry removed, pruned, or moved by Save changes to another server or login loses its password at once.
  */
 export function connectionLibrary(deps: ConnectionLibraryDeps) {
-  const current = async () => (await deps.connections.load()).library
+  // A library read since connections.json was quarantined is not the user's, so it prunes no remembered password.
+  const current = async () => { const read = await deps.connections.load(); return read.trusted === false ? null : read.library }
   // The renderer learns only which entries have a remembered password. A file that cannot be read hides them; it is not
   // a reason to fail the library.
   const view = async (library: ConnectionLibrary): Promise<ConnectionLibraryView & { passwordWarning?: string }> => {

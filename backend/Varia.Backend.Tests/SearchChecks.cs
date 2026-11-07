@@ -499,7 +499,7 @@ internal static class SearchChecks
         static long Costs(params string[] values) => values.Distinct().Sum(StringPool.Cost);
         var reads = 0;
         IndexedObject[] Objects(params string[] definitions) => [.. definitions.Select((text, at) => new IndexedObject("procedure", "systemStoredProcedures", "sys", "sp_" + at, Definition: text, System: true))];
-        Func<Task<IndexedObject[]>> Read(params string[] definitions) => () => { reads++; return Task.FromResult(Objects(definitions)); };
+        Func<CancellationToken, Task<IndexedObject[]>> Read(params string[] definitions) => _ => { reads++; return Task.FromResult(Objects(definitions)); };
         var key = new ResourceKey("16.0.4135.4", 3, 2, DateTime.UnixEpoch, 42, true);
         var first = await catalog.AcquireAsync(key, Read("CREATE PROCEDURE sys.sp_0 AS 1", "CREATE PROCEDURE sys.sp_1 AS 2"));
         var second = await catalog.AcquireAsync(key with { }, Read("never read"));
@@ -513,8 +513,55 @@ internal static class SearchChecks
             && ReferenceEquals(other.Objects[1].Name, first.Objects[1].Name), "two builds' sets hold the names and definitions they share once");
         check(budget.Used == first.Bytes + other.Bytes + Costs("sp_0", "sp_1", "sys", "CREATE PROCEDURE sys.sp_0 AS 1", "CREATE PROCEDURE sys.sp_1 AS 2", "CREATE PROCEDURE sys.sp_1 AS 3"),
             "the budget is charged for distinct texts only");
-        try { await catalog.AcquireAsync(key with { Checksum = 9 }, () => throw new InvalidOperationException("boom")); check(false, "a failed read throws"); }
+        try { await catalog.AcquireAsync(key with { Checksum = 9 }, _ => throw new InvalidOperationException("boom")); check(false, "a failed read throws"); }
         catch (InvalidOperationException) { check(catalog.Sets == 2, "a failed read keeps nothing, so the next build reads again"); }
+
+        // The connection whose build started a shared read stops (or disconnects): another connection waiting for the same set
+        // still gets it, because the read runs under its own lifetime, not the first caller's token.
+        var gated = key with { Checksum = 11 };
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var readStopped = false;
+        using (var starter = new CancellationTokenSource())
+        {
+            var started = catalog.AcquireAsync(gated, async readToken =>
+            {
+                readToken.Register(() => readStopped = true);
+                await release.Task;
+                return Objects("CREATE PROCEDURE sys.sp_0 AS 1");
+            }, token: starter.Token);
+            var waiter = catalog.AcquireAsync(gated with { }, Read("never read"));
+            starter.Cancel();
+            try { await started; check(false, "the stopped build stops waiting"); }
+            catch (OperationCanceledException) { check(!readStopped && catalog.Sets == 3, "stopping the build that started a shared read leaves the read running for the others"); }
+            release.SetResult();
+            var shared = await waiter;
+            check(shared.Objects.Length == 1 && !readStopped && catalog.Sets == 3, "a connection waiting on a shared read the first connection stopped still gets the set");
+            catalog.Release(shared);
+            check(catalog.Sets == 2, "the waiter's reference is the set's only one");
+        }
+        // When every waiter has gone, the read is stopped and kept nowhere, so the next build reads again.
+        var abandon = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using (var only = new CancellationTokenSource())
+        {
+            var lone = catalog.AcquireAsync(key with { Checksum = 12 }, async readToken =>
+            {
+                readToken.Register(() => stopped.TrySetResult());
+                await abandon.Task;
+                return Objects("x");
+            }, token: only.Token);
+            only.Cancel();
+            try { await lone; } catch (OperationCanceledException) { }
+            check(await Task.WhenAny(stopped.Task, Task.Delay(5000)) == stopped.Task && catalog.Sets == 2, "the last waiter leaving stops the shared read and keeps nothing");
+            abandon.SetResult();
+        }
+        // A shared read past its limit answers TimeoutException, not a caller's cancellation.
+        try
+        {
+            await catalog.AcquireAsync(key with { Checksum = 13 }, async readToken => { await Task.Delay(Timeout.Infinite, readToken); return Objects("x"); }, TimeSpan.FromMilliseconds(50));
+            check(false, "a shared read past its limit throws");
+        }
+        catch (TimeoutException) { check(catalog.Sets == 2, "a shared read past its limit times out and keeps nothing"); }
 
         // A connection's index searches its share once, as master's, or as the database a search names.
         var index = new ConnectionIndex(budget, catalog);
