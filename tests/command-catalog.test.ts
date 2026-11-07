@@ -293,7 +293,7 @@ describe('keybinding conflicts', () => {
     expect(kinds([rule('file.new', { key: 'ctrl+c', when: 'outputGridFocus' })])).toEqual([])
     expect(kinds([rule('file.new', { key: 'ctrl+a', when: 'messagesFocus' })])).toEqual([])
     expect(kinds([rule('file.new', { key: 'meta+e', when: 'optionsDialogFocus' }, 'darwin')], 'darwin')).toEqual([])
-    expect(kinds([rule('file.new', { key: 'ctrl+c', when: 'optionsDialogFocus' })])).toEqual([['reserved', 'ctrl+c', 'file.new']])
+    expect(kinds([rule('edit.undo', { key: 'ctrl+c', when: 'optionsDialogFocus', modal: true })])).toEqual([['reserved', 'ctrl+c', 'edit.undo']])
     // Surfaces that hold text fields of their own: the table designer's cell editors and the Activity Monitor's filter.
     for (const when of ['designerFocus', 'activityMonitorFocus', "activePanel == 'explorer'", 'documentTabFocus', 'queryBarFocus']) {
       expect(kinds([rule('file.new', { key: 'ctrl+a', when })]), when).toEqual([['reserved', 'ctrl+a', 'file.new']])
@@ -311,6 +311,15 @@ describe('keybinding conflicts', () => {
     expect(kinds([rule('file.new', { key: 'x', when: 'explorerFocus' })])).toEqual([])
     expect(kinds([rule('file.new', { key: 'x', when: 'editorFocus' })])).toEqual([['typing', 'x', 'file.new']])
     for (const key of ['f6', 'ctrl+shift+x', 'alt+x', 'meta+x', 'pause']) expect(kinds([rule('file.new', { key })]), key).toEqual([])
+  })
+  it('match only modal rules inside a modal dialog', () => {
+    // Options holds the window modal, so a Global Ctrl+E (Execute, say) never reaches it and does not conflict with its search key.
+    const search = rule('options.focusSearch', { key: 'ctrl+e', when: 'optionsDialogFocus', modal: true })
+    expect(kinds([rule('query.execute', { key: 'ctrl+e' }), search])).toEqual([])
+    expect(kinds([rule('edit.undo', { key: 'ctrl+e', modal: true }), search])).toEqual([['overlap', 'ctrl+e', 'options.focusSearch', 'edit.undo']])
+    // A typing key that works only inside the dialog and is not modal never runs, so it types nothing there.
+    expect(kinds([rule('file.new', { key: 'x', when: 'optionsDialogFocus' })])).toEqual([])
+    expect(kinds([rule('edit.undo', { key: 'x', when: 'optionsDialogFocus', modal: true })])).toEqual([['typing', 'x', 'edit.undo']])
   })
   it('keep workbench keys off commands that run behind a modal unless the key is marked modal', () => {
     expect(kinds([rule('edit.undo', { key: 'f6' })])).toEqual([['modal', 'f6', 'edit.undo']])

@@ -8,8 +8,11 @@ import { resolveShortcut, ruleLock, sameChords, shortcutLock, typesText } from '
 import { menuMayShowChords } from './menus'
 import { compileWhen, evaluateWhen, referencedKeys } from './when'
 
-/** Representative places focus can be. Each fixes every focus key; keys it does not list are false or ''. */
-export const focusSamples: readonly { readonly name: string; readonly keys: Partial<FocusKeys> }[] = [
+/**
+ * Representative places focus can be. Each fixes every focus key; keys it does not list are false or ''. A `modal`
+ * sample is inside a modal dialog, where `KeybindingService` matches only rules marked `modal`.
+ */
+export const focusSamples: readonly { readonly name: string; readonly keys: Partial<FocusKeys>; readonly modal?: true }[] = [
   { name: 'editorText', keys: { editorFocus: true, editorTextFocus: true, textInputFocus: true, activePanel: 'editor' } },
   { name: 'editorFindInput', keys: { editorFocus: true, inputFocus: true, textInputFocus: true, activePanel: 'editor' } },
   { name: 'explorerTree', keys: { activePanel: 'explorer', explorerFocus: true } },
@@ -28,8 +31,8 @@ export const focusSamples: readonly { readonly name: string; readonly keys: Part
   { name: 'toolbarSelect', keys: { inputFocus: true, textInputFocus: true } },
   { name: 'queryBarButton', keys: { activePanel: 'editor', queryBarFocus: true } },
   { name: 'queryBarSelect', keys: { activePanel: 'editor', queryBarFocus: true, inputFocus: true, textInputFocus: true } },
-  { name: 'optionsDialog', keys: { optionsDialogFocus: true } },
-  { name: 'optionsSearch', keys: { optionsDialogFocus: true, inputFocus: true, textInputFocus: true } },
+  { name: 'optionsDialog', keys: { optionsDialogFocus: true }, modal: true },
+  { name: 'optionsSearch', keys: { optionsDialogFocus: true, inputFocus: true, textInputFocus: true }, modal: true },
   { name: 'titleBar', keys: {} },
   { name: 'quickInput', keys: { inputFocus: true, textInputFocus: true } },
   { name: 'body', keys: {} }
@@ -49,7 +52,9 @@ export interface Conflict {
 const maxEnumeratedKeys = 12
 const stateKeys = new Set<string>(keysOfScope('state'))
 
-type Context = ReturnType<typeof contextRecord>
+// Marks a context built from a `modal` focus sample; `evaluateWhen` never reads it.
+const inModal = Symbol('inModal')
+type Context = ReturnType<typeof contextRecord> & { readonly [inModal]?: true }
 /**
  * The first focus sample, combined with some assignment of the state keys `rules` read, where `holds` is true. Focus
  * keys come from the samples and static keys from the platform; only state keys vary freely.
@@ -62,11 +67,12 @@ function findContext(rules: readonly ResolvedRule[], platform: Platform, holds: 
     for (const value of contextKeyValues(keys[index])) yield* assignments(index + 1, { ...values, [keys[index]]: value })
   }
   for (const sample of focusSamples) for (const values of assignments(0, {})) {
-    if (holds(contextRecord(platform, { ...sample.keys, ...values } as Partial<ContextKeys>))) return sample.name
+    const context: Context = { ...contextRecord(platform, { ...sample.keys, ...values } as Partial<ContextKeys>), ...(sample.modal ? { [inModal]: true as const } : {}) }
+    if (holds(context)) return sample.name
   }
   return undefined
 }
-const active = (rule: ResolvedRule, context: Context) => !rule.when || evaluateWhen(rule.when, context)
+const active = (rule: ResolvedRule, context: Context) => (!context[inModal] || rule.modal === true) && (!rule.when || evaluateWhen(rule.when, context))
 /**
  * Whether two overlapping rules are a shadow rather than a conflict: both workbench rules, one Global (with or without
  * the typing guard) and the other in a narrower preset scope, which wins (`workbenchRules` lists it first). Returns the
