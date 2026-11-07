@@ -1,5 +1,7 @@
 # Varia SQL Manager
 
+[Client Statistics](docs/client-statistics.md) compares per-execution SqlClient traffic, counters and reply-wait timings in its own output tab.
+
 Varia is a cross-platform desktop workbench for Microsoft SQL Server. It combines a SQL editor, query results, and database management tools in one application. It is under active development.
 
 ## Features

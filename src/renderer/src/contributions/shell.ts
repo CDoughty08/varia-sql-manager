@@ -114,6 +114,7 @@ export function shellContribution({ commands, documents, files, quickInput, conn
     commands.register('window.results', { run: () => host.reveal('results', { raise: true }) }),
     commands.register('window.messages', { run: () => host.reveal('messages', { raise: true }) }),
     commands.register('window.plan', { run: () => host.reveal('plan', { raise: true }) }),
+    commands.register('window.statistics', { run: () => host.reveal('statistics', { raise: true }) }),
     // SSMS's Ctrl+R: hiding the results puts focus in the query editor; showing them leaves focus where it is.
     commands.register('view.toggleResultsPane', { run: () => {
       if (host.toggleOutput() === 'hidden' && documents.getSnapshot().documents.length) documents.focusActive()

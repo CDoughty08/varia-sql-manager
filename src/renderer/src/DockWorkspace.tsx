@@ -429,7 +429,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     const hidden = hiddenOutput.current
     hiddenOutput.current = null
     // Reopened in the reverse of the order they closed in, so each returns beside the one it was closed beside.
-    for (const id of [...hidden?.ids ?? outputPaneIds].reverse()) reveal(id)
+    for (const id of [...hidden?.ids ?? outputPaneIds.filter(id => id !== 'statistics')].reverse()) reveal(id)
     for (const id of hidden?.shown ?? []) selectOutput(id)
     const shown = view && api.getPanel(view) ? view : (hidden?.shown[0] ?? 'results')
     if (api.getPanel(shown)) reveal(shown, options)
@@ -516,7 +516,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     // A popout window's own tabs switch its panels, so an output panel there lists only itself.
     const peers = (id: OutputPaneId) => recordOf(id) ? [id] : api.getPanel(id)?.group.panels.map(panel => panel.id).filter(isOutputPane) ?? []
     const each = <T,>(value: (id: PaneId) => T) => Object.fromEntries(paneIds.map(id => [id, value(id)])) as Record<PaneId, T>
-    shown.set(each(id => showing(api, id)), each(where), { results: peers('results'), messages: peers('messages'), plan: peers('plan') })
+    shown.set(each(id => showing(api, id)), each(where), { results: peers('results'), messages: peers('messages'), plan: peers('plan'), statistics: peers('statistics') })
   }
   useEffect(() => {
     const selector = shown.bindSelector(selectOutput)
