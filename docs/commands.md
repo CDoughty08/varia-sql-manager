@@ -823,7 +823,7 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
 | `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
 
-## Context keys (131)
+## Context keys (132)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -841,6 +841,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `textInputFocus` | boolean | focus | `editorTextFocus \|\| inputFocus`. |
 | `activePanel` | `'explorer'`, `'editor'`, `'output'`, `''` | focus | The pane that holds focus: Object Explorer, the query editor, an output panel (Results, Messages or Execution plan), or '' for none. |
 | `outputGridFocus` | boolean | focus | Focus is in a results grid, which copies its selected cells rather than text. |
+| `messagesFocus` | boolean | focus | Focus is in a Messages view; activePanel is then 'output'. |
 | `searchHitsFocus` | boolean | focus | Focus is on a Search Objects result (the Search Objects tab's or Object Explorer's search), whose Copy copies the object's name. |
 | `designerFocus` | boolean | focus | Focus is in the active table designer; activePanel is then 'editor'. |
 | `queryBarFocus` | boolean | focus | Focus is in the active query's bar (Execute, Cancel and its server and database lists); activePanel is then 'editor'. |
