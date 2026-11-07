@@ -6,7 +6,7 @@ import { documentKinds, type DocumentKind } from '../shared/contracts'
 import { recoveryCapMessage, recoveryLimits, type RecoveryEntry, type RecoveryWrite } from '../shared/files/recovery'
 import { quarantine, readJsonFile, writeBytesAtomic } from './json-file'
 import type { SettingsStore } from './settings-store'
-import { fileKinds, maxSqlFileBytes } from './sql-files'
+import { fileKinds, maxDocumentCharacters } from './sql-files'
 
 const fits = (value: { kind: DocumentKind; text: string }) => value.text.length <= fileKinds[value.kind].maxChars
 const eol = z.enum(['crlf', 'lf'])
@@ -17,7 +17,7 @@ const database = z.string().min(1).max(recoveryLimits.databaseChars)
 const recordId = z.uuid().regex(/^[0-9a-f-]{36}$/, 'An AutoRecover id is a lower-case uuid.')
 /** varia:recovery-write: the query's text, at most its kind's limit, and what the dialog shows about it. */
 export const recoveryWriteSchema = z.object({
-  id: recordId, name, kind: z.enum(documentKinds), fileId: z.uuid().optional(), eol, server: server.optional(), database: database.optional(), text: z.string().max(maxSqlFileBytes)
+  id: recordId, name, kind: z.enum(documentKinds), fileId: z.uuid().optional(), eol, server: server.optional(), database: database.optional(), text: z.string().max(maxDocumentCharacters)
 }).strict().refine(fits, 'The query is too large for AutoRecover.')
 export const recoveryDiscardSchema = z.object({ ids: z.array(recordId).min(1).max(recoveryLimits.discardIds) }).strict()
 export const recoveryTakeSchema = z.object({ id: recordId }).strict()
@@ -26,7 +26,7 @@ export const recoveryTakeSchema = z.object({ id: recordId }).strict()
 const recordSchema = z.object({
   version: z.literal(1), id: recordId, owner: z.object({ instance: z.uuid(), generation: z.int().min(0) }).strict(),
   name, kind: z.enum(documentKinds), path: z.string().min(1).max(recoveryLimits.pathChars).optional(), eol, server: server.optional(), database: database.optional(),
-  savedAt: z.iso.datetime(), text: z.string().max(maxSqlFileBytes)
+  savedAt: z.iso.datetime(), text: z.string().max(maxDocumentCharacters)
 }).strict().refine(fits)
 export type RecoveryRecord = z.infer<typeof recordSchema>
 

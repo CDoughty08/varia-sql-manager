@@ -130,6 +130,10 @@ export const commandCatalog = {
     title: 'Recover Unsaved Queries…', category: 'File', icon: 'history', keywords: ['autorecover', 'recover', 'recovery', 'crash', 'unsaved'], precondition: 'hasRecoveryFiles',
     unavailableHint: 'AutoRecover has nothing to recover.'
   },
+  // Main runs it as Windows ends the session (shut down, restart, log off): a copy of every unsaved query before the process can be ended.
+  'file.autoRecoverNow': {
+    title: 'Save AutoRecover Copies Now', category: 'File', palette: false, allowInModal: true
+  },
   'file.close': {
     title: 'Close Query', category: 'File', icon: 'close', precondition: 'hasActiveDocument && !documentBusy', unavailableHint: openFirst,
     // Delete and Backspace on a focused tab, as Dockview's tabs close; a key pressed on a tab closes that tab.
@@ -247,6 +251,12 @@ export const commandCatalog = {
     title: 'Cancel Executing Query', category: 'Query', icon: 'debug-stop', precondition: 'queryRunning', unavailableHint: 'No query is running in this tab.',
     keybindings: [{ win: 'alt+pause', linux: 'alt+pause' }],
     menus: [{ menu: 'query', group: '1_execute', order: 2, mnemonic: 'c' }, { menu: 'editor.context', group: '2_execute', order: 2, mnemonic: 'n' }]
+  },
+  'query.includeActualPlan': {
+    title: 'Include Actual Execution Plan', category: 'Query', icon: 'execution-plan', keywords: ['statistics', 'xml', 'showplan', 'capture'],
+    precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy', toggled: 'includeActualPlan',
+    keybindings: [{ win: 'ctrl+m', linux: 'ctrl+m', when: 'editorFocus || queryBarFocus' }],
+    menus: [{ menu: 'query', group: '1_execute', order: 3, mnemonic: 'i' }]
   },
   'workbench.showCommands': {
     title: 'Show All Commands', palette: false,

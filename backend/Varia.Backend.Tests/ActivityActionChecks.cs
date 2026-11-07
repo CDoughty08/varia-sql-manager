@@ -77,7 +77,7 @@ internal static class ActivityActionChecks
             "Kill's outcomes, the budgets inside main's 15 s and 30 s deadlines, and the text sizes come from the catalogue");
         var names = Catalog.PoolProgramNames("Varia SQL Manager");
         var long128 = Catalog.PoolProgramNames(new string('a', 120));
-        check(names.Count == 6 && names.Contains("Varia SQL Manager - Object Explorer") && names.Contains("Varia SQL Manager - Activity Monitor")
+        check(names.Count == 7 && names.Contains("Varia SQL Manager - Object Explorer") && names.Contains("Varia SQL Manager - Object Search") && names.Contains("Varia SQL Manager - Activity Monitor")
             && names.Contains("Varia SQL Manager - Object Actions") && !names.Contains("Varia SQL Manager") && long128.All(name => name.Length == 128),
             "Kill refuses this backend's pool sessions by their program names (cut to 128 characters as SqlService names its pools), never its query tabs");
         // Every connection may set its own Application Name: Kill's @pools holds the pool names of all of them, not only the
@@ -86,8 +86,8 @@ internal static class ActivityActionChecks
             applicationNames: ["Varia SQL Manager", "Reporting", new string('b', 120)]);
         var list = new SessionActions(host, new LiveService(host)).PoolList();
         var listed = list.Split('\n');
-        check(list.StartsWith('\n') && list.EndsWith('\n') && listed.Length == 2 + 12 + Catalog.PoolProgramNames(new string('b', 120)).Distinct().Count() && listed.Distinct().Count() == listed.Length - 1 && listed[1..^1].All(name => name.Length is > 0 and <= 128)
-            && listed.Contains("Varia SQL Manager - Object Explorer") && listed.Contains("Reporting - Object Explorer") && listed.Contains("Reporting - Activity Monitor")
+        check(list.StartsWith('\n') && list.EndsWith('\n') && listed.Length == 2 + 2 * names.Count + Catalog.PoolProgramNames(new string('b', 120)).Distinct().Count() && listed.Distinct().Count() == listed.Length - 1 && listed[1..^1].All(name => name.Length is > 0 and <= 128)
+            && listed.Contains("Varia SQL Manager - Object Explorer") && listed.Contains("Reporting - Object Explorer") && listed.Contains("Reporting - Object Search") && listed.Contains("Reporting - Activity Monitor")
             && listed.Contains("Reporting - Integration Services Actions") && Catalog.PoolProgramNames(new string('b', 120)).All(listed.Contains)
             && !listed.Contains("Varia SQL Manager") && !listed.Contains("Reporting"),
             "Kill's @pools lists the pool program names of every connection of this backend, whatever Application Name each set (cut to 128 characters), and no query tab: " + listed.Length);

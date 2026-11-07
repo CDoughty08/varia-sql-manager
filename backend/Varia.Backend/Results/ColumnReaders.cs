@@ -5,6 +5,7 @@ using System.Text;
 using System.Xml;
 using Microsoft.Data.SqlClient;
 using Microsoft.Data.SqlTypes;
+using Varia.Backend.Plans;
 
 namespace Varia.Backend.Results;
 
@@ -40,6 +41,7 @@ internal sealed class ColumnPlan
     // Reused by every xml cell: a fresh sink and feed per cell made a small cell cost about 45 KB instead of 28 KB.
     private CharSink? sink;
     private XmlFeed? feed;
+    private string? firstText;
     // The cell just read: its full characters and bytes, which ReadRow reports to the builder (PageBuilder.Measure); a
     // negative byte count measures nothing (a rowversion read as NULL).
     private long cellChars, cellBytes;
@@ -92,7 +94,7 @@ internal sealed class ColumnPlan
     /// <summary>"xml" or "json" when the set is FOR XML or FOR JSON output, which <see cref="ForXmlCollector"/> joins into
     /// one value; otherwise null.</summary>
     public string? ForXml { get; private init; }
-    /// <summary>Today's rule: a single column named "Microsoft SQL Server 2005 XML Showplan" is an execution plan.</summary>
+    /// <summary>A SQL Server Showplan result returned by the user's own SQL.</summary>
     public bool IsPlan { get; }
     /// <summary>Whether the set has a long column (max types, text, ntext, image, xml, CLR types), whose values can reach
     /// 2 GB. Rows that are not stored are then read past synchronously, on a thread of their own
@@ -102,13 +104,38 @@ internal sealed class ColumnPlan
     /// <summary><see cref="HasLong"/> for a set that has no plan because none of its rows are stored.</summary>
     public static bool HasLongColumns(SqlDataReader reader) => reader.GetColumnSchema().Any(column => column.IsLong == true);
 
+    public static bool MayBeExecutionPlan(SqlDataReader reader) =>
+        reader.FieldCount == 1 && reader.GetName(0).Equals(ShowplanColumn, StringComparison.OrdinalIgnoreCase)
+        && reader.GetDataTypeName(0) == "nvarchar" && reader.GetColumnSchema()[0].IsLong == true;
+
+    /// <summary>Read just enough of a candidate's first row to check its XML root. The normal reader resumes at this offset.</summary>
+    public static string? ReadShowplanPrefix(SqlDataReader reader)
+    {
+        if (reader.IsDBNull(0)) return null;
+        var prefix = new char[2048];
+        var length = (int)reader.GetChars(0, 0, prefix, 0, prefix.Length);
+        return new string(prefix, 0, length);
+    }
+
+    private static bool IsShowplan(string? prefix)
+    {
+        if (string.IsNullOrEmpty(prefix)) return false;
+        try
+        {
+            using var xml = XmlReader.Create(new StringReader(prefix), new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null });
+            return xml.MoveToContent() == XmlNodeType.Element && xml.LocalName == PlanParser.ShowplanName.LocalName
+                && xml.NamespaceURI == PlanParser.ShowplanName.NamespaceName;
+        }
+        catch (XmlException) { return false; }
+    }
+
     /// <param name="cellChars">A lower cap on every value's display text (Peek's Top rows), in UTF-16 code units: a binary value
     /// keeps the bytes whose 0x… text fits. The rest of a longer value is read past as usual.</param>
-    public static ColumnPlan From(SqlDataReader reader, int? cellChars = null)
+    public static ColumnPlan From(SqlDataReader reader, string? prefetchedText = null, int? cellChars = null)
     {
         var count = reader.FieldCount;
         var schema = reader.GetSchemaTable() ?? throw new InvalidOperationException("The result set has no schema.");
-        var isPlan = count == 1 && reader.GetName(0).Equals(ShowplanColumn, StringComparison.OrdinalIgnoreCase);
+        var isPlan = IsShowplan(prefetchedText);
         string? forXml = null;
         var columns = new Column[count];
         var descriptors = new ResultColumn[count];
@@ -140,7 +167,7 @@ internal sealed class ColumnPlan
                 MaxLength: !isLong && size is > 0 and < int.MaxValue && codec is CellCodec.Chars or CellCodec.Bytes ? size : null,
                 Precision: exact ? precision : null, Scale: exact || scaled ? scale : null, Nullable: nullable, Collation: collation?.Info);
         }
-        return new ColumnPlan(columns, descriptors, isPlan, hasLong) { ForXml = forXml };
+        return new ColumnPlan(columns, descriptors, isPlan, hasLong) { ForXml = forXml, firstText = prefetchedText };
     }
 
     private static bool IsCharType(int provider) => provider is (int)SqlDbType.Char or (int)SqlDbType.VarChar or (int)SqlDbType.Text
@@ -222,17 +249,19 @@ internal sealed class ColumnPlan
     public int ReadRow(SqlDataReader reader, PageBuilder builder, Action<string> warn, CancellationToken token = default)
     {
         var truncated = 0;
+        var prefix = firstText;
+        firstText = null;
         for (var i = 0; i < columns.Length; i++)
         {
             var column = columns[i];
-            if (reader.IsDBNull(i)) { builder.AppendNull(); continue; }
+            if (prefix is null && reader.IsDBNull(i)) { builder.AppendNull(); continue; }
             try
             {
                 cellChars = 0;
                 cellBytes = column.Length.FixedBytes;
                 cellExact = true;
                 cellTailFailed = false;
-                if (Read(column, reader, i, builder, token)) truncated++;
+                if (Read(column, reader, i, builder, token, prefix)) truncated++;
                 if (cellBytes >= 0) builder.Measure(cellChars, cellBytes, column.Length.Rule == LengthRule.Recorded, cellExact);
                 // The cell is stored, so it stays; only the column says that some values ended in an error.
                 if (cellTailFailed && !column.TailWarned)
@@ -255,6 +284,7 @@ internal sealed class ColumnPlan
                 }
                 column.Codec = column.Fallback;
             }
+            prefix = null;
         }
         return truncated;
     }
@@ -269,7 +299,7 @@ internal sealed class ColumnPlan
     private static bool IsCellFailure(Exception error) => error is InvalidCastException or OverflowException or FormatException or ArgumentException
         or NotSupportedException or SqlTypeException or FileNotFoundException or FileLoadException or TypeLoadException or InvalidDataException or XmlException;
 
-    private bool Read(Column column, SqlDataReader reader, int i, PageBuilder builder, CancellationToken token)
+    private bool Read(Column column, SqlDataReader reader, int i, PageBuilder builder, CancellationToken token, string? prefix)
     {
         switch (column.Codec)
         {
@@ -300,7 +330,7 @@ internal sealed class ColumnPlan
             case CellCodec.DateTime2: builder.EndFormatted(CellFormat.WriteDateTime2(builder.BeginFormatted(), reader.GetDateTime(i), column.Scale)); return false;
             case CellCodec.DateTimeOffset: builder.EndFormatted(CellFormat.WriteDateTimeOffset(builder.BeginFormatted(), reader.GetDateTimeOffset(i), column.Scale)); return false;
             case CellCodec.Guid: builder.EndFormatted(CellFormat.WriteGuid(builder.BeginFormatted(), reader.GetGuid(i))); return false;
-            case CellCodec.Chars: return Chars(reader, i, column, builder, token);
+            case CellCodec.Chars: return Chars(reader, i, column, builder, token, prefix);
             case CellCodec.Xml: return Xml(reader, i, column.Cap, builder, token);
             case CellCodec.Bytes: return Bytes(reader, i, column.Cap, builder, token);
             // SqlClient reports a NULL rowversion as not null with no bytes; a real one always has 8.
@@ -397,13 +427,14 @@ internal sealed class ColumnPlan
     /// <summary>Keeps at most cap + 1 characters, so a longer value is known to be truncated. The rest of a longer value is
     /// read in chunks into the buffer after the kept prefix, which stays intact (see the class summary); the other chunked
     /// readers below do the same.</summary>
-    private bool Chars(SqlDataReader reader, int i, Column column, PageBuilder builder, CancellationToken token)
+    private bool Chars(SqlDataReader reader, int i, Column column, PageBuilder builder, CancellationToken token, string? prefix)
     {
         var cap = column.Cap;
         var counter = column.Counter;
         counter.Reset();
         var limit = cap + 1;
-        var total = 0;
+        var total = prefix?.Length ?? 0;
+        prefix.AsSpan().CopyTo(chars);
         while (total < limit)
         {
             token.ThrowIfCancellationRequested();

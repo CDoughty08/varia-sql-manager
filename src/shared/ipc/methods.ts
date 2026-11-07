@@ -50,6 +50,7 @@ export const serverFilesDeadlineMs = 15_000
 export const restoreDescribeDeadlineMs = 130_000
 
 export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } = {
+  'plans.parse': { kind: 'unary', lane: 'metadata', deadlineMs: 15_000 },
   'system.health': control,
   // The connect timeout plus 30 s, and 0 waits as long as the provider does; Entra MFA adds the browser sign-in's 3 minutes.
   // Stop (varia:connections-cancel) ends either at any time.

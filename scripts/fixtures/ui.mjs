@@ -459,8 +459,9 @@ export const resultToggle = (page, index = 0) => outputPane(page).getByRole('but
 /** The Messages strip's line under the results, drawn "Messages · 2 · no errors" and named "Messages, 2 messages, no errors",
  *  a button that opens and closes it. */
 export const messagesStrip = page => outputPane(page).getByRole('button', { name: /^Messages, [\d,]+ messages?, / })
-/** The Execution plan view's list of the run's plans. */
-export const planList = page => outputPane(page).getByRole('list', { name: 'Execution plans', exact: true })
+/** The Execution plan view's unified graph and its accessible operator outline. */
+export const planViewer = page => page.getByRole('region', { name: 'Execution plan viewer', exact: true })
+export const planCanvas = page => planViewer(page).getByRole('region', { name: 'Query plan canvas', exact: true })
 export const resultSplitters = page => page.getByRole('separator', { name: /^Resize Result \d+$/ })
 
 // Live grids (LiveGridPane): a grid its owner names, in a frame with the overlay, the error strip and the new-rows button.

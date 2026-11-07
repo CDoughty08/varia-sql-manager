@@ -267,7 +267,10 @@ export class BackendSupervisor {
     if (method === 'query.execute') {
       const parsed = queryResultSchema.safeParse(result)
       if (!parsed.success) throw new BackendError('BACKEND_ERROR', sentences.invalid)
-      return { ...parsed.data, resultSets: parsed.data.resultSets.map(descriptor => stamp(descriptor, connection.generation)), budget: { ...parsed.data.budget, generation: connection.generation } }
+      const { planSets, resultSets, budget, ...summary } = parsed.data
+      return { ...summary, resultSets: resultSets.map(descriptor => stamp(descriptor, connection.generation)),
+        ...planSets ? { planSets: planSets.map(descriptor => stamp(descriptor, connection.generation)) } : {},
+        budget: { ...budget, generation: connection.generation } }
     }
     if (method === 'debug.results.synthesize') return stamp(result as BackendResultDescriptor, connection.generation)
     // Main drops a live stream's results from what the renderer may read by these answers, so they are checked too.

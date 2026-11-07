@@ -17,6 +17,7 @@ const request = <M extends RpcMethod>(method: M, params: RpcMethods[M]['params']
 const connectRequest = <M extends 'connections.connect' | 'connections.databases'>(method: M, params: RpcMethods[M]['params'], context?: ConnectContext): Promise<ApiResult<RpcMethods[M]['result']>> => ipcRenderer.invoke('varia:request', method, params, context)
 
 const api: VariaApi = {
+  parsePlan: xml => request('plans.parse', { xml }),
   platform: process.platform,
   setMenuState: state => { ipcRenderer.send('varia:menu-state', state) },
   runRole: (role, reloadPins) => ipcRenderer.invoke('varia:run-role', reloadPins ? { role, ...reloadPins } : role),

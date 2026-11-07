@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { planParseSchema, planDocumentSchema } from '../shared/plans'
 import type { RpcMethod } from '../shared/contracts'
 import { connectionOptionsSchema } from '../shared/connections'
 import { limits } from '../shared/ipc/wire/protocol'
@@ -16,6 +17,7 @@ const tooLargeScript = 'The script is too large to execute (limit: 1,000,000 cha
 const connectionId = z.uuid()
 const database = name
 export const requestSchemas = {
+  'plans.parse': planParseSchema,
   'system.health': z.object({}).strict(),
   'connections.connect': connectionOptionsSchema,
   'connections.databases': connectionOptionsSchema,
@@ -29,7 +31,7 @@ export const requestSchemas = {
     connectionId, sessionId: z.uuid(), database, sql: z.string().min(1).max(maxScriptCharacters, tooLargeScript), queryId: z.uuid(),
     startLine: z.number().int().min(1).max(1_000_000).optional(),
     maxRows: z.number().int().min(0).max(limits.maxRows), maxResultSets: z.number().int().min(limits.maxResultSets.min).max(limits.maxResultSets.max).optional(),
-    timeoutSeconds: z.number().int().min(0).max(86400), stopOnError: z.boolean().optional()
+    timeoutSeconds: z.number().int().min(0).max(86400), stopOnError: z.boolean().optional(), includeActualPlan: z.boolean().optional()
   }).strict(),
   'query.cancel': z.object({ queryId: z.uuid() }).strict(),
   'query.session.close': z.object({ sessionId: z.uuid(), transaction: z.enum(['commit', 'rollback']).optional() }).strict(),
@@ -55,6 +57,7 @@ export const requestSchemas = {
 const principal = z.string().min(1).max(256).regex(/^[^\p{Cc}\p{Cf}]+$/u)
 /** Answers main checks before the renderer sees them: the backend is trusted, but these come from native code. */
 export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
+  'plans.parse': planDocumentSchema,
   'connections.identity': z.object({ principal: principal.optional() }).strict(),
   // Steps carry SQL Server's text and names: bounded here as in C# (ActionSteps.Bound).
   'actions.execute': actionExecuteResultSchema

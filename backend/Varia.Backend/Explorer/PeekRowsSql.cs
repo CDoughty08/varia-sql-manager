@@ -59,7 +59,7 @@ internal static partial class PeekRowsSql
     /// <paramref name="columns"/> columns, each value as the grid shows it, cut to <paramref name="cellChars"/>.</summary>
     public static async Task<PeekRowsResult> ReadAsync(SqlDataReader reader, int rows, int columns, int cellChars, CancellationToken token)
     {
-        var plan = ColumnPlan.From(reader, cellChars);
+        var plan = ColumnPlan.From(reader, cellChars: cellChars);
         var shown = Math.Min(columns, plan.Columns.Count);
         var names = plan.Columns.Take(shown).Select(column => new PeekRowsColumn(string.IsNullOrEmpty(column.Name) ? ResultTextWriter.NoColumnName : column.Name, column.DataType)).ToList();
         var more = plan.Columns.Count > shown ? plan.Columns.Count - shown : (int?)null;

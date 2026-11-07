@@ -13,16 +13,20 @@ function prune(library: ConnectionLibrary) {
 }
 export class ConnectionStore {
   private writes: Promise<unknown> = Promise.resolve()
+  /** The file was quarantined this run: the library read since is not the one the user had, so nothing keyed by its entry
+   *  ids (remembered passwords) may be pruned against it until the next start, when the user may have restored the file. */
+  private quarantined = false
   constructor(private path: string) {}
-  private async read(): Promise<{ library: ConnectionLibrary; warning?: string }> {
+  private async read(): Promise<{ library: ConnectionLibrary; warning?: string; trusted: boolean }> {
     const read = await readJsonFile(this.path, limit)
-    if (read.kind === 'missing') return { library: { version: 1, profiles: [] } }
+    if (read.kind === 'missing') return { library: { version: 1, profiles: [] }, trusted: !this.quarantined }
     if (read.kind === 'ok') {
       const parsed = connectionLibrarySchema.safeParse(read.value)
-      if (parsed.success) return { library: parsed.data }
+      if (parsed.success) return { library: parsed.data, trusted: !this.quarantined }
     }
     await quarantine(this.path)
-    return { library: { version: 1, profiles: [] }, warning: 'The saved connection library was invalid. Its original file was preserved.' }
+    this.quarantined = true
+    return { library: { version: 1, profiles: [] }, warning: 'The saved connection library was invalid. Its original file was preserved.', trusted: false }
   }
   async load() { await this.writes; return this.read() }
   private change<T = undefined>(update: (value: ConnectionLibrary) => T): Promise<{ library: ConnectionLibrary; value: T }> {

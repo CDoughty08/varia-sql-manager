@@ -5,6 +5,21 @@ import { gridLimits } from '../src/renderer/src/grid/constants'
 import { documentFixture, deferred, TestEditor, type SaveResponse } from './fixtures/documents'
 
 describe('query documents', () => {
+  it('never saves an opening plan as a partial file, and a reload cancels its old pending chunks', async () => {
+    const { documents, model, api, frames, frame } = documentFixture()
+    const file = { id: 'plan-file', path: 'C:/large.sqlplan', name: 'large.sqlplan', encoding: 'utf8' as const, readOnly: false }
+    const value = documents.openText({ name: file.name, text: 'x'.repeat(gridLimits.documentChunk * 3), kind: 'sqlplan', file })
+    expect(documents.savable(value.id)).toBe(false)
+    const saving = documents.save(value.id)
+    await Promise.resolve()
+    expect(api.saveSqlFile).not.toHaveBeenCalled()
+    documents.reload(value.id, '<ShowPlanXML/>', 'lf', file)
+    expect(await saving).toBe(true)
+    expect(api.saveSqlFile.mock.calls[0][0].content).toBe('<ShowPlanXML/>')
+    while (frames.length) frame()
+    expect(model(value.id).getValue()).toBe('<ShowPlanXML/>')
+    expect(documents.savable(value.id)).toBe(true)
+  })
   it('marks edits dirty and clears the marker when undo returns to saved content', () => {
     const { documents, model } = documentFixture()
     const tab = documents.create('query.sql', 'SELECT 1', 'master')
@@ -125,6 +140,49 @@ describe('query documents', () => {
     documents.focusActive()
     documents.showIn(first.asEditor(), later.id)
     expect(first.focused).toBe(1)
+  })
+  it('focuses the visible plan view and waits for it even when its hidden editor already shows the model', () => {
+    const { documents } = documentFixture()
+    const editor = new TestEditor()
+    const plan = documents.openText({ name: 'plan.sqlplan', text: '<ShowPlanXML/>', kind: 'sqlplan' })
+    documents.showIn(editor.asEditor(), plan.id)
+    let ready = false
+    const focused: string[] = []
+    const binding = documents.useTextFocus(id => { if (!ready) return false; focused.push(id); return true })
+    documents.focusActive()
+    documents.showIn(editor.asEditor(), plan.id)
+    expect(editor.focused).toBe(0)
+    expect(focused).toEqual([])
+    ready = true
+    documents.showIn(editor.asEditor(), plan.id)
+    expect(focused).toEqual([plan.id])
+    // A completed focus request stays completed when the same panel mounts again.
+    documents.showIn(editor.asEditor(), plan.id)
+    expect(focused).toEqual([plan.id])
+    documents.focusActive()
+    expect(focused).toEqual([plan.id, plan.id])
+    binding.dispose()
+    documents.focusActive()
+    expect(editor.focused).toBe(1)
+  })
+  it('drops a deferred view focus when another document is chosen or focus leaves the editor area', () => {
+    const { documents } = documentFixture()
+    const editor = new TestEditor()
+    const first = documents.create('first.sql', '', 'master'), second = documents.create('second.sql', '', 'master')
+    let ready = false
+    const focused: string[] = []
+    documents.useTextFocus(id => { if (!ready) return false; focused.push(id); return true })
+    documents.focusActive()
+    documents.activate(first.id)
+    ready = true
+    documents.showIn(editor.asEditor(), second.id)
+    expect(focused).toEqual([])
+    ready = false
+    documents.focusActive()
+    documents.dropPendingFocus()
+    ready = true
+    documents.showIn(editor.asEditor(), first.id)
+    expect(focused).toEqual([])
   })
   it('hands a closing active document over to the successor its editor group names, and to the next in order without one', async () => {
     const { documents } = documentFixture()
@@ -285,6 +343,7 @@ describe('query documents', () => {
     const text = 'a'.repeat(first - 1) + '😀' + 'b'.repeat(chunk - 3) + '\r\n' + 'c'.repeat(2 * chunk + 10)
     const changes: boolean[] = []
     const value = documents.openText({ name: 'big.xml', text, kind: 'xml' })
+    expect(documents.isFilling(value.id)).toBe(true)
     documents.subscribe(() => changes.push(documents.get(value.id)!.dirty))
     expect(model(value.id).getValueLength()).toBe(first - 1)
     expect(frames).toHaveLength(1)
@@ -295,6 +354,7 @@ describe('query documents', () => {
     expect(model(value.id).getValueLength()).toBe(first + 2 * chunk - 2)
     expect(documents.get(value.id)?.dirty).toBe(false)
     while (frames.length) frame()
+    expect(documents.isFilling(value.id)).toBe(false)
     expect(model(value.id).getValue() === text).toBe(true)
     expect(documents.get(value.id)).toMatchObject({ dirty: false, savedVersionId: model(value.id).getAlternativeVersionId() })
     expect(changes.every(dirty => !dirty)).toBe(true)
@@ -315,6 +375,27 @@ describe('query documents', () => {
     frame()
     expect(frames).toHaveLength(0)
     expect(model(closed.id).getValueLength()).toBe(gridLimits.documentFirstChunk)
+  })
+  it('saves a value still filling only once its last chunk is in, so it never writes part of it and marks it saved', async () => {
+    const { documents, model, frames, frame, api } = documentFixture()
+    const text = 'x'.repeat(3 * gridLimits.documentChunk)
+    const value = documents.openText({ name: 'big.json', text, kind: 'json' })
+    api.saveSqlFile.mockResolvedValue({ ok: true, value: { id: 'f1', name: 'big.json', path: 'C:/big.json', encoding: 'utf8', readOnly: false } })
+    const saving = documents.save(value.id)
+    await Promise.resolve()
+    expect(api.saveSqlFile).not.toHaveBeenCalled()
+    while (frames.length) frame()
+    expect(await saving).toBe(true)
+    expect(api.saveSqlFile).toHaveBeenCalledTimes(1)
+    expect(api.saveSqlFile.mock.calls[0][0].content.length).toBe(text.length)
+    expect(documents.get(value.id)).toMatchObject({ dirty: false, savedVersionId: model(value.id).getAlternativeVersionId() })
+    // A value closed while it fills ends the wait without writing anything.
+    const closed = documents.openText({ name: 'closed.json', text, kind: 'json' })
+    const abandoned = documents.save(closed.id)
+    await documents.close(closed.id)
+    frame()
+    expect(await abandoned).toBe(false)
+    expect(api.saveSqlFile).toHaveBeenCalledTimes(1)
   })
   it('shows a large value without bracket matching or bracket colours, and turns matching back on for the others', () => {
     const { documents, model } = documentFixture()

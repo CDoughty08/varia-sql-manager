@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (234)
+## Commands (236)
 
 ### File
 
@@ -23,6 +23,7 @@ keys it uses are listed below.
 | Open Recent File… | `file.openRecent` | — | — | — | `hasRecentFiles && !documentBusy` | File › Recent Files › each recent file |
 | Clear Recent Files | `file.clearRecent` | — | — | — | `hasRecentFiles` | File › Recent Files › Clear Recent Files |
 | Recover Unsaved Queries… | `file.recoverUnsaved` | — | — | — | `hasRecoveryFiles` | — |
+| Save AutoRecover Copies Now (not in the palette) | `file.autoRecoverNow` | — | — | — | Always | — |
 | Close Query | `file.close` | Ctrl+W, Ctrl+F4, Delete (`documentTabFocus && !inputFocus`), Backspace (`documentTabFocus && !inputFocus`) | Ctrl+W, Ctrl+F4, Delete (`documentTabFocus && !inputFocus`), Backspace (`documentTabFocus && !inputFocus`) | ⌘W, ⌦ (`documentTabFocus && !inputFocus`), ⌫ (`documentTabFocus && !inputFocus`) | `hasActiveDocument && !documentBusy` | File › Close Query; Query tab context menu › Close |
 | Close All But This | `file.closeOthers` | — | — | — | `multipleDocuments && !documentBusy` | Query tab context menu › Close All But This |
 | Close All | `file.closeAll` | — | — | — | `hasActiveDocument && !documentBusy` | Window › Close All Documents; Query tab context menu › Close All |
@@ -122,6 +123,7 @@ keys it uses are listed below.
 | --- | --- | --- | --- | --- | --- | --- |
 | Execute | `query.execute` | F5 (`editorFocus \|\| queryBarFocus`), Ctrl+Enter (`editorFocus \|\| queryBarFocus`), Ctrl+E (`editorFocus \|\| queryBarFocus`) | F5 (`editorFocus \|\| queryBarFocus`), Ctrl+Enter (`editorFocus \|\| queryBarFocus`), Ctrl+E (`editorFocus \|\| queryBarFocus`) | F5 (`editorFocus \|\| queryBarFocus`), ⌘↩ (`editorFocus \|\| queryBarFocus`) | `activeDocumentIsQuery && !queryRunning && !documentBusy && (activeDocumentConnected \|\| (backendReady && !activeConnectionLost))` | Query › Execute; Editor context menu › Execute |
 | Cancel Executing Query | `query.cancel` | Alt+Pause | Alt+Pause | — | `queryRunning` | Query › Cancel Executing Query; Editor context menu › Cancel Executing Query |
+| Include Actual Execution Plan | `query.includeActualPlan` | Ctrl+M (`editorFocus \|\| queryBarFocus`) | Ctrl+M (`editorFocus \|\| queryBarFocus`) | — | `activeDocumentIsQuery && !queryRunning && !documentBusy`; checked when `includeActualPlan` | Query › Include Actual Execution Plan |
 | Change Connection… | `query.changeConnection` | — | — | — | `hasActiveDocument && activeDocumentIsQuery && !queryRunning && !documentBusy` | Query › Connection › Change Connection… |
 | Disconnect | `query.disconnect` | — | — | — | `activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy` | Query › Connection › Disconnect |
 | Disconnect All Queries | `query.disconnectAll` | — | — | — | `anyDocumentConnected && !documentBusy` | Query › Connection › Disconnect All Queries |
@@ -464,6 +466,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `0_connection` | Change **D**atabase… | `query.changeDatabase` | Always |
 | `1_execute` | E**x**ecute | `query.execute` | Always |
 | `1_execute` | **C**ancel Executing Query | `query.cancel` | Always |
+| `1_execute` | **I**nclude Actual Execution Plan | `query.includeActualPlan` | Always |
 
 #### Query › Connection
 
@@ -794,7 +797,7 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 | `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
 | `8_view` | **P**ause | `ssis.pauseOperations` | Always |
 
-## Context keys (128)
+## Context keys (129)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -857,6 +860,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `hasLostConnection` | boolean | state | A connection was lost when the SQL backend restarted and has not been reconnected or removed. |
 | `activeConnectionLost` | boolean | state | The active query's connection was lost when the SQL backend restarted. |
 | `queryRunning` | boolean | state | The active query is running. |
+| `includeActualPlan` | boolean | state | The active query will capture actual execution plans. |
 | `hasResults` | boolean | state | The active query has result sets, and they were not closed (Close Results) or lost with a run the SQL backend stopped. |
 | `anyDocumentConnected` | boolean | state | Some open query's server is connected. |
 | `outputPaneVisible` | boolean | state | An output panel (Results, Messages or Execution plan) is open and showing: its tab is selected, and no other panel is maximized. |

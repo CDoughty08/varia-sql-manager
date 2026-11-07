@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { closeAction, mergeCloseIntent } from '../src/main/close-intent'
+import { closeAction, holdsSessionEnd, mergeCloseIntent } from '../src/main/close-intent'
 
 describe('closing the window', () => {
   it('closes only the window on macOS, which keeps the app running, unless the user quit', () => {
@@ -18,5 +18,9 @@ describe('closing the window', () => {
     expect(mergeCloseIntent('window', 'quit')).toBe('quit')
     expect(mergeCloseIntent('quit', 'window')).toBe('quit')
     expect(closeAction('darwin', mergeCloseIntent(mergeCloseIntent(undefined, 'window'), 'quit'))).toBe('quit')
+  })
+  it('holds a Windows session end while the page closes, unless Windows will not wait', () => {
+    for (const reasons of [['shutdown'], ['logoff'], ['close-app'], [], undefined]) expect(holdsSessionEnd(reasons), String(reasons)).toBe(true)
+    expect(holdsSessionEnd(['shutdown', 'critical'])).toBe(false)
   })
 })

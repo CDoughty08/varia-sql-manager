@@ -39,7 +39,7 @@ describe('menu model', () => {
       expect(outline('edit.intellisense', platform)).toEqual(['edit.insertSnippet', 'edit.surroundWith'])
       expect(outline('view', platform)).toEqual(['workbench.showCommands', 'workbench.quickOpen', 'workbench.search', 'explorer.searchObjects', '-', 'layout.save', 'layout.load', 'layout.reset', '-', 'activity.open', 'ssis.allOperations', '-', 'submenu:view.theme', '-',
         'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', '-', 'developer.reloadWindow', 'developer.toggleDevTools'])
-      expect(outline('query', platform)).toEqual(['submenu:query.connection', 'query.changeDatabase', '-', 'query.execute', 'query.cancel'])
+      expect(outline('query', platform)).toEqual(['submenu:query.connection', 'query.changeDatabase', '-', 'query.execute', 'query.cancel', 'query.includeActualPlan'])
       expect(raw('query', platform)).toEqual(outline('query', platform))
       expect(outline('query.connection', platform)).toEqual(['connection.connect@query.connection', 'query.disconnect', 'query.disconnectAll', 'connection.reconnect@query.connection', '-', 'query.changeConnection', 'connection.environment'])
       expect(outline('theme', platform)).toEqual(['preferences.colorTheme'])
@@ -329,6 +329,8 @@ describe('menu state', () => {
       'explorer.scriptAs', 'explorer.modify', 'explorer.peek', 'explorer.cancelScripting', 'explorer.copyName', 'output.copy', 'output.copyWithHeaders', 'output.selectAll', 'backend.restart',
       'connection.removeLost', 'explorer.stop', 'explorer.collapseAll', 'explorer.filter', 'explorer.focusSearch', 'explorer.removeFilter', 'window.switchPane',
       'output.saveResultsAs', 'output.closeResults', 'output.openValue', 'editor.toggleOvertype', 'file.openRecent', 'file.clearRecent', 'file.recoverUnsaved', 'editor.toggleLineNumbers',
+      // Main runs AutoRecover's save as Windows ends the session; no menu shows it.
+      'file.autoRecoverNow',
       // Toasts are reached from the palette, as in VS Code.
       'notifications.focus', 'notifications.clearAll',
       // Download Update is offered by the status bar and its toast while Automatically download updates is off.
@@ -362,7 +364,7 @@ describe('menu state', () => {
       const placed = commandDescriptor(id).menus?.some(placement => nativeMenuIds.includes(placement.menu)) ?? false
       expect(menuCommandIds.includes(id), id).toBe(placed && !commandDescriptor(id).role)
     }
-    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'explorer.groupBySchema', 'ssis.pauseOperations', 'editor.toggleWordWrap', 'editor.toggleOvertype', 'editor.toggleWhitespace', 'editor.toggleLineNumbers', 'activity.togglePause', 'activity.toggleSplit', 'output.showSpaces', 'output.showAllWhitespace', 'window.togglePanelTabs'])
+    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'query.includeActualPlan', 'explorer.groupBySchema', 'ssis.pauseOperations', 'editor.toggleWordWrap', 'editor.toggleOvertype', 'editor.toggleWhitespace', 'editor.toggleLineNumbers', 'activity.togglePause', 'activity.toggleSplit', 'output.showSpaces', 'output.showAllWhitespace', 'window.togglePanelTabs'])
     // Main checks only toggles the schema names.
     expect(menuStateSchema.safeParse({ disabled: [], checked: ['editor.toggleWhitespace', 'editor.toggleLineNumbers'] }).success).toBe(true)
   })

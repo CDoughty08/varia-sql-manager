@@ -29,47 +29,94 @@ internal sealed class ResourceCatalog(StringPool pool, long keepFree = 0)
     private readonly object gate = new();
     private readonly Dictionary<ResourceKey, Entry> sets = [];
 
-    private sealed class Entry(Task<ResourceSet> load)
+    private sealed class Entry(CancellationTokenSource lifetime)
     {
-        public Task<ResourceSet> Load { get; } = load;
+        /// <summary>The shared read's own lifetime: its limit, or the last waiter leaving. No caller's token stops it, so a
+        /// connection that stops its build (or disconnects) never aborts another's wait.</summary>
+        public CancellationTokenSource Lifetime { get; } = lifetime;
+        public TaskCompletionSource<ResourceSet> Load { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        /// <summary>References: callers waiting or holding the set.</summary>
         public int Refs;
+        /// <summary>The read finished and its set is charged to the pool (under the gate).</summary>
+        public ResourceSet? Shared;
+        /// <summary>Every waiter left before the read finished: its result is not kept.</summary>
+        public bool Abandoned;
     }
 
     /// <summary>Sets held (the checks read it).</summary>
     public int Sets { get { lock (gate) return sets.Count; } }
 
     /// <summary>The set for <paramref name="key"/>, read by <paramref name="read"/> only when no connection holds it (or is reading
-    /// it); a caller that shares a read waits for it. Each successful call takes a reference that <see cref="Release"/> gives back.</summary>
-    public async Task<ResourceSet> AcquireAsync(ResourceKey key, Func<Task<IndexedObject[]>> read)
+    /// it); a caller that shares a read waits for it. The read runs under its own token, limited to <paramref name="limit"/> and
+    /// cancelled only when every caller waiting for it has stopped (<paramref name="token"/>); a read past its limit throws
+    /// <see cref="TimeoutException"/>. Each successful call takes a reference that <see cref="Release"/> gives back.</summary>
+    public async Task<ResourceSet> AcquireAsync(ResourceKey key, Func<CancellationToken, Task<IndexedObject[]>> read, TimeSpan? limit = null, CancellationToken token = default)
     {
-        TaskCompletionSource<ResourceSet>? reading = null;
+        token.ThrowIfCancellationRequested();
         Entry entry;
+        var start = false;
         lock (gate)
         {
             if (!sets.TryGetValue(key, out entry!))
             {
-                reading = new(TaskCreationOptions.RunContinuationsAsynchronously);
-                entry = new Entry(reading.Task);
+                entry = new Entry(new CancellationTokenSource());
+                if (limit is { } bound) entry.Lifetime.CancelAfter(bound);
                 sets[key] = entry;
+                start = true;
             }
             entry.Refs++;
         }
-        if (reading is not null)
-        {
-            try { reading.SetResult(Share(key, await read())); }
-            catch (Exception error)
-            {
-                // A failed read is not kept: the next build reads again.
-                lock (gate) if (sets.TryGetValue(key, out var current) && ReferenceEquals(current, entry)) sets.Remove(key);
-                reading.SetException(error);
-            }
-        }
-        try { return await entry.Load; }
+        if (start) _ = RunAsync(key, entry, read);
+        try { return await entry.Load.Task.WaitAsync(token); }
         catch
         {
-            lock (gate) entry.Refs--;
+            CancellationTokenSource? stop = null;
+            lock (gate)
+            {
+                if (--entry.Refs == 0 && entry.Shared is null && !entry.Abandoned)
+                {
+                    // The last waiter left a read still running: stop it and let the next build read again.
+                    entry.Abandoned = true;
+                    if (sets.TryGetValue(key, out var current) && ReferenceEquals(current, entry)) sets.Remove(key);
+                    stop = entry.Lifetime;
+                }
+                else if (entry.Refs == 0 && entry.Shared is { } set && sets.TryGetValue(key, out var current) && ReferenceEquals(current, entry))
+                {
+                    // The read finished as the last waiter left: nobody holds the set.
+                    sets.Remove(key);
+                    Drop(set);
+                }
+            }
+            try { stop?.Cancel(); } catch (ObjectDisposedException) { }
             throw;
         }
+    }
+
+    /// <summary>Runs the shared read and completes <see cref="Entry.Load"/>; it never throws.</summary>
+    private async Task RunAsync(ResourceKey key, Entry entry, Func<CancellationToken, Task<IndexedObject[]>> read)
+    {
+        try
+        {
+            var objects = await read(entry.Lifetime.Token);
+            lock (gate)
+            {
+                if (entry.Abandoned) throw new OperationCanceledException(entry.Lifetime.Token);
+                entry.Shared = Share(key, objects);
+            }
+            entry.Load.SetResult(entry.Shared);
+        }
+        catch (Exception error)
+        {
+            // A failed read is not kept: the next build reads again.
+            bool abandoned;
+            lock (gate)
+            {
+                abandoned = entry.Abandoned;
+                if (sets.TryGetValue(key, out var current) && ReferenceEquals(current, entry)) sets.Remove(key);
+            }
+            entry.Load.SetException(!abandoned && entry.Lifetime.IsCancellationRequested ? new TimeoutException("The shared read took longer than its limit.", error) : error);
+        }
+        finally { entry.Lifetime.Dispose(); }
     }
 
     /// <summary>Gives back one reference; the last one drops the set and its references to pooled texts.</summary>
@@ -77,12 +124,17 @@ internal sealed class ResourceCatalog(StringPool pool, long keepFree = 0)
     {
         lock (gate)
         {
-            if (!sets.TryGetValue(set.Key, out var entry) || !entry.Load.IsCompletedSuccessfully || !ReferenceEquals(entry.Load.Result, set)) return;
+            if (!sets.TryGetValue(set.Key, out var entry) || !ReferenceEquals(entry.Shared, set)) return;
             if (--entry.Refs > 0) return;
             sets.Remove(set.Key);
-            pool.Budget.Release(set.Bytes);
-            pool.Release(set.Objects.SelectMany(Texts));
+            Drop(set);
         }
+    }
+
+    private void Drop(ResourceSet set)
+    {
+        pool.Budget.Release(set.Bytes);
+        pool.Release(set.Objects.SelectMany(Texts));
     }
 
     /// <summary>The texts of an object a set holds one pool reference to each.</summary>

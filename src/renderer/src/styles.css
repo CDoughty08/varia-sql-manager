@@ -517,12 +517,18 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .query-status-server { flex-shrink: 1000000; }
 .query-status-login { flex-shrink: 1000; }
 .query-status-database { flex-shrink: 1; }
-/* A query's own bar: Execute and Cancel, then the connection pill at the right. The bar is a size container: a narrow
+/* A query's own bar: Execute, Cancel and Actual Plan, then the connection pill at the right. The bar is a size container: a narrow
    editor first drops the key and the button words, then the lists give up width, then a long environment label is cut
    short, and the pill never wraps. Its own size keeps the tag's 12em as wide as elsewhere. */
 .query-bar { display: flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-bar); padding: 0 var(--varia-space-2); flex-shrink: 0; min-width: 0; overflow: hidden; container-type: inline-size; font-size: var(--varia-size-sm); background: var(--varia-editor-background); border-bottom: 1px solid var(--varia-editorGroup-border); }
+/* Activating a sibling editor group must leave its controls under the pointer. */
+.query-bar-spacer { flex: 0 0 var(--varia-bar); }
 .query-bar-action { display: inline-flex; align-items: center; gap: 6px; height: var(--varia-control); padding: 0 10px; flex-shrink: 0; }
 .query-bar-action.execute kbd { color: inherit; border-color: currentColor; }
+.query-bar .actual-plan-toggle[aria-pressed="true"], .toolbar .actual-plan-toggle[aria-pressed="true"] {
+  background: var(--varia-list-activeSelectionBackground);
+  color: var(--varia-list-activeSelectionForeground);
+}
 .query-connection { display: flex; align-items: center; gap: var(--varia-space-1); flex: 0 1 auto; min-width: 0; height: var(--varia-control); margin-left: auto; padding: 0 var(--varia-space-0) 0 var(--varia-space-2); background: var(--varia-input-background); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); }
 /* The connection colour as the history list draws it, a short bar at the pill's start. */
 .query-connection .connection-swatch { height: 14px; }
@@ -536,8 +542,18 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
    shrink weight has them give way, down to their minimum, before the environment tag. */
 .query-connection select { flex: 0 1000 auto; min-width: 64px; max-width: 220px; height: 100%; padding: 0 2px; background: var(--varia-input-background); border: 0; text-overflow: ellipsis; }
 .query-connection select:focus-visible { outline-offset: 0; }
-@container (max-width: 520px) { .query-bar-action.execute kbd { display: none; } }
-@container (max-width: 400px) { .query-bar-label { display: none; } .query-bar-action { padding: 0 6px; } }
+@container (max-width: 520px) {
+  .query-bar-action.execute kbd { display: none; }
+  .query-bar-action.actual-plan-toggle .query-bar-label { display: none; }
+}
+@container (max-width: 400px) {
+  .query-bar-label { display: none; }
+  .query-bar-action { padding: 0 4px; }
+  .query-connection { gap: var(--varia-space-0); padding-left: var(--varia-space-1); }
+}
+@container (min-width: 310px) {
+  .query-bar-environment:has(.environment-tag:not([data-custom])) { flex-shrink: 0; }
+}
 @media (forced-colors: active) { .query-connection .connection-swatch { forced-color-adjust: none; } .query-connection { border-color: CanvasText; } }
 .editor-container { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
 .editor-loading { padding: 30px; color: var(--varia-emptyState-foreground); }
@@ -687,14 +703,59 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .messages-strip-facts { margin-left: 4px; font-variant-numeric: tabular-nums; }
 .messages-strip-facts[data-errors] { color: var(--varia-errorForeground); }
 .messages-strip .messages { flex: 1 1 auto; padding: 2px 20px 8px; }
-/* The Execution plan view: the run's plans, each opened as a .sqlplan document. */
-.plan-list { flex: 1; min-height: 0; margin: 0; padding: 4px 12px; overflow: auto; list-style: none; }
-.plan-item { display: flex; align-items: center; gap: 8px; min-height: 32px; border-bottom: 1px solid var(--varia-panel-border); color: var(--varia-foreground); font-size: var(--varia-size-sm); }
-.plan-name { font-weight: 600; }
-.plan-facts { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
-.plan-actions { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; gap: 4px; }
-.plan-actions button { padding: 2px 8px; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); color: var(--varia-foreground); font-size: var(--varia-size-xs); }
-.plan-more { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+/* A batch has one canvas and one camera. Only the independent outline and properties can scroll. */
+.plan-viewer { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; background: var(--varia-panel-background); color: var(--varia-foreground); font-size: var(--varia-size-sm); }
+.plan-document-tools, .plan-tools { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--varia-panel-border); }
+.plan-tools button, .plan-document-tools button { padding: 4px 8px; font-size: var(--varia-size-xs); }
+.plan-tools label { display: flex; align-items: center; gap: 4px; }
+.plan-tools select { min-width: 80px; max-width: 180px; font-size: var(--varia-size-xs); }
+.plan-tools-fact { margin-left: auto; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.plan-document-tools button[aria-pressed="true"], .plan-tools button[aria-pressed="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); transition: none; }
+.plan-body { display: flex; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+.plan-outline { display: flex; flex: 0 1 220px; flex-direction: column; min-width: 120px; min-height: 0; padding: 8px 0 0; border-right: 1px solid var(--varia-panel-border); }
+.plan-outline > input { min-width: 0; width: calc(100% - 16px); margin: 0 8px 8px; box-sizing: border-box; font-size: var(--varia-size-xs); }
+.plan-warning-filter { display: flex; align-items: center; gap: 4px; padding: 0 8px; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.plan-outline-summary { padding: 8px; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.plan-operator-tree { position: relative; flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.plan-operator-item { position: absolute; left: 0; right: 0; display: flex; flex-direction: column; justify-content: center; padding: 0 8px; cursor: pointer; box-sizing: border-box; }
+.plan-operator-item span, .plan-operator-item small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.plan-operator-item small { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.plan-operator-item[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.plan-canvas-shell { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.plan-canvas { position: absolute; inset: 0; overflow: hidden; touch-action: none; cursor: grab; }
+.plan-canvas[data-operator-hover]:not(:active) { cursor: pointer; }
+.plan-canvas:active { cursor: grabbing; }
+.plan-canvas canvas { display: block; }
+.plan-canvas-state { position: absolute; inset: 0; display: flex; background: var(--varia-panel-background); }
+.plan-hover-card { position: fixed; left: 0; top: 0; z-index: 12000; box-sizing: border-box; width: min(288px, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow: auto; overscroll-behavior: contain; padding: 10px 12px; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border: 1px solid var(--varia-widget-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); user-select: text; overflow-wrap: anywhere; }
+.plan-hover-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.plan-hover-heading strong { font-size: var(--varia-size-md); line-height: var(--varia-line-md); }
+.plan-hover-heading span { flex-shrink: 0; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-hover-heading span, .plan-hover-logical, .plan-hover-note, .plan-hover-card dt { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.plan-hover-object { margin-top: 4px; font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); }
+.plan-hover-card dl, .plan-hover-note { margin: 8px 0 0; }
+.plan-hover-card dd { margin: 0; font-variant-numeric: tabular-nums; }
+.plan-hover-rows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.plan-hover-rows > div { display: flex; flex-direction: column; justify-content: space-between; padding: 6px 8px; border-radius: var(--varia-radius-sm); background: var(--varia-input-background); }
+.plan-hover-rows dd { font-size: var(--varia-size-md); line-height: var(--varia-line-md); font-weight: 600; }
+.plan-hover-metrics > div { display: flex; justify-content: space-between; gap: 8px; }
+.plan-hover-metrics dd { text-align: right; }
+.plan-hover-warnings { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--varia-widget-border); color: var(--varia-warningForeground); font-size: var(--varia-size-xs); }
+.plan-hover-warnings ul { margin: 2px 0 0; padding-left: 16px; }
+.plan-inspector { flex: 0 1 260px; min-width: 140px; overflow: auto; overscroll-behavior: contain; padding: 8px 12px; border-left: 1px solid var(--varia-panel-border); }
+.plan-inspector h3 { margin: 0 0 8px; font-size: var(--varia-size-sm); }
+.plan-inspector p, .plan-inspector dd, .plan-inspector dt { overflow-wrap: anywhere; }
+.plan-inspector dl { margin: 8px 0; }
+.plan-inspector dt { margin-top: 8px; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.plan-inspector dd { margin: 2px 0 0; font-variant-numeric: tabular-nums; }
+.plan-statement-text { white-space: pre-wrap; font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); }
+.plan-warning, .plan-notice { color: var(--varia-warningForeground); font-size: var(--varia-size-xs); }
+.plan-notice { flex: 0 0 auto; padding: 4px 8px; border-bottom: 1px solid var(--varia-panel-border); }
+@media (forced-colors: active) {
+  .plan-canvas-shell { display: none; }
+  .plan-outline, .plan-inspector { flex: 1; }
+  .plan-operator-item[aria-selected="true"] { outline-color: Highlight; }
+}
 @media (forced-colors: active) {
   /* The selected view's fill is dropped; an outline inside marks it, and focus a ring outside it in another colour. */
   .output-views { border-color: CanvasText; }

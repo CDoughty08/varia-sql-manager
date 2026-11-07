@@ -47,6 +47,18 @@ describe('AutoRecover in the workbench', () => {
     } finally { fixture.dispose() }
   })
 
+  it('saves every unsaved query at once when main says Windows is ending the session, whatever the interval', async () => {
+    const fixture = workbenchFixture()
+    try {
+      const { api, commands } = fixture
+      dirtyQuery(fixture, 'SELECT 7 AS before_shutdown')
+      // A native dialog (a close prompt) may be open: main's command still runs.
+      expect(await commands.execute('file.autoRecoverNow', undefined, 'menu')).toBe(true)
+      await settled(fixture)
+      expect(api.writeRecovery.mock.calls.map(([record]) => record.text)).toEqual(['SELECT 7 AS before_shutdown'])
+    } finally { fixture.dispose() }
+  })
+
   it('deletes a copy once its query is saved, changed back, or closed', async () => {
     const fixture = workbenchFixture()
     try {
