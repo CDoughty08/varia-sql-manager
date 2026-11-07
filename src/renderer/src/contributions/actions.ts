@@ -1,7 +1,7 @@
 import { actionServes } from '../../../shared/actions/catalog.ts'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
-import { explorerNodeOf, type ExplorerMenuNode } from '../menus/targets'
+import { explorerNodeOf, objectNodeOf, type ExplorerMenuNode, type ObjectMenuNode } from '../menus/targets'
 import { newLoginTarget } from '../dialogs/new-login'
 import { actionDialog, isModalDialog } from '../../../shared/actions/catalog'
 
@@ -28,6 +28,8 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
     run: async (args?: CommandArgs) => { const id = restoreOf(args); if (id && when(id)) await run(id) }
   })
   const nodeOf = (args?: CommandArgs): ExplorerMenuNode | undefined => args?.target ? explorerNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
+  // An action that needs no tree row also takes a Search Objects result's object (`searchResults` in the catalogue).
+  const objectOf = (args?: CommandArgs): ObjectMenuNode | undefined => args?.target ? objectNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
   // Integration Services Catalogs on a live server; the dialog itself says when the server cannot have a catalog.
   const catalogs = (node: ExplorerMenuNode | undefined): node is ExplorerMenuNode => !!node && !node.lost && node.folder === 'integrationServicesCatalogs'
     && connections.getSnapshot().some(connection => connection.id === node.connectionId && !connection.lost)
@@ -46,8 +48,8 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
   const registrations = [
     // SSMS's script lists the columns, so the query can be trimmed; it runs at once when it can.
     commands.register('explorer.selectTopRows', {
-      when: args => actions.canRun('selectTop', nodeOf(args)),
-      run: async args => { const node = nodeOf(args); if (node) await actions.selectTop(node) }
+      when: args => actions.canRun('selectTop', objectOf(args)),
+      run: async args => { const node = objectOf(args); if (node) await actions.selectTop(node) }
     }),
     commands.register('explorer.rename', {
       when: args => actions.canRun('rename', nodeOf(args)),

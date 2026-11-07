@@ -100,6 +100,8 @@ export interface ObjectActionSpec {
   /** With `folder`, its placement on the rows whose kind offers it too (SSMS's database Tasks › Restore › Database…), as a command of
    *  its own that the palette leaves out: one context menu shows each command once (macOS's native menus answer by id). */
   readonly rows?: { readonly command: `explorer.${string}`; readonly menu: ActionMenuId; readonly title: string; readonly group: string; readonly order: number; readonly mnemonic: string }
+  /** Offered on Search Objects results too (search.hit.context), in the same group and order: actions that need no tree row. */
+  readonly searchResults?: true
   readonly group: string
   readonly order: number
   readonly class: ActionClass
@@ -122,7 +124,7 @@ export interface ObjectActionSpec {
  *  actions are a follow-up. */
 const onServers: readonly ServerEngine[] = ['box', 'managedInstance']
 const actionSpecData = {
-  selectTop: { title: 'Select Top 1000 Rows', mnemonic: 'w', group: '1_query', order: 3, class: 'query', command: 'explorer.selectTopRows', engines: serverEngines },
+  selectTop: { title: 'Select Top 1000 Rows', mnemonic: 'w', group: '1_query', order: 3, class: 'query', command: 'explorer.selectTopRows', engines: serverEngines, searchResults: true },
   rename: { title: 'Rename', mnemonic: 'm', group: '7_edit', order: 1, class: 'inline', command: 'explorer.rename', engines: onServers },
   // SSMS underlines D, which Disconnect has in Varia's one Object Explorer menu (access keys are unique per menu).
   delete: { title: 'Delete', mnemonic: 'e', group: '7_edit', order: 2, class: 'dialog', dialog: 'deleteObject', command: 'explorer.delete', engines: onServers },
@@ -425,11 +427,12 @@ export const actionContextValues = (state: Readonly<Record<ObjectAction, ActionS
   Object.fromEntries(objectActions.map(action => [actionContextKey(action), state[action]])) as ActionContextValues
 
 /** Keys only while Object Explorer has focus and no text field does (the inline rename box, a filter field). */
-export const explorerKeyWhen = "activePanel == 'explorer' && !textInputFocus"
+// Not on a Search Objects result in Object Explorer's search, whose focus is in the pane but whose keys are not the tree's selection's.
+export const explorerKeyWhen = "activePanel == 'explorer' && !textInputFocus && !searchHitsFocus"
 export interface ActionKeybinding { readonly key?: string; readonly win?: string; readonly linux?: string; readonly mac?: string; readonly when: string }
 /** Where an action command appears, in the shape of `MenuPlacement`. */
 export interface ActionMenuPlacement {
-  readonly menu: ActionMenuId
+  readonly menu: ActionMenuId | 'search.hit.context'
   readonly group: string
   readonly order: number
   /** The menu's title when it differs from the palette's. */
@@ -504,7 +507,9 @@ export function actionCommandEntries(): { readonly [K in ActionCommandId]: Actio
       when: spec.folder ? `${key} != '' && explorerNode == 'folder'` : `${key} != '' && explorerNode != 'background'`
     }
     const precondition = `backendReady && ${key} == 'enabled'` + (documentTask ? ' && !documentBusy' : '')
-    const entry: ActionCommandEntry = { title: spec.title, category: 'Object Explorer', ...data, precondition, menus: [placement] }
+    // A Search Objects result's menu stands in the result's keys for the selection's (`selectionContextOf`).
+    const search: ActionMenuPlacement[] = spec.searchResults ? [{ ...placement, menu: 'search.hit.context', when: `${key} != ''` }] : []
+    const entry: ActionCommandEntry = { title: spec.title, category: 'Object Explorer', ...data, precondition, menus: [placement, ...search] }
     if (!spec.rows) return [[spec.command, entry]]
     const { command, ...rows } = spec.rows
     const row: ActionCommandEntry = { ...entry, palette: false, menus: [{ ...rows, when: `${key} != '' && explorerNode != 'folder' && explorerNode != 'background'` }] }

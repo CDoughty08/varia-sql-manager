@@ -11,13 +11,15 @@ const dom = (value: FakeElement) => value as unknown as Element
 describe('menu targets', () => {
   it('map every kind of target to its context menu and keys', () => {
     const input = inputTarget(element('input', { value: 'a' }).dom, () => true)
+    const hitObject = { kind: 'table', database: 'd', schema: 'dbo', name: 'Orders' } as const
     const targets: MenuTarget[] = [
       { kind: 'editor', tabId: 't1' }, { kind: 'explorer', node: { id: 7, lost: false, kind: 'table', connectionId: 'c', label: 's.n', ref: { type: 'object', object: { kind: 'table', database: 'd', schema: 's', name: 'n' } } } }, { kind: 'tableDesigner', tabId: 't4' },
-      { kind: 'documentTab', tabId: 't2' }, { kind: 'output', tabId: 't3', view: 'messages', resultIndex: 0, selectedText: '', element: element('div').dom }, { kind: 'dockTab', pane: 'results', floating: true, popout: false }, input, { kind: 'ssisOperations', tabId: 't5' }
+      { kind: 'documentTab', tabId: 't2' }, { kind: 'output', tabId: 't3', view: 'messages', resultIndex: 0, selectedText: '', element: element('div').dom }, { kind: 'dockTab', pane: 'results', floating: true, popout: false }, input, { kind: 'ssisOperations', tabId: 't5' },
+      { kind: 'searchHit', searchId: 's', index: 0, hit: { object: hitObject, folder: 'tables', label: 'dbo.Orders' }, pane: false, node: { lost: false, kind: 'table', connectionId: 'c', label: 'dbo.Orders', ref: { type: 'object', object: hitObject } }, state: { explorerScriptTitle: 'table' } }
     ]
     expect(targets.map(target => menuForTarget[target.kind])).toEqual(contextMenuIds)
-    const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, explorerFolder: '', explorerFolderInsertable: false, explorerNodeStatus: '', explorerServerEngine: '', explorerServerLinux: false, outputView: '', pane: '', paneFloating: false, panePopout: false, documentTabFloating: false }
-    expect(targets.map(targetKeys)).toEqual([none, { ...none, explorerNode: 'table' }, none, none, { ...none, outputView: 'messages' }, { ...none, pane: 'results', paneFloating: true }, none, none])
+    const none = { explorerNode: '', explorerServerLost: false, explorerFolderFilterable: false, explorerFolderFiltered: false, explorerFolder: '', explorerFolderInsertable: false, explorerNodeStatus: '', explorerServerEngine: '', explorerServerLinux: false, outputView: '', pane: '', paneFloating: false, panePopout: false, documentTabFloating: false, searchHitSchema: false }
+    expect(targets.map(targetKeys)).toEqual([none, { ...none, explorerNode: 'table' }, none, none, { ...none, outputView: 'messages' }, { ...none, pane: 'results', paneFloating: true }, none, none, { ...none, searchHitSchema: true }])
     expect(targetKeys(undefined)).toEqual(none)
     // The empty area below the servers, and a server lost with its backend generation.
     expect(targetKeys({ kind: 'explorer' })).toEqual({ ...none, explorerNode: 'background' })
@@ -37,8 +39,10 @@ describe('menu targets', () => {
     const columns = { id: 3, lost: false, kind: 'folder', folder: 'columns', connectionId: 'c', label: 'Columns', ref: { type: 'folder', owner: { kind: 'table', database: 'd', schema: 's', name: 'n' }, folder: 'columns' }, insertable: true } as const
     expect(targetKeys({ kind: 'explorer', node: columns })).toEqual({ ...none, explorerNode: 'folder', explorerFolder: 'columns', explorerFolderInsertable: true })
     // File commands act on the tab the menu is for.
-    expect(targets.map(target => argsFor(target).tabId)).toEqual(['t1', undefined, 't4', 't2', 't3', undefined, undefined, 't5'])
+    expect(targets.map(target => argsFor(target).tabId)).toEqual(['t1', undefined, 't4', 't2', 't3', undefined, undefined, 't5', undefined])
     expect(argsFor(targets[5])).toEqual({ target: targets[5] })
+    // A Search Objects result's commands read its own selection keys over the tree's.
+    expect(argsFor(targets[8])).toEqual({ target: targets[8], state: { explorerScriptTitle: 'table' } })
     expect(Object.keys(contextMenuLabels)).toEqual([...contextMenuIds])
   })
   it('treat text inputs, text areas, and editable content as text fields, but not the editor\'s own input', () => {

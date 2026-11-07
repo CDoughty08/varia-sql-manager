@@ -13,6 +13,8 @@ export const focusSamples: readonly { readonly name: string; readonly keys: Part
   { name: 'documentTabRename', keys: { activePanel: 'editor', documentTabFocus: true, inputFocus: true, textInputFocus: true } },
   { name: 'outputGrid', keys: { activePanel: 'output', outputGridFocus: true } },
   { name: 'outputMessages', keys: { activePanel: 'output' } },
+  { name: 'searchHitsTab', keys: { activePanel: 'editor', searchHitsFocus: true } },
+  { name: 'searchHitsPane', keys: { activePanel: 'explorer', searchHitsFocus: true } },
   { name: 'toolbarSelect', keys: { inputFocus: true, textInputFocus: true } },
   { name: 'queryBarButton', keys: { activePanel: 'editor', queryBarFocus: true } },
   { name: 'queryBarSelect', keys: { activePanel: 'editor', queryBarFocus: true, inputFocus: true, textInputFocus: true } },
