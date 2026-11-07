@@ -169,7 +169,7 @@ internal sealed class ObjectSearchService : IDisposable
         var status = Status(state);
         var (matcher, problem) = SearchMatcher.Create(query.Text, query.CaseSensitive, query.WholeWord, query.Regex, Limits.MatchTimeout);
         if (matcher is null) return new([], 0, false, 0, status, problem);
-        try { return IndexSearch.Run(state.Index, query, matcher, Limits, status); }
+        try { return IndexSearch.Run(state.Index, query, matcher, Limits, status, token); }
         catch (System.Text.RegularExpressions.RegexMatchTimeoutException) { return new([], 0, true, 0, status, "The regular expression took too long on one definition."); }
     }
 
