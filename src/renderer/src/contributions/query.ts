@@ -46,6 +46,14 @@ export function queryContribution({ commands, queries, documents, connections, t
       const tab = documents.active
       if (tab && isQueryDocument(tab)) documents.update(tab.id, { includeActualPlan: !tab.includeActualPlan })
     } }),
+    commands.register('query.includeClientStatistics', { run: () => {
+      const tab = documents.active
+      if (tab && isQueryDocument(tab)) {
+        documents.update(tab.id, { includeClientStatistics: !tab.includeClientStatistics })
+        if (!tab.includeClientStatistics) void commands.execute('window.statistics', undefined, 'toolbar')
+      }
+    } }),
+    commands.register('query.resetClientStatistics', { run: () => { const tab = documents.active; if (tab) queries.statistics.reset(tab.id) } }),
     commands.register('query.changeConnection', { run: () => {
       const tab = documents.active
       if (!tab) return

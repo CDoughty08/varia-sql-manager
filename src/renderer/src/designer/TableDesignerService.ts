@@ -12,6 +12,7 @@ import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
 import type { Disposable, ExternalStore } from '../core/types'
 import { pressButton } from '../grid/selection'
+import { gesturesFor } from '../core/gestures'
 import type { ExplorerMenuNode } from '../menus/targets'
 import type { LiveConnection } from '../services/connections'
 import type { CustomDocumentProvider, DocumentService } from '../services/documents'
@@ -577,7 +578,8 @@ export function selectorPress(event: { readonly button: number; readonly ctrlKey
   const press = pressButton(event, platform)
   if (!press || (press === 'secondary' && selected)) return undefined
   if (press === 'secondary') return 'single'
-  return event.shiftKey ? 'range' : (platform === 'darwin' ? event.metaKey : event.ctrlKey) ? 'toggle' : 'single'
+  const gestures = gesturesFor(platform)
+  return gestures.matches('grid.extendSelection', event) ? 'range' : gestures.matches('grid.addToSelection', event) ? 'toggle' : 'single'
 }
 
 /** Whether a type takes each parameter, for Column Properties' Length, Precision and Scale rows. */

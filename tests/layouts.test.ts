@@ -5,9 +5,10 @@ import { LayoutStore } from '../src/main/layout-store'
 import { canPopOut, dockReference, emptyLayoutState, hidesHeader, layoutFile, outputIndex, paneIds, paneTitles, parseLayoutFile, parseLayoutState, parseWorkspaceLayout, withoutHeaderState, type PaneId, type WorkspaceLayout } from '../src/shared/layouts'
 
 function fixture(): WorkspaceLayout {
+  const legacyPanes = paneIds.filter(id => id !== 'statistics')
   return parseWorkspaceLayout({
-    grid: { width: 1440, height: 800, orientation: 'HORIZONTAL', root: { type: 'branch', data: paneIds.map((id, index) => ({ type: 'leaf', size: 400, data: { id: 'group-' + index, views: [id], activeView: id } })) } },
-    panels: Object.fromEntries(paneIds.map(id => [id, { id, title: paneTitles[id], contentComponent: 'workbench', renderer: 'always', minimumWidth: id === 'editor' ? 320 : 200, minimumHeight: id === 'editor' ? 180 : 100 }])), activeGroup: 'group-1'
+    grid: { width: 1440, height: 800, orientation: 'HORIZONTAL', root: { type: 'branch', data: legacyPanes.map((id, index) => ({ type: 'leaf', size: 400, data: { id: 'group-' + index, views: [id], activeView: id } })) } },
+    panels: Object.fromEntries(legacyPanes.map(id => [id, { id, title: paneTitles[id], contentComponent: 'workbench', renderer: 'always', minimumWidth: id === 'editor' ? 320 : 200, minimumHeight: id === 'editor' ? 180 : 100 }])), activeGroup: 'group-1'
   })
 }
 /** A version 1 layout as Varia wrote it: Object Explorer beside the editor over Query output, which had one panel, `output`. */
@@ -27,6 +28,14 @@ beforeEach(async () => { await mkdir('artifacts', { recursive: true }); director
 afterEach(async () => { expect(directory.startsWith(resolve('artifacts') + sep)).toBe(true); await rm(directory, { recursive: true, force: true }) })
 
 describe('workspace layout validation', () => {
+  it('restores the optional statistics pane and leaves older layouts without it valid', () => {
+    const layout = fixture()
+    expect(layout.panels.statistics).toBeUndefined()
+    layout.panels.statistics = { id: 'statistics', contentComponent: 'workbench', renderer: 'always' }
+    if (Array.isArray(layout.grid.root.data)) layout.grid.root.data.push({ type: 'leaf', data: { id: 'stats', views: ['statistics'], activeView: 'statistics' } })
+    expect(parseLayoutFile(layoutFile(layout)).panels.statistics.title).toBe('Client Statistics')
+    expect(canPopOut('statistics')).toBe(true)
+  })
   it('round trips geometry, tab groups, and floating panels', () => {
     const layout = fixture()
     const root = layout.grid.root.data as { type: string; data: { id: string; views: string[]; activeView: string } }[]

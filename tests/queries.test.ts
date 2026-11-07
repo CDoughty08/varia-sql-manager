@@ -36,6 +36,30 @@ function fixture(commandTimeout?: number, wait?: (ms: number) => Promise<void>, 
   return { ...docs, bus: docs.events, queries, queryApi: api, connection, tab, events, results, calls }
 }
 describe('query orchestration', () => {
+  it('reserves execution before notifying statistics listeners, preventing a reentrant second execution', async () => {
+    const { documents, queries, queryApi, tab } = fixture()
+    documents.update(tab.id, { includeClientStatistics: true })
+    const unsub = queries.statistics.subscribe(() => { if (queries.statistics.getSnapshot()[tab.id]?.at(-1)?.status === 'running') void queries.execute() })
+    await queries.execute()
+    expect(queryApi.execute).toHaveBeenCalledOnce()
+    expect(queries.statistics.getSnapshot()[tab.id]).toHaveLength(1)
+    unsub()
+  })
+  it('collects only included executions, retains comparisons across result replacement, and forgets closed tabs', async () => {
+    const { documents, queries, queryApi, tab, bus } = fixture()
+    await queries.execute()
+    expect(queryApi.execute.mock.calls[0][0]).not.toHaveProperty('includeClientStatistics')
+    expect(queries.statistics.getSnapshot()).toEqual({})
+    documents.update(tab.id, { includeClientStatistics: true })
+    queryApi.execute.mockResolvedValue({ ok: true, value: output({ spid: 50, clientStatistics: { counters: { BytesReceived: 400 } } }) })
+    await queries.execute(); await queries.execute()
+    expect(queryApi.execute.mock.calls[1][0]).toHaveProperty('includeClientStatistics', true)
+    expect(queries.statistics.getSnapshot()[tab.id]).toHaveLength(2)
+    bus.emit({ type: 'session.ended', tabId: tab.id }); await queries.execute()
+    expect(queries.statistics.getSnapshot()[tab.id].at(-1)?.scope).toBe(2)
+    bus.emit({ type: 'documents.closed', tabId: tab.id })
+    expect(queries.statistics.getSnapshot()).toEqual({})
+  })
   it.each([0, 7, undefined])('uses the document session and preserves timeout %s', async timeout => {
     const { queries, queryApi, tab } = fixture(timeout)
     await queries.execute()

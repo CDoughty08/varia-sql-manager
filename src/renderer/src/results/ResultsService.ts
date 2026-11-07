@@ -19,7 +19,7 @@ export interface ResultSetEntry { readonly index: number; readonly descriptor: R
 /** A set that has all its rows, for sizing the stack to them: its rows, and whether its grid shows a strip (truncated or incomplete). */
 export interface SettledSet { readonly rows: number; readonly strip: boolean }
 /** The output pane's views: the stacked grids, Messages, and the run's execution plans (shown only when it returned some). */
-export type OutputViewName = 'results' | 'messages' | 'plan'
+export type OutputViewName = 'results' | 'messages' | 'plan' | 'statistics'
 /** A set's key in a run: its generation and result id. */
 export const setKey = (descriptor: Pick<ResultDescriptor, 'generation' | 'resultId'>): string => descriptor.generation + ':' + descriptor.resultId
 /**

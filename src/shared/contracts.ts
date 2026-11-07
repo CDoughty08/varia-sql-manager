@@ -110,6 +110,7 @@ export interface QueryOptions {
   stopOnError?: boolean
   /** Collect actual execution plans for the statements that run. */
   includeActualPlan?: boolean
+  includeClientStatistics?: boolean
 }
 /** `text` cells carry their SSMS display text; `binary` cells are shown as 0x plus hexadecimal. */
 export type WireKind = 'text' | 'binary'
@@ -190,6 +191,8 @@ export interface QueryResult {
    *  is still open after the script. Its open transaction is read only when it is about to end (`query.session.state`). */
   spid?: number
   login?: string
+  /** Per-script provider counters. Absent unless requested; separate from elapsedMs and rendering. */
+  clientStatistics?: import('./client-statistics').ClientStatisticsSample
 }
 /** An idle session's open transaction as `query.session.state` read it: `checked` is false when its SET options (SHOWPLAN_*,
  *  NOEXEC, PARSEONLY or FMTONLY ON) kept the SELECT from returning @@TRANCOUNT, so it may hold one. */

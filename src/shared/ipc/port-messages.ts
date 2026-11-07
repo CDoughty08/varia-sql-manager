@@ -1,6 +1,7 @@
 // The results port (docs/ipc.md): one MessagePort per renderer load between main and the results worker. The worker's
 // requests are validated with portRequestSchema; backend payloads main forwards are validated with the schemas below.
 import { z } from 'zod'
+import { clientStatisticsSchema } from '../client-statistics'
 import type { BackendStatus, MemoryOrder, QueryEvent, ResultsCloseResult, ResultsReadResult, ResultsRowBytesResult } from '../contracts'
 import { maxQueryPlanDocuments } from '../plans'
 import { liveSubscribeParamsSchema, liveUpdateParamsSchema, testLiveSubscribeParamsSchema, testLiveUpdateParamsSchema, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../live/schema'
@@ -63,6 +64,7 @@ export const queryEventSchema = z.discriminatedUnion('type', [
 ])
 /** The query.execute summary: the stored messages, the errors kept past their cap, and up to 8 notes about truncation. */
 export const queryResultSchema = z.object({
+  clientStatistics: clientStatisticsSchema.optional(),
   resultSets: z.array(backendDescriptorSchema).max(limits.maxResultSets.max), discardedResultSets: count, messages: z.array(message).max(limits.messages.count + limits.messages.lateErrors + 8),
   planSets: z.array(backendDescriptorSchema.extend({ kind: z.literal('executionPlan') })).max(maxQueryPlanDocuments).optional(),
   planOrder: z.array(u32).max(limits.maxResultSets.max + maxQueryPlanDocuments).optional(),

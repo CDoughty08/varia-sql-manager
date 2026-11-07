@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (242)
+## Commands (245)
 
 ### File
 
@@ -72,6 +72,7 @@ keys it uses are listed below.
 | Show Results | `window.results` | — | — | — | Always | Window › Results |
 | Show Messages | `window.messages` | — | — | — | Always | Window › Messages |
 | Show Execution Plan | `window.plan` | — | — | — | Always | Window › Execution Plan |
+| Show Client Statistics | `window.statistics` | — | — | — | Always | Window › Client Statistics |
 | Toggle Results Pane | `view.toggleResultsPane` | Ctrl+R | Ctrl+R | ⌘R | Always; checked when `outputPaneVisible` | Window › Show Results Pane |
 | Switch Between Query and Results | `window.switchPane` | F6 (`!activityMonitorFocus`), Shift+F6 (`!activityMonitorFocus`) | F6 (`!activityMonitorFocus`), Shift+F6 (`!activityMonitorFocus`) | F6 (`!activityMonitorFocus`), ⇧F6 (`!activityMonitorFocus`) | `activeDocumentIsText` | — |
 | Save Layout… | `layout.save` | — | — | — | Always | View › Save Layout…; Window › Save Window Layout… |
@@ -124,6 +125,8 @@ keys it uses are listed below.
 | Execute | `query.execute` | F5 (`editorFocus \|\| queryBarFocus`), Ctrl+Enter (`editorFocus \|\| queryBarFocus`), Ctrl+E (`editorFocus \|\| queryBarFocus`) | F5 (`editorFocus \|\| queryBarFocus`), Ctrl+Enter (`editorFocus \|\| queryBarFocus`), Ctrl+E (`editorFocus \|\| queryBarFocus`) | F5 (`editorFocus \|\| queryBarFocus`), ⌘↩ (`editorFocus \|\| queryBarFocus`) | `activeDocumentIsQuery && !queryRunning && !documentBusy && (activeDocumentConnected \|\| (backendReady && !activeConnectionLost))` | Query › Execute; Editor context menu › Execute |
 | Cancel Executing Query | `query.cancel` | Alt+Pause | Alt+Pause | — | `queryRunning` | Query › Cancel Executing Query; Editor context menu › Cancel Executing Query |
 | Include Actual Execution Plan | `query.includeActualPlan` | Ctrl+M (`editorFocus \|\| queryBarFocus`) | Ctrl+M (`editorFocus \|\| queryBarFocus`) | — | `activeDocumentIsQuery && !queryRunning && !documentBusy`; checked when `includeActualPlan` | Query › Include Actual Execution Plan |
+| Include Client Statistics | `query.includeClientStatistics` | Shift+Alt+S (`editorFocus \|\| queryBarFocus`) | Shift+Alt+S (`editorFocus \|\| queryBarFocus`) | — | `activeDocumentIsQuery && !queryRunning && !documentBusy`; checked when `includeClientStatistics` | Query › Include Client Statistics |
+| Reset Client Statistics | `query.resetClientStatistics` | — | — | — | `activeDocumentIsQuery && !queryRunning && !documentBusy` | Query › Reset Client Statistics |
 | Change Connection… | `query.changeConnection` | — | — | — | `hasActiveDocument && activeDocumentIsQuery && !queryRunning && !documentBusy` | Query › Connection › Change Connection… |
 | Disconnect | `query.disconnect` | — | — | — | `activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy` | Query › Connection › Disconnect |
 | Disconnect All Queries | `query.disconnectAll` | — | — | — | `anyDocumentConnected && !documentBusy` | Query › Connection › Disconnect All Queries |
@@ -473,6 +476,8 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_execute` | E**x**ecute | `query.execute` | Always |
 | `1_execute` | **C**ancel Executing Query | `query.cancel` | Always |
 | `1_execute` | **I**nclude Actual Execution Plan | `query.includeActualPlan` | Always |
+| `1_execute` | Include Client **S**tatistics | `query.includeClientStatistics` | Always |
+| `1_execute` | **R**eset Client Statistics | `query.resetClientStatistics` | Always |
 
 #### Query › Connection
 
@@ -502,6 +507,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_panes` | E**x**ecution Plan | `window.plan` | Always |
 | `1_panes` | S**h**ow Results Pane | `view.toggleResultsPane` | Always |
 | `1_panes` | Panel **T**abs | `window.togglePanelTabs` | Always |
+| `1_panes` | **C**lient Statistics | `window.statistics` | Always |
 | `2_documents` | **N**ext Query | `document.next` | Always |
 | `2_documents` | **P**revious Query | `document.previous` | Always |
 | `2_documents` | C**l**ose All Documents | `file.closeAll` | Always |
@@ -824,7 +830,7 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
 | `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
 
-## Context keys (135)
+## Context keys (136)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -893,6 +899,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `activeConnectionLost` | boolean | state | The active query's connection was lost when the SQL backend restarted. |
 | `queryRunning` | boolean | state | The active query is running. |
 | `includeActualPlan` | boolean | state | The active query will capture actual execution plans. |
+| `includeClientStatistics` | boolean | state | The active query will collect client statistics. |
 | `hasResults` | boolean | state | The active query has result sets, and they were not closed (Close Results) or lost with a run the SQL backend stopped. |
 | `anyDocumentConnected` | boolean | state | Some open query's server is connected. |
 | `outputPaneVisible` | boolean | state | An output panel (Results, Messages or Execution plan) is open and showing: its tab is selected, and no other panel is maximized. |
@@ -963,7 +970,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerServerEngine` | `''`, `'box'`, `'managedInstance'`, `'cloud'` | target | The kind of server the Object Explorer node the menu is for is on: 'box', 'managedInstance' or 'cloud', or '' for the empty area. |
 | `explorerServerLinux` | boolean | target | The menu is for a node on SQL Server on Linux. |
 | `outputView` | `'grid'`, `'messages'`, `''` | target | The Query Output view the menu is for: a results grid or the messages. |
-| `pane` | `'explorer'`, `'editor'`, `'results'`, `'messages'`, `'plan'`, `''` | target | The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, Results, Messages, or Execution plan. |
+| `pane` | `'explorer'`, `'editor'`, `'results'`, `'messages'`, `'plan'`, `'statistics'`, `''` | target | The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, Results, Messages, Execution plan, or Client Statistics. |
 | `paneFloating` | boolean | target | The panel the menu is for is floating. |
 | `panePopout` | boolean | target | The panel the menu is for is in a window of its own (Move into New Window). |
 | `documentTabFloating` | boolean | target | The document tab the menu is for is in a floating editor group. |

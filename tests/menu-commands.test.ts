@@ -85,7 +85,7 @@ describe('results pane toggle', () => {
     expect(host.toggleOutput).toHaveBeenCalledOnce()
     expect(editor.focus).not.toHaveBeenCalled()
     // Any output panel showing counts: here Messages, docked apart from Results.
-    panes.set({ explorer: true, editor: true, results: false, messages: true, plan: false })
+    panes.set({ explorer: true, editor: true, results: false, messages: true, plan: false, statistics: false })
     expect(context.getState().outputPaneVisible).toBe(true)
     expect(commands.isToggled('view.toggleResultsPane')).toBe(true)
     await commands.execute('view.toggleResultsPane', undefined, 'keybinding')
@@ -96,21 +96,21 @@ describe('results pane toggle', () => {
     const { panes } = setup()
     const listener = vi.fn()
     panes.subscribe(listener)
-    panes.set({ explorer: true, editor: true, results: false, messages: false, plan: false })
-    panes.set({ explorer: true, editor: true, results: false, messages: false, plan: false })
+    panes.set({ explorer: true, editor: true, results: false, messages: false, plan: false, statistics: false })
+    panes.set({ explorer: true, editor: true, results: false, messages: false, plan: false, statistics: false })
     expect(listener).toHaveBeenCalledOnce()
-    expect(panes.getSnapshot()).toEqual({ explorer: true, editor: true, results: false, messages: false, plan: false })
+    expect(panes.getSnapshot()).toEqual({ explorer: true, editor: true, results: false, messages: false, plan: false, statistics: false })
   })
   it('publishes which output panels share a group only when that changes, and sends a toolbar tab\'s choice to the dock', () => {
     const { panes } = setup()
-    const listener = vi.fn(), visible = { explorer: true, editor: true, results: true, messages: false, plan: false }
+    const listener = vi.fn(), visible = { explorer: true, editor: true, results: true, messages: false, plan: false, statistics: false }
     panes.peers.subscribe(listener)
-    const grouped = { results: ['results', 'messages', 'plan'], messages: ['results', 'messages', 'plan'], plan: ['results', 'messages', 'plan'] } as const
+    const grouped = { results: ['results', 'messages', 'plan'], messages: ['results', 'messages', 'plan'], plan: ['results', 'messages', 'plan'], statistics: [] } as const
     panes.set(visible, undefined, grouped)
     panes.set(visible, undefined, { ...grouped })
     expect(listener).toHaveBeenCalledOnce()
     // Messages docked on its own: Results tabs between Results and Execution plan only.
-    panes.set(visible, undefined, { results: ['results', 'plan'], messages: ['messages'], plan: ['results', 'plan'] })
+    panes.set(visible, undefined, { results: ['results', 'plan'], messages: ['messages'], plan: ['results', 'plan'], statistics: [] })
     expect(listener).toHaveBeenCalledTimes(2)
     expect(panes.peers.getSnapshot().messages).toEqual(['messages'])
     // Nothing is selected until the dock binds, and nothing after it lets go.
@@ -126,12 +126,12 @@ describe('results pane toggle', () => {
     const listener = vi.fn()
     panes.subscribe(listener)
     expect(panes.location('results')).toBe('closed')
-    panes.set({ explorer: true, editor: true, results: true, messages: false, plan: false }, { explorer: 'grid', editor: 'grid', results: 'grid', messages: 'grid', plan: 'grid' })
-    panes.set({ explorer: true, editor: true, results: true, messages: false, plan: false }, { explorer: 'grid', editor: 'grid', results: 'floating', messages: 'grid', plan: 'grid' })
+    panes.set({ explorer: true, editor: true, results: true, messages: false, plan: false, statistics: false }, { explorer: 'grid', editor: 'grid', results: 'grid', messages: 'grid', plan: 'grid', statistics: 'closed' })
+    panes.set({ explorer: true, editor: true, results: true, messages: false, plan: false, statistics: false }, { explorer: 'grid', editor: 'grid', results: 'floating', messages: 'grid', plan: 'grid', statistics: 'closed' })
     expect([panes.location('explorer'), panes.location('results')]).toEqual(['grid', 'floating'])
     expect(listener).toHaveBeenCalledOnce()
     // Visibility alone leaves the locations as they were.
-    panes.set({ explorer: true, editor: false, results: true, messages: false, plan: false })
+    panes.set({ explorer: true, editor: false, results: true, messages: false, plan: false, statistics: false })
     expect(panes.location('results')).toBe('floating')
   })
 })

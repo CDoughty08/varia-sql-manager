@@ -19,7 +19,7 @@ const outline = (menu: MenuId, platform: Platform) => pruneMenu(buildMenuModel(m
 
 describe('menu model', () => {
   it('builds the menubar from the catalogue and the extras', () => {
-    const windowMenu = ['window.explorer', 'window.editor', 'window.results', 'window.messages', 'window.plan', 'view.toggleResultsPane', 'window.togglePanelTabs', '-', 'document.next', 'document.previous', 'file.closeAll', '-', 'editor.splitRight', 'editor.splitDown', 'editor.joinGroups', '-', 'layout.save@window', 'layout.load@window', 'layout.reset@window']
+    const windowMenu = ['window.explorer', 'window.editor', 'window.results', 'window.messages', 'window.plan', 'view.toggleResultsPane', 'window.togglePanelTabs', 'window.statistics', '-', 'document.next', 'document.previous', 'file.closeAll', '-', 'editor.splitRight', 'editor.splitDown', 'editor.joinGroups', '-', 'layout.save@window', 'layout.load@window', 'layout.reset@window']
     for (const platform of ['win32', 'linux'] as const) {
       // Exit (Windows) and Quit (Linux): macOS quits from its app menu.
       expect(outline('file', platform)).toEqual(['connection.connect', 'connection.disconnect', 'connection.reconnect', '-', 'file.new', 'file.open', 'file.save', 'file.saveAs', 'file.saveAll', '-', 'file.close', '-', 'submenu:file.recent', '-', 'window.close'])
@@ -39,7 +39,7 @@ describe('menu model', () => {
       expect(outline('edit.intellisense', platform)).toEqual(['edit.insertSnippet', 'edit.surroundWith'])
       expect(outline('view', platform)).toEqual(['workbench.showCommands', 'workbench.quickOpen', 'workbench.search', 'explorer.searchObjects', '-', 'layout.save', 'layout.load', 'layout.reset', '-', 'activity.open', 'ssis.allOperations', '-', 'submenu:view.theme', '-',
         'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', '-', 'developer.reloadWindow', 'developer.toggleDevTools'])
-      expect(outline('query', platform)).toEqual(['submenu:query.connection', 'query.changeDatabase', '-', 'query.execute', 'query.cancel', 'query.includeActualPlan'])
+      expect(outline('query', platform)).toEqual(['submenu:query.connection', 'query.changeDatabase', '-', 'query.execute', 'query.cancel', 'query.includeActualPlan', 'query.includeClientStatistics', 'query.resetClientStatistics'])
       expect(raw('query', platform)).toEqual(outline('query', platform))
       expect(outline('query.connection', platform)).toEqual(['connection.connect@query.connection', 'query.disconnect', 'query.disconnectAll', 'connection.reconnect@query.connection', '-', 'query.changeConnection', 'connection.environment'])
       expect(outline('theme', platform)).toEqual(['preferences.colorTheme'])
@@ -366,7 +366,7 @@ describe('menu state', () => {
       const placed = commandDescriptor(id).menus?.some(placement => nativeMenuIds.includes(placement.menu)) ?? false
       expect(menuCommandIds.includes(id), id).toBe(placed && !commandDescriptor(id).role)
     }
-    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'query.includeActualPlan', 'explorer.groupBySchema', 'ssis.pauseOperations', 'editor.toggleWordWrap', 'editor.toggleOvertype', 'editor.toggleWhitespace', 'editor.toggleLineNumbers', 'activity.togglePause', 'activity.toggleSplit', 'output.showSpaces', 'output.showAllWhitespace', 'window.togglePanelTabs'])
+    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'query.includeActualPlan', 'query.includeClientStatistics', 'explorer.groupBySchema', 'ssis.pauseOperations', 'editor.toggleWordWrap', 'editor.toggleOvertype', 'editor.toggleWhitespace', 'editor.toggleLineNumbers', 'activity.togglePause', 'activity.toggleSplit', 'output.showSpaces', 'output.showAllWhitespace', 'window.togglePanelTabs'])
     // Main checks only toggles the schema names.
     expect(menuStateSchema.safeParse({ disabled: [], checked: ['editor.toggleWhitespace', 'editor.toggleLineNumbers'] }).success).toBe(true)
   })
