@@ -100,7 +100,10 @@ internal static class PeekLiveChecks
             + "INSERT [Peek]]'Ü].[T]]'表] (Id, Name, Notes) VALUES (1, N'a', REPLICATE(CONVERT(nvarchar(max), N'x'), 10000)), (2, N'b', NULL), (3, N'c', NULL);\nGO\n"
             + "CREATE PROCEDURE [Peek]]'Ü].[P]]'表] WITH RECOMPILE, EXECUTE AS OWNER AS SELECT 1;\nGO\n"
             + "CREATE TABLE [Peek]]'Ü].[Child] (Id int NOT NULL PRIMARY KEY, ParentId int NULL CONSTRAINT FK_PeekChild REFERENCES [Peek]]'Ü].[T]]'表] (Id));\nGO\n"
-            + "CREATE VIEW [Peek]]'Ü].[V]]'表] AS SELECT Id, Name FROM [Peek]]'Ü].[T]]'表];\nGO\n", database);
+            + "CREATE VIEW [Peek]]'Ü].[V]]'表] AS SELECT Id, Name FROM [Peek]]'Ü].[T]]'表];\nGO\n"
+            + "CREATE FUNCTION [Peek]]'Ü].[F] () RETURNS TABLE AS RETURN SELECT 1 AS one;\nGO\n"
+            + "CREATE VIEW [Peek]]'Ü].[VF] AS SELECT f.one, t.Id FROM [Peek]]'Ü].[F]() AS f CROSS JOIN [" + database.Replace("]", "]]") + "].[Peek]]'Ü].[T]]'表] AS t;\nGO\n"
+            + "CREATE TABLE [Peek]]'Ü].[Blob] (Id int NOT NULL PRIMARY KEY, B varbinary(max) NULL);\nINSERT [Peek]]'Ü].[Blob] (Id, B) VALUES (1, CONVERT(varbinary(max), REPLICATE(CONVERT(varchar(max), 'ab'), 1000000)));\nGO\n", database);
         try
         {
             check(created.Status == "completed", "the peek fixtures are created: " + created.Error);
@@ -137,12 +140,16 @@ internal static class PeekLiveChecks
                 && heap.Facts["compression"] as string == "NONE" && heap.Facts["textFilegroup"] is null,
                 "a temporal table says so, and an empty heap has no rows, no index space and no text filegroup: " + JsonSerializer.Serialize(heap.Facts));
 
-            static string Names(IEnumerable<PeekDependency>? items) => string.Join(", ", (items ?? []).Select(item => item.Schema + "." + item.Name + ":" + item.Kind + (item.ForeignKey is true ? ":fk" : "")));
+            static string Names(IEnumerable<PeekDependency>? items) => string.Join(", ", (items ?? []).Select(item => item.Database + "." + item.Schema + "." + item.Name + ":" + item.Kind + ":" + item.Subtype + (item.ForeignKey is true ? ":fk" : "")));
             var tableUses = await Dependencies(service, connectionId, Ref("table", schema, "T]'表"), json);
             var view = await Dependencies(service, connectionId, Ref("view", schema, "V]'表"), json);
             var child = await Dependencies(service, connectionId, Ref("table", schema, "Child"), json);
             var procedureUses = await Dependencies(service, connectionId, Ref("procedure", schema, "P]'表"), json);
             var gone = await Dependencies(service, connectionId, Ref("view", schema, "NoSuchView"), json);
+            var viewOfFunction = await Dependencies(service, connectionId, Ref("view", schema, "VF"), json);
+            check(viewOfFunction is { Error: null } && viewOfFunction.Uses.Any(item => item is { Name: "F", Kind: "function", Subtype: "inline", Database: null })
+                && viewOfFunction.Uses.Any(item => item is { Name: "T]'表", Kind: "table", Subtype: null } && item.Database == database),
+                "a dependency carries the subtype the tree gives it, and a reference naming its own database is resolved to the object: " + Names(viewOfFunction.Uses));
             check(tableUses is { Error: null } && gone is { Error.Code: "NOT_FOUND" } && tableUses.UsedBy is { } usedBy && usedBy.Any(item => item is { Name: "V]'表", Kind: "view", ForeignKey: null } && item.Schema == schema)
                 && usedBy.Any(item => item is { Name: "Child", Kind: "table", ForeignKey: true }) && tableUses.UsesTruncated is null && tableUses.UsedByTruncated is null
                 && view.Uses is { } viewUses && viewUses.Any(item => item is { Name: "T]'表", Kind: "table", Database: null, Server: null } && item.Schema == schema)
@@ -155,6 +162,9 @@ internal static class PeekLiveChecks
                 && notes is { } first && first[1] == "a" && first[2] is { Length: 256 } cutText && cutText.All(c => c == 'x')
                 && rows.Cut is { } cut && cut.Any(cell => rows.Rows[cell[0]][0] == "1" && cell[1] == 2) && rows.Rows.Count(row => row[2] is null) == 2,
                 "a hostile-named table's top rows show its values as the grid does, NULL as null, and a long value cut at 256 and marked: " + JsonSerializer.Serialize(rows.Columns));
+            var blob = await Rows(service, connectionId, Ref("table", schema, "Blob"), json);
+            check(blob is { Error: null, Rows.Count: 1 } && blob.Rows[0][1] is { Length: 256 } hex && hex.StartsWith("0x6162", StringComparison.Ordinal) && blob.Cut is { } blobCut && blobCut.Any(cell => cell is [0, 1]),
+                "a 2 MB varbinary(max) value shows its first bytes as 0x… text, cut at 256 characters and marked: " + (blob.Error?.Message ?? blob.Rows.FirstOrDefault()?[1]?[..Math.Min(20, blob.Rows[0][1]?.Length ?? 0)]));
             var viewRows = await Rows(service, connectionId, Ref("view", schema, "V]'表"), json);
             check(viewRows is { Error: null, Rows.Count: 3 } && viewRows.Columns.Count == 2, "a hostile-named view's top rows are read too");
 
@@ -173,14 +183,14 @@ internal static class PeekLiveChecks
             var granted = await sql("CREATE USER [peek_low] WITHOUT LOGIN;\nGRANT VIEW DEFINITION TO [peek_low];\n", database);
             var band = Math.Min(major, ExplorerCatalog.MaxBand);
             var lowFacts = await sql(asLow + PeekSql.Render(ExplorerCatalog.Current.Peek.Kinds["table"], new SqlRender(band), ExplorerCatalog.Current.Peek.DefinitionChars).Text + revert, database);
-            var lowDependencies = await sql(asLow + PeekSql.Dependencies("table") + revert, database);
+            var lowDependencies = await sql(asLow + PeekSql.Dependencies("table", new SqlRender(band)) + revert, database);
             check(granted.Status == "completed" && lowFacts.Status == "completed" && lowDependencies.Status != "completed" && lowDependencies.Error is { } refused && refused.Contains("sql_expression_dependencies", StringComparison.Ordinal),
                 "a user who is not db_owner reads Peek's facts batch, and only the dependencies batch is refused: " + (lowFacts.Error ?? lowDependencies.Error ?? lowDependencies.Status));
         }
         finally
         {
             await sql("DROP USER IF EXISTS [peek_low];\n", database);
-            var dropped = await sql("DROP VIEW IF EXISTS [Peek]]'Ü].[V]]'表];\nDROP TABLE IF EXISTS [Peek]]'Ü].[Child];\nDROP PROCEDURE IF EXISTS [Peek]]'Ü].[P]]'表];\nDROP TABLE IF EXISTS [Peek]]'Ü].[T]]'表];\nDROP SCHEMA IF EXISTS [Peek]]'Ü];\n", database);
+            var dropped = await sql("DROP VIEW IF EXISTS [Peek]]'Ü].[VF];\nDROP FUNCTION IF EXISTS [Peek]]'Ü].[F];\nDROP TABLE IF EXISTS [Peek]]'Ü].[Blob];\nDROP VIEW IF EXISTS [Peek]]'Ü].[V]]'表];\nDROP TABLE IF EXISTS [Peek]]'Ü].[Child];\nDROP PROCEDURE IF EXISTS [Peek]]'Ü].[P]]'表];\nDROP TABLE IF EXISTS [Peek]]'Ü].[T]]'表];\nDROP SCHEMA IF EXISTS [Peek]]'Ü];\n", database);
             check(dropped.Status == "completed", "the peek fixtures are dropped: " + dropped.Error);
         }
     }

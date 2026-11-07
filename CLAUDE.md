@@ -31,7 +31,7 @@ pages, limits, error codes, display formats, benchmarks).
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 1621 offline
+  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 1624 offline
   checks; how many depends on the server version and authentication (2382 against a local SQL Server 2025 in Mixed Mode, which
   adds the low-privilege login checks, with Windows authentication and `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer, Script As and object action
   scratch-database checks (the last in their own `VariaScratch_…_act` database) and the script goldens in `tests/fixtures/scripting/`; `VARIA_UPDATE_SCRIPT_GOLDENS=1`
@@ -171,7 +171,9 @@ pages, limits, error codes, display formats, benchmarks).
   metadata built-ins; `READ UNCOMMITTED` and `LOCK_TIMEOUT 5000` on the explorer pool. The offline `CatalogSql` lint
   renders and checks every variant. Its one dynamic statement is Peek's Top rows (`Explorer/PeekRowsSql.cs`, run only when
   the tab is chosen): `SELECT TOP (@take) *` built on the server from `QUOTENAME` of the found object's two names, held to
-  `PeekRowsSql.Lint`, and read sequentially with the results grid's readers under a cap per value.
+  `PeekRowsSql.Lint`, and read sequentially with the results grid's readers under a cap per value and a `SET TEXTSIZE`; it is
+  the one Explorer read that may leave READ UNCOMMITTED, retrying under READ COMMITTED only when SQL Server refuses it for a
+  memory-optimized table (error 10794).
 - Search Objects' index (`backend/Varia.Backend/Search/`, docs/object-search.md) lives only in backend memory, one per
   connection, never on disk, and is dropped on disconnect; its limits are `objectSearchLimits` in
   `src/shared/explorer/search.ts`, mirrored in C# (`tests/object-search.test.ts`), with everything it holds (records, names

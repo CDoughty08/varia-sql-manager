@@ -160,7 +160,7 @@ export function installExplorerStub({ ipcMain }, { statics }) {
         : { uses: [{ name: 'Customers', schema: 'dbo', database: 'Crm' }], usedBy: [{ name: 'OrderLines', schema: 'dbo', kind: 'table', foreignKey: true }, { name: 'vOrders', schema: 'dbo', kind: 'view' }], elapsedMs: 1 })
       // The first rows read times out, so the smoke walks Retry.
       case 'explorer.peekRows': if (stub.calls.filter(call => call.method === 'explorer.peekRows').length === 1) return ok({ columns: [], rows: [], elapsedMs: 1, error: { code: 'TIMEOUT', message: 'Reading the rows took longer than 15 seconds. Retry.', retryable: true } })
-        return ok({ columns: [{ name: 'Id', type: 'int' }, { name: 'CustomerName', type: 'nvarchar' }], rows: [['1', 'Alice'], ['2', null]], elapsedMs: 1 })
+        return ok({ columns: [{ name: 'Id', type: 'int' }, { name: 'CustomerName', type: 'nvarchar' }], rows: [['1', 'Alice'], ['2', null], ['3', null]], unread: [[2, 1]], elapsedMs: 1 })
       case 'scripting.script': return ok({ text: `CREATE TABLE [${params.targets[0].schema}].[${params.targets[0].name}](\n\t[Id] [int] NOT NULL\n)\nGO\n`, database: params.targets[0].database ?? 'master', warnings: [], commands: 1, elapsedMs: 1 })
       case 'query.session.close': return ok({ closed: true })
       case 'query.session.state': return ok({ transactionCount: 0, checked: true })

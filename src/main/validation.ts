@@ -3,7 +3,7 @@ import { planParseSchema, planDocumentSchema } from '../shared/plans'
 import type { RpcMethod } from '../shared/contracts'
 import { connectionOptionsSchema } from '../shared/connections'
 import { limits } from '../shared/ipc/wire/protocol'
-import { explorerChildrenParamsSchema, peekDependenciesParamsSchema, peekParamsSchema, peekRowsParamsSchema } from '../shared/explorer/schema.ts'
+import { explorerChildrenParamsSchema, peekParamsSchema, peekRowsParamsSchema } from '../shared/explorer/schema.ts'
 import { objectIndexParamsSchema, objectSearchParamsSchema } from '../shared/explorer/search.ts'
 import { scriptRequestSchema } from '../shared/scripting/schema.ts'
 import { actionDescribeSchema, actionExecuteRequestSchema, actionExecuteResultSchema, actionScriptRequestSchema } from '../shared/actions/schema.ts'
@@ -40,7 +40,7 @@ export const requestSchemas = {
   'explorer.index': objectIndexParamsSchema,
   'explorer.search': objectSearchParamsSchema,
   'explorer.peek': peekParamsSchema,
-  'explorer.peekDependencies': peekDependenciesParamsSchema,
+  'explorer.peekDependencies': peekParamsSchema,
   'explorer.peekRows': peekRowsParamsSchema,
   'scripting.script': scriptRequestSchema,
   'actions.describe': actionDescribeSchema,

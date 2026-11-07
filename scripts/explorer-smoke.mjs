@@ -659,7 +659,9 @@ try {
   const topRows = peekCard.getByRole('table', { name: 'Top rows', exact: true })
   await expect(topRows).toContainText('Alice')
   await expect(peekTabs.getByRole('tab', { name: 'Top rows', exact: true })).toBeFocused()
-  await expect(topRows.getByRole('cell', { name: 'NULL', exact: true })).toBeVisible()
+  // A value the readers could not read shows as NULL, as the grid shows it, with a note.
+  await expect(topRows.getByRole('cell', { name: 'NULL', exact: true })).toHaveCount(2)
+  await expect(peekCard.getByRole('tabpanel')).toContainText('1 value could not be read and show as NULL.')
   expect((await stubCalls('explorer.peekRows')).at(-1).target).toMatchObject({ kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' })
   await page.keyboard.press('Escape')
   await expect(peekCard).toBeHidden()

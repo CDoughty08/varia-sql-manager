@@ -123,9 +123,10 @@ internal sealed class ExplorerService : IDisposable
     public Task<PeekDependenciesResult> PeekDependenciesAsync(PeekArgs args, CancellationToken token)
     {
         var spec = ExplorerRefs.ValidatePeek(args, catalog);
+        var profile = PeekProfile(args.ConnectionId);
         var max = catalog.Peek.Dependencies;
         // One more dependency than the card lists tells it there were more.
-        return RunPeekAsync(args.ConnectionId, args.RequestId, args.Target, PeekProfile(args.ConnectionId), PeekSql.Dependencies(spec.Kind), max + 1,
+        return RunPeekAsync(args.ConnectionId, args.RequestId, args.Target, profile, PeekSql.Dependencies(spec.Kind, new SqlRender(profile.Band)), max + 1,
             async (reader, ct) => await PeekSql.ReadDependenciesAsync(reader, max, ct),
             error => new PeekDependenciesResult([], [], 0, Error: error), (result, elapsed) => result with { ElapsedMs = elapsed }, "the dependencies", CommandBehavior.Default, token);
     }

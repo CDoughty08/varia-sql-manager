@@ -161,8 +161,9 @@ internal sealed record PeekResult(Dictionary<string, object?> Facts, long Elapse
 /// Both lists are empty with an Error.</summary>
 internal sealed record PeekDependenciesResult(List<PeekDependency> Uses, List<PeekDependency> UsedBy, long ElapsedMs, bool? UsesTruncated = null, bool? UsedByTruncated = null, ExplorerError? Error = null);
 /// <summary>One object on Peek's Dependencies tab: Database and Server name another database or a linked server; Kind is its
-/// Object Explorer kind when it is in this database and listed by name; ForeignKey is true when a foreign key makes the link.</summary>
-internal sealed record PeekDependency(string Name, string? Schema = null, string? Database = null, string? Server = null, string? Kind = null, bool? ForeignKey = null);
+/// Object Explorer kind when it is in this database and listed by name, with the Subtype the tree gives it; ForeignKey is true
+/// when a foreign key makes the link.</summary>
+internal sealed record PeekDependency(string Name, string? Schema = null, string? Database = null, string? Server = null, string? Kind = null, bool? ForeignKey = null, string? Subtype = null);
 /// <summary>explorer.peekRows: a table's or view's first rows (SELECT TOP (n) *), on Peek's slot and within its budget.</summary>
 internal sealed record PeekRowsArgs(string ConnectionId, string RequestId, ObjectRefDto Target);
 internal sealed record PeekRowsColumn(string Name, string Type);

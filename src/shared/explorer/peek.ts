@@ -3,7 +3,7 @@
 // (backend Explorer/PeekSql.cs) whose result columns are these facts' ids, in this order; the backend takes the list from
 // the `peek` block of the embedded Explorer/explorer-catalog.json, which explorerCatalogJson writes.
 import type { ExplorerError } from '../contracts.ts'
-import type { NodeKind } from './catalog.ts'
+import type { NodeKind, NodeSubtype } from './catalog.ts'
 import type { ObjectRef } from './refs.ts'
 
 export const peekKinds = ['table', 'view', 'procedure', 'function'] as const satisfies readonly NodeKind[]
@@ -128,6 +128,8 @@ export interface PeekDependency {
   readonly database?: string
   readonly server?: string
   readonly kind?: NodeKind
+  /** The subtype the tree lists it with, so a followed dependency offers the same Script As verbs and folders. */
+  readonly subtype?: NodeSubtype
   readonly foreignKey?: true
 }
 export interface PeekParams {

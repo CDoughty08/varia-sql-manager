@@ -151,9 +151,15 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
     this.loadTab()
   }
 
-  /** Whether a dependency can be peeked from the card: an object of a kind Peek describes, in the card's database. */
+  /**
+   * Whether a dependency can be peeked from the card: an object of a kind Peek describes, in the card's database (a reference
+   * may name that database itself).
+   */
   canFollow(dependency: PeekDependency): boolean {
-    return dependency.kind !== undefined && isPeekKind(dependency.kind) && dependency.database === undefined && dependency.server === undefined && dependency.schema !== undefined
+    const open = this.getSnapshot().open
+    const database = open?.node.ref.type === 'object' ? open.node.ref.object.database : undefined
+    return dependency.kind !== undefined && isPeekKind(dependency.kind) && dependency.server === undefined && dependency.schema !== undefined
+      && (dependency.database === undefined || dependency.database === database)
   }
 
   /** Peeks a dependency in the same card, beside the same row; Back returns to this one. */
@@ -162,7 +168,8 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
     if (!open || open.node.ref.type !== 'object' || !this.canFollow(dependency) || !dependency.kind || !isPeekKind(dependency.kind)) return
     const object = { kind: dependency.kind, ...(open.node.ref.object.database === undefined ? {} : { database: open.node.ref.object.database }), schema: dependency.schema!, name: dependency.name }
     const { subtype: _subtype, status: _status, database: _database, listedAt: _listedAt, filtered: _filtered, insertable: _insertable, ...rest } = open.node
-    const node: ExplorerMenuNode = { ...rest, kind: dependency.kind, ref: { type: 'object', object }, label: `${dependency.schema}.${dependency.name}` }
+    // The dependency's own subtype, as the tree lists it, so Script As offers its verbs and Columns reads its folder.
+    const node: ExplorerMenuNode = { ...rest, kind: dependency.kind, ...(dependency.subtype === undefined ? {} : { subtype: dependency.subtype }), ref: { type: 'object', object }, label: `${dependency.schema}.${dependency.name}` }
     const back = [...open.back, { node: open.node, kind: open.kind, tab: open.tab }].slice(-peekLimits.backSteps)
     this.load(node, dependency.kind, open.source === 'hover' ? 'keyboard' : open.source, false, { back })
   }

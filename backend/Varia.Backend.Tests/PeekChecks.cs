@@ -97,13 +97,17 @@ internal static partial class PeekChecks
         var dependencyProblems = new List<string>();
         foreach (var spec in peek.Kinds.Values)
         {
-            var text = PeekSql.Dependencies(spec.Kind);
-            dependencyProblems.AddRange(CatalogSql.Lint(text, new SqlRender(ExplorerCatalog.MaxBand), list: false, mayCheckAccess: false).Select(problem => spec.Kind + ": " + problem));
-            if (text != CatalogSql.ParentLookup(spec.Kind) + PeekSql.Uses + PeekSql.UsedBy) dependencyProblems.Add(spec.Kind + ": it does not find the object first");
+            for (var band = ExplorerCatalog.MinBand; band <= ExplorerCatalog.MaxBand; band++)
+            {
+                var render = new SqlRender(band);
+                var text = PeekSql.Dependencies(spec.Kind, render);
+                dependencyProblems.AddRange(CatalogSql.Lint(text, render, list: false, mayCheckAccess: false).Select(problem => spec.Kind + " " + band + ": " + problem));
+                if (text != CatalogSql.ParentLookup(spec.Kind) + PeekSql.Uses(render) + PeekSql.UsedBy(render)) dependencyProblems.Add(spec.Kind + ": it does not find the object first");
+            }
             for (var band = ExplorerCatalog.MinBand; band <= ExplorerCatalog.MaxBand; band++)
                 if (PeekSql.Render(spec, new SqlRender(band), peek.DefinitionChars).Text.Contains("sql_expression_dependencies", StringComparison.OrdinalIgnoreCase)) dependencyProblems.Add(spec.Kind + " " + band + ": the facts read dependencies");
         }
-        check(dependencyProblems.Count == 0, "each kind's dependencies batch finds the object, then lists both ways, passes the lint, and the facts batch reads no dependencies"
+        check(dependencyProblems.Count == 0, "each kind's dependencies batch, for bands 12-17, finds the object, then lists both ways, passes the lint, and the facts batch reads no dependencies"
             + (dependencyProblems.Count > 0 ? ": " + dependencyProblems[0] : ""));
         var table = peek.Kinds["table"];
         var old = PeekSql.Render(table, new SqlRender(12), peek.DefinitionChars);
@@ -124,6 +128,11 @@ internal static partial class PeekChecks
             problems.AddRange(PeekRowsSql.Lint(text, kind).Select(problem => kind + ": " + problem));
         }
         check(problems.Count == 0, "Peek's rows batch finds the table or view first and passes its lint: " + string.Join(" | ", problems));
+        var rendered = PeekRowsSql.Render("table");
+        check(PeekRowsSql.TextSize == (ExplorerCatalog.Current.Peek.RowCellChars + 1) * 4 && rendered.Contains("N'SET TEXTSIZE 1028; BEGIN TRY SELECT TOP (@take) * FROM '", StringComparison.Ordinal)
+            && rendered.Contains("BEGIN CATCH IF ERROR_NUMBER() <> 10794 THROW; SET TRANSACTION ISOLATION LEVEL READ COMMITTED; SELECT TOP (@take) * FROM '", StringComparison.Ordinal)
+            && !rendered.Contains("filegroups", StringComparison.Ordinal),
+            "Peek's rows limit large values with SET TEXTSIZE (four bytes a character, one past the cap) and read again under READ COMMITTED only after error 10794");
         var refused = false;
         try { PeekRowsSql.Render("procedure"); } catch (InvalidOperationException) { refused = true; }
         check(refused, "Peek renders no rows batch for a procedure");
@@ -132,7 +141,7 @@ internal static partial class PeekChecks
         {
             ("a name outside QUOTENAME", table.Replace("QUOTENAME(@object_name)", "@object_name", StringComparison.Ordinal)),
             ("QUOTENAME of another value", table.Replace("QUOTENAME(@object_name)", "QUOTENAME(@fname)", StringComparison.Ordinal)),
-            ("another literal", table.Replace("N';'", "N'; DROP TABLE x;'", StringComparison.Ordinal)),
+            ("another literal", table.Replace("N'; END CATCH;'", "N'; END CATCH; DROP TABLE x;'", StringComparison.Ordinal)),
             ("a second dynamic statement", table + "EXEC sys.sp_executesql @rows;\n"),
             ("EXEC of a string", table + "EXEC (@rows);\n"),
             ("a metadata built-in", table.Replace("QUOTENAME(@object_schema)", "QUOTENAME(OBJECT_SCHEMA_NAME(@object_id))", StringComparison.Ordinal)),
@@ -150,6 +159,23 @@ internal static partial class PeekChecks
         check(PeekSql.KindOf("U ") == "table" && PeekSql.KindOf("ET") == "table" && PeekSql.KindOf("V ") == "view" && PeekSql.KindOf("PC") == "procedure" && PeekSql.KindOf("IF") == "function"
             && PeekSql.KindOf("SN") == "synonym" && PeekSql.KindOf("SO") == "sequence" && PeekSql.KindOf("TR") is null && PeekSql.KindOf(null) is null,
             "a dependency's type maps to the Object Explorer kind the tree lists it as, and triggers and unknown types to none");
+        string? Sub(string kind, string type, int temporal = 0, int ledger = 0, bool node = false, bool system = false, int ledgerView = 0) =>
+            PeekSql.SubtypeOf(kind, type, temporal, ledger, node, false, false, false, false, system, ledgerView, false);
+        check(Sub("function", "AF") == "aggregate" && Sub("function", "IF") == "inline" && Sub("function", "FS") == "clrScalar" && Sub("procedure", "PC") == "clr"
+            && Sub("procedure", "X ", system: true) == "extended" && Sub("procedure", "P ", system: true) == "system" && Sub("procedure", "P ") == "sql"
+            && Sub("table", "U ", ledger: 1) == "ledgerHistory" && Sub("table", "U ", temporal: 2) == "systemVersioned" && Sub("table", "U ", node: true) == "graphNode" && Sub("table", "U ") is null
+            && Sub("view", "V ", ledgerView: 1) == "ledger" && Sub("view", "V ", system: true) == "system" && Sub("view", "V ") is null && PeekSql.SubtypeOf("synonym", "SN", 0, 0, false, false, false, false, false, false, 0, false) is null,
+            "a dependency's subtype is the one the tree lists it with: a function's and procedure's by type, a table's and view's by their flags");
+        // The rows page: shown values as text (binary as 0x…), cut ones and unreadable ones listed apart.
+        var builder = new Varia.Backend.Results.PageBuilder(1, [Varia.Backend.Results.WireKind.Text, Varia.Backend.Results.WireKind.Binary, Varia.Backend.Results.WireKind.Text]);
+        builder.BeginRow(); builder.AppendText("a"); builder.AppendBinary([0xAB, 0x01]); builder.AppendText("hidden"); builder.CommitRow();
+        builder.BeginRow(); builder.AppendNull(error: true); builder.AppendBinary([0xFF], truncated: true); builder.AppendNull(); builder.CommitRow();
+        builder.BeginRow(); builder.AppendText(new string('x', 300)); builder.AppendNull(); builder.AppendNull(); builder.CommitRow();
+        var page = PeekRowsSql.FromPage(builder.Seal(), 3, 3, [new("A", "nvarchar"), new("B", "varbinary")], 1, 256);
+        check(page.Rows.Count == 3 && page.Rows[0] is ["a", "0xAB01"] && page.Rows[1] is [null, "0xFF"] && page.Rows[2][0] is { Length: 256 } && page.Rows[2][1] is null
+            && page.Unread is [[1, 0]] && page.Cut is { Count: 2 } cut && cut.Any(cell => cell is [1, 1]) && cut.Any(cell => cell is [2, 0]) && page.MoreColumns == 1,
+            "a rows page shows the shown columns as text, binary as 0x…, lists cut values, and lists a value the readers could not read apart from NULL: "
+            + JsonSerializer.Serialize(new { page.Rows, page.Cut, page.Unread }));
         check(PeekSql.ExecuteAsWord(PeekSql.Caller, null) == "CALLER" && PeekSql.ExecuteAsWord(-2, "dbo") == "OWNER" && PeekSql.ExecuteAsWord(5, "app") == "app"
             && PeekSql.ExecuteAsWord(null, null) is null, "EXECUTE AS reads CALLER, OWNER or the user's name, and nothing for an object without a module");
         check(PeekSql.FunctionType("SQL_SCALAR_FUNCTION") == "Scalar-valued" && PeekSql.FunctionType("SQL_INLINE_TABLE_VALUED_FUNCTION") == "Inline table-valued"

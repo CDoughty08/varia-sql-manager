@@ -101,27 +101,40 @@ internal static class PeekSql
     };
 
     /// <summary>What the object references by name (column references collapse into their object's row; itself left out), and
-    /// the tables its foreign keys point at. Columns: server, database, schema, name, the object's type when it is in this
-    /// database, and whether a foreign key makes the link. A reference SQL Server resolved takes the object's current names.</summary>
-    internal const string Uses = "SELECT TOP (@take) x.server_name, x.database_name, x.schema_name, x.entity_name, x.type, x.via FROM ("
-        + "SELECT d.referenced_server_name AS server_name, d.referenced_database_name AS database_name, COALESCE(rs.name, d.referenced_schema_name) AS schema_name, "
-        + "COALESCE(ro.name, d.referenced_entity_name) AS entity_name, ro.type AS type, CONVERT(bit, 0) AS via "
+    /// the tables its foreign keys point at: server, database, schema, name, the object's id when it is in this database, and
+    /// whether a foreign key makes the link. A reference SQL Server resolved takes the object's current names.</summary>
+    private const string UsesRows = "SELECT d.referenced_server_name AS server_name, d.referenced_database_name AS database_name, COALESCE(rs.name, d.referenced_schema_name) AS schema_name, "
+        + "COALESCE(ro.name, d.referenced_entity_name) AS entity_name, ro.object_id AS id, CONVERT(bit, 0) AS via "
         + "FROM sys.sql_expression_dependencies AS d LEFT JOIN sys.all_objects AS ro ON ro.object_id = d.referenced_id LEFT JOIN sys.schemas AS rs ON rs.schema_id = ro.schema_id "
         + "WHERE d.referencing_id = @object_id AND d.referencing_class = 1 AND d.referenced_class = 1 AND d.referenced_entity_name IS NOT NULL "
         + "AND (d.referenced_id IS NULL OR d.referenced_id <> @object_id) "
-        + "UNION SELECT NULL, NULL, rs.name, ro.name, ro.type, CONVERT(bit, 1) FROM sys.foreign_keys AS fk JOIN sys.all_objects AS ro ON ro.object_id = fk.referenced_object_id "
-        + "JOIN sys.schemas AS rs ON rs.schema_id = ro.schema_id WHERE fk.parent_object_id = @object_id AND fk.referenced_object_id <> @object_id"
-        + ") AS x ORDER BY x.server_name, x.database_name, x.schema_name, x.entity_name, x.via;\n";
+        + "UNION SELECT NULL, NULL, rs.name, ro.name, ro.object_id, CONVERT(bit, 1) FROM sys.foreign_keys AS fk JOIN sys.all_objects AS ro ON ro.object_id = fk.referenced_object_id "
+        + "JOIN sys.schemas AS rs ON rs.schema_id = ro.schema_id WHERE fk.parent_object_id = @object_id AND fk.referenced_object_id <> @object_id";
 
     /// <summary>The objects whose code references the object (resolved references only), and the tables whose foreign keys point
-    /// at it. Columns: schema, name, type, and whether a foreign key makes the link.</summary>
-    internal const string UsedBy = "SELECT TOP (@take) x.schema_name, x.entity_name, x.type, x.via FROM ("
-        + "SELECT s.name AS schema_name, o.name AS entity_name, o.type AS type, CONVERT(bit, 0) AS via FROM sys.sql_expression_dependencies AS d "
-        + "JOIN sys.all_objects AS o ON o.object_id = d.referencing_id JOIN sys.schemas AS s ON s.schema_id = o.schema_id "
+    /// at it, in <see cref="UsesRows"/>' columns.</summary>
+    private const string UsedByRows = "SELECT CONVERT(sysname, NULL) AS server_name, CONVERT(sysname, NULL) AS database_name, s.name AS schema_name, o.name AS entity_name, o.object_id AS id, "
+        + "CONVERT(bit, 0) AS via FROM sys.sql_expression_dependencies AS d JOIN sys.all_objects AS o ON o.object_id = d.referencing_id JOIN sys.schemas AS s ON s.schema_id = o.schema_id "
         + "WHERE d.referenced_id = @object_id AND d.referencing_class = 1 AND d.referencing_id <> @object_id "
-        + "UNION SELECT s.name, o.name, o.type, CONVERT(bit, 1) FROM sys.foreign_keys AS fk JOIN sys.all_objects AS o ON o.object_id = fk.parent_object_id "
-        + "JOIN sys.schemas AS s ON s.schema_id = o.schema_id WHERE fk.referenced_object_id = @object_id AND fk.parent_object_id <> @object_id"
-        + ") AS x ORDER BY x.schema_name, x.entity_name, x.via;\n";
+        + "UNION SELECT NULL, NULL, s.name, o.name, o.object_id, CONVERT(bit, 1) FROM sys.foreign_keys AS fk JOIN sys.all_objects AS o ON o.object_id = fk.parent_object_id "
+        + "JOIN sys.schemas AS s ON s.schema_id = o.schema_id WHERE fk.referenced_object_id = @object_id AND fk.parent_object_id <> @object_id";
+
+    /// <summary>One listing, at most @take rows in name order: server, database, schema, name, the type, whether a foreign key
+    /// makes the link, then what the tree's listings read for a subtype (ExplorerQueries' Tables and views, the tools-support
+    /// property as their system flag), each from its band.</summary>
+    private static string Listing(string rows, SqlRender render) => "SELECT TOP (@take) x.server_name, x.database_name, x.schema_name, x.entity_name, o.type, x.via, "
+        + render.Col(13, "t.temporal_type", "CONVERT(tinyint, 0)") + ", " + render.Col(16, "t.ledger_type", "CONVERT(tinyint, 0)") + ", "
+        + render.Col(14, "t.is_node", "CONVERT(bit, 0)") + ", " + render.Col(14, "t.is_edge", "CONVERT(bit, 0)") + ", t.is_filetable, " + render.Col(13, "t.is_external", "CONVERT(bit, 0)") + ", "
+        + render.Col(16, "t.is_dropped_ledger_table", "CONVERT(bit, 0)") + ", CONVERT(bit, CASE WHEN o.is_ms_shipped = 1 OR ep.major_id IS NOT NULL THEN 1 ELSE 0 END), "
+        + render.Col(16, "v.ledger_view_type", "CONVERT(tinyint, 0)") + ", " + render.Col(16, "v.is_dropped_ledger_view", "CONVERT(bit, 0)") + " FROM (" + rows + ") AS x "
+        + "LEFT JOIN sys.all_objects AS o ON o.object_id = x.id LEFT JOIN sys.tables AS t ON t.object_id = x.id LEFT JOIN sys.all_views AS v ON v.object_id = x.id "
+        + "LEFT JOIN sys.extended_properties AS ep ON ep.class = 1 AND ep.major_id = x.id AND ep.minor_id = 0 AND ep.name = N'microsoft_database_tools_support' "
+        + "ORDER BY x.server_name, x.database_name, x.schema_name, x.entity_name, x.via;\n";
+
+    /// <summary>What the object uses, for the band.</summary>
+    internal static string Uses(SqlRender render) => Listing(UsesRows, render);
+    /// <summary>What uses the object, for the band.</summary>
+    internal static string UsedBy(SqlRender render) => Listing(UsedByRows, render);
 
     /// <summary>The helper columns after a kind's facts, in order: the table's count of compression settings, a module's
     /// EXECUTE AS principal name, and a module kind's text.</summary>
@@ -156,30 +169,48 @@ internal static class PeekSql
         return new(facts, 0, definition, cut ? true : null);
     }
 
-    /// <summary>explorer.peekDependencies' batch for a kind: the object found by name, then what it uses and what uses it, at
-    /// most @take rows each in name order.</summary>
-    public static string Dependencies(string kind) => CatalogSql.ParentLookup(kind) + Uses + UsedBy;
+    /// <summary>explorer.peekDependencies' batch for a kind and band: the object found by name, then what it uses and what uses
+    /// it, at most @take rows each in name order.</summary>
+    public static string Dependencies(string kind, SqlRender render) => CatalogSql.ParentLookup(kind) + Uses(render) + UsedBy(render);
 
     /// <summary>The two dependency listings (the reader is on the first): at most <paramref name="max"/> each, marked truncated
     /// when the batch's TOP (@take), one more, found another.</summary>
     public static async Task<PeekDependenciesResult> ReadDependenciesAsync(SqlDataReader reader, int max, CancellationToken token)
     {
-        var uses = new List<PeekDependency>();
-        var usedBy = new List<PeekDependency>();
-        bool usesCut = false, usedByCut = false;
-        while (await reader.ReadAsync(token))
-        {
-            if (uses.Count == max) { usesCut = true; break; }
-            uses.Add(new(reader.GetString(3), Text(reader, 2), Text(reader, 1), Text(reader, 0), KindOf(Text(reader, 4)), reader.GetBoolean(5) ? true : null));
-        }
-        if (await reader.NextResultAsync(token))
-            while (await reader.ReadAsync(token))
-            {
-                if (usedBy.Count == max) { usedByCut = true; break; }
-                usedBy.Add(new(reader.GetString(1), Text(reader, 0), null, null, KindOf(Text(reader, 2)), reader.GetBoolean(3) ? true : null));
-            }
+        var (uses, usesCut) = await ListingAsync(reader, max, token);
+        var (usedBy, usedByCut) = await reader.NextResultAsync(token) ? await ListingAsync(reader, max, token) : ([], false);
         return new(uses, usedBy, 0, usesCut ? true : null, usedByCut ? true : null);
     }
+
+    private static async Task<(List<PeekDependency> Items, bool Cut)> ListingAsync(SqlDataReader reader, int max, CancellationToken token)
+    {
+        var items = new List<PeekDependency>();
+        while (await reader.ReadAsync(token))
+        {
+            if (items.Count == max) return (items, true);
+            var type = Text(reader, 4);
+            var kind = KindOf(type);
+            items.Add(new(reader.GetString(3), Text(reader, 2), Text(reader, 1), Text(reader, 0), kind, reader.GetBoolean(5) ? true : null,
+                SubtypeOf(kind, type, Number(reader, 6), Number(reader, 7), Flag(reader, 8), Flag(reader, 9), Flag(reader, 10), Flag(reader, 11), Flag(reader, 12), Flag(reader, 13),
+                    Number(reader, 14), Flag(reader, 15))));
+        }
+        return (items, false);
+    }
+
+    private static int Number(SqlDataReader reader, int index) => reader.IsDBNull(index) ? 0 : Convert.ToInt32(reader.GetValue(index), CultureInfo.InvariantCulture);
+    private static bool Flag(SqlDataReader reader, int index) => !reader.IsDBNull(index) && reader.GetBoolean(index);
+
+    /// <summary>The subtype the tree lists a dependency with (ExplorerQueries: Tables, views, procedures, functions), so a followed
+    /// one offers the same Script As verbs and folders.</summary>
+    internal static string? SubtypeOf(string? kind, string? type, int temporal, int ledger, bool node, bool edge, bool fileTable, bool external, bool droppedLedger, bool system,
+        int ledgerView, bool droppedLedgerView) => kind switch
+    {
+        "table" => ExplorerLabels.TableSubtype(temporal, ledger, node, edge, fileTable, external, droppedLedger, system),
+        "view" => droppedLedgerView ? "droppedLedger" : ledgerView == 1 ? "ledger" : system ? "system" : null,
+        "procedure" => type?.TrimEnd() is "X" or "RF" ? ExplorerLabels.ProcedureSubtype(type.TrimEnd()) : system ? "system" : ExplorerLabels.ProcedureSubtype(type?.TrimEnd() ?? "P"),
+        "function" => ExplorerLabels.FunctionSubtype(type?.TrimEnd() ?? "FN"),
+        _ => null
+    };
 
     private static string? Text(SqlDataReader reader, int index) => reader.IsDBNull(index) ? null : reader.GetString(index);
 

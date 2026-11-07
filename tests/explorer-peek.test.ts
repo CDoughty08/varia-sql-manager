@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { explorerCatalogJson, maxBand, minBand } from '../src/shared/explorer/catalog'
 import { isPeekKind, peekCatalogBlock, peekFacts, peekFormats, peekKinds, peekLimits, peekSpecs, peekTabsOf, peekTabTitle, type PeekDependenciesResult, type PeekResult, type PeekRowsResult } from '../src/shared/explorer/peek'
-import { peekDependenciesParamsSchema, peekParamsSchema, peekRowsParamsSchema } from '../src/shared/explorer/schema'
+import { peekParamsSchema, peekRowsParamsSchema } from '../src/shared/explorer/schema'
 import { requestSchemas } from '../src/main/validation'
 import { methodPolicies } from '../src/shared/ipc/methods'
 import { cancellableRequests } from '../src/main/backend/renderer-requests'
@@ -457,9 +457,7 @@ describe('Peek tabs', () => {
     expect(peekRowsParamsSchema.safeParse({ connectionId, requestId, target: { ...target, kind: 'procedure' } }).success).toBe(false)
     expect(peekRowsParamsSchema.safeParse({ connectionId, requestId, target, extra: 1 }).success).toBe(false)
     expect(requestSchemas['explorer.peekRows']).toBe(peekRowsParamsSchema)
-    expect(peekDependenciesParamsSchema.safeParse({ connectionId, requestId, target: { ...target, kind: 'procedure' } }).success).toBe(true)
-    expect(peekDependenciesParamsSchema.safeParse({ connectionId, requestId, target: { ...target, kind: 'synonym' } }).success).toBe(false)
-    expect(requestSchemas['explorer.peekDependencies']).toBe(peekDependenciesParamsSchema)
+    expect(requestSchemas['explorer.peekDependencies']).toBe(peekParamsSchema)
     expect(methodPolicies['explorer.peekDependencies']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 30_000 })
     expect(methodPolicies['explorer.peekRows']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 30_000 })
     expect(cancellableRequests('explorer.peekRows', { explorer: 'explorer', scripting: 'scripting', actions: 'actions', ssis: 'ssis', activity: 'activity', connections: 'connections' })).toBe('explorer')
@@ -546,6 +544,7 @@ describe('Peek tabs', () => {
     const view = { name: 'vOrders', schema: 'Sales', kind: 'view' as const }
     expect(service.canFollow(view)).toBe(true)
     expect(service.canFollow({ ...view, database: 'Other' })).toBe(false)
+    expect(service.canFollow({ ...view, database: 'Sales' })).toBe(true)
     expect(service.canFollow({ ...view, server: 'LINKED' })).toBe(false)
     expect(service.canFollow({ name: 'trg', schema: 'dbo' })).toBe(false)
     expect(service.canFollow({ ...view, kind: 'synonym' })).toBe(false)
@@ -559,6 +558,10 @@ describe('Peek tabs', () => {
     expect(open()).toMatchObject({ rowId: 7, kind: 'view', back: [{ kind: 'table', tab: 'dependencies' }] })
     service.goBack()
     expect(open()).toMatchObject({ rowId: 7, kind: 'table', tab: 'dependencies', back: [] })
+    // A followed dependency keeps the subtype the tree gives it, so Script As offers its own verbs.
+    service.follow({ name: 'Median', schema: 'dbo', kind: 'function', subtype: 'aggregate' })
+    expect(open().node).toMatchObject({ kind: 'function', subtype: 'aggregate', ref: { object: { kind: 'function', database: 'Sales', schema: 'dbo', name: 'Median' } } })
+    service.goBack()
     // Peeking the row again from the tree while the card shows a followed object shows the row's own.
     service.follow(view)
     service.peek(node('table', 7), 'keyboard')
