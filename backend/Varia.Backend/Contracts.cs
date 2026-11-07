@@ -36,7 +36,7 @@ internal sealed record TableArgs(string ConnectionId, string Database, string Sc
 /// <summary>query.execute. StopOnError keeps the remaining batches from running after one that raised an error (for SQLCMD's
 /// :on error exit); by default execution continues with the next batch, as SSMS does.</summary>
 internal sealed record QueryArgs(string ConnectionId, string SessionId, string Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10,
-    bool StopOnError = false, bool IncludeActualPlan = false);
+    bool StopOnError = false, bool IncludeActualPlan = false, bool IncludeClientStatistics = false);
 /// <summary>query.session.close: Transaction "commit" commits the session's open transaction first; "rollback" is a plain close,
 /// since SQL Server rolls back what a closed session left open.</summary>
 internal sealed record SessionArgs(string SessionId, string? Transaction = null);
@@ -72,7 +72,7 @@ internal sealed record MessageEntry(string Text, string Kind);
 /// it opened; both are present while it is still open after the script.</summary>
 internal sealed record QueryResult(List<ResultDescriptor> ResultSets, int DiscardedResultSets, List<MessageEntry> Messages, long RecordsAffected, long ElapsedMs,
     string Status, QueryFailure? Error, int CompletedBatches, int TotalBatches, string Database, bool MessagesTruncated, ResultBudget Budget, string CompletedAt,
-    int? Spid = null, string? Login = null, List<ResultDescriptor>? PlanSets = null, List<uint>? PlanOrder = null);
+    int? Spid = null, string? Login = null, List<ResultDescriptor>? PlanSets = null, List<uint>? PlanOrder = null, Statistics.ClientStatisticsSample? ClientStatistics = null);
 internal sealed record SessionStateArgs(string SessionId);
 /// <summary>query.session.state: an idle session's @@TRANCOUNT, read on demand before it ends. Checked is false when the
 /// session's SET options (SHOWPLAN_*, NOEXEC, PARSEONLY, FMTONLY) kept the SELECT from returning it; TransactionCount is

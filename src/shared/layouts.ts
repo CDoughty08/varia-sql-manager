@@ -2,10 +2,10 @@ import { z } from 'zod'
 import type { SerializedDockview } from 'dockview-react'
 import { popoutLimits } from './popouts'
 
-export const paneIds = ['explorer', 'editor', 'results', 'messages', 'plan'] as const
+export const paneIds = ['explorer', 'editor', 'results', 'messages', 'plan', 'statistics'] as const
 export type PaneId = typeof paneIds[number]
 /** The panels that show the active query's output; by default they share one group, tabbed, below the editor. */
-export const outputPaneIds = ['results', 'messages', 'plan'] as const
+export const outputPaneIds = ['results', 'messages', 'plan', 'statistics'] as const
 export type OutputPaneId = typeof outputPaneIds[number]
 export const isOutputPane = (id: string): id is OutputPaneId => (outputPaneIds as readonly string[]).includes(id)
 /**
@@ -18,13 +18,13 @@ export function outputIndex(id: OutputPaneId, tabs: readonly string[]): number |
   const after = tabs.findIndex(tab => isOutputPane(tab) && order(tab) > order(id))
   return before >= 0 ? before + 1 : after >= 0 ? after : undefined
 }
-export const paneTitles: Record<PaneId, string> = { explorer: 'Object Explorer', editor: 'Query editor', results: 'Results', messages: 'Messages', plan: 'Execution plan' }
+export const paneTitles: Record<PaneId, string> = { explorer: 'Object Explorer', editor: 'Query editor', results: 'Results', messages: 'Messages', plan: 'Execution plan', statistics: 'Client Statistics' }
 /**
  * The panels that can move into a window of their own (Move into New Window). The query editor stays in the main window:
  * Monaco keeps per-document state (its styles, hover and suggest widgets, IME text area and clipboard handling) that it
  * does not move to a second document (docs/popout-windows.md).
  */
-export const popoutPaneIds = ['explorer', 'results', 'messages', 'plan'] as const
+export const popoutPaneIds = ['explorer', 'results', 'messages', 'plan', 'statistics'] as const
 export type PopoutPaneId = typeof popoutPaneIds[number]
 export const canPopOut = (id: string): id is PopoutPaneId => (popoutPaneIds as readonly string[]).includes(id)
 /** A popout window: its panels as tabs in order, the one it shows, and where it is on screen (content size, in the page's CSS pixels; main scales them by the zoom). */
@@ -75,7 +75,7 @@ const windowSchema = z.object({
 }).strict()
 
 const layoutSchema = z.object({
-  grid: gridSchema, panels: z.object({ explorer: panelSchema.optional(), editor: panelSchema.optional(), results: panelSchema.optional(), messages: panelSchema.optional(), plan: panelSchema.optional() }).strict(),
+  grid: gridSchema, panels: z.object({ explorer: panelSchema.optional(), editor: panelSchema.optional(), results: panelSchema.optional(), messages: panelSchema.optional(), plan: panelSchema.optional(), statistics: panelSchema.optional() }).strict(),
   activeGroup: identifier.optional(),
   floatingGroups: z.array(z.object({ data: groupSchema.optional(), grid: gridSchema.optional(), position: positionSchema }).strict()
     .refine(value => (value.data === undefined) !== (value.grid === undefined), 'A floating group needs exactly one layout.')).max(paneIds.length).optional(),
@@ -152,6 +152,8 @@ const legacyPaneIds: ReadonlySet<unknown> = new Set(['explorer', 'editor', 'outp
  * validated as any version 2 layout is.
  */
 export function migrateLayoutV1(value: unknown): unknown {
+  // Preserve the historical migration. New optional panels open through Window or their feature toggle.
+  const legacyOutputs = ['results', 'messages', 'plan'] as const
   bounded(value, maxLayoutFileBytes)
   const copy = JSON.parse(JSON.stringify(value) ?? 'null') as Record<string, unknown> | null
   if (!copy || typeof copy !== 'object') return copy
@@ -159,7 +161,7 @@ export function migrateLayoutV1(value: unknown): unknown {
     const item = data as { views?: unknown; activeView?: unknown } | undefined
     if (!item || typeof item !== 'object' || !Array.isArray(item.views)) return
     if (item.views.some(id => !legacyPaneIds.has(id))) throw new Error('Invalid or unsupported workspace layout: a version 1 layout names an unknown panel.')
-    item.views = item.views.flatMap(id => id === 'output' ? [...outputPaneIds] : [id])
+    item.views = item.views.flatMap(id => id === 'output' ? [...legacyOutputs] : [id])
     if (item.activeView === 'output') item.activeView = 'results'
   }
   const node = (value: unknown): void => {
@@ -172,7 +174,7 @@ export function migrateLayoutV1(value: unknown): unknown {
   const panels = copy.panels as Record<string, unknown> | undefined
   if (panels && typeof panels === 'object' && Object.hasOwn(panels, 'output')) {
     const { output, ...rest } = panels, legacy = output as { id?: unknown } | null
-    copy.panels = { ...rest, ...Object.fromEntries(outputPaneIds.map(id => [id, legacy && typeof legacy === 'object' ? { ...legacy, id: legacy.id === 'output' ? id : legacy.id } : legacy])) }
+    copy.panels = { ...rest, ...Object.fromEntries(legacyOutputs.map(id => [id, legacy && typeof legacy === 'object' ? { ...legacy, id: legacy.id === 'output' ? id : legacy.id } : legacy])) }
   }
   return copy
 }

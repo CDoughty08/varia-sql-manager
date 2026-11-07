@@ -160,7 +160,7 @@ beforeEach(() => {
   live = new LiveService({ client, settings, page, schedule: callback => callback() })
   connections = new ConnectionService()
   panes = new PaneService()
-  panes.set({ explorer: true, editor: true, results: false, messages: false, plan: false })
+  panes.set({ explorer: true, editor: true, results: false, messages: false, plan: false, statistics: false })
   status = new ExplorerStatusService({ live, connections, panes, settings, schedule: callback => callback() })
 })
 afterEach(() => { status.dispose(); live.dispose(); vi.useRealTimers() })
@@ -286,8 +286,8 @@ describe('ExplorerStatusService', () => {
     const page: PageVisibility = { hidden: () => hidden, subscribe: listener => { pageListeners.add(listener); return () => { pageListeners.delete(listener) } } }
     live = new LiveService({ client, settings, page, schedule: callback => callback() })
     status = new ExplorerStatusService({ live, connections, panes, settings, schedule: callback => callback() })
-    const shown = { explorer: true, editor: true, results: false, messages: false, plan: false }
-    const at = (explorer: 'grid' | 'window') => ({ explorer, editor: 'grid', results: 'closed', messages: 'closed', plan: 'closed' } as const)
+    const shown = { explorer: true, editor: true, results: false, messages: false, plan: false, statistics: false }
+    const at = (explorer: 'grid' | 'window') => ({ explorer, editor: 'grid', results: 'closed', messages: 'closed', plan: 'closed', statistics: 'closed' } as const)
     panes.set(shown, at('window'))
     connections.add(info(first), { server: 'a' } as never)
     const fake = streamOf(first)
@@ -308,11 +308,11 @@ describe('ExplorerStatusService', () => {
     connections.add(info(first), { server: 'a' } as never)
     const fake = streamOf(first)
     open(fake)
-    panes.set({ explorer: false, editor: true, results: false, messages: false, plan: false })
+    panes.set({ explorer: false, editor: true, results: false, messages: false, plan: false, statistics: false })
     vi.advanceTimersByTime(defaultSettings['liveData.pauseAfterSeconds'] * 1000)
     await settle()
     expect(fake.updates).toEqual([{ paused: true }])
-    panes.set({ explorer: true, editor: true, results: false, messages: false, plan: false })
+    panes.set({ explorer: true, editor: true, results: false, messages: false, plan: false, statistics: false })
     await settle()
     expect(fake.updates).toEqual([{ paused: true }, { paused: false }])
     // Object Explorer's Refresh samples the server at once.
@@ -327,10 +327,10 @@ describe('ExplorerStatusService', () => {
   })
 
   it('opens no view while Object Explorer is hidden, so a server connected then runs no SQL until the pane shows', () => {
-    panes.set({ explorer: false, editor: true, results: false, messages: false, plan: false })
+    panes.set({ explorer: false, editor: true, results: false, messages: false, plan: false, statistics: false })
     connections.add(info(first), { server: 'a' } as never)
     expect(client.streams).toHaveLength(0)
-    panes.set({ explorer: true, editor: true, results: false, messages: false, plan: false })
+    panes.set({ explorer: true, editor: true, results: false, messages: false, plan: false, statistics: false })
     expect(client.streams.map(stream => stream.params.connectionId)).toEqual([first])
   })
 
@@ -342,9 +342,9 @@ describe('ExplorerStatusService', () => {
     // The ended view holds no slot in the window.
     expect(live.getSnapshot().handles).toEqual([])
     expect(status.server(first)).toMatchObject({ server: undefined, databases: undefined })
-    panes.set({ explorer: false, editor: true, results: false, messages: false, plan: false })
+    panes.set({ explorer: false, editor: true, results: false, messages: false, plan: false, statistics: false })
     expect(client.streams).toHaveLength(1)
-    panes.set({ explorer: true, editor: true, results: false, messages: false, plan: false })
+    panes.set({ explorer: true, editor: true, results: false, messages: false, plan: false, statistics: false })
     expect(client.streams).toHaveLength(2)
   })
 
@@ -442,11 +442,11 @@ describe('ExplorerStatusService', () => {
     await settle()
     expect(status.server(first)!.databases?.get('Sales')?.words).toBe('Restoring 5 %, Read-only')
     // Hidden long enough to go dormant, then shown: a new subscription, whose first sample brings no table yet.
-    panes.set({ explorer: false, editor: true, results: false, messages: false, plan: false })
+    panes.set({ explorer: false, editor: true, results: false, messages: false, plan: false, statistics: false })
     vi.advanceTimersByTime(defaultSettings['liveData.stopAfterHiddenMinutes'] * 60_000 + 1000)
     await settle()
     expect(fake.cancelled).toBe(true)
-    panes.set({ explorer: true, editor: true, results: false, messages: false, plan: false })
+    panes.set({ explorer: true, editor: true, results: false, messages: false, plan: false, statistics: false })
     await settle()
     const next = client.streams.at(-1)!
     expect(next).not.toBe(fake)
