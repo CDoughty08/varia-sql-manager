@@ -62,10 +62,10 @@ function plansOf(tab: TabResults | undefined): readonly ResultSetEntry[] {
  * The output view a query tab shows: Messages until a set opens (a run without sets ends there), then Results, unless the
  * user picked a view; Execution plan only while the run has a plan. Undefined for a tab that has not run.
  */
-export function outputViewOf(tab: TabResults | undefined): OutputViewName | undefined {
+export function outputViewOf(tab: TabResults | undefined, livePlan = false): OutputViewName | undefined {
   if (!tab) return undefined
   const hasSets = tab.sets.length > 0 || tab.status === 'closed'
-  return tab.view === 'plan' && plansOf(tab).length > 0 ? 'plan' : tab.view !== 'messages' && hasSets ? 'results' : 'messages'
+  return tab.view === 'plan' && (plansOf(tab).length > 0 || livePlan) ? 'plan' : tab.view !== 'messages' && hasSets ? 'results' : 'messages'
 }
 
 /**
@@ -73,8 +73,8 @@ export function outputViewOf(tab: TabResults | undefined): OutputViewName | unde
  * place of the output panel its group shows. A group where the output panels share tabs with another panel stays as it is.
  */
 export function OutputViewSync({ tabId }: { tabId: string }) {
-  const { results, panes } = useWorkbench()
-  const view = outputViewOf(useServiceSnapshot(results)[tabId])
+  const { results, panes, queryPlans } = useWorkbench()
+  const view = outputViewOf(useServiceSnapshot(results)[tabId], !!useServiceSnapshot(queryPlans)[tabId])
   useEffect(() => { if (view) panes.select(view) }, [panes, tabId, view])
   return null
 }
@@ -130,7 +130,8 @@ const viewNames: Record<OutputPaneId, string> = { results: 'Results', messages: 
  * also holds the run summary and the copy and save strips, so they show once, wherever the panels are.
  */
 function OutputPane({ pane, tabId, query, connected, hint }: Props) {
-  const { results, panes } = useWorkbench()
+  const { results, panes, queryPlans } = useWorkbench()
+  const livePlan = useServiceSnapshot(queryPlans)[tabId]
   const all = useServiceSnapshot(results)
   const visible = useServiceSnapshot(panes)
   const peers = useServiceSnapshot(panes.peers)[pane]
@@ -145,7 +146,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
   const jobs = tab?.jobs.filter(job => job.visible) ?? []
   const id = useId(), panelId = id + 'panel', tabIds: Record<OutputPaneId, string> = { results: id + 'results', messages: id + 'messages', plan: id + 'plan' }
   const [viewRef, viewHeight] = useHeight()
-  const available: Record<OutputPaneId, boolean> = { results: hasSets, messages: !!tab, plan: plans.length > 0 }
+  const available: Record<OutputPaneId, boolean> = { results: hasSets, messages: !!tab, plan: plans.length > 0 || !!livePlan }
   // Only the panel its group shows lists the tabs: a hidden panel's tabs are gone, not merely out of sight.
   const views = !tab || !visible[pane] ? [] : (peers.length ? peers : [pane]).filter(view => view === pane || available[view])
   // The strip line shows once there is something to read beyond row counts (or the user opened the strip); it opens itself
@@ -214,7 +215,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
             : hasSets ? <ResultsStack key={tab.queryId} tabId={tabId} tab={tab} />
             : <EmptyState className="output-empty" icon="table" detail={tab.status === 'running' ? 'Result sets appear here as the query returns them.' : 'The query returned no result sets.'} />}
           {showStrip && <MessagesStrip tabId={tabId} tab={tab} fits={stripFits} maxHeight={stripMax} />}
-        </> : pane === 'plan' ? plans.length > 0 ? <ResultPlans tabId={tabId} queryId={tab.queryId} plans={plans} order={tab.summary?.planOrder} />
+        </> : pane === 'plan' ? plans.length > 0 || livePlan ? <ResultPlans tabId={tabId} queryId={tab.queryId} plans={plans} order={tab.summary?.planOrder} live={livePlan} />
           : <EmptyState className="output-empty" icon="execution-plan" detail="A plan appears here when the query returns one, as SET SHOWPLAN_XML ON and SET STATISTICS XML ON do." />
           : <MessagesView tabId={tabId} tab={tab} />}
       </div>}

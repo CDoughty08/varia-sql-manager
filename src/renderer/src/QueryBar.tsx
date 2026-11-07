@@ -53,14 +53,15 @@ const keepFocus = (event: PointerEvent<HTMLButtonElement>) => { if (event.button
 type Control = HTMLButtonElement | HTMLSelectElement
 const isControl = (target: EventTarget | null): target is Control => target instanceof HTMLButtonElement || target instanceof HTMLSelectElement
 
-export function ActualPlanToggle({ classic = false }: { classic?: boolean }) {
+export function ActualPlanToggle({ classic = false, live = false }: { classic?: boolean; live?: boolean }) {
   const { commands } = useWorkbench()
-  const id = 'query.includeActualPlan'
+  const id = live ? 'query.includeLivePlan' : 'query.includeActualPlan'
+  const title = live ? 'Include Live Execution Plan' : 'Include Actual Execution Plan'
   const enabled = useCommandEnabled(id), [pressed] = useCommandsToggled([id]), key = useKeybindingLabel(id)
   return <button type="button" className={classic ? 'actual-plan-toggle' : 'query-bar-action actual-plan-toggle'}
-    aria-label="Include Actual Execution Plan" aria-keyshortcuts={key?.aria} aria-pressed={pressed} disabled={!enabled}
-    title={withKey('Include Actual Execution Plan', key)} onPointerDown={keepFocus} onClick={() => void commands.execute(id, undefined, 'toolbar')}>
-    <Icon name="execution-plan" /><span className="query-bar-label">Actual Plan</span>
+    aria-label={title} aria-keyshortcuts={key?.aria} aria-pressed={pressed} disabled={!enabled}
+    title={withKey(title, key)} onPointerDown={keepFocus} onClick={() => void commands.execute(id, undefined, 'toolbar')}>
+    <Icon name="execution-plan" /><span className="query-bar-label">{live ? 'Live Plan' : 'Actual Plan'}</span>
   </button>
 }
 
@@ -123,6 +124,7 @@ export default function QueryBar() {
       <Icon name="debug-stop" /><span className="query-bar-label">Cancel</span>
     </button>
     <ActualPlanToggle />
+    <ActualPlanToggle live />
     <div className="query-connection" role="group" aria-label="Connection" data-lost={model.connection?.lost || undefined}>
       {accent && <span className="connection-swatch" style={{ background: accent }} aria-hidden="true" />}
       {tag && <span className="query-bar-environment"><span className="visually-hidden">Environment: </span><EnvironmentTag environment={environment} place="query" about={model.serverName} /></span>}

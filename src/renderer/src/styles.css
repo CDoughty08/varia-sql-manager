@@ -528,13 +528,14 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
    shrink weight has them give way, down to their minimum, before the environment tag. */
 .query-connection select { flex: 0 1000 auto; min-width: 64px; max-width: 220px; height: 100%; padding: 0 2px; background: var(--varia-input-background); border: 0; text-overflow: ellipsis; }
 .query-connection select:focus-visible { outline-offset: 0; }
-@container (max-width: 520px) {
+@container (max-width: 700px) {
   .query-bar-action.execute kbd { display: none; }
   .query-bar-action.actual-plan-toggle .query-bar-label { display: none; }
 }
-@container (max-width: 400px) {
+@container (max-width: 520px) {
   .query-bar-label { display: none; }
-  .query-bar-action { padding: 0 4px; }
+  .query-bar-action { padding: 0 var(--varia-space-0); min-width: var(--varia-space-5); }
+  .query-connection-icon, .query-connection-divider { display: none; }
   .query-connection { gap: var(--varia-space-0); padding-left: var(--varia-space-1); }
 }
 @container (min-width: 310px) {

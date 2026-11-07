@@ -69,7 +69,7 @@ internal static class LiveSchedulerChecks
                 .Concat(LiveSql.Lint(query.Text(LiveSql.CommittedPrologue, admin: false))).Select(problem => query.Probe + " band " + query.Band + ", restricted: " + problem))).ToList();
         // The one-batch probes are Object Explorer's status probes and the SSIS tree's catalog probe; the Activity Monitor's and the
         // Operations document's run several statements each (ActivityReader, SsisOperationsReader), checked by their own lints.
-        var oneBatch = catalog.Probes.Values.Where(probe => catalog.Sources[probe.Source].Scope != "none" && !ActivityCatalog.Current.LiveProbes.Contains(probe.Id) && probe.Id != LiveSql.OperationsProbe).ToList();
+        var oneBatch = catalog.Probes.Values.Where(probe => catalog.Sources[probe.Source].Scope != "none" && !ActivityCatalog.Current.LiveProbes.Contains(probe.Id) && probe.Id != LiveSql.OperationsProbe && probe.Id != Plans.LivePlanSampler.Probe).ToList();
         check(oneBatch.Count == 5 && queries.Count == oneBatch.Count * (LiveSql.MaxBand - LiveSql.MinBand + 1) && problems.Count == 0,
             "every one-batch SQL probe's text passes the live lint at every band, with the session probe, the catalog state read and the catalog probe's restricted and read-committed texts (" + queries.Count + "): " + string.Join("; ", problems.Take(5)));
         // The Activity Monitor's statements run through the live layer too, so they pass its lint as well as their own; @@SPID is

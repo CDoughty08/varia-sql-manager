@@ -110,6 +110,7 @@ export interface QueryOptions {
   stopOnError?: boolean
   /** Collect actual execution plans for the statements that run. */
   includeActualPlan?: boolean
+  includeLivePlan?: boolean
 }
 /** `text` cells carry their SSMS display text; `binary` cells are shown as 0x plus hexadecimal. */
 export type WireKind = 'text' | 'binary'

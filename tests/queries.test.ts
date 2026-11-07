@@ -36,6 +36,19 @@ function fixture(commandTimeout?: number, wait?: (ms: number) => Promise<void>, 
   return { ...docs, bus: docs.events, queries, queryApi: api, connection, tab, events, results, calls }
 }
 describe('query orchestration', () => {
+  it('requests live capture per query tab and retains run identity until the next execution', async () => {
+    const f = fixture()
+    f.documents.update(f.tab.id, { includeLivePlan: true })
+    await f.queries.execute()
+    const args = f.queryApi.execute.mock.calls[0][0]
+    expect(args.includeLivePlan).toBe(true)
+    expect(args).not.toHaveProperty('includeActualPlan')
+    expect(f.queries.getSnapshot()[f.tab.id].livePlan?.queryId).toBe(args.queryId)
+    f.documents.update(f.tab.id, { includeLivePlan: false })
+    await f.queries.execute()
+    expect(f.queryApi.execute.mock.calls[1][0]).not.toHaveProperty('includeLivePlan')
+    expect(f.queries.getSnapshot()[f.tab.id].livePlan).toBeUndefined()
+  })
   it.each([0, 7, undefined])('uses the document session and preserves timeout %s', async timeout => {
     const { queries, queryApi, tab } = fixture(timeout)
     await queries.execute()

@@ -7,6 +7,8 @@ import type { CanvasColors, HoveredOperator, PlanCanvas } from './PlanCanvas'
 import type { Camera, PlanLayout } from './geometry'
 import { loadPlanSources, type PlanSource, type SourceStatement } from './sources'
 import { formatPlanMetric as amount, PlanHoverCard } from './PlanHoverCard'
+import type { QueryPlanState } from './QueryPlansService'
+import { completedPlanStatements, planTopology, queryPlanStatements } from './live-model'
 
 interface Content { statements: SourceStatement[]; notices: string[]; layout?: PlanLayout; error?: string; empty?: boolean }
 type StatementSelection = Pick<SourceStatement, 'id' | 'sourceKey'>
@@ -21,10 +23,19 @@ export function findOperators(statements: readonly PlanStatement[], query: strin
 }
 
 /** One shared world, a virtual operator outline and a text inspector. No statement owns a nested graph scroller. */
-export default function PlanViewer({ sources, identity, openDocument }: { sources: readonly PlanSource[]; identity: string; openDocument?(sourceKey: string): void }) {
+export default function PlanViewer({ sources, identity, openDocument, live }: { sources: readonly PlanSource[]; identity: string; openDocument?(sourceKey: string): void; live?: QueryPlanState }) {
   const { theme } = useWorkbench()
   const colors = useServiceSnapshot(theme).active.colors
-  const [content, setContent] = useState<Content>({ statements: [], notices: [] })
+  const [parsed, setParsed] = useState<Content>({ statements: [], notices: [] })
+  const [layoutState, setLayoutState] = useState<{ topology?: string; layout?: PlanLayout; error?: string }>({})
+  const [mode, setMode] = useState<'live' | 'actual'>(live?.running ? 'live' : 'actual')
+  const actual = useMemo(() => live ? queryPlanStatements(parsed.statements) : parsed.statements, [parsed.statements, !!live])
+  const statements = useMemo(() => live ? mode === 'live' ? live.model.statements : completedPlanStatements(live.model.statements, actual) : actual, [live?.model.statements, actual, mode])
+  const topology = useMemo(() => planTopology(statements), [statements])
+  const statementsRef = useRef(statements)
+  statementsRef.current = statements
+  const content: Content = { ...parsed, ...layoutState.topology === topology ? layoutState : {}, statements: statements as SourceStatement[], notices: [...parsed.notices, ...parsed.error && statements.length ? [parsed.error] : [], ...live?.note ? [live.note] : []] }
+  useEffect(() => { if (live && !live.running) setMode('actual') }, [live?.running])
   const saved = views.get(identity)
   const [selected, setSelected] = useState(saved?.selected ?? '')
   const [statement, setStatement] = useState(saved?.statement)
@@ -54,29 +65,30 @@ export default function PlanViewer({ sources, identity, openDocument }: { source
   }, [identity])
   useEffect(() => {
     const stop = new AbortController()
-    let worker: Worker | undefined, timer: ReturnType<typeof setTimeout> | undefined
-    setContent({ statements: [], notices: [] })
-    setGpuFailed(false)
-    void (async () => {
-      const { statements, notices } = await loadPlanSources(sourceRef.current, xml => window.varia.parsePlan(xml), stop.signal)
-      if (stop.signal.aborted) return
-      if (!statements.length) { setContent({ statements, notices, empty: true }); return }
-      setContent({ statements, notices })
-      worker = new Worker(new URL('./layout.worker.ts', import.meta.url), { type: 'module' })
-      const failed = () => { if (!stop.signal.aborted) setContent({ statements, notices, error: 'The plan could not be laid out within 20 seconds. Its operator outline and XML source are available.' }); worker?.terminate() }
-      timer = setTimeout(failed, 20_000)
-      worker.onerror = failed
-      worker.onmessageerror = failed
-      worker.onmessage = (event: MessageEvent<{ ok: boolean; layout: PlanLayout; error?: string }>) => {
-        clearTimeout(timer)
-        worker?.terminate()
-        if (!stop.signal.aborted) setContent({ statements, notices, ...event.data.ok ? { layout: event.data.layout } : { error: event.data.error } })
-      }
-      // Layout needs topology only; never clone SQL, warnings or operator properties into its worker.
-      worker.postMessage(statements.map(entry => ({ id: entry.id, nodes: entry.nodes.map(node => ({ id: node.id, parentId: node.parentId })) })))
-    })().catch(error => { if (!stop.signal.aborted) setContent({ statements: [], notices: [], error: message(error) }) })
-    return () => { stop.abort(); clearTimeout(timer); worker?.terminate() }
+    setParsed({ statements: [], notices: [] })
+    void loadPlanSources(sourceRef.current, xml => window.varia.parsePlan(xml), stop.signal).then(
+      value => { if (!stop.signal.aborted) setParsed({ ...value, empty: !value.statements.length }) },
+      error => { if (!stop.signal.aborted) setParsed({ statements: [], notices: [], error: message(error) }) })
+    return () => stop.abort()
   }, [identity, sourceKey, retry])
+  useEffect(() => {
+    setLayoutState({})
+    setGpuFailed(false)
+    if (!statementsRef.current.length) return
+    const worker = new Worker(new URL('./layout.worker.ts', import.meta.url), { type: 'module' })
+    let stopped = false
+    const failed = () => { if (!stopped) setLayoutState({ topology, error: 'The plan could not be laid out within 20 seconds. Its operator outline and XML source are available.' }); worker.terminate() }
+    const timer = setTimeout(failed, 20_000)
+    worker.onerror = failed
+    worker.onmessageerror = failed
+    worker.onmessage = (event: MessageEvent<{ ok: boolean; layout: PlanLayout; error?: string }>) => {
+      clearTimeout(timer)
+      worker.terminate()
+      if (!stopped) setLayoutState(event.data.ok ? { topology, layout: event.data.layout } : { topology, error: event.data.error })
+    }
+    worker.postMessage(statementsRef.current.map(entry => ({ id: entry.id, nodes: entry.nodes.map(node => ({ id: node.id, parentId: node.parentId })) })))
+    return () => { stopped = true; clearTimeout(timer); worker.terminate() }
+  }, [identity, topology, retry])
   const palette: CanvasColors = useMemo(() => ({ background: colors['panel.background'], card: colors['input.background'], text: colors.foreground,
     muted: colors.descriptionForeground, border: colors['panel.border'], accent: colors.focusBorder, warning: colors.warningForeground }), [colors])
   const paletteRef = useRef(palette)
@@ -87,13 +99,14 @@ export default function PlanViewer({ sources, identity, openDocument }: { source
     let disposed = false
     void import('./PlanCanvas').then(({ PlanCanvas }) => {
       if (disposed) return
-      canvas.current = new PlanCanvas({ root: element, statements: content.statements, layout, colors: paletteRef.current, camera: camera.current,
+      canvas.current = new PlanCanvas({ root: element, statements: statementsRef.current, layout, colors: paletteRef.current, camera: camera.current,
         select: id => selection.current(id), hover: setHovered,
         cameraChanged: value => { camera.current = value; setZoom(current => current === value.scale ? current : value.scale) }, failed: () => setGpuFailed(true) })
       canvas.current.select(latest.current.selected)
     }).catch(() => { if (!disposed) setGpuFailed(true) })
     return () => { disposed = true; canvas.current?.dispose(); canvas.current = undefined }
-  }, [content.layout, content.statements])
+  }, [content.layout])
+  useEffect(() => { canvas.current?.update(content.statements) }, [content.statements])
   useEffect(() => { canvas.current?.colors(palette) }, [palette])
   useEffect(() => { canvas.current?.select(selected, true) }, [selected])
   useLayoutEffect(() => {
@@ -104,7 +117,7 @@ export default function PlanViewer({ sources, identity, openDocument }: { source
     setScroll(element.scrollTop)
     const observer = observeResize(element, () => setHeight(element.clientHeight))
     return () => observer.dispose()
-  }, [outline, content.statements])
+  }, [outline, topology])
   const matches = useMemo(() => findOperators(content.statements, query, warningsOnly), [content.statements, query, warningsOnly])
   const allNodes = useMemo(() => new Map(content.statements.flatMap((entry, s) => entry.nodes.map(node => [node.id, { node, statement: s }] as const))), [content.statements])
   const hoveredNode = !gpuFailed && content.layout && hovered ? allNodes.get(hovered.id)?.node : undefined
@@ -152,7 +165,7 @@ export default function PlanViewer({ sources, identity, openDocument }: { source
     if (tree.current) tree.current.scrollTop = 0
     canvas.current?.fit(index)
   }
-  const preferredSource = xmlSource ?? statement?.sourceKey ?? current?.sourceKey ?? sources[0]?.key
+  const preferredSource = xmlSource ?? current?.sourceKey ?? statement?.sourceKey ?? sources[0]?.key
   const selectedSource = sources.find(source => source.key === preferredSource)
   const warnings = useMemo(() => [...allNodes.values()].filter(({ node }) => node.warnings.length).length, [allNodes])
   return <section className="plan-viewer" aria-label="Execution plan viewer" onKeyDownCapture={event => {
@@ -162,6 +175,11 @@ export default function PlanViewer({ sources, identity, openDocument }: { source
     event.stopPropagation()
   }}>
     <div className="plan-tools" role="toolbar" aria-label="Plan navigation">
+      {live && <>
+        <button type="button" aria-pressed={mode === 'live'} onClick={() => setMode('live')}>Live</button>
+        <button type="button" aria-pressed={mode === 'actual'} onClick={() => setMode('actual')} disabled={live.running && !sources.length}>Actual</button>
+        <span className="plan-tools-fact">{live.running ? 'Query running' : 'Query ended'}</span>
+      </>}
       <button type="button" aria-pressed={outline} onClick={() => setOutline(!outline)}>Outline</button>
       <button type="button" aria-pressed={inspector} onClick={() => setInspector(!inspector)}>Properties</button>
       {openDocument && (sources.length > 1 || !selectedSource && sources.length > 0) && <label>XML source <select aria-label="Plan XML source" value={selectedSource?.key ?? ''} onChange={event => setXmlSource(event.target.value)}>
@@ -206,7 +224,7 @@ export default function PlanViewer({ sources, identity, openDocument }: { source
         {current && <>
           <details><summary>Statement SQL</summary><p className="plan-statement-text">{current.text.trim() ? current.text : 'SQL text unavailable'}</p></details>
           <dl>{current.batchLabel && <><dt>Position</dt><dd>{current.batchLabel}</dd></>}
-            <dt>Plan data</dt><dd>{current.nodes.some(node => node.actualRows !== null) ? 'Actual' : 'Estimated'}</dd><dt>Statement estimated cost</dt><dd>{amount(current.estimatedCost)}</dd></dl>
+            <dt>Plan data</dt><dd>{current.partial ? live?.running && mode === 'live' ? 'Live (partial)' : 'Partial live snapshot' : current.nodes.some(node => node.actualRows !== null) ? 'Actual' : 'Estimated'}</dd><dt>Statement estimated cost</dt><dd>{amount(current.estimatedCost)}</dd></dl>
           {current.warnings.map((warning, index) => <p className="plan-warning" key={index}>{warning}</p>)}
         </>}
         {selectedNode ? <>

@@ -13,6 +13,7 @@ namespace Varia.Backend.Live;
 /// <summary>What the live service needs from SqlService.</summary>
 internal interface ILiveHost
 {
+    Plans.LivePlanTarget? QueryPlan(string connectionId, string queryId) => null;
     /// <summary>VARIA_BACKEND_TEST_HOOKS=1: test-only sources (debug.synthetic) are accepted.</summary>
     bool TestHooks { get; }
     bool IsConnected(string connectionId);
@@ -697,6 +698,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
     private ILiveSampler CreateSampler(LiveSourceJson source, object? args, string subscriptionId, string connectionId) => TestSampler?.Invoke(source) ?? source.Id switch
     {
         SyntheticSampler.Source => new SyntheticSampler(host.Store, subscriptionId, (SyntheticLiveArgs?)args ?? new SyntheticLiveArgs(), Limits),
+        "query.plan" => new Plans.LivePlanSampler(host, Gates, connectionId, args as Plans.LivePlanArgs ?? throw Invalid("A query id is required.")),
         SsisOperationsSource when source.Scope == "ssisdb" => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, null,
             new SsisOperationsReader(Ssis.SsisCatalog.Current, (SsisOperationsLiveArgs?)args, () => host.SsisCatalog, host.SsisIgnoresLinux)),
         _ when source.Scope is "server" or "ssisdb" => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, TestSql,
@@ -765,6 +767,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
         {
             return source.Id switch
             {
+                "query.plan" => Plans.LivePlanSampler.Check(element.Deserialize<Plans.LivePlanArgs>(json) ?? throw Invalid("A query id is required.")),
                 SyntheticSampler.Source => SyntheticSampler.Check(element.Deserialize<SyntheticLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), maxTail),
                 SsisOperationsSource => SsisOperationsArgs.Check(element.Deserialize<SsisOperationsLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), Ssis.SsisCatalog.Current),
                 _ when source.Id == ActivityCatalog.Current.Source => ActivityReader.Check(element.Deserialize<ActivityLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), ActivityCatalog.Current),

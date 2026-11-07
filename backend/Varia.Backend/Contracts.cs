@@ -36,7 +36,7 @@ internal sealed record TableArgs(string ConnectionId, string Database, string Sc
 /// <summary>query.execute. StopOnError keeps the remaining batches from running after one that raised an error (for SQLCMD's
 /// :on error exit); by default execution continues with the next batch, as SSMS does.</summary>
 internal sealed record QueryArgs(string ConnectionId, string SessionId, string Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10,
-    bool StopOnError = false, bool IncludeActualPlan = false);
+    bool StopOnError = false, bool IncludeActualPlan = false, bool IncludeLivePlan = false);
 /// <summary>query.session.close: Transaction "commit" commits the session's open transaction first; "rollback" is a plain close,
 /// since SQL Server rolls back what a closed session left open.</summary>
 internal sealed record SessionArgs(string SessionId, string? Transaction = null);
