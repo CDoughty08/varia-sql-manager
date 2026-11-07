@@ -1,4 +1,5 @@
 import { commandDescriptor, commandIds, type CommandId, type KeybindingSpec } from './catalog'
+import { scopeOfWhen } from './scopes'
 import { compileWhen, type WhenAst } from './when'
 
 export type Platform = 'win32' | 'linux' | 'darwin'
@@ -16,7 +17,7 @@ const isModifier = (value: string): value is Modifier => (modifiers as readonly 
 const functionKeys = Array.from({ length: 24 }, (_, index) => `f${index + 1}`)
 const namedKeys = ['enter', 'escape', 'tab', 'space', 'backspace', 'delete', 'insert', 'home', 'end', 'pageup', 'pagedown', 'up', 'down', 'left', 'right', 'pause', 'contextmenu', ...functionKeys]
 const punctuationKeys = ['/', '\\', ',', '.', ';', "'", '[', ']', '-', '=', '`']
-const characterKeys = [...'abcdefghijklmnopqrstuvwxyz0123456789', ...punctuationKeys]
+export const characterKeys: readonly string[] = [...'abcdefghijklmnopqrstuvwxyz0123456789', ...punctuationKeys]
 export const keyNames: ReadonlySet<string> = new Set([...characterKeys, ...namedKeys])
 
 export class KeySpecError extends Error {
@@ -215,18 +216,25 @@ export function defaultRules(platform: Platform): readonly ResolvedRule[] {
   return rules
 }
 
-/** The first one-chord rule for `id` on `platform`, workbench or native: the one labels and accelerators show. */
-export const primaryRule = (id: CommandId, platform: Platform): ResolvedRule | undefined =>
-  defaultRules(platform).find(rule => rule.command === id && rule.chords.length === 1)
+/**
+ * The first one-chord rule for `id` on `platform`, workbench or native: the one labels and accelerators show. `rules`
+ * defaults to the catalogue's; pass effective rules (`effectiveRules`) to include the user's shortcuts.
+ */
+export const primaryRule = (id: CommandId, platform: Platform, rules: readonly ResolvedRule[] = defaultRules(platform)): ResolvedRule | undefined =>
+  rules.find(rule => rule.command === id && rule.chords.length === 1)
 
-/** The catalogue's bridge rules on `platform`: Varia's two-part editor chords, which Monaco dispatches. */
-export const bridgeRules = (platform: Platform): readonly ResolvedRule[] => defaultRules(platform).filter(rule => rule.bridge)
+/** The bridge rules on `platform`: Varia's two-part editor chords, which Monaco dispatches. */
+export const bridgeRules = (platform: Platform, rules: readonly ResolvedRule[] = defaultRules(platform)): readonly ResolvedRule[] => rules.filter(rule => rule.bridge)
 
 /** First chords of native two-part rules: the workbench must let the key after them through to Monaco. */
-export const nativeChordPrefixes = (platform: Platform): ReadonlySet<string> =>
-  new Set(defaultRules(platform).filter(rule => rule.native && rule.chords.length > 1).map(rule => rule.chords[0]))
+export const nativeChordPrefixes = (platform: Platform, rules: readonly ResolvedRule[] = defaultRules(platform)): ReadonlySet<string> =>
+  new Set(rules.filter(rule => rule.native && rule.chords.length > 1).map(rule => rule.chords[0]))
 
-/** Workbench (non-native) one-chord rules by chord, each list in catalogue order: the dispatcher's lookup table. */
+/**
+ * Workbench (non-native) one-chord rules by chord: the dispatcher's lookup table, where the first rule whose `when`
+ * holds wins. Narrower scopes (`scopeOfWhen`'s rank) come first, so a narrower scope shadows a Global shortcut, the only
+ * overlap `validateShortcut` allows; otherwise each list keeps the order of `rules`.
+ */
 export function workbenchRules(rules: readonly ResolvedRule[]): ReadonlyMap<string, readonly ResolvedRule[]> {
   const table = new Map<string, ResolvedRule[]>()
   for (const rule of rules) {
@@ -235,6 +243,8 @@ export function workbenchRules(rules: readonly ResolvedRule[]): ReadonlyMap<stri
     if (list) list.push(rule)
     else table.set(rule.chords[0], [rule])
   }
+  const rank = (rule: ResolvedRule) => scopeOfWhen(rule.whenSource).rank
+  for (const list of table.values()) if (list.some(rule => rank(rule) !== rank(list[0]))) list.sort((a, b) => rank(b) - rank(a))
   return table
 }
 
@@ -287,12 +297,15 @@ export function reservedWhere(chord: string, platform: Platform): 'text' | 'edit
   return listed === undefined ? undefined : localReasons.get(listed)
 }
 
+/** `reservedReason`'s answer for Ctrl+Alt+letter on Windows and Linux, which `validateShortcut` softens on Linux. */
+export const altGrReason = 'AltGr types characters with Ctrl+Alt'
+
 /** Why a workbench keybinding may not use `chord` on `platform`, or undefined when it may. */
 export function reservedReason(chord: string, platform: Platform): string | undefined {
   const listed = reservedByPlatform[platform].get(chord)
   if (listed) return listed
   const { modifiers: pressed, key } = splitChord(chord)
-  if (platform !== 'darwin' && pressed.has('ctrl') && pressed.has('alt') && !pressed.has('meta') && /^[a-z]$/.test(key)) return 'AltGr types characters with Ctrl+Alt'
+  if (platform !== 'darwin' && pressed.has('ctrl') && pressed.has('alt') && !pressed.has('meta') && /^[a-z]$/.test(key)) return altGrReason
   if (platform === 'darwin' && pressed.has('alt') && !pressed.has('ctrl') && !pressed.has('meta') && (characterKeys.includes(key) || key === 'space')) return '⌥ types characters on macOS'
   return undefined
 }

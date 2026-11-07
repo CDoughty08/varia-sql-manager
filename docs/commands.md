@@ -842,8 +842,8 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `textInputFocus` | boolean | focus | `editorTextFocus \|\| inputFocus`. |
 | `activePanel` | `'explorer'`, `'editor'`, `'output'`, `''` | focus | The pane that holds focus: Object Explorer, the query editor, an output panel (Results, Messages or Execution plan), or '' for none. |
 | `outputGridFocus` | boolean | focus | Focus is in a results grid, which copies its selected cells rather than text. |
+| `messagesFocus` | boolean | focus | Focus is in a Messages view; activePanel is then 'output'. |
 | `searchHitsFocus` | boolean | focus | Focus is on a Search Objects result (the Search Objects tab's or Object Explorer's search), whose Copy copies the object's name. |
-| `messagesFocus` | boolean | focus | Focus is in a query's Messages, whose Select All selects only their text; activePanel is then 'output'. |
 | `explorerFocus` | boolean | focus | Focus is on Object Explorer's tree, not its search box, toolbar or Peek card; activePanel is then 'explorer'. |
 | `explorerTypeAhead` | boolean | focus | Object Explorer's tree is collecting a type-ahead name, so Space types a space rather than peeking. |
 | `optionsDialogFocus` | boolean | focus | Focus is in the Options dialog. |

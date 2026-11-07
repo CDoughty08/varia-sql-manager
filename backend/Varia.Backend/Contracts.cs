@@ -156,6 +156,20 @@ internal sealed record PeekArgs(string ConnectionId, string RequestId, ObjectRef
 /// <summary>Facts: fact id to a string, bool, whole number or null, for the facts the server's band has. Definition: a module's
 /// text, absent when it is encrypted or hidden; DefinitionTruncated is true only when it was cut. Facts are empty with an Error.</summary>
 internal sealed record PeekResult(Dictionary<string, object?> Facts, long ElapsedMs, string? Definition = null, bool? DefinitionTruncated = null, ExplorerError? Error = null);
+/// <summary>explorer.peekDependencies (its args are PeekArgs): what the object references and the tables its foreign keys
+/// point at (Uses), and what references it or points at it by a foreign key (UsedBy), each truncated when there were more.
+/// Both lists are empty with an Error.</summary>
+internal sealed record PeekDependenciesResult(List<PeekDependency> Uses, List<PeekDependency> UsedBy, long ElapsedMs, bool? UsesTruncated = null, bool? UsedByTruncated = null, ExplorerError? Error = null);
+/// <summary>One object on Peek's Dependencies tab: Database and Server name another database or a linked server; Kind is its
+/// Object Explorer kind when it is in this database and listed by name, with the Subtype the tree gives it; ForeignKey is true
+/// when a foreign key makes the link.</summary>
+internal sealed record PeekDependency(string Name, string? Schema = null, string? Database = null, string? Server = null, string? Kind = null, bool? ForeignKey = null, string? Subtype = null);
+/// <summary>explorer.peekRows: a table's or view's first rows (SELECT TOP (n) *), on Peek's slot and within its budget.</summary>
+internal sealed record PeekRowsArgs(string ConnectionId, string RequestId, ObjectRefDto Target);
+internal sealed record PeekRowsColumn(string Name, string Type);
+/// <summary>Columns: the first RowColumns of them (MoreColumns: how many were left out). Rows: each value as the grid shows it,
+/// null for NULL, cut to RowCellChars; Cut lists the [row, column] values that were cut, Unread those that could not be read.</summary>
+internal sealed record PeekRowsResult(List<PeekRowsColumn> Columns, List<string?[]> Rows, long ElapsedMs, int? MoreColumns = null, List<int[]>? Cut = null, ExplorerError? Error = null, List<int[]>? Unread = null);
 
 /// <summary>explorer.index: (re)builds the connection's object index, with module definitions unless Definitions is false. It
 /// sends droppable explorer.index.progress EVENTs and answers once every database was read or skipped; a newer build of the
