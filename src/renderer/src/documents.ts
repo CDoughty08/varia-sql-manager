@@ -12,6 +12,7 @@ export interface QueryDocument {
   readonly database: string
   readonly includeActualPlan?: boolean
   readonly includeLivePlan?: boolean
+  readonly includeClientStatistics?: boolean
   readonly file?: SqlFile
   /** The query's session ended without the user ending it (a Reconnect after the backend restarted, or a session found
    *  lost); its next execution says so before its own messages. */

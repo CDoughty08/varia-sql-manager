@@ -211,7 +211,7 @@ function DocumentTab({ api }: IDockviewPanelHeaderProps) {
   const kind = kindInfo[documentKind(tab)], pin = `${tab.pinned ? 'Unpin' : 'Pin'} ${tab.name}`
   const sid = isQueryDocument(tab) && <span className="tab-sid" title={session} aria-hidden="true">{spid === undefined ? '—' : `SID ${spid}`}</span>
   return <div className={selected ? 'query-tab active' : 'query-tab'} ref={ref} data-tab-id={id} data-dirty={tab.dirty || undefined} data-pinned={tab.pinned || undefined} style={{ borderTopColor: workbench.theme.accent(connection?.color) }}
-    onDoubleClick={event => { if (!(event.target as Element).closest('.tab-close, .tab-pin')) workbench.tabRename.start(id) }}>
+    onDoubleClick={event => { if (workbench.gestures.matches('documentTabs.rename', event) && !(event.target as Element).closest('.tab-close, .tab-pin')) workbench.tabRename.start(id) }}>
     {renaming ? <div className="tab-select tab-renaming"><Icon name={kind.icon} className="tab-icon" label={kind.label} /><TabRenameBox tabId={id} name={tab.name} service={workbench.tabRename} />{sid}</div>
       : <div className="tab-select"><Icon name={kind.icon} className="tab-icon" label={kind.label} /><span className="tab-name">{tab.name}</span><EnvironmentTag environment={environment} place="tab" />{tab.file?.readOnly && <Icon name="lock" className="tab-readonly" label="Read-only" />}{running && <Icon name="loading" spin className="tab-running" label="Executing" />}{sid}{tab.dirty && <span className="dirty-dot" role="img" aria-label="Unsaved changes" />}</div>}
     {/* Pinned tabs come first in their group (EditorAreaController.keepPinsFirst); focus stays on the tab as it moves. */}
@@ -353,7 +353,7 @@ class EditorAreaController implements Area, EditorGroupHost {
     this.api = api
     this.root = root
     const { documents, editorGroups } = this.workbench
-    const guides = new DockingGuides(api, root, () => {}, error => this.workbench.commands.reportError(error instanceof Error ? error.message : 'The editor could not move.'))
+    const guides = new DockingGuides(api, root, () => {}, error => this.workbench.commands.reportError(error instanceof Error ? error.message : 'The editor could not move.'), this.workbench.gestures)
     api.updateOptions({ dropPositionResolver: guides })
     this.disposables.push(guides,
       api.onDidActivePanelChange(event => { if (!this.reconciling && event.panel && documents.getSnapshot().activeId !== event.panel.id) documents.activate(event.panel.id); this.followStatus() }),

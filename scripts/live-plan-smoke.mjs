@@ -30,6 +30,7 @@ try {
   const toggle = page.getByRole('button', { name: 'Include Live Execution Plan', exact: true })
   await toggle.click()
   await expect(toggle).toHaveAttribute('aria-pressed', 'true')
+  await queryBarButton(page, 'Include Client Statistics').click()
   const aggregate = "SELECT SUM(CONVERT(bigint,CHECKSUM(HASHBYTES('SHA2_256',CONCAT(a.object_id,':',b.object_id))))) AS measured FROM sys.all_objects a CROSS JOIN sys.all_objects b OPTION(MAXDOP 1);"
   await sql(aggregate)
   await expect(outputStatus(page)).toContainText(/^Executing/)
@@ -58,6 +59,10 @@ try {
   await expect(viewer.getByText('Partial live snapshot', { exact: true })).toHaveCount(0)
   await expect(viewer.getByRole('button', { name: 'Open plan document', exact: true })).toBeEnabled()
   await page.screenshot({ path: resolve('artifacts/live-plan-actual.png') })
+  await outputView(page, 'Client Statistics').click()
+  const statistics = page.getByRole('table', { name: 'Client statistics comparison', exact: true })
+  await expect(statistics.getByRole('row').filter({ has: page.getByRole('rowheader', { name: 'Server round trips', exact: true }) }).getByRole('cell').first()).toHaveText('1')
+  await expect(page.getByLabel('Statistics execution').getByRole('option')).toContainText(['live plan'])
   // Cancel a later long statement: earlier completed plans and every GO repetition remain distinct.
   await sql("SELECT TOP (1) name AS before_live FROM sys.all_objects ORDER BY object_id;\nGO 2\n" + aggregate.replace('CROSS JOIN sys.all_objects b', 'CROSS JOIN sys.all_objects b CROSS JOIN sys.all_objects c'))
   await outputView(page, /^Execution plan/).click()

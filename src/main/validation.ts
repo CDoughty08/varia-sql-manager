@@ -3,7 +3,7 @@ import { planParseSchema, planDocumentSchema } from '../shared/plans'
 import type { RpcMethod } from '../shared/contracts'
 import { connectionOptionsSchema } from '../shared/connections'
 import { limits } from '../shared/ipc/wire/protocol'
-import { explorerChildrenParamsSchema, peekParamsSchema } from '../shared/explorer/schema.ts'
+import { explorerChildrenParamsSchema, peekParamsSchema, peekRowsParamsSchema } from '../shared/explorer/schema.ts'
 import { objectIndexParamsSchema, objectSearchParamsSchema } from '../shared/explorer/search.ts'
 import { scriptRequestSchema } from '../shared/scripting/schema.ts'
 import { actionDescribeSchema, actionExecuteRequestSchema, actionExecuteResultSchema, actionScriptRequestSchema } from '../shared/actions/schema.ts'
@@ -31,7 +31,7 @@ export const requestSchemas = {
     connectionId, sessionId: z.uuid(), database, sql: z.string().min(1).max(maxScriptCharacters, tooLargeScript), queryId: z.uuid(),
     startLine: z.number().int().min(1).max(1_000_000).optional(),
     maxRows: z.number().int().min(0).max(limits.maxRows), maxResultSets: z.number().int().min(limits.maxResultSets.min).max(limits.maxResultSets.max).optional(),
-    timeoutSeconds: z.number().int().min(0).max(86400), stopOnError: z.boolean().optional(), includeActualPlan: z.boolean().optional(), includeLivePlan: z.boolean().optional()
+    timeoutSeconds: z.number().int().min(0).max(86400), stopOnError: z.boolean().optional(), includeActualPlan: z.boolean().optional(), includeClientStatistics: z.boolean().optional(), includeLivePlan: z.boolean().optional()
   }).strict(),
   'query.cancel': z.object({ queryId: z.uuid() }).strict(),
   'query.session.close': z.object({ sessionId: z.uuid(), transaction: z.enum(['commit', 'rollback']).optional() }).strict(),
@@ -40,6 +40,8 @@ export const requestSchemas = {
   'explorer.index': objectIndexParamsSchema,
   'explorer.search': objectSearchParamsSchema,
   'explorer.peek': peekParamsSchema,
+  'explorer.peekDependencies': peekParamsSchema,
+  'explorer.peekRows': peekRowsParamsSchema,
   'scripting.script': scriptRequestSchema,
   'actions.describe': actionDescribeSchema,
   'actions.script': actionScriptRequestSchema,

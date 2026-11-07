@@ -12,7 +12,9 @@ export function queryPlanStatements(statements: readonly SourceStatement[]): Sou
   const occurrences = new Map<string, number>()
   return statements.map(statement => {
     if (!statement.batchNumber) return statement
-    const key = `b${statement.batchNumber}i${statement.iteration ?? 1}s${statement.statementId || hash(statement.text.trim())}${statement.queryHash ? 'q' + statement.queryHash : ''}`
+    // IDs are local to the compiled batch, and QueryHash can agree for different literals. Dynamic SQL and
+    // procedures can reuse both within one submitted batch; retain the text identity as well.
+    const key = `b${statement.batchNumber}i${statement.iteration ?? 1}s${statement.statementId ?? ''}t${hash(statement.text.trim())}${statement.queryHash ? 'q' + statement.queryHash : ''}`
     const occurrence = occurrences.get(key) ?? 0
     occurrences.set(key, occurrence + 1)
     const id = key + ':' + occurrence

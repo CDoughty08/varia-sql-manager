@@ -19,7 +19,7 @@ interface DocumentEntry { model: editor.ITextModel; subscription: Disposable; vi
 /** A text document opened from a value: its tab name, its text, and what it holds. */
 export interface TextDocument { readonly name: string; readonly text: string; readonly kind: Exclude<DocumentKind, 'sql'>; readonly file?: QueryDocument['file']; readonly eol?: LineEnding }
 export interface DocumentSnapshot { readonly documents: readonly QueryDocument[]; readonly activeId: string; readonly busy: boolean }
-type DocumentPatch = Partial<Pick<QueryDocument, 'name' | 'connectionId' | 'database' | 'file' | 'sessionNotice' | 'lastServer' | 'includeActualPlan' | 'includeLivePlan'>>
+type DocumentPatch = Partial<Pick<QueryDocument, 'name' | 'connectionId' | 'database' | 'file' | 'sessionNotice' | 'lastServer' | 'includeActualPlan' | 'includeLivePlan' | 'includeClientStatistics'>>
 type DocumentApi = Pick<VariaApi, 'saveSqlFile' | 'closeQuerySession'>
 /**
  * What a document without text in the editor (a table designer) needs from its owner: Save (true when it saved), why it

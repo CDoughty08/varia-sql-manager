@@ -73,6 +73,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string? Login { get; private set; }
     /// <summary>Where the live table checks read a message log and a snapshot table (created on demand).</summary>
     public string Live => Name + "_live";
+    /// <summary>Where Peek reads a memory-optimized table's top rows: a database with a MEMORY_OPTIMIZED_DATA filegroup, which
+    /// cannot be removed again, so it is never the main scratch database (created on demand).</summary>
+    public string MemoryOptimized => Name + "_mo";
     /// <summary>The server file picker's database, whose backup file (on Linux) the backup folder's listing must show.</summary>
     public string Files => Name + "_files";
     /// <summary>Where the wave 5 seam checks run runner v2's compensation, the shared templates and the pre-move (created on demand).</summary>
@@ -155,8 +158,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // database, a database with its snapshot, and the login's own; _det Detach's and _dets its snapshot (a run that crashes while _det is detached
     // leaves only its files, which disposal attaches again when it can); and _ren, _renn and _rent the database rename checks' (D3c): a crashed run
     // can leave either name, or one in SINGLE_USER, which the DROP handles; _ldu and _ldk a login's Delete's (D4c): its mapped users' databases; _lpr
-    // Login Properties' (D2c).
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_files|_seam|_seamt|_nd|_ap|_at|_at'\]|_at2|_rst|_rstr|_rstf|_rfl|_lgn|_lgm|_lgmo|_lgmr|_dbs|_del|_delc|_delcs|_delo|_det|_dets|_ren|_renn|_rent|_ldu|_ldk|_lpr)?$")]
+    // Login Properties' (D2c); _mo Peek's memory-optimized table's.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_files|_seam|_seamt|_nd|_ap|_at|_at'\]|_at2|_rst|_rstr|_rstf|_rfl|_lgn|_lgm|_lgmo|_lgmr|_dbs|_del|_delc|_delcs|_delo|_det|_dets|_ren|_renn|_rent|_ldu|_ldk|_lpr|_mo)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^[a-z0-9]{1,8}\.(bak|trn)$")]
     private static partial Regex PartPattern();
@@ -471,6 +474,26 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
 
     /// <summary>Creates the empty, marked live tables database.</summary>
     public Task<string> CreateLiveAsync() => CreateMarkedAsync(Live);
+
+    /// <summary>Creates <see cref="MemoryOptimized"/> with a MEMORY_OPTIMIZED_DATA filegroup in the server's default data folder.</summary>
+    public async Task<string> CreateMemoryOptimizedAsync()
+    {
+        var name = await CreateMarkedAsync(MemoryOptimized);
+        await Exec("ALTER DATABASE " + Bracket(name) + " ADD FILEGROUP [mo] CONTAINS MEMORY_OPTIMIZED_DATA;\n"
+            + "DECLARE @path nvarchar(4000) = CONVERT(nvarchar(4000), SERVERPROPERTY('InstanceDefaultDataPath')) + " + Quote(name) + ";\n"
+            + "DECLARE @add nvarchar(max) = N'ALTER DATABASE " + Bracket(name).Replace("'", "''") + " ADD FILE (NAME = N''mo'', FILENAME = N''' + REPLACE(@path, N'''', N'''''') + N''') TO FILEGROUP [mo];';\n"
+            + "EXEC sys.sp_executesql @add;");
+        return name;
+    }
+
+    /// <summary>Drops <see cref="MemoryOptimized"/> once Peek's checks are done with it, so the Object Explorer checks that follow
+    /// list the scratch databases they expect (dispose drops it too, after a failure).</summary>
+    public async Task DropMemoryOptimizedAsync()
+    {
+        var dropped = await Drop(run, MemoryOptimized, online: true);
+        if (dropped.Status != "completed") throw new InvalidOperationException("Scratch cleanup failed: " + dropped.Error);
+        created.Remove(MemoryOptimized);
+    }
 
     /// <summary>Creates the empty, marked server file picker database.</summary>
     public Task<string> CreateFilesAsync() => CreateMarkedAsync(Files);

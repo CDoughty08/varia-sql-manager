@@ -1,5 +1,5 @@
 import type { CommandId } from '../../../shared/commands/catalog'
-import { findConflicts } from '../../../shared/commands/conflicts'
+import { findConflicts, isBlockingConflict } from '../../../shared/commands/conflicts'
 import type { ContextKeys } from '../../../shared/commands/context-keys'
 import { chordFromEvent, defaultRules, keybindingLabel, workbenchRules, type KeybindingLabel, type KeyEventLike, type Platform, type ResolvedRule } from '../../../shared/commands/keybindings'
 import { menuCommandIds, menuMayShowChords } from '../../../shared/commands/menus'
@@ -67,7 +67,7 @@ export class KeybindingService implements Disposable {
   constructor(private readonly options: KeybindingServiceOptions) {
     const { platform } = options
     this.rules = options.rules ?? defaultRules(platform)
-    const conflicts = findConflicts(this.rules, platform)
+    const conflicts = findConflicts(this.rules, platform).filter(conflict => isBlockingConflict(conflict, platform))
     if (conflicts.length) {
       const message = 'Keybinding conflicts:\n' + conflicts.map(conflict => conflict.message).join('\n')
       if ((options.onConflict ?? (import.meta.env?.DEV ? 'throw' : 'log')) === 'throw') throw new Error(message)

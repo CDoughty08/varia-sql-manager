@@ -18,7 +18,7 @@ describe('live execution plans', () => {
     const baseline = applyLivePlan(emptyLivePlan, frame())
     const next = applyLivePlan(baseline, { ...frame(23), document: undefined })
     expect(planTopology(next.statements)).toBe(planTopology(baseline.statements))
-    expect(next.statements.map(s => s.id)).toEqual(['b1i1s1:0', 'b1i1s2:0'])
+    expect(next.statements.map(s => s.id)).toEqual([expect.stringMatching(/^b1i1s1t.+:0$/), expect.stringMatching(/^b1i1s2t.+:0$/)])
     expect(next.statements[0].nodes[1].parentId).toBe(next.statements[0].nodes[0].id)
     expect(next.statements.flatMap(s => s.nodes).every(n => n.actualRows === 23 && n.liveActivity)).toBe(true)
     const idle = applyLivePlan(next, { ...frame(23), document: undefined })
@@ -62,6 +62,20 @@ describe('live execution plans', () => {
     const later = applyLivePlan(next, { ...frame(30), revision: 2, document: undefined })
     expect(later.statements[0].nodes[0].actualRows).toBe(1)
     expect(later.statements[1].nodes[0].actualRows).toBe(30)
+  })
+  it('keeps distinct SQL with reused statement ids and query hashes separate through final capture', () => {
+    const variant = (text: string, rows: number): LivePlanFrame => ({ ...frame(rows), document: { ...document, statements: [
+      { ...document.statements[0], statementId: '1', queryHash: '0x123', text }
+    ] } })
+    const first = applyLivePlan(emptyLivePlan, variant('SELECT * FROM Data WHERE n = 1', 10))
+    const second = applyLivePlan(first, { ...variant('SELECT * FROM Data WHERE n = 2', 20), revision: 2 })
+    expect(second.statements).toHaveLength(2)
+    expect(second.statements.map(s => s.nodes[0].actualRows)).toEqual([10, 20])
+    const actual = queryPlanStatements(second.statements.map(s => ({ ...s, partial: undefined, sourceKey: 'actual', nodes: s.nodes.map(n => ({ ...n, actualRows: 100 })) })))
+    const complete = completedPlanStatements(second.statements, actual)
+    expect(complete).toHaveLength(2)
+    expect(complete.map(s => s.id)).toEqual(second.statements.map(s => s.id))
+    expect(complete.every(s => !s.partial)).toBe(true)
   })
   it('bounds accumulated statements across repeated batches', () => {
     let model = emptyLivePlan

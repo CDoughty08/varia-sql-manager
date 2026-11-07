@@ -216,6 +216,10 @@ export const commandCatalog = {
     title: 'Show Execution Plan', category: 'View', icon: 'execution-plan', keywords: ['output', 'showplan', 'plan'],
     menus: [{ menu: 'window', group: '1_panes', order: 5, title: 'Execution Plan', mnemonic: 'x' }]
   },
+  'window.statistics': {
+    title: 'Show Client Statistics', category: 'View', icon: 'graph', keywords: ['output', 'bytes', 'timing'],
+    menus: [{ menu: 'window', group: '1_panes', order: 8, title: 'Client Statistics', mnemonic: 'c' }]
+  },
   // SSMS's Ctrl+R: hides the output panels (closing them keeps the results) or shows them again. It never reloads the window.
   'view.toggleResultsPane': {
     title: 'Toggle Results Pane', category: 'View', icon: 'output', keywords: ['results', 'messages', 'output', 'hide', 'show'], toggled: 'outputPaneVisible',
@@ -262,6 +266,16 @@ export const commandCatalog = {
     title: 'Include Live Execution Plan', category: 'Query', icon: 'execution-plan', keywords: ['profiling', 'statistics', 'progress'],
     precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy', toggled: 'includeLivePlan',
     menus: [{ menu: 'query', group: '1_execute', order: 4, mnemonic: 'l' }]
+  },
+  'query.includeClientStatistics': {
+    title: 'Include Client Statistics', category: 'Query', icon: 'graph', keywords: ['bytes', 'roundtrips', 'timing'],
+    precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy', toggled: 'includeClientStatistics',
+    keybindings: [{ win: 'alt+shift+s', linux: 'alt+shift+s', when: 'editorFocus || queryBarFocus' }],
+    menus: [{ menu: 'query', group: '1_execute', order: 5, mnemonic: 's' }]
+  },
+  'query.resetClientStatistics': {
+    title: 'Reset Client Statistics', category: 'Query', icon: 'clear-all', precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy',
+    menus: [{ menu: 'query', group: '1_execute', order: 6, mnemonic: 'r' }]
   },
   'workbench.showCommands': {
     title: 'Show All Commands', palette: false,

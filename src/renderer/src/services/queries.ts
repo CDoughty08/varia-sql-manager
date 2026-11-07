@@ -8,6 +8,7 @@ import type { Disposable } from '../core/types'
 import type { ResultsService } from '../results/ResultsService'
 import { isQueryDocument, type SessionNotice } from '../documents'
 import { DocumentService } from './documents'
+import { ClientStatisticsService } from '../statistics/ClientStatisticsService'
 
 export interface RunningQuery { readonly queryId: string; readonly connectionId: string; readonly startedAt: number }
 /** The tab's SQL session as its execution reported it: its SPID and login, read when it opened (SSMS's status bar
@@ -51,6 +52,7 @@ const nothingOpen: TransactionState = { transactions: 0 }
 const mayBeOpen: TransactionState = { transactions: 0, unchecked: true }
 
 export class QueryService extends SnapshotStore<QuerySnapshot> implements Disposable {
+  readonly statistics = new ClientStatisticsService()
   private disposed = false
   /** Each running execution, so closing its tab can wait for the cancel to land. */
   private readonly runs = new Map<string, Promise<void>>()
@@ -59,7 +61,10 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     private results: Pick<ResultsService, 'begin' | 'finish'>, private now: () => number = () => Date.now(), private wait: (ms: number) => Promise<void> = ms => new Promise(resolve => { setTimeout(resolve, ms) }),
     private settings: () => SettingsValues = () => defaultSettings) {
     super({})
-    this.subscription = events.subscribe(event => { if (event.type === 'session.ended') this.sessionEnded(event.tabId) })
+    this.subscription = events.subscribe(event => {
+      if (event.type === 'session.ended') this.sessionEnded(event.tabId)
+      if (event.type === 'documents.closed') this.statistics.reset(event.tabId)
+    })
   }
   isRunning(id: string): boolean { return !!this.getSnapshot()[id]?.running }
   isConnectionRunning(id: string): boolean { return Object.values(this.getSnapshot()).some(state => state.running?.connectionId === id) }
@@ -134,6 +139,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   }
   /** The tab's session ended (closed, or lost), and its transaction with it. */
   sessionEnded(id: string): void {
+    this.statistics.sessionEnded(id)
     const state = this.getSnapshot()[id]
     if (state?.session) this.update(id, { ...state, session: undefined })
   }
@@ -162,6 +168,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     // Reserve before the first await so repeated commands cannot start a second script.
     const livePlan = document.includeLivePlan ? { queryId, connectionId: connection.id } : undefined
     this.update(tabId, { running: { queryId, connectionId: connection.id, startedAt: this.now() }, session: previous, ...livePlan ? { livePlan } : {} })
+    if (document.includeClientStatistics) this.statistics.begin(tabId, queryId, connection.id, document.database, !!(document.includeActualPlan || document.includeLivePlan), connection.server, !!document.includeLivePlan)
     let summary: QueryResult | undefined, error: string | undefined, code: ErrorCode | undefined
     try {
       // The run's events are followed before the script is sent, so no early result set is missed.
@@ -172,11 +179,14 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       })
       this.events.emit({ type: 'query.started', tabId, queryId })
       const response = await this.api.execute({ connectionId: connection.id, sessionId: tabId, database: document.database, sql, startLine, queryId,
-        ...this.executionOptions(connection), ...document.includeActualPlan ? { includeActualPlan: true } : {}, ...document.includeLivePlan ? { includeLivePlan: true } : {} })
+        ...this.executionOptions(connection), ...document.includeActualPlan ? { includeActualPlan: true } : {},
+        ...document.includeClientStatistics ? { includeClientStatistics: true } : {}, ...document.includeLivePlan ? { includeLivePlan: true } : {} })
       if (response.ok) summary = response.value
       else { error = response.error; code = response.code }
     } catch (failure) { error = errorText(failure) }
     if (this.disposed) return
+    this.statistics.finish(tabId, queryId, summary)
+    if (sessionGone.has(code) || summary && summary.spid === undefined) this.statistics.sessionEnded(tabId)
     // A run that settles after its tab closed (a cancel that took longer than cancelSettleMs) still frees its results.
     if (!this.documents.get(tabId)) { this.results.finish(tabId, queryId, { summary, error, code }); return }
     if (this.getSnapshot()[tabId]?.running?.queryId !== queryId) return
@@ -252,5 +262,5 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     await Promise.race([stopped, this.wait(cancelSettleMs)])
     return new Map(tabs.map(tab => [tab.id, !tab.running && answer === 'commit' ? 'commit' : 'rollback']))
   }
-  dispose(): void { this.disposed = true; this.subscription.dispose(); this.clearListeners(); this.publish({}) }
+  dispose(): void { this.disposed = true; this.subscription.dispose(); this.statistics.dispose(); this.clearListeners(); this.publish({}) }
 }

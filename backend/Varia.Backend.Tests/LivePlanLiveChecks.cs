@@ -107,5 +107,40 @@ internal static class LivePlanLiveChecks
             await stream;
             await Call("query.session.close", new SessionArgs(session));
         }
+        await CompletedProcedureAsync(check, service, info, json);
+    }
+
+    private static async Task CompletedProcedureAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json)
+    {
+        var session = Guid.NewGuid().ToString();
+        var query = Guid.NewGuid().ToString();
+        async Task<QueryResult> Run(string sql, bool capture = false) => (QueryResult)await service.DispatchAsync("query.execute", JsonSerializer.SerializeToElement(
+            new QueryArgs(info.Id, session, "master", sql, capture ? query : Guid.NewGuid().ToString(), 10, 45, IncludeLivePlan: capture), json), json);
+        try
+        {
+            await Run("CREATE PROCEDURE #varia_live_identity AS BEGIN DECLARE @n int = 1; IF @n=1 "
+                + "SELECT SUM(CONVERT(bigint,CHECKSUM(HASHBYTES('SHA2_256',CONCAT(a.object_id,':',b.object_id))))) AS measured "
+                + "FROM sys.all_objects a CROSS JOIN sys.all_objects b OPTION(MAXDOP 1); END;");
+            using var sampler = new LivePlanSampler((ILiveHost)service, service.Live.Gates, info.Id, new(query));
+            var execution = Run("EXEC #varia_live_identity;", true);
+            var spec = new LiveProbeState(LiveCatalog.Current.Probes[LivePlanSampler.Probe], 1000);
+            var due = new LiveDue(spec, null, null, null, null, new Dictionary<int, LiveTrackArgs>(), BudgetMs: 1000);
+            PlanDocument? live = null;
+            while (!execution.IsCompleted)
+            {
+                var sample = await sampler.SampleAsync([due], CancellationToken.None);
+                live = sample.Samples.Select(s => s.Plan?.Document).FirstOrDefault(d => d is not null) ?? live;
+                await Task.WhenAny(execution, Task.Delay(250));
+            }
+            var result = await execution;
+            var actual = result.PlanSets?.SelectMany(set => LiveResultChecks.RowsOf(service.Results, set))
+                .SelectMany(row => PlanParser.Parse(new StringReader(row[0]!), CancellationToken.None).Statements).Where(s => s.Nodes.Count > 0).ToList() ?? [];
+            var profiled = live?.Statements.Where(s => s.Nodes.Count > 0).ToList() ?? [];
+            check(result.Status == "completed" && profiled.Count > 0 && actual.Count > 0
+                && profiled.All(s => actual.Any(a => a.StatementId == s.StatementId && a.QueryHash == s.QueryHash && a.Text.Trim() == s.Text.Trim())),
+                "completed procedure plans retain live statement identity: live=" + string.Join(',', profiled.Select(s => s.StatementId + ":" + s.QueryHash))
+                + "; actual=" + string.Join(',', actual.Select(s => s.StatementId + ":" + s.QueryHash)));
+        }
+        finally { await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(session), json), json); }
     }
 }
