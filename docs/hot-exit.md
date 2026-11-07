@@ -48,11 +48,24 @@ default. While it is off, pinned tabs still reopen, and a close asks about unsav
 strict zod schemas on both the request and the file, invalid files quarantined. The next start takes it and renames it
 `previous.json`, kept until that run closes. A new session replaces both, or a close with nothing to reopen deletes both. A run that
 crashes after restoring leaves `previous.json`, and the next process's first page reopens it again, while AutoRecover
-offers what changed since in its Recover dialog: a restore never loses text. A reload of the page within one process
-reopens only a session written since (macOS: closing the window and opening a new one).
+offers what changed since in its Recover dialog: a restore never loses text. A renderer crash after the restore is the
+same: Reload in the crash dialog reopens `previous.json` (it holds the only copy of the restored text until a close keeps
+the tabs again or AutoRecover's interval comes round), and a later close then keeps or asks about those tabs as usual.
+A reload of the page within one process otherwise reopens only a session written since (macOS: closing the window and
+opening a new one).
 
 AutoRecover is unchanged: a hot-exit close counts as handling every query, so AutoRecover's copies are deleted and the
 next start shows no Recover dialog.
+
+## Windows shutdown, restart and log off
+
+Windows ends its session without the quit that starts the close everywhere else (Electron emits no `before-quit`), so
+main handles the window's `query-session-end`: it asks the page for AutoRecover's copies of every unsaved query at once
+(`file.autoRecoverNow`, whatever the interval; nothing while AutoRecover is off), holds the end, and asks the page to
+close as a quit does. Hot exit then keeps the tabs, or with it off the unsaved-query prompts ask, and the app quits once
+the close is done, which lets Windows go on. While a prompt is open, Windows shows that Varia SQL Manager is keeping it
+from ending; Cancel there leaves the app open, and Shut down anyway ends it with AutoRecover's copies kept. A critical end
+does not wait, so it is not held. `session-end` (the end can no longer wait) asks once more for AutoRecover's copies.
 
 ## Connections
 
@@ -74,5 +87,7 @@ to another server uses that connection's database. Either way the memory is clea
 ## Tests
 
 `tests/session-store.test.ts` (store, schemas, limits, Save As suggestion), `tests/hot-exit.test.ts` (rename, keeping,
-close flow, restore, remembered database), and `scripts/hot-exit-smoke.mjs` (rename three ways, quit, relaunch).
+close flow, restore, remembered database), `tests/close-intent.test.ts` (which session ends are held),
+`tests/recovery-service.test.ts` (`file.autoRecoverNow`), and `scripts/hot-exit-smoke.mjs` (rename three ways, quit,
+relaunch, crashes during and after a restore, a Windows session end).
 Other smoke suites run with `VARIA_TEST_HOT_EXIT=0` (the fixture's default) so their save prompts stay.

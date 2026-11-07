@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (234)
+## Commands (235)
 
 ### File
 
@@ -23,6 +23,7 @@ keys it uses are listed below.
 | Open Recent File… | `file.openRecent` | — | — | — | `hasRecentFiles && !documentBusy` | File › Recent Files › each recent file |
 | Clear Recent Files | `file.clearRecent` | — | — | — | `hasRecentFiles` | File › Recent Files › Clear Recent Files |
 | Recover Unsaved Queries… | `file.recoverUnsaved` | — | — | — | `hasRecoveryFiles` | — |
+| Save AutoRecover Copies Now (not in the palette) | `file.autoRecoverNow` | — | — | — | Always | — |
 | Close Query | `file.close` | Ctrl+W, Ctrl+F4, Delete (`documentTabFocus && !inputFocus`), Backspace (`documentTabFocus && !inputFocus`) | Ctrl+W, Ctrl+F4, Delete (`documentTabFocus && !inputFocus`), Backspace (`documentTabFocus && !inputFocus`) | ⌘W, ⌦ (`documentTabFocus && !inputFocus`), ⌫ (`documentTabFocus && !inputFocus`) | `hasActiveDocument && !documentBusy` | File › Close Query; Query tab context menu › Close |
 | Close All But This | `file.closeOthers` | — | — | — | `multipleDocuments && !documentBusy` | Query tab context menu › Close All But This |
 | Close All | `file.closeAll` | — | — | — | `hasActiveDocument && !documentBusy` | Window › Close All Documents; Query tab context menu › Close All |
