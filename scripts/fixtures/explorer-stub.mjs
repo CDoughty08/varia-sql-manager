@@ -153,6 +153,8 @@ export function installExplorerStub({ ipcMain }, { statics }) {
         facts: { schema: params.target.schema ?? null, created: '2024-01-02T03:04:05', modified: '2024-02-03T04:05:06', systemObject: false, replicated: false, lockEscalation: 'TABLE',
           memoryOptimized: false, temporal: 'NON_TEMPORAL_TABLE', ledger: 'NON_LEDGER_TABLE', rowCount: 12345, dataSpace: 2048, indexSpace: 64, filegroup: 'PRIMARY', textFilegroup: null,
           partitioned: false, compression: 'NONE' },
+        // A module's text comes with its facts, as the backend reads it from sys.sql_modules.
+        ...(() => { const definition = searchObjects.find(item => item.object.kind === params.target.kind && item.object.name === params.target.name)?.definition; return definition ? { definition } : {} })(),
         elapsedMs: 1
       })
       case 'scripting.script': return ok({ text: `CREATE TABLE [${params.targets[0].schema}].[${params.targets[0].name}](\n\t[Id] [int] NOT NULL\n)\nGO\n`, database: params.targets[0].database ?? 'master', warnings: [], commands: 1, elapsedMs: 1 })
