@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import type { LivePlanFrame, PlanNode } from '../src/shared/plans'
+import { planLimits, type LivePlanFrame, type PlanNode } from '../src/shared/plans'
 import { liveEventSchema, liveSubscribeParamsSchema } from '../src/shared/live/schema'
-import { applyLivePlan, completedPlanStatements, emptyLivePlan, planTopology, queryPlanStatements } from '../src/renderer/src/plans/live-model'
+import { applyLivePlan, completedPlanStatements, completedPlanView, emptyLivePlan, planTopology, queryPlanStatements } from '../src/renderer/src/plans/live-model'
 import { loadPlanSources } from '../src/renderer/src/plans/sources'
 
 const node = (id: string, parentId: string | null, nodeId: string): PlanNode => ({ id, parentId, nodeId, physicalOp: 'Index Scan', logicalOp: 'Scan', object: '[dbo].[Data]',
@@ -86,15 +86,15 @@ describe('live execution plans', () => {
     expect(completed[0]).toMatchObject({ text: 'SELECT * FROM Data', sourceKey: 'native', partial: undefined })
     expect(completed[0].nodes.every(n => n.actualRows === 100)).toBe(true)
   })
-  it('separates omitted SQL using literal expressions and reconciles each completed native plan', () => {
+  it.each([{ label: 'omitted', text: '' }, { label: 'shortened', text: 'SELECT /* ' + 'x'.repeat(16_374) }])('separates $label SQL using literal expressions and reconciles each completed native plan', ({ text }) => {
     const variant = (literal: number): LivePlanFrame => ({ ...frame(literal), document: { ...document, statements: [
-      { ...document.statements[0], text: '', queryHash: '0x123', nodes: document.statements[0].nodes.map(n => ({ ...n,
+      { ...document.statements[0], text, queryHash: '0x123', nodes: document.statements[0].nodes.map(n => ({ ...n,
         properties: [{ name: 'Const.ConstValue', value: String(literal) }] })) }
     ] } })
     const first = applyLivePlan(emptyLivePlan, variant(1))
     const second = applyLivePlan(first, { ...variant(2), revision: 2 })
     expect(second.statements).toHaveLength(2)
-    const actual = queryPlanStatements(second.statements.map((s, i) => ({ ...s, text: `SELECT ${i + 1}`, partial: undefined, sourceKey: 'native' })))
+    const actual = queryPlanStatements(second.statements.map((s, i) => ({ ...s, text: text || `SELECT ${i + 1}`, partial: undefined, sourceKey: 'native' })))
     const completed = completedPlanStatements(second.statements, actual)
     expect(completed).toHaveLength(2)
     expect(completed.map(s => s.id)).toEqual(second.statements.map(s => s.id))
@@ -113,6 +113,30 @@ describe('live execution plans', () => {
     for (let iteration = 1; iteration <= 256; iteration++) model = applyLivePlan(model, { ...frame(), iteration, revision: iteration })
     expect(model.statements).toHaveLength(512)
     expect(applyLivePlan(model, { ...frame(), iteration: 257, revision: 257 })).toBe(model)
+  })
+  it('keeps the combined completed view within its statement limit', () => {
+    const source = (index: number, partial: boolean) => ({ ...document.statements[0], id: `${partial}:${index}`, batchNumber: index + (partial ? 1 : 1000),
+      sourceKey: partial ? '' : `actual-${index}`, partial, nodes: [] })
+    const live = Array.from({ length: planLimits.statements }, (_, i) => source(i, true))
+    const actual = Array.from({ length: planLimits.statements }, (_, i) => source(i, false))
+    const view = completedPlanView(live, actual)
+    expect(view.statements).toEqual(actual)
+    expect(view.omitted).toBe(planLimits.statements)
+    expect(live).toHaveLength(planLimits.statements)
+  })
+  it('keeps the combined completed view within its operator limit', () => {
+    const source = (index: number, partial: boolean) => {
+      const id = `${partial}:${index}`
+      return { ...document.statements[0], id, batchNumber: index + (partial ? 1 : 1000), sourceKey: partial ? '' : `actual-${index}`, partial,
+        nodes: Array.from({ length: 2000 }, (_, i) => node(id + ':' + i, null, String(i))) }
+    }
+    const live = Array.from({ length: 3 }, (_, i) => source(i, true))
+    const actual = Array.from({ length: 3 }, (_, i) => source(i, false))
+    const view = completedPlanView(live, actual)
+    expect(view.statements.reduce((sum, s) => sum + s.nodes.length, 0)).toBe(planLimits.nodes)
+    expect(view.statements.filter(s => !s.partial)).toEqual(actual)
+    expect(view.omitted).toBe(1)
+    expect(live).toHaveLength(3)
   })
   it('validates the live source query identity and prevents plan payloads on unrelated probes', () => {
     const subscriptionId = crypto.randomUUID(), connectionId = crypto.randomUUID()

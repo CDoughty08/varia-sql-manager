@@ -49,7 +49,10 @@ export class QueryPlansService extends SnapshotStore<Readonly<Record<string, Que
         const next = { ...this.getSnapshot() }; delete next[tab]; this.publish(next)
       } else if (!query.running && state.running) {
         this.end(tab)
-        const outcome = query.error ? query.error + ' Retained live statistics are partial.' : query.summary?.status === 'completed' ? 'Execution completed. Captured actual plans replace transient statistics where available.' : 'Execution stopped. Retained live statistics are partial; captured actual plans are available for completed statements.'
+        const status = query.summary?.status
+        const outcome = query.error ? query.error + ' Retained live statistics are partial.' : status === 'completed' || status === 'completedWithErrors'
+          ? `Execution completed${status === 'completedWithErrors' ? ' with errors' : ''}. Captured actual plans replace transient statistics where available.`
+          : 'Execution stopped. Retained live statistics are partial; captured actual plans are available for completed statements.'
         this.set(tab, { ...state, running: false, model: idleLivePlan(state.model),
           note: [outcome, state.issue].filter(Boolean).join(' ') })
       }

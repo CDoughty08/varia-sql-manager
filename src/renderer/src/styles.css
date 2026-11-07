@@ -2012,6 +2012,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-search-check > input { flex: none; margin: 0; accent-color: var(--varia-focusBorder); }
 .object-search-check > span { overflow-wrap: anywhere; }
 .object-search-check:has(input:focus-visible) { outline: 2px solid var(--varia-focusBorder); outline-offset: -2px; }
+.object-search-check:has(input:disabled), .object-search-toggle:disabled { color: var(--varia-disabledForeground); cursor: default; }
 .object-search-all-types { border-bottom: 1px solid var(--varia-menu-separatorBackground); padding-bottom: var(--varia-space-1); margin-bottom: var(--varia-space-1); }
 .object-search-popover > p + p { margin-top: var(--varia-space-2); }
 @container (min-width: 300px) {
@@ -2039,6 +2040,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-search-line-number { margin-inline-end: var(--varia-space-1); }
 .object-search-more { font-family: var(--varia-font-ui); }
 .object-search mark { background: transparent; color: var(--varia-list-highlightForeground); font-weight: 600; }
+.object-search mark[data-approximate] { font-weight: inherit; text-decoration: underline dotted; }
 .index-status { display: flex; align-items: center; gap: var(--varia-space-1); margin-left: var(--varia-space-3); white-space: nowrap; }
 .index-status .codicon { font-size: var(--varia-glyph-sm); }
 .index-status button { color: inherit; background: transparent; border: 1px solid currentColor; padding: 0 var(--varia-space-1); font-size: var(--varia-size-xs); line-height: 14px; }

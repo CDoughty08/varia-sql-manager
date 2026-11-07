@@ -21,6 +21,7 @@ internal static class SearchChecks
         Sql(check);
         Matcher(check);
         Ranking(check);
+        Fuzzy(check);
         Deadline(check);
         Qualified(check);
         Previews(check);
@@ -145,8 +146,107 @@ internal static class SearchChecks
     private static readonly ObjectIndexStatus Ready = new("ready", 2, 2, 7, 1, 0, [], true);
 
     private static ObjectSearchResult Search(ConnectionIndex index, string text, bool names = true, bool definitions = true, int limit = 200, HashSet<string>? kinds = null, string? database = null,
-        bool wholeWord = false, ObjectIndexLimits? limits = null, CancellationToken token = default) =>
-        IndexSearch.Run(index, new(text, false, wholeWord, false, names, definitions, kinds, database, limit), Make(text, wholeWord: wholeWord), limits ?? new ObjectIndexLimits(), Ready, token);
+        bool wholeWord = false, ObjectIndexLimits? limits = null, CancellationToken token = default, bool fuzzy = false) =>
+        IndexSearch.Run(index, new(text, false, wholeWord, false, names, definitions, kinds, database, limit, fuzzy), Make(text, wholeWord: wholeWord), limits ?? new ObjectIndexLimits(), Ready, token);
+
+    /// <summary>Fuzzy Match: how names split into words, the sound key, the bounded edit distance, and how approximate hits rank
+    /// below exact ones, mark their words, honour Whole Word and dots, and leave definitions exact.</summary>
+    private static void Fuzzy(Action<bool, string> check)
+    {
+        string Words(string value)
+        {
+            var spans = new List<(int Start, int Length)>();
+            FuzzyName.Split(value, spans);
+            return string.Join("|", spans.Select(span => value.Substring(span.Start, span.Length)));
+        }
+        check(Words("XMLParser") == "XML|Parser" && Words("usp_GetOrders2") == "usp|Get|Orders|2" && Words("orderLines") == "order|Lines" && Words("ID") == "ID"
+            && Words("[Sales Order]-Line") == "Sales|Order|Line" && Words("Ünïcode_Ä") == "Ünïcode|Ä",
+            "fuzzy matching splits names at punctuation, camelCase, a capital run's end and digits: " + Words("XMLParser") + ", " + Words("usp_GetOrders2"));
+        check(FuzzyName.Phonetic("Customer") == "KSTMR" && FuzzyName.Phonetic("Kustomer") == "KSTMR" && FuzzyName.Phonetic("Phone") == FuzzyName.Phonetic("Fone")
+            && FuzzyName.Phonetic("Address") == FuzzyName.Phonetic("Adres") && FuzzyName.Phonetic("Knight") == FuzzyName.Phonetic("Night") && FuzzyName.Phonetic("Orders") != FuzzyName.Phonetic("Users"),
+            "the sound key joins sound-alikes (Kustomer, Fone, Adres, Knight) and keeps others apart: " + FuzzyName.Phonetic("Customer") + ", " + FuzzyName.Phonetic("Address"));
+        var matcher = FuzzyName.Create("x", false)!;
+        check(matcher.Distance("custmer", "customer", 2, false) == 1 && matcher.Distance("cusotmer", "customer", 2, false) == 1 && matcher.Distance("custm", "customer", 1, true) == 1
+            && matcher.Distance("custm", "customer", 1, false) == -1 && matcher.Distance("orders", "users", 2, false) == -1,
+            "the edit distance counts a swap as one edit, can compare with the nearest prefix, and gives up past its bound");
+        check(FuzzyName.Create(string.Join(" ", Enumerable.Repeat("word", FuzzyName.MaxWords + 1)), false) is null && FuzzyName.Create(new string('a', FuzzyName.MaxWordChars + 1), false) is null
+            && FuzzyName.Create("*.?", false) is null && FuzzyName.Create(string.Join(" ", Enumerable.Repeat("word", FuzzyName.MaxWords)), false) is not null,
+            "a search with too many or too long words, or none, matches exactly only");
+
+        var index = new ConnectionIndex(new IndexBudget(1 << 20));
+        index.Put(new DatabaseIndex("Sales", [
+            new("table", "tables", "Sales", "Customer"),
+            new("table", "tables", "Sales", "CustomerAddress"),
+            new("table", "tables", "dbo", "Customer"),
+            new("table", "tables", "dbo", "Order"),
+            new("table", "tables", "dbo", "Orders"),
+            new("table", "tables", "dbo", "Users"),
+            new("table", "tables", "dbo", "PhoneNumber"),
+            new("table", "tables", "dbo", "Product"),
+            new("column", "columns", null, "AddressLine1", "table", "Sales", "CustomerAddress"),
+            new("procedure", "storedProcedures", "dbo", "usp_Report", Definition: "SELECT customer FROM Sales.Customer")
+        ], 0, 1, 0));
+        string Labels(ObjectSearchResult result) => string.Join(", ", result.Hits.Select(hit => hit.Label + (hit.Approximate == true ? "~" : "")));
+
+        var result = Search(index, "custmer adress", fuzzy: true);
+        check(result.Hits is [{ Label: "Sales.CustomerAddress", Approximate: true, Range: [6, 15] }], "a fuzzy search finds a name with a typo in each word and marks the words it matched: " + Labels(result));
+        check(Search(index, "custmer adress").Hits.Count == 0, "without Fuzzy Match the same search finds nothing");
+        result = Search(index, "orders", definitions: false, fuzzy: true);
+        check(Labels(result) == "dbo.Orders, dbo.Order~", "exact hits keep their rank and approximate ones follow, but a different word does not match: " + Labels(result));
+        result = Search(index, "ord", definitions: false, fuzzy: true);
+        check(Labels(result) == "dbo.Order, dbo.Orders", "a short word is no typo of another word's start, nor of a word with another first letter: " + Labels(result));
+        index.Put(new DatabaseIndex("Words", [new("table", "tables", "dbo", "Artist"), new("table", "tables", "dbo", "Kit"), new("table", "tables", "dbo", "Coat")], 0, 0, 0));
+        check(Search(index, "ord", definitions: false, fuzzy: true, database: "Words").Hits.Count == 0 && Search(index, "cat", definitions: false, fuzzy: true, database: "Words").Hits.All(hit => hit.Label != "dbo.Kit")
+            && Search(index, "code", definitions: false, fuzzy: true, database: "Words").Hits.Any(hit => hit.Label == "dbo.Coat"),
+            "a word of fewer than 4 letters never matches by sound (ord is not Artist, cat not Kit), a longer one does (code, Coat)");
+        result = Search(index, "fone", fuzzy: true);
+        check(result.Hits is [{ Label: "dbo.PhoneNumber", Approximate: true, Range: [4, 5] }], "a word that sounds alike matches: " + Labels(result));
+        result = Search(index, "custmeraddres", fuzzy: true);
+        check(result.Hits is [{ Label: "Sales.CustomerAddress" }], "a search typed without separators is compared with the whole name: " + Labels(result));
+        result = Search(index, "addr cust", definitions: false, fuzzy: true);
+        check(Labels(result) == "Sales.CustomerAddress~", "words match in any order and as prefixes: " + Labels(result));
+        result = Search(index, "custome", definitions: false, fuzzy: true);
+        check(Labels(result) == "dbo.Customer, Sales.Customer, Sales.CustomerAddress", "a search that is a name's start is an exact prefix hit, not an approximate one: " + Labels(result));
+        result = Search(index, "custmr", definitions: false, fuzzy: true);
+        check(result.Hits.Take(2).All(hit => hit.Label.EndsWith(".Customer", StringComparison.Ordinal)) && result.Hits.Count == 3, "fewer edits rank first: " + Labels(result));
+        result = Search(index, "custm", definitions: false, fuzzy: true, wholeWord: true);
+        check(result.Hits.Count == 0 && Search(index, "custm", definitions: false, fuzzy: true).Hits.Count == 3, "under Whole Word a fuzzy word must match a whole word, not a prefix: " + Labels(result));
+        result = Search(index, "custmer", definitions: false, fuzzy: true, wholeWord: true);
+        check(Labels(result) == "dbo.Customer~, Sales.Customer~, Sales.CustomerAddress~", "under Whole Word a fuzzy word may match any whole word of a name: " + Labels(result));
+        result = Search(index, "sales.custmer", definitions: false, fuzzy: true);
+        check(Labels(result) == "Sales.Customer~, Sales.CustomerAddress~", "a fuzzy search with a dot matches the schema before it (dbo.Customer is left out): " + Labels(result));
+        result = Search(index, "slaes.custmer.adress", definitions: false, fuzzy: true);
+        check(result.Hits is [{ Object.Kind: "column", Approximate: true }], "a child's words before the dot match its parent's schema or name: " + Labels(result));
+        var numbers = new ConnectionIndex(new IndexBudget(1 << 20));
+        numbers.Put(new DatabaseIndex("Numbers", [
+            new("table", "tables", "dbo", "Orders20"),
+            new("table", "tables", "dbo", "Sales2018"),
+            new("table", "tables", "dbo", "Sales20190"),
+            new("table", "tables", "dbo", "StringList"),
+            new("table", "tables", "dbo", "StoreList")
+        ], 0, 1, 0));
+        result = Search(numbers, "orders2000", definitions: false, fuzzy: true);
+        check(result.Hits.Count == 0, "a number never matches a shorter one by sound: " + Labels(result));
+        result = Search(numbers, "sales2019", definitions: false, fuzzy: true);
+        check(Labels(result) == "dbo.Sales20190", "a number matches only exactly or as a prefix, never within edits: " + Labels(result));
+        result = Search(numbers, "store list", definitions: false, fuzzy: true);
+        check(Labels(result) == "dbo.StoreList~", "a three-code sound key never matches a longer word's start (store is not String): " + Labels(result));
+        numbers.Dispose();
+        result = Search(index, "custmer", names: false, fuzzy: true);
+        check(result.Hits.Count == 0, "definitions stay exact under Fuzzy Match");
+        result = Search(index, "customer", fuzzy: true);
+        check(result.Hits[^1] is { Label: "dbo.usp_Report", Definition: not null, Range: null }, "a definition hit ranks after every approximate name hit: " + Labels(result));
+        // Past the candidate cap, an exact hit scanned last still takes the place of approximate ones scanned first.
+        var crowded = new ConnectionIndex(new IndexBudget(1 << 20));
+        crowded.Put(new DatabaseIndex("A", [new("table", "tables", "dbo", "Ordrs"), new("table", "tables", "x", "Ordrs"), new("table", "tables", "y", "Ordrs")], 0, 0, 0));
+        crowded.Put(new DatabaseIndex("B", [new("table", "tables", "dbo", "Orders")], 0, 0, 0));
+        result = Search(crowded, "orders", definitions: false, fuzzy: true, limits: new ObjectIndexLimits { Candidates = 2 });
+        check(result is { Partial: true, Total: 4, Hits: [{ Object.Database: "B", Approximate: null }, { Approximate: true }] }, "past the candidate cap a better hit replaces the worst: " + Labels(result));
+        crowded.Dispose();
+        result = IndexSearch.Run(index, new("custmer", false, false, true, true, false, null, null, 200, true), Make("custmer", regex: true), new ObjectIndexLimits(), Ready, CancellationToken.None);
+        check(result.Hits.Count == 0, "a regular expression never matches approximately");
+        index.Dispose();
+    }
 
     /// <summary>One early hit, then many long definitions that do not match: the budget and Stop must still end the scan, since
     /// they are checked by objects scanned, not hits found. The definitions share one string, so the index holds little memory
@@ -599,6 +699,10 @@ internal static class SearchChecks
         check(ObjectSearchService.Validate(Args(kinds: ["login", "column", "schema"])).Kinds!.Count == 3, "a search may narrow to server objects, children and database objects");
         Refused(Args(database: new string('d', 129)), "an overlong database name is refused");
         Refused(Args() with { ConnectionId = "nope" }, "a search needs a connection id");
+        Refused(Args() with { Match = "soundex" }, "an unknown match mode is refused");
+        Refused(Args() with { Match = "fuzzy", Regex = true }, "Fuzzy Match with a regular expression is refused");
+        check(ObjectSearchService.Validate(Args() with { Match = "fuzzy" }).Fuzzy && !ObjectSearchService.Validate(Args() with { Match = "exact" }).Fuzzy && !ObjectSearchService.Validate(Args()).Fuzzy,
+            "Match fuzzy asks for approximate name matches, and exact or none does not");
         var query = ObjectSearchService.Validate(Args(scope: "definitions"));
         check(!query.Names && query.Definitions && query.Limit == ObjectSearchService.DefaultLimit, "a definitions search skips names and takes the default limit");
         try { JsonSerializer.Deserialize<ObjectSearchArgs>("{\"connectionId\":\"" + id + "\",\"requestId\":\"" + id + "\",\"text\":\"x\",\"columns\":true}", Json); check(false, "an unknown search member is refused"); }

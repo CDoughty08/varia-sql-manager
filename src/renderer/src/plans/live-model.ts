@@ -20,7 +20,8 @@ export function queryPlanStatements(statements: readonly SourceStatement[]): Sou
     // IDs are local to the compiled batch, and QueryHash can agree for different literals. Dynamic SQL and
     // procedures can reuse both within one submitted batch; retain the text identity as well.
     const sql = statement.text.trim()
-    const key = `b${statement.batchNumber}i${statement.iteration ?? 1}s${statement.statementId ?? ''}t${sql ? hash(sql) : 'p' + (scalarIdentity(statement) ?? '')}${statement.queryHash ? 'q' + statement.queryHash : ''}`
+    const scalar = scalarIdentity(statement)
+    const key = `b${statement.batchNumber}i${statement.iteration ?? 1}s${statement.statementId ?? ''}t${hash(sql)}${scalar ? 'p' + scalar : ''}${statement.queryHash ? 'q' + statement.queryHash : ''}`
     const occurrence = occurrences.get(key) ?? 0
     occurrences.set(key, occurrence + 1)
     const id = key + ':' + occurrence
@@ -98,4 +99,20 @@ export function completedPlanStatements(live: readonly SourceStatement[], actual
   const ids = new Set(live.map(s => s.id))
   const added = actual.filter(s => !ids.has(s.id) && !consumed.has(s.id))
   return added.length ? [...retained, ...added].toSorted((a, b) => (a.batchNumber || Number.MAX_SAFE_INTEGER) - (b.batchNumber || Number.MAX_SAFE_INTEGER) || (a.iteration ?? 1) - (b.iteration ?? 1)) : retained
+}
+
+/** Actual sources and retained live snapshots are bounded separately. Their combined canvas needs the same cap. */
+export function completedPlanView(live: readonly SourceStatement[], actual: readonly SourceStatement[]): { statements: SourceStatement[]; omitted: number } {
+  const combined = completedPlanStatements(live, actual)
+  if (combined.length <= planLimits.statements && combined.reduce((sum, s) => sum + s.nodes.length, 0) <= planLimits.nodes)
+    return { statements: combined, omitted: 0 }
+  const kept = new Set<SourceStatement>()
+  let operators = 0
+  // Full captured data takes priority; omitted partial snapshots remain accessible in Live mode.
+  for (const statement of [...combined.filter(s => !s.partial), ...combined.filter(s => s.partial)]) {
+    if (kept.size === planLimits.statements || operators + statement.nodes.length > planLimits.nodes) continue
+    kept.add(statement)
+    operators += statement.nodes.length
+  }
+  return { statements: combined.filter(s => kept.has(s)), omitted: combined.length - kept.size }
 }

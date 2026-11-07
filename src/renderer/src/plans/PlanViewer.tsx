@@ -8,7 +8,7 @@ import type { Camera, PlanLayout } from './geometry'
 import { loadPlanSources, type PlanSource, type SourceStatement } from './sources'
 import { formatPlanMetric as amount, PlanHoverCard } from './PlanHoverCard'
 import type { QueryPlanState } from './QueryPlansService'
-import { completedPlanStatements, planTopology, queryPlanStatements } from './live-model'
+import { completedPlanView, planTopology, queryPlanStatements } from './live-model'
 
 interface Content { statements: SourceStatement[]; notices: string[]; layout?: PlanLayout; error?: string; empty?: boolean }
 type StatementSelection = Pick<SourceStatement, 'id' | 'sourceKey'>
@@ -30,11 +30,13 @@ export default function PlanViewer({ sources, identity, openDocument, live }: { 
   const [layoutState, setLayoutState] = useState<{ topology?: string; layout?: PlanLayout; error?: string }>({})
   const [mode, setMode] = useState<'live' | 'actual'>(live?.running ? 'live' : 'actual')
   const actual = useMemo(() => live ? queryPlanStatements(parsed.statements) : parsed.statements, [parsed.statements, !!live])
-  const statements = useMemo(() => live ? mode === 'live' ? live.model.statements : completedPlanStatements(live.model.statements, actual) : actual, [live?.model.statements, actual, mode])
+  const display = useMemo(() => live ? mode === 'live' ? { statements: live.model.statements, omitted: 0 } : completedPlanView(live.model.statements, actual) : { statements: actual, omitted: 0 }, [live?.model.statements, actual, mode])
+  const statements = display.statements
   const topology = useMemo(() => planTopology(statements), [statements])
   const statementsRef = useRef(statements)
   statementsRef.current = statements
-  const content: Content = { ...parsed, ...layoutState.topology === topology ? layoutState : {}, statements: statements as SourceStatement[], notices: [...parsed.notices, ...parsed.error && statements.length ? [parsed.error] : [], ...live?.note ? [live.note] : []] }
+  const content: Content = { ...parsed, ...layoutState.topology === topology ? layoutState : {}, statements: statements as SourceStatement[], notices: [...parsed.notices, ...parsed.error && statements.length ? [parsed.error] : [],
+    ...display.omitted ? ['Some partial snapshots were omitted to stay within the combined viewer limits. Captured actual plans take priority; use Live mode to inspect retained snapshots.'] : [], ...live?.note ? [live.note] : []] }
   useEffect(() => { if (live && !live.running) setMode('actual') }, [live?.running])
   const saved = views.get(identity)
   const [selected, setSelected] = useState(saved?.selected ?? '')

@@ -6,6 +6,7 @@ import type { QuerySnapshot } from '../src/renderer/src/services/queries'
 import type { ResultsService, TabResults } from '../src/renderer/src/results/ResultsService'
 import type { AppliedTick, LiveHandle, LiveOwner, LiveService, LiveSnapshot } from '../src/renderer/src/live/LiveService'
 import type { LivePlanFrame } from '../src/shared/plans'
+import type { QueryResult } from '../src/shared/contracts'
 import { documentFixture } from './fixtures/documents'
 
 class Store<T> extends SnapshotStore<T> { set(value: T) { this.publish(value) } }
@@ -32,6 +33,15 @@ function fixture() {
 }
 
 describe('query plan lifecycle', () => {
+  it('reports a completed script with batch errors as completed, rather than stopped', () => {
+    const f = fixture()
+    f.queries.set(f.running('run'))
+    f.handles[0].tick()
+    f.queries.set({ [f.tab.id]: { livePlan: { queryId: 'run', connectionId: 'connection' }, summary: { status: 'completedWithErrors' } as QueryResult } })
+    expect(f.service.getSnapshot()[f.tab.id].note).toMatch(/^Execution completed with errors\./)
+    expect(f.handles[0].dispose).toHaveBeenCalledOnce()
+    f.service.dispose(); f.documents.dispose(); f.panes.dispose()
+  })
   it('keeps its last sample while hidden and stops its subscription on completion', () => {
     const f = fixture()
     f.queries.set(f.running('run'))

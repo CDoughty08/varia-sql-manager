@@ -18,7 +18,7 @@ The same search runs in two places, with the same options and results:
   Search scope (All, Names, Definitions) stays visible. Object types opens a checkbox popover over the results; selected
   types combine and a compact summary and Clear action stay beside the results. Narrow sidebars stack the type picker
   below the scope, and the popover follows the pane's width without enlarging the search band. Search options holds
-  Match Case, Match Whole Word and Use Regular Expression; its button marks when any are on. The result count stays
+  Match Case, Match Whole Word, Use Regular Expression and Fuzzy Match; its button marks when any are on. The result count stays
   concise, with index counts, result limits and timing under Search and index details. Index progress, errors and
   incomplete indexes remain visible. Escape or a click outside dismisses a popover; Escape returns focus to its button.
 - **The Search Objects tab** (View › Search Objects…, a server or database node's menu, or the palette), with a server picker
@@ -108,6 +108,8 @@ The same search runs in two places, with the same options and results:
 | Skipped databases reported | 256 |
 | Time per search | 5 s |
 | Regex time per match | 2 s |
+| Words in a Fuzzy Match search (more match exactly only) | 8 |
+| Characters per Fuzzy Match word (a longer word: exactly only) | 64 |
 | Matches counted per definition | 999 |
 | Preview length | 160 characters |
 
@@ -127,6 +129,34 @@ The same search runs in two places, with the same options and results:
 - **Match Whole Word.** A match must have no identifier character (a letter, a digit, `_`, `@`, `#` or `$`) on either side.
 - **Use Regular Expression.** Patterns run with .NET's `NonBacktracking` engine, which takes linear time. Lookarounds and
   backreferences are refused with a message instead of running.
+- **Fuzzy Match** (the toggle after Use Regular Expression; `match: 'fuzzy'`). Names also match approximately, below every
+  exact hit, so typos and sound-alikes still find the object: `custmer adress` finds `Sales.CustomerAddress`, `fone` finds
+  `PhoneNumber`. The search and each name are split into words, at punctuation, camelCase (`orderLines`), the end of a
+  capital run (`XMLParser`: `XML`, `Parser`) and digits, so prefixes such as `usp_` are words of their own. Every word of the
+  search must find a word of the name, in any order, that equals it or starts with it, is within a few edits (one for 3 to 5
+  letters, two from 6, a swap of neighbours counting one; words of 1 or 2 letters must be exact, a word of 3 to 5 letters
+  must have the right first letter, and only a word of 4 letters or more may be a typo of a longer word's start), or, for a
+  word of 4 letters or more, sounds like it (as a longer word's start only when its key has 4 codes or more, so `store` does
+  not find `String`). A number matches only exactly or as a prefix: `Sales2019` does not find `Sales2018`. Two search words may match the same name word. A
+  single word is also compared with the whole name run together (`custmeraddres`). Case is ignored for approximate
+  matches; Match Case still applies to exact hits and definitions. Under Match Whole Word a word must match a whole word,
+  never a prefix (it may still be a typo of one: `order` finds `Orders`, one edit away). `*` and `?` separate words. With a dot, the words before the last dot match the schema's (and a child's
+  parent's) words and the rest the name's. An approximate hit marks the span from its first matched word to its last, with
+  a dotted underline instead of the exact match's emphasis. Definitions always match exactly. Fuzzy Match cannot go with
+  Use Regular Expression: the toggle is disabled while Regex is on (it keeps its setting for later), and a request asking
+  for both is refused.
+  - *Sound.* A small Metaphone-style key per word (`FuzzyName.Phonetic`): silent initial letters dropped, a leading vowel
+    kept and later vowels dropped, letters that sound alike given one code (`c`/`k`/`q`, `ph`/`f`/`v`, `z`/soft `c`, soft `g`
+    as `j`, `sh`/`ch`/`tio`, `th`, `d` as `t`), so `Kustomer` and `Customer` share `KSTMR`. SQL Server's SOUNDEX was
+    considered and left out: its four-character code keeps the first letter and three consonants, so long identifiers
+    collide (`Customer`, `CustomsHold` and `Cashier` are nearly one code) and a different first letter never matches.
+    Double Metaphone handles more English spelling, but identifiers are mostly abbreviations, which no sound key helps with,
+    and edit distance already covers most of what it adds.
+  - *Cost.* Nothing is stored for it: words, edit distances and keys are worked out per search, so Fuzzy Match takes no
+    index memory. A letter-set check skips most edit-distance work, and a sound key stops at its first differing code. On a
+    million synthetic names a fuzzy search took 0.3 to 0.7 s where an exact one took about 0.1 s (Release build, one desktop
+    core); the search's 5 s budget and Stop bound it as any search. Past the 20,000 candidates a search sorts, a better hit
+    takes the worst one's place, so approximate hits never push out exact ones.
 - **Scope.** Search names and definitions (All), names only, or definitions only.
 - **Object types.** Chips narrow a search to kinds of object: Tables, Views, Columns, Procedures, Functions, Parameters,
   Triggers, Keys and indexes, Schemas, Types, Security and Other. Several can be on at once, and All types turns them all off.
@@ -136,7 +166,9 @@ The same search runs in two places, with the same options and results:
   shows them all; its outline marks when a hidden chip is on. When even the scope does not fit, Scope and the chips become
   one Filters button that names what is chosen ("Filters: Names, Columns") and shows them on demand. The layout is worked
   out from a hidden copy of the controls, so it follows the font, density and the check a chosen chip draws.
-- **Ranking.** Exact name matches come first, then name prefixes, then other name matches, then definition-only matches. A
+- **Ranking.** Exact name matches come first, then name prefixes, then other name matches, then under Fuzzy Match the
+  approximate ones (every word found but not together, then within edits, then by sound, each by fewest edits), then
+  definition-only matches. A
   search with a dot counts the schema-qualified name: `dbo.Orders` matches `dbo.Orders` exactly and `dbo.Orders.id` by prefix.
   Within each group, hits are sorted by database and then by name.
 - **Definition hits.** A hit inside a definition shows the line, a preview with the match marked, and how many more
