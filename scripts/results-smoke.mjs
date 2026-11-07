@@ -8,6 +8,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promis
 import { join, resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
+import { checkClientStatistics } from './fixtures/client-statistics.mjs'
 import { enlargeOutput, sizeResultStack } from './fixtures/results-pane.mjs'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
@@ -1075,6 +1076,7 @@ try {
   await run('SELECT 42 -- ACTUAL_PLAN_FIXTURE')
   await expect(outputTab(/^Execution plan/)).toHaveCount(0)
   console.log('Results checks: actual plan capture keeps data grids separate, shows multiple plans on one canvas, and can be toggled off for the next run.')
+  await checkClientStatistics(page, expect, run, false)
 
   // A JSON value opens formatted, in JSON.
   await run('-- varia-fake: sets=L1*3')
@@ -1754,6 +1756,7 @@ try {
     await enlargeOutput(page)
     // The session opens with the first run, so the timed one below measures rows, not the login.
     await run('SELECT 1 AS warm;')
+    await checkClientStatistics(page, expect, run, true)
     const liveText = n => liveRow(n).map(value => value ?? 'NULL')
     // Row 1 painted, timed in the page from just before F5 (a poll from here would add its own interval). The server holds
     // a part-filled packet until the batch ends, so RAISERROR WITH NOWAIT sends the last rows before the wait.

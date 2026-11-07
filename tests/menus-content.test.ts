@@ -33,7 +33,7 @@ async function resolveAll(platform: Platform): Promise<(readonly ResolvedMenuIte
   const theme = fixture.theme as { state: ThemeState }
   theme.state = { ...theme.state, themes }
   fixture.api.push(readyBackend())
-  fixture.panes.set({ explorer: true, editor: true, results: true, messages: false, plan: false })
+  fixture.panes.set({ explorer: true, editor: true, results: true, messages: false, plan: false, statistics: false })
   const tab = fixture.documents.create('SQLQuery1.sql', 'SELECT 1', 'master')
   const snapshots: (readonly ResolvedMenuItem[])[][] = []
   const capture = () => { snapshots.push(applicationMenus.map(menu => fixture.menus.resolve(menu.id))) }
