@@ -9,7 +9,7 @@ import type { Disposable } from '../core/types'
 /** Monaco's KeyMod bits. */
 const keyMod = { ctrlCmd: 2048, shift: 1024, alt: 512, winCtrl: 256 } as const
 /** Monaco's KeyCode values for the keys the catalogue can name (`keyNames`). */
-const keyCodes: Readonly<Record<string, number>> = {
+export const monacoKeyCodes: Readonly<Record<string, number>> = {
   ...Object.fromEntries([...'abcdefghijklmnopqrstuvwxyz'].map((key, index) => [key, 31 + index])),
   ...Object.fromEntries([...'0123456789'].map((key, index) => [key, 21 + index])),
   ...Object.fromEntries(Array.from({ length: 24 }, (_, index) => [`f${index + 1}`, 59 + index])),
@@ -19,7 +19,7 @@ const keyCodes: Readonly<Record<string, number>> = {
 }
 
 function chordCode(chord: string, platform: Platform): number {
-  const { modifiers, key } = splitChord(chord), code = keyCodes[key]
+  const { modifiers, key } = splitChord(chord), code = monacoKeyCodes[key]
   if (code === undefined) throw new Error(`Monaco has no key code for "${key}".`)
   // CtrlCmd is ⌘ on macOS and Ctrl elsewhere; WinCtrl is the other one.
   const mac = platform === 'darwin'
