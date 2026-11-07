@@ -89,6 +89,7 @@ import { EventBus } from './events'
 import { domFocusAdapter } from './focus'
 import { InputModeService } from './input-mode'
 import { KeybindingService } from './keybindings'
+import { gesturesFor, type GestureService } from './gestures'
 import { MenuStatePublisher } from './menu-state'
 import { focusHeld, focusWhenDrawn, modalOpen } from './modal'
 import { nextFrame as frame } from './frame'
@@ -102,6 +103,8 @@ export interface Workbench extends Disposable {
   readonly commands: CommandService
   readonly context: ContextKeyService
   readonly keybindings: KeybindingService
+  /** Pointer gestures' modifiers (src/shared/commands/gestures.ts); handlers ask it instead of reading ctrlKey and the rest. */
+  readonly gestures: GestureService
   readonly menuState: MenuStatePublisher
   readonly menus: MenuService
   /** What context menus are for: components register their elements with `useMenuTarget`. */
@@ -402,6 +405,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     commands,
     context,
     keybindings,
+    gestures: gesturesFor(platform),
     menuState,
     menus,
     menuTargets,

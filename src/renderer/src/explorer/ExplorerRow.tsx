@@ -9,6 +9,7 @@ import Icon from '../Icon'
 import StatusPill from '../kit/StatusPill'
 import { useConnectionAccent } from '../core/WorkbenchContext'
 import { useCommandEnabled } from '../core/useCommand'
+import type { GestureEvent } from '../core/gestures'
 import ExplorerIcon, { type BadgeName } from './ExplorerIcon'
 import type { RowStatus } from './ExplorerStatusService'
 import { RowKind, type TreeNode } from './tree-model'
@@ -29,8 +30,8 @@ export interface RowActions {
   commitRename(rowId: number, text: string, refocus: boolean): Promise<boolean>
   /** Escape in the Rename box, or the box going away: nothing is sent. */
   cancelRename(refocus: boolean): void
-  /** The pointer moved over a node row (with the keys held then) or left it (`held` absent): Ctrl+hover peeks, ⌘ on macOS. */
-  peekHover(rowId: number, held?: { readonly ctrlKey: boolean; readonly metaKey: boolean }): void
+  /** The pointer moved over a node row (with the keys held then) or left it (`held` absent): Peek on Hover's gesture peeks (Ctrl, ⌘ on macOS). */
+  peekHover(rowId: number, held?: GestureEvent): void
 }
 export interface RowProps {
   readonly rowId: number
