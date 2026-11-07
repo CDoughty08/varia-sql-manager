@@ -361,7 +361,7 @@ internal static class ExplorerLiveChecks
         await using var scratch = await ScratchDatabase.CreateAsync(sql, Path.Combine(AppContext.BaseDirectory, "Fixtures"));
         Console.WriteLine("Created the Object Explorer scratch database in " + watch.ElapsedMilliseconds + " ms.");
         await SearchLiveChecks.RunAsync(check, service, client.ConnectionId, json, sql, scratch.Name);
-        await PeekLiveChecks.ScratchAsync(check, service, client.ConnectionId, scratch.Name, scratch.Major, sql, json);
+        await PeekLiveChecks.ScratchAsync(check, service, client.ConnectionId, scratch.Name, scratch.Major, sql, json, scratch.CreateMemoryOptimizedAsync, scratch.DropMemoryOptimizedAsync);
         var major = scratch.Major;
         var db = Database(scratch.Name);
         var dbName = scratch.Name;

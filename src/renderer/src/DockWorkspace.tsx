@@ -7,6 +7,7 @@ import type { ThemeType } from '../../shared/theme/types'
 import { DockingGuides } from './docking-guides'
 import Icon from './Icon'
 import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
+import { paneTabTitle } from './core/gestures'
 import { useMenuTarget } from './menus/useMenuTarget'
 import EmptyState from './kit/EmptyState'
 import type { PaneLocation } from './services/panes'
@@ -59,7 +60,7 @@ function EmptyWorkspace() {
 }
 function PaneTab(props: IDockviewPanelHeaderProps) {
   const commands = useContext(PaneCommandContext)!, element = useRef<HTMLDivElement>(null)
-  const { results, documents } = useWorkbench()
+  const { results, documents, gestures } = useWorkbench()
   // An output panel's dock tab chosen by the user is the active query's view, as its toolbar tab is.
   const choose = () => { const id = props.api.id, tabId = documents.getSnapshot().activeId; if (isOutputPane(id) && tabId) results.setView(tabId, id) }
   // The tab's menu (Float or Dock, and Close) replaces Dockview's own, which shows only when it has items.
@@ -67,8 +68,8 @@ function PaneTab(props: IDockviewPanelHeaderProps) {
   const ref = useCallback((node: HTMLDivElement | null) => { element.current = node; menuTarget(node) }, [menuTarget])
   useEffect(() => { element.current?.querySelector('button')?.setAttribute('aria-label', 'Close ' + paneTitles[props.api.id as PaneId]) }, [props.api.id])
   return <div ref={ref} className="pane-tab" data-pane-tab={props.api.id} onClick={event => { if (!(event.target as HTMLElement).closest('button')) choose() }}><DockviewDefaultTab {...props}
-    closeActionOverride={() => commands.close(props.api.id as PaneId)} title="Drag to dock; Ctrl-drag to float; Ctrl-double-click to toggle docking"
-    onDoubleClick={event => { if (event.ctrlKey && !(event.target as HTMLElement).closest('button')) commands.toggle(props.api.id as PaneId) }} /></div>
+    closeActionOverride={() => commands.close(props.api.id as PaneId)} title={paneTabTitle(gestures)}
+    onDoubleClick={event => { if (gestures.matches('dock.toggleFloat', event) && !(event.target as HTMLElement).closest('button')) commands.toggle(props.api.id as PaneId) }} /></div>
 }
 function value<T>(result: { ok: true; value: T } | { ok: false; error: string }): T { if (!result.ok) throw new Error(result.error); return result.value }
 const message = (error: unknown) => error instanceof Error ? error.message : 'The layout operation failed.'
@@ -429,7 +430,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     const hidden = hiddenOutput.current
     hiddenOutput.current = null
     // Reopened in the reverse of the order they closed in, so each returns beside the one it was closed beside.
-    for (const id of [...hidden?.ids ?? outputPaneIds].reverse()) reveal(id)
+    for (const id of [...hidden?.ids ?? outputPaneIds.filter(id => id !== 'statistics')].reverse()) reveal(id)
     for (const id of hidden?.shown ?? []) selectOutput(id)
     const shown = view && api.getPanel(view) ? view : (hidden?.shown[0] ?? 'results')
     if (api.getPanel(shown)) reveal(shown, options)
@@ -516,7 +517,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     // A popout window's own tabs switch its panels, so an output panel there lists only itself.
     const peers = (id: OutputPaneId) => recordOf(id) ? [id] : api.getPanel(id)?.group.panels.map(panel => panel.id).filter(isOutputPane) ?? []
     const each = <T,>(value: (id: PaneId) => T) => Object.fromEntries(paneIds.map(id => [id, value(id)])) as Record<PaneId, T>
-    shown.set(each(id => showing(api, id)), each(where), { results: peers('results'), messages: peers('messages'), plan: peers('plan') })
+    shown.set(each(id => showing(api, id)), each(where), { results: peers('results'), messages: peers('messages'), plan: peers('plan'), statistics: peers('statistics') })
   }
   useEffect(() => {
     const selector = shown.bindSelector(selectOutput)
@@ -593,7 +594,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
       subscription.current = { dispose: () => { layout.dispose(); maximized.dispose(); panels.forEach(item => item.dispose()) } }
       syncHeaders(api)
       publishVisibility(api)
-      guides.current = new DockingGuides(api, root.current!, ids => ids.forEach(id => rememberDock(id as PaneId)), error => setError(message(error)), (ids, at) => popOut(ids, at))
+      guides.current = new DockingGuides(api, root.current!, ids => ids.forEach(id => rememberDock(id as PaneId)), error => setError(message(error)), workbench.gestures, (ids, at) => popOut(ids, at))
       api.updateOptions({ dropPositionResolver: guides.current })
       // The editor groups are a Dockview of their own inside the editor panel, whose drop targets would hide the editor
       // panel's from a workbench panel dragged over it: while one is dragged, they let the pointer through (styles.css).

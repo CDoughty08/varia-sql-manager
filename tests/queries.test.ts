@@ -37,10 +37,49 @@ function fixture(commandTimeout?: number, wait?: (ms: number) => Promise<void>, 
   return { ...docs, bus: docs.events, queries, queryApi: api, connection, tab, events, results, calls }
 }
 describe('query orchestration', () => {
+  it('keeps the ordinary transaction decision when closing during an isolated estimate', async () => {
+    const { queries, queryApi, tab } = fixture()
+    const pending = deferred<Awaited<ReturnType<VariaApi['estimatePlan']>>>()
+    queryApi.estimatePlan.mockReturnValueOnce(pending.promise)
+    queryApi.querySessionState.mockResolvedValueOnce({ ok: true, value: { transactionCount: 1, checked: true } })
+    const run = queries.estimate()
+    queryApi.confirmSessions.mockResolvedValueOnce({ ok: true, value: 'commit' })
+    queryApi.cancel.mockImplementationOnce(async () => {
+      pending.resolve({ ok: false, error: 'Estimate cancelled.', code: 'CANCELLED' })
+      return { ok: true, value: { cancelled: true } }
+    })
+    expect(await queries.confirmSessions('close', [tab.id])).toEqual(new Map([[tab.id, 'commit']]))
+    expect(queryApi.querySessionState).toHaveBeenCalledExactlyOnceWith(tab.id)
+    expect(queryApi.confirmSessions.mock.calls).toEqual([
+      [{ action: 'close', tabs: [{ name: 'query.sql', transactions: 1, running: false }] }]
+    ])
+    await run
+  })
+  it('keeps an estimate running when the transaction prompt is cancelled, and stops it on close without a transaction', async () => {
+    const { queries, queryApi, tab } = fixture()
+    const pending = deferred<Awaited<ReturnType<VariaApi['estimatePlan']>>>()
+    queryApi.estimatePlan.mockReturnValueOnce(pending.promise)
+    queryApi.querySessionState.mockResolvedValueOnce({ ok: true, value: { transactionCount: 1, checked: true } })
+    const run = queries.estimate()
+    expect(await queries.confirmSessions('close', [tab.id])).toBeUndefined()
+    expect(queryApi.cancel).not.toHaveBeenCalled()
+    expect(queries.isRunning(tab.id)).toBe(true)
+    queryApi.querySessionState.mockResolvedValueOnce({ ok: true, value: { transactionCount: 0, checked: true } })
+    queryApi.cancel.mockImplementationOnce(async () => {
+      pending.resolve({ ok: false, error: 'Estimate cancelled.', code: 'CANCELLED' })
+      return { ok: true, value: { cancelled: true } }
+    })
+    expect(await queries.confirmSessions('close', [tab.id])).toEqual(new Map())
+    expect(queryApi.confirmSessions).toHaveBeenCalledOnce()
+    expect(queryApi.cancel).toHaveBeenCalledOnce()
+    await run
+  })
   it('estimates the selected text without streaming results or changing the ordinary session and actual-plan toggle', async () => {
     const f = fixture()
+    f.documents.update(f.tab.id, { includeActualPlan: true, includeClientStatistics: true })
+    f.queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ spid: 47, login: 'reader' }) })
     await f.queries.execute()
-    f.documents.update(f.tab.id, { includeActualPlan: true })
+    const statistics = f.queries.statistics.getSnapshot()
     vi.spyOn(f.documents, 'getExecuteText').mockReturnValue({ sql: 'SELECT selected', startLine: 9 })
     f.results.begin.mockClear(); f.results.finish.mockClear(); f.queryApi.execute.mockClear()
     const previous = f.queries.getSnapshot()[f.tab.id]
@@ -58,7 +97,8 @@ describe('query orchestration', () => {
     deferredPlan.resolve({ ok: true, value: { plans: [{ xml: '<ShowPlanXML/>', batchNumber: 1, iteration: 1 }], database: 'tempdb' } })
     await pending
     expect(f.queries.getSnapshot()[f.tab.id]).toMatchObject({ summary: previous.summary, session: previous.session, estimated: { result: { database: 'tempdb' } } })
-    expect(f.documents.active).toMatchObject({ database: 'master', includeActualPlan: true })
+    expect(f.queries.statistics.getSnapshot()).toBe(statistics)
+    expect(f.documents.active).toMatchObject({ database: 'master', includeActualPlan: true, includeClientStatistics: true })
     expect(f.results.begin).not.toHaveBeenCalled(); expect(f.results.finish).not.toHaveBeenCalled(); expect(f.queryApi.execute).not.toHaveBeenCalled()
     await f.queries.execute()
     expect(f.queries.getSnapshot()[f.tab.id].estimated).toBeUndefined()
@@ -103,6 +143,30 @@ describe('query orchestration', () => {
     expect(states.filter(state => state.estimated?.result)).toHaveLength(8)
     expect(f.queries.getSnapshot()[f.tab.id]).toMatchObject({ summary, estimated: { error: expect.stringContaining('released to limit memory') } })
     expect(f.queries.getSnapshot()[f.documents.active!.id].estimated?.result).toBeDefined()
+  })
+  it('reserves execution before notifying statistics listeners, preventing a reentrant second execution', async () => {
+    const { documents, queries, queryApi, tab } = fixture()
+    documents.update(tab.id, { includeClientStatistics: true })
+    const unsub = queries.statistics.subscribe(() => { if (queries.statistics.getSnapshot()[tab.id]?.at(-1)?.status === 'running') void queries.execute() })
+    await queries.execute()
+    expect(queryApi.execute).toHaveBeenCalledOnce()
+    expect(queries.statistics.getSnapshot()[tab.id]).toHaveLength(1)
+    unsub()
+  })
+  it('collects only included executions, retains comparisons across result replacement, and forgets closed tabs', async () => {
+    const { documents, queries, queryApi, tab, bus } = fixture()
+    await queries.execute()
+    expect(queryApi.execute.mock.calls[0][0]).not.toHaveProperty('includeClientStatistics')
+    expect(queries.statistics.getSnapshot()).toEqual({})
+    documents.update(tab.id, { includeClientStatistics: true })
+    queryApi.execute.mockResolvedValue({ ok: true, value: output({ spid: 50, clientStatistics: { counters: { BytesReceived: 400 } } }) })
+    await queries.execute(); await queries.execute()
+    expect(queryApi.execute.mock.calls[1][0]).toHaveProperty('includeClientStatistics', true)
+    expect(queries.statistics.getSnapshot()[tab.id]).toHaveLength(2)
+    bus.emit({ type: 'session.ended', tabId: tab.id }); await queries.execute()
+    expect(queries.statistics.getSnapshot()[tab.id].at(-1)?.scope).toBe(2)
+    bus.emit({ type: 'documents.closed', tabId: tab.id })
+    expect(queries.statistics.getSnapshot()).toEqual({})
   })
   it.each([0, 7, undefined])('uses the document session and preserves timeout %s', async timeout => {
     const { queries, queryApi, tab } = fixture(timeout)

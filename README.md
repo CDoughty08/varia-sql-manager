@@ -1,5 +1,7 @@
 # Varia SQL Manager
 
+[Client Statistics](docs/client-statistics.md) compares per-execution SqlClient traffic, counters and reply-wait timings in its own output tab.
+
 Varia is a cross-platform desktop workbench for Microsoft SQL Server. It combines a SQL editor, query results, and database management tools in one application. It is under active development.
 
 ## Features
@@ -86,9 +88,12 @@ Release builds run on pull requests and can also be run manually from the **Rele
 
 The Electron application uses React, TypeScript, Monaco, and Dockview. A .NET sidecar handles SQL connections and management through Microsoft.Data.SqlClient and SQL Management Objects (SMO). The processes communicate over a MessagePack-based protocol; see the [IPC reference](docs/ipc.md).
 
+The workbench page is treated as untrusted: it runs sandboxed with context isolation, no Node.js integration and a strict Content Security Policy, and reaches the system only through a small preload API whose every call main verifies. Built pages load from Varia's own `app://varia/` origin, never a `file:` URL, so page script cannot read local files. Packaged builds set Electron's fuses (`build/fuses.cjs`): `file:` pages get no extra privileges, the executable cannot run as Node.js or honour `NODE_OPTIONS` and `--inspect`, and the application loads only from its integrity-checked `app.asar`.
+
 ## Documentation
 
 - [Commands and shortcuts](docs/commands.md)
+- [Mouse gestures](docs/gestures.md)
 - [Editor groups](docs/editor-groups.md), [hot exit](docs/hot-exit.md) and [popout windows](docs/popout-windows.md)
 - [Object Explorer](docs/object-explorer.md), [object actions](docs/object-actions.md) and [Search Objects](docs/object-search.md)
 - [Scripting](docs/scripting.md) and [Table Designer](docs/table-designer.md)

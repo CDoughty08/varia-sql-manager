@@ -290,7 +290,7 @@ describe('document frame verbs in a workbench', () => {
     // No document is open: Save cannot run, and the results pane is hidden.
     expect(first.markup).toContain('<button type="button" class="document-verb primary" data-command="file.save" title="Save (Ctrl+S)" disabled="">')
     expect(first.markup).toContain('<button type="button" class="document-verb" data-command="view.toggleResultsPane" title="Toggle Results Pane (Ctrl+R)" aria-pressed="false">')
-    panes.set({ explorer: true, editor: true, results: true, messages: false, plan: false })
+    panes.set({ explorer: true, editor: true, results: true, messages: false, plan: false, statistics: false })
     const shown = render(verbs)
     expect(shown.markup).toContain('<button type="button" class="document-verb" data-command="view.toggleResultsPane" title="Toggle Results Pane (Ctrl+R)" aria-pressed="true">')
     const execute = vi.spyOn(commands, 'execute')

@@ -31,7 +31,7 @@ pages, limits, error codes, display formats, benchmarks).
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 1586 offline
+  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 1624 offline
   checks; how many depends on the server version and authentication (2382 against a local SQL Server 2025 in Mixed Mode, which
   adds the low-privilege login checks, with Windows authentication and `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer, Script As and object action
   scratch-database checks (the last in their own `VariaScratch_…_act` database) and the script goldens in `tests/fixtures/scripting/`; `VARIA_UPDATE_SCRIPT_GOLDENS=1`
@@ -79,7 +79,12 @@ pages, limits, error codes, display formats, benchmarks).
 
 - The renderer is untrusted: context isolation, sandbox, no Node integration, CSP, blocked navigation and popups.
   It reaches the system only through `window.varia` (`src/preload/index.ts`); never expose generic IPC or shell APIs,
-  and never disable the Chromium sandbox. Main verifies every IPC sender (`trusted()` in `src/main/index.ts`).
+  and never disable the Chromium sandbox. Main verifies every IPC sender (`trusted()` in `src/main/index.ts`, which
+  accepts only `app://varia/index.html` in built apps). Built pages load only from the privileged `app://varia/` scheme
+  (`src/main/app-protocol.ts`: files under `out/renderer` alone, traversal refused), never `file:`, whose origin reaches
+  every local file. Packaged builds set the Electron fuses in `build/fuses.cjs` (flipped in afterPack, read back by
+  `scripts/packaged-smoke.mjs`): no `file:` privileges, RunAsNode, `NODE_OPTIONS` or `--inspect`; asar only, integrity
+  checked.
   The only window the page may open is a popout (`src/main/popout-windows.ts`, docs/popout-windows.md): a same-origin
   `about:blank` child named `varia-popout-<uuid>` with exact bounds on a display, explicit preferences (no preload,
   sandboxed, isolated), no popups or navigation of its own, closed with the page. Its content is the page's DOM through
@@ -102,7 +107,9 @@ pages, limits, error codes, display formats, benchmarks).
   main or the renderer. Only connect and Load databases open a browser sign-in, under the request's token
   (Stop); sign-in hosts and token resources the server names are allowlisted. New Login's password lives only in `ObjectDialogService`'s secret slot (`setSecret`, never the snapshot), travels only in the sensitive `actions.execute`, reaches SQL only as one parameter read inside a constant batch, is scrubbed from replies, and Script writes `<password>` instead.
 - Query rows stay in backend memory (never on disk) under the result budget. Main forwards DATA pages undecoded, as
-  exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). Results-port
+  exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). The one exception is
+  Peek's Top rows (`explorer.peekRows`): at most 10 rows of 100 values of 256 characters, decoded in the backend and answered
+  as text over invoke, never stored. Results-port
   messages from the renderer are validated with `portRequestSchema`, ownership, and the current generation.
 - The grid renders cells only through `GridView` pools, and text only through `nodeValue` (`tests/grid-lint.test.ts`
   forbids HTML sinks under `grid/`, `results/`, `designer/` and `live/`); no React per row or cell, and frames stay
@@ -151,6 +158,10 @@ pages, limits, error codes, display formats, benchmarks).
   menus and the palette run it through `varia:run-role`. Two-part chords that Varia owns are `bridge` keybindings,
   registered with Monaco from the catalogue by `registerEditorBridge`; Monaco dispatches them. After catalogue changes,
   regenerate `docs/commands.md` with `npx vitest run tests/commands-docs.test.ts -u`.
+  Mouse gestures (modifier behaviours, pointer commands, fixed gestures) are declared only in `src/shared/commands/gestures.ts`;
+  handlers read pointer modifiers only through `GestureService` (`src/renderer/src/core/gestures.ts`, `tests/gesture-lint.test.ts`),
+  every pointer command has a keyboard path, and tooltips that name a gesture take its words from the service. After
+  changing it, regenerate `docs/gestures.md` with `npx vitest run tests/gestures.test.ts -u`.
 - Menus are declared only in `src/shared/commands` (placements in `catalog.ts`, submenus in `menus.ts`) plus the theme
   provider (`src/shared/theme/menu.ts`). Windows/Linux render them in `src/renderer/src/menus`; macOS renders them
   natively from ids. Main's application menu takes only command-id sets from the renderer (`menuStateSchema`) and sends
@@ -161,13 +172,23 @@ pages, limits, error codes, display formats, benchmarks).
   `contextmenu` listener, and only `.menu-layer` reaches z-index 30000.
 - The page reads the clipboard only through the Paste role, which main runs only within 1 s of a click, key press or tap
   in the focused window (`UserActivation` in `src/main/window-roles.ts`). An idle or background page cannot read it, but
-  main cannot tell which input chose Paste, so a page script can read it while the user types or clicks.
+  main cannot tell which input chose Paste, so a page script can read it while the user types or clicks. On Linux,
+  Chromium pastes the PRIMARY selection on a middle-click (into any editable, and as a readable `paste` event wherever
+  the click lands) with no role or gate: in each window the page cancels every middle-button release event
+  (pointerup and mouseup, since a cancelled pointerdown leaves no mouseup) and every middle-button pointermove (how a
+  chorded press or release comes) and hides any `paste` from every other listener while the middle button is held or in a release's
+  task (`blockPrimaryPaste`, `src/renderer/src/core/primary-selection.ts`). Monaco's `selectionClipboard` is off only so
+  a middle-drag selects a column as on other platforms: standalone Monaco has no selection clipboard.
 - Object Explorer structure lives only in `src/shared/explorer/catalog.ts` (folders, kinds, icons, filters, version
   gates, the kinds that carry live status chips, whose words are in `status.ts`); after changing it, regenerate `docs/object-explorer.md` and the backend's embedded
   `Explorer/explorer-catalog.json` with `npx vitest run tests/explorer-catalog.test.ts -u`. Explorer SQL is constant
   text per query, band and filter shape, with values as parameters and database names only through `QUOTENAME`; no
   metadata built-ins; `READ UNCOMMITTED` and `LOCK_TIMEOUT 5000` on the explorer pool. The offline `CatalogSql` lint
-  renders and checks every variant.
+  renders and checks every variant. Its one dynamic statement is Peek's Top rows (`Explorer/PeekRowsSql.cs`, run only when
+  the tab is chosen): `SELECT TOP (@take) *` built on the server from `QUOTENAME` of the found object's two names, held to
+  `PeekRowsSql.Lint`, and read sequentially with the results grid's readers under a cap per value and a `SET TEXTSIZE`; it is
+  the one Explorer read that may leave READ UNCOMMITTED, retrying under READ COMMITTED only when SQL Server refuses it for a
+  memory-optimized table (error 10794).
 - Search Objects' index (`backend/Varia.Backend/Search/`, docs/object-search.md) lives only in backend memory, one per
   connection, never on disk, and is dropped on disconnect; its limits are `objectSearchLimits` in
   `src/shared/explorer/search.ts`, mirrored in C# (`tests/object-search.test.ts`), with everything it holds (records, names

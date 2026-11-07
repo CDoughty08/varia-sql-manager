@@ -417,6 +417,20 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .peek-facts { margin: 0; }
 .peek-fact { display: grid; grid-template-columns: minmax(96px, 46%) minmax(0, 1fr); gap: var(--varia-space-2); padding: 1px var(--varia-space-3); }
 .peek-fact dt { color: var(--varia-descriptionForeground); }
+.peek-tabs { display: flex; gap: var(--varia-space-1); text-transform: none; letter-spacing: 0; }
+.peek-tab { padding: 0 var(--varia-space-1); border-bottom: 2px solid transparent; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.peek-tab[aria-selected="true"] { border-bottom-color: var(--varia-tab-activeBorderTop); color: var(--varia-editorWidget-foreground); }
+.peek-tab:focus-visible, .peek-follow:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.peek-list { margin: 0; padding: var(--varia-space-0) 0 var(--varia-space-2); list-style: none; }
+.peek-item { display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; padding: 1px var(--varia-space-3); white-space: nowrap; }
+.peek-item-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; user-select: text; }
+.peek-item-note { flex-shrink: 0; color: var(--varia-descriptionForeground); }
+.peek-follow { display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; padding: 0; color: var(--varia-list-highlightForeground); }
+.peek-follow:hover .peek-item-name { text-decoration: underline; }
+.peek-rows { border-collapse: collapse; margin: var(--varia-space-1) var(--varia-space-3) var(--varia-space-2); font: var(--varia-size-sm)/var(--varia-line-sm) var(--varia-font-mono); color: var(--varia-resultsGrid-foreground); }
+.peek-rows th, .peek-rows td { max-width: 240px; padding: 0 var(--varia-space-2); overflow: hidden; text-overflow: ellipsis; white-space: pre; border: 1px solid var(--varia-resultsGrid-gridlines); text-align: left; user-select: text; }
+.peek-rows th { position: sticky; top: 0; background: var(--varia-resultsGrid-headerBackground); color: var(--varia-resultsGrid-headerForeground); font: 600 var(--varia-size-xs)/var(--varia-line-sm) var(--varia-font-ui); }
+.peek-rows .peek-null { background: var(--varia-resultsGrid-nullBackground); color: var(--varia-resultsGrid-nullForeground); }
 .peek-fact dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; user-select: text; }
 .explorer-error { flex-shrink: 0; font-size: var(--varia-size-xs); color: var(--varia-errorForeground); line-height: 1.6; padding: 0 12px; margin: 5px 0 8px; overflow-wrap: anywhere; }
 @media (forced-colors: active) {
@@ -503,8 +517,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .query-status-server { flex-shrink: 1000000; }
 .query-status-login { flex-shrink: 1000; }
 .query-status-database { flex-shrink: 1; }
-/* A query's own bar: Execute, Cancel and Actual Plan, then the connection pill at the right. The bar is a size container: a narrow
-   editor first drops the key and the button words, then the lists give up width, then a long environment label is cut
+/* A query's own bar: Execute, Cancel, Actual Plan, Estimated Plan and Client Statistics, then the connection pill. A narrow
+   editor drops button words and key hints, then the lists give up width, then a long environment label is cut
    short, and the pill never wraps. Its own size keeps the tag's 12em as wide as elsewhere. */
 .query-bar { display: flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-bar); padding: 0 var(--varia-space-2); flex-shrink: 0; min-width: 0; overflow: hidden; container-type: inline-size; font-size: var(--varia-size-sm); background: var(--varia-editor-background); border-bottom: 1px solid var(--varia-editorGroup-border); }
 /* Activating a sibling editor group must leave its controls under the pointer. */
@@ -528,7 +542,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
    shrink weight has them give way, down to their minimum, before the environment tag. */
 .query-connection select { flex: 0 1000 auto; min-width: 64px; max-width: 220px; height: 100%; padding: 0 2px; background: var(--varia-input-background); border: 0; text-overflow: ellipsis; }
 .query-connection select:focus-visible { outline-offset: 0; }
-@container (max-width: 600px) {
+@container (max-width: 760px) {
   .query-bar-action.execute kbd { display: none; }
   .query-bar-action.actual-plan-toggle .query-bar-label, .query-bar-action.estimated-plan-button .query-bar-label { display: none; }
 }
@@ -536,8 +550,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .query-bar-label { display: none; }
   .query-bar-action { padding: 0 2px; }
   .query-connection { gap: var(--varia-space-0); padding-left: var(--varia-space-1); }
-  /* Reserve compact space for the environment label and both selectors. The divider still separates the lists. */
+  /* Reserve compact space for the environment label and both selectors. */
   .query-connection-icon { display: none; }
+}
+@container (max-width: 400px) {
+  .query-bar-action { padding: 0 1px; }
+  .query-connection-divider, .query-connection .connection-swatch { display: none; }
 }
 @container (min-width: 310px) {
   .query-bar-environment:has(.environment-tag:not([data-custom])) { flex-shrink: 0; }
@@ -753,6 +771,15 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .output-views button.active { outline: 2px solid Highlight; outline-offset: -2px; }
   .output-views button.active:focus-visible { outline: 2px solid CanvasText; outline-offset: 2px; }
 }
+.client-statistics { overflow: auto; padding: var(--varia-space-3); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.client-statistics-tools { display: flex; align-items: center; flex-wrap: wrap; gap: var(--varia-space-3); }
+.client-statistics-tools label { display: flex; align-items: center; gap: var(--varia-space-2); }
+.client-statistics p { color: var(--varia-descriptionForeground); margin: var(--varia-space-2) 0; }
+.client-statistics table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+.client-statistics th, .client-statistics td { border-bottom: 1px solid var(--varia-widget-border); padding: var(--varia-space-2); text-align: left; vertical-align: top; }
+.client-statistics td { white-space: nowrap; }
+.client-statistics td:last-child { white-space: normal; }
+.client-statistics th[scope="row"] { font-weight: 500; }
 .memory-status { margin-left: var(--varia-space-2); }
 .memory-indicator { anchor-name: --status-memory; display: flex; align-items: center; gap: var(--varia-space-1); padding: 0 var(--varia-space-2); color: inherit; font-size: inherit; }
 .memory-indicator:focus-visible { outline-offset: -2px; }

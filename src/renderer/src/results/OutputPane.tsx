@@ -9,6 +9,7 @@ import { gridLimits as g } from '../grid/constants'
 import ResultsStack, { stackNeed } from '../grid/ResultsStack'
 import ResultPlans from '../plans/ResultPlans'
 import EstimatedPlans from '../plans/EstimatedPlans'
+import ClientStatisticsPane from '../statistics/ClientStatisticsPane'
 import EmptyState from '../kit/EmptyState'
 import MessagesView from './MessagesView'
 import ResultsToolbar from './ResultsToolbar'
@@ -65,6 +66,7 @@ function plansOf(tab: TabResults | undefined): readonly ResultSetEntry[] {
  */
 export function outputViewOf(tab: TabResults | undefined): OutputViewName | undefined {
   if (!tab) return undefined
+  if (tab.view === 'statistics') return 'statistics'
   const hasSets = tab.sets.length > 0 || tab.status === 'closed'
   return tab.view === 'plan' && plansOf(tab).length > 0 ? 'plan' : tab.view !== 'messages' && hasSets ? 'results' : 'messages'
 }
@@ -119,10 +121,10 @@ function useHeight(): [(element: HTMLDivElement | null) => void, number] {
   return [setElement, height]
 }
 
-const emptyTitles: Record<OutputPaneId, string> = { results: 'Query results', messages: 'Messages', plan: 'Execution plan' }
-const emptyIcons = { results: 'table', messages: 'output', plan: 'execution-plan' } as const
-const regionNames: Record<OutputPaneId, string> = { results: 'Query results', messages: 'Query messages', plan: 'Query execution plans' }
-const viewNames: Record<OutputPaneId, string> = { results: 'Results', messages: 'Messages', plan: 'Execution plan' }
+const emptyTitles: Record<OutputPaneId, string> = { results: 'Query results', messages: 'Messages', plan: 'Execution plan', statistics: 'Client Statistics' }
+const emptyIcons = { results: 'table', messages: 'output', plan: 'execution-plan', statistics: 'graph' } as const
+const regionNames: Record<OutputPaneId, string> = { results: 'Query results', messages: 'Query messages', plan: 'Query execution plans', statistics: 'Query client statistics' }
+const viewNames: Record<OutputPaneId, string> = { results: 'Results', messages: 'Messages', plan: 'Execution plan', statistics: 'Client Statistics' }
 
 /**
  * One output panel for the active query: Results (stacked grids, and the Messages strip under them), Messages, or
@@ -136,6 +138,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
   const { results, panes, queries } = useWorkbench()
   const all = useServiceSnapshot(results)
   const estimated = useServiceSnapshot(queries)[tabId]?.estimated
+  const statistics = useServiceSnapshot(queries.statistics)[tabId] ?? []
   const visible = useServiceSnapshot(panes)
   const peers = useServiceSnapshot(panes.peers)[pane]
   const tab = tabId ? all[tabId] : undefined
@@ -143,13 +146,14 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
   const now = useTicker(leader && tab?.status === 'running')
   const hasSets = !!tab && (tab.sets.length > 0 || tab.status === 'closed')
   const plans = plansOf(tab)
+  const planCount = estimated ? estimated.result?.plans.length ?? 0 : plans.length
   const errors = !!tab?.messages.some(entry => entry.kind === 'error')
   // Closed results keep the tab, without a count of sets that are gone.
   const sets = tab && tab.status !== 'closed' ? tab.sets.length : 0, messages = tab?.messages.length ?? 0
   const jobs = tab?.jobs.filter(job => job.visible) ?? []
-  const id = useId(), panelId = id + 'panel', tabIds: Record<OutputPaneId, string> = { results: id + 'results', messages: id + 'messages', plan: id + 'plan' }
+  const id = useId(), panelId = id + 'panel', tabIds: Record<OutputPaneId, string> = { results: id + 'results', messages: id + 'messages', plan: id + 'plan', statistics: id + 'statistics' }
   const [viewRef, viewHeight] = useHeight()
-  const available: Record<OutputPaneId, boolean> = { results: hasSets, messages: !!tab, plan: plans.length > 0 || !!estimated }
+  const available: Record<OutputPaneId, boolean> = { results: hasSets, messages: !!tab, plan: plans.length > 0 || !!estimated, statistics: statistics.length > 0 }
   // Only the panel its group shows lists the tabs: a hidden panel's tabs are gone, not merely out of sight.
   const views = (!tab && !estimated) || !visible[pane] ? [] : (peers.length ? peers : [pane]).filter(view => view === pane || available[view])
   // The strip line shows once there is something to read beyond row counts (or the user opened the strip); it opens itself
@@ -190,12 +194,14 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
   const labels: Record<OutputPaneId, string> = {
     results: sets > 0 ? `Results, ${formatCount(sets)} ${plural(sets, 'result set')}` : 'Results',
     messages: errors ? 'Messages, contains errors' : messages > 0 ? `Messages, ${formatCount(messages)} ${plural(messages, 'message')}` : 'Messages',
-    plan: estimated ? 'Execution plan, Estimated' : plans.length > 0 ? `Execution plan, ${formatCount(plans.length)} ${plural(plans.length, 'plan')}` : 'Execution plan'
+    plan: estimated ? 'Execution plan, Estimated' : plans.length > 0 ? `Execution plan, ${formatCount(plans.length)} ${plural(plans.length, 'plan')}` : 'Execution plan',
+    statistics: 'Client Statistics'
   }
   const badges: Record<OutputPaneId, ReactNode> = {
     results: sets > 0 && <span className="badge">{sets}</span>,
     messages: errors ? <span className="badge error-count">!</span> : messages > 0 && <span className="badge">{messages}</span>,
-    plan: plans.length > 0 && <span className="badge">{plans.length}</span>
+    plan: planCount > 0 && <span className="badge">{planCount}</span>,
+    statistics: statistics.length > 0 && <span className="badge">{statistics.length}</span>
   }
   return <section className="output-panel" aria-label={regionNames[pane]} data-output-panel={pane}>
     <div className="output-toolbar">
@@ -213,6 +219,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
       <PaneMenuButton pane={pane} />
     </div>
     {pane === 'plan' && estimated ? <div ref={viewRef} className="output-view" role="tabpanel" id={panelId} aria-labelledby={tabIds[pane]}><EstimatedPlans state={estimated} /></div>
+      : pane === 'statistics' ? <div ref={viewRef} className="output-view" role="tabpanel" id={panelId} aria-labelledby={views.length ? tabIds[pane] : undefined} aria-label={views.length ? undefined : 'Client Statistics'}><ClientStatisticsPane tabId={tabId} /></div>
       : !tab ? <EmptyState className="output-empty" icon={emptyIcons[pane]} title={emptyTitles[pane]} detail={!query ? 'Query results appear here for query tabs.' : hint ?? (connected ? 'Execute a query to view results and messages.' : 'Connect this query to a server to execute it.')} />
       : <div ref={viewRef} className="output-view" role="tabpanel" id={panelId} aria-labelledby={tabIds[pane]}>
         {pane === 'results' ? <>

@@ -1,4 +1,5 @@
 import type { Platform } from '../../../shared/commands/keybindings'
+import { gesturesFor } from '../core/gestures'
 import type { ColumnRange, CopyPart, RowRange } from '../../../shared/contracts'
 import { formatCount, plural } from '../results/status'
 import { gridLimits, openEnd } from './constants'
@@ -119,7 +120,7 @@ function covers(selection: GridSelection, hit: GridHit, rows: number, columns: n
  * which reports the left button), so it is a right press there, as Monaco treats it; other buttons do nothing.
  */
 export function pressButton(event: { readonly button: number; readonly ctrlKey: boolean }, platform: Platform): 'primary' | 'secondary' | undefined {
-  if (event.button === 2 || (event.button === 0 && event.ctrlKey && platform === 'darwin')) return 'secondary'
+  if (event.button === 2 || (event.button === 0 && gesturesFor(platform).matches('grid.secondaryClick', event))) return 'secondary'
   return event.button === 0 ? 'primary' : undefined
 }
 /**

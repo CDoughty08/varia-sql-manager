@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { connectLive } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
-import { backendReady, planCanvas, planViewer, queryBarButton, documentTabs } from './fixtures/ui.mjs'
+import { backendReady, planCanvas, planViewer, queryBarButton, documentTabs, outputView } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 let application, page
@@ -46,10 +46,31 @@ try {
       await expect(dialog).toHaveCount(0)
     }
     const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+    // All three features coexist: an estimate preserves ordinary grids, actual capture and the statistics trial.
+    await queryBarButton(page, 'Include Actual Execution Plan').click()
+    await queryBarButton(page, 'Include Client Statistics').click()
+    await text(live ? 'SELECT COUNT_BIG(*) AS first_value FROM sys.objects;\nGO\nSELECT COUNT_BIG(*) AS second_value FROM sys.columns;' : 'ACTUAL_PLAN_FIXTURE')
+    await page.keyboard.press('F5')
+    await expect(queryBarButton(page, 'Display Estimated Execution Plan')).toBeEnabled()
+    await expect(outputView(page, 'Execution plan, 2 plans')).toBeVisible()
+    const firstCell = page.getByRole('grid', { name: /^Result 1 of/ }).getByRole('gridcell').first()
+    const retainedValue = await firstCell.innerText()
+    await outputView(page, 'Client Statistics').click()
+    const statistics = page.getByRole('table', { name: 'Client statistics comparison', exact: true })
+    await expect(statistics.getByRole('columnheader', { name: 'Run 1', exact: true })).toBeVisible()
     await text('SELECT name FROM sys.objects;')
     await page.keyboard.press(`${mod}+l`)
     await expect(page.locator('[data-estimated-plan]')).toContainText('Estimated')
     await expect(planCanvas(page).locator('canvas')).toHaveCount(1)
+    await expect(outputView(page, 'Execution plan, Estimated').getByText('1', { exact: true })).toBeVisible()
+    await expect(queryBarButton(page, 'Include Actual Execution Plan')).toHaveAttribute('aria-pressed', 'true')
+    await expect(queryBarButton(page, 'Include Client Statistics')).toHaveAttribute('aria-pressed', 'true')
+    await outputView(page, 'Client Statistics').click()
+    await expect(statistics.getByRole('columnheader', { name: 'Run 1', exact: true })).toBeVisible()
+    await expect(statistics.getByRole('columnheader', { name: /Previous \(run/ })).toHaveCount(0)
+    await outputView(page, /^Results,/).click()
+    await expect(firstCell).toHaveText(retainedValue)
+    await outputView(page, 'Execution plan, Estimated').click()
     // Give the short dock room through its normal splitter before inspecting outline rows below wrapped plan tools,
     // just as the results smoke suite does.
     await enlargeOutput(page)
@@ -75,7 +96,7 @@ try {
     if (!live) {
       const calls = (await readFile(join(control, 'calls.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line))
       expect(calls.filter(call => call.method === 'plans.estimate').at(-1).params).toMatchObject({ sql: 'SELECT name FROM sys.objects;', startLine: 2 })
-      expect(calls.some(call => call.method === 'query.execute')).toBe(false)
+      expect(calls.filter(call => call.method === 'query.execute')).toHaveLength(1)
     }
     if (live) {
       await text('SET SHOWPLAN_XML OFF\nGO\nSELECT 1;')
@@ -85,6 +106,8 @@ try {
       await page.keyboard.press('F5')
       await expect(page.getByRole('gridcell', { name: '42', exact: true })).toBeVisible()
       await expect(page.locator('[data-estimated-plan]')).toHaveCount(0)
+      // A streamed row can precede actual-capture cleanup; close only after the execution has settled.
+      await expect(queryBarButton(page, 'Display Estimated Execution Plan')).toBeEnabled()
     }
     await close()
     console.log(`Estimated plan Electron checks passed (${live ? 'SQL Server' : 'fake backend'}).`)

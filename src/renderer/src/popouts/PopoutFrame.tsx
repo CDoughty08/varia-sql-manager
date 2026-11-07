@@ -1,6 +1,7 @@
 import { useCallback, useLayoutEffect, useRef, type KeyboardEvent } from 'react'
 import { isOutputPane, paneTitles, type PaneId, type PopoutPaneId } from '../../../shared/layouts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
+import { popoutTabTitle } from '../core/gestures'
 import { useMenuTarget } from '../menus/useMenuTarget'
 import Icon from '../Icon'
 import { paneDrag } from './drag'
@@ -30,7 +31,7 @@ function PopoutSlot({ host, parking, hidden }: { host: HTMLElement; parking: HTM
 }
 
 function PopoutTab({ view, pane, commands }: { view: PopoutView; pane: PopoutPaneId; commands: PopoutCommands }) {
-  const { results, documents, menus } = useWorkbench()
+  const { results, documents, menus, gestures } = useWorkbench()
   const menuFor = useServiceSnapshot(menus.menuFor)
   const element = useRef<HTMLDivElement | null>(null)
   const register = useMenuTarget<HTMLDivElement>(() => ({ kind: 'dockTab', pane, floating: false, popout: true }))
@@ -54,9 +55,9 @@ function PopoutTab({ view, pane, commands }: { view: PopoutView; pane: PopoutPan
     } else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); choose() }
   }
   return <div ref={ref} className={`popout-tab${selected ? ' active' : ''}`} role="tab" aria-selected={selected} tabIndex={selected ? 0 : -1} data-popout-tab={pane}
-    aria-haspopup="menu" aria-expanded={!!menuFor && menuFor === element.current} draggable title="Drag onto the main window to dock it there"
+    aria-haspopup="menu" aria-expanded={!!menuFor && menuFor === element.current} draggable title={popoutTabTitle(gestures)}
     onClick={event => { if (!(event.target as Element).closest('button')) choose() }} onKeyDown={key}
-    onDoubleClick={event => { if (event.ctrlKey && !(event.target as Element).closest('button')) commands.moveToMain(pane) }}
+    onDoubleClick={event => { if (gestures.matches('popout.returnToMain', event) && !(event.target as Element).closest('button')) commands.moveToMain(pane) }}
     onDragStart={event => paneDrag.start(pane, event.dataTransfer)} onDragEnd={() => { paneDrag.end(); commands.dragEnded() }}>
     <span className="popout-tab-title">{paneTitles[pane]}</span>
     <button type="button" className="icon-button popout-tab-close" tabIndex={-1} aria-label={'Close ' + paneTitles[pane]} title="Close"

@@ -245,7 +245,8 @@ export default function App() {
         {!statusTop && statusBar}
       </main>} results={<OutputPane pane="results" tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />}
       messages={<OutputPane pane="messages" tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />}
-      plan={<OutputPane pane="plan" tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />} />
+      plan={<OutputPane pane="plan" tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />}
+      statistics={<OutputPane pane="statistics" tabId={active.id} query={isQuery} connected={!!liveConnection} />} />
     <OutputViewSync tabId={active.id} />
     <OutputAnnouncer tabId={active.id} />
     {/* Neutral until work runs: tinted while the active query executes, or while the backend is down. */}

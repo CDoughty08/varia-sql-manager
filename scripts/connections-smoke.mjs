@@ -961,14 +961,13 @@ async function environmentLabels() {
   expect(look).toEqual({ color: true, fill: true, accent: true, inside: true, whole: true })
   // The tag is no control, so the query bar's server list, which its keys reach, describes the environment.
   await expect(queryServer(page)).toHaveAttribute('aria-description', 'Production environment')
-  // PROD stays whole beside both lists in a narrow editor.
-  let widen = await narrowBar(330)
-  expect(await barFit()).toEqual({ clear: true, inside: true, lists: true, cut: false })
-  await widen()
-  // Check below the 330 px width that overflowed with Linux font metrics too.
-  widen = await narrowBar(320)
-  expect(await barFit(), '320 px query bar').toEqual({ clear: true, inside: true, lists: true, cut: false })
-  await widen()
+  // Every compact layout keeps PROD whole beside both lists and the five query actions, including Linux font metrics.
+  let widen
+  for (const width of [760, 600, 500, 400, 330, 320]) {
+    widen = await narrowBar(width)
+    expect(await barFit(), `${width} px query bar`).toEqual({ clear: true, inside: true, lists: true, cut: false })
+    await widen()
+  }
   await page.screenshot({ path: resolve('artifacts', 'environment-production.png') })
   // (2) From the server's menu: a Custom label left blank cannot be saved; one typed is saved and shown everywhere.
   let labelling = await serverMenu(row)

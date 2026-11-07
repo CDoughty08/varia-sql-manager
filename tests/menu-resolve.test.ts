@@ -40,7 +40,7 @@ describe('menu resolution', () => {
     const [undo] = edit
     expect(undo).toEqual({ kind: 'command', key: 'edit.undo', id: 'edit.undo', title: 'Undo', mnemonic: 0, icon: 'discard', keybinding: { parts: ['Ctrl+Z'], text: 'Ctrl+Z', aria: 'Control+Z' }, enabled: true })
     expect(submenu('edit.advanced').find(item => item.key === 'edit.commentLines')).toMatchObject({ keybinding: { text: 'Ctrl+K Ctrl+C' } })
-    const windowMenu = ['&Object Explorer', 'Query &Editor', 'Res&ults', '&Messages', 'E&xecution Plan', 'S&how Results Pane', 'Panel &Tabs', '-', '&Next Query', '&Previous Query', 'C&lose All Documents', '-', 'Spl&it Editor Right', 'Split Editor Do&wn', '&Join All Editor Groups', '-', '&Save Window Layout…', 'Lo&ad Window Layout…', '&Reset Window Layout']
+    const windowMenu = ['&Object Explorer', 'Query &Editor', 'Res&ults', '&Messages', 'E&xecution Plan', 'S&how Results Pane', 'Panel &Tabs', '&Client Statistics', '-', '&Next Query', '&Previous Query', 'C&lose All Documents', '-', 'Spl&it Editor Right', 'Split Editor Do&wn', '&Join All Editor Groups', '-', '&Save Window Layout…', 'Lo&ad Window Layout…', '&Reset Window Layout']
     expect(marked(resolveMenu('window', options({ platform: 'linux' })))).toEqual(windowMenu)
     // macOS's Minimize and Zoom are bare Electron roles: only its native menu shows them.
     expect(marked(resolveMenu('window', options({ platform: 'darwin' })))).toEqual(windowMenu)
@@ -57,7 +57,7 @@ describe('menu resolution', () => {
     const shape = (items: readonly ResolvedMenuItem[]): unknown[] => items.map(item => item.kind === 'command' ? [item.id, item.enabled, item.args] : item.kind === 'submenu' ? shape(item.items) : item.kind)
     expect(shape(query)).toEqual([
       [['connection.connect', true, args], ['query.disconnect', true, args], ['query.disconnectAll', true, args], ['connection.reconnect', true, args], 'separator', ['query.changeConnection', true, args], ['connection.environment', true, args]],
-      ['query.changeDatabase', true, args], 'separator', ['query.execute', false, args], ['query.cancel', true, args], ['query.includeActualPlan', true, args], ['query.estimatePlan', true, args]
+      ['query.changeDatabase', true, args], 'separator', ['query.execute', false, args], ['query.cancel', true, args], ['query.includeActualPlan', true, args], ['query.estimatePlan', true, args], ['query.includeClientStatistics', true, args], ['query.resetClientStatistics', true, args]
     ])
     expect(query.find(item => item.key === 'query.includeActualPlan')).toMatchObject({ checked: true })
     expect(resolved.commands.isEnabled).toHaveBeenCalledWith('query.execute', args)

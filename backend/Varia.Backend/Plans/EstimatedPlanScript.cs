@@ -19,7 +19,8 @@ internal static class EstimatedPlanScript
                 if ((token.Word || token.Identifier) && CaptureOptions.Contains(token.Value))
                     throw Invalid(batch, "Remove SHOWPLAN, NOEXEC, PARSEONLY and FMTONLY options before requesting an estimated plan.");
             bool Is(int index, string text) => index < tokens.Count && tokens[index].Word && tokens[index].Value.Equals(text, StringComparison.OrdinalIgnoreCase);
-            var uses = Enumerable.Range(0, tokens.Count).Where(i => Is(i, "USE") && !Is(i + 1, "HINT") && !Is(i + 1, "PLAN")).ToArray();
+            var uses = Enumerable.Range(0, tokens.Count).Where(i => Is(i, "USE")
+                && !(i > 0 && (tokens[i - 1].Value is "(" or ",") && (Is(i + 1, "HINT") || Is(i + 1, "PLAN")))).ToArray();
             string? database = null;
             if (uses.Length > 0)
             {

@@ -17,7 +17,9 @@ internal static class EstimatedPlanChecks
         var harmless = EstimatedPlanScript.Parse("SELECT 'SET SHOWPLAN_XML OFF', N'GO', 'it''s safe'; -- SET SHOWPLAN_XML OFF\n/* SET SHOWPLAN_XML OFF */\nGO 2\nUSE [temp]]db];\nGO\nSELECT 2 OPTION(USE HINT('DISABLE_PARAMETER_SNIFFING'));", 5);
         check(harmless.Count == 3 && harmless[0].Source.RepeatCount == 2 && harmless[1].Database == "temp]db", "estimated guard handles literals, GO repetitions, nested comments and quoted USE");
         check(EstimatedPlanScript.Parse("USE \"tempdb\";", 1)[0].Database == "tempdb", "quoted USE database decodes without concatenating SQL");
-        foreach (var sql in new[] { "USE tempdb; SELECT 1", "SELECT 1; USE master", "USE master; USE tempdb", "SELECT 1\nGO 0", "SELECT 1\n:r x", "SELECT 'unterminated" })
+        foreach (var database in new[] { "HINT", "PLAN" })
+            check(EstimatedPlanScript.Parse("USE " + database + ";", 1)[0].Database == database, "standalone USE is a database switch even when named " + database);
+        foreach (var sql in new[] { "USE tempdb; SELECT 1", "SELECT 1; USE master", "SELECT 1; USE HINT;", "SELECT 1; USE PLAN;", "USE master; USE tempdb", "SELECT 1\nGO 0", "SELECT 1\n:r x", "SELECT 'unterminated" })
         {
             try { EstimatedPlanScript.Parse(sql, 12); check(false, "invalid estimate accepted: " + sql); }
             catch (RequestException error) { check(error.Code == "INVALID_SCRIPT" && error.Message.Contains("Line "), "invalid estimated script has source line: " + sql); }
@@ -67,6 +69,8 @@ internal static class EstimatedPlanChecks
             var pending = Estimate("SELECT n FROM " + lockTable, cancelId);
             await Task.Delay(250);
             check(!pending.IsCompleted, "estimated compilation waits for a schema lock without executing SQL");
+            var ordinaryState = (SessionState)await Call("query.session.state", new SessionStateArgs(session));
+            check(ordinaryState is { TransactionCount: 1, Checked: true }, "the ordinary transaction remains readable while its isolated estimate is blocked");
             await Call("query.cancel", new CancelArgs(cancelId));
             try { await pending; check(false, "estimated cancellation"); }
             catch (RequestException error) { check(error.Code == "CANCELLED", "estimated cancellation settles with CANCELLED"); }
@@ -109,12 +113,14 @@ internal static class EstimatedPlanChecks
                 await hold.Task.WaitAsync(token);
             };
             var ids = new[] { Guid.NewGuid().ToString(), Guid.NewGuid().ToString() };
-            var reads = ids.Select(id => Call("plans.estimate", new EstimatedPlanArgs(info.Id, Guid.NewGuid().ToString(), id, "master", "SELECT 1;"))).ToArray();
+            var compilerSessions = new[] { Guid.NewGuid().ToString(), Guid.NewGuid().ToString() };
+            var reads = ids.Select((id, index) => Call("plans.estimate", new EstimatedPlanArgs(info.Id, compilerSessions[index], id, "master", "SELECT 1;"))).ToArray();
             try
             {
                 await both.Task.WaitAsync(TimeSpan.FromSeconds(10));
                 await Refused("SELECT 1;", "BUSY", "a third estimate is refused without queuing behind blocked compilers");
-                foreach (var id in ids) await Call("query.cancel", new CancelArgs(id));
+                await Call("query.cancel", new CancelArgs(ids[0]));
+                await Call("query.session.close", new SessionArgs(compilerSessions[1]));
                 foreach (var read in reads)
                 {
                     try { await read; check(false, "cancel held compiler"); }

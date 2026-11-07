@@ -1,6 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, anyResultGrid, backendReady, closeDocumentButton, documentTabs, editorText as editorTextOf, emptyState, emptyStateIcon, emptyStateTitle, errorMessages,
@@ -75,6 +76,17 @@ try {
   expect(await page.evaluate(() => window.varia.databases(crypto.randomUUID()))).toEqual({ ok: false, error: 'Connect to a SQL Server first.', code: 'NOT_CONNECTED' })
   expect(await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, invoke: typeof window.varia.invoke, port: typeof window.varia.port, postMessage: typeof window.varia.postMessage }))).toEqual({ node: 'undefined', process: 'undefined', invoke: 'undefined', port: 'undefined', postMessage: 'undefined' })
   expect(await application.evaluate(({ app }) => app.commandLine.hasSwitch('no-sandbox'))).toBe(process.platform === 'linux' && !launchOptions.chromiumSandbox)
+  // The page is app://varia/, never file:, so its script cannot read local files: not this suite's own profile, not main's
+  // bundle by traversal. Its own assets still load, with a JavaScript type for module scripts and workers.
+  expect(page.url()).toBe('app://varia/index.html')
+  await writeFile(join(profile, 'probe.txt'), 'secret')
+  const probe = pathToFileURL(join(profile, 'probe.txt')).href, localFile = pathToFileURL(resolve('package.json')).href
+  expect(await page.evaluate(async ([file, other]) => {
+    const fetched = async url => { try { const response = await fetch(url); return `read ${response.status} ${(await response.text()).length}` } catch (error) { return error.name } }
+    const xhr = url => new Promise(resolve => { const request = new XMLHttpRequest(); try { request.open('GET', url); request.onload = () => resolve(`read ${request.responseText.length}`); request.onerror = () => resolve('error'); request.send() } catch (error) { resolve(error.name) } })
+    const own = await fetch(document.querySelector('script[type=module]').src)
+    return { fetch: await fetched(file), other: await fetched(other), xhr: await xhr(file), traversal: (await fetch('app://varia/..%2fmain%2findex.js')).status, own: [own.status, own.headers.get('content-type')] }
+  }, [probe, localFile])).toEqual({ fetch: 'TypeError', other: 'TypeError', xhr: 'error', traversal: 404, own: [200, 'text/javascript; charset=utf-8'] })
   // The hidden smoke window draws at full rate (fixtures/smoke.mjs); at Chromium's hidden-window rate of one frame a second
   // every click waited two seconds for Playwright's stability check, and the suites took twice as long.
   const frameGap = await page.evaluate(() => new Promise(resolve => requestAnimationFrame(first => requestAnimationFrame(second => resolve(second - first)))))
@@ -96,31 +108,35 @@ try {
   const workbenchPolicy = await application.evaluate(({ BrowserWindow }, code) => BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(code), policyProbe)
   expect(workbenchPolicy).toMatchObject(refused)
   expect(workbenchPolicy.meta).toMatch(/^default-src 'self'; script-src 'self'; .*object-src 'none'; frame-src 'none'; base-uri 'none'$/)
-  const metaOnly = await application.evaluate(async ({ app, BrowserWindow }, code) => {
-    const { join } = process.getBuiltinModule('node:path')
-    const window = new BrowserWindow({ show: false, webPreferences: { partition: 'varia-policy-probe', sandbox: true, contextIsolation: true } })
+  // Both probes serve the built page from app://varia/ in their own session, as main does, but with no header of their own.
+  const metaOnly = await application.evaluate(async ({ app, BrowserWindow, net, session }, code) => {
+    const { join } = process.getBuiltinModule('node:path'), { pathToFileURL } = process.getBuiltinModule('node:url')
+    const probe = session.fromPartition('varia-policy-probe')
+    probe.protocol.handle('app', request => net.fetch(pathToFileURL(join(app.getAppPath(), 'out/renderer', new URL(request.url).pathname)).href))
+    const window = new BrowserWindow({ show: false, webPreferences: { session: probe, sandbox: true, contextIsolation: true } })
     try {
-      await window.loadFile(join(app.getAppPath(), 'out/renderer/index.html'))
+      await window.loadURL('app://varia/index.html')
       const heading = "document.getElementById('shell-failure-title')?.textContent ?? null"
       let failure = null
       for (let tries = 0; tries < 100 && !failure; tries++) failure = await window.webContents.executeJavaScript(heading) ?? await new Promise(resolve => setTimeout(resolve, 100, null))
       return { ...await window.webContents.executeJavaScript(code), failure, buttons: await window.webContents.executeJavaScript("[...document.querySelectorAll('main button')].map(button => button.textContent)") }
-    } finally { window.destroy() }
+    } finally { window.destroy(); probe.protocol.unhandle('app') }
   }, policyProbe)
   expect(metaOnly).toMatchObject({ ...refused, meta: workbenchPolicy.meta, failure: 'Varia SQL Manager could not start.', buttons: ['Reload', 'Copy details'] })
   // The page's own script loads the workbench as a separate chunk, so a chunk that cannot load (or a module that throws
   // while it loads) still gets the failure screen, styled: the stylesheet does not come with that chunk.
   const chunkLost = await application.evaluate(async ({ app, BrowserWindow, net, session }) => {
-    const { join } = process.getBuiltinModule('node:path')
+    const { join } = process.getBuiltinModule('node:path'), { pathToFileURL } = process.getBuiltinModule('node:url')
     const probe = session.fromPartition('varia-chunk-probe'), blocked = []
-    probe.protocol.handle('file', request => {
-      if (!/\/assets\/start-[^/]+\.js$/.test(new URL(request.url).pathname)) return net.fetch(request, { bypassCustomProtocolHandlers: true })
+    probe.protocol.handle('app', request => {
+      const path = new URL(request.url).pathname
+      if (!/\/assets\/start-[^/]+\.js$/.test(path)) return net.fetch(pathToFileURL(join(app.getAppPath(), 'out/renderer', path)).href)
       blocked.push(request.url)
       return new Response('', { status: 404 })
     })
     const window = new BrowserWindow({ show: false, webPreferences: { session: probe, sandbox: true, contextIsolation: true } })
     try {
-      await window.loadFile(join(app.getAppPath(), 'out/renderer/index.html'))
+      await window.loadURL('app://varia/index.html')
       const heading = "document.getElementById('shell-failure-title')?.textContent ?? null"
       let failure = null
       for (let tries = 0; tries < 100 && !failure; tries++) failure = await window.webContents.executeJavaScript(heading) ?? await new Promise(resolve => setTimeout(resolve, 100, null))
@@ -129,7 +145,7 @@ try {
         headingSize: document.getElementById('shell-failure-title') && getComputedStyle(document.getElementById('shell-failure-title')).fontSize,
         details: document.querySelector('main [aria-label="Details"]')?.textContent ?? ''
       })`) }
-    } finally { window.destroy(); probe.protocol.unhandle('file') }
+    } finally { window.destroy(); probe.protocol.unhandle('app') }
   })
   expect(chunkLost).toMatchObject({ failure: 'Varia SQL Manager could not start.', blocked: 1, buttons: ['Reload', 'Copy details'], headingSize: '20px' })
   expect(chunkLost.details).toMatch(/dynamically imported module/)
@@ -175,7 +191,7 @@ try {
   expect([titleBar.toolbar, titleBar.search]).toEqual([[true, 'no-drag'], 'no-drag'])
   expect(titleBar.height).toBe(40)
   // The header keeps the file commands. The active query's bar sits above the editor groups' tab strips, with Execute
-  // (the filled button), Cancel, Actual Plan and Estimated Plan, then its server and database lists in the connection pill.
+  // (the filled button), Cancel, Actual Plan, Estimated Plan and Client Statistics, then its server and database lists in the connection pill.
   expect(await toolbar(page).getByRole('button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label')))).toEqual(['Connect', 'New query', 'Open', 'Save', 'Save All', 'Activity Monitor'])
   await expect(toolbar(page).getByRole('combobox')).toHaveCount(0)
   await expect(queryConnection(page).getByLabel('Query server', { exact: true })).toBeVisible()
@@ -189,6 +205,13 @@ try {
   // server list's value alone.
   await queryServer(page).focus()
   await page.keyboard.press('ArrowLeft')
+  const clientStatistics = queryBarButton(page, 'Include Client Statistics')
+  await expect(clientStatistics).toBeFocused()
+  await page.keyboard.press('Space')
+  await expect(clientStatistics).toHaveAttribute('aria-pressed', 'true')
+  await page.keyboard.press('Space')
+  await expect(clientStatistics).toHaveAttribute('aria-pressed', 'false')
+  await page.keyboard.press('ArrowLeft')
   const actualPlan = queryBarButton(page, 'Include Actual Execution Plan')
   await expect(actualPlan).toBeFocused()
   await page.keyboard.press('Space')
@@ -200,9 +223,11 @@ try {
   await page.keyboard.press('ArrowRight')
   await expect(actualPlan).toBeFocused()
   await page.keyboard.press('ArrowRight')
+  await expect(clientStatistics).toBeFocused()
+  await page.keyboard.press('ArrowRight')
   await expect(queryServer(page)).toBeFocused()
   await expect(queryServer(page)).toHaveValue('')
-  expect(await queryBar(page).evaluate(bar => [...bar.querySelectorAll('button, select')].map(control => control.tabIndex))).toEqual([-1, -1, -1, -1, 0, -1])
+  expect(await queryBar(page).evaluate(bar => [...bar.querySelectorAll('button, select')].map(control => control.tabIndex))).toEqual([-1, -1, -1, -1, -1, 0, -1])
   // Options › Show the classic toolbar puts the text toolbar, with Layouts, back on a row of its own below the header.
   expect(await page.evaluate(() => window.varia.updateSettings({ 'environment.layout.classicToolbar': true }))).toMatchObject({ ok: true })
   await expect(toolbarButton(page, 'Layouts')).toBeVisible()
@@ -841,7 +866,7 @@ try {
     expect(await clipped(), String(width)).toEqual({ status: [], search: [] })
   }
   expect(failures).toEqual([])
-  console.log('Electron regression checks passed: the content security policy from main\'s header and the page\'s own <meta>, the startup failure screen (also for a workbench chunk that cannot load) and the workbench error boundary, integrated title bar and native controls, menu IPC and keyboard access, protocol v2 health and error codes, tab-switch undo/redo, save while typing and saved undo boundaries, file shortcuts and round trips, inactive-tab close with pending confirmation, unsaved close/quit, tab focus, selection execution and query shortcuts, zero timeout, retarget execution guard, two-server routing, the Object Explorer tree keys, lazy folders, per-folder errors, retry and refresh, per-tab execution sessions, partial results with statistics and batch errors, escaped XML plans, concurrent cancellation, alignment, the unsaved dot under forced colours, and whole status bar segments and search box labels from 1024 px up.')
+  console.log('Electron regression checks passed: the app://varia/ page that cannot read local files, the content security policy from main\'s header and the page\'s own <meta>, the startup failure screen (also for a workbench chunk that cannot load) and the workbench error boundary, integrated title bar and native controls, menu IPC and keyboard access, protocol v2 health and error codes, tab-switch undo/redo, save while typing and saved undo boundaries, file shortcuts and round trips, inactive-tab close with pending confirmation, unsaved close/quit, tab focus, selection execution and query shortcuts, zero timeout, retarget execution guard, two-server routing, the Object Explorer tree keys, lazy folders, per-folder errors, retry and refresh, per-tab execution sessions, partial results with statistics and batch errors, escaped XML plans, concurrent cancellation, alignment, the unsaved dot under forced colours, and whole status bar segments and search box labels from 1024 px up.')
 } catch (error) {
   const page = await application.firstWindow()
   await page.screenshot({ path: artifact('workbench-failure.png') }).catch(() => {})
