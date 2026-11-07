@@ -329,6 +329,8 @@ describe('menu state', () => {
       'explorer.scriptAs', 'explorer.modify', 'explorer.peek', 'explorer.cancelScripting', 'explorer.copyName', 'output.copy', 'output.copyWithHeaders', 'output.selectAll', 'backend.restart',
       'connection.removeLost', 'explorer.stop', 'explorer.collapseAll', 'explorer.filter', 'explorer.focusSearch', 'explorer.removeFilter', 'window.switchPane',
       'output.saveResultsAs', 'output.closeResults', 'output.openValue', 'editor.toggleOvertype', 'file.openRecent', 'file.clearRecent', 'file.recoverUnsaved', 'editor.toggleLineNumbers',
+      // Main runs AutoRecover's save as Windows ends the session; no menu shows it.
+      'file.autoRecoverNow',
       // Toasts are reached from the palette, as in VS Code.
       'notifications.focus', 'notifications.clearAll',
       // Download Update is offered by the status bar and its toast while Automatically download updates is off.

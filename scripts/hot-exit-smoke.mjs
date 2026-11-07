@@ -1,7 +1,8 @@
 // Hot exit and Rename Tab on the fake backend: tabs renamed by F2, a double-click and the tab menu (Escape keeps the old
 // name), Save As suggesting a renamed tab's name, then a quit that asks nothing and a relaunch on the same profile that
 // reopens every tab in order, with its text, unsaved state and name, the active one active, a clean file read again from
-// disk, the editor groups as they were, and no Recover dialog. Native message boxes are stubbed in main and recorded; files live under artifacts/.
+// disk, the editor groups as they were, and no Recover dialog; a renderer crash after a restore reopens it, and a Windows
+// session end keeps the tabs. Native message boxes are stubbed in main and recorded; files live under artifacts/.
 import { electron, expect } from './fixtures/smoke.mjs'
 import { crashRenderer } from './fixtures/dialog-lifecycle.mjs'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
@@ -419,6 +420,34 @@ try {
     await releaseRead()
   }
   console.log('Hot exit checks: a crash during startup also retries the saved tabs on Reload.')
+
+  // The page has acknowledged that restore, so previous.json is the only copy of its unsaved text (AutoRecover is off). A
+  // crash now must reopen it on Reload, not leave it for the next close to delete.
+  await expect.poll(recoveredPins, { timeout: 30000 }).toMatchObject({ pins: ['Totals', 'Orders report', 'large-pin.xml'] })
+  // A round trip after the acknowledgement, which the page sent before its tabs drew.
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.executeJavaScript('window.varia.listRecovery().then(() => true)'))
+  const stopped = async () => (await prompts()).filter(prompt => prompt === 'The workbench stopped unexpectedly.').length
+  const stoppedBefore = await stopped()
+  await crashRenderer(application)
+  await expect.poll(stopped, { timeout: 30000 }).toBe(stoppedBefore + 1)
+  await expect.poll(recoveredPins, { timeout: 30000 }).toMatchObject({
+    pins: ['Totals', 'Orders report', 'large-pin.xml'], text: expect.stringContaining('before_renderer_crash')
+  })
+  console.log('Hot exit checks: a crash after the restore was acknowledged reopens the restored tabs on Reload.')
+
+  // Windows ends its session (shut down, restart, log off) without before-quit: main holds the end, the close keeps the
+  // tabs, and the app quits so Windows can go on.
+  const ended = new Promise(done => application.process().once('exit', done))
+  expect(await application.evaluate(({ BrowserWindow }) => {
+    let held = false
+    BrowserWindow.getAllWindows()[0].emit('query-session-end', { reasons: ['shutdown'], preventDefault: () => { held = true } })
+    return held
+  })).toBe(true)
+  await ended
+  const atSessionEnd = JSON.parse(await readFile(join(profile, 'Session', 'session.json'), 'utf8'))
+  expect(atSessionEnd.documents.map(tab => tab.name)).toEqual(['Totals', 'Orders report', 'large-pin.xml'])
+  expect(atSessionEnd.documents[0].text).toContain('before_renderer_crash')
+  console.log('Hot exit checks: a Windows session end keeps the open tabs before the app quits.')
   expect(failures).toEqual([])
   console.log('Hot exit suite passed.')
 } catch (error) {

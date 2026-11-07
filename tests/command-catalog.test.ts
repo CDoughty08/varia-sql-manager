@@ -55,8 +55,8 @@ describe('command catalogue', () => {
   })
   it('is the renderer\'s command id type', () => {
     expectTypeOf<CommandId>().toEqualTypeOf<RendererCommandId>()
-    // 110 commands (Create Catalog among them), Object Explorer's six object actions (Select Top keeps PR4's id; Unlock… is the sixth), Restore Files and Filegroups and the row commands of Restore Database and Restore Files and Filegroups (Tasks › Restore › Database… and Files and Filegroups…), New Table and the table designer's seven, then Script As's 30 generated ones (three keep the table menu's CREATE ids) and its palette pick, Modify, and Cancel, the two notification commands, the Database Properties document's four verbs, the Restore Database document's three, New Database (with its database menu's own command) and its document's three verbs, Attach Database, Search in Object Explorer, the SSIS Catalog's four Properties verbs and their documents' Refresh, the Activity Monitor's nine, Integration Services Operations' nine, New Login's two (its Logins menu item and palette entry, and Security › New › Login…), Tasks › Take Offline and Bring Online, Tasks › Detach… (D3b), a login's Disable and Enable (D4b), Help's four update commands, and Search Objects' three (Search Objects…, Rebuild Search Index, Stop Indexing), and Object Explorer's Group by Schema; the output panels' Window and Tab With commands are three each (Results, Messages, Execution plan), and the query tabs' Move Left, Move Right and Rename Tab, and a panel's Move into New Window and Move Back into Main Window, and the editor groups' nine (Split Editor Right and Down, Move Editor into Next and Previous Group, Focus Next and Previous Editor Group, Join All Editor Groups, Float and Dock Editor), the results toolbar's two White space choices, Object Explorer's Peek, and Include Actual Execution Plan.
-    expect(commandIds).toHaveLength(235)
+    // Includes generated Script As commands and internal lifecycle commands.
+    expect(commandIds).toHaveLength(236)
     expect(commandIds.filter(id => id.startsWith('explorer.script') && id.includes('To'))).toEqual([...scriptCommandIds])
   })
   it('has a handler for every command once all contributions have run', () => {
@@ -94,9 +94,9 @@ describe('command catalogue', () => {
     // tests/icons.test.ts checks the registry against the bundled codicon font.
     expect(commandIds.filter(id => commandDescriptor(id).icon !== undefined && !isIconId(commandDescriptor(id).icon))).toEqual([])
   })
-  it('lets exactly window close, the text-editing commands, and the context-menu key run behind a modal', () => {
-    // Text fields in dialogs keep Undo, Redo, the clipboard, and their context menu.
-    expect(commandIds.filter(id => commandDescriptor(id).allowInModal)).toEqual(['window.close', 'edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll',
+  it('lets exactly window close, the text-editing commands, the context-menu key and main’s AutoRecover save run behind a modal', () => {
+    // Text fields in dialogs keep Undo, Redo, the clipboard, and their context menu. A Windows session end saves AutoRecover's copies whatever is open.
+    expect(commandIds.filter(id => commandDescriptor(id).allowInModal)).toEqual(['file.autoRecoverNow', 'window.close', 'edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll',
       'workbench.showContextMenu'])
     for (const platform of platforms) for (const rule of defaultRules(platform).filter(rule => rule.modal)) expect(commandDescriptor(rule.command).allowInModal, rule.command).toBe(true)
     expect(defaultRules('win32').filter(rule => rule.modal).map(rule => rule.chords.join(' '))).toEqual(['shift+f10', 'contextmenu'])

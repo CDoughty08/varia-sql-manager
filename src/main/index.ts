@@ -47,7 +47,7 @@ import { applicationMenuTemplate, type ApplicationMenuActions } from './applicat
 import { NativeMenuBridge } from './native-menu'
 import { rendererRoleSchema, runRole, UserActivation } from './window-roles'
 import { PopoutWindows } from './popout-windows'
-import { closeAction, mergeCloseIntent, type CloseIntent } from './close-intent'
+import { closeAction, holdsSessionEnd, mergeCloseIntent, type CloseIntent } from './close-intent'
 import { processAlive, RendererWatchdog } from './renderer-watchdog'
 import { ContextMenuPopups } from './context-menu'
 import { menuStyleArgument, menuStyleFor } from '../shared/menu-style'
@@ -612,6 +612,9 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
     rendererLoaded = false
     const lostPage = pageGeneration
     resetRendererState({ replacePage: true })
+    // What this process restored is in no other copy until a close keeps the tabs again (AutoRecover waits for its
+    // interval), so the replacement page reopens previous.json as the next process would.
+    sessionTaken = false
     const restores = sessionCheckpoint?.kind === 'reload' ? 'pins' : sessionCheckpoint ? 'session' : undefined
     void oneDialog(() => window.isDestroyed() ? Promise.resolve({ response: -1 }) : dialog.showMessageBox(window, { type: 'error', title: 'Workbench stopped', message: 'The workbench stopped unexpectedly.', detail: lossDetailsFor(lostPage, restores).stopped, buttons: ['Reload', 'Close'], defaultId: 0, cancelId: 1, noLink: true }),
       { response: -1 }).then(({ response }) => {
@@ -651,6 +654,17 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
     }
     closeApproved = true
   })
+  // Windows ends its session (shut down, restart, log off, an installer's Restart Manager) without before-quit, so the close
+  // that keeps unsaved work starts here: AutoRecover's copies at once, then the quit's close (hot exit keeps the tabs, or
+  // the unsaved-query prompts ask) while the end waits, unless Windows will not wait. The close quits once it is done.
+  window.on('query-session-end', event => {
+    if (closeApproved || !rendererCanConfirm(window)) return
+    command('file.autoRecoverNow')
+    if (holdsSessionEnd(event.reasons)) event.preventDefault()
+    requestClose('quit')
+  })
+  // The end can no longer wait (forced, or after Shut down anyway): only AutoRecover's copies can still be written.
+  window.on('session-end', () => { if (!closeApproved && rendererReady) command('file.autoRecoverNow') })
   // A closed window can no longer address its sessions. Only macOS keeps the app running after its last window closes,
   // so only there does a later window need a new backend.
   // A window replaced after its renderer was lost has already been reset.
