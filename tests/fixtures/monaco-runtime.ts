@@ -39,6 +39,9 @@ interface Internals {
   readonly titles: ReadonlyMap<string, string>
   /** The OperatingSystem Monaco detected, which its keybinding service resolves keys for. */
   readonly os: number
+  /** Monaco's host branch: the renderer has no `process`, so web, not native. */
+  readonly isWeb: boolean
+  readonly isNative: boolean
 }
 export interface LoadedMonaco {
   readonly monaco: typeof Monaco
@@ -50,31 +53,49 @@ export interface LoadedMonaco {
 }
 
 const load = (specifier: string) => import(/* @vite-ignore */ specifier) as Promise<any>
-let loaded: Promise<LoadedMonaco> | undefined
-/** Loads Monaco once per test file, for the running OS. Nothing may import Monaco's registry first, or its rules would be missed. */
+/** Chromium's user agent per platform, as Electron's renderer reports it (Monaco reads only the OS words). */
+export const rendererUserAgents: Readonly<Record<Platform, string>> = {
+  win32: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+  darwin: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+  linux: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'
+}
+/** Loads Monaco once per test file, as the renderer would on the running OS. Nothing may import Monaco's registry first. */
 export function loadMonaco(): Promise<LoadedMonaco> {
-  return loaded ??= loadInstance()
+  return loadMonacoFor(toPlatform(process.platform))
 }
 const loadedFor = new Map<Platform, Promise<LoadedMonaco>>()
+let loads: Promise<unknown> = Promise.resolve()
 /**
- * A separate Monaco loaded as on `platform`. Monaco folds OS constants into `when` clauses as its modules evaluate
- * (wordOperations adds `!accessibilityModeEnabled` only on Windows), so each platform's clauses need their own load:
- * the module cache is reset and `process.platform`, which Monaco's platform.js reads, is faked while it loads.
+ * A Monaco loaded as Varia's renderer loads it on `platform`. The renderer is sandboxed and has no `process`, so Monaco's
+ * platform.js takes its web branch and reads the OS from `navigator.userAgent`; that branch decides more than the OS
+ * (the clipboard contrib binds Cut, Copy and Paste keys only on a native host, not in a browser). So while each load's
+ * modules evaluate, `process.versions.node` is hidden and the user agent is the platform's. Monaco folds OS constants
+ * into `when` clauses as it loads (wordOperations adds `!accessibilityModeEnabled` only on Windows), so each platform
+ * gets its own load, one at a time, after a reset of the module cache.
  */
 export function loadMonacoFor(platform: Platform): Promise<LoadedMonaco> {
-  if (platform === toPlatform(process.platform)) return loadMonaco()
   let instance = loadedFor.get(platform)
   if (!instance) {
-    instance = (async () => {
-      await loadMonaco()
-      vi.resetModules()
-      const real = Object.getOwnPropertyDescriptor(process, 'platform')!
-      Object.defineProperty(process, 'platform', { ...real, value: platform })
-      try { return await loadInstance() } finally { Object.defineProperty(process, 'platform', real) }
-    })()
+    const first = loadedFor.size === 0
+    instance = loads.then(async () => {
+      if (!first) vi.resetModules()
+      return await asRenderer(platform, loadInstance)
+    })
+    loads = instance.catch(() => undefined)
     loadedFor.set(platform, instance)
   }
   return instance
+}
+async function asRenderer<T>(platform: Platform, run: () => Promise<T>): Promise<T> {
+  const versions = Object.getOwnPropertyDescriptor(process, 'versions')!
+  const agent = Object.getOwnPropertyDescriptor(navigator, 'userAgent')
+  Object.defineProperty(process, 'versions', { ...versions, value: { ...process.versions, node: undefined } })
+  Object.defineProperty(navigator, 'userAgent', { configurable: true, get: () => rendererUserAgents[platform] })
+  try { return await run() } finally {
+    Object.defineProperty(process, 'versions', versions)
+    if (agent) Object.defineProperty(navigator, 'userAgent', agent)
+    else delete (navigator as { userAgent?: string }).userAgent
+  }
 }
 async function loadInstance(): Promise<LoadedMonaco> {
   const { KeybindingsRegistry } = await load('monaco-editor/platform/keybinding/common/keybindingsRegistry.js')
@@ -89,7 +110,7 @@ async function loadInstance(): Promise<LoadedMonaco> {
   } finally {
     KeybindingsRegistry.registerKeybindingRule = register
   }
-  const [{ decodeKeybinding }, { OS }, { EditorExtensionsRegistry }, { MenuRegistry }, { StandaloneServices }, { IKeybindingService }, { IContextKeyService }] = await Promise.all([
+  const [{ decodeKeybinding }, { OS, isWeb, isNative }, { EditorExtensionsRegistry }, { MenuRegistry }, { StandaloneServices }, { IKeybindingService }, { IContextKeyService }] = await Promise.all([
     load('monaco-editor/base/common/keybindings.js'), load('monaco-editor/base/common/platform.js'), load('monaco-editor/editor/browser/editorExtensions.js'), load('monaco-editor/platform/actions/common/actions.js'),
     load('monaco-editor/editor/standalone/browser/standaloneServices.js'), load('monaco-editor/platform/keybinding/common/keybinding.js'),
     load('monaco-editor/platform/contextkey/common/contextkey.js')
@@ -101,7 +122,7 @@ async function loadInstance(): Promise<LoadedMonaco> {
     if (!titles.has(rule.id) && title) titles.set(rule.id, typeof title === 'string' ? title : title.value)
   }
   return {
-    monaco: monaco!, rules, internals: { decodeKeybinding, titles, os: OS },
+    monaco: monaco!, rules, internals: { decodeKeybinding, titles, os: OS, isWeb, isNative },
     services: { keybinding: StandaloneServices.get(IKeybindingService), contextKey: StandaloneServices.get(IContextKeyService) }
   }
 }

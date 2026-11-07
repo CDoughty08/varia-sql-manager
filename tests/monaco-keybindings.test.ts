@@ -309,8 +309,6 @@ describe('generated Monaco key table', () => {
     expect(key('editor.action.startFindReplaceAction', 'win32')).toEqual(['ctrl+h'])
     expect(key('editor.action.startFindReplaceAction', 'darwin')).toEqual(['alt+meta+f'])
     expect(key('editor.action.addCommentLine', 'linux')).toEqual(['ctrl+k ctrl+c'])
-    expect(key('editor.action.clipboardCopyAction', 'win32')).toEqual(['ctrl+c', 'ctrl+insert'])
-    expect(key('editor.action.clipboardCopyAction', 'linux')).toEqual(['ctrl+c'])
     expect(key('cursorColumnSelectLeft', 'linux')).toEqual([])
     expect(monacoKeyRules.find(rule => rule.command === 'actions.find')).toMatchObject({ title: 'Find', when: 'editorFocus || editorIsOpen' })
     expect(monacoKeyRules.find(rule => rule.command === 'cursorEnd')?.args).toEqual({ sticky: false })
@@ -320,6 +318,15 @@ describe('generated Monaco key table', () => {
     const rule = monacoKeyRules.find(rule => rule.command === 'cursorWordLeft')!
     expect(platforms.map(platform => monacoRuleWhen(rule, platform))).toEqual(['textInputFocus && !accessibilityModeEnabled', 'textInputFocus', 'textInputFocus'])
     expect([loads.win32.internals.os, loads.linux.internals.os, loads.darwin.internals.os]).toEqual([1, 3, 2])
+  })
+  it('loads Monaco as the sandboxed renderer does, on its web branch', () => {
+    for (const platform of platforms) expect(loads[platform].internals, platform).toMatchObject({ isWeb: true, isNative: false })
+    expect(loaded.internals).toMatchObject({ isWeb: true, isNative: false })
+    // In a browser Monaco binds no Cut, Copy or Paste keys (the page's own roles take them), so lane H must not list them.
+    for (const command of ['editor.action.clipboardCutAction', 'editor.action.clipboardCopyAction', 'editor.action.clipboardPasteAction']) {
+      for (const platform of platforms) expect(loads[platform].rules.some(rule => rule.id === command), `${command} on ${platform}`).toBe(false)
+      expect(monacoKeyRules.some(rule => rule.command === command), command).toBe(false)
+    }
   })
   it('leaves out keys for widgets Varia never opens and keys inside Monaco widgets', () => {
     const commands = new Set(monacoKeyRules.map(rule => rule.command))
