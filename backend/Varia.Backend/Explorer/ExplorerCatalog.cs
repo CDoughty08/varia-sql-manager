@@ -22,16 +22,17 @@ internal sealed record CatalogScope(IReadOnlyList<string> Required, IReadOnlyLis
 /// <summary>One of Peek's facts (src/shared/explorer/peek.ts): its id (the reply key and the batch's column alias), how its
 /// value travels (text, date, bool, count or kb), and the first band whose catalog has it (null: every band).</summary>
 internal sealed record PeekFactSpec(string Id, string Format, int? Since);
-/// <summary>A kind Peek describes: its facts in reply-column order, and where its definition comes from (module: the batch
-/// reads sys.all_sql_modules; script: the renderer asks Script As).</summary>
-internal sealed record PeekKindSpec(string Kind, string Definition, IReadOnlyList<PeekFactSpec> Facts)
+/// <summary>A kind Peek describes: its facts in reply-column order, where its definition comes from (module: the batch
+/// reads sys.all_sql_modules; script: the renderer asks Script As), and whether explorer.peekRows samples its rows.</summary>
+internal sealed record PeekKindSpec(string Kind, string Definition, IReadOnlyList<PeekFactSpec> Facts, bool Rows = false)
 {
     public bool Module => Definition == "module";
     /// <summary>The facts a server of this band has, in reply order.</summary>
     public IReadOnlyList<PeekFactSpec> FactsFor(int band) => [.. Facts.Where(fact => (fact.Since ?? ExplorerCatalog.MinBand) <= band)];
 }
-/// <summary>Peek's kinds and limits: module text kept (UTF-16 code units) and the backend's budget for one peek.</summary>
-internal sealed record CatalogPeek(IReadOnlyDictionary<string, PeekKindSpec> Kinds, int DefinitionChars, int BudgetMs);
+/// <summary>Peek's kinds and limits: module text kept (UTF-16 code units), the backend's budget for one peek or rows read, the
+/// dependencies listed each way, and the Top rows tab's rows, columns and value length.</summary>
+internal sealed record CatalogPeek(IReadOnlyDictionary<string, PeekKindSpec> Kinds, int DefinitionChars, int BudgetMs, int Dependencies, int Rows, int RowColumns, int RowCellChars);
 
 /// <summary>What a server can browse: its version band (12 below SQL Server 2016, else the major version up to 17, or the
 /// band of the catalog columns it has when that is higher), whether it is a cloud edition, whether it runs on Linux, and whether
@@ -62,8 +63,8 @@ internal sealed class ExplorerCatalog
         Dictionary<string, string> VariantIcons, List<string> Folders, Dictionary<string, List<string>> SubtypeFolders, List<string> HistoryLookup, List<string> Parents,
         string? List, List<string> Rows, int MaxName);
     private sealed record PeekFactJson(string Id, string Format, int? Since);
-    private sealed record PeekKindJson(string Kind, string Definition, List<PeekFactJson> Facts);
-    private sealed record PeekJson(int BudgetMs, int DefinitionChars, List<PeekKindJson> Kinds);
+    private sealed record PeekKindJson(string Kind, string Definition, bool Rows, List<PeekFactJson> Facts);
+    private sealed record PeekJson(int BudgetMs, int DefinitionChars, int Dependencies, int Rows, int RowColumns, int RowCellChars, List<PeekKindJson> Kinds);
     private sealed record CatalogJson(int Version, List<int> CloudEngineEditions, List<FolderJson> Folders, List<KindJson> Kinds, List<int> ManagedInstanceEngineEditions, List<string> Queries,
         CatalogSchemaGroups SchemaGroups, Dictionary<string, CatalogScope> Scopes, PeekJson? Peek);
     private static readonly string[] PeekFormats = ["text", "date", "bool", "count", "kb"];
@@ -106,7 +107,8 @@ internal sealed class ExplorerCatalog
     private static CatalogPeek ParsePeek(PeekJson? peek, Dictionary<string, CatalogKind> kinds)
     {
         if (peek is null) throw new InvalidOperationException("The Object Explorer catalogue has no peek block.");
-        if (peek.DefinitionChars is < 1 or > 4_000_000 || peek.BudgetMs is < 1000 or > 60_000) throw new InvalidOperationException("Peek's limits are out of range.");
+        if (peek.DefinitionChars is < 1 or > 4_000_000 || peek.BudgetMs is < 1000 or > 60_000 || peek.Dependencies is < 1 or > 10_000 || peek.Rows is < 1 or > 1000
+            || peek.RowColumns is < 1 or > 4096 || peek.RowCellChars is < 16 or > 65_535) throw new InvalidOperationException("Peek's limits are out of range.");
         var specs = new Dictionary<string, PeekKindSpec>(StringComparer.Ordinal);
         foreach (var kind in peek.Kinds ?? throw new InvalidOperationException("Peek has no kinds."))
         {
@@ -121,10 +123,11 @@ internal sealed class ExplorerCatalog
                 if (!PeekFormats.Contains(fact.Format) || fact.Since is { } since && (since <= MinBand || since > MaxBand))
                     throw new InvalidOperationException("Peek's fact " + kind.Kind + "." + fact.Id + " has an unknown format or band.");
             }
-            if (!specs.TryAdd(kind.Kind, new(kind.Kind, kind.Definition, [.. facts.Select(fact => new PeekFactSpec(fact.Id, fact.Format, fact.Since))])))
+            if (kind.Rows && kind.Kind is not ("table" or "view")) throw new InvalidOperationException("Peek samples rows only of tables and views, not " + kind.Kind + ".");
+            if (!specs.TryAdd(kind.Kind, new(kind.Kind, kind.Definition, [.. facts.Select(fact => new PeekFactSpec(fact.Id, fact.Format, fact.Since))], kind.Rows)))
                 throw new InvalidOperationException("Peek names " + kind.Kind + " twice.");
         }
-        return new(specs, peek.DefinitionChars, peek.BudgetMs);
+        return new(specs, peek.DefinitionChars, peek.BudgetMs, peek.Dependencies, peek.Rows, peek.RowColumns, peek.RowCellChars);
     }
 
     private static bool OwnsChildren(CatalogKind kind) => kind.Folders.Count > 0 || kind.SubtypeFolders.Count > 0 || kind.HistoryLookup.Count > 0 || kind.List is not null;

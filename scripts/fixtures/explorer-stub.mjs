@@ -153,8 +153,14 @@ export function installExplorerStub({ ipcMain }, { statics }) {
         facts: { schema: params.target.schema ?? null, created: '2024-01-02T03:04:05', modified: '2024-02-03T04:05:06', systemObject: false, replicated: false, lockEscalation: 'TABLE',
           memoryOptimized: false, temporal: 'NON_TEMPORAL_TABLE', ledger: 'NON_LEDGER_TABLE', rowCount: 12345, dataSpace: 2048, indexSpace: 64, filegroup: 'PRIMARY', textFilegroup: null,
           partitioned: false, compression: 'NONE' },
+        ...params.target.kind === 'view' ? { definition: 'CREATE VIEW dbo.vOrders AS SELECT Id FROM dbo.Orders' } : {},
         elapsedMs: 1
       })
+      case 'explorer.peekDependencies': return ok(params.target.kind === 'view' ? { uses: [{ name: 'Orders', schema: 'dbo', kind: 'table' }], usedBy: [], elapsedMs: 1 }
+        : { uses: [{ name: 'Customers', schema: 'dbo', database: 'Crm' }], usedBy: [{ name: 'OrderLines', schema: 'dbo', kind: 'table', foreignKey: true }, { name: 'vOrders', schema: 'dbo', kind: 'view' }], elapsedMs: 1 })
+      // The first rows read times out, so the smoke walks Retry.
+      case 'explorer.peekRows': if (stub.calls.filter(call => call.method === 'explorer.peekRows').length === 1) return ok({ columns: [], rows: [], elapsedMs: 1, error: { code: 'TIMEOUT', message: 'Reading the rows took longer than 15 seconds. Retry.', retryable: true } })
+        return ok({ columns: [{ name: 'Id', type: 'int' }, { name: 'CustomerName', type: 'nvarchar' }], rows: [['1', 'Alice'], ['2', null], ['3', null]], unread: [[2, 1]], elapsedMs: 1 })
       case 'scripting.script': return ok({ text: `CREATE TABLE [${params.targets[0].schema}].[${params.targets[0].name}](\n\t[Id] [int] NOT NULL\n)\nGO\n`, database: params.targets[0].database ?? 'master', warnings: [], commands: 1, elapsedMs: 1 })
       case 'query.session.close': return ok({ closed: true })
       case 'query.session.state': return ok({ transactionCount: 0, checked: true })
