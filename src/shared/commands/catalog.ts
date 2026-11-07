@@ -130,6 +130,10 @@ export const commandCatalog = {
     title: 'Recover Unsaved Queries…', category: 'File', icon: 'history', keywords: ['autorecover', 'recover', 'recovery', 'crash', 'unsaved'], precondition: 'hasRecoveryFiles',
     unavailableHint: 'AutoRecover has nothing to recover.'
   },
+  // Main runs it as Windows ends the session (shut down, restart, log off): a copy of every unsaved query before the process can be ended.
+  'file.autoRecoverNow': {
+    title: 'Save AutoRecover Copies Now', category: 'File', palette: false, allowInModal: true
+  },
   'file.close': {
     title: 'Close Query', category: 'File', icon: 'close', precondition: 'hasActiveDocument && !documentBusy', unavailableHint: openFirst,
     // Delete and Backspace on a focused tab, as Dockview's tabs close; a key pressed on a tab closes that tab.

@@ -16,7 +16,7 @@ const frame = (callback: () => void) => { if (typeof requestAnimationFrame === '
 export function filesContribution({ files, commands, documents, context, explorer, connections, recentFiles, quickInput, recovery }: Pick<Workbench, 'files' | 'commands' | 'documents'> & {
   readonly context: Pick<Workbench['context'], 'get'>; readonly explorer: Pick<Workbench['explorer'], 'queryTarget'>; readonly connections: Pick<Workbench['connections'], 'get'>
   readonly recentFiles?: ExternalStore<readonly RecentFile[]>; readonly quickInput?: Pick<Workbench['quickInput'], 'pick'>
-  readonly recovery?: Pick<Workbench['recovery'], 'getSnapshot' | 'refresh' | 'openDialog'>
+  readonly recovery?: Pick<Workbench['recovery'], 'getSnapshot' | 'refresh' | 'openDialog' | 'flush'>
 }, api: Pick<VariaApi, 'writeClipboardText' | 'revealSqlFile'> & Partial<Pick<VariaApi, 'clearRecentFiles'>>): Disposable {
   // The tab menu, or a key pressed on a focused tab (Delete, Ctrl+W), names its tab; otherwise the active document.
   const tabOf = (context?: CommandArgs) => context?.tabId ?? documents.getSnapshot().activeId
@@ -62,6 +62,8 @@ export function filesContribution({ files, commands, documents, context, explore
         recovery.openDialog()
       }
     }),
+    // AutoRecover's copies at once, whatever its interval (main asks as Windows ends the session); nothing while AutoRecover is off.
+    commands.register('file.autoRecoverNow', { run: () => recovery?.flush() }),
     commands.register('file.close', { when: context => files.canClose(tabOf(context)), run: context => files.close(tabOf(context)) }),
     commands.register('file.closeOthers', {
       when: context => files.canRun() && !!documents.get(tabOf(context)),
