@@ -1,5 +1,5 @@
-import type { ApiResult, VariaApi } from '../../../shared/contracts'
-import { isPeekKind, peekLimits, peekSpecs, type PeekKind, type PeekResult } from '../../../shared/explorer/peek.ts'
+import type { ApiResult, ExplorerError, ExplorerNode, VariaApi } from '../../../shared/contracts'
+import { isPeekKind, peekLimits, peekSpecs, peekTabsOf, type PeekDependency, type PeekKind, type PeekResult, type PeekRowsResult, type PeekTab } from '../../../shared/explorer/peek.ts'
 import type { ScriptingOptions } from '../../../shared/scripting/options.ts'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
@@ -10,6 +10,16 @@ import type { ExplorerMenuNode } from '../menus/targets'
 export type PeekSource = 'hover' | 'keyboard' | 'menu'
 export type PeekPart<T> = { readonly status: 'loading' } | { readonly status: 'ready'; readonly value: T } | { readonly status: 'error'; readonly message: string }
 export interface PeekDefinition { readonly text?: string; readonly truncated?: boolean }
+/** The Columns or Parameters folder as the tree lists it: its first page, `more` when the folder has others. */
+export interface PeekMembers { readonly nodes: readonly ExplorerNode[]; readonly more: boolean }
+export interface PeekDependencies {
+  readonly uses: readonly PeekDependency[]
+  readonly usesTruncated: boolean
+  readonly usedBy: readonly PeekDependency[]
+  readonly usedByTruncated: boolean
+}
+/** A card the user moved on from by following a dependency, which Back returns to. */
+export interface PeekStep { readonly node: ExplorerMenuNode; readonly kind: PeekKind; readonly tab: PeekTab }
 export interface OpenPeek {
   /** Increments with every peek, so the card knows a new one from a refresh of the same. */
   readonly id: number
@@ -19,11 +29,18 @@ export interface OpenPeek {
   readonly source: PeekSource
   readonly facts: PeekPart<PeekResult['facts']>
   readonly definition: PeekPart<PeekDefinition>
+  /** The tab shown; every tab but Definition is read the first time it is chosen, and again when it is chosen after failing. */
+  readonly tab: PeekTab
+  readonly members?: PeekPart<PeekMembers>
+  readonly dependencies?: PeekPart<PeekDependencies>
+  readonly rows?: PeekPart<PeekRowsResult>
+  /** The cards before this one, oldest first, when a dependency was followed. */
+  readonly back: readonly PeekStep[]
 }
 export interface PeekSnapshot { readonly open?: OpenPeek }
 
 export interface PeekServiceOptions {
-  readonly api: Pick<VariaApi, 'explorerPeek' | 'explorerCancel' | 'scriptObjects' | 'cancelScripting' | 'writeClipboardText'>
+  readonly api: Pick<VariaApi, 'explorerPeek' | 'explorerPeekDependencies' | 'explorerPeekRows' | 'explorerChildren' | 'explorerCancel' | 'scriptObjects' | 'cancelScripting' | 'writeClipboardText'>
   readonly connections: ExternalStore<readonly { readonly id: string; readonly lost?: boolean }[]>
   /** Tools › Options › Scripting, which a table's CREATE script follows, as Script As does. */
   readonly scriptingOptions: ExternalStore<{ readonly options: ScriptingOptions }>
@@ -37,7 +54,11 @@ export interface PeekServiceOptions {
 
 export const peekMessages = {
   notConnected: 'The server is not connected.',
-  noDefinition: 'The definition is encrypted, or the login does not have VIEW DEFINITION permission on it.'
+  noDefinition: 'The definition is encrypted, or the login does not have VIEW DEFINITION permission on it.',
+  noRows: 'It has no rows.',
+  noMembers: 'None.',
+  noDependencies: 'None found.',
+  unreadCell: 'This value could not be read. The results grid shows it as NULL, with a warning.'
 } as const
 
 type ScriptReply = Awaited<ReturnType<VariaApi['scriptObjects']>>
@@ -71,7 +92,7 @@ interface ScriptJob {
  */
 export class PeekService extends SnapshotStore<PeekSnapshot> {
   private next = 0
-  private requests: { peek?: string; script?: ScriptJob } = {}
+  private requests: { peek?: string; script?: ScriptJob } & { [tab in TabPart]?: string } = {}
   private background: ScriptJob[] = []
   /** Least recently used first. */
   private readonly scripts = new Map<string, CachedScript>()
@@ -114,11 +135,44 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
     this.cancelHover()
     if (this.disposed || !this.canPeek(node) || node.ref.type !== 'object') return
     const open = this.getSnapshot().open
-    if (open && open.rowId === node.id && open.node.connectionId === node.connectionId) {
+    // A card that followed a dependency keeps its row's place but shows another object: peeking the row shows the row's own.
+    if (open && open.rowId === node.id && open.node.connectionId === node.connectionId && sameObject(open.node, node)) {
       if (source !== 'hover' && open.source === 'hover') this.publish({ open: { ...open, source } })
       return
     }
     this.load(node, isPeekKindOf(node), source, false)
+  }
+
+  /** Shows another tab of the open card, reading it the first time; choosing a tab whose read failed reads it again. */
+  selectTab(tab: PeekTab): void {
+    const open = this.getSnapshot().open
+    if (!open || !peekTabsOf(open.kind).includes(tab)) return
+    if (open.tab !== tab) this.publish({ open: { ...open, tab } })
+    this.loadTab()
+  }
+
+  /** Whether a dependency can be peeked from the card: an object of a kind Peek describes, in the card's database. */
+  canFollow(dependency: PeekDependency): boolean {
+    return dependency.kind !== undefined && isPeekKind(dependency.kind) && dependency.database === undefined && dependency.server === undefined && dependency.schema !== undefined
+  }
+
+  /** Peeks a dependency in the same card, beside the same row; Back returns to this one. */
+  follow(dependency: PeekDependency): void {
+    const open = this.getSnapshot().open
+    if (!open || open.node.ref.type !== 'object' || !this.canFollow(dependency) || !dependency.kind || !isPeekKind(dependency.kind)) return
+    const object = { kind: dependency.kind, ...(open.node.ref.object.database === undefined ? {} : { database: open.node.ref.object.database }), schema: dependency.schema!, name: dependency.name }
+    const { subtype: _subtype, status: _status, database: _database, listedAt: _listedAt, filtered: _filtered, insertable: _insertable, ...rest } = open.node
+    const node: ExplorerMenuNode = { ...rest, kind: dependency.kind, ref: { type: 'object', object }, label: `${dependency.schema}.${dependency.name}` }
+    const back = [...open.back, { node: open.node, kind: open.kind, tab: open.tab }].slice(-peekLimits.backSteps)
+    this.load(node, dependency.kind, open.source === 'hover' ? 'keyboard' : open.source, false, { back })
+  }
+
+  /** Returns to the card a dependency was followed from, on the tab it showed. */
+  goBack(): void {
+    const open = this.getSnapshot().open
+    const step = open?.back[open.back.length - 1]
+    if (!open || !step) return
+    this.load(step.node, step.kind, open.source, false, { back: open.back.slice(0, -1), tab: step.tab })
   }
 
   /** The pointer rests on a row with Ctrl (⌘ on macOS) held: the card opens after `peekLimits.hoverMs`. */
@@ -148,7 +202,7 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
   /** Reads the open card's object again, its script included: Refresh never takes a kept script. */
   refresh(): void {
     const open = this.getSnapshot().open
-    if (open) this.load(open.node, open.kind, open.source, true)
+    if (open) this.load(open.node, open.kind, open.source, true, { back: open.back, tab: open.tab })
   }
 
   /** Copies the open card's definition, once it has all of it: a cut module is copied whole by Script to New Query. */
@@ -180,7 +234,7 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
     return this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost)
   }
 
-  private load(node: ExplorerMenuNode, kind: PeekKind, source: PeekSource, fresh: boolean): void {
+  private load(node: ExplorerMenuNode, kind: PeekKind, source: PeekSource, fresh: boolean, carry: { readonly back?: readonly PeekStep[]; readonly tab?: PeekTab } = {}): void {
     if (node.ref.type !== 'object') return
     // A refresh asks for the same script again, so the one running is not worth keeping.
     this.release(!fresh)
@@ -189,7 +243,12 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
     const cached = key === undefined || fresh ? undefined : this.kept(key)
     const peekId = this.newId()
     this.requests = { peek: peekId }
-    this.publish({ open: { id, rowId: node.id, node, kind, source, facts: { status: 'loading' }, definition: { status: 'loading' } } })
+    // A row's own card opens on Definition; Back and Refresh keep the tab they had.
+    const tab = carry.tab && peekTabsOf(kind).includes(carry.tab) ? carry.tab : 'definition'
+    // Rows the row's card does not own (a followed dependency) still anchor at that row.
+    const rowId = carry.back?.length ? carry.back[0]!.node.id : node.id
+    this.publish({ open: { id, rowId, node, kind, source, facts: { status: 'loading' }, definition: { status: 'loading' }, tab, back: carry.back ?? [] } })
+    this.loadTab()
     const current = () => !this.disposed && this.getSnapshot().open?.id === id
     const update = (change: Partial<Pick<OpenPeek, 'facts' | 'definition'>>) => { const open = this.getSnapshot().open; if (open && open.id === id) this.publish({ open: { ...open, ...change } }) }
     const deliver = (result: ScriptReply) => {
@@ -260,6 +319,39 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
     }).catch(onUnexpectedError)
   }
 
+  /**
+   * Reads the shown tab's part when this card has none or its read failed: the Columns or Parameters folder as the tree lists
+   * it (its first `peekLimits.members` rows), the dependencies (apart from the properties, since a login may read those and
+   * not sys.sql_expression_dependencies), or the top rows.
+   */
+  private loadTab(): void {
+    const open = this.getSnapshot().open
+    if (!open || open.node.ref.type !== 'object' || this.disposed || open.tab === 'definition') return
+    const connectionId = open.node.connectionId, target = open.node.ref.object, subtype = open.node.subtype
+    switch (open.tab) {
+      case 'members': return this.loadPart(open, 'members', requestId => this.options.api.explorerChildren({ connectionId, requestId,
+        node: { type: 'folder', owner: target, folder: peekSpecs[open.kind].members }, ...(subtype === undefined ? {} : { subtype }), pageSize: peekLimits.members }),
+        value => ({ nodes: value.nodes, more: value.cursor !== undefined }))
+      case 'dependencies': return this.loadPart(open, 'dependencies', requestId => this.options.api.explorerPeekDependencies({ connectionId, requestId, target }),
+        value => ({ uses: value.uses, usesTruncated: !!value.usesTruncated, usedBy: value.usedBy, usedByTruncated: !!value.usedByTruncated }))
+      case 'rows': return peekSpecs[open.kind].rows ? this.loadPart(open, 'rows', requestId => this.options.api.explorerPeekRows({ connectionId, requestId, target }), value => value) : undefined
+    }
+  }
+
+  private loadPart<K extends TabPart, R extends { readonly error?: ExplorerError }>(open: OpenPeek, key: K, request: (requestId: string) => Promise<ApiResult<R>>, value: (result: R) => PartValue<K>): void {
+    if (open[key] && open[key].status !== 'error') return
+    const id = open.id, requestId = this.newId()
+    const update = (part: PeekPart<PartValue<K>>) => { const now = this.getSnapshot().open; if (!this.disposed && now?.id === id) this.publish({ open: { ...now, [key]: part } }) }
+    this.requests = { ...this.requests, [key]: requestId }
+    update({ status: 'loading' })
+    void settle(request(requestId)).then(result => {
+      if (this.requests[key] !== requestId) return
+      this.requests = { ...this.requests, [key]: undefined }
+      if (!result.ok || result.value.error) update({ status: 'error', message: result.ok ? result.value.error?.message ?? '' : result.error })
+      else update({ status: 'ready', value: value(result.value) })
+    }).catch(onUnexpectedError)
+  }
+
   private optionsKey(): string { return JSON.stringify(this.options.scriptingOptions.getSnapshot().options) }
 
   /** The kept script for `key`, when it is still good for these options and not too old. */
@@ -310,10 +402,11 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
    * its modified time, when it finishes in the background to be cached (the oldest background script gives way past the limit).
    */
   private release(keep: boolean): void {
-    const { peek, script } = this.requests
+    const { peek, script, members, dependencies, rows } = this.requests
     this.requests = {}
     try {
-      if (peek) report(this.options.api.explorerCancel([peek]))
+      const reads = [peek, members, dependencies, rows].filter((request): request is string => request !== undefined)
+      if (reads.length) report(this.options.api.explorerCancel(reads))
       if (!script || script.done) return
       if (!keep || script.modified === undefined) { this.cancelScript(script); return }
       script.deliver = undefined
@@ -329,6 +422,11 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
 }
 
 const isPeekKindOf = (node: ExplorerMenuNode): PeekKind => node.kind as PeekKind
+/** The tabs read apart from the properties, each kept on the card under its own name. */
+type TabPart = Exclude<PeekTab, 'definition'>
+type PartValue<K extends TabPart> = NonNullable<OpenPeek[K]> extends PeekPart<infer V> ? V : never
+const sameObject = (a: ExplorerMenuNode, b: ExplorerMenuNode) => a.ref.type === 'object' && b.ref.type === 'object' && a.kind === b.kind
+  && a.ref.object.database === b.ref.object.database && a.ref.object.schema === b.ref.object.schema && a.ref.object.name === b.ref.object.name
 /** A table's place in the cache: its connection and its three-part name. */
 const scriptKey = (connectionId: string, object: { readonly database?: string; readonly schema?: string; readonly name?: string }) =>
   JSON.stringify([connectionId, object.database ?? null, object.schema ?? null, object.name ?? null])

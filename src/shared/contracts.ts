@@ -9,7 +9,7 @@ import type { AuthenticationMode } from './auth'
 import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts'
 import type { ObjectIndexParams, ObjectIndexProgress, ObjectIndexResult, ObjectSearchParams, ObjectSearchResult } from './explorer/search.ts'
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
-import type { PeekParams, PeekResult } from './explorer/peek.ts'
+import type { PeekDependenciesParams, PeekDependenciesResult, PeekParams, PeekResult, PeekRowsParams, PeekRowsResult } from './explorer/peek.ts'
 import type { DatabaseRuntime } from './explorer/status.ts'
 import type { ActionPromptAnswer, ActionPromptRequest } from './actions/prompts.ts'
 import type { LongRunState } from './long-runs.ts'
@@ -296,6 +296,9 @@ export interface RpcMethods {
   'explorer.search': { params: ObjectSearchParams; result: ObjectSearchResult }
   /** Peek: a table's, view's or module's properties (and a module's text), on the Object Explorer pool; Stop is varia:explorer-cancel. */
   'explorer.peek': { params: PeekParams; result: PeekResult }
+  'explorer.peekDependencies': { params: PeekDependenciesParams; result: PeekDependenciesResult }
+  /** Peek's Top rows: a table's or view's first rows (SELECT TOP (n) *), on Peek's slot; Stop is varia:explorer-cancel. */
+  'explorer.peekRows': { params: PeekRowsParams; result: PeekRowsResult }
   'scripting.script': { params: ScriptRequest; result: ScriptResult }
   /** What an object dialog shows (Delete Object's row and warnings), read in the action's own connection. */
   'actions.describe': { params: ActionDescribeRequest; result: ActionDescribeResult }
@@ -445,6 +448,9 @@ export interface VariaApi {
   explorerSearch(params: ObjectSearchParams): Promise<ApiResult<ObjectSearchResult>>
   /** Peek's read of one object; a card closed before it answers cancels it with explorerCancel. */
   explorerPeek(params: PeekParams): Promise<ApiResult<PeekResult>>
+  explorerPeekDependencies(params: PeekDependenciesParams): Promise<ApiResult<PeekDependenciesResult>>
+  /** Peek's Top rows, read when the tab is chosen; a card closed or moved on cancels it with explorerCancel. */
+  explorerPeekRows(params: PeekRowsParams): Promise<ApiResult<PeekRowsResult>>
   /** A build's progress, at most 4 a second per build and only for builds this window started; droppable. Returns the unsubscribe. */
   onExplorerIndexProgress(listener: (progress: ObjectIndexProgress) => void): () => void
   /** Scripts one Object Explorer object (Script As). Failures the user can act on come back as `result.error`. */

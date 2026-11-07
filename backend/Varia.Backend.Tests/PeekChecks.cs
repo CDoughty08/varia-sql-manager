@@ -24,6 +24,7 @@ internal static partial class PeekChecks
     {
         Catalog(check);
         Sql(check);
+        RowsSql(check);
         Words(check);
         await RequestsAsync(check);
     }
@@ -34,6 +35,8 @@ internal static partial class PeekChecks
         check(peek.Kinds.Keys.Order(StringComparer.Ordinal).SequenceEqual(["function", "procedure", "table", "view"]) && peek.DefinitionChars == 1_000_000 && peek.BudgetMs == 15_000
             && peek.Kinds["table"].Definition == "script" && peek.Kinds["view"].Module && peek.Kinds["procedure"].Module && peek.Kinds["function"].Module,
             "the catalogue's peek block lists tables (scripted), views, procedures and functions (module text), with its limits");
+        check(peek.Dependencies == 200 && peek.Rows == 10 && peek.RowColumns == 100 && peek.RowCellChars == 256 && peek.Kinds["table"].Rows && peek.Kinds["view"].Rows
+            && !peek.Kinds["procedure"].Rows && !peek.Kinds["function"].Rows, "Peek lists 200 dependencies each way and samples 10 rows of tables and views, 100 columns, 256 characters a value");
         var table = peek.Kinds["table"];
         check(table.Facts.Select(fact => fact.Id).Take(4).SequenceEqual(["schema", "created", "modified", "systemObject"]) && table.Facts.Single(fact => fact.Id == "temporal").Since == 13
             && table.Facts.Single(fact => fact.Id == "ledger").Since == 16 && table.FactsFor(12).All(fact => fact.Since is null) && table.FactsFor(16).Count == table.Facts.Count
@@ -51,7 +54,10 @@ internal static partial class PeekChecks
             ("an unknown definition source", json => Kind(json, "view")["definition"] = "file"),
             ("a kind that is not a schema object", json => Kind(json, "view")["kind"] = "login"),
             ("a kind twice", json => Kind(json, "view")["kind"] = "table"),
-            ("a definition budget of zero", json => json["peek"]!["definitionChars"] = 0)
+            ("a definition budget of zero", json => json["peek"]!["definitionChars"] = 0),
+            ("rows of a procedure", json => Kind(json, "procedure")["rows"] = true),
+            ("no dependencies", json => json["peek"]!["dependencies"] = 0),
+            ("a value length under 16", json => json["peek"]!["rowCellChars"] = 8)
         };
         var accepted = new List<string>();
         foreach (var (name, change) in malformed)
@@ -86,6 +92,19 @@ internal static partial class PeekChecks
             }
         check(renders == 24 && problems.Count == 0, "every peek kind renders for bands 12-17, passes the lint, and reads the catalogue's facts in order as their ids, then its helpers ("
             + renders + " renders" + (problems.Count > 0 ? "; first problem: " + problems[0] : ")"));
+        // Dependencies are their own request: sys.sql_expression_dependencies needs more than VIEW DEFINITION, and a login refused
+        // it must still get the facts.
+        var dependencyProblems = new List<string>();
+        foreach (var spec in peek.Kinds.Values)
+        {
+            var text = PeekSql.Dependencies(spec.Kind);
+            dependencyProblems.AddRange(CatalogSql.Lint(text, new SqlRender(ExplorerCatalog.MaxBand), list: false, mayCheckAccess: false).Select(problem => spec.Kind + ": " + problem));
+            if (text != CatalogSql.ParentLookup(spec.Kind) + PeekSql.Uses + PeekSql.UsedBy) dependencyProblems.Add(spec.Kind + ": it does not find the object first");
+            for (var band = ExplorerCatalog.MinBand; band <= ExplorerCatalog.MaxBand; band++)
+                if (PeekSql.Render(spec, new SqlRender(band), peek.DefinitionChars).Text.Contains("sql_expression_dependencies", StringComparison.OrdinalIgnoreCase)) dependencyProblems.Add(spec.Kind + " " + band + ": the facts read dependencies");
+        }
+        check(dependencyProblems.Count == 0, "each kind's dependencies batch finds the object, then lists both ways, passes the lint, and the facts batch reads no dependencies"
+            + (dependencyProblems.Count > 0 ? ": " + dependencyProblems[0] : ""));
         var table = peek.Kinds["table"];
         var old = PeekSql.Render(table, new SqlRender(12), peek.DefinitionChars);
         var newest = PeekSql.Render(table, new SqlRender(17), peek.DefinitionChars);
@@ -96,8 +115,41 @@ internal static partial class PeekChecks
         check(CatalogSql.Lint(newest.Text, new SqlRender(13), false, false).Any(problem => problem.Contains("ledger_type")), "a table's band 17 batch fails the lint on a band 13 server");
     }
 
+    private static void RowsSql(Action<bool, string> check)
+    {
+        var problems = new List<string>();
+        foreach (var kind in new[] { "table", "view" })
+        {
+            var text = PeekRowsSql.Render(kind);
+            problems.AddRange(PeekRowsSql.Lint(text, kind).Select(problem => kind + ": " + problem));
+        }
+        check(problems.Count == 0, "Peek's rows batch finds the table or view first and passes its lint: " + string.Join(" | ", problems));
+        var refused = false;
+        try { PeekRowsSql.Render("procedure"); } catch (InvalidOperationException) { refused = true; }
+        check(refused, "Peek renders no rows batch for a procedure");
+        var table = PeekRowsSql.Render("table");
+        var mutants = new (string Name, string Text)[]
+        {
+            ("a name outside QUOTENAME", table.Replace("QUOTENAME(@object_name)", "@object_name", StringComparison.Ordinal)),
+            ("QUOTENAME of another value", table.Replace("QUOTENAME(@object_name)", "QUOTENAME(@fname)", StringComparison.Ordinal)),
+            ("another literal", table.Replace("N';'", "N'; DROP TABLE x;'", StringComparison.Ordinal)),
+            ("a second dynamic statement", table + "EXEC sys.sp_executesql @rows;\n"),
+            ("EXEC of a string", table + "EXEC (@rows);\n"),
+            ("a metadata built-in", table.Replace("QUOTENAME(@object_schema)", "QUOTENAME(OBJECT_SCHEMA_NAME(@object_id))", StringComparison.Ordinal)),
+            ("the database parameter", table + "SELECT @db;\n"),
+            ("a name copied into another variable", table.Replace("DECLARE @rows", "DECLARE @n sysname = @object_name;\nDECLARE @rows", StringComparison.Ordinal).Replace("QUOTENAME(@object_name)", "@n", StringComparison.Ordinal)),
+            ("a name assigned to a declared variable", table.Replace("EXEC sys.sp_executesql", "SET @rows = @rows + @object_name;\nEXEC sys.sp_executesql", StringComparison.Ordinal)),
+            ("the rows read without the lookup", table[CatalogSql.ParentLookup("table").Length..])
+        };
+        var passed = mutants.Where(mutant => PeekRowsSql.Lint(mutant.Text, "table").Count == 0).Select(mutant => mutant.Name).ToList();
+        check(passed.Count == 0, "Peek's rows lint refuses names outside QUOTENAME, other literals and other dynamic SQL: " + string.Join(", ", passed));
+    }
+
     private static void Words(Action<bool, string> check)
     {
+        check(PeekSql.KindOf("U ") == "table" && PeekSql.KindOf("ET") == "table" && PeekSql.KindOf("V ") == "view" && PeekSql.KindOf("PC") == "procedure" && PeekSql.KindOf("IF") == "function"
+            && PeekSql.KindOf("SN") == "synonym" && PeekSql.KindOf("SO") == "sequence" && PeekSql.KindOf("TR") is null && PeekSql.KindOf(null) is null,
+            "a dependency's type maps to the Object Explorer kind the tree lists it as, and triggers and unknown types to none");
         check(PeekSql.ExecuteAsWord(PeekSql.Caller, null) == "CALLER" && PeekSql.ExecuteAsWord(-2, "dbo") == "OWNER" && PeekSql.ExecuteAsWord(5, "app") == "app"
             && PeekSql.ExecuteAsWord(null, null) is null, "EXECUTE AS reads CALLER, OWNER or the user's name, and nothing for an object without a module");
         check(PeekSql.FunctionType("SQL_SCALAR_FUNCTION") == "Scalar-valued" && PeekSql.FunctionType("SQL_INLINE_TABLE_VALUED_FUNCTION") == "Inline table-valued"
@@ -133,6 +185,15 @@ internal static partial class PeekChecks
                 await Code(Body("{\"kind\":\"table\",\"database\":\"Sales\",\"schema\":\"dbo\",\"name\":\"Orders\",\"extra\":1}")),
                 await Code(Body(Ref("procedure", name: new string('p', 128))))
             };
+            async Task<string> Rows(string body)
+            {
+                try { await sql.DispatchAsync("explorer.peekRows", JsonDocument.Parse(body).RootElement, Json); return "ok"; }
+                catch (RequestException error) { return error.Code; }
+                catch (JsonException) { return "JSON"; }
+            }
+            var rows = new[] { await Rows(Body(Ref("procedure"))), await Rows(Body(Ref("synonym"))), await Rows(Body(Ref("table"), connection: "x")), await Rows(Body(Ref("view"))) };
+            check(sql.Methods.Contains("explorer.peekRows") && sql.LaneOf("explorer.peekRows") == RequestLane.Explorer && rows.SequenceEqual(["INVALID_PARAMS", "INVALID_PARAMS", "INVALID_PARAMS", "NOT_CONNECTED"]),
+                "HELLO lists explorer.peekRows on the explorer lane, and it refuses procedures, other kinds and bad ids before the connection: " + string.Join(", ", rows));
             check(sql.Methods.Contains("explorer.peek") && sql.LaneOf("explorer.peek") == RequestLane.Explorer
                 && codes.SequenceEqual(["INVALID_PARAMS", "INVALID_PARAMS", "INVALID_PARAMS", "INVALID_PARAMS", "INVALID_PARAMS", "INVALID_PARAMS", "INVALID_PARAMS", "JSON", "NOT_CONNECTED"]),
                 "HELLO lists explorer.peek on the explorer lane, and it refuses bad ids, kinds Peek does not describe, missing fields and names past 128 before the connection: " + string.Join(", ", codes));
@@ -150,6 +211,16 @@ internal static partial class PeekChecks
         var shaped = JsonSerializer.Serialize(new PeekResult(new() { ["schema"] = "dbo", ["rowCount"] = 3L, ["temporal"] = null, ["systemObject"] = false }, 4, "CREATE VIEW v AS SELECT 1", true), Json);
         check(shaped == "{\"facts\":{\"schema\":\"dbo\",\"rowCount\":3,\"temporal\":null,\"systemObject\":false},\"elapsedMs\":4,\"definition\":\"CREATE VIEW v AS SELECT 1\",\"definitionTruncated\":true}",
             "a peek reply keeps null facts and drops the members it does not have: " + shaped);
+        var linked = JsonSerializer.Serialize(new PeekDependenciesResult([new("Orders", "dbo", Kind: "table", ForeignKey: true), new("Remote", "dbo", "Other", "LINKED")], [], 1, UsedByTruncated: true), Json);
+        check(linked == "{\"uses\":[{\"name\":\"Orders\",\"schema\":\"dbo\",\"kind\":\"table\",\"foreignKey\":true},{\"name\":\"Remote\",\"schema\":\"dbo\",\"database\":\"Other\",\"server\":\"LINKED\"}],\"usedBy\":[],\"elapsedMs\":1,\"usedByTruncated\":true}",
+            "a dependencies reply keeps only the fields each dependency has: " + linked);
+        var failedDependencies = await service.PeekDependenciesAsync(new PeekArgs(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), target), CancellationToken.None);
+        check(failedDependencies is { Error.Retryable: true, Uses.Count: 0, UsedBy.Count: 0 } && service.RunningCount == 0,
+            "a dependencies read that cannot reach the server is a retryable error value with empty lists, and unregisters: " + failedDependencies.Error?.Code);
+        var failedRows = await service.PeekRowsAsync(new PeekRowsArgs(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("table", "Sales", "dbo", "Orders")), CancellationToken.None);
+        var rowsJson = JsonSerializer.Serialize(failedRows, Json);
+        check(failedRows is { Error.Retryable: true, Columns.Count: 0, Rows.Count: 0 } && service.RunningCount == 0 && rowsJson.StartsWith("{\"columns\":[],\"rows\":[],\"elapsedMs\":", StringComparison.Ordinal),
+            "a rows read that cannot reach the server is a retryable error value with no columns or rows, and unregisters: " + rowsJson);
         using (var cancelled = new CancellationTokenSource())
         {
             cancelled.Cancel();

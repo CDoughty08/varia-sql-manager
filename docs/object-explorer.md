@@ -377,6 +377,21 @@ within 15,000 ms; a table's definition comes from Script As (CREATE). A fact who
 catalog column is newer than the server is left out. Esc, a click elsewhere or another peek closes the card, and
 cancels a read still running.
 
+Beside Definition, the card has tabs. **Columns** (tables and views) or **Parameters** (procedures and functions) lists the
+object's folder with `explorer.children`, as the tree does, up to 1,024 rows. **Dependencies**
+(`explorer.peekDependencies`) lists what the object references (`sys.sql_expression_dependencies`, other databases and
+linked servers included) and the tables its foreign keys point at, and what references it or points at it by a foreign key,
+at most 200 each way in name order. It is its own request because reading `sys.sql_expression_dependencies`
+takes more than VIEW DEFINITION (db_owner by default): a login refused it still sees the properties, and the tab says why. A
+dependency in the same database of a kind Peek describes opens in the same card, beside the same row, and Back returns.
+Every tab but Definition is read the first time it is chosen, and again (or by Retry) when it is chosen after failing; the
+arrow keys move between tabs without choosing them, and Enter or Space chooses. **Top rows** (tables and views): `explorer.peekRows` runs
+`SELECT TOP (10) *` on Peek's slot within its budget, through the one dynamic statement Object Explorer runs, built on
+the server from `QUOTENAME` of the object's names (`Explorer/PeekRowsSql.cs`, held to its own lint; a memory-optimized table, or a view in a database that can hold one,
+is read READ COMMITTED, since memory-optimized tables refuse READ UNCOMMITTED). Values show as the results grid shows them, read by its own readers, cut at 256 characters
+(a value the readers cannot read shows as NULL, as the grid shows it, with a note); the tab shows the first 100 columns.
+These few bounded values are decoded in the backend and answered as text, outside the result store and the results port.
+
 | Kind | Definition | Group | Facts |
 | --- | --- | --- | --- |
 | `table` | Script As | General | Schema, Created, Last modified, System object, Replicated, Lock escalation, Memory optimized, Temporal (band 13+), Ledger (band 16+) |
