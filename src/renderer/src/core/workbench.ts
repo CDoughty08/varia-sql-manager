@@ -3,6 +3,7 @@ import type { ReloadPins, VariaApi } from '../../../shared/contracts'
 import { actsOnTab } from '../../../shared/commands/catalog'
 import { toPlatform, type Platform } from '../../../shared/commands/keybindings'
 import { platformLineEnding } from '../../../shared/files/encoding'
+import { blockPrimaryPaste } from './primary-selection'
 import { DocumentService, settingsDocumentOptions } from '../services/documents'
 import { QueryService } from '../services/queries'
 import { ConnectionService } from '../services/connections'
@@ -89,6 +90,7 @@ import { EventBus } from './events'
 import { domFocusAdapter } from './focus'
 import { InputModeService } from './input-mode'
 import { KeybindingService } from './keybindings'
+import { gesturesFor, type GestureService } from './gestures'
 import { MenuStatePublisher } from './menu-state'
 import { focusHeld, focusWhenDrawn, modalOpen } from './modal'
 import { nextFrame as frame } from './frame'
@@ -102,6 +104,8 @@ export interface Workbench extends Disposable {
   readonly commands: CommandService
   readonly context: ContextKeyService
   readonly keybindings: KeybindingService
+  /** Pointer gestures' modifiers (src/shared/commands/gestures.ts); handlers ask it instead of reading ctrlKey and the rest. */
+  readonly gestures: GestureService
   readonly menuState: MenuStatePublisher
   readonly menus: MenuService
   /** What context menus are for: components register their elements with `useMenuTarget`. */
@@ -405,6 +409,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     commands,
     context,
     keybindings,
+    gestures: gesturesFor(platform),
     menuState,
     menus,
     menuTargets,
@@ -459,7 +464,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     notifications,
     updates,
     attachWindow: target => {
-      const attached = [windows.add(target), keybindings.attach(target), menus.attach(target), trackWindowFocus(target, target.document.documentElement)]
+      const attached = [windows.add(target), keybindings.attach(target), menus.attach(target), blockPrimaryPaste(target, platform), trackWindowFocus(target, target.document.documentElement)]
       return { dispose: () => attached.forEach(item => item.dispose()) }
     },
     dispose: () => {
@@ -558,6 +563,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const listeners = [
     keybindings.attach(window),
     menus.attach(window),
+    // On Linux a middle-click would paste the PRIMARY selection outside the gated Paste role.
+    blockPrimaryPaste(window, platform),
     trackWindowFocus(window, document.documentElement),
     watchExternalChanges(window, files, () => settings.getSnapshot().values['environment.documents.detectExternalChanges'])
   ]
@@ -567,8 +574,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // The tabs the last close kept (hot exit), else the welcome query; what an earlier run or page left unsaved is offered
   // once the workbench is up.
   const welcome = () => { if (!disposed) documents.create('SQLQuery1.sql', '-- Connect this query to a server and press F5 to execute.\n\nSELECT\n    @@SERVERNAME AS server_name,\n    DB_NAME() AS database_name,\n    SYSDATETIME() AS server_time;\n', 'master') }
-  if (api.hotExit) void restoreSession({ api, documents, files, groups: editorGroups, resumeRecovery: (tabId, id) => recovery.resume(tabId, id) })
-    .catch(() => 0).then(opened => { if (!opened) welcome(); if (!disposed) void recovery.start() })
+  if (api.hotExit) void restoreSession({ api, documents, files, groups: editorGroups, resumeRecovery: (tabId, id) => recovery.resume(tabId, id), otherwise: welcome })
+    .catch(() => {}).then(() => { if (!disposed) void recovery.start() })
   else { welcome(); void recovery.start() }
   return workbench
 }

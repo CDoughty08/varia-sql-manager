@@ -387,7 +387,7 @@ export const activeGroupEditorText = page => page.locator(part.activeEditorGroup
 
 // Panes: the dock's panels, each with a tab in its group's header
 
-const paneTitles = { explorer: 'Object Explorer', editor: 'Query editor', results: 'Results', messages: 'Messages', plan: 'Execution plan' }
+const paneTitles = { explorer: 'Object Explorer', editor: 'Query editor', results: 'Results', messages: 'Messages', plan: 'Execution plan', statistics: 'Client Statistics' }
 /** The panel menu's names for the panels, in its Tab with items. */
 const paneMenuTitles = { explorer: 'Object Explorer', editor: 'Query Editor', results: 'Results', messages: 'Messages', plan: 'Execution Plan' }
 /** The output panels, which share one group by default, its toolbar tabbing between them. */
@@ -510,6 +510,8 @@ export const explorerSearchOptions = page => page.locator(part.explorerSearch).g
 export const explorerSearchTypes = page => page.locator(part.explorerSearch).getByRole('button', { name: /^Object types:/ })
 export const explorerSearchPopover = (page, name) => page.locator(part.explorerSearch).getByRole('dialog', { name, exact: true })
 export const explorerSearchCheck = (page, name) => page.locator(part.explorerSearch).getByRole('checkbox', { name, exact: true })
+/** A hit's name marked as an approximate (Fuzzy Match) match. */
+export const searchHitApproximate = hit => hit.locator('mark[data-approximate]')
 export const explorerSearchTypeSummary = page => page.locator(part.explorerSearch).locator('.object-search-chosen-types')
 export const explorerFooter = page => page.locator(part.explorerFooter)
 export const explorerFreshness = page => explorerFooter(page).locator(part.explorerFreshness)

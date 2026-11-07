@@ -10,6 +10,9 @@ const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TES
 if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'menus-profile-'))
+// The suite sends the window synthetic focus events with a saved query open; the external-change check each one starts
+// 500 ms later holds the document lock, and a menu item chosen then (New Query needs !documentBusy) was refused.
+await writeFile(join(profile, 'settings.json'), JSON.stringify({ version: 1, values: { 'environment.documents.detectExternalChanges': false } }))
 const control = await mkdtemp(resolve('artifacts', 'menus-backend-'))
 const liveEnv = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile }
 delete liveEnv.ELECTRON_RUN_AS_NODE
@@ -33,6 +36,34 @@ const textbox = () => page.locator('.monaco-editor [role="textbox"]')
 const editorText = () => editorTextOf(page)
 const tabs = () => documentTabs(page).getByRole('tab')
 const clipboard = () => application.evaluate(({ clipboard }) => clipboard.readText())
+// Linux: Chromium pastes the X11/Wayland PRIMARY selection on a middle-click, a clipboard read outside the gated Paste role.
+const primarySelection = process.platform === 'linux'
+// Read back, so a session where PRIMARY cannot be written fails instead of passing with nothing to paste.
+const setPrimary = async text => {
+  await application.evaluate(({ clipboard }, value) => clipboard.writeText(value, 'selection'), text)
+  expect(await application.evaluate(({ clipboard }) => clipboard.readText('selection'))).toBe(text)
+}
+/**
+ * Middle-clicks `locator` (or runs `press` on its box) and reports the paste events the page saw (with the text they could
+ * read), each middle-button pointerup, mouseup and pointermove as it bubbled out (" open" if nothing cancelled it, so
+ * Blink would paste), and the auxclicks.
+ */
+const middleClick = async (locator, press) => {
+  await page.evaluate(() => {
+    const seen = window.__variaMiddleClick ??= { pastes: [], releases: [], auxclicks: 0 }
+    if (!seen.listening) {
+      seen.listening = true
+      window.addEventListener('paste', event => seen.pastes.push(event.clipboardData?.getData('text/plain') ?? ''), true)
+      for (const type of ['pointerup', 'mouseup', 'pointermove']) window.addEventListener(type, event => { if (event.button === 1) seen.releases.push(type + (event.defaultPrevented ? '' : ' open')) })
+      window.addEventListener('auxclick', event => { if (event.button === 1) seen.auxclicks++ }, true)
+    }
+    Object.assign(seen, { pastes: [], releases: [], auxclicks: 0 })
+  })
+  // Blink pastes PRIMARY while it handles the release, which the click awaits.
+  if (press) await press(await locator.boundingBox())
+  else await locator.click({ button: 'middle' })
+  return page.evaluate(() => { const { pastes, releases, auxclicks } = window.__variaMiddleClick; return { pastes, releases, auxclicks } })
+}
 const zoomLevel = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getZoomLevel())
 const variable = key => page.evaluate(name => getComputedStyle(document.documentElement).getPropertyValue(name).trim(), '--varia-' + key.replaceAll('.', '-'))
 // expect.poll does not retry a callback that throws, and appearance.json appears only after the first choice.
@@ -354,6 +385,37 @@ try {
     field.remove()
     return { ok: result.ok, value }
   })).toEqual({ ok: false, value: '' })
+  if (primarySelection) {
+    // Nor can a middle-click paste the PRIMARY selection into the editor: the page cancels the release's default action, and
+    // the paste is hidden as a second layer. The click still reaches the page, auxclick included (middle-click closes tabs).
+    await setPrimary('primary-into-editor')
+    const before = await editorText()
+    expect(await middleClick(page.locator('.monaco-editor .view-lines'))).toEqual({ pastes: [], releases: ['pointerup', 'mouseup'], auxclicks: 1 })
+    expect(await editorText()).toBe(before)
+    // The title bar's menus cancel every pointerdown so focus stays put, which leaves the click no mouseup: with the editor
+    // focused, a middle-click on File still pastes nothing (the pointerup is cancelled too), and opens no menu.
+    await textbox().focus()
+    await setPrimary('primary-through-menubar')
+    expect(await middleClick(menubarItem('File'))).toEqual({ pastes: [], releases: ['pointerup'], auxclicks: 1 })
+    expect(await editorText()).toBe(before)
+    await expect(openMenus()).toHaveCount(0)
+    await expect(textbox()).toBeFocused()
+    // A chorded release (left held on File, middle pressed and released) comes as a pointermove, with no pointerup or mouseup.
+    await setPrimary('primary-through-chord')
+    const chord = await middleClick(menubarItem('File'), async box => {
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+      await page.mouse.down()
+      await page.mouse.down({ button: 'middle' })
+      await page.mouse.up({ button: 'middle' })
+      await page.mouse.up()
+    })
+    // Both the chorded press and the release come as middle-button pointermoves, and both are cancelled.
+    expect(chord).toEqual({ pastes: [], releases: ['pointermove', 'pointermove'], auxclicks: 1 })
+    await page.keyboard.press('Escape')
+    await expect(openMenus()).toHaveCount(0)
+    await textbox().focus()
+    expect(await editorText()).toBe(before)
+  }
   // A tap is the user acting, as a click is: Edit › Paste chosen by touch pastes (Windows touch screens).
   await application.evaluate(({ clipboard }) => clipboard.writeText('pasted-by-touch'))
   await typeSql('abc')
@@ -430,7 +492,7 @@ try {
     return calls
   })
   expect(overlays).toEqual([expect.objectContaining({ color: expect.stringMatching(/^#[0-9a-f]{6}$/), symbolColor: expect.stringMatching(/^#[0-9a-f]{6}$/) }), expect.objectContaining({ color: expect.stringMatching(/^#[0-9a-f]{6}$/) })])
-  console.log('Menus checks: Cut and Paste in the editor through roles, no Paste the page runs alone, zoom roles, forced colors, and the inactive title bar.')
+  console.log('Menus checks: Cut and Paste in the editor through roles, no Paste the page runs alone' + (primarySelection ? ' or a middle-click pastes from PRIMARY' : '') + ', zoom roles, forced colors, and the inactive title bar.')
 
   // 6. Ctrl+R toggles the results pane, as in SSMS; nothing reloads. The operating system's keys are pressed after step 14,
   // in a shown window, where the hidden menu's accelerators work.
@@ -661,6 +723,12 @@ try {
   await server.click({ button: 'right', force: true })
   await fieldMenu.getByRole('menuitem', { name: 'Paste', exact: true }).click()
   await expect(server).toHaveValue('menus-server')
+  if (primarySelection) {
+    // A text field takes no PRIMARY paste either; only the field menu's Paste, above, reads the clipboard.
+    await setPrimary('primary-into-field')
+    expect(await middleClick(server)).toEqual({ pastes: [], releases: ['pointerup', 'mouseup'], auxclicks: 1 })
+    await expect(server).toHaveValue('menus-server')
+  }
   await page.locator('#connect-auth').selectOption('sql')
   await password.fill('hunter2')
   await password.selectText()

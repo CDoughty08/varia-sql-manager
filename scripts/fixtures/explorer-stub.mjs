@@ -110,7 +110,9 @@ export function installExplorerStub({ ipcMain }, { statics }) {
     { object: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'table2' }, folder: 'tables', label: 'dbo.table2' }
   ]
   const indexStatus = definitions => ({ state: 'ready', databases: 2, indexed: 2, objects: searchObjects.length, modules: definitions ? 1 : 0, cut: 0, skipped: [], definitions, builtAt: '2026-11-03T12:00:00Z' })
-  function search({ text, caseSensitive, wholeWord, regex, in: scope = 'all', kinds }) {
+  // Fuzzy Match stands in as a subsequence: a name holding the text's letters in order, but not the text, is approximate.
+  const approximately = (name, text) => { let at = 0; for (const c of name.toLowerCase()) if (c === text[at]?.toLowerCase()) at++; return at === text.length }
+  function search({ text, caseSensitive, wholeWord, regex, in: scope = 'all', kinds, match: mode }) {
     let pattern
     try { pattern = new RegExp(regex ? text : text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), caseSensitive ? 'gm' : 'gim') }
     catch { return { hits: [], total: 0, partial: false, elapsedMs: 0, index: indexStatus(true), problem: 'The regular expression is not valid.' } }
@@ -124,6 +126,8 @@ export function installExplorerStub({ ipcMain }, { statics }) {
       if ((kinds && !kinds.includes(item.object.kind)) || stub.searchHidden.includes(item.object.name)) return []
       const name = scope !== 'definitions' ? find(item.object.name) : undefined
       const body = scope !== 'names' && definition ? find(definition) : undefined
+      if (!name && !body && mode === 'fuzzy' && !regex && scope !== 'definitions' && approximately(item.object.name, text))
+        return [{ ...item, range: [item.label.length - item.object.name.length, item.object.name.length], approximate: true }]
       if (!name && !body) return []
       const start = body ? definition.lastIndexOf('\n', body.index - 1) + 1 : 0, stop = body ? definition.indexOf('\n', body.index) : -1
       const end = stop < 0 ? definition?.length ?? 0 : stop
@@ -153,10 +157,19 @@ export function installExplorerStub({ ipcMain }, { statics }) {
         facts: { schema: params.target.schema ?? null, created: '2024-01-02T03:04:05', modified: '2024-02-03T04:05:06', systemObject: false, replicated: false, lockEscalation: 'TABLE',
           memoryOptimized: false, temporal: 'NON_TEMPORAL_TABLE', ledger: 'NON_LEDGER_TABLE', rowCount: 12345, dataSpace: 2048, indexSpace: 64, filegroup: 'PRIMARY', textFilegroup: null,
           partitioned: false, compression: 'NONE' },
-        // A module's text comes with its facts, as the backend reads it from sys.sql_modules.
-        ...(() => { const definition = searchObjects.find(item => item.object.kind === params.target.kind && item.object.name === params.target.name)?.definition; return definition ? { definition } : {} })(),
+        // A module's text comes with its facts, as the backend reads it from sys.sql_modules (Peek's followed view has its own).
+        ...(() => {
+          const definition = searchObjects.find(item => item.object.kind === params.target.kind && item.object.name === params.target.name)?.definition
+            ?? (params.target.kind === 'view' ? 'CREATE VIEW dbo.vOrders AS SELECT Id FROM dbo.Orders' : undefined)
+          return definition ? { definition } : {}
+        })(),
         elapsedMs: 1
       })
+      case 'explorer.peekDependencies': return ok(params.target.kind === 'view' ? { uses: [{ name: 'Orders', schema: 'dbo', kind: 'table' }], usedBy: [], elapsedMs: 1 }
+        : { uses: [{ name: 'Customers', schema: 'dbo', database: 'Crm' }], usedBy: [{ name: 'OrderLines', schema: 'dbo', kind: 'table', foreignKey: true }, { name: 'vOrders', schema: 'dbo', kind: 'view' }], elapsedMs: 1 })
+      // The first rows read times out, so the smoke walks Retry.
+      case 'explorer.peekRows': if (stub.calls.filter(call => call.method === 'explorer.peekRows').length === 1) return ok({ columns: [], rows: [], elapsedMs: 1, error: { code: 'TIMEOUT', message: 'Reading the rows took longer than 15 seconds. Retry.', retryable: true } })
+        return ok({ columns: [{ name: 'Id', type: 'int' }, { name: 'CustomerName', type: 'nvarchar' }], rows: [['1', 'Alice'], ['2', null], ['3', null]], unread: [[2, 1]], elapsedMs: 1 })
       case 'scripting.script': return ok({ text: `CREATE TABLE [${params.targets[0].schema}].[${params.targets[0].name}](\n\t[Id] [int] NOT NULL\n)\nGO\n`, database: params.targets[0].database ?? 'master', warnings: [], commands: 1, elapsedMs: 1 })
       case 'query.session.close': return ok({ closed: true })
       case 'query.session.state': return ok({ transactionCount: 0, checked: true })

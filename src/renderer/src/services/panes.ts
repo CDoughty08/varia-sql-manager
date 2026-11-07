@@ -9,7 +9,7 @@ export type PaneLocation = 'grid' | 'floating' | 'window' | 'closed'
 export type OutputPeers = Readonly<Record<OutputPaneId, readonly OutputPaneId[]>>
 
 const record = <T>(value: (id: PaneId) => T) => Object.fromEntries(paneIds.map(id => [id, value(id)])) as Record<PaneId, T>
-const noPeers: OutputPeers = { results: [], messages: [], plan: [] }
+const noPeers: OutputPeers = { results: [], messages: [], plan: [], statistics: [] }
 
 /** The peers store: which output panels share a group, which their toolbars tab between. */
 class OutputPeerStore extends SnapshotStore<OutputPeers> {

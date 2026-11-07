@@ -6,7 +6,7 @@ import { expandExplorerPath, explorerLines, explorerRow, explorerTree, revealExp
 import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.mjs'
 import {
   activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
-  explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, explorerSublabel, explorerToolbar, itemCount,
+  explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, searchHitApproximate, explorerSublabel, explorerToolbar, itemCount,
   menuItemNames, messages, movePane, objectSearchBox, objectSearchHits, objectSearchSelected, outputView, paneMenuButton, part, popoutDockButton, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
 } from './fixtures/ui.mjs'
 
@@ -613,13 +613,13 @@ try {
   await expect(peekCard).toBeFocused()
   await expect(peekCard.getByRole('region', { name: 'Storage', exact: true })).toContainText('12,345')
   await expect(peekCard.getByRole('region', { name: 'General', exact: true })).toContainText('Non temporal table')
-  await expect(peekCard.getByLabel('Definition', { exact: true })).toContainText('CREATE TABLE [dbo].[Orders]')
+  await expect(peekCard.getByLabel('Definition text', { exact: true })).toContainText('CREATE TABLE [dbo].[Orders]')
   const peeked = (await stubCalls('explorer.peek')).at(-1)
   expect(peeked.target).toMatchObject({ kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' })
   expect((await stubCalls('scripting.script')).at(-1)).toMatchObject({ verb: 'create', targets: [{ kind: 'table', name: 'Orders' }] })
   // Tab wraps within the card, so Esc keeps reaching it.
   await page.keyboard.press('Shift+Tab')
-  await expect(peekCard.getByLabel('Definition', { exact: true })).toBeFocused()
+  await expect(peekCard.getByLabel('Definition text', { exact: true })).toBeFocused()
   await page.keyboard.press('Tab')
   await expect(peekCard.getByRole('button', { name: 'Refresh', exact: true })).toBeFocused()
   await page.keyboard.press('Escape')
@@ -628,6 +628,41 @@ try {
   await peekRow.click({ button: 'right' })
   await menu('Object Explorer').getByRole('menuitem', { name: 'Peek', exact: true }).click()
   await expect(peekCard).toBeFocused()
+  // The tabs: Columns lists the tree's Columns folder, Dependencies both ways (a dependency in this database peeks in the same
+  // card, and Back returns), and Top rows reads only once chosen, showing NULL as the grid does. Arrow keys only move focus:
+  // passing Top rows on the way to Dependencies reads nothing.
+  const peekTabs = peekCard.getByRole('tablist', { name: 'Peek', exact: true })
+  await peekTabs.getByRole('tab', { name: 'Columns', exact: true }).click()
+  await expect(peekCard.getByRole('tabpanel')).toContainText('CustomerName')
+  await expect(peekCard.getByRole('tabpanel')).toContainText('(PK, int, not null)')
+  expect(await stubCalls('explorer.peekDependencies')).toHaveLength(0)
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('ArrowRight')
+  await expect(peekTabs.getByRole('tab', { name: 'Top rows', exact: true })).toBeFocused()
+  await expect(peekTabs.getByRole('tab', { name: 'Columns', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await page.keyboard.press('ArrowLeft')
+  await expect(peekTabs.getByRole('tab', { name: 'Dependencies', exact: true })).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(peekTabs.getByRole('tab', { name: 'Dependencies', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await expect(peekCard.getByRole('region', { name: 'Uses', exact: true })).toContainText('Crm.dbo.Customers')
+  await expect(peekCard.getByRole('region', { name: 'Used by', exact: true })).toContainText('Foreign key')
+  expect(await stubCalls('explorer.peekRows')).toHaveLength(0)
+  await peekCard.getByRole('button', { name: 'Peek dbo.vOrders', exact: true }).click()
+  const followed = page.getByRole('dialog', { name: 'Peek: dbo.vOrders', exact: true })
+  await expect(followed.getByLabel('Definition text', { exact: true })).toContainText('CREATE VIEW dbo.vOrders')
+  await followed.getByRole('button', { name: 'Back', exact: true }).click()
+  await expect(peekTabs.getByRole('tab', { name: 'Dependencies', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await peekTabs.getByRole('tab', { name: 'Top rows', exact: true }).click()
+  // A failed read offers Retry, which keeps focus in the card (on the tab), so Esc still closes it.
+  await expect(peekCard.getByRole('alert')).toContainText('took longer than 15 seconds')
+  await peekCard.getByRole('button', { name: 'Retry', exact: true }).click()
+  const topRows = peekCard.getByRole('table', { name: 'Top rows', exact: true })
+  await expect(topRows).toContainText('Alice')
+  await expect(peekTabs.getByRole('tab', { name: 'Top rows', exact: true })).toBeFocused()
+  // A value the readers could not read shows as NULL, as the grid shows it, with a note.
+  await expect(topRows.getByRole('cell', { name: 'NULL', exact: true })).toHaveCount(2)
+  await expect(peekCard.getByRole('tabpanel')).toContainText('1 value could not be read and show as NULL.')
+  expect((await stubCalls('explorer.peekRows')).at(-1).target).toMatchObject({ kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' })
   await page.keyboard.press('Escape')
   await expect(peekCard).toBeHidden()
   const peekKey = process.platform === 'darwin' ? 'Meta' : 'Control'
@@ -639,7 +674,7 @@ try {
   await expect(tree()).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(peekCard).toBeHidden()
-  console.log('Object Explorer checks: Peek opens on dbo.Orders by Space, the menu and Ctrl+hover, shows its properties and CREATE script, and Esc returns to the tree.')
+  console.log('Object Explorer checks: Peek opens on dbo.Orders by Space, the menu and Ctrl+hover, shows its properties and CREATE script, its Columns, Dependencies (followed and back) and Top rows tabs, and Esc returns to the tree.')
 
   // 9. An offline database is listed, dimmed, with no chevron.
   await select('server-a', 'Databases', 'AppData')
@@ -802,7 +837,7 @@ try {
   await splitter.dblclick()
   await expect(splitter).toHaveAttribute('aria-valuetext', 'Fits the results')
   expect(await band()).toMatchObject({ sized: false })
-  // The three match options share one popover and still run the same searches as the tab's toggles.
+  // The four match options share one popover and still run the same searches as the tab's toggles.
   const optionsButton = explorerSearchOptions(page)
   await optionsButton.click()
   const wholeWord = explorerSearchCheck(page, 'Match Whole Word')
@@ -820,7 +855,35 @@ try {
   await expect(explorerSearchHits(page)).toHaveCount(3)
   await explorerSearchCheck(page, 'Use Regular Expression').check()
   await expect(explorerSearchHits(page)).toHaveCount(3)
+  // Fuzzy Match asks for approximate names, marks them apart, and cannot go with Regex (it keeps its setting meanwhile).
+  const fuzzy = explorerSearchCheck(page, 'Fuzzy Match')
+  await expect(fuzzy).toBeDisabled()
   await explorerSearchCheck(page, 'Use Regular Expression').uncheck()
+  await expect(fuzzy).toBeEnabled()
+  await fuzzy.check()
+  const lastSearch = async () => (await stubCalls('explorer.search')).at(-1)
+  // Typing in the box may light-dismiss the popover; the options open again where it did.
+  const reopen = async () => { if (!await fuzzy.isVisible()) await optionsButton.click() }
+  await expect.poll(lastSearch).toMatchObject({ text: 'ORD', match: 'fuzzy' })
+  await expect(explorerSearchHits(page)).toHaveCount(3)
+  await expect(searchHitApproximate(explorerSearchHits(page).first())).toHaveCount(0)
+  await searchBox().fill('tbl1')
+  await expect(explorerSearchHits(page)).toHaveCount(1)
+  await expect(searchHitApproximate(explorerSearchHits(page).first())).toHaveText('table1')
+  await reopen()
+  await explorerSearchCheck(page, 'Use Regular Expression').check()
+  await expect(fuzzy).not.toBeChecked()
+  await expect.poll(lastSearch).toMatchObject({ text: 'tbl1', regex: true })
+  expect((await lastSearch()).match).toBeUndefined()
+  await expect(explorerSearchHits(page)).toHaveCount(0)
+  await explorerSearchCheck(page, 'Use Regular Expression').uncheck()
+  await expect(fuzzy).toBeChecked()
+  await searchBox().fill('ORD')
+  await reopen()
+  await fuzzy.uncheck()
+  await expect.poll(lastSearch).toMatchObject({ text: 'ORD' })
+  expect((await lastSearch()).match).toBeUndefined()
+  await expect(explorerSearchHits(page)).toHaveCount(3)
   await page.keyboard.press('Escape')
   await expect(optionsButton).toBeFocused()
   await expect(optionsButton).toHaveAttribute('aria-expanded', 'false')

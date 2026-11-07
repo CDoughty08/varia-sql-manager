@@ -5,6 +5,7 @@ import { useCommandEnabled, useCommandsToggled, useKeybindingLabel } from './cor
 import { environmentTag } from '../../shared/environments'
 import EnvironmentTag from './EnvironmentTag'
 import Icon from './Icon'
+import ClientStatisticsToggle from './statistics/ClientStatisticsToggle'
 import { lostHint, queryContextModel, toolbarMove, toolbarReturn, toolbarStop, withKey, type QueryContextModel } from './query-context'
 
 /** The active document's server and database lists, as its query bar and the classic toolbar show them. */
@@ -123,6 +124,7 @@ export default function QueryBar() {
       <Icon name="debug-stop" /><span className="query-bar-label">Cancel</span>
     </button>
     <ActualPlanToggle />
+    <ClientStatisticsToggle />
     <div className="query-connection" role="group" aria-label="Connection" data-lost={model.connection?.lost || undefined}>
       {accent && <span className="connection-swatch" style={{ background: accent }} aria-hidden="true" />}
       {tag && <span className="query-bar-environment"><span className="visually-hidden">Environment: </span><EnvironmentTag environment={environment} place="query" about={model.serverName} /></span>}

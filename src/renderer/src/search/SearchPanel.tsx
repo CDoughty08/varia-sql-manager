@@ -45,12 +45,15 @@ const dragEnds = ['pointerup', 'pointercancel', 'lostpointercapture'] as const
 /** The splitter's pane (Object Explorer's column) and the band's own box. */
 const paneBox = (band: HTMLElement) => band.parentElement?.getBoundingClientRect()
 
-/** `text` with [start, length] marked; names keep displayText's markers for hidden characters. */
-function Marked({ text, range }: { readonly text: string; readonly range?: readonly [number, number] }): ReactNode {
+/** `text` with [start, length] marked; names keep displayText's markers for hidden characters. An approximate (Fuzzy Match)
+ *  name match is marked apart, with a dotted underline. */
+function Marked({ text, range, approximate }: { readonly text: string; readonly range?: readonly [number, number]; readonly approximate?: boolean }): ReactNode {
   if (!range || range[1] <= 0) return displayText(text)
   const [start, length] = range
-  return <>{displayText(text.slice(0, start))}<mark>{displayText(text.slice(start, start + length))}</mark>{displayText(text.slice(start + length))}</>
+  return <>{displayText(text.slice(0, start))}<mark data-approximate={approximate ? '' : undefined} title={approximate ? 'Approximate match' : undefined}>{displayText(text.slice(start, start + length))}</mark>{displayText(text.slice(start + length))}</>
 }
+const fuzzyLabel = 'Fuzzy Match'
+const fuzzyTitle = 'Fuzzy Match: names also match with typos or by sound (not with regular expressions)'
 
 /**
  * Where a hit is, for its row: a server object's folders below the server (Security › Logins), a database's Databases folder,
@@ -145,8 +148,12 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   const result = state.result
   const pane = layout === 'pane'
   const set = (patch: Partial<SearchQueryState>) => objectSearch.setQuery(searchId, patch)
-  const toggle = (key: 'caseSensitive' | 'wholeWord' | 'regex', label: string, icon: 'case-sensitive' | 'whole-word' | 'regex') =>
-    <button type="button" className="icon-button object-search-toggle" aria-pressed={state[key]} aria-label={label} title={label} onClick={() => set({ [key]: !state[key] })}><Icon name={icon} /></button>
+  const toggle = (key: 'caseSensitive' | 'wholeWord' | 'regex' | 'fuzzy', label: string, icon: 'case-sensitive' | 'whole-word' | 'regex' | 'fuzzy-match', title = label) => {
+    // Fuzzy Match keeps its setting while Regex is on, but cannot apply.
+    const off = key === 'fuzzy' && state.regex
+    return <button type="button" className="icon-button object-search-toggle" aria-pressed={state[key] && !off} aria-label={label} title={title} disabled={off} onClick={() => set({ [key]: !state[key] })}><Icon name={icon} /></button>
+  }
+  const optionsActive = state.caseSensitive || state.wholeWord || state.regex || state.fuzzy
   const rows = () => [...(list.current?.querySelectorAll<HTMLElement>('[data-hit]') ?? [])]
   /** Copy on a focused hit (its key, or Edit › Copy's copy event) copies the hit's name; hits have no text to select. */
   const copyName = (event: { preventDefault(): void }) => {
@@ -295,7 +302,7 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
           <div ref={menuTarget} role="option" className="object-search-open" data-hit data-index={index} tabIndex={index === (current ?? 0) ? 0 : -1} aria-selected={index === current}
             title={`Reveal in Object Explorer: ${displayText(hit.label)}`} onClick={() => { if (pane) open(index); else objectSearch.pick(searchId, index) }} onDoubleClick={pane ? undefined : () => open(index)}>
             <ExplorerIcon name={(hit.subtype && spec.subtypeIcons?.[hit.subtype]) || spec.icon} />
-            <span className="object-search-name"><Marked text={hit.label} range={hit.range} /></span>
+            <span className="object-search-name"><Marked text={hit.label} range={hit.range} approximate={hit.approximate} /></span>
             <span className="object-search-path">{displayText(path)}</span>
             {hit.definition && <span className="object-search-line">
               <span className="object-search-line-number">{hit.definition.line}:</span>
@@ -313,11 +320,14 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
         <input ref={inputRef} type="text" data-object-search-focus aria-label={pane ? 'Search in Object Explorer' : 'Search objects'} placeholder={state.regex ? 'Regular expression' : pane ? 'Search objects' : 'Object name or text in definitions'}
           maxLength={objectSearchLimits.text} spellCheck={false} autoComplete="off" value={state.text} onChange={event => set({ text: event.target.value })} onKeyDown={onInputKey} />
         {pane && state.text && <button type="button" className="icon-button" tabIndex={-1} aria-label="Clear search" title="Clear search (Escape)" onClick={() => { set({ text: '' }); root.current?.querySelector<HTMLElement>('[data-object-search-focus]')?.focus() }}><Icon name="close" /></button>}
-        {pane ? <SearchPopover label={`Search options${state.caseSensitive || state.wholeWord || state.regex ? ': active' : ''}`} title="Search options" icon="settings-gear" compact active={state.caseSensitive || state.wholeWord || state.regex}>
+        {pane ? <SearchPopover label={`Search options${optionsActive ? ': active' : ''}`} title="Search options" icon="settings-gear" compact active={optionsActive}>
           {(['caseSensitive', 'wholeWord', 'regex'] as const).map((key, index) => <label key={key} className="object-search-check">
             <input type="checkbox" checked={state[key]} onChange={() => set({ [key]: !state[key] })} /><span>{['Match Case', 'Match Whole Word', 'Use Regular Expression'][index]}</span>
           </label>)}
-        </SearchPopover> : <>{toggle('caseSensitive', 'Match Case', 'case-sensitive')}{toggle('wholeWord', 'Match Whole Word', 'whole-word')}{toggle('regex', 'Use Regular Expression', 'regex')}</>}
+          <label className="object-search-check" title={fuzzyTitle}>
+            <input type="checkbox" checked={state.fuzzy && !state.regex} disabled={state.regex} onChange={() => set({ fuzzy: !state.fuzzy })} /><span>{fuzzyLabel}</span>
+          </label>
+        </SearchPopover> : <>{toggle('caseSensitive', 'Match Case', 'case-sensitive')}{toggle('wholeWord', 'Match Whole Word', 'whole-word')}{toggle('regex', 'Use Regular Expression', 'regex')}{toggle('fuzzy', fuzzyLabel, 'fuzzy-match', fuzzyTitle)}</>}
       </div>
       {showHits && <>
         {pane ? <PaneSearchFilters id={searchId} scope={state.scope} types={state.types} onScope={scope => set({ scope })} onTypes={types => set({ types })} />

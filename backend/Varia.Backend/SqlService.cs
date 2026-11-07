@@ -29,7 +29,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
-        "results.read", "results.close", "results.rowBytes", "explorer.children", "explorer.peek", "explorer.index", "explorer.search", "results.copy", "results.export",
+        "results.read", "results.close", "results.rowBytes", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.peekRows", "explorer.index", "explorer.search", "results.copy", "results.export",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
         "ssis.describe", "ssis.execute", "ssis.catalogSetup"
@@ -295,7 +295,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     {
         "query.execute" => RequestLane.Query,
         "results.read" or "results.copy" or "results.export" => RequestLane.Results,
-        "explorer.children" or "explorer.peek" or "explorer.index" or "explorer.search" => RequestLane.Explorer,
+        "explorer.children" or "explorer.peek" or "explorer.peekDependencies" or "explorer.peekRows" or "explorer.index" or "explorer.search" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
         "ssis.describe" or "ssis.execute" or "ssis.catalogSetup" => RequestLane.Ssis,
         "live.subscribe" or "activity.details" => RequestLane.Live,
@@ -352,6 +352,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "results.export" => await jobs.ExportAsync(Read<ResultsExportArgs>(parameters, json), context),
         "explorer.children" => await explorer.ChildrenAsync(Read<ExplorerChildrenArgs>(parameters, json), Token(context)),
         "explorer.peek" => await explorer.PeekAsync(Read<PeekArgs>(parameters, json), Token(context)),
+        "explorer.peekDependencies" => await explorer.PeekDependenciesAsync(Read<PeekArgs>(parameters, json), Token(context)),
+        "explorer.peekRows" => await explorer.PeekRowsAsync(Read<PeekRowsArgs>(parameters, json), Token(context)),
         // The build reports how far it got as droppable explorer.index.progress EVENTs on the request.
         "explorer.index" => await search.IndexAsync(Read<ObjectIndexArgs>(parameters, json), Token(context), context is null ? null : value => context.SendEvent(value, droppable: true)),
         "explorer.search" => search.Search(Read<ObjectSearchArgs>(parameters, json), Token(context)),
@@ -910,6 +912,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         var sets = new List<ResultSetBuffer>();
         var plans = new List<ResultDescriptor>();
         ActualPlanCapture? capture = null;
+        Statistics.ClientStatisticsCollector? statistics = null;
+        Statistics.ClientStatisticsSample? statisticsSample = null;
         var omittedPlans = false;
         var lostPlanEvents = false;
         var noPlanEvents = false;
@@ -1071,6 +1075,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                 }
             }
             connection.FireInfoMessageEventOnUserErrors = true;
+            if (args.IncludeClientStatistics) statistics = new(connection);
             for (var b = 0; b < batches.Count && failure is null; b++)
             {
                 batchNumber = b + 1;
@@ -1315,6 +1320,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         }
         finally
         {
+            // Every reader (including a failed or cancelled one) has drained/disposed. Stop before observer reads and session cleanup.
+            statisticsSample = statistics?.Finish();
             watch.Stop();
             queries.TryRemove(args.QueryId, out _);
             try
@@ -1414,7 +1421,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         if (context is not null) context.Unsent = () => store.Release(descriptors.Concat(plans).Select(set => set.ResultId));
         var completedAt = DateTimeOffset.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz", CultureInfo.InvariantCulture);
         return new(descriptors, overflowSets + oversizeSets + budgetSets, output, recordsAffected, watch.ElapsedMilliseconds, status, failure, completed,
-            totalBatches, database, messages.Truncated, SummaryBudget(), completedAt, spid, login, plans.Count > 0 ? plans : null, planOrder);
+            totalBatches, database, messages.Truncated, SummaryBudget(), completedAt, spid, login, plans.Count > 0 ? plans : null, planOrder,
+            statisticsSample ?? (args.IncludeClientStatistics ? new([], null, "Execution ended before statistics collection could start.") : null));
     }
 
     private bool StoreActualPlans(string sessionId, List<ActualPlanCapture.CapturedPlan> captured, Dictionary<int, uint>? idsByEvent, List<ResultDescriptor> plans)
