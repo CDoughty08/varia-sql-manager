@@ -234,7 +234,11 @@ describe('scripting catalogue', () => {
     expect(Object.keys(entries)).toEqual([...scriptSubmenuIds])
     expect(entries['explorer.scriptAs']).toEqual({
       title: 'Script as', nativeId: 'explorer.scriptAs', dynamicTitle: 'scriptAs',
-      placements: [{ menu: 'explorer.context', group: '2_script', order: 1, mnemonic: 's', when: "explorerScriptTitle != '' && explorerNode != 'background'" }]
+      placements: [
+        { menu: 'explorer.context', group: '2_script', order: 1, mnemonic: 's', when: "explorerScriptTitle != '' && explorerNode != 'background'" },
+        // A Search Objects result's menu stands in the result's keys for the selection's.
+        { menu: 'search.hit.context', group: '2_script', order: 1, mnemonic: 's', when: "explorerScriptTitle != ''" }
+      ]
     })
     expect(entries['explorer.scriptAs.createOrAlter']).toEqual({
       title: 'CREATE OR ALTER To', nativeId: 'explorer.scriptAs.createOrAlter', placements: [{ menu: 'explorer.scriptAs', group: '1_ddl', order: 3, mnemonic: 'r', when: "explorerScriptCreateOrAlter != ''" }]

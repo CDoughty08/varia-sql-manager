@@ -298,6 +298,32 @@ describe('ObjectSearchService', () => {
     expect(service.getSnapshot().documents[id].current).toBeUndefined()
   })
 
+  it('selects a menu\'s hit where the answer has it now, and acts from keys only on the focused list\'s hit', async () => {
+    const { service, pendingSearch, connections, timers } = harness()
+    connections.set([connection('a')])
+    const id = service.open('a')!
+    const hits = ['A', 'B', 'C'].map(name => ({ ...hit, label: `dbo.${name}`, object: { ...hit.object, name } }))
+    const answer = (value: ObjectSearchHit[]): ApiResult<ObjectSearchResult> => ({ ok: true, value: { hits: value, total: value.length, partial: false, elapsedMs: 1, index: status() } })
+    service.setQuery(id, { text: 'x' })
+    timers.run()
+    pendingSearch[0](answer(hits))
+    await settle()
+    // A menu opened on dbo.B at index 1; the answer has since moved it to index 2.
+    void service.search(id)
+    pendingSearch[1](answer([hits[2]!, hits[0]!, hits[1]!]))
+    await settle()
+    service.pickHit(id, hits[1]!)
+    expect(service.getSnapshot().documents[id].current).toBe(2)
+    // A hit the answer no longer has selects nothing new.
+    service.pickHit(id, { ...hit, object: { ...hit.object, name: 'Gone' } })
+    expect(service.getSnapshot().documents[id].current).toBe(2)
+    expect(service.focusedHit()).toBeUndefined()
+    service.listFocused(id, true)
+    expect(service.focusedHit()).toMatchObject({ searchId: id, connectionId: 'a', index: 2, hit: hits[1] })
+    service.listFocused(id, false)
+    expect(service.focusedHit()).toBeUndefined()
+  })
+
   it('reports a failed search and clears results for empty text', async () => {
     const { service, pendingSearch, connections } = harness()
     connections.set([connection('a')])

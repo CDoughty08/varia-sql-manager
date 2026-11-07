@@ -168,7 +168,7 @@ describe('object action catalogue', () => {
     for (const platform of platforms) {
       const rules = defaultRules(platform).filter(rule => rule.command === 'explorer.properties')
       expect(rules.map(rule => rule.chords.join(' ')), platform).toEqual(platform === 'darwin' ? ['meta+i'] : [])
-      for (const rule of rules) expect([rule.whenSource, reservedReason(rule.chords[0], platform)]).toEqual(["activePanel == 'explorer' && !textInputFocus", undefined])
+      for (const rule of rules) expect([rule.whenSource, reservedReason(rule.chords[0], platform)]).toEqual(["activePanel == 'explorer' && !textInputFocus && !searchHitsFocus", undefined])
       expect(reservedReason('alt+enter', platform) !== undefined, platform).toBe(platform !== 'darwin')
     }
   })
@@ -179,7 +179,7 @@ describe('object action catalogue', () => {
         ? [['explorer.rename', 'f2'], ['explorer.delete', 'meta+backspace'], ['explorer.delete', 'delete']]
         : [['explorer.rename', 'f2'], ['explorer.delete', 'delete']])
       for (const rule of rules) {
-        expect(rule.whenSource).toBe("activePanel == 'explorer' && !textInputFocus")
+        expect(rule.whenSource).toBe("activePanel == 'explorer' && !textInputFocus && !searchHitsFocus")
         expect(reservedReason(rule.chords[0], platform), `${rule.chords[0]} on ${platform}`).toBeUndefined()
       }
       expect(findConflicts(defaultRules(platform), platform), platform).toEqual([])

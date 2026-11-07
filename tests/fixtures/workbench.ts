@@ -491,7 +491,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     designerContribution(workbench),
     ssisContribution(workbench),
     activityContribution(workbench),
-    searchContribution(workbench),
+    searchContribution(workbench, api),
     settingsContribution(workbench),
     notificationsContribution(workbench)
   ]

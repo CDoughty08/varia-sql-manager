@@ -70,7 +70,9 @@ describe('menu model', () => {
       ['explorer.scriptAs.insert', 'INSERT To', 'i'], ['explorer.scriptAs.update', 'UPDATE To', 'u'], ['explorer.scriptAs.delete', 'DELETE To', 'e'], ['explorer.scriptAs.execute', 'EXECUTE To', 'x']
     ])
     expect(buildMenuModel('explorer.scriptAs', 'linux').map(entry => entry.kind)).toEqual(['submenu', 'submenu', 'submenu', 'submenu', 'submenu', 'separator', 'submenu', 'submenu', 'submenu', 'submenu', 'separator', 'submenu'])
-    expect(menuRoots('explorer.scriptAs.create')).toEqual(['explorer.context'])
+    // Search Objects' result menu offers the same Script as submenu.
+    expect(menuRoots('explorer.scriptAs.create')).toEqual(['explorer.context', 'search.hit.context'])
+    expect(menuRoots('search.copy')).toEqual(['search.hit.context'])
     expect(menuRoots('query.connection')).toEqual(['query', 'editor.context'])
     expect(menuRoots('theme')).toEqual(['view'])
     expect(menuRoots('file')).toEqual(['file'])
@@ -326,7 +328,7 @@ describe('menu state', () => {
     // Context-menu commands and the keyboard-only ones are not in the native menu bar either.
     const unplaced = ['file.closeOthers', 'file.copyPath', 'file.revealInFolder', 'document.moveLeft', 'document.moveRight', 'document.rename', 'editor.moveToNextGroup', 'editor.moveToPreviousGroup', 'editor.float', 'editor.dock', 'workbench.showContextMenu', 'explorer.refresh', 'preferences.createTheme', 'preferences.openThemesFolder',
       'preferences.reloadThemes', 'preferences.setTheme', 'pane.dockLeft', 'pane.dockRight', 'pane.dockTop', 'pane.dockBottom', 'pane.tabWithExplorer', 'pane.tabWithEditor', 'pane.tabWithResults', 'pane.tabWithMessages', 'pane.tabWithPlan', 'pane.float', 'pane.dock', 'pane.moveToNewWindow', 'pane.moveToMainWindow', 'pane.close', 'explorer.newQuery', 'explorer.selectTopRows', 'explorer.rename', 'explorer.delete', 'explorer.properties', 'explorer.disable', 'explorer.enable', 'explorer.unlock', 'explorer.restoreDatabase', 'explorer.tasks.restoreDatabase', 'explorer.restoreFiles', 'explorer.tasks.restoreFiles', 'explorer.newTable', 'explorer.newDatabase', 'explorer.newDatabaseOnDatabase', 'explorer.createCatalog', 'explorer.attachDatabase', 'explorer.takeOffline', 'explorer.bringOnline', 'explorer.detachDatabase', 'explorer.newLogin', 'explorer.newLoginOnSecurity', ...scriptCommandIds,
-      'explorer.scriptAs', 'explorer.modify', 'explorer.peek', 'explorer.cancelScripting', 'explorer.copyName', 'output.copy', 'output.copyWithHeaders', 'output.selectAll', 'options.focusSearch', 'backend.restart',
+      'explorer.scriptAs', 'explorer.modify', 'explorer.peek', 'explorer.cancelScripting', 'explorer.copyName', 'search.revealHit', 'search.copyName', 'search.copySchemaName', 'search.copyQualifiedName', 'search.copyBracketedName', 'output.copy', 'output.copyWithHeaders', 'output.selectAll', 'options.focusSearch', 'backend.restart',
       'connection.removeLost', 'explorer.stop', 'explorer.collapseAll', 'explorer.filter', 'explorer.focusSearch', 'explorer.removeFilter', 'window.switchPane',
       'output.saveResultsAs', 'output.closeResults', 'output.openValue', 'editor.toggleOvertype', 'file.openRecent', 'file.clearRecent', 'file.recoverUnsaved', 'editor.toggleLineNumbers',
       // Main runs AutoRecover's save as Windows ends the session; no menu shows it.

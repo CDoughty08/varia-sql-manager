@@ -25,6 +25,7 @@ import type { SettingsValues } from '../../../shared/settings/catalog'
 
 export interface FocusFacts {
   readonly editorFocus: boolean; readonly editorTextFocus: boolean; readonly inputFocus: boolean; readonly activePanel: 'explorer' | 'editor' | 'output' | ''; readonly outputGridFocus: boolean
+  readonly searchHitsFocus: boolean
   readonly designerFocus: boolean; readonly queryBarFocus: boolean; readonly activityMonitorFocus: boolean; readonly documentTabFocus: boolean
   readonly messagesFocus: boolean; readonly explorerFocus: boolean; readonly explorerTypeAhead: boolean; readonly optionsDialogFocus: boolean
 }
@@ -49,7 +50,7 @@ export interface SsisOperationsContextState { readonly byDocument: Readonly<Reco
 export interface FocusElement { matches(selector: string): boolean; closest(selector: string): { getAttribute(name: string): string | null } | null }
 export interface FocusEditor<E> { getContainerDomNode(): { contains(node: E): boolean }; hasTextFocus(): boolean }
 
-const noFocus: FocusFacts = { editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '', outputGridFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false,
+const noFocus: FocusFacts = { editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '', outputGridFocus: false, searchHitsFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false,
   messagesFocus: false, explorerFocus: false, explorerTypeAhead: false, optionsDialogFocus: false }
 const panels: ReadonlySet<string> = new Set(['explorer', 'editor'])
 
@@ -64,6 +65,7 @@ export function focusFacts<E extends FocusElement>(element: E | null, editor: Fo
   const tree = element.closest('[data-explorer-tree]')
   return {
     editorFocus, editorTextFocus, inputFocus, activePanel: isOutputPane(pane) ? 'output' : panels.has(pane) ? pane as FocusFacts['activePanel'] : '', outputGridFocus: !!element.closest('[data-result-grid]'),
+    searchHitsFocus: !!element.closest('[data-search-hits]'),
     designerFocus: !!element.closest('[data-designer]'), queryBarFocus: !!element.closest('[data-query-bar]'), activityMonitorFocus: !!element.closest('[data-activity-monitor]'),
     documentTabFocus: !!element.closest('[data-document-tab]'), messagesFocus: !!element.closest('[data-output-view="messages"]'),
     // The tree marks itself while type-ahead collects a name (ExplorerTree), so Space types rather than peeks.

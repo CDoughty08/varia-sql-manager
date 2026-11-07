@@ -10,7 +10,7 @@ import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable, ExternalStore } from '../core/types'
-import type { ExplorerMenuNode } from '../menus/targets'
+import type { ExplorerMenuNode, ObjectMenuNode } from '../menus/targets'
 import { scriptObjectLabel } from '../scripting/ScriptingService'
 import type { LiveConnection } from '../services/connections'
 import type { DatabaseRenameHooks } from './database-rename'
@@ -171,16 +171,16 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
   /** Each action's state for a node: what the context keys say for the selection. */
   state(target: ActionTarget | undefined): Readonly<Record<ObjectAction, ActionState>> { return actionMenuState(target) }
   /** Whether `action` can run on `node` now: its kind and subtype offer it, on its row or its folder, and its server is live. */
-  canRun(action: ObjectAction, node: ExplorerMenuNode | undefined): node is ExplorerMenuNode {
+  canRun<N extends ObjectMenuNode>(action: ObjectAction, node: N | undefined): node is N {
     // A folder action (Databases › Attach… and Restore Database…) runs on its folder, and on object rows only where it places itself
     // on them (`rows`: a database's Tasks › Restore › Database…); actionMenuState says which rows enable it.
     const { folder, rows } = objectActionSpecs[action]
-    const placed = (node: ExplorerMenuNode) => folder ? node.ref.type === 'folder' && node.ref.folder === folder || !!rows && node.ref.type === 'object' : node.ref.type === 'object'
+    const placed = (node: ObjectMenuNode) => folder ? node.ref.type === 'folder' && node.ref.folder === folder || !!rows && node.ref.type === 'object' : node.ref.type === 'object'
     return !!node && !node.lost && placed(node) && actionMenuState(node)[action] === 'enabled' && this.isLive(node.connectionId)
   }
 
   /** SSMS's Select Top N Rows: the columns, one per line, in a new unmarked query on the object's database, run at once. */
-  async selectTop(node: ExplorerMenuNode): Promise<void> {
+  async selectTop(node: ObjectMenuNode): Promise<void> {
     const object = objectOf(node)
     if (!this.canRun('selectTop', node) || !object?.database || object.schema === undefined || object.name === undefined) throw new Error('Select a table or view in Object Explorer.')
     const name = { connectionId: node.connectionId, database: object.database, schema: object.schema, name: object.name }
@@ -196,7 +196,7 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
    * login's greyed verb (a Windows group's Disable, SQL Server's own logins, an Entra login's Rename) as logins.ts words it, or
    * the database's state (the catalogue's rule reason) as "<Action> is unavailable: <reason>". Undefined when nothing greys it.
    */
-  unavailable(action: ObjectAction, node: ExplorerMenuNode | undefined): string | undefined {
+  unavailable(action: ObjectAction, node: ObjectMenuNode | undefined): string | undefined {
     if (!node || node.lost || node.ref.type !== 'object' || !this.isLive(node.connectionId) || actionMenuState(node)[action] !== 'disabled') return undefined
     const subtype = objectOf(node)?.kind === 'login' ? node.subtype : undefined
     if (isLoginSubtype(subtype) && isLoginVerb(action)) return loginMessages[loginGreyedMessage(subtype, action)]

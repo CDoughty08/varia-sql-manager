@@ -28,7 +28,7 @@ try {
   if (!browser) throw new Error('Portable application did not open its debugging port.')
   let page
   while (Date.now() < deadline && !page) {
-    page = browser.contexts().flatMap(context => context.pages()).find(candidate => candidate.url().startsWith('file:'))
+    page = browser.contexts().flatMap(context => context.pages()).find(candidate => candidate.url() === 'app://varia/index.html')
     if (!page) await delay(250)
   }
   if (!page) throw new Error('Portable application did not open its window.')

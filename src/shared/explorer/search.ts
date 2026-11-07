@@ -2,6 +2,7 @@
 // only in the backend's memory, per connection, and is dropped on disconnect; nothing about it reaches disk.
 import { z } from 'zod'
 import { maxIdentifierLength } from '../sql/identifiers.ts'
+import { bracketName, scriptName } from '../designer/catalog.ts'
 import type { ObjectRef } from './refs.ts'
 import type { FolderId, NodeKind, NodeSubtype } from './catalog.ts'
 
@@ -141,6 +142,29 @@ export interface ObjectSearchHit {
   /** The table (in the hit's database, listed in `folder`) whose history row is a temporal or ledger history table: the hit
    *  itself, or a child's parent. */
   readonly via?: { readonly schema: string; readonly name: string; readonly folder: FolderId }
+}
+/** A search hit's names as Copy gives them: `qualified` brackets only the parts that need it, `bracketed` every part. */
+export interface SearchHitNames {
+  readonly name: string
+  /** In a schema (the object's, or its parent's for a column, key or trigger): schema, parent and name. */
+  readonly schema?: string
+  /** With the schema-qualified name, the database first. */
+  readonly qualified?: string
+  readonly bracketed: string
+}
+/**
+ * The names Copy offers for a hit's object, unescaped for display nowhere: Name is the name as SQL Server stores it; the
+ * qualified forms join database, schema, parent and name with dots, bracketing a part (QUOTENAME's `]]`) that is not a regular
+ * identifier or is a reserved keyword, as a query needs it; Bracketed brackets every part. An object outside a schema (a login,
+ * a database, a database user) has only its name.
+ */
+export function searchHitNames(object: ObjectRef): SearchHitNames {
+  const name = object.name ?? ''
+  const schema = object.parent ? object.parent.schema : object.schema
+  if (!schema) return { name, bracketed: bracketName(name) }
+  const parts = [schema, ...object.parent ? [object.parent.name] : [], name]
+  const full = object.database === undefined ? parts : [object.database, ...parts]
+  return { name, schema: parts.map(scriptName).join('.'), qualified: full.map(scriptName).join('.'), bracketed: full.map(bracketName).join('.') }
 }
 export interface ObjectSearchResult {
   readonly hits: readonly ObjectSearchHit[]
