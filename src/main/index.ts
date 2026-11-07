@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, ipcMain, Menu, MessageChannelMain, dialog, nativeTheme, powerMonitor, safeStorage, screen, session, shell, type IpcMainEvent, type IpcMainInvokeEvent, type Rectangle } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, Menu, MessageChannelMain, dialog, nativeTheme, powerMonitor, protocol, safeStorage, screen, session, shell, type IpcMainEvent, type IpcMainInvokeEvent, type Rectangle } from 'electron'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import { stat, writeFile } from 'node:fs/promises'
 import { z } from 'zod'
@@ -7,6 +7,7 @@ import { BackendSupervisor } from './backend/supervisor'
 import { BackendError } from './backend/errors'
 import { backendSpawnSpec } from './backend/spawn-spec'
 import { rendererUrlVerifier } from './trusted-renderer'
+import { appIndexUrl, appProtocolHandler, appScheme, appSchemePrivileges } from './app-protocol'
 import { installTestHooks, type BackendTestHooks, type RendererLossSource } from './backend/test-hooks'
 import { ResultsPortHost, supervisorResults } from './backend/results-port'
 import { ExplorerRequests } from './backend/explorer-requests'
@@ -73,9 +74,11 @@ import { applyUpdate, installTargetFor, removeReplacedPortable, testUpdateTarget
 import { assetUrl, releasesPageUrl, updateErrors, updateFeedUrl, type InstallKind } from '../shared/updates'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const rendererFile = join(here, '../renderer/index.html')
+const rendererDir = join(here, '../renderer')
 const developmentUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined
-const isRendererUrl = rendererUrlVerifier(rendererFile, developmentUrl)
+const isRendererUrl = rendererUrlVerifier(developmentUrl)
+// Built pages load from app://varia/ (app-protocol.ts), never file:, whose origin would reach every local file.
+protocol.registerSchemesAsPrivileged([{ scheme: appScheme, privileges: appSchemePrivileges }])
 const maxClipboardText = 8_388_608
 let mainWindow: BrowserWindow | null = null
 let backend: BackendSupervisor
@@ -629,7 +632,7 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
   window.on('unresponsive', () => { rendererUnresponsive = true })
   window.on('responsive', () => { rendererUnresponsive = false })
   if (developmentUrl) void window.loadURL(developmentUrl)
-  else void window.loadFile(rendererFile)
+  else void window.loadURL(appIndexUrl)
   window.on('close', event => {
     // A renderer only the watchdog saw go would never answer the unload Chromium sends it, so the window goes at once.
     if (rendererLost && !contents.isCrashed()) {
@@ -686,6 +689,7 @@ function reloadLostRenderer(window: BrowserWindow): void {
 
 app.whenReady().then(async () => {
   if (!primaryInstance) return
+  if (!developmentUrl) protocol.handle(appScheme, appProtocolHandler(rendererDir, contentSecurityPolicy()))
   const root = app.getAppPath()
   // Smoke tests shorten the silence that counts as unresponsive; PING then runs often enough for a healthy backend.
   const livenessMs = testSeams ? Number(process.env.VARIA_BACKEND_LIVENESS_MS) : NaN

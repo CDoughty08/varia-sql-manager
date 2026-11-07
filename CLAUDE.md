@@ -79,7 +79,12 @@ pages, limits, error codes, display formats, benchmarks).
 
 - The renderer is untrusted: context isolation, sandbox, no Node integration, CSP, blocked navigation and popups.
   It reaches the system only through `window.varia` (`src/preload/index.ts`); never expose generic IPC or shell APIs,
-  and never disable the Chromium sandbox. Main verifies every IPC sender (`trusted()` in `src/main/index.ts`).
+  and never disable the Chromium sandbox. Main verifies every IPC sender (`trusted()` in `src/main/index.ts`, which
+  accepts only `app://varia/index.html` in built apps). Built pages load only from the privileged `app://varia/` scheme
+  (`src/main/app-protocol.ts`: files under `out/renderer` alone, traversal refused), never `file:`, whose origin reaches
+  every local file. Packaged builds set the Electron fuses in `build/fuses.cjs` (flipped in afterPack, read back by
+  `scripts/packaged-smoke.mjs`): no `file:` privileges, RunAsNode, `NODE_OPTIONS` or `--inspect`; asar only, integrity
+  checked.
   The only window the page may open is a popout (`src/main/popout-windows.ts`, docs/popout-windows.md): a same-origin
   `about:blank` child named `varia-popout-<uuid>` with exact bounds on a display, explicit preferences (no preload,
   sandboxed, isolated), no popups or navigation of its own, closed with the page. Its content is the page's DOM through
