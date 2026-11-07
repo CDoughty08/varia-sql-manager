@@ -33,6 +33,25 @@ const textbox = () => page.locator('.monaco-editor [role="textbox"]')
 const editorText = () => editorTextOf(page)
 const tabs = () => documentTabs(page).getByRole('tab')
 const clipboard = () => application.evaluate(({ clipboard }) => clipboard.readText())
+// Linux: Chromium pastes the X11/Wayland PRIMARY selection on a middle-click, a clipboard read outside the gated Paste role.
+const primarySelection = process.platform === 'linux'
+const setPrimary = text => application.evaluate(({ clipboard }, value) => clipboard.writeText(value, 'selection'), text)
+/** Middle-clicks `locator` and reports the paste events (with the text they could read), mouseups and auxclicks the page saw. */
+const middleClick = async locator => {
+  await page.evaluate(() => {
+    const seen = window.__variaMiddleClick ??= { pastes: [], mouseups: 0, auxclicks: 0 }
+    if (!seen.listening) {
+      seen.listening = true
+      window.addEventListener('paste', event => seen.pastes.push(event.clipboardData?.getData('text/plain') ?? ''), true)
+      window.addEventListener('mouseup', event => { if (event.button === 1) seen.mouseups++ }, true)
+      window.addEventListener('auxclick', event => { if (event.button === 1) seen.auxclicks++ }, true)
+    }
+    Object.assign(seen, { pastes: [], mouseups: 0, auxclicks: 0 })
+  })
+  // Blink pastes PRIMARY while it handles the mouseup, which the click awaits.
+  await locator.click({ button: 'middle' })
+  return page.evaluate(() => { const { pastes, mouseups, auxclicks } = window.__variaMiddleClick; return { pastes, mouseups, auxclicks } })
+}
 const zoomLevel = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getZoomLevel())
 const variable = key => page.evaluate(name => getComputedStyle(document.documentElement).getPropertyValue(name).trim(), '--varia-' + key.replaceAll('.', '-'))
 // expect.poll does not retry a callback that throws, and appearance.json appears only after the first choice.
@@ -354,6 +373,14 @@ try {
     field.remove()
     return { ok: result.ok, value }
   })).toEqual({ ok: false, value: '' })
+  if (primarySelection) {
+    // Nor can a middle-click paste the PRIMARY selection into the editor: the page cancels that mouseup's default action, and
+    // Monaco's selectionClipboard is off. The click still reaches the page, auxclick included (middle-click closes tabs).
+    await setPrimary('primary-into-editor')
+    const before = await editorText()
+    expect(await middleClick(page.locator('.monaco-editor .view-lines'))).toEqual({ pastes: [], mouseups: 1, auxclicks: 1 })
+    expect(await editorText()).toBe(before)
+  }
   // A tap is the user acting, as a click is: Edit › Paste chosen by touch pastes (Windows touch screens).
   await application.evaluate(({ clipboard }) => clipboard.writeText('pasted-by-touch'))
   await typeSql('abc')
@@ -430,7 +457,7 @@ try {
     return calls
   })
   expect(overlays).toEqual([expect.objectContaining({ color: expect.stringMatching(/^#[0-9a-f]{6}$/), symbolColor: expect.stringMatching(/^#[0-9a-f]{6}$/) }), expect.objectContaining({ color: expect.stringMatching(/^#[0-9a-f]{6}$/) })])
-  console.log('Menus checks: Cut and Paste in the editor through roles, no Paste the page runs alone, zoom roles, forced colors, and the inactive title bar.')
+  console.log('Menus checks: Cut and Paste in the editor through roles, no Paste the page runs alone' + (primarySelection ? ' or a middle-click pastes from PRIMARY' : '') + ', zoom roles, forced colors, and the inactive title bar.')
 
   // 6. Ctrl+R toggles the results pane, as in SSMS; nothing reloads. The operating system's keys are pressed after step 14,
   // in a shown window, where the hidden menu's accelerators work.
@@ -661,6 +688,12 @@ try {
   await server.click({ button: 'right', force: true })
   await fieldMenu.getByRole('menuitem', { name: 'Paste', exact: true }).click()
   await expect(server).toHaveValue('menus-server')
+  if (primarySelection) {
+    // A text field takes no PRIMARY paste either; only the field menu's Paste, above, reads the clipboard.
+    await setPrimary('primary-into-field')
+    expect(await middleClick(server)).toEqual({ pastes: [], mouseups: 1, auxclicks: 1 })
+    await expect(server).toHaveValue('menus-server')
+  }
   await page.locator('#connect-auth').selectOption('sql')
   await password.fill('hunter2')
   await password.selectText()

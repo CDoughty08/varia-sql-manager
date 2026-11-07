@@ -161,7 +161,10 @@ pages, limits, error codes, display formats, benchmarks).
   `contextmenu` listener, and only `.menu-layer` reaches z-index 30000.
 - The page reads the clipboard only through the Paste role, which main runs only within 1 s of a click, key press or tap
   in the focused window (`UserActivation` in `src/main/window-roles.ts`). An idle or background page cannot read it, but
-  main cannot tell which input chose Paste, so a page script can read it while the user types or clicks.
+  main cannot tell which input chose Paste, so a page script can read it while the user types or clicks. On Linux,
+  Chromium pastes the PRIMARY selection on a middle-click (into any editable, and as a readable `paste` event wherever
+  the click lands) with no role or gate: the page cancels every middle-button mouseup in each window
+  (`blockPrimaryPaste`, `src/renderer/src/core/primary-selection.ts`), and Monaco's `selectionClipboard` is off.
 - Object Explorer structure lives only in `src/shared/explorer/catalog.ts` (folders, kinds, icons, filters, version
   gates, the kinds that carry live status chips, whose words are in `status.ts`); after changing it, regenerate `docs/object-explorer.md` and the backend's embedded
   `Explorer/explorer-catalog.json` with `npx vitest run tests/explorer-catalog.test.ts -u`. Explorer SQL is constant

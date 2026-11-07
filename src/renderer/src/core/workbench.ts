@@ -3,6 +3,7 @@ import type { ReloadPins, VariaApi } from '../../../shared/contracts'
 import { actsOnTab } from '../../../shared/commands/catalog'
 import { toPlatform, type Platform } from '../../../shared/commands/keybindings'
 import { platformLineEnding } from '../../../shared/files/encoding'
+import { blockPrimaryPaste } from './primary-selection'
 import { DocumentService, settingsDocumentOptions } from '../services/documents'
 import { QueryService } from '../services/queries'
 import { ConnectionService } from '../services/connections'
@@ -454,7 +455,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     notifications,
     updates,
     attachWindow: target => {
-      const attached = [windows.add(target), keybindings.attach(target), menus.attach(target), trackWindowFocus(target, target.document.documentElement)]
+      const attached = [windows.add(target), keybindings.attach(target), menus.attach(target), blockPrimaryPaste(target, platform), trackWindowFocus(target, target.document.documentElement)]
       return { dispose: () => attached.forEach(item => item.dispose()) }
     },
     dispose: () => {
@@ -551,6 +552,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const listeners = [
     keybindings.attach(window),
     menus.attach(window),
+    // On Linux a middle-click would paste the PRIMARY selection outside the gated Paste role.
+    blockPrimaryPaste(window, platform),
     trackWindowFocus(window, document.documentElement),
     watchExternalChanges(window, files, () => settings.getSnapshot().values['environment.documents.detectExternalChanges'])
   ]
