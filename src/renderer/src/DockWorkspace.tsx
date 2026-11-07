@@ -7,7 +7,7 @@ import type { ThemeType } from '../../shared/theme/types'
 import { DockingGuides } from './docking-guides'
 import Icon from './Icon'
 import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
-import type { GestureService } from './core/gestures'
+import { paneTabTitle } from './core/gestures'
 import { useMenuTarget } from './menus/useMenuTarget'
 import EmptyState from './kit/EmptyState'
 import type { PaneLocation } from './services/panes'
@@ -71,9 +71,6 @@ function PaneTab(props: IDockviewPanelHeaderProps) {
     closeActionOverride={() => commands.close(props.api.id as PaneId)} title={paneTabTitle(gestures)}
     onDoubleClick={event => { if (gestures.matches('dock.toggleFloat', event) && !(event.target as HTMLElement).closest('button')) commands.toggle(props.api.id as PaneId) }} /></div>
 }
-/** A panel tab's tooltip, with the gestures' modifiers as they are now: `Drag to dock; Ctrl-drag to float; Ctrl-double-click to toggle docking`. */
-export const paneTabTitle = (gestures: GestureService): string =>
-  `Drag to dock; ${gestures.phrase('dock.floatWhileDragging')} to float; ${gestures.phrase('dock.toggleFloat')} to toggle docking`
 function value<T>(result: { ok: true; value: T } | { ok: false; error: string }): T { if (!result.ok) throw new Error(result.error); return result.value }
 const message = (error: unknown) => error instanceof Error ? error.message : 'The layout operation failed.'
 

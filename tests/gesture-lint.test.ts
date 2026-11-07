@@ -19,10 +19,15 @@ const functionStart = /^(?!\s*(?:\}\s*)?(?:if|else|for|while|switch|catch|try)\b
 const keyboardSignal = /\bKeyboardEvent\b|\bKeyEventLike\b|\bonKey(?:Down|Up)\b|['"`]key(?:down|up)['"`]|\bevent\.key\b/
 const pointerSignal = /\b(?:Pointer|Mouse|Wheel|Drag)Event\b|\bon(?:Pointer|Mouse|Click|DoubleClick|Wheel|Drag|Drop|ContextMenu)\w*=|['"`](?:pointer\w*|mouse\w*|wheel|click|dblclick|drag\w*|drop|contextmenu)['"`]|\bnativeEvent\.(?:ctrl|meta|alt|shift)Key\b|\bbutton\s*:\s*number\b|\bevent\.button\b|\bPositionResolverArgs\b|\bargs\.event\b|\bonWill(?:ShowOverlay|Drop|DragPanel|DragGroup)\b/
 
+const indent = (line: string) => /^\s*/.exec(line)![0].length
+/** Whether `context` decides the handler: 'key' (a key handler), 'pointer', or undefined (it names neither). */
+const verdict = (context: string): 'key' | 'pointer' | undefined => keyboardSignal.test(context) ? 'key' : pointerSignal.test(context) ? 'pointer' : undefined
+
 /**
  * Modifier reads that sit in a pointer, mouse, wheel or drag handler: from the read back to the line that starts its
  * function, the text names a pointer event (a type, a JSX handler, a listener's event name, a `button` field) and no key
- * event. A heuristic over source text, since the TypeScript package carries no compiler API.
+ * event. When that function names neither, as a callback nested in a handler, the enclosing functions (lines indented
+ * less) decide in turn. A heuristic over source text, since the TypeScript package carries no compiler API.
  */
 export function pointerModifierReads(source: string): { readonly line: number; readonly text: string }[] {
   const lines = source.split('\n'), found: { line: number; text: string }[] = []
@@ -30,10 +35,17 @@ export function pointerModifierReads(source: string): { readonly line: number; r
     for (const match of text.matchAll(modifierRead)) {
       // An inline handler (`onDoubleClick={event => ...}`) is its own context; otherwise walk back to the enclosing function.
       const prefix = text.slice(0, match.index)
+      const inline = /=>|\bfunction\b/.test(prefix)
       let start = index
-      if (!/=>|\bfunction\b/.test(prefix)) while (start > 0 && !functionStart.test(lines[start]) && index - start < 40) start--
-      const context = [...lines.slice(start, index), prefix].join('\n')
-      if (pointerSignal.test(context) && !keyboardSignal.test(context)) found.push({ line: index + 1, text: text.trim() })
+      if (!inline) while (start > 0 && !functionStart.test(lines[start]) && index - start < 40) start--
+      let decided = verdict([...lines.slice(start, index), prefix].join('\n'))
+      // Up through the enclosing functions, each judged by its own signature line.
+      for (let at = start - 1, depth = indent(lines[start]); !decided && at >= 0 && depth > 0 && start - at < 200; at--) {
+        if (!lines[at].trim() || indent(lines[at]) >= depth) continue
+        depth = indent(lines[at])
+        if (functionStart.test(lines[at]) || /=>/.test(lines[at])) decided = verdict(lines[at])
+      }
+      if (decided === 'pointer') found.push({ line: index + 1, text: text.trim() })
     }
   })
   return found
@@ -56,6 +68,8 @@ describe('gesture lint', () => {
       "  private pointerDown(event: PointerEvent): void {\n    const press = pressButton(event, this.o.platform)\n    const add = press === 'primary' && (this.o.platform === 'darwin' ? event.metaKey : event.ctrlKey)\n  }",
       "export function pressButton(event: { readonly button: number; readonly ctrlKey: boolean }, platform: Platform): 'primary' | 'secondary' | undefined {\n  if (event.button === 2 || (event.button === 0 && event.ctrlKey && platform === 'darwin')) return 'secondary'\n}",
       "  const key = (event: KeyboardEvent<HTMLDivElement>) => {\n  }\n  return <div onKeyDown={key}\n    onDoubleClick={event => { if (event.ctrlKey && !(event.target as Element).closest('button')) commands.moveToMain(pane) }}>",
+      // A callback nested in a pointer handler is judged by the handler.
+      "  private pointerDown(event: PointerEvent): void {\n    items.forEach(item => {\n      if (event.ctrlKey) item.add()\n    })\n  }",
       "  const scrollPinnedBand = useCallback((event: WheelEvent) => {\n    if (!tree || event.ctrlKey || !event.deltaY) return\n  }, [])"
     ]
     for (const source of before) expect(pointerModifierReads(source), source).not.toEqual([])

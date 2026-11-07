@@ -86,7 +86,8 @@ export const gestureCatalog = {
   'explorer.peekHover': {
     title: 'Peek on Hover', description: 'Peeks a table, view, procedure or function while the pointer rests on its row.',
     kind: 'modifier', scope: 'objectExplorer', action: 'hover', target: 'an object', modifiers: ['mod'],
-    choices: [['mod'], ['alt'], ['shift']], keyboard: ['explorer.peek']
+    // Not Alt: hovering presses nothing, so releasing Alt afterwards would count as a bare-Alt tap and focus the menu bar.
+    choices: [['mod'], ['shift']], keyboard: ['explorer.peek']
   },
   'explorer.dragName': {
     title: 'Insert Name', description: 'Dropping an object in a query inserts its quoted name.',

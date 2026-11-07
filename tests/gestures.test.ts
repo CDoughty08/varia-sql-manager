@@ -4,9 +4,7 @@ import { renderGestureDocs } from '../src/shared/commands/gesture-docs'
 import { gestureDescriptor, gestureIds, gestureLabel, gesturePhrase, gestureScopes, modifiersLabel, physicalModifiers, type GestureModifiers } from '../src/shared/commands/gestures'
 import { platforms, specForPlatform, type Platform } from '../src/shared/commands/keybindings'
 import { contextMenuIds } from '../src/shared/commands/menus'
-import { GestureService, gesturesFor, type GestureEvent } from '../src/renderer/src/core/gestures'
-import { paneTabTitle } from '../src/renderer/src/DockWorkspace'
-import { popoutTabTitle } from '../src/renderer/src/popouts/PopoutFrame'
+import { GestureService, gesturesFor, paneTabTitle, popoutTabTitle, type GestureEvent } from '../src/renderer/src/core/gestures'
 
 /** Every combination of the four modifier fields. */
 const events: GestureEvent[] = Array.from({ length: 16 }, (_, bits) => ({ ctrlKey: !!(bits & 1), metaKey: !!(bits & 2), altKey: !!(bits & 4), shiftKey: !!(bits & 8) }))
@@ -126,6 +124,13 @@ describe('GestureService', () => {
     expect(service.isModifierKey('dock.floatWhileDragging', 'Alt')).toBe(true)
     expect(service.matches('explorer.peekHover', { metaKey: true, ctrlKey: true, altKey: true, shiftKey: true })).toBe(false)
     expect([service.label('explorer.peekHover'), service.label('dock.floatWhileDragging')]).toEqual(['Off', '⌥ Drag'])
+    // Locked gestures and modifier sets a gesture does not offer keep their defaults; only modifier gestures turn off.
+    service.setModifiers(new Map([['grid.secondaryClick', []], ['explorer.peekHover', ['alt']], ['dock.toggleFloat', null], ['grid.addToSelection', ['alt']]]))
+    expect(service.matches('grid.secondaryClick', {})).toBe(false)
+    expect(service.matches('grid.secondaryClick', { ctrlKey: true })).toBe(true)
+    expect(service.matches('explorer.peekHover', { altKey: true })).toBe(false)
+    expect(service.matches('dock.toggleFloat', { ctrlKey: true })).toBe(true)
+    expect(service.matches('grid.addToSelection', { altKey: true })).toBe(true)
     // Ids left out return to their defaults.
     service.setModifiers(new Map())
     expect(service.matches('explorer.peekHover', { metaKey: true })).toBe(true)

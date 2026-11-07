@@ -1,7 +1,7 @@
 import { useCallback, useLayoutEffect, useRef, type KeyboardEvent } from 'react'
 import { isOutputPane, paneTitles, type PaneId, type PopoutPaneId } from '../../../shared/layouts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
-import type { GestureService } from '../core/gestures'
+import { popoutTabTitle } from '../core/gestures'
 import { useMenuTarget } from '../menus/useMenuTarget'
 import Icon from '../Icon'
 import { paneDrag } from './drag'
@@ -30,8 +30,6 @@ function PopoutSlot({ host, parking, hidden }: { host: HTMLElement; parking: HTM
   return <div className="popout-slot dock-slot" ref={slot} hidden={hidden} />
 }
 
-/** A popout tab's tooltip, with Move Back into Main Window's gesture as it is now. */
-export const popoutTabTitle = (gestures: GestureService): string => `Drag onto the main window to dock it there; ${gestures.phrase('popout.returnToMain')} to move it back`
 function PopoutTab({ view, pane, commands }: { view: PopoutView; pane: PopoutPaneId; commands: PopoutCommands }) {
   const { results, documents, menus, gestures } = useWorkbench()
   const menuFor = useServiceSnapshot(menus.menuFor)
