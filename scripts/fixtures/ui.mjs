@@ -510,6 +510,8 @@ export const explorerSearchOptions = page => page.locator(part.explorerSearch).g
 export const explorerSearchTypes = page => page.locator(part.explorerSearch).getByRole('button', { name: /^Object types:/ })
 export const explorerSearchPopover = (page, name) => page.locator(part.explorerSearch).getByRole('dialog', { name, exact: true })
 export const explorerSearchCheck = (page, name) => page.locator(part.explorerSearch).getByRole('checkbox', { name, exact: true })
+/** A hit's name marked as an approximate (Fuzzy Match) match. */
+export const searchHitApproximate = hit => hit.locator('mark[data-approximate]')
 export const explorerSearchTypeSummary = page => page.locator(part.explorerSearch).locator('.object-search-chosen-types')
 export const explorerFooter = page => page.locator(part.explorerFooter)
 export const explorerFreshness = page => explorerFooter(page).locator(part.explorerFreshness)

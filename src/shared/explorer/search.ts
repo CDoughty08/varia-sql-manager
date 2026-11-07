@@ -32,7 +32,11 @@ export const objectSearchLimits = {
   /** How long the Search Objects box waits after a key before it searches, in ms. */
   typingMs: 200,
   /** The most kinds one search may name. */
-  kinds: 64
+  kinds: 64,
+  /** The most words a Fuzzy Match search may have; one with more matches exactly only (FuzzyName.MaxWords). */
+  fuzzyWords: 8,
+  /** The longest word Fuzzy Match compares, in UTF-16 code units; a search with a longer one matches exactly only. */
+  fuzzyWordChars: 64
 } as const
 
 /** The kinds the index holds, as Object Explorer names them: every kind it lists but the server, return values and the SSIS
@@ -48,6 +52,10 @@ export const searchKinds = [
 export type SearchKind = typeof searchKinds[number]
 export const searchScopes = ['all', 'names', 'definitions'] as const
 export type SearchScope = typeof searchScopes[number]
+/** exact: the text as typed (with Match Case, Whole Word, wildcards or Regex); fuzzy: names also match approximately, word by
+ *  word, within a few typos or by sound, ranked below exact hits. Definitions always match exactly; fuzzy cannot go with Regex. */
+export const searchMatches = ['exact', 'fuzzy'] as const
+export type SearchMatch = typeof searchMatches[number]
 
 /** Search Objects' type filters, in the order the chips show: each names a set of kinds, and together they name every kind the
  *  index holds exactly once (tests/object-search.test.ts). A search with none chosen searches every kind; with some, the kinds
@@ -114,6 +122,7 @@ export interface ObjectSearchParams {
   readonly kinds?: readonly SearchKind[]
   readonly database?: string
   readonly limit?: number
+  readonly match?: SearchMatch
 }
 /** A definition's first match: line and column are 1-based; range is [start, length] in preview. */
 export interface DefinitionMatch {
@@ -131,8 +140,10 @@ export interface ObjectSearchHit {
   readonly folder: FolderId
   /** schema.name, parentSchema.parent.name for a child (a column, key or trigger), or the name alone. */
   readonly label: string
-  /** The name match's [start, length] in label. */
+  /** The name match's [start, length] in label: for an approximate hit, from its first matched word to its last. */
   readonly range?: readonly [number, number]
+  /** A Fuzzy Match hit whose name matched only approximately. */
+  readonly approximate?: boolean
   readonly modified?: string
   readonly definition?: DefinitionMatch
   /** The node's subtype, where the index knows it (a foreign key, an inline function, a SQL login). */
@@ -192,5 +203,5 @@ export const objectSearchParamsSchema = z.object({
   caseSensitive: z.boolean().optional(), wholeWord: z.boolean().optional(), regex: z.boolean().optional(), in: z.enum(searchScopes).optional(),
   kinds: z.array(z.enum(searchKinds)).min(1).max(objectSearchLimits.kinds).optional(),
   database: units(maxIdentifierLength).refine(value => !value.includes('\u0000'), 'A name cannot contain U+0000.').optional(),
-  limit: z.number().int().min(1).max(objectSearchLimits.hits).optional()
-}).strict() satisfies z.ZodType<ObjectSearchParams>
+  limit: z.number().int().min(1).max(objectSearchLimits.hits).optional(), match: z.enum(searchMatches).optional()
+}).strict().refine(value => !(value.match === 'fuzzy' && value.regex), 'Fuzzy Match cannot go with a regular expression.') satisfies z.ZodType<ObjectSearchParams>
