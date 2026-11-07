@@ -6,7 +6,8 @@ import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import {
-  backendReady, explorerSearchBox, explorerTree, gridCell, movePane, openMenus, pane, paneTab, part, popoutDockButton, popoutTab, popoutTabs, quickInput, resultGrid, toolbarButton
+  backendReady, explorerSearchBox, explorerTree, gridCell, movePane, openMenus, outputView, pane, paneTab, part, planCanvas, planViewer,
+  popoutDockButton, popoutTab, popoutTabs, quickInput, resultGrid, toolbarButton
 } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -33,6 +34,12 @@ async function ready() {
   page.on('pageerror', error => failures.push(error.message))
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
+}
+async function run(sql) {
+  await page.locator('.monaco-editor [role="textbox"]').focus()
+  await page.keyboard.press('Control+A')
+  await page.keyboard.insertText(sql)
+  await page.keyboard.press('F5')
 }
 /** Runs `move` and answers the popout window's page it opened. */
 async function popsOut(move) {
@@ -65,10 +72,7 @@ try {
   await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
   await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
-  await page.locator('.monaco-editor [role="textbox"]').focus()
-  await page.keyboard.press('Control+A')
-  await page.keyboard.insertText('-- varia-fake: sets=W1*50')
-  await page.keyboard.press('F5')
+  await run('-- varia-fake: sets=W1*50')
   await expect(gridCell(resultGrid(page), 0, 1)).toHaveText(w1(0)[1])
 
   // 1. Results moves into a window of its own by its panel menu, with its grid and rows; the main window no longer shows it.
@@ -130,6 +134,29 @@ try {
   await popoutDockButton(results).click()
   await expect(pane(page, 'results')).toBeVisible()
   await expect.poll(windowCount).toBe(1)
+  await expect(gridCell(resultGrid(page), 0, 1)).toHaveText(w1(0)[1])
+
+  // The plan canvas follows the popout's layout and can redraw after moving between windows.
+  await run('SELECT 1 -- XML_PLAN_FIXTURE')
+  await outputView(page, /^Execution plan/).click()
+  await expect(planCanvas(page).locator('canvas')).toBeVisible()
+  const plans = await popsOut(() => movePane(page, 'plan', 'window'))
+  const graph = planCanvas(plans).locator('canvas')
+  await expect(graph).toBeVisible()
+  const width = await graph.evaluate(element => element.width)
+  await application.evaluate(({ BrowserWindow }) => {
+    const popout = BrowserWindow.getAllWindows().find(window => window.webContents.getURL() === 'about:blank')
+    const [width, height] = popout.getSize()
+    popout.setSize(width + 96, height)
+  })
+  await expect.poll(() => graph.evaluate(element => element.width)).toBeGreaterThan(width)
+  await planViewer(plans).getByRole('treeitem').filter({ hasText: 'Index Scan' }).click()
+  await expect(planViewer(plans).getByRole('complementary', { name: 'Plan properties' })).toContainText('Index Scan')
+  await popoutDockButton(plans).click()
+  await expect(planCanvas(page).locator('canvas')).toBeVisible()
+  await expect.poll(windowCount).toBe(1)
+  console.log('Popout checks: the execution plan canvas resizes in its new window and draws again when docked.')
+  await run('-- varia-fake: sets=W1*50')
   await expect(gridCell(resultGrid(page), 0, 1)).toHaveText(w1(0)[1])
 
   // 4. Object Explorer's tab dragged past the window's edge pops it out; dropped back on the main window, it docks there.

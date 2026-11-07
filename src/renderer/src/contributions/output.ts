@@ -38,13 +38,14 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     return set && state && state.state !== 'lost' && state.state !== 'released' ? { set, rows: state.rowsAvailable, columns: set.descriptor.columns.length } : undefined
   }
   const valueCell = (args?: CommandArgs) => {
-    let cell: { tabId: string; resultIndex: number; row: number; column: number } | undefined
+    let cell: (NonNullable<CommandArgs['cell']> & { tabId: string }) | undefined
     if (args?.cell && args.tabId) cell = { tabId: args.tabId, ...args.cell }
     else {
       const target = targetOf(args), active = target?.view === 'grid' ? results.selection(target.tabId, target.resultIndex)?.active : undefined
       if (target && active) cell = { tabId: target.tabId, resultIndex: target.resultIndex, row: active.row, column: active.column }
     }
-    const role = cell && results.getSnapshot()[cell.tabId]?.sets[cell.resultIndex]?.descriptor.columns[cell.column]?.role
+    const tab = cell && results.getSnapshot()[cell.tabId]
+    const role = cell && (cell.capturedPlan ? tab?.planSets : tab?.sets)?.[cell.resultIndex]?.descriptor.columns[cell.column]?.role
     return role && valueRoles.has(role) ? cell : undefined
   }
   const selected = (target: OutputTarget | undefined) => {
@@ -86,10 +87,10 @@ export function outputContribution({ commands, results, menuTargets, documents, 
       run: async args => {
         const cell = valueCell(args)
         if (!cell) return
-        const { opened, message } = await results.openValue(cell.tabId, cell.resultIndex, cell.row, cell.column)
+        const { opened, message } = await results.openValue(cell.tabId, cell.resultIndex, cell.row, cell.column, cell.capturedPlan)
         if (message) commands.reportError(message)
         // The value's tab is active now; typing goes to it, as in SSMS.
-        if (opened) documents.boundEditor?.focus()
+        if (opened) documents.focusActive()
       }
     }),
     commands.register('output.closeResults', {

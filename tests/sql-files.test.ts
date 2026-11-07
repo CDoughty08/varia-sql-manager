@@ -14,6 +14,29 @@ afterEach(async () => {
 })
 
 describe('SQL documents', () => {
+  it('reads a sqlplan larger than the SQL file cap without raising that cap for query files', async () => {
+    const store = new SqlFileStore(), content = 'x'.repeat(5_000_001)
+    const plan = join(directory, 'large.sqlplan'), sql = join(directory, 'large.sql')
+    await writeFile(plan, content)
+    await writeFile(sql, content)
+    expect(await store.read(plan)).toMatchObject({ kind: 'sqlplan', content })
+    await expect(store.read(sql)).rejects.toThrow('5 MB')
+  })
+  it('reopens a large Showplan saved as XML using its root and namespace', async () => {
+    const store = new SqlFileStore(), path = join(directory, 'exported.XML')
+    const header = '<?xml version="1.0"?>\n<!--' + 'x'.repeat(5_000_000) + '-->\n'
+    const root = '<p:ShowPlanXML Version="1.6" xmlns:p=\'http://schemas.microsoft.com/sqlserver/2004/07/showplan\'/>'
+    const content = header + root
+    const saved = await store.save(content, undefined, path, 'sqlplan')
+    store.release(saved.id)
+    const opened = await store.read(path)
+    expect(opened).toMatchObject({ kind: 'sqlplan', content })
+    expect(await store.reload(opened.id)).toMatchObject({ kind: 'sqlplan', id: opened.id })
+
+    const ordinary = join(directory, 'ordinary.xml')
+    await writeFile(ordinary, header + '<root>' + root + '</root>')
+    await expect(store.read(ordinary)).rejects.toThrow('5 MB')
+  })
   it('opens, saves, and saves as without exposing paths as renderer capabilities', async () => {
     const store = new SqlFileStore()
     const path = join(directory, 'query.sql')

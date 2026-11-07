@@ -24,6 +24,7 @@ import type { RecoveredDocument, RecoveryEntry, RecoveryWrite } from './files/re
 import type { ReloadPins, RestoredSession, SessionWrite } from './files/session'
 import type { LiveEnd, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from './live/schema'
 import type { ActivityDetailsRequest, ActivityDetailsResult, ActivityKillRequest, ActivityKillResult } from './activity/schema.ts'
+import type { PlanDocument } from './plans'
 
 export interface AdvancedConnectionOptions {
   commandTimeout: number
@@ -107,6 +108,8 @@ export interface QueryOptions {
   maxResultSets?: number
   /** Stop at the first batch that raises an error (SQLCMD's `:on error exit`). By default the next GO batch still runs, as in SSMS. */
   stopOnError?: boolean
+  /** Collect actual execution plans for the statements that run. */
+  includeActualPlan?: boolean
 }
 /** `text` cells carry their SSMS display text; `binary` cells are shown as 0x plus hexadecimal. */
 export type WireKind = 'text' | 'binary'
@@ -165,6 +168,10 @@ export type QueryStatus = 'completed' | 'completedWithErrors' | 'failed' | 'canc
  *  local time with 7 fractional digits, for SSMS's "Completion time:" line. */
 export interface QueryResult {
   resultSets: ResultDescriptor[]
+  /** Toolbar-captured plans are kept separately from the data grids. */
+  planSets?: ResultDescriptor[]
+  /** Result IDs with a known order across toolbar and SQL-returned plans. */
+  planOrder?: number[]
   discardedResultSets: number
   messages: MessageEntry[]
   recordsAffected: number
@@ -274,6 +281,7 @@ export interface ExplorerChildrenResult {
  *  Windows, while the default credential cache holds a valid ticket; absent on Windows and without a ticket or GSSAPI. */
 export interface IntegratedIdentity { principal?: string }
 export interface RpcMethods {
+  'plans.parse': { params: { xml: string }; result: PlanDocument }
   'system.health': { params: Record<string, never>; result: BackendHealth }
   'connections.connect': { params: ConnectionOptions; result: ConnectionInfo }
   'connections.databases': { params: ConnectionOptions; result: DatabaseInfo[] }
@@ -344,7 +352,9 @@ export interface DebugMethods {
   'debug.results.synthesize': { params: { shape: SyntheticShape; rows: number }; result: BackendResultDescriptor }
 }
 /** Every method main sends to the backend. */
-export interface BackendMethods extends RpcMethods, PortMethods, JobMethods, AuthMethods, DebugMethods {}
+/** Main compresses plan input before the existing 4 MiB request boundary. Renderers can supply only raw XML. */
+export interface PlanMethods { 'plans.parse': { params: { xml: string; encoding: 'gzip' }; result: PlanDocument } }
+export interface BackendMethods extends Omit<RpcMethods, 'plans.parse'>, PlanMethods, PortMethods, JobMethods, AuthMethods, DebugMethods {}
 export type BackendMethod = keyof BackendMethods
 /** Facts about a failed connection for the Connect dialog: SQL Server's error number, state and class (level), the
  *  server that answered (at most 256 characters), and `reason` 'certificate' when the server's TLS certificate was not
@@ -380,7 +390,7 @@ export type LineEnding = 'crlf' | 'lf'
 /** A file main registered: `codePage` names a `legacy` encoding ('Windows-1252'); `readOnly` is what the last read or save saw. */
 export interface SqlFile { id: string; name: string; path: string; encoding: FileEncoding; codePage?: string; readOnly: boolean }
 /** `eol` is the file's dominant line ending (the platform's when it has none); `mixedEol` says it had more than one. */
-export interface OpenSqlFile extends SqlFile { content: string; eol: LineEnding; mixedEol: boolean }
+export interface OpenSqlFile extends SqlFile { content: string; eol: LineEnding; mixedEol: boolean; kind?: 'sqlplan' }
 /** What a document tab holds: a query, or an XML, JSON or execution plan value opened from a results grid. */
 export const documentKinds = ['sql', 'xml', 'json', 'sqlplan'] as const
 export type DocumentKind = typeof documentKinds[number]
@@ -399,6 +409,7 @@ export type { ReloadPins, RestoredDocument, RestoredSession, SessionDocumentWrit
 export interface SaveSqlFile { fileId?: string; name: string; content: string; saveAs: boolean; kind?: DocumentKind }
 
 export interface VariaApi {
+  parsePlan(xml: string): Promise<ApiResult<PlanDocument>>
   readonly platform: string
   /** Which native menu items are disabled and checked; main validates the ids against its own catalogue. */
   setMenuState(state: MenuState): void

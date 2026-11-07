@@ -1,4 +1,4 @@
-import { memo, useEffect, useId, useLayoutEffect, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
+import { memo, useEffect, useId, useLayoutEffect, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import { outputPaneIds, type OutputPaneId } from '../../../shared/layouts'
 import PaneMenuButton from '../PaneMenuButton'
 import Icon from '../Icon'
@@ -6,18 +6,16 @@ import { useTicker } from '../core/useTicker'
 import { observeResize } from '../core/windows'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { gridLimits as g } from '../grid/constants'
-import ResultsStack, { batchText, stackNeed } from '../grid/ResultsStack'
+import ResultsStack, { stackNeed } from '../grid/ResultsStack'
+import ResultPlans from '../plans/ResultPlans'
 import EmptyState from '../kit/EmptyState'
 import MessagesView from './MessagesView'
 import ResultsToolbar from './ResultsToolbar'
-import { setKey, type OutputViewName, type ResultJob, type ResultSetEntry, type TabResults } from './ResultsService'
+import type { OutputViewName, ResultJob, ResultSetEntry, TabResults } from './ResultsService'
 import { formatCount, messagesSummary, plural, runSummary } from './status'
 
 /** `query` is false for a value's document (XML, JSON, plan), which has no results of its own. */
 interface Props { pane: OutputPaneId; tabId: string; query: boolean; connected: boolean; hint?: string }
-
-/** Plans a plan set lists in the Execution plan view; more are opened from its grid in Results. */
-const planRowsShown = 16
 
 function jobText(job: ResultJob): string {
   const percent = job.rowsTotal > 0 ? Math.min(100, Math.floor(job.rowsDone / job.rowsTotal * 100)) : 0
@@ -58,7 +56,7 @@ export function OutputAnnouncer({ tabId }: { tabId: string }) {
 
 /** The run's plan sets, which the Execution plan panel lists; closed results have none. */
 function plansOf(tab: TabResults | undefined): readonly ResultSetEntry[] {
-  return tab && tab.status !== 'closed' ? tab.sets.filter(set => set.descriptor.kind === 'executionPlan') : []
+  return tab && tab.status !== 'closed' ? [...tab.planSets, ...tab.sets.filter(set => set.descriptor.kind === 'executionPlan')] : []
 }
 /**
  * The output view a query tab shows: Messages until a set opens (a run without sets ends there), then Results, unless the
@@ -116,31 +114,6 @@ function useHeight(): [(element: HTMLDivElement | null) => void, number] {
     return () => observer.dispose()
   }, [element])
   return [setElement, height]
-}
-
-/** One plan set in the Execution plan view: where it came from, and Open for each plan it holds (its rows). */
-function PlanItem({ tabId, entry, number, totalBatches }: { tabId: string; entry: ResultSetEntry; number: number; totalBatches: number }) {
-  const { commands } = useWorkbench()
-  const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
-  const rows = snapshot.state === 'lost' || snapshot.state === 'released' ? 0 : snapshot.rowsAvailable, shown = Math.min(rows, planRowsShown)
-  const batch = batchText(entry.descriptor.batchNumber, entry.descriptor.iteration, totalBatches)
-  const name = `Execution plan ${number}`
-  const open = (row: number) => { void commands.execute('output.openValue', { tabId, cell: { resultIndex: entry.index, row, column: 0 } }, 'toolbar') }
-  return <li className="plan-item">
-    <Icon name="execution-plan" /><span className="plan-name">{name}</span>
-    <span className="plan-facts">{[batch, `Result ${entry.index + 1}`].filter(Boolean).join(' · ')}</span>
-    <span className="plan-actions">
-      {Array.from({ length: shown }, (_, row) => <button key={row} type="button" onClick={() => open(row)} aria-label={shown > 1 ? `Open ${name}, statement ${row + 1}` : `Open ${name}`}>{shown > 1 ? `Open ${row + 1}` : 'Open'}</button>)}
-      {rows > shown && <span className="plan-more">{formatCount(rows - shown)} more in Results</span>}
-    </span>
-  </li>
-}
-
-/** The Execution plan view: the run's showplan result sets (SET SHOWPLAN_XML, SET STATISTICS XML), each opened as a .sqlplan document. */
-function PlanView({ tabId, tab, plans }: { tabId: string; tab: TabResults; plans: readonly ResultSetEntry[] }) {
-  return <ul className="plan-list" aria-label="Execution plans">
-    {plans.map((entry, index) => <PlanItem key={setKey(entry.descriptor)} tabId={tabId} entry={entry} number={index + 1} totalBatches={tab.totalBatches} />)}
-  </ul>
 }
 
 const emptyTitles: Record<OutputPaneId, string> = { results: 'Query results', messages: 'Messages', plan: 'Execution plan' }
@@ -241,7 +214,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
             : hasSets ? <ResultsStack key={tab.queryId} tabId={tabId} tab={tab} />
             : <EmptyState className="output-empty" icon="table" detail={tab.status === 'running' ? 'Result sets appear here as the query returns them.' : 'The query returned no result sets.'} />}
           {showStrip && <MessagesStrip tabId={tabId} tab={tab} fits={stripFits} maxHeight={stripMax} />}
-        </> : pane === 'plan' ? plans.length > 0 ? <PlanView tabId={tabId} tab={tab} plans={plans} />
+        </> : pane === 'plan' ? plans.length > 0 ? <ResultPlans tabId={tabId} queryId={tab.queryId} plans={plans} order={tab.summary?.planOrder} />
           : <EmptyState className="output-empty" icon="execution-plan" detail="A plan appears here when the query returns one, as SET SHOWPLAN_XML ON and SET STATISTICS XML ON do." />
           : <MessagesView tabId={tabId} tab={tab} />}
       </div>}

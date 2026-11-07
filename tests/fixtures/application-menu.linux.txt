@@ -116,6 +116,7 @@
   {"type":"separator"}
   {"accelerator":"F5","id":"query.execute","label":"Execute","registerAccelerator":false,"type":"normal","click":[["command","query.execute"]]}
   {"id":"query.cancel","label":"Cancel Executing Query","registerAccelerator":false,"type":"normal","click":[["command","query.cancel"]]}
+  {"accelerator":"Ctrl+M","id":"query.includeActualPlan","label":"Include Actual Execution Plan","registerAccelerator":false,"type":"checkbox","click":[["command","query.includeActualPlan"]],"checkedAfterClick":false}
 {"id":"menu.tools","label":"Tools"}
   {"id":"preferences.options","label":"Options…","registerAccelerator":false,"type":"normal","click":[["command","preferences.options"]]}
 {"id":"menu.window","label":"Window"}

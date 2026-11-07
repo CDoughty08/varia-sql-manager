@@ -3,7 +3,7 @@ import type { ApiResult, BackendHealth, BackendState, ConnectionInfo, Connection
 import { isCommandId } from '../../shared/commands/catalog'
 import { shellContribution, type ShellHost } from './contributions/shell'
 import { documentKind, isCustomKind, isQueryDocument, type QueryTab } from './documents'
-import { useConnectionAccent, useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
+import { useConnectionAccent, useServiceSelector, useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import QueryStatusBar from './QueryStatusBar'
 import EditorStatus from './EditorStatus'
 import Icon from './Icon'
@@ -92,6 +92,8 @@ export default function App() {
   // and the classic toolbar's lists do not change it.
   const activeKind = documentKind(active), isQuery = activeKind === 'sql'
   const isCustom = isCustomKind(activeKind)
+  const queryInSplit = useServiceSelector(workbench.editorGroups, ({ groups }) => groups.length > 1
+    && groups.some(group => group.active && isQueryDocument(documents.get(group.active))))
   const windowTitle = active.id ? `${active.dirty ? '* ' : ''}${active.name} — Varia SQL Manager` : 'Varia SQL Manager'
   const connection = connections.find(value => value.id === active.connectionId)
   const liveConnection = connection?.lost ? undefined : connection
@@ -235,7 +237,7 @@ export default function App() {
     <ThemeNotice />
     <DockWorkspace ref={workspaceRef} explorer={<aside className="explorer"><ExplorerPane error={explorerError} activeConnectionId={liveConnection?.id} activeQueryId={isQuery ? active.id || undefined : undefined} /></aside>} editor={<main className="workspace">
         {/* The active query's own bar, unless the classic toolbar brings back the global lists (for one release). */}
-        {active.id && isQuery && !shell.classicToolbar && <QueryBar />}
+        {!shell.classicToolbar && (active.id && isQuery ? <QueryBar /> : queryInSplit && <div className="query-bar-spacer" aria-hidden="true" />)}
         {statusTop && statusBar}
         {/* Editor groups: each with its tab strip and editor; designers, properties and monitors render in their own panels. */}
         <EditorArea />

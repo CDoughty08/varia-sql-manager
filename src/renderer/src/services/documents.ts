@@ -17,9 +17,9 @@ interface Fill { appending: boolean; userEdited: boolean; done: Promise<void>; f
 /** `plain`: a large value document, shown without bracket matching and colours. */
 interface DocumentEntry { model: editor.ITextModel; subscription: Disposable; viewState?: editor.ICodeEditorViewState | null; fill?: Fill; plain?: boolean }
 /** A text document opened from a value: its tab name, its text, and what it holds. */
-export interface TextDocument { readonly name: string; readonly text: string; readonly kind: Exclude<DocumentKind, 'sql'> }
+export interface TextDocument { readonly name: string; readonly text: string; readonly kind: Exclude<DocumentKind, 'sql'>; readonly file?: QueryDocument['file']; readonly eol?: LineEnding }
 export interface DocumentSnapshot { readonly documents: readonly QueryDocument[]; readonly activeId: string; readonly busy: boolean }
-type DocumentPatch = Partial<Pick<QueryDocument, 'name' | 'connectionId' | 'database' | 'file' | 'sessionNotice' | 'lastServer'>>
+type DocumentPatch = Partial<Pick<QueryDocument, 'name' | 'connectionId' | 'database' | 'file' | 'sessionNotice' | 'lastServer' | 'includeActualPlan'>>
 type DocumentApi = Pick<VariaApi, 'saveSqlFile' | 'closeQuerySession'>
 /**
  * What a document without text in the editor (a table designer) needs from its owner: Save (true when it saved), why it
@@ -78,6 +78,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
    * panel). It lapses when focus moves elsewhere first (`dropPendingFocus`), so an editor area shown later takes no focus.
    */
   private pendingFocus = ''
+  private textFocus?: (id: string) => boolean
   /** The document a closing active one hands over to: the next in its own editor group (`useCloseSuccessor`). */
   private successor?: (closing: string) => string | undefined
   /** Whether bracket matching is on in each editor, so it changes only when it must. */
@@ -119,7 +120,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   /** Whether File › Save All saves the document: every text document, and the custom ones whose provider says so. */
   inSaveAll(id: string): boolean { return this.provider(id)?.inSaveAll ?? true }
   /** Whether File › Save means anything for the document: every text document does, a custom one unless its provider says not. */
-  savable(id: string): boolean { return this.provider(id)?.saves !== false }
+  savable(id: string): boolean { return !this.isFilling(id) && this.provider(id)?.saves !== false }
   /** Why the document cannot close now (a custom document saving), or undefined. */
   closeRefusal(id: string): string | undefined { return this.provider(id)?.canClose(id) }
   /**
@@ -133,10 +134,16 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     }
     return undefined
   }
-  /** Focus to the active document: the editor's text, or the custom document's own element. */
+  /** The editor area focuses a text document's visible view, which may be a plan graph. False defers until it renders. */
+  useTextFocus(focus: (id: string) => boolean): Disposable {
+    this.textFocus = focus
+    return { dispose: () => { if (this.textFocus === focus) this.textFocus = undefined } }
+  }
+  /** Focus to the active document's visible view, or wait until its editor group renders it. */
   focusActive(): void {
     const id = this.getSnapshot().activeId, provider = this.provider(id)
     if (provider) { provider.focus(id); return }
+    if (this.textFocus) { this.pendingFocus = this.textFocus(id) ? '' : id; return }
     const editor = this.boundEditor
     if (editor && (this.follower || this.shown.get(editor) === id)) { this.pendingFocus = ''; editor.focus() }
     else this.pendingFocus = id
@@ -222,7 +229,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
    */
   openText(o: TextDocument): QueryDocument {
     const first = chunkEnd(o.text, 0, gridLimits.documentFirstChunk)
-    const document = this.add(o.name, o.text.slice(0, first), '', undefined, false, undefined, o.kind, o.text.length > gridLimits.documentBracketChars)
+    const document = this.add(o.name, o.text.slice(0, first), '', undefined, false, o.file, o.kind, o.text.length > gridLimits.documentBracketChars, o.eol)
     if (first < o.text.length) this.fill(document.id, o.text, first)
     return document
   }
@@ -276,7 +283,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     const done = new Promise<void>(resolve => { finish = resolve })
     const fill: Fill = entry.fill = { appending: false, userEdited: false, done, finish }
     const step = () => {
-      if (this.disposed || this.entries.get(id) !== entry) { fill.finish(); return }
+      if (this.disposed || this.entries.get(id) !== entry || entry.fill !== fill) { fill.finish(); return }
       const { model } = entry, end = chunkEnd(text, at), line = model.getLineCount(), column = model.getLineMaxColumn(line)
       fill.appending = true
       try { model.applyEdits([{ range: { startLineNumber: line, startColumn: column, endLineNumber: line, endColumn: column }, text: text.slice(at, end) }]) }
@@ -367,10 +374,11 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   showIn(instance: editor.IStandaloneCodeEditor, id: string): void {
     if (this.disposed) return
     if (!this.matching.has(instance)) this.matching.set(instance, true)
-    if (this.shown.get(instance) === id && instance.getModel() === (this.entries.get(id)?.model ?? null)) return
-    this.rememberView(instance)
-    this.showModel(instance, id)
-    if (this.pendingFocus === id) { this.pendingFocus = ''; instance.focus() }
+    if (this.shown.get(instance) !== id || instance.getModel() !== (this.entries.get(id)?.model ?? null)) {
+      this.rememberView(instance)
+      this.showModel(instance, id)
+    }
+    if (this.pendingFocus === id) this.focusActive()
   }
   /** The editor no longer shows documents (its group closed): where it was is kept, and it lets go of the model. */
   releaseEditor(instance: editor.IStandaloneCodeEditor): void {
@@ -407,8 +415,9 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
    * changed, so the caret stays where it can, with the file's line ending; the document is clean afterwards.
    */
   reload(id: string, text: string, eol: LineEnding, file: NonNullable<QueryDocument['file']>): void {
-    const model = this.entries.get(id)?.model
+    const entry = this.entries.get(id), model = entry?.model
     if (!model || this.disposed) return
+    if (entry) { entry.fill?.finish(); entry.fill = undefined }
     const sequence = eol === 'crlf' ? '\r\n' : '\n'
     model.pushStackElement()
     if (model.getEOL() !== sequence) model.pushEOL(eol === 'crlf' ? 1 : 0)
@@ -494,6 +503,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   }
   dispose(): void {
     this.disposed = true
+    this.textFocus = undefined
     this.customs.clear()
     for (const instance of this.shown.keys()) instance.setModel(null)
     this.shown.clear()

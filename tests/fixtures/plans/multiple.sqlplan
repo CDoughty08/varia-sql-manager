@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ShowPlanXML xmlns="http://schemas.microsoft.com/sqlserver/2004/07/showplan" Version="1.6" Build="16.0.1000.6">
+  <BatchSequence><Batch><Statements>
+    <StmtSimple StatementId="1" StatementType="SELECT" StatementText="SELECT SUM(Amount) FROM dbo.Orders WHERE Status = N'完了'" StatementSubTreeCost="0.45">
+      <QueryPlan>
+        <MissingIndexes><MissingIndexGroup Impact="72.4"><MissingIndex Database="[Sales]" Schema="[dbo]" Table="[Orders]" /></MissingIndexGroup></MissingIndexes>
+        <RelOp NodeId="0" PhysicalOp="Stream Aggregate" LogicalOp="Aggregate" EstimateRows="1" EstimatedTotalSubtreeCost="0.45">
+          <RunTimeInformation><RunTimeCountersPerThread Thread="0" ActualRows="1" ActualExecutions="1" ActualElapsedms="42" ActualCPUms="12" /></RunTimeInformation>
+          <StreamAggregate><RelOp NodeId="1" PhysicalOp="Index Scan" LogicalOp="Index Scan" EstimateRows="100" EstimatedTotalSubtreeCost="0.4">
+            <Warnings><PlanAffectingConvert ConvertIssue="Cardinality Estimate" Expression="CONVERT_IMPLICIT(int,[Status],0)" /></Warnings>
+            <RunTimeInformation>
+              <RunTimeCountersPerThread Thread="1" ActualRows="40" ActualExecutions="1" ActualElapsedms="40" ActualCPUms="10" />
+              <RunTimeCountersPerThread Thread="2" ActualRows="60" ActualExecutions="1" ActualElapsedms="38" ActualCPUms="8" />
+            </RunTimeInformation>
+            <IndexScan><Object Database="[Sales]" Schema="[dbo]" Table="[Orders]" Index="[IX_Status]" /><Predicate><ScalarOperator ScalarString="[Status]=N'完了'" /></Predicate></IndexScan>
+          </RelOp></StreamAggregate>
+        </RelOp>
+      </QueryPlan>
+    </StmtSimple>
+    <StmtSimple StatementId="2" StatementType="SELECT" StatementText="SELECT Name FROM dbo.Customers" StatementSubTreeCost="0.03">
+      <QueryPlan><RelOp NodeId="0" PhysicalOp="Future SQL Operator" LogicalOp="Future Operation" EstimateRows="5" EstimatedTotalSubtreeCost="0.03">
+        <FutureOperator NewProperty="preserved"><Object Database="[Sales]" Schema="[dbo]" Table="[Customers]" /></FutureOperator>
+      </RelOp></QueryPlan>
+    </StmtSimple>
+  </Statements></Batch></BatchSequence>
+</ShowPlanXML>
