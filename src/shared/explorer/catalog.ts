@@ -5,6 +5,7 @@
 import type { CodiconId, IconId } from '../icons.ts'
 import { maxIdentifierLength } from '../sql/identifiers.ts'
 import { loginSubtypes } from '../actions/logins.ts'
+import { peekCatalogBlock } from './peek.ts'
 
 /** What a node is, independent of the folder showing it. Folders are not a kind. */
 export const nodeKinds = [
@@ -557,8 +558,8 @@ const line = (value: unknown) => JSON.stringify(sortKeys(value))
 const block = (items: readonly unknown[]) => '[\n' + items.map(item => '    ' + line(item)).join(',\n') + '\n  ]'
 
 /**
- * The catalogue as the backend embeds it: `{"cloudEngineEditions", "folders", "kinds", "managedInstanceEngineEditions", "queries", "schemaGroups", "scopes",
- * "version"}`, keys sorted and everything derived spelled out, so C# needs no rules of its own: each folder's `since` and
+ * The catalogue as the backend embeds it: `{"cloudEngineEditions", "folders", "kinds", "managedInstanceEngineEditions", "peek", "queries", "schemaGroups",
+ * "scopes", "version"}`, keys sorted and everything derived spelled out, so C# needs no rules of its own: each folder's `since` and
  * `engines` include the gates of the folders above it, its `schemaPlacement` is Group by Schema's, and kinds carry every
  * collection and a child's `parents`.
  */
@@ -577,6 +578,7 @@ export function explorerCatalogJson(): string {
     `  "folders": ${block(folders)},`,
     `  "kinds": ${block(kinds)},`,
     `  "managedInstanceEngineEditions": ${line(managedInstanceEngineEditions)},`,
+    `  "peek": ${line(peekCatalogBlock())},`,
     `  "queries": ${line(queryIds)},`,
     `  "schemaGroups": ${line({ list: schemaGroupList, rows: ['schema'] })},`,
     `  "scopes": ${line(scopeFields)},`,

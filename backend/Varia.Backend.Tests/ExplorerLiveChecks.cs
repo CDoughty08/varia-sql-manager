@@ -147,6 +147,7 @@ internal static class ExplorerLiveChecks
             "a missing database or parent object is NOT_FOUND with refresh-parent");
 
         await KindListsAsync(check, service, info.Id, text => Sql(text));
+        await PeekLiveChecks.SystemAsync(check, service, info.Id, major, json);
         await CancellationAsync(check, service, client, live, json);
         if (Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SCRATCH") != "1")
         {
@@ -360,6 +361,7 @@ internal static class ExplorerLiveChecks
         await using var scratch = await ScratchDatabase.CreateAsync(sql, Path.Combine(AppContext.BaseDirectory, "Fixtures"));
         Console.WriteLine("Created the Object Explorer scratch database in " + watch.ElapsedMilliseconds + " ms.");
         await SearchLiveChecks.RunAsync(check, service, client.ConnectionId, json, sql, scratch.Name);
+        await PeekLiveChecks.ScratchAsync(check, service, client.ConnectionId, scratch.Name, scratch.Major, sql, json);
         var major = scratch.Major;
         var db = Database(scratch.Name);
         var dbName = scratch.Name;

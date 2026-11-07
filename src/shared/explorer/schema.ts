@@ -7,6 +7,7 @@ import {
   parentKinds, queryIds, schemaGroupList, scopeFields, textFilterOps, type FilterProperty, type KindSpec, type NodeKind, type RefField
 } from './catalog.ts'
 import type { ExplorerCancelParams, ExplorerChildrenParams, ExplorerFilter, ExplorerNodeRef, ObjectRef } from './refs.ts'
+import { isPeekKind, type PeekParams } from './peek.ts'
 
 // zod's max() counts code points, while sysname holds 128 UTF-16 code units.
 const utf16 = (max: number) => z.string().min(1).refine(value => value.length <= max, `At most ${max} UTF-16 code units.`)
@@ -92,3 +93,7 @@ export function childrenParamsProblems(params: ExplorerChildrenParams, specs: Ki
 export const explorerCancelParamsSchema = z.object({
   requestIds: z.array(z.uuid()).min(1).max(explorerLimits.cancelBatch).refine(ids => new Set(ids).size === ids.length, 'Duplicate request id.')
 }).strict() satisfies z.ZodType<ExplorerCancelParams>
+
+/** Peek reads tables, views, procedures and functions (peekKinds). */
+export const peekParamsSchema = z.object({ connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema }).strict()
+  .refine(params => isPeekKind(params.target.kind), { path: ['target', 'kind'], message: 'Peek describes tables, views, procedures and functions.' }) satisfies z.ZodType<PeekParams>

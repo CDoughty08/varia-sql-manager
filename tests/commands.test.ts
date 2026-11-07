@@ -284,6 +284,9 @@ describe('context keys', () => {
     expect(focusFacts(textArea, editor(true))).toEqual({ editorFocus: true, editorTextFocus: true, inputFocus: false, activePanel: 'editor', outputGridFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false })
     expect(focusFacts(findInput, editor(false))).toEqual({ editorFocus: true, editorTextFocus: false, inputFocus: true, activePanel: 'editor', outputGridFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false })
     expect(focusFacts(element('button', { pane: 'explorer' }), editor(false))).toEqual({ editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: 'explorer', outputGridFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false })
+    // Object Explorer's Peek card is drawn into the body, outside every pane: Explorer's Delete, F2 and F5 never reach the
+    // tree's selection from inside it.
+    expect(focusFacts(element('div'), editor(false))).toMatchObject({ activePanel: '', inputFocus: false })
     // Ctrl+Shift+C copies with headers only in a results grid, not in Messages.
     expect(focusFacts(element('div', { pane: 'results', grid: true }), editor(false))).toEqual({ editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: 'output', outputGridFocus: true, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false })
     // Each output panel (Results, Messages, Execution plan) is the output to the keybindings.

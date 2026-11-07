@@ -4,6 +4,7 @@ import {
   schemaGroupRoots, schemaPlacement, scopeFields, statusBadges, statusChipKinds, subfolders, type FolderId, type InsertStyle, type KindSpec, type LaterFolder, type NodeKind, type NodeSubtype
 } from './catalog.ts'
 import { loginChipDocs, statusChipDocs } from './status.ts'
+import { peekKinds, peekLimits, peekSpecs } from './peek.ts'
 import { loginDetailWords, loginTypeSubtypes, type LoginType } from '../actions/logins.ts'
 import { glyphSizes } from '../theme/metrics.ts'
 
@@ -226,6 +227,18 @@ export function renderExplorerDocs(): string {
     table(['Kind', 'Probes'], (Object.keys(statusChipKinds) as (keyof typeof statusChipKinds)[]).map(kind => [code(kind), codes(statusChipKinds[kind])])),
     '',
     table(['Node', 'Chip', 'Tone', 'When'], statusChipDocs.map(doc => [doc.kind, doc.chip, doc.tone, doc.when])),
+    '',
+    '## Peek',
+    '',
+    'Peek (the context menu\'s Peek, Space on the selected row, or resting the pointer on a row with Ctrl held, Cmd on macOS)',
+    'opens a card beside the row with the object\'s definition and its properties. One `explorer.peek` request reads the',
+    'properties (and a module\'s text) on the Object Explorer pool, in one constant batch per kind (`Explorer/PeekSql.cs`)',
+    `within ${peekLimits.budgetMs.toLocaleString('en-US')} ms; a table's definition comes from Script As (CREATE). A fact whose`,
+    'catalog column is newer than the server is left out. Esc, a click elsewhere or another peek closes the card, and',
+    'cancels a read still running.',
+    '',
+    table(['Kind', 'Definition', 'Group', 'Facts'], peekKinds.flatMap(kind => peekSpecs[kind].groups.map(group => [code(kind), peekSpecs[kind].definition === 'module' ? 'sys.sql_modules' : 'Script As',
+      group.title, group.facts.map(item => item.label + (item.since ? ` (band ${item.since}+)` : '')).join(', ')]))),
     '',
     '## Limits',
     '',

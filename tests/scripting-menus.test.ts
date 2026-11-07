@@ -66,7 +66,7 @@ describe('Script As in Object Explorer\'s context menu', () => {
     expect(verbs).toEqual([['CREATE To', true], ['ALTER To', false], ['CREATE OR ALTER To', false], ['DROP To', true], ['DROP And CREATE To', true], ['-'],
       ['SELECT To', true], ['INSERT To', true], ['UPDATE To', true], ['DELETE To', true], ['-'], ['EXECUTE To', false]])
     const procedure = resolveFor('linux', { kind: 'procedure', subtype: 'sql' })
-    expect(describe_(procedure).filter(line => !line.startsWith('  '))).toEqual(['Modif&y', '---', '&Script Stored Procedure as >', '---', 'Copy N&ame', '---', 'Rena&me', 'D&elete', '---', 'Re&fresh'])
+    expect(describe_(procedure).filter(line => !line.startsWith('  '))).toEqual(['Modif&y', 'Pee&k (disabled)', '---', '&Script Stored Procedure as >', '---', 'Copy N&ame', '---', 'Rena&me', 'D&elete', '---', 'Re&fresh'])
     expect(resolveFor('linux', { kind: 'procedure', subtype: 'clr' }).some(item => item.kind === 'command' && item.id === 'explorer.modify')).toBe(false)
     for (const [kind, subtype, title] of [['type', 'clr', 'Script User-Defined Type as'], ['type', 'alias', 'Script User-Defined Data Type as'], ['tableType', undefined, 'Script User-Defined Table Type as']] as const) {
       expect(resolveFor('win32', { kind, subtype }).find(item => item.key === 'explorer.scriptAs'), `${kind} ${subtype}`).toMatchObject({ title })
@@ -97,7 +97,9 @@ describe('Script As in Object Explorer\'s context menu', () => {
     const items = resolveFor('win32', { kind: 'table' })
     controller.openContext(items, { kind: 'point', x: 0, y: 0 }, { keyboard: true, label: 'Object Explorer' })
     const level = () => controller.view.levels.at(-1)!, activeTitle = () => { const item = level().items[level().active]; return item?.kind === 'separator' ? '' : item?.title }
-    // Select Top 1000 Rows, then the Script submenu.
+    // Select Top 1000 Rows, Peek, then the Script submenu.
+    controller.key(key('ArrowDown'))
+    expect(activeTitle()).toBe('Peek')
     controller.key(key('ArrowDown'))
     expect(activeTitle()).toBe('Script Table as')
     controller.key(key('ArrowRight'))
@@ -162,6 +164,6 @@ describe('Script As in Object Explorer\'s context menu', () => {
     }
     // A table: 30 script commands (its greyed verbs too), Select Top 1000 Rows, Copy Name, Rename, Delete and Refresh.
     expect(largest).toBeLessThanOrEqual(64)
-    expect(largest).toBe(35)
+    expect(largest).toBe(36)
   })
 })

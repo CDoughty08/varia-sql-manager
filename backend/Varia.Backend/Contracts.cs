@@ -150,6 +150,12 @@ internal sealed record ExplorerDatabase(int State, int UserAccess, bool ReadOnly
 internal sealed record ExplorerError(string Code, string Message, bool Retryable, string? Action = null);
 /// <summary>A page of children: static folders first (first page only), then rows. Total is on the first page only.</summary>
 internal sealed record ExplorerChildrenResult(List<ExplorerNode> Nodes, long ElapsedMs, string? Cursor = null, int? Total = null, ExplorerError? Error = null);
+/// <summary>explorer.peek (src/shared/explorer/peek.ts): a table, view, procedure or function's Properties facts and, for
+/// modules, its text. Cancellation is a CANCEL frame for the request (or varia:explorer-cancel), as explorer.children's.</summary>
+internal sealed record PeekArgs(string ConnectionId, string RequestId, ObjectRefDto Target);
+/// <summary>Facts: fact id to a string, bool, whole number or null, for the facts the server's band has. Definition: a module's
+/// text, absent when it is encrypted or hidden; DefinitionTruncated is true only when it was cut. Facts are empty with an Error.</summary>
+internal sealed record PeekResult(Dictionary<string, object?> Facts, long ElapsedMs, string? Definition = null, bool? DefinitionTruncated = null, ExplorerError? Error = null);
 
 /// <summary>explorer.index: (re)builds the connection's object index, with module definitions unless Definitions is false. It
 /// sends droppable explorer.index.progress EVENTs and answers once every database was read or skipped; a newer build of the
