@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { scriptAsTitleKeys, scriptAsTitles, scriptCommandIds, scriptSubmenuEntries, scriptSubmenuIds, type ScriptAsTitleKey } from '../scripting/catalog.ts'
 import { commandDescriptor, commandIds, type CommandId, type RoleName } from './catalog'
-import { primaryRule, splitChord, toAccelerator, type Platform } from './keybindings'
+import { defaultRules, primaryRule, splitChord, toAccelerator, type Platform, type ResolvedRule } from './keybindings'
 import { compileWhen, type WhenAst } from './when'
 
 /** The menubar, in title-bar order. Alt plus the mnemonic opens a menu on Windows and Linux. */
@@ -173,9 +173,12 @@ const applies = (platforms: readonly Platform[] | undefined, platform: Platform)
  */
 export const menuMayShowChords = (chords: readonly string[], platform: Platform): boolean =>
   platform !== 'darwin' || (chords.length === 1 && splitChord(chords[0]).modifiers.has('meta'))
-/** The accelerator a command's menu items show: its primary key, where Electron can name it and the platform allows it. */
-export function menuAccelerator(id: CommandId, platform: Platform): string | undefined {
-  const rule = primaryRule(id, platform)
+/**
+ * The accelerator a command's menu items show: its primary key, where Electron can name it and the platform allows it.
+ * `rules` defaults to the catalogue's; pass effective rules to show the user's shortcuts.
+ */
+export function menuAccelerator(id: CommandId, platform: Platform, rules: readonly ResolvedRule[] = defaultRules(platform)): string | undefined {
+  const rule = primaryRule(id, platform, rules)
   return rule && menuMayShowChords(rule.chords, platform) ? toAccelerator(rule.chords, platform) : undefined
 }
 /** A command's title in menus on `platform`: the placement's own title, else the platform's, else the palette title. */
@@ -187,7 +190,7 @@ export const menuTitle = (id: CommandId, platform: Platform, placementTitle?: st
  * title, with exactly one separator between non-empty groups. Placement `when` clauses are compiled, not applied:
  * `pruneMenu` drops what a context hides, and with it any separator or submenu left empty.
  */
-export function buildMenuModel(menu: MenuId, platform: Platform): MenuEntry[] {
+export function buildMenuModel(menu: MenuId, platform: Platform, rules: readonly ResolvedRule[] = defaultRules(platform)): MenuEntry[] {
   const items: { group: string; order: number; title: string; entry: MenuEntry }[] = []
   const optional = (placement: { readonly mnemonic?: string; readonly when?: string }) =>
     ({ ...(placement.mnemonic ? { mnemonic: placement.mnemonic } : {}), ...(placement.when !== undefined ? { when: compileWhen(placement.when) } : {}) })
@@ -195,7 +198,7 @@ export function buildMenuModel(menu: MenuId, platform: Platform): MenuEntry[] {
     const command = commandDescriptor(id)
     for (const placement of command.menus ?? []) {
       if (placement.menu !== menu || !applies(placement.platforms, platform)) continue
-      const title = menuTitle(id, platform, placement.title), accelerator = menuAccelerator(id, platform)
+      const title = menuTitle(id, platform, placement.title), accelerator = menuAccelerator(id, platform, rules)
       items.push({ group: placement.group, order: placement.order, title, entry: {
         kind: 'command', id, nativeId: nativeItemId(id, menu), title, toggle: command.toggled !== undefined, ...optional(placement),
         ...(command.role ? { role: command.role } : {}), ...(accelerator ? { accelerator } : {})

@@ -797,7 +797,7 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 | `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
 | `8_view` | **P**ause | `ssis.pauseOperations` | Always |
 
-## Context keys (129)
+## Context keys (130)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -815,6 +815,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `textInputFocus` | boolean | focus | `editorTextFocus \|\| inputFocus`. |
 | `activePanel` | `'explorer'`, `'editor'`, `'output'`, `''` | focus | The pane that holds focus: Object Explorer, the query editor, an output panel (Results, Messages or Execution plan), or '' for none. |
 | `outputGridFocus` | boolean | focus | Focus is in a results grid, which copies its selected cells rather than text. |
+| `messagesFocus` | boolean | focus | Focus is in a Messages view; activePanel is then 'output'. |
 | `designerFocus` | boolean | focus | Focus is in the active table designer; activePanel is then 'editor'. |
 | `queryBarFocus` | boolean | focus | Focus is in the active query's bar (Execute, Cancel and its server and database lists); activePanel is then 'editor'. |
 | `activityMonitorFocus` | boolean | focus | Focus is in the active Activity Monitor; activePanel is then 'editor'. |
