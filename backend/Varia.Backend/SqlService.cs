@@ -910,6 +910,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         var sets = new List<ResultSetBuffer>();
         var plans = new List<ResultDescriptor>();
         ActualPlanCapture? capture = null;
+        Statistics.ClientStatisticsCollector? statistics = null;
+        Statistics.ClientStatisticsSample? statisticsSample = null;
         var omittedPlans = false;
         var lostPlanEvents = false;
         var noPlanEvents = false;
@@ -1071,6 +1073,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                 }
             }
             connection.FireInfoMessageEventOnUserErrors = true;
+            if (args.IncludeClientStatistics) statistics = new(connection);
             for (var b = 0; b < batches.Count && failure is null; b++)
             {
                 batchNumber = b + 1;
@@ -1315,6 +1318,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         }
         finally
         {
+            // Every reader (including a failed or cancelled one) has drained/disposed. Stop before observer reads and session cleanup.
+            statisticsSample = statistics?.Finish();
             watch.Stop();
             queries.TryRemove(args.QueryId, out _);
             try
@@ -1414,7 +1419,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         if (context is not null) context.Unsent = () => store.Release(descriptors.Concat(plans).Select(set => set.ResultId));
         var completedAt = DateTimeOffset.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz", CultureInfo.InvariantCulture);
         return new(descriptors, overflowSets + oversizeSets + budgetSets, output, recordsAffected, watch.ElapsedMilliseconds, status, failure, completed,
-            totalBatches, database, messages.Truncated, SummaryBudget(), completedAt, spid, login, plans.Count > 0 ? plans : null, planOrder);
+            totalBatches, database, messages.Truncated, SummaryBudget(), completedAt, spid, login, plans.Count > 0 ? plans : null, planOrder,
+            statisticsSample ?? (args.IncludeClientStatistics ? new([], null, "Execution ended before statistics collection could start.") : null));
     }
 
     private bool StoreActualPlans(string sessionId, List<ActualPlanCapture.CapturedPlan> captured, Dictionary<int, uint>? idsByEvent, List<ResultDescriptor> plans)

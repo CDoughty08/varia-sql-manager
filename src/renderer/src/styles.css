@@ -748,6 +748,15 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .output-views button.active { outline: 2px solid Highlight; outline-offset: -2px; }
   .output-views button.active:focus-visible { outline: 2px solid CanvasText; outline-offset: 2px; }
 }
+.client-statistics { overflow: auto; padding: var(--varia-space-3); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.client-statistics-tools { display: flex; align-items: center; flex-wrap: wrap; gap: var(--varia-space-3); }
+.client-statistics-tools label { display: flex; align-items: center; gap: var(--varia-space-2); }
+.client-statistics p { color: var(--varia-descriptionForeground); margin: var(--varia-space-2) 0; }
+.client-statistics table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+.client-statistics th, .client-statistics td { border-bottom: 1px solid var(--varia-widget-border); padding: var(--varia-space-2); text-align: left; vertical-align: top; }
+.client-statistics td { white-space: nowrap; }
+.client-statistics td:last-child { white-space: normal; }
+.client-statistics th[scope="row"] { font-weight: 500; }
 .memory-status { margin-left: var(--varia-space-2); }
 .memory-indicator { anchor-name: --status-memory; display: flex; align-items: center; gap: var(--varia-space-1); padding: 0 var(--varia-space-2); color: inherit; font-size: inherit; }
 .memory-indicator:focus-visible { outline-offset: -2px; }

@@ -112,6 +112,8 @@ Query
   E&xecute  F5  ++--
   &Cancel Executing Query  Alt+Pause  --+-
   &Include Actual Execution Plan  Ctrl+M [ ]  ++--
+  Include Client &Statistics  Shift+Alt+S [ ]  ++--
+  &Reset Client Statistics  ++--
 Tools
   &Options…  ++++
 Window
@@ -122,6 +124,7 @@ Window
   E&xecution Plan  ++++
   S&how Results Pane  Ctrl+R [x]  ++++
   Panel &Tabs [ ]  ++++
+  &Client Statistics  ++++
   ---
   &Next Query  Ctrl+Tab  ----
   &Previous Query  Ctrl+Shift+Tab  ----
