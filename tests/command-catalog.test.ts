@@ -288,13 +288,27 @@ describe('keybinding conflicts', () => {
     expect(kinds([rule('file.new', { key: 'ctrl+e' }, 'darwin')], 'darwin')).toEqual([['reserved', 'ctrl+e', 'file.new']])
     expect(kinds([rule('file.new', { key: 'ctrl+e' })])).toEqual([])
   })
+  it('free clipboard and editor chords only for rules that never match where text or the query editor has focus', () => {
+    // A results grid, Messages, and the Options dialog (whose search box keeps the clipboard, but has no find widget).
+    expect(kinds([rule('file.new', { key: 'ctrl+c', when: 'outputGridFocus' })])).toEqual([])
+    expect(kinds([rule('file.new', { key: 'ctrl+a', when: 'messagesFocus' })])).toEqual([])
+    expect(kinds([rule('file.new', { key: 'meta+e', when: 'optionsDialogFocus' }, 'darwin')], 'darwin')).toEqual([])
+    expect(kinds([rule('file.new', { key: 'ctrl+c', when: 'optionsDialogFocus' })])).toEqual([['reserved', 'ctrl+c', 'file.new']])
+    // Surfaces that hold text fields of their own: the table designer's cell editors and the Activity Monitor's filter.
+    for (const when of ['designerFocus', 'activityMonitorFocus', "activePanel == 'explorer'", 'documentTabFocus', 'queryBarFocus']) {
+      expect(kinds([rule('file.new', { key: 'ctrl+a', when })]), when).toEqual([['reserved', 'ctrl+a', 'file.new']])
+    }
+    expect(kinds([rule('file.new', { key: 'meta+e', when: 'editorFocus' }, 'darwin')], 'darwin')).toEqual([['reserved', 'meta+e', 'file.new']])
+  })
   it('require !textInputFocus on keys that type', () => {
     for (const key of ['x', 'shift+x', '5', '/', 'space', 'enter', 'backspace', 'shift+delete', 'up']) {
       const chord = rule('file.new', { key }).chords[0]
       expect(kinds([rule('file.new', { key })]).filter(([kind]) => kind === 'typing'), key).toEqual([['typing', chord, 'file.new']])
       expect(kinds([rule('file.new', { key, when: "activePanel == 'explorer' && !textInputFocus" })]).filter(([kind]) => kind === 'typing'), key).toEqual([])
     }
-    expect(kinds([rule('file.new', { key: 'x', when: "activePanel == 'explorer'" })])).toEqual([])
+    // Object Explorer's search box is in the explorer pane too, so a typing key there needs !textInputFocus.
+    expect(kinds([rule('file.new', { key: 'x', when: "activePanel == 'explorer'" })])).toEqual([['typing', 'x', 'file.new']])
+    expect(kinds([rule('file.new', { key: 'x', when: 'explorerFocus' })])).toEqual([])
     expect(kinds([rule('file.new', { key: 'x', when: 'editorFocus' })])).toEqual([['typing', 'x', 'file.new']])
     for (const key of ['f6', 'ctrl+shift+x', 'alt+x', 'meta+x', 'pause']) expect(kinds([rule('file.new', { key })]), key).toEqual([])
   })
