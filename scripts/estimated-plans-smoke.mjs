@@ -54,6 +54,8 @@ try {
     await expect(queryBarButton(page, 'Display Estimated Execution Plan')).toBeEnabled()
     await expect(outputView(page, 'Execution plan, 2 plans')).toBeVisible()
     const firstCell = page.getByRole('grid', { name: /^Result 1 of/ }).getByRole('gridcell').first()
+    // The result summary can arrive before the worker paints this cell's page.
+    await expect(firstCell).toHaveText(/^\d+$/)
     const retainedValue = await firstCell.innerText()
     await outputView(page, 'Client Statistics').click()
     const statistics = page.getByRole('table', { name: 'Client statistics comparison', exact: true })
