@@ -5,7 +5,8 @@ import type { Disposable } from './types'
 const middleButton = 1, middleButtons = 4
 /** The events whose middle-button change Blink may follow with a paste: a chorded press or release (another button still held) comes as a pointermove. */
 const changeEvents = new Set(['pointerup', 'mouseup', 'pointermove'])
-const watched = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'pointermove', 'pointercancel', 'auxclick'] as const
+/** Pointer events, and the drag events that end an HTML drag (no pointer events reach the page during one). */
+const watched = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'pointermove', 'pointercancel', 'auxclick', 'dragend', 'drop'] as const
 
 /** A window: its own timers keep running while another window is hidden and throttled. */
 export type PrimaryPasteTarget = Pick<Window, 'addEventListener' | 'removeEventListener' | 'setTimeout'>
@@ -18,14 +19,15 @@ export type PrimaryPasteTarget = Pick<Window, 'addEventListener' | 'removeEventL
  * user-activation check in main.
  *
  * Two guards, in the capture phase of each window:
- * - Every event that carries a middle-button change is cancelled: the pointerup and the mouseup, since where a handler
- *   cancels the pointerdown (the title bar's menus, the plan canvas, Dockview's handles) Chromium sends no mouseup and
- *   still pastes; and a pointermove whose `button` is the middle one, which is how a chorded press or release comes
- *   (cancelling a chorded press only skips its focus and selection handling).
+ * - Every middle-button release event is cancelled, the pointerup as well as the mouseup, since where a handler cancels
+ *   the pointerdown (the title bar's menus, the plan canvas, Dockview's handles) Chromium sends no mouseup and still
+ *   pastes; and so is every pointermove whose `button` is the middle one, which is how a chorded press or release comes
+ *   (cancelling a chorded press only skips its focus and selection handling). A plain middle press is left alone.
  * - A `paste` event is cancelled before any other listener sees it while the middle button is held (from its press,
- *   which always reaches the window, until a task after an event shows it up) or in the task of a middle-button release
- *   or its auxclick, in case a release reaches Blink without a cancelled event. The Paste role's paste comes from main, in
- *   a task of its own.
+ *   which reaches the window unless a page script detached its target, until a task after an event shows it up) or in the
+ *   task of a middle-button release or its auxclick, in case a release reaches Blink without a cancelled event. The
+ *   Paste role's paste comes from main, in a task of its own; one chosen while the middle button is still held (Ctrl+V
+ *   during a middle-drag) is dropped too.
  * auxclick (middle-click to close a tab), Monaco's middle-button column selection (it reads mousedown), middle-drag
  * panning (its moves carry no button change) and every listener's own event are left alone. Other platforms have no
  * PRIMARY selection.

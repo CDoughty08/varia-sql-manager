@@ -69,11 +69,17 @@ describe('PRIMARY selection paste', () => {
     expect(paste()).toBe(true)
     target.dispatchEvent(pointer('pointerup', 0, 0))
     await nextTask()
+    // An HTML drag sends no pointer events: its end shows the button up.
+    target.dispatchEvent(pointer('pointerdown', 1, 4))
+    target.dispatchEvent(pointer('dragend', 0, 0))
+    expect(paste()).toBe(true)
+    await nextTask()
+    expect(paste()).toBe(false)
     // Left-button events mark nothing.
     target.dispatchEvent(pointer('auxclick', 0))
     target.dispatchEvent(pointer('pointerdown', 0, 1))
     expect(paste()).toBe(false)
-    expect(seen).toEqual(['paste', 'paste', 'paste', 'paste'])
+    expect(seen).toEqual(['paste', 'paste', 'paste', 'paste', 'paste'])
     guard.dispose()
   })
   it('guards the main window and every popout', () => {
