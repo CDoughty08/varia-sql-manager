@@ -251,6 +251,30 @@ describe('hot exit', () => {
     expect(documents.getSnapshot().documents).toHaveLength(1)
     expect(fileApi.releaseSqlFile).not.toHaveBeenCalled()
   })
+  it('opens the welcome query inside its own file task, before a file the command line hands over during the restore', async () => {
+    const { documents, files } = fixture()
+    let release!: (value: Awaited<ReturnType<VariaApi['takeSession']>>) => void
+    const api = { hotExit: true, takeSession: vi.fn<VariaApi['takeSession']>(() => new Promise(resolve => { release = resolve })), finishSessionRestore: vi.fn<VariaApi['finishSessionRestore']>() }
+    const welcome = vi.fn(() => { documents.create('SQLQuery1.sql', 'SELECT 1', 'master') })
+    const restoring = restoreSession({ api, documents, files, otherwise: welcome })
+    await vi.waitFor(() => expect(api.takeSession).toHaveBeenCalled())
+    const adopting = files.adopt({ files: [{ ...file('orders.sql'), content: 'SELECT 2', eol: 'lf', mixedEol: false }], errors: [] })
+    release({ ok: true, value: { activeIndex: -1, problems: [], documents: [] } })
+    expect(await restoring).toBe(0)
+    await adopting
+    expect(welcome).toHaveBeenCalledOnce()
+    expect(documents.getSnapshot().documents.map(tab => tab.name)).toEqual(['SQLQuery1.sql', 'orders.sql'])
+  })
+  it('opens the welcome query when the restore fails, and not when it reopened tabs', async () => {
+    const { documents, files } = fixture()
+    const welcome = vi.fn()
+    const failing = { hotExit: true, takeSession: vi.fn<VariaApi['takeSession']>(async () => ({ ok: false, error: 'Access is denied.' })), finishSessionRestore: vi.fn<VariaApi['finishSessionRestore']>() }
+    expect(await restoreSession({ api: failing, documents, files, otherwise: welcome })).toBe(0)
+    expect(welcome).toHaveBeenCalledOnce()
+    const reopening = { ...failing, takeSession: vi.fn<VariaApi['takeSession']>(async () => ({ ok: true, value: { activeIndex: 0, problems: [], documents: [{ name: 'SQLQuery7.sql', kind: 'sql' as const, eol: 'lf' as const, dirty: true, text: 'SELECT 7' }] } })) }
+    expect(await restoreSession({ api: reopening, documents, files, otherwise: welcome })).toBe(1)
+    expect(welcome).toHaveBeenCalledOnce()
+  })
   it('reports a session that could not be read in the file banner', async () => {
     const { documents, files } = fixture()
     const api = { hotExit: true, takeSession: vi.fn<VariaApi['takeSession']>(async () => ({ ok: false, error: 'Access is denied.' })), finishSessionRestore: vi.fn<VariaApi['finishSessionRestore']>() }

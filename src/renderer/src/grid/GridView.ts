@@ -2,6 +2,7 @@ import type { Platform } from '../../../shared/commands/keybindings'
 import type { ResultDescriptor } from '../../../shared/contracts'
 import { liveTones, type LiveTone } from '../../../shared/live/catalog'
 import { nextFrame } from '../core/frame'
+import { gesturesFor } from '../core/gestures'
 import { observeResize, windowOf, windows } from '../core/windows'
 import { typeScale } from '../../../shared/theme/metrics'
 import { monoFontFamily, uiFontFamily } from '../fonts'
@@ -108,6 +109,7 @@ export interface GridViewOptions {
  */
 export class GridView {
   private readonly o: GridViewOptions
+  private get gestures() { return gesturesFor(this.o.platform) }
   private readonly root: HTMLElement
   private readonly scroller: HTMLElement
   private readonly spacer: HTMLDivElement
@@ -532,7 +534,8 @@ export class GridView {
   private readonly onWheel = (event: WheelEvent): void => {
     try {
       const model = this.model
-      if (!model || model.mode !== 'virtual' || event.ctrlKey) return
+      // Control+wheel (and a trackpad pinch) zooms the window, as Chromium does elsewhere.
+      if (!model || model.mode !== 'virtual' || this.gestures.matches('global.wheelZoom', event)) return
       const dy = normalizeWheel(event.deltaY, event.deltaMode, this.viewportHeight)
       const step = applyWheel(model, this.pendingTop ?? this.o.state.virtualTop, dy)
       if (!step.handled) return
@@ -601,10 +604,10 @@ export class GridView {
       // A right-press on a border is a press on its column, which the menu then acts on.
       hit = { kind: 'column', column: hit.column }
     }
-    const add = press === 'primary' && (this.o.platform === 'darwin' ? event.metaKey : event.ctrlKey)
-    this.select(pressSelection(this.o.state.selection, hit, { resultIndex: this.o.resultIndex, shift: event.shiftKey, right: press === 'secondary', add, rows: this.rows(), columns: this.columns }))
+    const add = press === 'primary' && this.gestures.matches('grid.addToSelection', event), shift = this.gestures.matches('grid.extendSelection', event)
+    this.select(pressSelection(this.o.state.selection, hit, { resultIndex: this.o.resultIndex, shift, right: press === 'secondary', add, rows: this.rows(), columns: this.columns }))
     if (press !== 'primary' || hit.kind === 'corner') return
-    this.drag = { pointerId: event.pointerId, x0: point.x, y0: point.y, x: point.x, y: point.y, dragging: false, hit, modifiers: event.shiftKey || add }
+    this.drag = { pointerId: event.pointerId, x0: point.x, y0: point.y, x: point.x, y: point.y, dragging: false, hit, modifiers: shift || add }
     try { this.root.setPointerCapture(event.pointerId) } catch { /* A synthetic pointer has nothing to capture. */ }
   }
 
@@ -688,7 +691,7 @@ export class GridView {
     const point = this.point(event)
     if (!point.inside || point.y >= g.headerHeight) return
     const hit = this.hitAt(point.x, point.y)
-    if (hit?.kind === 'resize') this.fit(hit.column)
+    if (hit?.kind === 'resize' && this.gestures.matches('grid.fitColumn', event)) this.fit(hit.column)
   }
   /**
    * Fits a column to its header and the widest display text of its first 4,096 rows and the rows in view, measured by

@@ -141,7 +141,8 @@ internal static partial class CatalogSql
     /// <summary>Problems with one rendered statement; empty when it passes.</summary>
     /// <param name="list">A paged listing: it must take TOP (@take) rows in keyset order.</param>
     /// <param name="mayCheckAccess">Database listings may call HAS_DBACCESS.</param>
-    public static List<string> Lint(string text, SqlRender render, bool list, bool mayCheckAccess)
+    /// <param name="literals">More literals this statement may hold (Peek's rows batch).</param>
+    public static List<string> Lint(string text, SqlRender render, bool list, bool mayCheckAccess, IReadOnlySet<string>? literals = null)
     {
         var problems = new List<string>();
         foreach (var builtin in Builtins) if (text.Contains(builtin, StringComparison.OrdinalIgnoreCase)) problems.Add("uses " + builtin);
@@ -151,7 +152,7 @@ internal static partial class CatalogSql
         foreach (var (token, since) in Gates) if (render.Band < since && text.Contains(token, StringComparison.Ordinal)) problems.Add("uses " + token + " below band " + since);
         if (!render.VectorDimensions && text.Contains("vector_dimensions", StringComparison.Ordinal)) problems.Add("uses vector_dimensions without the probe flag");
         foreach (Match literal in LiteralPattern().Matches(text))
-            if (!Literals.Contains(literal.Value) && !TypeLetters().IsMatch(literal.Value)) problems.Add("has the literal " + literal.Value);
+            if (!Literals.Contains(literal.Value) && literals?.Contains(literal.Value) != true && !TypeLetters().IsMatch(literal.Value)) problems.Add("has the literal " + literal.Value);
         if (text.Contains("@db", StringComparison.Ordinal)) problems.Add("names @db inside a statement");
         return problems;
     }

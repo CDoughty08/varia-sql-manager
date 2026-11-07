@@ -85,7 +85,8 @@ const isEnabled = (item: ResolvedMenuItem) => item.kind !== 'separator' && item.
 export function resolveMenu(menu: MenuId, options: ResolveOptions): readonly ResolvedMenuItem[] {
   const { platform, commands, keybindings, args } = options
   const model = options.model ?? ((id: MenuId) => catalogueModel(id, platform))
-  const keys = contextRecord(platform, { ...options.state, ...options.target })
+  // A target's stand-in state keys (a Search Objects result's selection keys) win over the workbench's.
+  const keys = contextRecord(platform, { ...options.state, ...args?.state, ...options.target })
   const keep = (entry: MenuEntry) => entry.kind !== 'role' && (entry.kind === 'separator' || !entry.when || evaluateWhen(entry.when, keys))
   const children = (id: SubmenuId) => model(id)
   let separators = 0

@@ -387,7 +387,7 @@ export const activeGroupEditorText = page => page.locator(part.activeEditorGroup
 
 // Panes: the dock's panels, each with a tab in its group's header
 
-const paneTitles = { explorer: 'Object Explorer', editor: 'Query editor', results: 'Results', messages: 'Messages', plan: 'Execution plan' }
+const paneTitles = { explorer: 'Object Explorer', editor: 'Query editor', results: 'Results', messages: 'Messages', plan: 'Execution plan', statistics: 'Client Statistics' }
 /** The panel menu's names for the panels, in its Tab with items. */
 const paneMenuTitles = { explorer: 'Object Explorer', editor: 'Query Editor', results: 'Results', messages: 'Messages', plan: 'Execution Plan' }
 /** The output panels, which share one group by default, its toolbar tabbing between them. */
@@ -496,14 +496,14 @@ export const statusChips = row => row.locator(`${part.explorerChips} ${part.stat
 export const activeServerRows = page => serverRows(page).filter({ has: page.locator(part.explorerActive) })
 export const explorerSearchBox = page => page.getByRole('textbox', { name: 'Search in Object Explorer', exact: true })
 export const explorerSearchField = page => page.locator(part.explorerSearchField)
-/** Object Explorer's search hits, by their reveal buttons' accessible names. */
-export const explorerSearchHits = page => page.locator(part.explorerSearch).getByRole('list', { name: 'Search results', exact: true }).locator('[data-hit]')
+/** Object Explorer's search hits, the options of its results list. */
+export const explorerSearchHits = page => page.locator(part.explorerSearch).getByRole('listbox', { name: 'Search results', exact: true }).getByRole('option')
 /** The hit Enter in the box revealed last. */
-export const explorerSearchCurrent = page => page.locator(part.explorerSearch).getByRole('list', { name: 'Search results', exact: true }).locator('[data-hit][aria-current]')
-/** The Search Objects tab's box, its hits by their buttons, and the selected hit. */
+export const explorerSearchCurrent = page => page.locator(part.explorerSearch).getByRole('listbox', { name: 'Search results', exact: true }).getByRole('option', { selected: true })
+/** The Search Objects tab's box, its hits (the options of its results list), and the selected hit. */
 export const objectSearchBox = page => page.locator(part.objectSearchTab).getByRole('textbox', { name: 'Search objects', exact: true })
-export const objectSearchHits = page => page.locator(part.objectSearchTab).getByRole('list', { name: 'Results', exact: true }).locator('[data-hit]')
-export const objectSearchSelected = page => page.locator(part.objectSearchTab).getByRole('list', { name: 'Results', exact: true }).locator('[data-hit][aria-current]')
+export const objectSearchHits = page => page.locator(part.objectSearchTab).getByRole('listbox', { name: 'Results', exact: true }).getByRole('option')
+export const objectSearchSelected = page => page.locator(part.objectSearchTab).getByRole('listbox', { name: 'Results', exact: true }).getByRole('option', { selected: true })
 export const explorerSearchSplitter = page => page.locator(part.explorerSearch).getByRole('separator', { name: 'Resize search results', exact: true })
 export const explorerSearchToggle = (page, name) => page.locator(part.explorerSearch).getByRole('button', { name, exact: true })
 export const explorerSearchOptions = page => page.locator(part.explorerSearch).getByRole('button', { name: /^Search options/ })

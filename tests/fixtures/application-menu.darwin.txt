@@ -116,6 +116,8 @@
   {"id":"query.execute","label":"Execute","registerAccelerator":false,"type":"normal","click":[["command","query.execute"]]}
   {"id":"query.cancel","label":"Cancel Executing Query","registerAccelerator":false,"type":"normal","click":[["command","query.cancel"]]}
   {"id":"query.includeActualPlan","label":"Include Actual Execution Plan","registerAccelerator":false,"type":"checkbox","click":[["command","query.includeActualPlan"]],"checkedAfterClick":false}
+  {"id":"query.includeClientStatistics","label":"Include Client Statistics","registerAccelerator":false,"type":"checkbox","click":[["command","query.includeClientStatistics"]],"checkedAfterClick":false}
+  {"id":"query.resetClientStatistics","label":"Reset Client Statistics","registerAccelerator":false,"type":"normal","click":[["command","query.resetClientStatistics"]]}
 {"id":"menu.tools","label":"Tools"}
   {"accelerator":"Cmd+,","id":"preferences.options","label":"Options…","registerAccelerator":false,"type":"normal","click":[["command","preferences.options"]]}
 {"id":"menu.window","label":"Window","role":"window"}
@@ -126,6 +128,7 @@
   {"id":"window.plan","label":"Execution Plan","registerAccelerator":false,"type":"normal","click":[["command","window.plan"]]}
   {"accelerator":"Cmd+R","id":"view.toggleResultsPane","label":"Show Results Pane","registerAccelerator":false,"type":"checkbox","click":[["command","view.toggleResultsPane"]],"checkedAfterClick":false}
   {"id":"window.togglePanelTabs","label":"Panel Tabs","registerAccelerator":false,"type":"checkbox","click":[["command","window.togglePanelTabs"]],"checkedAfterClick":false}
+  {"id":"window.statistics","label":"Client Statistics","registerAccelerator":false,"type":"normal","click":[["command","window.statistics"]]}
   {"type":"separator"}
   {"id":"document.next","label":"Next Query","registerAccelerator":false,"type":"normal","click":[["command","document.next"]]}
   {"id":"document.previous","label":"Previous Query","registerAccelerator":false,"type":"normal","click":[["command","document.previous"]]}

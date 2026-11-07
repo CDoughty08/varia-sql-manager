@@ -36,7 +36,7 @@ internal sealed record TableArgs(string ConnectionId, string Database, string Sc
 /// <summary>query.execute. StopOnError keeps the remaining batches from running after one that raised an error (for SQLCMD's
 /// :on error exit); by default execution continues with the next batch, as SSMS does.</summary>
 internal sealed record QueryArgs(string ConnectionId, string SessionId, string Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10,
-    bool StopOnError = false, bool IncludeActualPlan = false);
+    bool StopOnError = false, bool IncludeActualPlan = false, bool IncludeClientStatistics = false);
 /// <summary>query.session.close: Transaction "commit" commits the session's open transaction first; "rollback" is a plain close,
 /// since SQL Server rolls back what a closed session left open.</summary>
 internal sealed record SessionArgs(string SessionId, string? Transaction = null);
@@ -72,7 +72,7 @@ internal sealed record MessageEntry(string Text, string Kind);
 /// it opened; both are present while it is still open after the script.</summary>
 internal sealed record QueryResult(List<ResultDescriptor> ResultSets, int DiscardedResultSets, List<MessageEntry> Messages, long RecordsAffected, long ElapsedMs,
     string Status, QueryFailure? Error, int CompletedBatches, int TotalBatches, string Database, bool MessagesTruncated, ResultBudget Budget, string CompletedAt,
-    int? Spid = null, string? Login = null, List<ResultDescriptor>? PlanSets = null, List<uint>? PlanOrder = null);
+    int? Spid = null, string? Login = null, List<ResultDescriptor>? PlanSets = null, List<uint>? PlanOrder = null, Statistics.ClientStatisticsSample? ClientStatistics = null);
 internal sealed record SessionStateArgs(string SessionId);
 /// <summary>query.session.state: an idle session's @@TRANCOUNT, read on demand before it ends. Checked is false when the
 /// session's SET options (SHOWPLAN_*, NOEXEC, PARSEONLY, FMTONLY) kept the SELECT from returning it; TransactionCount is
@@ -156,6 +156,20 @@ internal sealed record PeekArgs(string ConnectionId, string RequestId, ObjectRef
 /// <summary>Facts: fact id to a string, bool, whole number or null, for the facts the server's band has. Definition: a module's
 /// text, absent when it is encrypted or hidden; DefinitionTruncated is true only when it was cut. Facts are empty with an Error.</summary>
 internal sealed record PeekResult(Dictionary<string, object?> Facts, long ElapsedMs, string? Definition = null, bool? DefinitionTruncated = null, ExplorerError? Error = null);
+/// <summary>explorer.peekDependencies (its args are PeekArgs): what the object references and the tables its foreign keys
+/// point at (Uses), and what references it or points at it by a foreign key (UsedBy), each truncated when there were more.
+/// Both lists are empty with an Error.</summary>
+internal sealed record PeekDependenciesResult(List<PeekDependency> Uses, List<PeekDependency> UsedBy, long ElapsedMs, bool? UsesTruncated = null, bool? UsedByTruncated = null, ExplorerError? Error = null);
+/// <summary>One object on Peek's Dependencies tab: Database and Server name another database or a linked server; Kind is its
+/// Object Explorer kind when it is in this database and listed by name, with the Subtype the tree gives it; ForeignKey is true
+/// when a foreign key makes the link.</summary>
+internal sealed record PeekDependency(string Name, string? Schema = null, string? Database = null, string? Server = null, string? Kind = null, bool? ForeignKey = null, string? Subtype = null);
+/// <summary>explorer.peekRows: a table's or view's first rows (SELECT TOP (n) *), on Peek's slot and within its budget.</summary>
+internal sealed record PeekRowsArgs(string ConnectionId, string RequestId, ObjectRefDto Target);
+internal sealed record PeekRowsColumn(string Name, string Type);
+/// <summary>Columns: the first RowColumns of them (MoreColumns: how many were left out). Rows: each value as the grid shows it,
+/// null for NULL, cut to RowCellChars; Cut lists the [row, column] values that were cut, Unread those that could not be read.</summary>
+internal sealed record PeekRowsResult(List<PeekRowsColumn> Columns, List<string?[]> Rows, long ElapsedMs, int? MoreColumns = null, List<int[]>? Cut = null, ExplorerError? Error = null, List<int[]>? Unread = null);
 
 /// <summary>explorer.index: (re)builds the connection's object index, with module definitions unless Definitions is false. It
 /// sends droppable explorer.index.progress EVENTs and answers once every database was read or skipped; a newer build of the

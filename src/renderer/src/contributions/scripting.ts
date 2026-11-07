@@ -2,16 +2,17 @@ import { isCommandId } from '../../../shared/commands/catalog'
 import { scriptAsTitles, scriptCommandId, scriptDestinations, scriptDestinationSpecs, scriptMenuState, scriptVerbs, scriptVerbSpecs, scriptVerbTitle } from '../../../shared/scripting/catalog.ts'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
-import { explorerNodeOf } from '../menus/targets'
+import { objectNodeOf } from '../menus/targets'
 import type { QuickPickItem } from '../quickinput/QuickInputService'
 import { scriptTarget } from '../scripting/ScriptingService'
 
 /**
- * Scripting's commands. Script as › <verb> To › <destination> acts on the node its menu was opened for, otherwise on
- * the selected node (the palette's Script As… and Modify).
+ * Scripting's commands. Script as › <verb> To › <destination> acts on the node (or Search Objects result) its menu was opened
+ * for, otherwise on the selected node (the palette's Script As… and Modify).
  */
 export function scriptingContribution({ commands, scripting, explorer, quickInput, context }: Pick<Workbench, 'commands' | 'scripting' | 'explorer' | 'quickInput' | 'context'>): Disposable {
-  const nodeOf = (args?: CommandArgs) => args?.target ? explorerNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
+  // A Search Objects result's menu scripts the result's object, which Object Explorer may not have loaded.
+  const nodeOf = (args?: CommandArgs) => args?.target ? objectNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
   const scriptCommands = scriptVerbs.flatMap(verb => scriptDestinations.map(destination => commands.register(scriptCommandId(verb, destination), {
     when: args => scripting.canRun(verb, nodeOf(args)),
     run: args => scripting.run(verb, destination, nodeOf(args))

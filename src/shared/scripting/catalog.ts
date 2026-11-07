@@ -309,7 +309,7 @@ export interface ScriptSubmenuEntry {
   readonly title: string
   readonly nativeId: string
   readonly dynamicTitle?: 'scriptAs'
-  readonly placements: readonly [{ readonly menu: 'explorer.context' | typeof scriptAsSubmenuId; readonly group: string; readonly order: number; readonly mnemonic: string; readonly when: string }]
+  readonly placements: readonly { readonly menu: 'explorer.context' | 'search.hit.context' | typeof scriptAsSubmenuId; readonly group: string; readonly order: number; readonly mnemonic: string; readonly when: string }[]
 }
 export function scriptSubmenuEntries(): { readonly [K in typeof scriptAsSubmenuId | ScriptVerbSubmenuId]: ScriptSubmenuEntry } {
   const verbs = scriptVerbs.map(verb => {
@@ -322,8 +322,12 @@ export function scriptSubmenuEntries(): { readonly [K in typeof scriptAsSubmenuI
   })
   const scriptAs: ScriptSubmenuEntry = {
     title: 'Script as', nativeId: scriptAsSubmenuId, dynamicTitle: 'scriptAs',
-    // The keys describe the selection, which a node's menu has just selected; the empty area's menu keeps it, so it opts out.
-    placements: [{ menu: 'explorer.context', group: '2_script', order: 1, mnemonic: 's', when: "explorerScriptTitle != '' && explorerNode != 'background'" }]
+    // The keys describe the selection, which a node's menu has just selected; the empty area's menu keeps it, so it opts out. A
+    // Search Objects hit's menu stands in its own keys for the selection's (`selectionContextOf`).
+    placements: [
+      { menu: 'explorer.context', group: '2_script', order: 1, mnemonic: 's', when: "explorerScriptTitle != '' && explorerNode != 'background'" },
+      { menu: 'search.hit.context', group: '2_script', order: 1, mnemonic: 's', when: "explorerScriptTitle != ''" }
+    ]
   }
   return Object.fromEntries([[scriptAsSubmenuId, scriptAs], ...verbs]) as { readonly [K in typeof scriptAsSubmenuId | ScriptVerbSubmenuId]: ScriptSubmenuEntry }
 }

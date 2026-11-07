@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { scriptAsTitleKeys, scriptAsTitles, scriptCommandIds, scriptSubmenuEntries, scriptSubmenuIds, type ScriptAsTitleKey } from '../scripting/catalog.ts'
 import { commandDescriptor, commandIds, type CommandId, type RoleName } from './catalog'
-import { primaryRule, splitChord, toAccelerator, type Platform } from './keybindings'
+import { defaultRules, primaryRule, splitChord, toAccelerator, type Platform, type ResolvedRule } from './keybindings'
 import { compileWhen, type WhenAst } from './when'
 
 /** The menubar, in title-bar order. Alt plus the mnemonic opens a menu on Windows and Linux. */
@@ -11,8 +11,8 @@ export const applicationMenus = [
   { id: 'help', label: 'Help', mnemonic: 'h' }
 ] as const
 export type MenubarId = typeof applicationMenus[number]['id']
-/** Context menus, one per kind of target: the editor, an Object Explorer node, a table designer, a query tab, Query Output, a panel tab, a text field, the Integration Services Operations grid. */
-export const contextMenuIds = ['editor.context', 'explorer.context', 'tableDesigner.context', 'documentTab.context', 'output.context', 'dockTab.context', 'input.context', 'ssis.operation.context'] as const
+/** Context menus, one per kind of target: the editor, an Object Explorer node, a table designer, a query tab, Query Output, a panel tab, a text field, the Integration Services Operations grid, a Search Objects hit. */
+export const contextMenuIds = ['editor.context', 'explorer.context', 'tableDesigner.context', 'documentTab.context', 'output.context', 'dockTab.context', 'input.context', 'ssis.operation.context', 'search.hit.context'] as const
 export type ContextMenuId = typeof contextMenuIds[number]
 export const submenuIds = [
   'file.recent',
@@ -25,7 +25,8 @@ export const submenuIds = [
   'explorer.new',
   'explorer.tasks',
   'explorer.tasks.restore',
-  ...scriptSubmenuIds
+  ...scriptSubmenuIds,
+  'search.copy'
 ] as const
 export type SubmenuId = typeof submenuIds[number]
 export type MenuId = MenubarId | SubmenuId | ContextMenuId
@@ -34,7 +35,8 @@ export type MenuId = MenubarId | SubmenuId | ContextMenuId
  * line, so menus added later merge line by line. The planned order, where each new menu goes: 'file', 'file.recent',
  * 'edit', 'edit.findReplace', 'edit.advanced', 'edit.bookmarks', 'edit.intellisense', 'view', 'theme', 'query',
  * 'query.connection', 'tools', 'window', 'help', 'editor.context', 'explorer.context', 'explorer.new', 'explorer.tasks',
- * 'explorer.tasks.restore', ...scriptSubmenuIds, then the remaining context menus.
+ * 'explorer.tasks.restore', ...scriptSubmenuIds, then the remaining context menus, each followed by the submenus it has first
+ * ('search.hit.context', 'search.copy').
  */
 export const menuIds: readonly MenuId[] = [
   'file',
@@ -62,7 +64,9 @@ export const menuIds: readonly MenuId[] = [
   'output.context',
   'dockTab.context',
   'input.context',
-  'ssis.operation.context'
+  'ssis.operation.context',
+  'search.hit.context',
+  'search.copy'
 ]
 export const menubarIds: readonly MenubarId[] = applicationMenus.map(menu => menu.id)
 export const isContextMenuId = (menu: MenuId): menu is ContextMenuId => (contextMenuIds as readonly MenuId[]).includes(menu)
@@ -117,7 +121,9 @@ export const submenus: Readonly<Record<SubmenuId, SubmenuDescriptor>> = {
   'explorer.tasks': { title: 'Tasks', nativeId: 'explorer.tasks', placements: [{ menu: 'explorer.context', group: '4_tasks', order: 1, mnemonic: 't', when: "explorerNode == 'database' && !explorerServerLost" }] },
   'explorer.tasks.restore': { title: 'Restore', nativeId: 'explorer.tasks.restore', placements: [{ menu: 'explorer.tasks', group: '4_backup', order: 2, mnemonic: 'r' }] },
   // Script as › <verb> To, from src/shared/scripting/catalog.ts.
-  ...scriptSubmenuEntries()
+  ...scriptSubmenuEntries(),
+  // A Search Objects hit's names, from src/shared/explorer/search.ts' `searchHitNames`.
+  'search.copy': { title: 'Copy', nativeId: 'search.copy', placements: [{ menu: 'search.hit.context', group: '5_copy', order: 1, mnemonic: 'c' }] }
 }
 /** The deepest a submenu may nest below a menu, so at most four menu levels are ever open. */
 export const maxSubmenuDepth = 3
@@ -173,9 +179,12 @@ const applies = (platforms: readonly Platform[] | undefined, platform: Platform)
  */
 export const menuMayShowChords = (chords: readonly string[], platform: Platform): boolean =>
   platform !== 'darwin' || (chords.length === 1 && splitChord(chords[0]).modifiers.has('meta'))
-/** The accelerator a command's menu items show: its primary key, where Electron can name it and the platform allows it. */
-export function menuAccelerator(id: CommandId, platform: Platform): string | undefined {
-  const rule = primaryRule(id, platform)
+/**
+ * The accelerator a command's menu items show: its primary key, where Electron can name it and the platform allows it.
+ * `rules` defaults to the catalogue's; pass effective rules to show the user's shortcuts.
+ */
+export function menuAccelerator(id: CommandId, platform: Platform, rules: readonly ResolvedRule[] = defaultRules(platform)): string | undefined {
+  const rule = primaryRule(id, platform, rules)
   return rule && menuMayShowChords(rule.chords, platform) ? toAccelerator(rule.chords, platform) : undefined
 }
 /** A command's title in menus on `platform`: the placement's own title, else the platform's, else the palette title. */
@@ -187,7 +196,7 @@ export const menuTitle = (id: CommandId, platform: Platform, placementTitle?: st
  * title, with exactly one separator between non-empty groups. Placement `when` clauses are compiled, not applied:
  * `pruneMenu` drops what a context hides, and with it any separator or submenu left empty.
  */
-export function buildMenuModel(menu: MenuId, platform: Platform): MenuEntry[] {
+export function buildMenuModel(menu: MenuId, platform: Platform, rules: readonly ResolvedRule[] = defaultRules(platform)): MenuEntry[] {
   const items: { group: string; order: number; title: string; entry: MenuEntry }[] = []
   const optional = (placement: { readonly mnemonic?: string; readonly when?: string }) =>
     ({ ...(placement.mnemonic ? { mnemonic: placement.mnemonic } : {}), ...(placement.when !== undefined ? { when: compileWhen(placement.when) } : {}) })
@@ -195,7 +204,7 @@ export function buildMenuModel(menu: MenuId, platform: Platform): MenuEntry[] {
     const command = commandDescriptor(id)
     for (const placement of command.menus ?? []) {
       if (placement.menu !== menu || !applies(placement.platforms, platform)) continue
-      const title = menuTitle(id, platform, placement.title), accelerator = menuAccelerator(id, platform)
+      const title = menuTitle(id, platform, placement.title), accelerator = menuAccelerator(id, platform, rules)
       items.push({ group: placement.group, order: placement.order, title, entry: {
         kind: 'command', id, nativeId: nativeItemId(id, menu), title, toggle: command.toggled !== undefined, ...optional(placement),
         ...(command.role ? { role: command.role } : {}), ...(accelerator ? { accelerator } : {})

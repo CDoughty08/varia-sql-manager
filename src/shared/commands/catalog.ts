@@ -216,6 +216,10 @@ export const commandCatalog = {
     title: 'Show Execution Plan', category: 'View', icon: 'execution-plan', keywords: ['output', 'showplan', 'plan'],
     menus: [{ menu: 'window', group: '1_panes', order: 5, title: 'Execution Plan', mnemonic: 'x' }]
   },
+  'window.statistics': {
+    title: 'Show Client Statistics', category: 'View', icon: 'graph', keywords: ['output', 'bytes', 'timing'],
+    menus: [{ menu: 'window', group: '1_panes', order: 8, title: 'Client Statistics', mnemonic: 'c' }]
+  },
   // SSMS's Ctrl+R: hides the output panels (closing them keeps the results) or shows them again. It never reloads the window.
   'view.toggleResultsPane': {
     title: 'Toggle Results Pane', category: 'View', icon: 'output', keywords: ['results', 'messages', 'output', 'hide', 'show'], toggled: 'outputPaneVisible',
@@ -257,6 +261,16 @@ export const commandCatalog = {
     precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy', toggled: 'includeActualPlan',
     keybindings: [{ win: 'ctrl+m', linux: 'ctrl+m', when: 'editorFocus || queryBarFocus' }],
     menus: [{ menu: 'query', group: '1_execute', order: 3, mnemonic: 'i' }]
+  },
+  'query.includeClientStatistics': {
+    title: 'Include Client Statistics', category: 'Query', icon: 'graph', keywords: ['bytes', 'roundtrips', 'timing'],
+    precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy', toggled: 'includeClientStatistics',
+    keybindings: [{ win: 'alt+shift+s', linux: 'alt+shift+s', when: 'editorFocus || queryBarFocus' }],
+    menus: [{ menu: 'query', group: '1_execute', order: 4, mnemonic: 's' }]
+  },
+  'query.resetClientStatistics': {
+    title: 'Reset Client Statistics', category: 'Query', icon: 'clear-all', precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy',
+    menus: [{ menu: 'query', group: '1_execute', order: 5, mnemonic: 'r' }]
   },
   'workbench.showCommands': {
     title: 'Show All Commands', palette: false,
@@ -403,7 +417,10 @@ export const commandCatalog = {
   'explorer.modify': {
     title: 'Modify', category: 'Object Explorer', icon: 'edit', precondition: "backendReady && explorerSelectionModifiable && explorerScriptAlter == 'enabled' && !documentBusy",
     unavailableHint: 'Select a stored procedure, function, or trigger.',
-    menus: [{ menu: 'explorer.context', group: '1_query', order: 4, mnemonic: 'y', when: "explorerSelectionModifiable && explorerNode != 'background'" }]
+    menus: [
+      { menu: 'explorer.context', group: '1_query', order: 4, mnemonic: 'y', when: "explorerSelectionModifiable && explorerNode != 'background'" },
+      { menu: 'search.hit.context', group: '1_query', order: 4, mnemonic: 'y', when: 'explorerSelectionModifiable' }
+    ]
   },
   'explorer.cancelScripting': { title: 'Cancel Scripting', category: 'Object Explorer', icon: 'debug-stop', keywords: ['script', 'stop'], precondition: 'scriptingRunning', unavailableHint: 'Nothing is being scripted.' },
   // Peek: the object's definition and properties in a card beside its row (src/shared/explorer/peek.ts). Space on the selected
@@ -412,7 +429,7 @@ export const commandCatalog = {
     title: 'Peek', category: 'Object Explorer', icon: 'eye', keywords: ['definition', 'properties', 'preview', 'describe'],
     precondition: "backendReady && (explorerSelectionKind == 'table' || explorerSelectionKind == 'view' || explorerSelectionKind == 'procedure' || explorerSelectionKind == 'function')",
     unavailableHint: 'Select a table, view, stored procedure, or function.',
-    keybindings: [{ key: 'alt+f12', when: "activePanel == 'explorer' && !inputFocus" }],
+    keybindings: [{ key: 'alt+f12', when: "activePanel == 'explorer' && !inputFocus && !searchHitsFocus" }],
     menus: [{ menu: 'explorer.context', group: '1_query', order: 7, mnemonic: 'k', when: "(explorerNode == 'table' || explorerNode == 'view' || explorerNode == 'procedure' || explorerNode == 'function') && !explorerServerLost" }]
   },
   'explorer.copyName': {
@@ -802,7 +819,30 @@ export const commandCatalog = {
     title: 'Rebuild Search Index', category: 'Object Explorer', icon: 'refresh', keywords: ['search', 'objects', 'index', 'refresh'],
     precondition: 'hasConnection', unavailableHint: noServer
   },
-  'explorer.stopIndexing': { title: 'Stop Indexing', category: 'Object Explorer', icon: 'debug-stop', keywords: ['search', 'index', 'cancel'] }
+  'explorer.stopIndexing': { title: 'Stop Indexing', category: 'Object Explorer', icon: 'debug-stop', keywords: ['search', 'index', 'cancel'] },
+  // A Search Objects result's menu (search.hit.context) and keys. They act on the result the menu was opened for, else the
+  // selected result of the list that has focus; the palette offers none of them, since it has no result to act on.
+  'search.revealHit': {
+    title: 'Reveal in Object Explorer', category: 'Object Explorer', icon: 'list-tree', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result.',
+    menus: [{ menu: 'search.hit.context', group: '0_reveal', order: 1, mnemonic: 'r' }]
+  },
+  // Ctrl+C (and Edit › Copy) on a focused result runs it from SearchPanel's list, as the results grid's does; the rule only labels the key.
+  'search.copyName': {
+    title: 'Copy Name', category: 'Object Explorer', icon: 'copy', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result.',
+    keybindings: [{ key: 'mod+c', when: 'searchHitsFocus', native: true }], menus: [{ menu: 'search.copy', group: '1_names', order: 1, title: 'Name', mnemonic: 'n' }]
+  },
+  'search.copySchemaName': {
+    title: 'Copy Schema-Qualified Name', category: 'Object Explorer', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result in a schema.',
+    menus: [{ menu: 'search.copy', group: '1_names', order: 2, title: 'Schema-Qualified Name', mnemonic: 's', when: 'searchHitSchema' }]
+  },
+  'search.copyQualifiedName': {
+    title: 'Copy Fully Qualified Name', category: 'Object Explorer', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result in a schema.',
+    keybindings: [{ key: 'mod+shift+c', when: 'searchHitsFocus' }], menus: [{ menu: 'search.copy', group: '1_names', order: 3, title: 'Fully Qualified Name', mnemonic: 'f', when: 'searchHitSchema' }]
+  },
+  'search.copyBracketedName': {
+    title: 'Copy Bracketed Name', category: 'Object Explorer', palette: false, precondition: 'hasConnection', unavailableHint: 'Select a search result.',
+    menus: [{ menu: 'search.copy', group: '2_brackets', order: 1, title: 'Bracketed Name', mnemonic: 'b' }]
+  }
 } as const satisfies Record<string, CommandDescriptor>
 
 export type CommandId = keyof typeof commandCatalog

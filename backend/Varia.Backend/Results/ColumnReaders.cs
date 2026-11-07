@@ -129,7 +129,9 @@ internal sealed class ColumnPlan
         catch (XmlException) { return false; }
     }
 
-    public static ColumnPlan From(SqlDataReader reader, string? prefetchedText = null)
+    /// <param name="cellChars">A lower cap on every value's display text (Peek's Top rows), in UTF-16 code units: a binary value
+    /// keeps the bytes whose 0x… text fits. The rest of a longer value is read past as usual.</param>
+    public static ColumnPlan From(SqlDataReader reader, string? prefetchedText = null, int? cellChars = null)
     {
         var count = reader.FieldCount;
         var schema = reader.GetSchemaTable() ?? throw new InvalidOperationException("The result set has no schema.");
@@ -154,6 +156,7 @@ internal sealed class ColumnPlan
             var nullable = row["AllowDBNull"] is not false;
             var clrType = row["DataType"] as Type;
             var (codec, wire, role, cap) = Choose(provider, precision, isLong, clrType, isPlan);
+            if (cellChars is { } chars && cap > 0) cap = Math.Min(cap, wire == WireKind.Binary ? Math.Max(1, (chars - 2) / 2) : chars);
             if (count == 1 && ForXmlCollector.RoleOf(name, provider) is { } documentRole) role = forXml = documentRole;
             var timeScale = scale is >= 0 and <= 7 ? scale.Value : 7;
             var collation = IsCharType(provider) ? SqlClientCollation.Of(reader, i) : null;

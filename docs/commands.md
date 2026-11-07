@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (236)
+## Commands (244)
 
 ### File
 
@@ -72,6 +72,7 @@ keys it uses are listed below.
 | Show Results | `window.results` | — | — | — | Always | Window › Results |
 | Show Messages | `window.messages` | — | — | — | Always | Window › Messages |
 | Show Execution Plan | `window.plan` | — | — | — | Always | Window › Execution Plan |
+| Show Client Statistics | `window.statistics` | — | — | — | Always | Window › Client Statistics |
 | Toggle Results Pane | `view.toggleResultsPane` | Ctrl+R | Ctrl+R | ⌘R | Always; checked when `outputPaneVisible` | Window › Show Results Pane |
 | Switch Between Query and Results | `window.switchPane` | F6 (`!activityMonitorFocus`), Shift+F6 (`!activityMonitorFocus`) | F6 (`!activityMonitorFocus`), Shift+F6 (`!activityMonitorFocus`) | F6 (`!activityMonitorFocus`), ⇧F6 (`!activityMonitorFocus`) | `activeDocumentIsText` | — |
 | Save Layout… | `layout.save` | — | — | — | Always | View › Save Layout…; Window › Save Window Layout… |
@@ -124,6 +125,8 @@ keys it uses are listed below.
 | Execute | `query.execute` | F5 (`editorFocus \|\| queryBarFocus`), Ctrl+Enter (`editorFocus \|\| queryBarFocus`), Ctrl+E (`editorFocus \|\| queryBarFocus`) | F5 (`editorFocus \|\| queryBarFocus`), Ctrl+Enter (`editorFocus \|\| queryBarFocus`), Ctrl+E (`editorFocus \|\| queryBarFocus`) | F5 (`editorFocus \|\| queryBarFocus`), ⌘↩ (`editorFocus \|\| queryBarFocus`) | `activeDocumentIsQuery && !queryRunning && !documentBusy && (activeDocumentConnected \|\| (backendReady && !activeConnectionLost))` | Query › Execute; Editor context menu › Execute |
 | Cancel Executing Query | `query.cancel` | Alt+Pause | Alt+Pause | — | `queryRunning` | Query › Cancel Executing Query; Editor context menu › Cancel Executing Query |
 | Include Actual Execution Plan | `query.includeActualPlan` | Ctrl+M (`editorFocus \|\| queryBarFocus`) | Ctrl+M (`editorFocus \|\| queryBarFocus`) | — | `activeDocumentIsQuery && !queryRunning && !documentBusy`; checked when `includeActualPlan` | Query › Include Actual Execution Plan |
+| Include Client Statistics | `query.includeClientStatistics` | Shift+Alt+S (`editorFocus \|\| queryBarFocus`) | Shift+Alt+S (`editorFocus \|\| queryBarFocus`) | — | `activeDocumentIsQuery && !queryRunning && !documentBusy`; checked when `includeClientStatistics` | Query › Include Client Statistics |
+| Reset Client Statistics | `query.resetClientStatistics` | — | — | — | `activeDocumentIsQuery && !queryRunning && !documentBusy` | Query › Reset Client Statistics |
 | Change Connection… | `query.changeConnection` | — | — | — | `hasActiveDocument && activeDocumentIsQuery && !queryRunning && !documentBusy` | Query › Connection › Change Connection… |
 | Disconnect | `query.disconnect` | — | — | — | `activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy` | Query › Connection › Disconnect |
 | Disconnect All Queries | `query.disconnectAll` | — | — | — | `anyDocumentConnected && !documentBusy` | Query › Connection › Disconnect All Queries |
@@ -163,10 +166,10 @@ keys it uses are listed below.
 | Collapse All | `explorer.collapseAll` | — | — | — | `hasConnection` | — |
 | Group by Schema | `explorer.groupBySchema` | — | — | — | Always; checked when `explorerGroupBySchema` | — |
 | New Query | `explorer.newQuery` | — | — | — | `!documentBusy` | Object Explorer context menu › New Query |
-| Select Top 1000 Rows | `explorer.selectTopRows` | — | — | — | `backendReady && explorerActionSelectTop == 'enabled' && !documentBusy` | Object Explorer context menu › Select Top 1000 Rows |
-| Rename | `explorer.rename` | F2 (`activePanel == 'explorer' && !textInputFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus`) | `backendReady && explorerActionRename == 'enabled'` | Object Explorer context menu › Rename |
-| Delete | `explorer.delete` | Delete (`activePanel == 'explorer' && !textInputFocus`) | Delete (`activePanel == 'explorer' && !textInputFocus`) | ⌘⌫ (`activePanel == 'explorer' && !textInputFocus`), ⌦ (`activePanel == 'explorer' && !textInputFocus`) | `backendReady && explorerActionDelete == 'enabled'` | Object Explorer context menu › Delete |
-| Properties | `explorer.properties` | — | — | ⌘I (`activePanel == 'explorer' && !textInputFocus`) | `backendReady && explorerActionProperties == 'enabled'` | Object Explorer context menu › Properties |
+| Select Top 1000 Rows | `explorer.selectTopRows` | — | — | — | `backendReady && explorerActionSelectTop == 'enabled' && !documentBusy` | Object Explorer context menu › Select Top 1000 Rows; Search Objects result context menu › Select Top 1000 Rows |
+| Rename | `explorer.rename` | F2 (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | `backendReady && explorerActionRename == 'enabled'` | Object Explorer context menu › Rename |
+| Delete | `explorer.delete` | Delete (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | Delete (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | ⌘⌫ (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`), ⌦ (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | `backendReady && explorerActionDelete == 'enabled'` | Object Explorer context menu › Delete |
+| Properties | `explorer.properties` | — | — | ⌘I (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | `backendReady && explorerActionProperties == 'enabled'` | Object Explorer context menu › Properties |
 | Attach Database… | `explorer.attachDatabase` | — | — | — | `backendReady && explorerActionAttach == 'enabled'` | Object Explorer context menu › Attach… |
 | Take Database Offline | `explorer.takeOffline` | — | — | — | `backendReady && explorerActionTakeOffline == 'enabled'` | Object Explorer context menu › Tasks › Take Offline |
 | Bring Database Online | `explorer.bringOnline` | — | — | — | `backendReady && explorerActionBringOnline == 'enabled'` | Object Explorer context menu › Tasks › Bring Online |
@@ -212,13 +215,18 @@ keys it uses are listed below.
 | Script as EXECUTE to File… (not in the palette) | `explorer.scriptExecuteToFile` | — | — | — | `backendReady && explorerScriptExecute == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › EXECUTE To › File… |
 | Script as EXECUTE to Clipboard (not in the palette) | `explorer.scriptExecuteToClipboard` | — | — | — | `backendReady && explorerScriptExecute == 'enabled'` | Object Explorer context menu › Script … as › EXECUTE To › Clipboard |
 | Script As… | `explorer.scriptAs` | — | — | — | `backendReady && explorerScriptTitle != ''` | — |
-| Modify | `explorer.modify` | — | — | — | `backendReady && explorerSelectionModifiable && explorerScriptAlter == 'enabled' && !documentBusy` | Object Explorer context menu › Modify |
+| Modify | `explorer.modify` | — | — | — | `backendReady && explorerSelectionModifiable && explorerScriptAlter == 'enabled' && !documentBusy` | Object Explorer context menu › Modify; Search Objects result context menu › Modify |
 | Cancel Scripting | `explorer.cancelScripting` | — | — | — | `scriptingRunning` | — |
-| Peek | `explorer.peek` | Alt+F12 (`activePanel == 'explorer' && !inputFocus`) | Alt+F12 (`activePanel == 'explorer' && !inputFocus`) | ⌥F12 (`activePanel == 'explorer' && !inputFocus`) | `backendReady && (explorerSelectionKind == 'table' \|\| explorerSelectionKind == 'view' \|\| explorerSelectionKind == 'procedure' \|\| explorerSelectionKind == 'function')` | Object Explorer context menu › Peek |
+| Peek | `explorer.peek` | Alt+F12 (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`) | Alt+F12 (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`) | ⌥F12 (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`) | `backendReady && (explorerSelectionKind == 'table' \|\| explorerSelectionKind == 'view' \|\| explorerSelectionKind == 'procedure' \|\| explorerSelectionKind == 'function')` | Object Explorer context menu › Peek |
 | Copy Name | `explorer.copyName` | — | — | — | `hasConnection` | Object Explorer context menu › Copy Name |
 | Search Objects… | `explorer.searchObjects` | — | — | — | `hasConnection` | View › Search Objects…; Object Explorer context menu › Search Objects… |
 | Rebuild Search Index | `explorer.rebuildIndex` | — | — | — | `hasConnection` | — |
 | Stop Indexing | `explorer.stopIndexing` | — | — | — | Always | — |
+| Reveal in Object Explorer (not in the palette) | `search.revealHit` | — | — | — | `hasConnection` | Search Objects result context menu › Reveal in Object Explorer |
+| Copy Name (not in the palette) | `search.copyName` | Ctrl+C * (`searchHitsFocus`) | Ctrl+C * (`searchHitsFocus`) | ⌘C * (`searchHitsFocus`) | `hasConnection` | Search Objects result context menu › Copy › Name |
+| Copy Schema-Qualified Name (not in the palette) | `search.copySchemaName` | — | — | — | `hasConnection` | Search Objects result context menu › Copy › Schema-Qualified Name |
+| Copy Fully Qualified Name (not in the palette) | `search.copyQualifiedName` | Ctrl+Shift+C (`searchHitsFocus`) | Ctrl+Shift+C (`searchHitsFocus`) | ⇧⌘C (`searchHitsFocus`) | `hasConnection` | Search Objects result context menu › Copy › Fully Qualified Name |
+| Copy Bracketed Name (not in the palette) | `search.copyBracketedName` | — | — | — | `hasConnection` | Search Objects result context menu › Copy › Bracketed Name |
 
 ### Table Designer
 
@@ -467,6 +475,8 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_execute` | E**x**ecute | `query.execute` | Always |
 | `1_execute` | **C**ancel Executing Query | `query.cancel` | Always |
 | `1_execute` | **I**nclude Actual Execution Plan | `query.includeActualPlan` | Always |
+| `1_execute` | Include Client **S**tatistics | `query.includeClientStatistics` | Always |
+| `1_execute` | **R**eset Client Statistics | `query.resetClientStatistics` | Always |
 
 #### Query › Connection
 
@@ -496,6 +506,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_panes` | E**x**ecution Plan | `window.plan` | Always |
 | `1_panes` | S**h**ow Results Pane | `view.toggleResultsPane` | Always |
 | `1_panes` | Panel **T**abs | `window.togglePanelTabs` | Always |
+| `1_panes` | **C**lient Statistics | `window.statistics` | Always |
 | `2_documents` | **N**ext Query | `document.next` | Always |
 | `2_documents` | **P**revious Query | `document.previous` | Always |
 | `2_documents` | C**l**ose All Documents | `file.closeAll` | Always |
@@ -797,7 +808,28 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 | `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
 | `8_view` | **P**ause | `ssis.pauseOperations` | Always |
 
-## Context keys (129)
+#### Search Objects result context menu (`search.hit.context`)
+
+Right-click a Search Objects result (in the Search Objects tab or Object Explorer's search), which selects it, or press Shift+F10 or the context-menu key on the selected result. Items act on that object: Select Top N Rows, Modify and Script … as are Object Explorer's, for the object's kind; Rename, Delete and Properties are left to the tree (Reveal in Object Explorer first).
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `0_reveal` | **R**eveal in Object Explorer | `search.revealHit` | Always |
+| `1_query` | Select Top 1000 Ro**w**s | `explorer.selectTopRows` | `explorerActionSelectTop != ''` |
+| `1_query` | Modif**y** | `explorer.modify` | `explorerSelectionModifiable` |
+| `2_script` | **S**cript … as › | Submenu: Object Explorer context menu › Script … as | `explorerScriptTitle != ''` |
+| `5_copy` | **C**opy › | Submenu: Search Objects result context menu › Copy | Always |
+
+#### Search Objects result context menu › Copy
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_names` | **N**ame | `search.copyName` | Always |
+| `1_names` | **S**chema-Qualified Name | `search.copySchemaName` | `searchHitSchema` |
+| `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
+| `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
+
+## Context keys (132)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -815,6 +847,8 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `textInputFocus` | boolean | focus | `editorTextFocus \|\| inputFocus`. |
 | `activePanel` | `'explorer'`, `'editor'`, `'output'`, `''` | focus | The pane that holds focus: Object Explorer, the query editor, an output panel (Results, Messages or Execution plan), or '' for none. |
 | `outputGridFocus` | boolean | focus | Focus is in a results grid, which copies its selected cells rather than text. |
+| `messagesFocus` | boolean | focus | Focus is in a Messages view; activePanel is then 'output'. |
+| `searchHitsFocus` | boolean | focus | Focus is on a Search Objects result (the Search Objects tab's or Object Explorer's search), whose Copy copies the object's name. |
 | `designerFocus` | boolean | focus | Focus is in the active table designer; activePanel is then 'editor'. |
 | `queryBarFocus` | boolean | focus | Focus is in the active query's bar (Execute, Cancel and its server and database lists); activePanel is then 'editor'. |
 | `activityMonitorFocus` | boolean | focus | Focus is in the active Activity Monitor; activePanel is then 'editor'. |
@@ -861,6 +895,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `activeConnectionLost` | boolean | state | The active query's connection was lost when the SQL backend restarted. |
 | `queryRunning` | boolean | state | The active query is running. |
 | `includeActualPlan` | boolean | state | The active query will capture actual execution plans. |
+| `includeClientStatistics` | boolean | state | The active query will collect client statistics. |
 | `hasResults` | boolean | state | The active query has result sets, and they were not closed (Close Results) or lost with a run the SQL backend stopped. |
 | `anyDocumentConnected` | boolean | state | Some open query's server is connected. |
 | `outputPaneVisible` | boolean | state | An output panel (Results, Messages or Execution plan) is open and showing: its tab is selected, and no other panel is maximized. |
@@ -931,10 +966,11 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerServerEngine` | `''`, `'box'`, `'managedInstance'`, `'cloud'` | target | The kind of server the Object Explorer node the menu is for is on: 'box', 'managedInstance' or 'cloud', or '' for the empty area. |
 | `explorerServerLinux` | boolean | target | The menu is for a node on SQL Server on Linux. |
 | `outputView` | `'grid'`, `'messages'`, `''` | target | The Query Output view the menu is for: a results grid or the messages. |
-| `pane` | `'explorer'`, `'editor'`, `'results'`, `'messages'`, `'plan'`, `''` | target | The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, Results, Messages, or Execution plan. |
+| `pane` | `'explorer'`, `'editor'`, `'results'`, `'messages'`, `'plan'`, `'statistics'`, `''` | target | The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, Results, Messages, Execution plan, or Client Statistics. |
 | `paneFloating` | boolean | target | The panel the menu is for is floating. |
 | `panePopout` | boolean | target | The panel the menu is for is in a window of its own (Move into New Window). |
 | `documentTabFloating` | boolean | target | The document tab the menu is for is in a floating editor group. |
+| `searchHitSchema` | boolean | target | The Search Objects result the menu is for is in a schema (itself, or its parent for a column, key or trigger), so it has schema-qualified and fully qualified names. |
 
 ## Reserved keys
 

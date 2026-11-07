@@ -25,6 +25,8 @@ The same search runs in two places, with the same options and results:
   when more than one server is connected. Its hits are one tab stop on the selected hit: a click selects a hit, ↑ ↓,
   Page Up, Page Down (to the last hit in view first, then a page on), Home and End move the selection, and a double-click or Enter reveals the hit in Object Explorer, which
   shows without taking focus, so the keys go on walking the hits. ↑ on the first hit, and Escape, return to the box.
+- **In both,** the hits are a listbox whose options announce the selected one, and each has a context menu (right-click,
+  which selects the hit, or Shift+F10 and the context-menu key on the selected hit). See *A hit's menu* below.
 
 ## The index
 
@@ -150,8 +152,16 @@ The same search runs in two places, with the same options and results:
 - **When a reveal fails.** The status says why: the listing failed, a filter hides the row, the folder stopped at its
   100,000-item cap (filter it by name), or the object is gone. Stop in Object Explorer, another reveal, or losing the
   server ends it.
-- **Scripting a hit.** The script button scripts the object to a new query: ALTER for modules where the login may,
-  otherwise CREATE. Columns and parameters, which Script As does not script, have no button.
+- **A hit's menu** (`search.hit.context`) is Object Explorer's menu for the hit's object, which the tree need not have
+  loaded: Reveal in Object Explorer; Select Top N Rows on a table or view; Modify on a T-SQL module; Script … as, titled
+  and greyed for the object's kind as in the tree; and Copy. Its Object Explorer commands read the hit's own selection
+  keys (`CommandArgs.state`, from `selectionContextOf`), never the tree's selection. Rename, Delete and Properties need
+  the tree's row and are left to the tree: reveal the hit first.
+- **Copy** has four forms. Name is the name as stored (Ctrl+C on a hit). Schema-Qualified Name and Fully Qualified Name
+  (Ctrl+Shift+C) join the database, schema, a child's parent and the name with dots, bracketing only a part that is not a
+  regular identifier or is a reserved keyword (`AppData.dbo.[Order Details].UnitPrice`); they are offered only for objects
+  in a schema. Bracketed Name brackets every part, `]` doubled as QUOTENAME does (`[AppData].[dbo].[Orders]`); a login, a
+  database or a database user has only its name, bracketed.
 
 ## Protocol
 
