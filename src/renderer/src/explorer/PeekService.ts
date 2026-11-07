@@ -1,5 +1,6 @@
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import { isPeekKind, peekLimits, peekSpecs, type PeekKind, type PeekResult } from '../../../shared/explorer/peek.ts'
+import type { ObjectRef } from '../../../shared/explorer/refs.ts'
 import type { ScriptingOptions } from '../../../shared/scripting/options.ts'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
@@ -21,6 +22,15 @@ export interface OpenPeek {
   readonly definition: PeekPart<PeekDefinition>
 }
 export interface PeekSnapshot { readonly open?: OpenPeek }
+/** What a read describes: a table, view, procedure or function on a connection. */
+export interface PeekTarget { readonly connectionId: string; readonly object: ObjectRef; readonly kind: PeekKind }
+/** A read's parts as they arrive. */
+export type PeekChange = Partial<{ readonly facts: PeekPart<PeekResult['facts']>; readonly definition: PeekPart<PeekDefinition> }>
+/**
+ * A running read: the Peek card's, or a Search Objects tab's details pane's. Releasing it cancels the properties read, and the
+ * table's script unless `keep` and the facts gave its modified time, when it finishes in the background to be cached.
+ */
+export interface PeekReader { release(keep: boolean): void }
 
 export interface PeekServiceOptions {
   readonly api: Pick<VariaApi, 'explorerPeek' | 'explorerCancel' | 'scriptObjects' | 'cancelScripting' | 'writeClipboardText'>
@@ -71,7 +81,7 @@ interface ScriptJob {
  */
 export class PeekService extends SnapshotStore<PeekSnapshot> {
   private next = 0
-  private requests: { peek?: string; script?: ScriptJob } = {}
+  private card: PeekReader | undefined
   private background: ScriptJob[] = []
   /** Least recently used first. */
   private readonly scripts = new Map<string, CachedScript>()
@@ -161,14 +171,16 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
 
   close(): void {
     this.cancelHover()
-    this.release(true)
+    this.card?.release(true)
+    this.card = undefined
     if (this.getSnapshot().open) this.publish({})
   }
 
   dispose(): void {
     if (this.disposed) return
     this.cancelHover()
-    this.release(false)
+    this.card?.release(false)
+    this.card = undefined
     this.forget(() => true)
     if (this.getSnapshot().open) this.publish({})
     this.disposed = true
@@ -183,30 +195,47 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
   private load(node: ExplorerMenuNode, kind: PeekKind, source: PeekSource, fresh: boolean): void {
     if (node.ref.type !== 'object') return
     // A refresh asks for the same script again, so the one running is not worth keeping.
-    this.release(!fresh)
-    const id = ++this.next, object = node.ref.object, connectionId = node.connectionId
+    this.card?.release(!fresh)
+    const id = ++this.next
+    this.publish({ open: { id, rowId: node.id, node, kind, source, facts: { status: 'loading' }, definition: { status: 'loading' } } })
+    this.card = this.read({ connectionId: node.connectionId, object: node.ref.object, kind }, fresh, change => {
+      const open = this.getSnapshot().open
+      if (open && open.id === id) this.publish({ open: { ...open, ...change } })
+    })
+  }
+
+  /**
+   * Reads `target`'s properties (explorer.peek) and its definition: a module's text comes with them; a table's from Script As
+   * CREATE, taken from the window's cache while the table's modified time still matches (never when `fresh`), or from a
+   * replaced read's script still running for it. `update` gets each part as it arrives, until the reader is released.
+   */
+  read(target: PeekTarget, fresh: boolean, update: (change: PeekChange) => void): PeekReader {
+    const { connectionId, object, kind } = target
+    const requests: { peek?: string; script?: ScriptJob } = {}
+    let released = this.disposed
+    const reader: PeekReader = { release: keep => { if (released) return; released = true; this.release(requests, keep) } }
+    if (released) return reader
     const key = peekSpecs[kind].definition === 'script' ? scriptKey(connectionId, object) : undefined
     const cached = key === undefined || fresh ? undefined : this.kept(key)
     const peekId = this.newId()
-    this.requests = { peek: peekId }
-    this.publish({ open: { id, rowId: node.id, node, kind, source, facts: { status: 'loading' }, definition: { status: 'loading' } } })
-    const current = () => !this.disposed && this.getSnapshot().open?.id === id
-    const update = (change: Partial<Pick<OpenPeek, 'facts' | 'definition'>>) => { const open = this.getSnapshot().open; if (open && open.id === id) this.publish({ open: { ...open, ...change } }) }
+    requests.peek = peekId
+    const current = () => !this.disposed && !released
+    const tell = (change: PeekChange) => { if (current()) update(change) }
     const deliver = (result: ScriptReply) => {
       if (!current()) return
-      if (!result.ok) { update({ definition: { status: 'error', message: result.error } }); return }
+      if (!result.ok) { tell({ definition: { status: 'error', message: result.error } }); return }
       const value = result.value
-      if (value.error) { update({ definition: { status: 'error', message: value.error.message } }); return }
-      update({ definition: { status: 'ready', value: value.text === undefined ? {} : { text: value.text } } })
+      if (value.error) { tell({ definition: { status: 'error', message: value.error.message } }); return }
+      tell({ definition: { status: 'ready', value: value.text === undefined ? {} : { text: value.text } } })
     }
     const startScript = (key: string, modified?: string): ScriptJob => {
       const options = this.options.scriptingOptions.getSnapshot().options
       const job: ScriptJob = { requestId: this.newId(), connectionId, key, optionsKey: JSON.stringify(options), deliver, ...(modified === undefined ? {} : { modified }), done: false }
-      this.requests = { ...this.requests, script: job }
+      requests.script = job
       void settle(this.options.api.scriptObjects({ connectionId, requestId: job.requestId, targets: [object], verb: 'create', options })).then(result => {
         job.done = true
         this.background = this.background.filter(other => other !== job)
-        if (this.requests.script === job) this.requests = { ...this.requests, script: undefined }
+        if (requests.script === job) requests.script = undefined
         if (result.ok && !result.value.error && result.value.text !== undefined) {
           if (job.modified === undefined) job.text = result.value.text
           else this.keep(job, result.value.text)
@@ -215,13 +244,13 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
       }).catch(onUnexpectedError)
       return job
     }
-    // A replaced card's script for this table, still running, answers this card instead of a second SMO job.
+    // A replaced read's script for this table, still running, answers this read instead of a second SMO job.
     const adopt = (key: string): ScriptJob | undefined => {
       const job = this.background.find(other => other.key === key && !other.done && other.optionsKey === this.optionsKey())
       if (!job) return undefined
       this.background = this.background.filter(other => other !== job)
       job.deliver = deliver
-      this.requests = { ...this.requests, script: job }
+      requests.script = job
       return job
     }
     // Without a kept script the table is scripted at once (or by the script already running for it); with one, the facts'
@@ -229,16 +258,16 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
     let job = key === undefined || cached ? undefined : (fresh ? undefined : adopt(key)) ?? startScript(key)
     void settle(this.options.api.explorerPeek({ connectionId, requestId: peekId, target: object })).then(result => {
       if (!current()) return
-      if (this.requests.peek === peekId) this.requests = { ...this.requests, peek: undefined }
+      if (requests.peek === peekId) requests.peek = undefined
       if (!result.ok || result.value.error) {
         const message = result.ok ? result.value.error?.message ?? '' : result.error
-        update({ facts: { status: 'error', message }, ...(key === undefined ? { definition: { status: 'error', message } } : {}) })
+        tell({ facts: { status: 'error', message }, ...(key === undefined ? { definition: { status: 'error', message } } : {}) })
         // A kept script cannot be checked without the facts, so the table is scripted again.
         if (key !== undefined && cached) startScript(key)
         return
       }
       const value = result.value, modified = typeof value.facts.modified === 'string' ? value.facts.modified : undefined
-      update({ facts: { status: 'ready', value: value.facts },
+      tell({ facts: { status: 'ready', value: value.facts },
         ...(key === undefined ? { definition: { status: 'ready', value: value.definition === undefined ? {} : { text: value.definition, ...(value.definitionTruncated ? { truncated: true } : {}) } } } : {}) })
       if (key === undefined) return
       if (job && modified !== undefined) {
@@ -255,9 +284,10 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
       if (!cached) return
       if (modified !== undefined && cached.modified === modified) {
         this.touch(key, cached)
-        update({ definition: { status: 'ready', value: { text: cached.text } } })
+        tell({ definition: { status: 'ready', value: { text: cached.text } } })
       } else startScript(key, modified)
     }).catch(onUnexpectedError)
+    return reader
   }
 
   private optionsKey(): string { return JSON.stringify(this.options.scriptingOptions.getSnapshot().options) }
@@ -306,12 +336,13 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
   }
 
   /**
-   * The card's reads end: the properties read is cancelled, and so is the table's script unless `keep` and the facts gave
-   * its modified time, when it finishes in the background to be cached (the oldest background script gives way past the limit).
+   * A read ends: its properties read is cancelled, and so is the table's script unless `keep` and the facts gave its modified
+   * time, when it finishes in the background to be cached (the oldest background script gives way past the limit).
    */
-  private release(keep: boolean): void {
-    const { peek, script } = this.requests
-    this.requests = {}
+  private release(requests: { peek?: string; script?: ScriptJob }, keep: boolean): void {
+    const { peek, script } = requests
+    requests.peek = undefined
+    requests.script = undefined
     try {
       if (peek) report(this.options.api.explorerCancel([peek]))
       if (!script || script.done) return
