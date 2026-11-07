@@ -185,18 +185,23 @@ describe('Monaco runtime keybinding rules', () => {
   it('starts from the defaults', () => {
     const { KeyMod, KeyCode } = loaded.monaco
     expect(press(KeyMod.CtrlCmd | KeyCode.KeyF, editor)).toBe('actions.find')
-    expect(press(KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyF, editor)).toBeUndefined()
+    expect(press(KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyJ, editor)).toBeUndefined()
+    // The checks below add Ctrl/⌘+Alt+J, so it must be free on every platform (⌘⌥F, say, is Replace on macOS).
+    for (const platform of platforms) {
+      const free = platform === 'darwin' ? 'alt+meta+j' : 'ctrl+alt+j'
+      expect(monacoKeyRules.some(rule => rule.keys[platform].some(chords => chords.join(' ') === free)), platform).toBe(false)
+    }
     expect(keysOf('cancelSelection')).toEqual(['escape', 'shift+escape'])
   })
 
   it('adds a rule and disposing it restores the default', () => {
     const { KeyMod, KeyCode, editor: api } = loaded.monaco, before = keysOf('actions.find')
-    const added = api.addKeybindingRules([{ keybinding: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyF, command: 'actions.find', when: 'editorFocus' }])
-    expect(press(KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyF, editor)).toBe('actions.find')
+    const added = api.addKeybindingRules([{ keybinding: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyJ, command: 'actions.find', when: 'editorFocus' }])
+    expect(press(KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyJ, editor)).toBe('actions.find')
     expect(press(KeyMod.CtrlCmd | KeyCode.KeyF, editor)).toBe('actions.find')
     expect(keysOf('actions.find')).toHaveLength(before.length + 1)
     added.dispose()
-    expect(press(KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyF, editor)).toBeUndefined()
+    expect(press(KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyJ, editor)).toBeUndefined()
     expect(keysOf('actions.find')).toEqual(before)
     // A second dispose is harmless.
     added.dispose()
@@ -228,13 +233,13 @@ describe('Monaco runtime keybinding rules', () => {
     const { KeyMod, KeyCode, editor: api } = loaded.monaco
     const remap = api.addKeybindingRules([
       { keybinding: KeyMod.CtrlCmd | KeyCode.KeyF, command: '-actions.find' },
-      { keybinding: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyF, command: 'actions.find', when: 'editorFocus || editorIsOpen' }
+      { keybinding: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyJ, command: 'actions.find', when: 'editorFocus || editorIsOpen' }
     ])
     expect(press(KeyMod.CtrlCmd | KeyCode.KeyF, editor)).toBeUndefined()
-    expect(press(KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyF, editor)).toBe('actions.find')
+    expect(press(KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyJ, editor)).toBe('actions.find')
     remap.dispose()
     expect(press(KeyMod.CtrlCmd | KeyCode.KeyF, editor)).toBe('actions.find')
-    expect(press(KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyF, editor)).toBeUndefined()
+    expect(press(KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyJ, editor)).toBeUndefined()
   })
 
   it("a removal matches a default only when its `when` is absent or implied by the default's", () => {
@@ -252,10 +257,10 @@ describe('Monaco runtime keybinding rules', () => {
 
   it("disposing registrations out of order removes only each one's own rules", () => {
     const { KeyMod, KeyCode, editor: api } = loaded.monaco
-    const first = api.addKeybindingRules([{ keybinding: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyF, command: 'actions.find', when: 'editorFocus' }])
+    const first = api.addKeybindingRules([{ keybinding: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyJ, command: 'actions.find', when: 'editorFocus' }])
     const second = api.addKeybindingRules([{ keybinding: KeyMod.CtrlCmd | KeyCode.KeyF, command: '-actions.find' }])
     first.dispose()
-    expect(press(KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyF, editor)).toBeUndefined()
+    expect(press(KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyJ, editor)).toBeUndefined()
     expect(press(KeyMod.CtrlCmd | KeyCode.KeyF, editor)).toBeUndefined()
     second.dispose()
     expect(press(KeyMod.CtrlCmd | KeyCode.KeyF, editor)).toBe('actions.find')
