@@ -54,7 +54,7 @@ function setup(options: Parameters<typeof workbenchFixture>[0] = {}) {
 describe('editing commands', () => {
   it('register the catalogue bridge chords with Monaco', () => {
     const { monaco } = setup()
-    expect(monaco.editor.registerCommand.mock.calls.map(call => call[0])).toEqual(['varia.edit.toggleBookmark', 'varia.edit.previousBookmark', 'varia.edit.nextBookmark', 'varia.edit.clearBookmarks',
+    expect(monaco.editor.registerCommand.mock.calls.map(call => call[0])).toEqual(['varia.editor.splitDown', 'varia.editor.focusNextGroup', 'varia.editor.focusPreviousGroup', 'varia.edit.toggleBookmark', 'varia.edit.previousBookmark', 'varia.edit.nextBookmark', 'varia.edit.clearBookmarks',
       'varia.edit.insertSnippet', 'varia.edit.surroundWith', 'varia.edit.find', 'varia.edit.replace', 'varia.edit.findNext', 'varia.edit.findPrevious'])
     expect(monaco.editor.addKeybindingRules.mock.calls.flatMap(call => call[0]).every(rule => rule.when === 'editorTextFocus')).toBe(true)
   })

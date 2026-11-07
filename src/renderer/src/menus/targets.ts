@@ -60,7 +60,8 @@ export type MenuTarget =
   | { readonly kind: 'editor'; readonly tabId: string }
   /** Without a node, the empty area below the servers. */
   | { readonly kind: 'explorer'; readonly node?: ExplorerMenuNode }
-  | { readonly kind: 'documentTab'; readonly tabId: string }
+  /** `floating` when the tab is in a floating editor group. */
+  | { readonly kind: 'documentTab'; readonly tabId: string; readonly floating?: boolean }
   /** A table designer's grid; its commands act on the designer's selected columns. */
   | { readonly kind: 'tableDesigner'; readonly tabId: string }
   /** An Integration Services Operations grid; its commands act on the selected operation. */
@@ -100,6 +101,7 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
     pane: target?.kind === 'dockTab' ? target.pane : '',
     paneFloating: target?.kind === 'dockTab' && target.floating,
     panePopout: target?.kind === 'dockTab' && target.popout,
+    documentTabFloating: target?.kind === 'documentTab' && !!target.floating,
     searchHitSchema: target?.kind === 'searchHit' && searchHitNames(target.hit.object).schema !== undefined
   }
 }
@@ -228,8 +230,9 @@ export class MenuTargetService {
       }
       const editor = this.options.editor?.()
       if (editor?.container.contains(element)) return element.closest(editorChrome) || !editor.tabId ? null : { target: { kind: 'editor', tabId: editor.tabId }, element: editor.container }
-      // Dockview's focusable tab element wraps the panel's own tab content, which registers the target.
-      const tab = element.closest('.dv-tab')?.querySelector('[data-pane-tab]')
+      // Dockview's focusable tab element wraps the panel's own tab content (a workspace pane's, or a document's), which
+      // registers the target.
+      const tab = element.closest('.dv-tab')?.querySelector('[data-pane-tab], [data-tab-id]')
       const provider = tab && this.providers.get(tab)
       if (provider) return this.hit(provider, tab, element)
       const output = outputTarget(element)

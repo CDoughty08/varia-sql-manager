@@ -20,6 +20,7 @@ import { documentOwner, type LiveHandle, type LiveService } from '../live/LiveSe
 import type { LiveConnection } from '../services/connections'
 import type { CustomDocumentProvider, DocumentService } from '../services/documents'
 import type { PaneService } from '../services/panes'
+import type { EditorGroupService } from '../services/editor-groups'
 
 export const operationsProbe = 'ssis.operations.list' as const
 export const operationsSource = 'ssis.operations' as const
@@ -69,6 +70,8 @@ export interface SsisOperationsServiceOptions {
   readonly api: Pick<VariaApi, 'executeSsis' | 'cancelSsis'>
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'activate' | 'getSnapshot' | 'subscribe'>
   readonly panes: Pick<PaneService, 'getSnapshot' | 'subscribe'>
+  /** The editor groups: a document shown in any group is visible. */
+  readonly groups?: Pick<EditorGroupService, 'getSnapshot' | 'subscribe'>
   readonly live: Pick<LiveService, 'open'>
   readonly connections: ExternalStore<readonly LiveConnection[]>
   readonly settings: ExternalStore<{ readonly values: SettingsValues }>
@@ -247,7 +250,7 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
   private subscribeLive(state: SsisOperationsState): void {
     const handle = this.options.live.open({
       connectionId: state.connectionId!, source: operationsSource, args: operationsArgs(state.filters), probes: [{ probe: operationsProbe, intervalMs: this.intervalMs }]
-    }, documentOwner(state.id, this.options.documents, this.options.panes))
+    }, documentOwner(state.id, this.options.documents, this.options.panes, this.options.groups))
     this.handles.set(state.id, handle)
     // The view's status decides the Pause, Refresh and Stop Operation keys (an ended view says why in place of its rows);
     // each sample's metrics are the tiles' counts.

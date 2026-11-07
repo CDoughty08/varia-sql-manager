@@ -14,7 +14,7 @@ import { ssisVerbContextKey, ssisVerbs, ssisVerbSpecs, type SsisVerbContextKey }
 export type ContextKeyScope = 'static' | 'state' | 'focus' | 'target'
 interface Declared { readonly scope: Exclude<ContextKeyScope, 'target'>; readonly description: string; readonly menu?: undefined }
 /** A target key describes one kind of context-menu target, so it may appear only in that context menu's placements. */
-interface DeclaredTarget { readonly scope: 'target'; readonly description: string; readonly menu: 'explorer.context' | 'output.context' | 'dockTab.context' | 'search.hit.context' }
+interface DeclaredTarget { readonly scope: 'target'; readonly description: string; readonly menu: 'explorer.context' | 'output.context' | 'dockTab.context' | 'documentTab.context' | 'search.hit.context' }
 export type ContextKeyDeclaration =
   | ({ readonly type: 'boolean' } & (Declared | DeclaredTarget))
   | ({ readonly type: 'enum'; readonly values: readonly string[] } & (Declared | DeclaredTarget))
@@ -85,6 +85,8 @@ export const contextKeys = {
   activitySplit: { type: 'boolean', scope: 'state', description: 'The active Activity Monitor shows two panes (Split View).' },
   activeDocumentIsQuery: { type: 'boolean', scope: 'state', description: 'The active document is a query, not an XML, JSON, or execution plan value opened from the results.' },
   multipleDocuments: { type: 'boolean', scope: 'state', description: 'Two or more queries are open.' },
+  multipleEditorGroups: { type: 'boolean', scope: 'state', description: 'The query editor shows two or more editor groups (split or floating).' },
+  activeDocumentFloating: { type: 'boolean', scope: 'state', description: "The active document's editor group floats over the editor area." },
   documentBusy: { type: 'boolean', scope: 'state', description: 'A document task is in progress: opening, saving, or closing a query, or changing its connection.' },
   hasConnection: { type: 'boolean', scope: 'state', description: 'At least one server is connected (lost connections do not count).' },
   activeDocumentConnected: { type: 'boolean', scope: 'state', description: "The active query's server is connected and its connection was not lost." },
@@ -167,6 +169,7 @@ export const contextKeys = {
   pane: { type: 'enum', scope: 'target', menu: 'dockTab.context', values: ['explorer', 'editor', 'results', 'messages', 'plan', ''], description: "The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, Results, Messages, or Execution plan." },
   paneFloating: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel the menu is for is floating.' },
   panePopout: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel the menu is for is in a window of its own (Move into New Window).' },
+  documentTabFloating: { type: 'boolean', scope: 'target', menu: 'documentTab.context', description: "The document tab the menu is for is in a floating editor group." },
   searchHitSchema: { type: 'boolean', scope: 'target', menu: 'search.hit.context', description: 'The Search Objects result the menu is for is in a schema (itself, or its parent for a column, key or trigger), so it has schema-qualified and fully qualified names.' }
 } as const satisfies Record<string, ContextKeyDeclaration>
 

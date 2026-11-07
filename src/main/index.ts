@@ -37,6 +37,7 @@ import { SettingsStore } from './settings-store'
 import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
 import { encodeSession, SessionStore, sessionWriteSchema, type SessionInput, type SessionRecord, type SessionRecordDocument } from './session-store'
 import { sessionLimits, type ReloadPins, type RestoredDocument, type RestoredSession, type SessionWrite } from '../shared/files/session'
+import { remapEditorGroups } from '../shared/editor-groups'
 import { lossDetails } from '../shared/files/recovery'
 import { commandTitle } from '../shared/settings/catalog'
 import { popoutWindowName } from '../shared/popouts'
@@ -337,7 +338,7 @@ function sessionInput(request: SessionWrite): SessionInput {
   const documents = request.documents.map(({ fileId, ...document }) => ({
     ...document, ...fileId ? files.sessionFile(fileId) : undefined
   }))
-  return { documents, activeIndex: request.activeIndex }
+  return { documents, activeIndex: request.activeIndex, ...request.groups ? { groups: request.groups } : {} }
 }
 
 function reloadCheckpoint(pins?: ReloadPins): Extract<SessionCheckpoint, { kind: 'reload' }> {
@@ -999,7 +1000,7 @@ app.whenReady().then(async () => {
       if (sessionCheckpoint?.record === checkpoint.record) sessionCheckpoint = undefined
       throw error
     }
-    const documents: RestoredDocument[] = [], problems: string[] = []
+    const documents: RestoredDocument[] = [], problems: string[] = [], places = new Map<number, number>()
     let activeIndex = -1
     for (const [index, document] of (record?.documents ?? []).entries()) {
       if (generation !== rendererGeneration) break
@@ -1009,9 +1010,12 @@ app.whenReady().then(async () => {
       if (index === record?.activeIndex) activeIndex = documents.length
       const recoveryId = checkpoint.kind === 'reload' ? checkpoint.recoveryIds[index] : undefined
       const resumed = restored.dirty && checkpoint.kind === 'reload' && recoveryId && await recovery.resumeReloaded(recoveryId, checkpoint.sourceGeneration, generation, restored).catch(() => false)
+      places.set(index, documents.length)
       documents.push(resumed && recoveryId ? { ...restored, recoveryId } : restored)
     }
-    return { documents, activeIndex, problems: problems.slice(0, 32), restoreGeneration: generation }
+    // The editor groups follow the tabs that reopened; a group whose files are all gone goes.
+    const groups = record?.groups ? remapEditorGroups(record.groups, index => places.get(index)) : undefined
+    return { documents, activeIndex, ...groups ? { groups } : {}, problems: problems.slice(0, 32), restoreGeneration: generation }
   })
   handle('varia:session-restored', value => {
     const generation = z.int().parse(value)

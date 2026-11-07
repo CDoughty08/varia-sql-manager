@@ -18,6 +18,7 @@ export function filesContribution({ files, commands, documents, context, explore
   readonly recentFiles?: ExternalStore<readonly RecentFile[]>; readonly quickInput?: Pick<Workbench['quickInput'], 'pick'>
   readonly recovery?: Pick<Workbench['recovery'], 'getSnapshot' | 'refresh' | 'openDialog'>
 }, api: Pick<VariaApi, 'writeClipboardText' | 'revealSqlFile'> & Partial<Pick<VariaApi, 'clearRecentFiles'>>): Disposable {
+  // The tab menu, or a key pressed on a focused tab (Delete, Ctrl+W), names its tab; otherwise the active document.
   const tabOf = (context?: CommandArgs) => context?.tabId ?? documents.getSnapshot().activeId
   const fileOf = (context?: CommandArgs) => documents.get(tabOf(context))?.file
   const newQuery = () => {
@@ -61,7 +62,7 @@ export function filesContribution({ files, commands, documents, context, explore
         recovery.openDialog()
       }
     }),
-    commands.register('file.close', { when: context => files.canClose(context?.tabId), run: context => files.close(context?.tabId) }),
+    commands.register('file.close', { when: context => files.canClose(tabOf(context)), run: context => files.close(tabOf(context)) }),
     commands.register('file.closeOthers', {
       when: context => files.canRun() && !!documents.get(tabOf(context)),
       run: context => { const keep = tabOf(context); return files.closeMany(documents.getSnapshot().documents.flatMap(document => document.id === keep ? [] : [document.id])) }

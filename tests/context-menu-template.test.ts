@@ -44,7 +44,8 @@ describe('native context menu template', () => {
     expect(find(editor, 'edit.copy@editor.context')).toMatchObject({ role: 'copy', accelerator: 'Cmd+C' })
     expect(describeTemplate(contextMenuTemplate(request('documentTab.context', { disabled: ['file.copyPath', 'file.revealInFolder'] }), 'darwin', () => {}))).toEqual([
       'Save (click, Cmd+S)', 'Save As… (click, Cmd+Shift+S)', '---', 'Close (click, Cmd+W)', 'Close All But This (click)', 'Close All (click)', '---',
-      'Copy Full Path (click, disabled)', 'Reveal in Finder (click, disabled)', '---', 'Move Left (click, Ctrl+Shift+PageUp)', 'Move Right (click, Ctrl+Shift+PageDown)', 'Rename Tab… (click, F2)'
+      'Copy Full Path (click, disabled)', 'Reveal in Finder (click, disabled)', '---', 'Move Left (click, Ctrl+Shift+PageUp)', 'Move Right (click, Ctrl+Shift+PageDown)', 'Rename Tab… (click, F2)',
+      '---', 'Split Right (click, Cmd+\\)', 'Split Down (click)', 'Move to Next Group (click, Cmd+Ctrl+Right)', 'Move to Previous Group (click, Cmd+Ctrl+Left)', 'Float (click)', 'Dock (click)'
     ])
     expect(describeTemplate(contextMenuTemplate(request('input.context'), 'darwin', () => {}))).toEqual([
       'Undo (click, Cmd+Z)', 'Redo (click, Cmd+Shift+Z)', '---', 'Cut (role cut, Cmd+X)', 'Copy (role copy, Cmd+C)', 'Paste (role paste, Cmd+V)', 'Delete (role delete, Delete)', '---',

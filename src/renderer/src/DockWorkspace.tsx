@@ -595,6 +595,17 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
       publishVisibility(api)
       guides.current = new DockingGuides(api, root.current!, ids => ids.forEach(id => rememberDock(id as PaneId)), error => setError(message(error)), (ids, at) => popOut(ids, at))
       api.updateOptions({ dropPositionResolver: guides.current })
+      // The editor groups are a Dockview of their own inside the editor panel, whose drop targets would hide the editor
+      // panel's from a workbench panel dragged over it: while one is dragged, they let the pointer through (styles.css).
+      const workbenchElement = root.current!
+      const dragging = () => workbenchElement.classList.add('dock-dragging')
+      const dropped = () => { setTimeout(() => workbenchElement.classList.remove('dock-dragging'), 0) }
+      document.addEventListener('pointerup', dropped, true)
+      document.addEventListener('pointercancel', dropped, true)
+      const passThrough = [api.onWillDragPanel(dragging), api.onWillDragGroup(dragging),
+        { dispose: () => { document.removeEventListener('pointerup', dropped, true); document.removeEventListener('pointercancel', dropped, true) } }]
+      const beforePassThrough = subscription.current
+      subscription.current = { dispose: () => { beforePassThrough?.dispose(); passThrough.forEach(item => item.dispose()) } }
       // A popout window's tab dragged onto the workbench docks there (the compass shows where), or where it was.
       const workbenchRoot = root.current!
       const carried = (event: DragEvent) => { const pane = paneDrag.carried(event.dataTransfer); return pane && recordOf(pane) ? pane : undefined }

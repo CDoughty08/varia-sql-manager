@@ -77,6 +77,16 @@ describe('the hot exit session store', () => {
     expect(await readFile(join(folder, 'session.json'), 'utf8')).toBe(before)
   })
 
+  it('keeps the editor groups with their documents, following them to their places and dropping a group left empty', async () => {
+    const store = new SessionStore(folder)
+    const gone = { name: 'gone.sql', kind: 'sql' as const, eol: 'lf' as const, dirty: false }
+    const groups = { root: { type: 'branch' as const, children: [{ type: 'leaf' as const, views: [0] }, { type: 'leaf' as const, views: [2, 1], active: 1 }, { type: 'leaf' as const, views: [3] }] }, orientation: 'HORIZONTAL' as const, width: 800, height: 600, activeGroup: 1 }
+    await store.write({ activeIndex: 1, documents: [gone, tabs.documents[0], tabs.documents[1], tabs.documents[3]], groups }, 1)
+    expect(await store.take(true)).toMatchObject({ activeIndex: 0, groups: { root: { type: 'branch', children: [{ type: 'leaf', views: [1, 0], active: 0 }, { type: 'leaf', views: [2] }] }, activeGroup: 0 } })
+    // Groups that name a tab the session does not hold are refused.
+    expect(sessionWriteSchema.safeParse({ activeIndex: 0, documents: [tabs.documents[0]], groups: { ...groups, root: { type: 'branch', children: [{ type: 'leaf', views: [0] }, { type: 'leaf', views: [1] }] } } }).success).toBe(false)
+  })
+
   it('refuses a session past its byte cap, writing nothing', async () => {
     const store = new SessionStore(folder, { totalBytes: 1024 })
     await expect(store.write({ activeIndex: 0, documents: [{ name: 'big.sql', kind: 'sql', eol: 'lf', dirty: true, text: 'x'.repeat(2048) }] }, 1)).rejects.toThrow(sessionCapMessage)
