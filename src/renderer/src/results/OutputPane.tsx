@@ -9,6 +9,7 @@ import { gridLimits as g } from '../grid/constants'
 import ResultsStack, { stackNeed } from '../grid/ResultsStack'
 import ResultPlans from '../plans/ResultPlans'
 import EstimatedPlans from '../plans/EstimatedPlans'
+import type { EstimatedPlanState } from '../services/queries'
 import ClientStatisticsPane from '../statistics/ClientStatisticsPane'
 import EmptyState from '../kit/EmptyState'
 import MessagesView from './MessagesView'
@@ -61,10 +62,11 @@ function plansOf(tab: TabResults | undefined): readonly ResultSetEntry[] {
   return tab && tab.status !== 'closed' ? [...tab.planSets, ...tab.sets.filter(set => set.descriptor.kind === 'executionPlan')] : []
 }
 /**
- * The output view a query tab shows: Messages until a set opens (a run without sets ends there), then Results, unless the
- * user picked a view; Execution plan only while the run has a plan. Undefined for a tab that has not run.
+ * An estimate keeps its chosen output independently of ordinary runs. Otherwise show Messages until a set opens,
+ * then Results unless the user picked a view; Execution plan only while the run has a plan. Undefined before either ran.
  */
-export function outputViewOf(tab: TabResults | undefined): OutputViewName | undefined {
+export function outputViewOf(tab: TabResults | undefined, estimated?: EstimatedPlanState): OutputViewName | undefined {
+  if (estimated) return estimated.view ?? 'plan'
   if (!tab) return undefined
   if (tab.view === 'statistics') return 'statistics'
   const hasSets = tab.sets.length > 0 || tab.status === 'closed'
@@ -77,10 +79,10 @@ export function outputViewOf(tab: TabResults | undefined): OutputViewName | unde
  */
 export function OutputViewSync({ tabId }: { tabId: string }) {
   const { results, panes, queries } = useWorkbench()
-  const view = outputViewOf(useServiceSnapshot(results)[tabId])
+  const tab = useServiceSnapshot(results)[tabId]
   const estimated = useServiceSnapshot(queries)[tabId]?.estimated
-  useEffect(() => { if (view) panes.select(view) }, [panes, tabId, view])
-  useEffect(() => { if (estimated) panes.select('plan') }, [panes, tabId, estimated?.requestId])
+  const view = outputViewOf(tab, estimated)
+  useEffect(() => { if (view) panes.select(view) }, [panes, tabId, view, estimated?.requestId])
   return null
 }
 

@@ -4,6 +4,8 @@ Use **Query › Display Estimated Execution Plan**, the query or classic toolbar
 
 The existing **Execution plan** pane labels these results **Estimated**. Its Pixi canvas, operator outline, search, statement selection, properties, zoom and fit controls work as for actual plans. Runtime rows and timings are unavailable. **Open plan document** opens a `.sqlplan` document; the normal Save, Save As, editable XML and recovery behavior applies. Estimation keeps the last ordinary data grids and does not change **Include Actual Execution Plan**. The next ordinary execution replaces the estimate.
 
+The output view you select is preserved when you return to the query tab or restore the output with **Ctrl+R**. A new estimate opens its plan view again, without replacing the ordinary results or statistics history.
+
 ## Session and database context
 
 Each request opens a fresh, unpooled SQL connection, with connection recovery disabled, using the query's credentials, selected database and Varia's query-window SET defaults. It never borrows the tab's SQL session. This deliberately protects existing transactions, temporary objects, SET options, database context, result handles and capture options when estimation succeeds, fails, times out or is cancelled.

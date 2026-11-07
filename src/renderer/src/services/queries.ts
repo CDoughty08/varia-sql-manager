@@ -6,13 +6,13 @@ import { defaultSettings, type SettingsValues } from '../../../shared/settings/c
 import { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
-import type { ResultsService } from '../results/ResultsService'
+import type { OutputViewName, ResultsService } from '../results/ResultsService'
 import { isQueryDocument, type SessionNotice } from '../documents'
 import { DocumentService } from './documents'
 import { ClientStatisticsService } from '../statistics/ClientStatisticsService'
 
 export interface RunningQuery { readonly queryId: string; readonly connectionId: string; readonly startedAt: number; readonly kind?: 'estimate' }
-export interface EstimatedPlanState { readonly requestId: string; readonly result?: EstimatedPlanResult; readonly error?: string; readonly loading?: true }
+export interface EstimatedPlanState { readonly requestId: string; readonly result?: EstimatedPlanResult; readonly error?: string; readonly loading?: true; readonly view?: OutputViewName }
 /** The tab's SQL session as its execution reported it: its SPID and login, read when it opened (SSMS's status bar
  *  shows them). It belongs to the connection it ran on, so a query moved elsewhere (or a connection lost) no longer has
  *  it. Its open transaction is not kept here: it is read from the session only when the session is about to end. */
@@ -66,6 +66,11 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     this.subscription = events.subscribe(event => {
       if (event.type === 'session.ended') this.sessionEnded(event.tabId)
       if (event.type === 'documents.closed') this.statistics.reset(event.tabId)
+      if (event.type === 'query.outputSelected') {
+        const state = this.getSnapshot()[event.tabId]
+        if (state?.estimated && state.estimated.view !== event.view)
+          this.update(event.tabId, { ...state, estimated: { ...state.estimated, view: event.view } })
+      }
     })
   }
   isRunning(id: string): boolean { return !!this.getSnapshot()[id]?.running }
@@ -173,7 +178,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const { sql, startLine } = this.documents.getExecuteText(tabId)
     if (!sql.trim()) return
     const requestId = crypto.randomUUID(), previous = this.getSnapshot()[tabId]
-    this.update(tabId, { ...previous, running: { queryId: requestId, connectionId, startedAt: this.now(), kind: 'estimate' }, estimated: { requestId, loading: true } })
+    this.update(tabId, { ...previous, running: { queryId: requestId, connectionId, startedAt: this.now(), kind: 'estimate' }, estimated: { requestId, loading: true, view: 'plan' } })
     this.events.emit({ type: 'query.estimateStarted', tabId })
     let result: EstimatedPlanResult | undefined, error: string | undefined
     try {
@@ -183,14 +188,14 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       else error = response.error
     } catch (failure) { error = errorText(failure) }
     if (this.disposed || !this.documents.get(tabId) || this.getSnapshot()[tabId]?.running?.queryId !== requestId) return
-    const next = { ...this.getSnapshot(), [tabId]: { ...this.getSnapshot()[tabId], running: undefined, estimated: { requestId, result, error } } }
+    const next = { ...this.getSnapshot(), [tabId]: { ...this.getSnapshot()[tabId], running: undefined, estimated: { requestId, result, error, view: this.getSnapshot()[tabId].estimated?.view } } }
     const size = (state: QueryState) => state.estimated?.result?.plans.reduce((sum, plan) => sum + plan.xml.length, 0) ?? 0
     let characters = Object.values(next).reduce((sum, state) => sum + size(state), 0)
     for (const [id, state] of Object.entries(next)) {
       if (characters <= estimatedPlanCacheCharacters) break
       if (id === tabId || !state.estimated?.result) continue
       characters -= size(state)
-      next[id] = { ...state, estimated: { requestId: state.estimated.requestId, error: 'This estimated plan was released to limit memory. Display Estimated Execution Plan again to reload it.' } }
+      next[id] = { ...state, estimated: { requestId: state.estimated.requestId, view: state.estimated.view, error: 'This estimated plan was released to limit memory. Display Estimated Execution Plan again to reload it.' } }
     }
     this.publish(next)
   }

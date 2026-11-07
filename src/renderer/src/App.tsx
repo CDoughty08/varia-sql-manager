@@ -110,7 +110,10 @@ export default function App() {
   const statusBar = shell.queryStatusBar ? queryStatus : null
 
   /** The output view the active query shows, whose panel revealing the output shows. */
-  const activeOutputView = useStableCallback(() => outputViewOf(workbench.results.getSnapshot()[documents.getSnapshot().activeId]))
+  const activeOutputView = useStableCallback(() => {
+    const tabId = documents.getSnapshot().activeId
+    return outputViewOf(workbench.results.getSnapshot()[tabId], workbench.queries.getSnapshot()[tabId]?.estimated)
+  })
   const disconnectServer = useStableCallback((id: string) => disconnect(id))
   // Stable for the app's lifetime; it reaches the dock workspace through its ref.
   const shellHost = useMemo<ShellHost>(() => ({

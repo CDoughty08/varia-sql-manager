@@ -37,6 +37,21 @@ function fixture(commandTimeout?: number, wait?: (ms: number) => Promise<void>, 
   return { ...docs, bus: docs.events, queries, queryApi: api, connection, tab, events, results, calls }
 }
 describe('query orchestration', () => {
+  it('preserves an estimate output choice through completion and opens each new estimate on its plan', async () => {
+    const { queries, queryApi, tab, bus } = fixture()
+    bus.emit({ type: 'query.outputSelected', tabId: tab.id, view: 'messages' })
+    expect(queries.getSnapshot()[tab.id]).toBeUndefined()
+    const pending = deferred<Awaited<ReturnType<VariaApi['estimatePlan']>>>()
+    queryApi.estimatePlan.mockReturnValueOnce(pending.promise)
+    const run = queries.estimate()
+    expect(queries.getSnapshot()[tab.id].estimated?.view).toBe('plan')
+    bus.emit({ type: 'query.outputSelected', tabId: tab.id, view: 'messages' })
+    pending.resolve({ ok: true, value: { plans: [], database: 'master' } })
+    await run
+    expect(queries.getSnapshot()[tab.id].estimated?.view).toBe('messages')
+    await queries.estimate()
+    expect(queries.getSnapshot()[tab.id].estimated?.view).toBe('plan')
+  })
   it('keeps the ordinary transaction decision when closing during an isolated estimate', async () => {
     const { queries, queryApi, tab } = fixture()
     const pending = deferred<Awaited<ReturnType<VariaApi['estimatePlan']>>>()
@@ -135,13 +150,14 @@ describe('query orchestration', () => {
     const summary = f.queries.getSnapshot()[f.tab.id].summary
     f.queryApi.estimatePlan.mockResolvedValue({ ok: true, value: { database: 'master', plans: [{ xml: 'x'.repeat(2_097_152), batchNumber: 1, iteration: 1 }] } })
     await f.queries.estimate(f.tab.id)
+    f.bus.emit({ type: 'query.outputSelected', tabId: f.tab.id, view: 'results' })
     for (let i = 0; i < 8; i++) {
       const tab = f.documents.create(`q${i}.sql`, 'SELECT 1', 'master', f.connection.id)
       await f.queries.estimate(tab.id)
     }
     const states = Object.values(f.queries.getSnapshot())
     expect(states.filter(state => state.estimated?.result)).toHaveLength(8)
-    expect(f.queries.getSnapshot()[f.tab.id]).toMatchObject({ summary, estimated: { error: expect.stringContaining('released to limit memory') } })
+    expect(f.queries.getSnapshot()[f.tab.id]).toMatchObject({ summary, estimated: { view: 'results', error: expect.stringContaining('released to limit memory') } })
     expect(f.queries.getSnapshot()[f.documents.active!.id].estimated?.result).toBeDefined()
   })
   it('reserves execution before notifying statistics listeners, preventing a reentrant second execution', async () => {

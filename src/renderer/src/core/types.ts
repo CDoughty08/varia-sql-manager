@@ -1,5 +1,6 @@
 import type { ContextKeys } from '../../../shared/commands/context-keys'
 import type { QueryResult } from '../../../shared/contracts'
+import type { OutputViewName } from '../results/ResultsService'
 import type { ThemePreferencePatch } from '../../../shared/theme/types'
 import type { MenuTarget } from '../menus/targets'
 
@@ -32,6 +33,7 @@ export type WorkbenchEvent =
   | { type: 'documents.closed'; tabId: string }
   | { type: 'query.started'; tabId: string; queryId: string }
   | { type: 'query.estimateStarted'; tabId: string }
+  | { type: 'query.outputSelected'; tabId: string; view: OutputViewName }
   | { type: 'query.finished'; tabId: string; queryId: string; summary?: QueryResult; error?: string }
   /** Execute ran on a query with no connection: the Connect dialog opens, and the query runs once connected. */
   | { type: 'query.connectRequested'; tabId: string }

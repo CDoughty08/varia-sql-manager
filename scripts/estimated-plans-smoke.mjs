@@ -70,6 +70,11 @@ try {
     await expect(statistics.getByRole('columnheader', { name: /Previous \(run/ })).toHaveCount(0)
     await outputView(page, /^Results,/).click()
     await expect(firstCell).toHaveText(retainedValue)
+    // Returning to a query keeps the output the user selected, even while that query retains an estimate.
+    await page.keyboard.press(`${mod}+n`)
+    await documentTabs(page).getByRole('tab').filter({ hasText: /^SQLQuery1/ }).click()
+    await expect(outputView(page, /^Results,/)).toHaveAttribute('aria-selected', 'true')
+    await expect(firstCell).toHaveText(retainedValue)
     await outputView(page, 'Execution plan, Estimated').click()
     // Give the short dock room through its normal splitter before inspecting outline rows below wrapped plan tools,
     // just as the results smoke suite does.
@@ -109,6 +114,16 @@ try {
       // A streamed row can precede actual-capture cleanup; close only after the execution has settled.
       await expect(queryBarButton(page, 'Display Estimated Execution Plan')).toBeEnabled()
     }
+    // A query with only an estimate has no ordinary ResultsService run to supply its Ctrl+R restore view.
+    await documentTabs(page).getByRole('tab').filter({ hasText: /^SQLQuery2/ }).click()
+    await text('SELECT name FROM sys.objects;')
+    await page.keyboard.press(`${mod}+l`)
+    await expect(planCanvas(page).locator('canvas')).toHaveCount(1)
+    await textbox().focus()
+    await page.keyboard.press(`${mod}+r`)
+    await expect(planViewer(page)).toBeHidden()
+    await page.keyboard.press(`${mod}+r`)
+    await expect(planViewer(page)).toBeVisible()
     await close()
     console.log(`Estimated plan Electron checks passed (${live ? 'SQL Server' : 'fake backend'}).`)
   }
