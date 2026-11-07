@@ -10,6 +10,9 @@ const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TES
 if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'menus-profile-'))
+// The suite sends the window synthetic focus events with a saved query open; the external-change check each one starts
+// 500 ms later holds the document lock, and a menu item chosen then (New Query needs !documentBusy) was refused.
+await writeFile(join(profile, 'settings.json'), JSON.stringify({ version: 1, values: { 'environment.documents.detectExternalChanges': false } }))
 const control = await mkdtemp(resolve('artifacts', 'menus-backend-'))
 const liveEnv = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile }
 delete liveEnv.ELECTRON_RUN_AS_NODE
