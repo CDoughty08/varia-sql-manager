@@ -62,6 +62,8 @@ internal sealed class FuzzyName
         return [.. found.Select(span =>
         {
             var word = text.Substring(span.Start, span.Length).ToLowerInvariant();
+            // A number matches only itself or as a prefix: Sales2019 is not a typo of Sales2018, and 2000 does not sound like 20.
+            if (char.IsDigit(word[0])) return new Word(word, 0, "", Mask(word));
             return new Word(word, word.Length < 3 ? 0 : word.Length < 6 ? 1 : 2, word.Length < 4 ? "" : Phonetic(word), Mask(word));
         })];
     }
@@ -196,8 +198,8 @@ internal sealed class FuzzyName
             if (distance > 0) { (tier, cost) = (Tier.Edits, distance); return true; }
         }
         // Only a word of 4 letters or more is matched by sound (three-letter consonant skeletons are mostly one another's), and
-        // only one whose key has 3 codes or more by a longer word's start.
-        if (word.Key.Length >= 2 && part.Length >= 2 && Sounds(part, word.Key, prefix && word.Key.Length >= 3, codes))
+        // only one whose key has 4 codes or more by a longer word's start (store, STR, would otherwise find String and Street).
+        if (word.Key.Length >= 2 && part.Length >= 2 && Sounds(part, word.Key, prefix && word.Key.Length >= 4, codes))
         {
             (tier, cost) = (Tier.Sound, SoundCost);
             return true;

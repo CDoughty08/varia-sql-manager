@@ -136,7 +136,8 @@ The same search runs in two places, with the same options and results:
   search must find a word of the name, in any order, that equals it or starts with it, is within a few edits (one for 3 to 5
   letters, two from 6, a swap of neighbours counting one; words of 1 or 2 letters must be exact, a word of 3 to 5 letters
   must have the right first letter, and only a word of 4 letters or more may be a typo of a longer word's start), or, for a
-  word of 4 letters or more, sounds like it. Two search words may match the same name word. A
+  word of 4 letters or more, sounds like it (as a longer word's start only when its key has 4 codes or more, so `store` does
+  not find `String`). A number matches only exactly or as a prefix: `Sales2019` does not find `Sales2018`. Two search words may match the same name word. A
   single word is also compared with the whole name run together (`custmeraddres`). Case is ignored for approximate
   matches; Match Case still applies to exact hits and definitions. Under Match Whole Word a word must match a whole word,
   never a prefix (it may still be a typo of one: `order` finds `Orders`, one edit away). `*` and `?` separate words. With a dot, the words before the last dot match the schema's (and a child's

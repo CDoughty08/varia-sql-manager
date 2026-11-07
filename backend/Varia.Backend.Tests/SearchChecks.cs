@@ -217,6 +217,21 @@ internal static class SearchChecks
         check(Labels(result) == "Sales.Customer~, Sales.CustomerAddress~", "a fuzzy search with a dot matches the schema before it (dbo.Customer is left out): " + Labels(result));
         result = Search(index, "slaes.custmer.adress", definitions: false, fuzzy: true);
         check(result.Hits is [{ Object.Kind: "column", Approximate: true }], "a child's words before the dot match its parent's schema or name: " + Labels(result));
+        var numbers = new ConnectionIndex(new IndexBudget(1 << 20));
+        numbers.Put(new DatabaseIndex("Numbers", [
+            new("table", "tables", "dbo", "Orders20"),
+            new("table", "tables", "dbo", "Sales2018"),
+            new("table", "tables", "dbo", "Sales20190"),
+            new("table", "tables", "dbo", "StringList"),
+            new("table", "tables", "dbo", "StoreList")
+        ], 0, 1, 0));
+        result = Search(numbers, "orders2000", definitions: false, fuzzy: true);
+        check(result.Hits.Count == 0, "a number never matches a shorter one by sound: " + Labels(result));
+        result = Search(numbers, "sales2019", definitions: false, fuzzy: true);
+        check(Labels(result) == "dbo.Sales20190", "a number matches only exactly or as a prefix, never within edits: " + Labels(result));
+        result = Search(numbers, "store list", definitions: false, fuzzy: true);
+        check(Labels(result) == "dbo.StoreList~", "a three-code sound key never matches a longer word's start (store is not String): " + Labels(result));
+        numbers.Dispose();
         result = Search(index, "custmer", names: false, fuzzy: true);
         check(result.Hits.Count == 0, "definitions stay exact under Fuzzy Match");
         result = Search(index, "customer", fuzzy: true);

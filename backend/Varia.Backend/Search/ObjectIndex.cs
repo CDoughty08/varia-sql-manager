@@ -324,7 +324,7 @@ internal static class IndexSearch
         var watch = Stopwatch.StartNew();
         // The candidates, worst first: past the cap a better hit takes the worst one's place, so approximate or definition hits
         // scanned early never push out an exact one scanned later.
-        var found = new PriorityQueue<(int Rank, int Score, bool System, ObjectSearchHit Hit), (int Rank, int Score)>(Comparer<(int Rank, int Score)>.Create((a, b) => b.CompareTo(a)));
+        var found = new PriorityQueue<(int Rank, int Score, bool System, ObjectSearchHit Hit), (int Rank, int Score, bool System)>(Comparer<(int Rank, int Score, bool System)>.Create((a, b) => b.CompareTo(a)));
         var fuzzy = query.Fuzzy && query.Names && !query.Regex ? FuzzyName.Create(query.Text, query.WholeWord) : null;
         var total = 0;
         var scanned = 0;
@@ -352,11 +352,11 @@ internal static class IndexSearch
                 var hit = Match(name, item, query, matcher, fuzzy, limits, dotted, out var rank, out var score);
                 if (hit is null) continue;
                 total++;
-                if (found.Count < limits.Candidates) found.Enqueue((rank, score, item.System, hit), (rank, score));
+                if (found.Count < limits.Candidates) found.Enqueue((rank, score, item.System, hit), (rank, score, item.System));
                 else
                 {
                     partial = true;
-                    if (found.TryPeek(out _, out var worst) && (rank, score).CompareTo(worst) < 0) found.DequeueEnqueue((rank, score, item.System, hit), (rank, score));
+                    if (found.TryPeek(out _, out var worst) && (rank, score, item.System).CompareTo(worst) < 0) found.DequeueEnqueue((rank, score, item.System, hit), (rank, score, item.System));
                 }
             }
         }
