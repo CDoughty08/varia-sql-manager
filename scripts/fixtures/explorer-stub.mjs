@@ -110,7 +110,9 @@ export function installExplorerStub({ ipcMain }, { statics }) {
     { object: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'table2' }, folder: 'tables', label: 'dbo.table2' }
   ]
   const indexStatus = definitions => ({ state: 'ready', databases: 2, indexed: 2, objects: searchObjects.length, modules: definitions ? 1 : 0, cut: 0, skipped: [], definitions, builtAt: '2026-11-03T12:00:00Z' })
-  function search({ text, caseSensitive, wholeWord, regex, in: scope = 'all', kinds }) {
+  // Fuzzy Match stands in as a subsequence: a name holding the text's letters in order, but not the text, is approximate.
+  const approximately = (name, text) => { let at = 0; for (const c of name.toLowerCase()) if (c === text[at]?.toLowerCase()) at++; return at === text.length }
+  function search({ text, caseSensitive, wholeWord, regex, in: scope = 'all', kinds, match: mode }) {
     let pattern
     try { pattern = new RegExp(regex ? text : text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), caseSensitive ? 'gm' : 'gim') }
     catch { return { hits: [], total: 0, partial: false, elapsedMs: 0, index: indexStatus(true), problem: 'The regular expression is not valid.' } }
@@ -124,6 +126,8 @@ export function installExplorerStub({ ipcMain }, { statics }) {
       if ((kinds && !kinds.includes(item.object.kind)) || stub.searchHidden.includes(item.object.name)) return []
       const name = scope !== 'definitions' ? find(item.object.name) : undefined
       const body = scope !== 'names' && definition ? find(definition) : undefined
+      if (!name && !body && mode === 'fuzzy' && !regex && scope !== 'definitions' && approximately(item.object.name, text))
+        return [{ ...item, range: [item.label.length - item.object.name.length, item.object.name.length], approximate: true }]
       if (!name && !body) return []
       const start = body ? definition.lastIndexOf('\n', body.index - 1) + 1 : 0, stop = body ? definition.indexOf('\n', body.index) : -1
       const end = stop < 0 ? definition?.length ?? 0 : stop

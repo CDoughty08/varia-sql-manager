@@ -6,7 +6,7 @@ import { expandExplorerPath, explorerLines, explorerRow, explorerTree, revealExp
 import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.mjs'
 import {
   activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
-  explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, explorerSublabel, explorerToolbar, itemCount,
+  explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, searchHitApproximate, explorerSublabel, explorerToolbar, itemCount,
   menuItemNames, messages, movePane, objectSearchBox, objectSearchHits, objectSearchSelected, outputView, paneMenuButton, part, popoutDockButton, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
 } from './fixtures/ui.mjs'
 
@@ -837,7 +837,7 @@ try {
   await splitter.dblclick()
   await expect(splitter).toHaveAttribute('aria-valuetext', 'Fits the results')
   expect(await band()).toMatchObject({ sized: false })
-  // The three match options share one popover and still run the same searches as the tab's toggles.
+  // The four match options share one popover and still run the same searches as the tab's toggles.
   const optionsButton = explorerSearchOptions(page)
   await optionsButton.click()
   const wholeWord = explorerSearchCheck(page, 'Match Whole Word')
@@ -855,7 +855,35 @@ try {
   await expect(explorerSearchHits(page)).toHaveCount(3)
   await explorerSearchCheck(page, 'Use Regular Expression').check()
   await expect(explorerSearchHits(page)).toHaveCount(3)
+  // Fuzzy Match asks for approximate names, marks them apart, and cannot go with Regex (it keeps its setting meanwhile).
+  const fuzzy = explorerSearchCheck(page, 'Fuzzy Match')
+  await expect(fuzzy).toBeDisabled()
   await explorerSearchCheck(page, 'Use Regular Expression').uncheck()
+  await expect(fuzzy).toBeEnabled()
+  await fuzzy.check()
+  const lastSearch = async () => (await stubCalls('explorer.search')).at(-1)
+  // Typing in the box may light-dismiss the popover; the options open again where it did.
+  const reopen = async () => { if (!await fuzzy.isVisible()) await optionsButton.click() }
+  await expect.poll(lastSearch).toMatchObject({ text: 'ORD', match: 'fuzzy' })
+  await expect(explorerSearchHits(page)).toHaveCount(3)
+  await expect(searchHitApproximate(explorerSearchHits(page).first())).toHaveCount(0)
+  await searchBox().fill('tbl1')
+  await expect(explorerSearchHits(page)).toHaveCount(1)
+  await expect(searchHitApproximate(explorerSearchHits(page).first())).toHaveText('table1')
+  await reopen()
+  await explorerSearchCheck(page, 'Use Regular Expression').check()
+  await expect(fuzzy).not.toBeChecked()
+  await expect.poll(lastSearch).toMatchObject({ text: 'tbl1', regex: true })
+  expect((await lastSearch()).match).toBeUndefined()
+  await expect(explorerSearchHits(page)).toHaveCount(0)
+  await explorerSearchCheck(page, 'Use Regular Expression').uncheck()
+  await expect(fuzzy).toBeChecked()
+  await searchBox().fill('ORD')
+  await reopen()
+  await fuzzy.uncheck()
+  await expect.poll(lastSearch).toMatchObject({ text: 'ORD' })
+  expect((await lastSearch()).match).toBeUndefined()
+  await expect(explorerSearchHits(page)).toHaveCount(3)
   await page.keyboard.press('Escape')
   await expect(optionsButton).toBeFocused()
   await expect(optionsButton).toHaveAttribute('aria-expanded', 'false')
