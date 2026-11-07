@@ -784,7 +784,7 @@ try {
   // A table: Select Top 1000 Rows opens SSMS's script on its database and runs it there.
   await expandExplorerPath(page, ...ordersPath.slice(0, -1))
   await openExplorerRowMenu(...ordersPath)
-  expect(await labels()).toEqual(['Select Top 1000 Rows', 'Script Table as', 'Copy Name', 'Rename', 'Delete', 'Refresh'])
+  expect(await labels()).toEqual(['Select Top 1000 Rows', 'Peek', 'Script Table as', 'Copy Name', 'Rename', 'Delete', 'Refresh'])
   await explorerMenu.getByRole('menuitem', { name: 'Select Top 1000 Rows', exact: true }).click()
   const selectTop = ['/****** Script for SelectTopNRows command from Varia SQL Manager ******/', 'SELECT TOP (1000) [Id]', '      ,[CustomerName]', '  FROM [AppData].[dbo].[Orders]'].join('\n')
   // New queries take the platform's line ending, as SSMS's do, so the SQL sent is CRLF on Windows; the editor's lines are not.
@@ -1208,7 +1208,7 @@ try {
   // Main titles the Script submenu from the request's key, and disables the verbs a table does not support.
   const verbs = names => names.map(name => [name, ['New Query Editor Window', 'File…', 'Clipboard']])
   const tableScripts = [...verbs(['CREATE To', 'ALTER To', 'CREATE OR ALTER To', 'DROP To', 'DROP And CREATE To']), '---', ...verbs(['SELECT To', 'INSERT To', 'UPDATE To', 'DELETE To']), '---', ...verbs(['EXECUTE To'])]
-  expect(tablePopup.items).toEqual(['Select Top 1000 Rows', '---', ['Script Table as', tableScripts], '---', 'Copy Name', '---', 'Rename', 'Delete', '---', 'Refresh'])
+  expect(tablePopup.items).toEqual(['Select Top 1000 Rows', 'Peek', '---', ['Script Table as', tableScripts], '---', 'Copy Name', '---', 'Rename', 'Delete', '---', 'Refresh'])
   expect(await application.evaluate(() => ['explorer.scriptAs', 'explorer.scriptAs.create', 'explorer.scriptAs.alter', 'explorer.scriptAs.execute']
     .map(id => globalThis.variaPopups.at(-1).menu.getMenuItemById(id).enabled))).toEqual([true, true, false, false])
   expect(Math.abs(tablePopup.x - (tableBox.x + 12))).toBeLessThanOrEqual(1)
@@ -1267,7 +1267,7 @@ try {
   await nativeTable.click({ button: 'right' })
   const fallbackMenu = menu('Object Explorer')
   await expect(fallbackMenu).toBeVisible()
-  expect(await menuItemNames(fallbackMenu)).toEqual(['Select Top 1000 Rows', 'Script Table as', 'Copy Name', 'Rename', 'Delete', 'Refresh'])
+  expect(await menuItemNames(fallbackMenu)).toEqual(['Select Top 1000 Rows', 'Peek', 'Script Table as', 'Copy Name', 'Rename', 'Delete', 'Refresh'])
   await page.keyboard.press('Escape')
   await expect(openMenus()).toHaveCount(0)
   await popupMode('record')

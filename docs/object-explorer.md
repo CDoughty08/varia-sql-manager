@@ -368,6 +368,26 @@ count and connection dot keep their size, and the label gives up the row's empty
 | server | n Agent jobs running | running | SQL Server Agent jobs of its current session that started and have not stopped (none while none runs) |
 | server | <group> healthy / partially healthy / not healthy | success, warning, critical | the least healthy availability group (several: "n AGs …"); its tooltip names each group with its health and this replica's role |
 
+## Peek
+
+Peek (the context menu's Peek, Space on the selected row, or resting the pointer on a row with Ctrl held, Cmd on macOS)
+opens a card beside the row with the object's definition and its properties. One `explorer.peek` request reads the
+properties (and a module's text) on the Object Explorer pool, in one constant batch per kind (`Explorer/PeekSql.cs`)
+within 15,000 ms; a table's definition comes from Script As (CREATE). A fact whose
+catalog column is newer than the server is left out. Esc, a click elsewhere or another peek closes the card, and
+cancels a read still running.
+
+| Kind | Definition | Group | Facts |
+| --- | --- | --- | --- |
+| `table` | Script As | General | Schema, Created, Last modified, System object, Replicated, Lock escalation, Memory optimized, Temporal (band 13+), Ledger (band 16+) |
+| `table` | Script As | Storage | Row count, Data space, Index space, Filegroup, Text filegroup, Partitioned, Data compression |
+| `view` | sys.sql_modules | General | Schema, Created, Last modified, System object |
+| `view` | sys.sql_modules | Options | Schema bound, Indexed, ANSI NULLs, Quoted identifier |
+| `procedure` | sys.sql_modules | General | Schema, Created, Last modified, System object |
+| `procedure` | sys.sql_modules | Options | Execute as, Recompile, Natively compiled, ANSI NULLs, Quoted identifier |
+| `function` | sys.sql_modules | General | Schema, Created, Last modified, System object, Function type |
+| `function` | sys.sql_modules | Options | Execute as, Schema bound, Natively compiled, Returns NULL on NULL input, ANSI NULLs, Quoted identifier |
+
 ## Limits
 
 | Limit | Value | Meaning |

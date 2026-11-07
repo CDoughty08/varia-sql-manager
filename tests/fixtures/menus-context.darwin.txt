@@ -238,6 +238,7 @@ explorer.context, for the Programmability folder
   Re&fresh  F5  -+++
 explorer.context, for a table
   Select Top 1000 Ro&ws  -++-
+  Pee&k  ⌥F12  ----
   ---
   &Script Table as >
     &CREATE To >

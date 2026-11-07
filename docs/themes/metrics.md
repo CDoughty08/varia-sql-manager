@@ -91,7 +91,7 @@ Compact is the default and the only density `:root` sets; Comfortable is planned
 | Token | Compact px | Comfortable px | Planned for | Sized with it now |
 | --- | --- | --- | --- | --- |
 | `--varia-header` | 40 | 44 | The title bar. | `.title-bar` |
-| `--varia-bar` | 36 | 40 | Tab strips, the query bar, side-bar headers. | `.editor-empty > .editor-group-actions`, `.explorer-header`, `.query-bar`, `.output-toolbar`, `.document-script-head`, `.activity-pane-tabs [role="tab"]` |
+| `--varia-bar` | 36 | 40 | Tab strips, the query bar, side-bar headers. | `.editor-empty > .editor-group-actions`, `.explorer-header`, `.peek-head`, `.query-bar`, `.output-toolbar`, `.document-script-head`, `.activity-pane-tabs [role="tab"]` |
 | `--varia-control` | 26 | 28 | Buttons, inputs, selects. | `.icon-button`, `.object-search-field`, `.object-search-filter-button`, `.command-centre`, `.query-bar-action`, `.query-connection`, `.document-verb`, `.property-input`, `.property-field-control > .property-input-action > .property-input`, `.property-value.restore-to`, `.activity-select`, `.activity-tile-toggle` |
 | `--varia-row` | 22 | 26 | Tree, grid and list rows. | `.explorer-row`, `.explorer-pin-more`, `.skeleton-row`, `.document-nav-item`, `.server-files-head`, `.server-files-row`, `.new-database-cell`, `.attach-database-grid .attach-database-cell`, `.user-mapping-head`, `.new-login-credentials-grid th`, `.new-login-credentials-grid td` |
 | `--varia-status` | 24 | 26 | The status bars. | `.status-bar`, `.query-status-bar` |

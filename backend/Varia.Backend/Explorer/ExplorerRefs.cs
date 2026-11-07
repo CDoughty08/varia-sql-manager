@@ -73,6 +73,16 @@ internal static class ExplorerRefs
         return new(args.ConnectionId, args.RequestId, node, target, folder, database, args.Subtype, args.Cursor, args.PageSize ?? MaxPageSize, effective, list, grouped);
     }
 
+    /// <summary>explorer.peek's request, as peekParamsSchema accepts it: GUIDs, and a schema object ref of a kind Peek describes.</summary>
+    public static PeekKindSpec ValidatePeek(PeekArgs args, ExplorerCatalog catalog)
+    {
+        if (!Guid.TryParse(args.ConnectionId, out _)) throw Invalid("connectionId.");
+        if (!Guid.TryParse(args.RequestId, out _)) throw Invalid("requestId.");
+        var target = args.Target ?? throw Invalid("target.");
+        Object(target, catalog);
+        return catalog.Peek.Kinds.GetValueOrDefault(target.Kind) ?? throw Invalid("Peek describes tables, views, procedures and functions.");
+    }
+
     /// <summary>The ref's shape: the fields its kind's scope requires and forbids, identifiers (the name within the kind's
     /// bound), and a child's parent kind.</summary>
     public static void Object(ObjectRefDto value, ExplorerCatalog catalog)
