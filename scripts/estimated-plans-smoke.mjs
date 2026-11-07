@@ -3,6 +3,8 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { connectLive } from './fixtures/live-rows.mjs'
+import { enlargeOutput } from './fixtures/results-pane.mjs'
+import { resizeContent } from './fixtures/window-resize.mjs'
 import { backendReady, planCanvas, planViewer, queryBarButton, documentTabs } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -28,12 +30,18 @@ try {
     page.setDefaultTimeout(20_000)
     page.on('pageerror', error => failures.push(error.message))
     await expect(backendReady(page, live ? /\.NET \d+\./ : 'fake')).toBeVisible({ timeout: 30_000 })
+    // Windows CI has a 1024x768 display. Exercise that layout everywhere instead of relying on the host's screen.
+    await resizeContent(application, page, 1024, 700)
     await expect(queryBarButton(page, 'Display Estimated Execution Plan')).toBeDisabled()
     if (live) await connectLive(page, expect)
     else {
       await page.getByRole('button', { name: 'Connect', exact: true }).first().click()
       const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
       await dialog.getByLabel('Server Name', { exact: true }).fill('estimated-test')
+      // Fake connections must not depend on Windows identity or a Kerberos ticket on the host.
+      await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
+      await dialog.getByLabel('Login', { exact: true }).fill('reader')
+      await dialog.getByLabel('Password', { exact: true }).fill('unused')
       await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
       await expect(dialog).toHaveCount(0)
     }
@@ -42,7 +50,11 @@ try {
     await page.keyboard.press(`${mod}+l`)
     await expect(page.locator('[data-estimated-plan]')).toContainText('Estimated')
     await expect(planCanvas(page).locator('canvas')).toHaveCount(1)
+    // Give the short dock room through its normal splitter before inspecting outline rows below wrapped plan tools,
+    // just as the results smoke suite does.
+    await enlargeOutput(page)
     await expect(planViewer(page).getByRole('treeitem').first()).toBeVisible()
+    await expect(planViewer(page).getByRole('treeitem').first()).toBeInViewport()
     await planViewer(page).getByRole('treeitem').first().click()
     await expect(planViewer(page).getByRole('complementary', { name: 'Plan properties' })).toContainText('Estimated rows')
     await planViewer(page).getByRole('button', { name: 'Fit batch', exact: true }).click()
