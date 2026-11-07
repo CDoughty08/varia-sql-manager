@@ -6,6 +6,11 @@ function hash(text: string): string {
   for (let i = 0; i < text.length; i++) value = Math.imul(value ^ text.charCodeAt(i), 16777619)
   return (value >>> 0).toString(36)
 }
+function scalarIdentity(statement: SourceStatement): string | undefined {
+  const values = statement.nodes.flatMap(node => node.properties.filter(p => p.name === 'ScalarOperator.ScalarString' || p.name === 'Const.ConstValue')
+    .map(p => [node.nodeId, p.name, p.value]))
+  return values.length ? hash(JSON.stringify(values)) : undefined
+}
 /** SQL Server StatementId and NodeId survive the transient/completed XML's different document boundaries.
  * Batch and GO iteration are indispensable: two identical submitted statements are separate executions. */
 export function queryPlanStatements(statements: readonly SourceStatement[]): SourceStatement[] {
@@ -14,7 +19,8 @@ export function queryPlanStatements(statements: readonly SourceStatement[]): Sou
     if (!statement.batchNumber) return statement
     // IDs are local to the compiled batch, and QueryHash can agree for different literals. Dynamic SQL and
     // procedures can reuse both within one submitted batch; retain the text identity as well.
-    const key = `b${statement.batchNumber}i${statement.iteration ?? 1}s${statement.statementId ?? ''}t${hash(statement.text.trim())}${statement.queryHash ? 'q' + statement.queryHash : ''}`
+    const sql = statement.text.trim()
+    const key = `b${statement.batchNumber}i${statement.iteration ?? 1}s${statement.statementId ?? ''}t${sql ? hash(sql) : 'p' + (scalarIdentity(statement) ?? '')}${statement.queryHash ? 'q' + statement.queryHash : ''}`
     const occurrence = occurrences.get(key) ?? 0
     occurrences.set(key, occurrence + 1)
     const id = key + ':' + occurrence
@@ -60,8 +66,36 @@ export function planTopology(statements: readonly SourceStatement[]): string {
 
 export function completedPlanStatements(live: readonly SourceStatement[], actual: readonly SourceStatement[]): SourceStatement[] {
   const replacements = new Map(actual.map(s => [s.id, s]))
+  const consumed = new Set<string>()
+  // Native STATISTICS XML can supply SQL text that the live DMV omits. Use a unique compiled-statement match
+  // only for completed data; never collapse different nonempty SQL or guess between repeated executions.
+  const candidates = actual.filter(s => !s.partial && !live.some(l => l.id === s.id))
+  const unmatched = live.filter(s => !replacements.has(s.id))
+  const shapes = new Map<SourceStatement, string>()
+  const scalars = new Map(candidates.length ? [...live, ...candidates].map(s => [s, scalarIdentity(s)] as const) : [])
+  const shape = (statement: SourceStatement) => {
+    let value = shapes.get(statement)
+    if (value === undefined) {
+      const nodes = new Map(statement.nodes.map(n => [n.id, n.nodeId]))
+      value = JSON.stringify(statement.nodes.map(n => [n.nodeId, nodes.get(n.parentId ?? ''), n.physicalOp, n.logicalOp, n.object]))
+      shapes.set(statement, value)
+    }
+    return value
+  }
+  const matches = (a: SourceStatement, b: SourceStatement) => !!a.batchNumber && a.batchNumber === b.batchNumber && (a.iteration ?? 1) === (b.iteration ?? 1)
+    && !!a.queryHash && a.queryHash === b.queryHash && (!a.text.trim() || !b.text.trim() || a.text.trim() === b.text.trim())
+    && !(scalars.get(a) && scalars.get(b) && scalars.get(a) !== scalars.get(b)) && shape(a) === shape(b)
+  for (const statement of unmatched) {
+    const found = candidates.filter(candidate => matches(statement, candidate))
+    if (found.length !== 1 || unmatched.filter(other => matches(other, found[0])).length !== 1) continue
+    const completed = found[0]
+    const nodeIds = new Map(completed.nodes.map(node => [node.id, statement.id + 'n' + node.nodeId]))
+    replacements.set(statement.id, { ...completed, id: statement.id, nodes: completed.nodes.map(node => ({ ...node,
+      id: nodeIds.get(node.id)!, parentId: node.parentId ? nodeIds.get(node.parentId) ?? null : null })) })
+    consumed.add(completed.id)
+  }
   const retained = live.map(s => replacements.get(s.id) ?? s)
   const ids = new Set(live.map(s => s.id))
-  const added = actual.filter(s => !ids.has(s.id))
+  const added = actual.filter(s => !ids.has(s.id) && !consumed.has(s.id))
   return added.length ? [...retained, ...added].toSorted((a, b) => (a.batchNumber || Number.MAX_SAFE_INTEGER) - (b.batchNumber || Number.MAX_SAFE_INTEGER) || (a.iteration ?? 1) - (b.iteration ?? 1)) : retained
 }

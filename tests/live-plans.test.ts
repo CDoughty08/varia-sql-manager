@@ -77,6 +77,37 @@ describe('live execution plans', () => {
     expect(complete.map(s => s.id)).toEqual(second.statements.map(s => s.id))
     expect(complete.every(s => !s.partial)).toBe(true)
   })
+  it('reconciles native SQL text omitted by the live DMV without changing selection or layout', () => {
+    const live = applyLivePlan(emptyLivePlan, { ...frame(), document: { ...document, statements: [{ ...document.statements[0], text: '', queryHash: '0x123' }] } })
+    const actual = queryPlanStatements(live.statements.map(s => ({ ...s, text: 'SELECT * FROM Data', partial: undefined, sourceKey: 'native', nodes: s.nodes.map(n => ({ ...n, actualRows: 100 })) })))
+    const completed = completedPlanStatements(live.statements, actual)
+    expect(completed).toHaveLength(1)
+    expect(planTopology(completed)).toBe(planTopology(live.statements))
+    expect(completed[0]).toMatchObject({ text: 'SELECT * FROM Data', sourceKey: 'native', partial: undefined })
+    expect(completed[0].nodes.every(n => n.actualRows === 100)).toBe(true)
+  })
+  it('separates omitted SQL using literal expressions and reconciles each completed native plan', () => {
+    const variant = (literal: number): LivePlanFrame => ({ ...frame(literal), document: { ...document, statements: [
+      { ...document.statements[0], text: '', queryHash: '0x123', nodes: document.statements[0].nodes.map(n => ({ ...n,
+        properties: [{ name: 'Const.ConstValue', value: String(literal) }] })) }
+    ] } })
+    const first = applyLivePlan(emptyLivePlan, variant(1))
+    const second = applyLivePlan(first, { ...variant(2), revision: 2 })
+    expect(second.statements).toHaveLength(2)
+    const actual = queryPlanStatements(second.statements.map((s, i) => ({ ...s, text: `SELECT ${i + 1}`, partial: undefined, sourceKey: 'native' })))
+    const completed = completedPlanStatements(second.statements, actual)
+    expect(completed).toHaveLength(2)
+    expect(completed.map(s => s.id)).toEqual(second.statements.map(s => s.id))
+    expect(completed.every(s => !s.partial)).toBe(true)
+  })
+  it('retains an unmatched partial snapshot rather than guessing between repeated native executions', () => {
+    const live = applyLivePlan(emptyLivePlan, { ...frame(), document: { ...document, statements: [{ ...document.statements[0], text: '', queryHash: '0x123' }] } })
+    const actual = queryPlanStatements(['SELECT * FROM Data WHERE n = 1', 'SELECT * FROM Data WHERE n = 2'].map(text => ({ ...live.statements[0], text, partial: undefined, sourceKey: 'native' })))
+    const completed = completedPlanStatements(live.statements, actual)
+    expect(completed).toHaveLength(3)
+    expect(completed[0].partial).toBe(true)
+    expect(completed.slice(1).every(s => !s.partial)).toBe(true)
+  })
   it('bounds accumulated statements across repeated batches', () => {
     let model = emptyLivePlan
     for (let iteration = 1; iteration <= 256; iteration++) model = applyLivePlan(model, { ...frame(), iteration, revision: iteration })

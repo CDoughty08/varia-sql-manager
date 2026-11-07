@@ -120,7 +120,7 @@ internal static class LivePlanLiveChecks
         {
             await Run("CREATE PROCEDURE #varia_live_identity AS BEGIN DECLARE @n int = 1; IF @n=1 "
                 + "SELECT SUM(CONVERT(bigint,CHECKSUM(HASHBYTES('SHA2_256',CONCAT(a.object_id,':',b.object_id))))) AS measured "
-                + "FROM sys.all_objects a CROSS JOIN sys.all_objects b OPTION(MAXDOP 1); END;");
+                + "FROM (SELECT TOP (1500) object_id FROM sys.all_objects) a CROSS JOIN (SELECT TOP (1500) object_id FROM sys.all_objects) b OPTION(MAXDOP 1); END;");
             using var sampler = new LivePlanSampler((ILiveHost)service, service.Live.Gates, info.Id, new(query));
             var execution = Run("EXEC #varia_live_identity;", true);
             var spec = new LiveProbeState(LiveCatalog.Current.Probes[LivePlanSampler.Probe], 1000);
@@ -139,7 +139,8 @@ internal static class LivePlanLiveChecks
             check(result.Status == "completed" && profiled.Count > 0 && actual.Count > 0
                 && profiled.All(s => actual.Any(a => a.StatementId == s.StatementId && a.QueryHash == s.QueryHash && a.Text.Trim() == s.Text.Trim())),
                 "completed procedure plans retain live statement identity: live=" + string.Join(',', profiled.Select(s => s.StatementId + ":" + s.QueryHash))
-                + "; actual=" + string.Join(',', actual.Select(s => s.StatementId + ":" + s.QueryHash)));
+                + "; actual=" + string.Join(',', actual.Select(s => s.StatementId + ":" + s.QueryHash))
+                + "; status=" + result.Status + "; " + string.Join(" | ", LiveResultChecks.Texts(result)));
         }
         finally { await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(session), json), json); }
     }

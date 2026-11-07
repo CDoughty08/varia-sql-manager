@@ -32,7 +32,7 @@ try {
   await expect(toggle).toHaveAttribute('aria-pressed', 'true')
   await queryBarButton(page, 'Include Client Statistics').click()
   const aggregate = "SELECT SUM(CONVERT(bigint,CHECKSUM(HASHBYTES('SHA2_256',CONCAT(a.object_id,':',b.object_id))))) AS measured FROM sys.all_objects a CROSS JOIN sys.all_objects b OPTION(MAXDOP 1);"
-  await sql(aggregate)
+  await sql('SET STATISTICS XML ON; ' + aggregate)
   await expect(outputStatus(page)).toContainText(/^Executing/)
   await outputView(page, /^Execution plan/).click()
   const viewer = planViewer(page), canvas = planCanvas(page)
@@ -64,7 +64,7 @@ try {
   await expect(statistics.getByRole('row').filter({ has: page.getByRole('rowheader', { name: 'Server round trips', exact: true }) }).getByRole('cell').first()).toHaveText('1')
   await expect(page.getByLabel('Statistics execution').getByRole('option')).toContainText(['live plan'])
   // Cancel a later long statement: earlier completed plans and every GO repetition remain distinct.
-  await sql("SELECT TOP (1) name AS before_live FROM sys.all_objects ORDER BY object_id;\nGO 2\n" + aggregate.replace('CROSS JOIN sys.all_objects b', 'CROSS JOIN sys.all_objects b CROSS JOIN sys.all_objects c'))
+  await sql("SET STATISTICS XML OFF; SELECT TOP (1) name AS before_live FROM sys.all_objects ORDER BY object_id;\nGO 2\n" + aggregate.replace('CROSS JOIN sys.all_objects b', 'CROSS JOIN sys.all_objects b CROSS JOIN sys.all_objects c'))
   await outputView(page, /^Execution plan/).click()
   await expect(planViewer(page).getByRole('button', { name: 'Live', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect(planCanvas(page).locator('canvas')).toHaveCount(1)

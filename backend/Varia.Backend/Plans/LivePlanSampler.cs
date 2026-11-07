@@ -95,7 +95,7 @@ internal sealed class LivePlanSampler(ILiveHost host, LiveGates gates, string co
             // Per-thread raw properties would become stale in counter-only frames. Live exposes current aggregate
             // counters; captured actual XML retains the full thread details at completion.
             foreach (var node in nodes) node.Properties.RemoveAll(p => p.Name.StartsWith("RunTimeCountersPerThread", StringComparison.Ordinal));
-            var signature = target.Batch + ":" + target.Iteration + ":" + string.Join('|', document.Statements.Select(s => s.Id + ":" + s.StatementId + ":" + s.QueryHash + ":" + s.Text + ":" + string.Join(',', s.Nodes.Select(n => n.Id + ":" + n.ParentId + ":" + n.PhysicalOp + ":" + n.LogicalOp + ":" + n.Object + ":" + n.EstimatedRows + ":" + n.EstimatedCost))));
+            var signature = Signature(target, document);
             var changed = signature != topology;
             var counters = nodes.Select(n => new LivePlanCounter(n.Id, n.ActualRows, n.ElapsedMs, n.CpuMs, n.Executions)).ToList();
             var frame = new LivePlanFrame(target.Batch, target.Iteration, changed ? revision + 1 : revision, changed ? document : null, counters);
@@ -115,6 +115,19 @@ internal sealed class LivePlanSampler(ILiveHost host, LiveGates gates, string co
         LiveSampleBatch Error(string code, string message) => new([], [LiveErrors.Create(Probe, code, message)]);
     }
     public void Apply(object value) { if (value is not LivePlanArgs next || next != args) throw new RequestException("INVALID_PARAMS", "A live plan cannot change its query identity."); }
+    internal static string Signature(LivePlanTarget target, PlanDocument document) => JsonSerializer.Serialize(new
+    {
+        target.Batch, target.Iteration,
+        Statements = document.Statements.Select(s => new
+        {
+            s.Id, s.StatementId, s.QueryHash, s.Text,
+            Nodes = s.Nodes.Select(n => new
+            {
+                n.Id, n.ParentId, n.PhysicalOp, n.LogicalOp, n.Object, n.EstimatedRows, n.EstimatedCost,
+                Literals = n.Properties.Where(p => p.Name is "ScalarOperator.ScalarString" or "Const.ConstValue")
+            })
+        })
+    });
     public uint[] Keep() => [];
     public void Release() { }
     public void Dispose() { }
