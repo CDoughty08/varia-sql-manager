@@ -151,6 +151,10 @@ pages, limits, error codes, display formats, benchmarks).
   menus and the palette run it through `varia:run-role`. Two-part chords that Varia owns are `bridge` keybindings,
   registered with Monaco from the catalogue by `registerEditorBridge`; Monaco dispatches them. After catalogue changes,
   regenerate `docs/commands.md` with `npx vitest run tests/commands-docs.test.ts -u`.
+  Mouse gestures (modifier behaviours, pointer commands, fixed gestures) are declared only in `src/shared/commands/gestures.ts`;
+  handlers read pointer modifiers only through `GestureService` (`src/renderer/src/core/gestures.ts`, `tests/gesture-lint.test.ts`),
+  every pointer command has a keyboard path, and tooltips that name a gesture take its words from the service. After
+  changing it, regenerate `docs/gestures.md` with `npx vitest run tests/gestures.test.ts -u`.
 - Menus are declared only in `src/shared/commands` (placements in `catalog.ts`, submenus in `menus.ts`) plus the theme
   provider (`src/shared/theme/menu.ts`). Windows/Linux render them in `src/renderer/src/menus`; macOS renders them
   natively from ids. Main's application menu takes only command-id sets from the renderer (`menuStateSchema`) and sends

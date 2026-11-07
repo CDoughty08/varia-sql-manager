@@ -88,6 +88,7 @@ The Electron application uses React, TypeScript, Monaco, and Dockview. A .NET si
 ## Documentation
 
 - [Commands and shortcuts](docs/commands.md)
+- [Mouse gestures](docs/gestures.md)
 - [Editor groups](docs/editor-groups.md), [hot exit](docs/hot-exit.md) and [popout windows](docs/popout-windows.md)
 - [Object Explorer](docs/object-explorer.md), [object actions](docs/object-actions.md) and [Search Objects](docs/object-search.md)
 - [Scripting](docs/scripting.md) and [Table Designer](docs/table-designer.md)
