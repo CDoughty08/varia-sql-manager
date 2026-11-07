@@ -8,6 +8,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { gridLimits as g } from '../grid/constants'
 import ResultsStack, { stackNeed } from '../grid/ResultsStack'
 import ResultPlans from '../plans/ResultPlans'
+import EstimatedPlans from '../plans/EstimatedPlans'
 import EmptyState from '../kit/EmptyState'
 import MessagesView from './MessagesView'
 import ResultsToolbar from './ResultsToolbar'
@@ -73,9 +74,11 @@ export function outputViewOf(tab: TabResults | undefined): OutputViewName | unde
  * place of the output panel its group shows. A group where the output panels share tabs with another panel stays as it is.
  */
 export function OutputViewSync({ tabId }: { tabId: string }) {
-  const { results, panes } = useWorkbench()
+  const { results, panes, queries } = useWorkbench()
   const view = outputViewOf(useServiceSnapshot(results)[tabId])
+  const estimated = useServiceSnapshot(queries)[tabId]?.estimated
   useEffect(() => { if (view) panes.select(view) }, [panes, tabId, view])
+  useEffect(() => { if (estimated) panes.select('plan') }, [panes, tabId, estimated?.requestId])
   return null
 }
 
@@ -130,8 +133,9 @@ const viewNames: Record<OutputPaneId, string> = { results: 'Results', messages: 
  * also holds the run summary and the copy and save strips, so they show once, wherever the panels are.
  */
 function OutputPane({ pane, tabId, query, connected, hint }: Props) {
-  const { results, panes } = useWorkbench()
+  const { results, panes, queries } = useWorkbench()
   const all = useServiceSnapshot(results)
+  const estimated = useServiceSnapshot(queries)[tabId]?.estimated
   const visible = useServiceSnapshot(panes)
   const peers = useServiceSnapshot(panes.peers)[pane]
   const tab = tabId ? all[tabId] : undefined
@@ -145,9 +149,9 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
   const jobs = tab?.jobs.filter(job => job.visible) ?? []
   const id = useId(), panelId = id + 'panel', tabIds: Record<OutputPaneId, string> = { results: id + 'results', messages: id + 'messages', plan: id + 'plan' }
   const [viewRef, viewHeight] = useHeight()
-  const available: Record<OutputPaneId, boolean> = { results: hasSets, messages: !!tab, plan: plans.length > 0 }
+  const available: Record<OutputPaneId, boolean> = { results: hasSets, messages: !!tab, plan: plans.length > 0 || !!estimated }
   // Only the panel its group shows lists the tabs: a hidden panel's tabs are gone, not merely out of sight.
-  const views = !tab || !visible[pane] ? [] : (peers.length ? peers : [pane]).filter(view => view === pane || available[view])
+  const views = (!tab && !estimated) || !visible[pane] ? [] : (peers.length ? peers : [pane]).filter(view => view === pane || available[view])
   // The strip line shows once there is something to read beyond row counts (or the user opened the strip); it opens itself
   // only when the stack keeps room for its sets at their floors.
   const stripSummary = tab ? messagesSummary(tab.messages) : undefined
@@ -186,7 +190,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
   const labels: Record<OutputPaneId, string> = {
     results: sets > 0 ? `Results, ${formatCount(sets)} ${plural(sets, 'result set')}` : 'Results',
     messages: errors ? 'Messages, contains errors' : messages > 0 ? `Messages, ${formatCount(messages)} ${plural(messages, 'message')}` : 'Messages',
-    plan: plans.length > 0 ? `Execution plan, ${formatCount(plans.length)} ${plural(plans.length, 'plan')}` : 'Execution plan'
+    plan: estimated ? 'Execution plan, Estimated' : plans.length > 0 ? `Execution plan, ${formatCount(plans.length)} ${plural(plans.length, 'plan')}` : 'Execution plan'
   }
   const badges: Record<OutputPaneId, ReactNode> = {
     results: sets > 0 && <span className="badge">{sets}</span>,
@@ -200,14 +204,16 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
         {views.map(view => <button key={view} {...tabProps(view)} aria-label={labels[view]}>{viewNames[view]}{badges[view]}</button>)}
       </div>
       {showTools && <ResultsToolbar />}
-      {leader && tab ? <RunSummaryView tab={tab} now={now} /> : <span className="output-spacer" />}
+      {pane === 'plan' && estimated ? <span className="output-status">Estimated{estimated.loading ? ' · Compiling…' : estimated.error ? ' · Unavailable' : ''}</span>
+        : leader && tab ? <RunSummaryView tab={tab} now={now} /> : <span className="output-spacer" />}
       {/* Visual progress only: the output's live region announces how a copy or save ended. */}
       {leader && jobs.map(job => <div key={job.jobId} className="job-strip"><span>{jobText(job)}</span><button onClick={() => results.cancelJob(job.jobId)}>Cancel</button></div>)}
       {/* The live region announces it; this is the visible copy. */}
       {leader && tab?.jobNotice && <div className="job-strip job-notice">{tab.jobNotice}</div>}
       <PaneMenuButton pane={pane} />
     </div>
-    {!tab ? <EmptyState className="output-empty" icon={emptyIcons[pane]} title={emptyTitles[pane]} detail={!query ? 'Query results appear here for query tabs.' : hint ?? (connected ? 'Execute a query to view results and messages.' : 'Connect this query to a server to execute it.')} />
+    {pane === 'plan' && estimated ? <div ref={viewRef} className="output-view" role="tabpanel" id={panelId} aria-labelledby={tabIds[pane]}><EstimatedPlans state={estimated} /></div>
+      : !tab ? <EmptyState className="output-empty" icon={emptyIcons[pane]} title={emptyTitles[pane]} detail={!query ? 'Query results appear here for query tabs.' : hint ?? (connected ? 'Execute a query to view results and messages.' : 'Connect this query to a server to execute it.')} />
       : <div ref={viewRef} className="output-view" role="tabpanel" id={panelId} aria-labelledby={tabIds[pane]}>
         {pane === 'results' ? <>
           {tab.status === 'closed' ? <EmptyState className="output-empty" detail="Results were closed to free memory. Execute the query again to see them." />

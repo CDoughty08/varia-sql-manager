@@ -258,6 +258,13 @@ export const commandCatalog = {
     keybindings: [{ win: 'ctrl+m', linux: 'ctrl+m', when: 'editorFocus || queryBarFocus' }],
     menus: [{ menu: 'query', group: '1_execute', order: 3, mnemonic: 'i' }]
   },
+  'query.estimatePlan': {
+    title: 'Display Estimated Execution Plan', category: 'Query', icon: 'execution-plan', keywords: ['compile', 'xml', 'showplan'],
+    precondition: 'activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy',
+    unavailableHint: 'Connect an idle query to a server to estimate its execution plan.',
+    keybindings: [{ key: 'mod+l', when: 'editorFocus || queryBarFocus' }],
+    menus: [{ menu: 'query', group: '1_execute', order: 4, mnemonic: 'e' }, { menu: 'editor.context', group: '2_execute', order: 3, mnemonic: 'd' }]
+  },
   'workbench.showCommands': {
     title: 'Show All Commands', palette: false,
     keybindings: [{ key: 'mod+shift+p' }, { key: 'f1' }],

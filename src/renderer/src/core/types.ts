@@ -31,6 +31,7 @@ export type WorkbenchEvent =
   | { type: 'documents.activated'; tabId: string }
   | { type: 'documents.closed'; tabId: string }
   | { type: 'query.started'; tabId: string; queryId: string }
+  | { type: 'query.estimateStarted'; tabId: string }
   | { type: 'query.finished'; tabId: string; queryId: string; summary?: QueryResult; error?: string }
   /** Execute ran on a query with no connection: the Connect dialog opens, and the query runs once connected. */
   | { type: 'query.connectRequested'; tabId: string }

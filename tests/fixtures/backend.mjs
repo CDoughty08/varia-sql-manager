@@ -961,6 +961,7 @@ async function workbench(id, method, params, credit) {
   if (!directive?.hold && method !== 'results.export' && method !== 'ssis.describe') while (await controlled(join('hold', method))) await sleep(25)
   switch (method) {
     case 'system.health': return respond(id, { protocolVersion: 2, runtime: 'fake', platform: process.platform, smoVersion: 'fake', sqlClientVersion: 'fake' })
+    case 'plans.estimate': return respond(id, { plans: [{ xml: fixturePlanXml, batchNumber: 1, iteration: 1 }], database: params.database })
     case 'plans.parse': {
       const xml = gunzipSync(Buffer.from(params.xml, 'base64'), { maxOutputLength: 32 * 1024 * 1024 }).toString('utf8')
       if (xml.includes('<unavailable-plan')) return fail(id, 'INVALID_PARAMS', 'The plan XML could not be graphed.')
