@@ -21,6 +21,7 @@ internal static class SearchChecks
         Sql(check);
         Matcher(check);
         Ranking(check);
+        Deadline(check);
         Qualified(check);
         Previews(check);
         Budget(check);
@@ -144,8 +145,38 @@ internal static class SearchChecks
     private static readonly ObjectIndexStatus Ready = new("ready", 2, 2, 7, 1, 0, [], true);
 
     private static ObjectSearchResult Search(ConnectionIndex index, string text, bool names = true, bool definitions = true, int limit = 200, HashSet<string>? kinds = null, string? database = null,
-        bool wholeWord = false, ObjectIndexLimits? limits = null) =>
-        IndexSearch.Run(index, new(text, false, wholeWord, false, names, definitions, kinds, database, limit), Make(text, wholeWord: wholeWord), limits ?? new ObjectIndexLimits(), Ready);
+        bool wholeWord = false, ObjectIndexLimits? limits = null, CancellationToken token = default) =>
+        IndexSearch.Run(index, new(text, false, wholeWord, false, names, definitions, kinds, database, limit), Make(text, wholeWord: wholeWord), limits ?? new ObjectIndexLimits(), Ready, token);
+
+    /// <summary>One early hit, then many long definitions that do not match: the budget and Stop must still end the scan, since
+    /// they are checked by objects scanned, not hits found. The definitions share one string, so the index holds little memory
+    /// while a full scan would read about 10^10 characters.</summary>
+    private static void Deadline(Action<bool, string> check)
+    {
+        var filler = new string('x', 100_000);
+        var objects = new IndexedObject[100_001];
+        objects[0] = new("procedure", "storedProcedures", "dbo", "needle_first");
+        for (var i = 1; i < objects.Length; i++) objects[i] = new("procedure", "storedProcedures", "dbo", "p" + i, Definition: filler);
+        var index = new ConnectionIndex(new IndexBudget(1 << 20));
+        index.Put(new DatabaseIndex("Big", objects, 0, objects.Length - 1, 0));
+        var result = Search(index, "needle", limits: new ObjectIndexLimits { SearchBudget = TimeSpan.FromMilliseconds(50) });
+        check(result.Partial && result.Total == 1 && result.Hits is [{ Label: "dbo.needle_first" }],
+            $"a search past its budget answers partial with the hits it found, even after an early hit ({result.Total} hits, partial {result.Partial}, {result.ElapsedMs} ms)");
+        var roomy = new ObjectIndexLimits { SearchBudget = TimeSpan.FromHours(1) };
+        using var stop = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var stopped = false;
+        try { Search(index, "needle", limits: roomy, token: stop.Token); }
+        catch (OperationCanceledException) { stopped = true; }
+        check(stopped, $"a cancelled search stops scanning after an early hit ({watch.ElapsedMilliseconds} ms)");
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        stopped = false;
+        try { Search(index, "needle", limits: roomy, token: cancelled.Token); }
+        catch (OperationCanceledException) { stopped = true; }
+        check(stopped, "a search whose request was already cancelled does not scan");
+        index.Dispose();
+    }
 
     private static void Ranking(Action<bool, string> check)
     {
