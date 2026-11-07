@@ -35,9 +35,13 @@ const tabs = () => documentTabs(page).getByRole('tab')
 const clipboard = () => application.evaluate(({ clipboard }) => clipboard.readText())
 // Linux: Chromium pastes the X11/Wayland PRIMARY selection on a middle-click, a clipboard read outside the gated Paste role.
 const primarySelection = process.platform === 'linux'
-const setPrimary = text => application.evaluate(({ clipboard }, value) => clipboard.writeText(value, 'selection'), text)
-/** Middle-clicks `locator` and reports the paste events (with the text they could read), mouseups and auxclicks the page saw. */
-const middleClick = async locator => {
+// Read back, so a session where PRIMARY cannot be written fails instead of passing with nothing to paste.
+const setPrimary = async text => {
+  await application.evaluate(({ clipboard }, value) => clipboard.writeText(value, 'selection'), text)
+  expect(await application.evaluate(({ clipboard }) => clipboard.readText('selection'))).toBe(text)
+}
+/** Middle-clicks `locator` (or runs `press` on its box) and reports the paste events (with the text they could read), mouseups and auxclicks the page saw. */
+const middleClick = async (locator, press) => {
   await page.evaluate(() => {
     const seen = window.__variaMiddleClick ??= { pastes: [], mouseups: 0, auxclicks: 0 }
     if (!seen.listening) {
@@ -48,8 +52,9 @@ const middleClick = async locator => {
     }
     Object.assign(seen, { pastes: [], mouseups: 0, auxclicks: 0 })
   })
-  // Blink pastes PRIMARY while it handles the mouseup, which the click awaits.
-  await locator.click({ button: 'middle' })
+  // Blink pastes PRIMARY while it handles the release, which the click awaits.
+  if (press) await press(await locator.boundingBox())
+  else await locator.click({ button: 'middle' })
   return page.evaluate(() => { const { pastes, mouseups, auxclicks } = window.__variaMiddleClick; return { pastes, mouseups, auxclicks } })
 }
 const zoomLevel = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getZoomLevel())
@@ -388,6 +393,20 @@ try {
     expect(await editorText()).toBe(before)
     await expect(openMenus()).toHaveCount(0)
     await expect(textbox()).toBeFocused()
+    // A chorded release (left held on File, middle pressed and released) comes as a pointermove, with no pointerup or mouseup.
+    await setPrimary('primary-through-chord')
+    const chord = await middleClick(menubarItem('File'), async box => {
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+      await page.mouse.down()
+      await page.mouse.down({ button: 'middle' })
+      await page.mouse.up({ button: 'middle' })
+      await page.mouse.up()
+    })
+    expect(chord).toEqual({ pastes: [], mouseups: 0, auxclicks: 1 })
+    await page.keyboard.press('Escape')
+    await expect(openMenus()).toHaveCount(0)
+    await textbox().focus()
+    expect(await editorText()).toBe(before)
   }
   // A tap is the user acting, as a click is: Edit › Paste chosen by touch pastes (Windows touch screens).
   await application.evaluate(({ clipboard }) => clipboard.writeText('pasted-by-touch'))
