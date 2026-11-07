@@ -32,6 +32,7 @@ import { ExplorerStatusService } from '../explorer/ExplorerStatusService'
 import { DatabaseListService } from '../services/database-list'
 import { SsisTreeProbe } from '../ssis/SsisTreeProbe'
 import { ResultSelectionService } from '../services/result-selection'
+import { PeekService } from '../explorer/PeekService'
 import type { ThemeService } from '../services/theme'
 import { queryContribution } from '../contributions/query'
 import { filesContribution, watchExternalChanges } from '../contributions/files'
@@ -156,6 +157,8 @@ export interface Workbench extends Disposable {
   readonly settings: SettingsService
   /** Script As requests: their status, cancellation, and destinations. */
   readonly scripting: ScriptingService
+  /** Object Explorer's Peek card: the object it shows and its reads. */
+  readonly peek: PeekService
   /** Object Explorer's Select Top, Rename and the other object actions. */
   readonly actions: ObjectActionService
   /** The latest STATS progress of the long object actions (restore, backup) this window runs, by request id. */
@@ -269,6 +272,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // A document focuses itself once drawn, unless a dialog, the palette or a menu has focus by then (focusWhenDrawn).
   const focusLater = (focus: () => void) => focusWhenDrawn(nextFrame, focus)
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => focusLater(() => documents.focusActive()) })
+  const peek = new PeekService({ api, connections, scriptingOptions, platform })
   const serverFiles = new ServerFilePickerService({ api, connections })
   const longRuns = new LongRunService({ api })
   const dialogs = new ObjectDialogService({
@@ -369,7 +373,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     modalContains: element => [...document.querySelectorAll('[aria-modal="true"]')].at(-1)?.contains(element) ?? false, style: api.menuStyle, api })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen, menus,
     keyArgs: command => { const tabId = actsOnTab(command) ? editorGroups.focusedDocument() : undefined; return tabId ? { tabId } : undefined }, editorHasTextFocus: () => documents.boundEditor?.hasTextFocus() ?? false,
-    editorContains: target => target instanceof Node && !!documents.boundEditor?.getContainerDomNode().contains(target) })
+    editorContains: target => target instanceof Node && !!documents.boundEditor?.getContainerDomNode().contains(target),
+    keyUp: event => peek.keyUp(event.key) })
   const menuState = new MenuStatePublisher({ commands, context, send: state => api.setMenuState(state) })
   const actions = new ObjectActionService({
     api, explorer, documents, queries, connections, selectTopCount: () => settings.get('objectExplorer.selectTopRows'),
@@ -430,6 +435,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     resultSelection,
     settings,
     scripting,
+    peek,
     actions,
     actionProgress,
     dialogs,
@@ -509,6 +515,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       panes.dispose()
       editorGroups.dispose()
       resultSelection.dispose()
+      peek.dispose()
       settings.dispose()
       notifications.dispose()
       updates.dispose()

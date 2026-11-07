@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (238)
+## Commands (239)
 
 ### File
 
@@ -212,6 +212,7 @@ keys it uses are listed below.
 | Script As… | `explorer.scriptAs` | — | — | — | `backendReady && explorerScriptTitle != ''` | — |
 | Modify | `explorer.modify` | — | — | — | `backendReady && explorerSelectionModifiable && explorerScriptAlter == 'enabled' && !documentBusy` | Object Explorer context menu › Modify; Search Objects result context menu › Modify |
 | Cancel Scripting | `explorer.cancelScripting` | — | — | — | `scriptingRunning` | — |
+| Peek | `explorer.peek` | Alt+F12 (`activePanel == 'explorer' && !inputFocus`) | Alt+F12 (`activePanel == 'explorer' && !inputFocus`) | ⌥F12 (`activePanel == 'explorer' && !inputFocus`) | `backendReady && (explorerSelectionKind == 'table' \|\| explorerSelectionKind == 'view' \|\| explorerSelectionKind == 'procedure' \|\| explorerSelectionKind == 'function')` | Object Explorer context menu › Peek |
 | Copy Name | `explorer.copyName` | — | — | — | `hasConnection` | Object Explorer context menu › Copy Name |
 | Search Objects… | `explorer.searchObjects` | — | — | — | `hasConnection` | View › Search Objects…; Object Explorer context menu › Search Objects… |
 | Rebuild Search Index | `explorer.rebuildIndex` | — | — | — | `hasConnection` | — |
@@ -564,6 +565,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `1_query` | Modif**y** | `explorer.modify` | `explorerSelectionModifiable && explorerNode != 'background'` |
 | `1_query` | Ac**t**ivity Monitor | `activity.open` | `explorerNode == 'server' && !explorerServerLost` |
 | `1_query` | Searc**h** Objects… | `explorer.searchObjects` | `(explorerNode == 'server' && !explorerServerLost) \|\| explorerNode == 'database'` |
+| `1_query` | Pee**k** | `explorer.peek` | `(explorerNode == 'table' \|\| explorerNode == 'view' \|\| explorerNode == 'procedure' \|\| explorerNode == 'function') && !explorerServerLost` |
 | `2_script` | **S**cript … as › | Submenu: Object Explorer context menu › Script … as | `explorerScriptTitle != '' && explorerNode != 'background'` |
 | `3_filter` | F**i**lter Settings… | `explorer.filter` | `explorerFolderFilterable` |
 | `3_filter` | Remove Fi**l**ter | `explorer.removeFilter` | `explorerFolderFiltered` |

@@ -30,6 +30,9 @@ internal sealed class ExplorerOptions
 {
     public int PerConnection { get; init; } = 4;
     public int Total { get; init; } = 8;
+    /// <summary>Peek's own slots per connection, outside PerConnection and Total: a peek is one small read the user waits on, so
+    /// it never queues behind the tree's paging.</summary>
+    public int PeekPerConnection { get; init; } = 1;
     public int MaxRegistered { get; init; } = 1024;
     public TimeSpan Budget { get; set; } = TimeSpan.FromSeconds(40);
     /// <summary>Stop reading a page once its estimated size passes this many bytes.</summary>
@@ -40,6 +43,8 @@ internal sealed class ExplorerOptions
     public bool ForcePerDatabaseScope { get; set; }
     /// <summary>Delays every catalog statement (cancellation checks).</summary>
     public TimeSpan? TestDelay { get; set; }
+    /// <summary>Replaces Peek's budget from the catalogue (timeout checks).</summary>
+    public TimeSpan? PeekBudget { get; set; }
 }
 
 /// <summary>explorer.children: static folders straight from the catalogue (no SQL, no slot), dynamic rows from constant
@@ -52,6 +57,7 @@ internal sealed class ExplorerService : IDisposable
     private readonly IReadOnlyDictionary<string, ExplorerQuery> queries;
     private readonly RequestRegistry running;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> gates = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> peekGates = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim total;
 
     /// <param name="catalog">A catalogue other than the embedded one, with <paramref name="queries"/> for the ids it lists
@@ -101,17 +107,54 @@ internal sealed class ExplorerService : IDisposable
         finally { running.Unregister(request.RequestId, entry); }
     }
 
+    /// <summary>explorer.peek: one constant batch (PeekSql) in the object's database on the same pools and with the same error
+    /// values as explorer.children, under the connection's peek slot rather than the tree's gates, within the catalogue's budget
+    /// from the moment it has its slot (a TIMEOUT value past it).</summary>
+    public async Task<PeekResult> PeekAsync(PeekArgs args, CancellationToken token)
+    {
+        var watch = Stopwatch.StartNew();
+        var spec = ExplorerRefs.ValidatePeek(args, catalog);
+        var target = args.Target;
+        var real = host.Profile(args.ConnectionId).Explorer(catalog);
+        var profile = Options.ForceBand is { } band ? real with { Band = band } : real;
+        var batch = PeekSql.Render(spec, new SqlRender(profile.Band), catalog.Peek.DefinitionChars);
+        var budget = Options.PeekBudget ?? TimeSpan.FromMilliseconds(catalog.Peek.BudgetMs);
+        using var source = CancellationTokenSource.CreateLinkedTokenSource(token);
+        var entry = running.Register(args.RequestId, args.ConnectionId, source);
+        try
+        {
+            token.ThrowIfCancellationRequested();
+            var lane = peekGates.GetOrAdd(args.ConnectionId, _ => new SemaphoreSlim(Options.PeekPerConnection));
+            var values = new Values(target.Schema, target.Name, null, false, 0, null, null, null, null, null, null, null);
+            var result = await RunAsync(args.ConnectionId, target.Database, target.Schema + "." + target.Name, profile, QueryScope.Database, batch.Text, values, async (_, reader) =>
+                await ParentExistsAsync(reader, source.Token) && await reader.ReadAsync(source.Token)
+                    ? PeekSql.Read(reader, spec, batch, profile.Band, catalog.Peek.DefinitionChars)
+                    : new PeekResult([], 0, Error: NotFound(target)),
+                error => new PeekResult([], 0, Error: error), source.Token, lane, () => source.CancelAfter(budget));
+            return result with { ElapsedMs = watch.ElapsedMilliseconds };
+        }
+        catch (Exception error) when (error is OperationCanceledException or SqlException && source.IsCancellationRequested && !token.IsCancellationRequested)
+        {
+            if (entry.Forgotten) throw new RequestException("CANCELLED", "The operation was cancelled.");
+            return new([], watch.ElapsedMilliseconds, Error: new("TIMEOUT", "Reading the properties took longer than "
+                + Math.Ceiling(budget.TotalSeconds).ToString(CultureInfo.InvariantCulture) + " seconds. Retry.", true));
+        }
+        finally { running.Unregister(args.RequestId, entry); }
+    }
+
     /// <summary>Cancels a disconnected connection's requests and drops its gate.</summary>
     public void Forget(string connectionId)
     {
         running.Forget(connectionId);
         gates.TryRemove(connectionId, out _);
+        peekGates.TryRemove(connectionId, out _);
     }
 
     public void Dispose()
     {
         running.ForgetAll();
         gates.Clear();
+        peekGates.Clear();
     }
 
     private async Task<ExplorerChildrenResult> LoadAsync(ExplorerRequest request, ExplorerProfile profile, bool vector, CursorKey? key, CancellationToken token)
@@ -261,29 +304,39 @@ internal sealed class ExplorerService : IDisposable
             ExplorerRefs.Date(filter?.Created?.Value), ExplorerRefs.Date(filter?.Created?.Value2), owner.SsisFolder, owner.SsisProject);
     }
 
-    /// <summary>Takes the connection's gate and then the global one, runs one batch, and reads it; SQL errors become values.</summary>
-    private async Task<ExplorerChildrenResult> RunAsync(ExplorerRequest request, ExplorerProfile profile, QueryScope scope, string statement, Values values,
-        Func<SqlCommand, SqlDataReader, Task<ExplorerChildrenResult>> read, CancellationToken token, List<ExplorerNode> partial)
+    private Task<ExplorerChildrenResult> RunAsync(ExplorerRequest request, ExplorerProfile profile, QueryScope scope, string statement, Values values,
+        Func<SqlCommand, SqlDataReader, Task<ExplorerChildrenResult>> read, CancellationToken token, List<ExplorerNode> partial) =>
+        RunAsync(request.ConnectionId, request.Database, Subject(request), profile, scope, statement, values, read, error => new ExplorerChildrenResult(partial, 0, Error: error), token);
+
+    /// <summary>Takes the connection's gate and then the global one (or only <paramref name="lane"/>, a slot of its own), runs
+    /// one batch, and reads it; SQL errors become values (<paramref name="failed"/>).</summary>
+    /// <param name="requestDatabase">The database the request reads (absent for server-scope statements).</param>
+    /// <param name="subject">The folder or object being read, as the tree labels it, for error messages.</param>
+    /// <param name="started">Runs once the slots are taken, before the connection opens (Peek starts its budget there).</param>
+    private async Task<T> RunAsync<T>(string connectionId, string? requestDatabase, string subject, ExplorerProfile profile, QueryScope scope, string statement, Values values,
+        Func<SqlCommand, SqlDataReader, Task<T>> read, Func<ExplorerError, T> failed, CancellationToken token, SemaphoreSlim? lane = null, Action? started = null)
     {
         var perDatabase = scope == QueryScope.Database && (profile.Cloud || Options.ForcePerDatabaseScope);
-        var database = scope == QueryScope.Ssis ? host.SsisCatalog : request.Database;
+        var database = scope == QueryScope.Ssis ? host.SsisCatalog : requestDatabase;
         // Inside EXEC [db].sys.sp_executesql, a missing procedure can only be the wrapper's: the database is gone.
         var phase = scope == QueryScope.Database && !perDatabase ? ErrorPhase.Scope : ErrorPhase.Statement;
-        var gate = gates.GetOrAdd(request.ConnectionId, _ => new SemaphoreSlim(Options.PerConnection));
+        var shared = lane is null;
+        var gate = lane ?? gates.GetOrAdd(connectionId, _ => new SemaphoreSlim(Options.PerConnection));
         await gate.WaitAsync(token);
         try
         {
-            await total.WaitAsync(token);
+            if (shared) await total.WaitAsync(token);
             try
             {
-                await using var connection = scope == QueryScope.Ssis ? host.SsisConnection(request.ConnectionId) : host.Connection(request.ConnectionId, perDatabase ? request.Database : null);
+                started?.Invoke();
+                await using var connection = scope == QueryScope.Ssis ? host.SsisConnection(connectionId) : host.Connection(connectionId, perDatabase ? requestDatabase : null);
                 try { await host.OpenAsync(connection, token); }
                 // 4060 says the login cannot open the catalog's database, whether it is gone, offline, restoring or closed to the
                 // login: the Explorer pool tells which.
                 catch (SqlException error) when (scope == QueryScope.Ssis && ExplorerErrors.Classify(error.Number, error.Class, ErrorPhase.Statement) is "NO_DB_ACCESS" or "DATABASE_UNAVAILABLE"
                     && !token.IsCancellationRequested)
                 {
-                    return new(partial, 0, Error: await SsisOpenFailureAsync(request, database!, token));
+                    return failed(await SsisOpenFailureAsync(connectionId, subject, database!, token));
                 }
                 await using var command = connection.CreateCommand();
                 command.CommandTimeout = 30;
@@ -291,7 +344,7 @@ internal sealed class ExplorerService : IDisposable
                 if (phase == ErrorPhase.Scope)
                 {
                     command.CommandText = prologue + CatalogSql.ModuleCall;
-                    Add(command, "@db", SqlDbType.NVarChar, 128, request.Database);
+                    Add(command, "@db", SqlDbType.NVarChar, 128, requestDatabase);
                     Add(command, "@stmt", SqlDbType.NVarChar, -1, statement);
                     Add(command, "@decl", SqlDbType.NVarChar, -1, CatalogSql.Declarations);
                 }
@@ -300,26 +353,26 @@ internal sealed class ExplorerService : IDisposable
                 await using var reader = await command.ExecuteReaderAsync(token);
                 return await read(command, reader);
             }
-            finally { total.Release(); }
+            finally { if (shared) total.Release(); }
         }
         catch (SqlException error) when (!token.IsCancellationRequested)
         {
-            return new(partial, 0, Error: ExplorerErrors.From(error, phase, Subject(request), database));
+            return failed(ExplorerErrors.From(error, phase, subject, database));
         }
         catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA")
         {
-            return new(partial, 0, Error: ExplorerErrors.SignIn(error));
+            return failed(ExplorerErrors.SignIn(error));
         }
         finally { gate.Release(); }
     }
 
     /// <summary>The SSIS Catalog's database state, read on the Explorer pool after its own failed to open: it was dropped (the
     /// node is gone), it is unavailable to everyone (offline, restoring, single-user in use), or the login may not open it.</summary>
-    private async Task<ExplorerError> SsisOpenFailureAsync(ExplorerRequest request, string name, CancellationToken token)
+    private async Task<ExplorerError> SsisOpenFailureAsync(string connectionId, string subject, string name, CancellationToken token)
     {
         try
         {
-            await using var connection = host.Connection(request.ConnectionId, null);
+            await using var connection = host.Connection(connectionId, null);
             await host.OpenAsync(connection, token);
             await using var command = connection.CreateCommand();
             command.CommandTimeout = 30;
@@ -331,7 +384,7 @@ internal sealed class ExplorerService : IDisposable
                 ? ExplorerErrors.Create("DATABASE_UNAVAILABLE", name, name, 0, reason)
                 : ExplorerErrors.Create("NO_DB_ACCESS", name, name);
         }
-        catch (SqlException error) when (!token.IsCancellationRequested) { return ExplorerErrors.From(error, ErrorPhase.Statement, Subject(request), name); }
+        catch (SqlException error) when (!token.IsCancellationRequested) { return ExplorerErrors.From(error, ErrorPhase.Statement, subject, name); }
     }
 
     /// <summary>The parameters <see cref="CatalogSql.Declarations"/> declares, in its order.</summary>
