@@ -4,8 +4,9 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
+import { vi } from 'vitest'
 import { monacoKeyCodes } from '../../src/renderer/src/editor/keybinding-bridge'
-import { platforms, type Platform } from '../../src/shared/commands/keybindings'
+import { platforms, toPlatform, type Platform } from '../../src/shared/commands/keybindings'
 
 // The Monaco modules start.tsx imports. Adding a contrib changes Monaco's keys, so it must be reviewed here.
 export const reviewedImports = [
@@ -50,37 +51,59 @@ export interface LoadedMonaco {
 
 const load = (specifier: string) => import(/* @vite-ignore */ specifier) as Promise<any>
 let loaded: Promise<LoadedMonaco> | undefined
-/** Loads Monaco once per test file. Nothing may import Monaco's registry before this, or its rules would be missed. */
+/** Loads Monaco once per test file, for the running OS. Nothing may import Monaco's registry first, or its rules would be missed. */
 export function loadMonaco(): Promise<LoadedMonaco> {
-  return loaded ??= (async () => {
-    const { KeybindingsRegistry } = await load('monaco-editor/platform/keybinding/common/keybindingsRegistry.js')
-    if (KeybindingsRegistry.getDefaultKeybindings().length) throw new Error('Monaco registered keybindings before loadMonaco wrapped its registry.')
-    const rules: RawRule[] = [], register = KeybindingsRegistry.registerKeybindingRule
-    // registerCommandAndKeybindingRule calls this method too, so one wrapper sees every rule.
-    KeybindingsRegistry.registerKeybindingRule = function (rule: RawRule) { rules.push(rule); return register.call(this, rule) }
-    let monaco: typeof Monaco
-    try {
-      monaco = await load(reviewedImports[0])
-      for (const specifier of reviewedImports.slice(1)) await load(specifier)
-    } finally {
-      KeybindingsRegistry.registerKeybindingRule = register
-    }
-    const [{ decodeKeybinding }, { OS }, { EditorExtensionsRegistry }, { MenuRegistry }, { StandaloneServices }, { IKeybindingService }, { IContextKeyService }] = await Promise.all([
-      load('monaco-editor/base/common/keybindings.js'), load('monaco-editor/base/common/platform.js'), load('monaco-editor/editor/browser/editorExtensions.js'), load('monaco-editor/platform/actions/common/actions.js'),
-      load('monaco-editor/editor/standalone/browser/standaloneServices.js'), load('monaco-editor/platform/keybinding/common/keybinding.js'),
-      load('monaco-editor/platform/contextkey/common/contextkey.js')
-    ])
-    const titles = new Map<string, string>()
-    for (const action of EditorExtensionsRegistry.getEditorActions() as { id: string; label: string }[]) titles.set(action.id, action.label)
-    for (const rule of rules) {
-      const title = MenuRegistry.getCommand(rule.id)?.title
-      if (!titles.has(rule.id) && title) titles.set(rule.id, typeof title === 'string' ? title : title.value)
-    }
-    return {
-      monaco: monaco!, rules, internals: { decodeKeybinding, titles, os: OS },
-      services: { keybinding: StandaloneServices.get(IKeybindingService), contextKey: StandaloneServices.get(IContextKeyService) }
-    }
-  })()
+  return loaded ??= loadInstance()
+}
+const loadedFor = new Map<Platform, Promise<LoadedMonaco>>()
+/**
+ * A separate Monaco loaded as on `platform`. Monaco folds OS constants into `when` clauses as its modules evaluate
+ * (wordOperations adds `!accessibilityModeEnabled` only on Windows), so each platform's clauses need their own load:
+ * the module cache is reset and `process.platform`, which Monaco's platform.js reads, is faked while it loads.
+ */
+export function loadMonacoFor(platform: Platform): Promise<LoadedMonaco> {
+  if (platform === toPlatform(process.platform)) return loadMonaco()
+  let instance = loadedFor.get(platform)
+  if (!instance) {
+    instance = (async () => {
+      await loadMonaco()
+      vi.resetModules()
+      const real = Object.getOwnPropertyDescriptor(process, 'platform')!
+      Object.defineProperty(process, 'platform', { ...real, value: platform })
+      try { return await loadInstance() } finally { Object.defineProperty(process, 'platform', real) }
+    })()
+    loadedFor.set(platform, instance)
+  }
+  return instance
+}
+async function loadInstance(): Promise<LoadedMonaco> {
+  const { KeybindingsRegistry } = await load('monaco-editor/platform/keybinding/common/keybindingsRegistry.js')
+  if (KeybindingsRegistry.getDefaultKeybindings().length) throw new Error('Monaco registered keybindings before loadMonaco wrapped its registry.')
+  const rules: RawRule[] = [], register = KeybindingsRegistry.registerKeybindingRule
+  // registerCommandAndKeybindingRule calls this method too, so one wrapper sees every rule.
+  KeybindingsRegistry.registerKeybindingRule = function (rule: RawRule) { rules.push(rule); return register.call(this, rule) }
+  let monaco: typeof Monaco
+  try {
+    monaco = await load(reviewedImports[0])
+    for (const specifier of reviewedImports.slice(1)) await load(specifier)
+  } finally {
+    KeybindingsRegistry.registerKeybindingRule = register
+  }
+  const [{ decodeKeybinding }, { OS }, { EditorExtensionsRegistry }, { MenuRegistry }, { StandaloneServices }, { IKeybindingService }, { IContextKeyService }] = await Promise.all([
+    load('monaco-editor/base/common/keybindings.js'), load('monaco-editor/base/common/platform.js'), load('monaco-editor/editor/browser/editorExtensions.js'), load('monaco-editor/platform/actions/common/actions.js'),
+    load('monaco-editor/editor/standalone/browser/standaloneServices.js'), load('monaco-editor/platform/keybinding/common/keybinding.js'),
+    load('monaco-editor/platform/contextkey/common/contextkey.js')
+  ])
+  const titles = new Map<string, string>()
+  for (const action of EditorExtensionsRegistry.getEditorActions() as { id: string; label: string }[]) titles.set(action.id, action.label)
+  for (const rule of rules) {
+    const title = MenuRegistry.getCommand(rule.id)?.title
+    if (!titles.has(rule.id) && title) titles.set(rule.id, typeof title === 'string' ? title : title.value)
+  }
+  return {
+    monaco: monaco!, rules, internals: { decodeKeybinding, titles, os: OS },
+    services: { keybinding: StandaloneServices.get(IKeybindingService), contextKey: StandaloneServices.get(IContextKeyService) }
+  }
 }
 
 /** Monaco's OperatingSystem enum. */
@@ -136,21 +159,42 @@ function omitted(when: string | undefined): boolean {
 export interface MonacoKeyRow {
   readonly command: string
   readonly title?: string
-  readonly when?: string
+  /** Monaco's clause, or each platform's where they differ (null: none there). */
+  readonly when?: string | Readonly<Record<Platform, string | null>>
   readonly args?: unknown
   readonly keys: Readonly<Record<Platform, readonly (readonly string[])[]>>
 }
-/** One row per default rule that is bound on some platform and not omitted, in Monaco's registration order. */
-export function monacoKeyRows({ rules, internals }: Pick<LoadedMonaco, 'rules' | 'internals'>): MonacoKeyRow[] {
-  const rows: MonacoKeyRow[] = []
-  for (const rule of rules) {
-    const when = rule.when?.serialize() || undefined
-    if (omitted(when)) continue
-    const keys = Object.fromEntries(platforms.map(platform => [platform, platformKeys(rule, platform).map(keybinding => toChords(keybinding, platform, internals, rule.id))])) as Record<Platform, string[][]>
-    if (platforms.every(platform => keys[platform].length === 0)) continue
-    const title = internals.titles.get(rule.id)
-    rows.push({ command: rule.id, ...(title ? { title } : {}), ...(when ? { when } : {}), ...(rule.args === undefined ? {} : { args: rule.args }), keys })
+/** `command#n` for each rule: the nth rule Monaco registered for that command. */
+function occurrences(rules: readonly RawRule[]): string[] {
+  const seen = new Map<string, number>()
+  return rules.map(rule => { const n = seen.get(rule.id) ?? 0; seen.set(rule.id, n + 1); return `${rule.id}#${n}` })
+}
+/**
+ * One row per default rule that is bound on some platform and not omitted on all, in Monaco's registration order. Each
+ * platform's keys and clause come from its own load; rules are matched across loads by command and occurrence.
+ */
+export function monacoKeyRows(loads: Readonly<Record<Platform, Pick<LoadedMonaco, 'rules' | 'internals'>>>): MonacoKeyRow[] {
+  const base = loads[platforms[0]].rules, ids = occurrences(base)
+  for (const platform of platforms) {
+    const other = occurrences(loads[platform].rules)
+    if (other.length !== ids.length || other.some((id, index) => id !== ids[index])) throw new Error(`Monaco registers different rules on ${platform}; match them by more than command and occurrence.`)
   }
+  const rows: MonacoKeyRow[] = []
+  base.forEach((first, index) => {
+    const keys = {} as Record<Platform, string[][]>, when = {} as Record<Platform, string | null>
+    for (const platform of platforms) {
+      const rule = loads[platform].rules[index], clause = rule.when?.serialize() || null
+      when[platform] = clause
+      keys[platform] = omitted(clause ?? undefined) ? [] : platformKeys(rule, platform).map(keybinding => toChords(keybinding, platform, loads[platform].internals, rule.id))
+    }
+    if (platforms.every(platform => keys[platform].length === 0)) return
+    const clauses = new Set(platforms.map(platform => when[platform])), common = when[platforms[0]]
+    const title = loads[platforms[0]].internals.titles.get(first.id)
+    rows.push({
+      command: first.id, ...(title ? { title } : {}), ...(clauses.size > 1 ? { when } : common ? { when: common } : {}),
+      ...(first.args === undefined ? {} : { args: first.args }), keys
+    })
+  })
   return rows
 }
 
@@ -172,18 +216,24 @@ export function renderMonacoKeys(rows: readonly MonacoKeyRow[]): string {
     '/**',
     " * One of Monaco's default keybinding rules in the modules Varia's editor loads. `keys` lists each platform's",
     ' * keybindings in canonical chords (primary first); an empty list means the rule has no key there. `when` is Monaco\'s',
-    ' * own clause, and `args` the arguments its rule passes. Rules for widgets Varia never opens, or keys that act only',
-    ' * inside a Monaco widget, are left out (`omittedContextKeys` in the generator).',
+    " * own clause, or each platform's where Monaco builds them differently (null: none there; read it with `monacoRuleWhen`),",
+    ' * and `args` the arguments its rule passes. Rules for widgets Varia never opens, or keys that act only inside a Monaco',
+    ' * widget, are left out (`omittedContextKeys` in the generator).',
     ' */',
     'export interface MonacoKeyRule {',
     '  readonly command: string',
     '  readonly title?: string',
-    '  readonly when?: string',
+    '  readonly when?: string | Readonly<Record<Platform, string | null>>',
     '  readonly args?: unknown',
     '  readonly keys: Readonly<Record<Platform, readonly (readonly string[])[]>>',
     '}',
     '',
     `export const monacoKeysVersion = ${literal(version)}`,
+    '',
+    "/** The rule's `when` clause on `platform`, or undefined when it has none. */",
+    'export function monacoRuleWhen(rule: MonacoKeyRule, platform: Platform): string | undefined {',
+    "  return typeof rule.when === 'object' ? rule.when[platform] ?? undefined : rule.when",
+    '}',
     '',
     'export const monacoKeyRules: readonly MonacoKeyRule[] = [',
     ...rows.map((row, index) => `  ${literal(row)}${index === rows.length - 1 ? '' : ','}`),

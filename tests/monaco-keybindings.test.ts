@@ -4,8 +4,8 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { commandDescriptor } from '../src/shared/commands/catalog'
-import { loadMonaco, monacoKeyRows, omittedContextKeys, renderMonacoKeys, reviewedImports, type LoadedMonaco } from './fixtures/monaco-runtime'
-import { monacoKeyRules } from '../src/shared/commands/monaco-keys.generated'
+import { loadMonaco, loadMonacoFor, monacoKeyRows, omittedContextKeys, renderMonacoKeys, reviewedImports, type LoadedMonaco } from './fixtures/monaco-runtime'
+import { monacoKeyRules, monacoRuleWhen } from '../src/shared/commands/monaco-keys.generated'
 import { bridgeRules, defaultRules, nativeChordPrefixes, parseKeySpec, platforms, reservedReason, workbenchRules, type Platform } from '../src/shared/commands/keybindings'
 
 /**
@@ -244,7 +244,7 @@ describe('Monaco runtime keybinding rules', () => {
     const narrower = api.addKeybindingRules([{ keybinding: KeyMod.CtrlCmd | KeyCode.KeyF, command: '-actions.find', when: 'editorTextFocus' }])
     expect(press(KeyMod.CtrlCmd | KeyCode.KeyF, editor)).toBe('actions.find')
     narrower.dispose()
-    const exact = api.addKeybindingRules([{ keybinding: KeyMod.CtrlCmd | KeyCode.KeyF, command: '-actions.find', when: monacoKeyRules.find(rule => rule.command === 'actions.find')!.when }])
+    const exact = api.addKeybindingRules([{ keybinding: KeyMod.CtrlCmd | KeyCode.KeyF, command: '-actions.find', when: monacoRuleWhen(monacoKeyRules.find(rule => rule.command === 'actions.find')!, 'win32') }])
     expect(press(KeyMod.CtrlCmd | KeyCode.KeyF, editor)).toBeUndefined()
     exact.dispose()
     expect(press(KeyMod.CtrlCmd | KeyCode.KeyF, editor)).toBe('actions.find')
@@ -286,11 +286,16 @@ describe('Monaco runtime keybinding rules', () => {
 
 // Regenerate after a Monaco upgrade or a change to start.tsx's Monaco imports: npx vitest run tests/monaco-keybindings.test.ts -u
 describe('generated Monaco key table', () => {
-  let loaded: LoadedMonaco
-  beforeAll(async () => { loaded = await loadMonaco() }, 60000)
+  let loaded: LoadedMonaco, loads: Record<Platform, LoadedMonaco>
+  beforeAll(async () => {
+    loaded = await loadMonaco()
+    // One at a time: each load fakes process.platform while Monaco's modules evaluate.
+    loads = {} as Record<Platform, LoadedMonaco>
+    for (const platform of platforms) loads[platform] = await loadMonacoFor(platform)
+  }, 120000)
 
   it('keeps src/shared/commands/monaco-keys.generated.ts in sync with the installed Monaco', async () => {
-    await expect(renderMonacoKeys(monacoKeyRows(loaded))).toMatchFileSnapshot('../src/shared/commands/monaco-keys.generated.ts')
+    await expect(renderMonacoKeys(monacoKeyRows(loads))).toMatchFileSnapshot('../src/shared/commands/monaco-keys.generated.ts')
   })
   it('lists the editor keys the Shortcuts page shows as Editor rows', () => {
     const key = (command: string, platform: Platform) => monacoKeyRules.filter(rule => rule.command === command).flatMap(rule => rule.keys[platform].map(chords => chords.join(' ')))
@@ -304,6 +309,12 @@ describe('generated Monaco key table', () => {
     expect(key('cursorColumnSelectLeft', 'linux')).toEqual([])
     expect(monacoKeyRules.find(rule => rule.command === 'actions.find')).toMatchObject({ title: 'Find', when: 'editorFocus || editorIsOpen' })
     expect(monacoKeyRules.find(rule => rule.command === 'cursorEnd')?.args).toEqual({ sticky: false })
+  })
+  it("records each platform's clause where Monaco folds the OS into it", () => {
+    // wordOperations guards its keys with !(accessibilityModeEnabled && isWindows), which Monaco folds as it loads.
+    const rule = monacoKeyRules.find(rule => rule.command === 'cursorWordLeft')!
+    expect(platforms.map(platform => monacoRuleWhen(rule, platform))).toEqual(['textInputFocus && !accessibilityModeEnabled', 'textInputFocus', 'textInputFocus'])
+    expect([loads.win32.internals.os, loads.linux.internals.os, loads.darwin.internals.os]).toEqual([1, 3, 2])
   })
   it('leaves out keys for widgets Varia never opens and keys inside Monaco widgets', () => {
     const commands = new Set(monacoKeyRules.map(rule => rule.command))

@@ -5,18 +5,24 @@ import type { Platform } from './keybindings'
 /**
  * One of Monaco's default keybinding rules in the modules Varia's editor loads. `keys` lists each platform's
  * keybindings in canonical chords (primary first); an empty list means the rule has no key there. `when` is Monaco's
- * own clause, and `args` the arguments its rule passes. Rules for widgets Varia never opens, or keys that act only
- * inside a Monaco widget, are left out (`omittedContextKeys` in the generator).
+ * own clause, or each platform's where Monaco builds them differently (null: none there; read it with `monacoRuleWhen`),
+ * and `args` the arguments its rule passes. Rules for widgets Varia never opens, or keys that act only inside a Monaco
+ * widget, are left out (`omittedContextKeys` in the generator).
  */
 export interface MonacoKeyRule {
   readonly command: string
   readonly title?: string
-  readonly when?: string
+  readonly when?: string | Readonly<Record<Platform, string | null>>
   readonly args?: unknown
   readonly keys: Readonly<Record<Platform, readonly (readonly string[])[]>>
 }
 
 export const monacoKeysVersion = '0.57.0'
+
+/** The rule's `when` clause on `platform`, or undefined when it has none. */
+export function monacoRuleWhen(rule: MonacoKeyRule, platform: Platform): string | undefined {
+  return typeof rule.when === 'object' ? rule.when[platform] ?? undefined : rule.when
+}
 
 export const monacoKeyRules: readonly MonacoKeyRule[] = [
   { command: 'undo', keys: { win32: [['ctrl+z']], linux: [['ctrl+z']], darwin: [['meta+z']] } },
@@ -89,10 +95,10 @@ export const monacoKeyRules: readonly MonacoKeyRule[] = [
   { command: 'editor.action.blockComment', title: 'Toggle Block Comment', when: 'editorTextFocus && !editorReadonly', keys: { win32: [['shift+alt+a']], linux: [['ctrl+shift+a']], darwin: [['shift+alt+a']] } },
   { command: 'editor.action.jumpToBracket', title: 'Go to Bracket', when: 'editorTextFocus', keys: { win32: [['ctrl+shift+\\']], linux: [['ctrl+shift+\\']], darwin: [['shift+meta+\\']] } },
   { command: 'editor.action.removeBrackets', title: 'Remove Brackets', when: 'editorTextFocus', keys: { win32: [['ctrl+alt+backspace']], linux: [['ctrl+alt+backspace']], darwin: [['alt+meta+backspace']] } },
-  { command: 'cursorWordLeft', when: 'textInputFocus && !accessibilityModeEnabled', keys: { win32: [['ctrl+left']], linux: [['ctrl+left']], darwin: [['alt+left']] } },
-  { command: 'cursorWordLeftSelect', when: 'textInputFocus && !accessibilityModeEnabled', keys: { win32: [['ctrl+shift+left']], linux: [['ctrl+shift+left']], darwin: [['shift+alt+left']] } },
-  { command: 'cursorWordEndRight', when: 'textInputFocus && !accessibilityModeEnabled', keys: { win32: [['ctrl+right']], linux: [['ctrl+right']], darwin: [['alt+right']] } },
-  { command: 'cursorWordEndRightSelect', when: 'textInputFocus && !accessibilityModeEnabled', keys: { win32: [['ctrl+shift+right']], linux: [['ctrl+shift+right']], darwin: [['shift+alt+right']] } },
+  { command: 'cursorWordLeft', when: { win32: 'textInputFocus && !accessibilityModeEnabled', linux: 'textInputFocus', darwin: 'textInputFocus' }, keys: { win32: [['ctrl+left']], linux: [['ctrl+left']], darwin: [['alt+left']] } },
+  { command: 'cursorWordLeftSelect', when: { win32: 'textInputFocus && !accessibilityModeEnabled', linux: 'textInputFocus', darwin: 'textInputFocus' }, keys: { win32: [['ctrl+shift+left']], linux: [['ctrl+shift+left']], darwin: [['shift+alt+left']] } },
+  { command: 'cursorWordEndRight', when: { win32: 'textInputFocus && !accessibilityModeEnabled', linux: 'textInputFocus', darwin: 'textInputFocus' }, keys: { win32: [['ctrl+right']], linux: [['ctrl+right']], darwin: [['alt+right']] } },
+  { command: 'cursorWordEndRightSelect', when: { win32: 'textInputFocus && !accessibilityModeEnabled', linux: 'textInputFocus', darwin: 'textInputFocus' }, keys: { win32: [['ctrl+shift+right']], linux: [['ctrl+shift+right']], darwin: [['shift+alt+right']] } },
   { command: 'deleteWordLeft', when: 'textInputFocus && !editorReadonly', keys: { win32: [['ctrl+backspace']], linux: [['ctrl+backspace']], darwin: [['alt+backspace']] } },
   { command: 'deleteWordRight', when: 'textInputFocus && !editorReadonly', keys: { win32: [['ctrl+delete']], linux: [['ctrl+delete']], darwin: [['alt+delete']] } },
   { command: 'editor.action.marker.next', title: 'Go to Next Problem (Error, Warning, Info)', when: 'editorFocus', keys: { win32: [['alt+f8']], linux: [['alt+f8']], darwin: [['alt+f8']] } },
