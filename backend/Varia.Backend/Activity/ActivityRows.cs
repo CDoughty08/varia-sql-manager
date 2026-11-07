@@ -35,7 +35,7 @@ internal sealed record ActivityCapabilities(int Spid, bool ServerState, bool Alt
 
 /// <summary>Which sessions are Varia's own (D-am §6.8): a session this backend's process (host_process_id) opened from this
 /// machine (host_name, the workstation id its connections send) under one of its connections' program names plus a known
-/// suffix. Those values are the client's own claims at login, so a pool session (Object Explorer, Scripting, Object Actions,
+/// suffix. Those values are the client's own claims at login, so a pool session (Object Explorer, Scripting, Object Search, Object Actions,
 /// the Activity Monitor, the SSIS pools), which the default filter hides, must also be a session id Varia's own connections
 /// were given when they opened (SqlConnection.ServerProcessId) and may still hold (OwnSessionLedger): a client that claims
 /// Varia's process, machine and program name under any other session id is shown as itself (though Protected refuses to

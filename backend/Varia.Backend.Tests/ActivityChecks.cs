@@ -41,6 +41,8 @@ internal static class ActivityChecks
             && Catalog.Limit("textBatch") == ActivitySql.TextSlots && Catalog.Limit("killSessions") == 64 && Catalog.BlockerLabels[-2] == "Orphaned DTC" && Catalog.BlockerLabels.Count == 4
             && Catalog.Tones["blocked"] == "error" && Catalog.VariaSuffixes.Count(entry => entry.Kind == "queryTab") == 1 && Catalog.VariaSuffixes.Any(entry => entry.Suffix == Catalog.PoolSuffix),
             "the limits, negative blocker ids, tones and Varia's session suffixes equal TypeScript's");
+        var unnamed = SqlService.OwnSuffixes.Where(suffix => !Catalog.VariaSuffixes.Any(entry => entry.Suffix == suffix && entry.Kind == "pool")).ToList();
+        check(unnamed.Count == 0, "every program-name suffix Varia's own connections use is a pool the Activity Monitor names: " + string.Join(", ", unnamed));
         check(Catalog.EditionOf(2) == "box" && Catalog.EditionOf(8) == "managedInstance" && Catalog.EditionOf(5) == "azureSqlDatabase" && Catalog.EditionOf(6) is null && Catalog.EditionOf(11) is null
             && Catalog.Available("box") && Catalog.Available("managedInstance") && !Catalog.Available("azureSqlDatabase"),
             "the monitor serves box servers and Managed Instance now, Azure SQL Database later, and no other engine edition");

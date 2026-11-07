@@ -41,7 +41,9 @@ function unseal(text: string, options: Omit<ConnectionOptions, 'password'>): str
   if (!password || check.length !== expected.length || !timingSafeEqual(check, expected)) throw new Error(savedPasswordMessages.unreadable)
   return password
 }
-type LibrarySource = ConnectionLibrary | (() => Promise<ConnectionLibrary>)
+/** The library to reconcile against; a loader answers null when the library could not be read (it was quarantined), and then
+ *  nothing is pruned. */
+type LibrarySource = ConnectionLibrary | (() => Promise<ConnectionLibrary | null>)
 
 /**
  * Remembered passwords, as OS-protected ciphertext in their own file (never connections.json), keyed by the history
@@ -147,6 +149,8 @@ export class SavedPasswordStore {
     if (!await this.available()) return { ids: [] }
     const { ids, warning } = await this.change(async entries => {
       const library = typeof source === 'function' ? await source() : source
+      // An unreadable library is not an empty one: its entries' passwords stay for when the user restores the file.
+      if (!library) return { entries, value: undefined }
       const bindings = new Map(library.profiles.filter(profile => canRememberPassword(profile.options.authentication)).map(profile => [profile.id, bindingHash(profile.options)]))
       return { entries: entries.filter(item => bindings.get(item.profileId) === item.binding), value: undefined }
     })
