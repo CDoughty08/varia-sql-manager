@@ -362,6 +362,7 @@ class EditorAreaController implements Area, EditorGroupHost {
       // A group past the cap (a drop that would split once more) goes back: its documents join the active group.
       api.onDidAddGroup(group => { if (api.groups.length > editorGroupLimits.groups) queueMicrotask(() => this.mergeInto(group)) }),
       { dispose: documents.subscribe(() => this.reconcile()) },
+      documents.useTextFocus(id => this.focusText(id)),
       editorGroups.attach(this),
       this.regions = nameGroupRegions(root),
       this.pointer = afterPointer(),
@@ -504,7 +505,7 @@ class EditorAreaController implements Area, EditorGroupHost {
     if (editor.element.parentElement !== slot) slot.append(editor.element)
     editor.shows = id
     this.workbench.documents.showIn(editor.editor.instance, id)
-    if (keep && this.workbench.documents.getSnapshot().activeId === id && !editor.editor.instance.hasWidgetFocus()) editor.editor.instance.focus()
+    if (keep && this.workbench.documents.getSnapshot().activeId === id && !editor.editor.instance.hasWidgetFocus()) this.workbench.documents.focusActive()
     this.followStatus()
   }
   unmount(group: string, slot: HTMLElement): void {
@@ -527,11 +528,13 @@ class EditorAreaController implements Area, EditorGroupHost {
   }
 
   private groupById(id: string): DockviewGroupPanel | undefined { return this.api?.groups.find(group => group.id === id) }
-  private focusShownDocument(): void {
-    // A plan's Monaco editor is hidden while the graph is shown.
-    const graph = this.root?.querySelector<HTMLElement>('.dv-active-group .plan-canvas')
-    if (graph) graph.focus()
-    else this.workbench.documents.focusActive()
+  private focusText(id: string): boolean {
+    const editor = this.workbench.documents.editorOf(id), element = editor?.getContainerDomNode()
+    const graph = element?.closest('.document-view')?.querySelector<HTMLElement>('.plan-canvas')
+    if (graph?.checkVisibility()) { graph.focus(); return true }
+    if (!editor || !element?.checkVisibility()) return false
+    editor.focus()
+    return true
   }
   // EditorGroupHost: the moves commands ask for.
   move(id: string, to: EditorMove): void {
@@ -554,14 +557,14 @@ class EditorAreaController implements Area, EditorGroupHost {
     // The moved document stays the one shown, in its new group, and keeps the keyboard, as VS Code's moves do.
     api.getPanel(id)?.api.setActive()
     this.publish()
-    requestAnimationFrame(() => this.focusShownDocument())
+    requestAnimationFrame(() => this.workbench.documents.focusActive())
   }
   focusGroup(groupId: string): void {
     const group = this.groupById(groupId)
     if (!group) return
     group.api.setActive()
     const shown = group.activePanel
-    if (shown) { shown.api.setActive(); requestAnimationFrame(() => this.focusShownDocument()) }
+    if (shown) { shown.api.setActive(); requestAnimationFrame(() => this.workbench.documents.focusActive()) }
   }
   join(): void {
     const api = this.api
@@ -572,7 +575,7 @@ class EditorAreaController implements Area, EditorGroupHost {
     for (const info of groups.slice(1)) for (const id of info.documents) api.getPanel(id)?.api.moveTo({ group: first, position: 'center' })
     if (active) api.getPanel(active)?.api.setActive()
     this.publish()
-    requestAnimationFrame(() => this.focusShownDocument())
+    requestAnimationFrame(() => this.workbench.documents.focusActive())
   }
   focusedDocument(): string | undefined {
     const tab = document.activeElement?.closest('.dv-tab')

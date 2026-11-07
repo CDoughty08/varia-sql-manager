@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { type PlanNode, type PlanStatement } from '../../../shared/plans'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { observeResize } from '../core/windows'
@@ -96,9 +96,12 @@ export default function PlanViewer({ sources, identity, openDocument }: { source
   }, [content.layout, content.statements])
   useEffect(() => { canvas.current?.colors(palette) }, [palette])
   useEffect(() => { canvas.current?.select(selected, true) }, [selected])
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = tree.current
     if (!element) return
+    // The outline is recreated when shown again, while its virtual offset survives.
+    element.scrollTop = scroll
+    setScroll(element.scrollTop)
     const observer = observeResize(element, () => setHeight(element.clientHeight))
     return () => observer.dispose()
   }, [outline, content.statements])

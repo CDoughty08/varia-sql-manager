@@ -563,6 +563,7 @@ try {
   await expect(outputTab(/^Execution plan/)).toHaveAttribute('aria-selected', 'true')
   await planViewer(page).getByRole('button', { name: 'Open plan document', exact: true }).click()
   await expect(activeDocument(page)).toContainText('ExecutionPlan1.sqlplan')
+  await expect(planCanvas(page)).toBeFocused()
   await page.keyboard.press('Control+W')
   await expect(queryTabs()).toHaveCount(1)
   await page.screenshot({ path: resolve('artifacts', 'results-head.png') })

@@ -964,6 +964,9 @@ async function workbench(id, method, params, credit) {
     case 'plans.parse': {
       const xml = gunzipSync(Buffer.from(params.xml, 'base64'), { maxOutputLength: 32 * 1024 * 1024 }).toString('utf8')
       if (xml.includes('<unavailable-plan')) return fail(id, 'INVALID_PARAMS', 'The plan XML could not be graphed.')
+      if (xml.includes('<!-- large-outline -->')) return respond(id, { ...fixturePlan, statements: [{ ...fixturePlan.statements[0],
+        nodes: Array.from({ length: 101 }, (_, index) => ({ ...fixturePlan.statements[0].nodes[index ? 1 : 0], id: 'outline' + index, nodeId: String(index), parentId: index ? 'outline0' : null }))
+      }] })
       if (xml.includes('StatementText=') && xml.includes('SUM(Amount)')) return respond(id, fixturePlan)
       if (xml.includes('IX_Status')) return respond(id, { ...fixturePlan, statements: fixturePlan.statements.map(statement => ({ ...statement, text: '' })) })
       return respond(id, { version: '', build: '', notices: [], statements: [] })

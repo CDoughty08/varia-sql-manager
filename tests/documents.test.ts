@@ -138,6 +138,49 @@ describe('query documents', () => {
     documents.showIn(first.asEditor(), later.id)
     expect(first.focused).toBe(1)
   })
+  it('focuses the visible plan view and waits for it even when its hidden editor already shows the model', () => {
+    const { documents } = documentFixture()
+    const editor = new TestEditor()
+    const plan = documents.openText({ name: 'plan.sqlplan', text: '<ShowPlanXML/>', kind: 'sqlplan' })
+    documents.showIn(editor.asEditor(), plan.id)
+    let ready = false
+    const focused: string[] = []
+    const binding = documents.useTextFocus(id => { if (!ready) return false; focused.push(id); return true })
+    documents.focusActive()
+    documents.showIn(editor.asEditor(), plan.id)
+    expect(editor.focused).toBe(0)
+    expect(focused).toEqual([])
+    ready = true
+    documents.showIn(editor.asEditor(), plan.id)
+    expect(focused).toEqual([plan.id])
+    // A completed focus request stays completed when the same panel mounts again.
+    documents.showIn(editor.asEditor(), plan.id)
+    expect(focused).toEqual([plan.id])
+    documents.focusActive()
+    expect(focused).toEqual([plan.id, plan.id])
+    binding.dispose()
+    documents.focusActive()
+    expect(editor.focused).toBe(1)
+  })
+  it('drops a deferred view focus when another document is chosen or focus leaves the editor area', () => {
+    const { documents } = documentFixture()
+    const editor = new TestEditor()
+    const first = documents.create('first.sql', '', 'master'), second = documents.create('second.sql', '', 'master')
+    let ready = false
+    const focused: string[] = []
+    documents.useTextFocus(id => { if (!ready) return false; focused.push(id); return true })
+    documents.focusActive()
+    documents.activate(first.id)
+    ready = true
+    documents.showIn(editor.asEditor(), second.id)
+    expect(focused).toEqual([])
+    ready = false
+    documents.focusActive()
+    documents.dropPendingFocus()
+    ready = true
+    documents.showIn(editor.asEditor(), first.id)
+    expect(focused).toEqual([])
+  })
   it('hands a closing active document over to the successor its editor group names, and to the next in order without one', async () => {
     const { documents } = documentFixture()
     const [a, b, c, d] = ['a.sql', 'b.sql', 'c.sql', 'd.sql'].map(name => documents.create(name, '', 'master'))

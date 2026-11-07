@@ -90,7 +90,7 @@ export function outputContribution({ commands, results, menuTargets, documents, 
         const { opened, message } = await results.openValue(cell.tabId, cell.resultIndex, cell.row, cell.column, cell.capturedPlan)
         if (message) commands.reportError(message)
         // The value's tab is active now; typing goes to it, as in SSMS.
-        if (opened) documents.boundEditor?.focus()
+        if (opened) documents.focusActive()
       }
     }),
     commands.register('output.closeResults', {

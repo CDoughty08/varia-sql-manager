@@ -78,6 +78,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
    * panel). It lapses when focus moves elsewhere first (`dropPendingFocus`), so an editor area shown later takes no focus.
    */
   private pendingFocus = ''
+  private textFocus?: (id: string) => boolean
   /** The document a closing active one hands over to: the next in its own editor group (`useCloseSuccessor`). */
   private successor?: (closing: string) => string | undefined
   /** Whether bracket matching is on in each editor, so it changes only when it must. */
@@ -133,10 +134,16 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     }
     return undefined
   }
-  /** Focus to the active document: the editor's text, or the custom document's own element. */
+  /** The editor area focuses a text document's visible view, which may be a plan graph. False defers until it renders. */
+  useTextFocus(focus: (id: string) => boolean): Disposable {
+    this.textFocus = focus
+    return { dispose: () => { if (this.textFocus === focus) this.textFocus = undefined } }
+  }
+  /** Focus to the active document's visible view, or wait until its editor group renders it. */
   focusActive(): void {
     const id = this.getSnapshot().activeId, provider = this.provider(id)
     if (provider) { provider.focus(id); return }
+    if (this.textFocus) { this.pendingFocus = this.textFocus(id) ? '' : id; return }
     const editor = this.boundEditor
     if (editor && (this.follower || this.shown.get(editor) === id)) { this.pendingFocus = ''; editor.focus() }
     else this.pendingFocus = id
@@ -364,10 +371,11 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   showIn(instance: editor.IStandaloneCodeEditor, id: string): void {
     if (this.disposed) return
     if (!this.matching.has(instance)) this.matching.set(instance, true)
-    if (this.shown.get(instance) === id && instance.getModel() === (this.entries.get(id)?.model ?? null)) return
-    this.rememberView(instance)
-    this.showModel(instance, id)
-    if (this.pendingFocus === id) { this.pendingFocus = ''; instance.focus() }
+    if (this.shown.get(instance) !== id || instance.getModel() !== (this.entries.get(id)?.model ?? null)) {
+      this.rememberView(instance)
+      this.showModel(instance, id)
+    }
+    if (this.pendingFocus === id) this.focusActive()
   }
   /** The editor no longer shows documents (its group closed): where it was is kept, and it lets go of the model. */
   releaseEditor(instance: editor.IStandaloneCodeEditor): void {
@@ -490,6 +498,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   }
   dispose(): void {
     this.disposed = true
+    this.textFocus = undefined
     this.customs.clear()
     for (const instance of this.shown.keys()) instance.setModel(null)
     this.shown.clear()
