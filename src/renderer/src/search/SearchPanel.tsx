@@ -3,7 +3,7 @@ import { folderSpecs, kindSpecs, type FolderId } from '../../../shared/explorer/
 import { displayText } from '../../../shared/explorer/refs.ts'
 import { childrenLeftOut, objectSearchLimits, type ObjectIndexStatus, type ObjectSearchHit } from '../../../shared/explorer/search.ts'
 import { onUnexpectedError } from '../core/errors'
-import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
+import { useServiceSelector, useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import ExplorerIcon from '../explorer/ExplorerIcon'
 import Icon from '../Icon'
 import EmptyState from '../kit/EmptyState'
@@ -105,7 +105,9 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   const workbench = useWorkbench()
   const { objectSearch, explorer, commands, platform, searchDetails } = workbench
   const snapshot = useServiceSnapshot(objectSearch)
-  const detailsState = useServiceSnapshot(searchDetails)
+  // Only the tab has a details pane, so Object Explorer's band reads nothing of it.
+  const detailsHidden = useServiceSelector(searchDetails, details => layout !== 'tab' || details.hidden)
+  const detailsShare = useServiceSelector(searchDetails, details => layout === 'tab' ? details.size : undefined)
   const body = useRef<HTMLDivElement>(null)
   const root = useRef<HTMLDivElement>(null)
   const list = useRef<HTMLUListElement>(null)
@@ -142,7 +144,7 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   // The tab's details pane follows the selection (and reads it once the selection settles); Object Explorer's band has none.
   useEffect(() => {
     if (layout === 'tab' && state) searchDetails.show(searchId, state.connectionId, selectedHit)
-  }, [layout, searchId, state?.connectionId, selectedKey, detailsState.hidden])
+  }, [layout, searchId, state?.connectionId, selectedHit, detailsHidden])
   if (!state) return null
   const entry = snapshot.indexes[state.connectionId]
   const result = state.result
@@ -243,8 +245,8 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
     target.addEventListener('pointermove', move)
     for (const type of dragEnds) target.addEventListener(type, end)
   }
-  const showDetails = !pane && !detailsState.hidden
-  const detailsSize = detailsState.size ?? searchDetailsLimits.initial
+  const showDetails = !pane && !detailsHidden
+  const detailsSize = detailsShare ?? searchDetailsLimits.initial
   const dragDetails = (event: ReactPointerEvent<HTMLDivElement>) => {
     const host = body.current
     if (event.button !== 0 || !host) return
@@ -341,8 +343,8 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
         </SearchPopover>}
       </div> : <div className="object-search-tab-status">
         <p className={`object-search-summary${state.error || result?.problem ? ' error' : ''}`} role="status">{showHits ? summary : ''}</p>
-        <button type="button" className="icon-button" aria-pressed={!detailsState.hidden} aria-label="Details pane" title={detailsState.hidden ? 'Show the details pane' : 'Hide the details pane'}
-          onClick={() => searchDetails.setHidden(!detailsState.hidden)}><Icon name="split-horizontal" /></button>
+        <button type="button" className="icon-button" aria-pressed={!detailsHidden} aria-label="Details pane" title={detailsHidden ? 'Show the details pane' : 'Hide the details pane'}
+          onClick={() => searchDetails.setHidden(!detailsHidden)}><Icon name="split-horizontal" /></button>
       </div>}
     </div>
     {pane ? showHits && hitsView

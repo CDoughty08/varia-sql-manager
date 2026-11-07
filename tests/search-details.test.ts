@@ -45,6 +45,7 @@ function setup() {
   return {
     service, api, pending, timers, settle,
     lose: () => { live = []; for (const listener of connectionListeners) listener() },
+    restore: () => { live = [{ id: connectionId }]; for (const listener of connectionListeners) listener() },
     close: () => { documents = {}; for (const listener of searchListeners) listener() }
   }
 }
@@ -143,6 +144,40 @@ describe('Search Objects details pane', () => {
     expect(service.getSnapshot().documents.tab).toMatchObject({ facts: { status: 'error', message: 'The server is not connected.' }, definition: { status: 'error' } })
     close()
     expect(service.getSnapshot().documents).toEqual({})
+    service.dispose()
+  })
+
+  it('takes a new answer\'s hit for the same object, reads columns once while settling and again after failing, and reads a lost hit again on reconnect', async () => {
+    const { service, api, pending, settle, lose, restore } = setup()
+    service.show('tab', connectionId, procedure)
+    settle()
+    // Another query matches the same procedure on another line: the pane shows that match, without reading again.
+    const again: ObjectSearchHit = { ...procedure, definition: { ...procedure.definition!, line: 9, preview: 'RETURN 0' } }
+    service.show('tab', connectionId, again)
+    expect(service.getSnapshot().documents.tab?.hit).toBe(again)
+    expect(api.explorerPeek).toHaveBeenCalledTimes(1)
+    // Columns chosen while the table settles are read once, by the settled read.
+    service.show('tab', connectionId, table)
+    service.setView('columns')
+    expect(api.explorerChildren).not.toHaveBeenCalled()
+    settle()
+    expect(api.explorerChildren).toHaveBeenCalledTimes(1)
+    pending.columns[0]!(ok({ nodes: [], elapsedMs: 1, error: { code: 'TIMEOUT', message: 'Timed out.', retryable: true } } as never))
+    await flush()
+    expect(service.getSnapshot().documents.tab?.columns).toMatchObject({ status: 'error' })
+    service.setView('definition')
+    service.setView('columns')
+    expect(api.explorerChildren).toHaveBeenCalledTimes(2)
+    // A lost server marks the hit once; its return reads the hit again.
+    lose()
+    expect(service.getSnapshot().documents.tab).toMatchObject({ lost: true, facts: { status: 'error', message: 'The server is not connected.' } })
+    const marked = service.getSnapshot()
+    lose()
+    expect(service.getSnapshot()).toBe(marked)
+    restore()
+    expect(service.getSnapshot().documents.tab).toMatchObject({ facts: { status: 'loading' }, columns: { status: 'loading' } })
+    expect(service.getSnapshot().documents.tab?.lost).toBeUndefined()
+    expect(api.explorerPeek).toHaveBeenCalledTimes(3)
     service.dispose()
   })
 

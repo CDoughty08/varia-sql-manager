@@ -64,6 +64,8 @@ export interface SearchDetails {
   readonly facts?: PeekPart<PeekResult['facts']>
   readonly definition: DefinitionPart
   readonly columns?: PeekPart<readonly DetailsColumn[]>
+  /** Its server was lost: whatever had not arrived says so, and the hit is read again when the server comes back. */
+  readonly lost?: true
 }
 export interface SearchDetailsSnapshot {
   readonly documents: Readonly<Record<string, SearchDetails>>
@@ -118,7 +120,11 @@ export class SearchDetailsService extends SnapshotStore<SearchDetailsSnapshot> i
       for (const id of [...this.reads.keys()]) if (!Object.hasOwn(open, id)) this.drop(id)
     })
     const connections = options.connections.subscribe(() => {
-      for (const [id, details] of Object.entries(this.getSnapshot().documents)) if (!this.isLive(details.connectionId)) this.lost(id)
+      for (const [id, details] of Object.entries(this.getSnapshot().documents)) {
+        const live = this.isLive(details.connectionId)
+        if (!live && !details.lost) this.lost(id)
+        else if (live && details.lost) this.load(id, details.connectionId, details.hit, false, false)
+      }
     })
     this.unsubscribe = () => { searches(); connections() }
   }
@@ -133,7 +139,10 @@ export class SearchDetailsService extends SnapshotStore<SearchDetailsSnapshot> i
     const shown = this.getSnapshot().documents[documentId]
     if (!hit) { if (shown || this.reads.has(documentId)) this.drop(documentId); return }
     const key = hitKey(hit)
-    if (shown && shown.key === key && shown.connectionId === connectionId) return
+    if (shown && shown.key === key && shown.connectionId === connectionId) {
+      if (shown.hit !== hit) this.put(documentId, { ...shown, hit })
+      return
+    }
     this.load(documentId, connectionId, hit, false, true)
   }
 
@@ -155,11 +164,15 @@ export class SearchDetailsService extends SnapshotStore<SearchDetailsSnapshot> i
     if (next !== this.getSnapshot().size) this.publish({ ...this.getSnapshot(), size: next })
   }
 
-  /** Shows a table's or view's definition or its columns; the columns are read the first time each hit shows them. */
+  /** Shows a table's or view's definition or its columns; the columns are read the first time each hit shows them, and again after failing. */
   setView(view: SearchDetailsView): void {
     if (view === this.getSnapshot().view) return
     this.publish({ ...this.getSnapshot(), view })
-    if (view === 'columns') for (const [id, details] of Object.entries(this.getSnapshot().documents)) if (columnsOf(details.hit.object) && !details.columns) this.readColumns(id, details)
+    if (view !== 'columns') return
+    for (const [id, details] of Object.entries(this.getSnapshot().documents)) {
+      if (!columnsOf(details.hit.object) || details.columns && details.columns.status !== 'error') continue
+      if (this.reads.get(id)?.timer === undefined) this.readColumns(id, details)
+    }
   }
 
   dispose(): void {
@@ -179,7 +192,7 @@ export class SearchDetailsService extends SnapshotStore<SearchDetailsSnapshot> i
     const id = ++this.next, kind = isPeekKind(hit.object.kind) ? hit.object.kind : undefined
     const live = this.isLive(connectionId)
     const definition: DefinitionPart = !live ? { status: 'error', message: peekMessages.notConnected } : kind || scriptable(hit) ? { status: 'loading' } : { status: 'none' }
-    const details: SearchDetails = { id, key: hitKey(hit), connectionId, hit, definition, ...(kind ? { kind, facts: live ? { status: 'loading' } : { status: 'error', message: peekMessages.notConnected } } : {}) }
+    const details: SearchDetails = { id, key: hitKey(hit), connectionId, hit, definition, ...(kind ? { kind, facts: live ? { status: 'loading' } : { status: 'error', message: peekMessages.notConnected } } : {}), ...(live ? {} : { lost: true as const }) }
     this.put(documentId, details)
     if (!live || this.getSnapshot().hidden) return
     const start = () => {
@@ -261,7 +274,7 @@ export class SearchDetailsService extends SnapshotStore<SearchDetailsSnapshot> i
     if (!details) return
     const gone = { status: 'error' as const, message: peekMessages.notConnected }
     const loading = (part: { readonly status: string } | undefined) => part?.status === 'loading'
-    this.put(documentId, { ...details, ...(loading(details.facts) ? { facts: gone } : {}), ...(loading(details.definition) ? { definition: gone } : {}), ...(loading(details.columns) ? { columns: gone } : {}) })
+    this.put(documentId, { ...details, lost: true, ...(loading(details.facts) ? { facts: gone } : {}), ...(loading(details.definition) ? { definition: gone } : {}), ...(loading(details.columns) ? { columns: gone } : {}) })
   }
 
   private drop(documentId: string): void {
