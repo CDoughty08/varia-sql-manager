@@ -349,7 +349,8 @@ internal static class ActivitySourceChecks
             && C(5, 4242, "Reports - Scripting") == ("Query tab", false)
             && Own(["Reports - Scripting", "Reports"], 5).Classify(5, 4242, Host, "Reports - Scripting", 99) == ("Varia Scripting", true) && C(6, 4242, "SSMS") == (null, false)
             && varia.Classify(99, null, null, null, 99) == ("Varia Activity Monitor", true) && C(7, 4242, "Varia SQL Manager - Integration Services Actions") == ("Varia Integration Services Actions", true)
-            && C(2, 4242, "Varia SQL Manager", "web01") == ("Query tab", false),
+            && C(2, 4242, "Varia SQL Manager", "web01") == ("Query tab", false)
+            && C(5, 4242, "Varia SQL Manager - Object Search") == ("Varia Object Search", true) && varia.Protected(8, 4242, Host, "Varia SQL Manager - Object Search", 99),
             "Varia's own sessions are this process's from this machine under a connection's program name: its pools by suffix, its query tabs by the plain name (a pool wins when names collide), and the monitor's own session always");
         // What a client claims at login (process id, machine, program name) is not enough for a pool, which the default filter hides.
         check(C(1, 4242, "Varia SQL Manager - Object Explorer", "OTHER-PC") == (null, false) && C(2, 4242, "Varia SQL Manager", "OTHER-PC") == (null, false)

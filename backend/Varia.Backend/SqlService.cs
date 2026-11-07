@@ -608,7 +608,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     {
         if (!connections.TryGetValue(connectionId, out var connectionString)) throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
         var builder = new SqlConnectionStringBuilder(connectionString) { Pooling = false, ConnectRetryCount = 0, CommandTimeout = 0, InitialCatalog = "master" };
-        var name = builder.ApplicationName + " - Object Actions";
+        var name = builder.ApplicationName + ActionsProgram;
         builder.ApplicationName = name.Length > 128 ? name[..128] : name;
         return Owned(new SqlConnection(builder.ConnectionString), connectionId);
     }
@@ -756,6 +756,10 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     SqlConnection ISsisHost.SsisServerConnection(string connectionId) => PoolConnection(connectionId, null, SsisPool);
     Task ISsisHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
     private const string SsisPool = " - Integration Services";
+    private const string ActionsProgram = " - Object Actions", SsisActionsProgram = " - Integration Services Actions";
+    /// <summary>Every program-name suffix Varia's own connections open under; the Activity Monitor's catalogue must name each one
+    /// (the checks hold it), or its sessions show as a user's and only the ledger refuses Kill.</summary>
+    internal static readonly string[] OwnSuffixes = [ExplorerPool, ScriptingPool, SearchPool, SsisPool, ActionsProgram, SsisActionsProgram, LiveConnections.ServerSuffix, LiveConnections.SsisSuffix];
 
     /// <summary>A write's own connection (D-ssis 4.4), as object actions have: unpooled, so its settings and session end with the
     /// request, and never retried, so a write is never sent twice.</summary>
@@ -763,7 +767,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     {
         if (!connections.TryGetValue(connectionId, out var connectionString)) throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
         var builder = new SqlConnectionStringBuilder(connectionString) { Pooling = false, ConnectRetryCount = 0, CommandTimeout = 0, InitialCatalog = catalogDatabase };
-        var name = builder.ApplicationName + " - Integration Services Actions";
+        var name = builder.ApplicationName + SsisActionsProgram;
         builder.ApplicationName = name.Length > 128 ? name[..128] : name;
         return new SqlConnection(builder.ConnectionString);
     }

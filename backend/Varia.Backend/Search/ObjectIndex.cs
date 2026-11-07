@@ -316,11 +316,12 @@ internal sealed record SearchQuery(string Text, bool CaseSensitive, bool WholeWo
 /// (which name no database) only by a search of the whole server.</summary>
 internal static class IndexSearch
 {
-    public static ObjectSearchResult Run(ConnectionIndex index, SearchQuery query, SearchMatcher matcher, ObjectIndexLimits limits, ObjectIndexStatus status)
+    public static ObjectSearchResult Run(ConnectionIndex index, SearchQuery query, SearchMatcher matcher, ObjectIndexLimits limits, ObjectIndexStatus status, CancellationToken token)
     {
         var watch = Stopwatch.StartNew();
         var found = new List<(int Rank, bool System, ObjectSearchHit Hit)>();
         var total = 0;
+        var scanned = 0;
         var partial = false;
         var dotted = query.Text.Contains('.');
         var databases = index.Databases.OrderBy(value => value.Database, StringComparer.OrdinalIgnoreCase).ToList();
@@ -334,8 +335,14 @@ internal static class IndexSearch
         {
             foreach (var item in objects)
             {
+                // The budget and Stop are checked by objects scanned, not hits found: a search with few hits still reads every
+                // definition, and a superseded search must not keep scanning on the thread pool.
+                if ((++scanned & 63) == 0)
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (watch.Elapsed > limits.SearchBudget) { partial = true; goto done; }
+                }
                 if (query.Kinds is not null && !query.Kinds.Contains(item.Kind)) continue;
-                if ((total & 255) == 0 && watch.Elapsed > limits.SearchBudget) { partial = true; goto done; }
                 var hit = Match(name, item, query, matcher, limits, dotted, out var rank);
                 if (hit is null) continue;
                 total++;
