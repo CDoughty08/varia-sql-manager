@@ -380,6 +380,14 @@ try {
     const before = await editorText()
     expect(await middleClick(page.locator('.monaco-editor .view-lines'))).toEqual({ pastes: [], mouseups: 1, auxclicks: 1 })
     expect(await editorText()).toBe(before)
+    // The title bar's menus cancel every pointerdown so focus stays put, which leaves the click no mouseup: with the editor
+    // focused, a middle-click on File still pastes nothing (the pointerup is cancelled too), and opens no menu.
+    await textbox().focus()
+    await setPrimary('primary-through-menubar')
+    expect((await middleClick(menubarItem('File'))).pastes).toEqual([])
+    expect(await editorText()).toBe(before)
+    await expect(openMenus()).toHaveCount(0)
+    await expect(textbox()).toBeFocused()
   }
   // A tap is the user acting, as a click is: Edit › Paste chosen by touch pastes (Windows touch screens).
   await application.evaluate(({ clipboard }) => clipboard.writeText('pasted-by-touch'))
