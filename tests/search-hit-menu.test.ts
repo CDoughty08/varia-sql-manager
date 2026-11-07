@@ -5,6 +5,9 @@ import type { ObjectRef } from '../src/shared/explorer/refs'
 import type { ResolvedMenuItem } from '../src/renderer/src/menus/resolve'
 import { argsFor } from '../src/renderer/src/menus/targets'
 import { isCopyKey, searchHitTarget } from '../src/renderer/src/search/hit-actions'
+import { defaultRules } from '../src/shared/commands/keybindings'
+import { contextRecord } from '../src/shared/commands/context-keys'
+import { evaluateWhen } from '../src/shared/commands/when'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
@@ -92,6 +95,19 @@ describe('a Search Objects result\'s Copy key', () => {
       // Ctrl+Shift+C is Copy Fully Qualified Name, a keybinding of its own.
       expect(isCopyKey(key({ ctrlKey: true, shiftKey: true }), platform)).toBe(false)
       expect(isCopyKey(key({ ctrlKey: true, altKey: true }), platform)).toBe(false)
+    }
+  })
+})
+
+describe('keys on a result in Object Explorer\'s search', () => {
+  it('never reach the tree\'s selection: Delete, F2, Properties and Peek act only in the tree', () => {
+    for (const platform of ['win32', 'linux', 'darwin'] as const) {
+      const rules = defaultRules(platform).filter(rule => ['explorer.delete', 'explorer.rename', 'explorer.properties', 'explorer.peek'].includes(rule.command))
+      expect(rules.length, platform).toBeGreaterThan(0)
+      for (const rule of rules) {
+        expect(evaluateWhen(rule.when!, contextRecord(platform, { activePanel: 'explorer' })), `${platform} ${rule.command}`).toBe(true)
+        expect(evaluateWhen(rule.when!, contextRecord(platform, { activePanel: 'explorer', searchHitsFocus: true })), `${platform} ${rule.command}`).toBe(false)
+      }
     }
   })
 })

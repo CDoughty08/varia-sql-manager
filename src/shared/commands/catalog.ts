@@ -405,7 +405,7 @@ export const commandCatalog = {
     title: 'Peek', category: 'Object Explorer', icon: 'eye', keywords: ['definition', 'properties', 'preview', 'describe'],
     precondition: "backendReady && (explorerSelectionKind == 'table' || explorerSelectionKind == 'view' || explorerSelectionKind == 'procedure' || explorerSelectionKind == 'function')",
     unavailableHint: 'Select a table, view, stored procedure, or function.',
-    keybindings: [{ key: 'alt+f12', when: "activePanel == 'explorer' && !inputFocus" }],
+    keybindings: [{ key: 'alt+f12', when: "activePanel == 'explorer' && !inputFocus && !searchHitsFocus" }],
     menus: [{ menu: 'explorer.context', group: '1_query', order: 7, mnemonic: 'k', when: "(explorerNode == 'table' || explorerNode == 'view' || explorerNode == 'procedure' || explorerNode == 'function') && !explorerServerLost" }]
   },
   'explorer.copyName': {

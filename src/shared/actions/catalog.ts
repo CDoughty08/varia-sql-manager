@@ -427,7 +427,8 @@ export const actionContextValues = (state: Readonly<Record<ObjectAction, ActionS
   Object.fromEntries(objectActions.map(action => [actionContextKey(action), state[action]])) as ActionContextValues
 
 /** Keys only while Object Explorer has focus and no text field does (the inline rename box, a filter field). */
-export const explorerKeyWhen = "activePanel == 'explorer' && !textInputFocus"
+// Not on a Search Objects result in Object Explorer's search, whose focus is in the pane but whose keys are not the tree's selection's.
+export const explorerKeyWhen = "activePanel == 'explorer' && !textInputFocus && !searchHitsFocus"
 export interface ActionKeybinding { readonly key?: string; readonly win?: string; readonly linux?: string; readonly mac?: string; readonly when: string }
 /** Where an action command appears, in the shape of `MenuPlacement`. */
 export interface ActionMenuPlacement {

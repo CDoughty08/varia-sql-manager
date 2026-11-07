@@ -34,12 +34,12 @@ const monacoShadowAllowlist: Readonly<Record<string, string>> = {
   'ctrl+pagedown': 'Next Query (Windows and Linux only); Monaco binds ⌘PageDown only on macOS and Alt+PageDown elsewhere',
   'shift+f10': "workbench.showContextMenu replaces Monaco's menu (contextmenu: false), so Shift+F10 opens the workbench's editor menu",
   'contextmenu': 'the context-menu key, likewise (Windows and Linux)',
-  'delete': "Delete in Object Explorer's tree only (activePanel == 'explorer' && !textInputFocus), and Close Query on a focused document tab (documentTabFocus && !inputFocus); Monaco's deleteRight acts in editor text",
+  'delete': "Delete in Object Explorer's tree only (activePanel == 'explorer' && !textInputFocus && !searchHitsFocus), and Close Query on a focused document tab (documentTabFocus && !inputFocus); Monaco's deleteRight acts in editor text",
   'backspace': "Close Query on a focused document tab (documentTabFocus && !inputFocus), as Dockview's tabs close; Monaco's deleteLeft acts in editor text",
   'cmd+backspace': "Delete in Object Explorer's tree on macOS, as in Finder; Monaco's deleteWordLeft acts in editor text",
   'ctrl+g': 'Go To Line, as in SSMS (Windows and Linux); Monaco binds ⌘G (next match) only on macOS',
   'f4': "The table designer's Properties (designerFocus): its grid is outside the editor, so Monaco's next reference keeps F4 in editor text",
-  'alt+f12': "Peek in Object Explorer's tree only (activePanel == 'explorer' && !inputFocus), as VS Code's Peek Definition; Monaco's peek keeps Alt+F12 in editor text",
+  'alt+f12': "Peek in Object Explorer's tree only (activePanel == 'explorer' && !inputFocus && !searchHitsFocus), as VS Code's Peek Definition; Monaco's peek keeps Alt+F12 in editor text",
   'shift+escape': "Close Activity Monitor (activityMonitorFocus), SSMS's key: the monitor is outside the editor, so Monaco's Shift+Escape (closing a widget, leaving a snippet) keeps it in editor text"
 }
 
