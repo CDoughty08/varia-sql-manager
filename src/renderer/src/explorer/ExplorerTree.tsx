@@ -29,7 +29,7 @@ interface FollowedQuery {
  * arrows, Home and End, Page Up and Down, Enter, `*`, Numpad plus and minus, and type-ahead.
  */
 export default function ExplorerTree({ activeConnectionId, activeQueryId }: { readonly activeConnectionId?: string; readonly activeQueryId?: string }) {
-  const { explorer, commands, connections, actions: objectActions, explorerStatus, settings, menuTargets, peek, platform } = useWorkbench()
+  const { explorer, commands, connections, actions: objectActions, explorerStatus, settings, menuTargets, peek, gestures } = useWorkbench()
   const snapshot = useServiceSnapshot(explorer)
   const { servers: statuses } = useServiceSnapshot(explorerStatus)
   const { explorerLoading } = useServiceSnapshot(explorer.context)
@@ -66,11 +66,11 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
   }, [])
   const scrollPinnedBand = useCallback((event: WheelEvent) => {
     const tree = element.current
-    if (!tree || (event.target as Element).closest?.('.explorer-pin-menu') || event.ctrlKey || !event.deltaY) return
+    if (!tree || (event.target as Element).closest?.('.explorer-pin-menu') || gestures.matches('global.wheelZoom', event) || !event.deltaY) return
     event.preventDefault()
     const unit = event.deltaMode === 1 ? rowHeight : event.deltaMode === 2 ? tree.clientHeight : 1
     tree.scrollTop += event.deltaY * unit
-  }, [])
+  }, [gestures])
 
   // Scrolling and resizing re-window on the next frame (or soon after, when frames are throttled).
   useLayoutEffect(() => {
@@ -207,10 +207,10 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
       if (refocus) element.current?.focus({ preventScroll: true })
     },
     peekHover: (rowId, held) => {
-      if (held && (platform === 'darwin' ? held.metaKey : held.ctrlKey)) peek.hover(explorer.menuNode(rowId))
+      if (held && gestures.matches('explorer.peekHover', held)) peek.hover(explorer.menuNode(rowId))
       else peek.cancelHover()
     }
-  }), [explorer, run, activate, objectActions, peek, platform])
+  }), [explorer, run, activate, objectActions, peek, gestures])
   // Rows are menu targets: right-click has selected the row; Shift+F10 asks for the active descendant's menu.
   const rowTarget = useMenuTarget<HTMLDivElement>(row => {
     const node = explorer.menuNode(Number(row.getAttribute('data-row-id')))
