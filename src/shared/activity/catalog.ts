@@ -158,7 +158,7 @@ export const killOutcomes = {
   changed: 'The id now belongs to another session (its login time or host process id differs). Nothing was killed.',
   own: 'The session Kill itself runs on. Nothing was killed.',
   system: 'A SQL Server system session: only user sessions can be killed. Nothing was killed.',
-  varia: 'One of this window\'s own pool sessions (Object Explorer, Scripting, Object Actions, Activity Monitor or Integration Services). Nothing was killed.',
+  varia: 'One of this window\'s own pool sessions (Object Explorer, Scripting, Object Search, Object Actions, Activity Monitor or Integration Services). Nothing was killed.',
   denied: 'The login lacks ALTER ANY CONNECTION (sysadmin or processadmin). Nothing was killed.',
   failed: 'Another error, which the message gives; when the connection broke during KILL, whether the session ended is unknown.'
 } as const
@@ -601,6 +601,7 @@ export const variaSessionKinds: readonly { readonly suffix: string; readonly kin
   { suffix: '', kind: 'queryTab', label: 'Query tab' },
   { suffix: ' - Object Explorer', kind: 'pool', label: 'Varia Object Explorer' },
   { suffix: ' - Scripting', kind: 'pool', label: 'Varia Scripting' },
+  { suffix: ' - Object Search', kind: 'pool', label: 'Varia Object Search' },
   { suffix: ' - Object Actions', kind: 'pool', label: 'Varia Object Actions' },
   { suffix: activityPoolSuffix, kind: 'pool', label: 'Varia Activity Monitor' },
   { suffix: ' - Integration Services', kind: 'pool', label: 'Varia Integration Services' },

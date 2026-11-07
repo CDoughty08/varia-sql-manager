@@ -13,7 +13,7 @@ export const documentUri = (id: string): string => `varia-sql://query/${id}`
 /** A Monaco model for a document's text in its language ('sql', 'xml' or 'json'). */
 export type ModelFactory = (text: string, uri: string, language: string) => editor.ITextModel
 /** A large text still being appended, one chunk a frame; edits the user makes meanwhile keep the document dirty. */
-interface Fill { appending: boolean; userEdited: boolean }
+interface Fill { appending: boolean; userEdited: boolean; done: Promise<void>; finish: () => void }
 /** `plain`: a large value document, shown without bracket matching and colours. */
 interface DocumentEntry { model: editor.ITextModel; subscription: Disposable; viewState?: editor.ICodeEditorViewState | null; fill?: Fill; plain?: boolean }
 /** A text document opened from a value: its tab name, its text, and what it holds. */
@@ -272,9 +272,11 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   private fill(id: string, text: string, at: number): void {
     const entry = this.entries.get(id)
     if (!entry) return
-    const fill: Fill = entry.fill = { appending: false, userEdited: false }
+    let finish = () => {}
+    const done = new Promise<void>(resolve => { finish = resolve })
+    const fill: Fill = entry.fill = { appending: false, userEdited: false, done, finish }
     const step = () => {
-      if (this.disposed || this.entries.get(id) !== entry) return
+      if (this.disposed || this.entries.get(id) !== entry) { fill.finish(); return }
       const { model } = entry, end = chunkEnd(text, at), line = model.getLineCount(), column = model.getLineMaxColumn(line)
       fill.appending = true
       try { model.applyEdits([{ range: { startLineNumber: line, startColumn: column, endLineNumber: line, endColumn: column }, text: text.slice(at, end) }]) }
@@ -284,6 +286,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
       entry.fill = undefined
       // Typing during the fill is not part of the value, so it leaves the document dirty.
       this.replace(id, { savedVersionId: fill.userEdited ? null : model.getAlternativeVersionId(), dirty: fill.userEdited })
+      fill.finish()
     }
     this.frame(step)
   }
@@ -428,6 +431,9 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   async save(id: string, saveAs = false): Promise<boolean> {
     const provider = this.provider(id)
     if (provider) return provider.save(id, saveAs)
+    // A value still filling is not all there: Save waits for its last chunk, so it never writes part of it and marks it saved.
+    const fill = this.entries.get(id)?.fill
+    if (fill) await fill.done
     const document = this.get(id), model = this.entries.get(id)?.model
     if (!document || !model) return false
     model.pushStackElement()

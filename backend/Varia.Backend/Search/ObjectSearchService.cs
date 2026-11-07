@@ -363,18 +363,22 @@ internal sealed class ObjectSearchService : IDisposable
                     rows.IsDBNull(1) ? null : rows.GetDateTime(1), rows.IsDBNull(2) ? 0 : rows.GetInt32(2), definitions);
             }
             if (state.Index.Resource?.Key == key) return null;
-            var set = await resources.AcquireAsync(key, async () =>
+            // The shared read has its own connection and lifetime: other connections may wait for it, so stopping this build (or
+            // disconnecting) stops only this wait, and the read ends only when every waiter has gone or its budget runs out.
+            var set = await resources.AcquireAsync(key, async readToken =>
             {
-                await using var command = connection.CreateCommand();
+                await using var own = host.Connection(connectionId, null);
+                await host.OpenAsync(own, readToken);
+                await using var command = own.CreateCommand();
                 command.CommandTimeout = 0;
                 command.CommandText = ObjectSearchSql.Prologue + ObjectSearchSql.ResourceObjects(definitions);
-                await using var rows = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, budgetSource.Token);
-                return await DatabaseReader.ReadResourceAsync(rows, definitions, Limits, budgetSource.Token);
-            });
+                await using var rows = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, readToken);
+                return await DatabaseReader.ReadResourceAsync(rows, definitions, Limits, readToken);
+            }, Limits.DatabaseBudget, token);
             state.Index.PutResource(set);
             return null;
         }
-        catch (Exception error) when (error is OperationCanceledException or SqlException && budgetSource.IsCancellationRequested && !token.IsCancellationRequested)
+        catch (Exception error) when (error is TimeoutException || error is OperationCanceledException or SqlException && budgetSource.IsCancellationRequested && !token.IsCancellationRequested)
         {
             return new(ResourceDatabase, "TIMEOUT", "Reading the system objects took longer than " + Limits.DatabaseBudget.TotalSeconds.ToString(CultureInfo.InvariantCulture) + " seconds.");
         }

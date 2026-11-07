@@ -94,4 +94,7 @@ export async function settle(prepared: PreparedRequest, outcome: Settled, deps: 
   await deps.savedPasswords.reconcile(() => libraryOf(deps)).catch(() => {})
   return outcome
 }
-const libraryOf = async (deps: Pick<ConnectionRequestDeps, 'connections'>): Promise<ConnectionLibrary> => (await deps.connections.load()).library
+const libraryOf = async (deps: Pick<ConnectionRequestDeps, 'connections'>): Promise<ConnectionLibrary | null> => {
+  const read = await deps.connections.load()
+  return read.trusted === false ? null : read.library
+}
