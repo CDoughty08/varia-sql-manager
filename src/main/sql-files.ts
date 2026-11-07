@@ -1,11 +1,12 @@
 import { constants } from 'node:fs'
 import { access, chmod, lstat, open, realpath, rm, stat } from 'node:fs/promises'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, extname, join, resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { documentKinds, type DocumentKind, type FileChange, type FileEncoding, type OpenSqlFile, type SaveSqlFile, type SqlFile } from '../shared/contracts'
 import { readRegularFile, replaceFile } from './json-file'
 import { detectAndDecode, detectEol, encodeText, type DecoderFactory } from './text-encoding'
+import { planLimits } from '../shared/plans'
 
 export const maxSqlFileBytes = 5_000_000
 interface FileKind { readonly title: string; readonly filters: { name: string; extensions: string[] }[]; readonly maxChars: number; readonly maxBytes: number; readonly tooLarge: string }
@@ -15,10 +16,39 @@ export const fileKinds: Readonly<Record<DocumentKind, FileKind>> = {
   sql: { title: 'Save SQL query', filters: [{ name: 'SQL files', extensions: ['sql'] }], maxChars: maxSqlFileBytes, maxBytes: maxSqlFileBytes, tooLarge: 'SQL files must be smaller than 5 MB.' },
   xml: valueFile('Save XML document', [{ name: 'XML files', extensions: ['xml'] }]),
   json: valueFile('Save JSON document', [{ name: 'JSON files', extensions: ['json'] }]),
-  sqlplan: valueFile('Save execution plan', [{ name: 'Execution plans', extensions: ['sqlplan'] }, { name: 'XML files', extensions: ['xml'] }])
+  sqlplan: { ...valueFile('Save execution plan', [{ name: 'Execution plans', extensions: ['sqlplan'] }, { name: 'XML files', extensions: ['xml'] }]), maxChars: planLimits.characters }
 }
+export const maxDocumentCharacters = Math.max(...Object.values(fileKinds).map(kind => kind.maxChars))
+
+/** Identify a Showplan exported as .xml from its root and namespace. The viewer parses the full document separately. */
+function isShowplanXml(text: string): boolean {
+  const space = /[ \t\r\n]*/y
+  let at = 0
+  while (true) {
+    space.lastIndex = at
+    space.test(text)
+    at = space.lastIndex
+    const end = text.startsWith('<!--', at) ? '-->' : text.startsWith('<?', at) ? '?>' : undefined
+    if (!end) break
+    const next = text.indexOf(end, at + 2)
+    if (next < 0) return false
+    at = next + end.length
+  }
+  const root = /<(?:([^\s<>/:="'?]+):)?ShowPlanXML(?=[\s/>])/y
+  root.lastIndex = at
+  const match = root.exec(text)
+  if (!match) return false
+  const binding = match[1] ? `xmlns:${match[1]}` : 'xmlns'
+  const attribute = /[ \t\r\n]+([^\s=\/<>"']+)[ \t\r\n]*=[ \t\r\n]*(?:"([^"]*)"|'([^']*)')/y
+  attribute.lastIndex = root.lastIndex
+  for (let value; (value = attribute.exec(text));) {
+    if (value[1] === binding) return (value[2] ?? value[3]) === 'http://schemas.microsoft.com/sqlserver/2004/07/showplan'
+  }
+  return false
+}
+
 /** varia:files-save: the content's limit depends on the kind (a query by default). */
-export const saveFileSchema = z.object({ fileId: z.uuid().optional(), name: z.string().min(1).max(512), content: z.string().max(maxSqlFileBytes), saveAs: z.boolean(), kind: z.enum(documentKinds).optional() }).strict()
+export const saveFileSchema = z.object({ fileId: z.uuid().optional(), name: z.string().min(1).max(512), content: z.string().max(maxDocumentCharacters), saveAs: z.boolean(), kind: z.enum(documentKinds).optional() }).strict()
   .refine(value => value.content.length <= fileKinds[value.kind ?? 'sql'].maxChars, 'The document is too large to save.')
 /** varia:confirm-reload: main names the file from its own registration. */
 export const reloadPromptSchema = z.object({ fileId: z.uuid(), dirty: z.boolean(), more: z.boolean() }).strict()
@@ -94,13 +124,20 @@ export class SqlFileStore {
    * Reads and registers the file at `path`. A file already registered keeps its id, and keeps what it was last read as:
    * an Open that finds its tab must not hide a change the tab has not seen (`reload` is the read that does show it).
    */
-  async read(path: string, { reload = false, kind = 'sql', restore }: FileReadOptions = {}): Promise<OpenSqlFile> {
-    const absolutePath = resolve(path), limits = fileKinds[kind]
+  async read(path: string, { reload = false, kind: requestedKind, restore }: FileReadOptions = {}): Promise<OpenSqlFile> {
+    const absolutePath = resolve(path)
+    const extension = extname(absolutePath).toLowerCase()
+    const inferXml = requestedKind === undefined && extension === '.xml'
+    const candidateKind = requestedKind ?? (extension === '.sqlplan' || inferXml ? 'sqlplan' : 'sql')
+    const candidateLimits = fileKinds[candidateKind]
     // A FIFO or device is refused without blocking; only a regular file is read, and at most one byte past the limit.
-    const bytes = await readRegularFile(absolutePath, limits.maxBytes)
+    const bytes = await readRegularFile(absolutePath, candidateLimits.maxBytes)
     if (!bytes) throw new Error(`${basename(absolutePath)} is not a file.`)
-    if (bytes.length > limits.maxBytes) throw new Error(limits.tooLarge)
+    if (bytes.length > candidateLimits.maxBytes) throw new Error(candidateLimits.tooLarge)
     const decoded = detectAndDecode(bytes, this.options.legacyLabel?.() ?? 'windows-1252', this.options.decoder)
+    const kind = inferXml && !isShowplanXml(decoded.text) ? 'sql' : candidateKind
+    const limits = fileKinds[kind]
+    if (bytes.length > limits.maxBytes) throw new Error(limits.tooLarge)
     if (decoded.text.length > limits.maxChars) throw new Error('The document is too large to open.')
     const { eol, mixed } = detectEol(decoded.text, this.platform)
     // One file keeps one registration, path and name, whatever case or link it is reached through, so the page finds
@@ -120,7 +157,7 @@ export class SqlFileStore {
       this.stamps.set(file.id, { size: info.size, mtimeMs: info.mtimeMs, sha256: hash })
     }
     if (reload) this.conflicts.delete(file.id)
-    return { ...file, content: decoded.text, eol, mixedEol: mixed }
+    return { ...file, content: decoded.text, eol, mixedEol: mixed, ...kind === 'sqlplan' ? { kind } : {} }
   }
 
   /**

@@ -170,7 +170,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
           this.update(tabId, { ...state, session: { connectionId: connection.id, spid, login } })
       })
       this.events.emit({ type: 'query.started', tabId, queryId })
-      const response = await this.api.execute({ connectionId: connection.id, sessionId: tabId, database: document.database, sql, startLine, queryId, ...this.executionOptions(connection) })
+      const response = await this.api.execute({ connectionId: connection.id, sessionId: tabId, database: document.database, sql, startLine, queryId,
+        ...this.executionOptions(connection), ...document.includeActualPlan ? { includeActualPlan: true } : {} })
       if (response.ok) summary = response.value
       else { error = response.error; code = response.code }
     } catch (failure) { error = errorText(failure) }

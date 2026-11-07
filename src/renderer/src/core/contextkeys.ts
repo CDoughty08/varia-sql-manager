@@ -148,6 +148,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     activeDocumentConnected: !!activeConnection && !activeConnection.lost, activeConnectionLost: !!activeConnection?.lost,
     anyDocumentConnected: documents.documents.some(document => isQueryDocument(document) && !!document.connectionId && connections.some(connection => connection.id === document.connectionId && !connection.lost)),
     queryRunning: !!active && !!inputs.queries[active.id]?.running, hasResults: !!active && !!inputs.results?.[active.id], outputPaneVisible: !!inputs.panes && outputPaneIds.some(id => inputs.panes![id]), panelTabsVisible: !!inputs.panelTabs, ...inputs.explorer,
+    includeActualPlan: isQueryDocument(active) && !!active?.includeActualPlan,
     scriptingRunning: !!inputs.scriptingRunning, hasNotifications: !!inputs.notifications,
     updateBusy: inputs.update?.status === 'checking' || inputs.update?.status === 'downloading', updateReady: inputs.update?.status === 'ready',
     updateAvailable: inputs.update?.status === 'available' && inputs.update.size !== undefined

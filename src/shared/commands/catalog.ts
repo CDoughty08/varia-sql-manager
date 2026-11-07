@@ -252,6 +252,12 @@ export const commandCatalog = {
     keybindings: [{ win: 'alt+pause', linux: 'alt+pause' }],
     menus: [{ menu: 'query', group: '1_execute', order: 2, mnemonic: 'c' }, { menu: 'editor.context', group: '2_execute', order: 2, mnemonic: 'n' }]
   },
+  'query.includeActualPlan': {
+    title: 'Include Actual Execution Plan', category: 'Query', icon: 'execution-plan', keywords: ['statistics', 'xml', 'showplan', 'capture'],
+    precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy', toggled: 'includeActualPlan',
+    keybindings: [{ win: 'ctrl+m', linux: 'ctrl+m', when: 'editorFocus || queryBarFocus' }],
+    menus: [{ menu: 'query', group: '1_execute', order: 3, mnemonic: 'i' }]
+  },
   'workbench.showCommands': {
     title: 'Show All Commands', palette: false,
     keybindings: [{ key: 'mod+shift+p' }, { key: 'f1' }],

@@ -2,6 +2,7 @@
 // requests are validated with portRequestSchema; backend payloads main forwards are validated with the schemas below.
 import { z } from 'zod'
 import type { BackendStatus, MemoryOrder, QueryEvent, ResultsCloseResult, ResultsReadResult, ResultsRowBytesResult } from '../contracts'
+import { maxQueryPlanDocuments } from '../plans'
 import { liveSubscribeParamsSchema, liveUpdateParamsSchema, testLiveSubscribeParamsSchema, testLiveUpdateParamsSchema, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../live/schema'
 import { backendDescriptorSchema } from './descriptors'
 import { limits, type ErrorCode } from './wire/protocol'
@@ -63,6 +64,8 @@ export const queryEventSchema = z.discriminatedUnion('type', [
 /** The query.execute summary: the stored messages, the errors kept past their cap, and up to 8 notes about truncation. */
 export const queryResultSchema = z.object({
   resultSets: z.array(backendDescriptorSchema).max(limits.maxResultSets.max), discardedResultSets: count, messages: z.array(message).max(limits.messages.count + limits.messages.lateErrors + 8),
+  planSets: z.array(backendDescriptorSchema.extend({ kind: z.literal('executionPlan') })).max(maxQueryPlanDocuments).optional(),
+  planOrder: z.array(u32).max(limits.maxResultSets.max + maxQueryPlanDocuments).optional(),
   recordsAffected: z.number().int().min(-1), elapsedMs: count, status: z.enum(['completed', 'completedWithErrors', 'failed', 'cancelled', 'timedOut']),
   error: z.object({ code: z.string().max(64), message: z.string().max(limits.messages.errorCharacters + 1), batchNumber: count, iteration: count }).strict().optional(),
   completedBatches: count, totalBatches: count, database: z.string().max(256), messagesTruncated: z.boolean(),

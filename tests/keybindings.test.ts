@@ -216,7 +216,7 @@ describe('default keybindings', () => {
     const monitor = ['activity.refresh', 'activity.nextPane', 'activity.previousPane', 'activity.close']
     for (const platform of ['win32', 'linux'] as const) {
       expect(defaultRules(platform).map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAll', 'file.close', 'file.close', 'file.close', 'file.close', 'window.close', 'edit.undo', 'edit.redo', 'edit.redo', ...clipboard,
-        'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane', 'query.execute', 'query.execute', 'query.execute', 'query.cancel', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu',
+        'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane', 'query.execute', 'query.execute', 'query.execute', 'query.cancel', 'query.includeActualPlan', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu',
         'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.focusSearch', 'explorer.rename', 'explorer.delete', 'tableDesigner.properties', 'ssis.refreshOperations', 'ssis.refreshProperties', 'explorer.peek',
         'query.changeDatabase', 'document.next', 'document.next', 'document.previous', 'document.previous', 'document.moveLeft', 'document.moveRight', 'document.rename', ...groups, 'editor.toggleWordWrap', 'editor.toggleOvertype', ...native, ...editing, ...monitor, ...display, ...output, ...platform === 'win32' ? ['workbench.search'] : [], ...search])
     }
@@ -258,7 +258,7 @@ describe('default keybindings', () => {
     // Ctrl/⌘+Shift+F focuses Object Explorer's search box (SSMS's Find in Files, which Varia lacks).
     const palette: Readonly<Record<string, CommandId>> = { p: 'workbench.quickOpen', 'shift+p': 'workbench.showCommands', u: 'query.changeDatabase', r: 'view.toggleResultsPane', 'shift+f': 'explorer.focusSearch' }
     // Go To Line is Ctrl+G in the editor; Make Uppercase and Lowercase need its text focused, which editorFocus alone is not.
-    const added: Readonly<Record<Platform, Readonly<Record<string, CommandId>>>> = { win32: { e: 'query.execute', g: 'edit.goToLine' }, linux: { e: 'query.execute', g: 'edit.goToLine' }, darwin: {} }
+    const added: Readonly<Record<Platform, Readonly<Record<string, CommandId>>>> = { win32: { e: 'query.execute', g: 'edit.goToLine', m: 'query.includeActualPlan' }, linux: { e: 'query.execute', g: 'edit.goToLine', m: 'query.includeActualPlan' }, darwin: {} }
     // SSMS's search box key; Linux and macOS quit with it.
     const search: Readonly<Record<Platform, Readonly<Record<string, CommandId>>>> = { win32: { q: 'workbench.search' }, linux: {}, darwin: {} }
     for (const platform of platforms) {

@@ -26,6 +26,7 @@ import RestoreDatabase from '../restore/RestoreDatabase'
 import ActivityMonitor from '../activity/ActivityMonitor'
 import SsisOperations from '../ssis/SsisOperations'
 import ObjectSearch from '../search/ObjectSearch'
+import PlanDocument from '../plans/PlanDocument'
 
 /**
  * The query editor panel's editor groups (docs/editor-groups.md): a Dockview of its own inside the workbench's editor
@@ -86,6 +87,7 @@ function DocumentPanel({ api }: IDockviewPanelProps) {
   // editor's workbench rendered only the active one.
   const [visible, setVisible] = useState(api.isVisible)
   const [group, setGroup] = useState(api.group.id)
+  const [planSource, setPlanSource] = useState(false)
   const slot = useRef<HTMLDivElement>(null)
   const custom = isCustomKind(kind)
   const text = useRef(!custom)
@@ -109,7 +111,14 @@ function DocumentPanel({ api }: IDockviewPanelProps) {
     return () => area.unmount(group, element)
   }, [area, api.id, group, visible, custom])
   // A text document keeps its (empty) slot while hidden, so the editor can move in the moment its tab is chosen.
-  if (!custom) return <div className="editor-container" ref={slot} />
+  if (!custom) {
+    const plan = kind === 'sqlplan'
+    const editor = <div className="editor-container" ref={slot} hidden={plan && !planSource} />
+    return plan ? <div className="document-view">
+      {visible && <PlanDocument documentId={api.id} source={planSource} onSource={setPlanSource} />}
+      {editor}
+    </div> : editor
+  }
   if (!visible) return null
   const id = api.id
   return <div className="document-view">
@@ -353,6 +362,7 @@ class EditorAreaController implements Area, EditorGroupHost {
       // A group past the cap (a drop that would split once more) goes back: its documents join the active group.
       api.onDidAddGroup(group => { if (api.groups.length > editorGroupLimits.groups) queueMicrotask(() => this.mergeInto(group)) }),
       { dispose: documents.subscribe(() => this.reconcile()) },
+      documents.useTextFocus(id => this.focusText(id)),
       editorGroups.attach(this),
       this.regions = nameGroupRegions(root),
       this.pointer = afterPointer(),
@@ -495,7 +505,7 @@ class EditorAreaController implements Area, EditorGroupHost {
     if (editor.element.parentElement !== slot) slot.append(editor.element)
     editor.shows = id
     this.workbench.documents.showIn(editor.editor.instance, id)
-    if (keep && this.workbench.documents.getSnapshot().activeId === id && !editor.editor.instance.hasWidgetFocus()) editor.editor.instance.focus()
+    if (keep && this.workbench.documents.getSnapshot().activeId === id && !editor.editor.instance.hasWidgetFocus()) this.workbench.documents.focusActive()
     this.followStatus()
   }
   unmount(group: string, slot: HTMLElement): void {
@@ -518,6 +528,14 @@ class EditorAreaController implements Area, EditorGroupHost {
   }
 
   private groupById(id: string): DockviewGroupPanel | undefined { return this.api?.groups.find(group => group.id === id) }
+  private focusText(id: string): boolean {
+    const editor = this.workbench.documents.editorOf(id), element = editor?.getContainerDomNode()
+    const graph = element?.closest('.document-view')?.querySelector<HTMLElement>('.plan-canvas')
+    if (graph?.checkVisibility()) { graph.focus(); return true }
+    if (!editor || !element?.checkVisibility()) return false
+    editor.focus()
+    return true
+  }
   // EditorGroupHost: the moves commands ask for.
   move(id: string, to: EditorMove): void {
     const api = this.api, panel = api?.getPanel(id)

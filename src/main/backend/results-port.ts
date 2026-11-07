@@ -195,6 +195,7 @@ export class ResultsPortHost {
 
   querySummary(summary: QueryResult): void {
     this.own(summary.resultSets)
+    if (summary.planSets) this.own(summary.planSets)
     this.rememberMemory('results', summary.budget)
   }
 

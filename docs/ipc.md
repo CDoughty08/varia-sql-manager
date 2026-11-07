@@ -220,6 +220,7 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `connections.identity` | invoke | unary | metadata | 10 s. Takes `{}`; main checks the answer (integrated identity, below). |
 | `databases.list` | invoke | unary | metadata | 45 s |
 | `tables.columns` | invoke | unary | metadata | 45 s; the backend also stops its own query after 30 s. Tables and views, read through `QUOTENAME(@db) + '.sys.sp_executesql'` so no pooled connection stays in the database |
+| `plans.parse` | invoke | unary | metadata | 15 s; parses Showplan data only, without a SQL connection. Main compresses raw XML before the 4 MiB request boundary; see Execution plan viewer below |
 | `query.execute` | invoke, events on the port | unary with EVENTs | query | none; backstop `timeoutSeconds + 30` s |
 | `query.cancel` | invoke | unary | control | 10 s |
 | `query.session.close` | invoke | unary | control | 10 s, 60 s with `transaction: 'commit'`; answered locally `{ closed: false }` for a session of an ended generation |
@@ -866,13 +867,61 @@ still in the open page builder are not served; the worker reads again after a pr
 - Query events have no credit; they are bounded where they are produced. Live subscriptions are the one exception: their
   EVENTs are credited, one at a time ([Live subscriptions](#live-subscriptions)).
 
+## Execution plan viewer
+
+`plans.parse` accepts `{ xml }` from the renderer, at most 8,388,608 characters. Only main creates the wire form
+`{ xml: <base64 gzip>, encoding: 'gzip' }`: asynchronous compression, at most two preparations at once, and at most
+2,097,152 compressed bytes. Renderer validation rejects the encoding field. Protocol v2's frame limits are unchanged.
+The backend streams decompressed UTF-8 through `XmlReader`, with DTDs and external entities prohibited, a character
+limit and a 256-level depth limit. No SQL executes and no input or plan text is logged.
+
+The response is a normalized document: version/build, ordered statements, and each statement's operators with stable
+document-local IDs, parent IDs, SQL Server node IDs, operation names, object names, estimates, runtime counters,
+warnings and bounded properties. Source NodeId values alone are not identities: they repeat across statements.
+Parallel runtime rows, CPU and executions sum; elapsed time takes the maximum thread value. Missing counters stay
+absent (the renderer's schema normalizes them to null), rather than becoming zero. Unknown operators remain visible.
+Raw runtime properties include the thread identity. Repeated properties that cannot be retained are explicitly reported.
+The parser permits at most 512 statements and 10,000 operators, 64 properties per operator, 1,048,576 characters of
+SQL/property text, and a 12 MiB serialized response. Essential operator labels, objects and warnings keep separate
+per-field caps so verbose earlier properties cannot erase them. Shortened text/properties produce an explicit notice; malformed,
+oversized or overdeep documents fail with bounded, input-independent errors. Original XML is unchanged.
+
+The renderer holds parsed models only while the viewer is mounted. A viewer combines up to 64 source documents,
+16,777,216 input characters, 512 statements and 10,000 operators. Query plans are read on demand through their existing
+result handles; releases and backend generation changes invalidate those sources. Existing result-cell truncation
+remains in effect, and a truncated plan is never drawn as a complete graph. `.sqlplan` documents retain their text
+models for editing, Save and AutoRecover, with Graph and XML source views. Plan files use their own 16 MiB byte and
+8,388,608-character limits; ordinary SQL files keep their existing limits. A failed plan source is reported separately
+so other valid plans in the run remain usable.
+
+`elkjs` runs in a dedicated, cancellable module worker (20 s layout bound), independent of the results worker. A batch
+has one PixiJS WebGL canvas and camera. Static spatial indices cull cards and connecting edges; zoom controls label
+detail. Drawing is on demand, at most once per animation frame, and pauses while hidden. Pixi's interpreter extension
+supports the existing strict CSP without adding unsafe-eval. Canvas resources and workers are destroyed on unmount;
+only the last 64 small navigation states are retained. A virtualized DOM operator outline supplies keyboard and
+screen-reader navigation and properties when GPU rendering is unavailable. Forced-colors mode uses the DOM views.
+Capture controls, live subscriptions and client statistics are outside this viewer increment.
+
 ## Query execution
 
 `query.execute` takes `{ connectionId, sessionId, database, sql, queryId, maxRows, timeoutSeconds, startLine?,
-maxResultSets?, stopOnError? }`. `sessionId` is the query tab's UUID: the tab's SQL session is one unpooled connection
+maxResultSets?, stopOnError?, includeActualPlan? }`. `sessionId` is the query tab's UUID: the tab's SQL session is one unpooled connection
 with connection recovery off, opened on its first execution and kept until the tab closes, its server changes, or it is
 lost.
 
+- **Actual execution plans.** With `includeActualPlan`, a separate connection starts a lightweight Extended Events session
+  scoped to the query's physical connection and SPID. The query session receives its original batches verbatim, preserving
+  session counters such as `@@ROWCOUNT`. The observer reads its bounded in-memory ring buffer after execution and drops the
+  event session. The summary's optional `planSets` holds up to 64 plans in execution order, including plans from statements
+  that finished before an error or cancel. Plan storage runs after the grids and has an 8 MiB allowance within the global
+  budget. The descriptors use the same page format and release lifecycle as `resultSets`. Missing permissions, an
+  unsupported server, and incomplete capture are reported in Messages. The observer needs lightweight plan profiling
+  and permission to create, enable, read and drop its event session. SQL Server 2025 and Azure SQL Database also set
+  a maximum collector duration. If a process exits abruptly before cleanup, a collector's connection ID filter prevents
+  a later session that reuses the SPID from being captured.
+  When `SET STATISTICS XML` also returned the same execution, Varia keeps the complete SQL-returned plan and pairs it with
+  one observer event in the same batch and repetition. The optional `planOrder` lists matched and retained observer result
+  IDs in event order so the canvas can interleave both sources within a batch. Across batches it uses batch and repetition.
 - **SET prologue.** When a session opens (and so whenever one is reopened after it closed or was lost), the backend
   runs SSMS's query-window defaults before the script: `SET ARITHABORT ON; SET ANSI_NULLS ON; SET ANSI_PADDING ON;
   SET ANSI_WARNINGS ON; SET ANSI_NULL_DFLT_ON ON; SET CONCAT_NULL_YIELDS_NULL ON; SET QUOTED_IDENTIFIER ON;
@@ -925,9 +974,9 @@ nothing runs.
 session costs no extra round trip; `spid` is `SqlConnection.ServerProcessId` (from the login acknowledgement, no round
 trip). Both are read once, as SSMS shows them from the connection, and every summary returns `spid` and `login` (≤ 128
 characters) while the session is still open after the script; both are absent when the session was lost or never
-opened. The status bar shows `login (spid)`, as SSMS does. Nothing runs in the session after a script, so the next
-script sees the `@@ROWCOUNT` and `@@ERROR` the previous one's last statement left, and the session's most recent SQL
-(`DBCC INPUTBUFFER`, `sys.dm_exec_input_buffer`, sp_WhoIsActive) is the user's own; the live checks pin both.
+opened. The status bar shows `login (spid)`, as SSMS does. Varia sends no SQL on the query session after the script.
+The next script can read the `@@ROWCOUNT` and `@@ERROR` left by the previous script. Session observers
+(`DBCC INPUTBUFFER`, `sys.dm_exec_input_buffer`, sp_WhoIsActive) see the user's most recent SQL.
 
 **Transaction state.** As SSMS asks a query window's session when it closes or disconnects, the renderer reads an idle
 session's open transaction only when the session is about to end: `query.session.state` takes `{ sessionId }` (a UUID)
