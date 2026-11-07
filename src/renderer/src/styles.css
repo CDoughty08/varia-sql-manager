@@ -503,8 +503,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .query-status-server { flex-shrink: 1000000; }
 .query-status-login { flex-shrink: 1000; }
 .query-status-database { flex-shrink: 1; }
-/* A query's own bar: Execute, Cancel and Actual Plan, then the connection pill at the right. The bar is a size container: a narrow
-   editor first drops the key and the button words, then the lists give up width, then a long environment label is cut
+/* A query's own bar: Execute, Cancel, Actual Plan and Client Statistics, then the connection pill. A narrow
+   editor drops button words and key hints, then the lists give up width, then a long environment label is cut
    short, and the pill never wraps. Its own size keeps the tag's 12em as wide as elsewhere. */
 .query-bar { display: flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-bar); padding: 0 var(--varia-space-2); flex-shrink: 0; min-width: 0; overflow: hidden; container-type: inline-size; font-size: var(--varia-size-sm); background: var(--varia-editor-background); border-bottom: 1px solid var(--varia-editorGroup-border); }
 /* Activating a sibling editor group must leave its controls under the pointer. */
@@ -528,14 +528,19 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
    shrink weight has them give way, down to their minimum, before the environment tag. */
 .query-connection select { flex: 0 1000 auto; min-width: 64px; max-width: 220px; height: 100%; padding: 0 2px; background: var(--varia-input-background); border: 0; text-overflow: ellipsis; }
 .query-connection select:focus-visible { outline-offset: 0; }
-@container (max-width: 520px) {
-  .query-bar-action.execute kbd { display: none; }
+@container (max-width: 640px) {
   .query-bar-action.actual-plan-toggle .query-bar-label { display: none; }
 }
-@container (max-width: 400px) {
+@container (max-width: 520px) {
+  .query-bar-action.execute kbd { display: none; }
+}
+@container (max-width: 480px) {
   .query-bar-label { display: none; }
+}
+@container (max-width: 400px) {
   .query-bar-action { padding: 0 4px; }
   .query-connection { gap: var(--varia-space-0); padding-left: var(--varia-space-1); }
+  .query-connection-icon, .query-connection-divider { display: none; }
 }
 @container (min-width: 310px) {
   .query-bar-environment:has(.environment-tag:not([data-custom])) { flex-shrink: 0; }

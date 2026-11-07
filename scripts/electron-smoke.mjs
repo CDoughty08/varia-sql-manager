@@ -175,7 +175,7 @@ try {
   expect([titleBar.toolbar, titleBar.search]).toEqual([[true, 'no-drag'], 'no-drag'])
   expect(titleBar.height).toBe(40)
   // The header keeps the file commands. The active query's bar sits above the editor groups' tab strips, with Execute
-  // (the filled button), Cancel and Actual Plan, then its server and database lists in the connection pill.
+  // (the filled button), Cancel, Actual Plan and Client Statistics, then the connection pill's lists.
   expect(await toolbar(page).getByRole('button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label')))).toEqual(['Connect', 'New query', 'Open', 'Save', 'Save All', 'Activity Monitor'])
   await expect(toolbar(page).getByRole('combobox')).toHaveCount(0)
   await expect(queryConnection(page).getByLabel('Query server', { exact: true })).toBeVisible()
@@ -189,6 +189,13 @@ try {
   // server list's value alone.
   await queryServer(page).focus()
   await page.keyboard.press('ArrowLeft')
+  const clientStatistics = queryBarButton(page, 'Include Client Statistics')
+  await expect(clientStatistics).toBeFocused()
+  await page.keyboard.press('Space')
+  await expect(clientStatistics).toHaveAttribute('aria-pressed', 'true')
+  await page.keyboard.press('Space')
+  await expect(clientStatistics).toHaveAttribute('aria-pressed', 'false')
+  await page.keyboard.press('ArrowLeft')
   const actualPlan = queryBarButton(page, 'Include Actual Execution Plan')
   await expect(actualPlan).toBeFocused()
   await page.keyboard.press('Space')
@@ -200,9 +207,11 @@ try {
   await page.keyboard.press('ArrowRight')
   await expect(actualPlan).toBeFocused()
   await page.keyboard.press('ArrowRight')
+  await expect(clientStatistics).toBeFocused()
+  await page.keyboard.press('ArrowRight')
   await expect(queryServer(page)).toBeFocused()
   await expect(queryServer(page)).toHaveValue('')
-  expect(await queryBar(page).evaluate(bar => [...bar.querySelectorAll('button, select')].map(control => control.tabIndex))).toEqual([-1, -1, -1, 0, -1])
+  expect(await queryBar(page).evaluate(bar => [...bar.querySelectorAll('button, select')].map(control => control.tabIndex))).toEqual([-1, -1, -1, -1, 0, -1])
   // Options › Show the classic toolbar puts the text toolbar, with Layouts, back on a row of its own below the header.
   expect(await page.evaluate(() => window.varia.updateSettings({ 'environment.layout.classicToolbar': true }))).toMatchObject({ ok: true })
   await expect(toolbarButton(page, 'Layouts')).toBeVisible()
