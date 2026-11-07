@@ -1204,7 +1204,18 @@ try {
   await run('-- varia-fake: sets=W1*0')
   await outputTab(/^Messages/).click()
   await expect(messages(page)).toContainText('Commands completed successfully.')
-  console.log('Results checks: Messages stream, show errors in red and in order, and end with the completion time.')
+  // Ctrl+A in Messages is the catalogue's output.selectAll (messagesFocus): it selects only their text, not the window's,
+  // and Ctrl+C there stays Chromium's copy of it.
+  await messages(page).click()
+  await page.keyboard.press('Control+A')
+  await expect.poll(() => messages(page).evaluate(log => {
+    const selection = log.ownerDocument.getSelection(), range = selection.rangeCount === 1 ? selection.getRangeAt(0) : undefined
+    return !!range && log.contains(range.startContainer) && log.contains(range.endContainer) && selection.toString().includes('Commands completed successfully.')
+  })).toBe(true)
+  await setClipboard('')
+  await page.keyboard.press('Control+C')
+  await expect.poll(clipboard).toContain('Commands completed successfully.')
+  console.log('Results checks: Messages stream, show errors in red and in order, and end with the completion time; Ctrl+A selects only their text.')
 
   // 11. Lifecycle: running again frees the last run's windows, closing a tab disposes its grids, and results outlive
   // Disconnect.

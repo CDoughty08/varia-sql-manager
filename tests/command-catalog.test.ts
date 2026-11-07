@@ -56,7 +56,7 @@ describe('command catalogue', () => {
   it('is the renderer\'s command id type', () => {
     expectTypeOf<CommandId>().toEqualTypeOf<RendererCommandId>()
     // Includes generated Script As commands and internal lifecycle commands.
-    expect(commandIds).toHaveLength(241)
+    expect(commandIds).toHaveLength(242)
     expect(commandIds.filter(id => id.startsWith('explorer.script') && id.includes('To'))).toEqual([...scriptCommandIds])
   })
   it('has a handler for every command once all contributions have run', () => {
@@ -94,13 +94,14 @@ describe('command catalogue', () => {
     // tests/icons.test.ts checks the registry against the bundled codicon font.
     expect(commandIds.filter(id => commandDescriptor(id).icon !== undefined && !isIconId(commandDescriptor(id).icon))).toEqual([])
   })
-  it('lets exactly window close, the text-editing commands, the context-menu key and main’s AutoRecover save run behind a modal', () => {
+  it('lets exactly window close, the text-editing commands, the context-menu key, main’s AutoRecover save and the Options search run behind a modal', () => {
     // Text fields in dialogs keep Undo, Redo, the clipboard, and their context menu. A Windows session end saves AutoRecover's copies whatever is open.
+    // The Options dialog's Ctrl+E (⌘E) focuses its search box.
     expect(commandIds.filter(id => commandDescriptor(id).allowInModal)).toEqual(['file.autoRecoverNow', 'window.close', 'edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll',
-      'workbench.showContextMenu'])
+      'workbench.showContextMenu', 'options.focusSearch'])
     for (const platform of platforms) for (const rule of defaultRules(platform).filter(rule => rule.modal)) expect(commandDescriptor(rule.command).allowInModal, rule.command).toBe(true)
-    expect(defaultRules('win32').filter(rule => rule.modal).map(rule => rule.chords.join(' '))).toEqual(['shift+f10', 'contextmenu'])
-    expect(defaultRules('darwin').filter(rule => rule.modal).map(rule => rule.chords.join(' '))).toEqual(['shift+f10'])
+    expect(defaultRules('win32').filter(rule => rule.modal).map(rule => rule.chords.join(' '))).toEqual(['shift+f10', 'contextmenu', 'ctrl+e'])
+    expect(defaultRules('darwin').filter(rule => rule.modal).map(rule => rule.chords.join(' '))).toEqual(['shift+f10', 'meta+e'])
   })
   it('gives role-backed commands only native keys, and platform titles without access keys', () => {
     for (const id of commandIds) if (commandDescriptor(id).role) for (const spec of commandDescriptor(id).keybindings ?? []) expect(spec.native, id).toBe(true)
@@ -287,13 +288,27 @@ describe('keybinding conflicts', () => {
     expect(kinds([rule('file.new', { key: 'ctrl+e' }, 'darwin')], 'darwin')).toEqual([['reserved', 'ctrl+e', 'file.new']])
     expect(kinds([rule('file.new', { key: 'ctrl+e' })])).toEqual([])
   })
+  it('free clipboard and editor chords only for rules that never match where text or the query editor has focus', () => {
+    // A results grid, Messages, and the Options dialog (whose search box keeps the clipboard, but has no find widget).
+    expect(kinds([rule('file.new', { key: 'ctrl+c', when: 'outputGridFocus' })])).toEqual([])
+    expect(kinds([rule('file.new', { key: 'ctrl+a', when: 'messagesFocus' })])).toEqual([])
+    expect(kinds([rule('file.new', { key: 'meta+e', when: 'optionsDialogFocus' }, 'darwin')], 'darwin')).toEqual([])
+    expect(kinds([rule('file.new', { key: 'ctrl+c', when: 'optionsDialogFocus' })])).toEqual([['reserved', 'ctrl+c', 'file.new']])
+    // Surfaces that hold text fields of their own: the table designer's cell editors and the Activity Monitor's filter.
+    for (const when of ['designerFocus', 'activityMonitorFocus', "activePanel == 'explorer'", 'documentTabFocus', 'queryBarFocus']) {
+      expect(kinds([rule('file.new', { key: 'ctrl+a', when })]), when).toEqual([['reserved', 'ctrl+a', 'file.new']])
+    }
+    expect(kinds([rule('file.new', { key: 'meta+e', when: 'editorFocus' }, 'darwin')], 'darwin')).toEqual([['reserved', 'meta+e', 'file.new']])
+  })
   it('require !textInputFocus on keys that type', () => {
     for (const key of ['x', 'shift+x', '5', '/', 'space', 'enter', 'backspace', 'shift+delete', 'up']) {
       const chord = rule('file.new', { key }).chords[0]
       expect(kinds([rule('file.new', { key })]).filter(([kind]) => kind === 'typing'), key).toEqual([['typing', chord, 'file.new']])
       expect(kinds([rule('file.new', { key, when: "activePanel == 'explorer' && !textInputFocus" })]).filter(([kind]) => kind === 'typing'), key).toEqual([])
     }
-    expect(kinds([rule('file.new', { key: 'x', when: "activePanel == 'explorer'" })])).toEqual([])
+    // Object Explorer's search box is in the explorer pane too, so a typing key there needs !textInputFocus.
+    expect(kinds([rule('file.new', { key: 'x', when: "activePanel == 'explorer'" })])).toEqual([['typing', 'x', 'file.new']])
+    expect(kinds([rule('file.new', { key: 'x', when: 'explorerFocus' })])).toEqual([])
     expect(kinds([rule('file.new', { key: 'x', when: 'editorFocus' })])).toEqual([['typing', 'x', 'file.new']])
     for (const key of ['f6', 'ctrl+shift+x', 'alt+x', 'meta+x', 'pause']) expect(kinds([rule('file.new', { key })]), key).toEqual([])
   })

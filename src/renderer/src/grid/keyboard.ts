@@ -2,8 +2,9 @@ import { chordFromEvent, parseKeySpec, type KeyEventLike, type Platform } from '
 import { gridLimits as g } from './constants'
 
 // The grid's own keys, handled in the grid's React onKeyDown. They are not catalogue keybindings: the catalogue's
-// commands (Copy with Headers, Save Results As, F6, Ctrl+R, Shift+F10) reach the grid through KeybindingService, and
-// Tab, Alt combinations and Previous/Next Query are left to the browser and the workbench.
+// commands (Copy, Select All, Copy with Headers, Save Results As, F6, Ctrl+R, Shift+F10) reach a results grid through
+// KeybindingService, and Tab, Alt combinations and Previous/Next Query are left to the browser and the workbench. A live
+// grid (LiveGridPane) is outside Query Output, so it keeps mod+C and mod+A as its own keys (`clipboard`).
 
 /** Where a move goes: one cell, a page, or an edge of the result (the last row is the last available one). */
 export type GridMove = 'up' | 'down' | 'left' | 'right' | 'pageUp' | 'pageDown' | 'firstRow' | 'lastRow' | 'firstColumn' | 'lastColumn' | 'firstCell' | 'lastCell'
@@ -12,14 +13,14 @@ export type GridAction =
   | { readonly type: 'move'; readonly move: GridMove; readonly extend: boolean }
   /** Shift+Space and Ctrl+Space: whole rows or whole columns over the last block. */
   | { readonly type: 'selectRows' | 'selectColumns' | 'selectAll' }
-  /** Enter opens a link cell; Escape cancels a drag, a resize, or the tab's copy or save; copy is mod+C. */
+  /** Enter opens a link cell; Escape cancels a drag, a resize, or the tab's copy or save; copy is a live grid's mod+C. */
   | { readonly type: 'open' | 'escape' | 'copy' }
 
 const moves: readonly (readonly [key: string, plain: GridMove, mod: GridMove])[] = [
   ['up', 'up', 'firstRow'], ['down', 'down', 'lastRow'], ['left', 'left', 'firstColumn'], ['right', 'right', 'lastColumn'],
   ['home', 'firstColumn', 'firstCell'], ['end', 'lastColumn', 'lastCell'], ['pageup', 'pageUp', 'pageUp'], ['pagedown', 'pageDown', 'pageDown']
 ]
-function build(platform: Platform): ReadonlyMap<string, GridAction> {
+function build(platform: Platform, clipboard: boolean): ReadonlyMap<string, GridAction> {
   const map = new Map<string, GridAction>()
   const add = (spec: string, action: GridAction) => { for (const chord of parseKeySpec(spec, platform)) map.set(chord, action) }
   for (const [key, plain, mod] of moves) {
@@ -35,18 +36,24 @@ function build(platform: Platform): ReadonlyMap<string, GridAction> {
   add('ctrl+space', { type: 'selectColumns' })
   add('enter', { type: 'open' })
   add('escape', { type: 'escape' })
-  add('mod+a', { type: 'selectAll' })
-  add('mod+c', { type: 'copy' })
+  if (clipboard) {
+    add('mod+a', { type: 'selectAll' })
+    add('mod+c', { type: 'copy' })
+  }
   return map
 }
-const tables = new Map<Platform, ReadonlyMap<string, GridAction>>()
+const tables = new Map<string, ReadonlyMap<string, GridAction>>()
 
-/** What a key press does in the grid, or undefined when the grid leaves it alone (and does not prevent its default). */
-export function gridKeyAction(event: KeyEventLike, platform: Platform): GridAction | undefined {
+/**
+ * What a key press does in the grid, or undefined when the grid leaves it alone (and does not prevent its default).
+ * `clipboard` adds mod+A and mod+C, for grids whose Select All and Copy are not the catalogue's `output.*` commands.
+ */
+export function gridKeyAction(event: KeyEventLike, platform: Platform, clipboard = false): GridAction | undefined {
   const chord = chordFromEvent(event, platform)
   if (!chord) return undefined
-  let table = tables.get(platform)
-  if (!table) tables.set(platform, table = build(platform))
+  const id = platform + (clipboard ? '+clipboard' : '')
+  let table = tables.get(id)
+  if (!table) tables.set(id, table = build(platform, clipboard))
   return table.get(chord)
 }
 

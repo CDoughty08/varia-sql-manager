@@ -141,6 +141,7 @@ export default function OptionsDialog({ page: requested }: { page?: string }) {
     event.preventDefault()
     event.stopPropagation()
   }
+  // Ctrl+E (⌘E) is the catalogue's options.focusSearch (contributions/settings.ts), which focuses the box marked data-options-search.
   const keyDown = (event: KeyboardEvent<HTMLFormElement>) => {
     trapFocus(event)
     const target = event.target
@@ -149,9 +150,6 @@ export default function OptionsDialog({ page: requested }: { page?: string }) {
       // As in Visual Studio, Escape in a search box with text clears the search first.
       if (target === search.current && query) changeQuery('')
       else close()
-    } else if (event.key.toLowerCase() === 'e' && (platform === 'darwin' ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey) && !event.altKey && !event.shiftKey) {
-      event.preventDefault(); event.stopPropagation()
-      search.current?.focus(); search.current?.select()
     } else if (target === search.current && (event.key === 'ArrowDown' || event.key === 'Enter')) {
       event.preventDefault()
       tree.current?.querySelector<HTMLElement>(`[data-page="${focusId}"]`)?.focus()
@@ -167,12 +165,12 @@ export default function OptionsDialog({ page: requested }: { page?: string }) {
   </div>)
 
   // Focusable itself, so pressing a greyed row, a label or the description keeps focus (and Escape and Enter) in the dialog.
-  return <div className="modal-backdrop"><form className="connection-modal options-dialog" role="dialog" aria-modal="true" aria-labelledby="options-title" noValidate tabIndex={-1}
+  return <div className="modal-backdrop"><form className="connection-modal options-dialog" data-options-dialog role="dialog" aria-modal="true" aria-labelledby="options-title" noValidate tabIndex={-1}
     onSubmit={event => { event.preventDefault(); void ok() }} onKeyDown={keyDown}>
     <div className="connection-heading"><h2 id="options-title">Options</h2><button type="button" className="icon-button" aria-label="Close options" disabled={saving} onClick={close}><Icon name="close" /></button></div>
     <div className="options-body">
       <div className="options-nav">
-        <input ref={search} type="search" className="options-search" placeholder={platform === 'darwin' ? 'Search Options (⌘E)' : 'Search Options (Ctrl+E)'} aria-label="Search Options"
+        <input ref={search} type="search" className="options-search" data-options-search placeholder={platform === 'darwin' ? 'Search Options (⌘E)' : 'Search Options (Ctrl+E)'} aria-label="Search Options"
           maxLength={256} value={query} autoFocus onChange={event => changeQuery(event.target.value)} />
         {found && !found.pages.length
           ? <p className="options-empty" role="status">No settings match.</p>
