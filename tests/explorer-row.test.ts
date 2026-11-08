@@ -2,7 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { ExplorerNodeRef } from '../src/shared/explorer/refs'
-import ExplorerRow, { changedSentence, connectionState, itemCount, Label, liveDatabase, RowEnd, rowDescription, rowName, rowTooltip, shownSublabel, type RowActions, type RowProps } from '../src/renderer/src/explorer/ExplorerRow'
+import ExplorerRow, { rowClick, changedSentence, connectionState, itemCount, Label, liveDatabase, RowEnd, rowDescription, rowName, rowTooltip, shownSublabel, type RowActions, type RowProps } from '../src/renderer/src/explorer/ExplorerRow'
 import { onlineStatus, type RowStatus } from '../src/renderer/src/explorer/ExplorerStatusService'
 import { databaseChips, serverChips } from '../src/shared/explorer/status'
 import { RowKind } from '../src/renderer/src/explorer/tree-model'
@@ -27,6 +27,15 @@ function node(fields: Partial<TreeNode> = {}): TreeNode {
 }
 
 describe('Object Explorer rows', () => {
+  it("pass a row's click to Open Peek as Tab's gesture, but not a twistie's or a double-click's second click", () => {
+    const actions = { click: vi.fn() }
+    const target = (twistie: boolean) => ({ closest: (selector: string) => twistie && selector === '.oe-twistie' ? {} : null }) as unknown as EventTarget
+    rowClick(actions, 7, { ctrlKey: true, detail: 1, target: target(false) })
+    rowClick(actions, 7, { ctrlKey: true, detail: 2, target: target(false) })
+    rowClick(actions, 7, { ctrlKey: true, detail: 1, target: target(true) })
+    expect(actions.click).toHaveBeenCalledTimes(1)
+    expect(actions.click).toHaveBeenCalledWith(7, expect.objectContaining({ ctrlKey: true }))
+  })
   it('name a row by its label and sublabel as shown, then its state', () => {
     expect(rowName(node({ sublabel: '(System-Versioned)' }))).toBe('dbo.Orders (System-Versioned)')
     expect(rowName(node({ kind: 'folder', folder: 'tables', label: 'Tables', filtered: true }))).toBe('Tables (filtered)')

@@ -363,7 +363,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-object-search="${CSS.escape(id)}"] [data-object-search-focus]`)?.focus())
   })
   const peekTabs = new PeekTabService({
-    peek, documents,
+    peek, documents, connections,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-peek-tab="${CSS.escape(id)}"] [role="tab"][aria-selected="true"]`)?.focus())
   })
   const searchDetails = new SearchDetailsService({ api, peek, connections, searches: objectSearch, scriptingOptions })

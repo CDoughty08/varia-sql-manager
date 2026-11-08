@@ -458,7 +458,7 @@ export const commandCatalog = {
     precondition: 'backendReady',
     unavailableHint: 'Peek or select a table, view, stored procedure, or function.',
     // Not in the card's grid, whose keys stay the results grid's.
-    keybindings: [{ key: 'mod+enter', when: 'peekFocus && !outputGridFocus' }, { key: 'mod+enter', when: "activePanel == 'explorer' && !inputFocus" }]
+    keybindings: [{ key: 'mod+enter', when: 'peekFocus && !outputGridFocus' }, { key: 'mod+enter', when: "activePanel == 'explorer' && !inputFocus && !searchHitsFocus" }]
   },
   // The Peek card's or the active Peek tab's Refresh: it reads the object again, its script and its top rows included.
   'peek.refresh': {

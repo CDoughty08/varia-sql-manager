@@ -389,6 +389,18 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
     this.load(step.node, step.kind, open.source, false, { back: open.back.slice(0, -1), tab: step.tab })
   }
 
+  /**
+   * After Reconnect, the tab's document moves to the new connection to its server: so does the view (its object and its Back
+   * steps), which then reads again there.
+   */
+  rebind(connectionId: string): void {
+    const open = this.getSnapshot().open
+    if (this.disposed || !open || open.node.connectionId === connectionId) return
+    const move = (node: ExplorerMenuNode): ExplorerMenuNode => ({ ...node, connectionId, lost: false })
+    this.publish({ open: { ...open, node: move(open.node), back: open.back.map(step => ({ ...step, node: move(step.node) })) } })
+    this.refresh()
+  }
+
   /** Reads the object again, its script and its rows included: Refresh never takes a kept script. */
   refresh(): void {
     const open = this.getSnapshot().open

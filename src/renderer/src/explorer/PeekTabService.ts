@@ -10,7 +10,9 @@ import type { PeekService, PeekView } from './PeekService'
 export interface PeekTabSnapshot { readonly views: Readonly<Record<string, PeekView>> }
 export interface PeekTabServiceOptions {
   readonly peek: Pick<PeekService, 'createView' | 'canPeek'>
-  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'update' | 'get'>
+  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'update' | 'get' | 'subscribe'>
+  /** The server a connection reaches, so a tab follows Reconnect to a new connection to its server. */
+  readonly connections: { get(id: string): { readonly server: string } | undefined }
   readonly focus?: (id: string) => void
 }
 
@@ -30,12 +32,21 @@ export class PeekTabService extends SnapshotStore<PeekTabSnapshot> implements Cu
   readonly inSaveAll = false
   readonly saves = false
   private readonly watchers = new Map<string, () => void>()
+  private readonly servers = new Map<string, string>()
   private readonly registration: Disposable
+  private readonly unsubscribeDocuments: () => void
   private disposed = false
 
   constructor(private readonly o: PeekTabServiceOptions) {
     super({ views: {} })
     this.registration = o.documents.registerProvider(this)
+    // Reconnect moves a following document to the new connection (DocumentService.update): its view moves with it.
+    this.unsubscribeDocuments = o.documents.subscribe(() => {
+      for (const [id, view] of Object.entries(this.getSnapshot().views)) {
+        const connectionId = this.o.documents.get(id)?.connectionId
+        if (connectionId) view.rebind(connectionId)
+      }
+    })
   }
 
   /** Whether `node` can open in a tab: what the card can peek. */
@@ -46,6 +57,8 @@ export class PeekTabService extends SnapshotStore<PeekTabSnapshot> implements Cu
     if (this.disposed || !this.canOpen(node) || node.ref.type !== 'object' || node.kind === 'folder' || !isPeekKind(node.kind)) return undefined
     const view = this.o.peek.createView()
     const document = this.o.documents.openCustom('peek', peekTabName(node), node.connectionId, node.ref.object.database ?? '')
+    const server = this.o.connections.get(node.connectionId)?.server
+    if (server !== undefined) this.servers.set(document.id, server)
     this.publish({ views: { ...this.getSnapshot().views, [document.id]: view } })
     view.show(node, tab)
     // A followed dependency names the tab after the object it shows.
@@ -67,12 +80,14 @@ export class PeekTabService extends SnapshotStore<PeekTabSnapshot> implements Cu
   canClose(): string | undefined { return undefined }
   revision(): number { return 0 }
   focus(id: string): void { this.o.focus?.(id) }
-  follows(): boolean { return false }
+  /** A tab follows Reconnect to a connection to the server it was opened on, as other server documents do. */
+  follows(id: string, server: string): boolean { const own = this.servers.get(id); return own !== undefined && own.trim().toLowerCase() === server.trim().toLowerCase() }
   closed(id: string): void {
     const view = this.view(id)
     if (!view) return
     this.watchers.get(id)?.()
     this.watchers.delete(id)
+    this.servers.delete(id)
     view.dispose()
     const { [id]: _closed, ...views } = this.getSnapshot().views
     this.publish({ views })
@@ -83,6 +98,7 @@ export class PeekTabService extends SnapshotStore<PeekTabSnapshot> implements Cu
     this.disposed = true
     for (const unwatch of this.watchers.values()) unwatch()
     this.watchers.clear()
+    this.unsubscribeDocuments()
     for (const view of Object.values(this.getSnapshot().views)) view.dispose()
     this.registration.dispose()
     this.clearListeners()

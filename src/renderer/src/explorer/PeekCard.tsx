@@ -6,7 +6,7 @@ import { displayText } from '../../../shared/explorer/refs.ts'
 import { scriptCommandId } from '../../../shared/scripting/catalog.ts'
 import { isSqlScope } from '../../../shared/theme/registry'
 import type { SyntaxStyle } from '../../../shared/theme/types'
-import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
+import { useServiceSelector, useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { onUnexpectedError } from '../core/errors'
 import ResultsStack from '../grid/ResultsStack'
 import Icon from '../Icon'
@@ -163,9 +163,10 @@ function Dependencies({ part }: { part: PeekPart<PeekDependencies> | undefined }
  */
 export function PeekRowsPart({ part }: { part: PeekPart<PeekRows> | undefined }) {
   const { results } = useWorkbench()
-  const all = useServiceSnapshot(results)
+  // Only this run's entry: other tabs' results streaming do not draw the card again.
+  const key = part?.status === 'ready' ? part.value.key : undefined
+  const tab = useServiceSelector(results, all => key === undefined ? undefined : all[key])
   if (part?.status !== 'ready') return <Pending part={part} loading="Reading the top rows…" />
-  const tab = all[part.value.key]
   if (!tab?.sets.length) return <p className="peek-note">{peekMessages.rowsUnavailable}</p>
   const read = tab.summary?.resultSets[0]?.rowsRead
   return <div className="peek-rows" data-peek-rows="">

@@ -9,6 +9,9 @@ import { explorerContribution } from '../src/renderer/src/contributions/explorer
 import { focusFacts } from '../src/renderer/src/core/contextkeys'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { fakeResults, summary } from './fixtures/peek-results'
+import { commandDescriptor } from '../src/shared/commands/catalog'
+import { contextRecord } from '../src/shared/commands/context-keys'
+import { compileWhen, evaluateWhen } from '../src/shared/commands/when'
 
 const connectionId = '11111111-1111-4111-8111-111111111111'
 const ok = <T>(value: T): ApiResult<T> => ({ ok: true, value })
@@ -44,7 +47,7 @@ function setup(options: { columns?: ApiResult<TableColumns> } = {}) {
   return {
     service, api, results, executes, columns: (value: ApiResult<TableColumns>) => columns(value),
     lose: () => { live = []; for (const listener of [...listeners]) listener() },
-    reconnect: () => { live = [{ id: connectionId }]; for (const listener of [...listeners]) listener() }
+    reconnect: (id = connectionId) => { live = [{ id }]; for (const listener of [...listeners]) listener() }
   }
 }
 
@@ -196,11 +199,14 @@ describe('Peek tabs (PeekTabService)', () => {
     const documents = {
       openCustom: vi.fn((kind: string, name: string, connectionId: string | undefined, database: string) => { const document = { id: `doc-${opened.length + 1}`, kind, name, connectionId, database }; opened.push(document); return document as never }),
       registerProvider: vi.fn((provider: unknown) => { providers.push(provider); return { dispose: () => { providers.splice(providers.indexOf(provider), 1) } } }),
-      update: vi.fn(),
-      get: vi.fn((id: string) => opened.find(document => document.id === id) as never)
+      update: vi.fn((id: string, patch: Partial<{ name: string; connectionId: string }>) => { Object.assign(opened.find(document => document.id === id)!, patch); for (const listener of [...listeners]) listener() }),
+      get: vi.fn((id: string) => opened.find(document => document.id === id) as never),
+      subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } }
     }
-    const peekTabs = new PeekTabService({ peek: base.service, documents })
-    return { ...base, peekTabs, documents, opened, providers }
+    const listeners = new Set<() => void>()
+    const servers: Record<string, string> = { [connectionId]: 'Prod\SQL01' }
+    const peekTabs = new PeekTabService({ peek: base.service, documents, connections: { get: id => servers[id] === undefined ? undefined : { server: servers[id]! } } })
+    return { ...base, peekTabs, documents, opened, providers, servers, listeners }
   }
 
   it('opens the object in a tab of its own with a view that owns its reads and rows, and closing the tab releases them', async () => {
@@ -220,8 +226,38 @@ describe('Peek tabs (PeekTabService)', () => {
     expect(results.held()).toEqual([])
     expect(api.explorerCancel).toHaveBeenCalled()
     // Not saved, never in Save All, nothing to refuse a close.
-    expect([peekTabs.inSaveAll, peekTabs.saves, peekTabs.canClose(), peekTabs.follows()]).toEqual([false, false, undefined, false])
+    expect([peekTabs.inSaveAll, peekTabs.saves, peekTabs.canClose()]).toEqual([false, false, undefined])
     await expect(peekTabs.save()).resolves.toBe(false)
+  })
+
+  it('follows Reconnect to a new connection to the server it was opened on, and reads again there', async () => {
+    const { peekTabs, documents, executes, lose, reconnect, servers, api, results } = tabs()
+    const id = peekTabs.open(node('table'), 'rows')!
+    const view = peekTabs.view(id)!
+    view.follow({ name: 'vOrders', schema: 'dbo', kind: 'view' })
+    view.selectTab('rows')
+    await flush()
+    executes[0]!.resolve(ok(summary('r')))
+    await flush()
+    lose()
+    expect(view.connected).toBe(false)
+    expect(results.held()).toEqual([])
+    // Reconnect gives the server a new connection id; the document moves only to the server the tab was opened on.
+    const next = '22222222-2222-4222-8222-222222222222'
+    servers[next] = 'prod\sql01'
+    expect([peekTabs.follows(id, 'PROD\SQL01 '), peekTabs.follows(id, 'Other')]).toEqual([true, false])
+    reconnect(next)
+    const peeks = api.explorerPeek.mock.calls.length
+    documents.update(id, { connectionId: next })
+    expect(view.connected).toBe(true)
+    expect(view.getSnapshot().open).toMatchObject({ node: { connectionId: next, lost: false, label: 'dbo.vOrders' }, back: [{ node: { connectionId: next } }], rows: { status: 'loading' } })
+    expect(api.explorerPeek.mock.calls.length).toBe(peeks + 1)
+    expect((api.explorerPeek.mock.calls.at(-1) as unknown as [{ connectionId: string }])[0].connectionId).toBe(next)
+    await flush()
+    expect(executes.at(-1)!.options.connectionId).toBe(next)
+    // A tab closed is forgotten: it no longer follows anything.
+    peekTabs.closed(id)
+    expect(peekTabs.follows(id, 'Prod\SQL01')).toBe(false)
   })
 
   it('refuses what Peek cannot describe, names the tab after a followed dependency, and lets every view go on dispose', () => {
@@ -260,6 +296,16 @@ describe('Peek tabs (PeekTabService)', () => {
     open.run({ target: { kind: 'explorer', node: node('procedure', 6, 'Clicked') } })
     expect(Object.values(peekTabs.getSnapshot().views).map(view => view.getSnapshot().open?.node.label)).toEqual(['Card', 'Selected', 'Clicked'])
     expect(open.when?.({ target: { kind: 'explorer', node: { ...node('table'), lost: true } } })).toBe(false)
+  })
+
+  it("opens a tab by Ctrl+Enter in the tree or the card, but not in a search hit, which it would not name, nor in the card's grid", () => {
+    const keys = commandDescriptor('explorer.openPeekTab').keybindings!.map(spec => compileWhen(spec.when!))
+    const fires = (values: Parameters<typeof contextRecord>[1]) => keys.some(when => evaluateWhen(when, contextRecord('win32', values)))
+    expect(fires({ activePanel: 'explorer', explorerFocus: true })).toBe(true)
+    expect(fires({ peekFocus: true })).toBe(true)
+    expect(fires({ activePanel: 'explorer', searchHitsFocus: true })).toBe(false)
+    expect(fires({ peekFocus: true, outputGridFocus: true })).toBe(false)
+    expect(fires({ activePanel: 'explorer', inputFocus: true, textInputFocus: true })).toBe(false)
   })
 
   it('marks focus in the card and in a Peek tab for their keys', () => {
