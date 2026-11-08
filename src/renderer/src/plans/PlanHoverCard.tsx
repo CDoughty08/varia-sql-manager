@@ -2,12 +2,8 @@ import { useLayoutEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import type { PlanNode } from '../../../shared/plans'
 import type { Rect } from './geometry'
-
-const metricFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 4 })
-export function formatPlanMetric(value: number | null): string {
-  if (value === null) return 'Unavailable'
-  return value > 0 && value < 0.0001 ? value.toExponential(2) : metricFormat.format(value)
-}
+import { discrepancyLabel, formatPlanMetric } from './diagnostics'
+export { formatPlanMetric } from './diagnostics'
 
 function cardPosition(anchor: Rect, card: DOMRect, viewport: HTMLElement): { left: number; top: number } {
   const margin = 8, gap = 8
@@ -52,6 +48,11 @@ export function PlanHoverCard({ node, anchor, owner, id, hold, leave }: {
     </dl>
     {!hasRuntime && <p className="plan-hover-note">Runtime counters unavailable</p>}
     {stats.length > 0 && <dl className="plan-hover-metrics">{stats.map(stat => <div key={stat.label}><dt>{stat.label}</dt><dd>{formatPlanMetric(stat.value)}{stat.unit}</dd></div>)}</dl>}
+    <dl className="plan-hover-metrics"><div><dt>Row discrepancy · totals</dt><dd>{discrepancyLabel(node)}</dd></div>
+      {node.diagnostics?.estimatedExecutionMode && <div><dt>Estimated mode</dt><dd>{node.diagnostics.estimatedExecutionMode}{node.diagnostics.parallel ? ' · parallel' : ''}</dd></div>}
+    </dl>
+    {node.diagnostics?.predicates.find(predicate => predicate.expressions.length)?.expressions[0] && <p className="plan-hover-predicate">{node.diagnostics.predicates.find(predicate => predicate.expressions.length)!.expressions[0]}</p>}
+    <p className="plan-hover-note">Costs are estimates. Times can overlap across operators. Full diagnostics in Properties.</p>
     {node.warnings.length > 0 && <div className="plan-hover-warnings">
       <strong>{node.warnings.length === 1 ? 'Warning' : `Warnings (${node.warnings.length})`}</strong>
       <ul>{node.warnings.slice(0, 3).map((warning, index) => <li key={index}>{warning}</li>)}</ul>

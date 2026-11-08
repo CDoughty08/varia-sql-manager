@@ -19,6 +19,7 @@ internal static class ExecutionLiveChecks
 
     public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json)
     {
+        await PlanDiagnosticLiveChecks.RunAsync(check, service, info, json);
         await LivePlanLiveChecks.RunAsync(check, service, info, json);
         var store = service.Results;
         var session = Guid.NewGuid().ToString();

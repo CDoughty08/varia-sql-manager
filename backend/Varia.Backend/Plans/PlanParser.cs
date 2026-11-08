@@ -2,6 +2,7 @@ using System.Globalization;
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Xml;
 using System.Xml.Linq;
 
@@ -25,6 +26,10 @@ internal sealed class PlanNode
     public double? Executions { get; set; }
     public List<string> Warnings { get; } = [];
     public List<PlanProperty> Properties { get; } = [];
+    // Live's counter-only frames cannot refresh detailed records. Omit the complete object in live topology replies.
+    [JsonIgnore] public OperatorDiagnostics Diagnostics { get; } = new();
+    [JsonPropertyName("diagnostics"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public OperatorDiagnostics? DiagnosticPayload => Diagnostics.RuntimeDetailsAvailable ? Diagnostics : null;
 }
 internal sealed class PlanStatement
 {
@@ -36,6 +41,10 @@ internal sealed class PlanStatement
     public double? EstimatedCost { get; init; }
     public List<string> Warnings { get; } = [];
     public List<PlanNode> Nodes { get; } = [];
+    [JsonIgnore] public StatementDiagnostics Diagnostics { get; } = new();
+    internal bool IncludeDiagnostics { get; init; } = true;
+    [JsonPropertyName("diagnostics"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public StatementDiagnostics? DiagnosticPayload => IncludeDiagnostics ? Diagnostics : null;
 }
 internal sealed record PlanDocument(string Version, string Build, List<PlanStatement> Statements, List<string> Notices);
 
@@ -64,7 +73,7 @@ internal static class PlanParser
         { throw new RequestException("INVALID_PARAMS", "The execution plan input could not be read."); }
     }
 
-    internal static PlanDocument Parse(TextReader input, CancellationToken token = default)
+    internal static PlanDocument Parse(TextReader input, CancellationToken token = default, bool includeDiagnostics = true)
     {
         try
         {
@@ -81,6 +90,7 @@ internal static class PlanParser
             var count = 0;
             var remaining = Text;
             var omitted = false;
+            var diagnostics = new PlanDiagnostics((value, cap) => Bound(value, cap), () => omitted = true);
             // Essential labels keep their own per-field caps: verbose early properties must not blank later operators.
             string Core(string? value, int cap = 1024)
             {
@@ -129,7 +139,7 @@ internal static class PlanParser
                 if (name.StartsWith("Stmt", StringComparison.Ordinal))
                 {
                     if (statements.Count >= Statements) throw Limit();
-                    statement = new PlanStatement { Id = "s" + statements.Count, StatementId = Core(xml.GetAttribute("StatementId"), 64), QueryHash = Core(xml.GetAttribute("QueryHash"), 64), Text = Bound(xml.GetAttribute("StatementText"), 16_384),
+                    statement = new PlanStatement { Id = "s" + statements.Count, IncludeDiagnostics = includeDiagnostics, StatementId = Core(xml.GetAttribute("StatementId"), 64), QueryHash = Core(xml.GetAttribute("QueryHash"), 64), Text = Bound(xml.GetAttribute("StatementText"), 16_384),
                         Type = Core(xml.GetAttribute("StatementType") ?? name, 128), EstimatedCost = Number(xml.GetAttribute("StatementSubTreeCost")) };
                     statements.Add(statement);
                     node = null;
@@ -143,10 +153,12 @@ internal static class PlanParser
                         PhysicalOp = Core(xml.GetAttribute("PhysicalOp") ?? "Unknown operator", 128), LogicalOp = Core(xml.GetAttribute("LogicalOp"), 128),
                         EstimatedRows = Number(xml.GetAttribute("EstimateRows")), EstimatedCost = Number(xml.GetAttribute("EstimatedTotalSubtreeCost")) };
                     statement.Nodes.Add(node);
+                    node.Diagnostics.RuntimeDetailsAvailable = includeDiagnostics;
                     scoped = true;
                 }
                 else if (name == "Warnings") { warning = true; scoped = true; }
                 if (scoped && !xml.IsEmptyElement) scopes.Push(previous);
+                if (includeDiagnostics) diagnostics.Read(xml, statement, node);
                 if (name == "MissingIndexGroup" && statement is not null) Warn(statement.Warnings, "Missing index (estimated impact " + (xml.GetAttribute("Impact") ?? "unknown") + "%)");
                 if (node is not null)
                 {
@@ -154,10 +166,8 @@ internal static class PlanParser
                     if (name == "Object") node.Object = Core(string.Join('.', new[] { "Database", "Schema", "Table", "Index" }.Select(xml.GetAttribute).Where(value => !string.IsNullOrEmpty(value))), 512);
                     if (name == "RunTimeCountersPerThread")
                     {
-                        node.ActualRows = Sum(node.ActualRows, Number(xml.GetAttribute("ActualRows")));
-                        node.Executions = Sum(node.Executions, Number(xml.GetAttribute("ActualExecutions")));
-                        node.CpuMs = Sum(node.CpuMs, Number(xml.GetAttribute("ActualCPUms")));
-                        if (Number(xml.GetAttribute("ActualElapsedms")) is { } elapsed) node.ElapsedMs = Math.Max(node.ElapsedMs ?? 0, elapsed);
+                        // The collector aggregates all counter entries, including entries beyond the detail cap.
+                        diagnostics.Runtime(xml, node, includeDiagnostics);
                     }
                     if (warning && name != "Warnings") Warn(node.Warnings, name);
                     if (xml.MoveToFirstAttribute())
@@ -165,7 +175,7 @@ internal static class PlanParser
                         do
                         {
                             if (xml.NamespaceURI.Length > 0) continue;
-                            if (warning && name == "Warnings" && xml.Value != "false") Warn(node.Warnings, xml.LocalName);
+                            if (warning && name == "Warnings" && xml.Value is not ("false" or "0")) Warn(node.Warnings, xml.LocalName);
                             var key = name + (thread is null ? "" : "[Thread=" + thread.Value.ToString(CultureInfo.InvariantCulture) + "]") + "." + xml.LocalName;
                             if (node.Properties.FirstOrDefault(property => property.Name == key) is { } previousProperty)
                             { if (previousProperty.Value != xml.Value) omitted = true; continue; }
@@ -179,12 +189,11 @@ internal static class PlanParser
                 if (scoped && xml.IsEmptyElement) { statement = previous.statement; node = previous.node; warning = previous.warning; }
             }
             if (!found) throw new RequestException("INVALID_PARAMS", "This document is not SQL Server Showplan XML.");
-            var result = new PlanDocument(version, build, statements, omitted ? ["Some plan text or properties were shortened to stay within the viewer's text budget. The XML source is unchanged."] : []);
+            var result = new PlanDocument(version, build, statements, omitted ? ["Some plan text, properties or diagnostic details were shortened to stay within the viewer's budgets. The XML source is unchanged."] : []);
             if (JsonSerializer.SerializeToUtf8Bytes(result).Length > ReplyBytes) throw Limit();
             return result;
         }
         catch (XmlException) { throw new RequestException("INVALID_PARAMS", "The execution plan XML is invalid or exceeds the viewer's XML limit. DTDs and external entities are not allowed."); }
     }
-    private static double? Number(string? value) => double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) && double.IsFinite(number) && number >= 0 ? number : null;
-    private static double? Sum(double? first, double? second) => second is null ? first : double.IsFinite((first ?? 0) + second.Value) ? (first ?? 0) + second.Value : null;
+    internal static double? Number(string? value) => double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var number) && double.IsFinite(number) && number >= 0 ? number : null;
 }

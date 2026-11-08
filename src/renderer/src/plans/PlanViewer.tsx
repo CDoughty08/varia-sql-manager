@@ -6,7 +6,9 @@ import EmptyState from '../kit/EmptyState'
 import type { CanvasColors, HoveredOperator, PlanCanvas } from './PlanCanvas'
 import type { Camera, PlanLayout } from './geometry'
 import { loadPlanSources, type PlanSource, type SourceStatement } from './sources'
-import { formatPlanMetric as amount, PlanHoverCard } from './PlanHoverCard'
+import { PlanHoverCard } from './PlanHoverCard'
+import { PlanProperties } from './PlanProperties'
+import { discrepancyLabel, formatPlanMetric, rankOperators, rankingValue, type OperatorRanking } from './diagnostics'
 import type { QueryPlanState } from './QueryPlansService'
 import { completedPlanView, planTopology, queryPlanStatements } from './live-model'
 
@@ -44,6 +46,7 @@ export default function PlanViewer({ sources, identity, openDocument, live }: { 
   const [xmlSource, setXmlSource] = useState(saved?.xmlSource)
   const [query, setQuery] = useState(saved?.query ?? '')
   const [warningsOnly, setWarningsOnly] = useState(false)
+  const [ranking, setRanking] = useState<OperatorRanking>('plan')
   const [outline, setOutline] = useState(true)
   const [gpuFailed, setGpuFailed] = useState(false)
   const [retry, setRetry] = useState(0)
@@ -127,7 +130,7 @@ export default function PlanViewer({ sources, identity, openDocument, live }: { 
   const selectedNode = selectedMatch?.node
   const activeStatement = selectedMatch?.statement ?? Math.max(0, content.statements.findIndex(entry => entry.id === statement?.id))
   const current = content.statements[activeStatement]
-  const shown = useMemo(() => query.trim() || warningsOnly ? matches : matches.filter(match => match.statement === activeStatement), [matches, query, warningsOnly, activeStatement])
+  const shown = useMemo(() => rankOperators(query.trim() || warningsOnly ? matches : matches.filter(match => match.statement === activeStatement), ranking), [matches, query, warningsOnly, activeStatement, ranking])
   const rowHeight = 32, first = Math.max(0, Math.floor(scroll / rowHeight) - 3), last = Math.min(shown.length, Math.ceil((scroll + height) / rowHeight) + 3)
   const choose = (id: string) => {
     setSelected(id)
@@ -204,13 +207,16 @@ export default function PlanViewer({ sources, identity, openDocument, live }: { 
       {outline && <aside className="plan-outline" aria-label="Plan outline">
         <input type="search" aria-label="Find plan operators" placeholder="Find operators or objects" maxLength={256} value={query} onChange={event => { setQuery(event.target.value); setScroll(0); if (tree.current) tree.current.scrollTop = 0 }} />
         <label className="plan-warning-filter"><input type="checkbox" checked={warningsOnly} onChange={event => { setWarningsOnly(event.target.checked); setScroll(0); if (tree.current) tree.current.scrollTop = 0 }} />Warnings only ({warnings})</label>
-        <div className="plan-outline-summary" role="status">{shown.length} {query.trim() || warningsOnly ? 'matching' : ''} operators</div>
+        <div className="plan-outline-actions"><span className="plan-outline-summary" role="status">{shown.length} {query.trim() || warningsOnly ? 'matching' : ''} operators{ranking !== 'plan' ? ' available' : ''}</span>
+          <select className="plan-ranking" aria-label="Operator ranking" aria-description="Descending available values, including measured zero. CPU sums threads; elapsed is the maximum thread in milliseconds. Operator times may overlap. Row discrepancy compares total rows to all estimated executions. Live totals are partial." value={ranking} onChange={event => { setRanking(event.target.value as OperatorRanking); setScroll(0); if (tree.current) tree.current.scrollTop = 0 }}>
+            <option value="plan">Plan order</option><option value="cpu">CPU · summed threads</option><option value="elapsed">Elapsed · max thread</option><option value="rows">Row-estimate discrepancy</option>
+          </select></div>
         <div className="plan-operator-tree" ref={tree} role="tree" aria-label="Plan operators" tabIndex={0} onKeyDown={navigate} onScroll={event => setScroll(event.currentTarget.scrollTop)}
           aria-activedescendant={shown.slice(first, last).some(match => match.node.id === selected) ? labelId + selected : undefined}>
           <div style={{ height: shown.length * rowHeight, position: 'relative' }}>{shown.slice(first, last).map(({ node }, offset) => <div key={node.id} id={labelId + node.id}
             role="treeitem" aria-selected={selected === node.id} aria-level={1} aria-setsize={shown.length} aria-posinset={first + offset + 1}
             className="plan-operator-item" style={{ top: (first + offset) * rowHeight, height: rowHeight }} onClick={() => { choose(node.id); tree.current?.focus() }} title={[node.physicalOp, node.object, ...node.warnings].filter(Boolean).join(' · ')}>
-            <span>{node.physicalOp}</span><small>{node.warnings.length ? 'Warning · ' : ''}{node.object || `Node ${node.nodeId}`}</small>
+            <span>{node.physicalOp}{ranking !== 'plan' ? ` · ${ranking === 'rows' ? discrepancyLabel(node) : formatPlanMetric(rankingValue(node, ranking)) + ' ms'}` : ''}</span><small>{node.warnings.length ? 'Warning · ' : ''}{node.object || `Node ${node.nodeId}`}</small>
           </div>)}</div>
         </div>
       </aside>}
@@ -222,22 +228,7 @@ export default function PlanViewer({ sources, identity, openDocument, live }: { 
           actions={content.error || gpuFailed ? [{ label: 'Retry plan viewer', run: () => setRetry(value => value + 1) }] : undefined} /></div>}
       </div>
       {inspector && <aside className="plan-inspector" aria-label="Plan properties">
-        <h3>{selectedNode?.physicalOp ?? 'Statement properties'}</h3>
-        {current && <>
-          <details><summary>Statement SQL</summary><p className="plan-statement-text">{current.text.trim() ? current.text : 'SQL text unavailable'}</p></details>
-          <dl>{current.batchLabel && <><dt>Position</dt><dd>{current.batchLabel}</dd></>}
-            <dt>Plan data</dt><dd>{current.partial ? live?.running && mode === 'live' ? 'Live (partial)' : 'Partial live snapshot' : current.nodes.some(node => node.actualRows !== null) ? 'Actual' : 'Estimated'}</dd><dt>Statement estimated cost</dt><dd>{amount(current.estimatedCost)}</dd></dl>
-          {current.warnings.map((warning, index) => <p className="plan-warning" key={index}>{warning}</p>)}
-        </>}
-        {selectedNode ? <>
-          <dl>{([
-            ['Node ID', selectedNode.nodeId], ['Logical operation', selectedNode.logicalOp], ['Object', selectedNode.object],
-            ['Estimated rows', amount(selectedNode.estimatedRows)], ['Actual rows', amount(selectedNode.actualRows)], ['Estimated subtree cost', amount(selectedNode.estimatedCost)],
-            ['Elapsed (ms, maximum thread)', amount(selectedNode.elapsedMs)], ['CPU (ms, summed threads)', amount(selectedNode.cpuMs)], ['Executions (summed threads)', amount(selectedNode.executions)]
-          ] as const).map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{value || 'Unavailable'}</dd></div>)}</dl>
-          {selectedNode.warnings.map((warning, index) => <p className="plan-warning" key={index}>{warning}</p>)}
-          <details><summary>Operator properties</summary><dl>{selectedNode.properties.map(property => <div key={property.name}><dt>{property.name}</dt><dd>{property.value}</dd></div>)}</dl></details>
-        </> : <p>Select an operator to inspect its properties. Cost values are optimizer estimates, including in actual plans.</p>}
+        <PlanProperties statement={current} node={selectedNode} liveRunning={live?.running && mode === 'live'} />
       </aside>}
     </div>
   </section>

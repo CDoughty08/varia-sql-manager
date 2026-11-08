@@ -60,6 +60,9 @@ internal static class LivePlanLiveChecks
                 + "; target=" + JsonSerializer.Serialize(((ILiveHost)service).QueryPlan(info.Id, query), json));
             check(frames.Any(f => f.Counters.Any(c => c.Rows > 0)) && frames.Select(f => f.Counters.Sum(c => c.Rows ?? 0)).Distinct().Count() > 1,
                 "real live operator counters change while the aggregate runs");
+            check(frames.Where(f => f.Document is not null).SelectMany(f => f.Document!.Statements).SelectMany(s => s.Nodes)
+                .All(n => n.DiagnosticPayload is null && !n.Properties.Any(p => p.Name.StartsWith("RunTimeCountersPerThread", StringComparison.Ordinal))),
+                "live topology omits stale thread diagnostics and preserves the counter-frame payload budget");
             var host = (ILiveHost)service;
             check(host.QueryPlan(Guid.NewGuid().ToString(), query) is null && host.QueryPlan(info.Id, query) is { Spid: > 0, ServerConnectionId: var client } && client != Guid.Empty,
                 "only the run's own connection can resolve the live profiling target");

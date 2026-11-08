@@ -1,0 +1,7 @@
+.plan-outline-actions { display: flex; align-items: center; gap: 4px; padding-right: 8px; }
+.plan-outline-actions .plan-outline-summary { flex: 1; min-width: 0; padding-right: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.plan-ranking { min-width: 0; width: 108px; font-size: var(--varia-size-xs); }
+.plan-diagnostic-note { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-sm); }
+.plan-diagnostic-detail { padding: 8px 0; border-bottom: 1px solid var(--varia-panel-border); }
+.plan-inspector details { margin: 8px 0; }
+.plan-hover-predicate { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); }
