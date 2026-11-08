@@ -46,8 +46,17 @@ export interface KeybindingServiceOptions {
   /** Every key release, after the menus': Peek forgets a Ctrl+hover when Ctrl goes up with the pointer still. Never consumes. */
   readonly keyUp?: (event: KeyDownEvent) => void
 }
+/** A captured chord: one canonical chord (`ctrl+shift+e`), or two separated by a space after Ctrl/⌘+K (`ctrl+k ctrl+c`). */
+export type CaptureListener = (chord: string, event: KeyDownEvent) => void
+export interface CaptureOptions {
+  /** Ctrl/⌘+K was pressed and waits for a second chord (the box shows "Ctrl+K, …"). */
+  readonly onPrefix?: (chord: string, event: KeyDownEvent) => void
+}
+interface CaptureState { readonly onChord: CaptureListener; readonly options: CaptureOptions; prefix?: { readonly chord: string; readonly at: number } }
 /** Monaco leaves chord mode 5 s after the prefix (`_scheduleLeaveChordMode`); from then on the next key is a plain key again. */
 export const nativeChordTimeout = 5000
+/** The one chord prefix a capture box takes in v1: Ctrl+K, or ⌘K on macOS (two-part chords are `mod+k X` in the editor). */
+export const captureChordPrefix = (platform: Platform): string => platform === 'darwin' ? 'meta+k' : 'ctrl+k'
 
 /**
  * The workbench's only key dispatcher: capture listeners on window, so it runs before Monaco and React. Open menus see
@@ -57,31 +66,74 @@ export const nativeChordTimeout = 5000
  * pass-through also delivers Varia's own two-part chords (bridge keybindings), which Monaco dispatches to the catalogue.
  */
 export class KeybindingService implements Disposable {
-  private readonly rules: readonly ResolvedRule[]
-  private readonly table: ReadonlyMap<string, readonly ResolvedRule[]>
-  private readonly prefixes: ReadonlySet<string>
-  private readonly macKeyEquivalents: ReadonlySet<string>
+  private rules: readonly ResolvedRule[] = []
+  private table: ReadonlyMap<string, readonly ResolvedRule[]> = new Map()
+  private prefixes: ReadonlySet<string> = new Set()
+  private macKeyEquivalents: ReadonlySet<string> = new Set()
+  private revision = 0
+  private readonly listeners = new Set<() => void>()
   /** When a native chord prefix was pressed in editor text, while Monaco waits for the chord's second key. */
   private pendingNativePrefix?: number
+  private captureState?: CaptureState
   private readonly detachers = new Set<() => void>()
   constructor(private readonly options: KeybindingServiceOptions) {
-    const { platform } = options
-    this.rules = options.rules ?? defaultRules(platform)
-    const conflicts = findConflicts(this.rules, platform).filter(conflict => isBlockingConflict(conflict, platform))
+    this.apply(options.rules ?? defaultRules(options.platform), options.onConflict ?? (import.meta.env?.DEV ? 'throw' : 'log'))
+  }
+  private apply(rules: readonly ResolvedRule[], onConflict: 'throw' | 'log'): void {
+    const { platform } = this.options
+    const conflicts = findConflicts(rules, platform).filter(conflict => isBlockingConflict(conflict, platform))
     if (conflicts.length) {
       const message = 'Keybinding conflicts:\n' + conflicts.map(conflict => conflict.message).join('\n')
-      if ((options.onConflict ?? (import.meta.env?.DEV ? 'throw' : 'log')) === 'throw') throw new Error(message)
+      if (onConflict === 'throw') throw new Error(message)
       console.error(message)
     }
-    this.table = workbenchRules(this.rules)
-    this.prefixes = new Set(this.rules.filter(rule => rule.native && rule.chords.length > 1).map(rule => rule.chords[0]))
+    const primary = (id: CommandId) => rules.find(rule => rule.command === id && rule.chords.length === 1)
+    this.rules = rules
+    this.table = workbenchRules(rules)
+    this.prefixes = new Set(rules.filter(rule => rule.native && rule.chords.length > 1).map(rule => rule.chords[0]))
     // A macOS menu item's ⌘ accelerator is also a key equivalent, which Chromium offers the page first and then the menu,
     // where it would run the command where its key does not apply; consuming the key stops that.
     this.macKeyEquivalents = new Set(platform === 'darwin' ? menuCommandIds.flatMap(id => {
-      const rule = this.primaryRule(id)
+      const rule = primary(id)
       return rule && !rule.native && menuMayShowChords(rule.chords, platform) ? [rule.chords[0]] : []
     }) : [])
   }
+  /**
+   * Replaces the rules every key, label and menu reads (the Shortcuts page's effective rules), then tells subscribers.
+   * Conflicts are logged, never thrown: `effectiveRules` already refused any it would have caused. A pending native chord
+   * prefix is kept: Monaco, not the rules, waits for the chord's second key, and still takes it within its timeout.
+   */
+  setRules(rules: readonly ResolvedRule[]): void {
+    if (rules === this.rules) return
+    this.apply(rules, 'log')
+    this.revision++
+    for (const listener of [...this.listeners]) {
+      try { listener() } catch (error) { onUnexpectedError(error) }
+    }
+  }
+  /** The rules in force: the catalogue's until `setRules`. */
+  getRules(): readonly ResolvedRule[] { return this.rules }
+  /** Counts `setRules` calls: a snapshot for `useSyncExternalStore`, so labels follow a remap. */
+  getRevision(): number { return this.revision }
+  /** Calls `listener` after every `setRules`. */
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener)
+    return () => { this.listeners.delete(listener) }
+  }
+  /**
+   * Routes key presses to `onChord` instead of menus, access keys and dispatch, until the returned function is called
+   * (the Shortcuts page's capture box), so this stays the only key listener. Every chord is recorded, Escape and Enter
+   * included, but Tab and Shift+Tab are never captured, so focus can leave the box; modifier presses, IME composition and
+   * dead keys record nothing. After Ctrl/⌘+K the next chord within `nativeChordTimeout` makes a two-part chord
+   * (`ctrl+k ctrl+c`), as Monaco's would; the prefix alone goes to `onPrefix`. A later capture replaces an earlier one.
+   */
+  capture(onChord: CaptureListener, options: CaptureOptions = {}): () => void {
+    const state: CaptureState = { onChord, options }
+    this.captureState = state
+    return () => { if (this.captureState === state) this.captureState = undefined }
+  }
+  /** Whether a capture box is recording keys now. */
+  get capturing(): boolean { return !!this.captureState }
   private primaryRule(id: CommandId): ResolvedRule | undefined { return this.rules.find(rule => rule.command === id && rule.chords.length === 1) }
   /**
    * The label of the command's primary keybinding, for tooltips and the palette. A command bound only to a two-part
@@ -115,6 +167,7 @@ export class KeybindingService implements Disposable {
   handleKeyDown(event: KeyDownEvent): void {
     try {
       if (event.defaultPrevented) return
+      if (this.captureState) { this.captureKey(this.captureState, event); return }
       const { platform, menus } = this.options
       // Every press counts for a bare-Alt tap, even one the menus then consume (an Alt tap also leaves the menubar).
       menus?.noteKeyDown(event)
@@ -151,8 +204,25 @@ export class KeybindingService implements Disposable {
       void this.options.commands.execute(rule.command, this.options.keyArgs?.(rule.command), 'keybinding')
     } catch (error) { onUnexpectedError(error) }
   }
+  private captureKey(state: CaptureState, event: KeyDownEvent): void {
+    const { platform } = this.options
+    if (event.isComposing || event.keyCode === 229) return
+    const chord = chordFromEvent(event, platform)
+    // Tab and Shift+Tab move focus out of the box (and forget a prefix); every other chord is the box's.
+    if (chord === 'tab' || chord === 'shift+tab') { state.prefix = undefined; return }
+    if (!chord) { if (event.key === 'Dead') state.prefix = undefined; return }
+    event.preventDefault()
+    event.stopPropagation()
+    if (event.repeat) return
+    const now = (this.options.now ?? Date.now)(), prefix = state.prefix
+    state.prefix = undefined
+    if (prefix && now - prefix.at <= nativeChordTimeout) { state.onChord(`${prefix.chord} ${chord}`, event); return }
+    if (chord === captureChordPrefix(platform)) { state.prefix = { chord, at: now }; state.options.onPrefix?.(chord, event); return }
+    state.onChord(chord, event)
+  }
   handleKeyUp(event: KeyDownEvent): void {
-    try { this.options.menus?.handleKeyUp(event) } catch (error) { onUnexpectedError(error) }
+    // While a capture box records, a bare Alt release is part of a chord, not a tap that focuses the menubar.
+    if (!this.captureState) try { this.options.menus?.handleKeyUp(event) } catch (error) { onUnexpectedError(error) }
     try { this.options.keyUp?.(event) } catch (error) { onUnexpectedError(error) }
   }
   dispose(): void { for (const detach of [...this.detachers]) detach() }

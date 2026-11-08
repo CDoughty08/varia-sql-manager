@@ -1,0 +1,195 @@
+import type { ApiResult } from '../../../shared/contracts'
+import { effectiveRules, type EffectiveShortcuts } from '../../../shared/commands/effective'
+import { gestureOverrides } from '../../../shared/commands/gesture-choices'
+import type { GestureId, GestureModifiers } from '../../../shared/commands/gestures'
+import type { Platform, ResolvedRule } from '../../../shared/commands/keybindings'
+import { emptyShortcutFile, shortcutFileSchema, type ShortcutFile } from '../../../shared/commands/shortcut-schema'
+import { onUnexpectedError } from './errors'
+import type { Disposable, ExternalStore } from './types'
+
+/** Main's shortcuts as the page receives them. */
+export interface ShortcutsFileSnapshot { readonly file: ShortcutFile; readonly revision: number }
+/** `window.varia.shortcuts` (lane E's preload API), as this service uses it. */
+export interface ShortcutsApi {
+  get(): Promise<ApiResult<ShortcutsFileSnapshot & { readonly salvaged: boolean; readonly notice?: string }>>
+  /** Fails with code `STALE` when the file changed since `baseRevision`. */
+  save(file: ShortcutFile, baseRevision: number): Promise<ApiResult<{ readonly revision: number }>>
+  importFile(): Promise<ApiResult<{ readonly cancelled: true } | { readonly file: ShortcutFile; readonly problems: readonly string[] }>>
+  exportFile(file: ShortcutFile): Promise<ApiResult<{ readonly cancelled: boolean }>>
+  onChanged(callback: (snapshot: ShortcutsFileSnapshot) => void): () => void
+}
+
+const unavailable = 'This build of Varia cannot store shortcuts.'
+/**
+ * The preload's `shortcuts` namespace, or, in a build whose preload has none yet, one that reads no shortcuts and saves
+ * nothing, so the workbench runs on the catalogue's keys.
+ */
+export function shortcutsApiOf(api: object): ShortcutsApi {
+  const shortcuts = (api as { shortcuts?: ShortcutsApi }).shortcuts
+  if (shortcuts) return shortcuts
+  return {
+    get: async () => ({ ok: true, value: { file: emptyShortcutFile, revision: 0, salvaged: false } }),
+    save: async () => ({ ok: false, error: unavailable }),
+    importFile: async () => ({ ok: false, error: unavailable }),
+    exportFile: async () => ({ ok: false, error: unavailable }),
+    onChanged: () => () => {}
+  }
+}
+
+export interface ShortcutsSnapshot extends ShortcutsFileSnapshot {
+  /** What the workbench applies: the catalogue ⊕ scheme ⊕ the file's entries, with the entries it did not apply. */
+  readonly effective: EffectiveShortcuts
+  /** Main's first answer has arrived (or failed: then the catalogue's keys apply). */
+  readonly loaded: boolean
+  /** Main set part or all of the file aside on reading it; `notice` says so in fixed words, for a banner. */
+  readonly salvaged: boolean
+  readonly notice?: string
+}
+/** What applying a snapshot reaches: the dispatcher (and through it labels, menus, the palette and the editor bridge) and gestures. */
+export interface ShortcutsTargets {
+  readonly keybindings?: { setRules(rules: readonly ResolvedRule[]): void }
+  readonly gestures?: { setModifiers(choices: ReadonlyMap<GestureId, GestureModifiers | null>): void }
+}
+export interface ShortcutsServiceOptions extends ShortcutsTargets {
+  readonly api: ShortcutsApi
+  readonly platform: Platform
+  /** The snapshot before main answers; the empty file at revision 0 by default. */
+  readonly initial?: ShortcutsFileSnapshot
+  /** The initial snapshot is main's already (tests), so no load is needed. */
+  readonly loaded?: boolean
+}
+
+const errorText = (error: unknown) => error instanceof Error && error.message ? error.message : 'The operation failed.'
+
+/**
+ * The user's keyboard and mouse shortcuts in the renderer. Main owns `shortcuts.json`; this holds the file and revision
+ * main last sent, the effective rules built from them, and applies each new snapshot to the keybinding service (keys,
+ * menus, the palette, labels, the editor bridge) and the gesture service. Every file from main is validated, and a push
+ * no newer than the revision held is ignored. One service serves the main window and its popouts.
+ */
+export class ShortcutsService implements ExternalStore<ShortcutsSnapshot>, Disposable {
+  // Not a SnapshotStore: its private `snapshot` field would clash with the contract's `snapshot()`.
+  private current: ShortcutsSnapshot
+  private readonly listeners = new Set<() => void>()
+  private targets: ShortcutsTargets
+  private loading?: Promise<boolean>
+  private disposed = false
+  private readonly unsubscribe: () => void
+
+  constructor(private readonly options: ShortcutsServiceOptions) {
+    const initial = options.initial ?? { file: emptyShortcutFile, revision: 0 }
+    this.current = { ...initial, effective: effectiveRules(options.platform, initial.file), loaded: options.loaded ?? false, salvaged: false }
+    this.targets = { keybindings: options.keybindings, gestures: options.gestures }
+    let unsubscribe = () => {}
+    try { unsubscribe = options.api.onChanged(snapshot => this.accept(snapshot)) } catch (error) { onUnexpectedError(error) }
+    this.unsubscribe = unsubscribe
+    if (options.initial) this.applyTargets()
+  }
+  /** Starts a load and resolves once main answers or after `timeout` ms, whichever is first, as `SettingsService.create`. */
+  static async create(options: ShortcutsServiceOptions, { timeout = 1500 }: { timeout?: number } = {}): Promise<ShortcutsService> {
+    const service = new ShortcutsService(options)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([service.load(), new Promise(resolve => { timer = setTimeout(resolve, timeout) })])
+    clearTimeout(timer)
+    return service
+  }
+  getSnapshot = (): ShortcutsSnapshot => this.current
+  /** The contract's name for `getSnapshot`. */
+  snapshot(): ShortcutsSnapshot { return this.current }
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener)
+    return () => { this.listeners.delete(listener) }
+  }
+  private publish(snapshot: ShortcutsSnapshot): void {
+    this.current = snapshot
+    for (const listener of [...this.listeners]) {
+      try { listener() } catch (error) { onUnexpectedError(error) }
+    }
+  }
+  /** Connects the services a snapshot applies to (the workbench creates them after this) and applies the current one. */
+  bind(targets: ShortcutsTargets): Disposable {
+    this.targets = { ...this.targets, ...targets }
+    this.applyTargets()
+    return { dispose: () => { this.targets = {} } }
+  }
+  private applyTargets(): void {
+    const { effective } = this.getSnapshot()
+    try { this.targets.keybindings?.setRules(effective.rules) } catch (error) { onUnexpectedError(error) }
+    try { this.targets.gestures?.setModifiers(gestureOverrides(effective.gestures)) } catch (error) { onUnexpectedError(error) }
+  }
+
+  /**
+   * Reads main's shortcuts; later calls share a read that succeeded or is in flight, and the next call after a failure
+   * reads again. Resolves to whether main's file is in: on failure the catalogue's keys stay.
+   */
+  load(): Promise<boolean> {
+    const pending = this.loading ??= this.read()
+    return pending.then(ok => {
+      if (!ok && this.loading === pending) this.loading = undefined
+      return ok
+    })
+  }
+  private async read(): Promise<boolean> {
+    let ok = false
+    try {
+      const result = await this.options.api.get()
+      if (result.ok) {
+        const { salvaged, notice } = result.value
+        ok = this.accept(result.value, { loaded: true, salvaged: salvaged === true, ...typeof notice === 'string' ? { notice } : {} })
+      }
+    } catch (error) { onUnexpectedError(error) }
+    if (!ok && !this.disposed && !this.getSnapshot().loaded) this.publish({ ...this.getSnapshot(), loaded: true })
+    return ok
+  }
+  /**
+   * Takes main's file when it is valid and newer than what is held, publishes it and applies its rules. Returns whether
+   * the value was valid (an old revision is valid, just not newer).
+   */
+  private accept(value: unknown, extra: Partial<Pick<ShortcutsSnapshot, 'loaded' | 'salvaged' | 'notice'>> = {}): boolean {
+    if (this.disposed) return false
+    const current = this.getSnapshot()
+    const record = typeof value === 'object' && value !== null ? value as Partial<ShortcutsFileSnapshot> : {}
+    const parsed = shortcutFileSchema.safeParse(record.file)
+    const revision = record.revision
+    if (!parsed.success || typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0) return false
+    const newer = revision > current.revision || (revision === current.revision && !current.loaded && extra.loaded === true)
+    if (!newer) {
+      if (Object.keys(extra).length) this.publish({ ...current, ...extra })
+      return true
+    }
+    const file = parsed.data as ShortcutFile
+    this.publish({ ...current, ...extra, file, revision, effective: effectiveRules(this.options.platform, file) })
+    this.applyTargets()
+    return true
+  }
+  /**
+   * Saves `file` through main, from the revision held, and applies it once main answers. A file that changed since
+   * (another window saved) fails with code `STALE`; the snapshot then follows main's push.
+   */
+  async save(file: ShortcutFile): Promise<ApiResult<{ revision: number }>> {
+    const parsed = shortcutFileSchema.safeParse(file)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? 'The shortcuts are not valid.' }
+    try {
+      const result = await this.options.api.save(file, this.getSnapshot().revision)
+      if (!result.ok) return result
+      if (typeof result.value?.revision !== 'number') return { ok: false, error: 'Main sent an answer this version does not support.' }
+      this.accept({ file, revision: result.value.revision })
+      return { ok: true, value: { revision: result.value.revision } }
+    } catch (error) { return { ok: false, error: errorText(error) } }
+  }
+  /** Main's open dialog; the file is read and validated but not saved (the page previews it, then saves). */
+  async importFile(): ReturnType<ShortcutsApi['importFile']> {
+    try { return await this.options.api.importFile() } catch (error) { return { ok: false, error: errorText(error) } }
+  }
+  /** Main's save dialog, writing `file`. */
+  async exportFile(file: ShortcutFile): ReturnType<ShortcutsApi['exportFile']> {
+    try { return await this.options.api.exportFile(file) } catch (error) { return { ok: false, error: errorText(error) } }
+  }
+  dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
+    this.targets = {}
+    try { this.unsubscribe() } catch (error) { onUnexpectedError(error) }
+    this.listeners.clear()
+  }
+}
