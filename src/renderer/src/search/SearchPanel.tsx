@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type Ref } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type Ref } from 'react'
 import { folderSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import { childrenLeftOut, objectSearchLimits, searchKindBadge, type ObjectIndexStatus, type ObjectSearchHit } from '../../../shared/explorer/search.ts'
@@ -141,6 +141,17 @@ export function allServersSummary(document: SearchDocumentState, indexes: Readon
   return parts.join(' · ')
 }
 
+/**
+ * An All servers list's one tab stop, which roves with focus as a tree grid's does: the group header that has focus (reached
+ * with the arrows), else the selected hit (the first shown when the selection is hidden or none), else the first header when
+ * every group is collapsed. Tab and Shift+Tab from anywhere in the list therefore leave it.
+ */
+export function listTabStop(heads: readonly string[], shown: readonly number[], current: number | undefined, focusedHead: string | undefined): { readonly hit?: number; readonly head?: string } {
+  if (focusedHead !== undefined && heads.includes(focusedHead)) return { head: focusedHead }
+  const hit = current !== undefined && shown.includes(current) ? current : shown[0]
+  return hit !== undefined ? { hit } : heads.length ? { head: heads[0] } : {}
+}
+
 /** A hit's kind badge; a kind this build does not know shows as '?' rather than failing the list. */
 export function KindBadge({ kind }: { readonly kind: string }) {
   const badge = searchKindBadge(kind)
@@ -153,7 +164,7 @@ function GroupHead({ group, color, environment, note, expanded, controls, tabbab
   readonly expanded: boolean; readonly controls: string; readonly tabbable: boolean; readonly onToggle: () => void
 }) {
   const accent = useConnectionAccent(color)
-  // The arrows reach the header from the list's hits, which hold its one tab stop; Tab lands here only when no hit is shown.
+  // The list's one tab stop roves to a header while it has focus (listTabStop), so Tab from a header leaves the list.
   return <h3 className="object-search-group-head">
     <button type="button" data-group-head={group.connectionId} tabIndex={tabbable ? 0 : -1} aria-expanded={expanded} aria-controls={expanded ? controls : undefined} onClick={onToggle}
       title={expanded ? 'Collapse (Left Arrow)' : 'Expand (Right Arrow)'}>
@@ -200,6 +211,8 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   // Whether keyboard focus is on a hit (the list's focus and blur events keep it): a new answer that drops the focused hit hands
   // focus to the list's tab stop, or to the box when no hits are left, rather than leaving it on the page, where keys reach nothing.
   const focusInList = useRef(false)
+  // The group header that has focus (All servers): it holds the list's tab stop while it does.
+  const [focusedHead, setFocusedHead] = useState<string | undefined>(undefined)
   // A hit's menu is for the hit it opens on, which it selects first, as Object Explorer's does; its Object Explorer commands read
   // the hit's own selection keys, not the tree's.
   const menuTarget = useMenuTarget<HTMLElement>(element => {
@@ -351,9 +364,9 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
     return connection ? connection.displayName || connection.server : state.servers?.find(answer => answer.connectionId === connectionId)?.label ?? connectionId
   }
   const indexText = spanning ? allIndexesSummary(Object.values(snapshot.indexes), serverLabel) : indexSummary(entry, index)
-  // Progress and incomplete indexes stay visible; the healthy index's detail is available from the information button. With All
-  // servers, every server's index counts, not only the first's.
-  const indexNotice = spanning ? Object.values(snapshot.indexes).some(item => indexIncomplete(item, item.status)) : indexIncomplete(entry, index)
+  // In Object Explorer's band, progress and an incomplete index stay visible and a healthy index's detail is a click away; the
+  // tab (All servers included, which is tab only) always shows the line, naming each server whose index leaves objects out.
+  const indexNotice = indexIncomplete(entry, index)
   const paneSummary = result && asked && !state.requestId && !state.error && !result.problem && !result.partial
     ? `${count(result.total, 'result')} · ${count(result.index.indexed, 'database')}` : summary
   const showHits = !pane || !!state.text.trim()
@@ -421,8 +434,9 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   const groups = spanning ? serverGroups(state) : []
   const collapsed = new Set(spanning ? state.collapsed ?? [] : [])
   const shown = spanning ? shownHits(state) : undefined
-  // One tab stop for the list: the selected hit, or the first shown; with every group collapsed (no hit shown), the first header.
-  const tabStop = shown ? (current !== undefined && shown.includes(current) ? current : shown[0]) : current ?? 0
+  // One tab stop for the list (listTabStop): the focused header, the selected hit, the first shown, or the first header.
+  const stop = shown ? listTabStop(groups.map(group => group.connectionId), shown, current, focusedHead) : { hit: current ?? 0 }
+  const tabStop = stop.hit
   const hitRow = (hit: ObjectSearchHit, index: number, server: string) => {
     const path = searchHitPath(hit)
     // A click selects; in the tab only a double-click (or Enter) reveals, so a click never takes focus away from the list.
@@ -444,10 +458,15 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   const listEvents = {
     onKeyDown: onListKey,
     onCopy: (event: { target: EventTarget; preventDefault(): void }) => { if (rows().some(row => row.contains(event.target as Node))) copyName(event) },
-    onFocus: () => { focusInList.current = true; objectSearch.listFocused(searchId, true) },
+    onFocus: (event: { target: EventTarget }) => {
+      focusInList.current = true
+      objectSearch.listFocused(searchId, true)
+      setFocusedHead((event.target as HTMLElement).dataset?.groupHead)
+    },
     onBlur: (event: { relatedTarget: EventTarget | null; currentTarget: HTMLElement; target: EventTarget }) => {
       const next = event.relatedTarget
       if (next && event.currentTarget.contains(next as Node)) return
+      setFocusedHead(undefined)
       // A hit a new answer removes may blur as it goes; focus that leaves with its element is still the list's, for the
       // effect above to hand on.
       const left = event.target as Node
@@ -466,7 +485,7 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
           const expanded = !collapsed.has(group.connectionId), controls = `${searchId}-group-${group.connectionId}`
           return <section key={group.connectionId} className="object-search-group">
             <GroupHead group={group} color={connection?.color} environment={connection?.options.environment} note={groupNote(group, snapshot.indexes[group.connectionId])}
-              expanded={expanded} controls={controls} tabbable={tabStop === undefined && group === groups[0]} onToggle={() => objectSearch.toggleGroup(searchId, group.connectionId)} />
+              expanded={expanded} controls={controls} tabbable={stop.head === group.connectionId} onToggle={() => objectSearch.toggleGroup(searchId, group.connectionId)} />
             {expanded && group.hits.length > 0 && <ul id={controls} role="listbox" className="object-search-group-hits" aria-label={`Results on ${group.label}`}>
               {group.hits.map((hit, offset) => hitRow(hit, group.start + offset, group.connectionId))}
             </ul>}

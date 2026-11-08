@@ -105,6 +105,8 @@ function folderChain(owner: ObjectRef, folder: FolderId): ExplorerNodeRef[] {
   for (let at: FolderId | undefined = folder; at; at = folderSpecs[at].parent) chain.unshift({ type: 'folder', owner, folder: at })
   return chain
 }
+/** Reveal's answer for a hit whose kind this build does not know. */
+export const unknownKindReveal = 'This version of Varia cannot show that kind of object in Object Explorer.'
 const systemDatabases = new Set(['master', 'model', 'msdb'])
 /** Where a child's parent may be listed when the hit does not say: under its kind's folder, then the System one. */
 const parentFolders: { readonly [K in 'table' | 'view' | 'tableType' | 'procedure' | 'function']: readonly FolderId[] } = {
@@ -122,6 +124,8 @@ const parentFolders: { readonly [K in 'table' | 'view' | 'tableType' | 'procedur
  */
 export function revealPaths(hit: ObjectSearchHit, grouped = false): RevealPath[] {
   const server: ObjectRef = { kind: 'server' }
+  // A kind this build does not know (a newer backend's) has no place in this build's tree.
+  if (!Object.hasOwn(kindSpecs, hit.object.kind)) return []
   const scope = kindSpecs[hit.object.kind].scope
   if (scope === 'serverObject' || scope === 'database') return [[...folderChain(server, hit.folder), { type: 'object', object: hit.object }]]
   const name = hit.object.database ?? ''
@@ -205,8 +209,9 @@ function keptHit(document: SearchDocumentState, asked: SearchQueryState, next: S
 interface Fanout {
   readonly requestId: string
   readonly asked: SearchQueryState
-  /** The servers in the groups' order (Object Explorer's), with the names they are shown by. */
-  readonly order: readonly { readonly connectionId: string; readonly label: string }[]
+  /** The servers in the groups' order (Object Explorer's), with the names they are shown by; a server that joins as the search
+   *  runs is added in its place. */
+  order: readonly { readonly connectionId: string; readonly label: string }[]
   /** The requests still on their way, by server. */
   readonly requests: Map<string, string>
   /** The answers in, by server; null for a server whose search was cancelled (it disconnected as it ran), which drops out. */
@@ -216,7 +221,7 @@ interface Fanout {
   readonly done: Promise<void>
   readonly settle: () => void
 }
-const emptyQuery: SearchQueryState ={ text: '', caseSensitive: false, wholeWord: false, regex: false, fuzzy: false, scope: 'all', types: [] }
+const emptyQuery: SearchQueryState = { text: '', caseSensitive: false, wholeWord: false, regex: false, fuzzy: false, scope: 'all', types: [] }
 const live = (connection: LiveConnection | undefined): connection is LiveConnection => !!connection && !connection.lost
 
 /**
@@ -451,12 +456,14 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const id = this.focusedList, document = id === undefined ? undefined : this.getSnapshot().documents[id]
     const index = document?.current ?? (document ? shownHits(document)[0] : undefined), hit = index === undefined ? undefined : document?.result?.hits[index]
     const connectionId = document && index !== undefined ? hitServer(document, index) : undefined
-    return id !== undefined && document && hit && index !== undefined && connectionId ?{ searchId: id, connectionId, index, hit } : undefined
+    return id !== undefined && document && hit && index !== undefined && connectionId ? { searchId: id, connectionId, index, hit } : undefined
   }
 
   /** Reveal in Object Explorer: walks the hit's path from the server down, loading what it needs, and selects its node. */
   reveal(host: RevealHost, connectionId: string, hit: ObjectSearchHit): Promise<SeekOutcome> {
-    return host.seek(connectionId, revealPaths(hit, !!host.groupBySchema))
+    const paths = revealPaths(hit, !!host.groupBySchema)
+    if (!paths.length) return Promise.resolve({ ok: false, message: unknownKindReveal })
+    return host.seek(connectionId, paths)
   }
 
   // --- CustomDocumentProvider ------------------------------------------------------------------------------------------
@@ -508,7 +515,14 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
    */
   private searchAll(document: SearchDocumentState, asked: SearchQueryState, only?: readonly string[]): Promise<void> {
     const id = document.id, servers = this.o.connections.getSnapshot().filter(live)
-    if (!servers.length) { this.putDocument({ ...document, requestId: undefined, error: 'No server is connected.' }); return Promise.resolve() }
+    if (!servers.length) {
+      // No server is left to answer: a cancelled search's pending marks go (keeping any answer they showed), so no group or
+      // picker entry still says it is searching.
+      const settled = document.servers?.flatMap(({ pending: _pending, ...answer }): ServerAnswer[] => answer.result || answer.error ? [answer] : [])
+      const { servers: _servers, ...rest } = document
+      this.putDocument({ ...rest, ...settled?.length ? { servers: settled } : {}, requestId: undefined, error: 'No server is connected.' })
+      return Promise.resolve()
+    }
     const requestId = this.newId()
     let settle = () => {}
     const done = new Promise<void>(resolve => { settle = resolve })
@@ -584,7 +598,14 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     if (!document?.allServers || !document.text.trim() || this.typing.has(id) || this.disposed) return
     const asked = this.query(document), fanout = this.fanouts.get(id)
     const targets = connectionIds.filter(connectionId => live(this.o.connections.get(connectionId)))
-    if (fanout && JSON.stringify(fanout.asked) === JSON.stringify(asked) && targets.every(connectionId => fanout.order.some(server => server.connectionId === connectionId))) {
+    if (fanout && JSON.stringify(fanout.asked) === JSON.stringify(asked)) {
+      // A server that joined as the search runs takes its place in Object Explorer's order within it, rather than the whole
+      // search running again on every server (servers connecting one by one would cost N²/2 requests).
+      const inOrder = (connectionId: string) => fanout.order.some(server => server.connectionId === connectionId)
+      if (!targets.every(inOrder)) {
+        fanout.order = this.o.connections.getSnapshot().filter(connection => live(connection) && (inOrder(connection.id) || targets.includes(connection.id)))
+          .map(connection => ({ connectionId: connection.id, label: connection.displayName || connection.server }))
+      }
       const superseded = targets.flatMap(connectionId => { const request = fanout.requests.get(connectionId); return request ? [request] : [] })
       if (superseded.length) void this.o.api.explorerCancel(superseded).catch(onUnexpectedError)
       for (const connectionId of targets) this.askServer(id, fanout, connectionId)

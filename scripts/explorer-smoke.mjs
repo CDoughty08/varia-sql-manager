@@ -1253,6 +1253,9 @@ try {
     await page.keyboard.press('ArrowLeft')
     await expect(groupHead).toBeFocused()
     await expect(groupHead).toHaveAttribute('aria-expanded', 'true')
+    // The list's one tab stop roves to the focused header, off the selected hit below it, so Tab leaves the list from here.
+    await expect(groupHead).toHaveAttribute('tabindex', '0')
+    await expect(objectSearchGroup(page, 'server-a').getByRole('option').nth(1)).toHaveAttribute('tabindex', '-1')
     await page.keyboard.press('ArrowLeft')
     await expect(groupHead).toHaveAttribute('aria-expanded', 'false')
     await expect(groupHead).toBeFocused()
@@ -1265,7 +1268,7 @@ try {
     await expect(objectSearchGroup(page, 'server-a').getByRole('option')).toHaveCount(2)
     await page.keyboard.press('ArrowRight')
     await expect(objectSearchGroup(page, 'server-a').getByRole('option').first()).toBeFocused()
-    // The list keeps one tab stop: the headers are not in the tab order while a hit is shown.
+    // The tab stop moves back to the hit that has focus: the header leaves the tab order.
     await expect(groupHead).toHaveAttribute('tabindex', '-1')
     await objectSearchServer(page).click()
     await objectSearchServerOptions(page).filter({ hasText: 'server-a' }).click()

@@ -5,7 +5,7 @@ import type { ObjectSearchHit } from '../src/shared/explorer/search'
 import type { ScriptingOptions } from '../src/shared/scripting/options'
 import { PeekService } from '../src/renderer/src/explorer/PeekService'
 import { detailsDrag, detailsKey, scriptable, searchDetailsLimits, SearchDetailsService } from '../src/renderer/src/search/SearchDetailsService'
-import { hitProperties, matchedLine, scrollKey } from '../src/renderer/src/search/SearchDetails'
+import { hitKindSpec, hitProperties, matchedLine, scrollKey } from '../src/renderer/src/search/SearchDetails'
 
 const ok = <T>(value: T): ApiResult<T> => ({ ok: true, value })
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -214,5 +214,13 @@ describe('Search Objects details pane', () => {
     expect(hitProperties(table)).toEqual([{ label: 'Type', value: 'Table' }, { label: 'Database', value: 'Sales' }, { label: 'Schema', value: 'dbo' }])
     expect(hitProperties(trigger)).toEqual([{ label: 'Type', value: 'Trigger' }, { label: 'Database', value: 'Sales' }, { label: 'Schema', value: 'dbo' }, { label: 'Table', value: 'Orders' }])
     expect(hitProperties({ object: { kind: 'login', name: 'app_reader' }, folder: 'logins', label: 'app_reader' })).toEqual([{ label: 'Type', value: 'Login' }])
+  })
+
+  it('shows a hit whose kind this build does not know (from a newer backend) as a plain object rather than failing the pane', () => {
+    const future = { object: { kind: 'futureKind', database: 'Sales', schema: 'dbo', name: 'X', parent: { kind: 'futureParent', schema: 'dbo', name: 'P' } }, folder: 'tables', label: 'dbo.X' } as unknown as ObjectSearchHit
+    expect(hitProperties(future)).toEqual([{ label: 'Type', value: 'Object' }, { label: 'Database', value: 'Sales' }, { label: 'Schema', value: 'dbo' }, { label: 'Object', value: 'P' }])
+    expect(hitKindSpec('futureKind')).toMatchObject({ title: 'Object', icon: 'file' })
+    expect(hitKindSpec('toString')).toMatchObject({ title: 'Object' })
+    expect(hitKindSpec('table')).toMatchObject({ title: 'Table', icon: 'table' })
   })
 })

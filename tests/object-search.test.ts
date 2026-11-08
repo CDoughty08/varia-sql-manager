@@ -14,9 +14,11 @@ import {
 import { SnapshotStore } from '../src/renderer/src/core/store'
 import type { Timers } from '../src/renderer/src/core/timers'
 import type { LiveConnection } from '../src/renderer/src/services/connections'
-import { explorerSearchId, hitServer, mergeAnswers, ObjectSearchService, revealPaths, serverGroups, shownHits, type ObjectSearchOptions, type RevealHost } from '../src/renderer/src/search/ObjectSearchService'
+import { explorerSearchId, hitServer, mergeAnswers, ObjectSearchService, revealPaths, serverGroups, shownHits, unknownKindReveal, type ObjectSearchOptions, type RevealHost } from '../src/renderer/src/search/ObjectSearchService'
+import { searchHitTarget } from '../src/renderer/src/search/hit-actions'
+import { insertTextFor } from '../src/shared/explorer/refs'
 import { indexSummary, searchHitPath } from '../src/renderer/src/search/ObjectSearch'
-import { allIndexesSummary, allServersSummary, groupNote, indexGap, indexIncomplete, KindBadge } from '../src/renderer/src/search/SearchPanel'
+import { allIndexesSummary, allServersSummary, groupNote, indexGap, indexIncomplete, KindBadge, listTabStop } from '../src/renderer/src/search/SearchPanel'
 import { kindSpecs, nodeKinds } from '../src/shared/explorer/catalog'
 import { colorKeys } from '../src/shared/theme/registry'
 import { layoutFilters, minimumChips } from '../src/renderer/src/search/filter-layout'
@@ -462,6 +464,66 @@ describe('ObjectSearchService', () => {
     service.dispose()
   })
 
+  it('asks each server that connects while an All servers search runs on its own, within that search: N joins cost N requests', async () => {
+    const { service, calls, pendingSearch, connections, timers } = harness({ indexOnConnect: false })
+    connections.set([connection('a')])
+    const id = service.open('a', undefined, true)!
+    const answer = (value: ObjectSearchHit[]): ApiResult<ObjectSearchResult> => ({ ok: true, value: { hits: value, total: value.length, partial: false, elapsedMs: 1, index: status() } })
+    service.setQuery(id, { text: 'x' })
+    timers.run()
+    expect(calls.search.map(call => call.connectionId)).toEqual(['a'])
+    // Servers connect one by one, each before the search before has answered: each is asked alone, and a's request stands.
+    connections.set([connection('a'), connection('b')])
+    connections.set([connection('a'), connection('b'), connection('c')])
+    connections.set([connection('a'), connection('b'), connection('c'), connection('d')])
+    expect(calls.search.map(call => call.connectionId)).toEqual(['a', 'b', 'c', 'd'])
+    expect(calls.cancel).toEqual([])
+    expect(service.getSnapshot().documents[id].requestId).toBeDefined()
+    // Every answer lands in its group, in Object Explorer's order, whatever order they come in.
+    for (const index of [3, 1, 0, 2]) pendingSearch[index]!(answer([hit]))
+    await settle()
+    const document = service.getSnapshot().documents[id]
+    expect(serverGroups(document).map(group => [group.connectionId, group.hits.length, !!group.pending])).toEqual(['a', 'b', 'c', 'd'].map(name => [name, 1, false]))
+    expect(document.requestId).toBeUndefined()
+    expect(calls.search).toHaveLength(4)
+    service.dispose()
+  })
+
+  it('clears the pending marks of an All servers search when no server is left to answer it', async () => {
+    const { service, pendingSearch, connections, timers } = harness({ indexOnConnect: false })
+    connections.set([connection('a'), connection('b')])
+    const id = service.open('a', undefined, true)!
+    const answer = (value: ObjectSearchHit[]): ApiResult<ObjectSearchResult> => ({ ok: true, value: { hits: value, total: value.length, partial: false, elapsedMs: 1, index: status() } })
+    service.setQuery(id, { text: 'x' })
+    timers.run()
+    pendingSearch[0](answer([hit]))
+    await settle()
+    expect(serverGroups(service.getSnapshot().documents[id]).map(group => [group.connectionId, !!group.pending])).toEqual([['a', false], ['b', true]])
+    // Every server goes (the backend was lost): nothing says it is still searching, and a's answer stays in view.
+    connections.set([])
+    const document = service.getSnapshot().documents[id]
+    expect(document.error).toBe('No server is connected.')
+    expect(document.requestId).toBeUndefined()
+    expect(document.servers?.map(answer => [answer.connectionId, !!answer.pending])).toEqual([['a', false]])
+    expect(allServersSummary(document, {})).not.toContain('searching')
+    service.dispose()
+  })
+
+  it('roves the All servers list\'s one tab stop to the group header that has focus, so Tab from a header leaves the list', () => {
+    const heads = ['a', 'b', 'c']
+    // The selected hit holds it, or the first shown when the selection is hidden or none.
+    expect(listTabStop(heads, [0, 1, 4], 4, undefined)).toEqual({ hit: 4 })
+    expect(listTabStop(heads, [0, 1, 4], 2, undefined)).toEqual({ hit: 0 })
+    expect(listTabStop(heads, [0, 1, 4], undefined, undefined)).toEqual({ hit: 0 })
+    // A focused header takes it from the selected hit, before or after it, and no hit keeps one.
+    expect(listTabStop(heads, [0, 1, 4], 4, 'c')).toEqual({ head: 'c' })
+    expect(listTabStop(heads, [0, 1, 4], 0, 'b')).toEqual({ head: 'b' })
+    // A header whose group has gone holds nothing; with every group collapsed, the first header holds it.
+    expect(listTabStop(heads, [0, 1, 4], 1, 'z')).toEqual({ hit: 1 })
+    expect(listTabStop(heads, [], undefined, undefined)).toEqual({ head: 'a' })
+    expect(listTabStop([], [], undefined, undefined)).toEqual({})
+  })
+
   it('asks only the server whose build ended again in an All servers search: N builds ending cost N requests, not N²', async () => {
     const { service, calls, pendingSearch, pendingIndex, connections, timers } = harness()
     const servers = ['a', 'b', 'c', 'd']
@@ -548,7 +610,7 @@ describe('ObjectSearchService', () => {
     expect(allIndexesSummary([])).toBe('No server has an index yet.')
     expect(allIndexesSummary([{ connectionId: 'a', done: 2, total: 2, objects: 40, status: status() }, { connectionId: 'b', requestId: 'r', done: 1, total: 4, objects: 7 }]))
       .toBe('Indexes: 47 objects on 2 servers · 1 indexing')
-    // A healthy first server does not hide a second whose index leaves objects out: the line names it, and stays in view.
+    // A healthy first server does not hide a second whose index leaves objects out: the line (always shown in the tab) names it.
     const healthy = { connectionId: 'a', done: 2, total: 2, objects: 40, status: status() }
     const incomplete = { connectionId: 'b', done: 2, total: 2, objects: 30, status: status({ objects: 30, definitions: false, skipped: [{ database: 'x', code: 'NO_DB_ACCESS', message: 'm' }, { database: 'y', code: 'TIMEOUT', message: 'm' }] }) }
     const label = (id: string) => `srv-${id}`
@@ -574,6 +636,19 @@ describe('ObjectSearchService', () => {
     const cleared = service.getSnapshot().documents[id]
     expect(cleared).toMatchObject({ text: '', scope: 'names' })
     expect([cleared.error, cleared.result]).toEqual([undefined, undefined])
+  })
+
+  it('handles a hit whose kind this build does not know without failing: no reveal path, no insert text, a menu target', async () => {
+    const { service } = harness()
+    const future = { object: { kind: 'futureKind', database: 'Sales', schema: 'dbo', name: 'X' }, folder: 'futureFolder', label: 'dbo.X' } as unknown as ObjectSearchHit
+    expect(revealPaths(future)).toEqual([])
+    const seek = vi.fn()
+    expect(await service.reveal({ seek }, 'a', future)).toEqual({ ok: false, message: unknownKindReveal })
+    expect(seek).not.toHaveBeenCalled()
+    expect(insertTextFor({ type: 'object', object: future.object })).toBeUndefined()
+    const explorer = { objectNode: (connectionId: string, object: ObjectSearchHit['object'], label: string) => ({ connectionId, ref: { type: 'object' as const, object }, kind: object.kind, label, linux: false, lost: false }) }
+    expect(searchHitTarget(explorer as never, 'a', 'tab', 0, future, false)).toMatchObject({ kind: 'searchHit', hit: future })
+    service.dispose()
   })
 
   it('reveals a hit by its path from the server: the database, the folders above its listing, a trigger\'s table or view', async () => {
