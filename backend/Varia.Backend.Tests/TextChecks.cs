@@ -702,6 +702,9 @@ internal static class TextChecks
             ("<?pi a<b " + huge + "?><r/>", "<?pi a<b "),
             ("<r><!--<<--><![CDATA[<]]><?p <?><c/>  <c x=\"" + huge + "\"/></r>", "<r><!--<<--><![CDATA[<]]><?p <?><c />  <c x=\""),
             (string.Concat(Enumerable.Repeat("<n/>", 5000)) + "<r><n>t</n><c x=\"" + huge + "\"/></r>", string.Concat(Enumerable.Repeat("<n />", 5000)) + "<r><n>t</n><c x=\""),
+            // The tail moves past several of its chunks before the cut node starts.
+            ("<r>" + string.Concat(Enumerable.Repeat("<n/>", 40_000)) + "<!-- " + new string('w', 3 * XmlFeed.Chunk + 7) + " --><c x=\"" + huge + "\"/></r>",
+                "<r>" + string.Concat(Enumerable.Repeat("<n />", 40_000)) + "<!-- " + new string('w', 3 * XmlFeed.Chunk + 7) + " --><c x=\""),
         ];
         var wrong = new List<string>();
         foreach (var (xml, start) in cases)
@@ -719,6 +722,44 @@ internal static class TextChecks
         var shrunk = string.Concat(Enumerable.Repeat("&#x41;", 600_000));
         var lost = Cut(cells, stream, "<r><a x=\"" + shrunk + "\"><b y=\"" + huge + "\"/></a></r>", Limit);
         check(lost == "<r><a x=\"" + new string('A', 600_000) + "\">", "a cut whose node start the feed could not keep ends with the parent's start tag closed (" + lost?.Length + " characters)");
+    }
+
+    /// <summary>The feed copies a node's raw text while XmlReader holds it, in case the feed cuts it; most long nodes are read
+    /// whole, so that copy must cost no allocation once the pool holds its chunks (a doubling array grew to the node's length,
+    /// about 4 MB for a 1 Mi-character comment, in every cell), and the feed keeps no chunk once the cell ends.</summary>
+    private static void XmlTailCost(Action<bool, string> check)
+    {
+        const int Limit = 2_097_153;
+        var xml = "<r><!--" + new string('y', 1024 * 1024) + "--><c><![CDATA[" + new string('z', 300_000) + "]]></c></r>";
+        var stream = new MemoryStream();
+        var cells = new XmlCellWriter();
+        long Allocated(int keep)
+        {
+            var text = "";
+            for (var warm = 0; warm < 2; warm++) text = Run(keep);
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 4; i++) text = Run(keep);
+            var allocated = (GC.GetAllocatedBytesForCurrentThread() - before) / 4;
+            return text == xml ? allocated : -1;
+        }
+        string Run(int keep)
+        {
+            stream.SetLength(Encoding.Unicode.GetByteCount(xml));
+            Encoding.Unicode.GetBytes(xml, 0, xml.Length, stream.GetBuffer(), 0);
+            stream.Position = 0;
+            cells.Reset(Limit);
+            cells.Feed.Keep = keep;
+            cells.Feed.Reset(stream);
+            using (var reader = cells.OpenReader())
+                if (cells.Write(reader, cells.Feed, default)) return "!starved";
+            cells.Feed.Reset(Stream.Null);
+            return cells.Text.ToString();
+        }
+        var without = Allocated(0);
+        var with = Allocated(Limit);
+        check(without >= 0 && with >= 0 && with - without < 256 * 1024 && cells.Feed.Chunks == 0,
+            "an xml cell whose long comment and CDATA section are read whole allocates nothing more for the feed's copy of them ("
+            + (with - without) + " bytes more a cell, " + cells.Feed.Chunks + " chunks kept)");
     }
 
     /// <summary>The text of an xml cell the feed starved, or null when it was not cut.</summary>
@@ -798,6 +839,7 @@ internal static class TextChecks
         GC.Collect();
         check(kept && last.CurrentNames is null && !table.IsAlive, "a NameTable a hostile xml cell grew past its cap is released as soon as that cell ends");
         XmlCuts(check);
+        XmlTailCost(check);
 
         var small = new XmlCellWriter();
         for (var i = 0; i < 100; i++) Cell(small, stream, "<a b=\"1\">x</a>");

@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -56,7 +57,7 @@ internal static class SequentialXml
 /// buffer of its own. One feed serves a column plan's cells in turn (<see cref="Reset"/>).
 /// <para>So that a cut value still shows the start of the node it cut, as the first characters of the whole value would, the
 /// feed keeps the raw text from the first '&lt;' XmlReader has not yet returned a node for, up to <see cref="Keep"/>
-/// characters (<see cref="Tail"/>). Every markup node starts with a '&lt;', and only a comment, processing instruction or
+/// characters (<see cref="WriteTail"/>). Every markup node starts with a '&lt;', and only a comment, processing instruction or
 /// CDATA section holds more (a start tag's attribute values cannot), so counting them (<see cref="Returned"/>) finds it;
 /// text and whitespace hold none.</para></summary>
 internal sealed class XmlFeed(Func<int> output) : TextReader
@@ -73,10 +74,12 @@ internal sealed class XmlFeed(Func<int> output) : TextReader
     private int seen;
     // A read can end inside a character: its first byte waits here for the next read.
     private int pending = -1;
-    // The tail: raw text from the '<' numbered tailOrdinal (counting from 1 in this cell), at tail[tailStart..+tailLength].
-    // Kept up to 16 Ki characters between cells; a larger one goes when the cell ends, outside the result budget otherwise.
-    private const int KeptTail = 16 * 1024;
-    private char[] tail = [];
+    // The tail: raw text from the '<' numbered tailOrdinal (counting from 1 in this cell), tailLength characters from
+    // tailStart in chunks[0]. Most long nodes a cell holds are read whole, so their copy is never used: the chunks come from
+    // the shared pool (below the large object heap) and go back as the tail moves past them and when the cell ends, so a
+    // long node allocates nothing once the pool holds them, nothing is copied twice, and none stays outside the result budget.
+    internal const int Chunk = 32 * 1024;
+    private readonly List<char[]> chunks = [];
     private int tailStart;
     private int tailLength;
     private long tailOrdinal;
@@ -92,20 +95,26 @@ internal sealed class XmlFeed(Func<int> output) : TextReader
     /// <summary>The feed stopped, so the value is cut before the node XmlReader was reading.</summary>
     public bool Starved { get; private set; }
 
-    /// <summary>The most raw characters <see cref="Tail"/> keeps (0, the default, keeps none).</summary>
+    /// <summary>The most raw characters <see cref="WriteTail"/> keeps (0, the default, keeps none).</summary>
     public int Keep { get; set; }
 
-    /// <summary>The raw text of the node XmlReader was reading when the feed starved, from its '&lt;' and at most
-    /// <see cref="Keep"/> characters of it, or empty when that start was not kept (a node with no '&lt;' of its own, or one
-    /// within XmlReader's look-ahead of a kept node that already reached <see cref="Keep"/>).</summary>
-    public ReadOnlySpan<char> Tail
+    /// <summary>Writes the raw text of the node XmlReader was reading when the feed starved to <paramref name="sink"/>: from
+    /// its '&lt;' and at most <see cref="Keep"/> characters of it, or nothing when that start was not kept (a node with no
+    /// '&lt;' of its own, or one within XmlReader's look-ahead of a kept node that already reached <see cref="Keep"/>).</summary>
+    public void WriteTail(TextWriter sink)
     {
-        get
+        Trim();
+        if (lost) return;
+        for (int at = tailStart, end = tailStart + tailLength; at < end;)
         {
-            Trim();
-            return lost ? [] : tail.AsSpan(tailStart, tailLength);
+            var take = Math.Min(end - at, Chunk - at % Chunk);
+            sink.Write(chunks[at / Chunk].AsSpan(at % Chunk, take));
+            at += take;
         }
     }
+
+    /// <summary>The tail's chunks the feed holds (the offline checks look for their release).</summary>
+    internal int Chunks => chunks.Count;
 
     /// <summary>XmlReader returned a node holding <paramref name="count"/> '&lt;' characters of the raw text.</summary>
     public void Returned(int count) => markup += count;
@@ -121,7 +130,7 @@ internal sealed class XmlFeed(Func<int> output) : TextReader
         tailStart = tailLength = 0;
         tailOrdinal = lessThans = markup = 0;
         clipped = lost = false;
-        if (tail.Length > KeptTail) tail = [];
+        Release(0);
     }
 
     public override int Read(char[] buffer, int index, int count) => Read(buffer.AsSpan(index, count));
@@ -180,7 +189,7 @@ internal sealed class XmlFeed(Func<int> output) : TextReader
         if (lost && markup >= lessThans) lost = false;
         while (tailLength > 0 && tailOrdinal <= markup)
         {
-            var next = tail.AsSpan(tailStart + 1, tailLength - 1).IndexOf('<');
+            var next = LessThan(tailStart + 1, tailStart + tailLength);
             if (next < 0)
             {
                 tailLength = 0;
@@ -189,11 +198,43 @@ internal sealed class XmlFeed(Func<int> output) : TextReader
                 clipped = false;
                 break;
             }
-            tailStart += next + 1;
-            tailLength -= next + 1;
+            tailLength -= next - tailStart;
+            tailStart = next;
             tailOrdinal++;
         }
-        if (tailLength == 0) tailStart = 0;
+        if (tailLength == 0)
+        {
+            tailStart = 0;
+            Release(1);
+        }
+        else if (tailStart >= Chunk)
+        {
+            var passed = tailStart / Chunk;
+            for (var i = 0; i < passed; i++) ArrayPool<char>.Shared.Return(chunks[i]);
+            chunks.RemoveRange(0, passed);
+            tailStart -= passed * Chunk;
+        }
+    }
+
+    /// <summary>The position of the first '&lt;' in the chunks from <paramref name="from"/> to <paramref name="end"/>, or -1.</summary>
+    private int LessThan(int from, int end)
+    {
+        while (from < end)
+        {
+            var take = Math.Min(end - from, Chunk - from % Chunk);
+            var found = chunks[from / Chunk].AsSpan(from % Chunk, take).IndexOf('<');
+            if (found >= 0) return from + found;
+            from += take;
+        }
+        return -1;
+    }
+
+    /// <summary>Returns the chunks past the first <paramref name="keep"/> to the pool.</summary>
+    private void Release(int keep)
+    {
+        if (chunks.Count <= keep) return;
+        for (var i = keep; i < chunks.Count; i++) ArrayPool<char>.Shared.Return(chunks[i]);
+        chunks.RemoveRange(keep, chunks.Count - keep);
     }
 
     private void Capture(ReadOnlySpan<char> text)
@@ -217,14 +258,16 @@ internal sealed class XmlFeed(Func<int> output) : TextReader
         var take = Math.Min(text.Length, Keep - tailLength);
         if (take < text.Length) clipped = true;
         if (take <= 0) return;
-        if (tailStart + tailLength + take > tail.Length)
+        text = text[..take];
+        while (!text.IsEmpty)
         {
-            if (tailLength + take > tail.Length) Array.Resize(ref tail, Math.Min(Keep, Math.Max(tailLength + take, Math.Max(tail.Length * 2, 4096))));
-            tail.AsSpan(tailStart, tailLength).CopyTo(tail);
-            tailStart = 0;
+            var at = tailStart + tailLength;
+            if (at / Chunk == chunks.Count) chunks.Add(ArrayPool<char>.Shared.Rent(Chunk));
+            var part = Math.Min(text.Length, Chunk - at % Chunk);
+            text[..part].CopyTo(chunks[at / Chunk].AsSpan(at % Chunk));
+            tailLength += part;
+            text = text[part..];
         }
-        text[..take].CopyTo(tail.AsSpan(tailStart + tailLength));
-        tailLength += take;
     }
 }
 
@@ -310,7 +353,7 @@ internal sealed class XmlCellWriter
 
     /// <summary>Serialises <paramref name="xml"/> node by node until it ends or the sink is full. Returns whether
     /// <paramref name="feed"/> starved, which cuts the value inside the node XmlReader was reading: what was written before
-    /// it is kept, the parent's start tag closed, and then the node's own raw text from the feed (<see cref="XmlFeed.Tail"/>)
+    /// it is kept, the parent's start tag closed, and then the node's own raw text from the feed (<see cref="XmlFeed.WriteTail"/>)
     /// up to the limit, as the first characters of the whole value would show it.</summary>
     public bool Write(XmlReader xml, XmlFeed? feed, CancellationToken token)
     {
@@ -387,7 +430,7 @@ internal sealed class XmlCellWriter
         {
             // Written past the writer, which is dropped: the parent's '>', then the cut node as the stream had it.
             if (open) sink.Write('>');
-            sink.Write(feed.Tail);
+            feed.WriteTail(sink);
         }
         return true;
     }
