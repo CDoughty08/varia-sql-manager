@@ -14,7 +14,7 @@ import type { Timers } from '../src/renderer/src/core/timers'
 import type { LiveConnection } from '../src/renderer/src/services/connections'
 import { explorerSearchId, hitServer, mergeAnswers, ObjectSearchService, revealPaths, serverGroups, type ObjectSearchOptions, type RevealHost } from '../src/renderer/src/search/ObjectSearchService'
 import { indexSummary, searchHitPath } from '../src/renderer/src/search/ObjectSearch'
-import { allIndexesSummary, allServersSummary, groupNote } from '../src/renderer/src/search/SearchPanel'
+import { allIndexesSummary, allServersSummary, groupNote, moreMatches } from '../src/renderer/src/search/SearchPanel'
 import { kindSpecs, nodeKinds } from '../src/shared/explorer/catalog'
 import { colorKeys } from '../src/shared/theme/registry'
 import { layoutFilters, minimumChips } from '../src/renderer/src/search/filter-layout'
@@ -677,5 +677,17 @@ describe('Search Objects type filters', () => {
     // The tab's server picker takes its share of the scope row.
     expect(layoutFilters({ ...base, options: 100, available: 242 })).toEqual({ collapsed: true, shown: 0 })
     expect(layoutFilters({ ...base, available: 0 })).toEqual({ collapsed: true, shown: 0 })
+  })
+})
+
+describe('definition match counts', () => {
+  const match = (matches: number, uncounted?: boolean) => ({ line: 1, column: 1, preview: 'x', range: [0, 1] as const, before: false, after: false, matches, cut: false, ...(uncounted ? { uncounted } : {}) })
+  it('shows a count cut short by the search budget as a lower bound', () => {
+    expect(moreMatches(match(1))).toBeUndefined()
+    expect(moreMatches(match(13))).toBe('+12 more')
+    expect(moreMatches(match(999))).toBe('+998+ more')
+    // Past the budget the backend stops counting: 13 counted may be 50 in the definition, and 1 counted may be more.
+    expect(moreMatches(match(13, true))).toBe('+12+ more')
+    expect(moreMatches(match(1, true))).toBe('more not counted')
   })
 })
