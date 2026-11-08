@@ -12,7 +12,7 @@ import { join, resolve } from 'node:path'
 import { electron, expect, within } from './smoke.mjs'
 import { explorerRow } from './explorer-tree.mjs'
 import { crashRendererAndAwaitLoss } from './dialog-lifecycle.mjs'
-import { activeDocumentName, anyResultGrid, backendReady, banner, closeDocumentButton, documentTabs, executingMark, explorerToolbar, queryServer, querySession, toolbarButton } from './ui.mjs'
+import { activeDocumentName, anyResultGrid, backendReady, banner, closeDocumentButton, documentTabs, executingMark, explorerToolbar, queryBarButton, queryServer, querySession, toolbarButton } from './ui.mjs'
 
 const wait = ms => new Promise(done => setTimeout(done, ms))
 
@@ -59,6 +59,9 @@ async function launch(launchOptions, name) {
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
   await mockPrompts(application)
   const run = async sql => {
+    // F5 does nothing while the query's connection is still being changed (its documents are busy); a query without a
+    // server opens Connect instead, so only a connected one waits for Execute.
+    if (await queryServer(page).inputValue()) await expect(queryBarButton(page, 'Execute')).toBeEnabled()
     await page.locator('.monaco-editor [role="textbox"]').focus()
     await page.keyboard.press('Control+A')
     await page.keyboard.insertText(sql)

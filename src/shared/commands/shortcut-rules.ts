@@ -6,15 +6,17 @@ import { scopeWhen, shortcutScope, type ScopeId } from './scopes'
 /**
  * Which shortcuts a user may change, and how a user shortcut becomes a rule. Editability is derived from the catalogue:
  * a command with a native, non-bridge key belongs to Monaco or Chromium (Editor, locked until Monaco remaps arrive); the
- * clipboard roles, quit and window close stay with the system for good.
+ * clipboard roles, quit and window close stay with the system for good; a dialog's own keys stay with the dialog, since a
+ * user shortcut has no scope for one and would run over every other dialog too.
  */
-export interface ShortcutLock { readonly source: 'editor' | 'system'; readonly reason: string }
+export interface ShortcutLock { readonly source: 'editor' | 'system' | 'dialog'; readonly reason: string }
 
 const systemRoles: Partial<Record<RoleName, string>> = {
   cut: 'The clipboard keys stay with the system.', copy: 'The clipboard keys stay with the system.', paste: 'The clipboard keys stay with the system.',
   delete: 'The editing keys stay with the system.', selectAll: 'The editing keys stay with the system.', quit: 'Quit stays with the system.'
 }
 const systemCommands: Partial<Record<CommandId, string>> = { 'window.close': 'Closing the window stays with the system.' }
+const dialogCommands: Partial<Record<CommandId, string>> = { 'options.focusSearch': 'Search Options works only in the Options dialog, so its key stays with the dialog.' }
 const editorReason = 'The editor or the browser handles this key, so it cannot be changed yet.'
 
 /** Why no shortcut of `command` can be added or removed, or undefined when they can. */
@@ -22,6 +24,8 @@ export function shortcutLock(command: CommandId): ShortcutLock | undefined {
   const descriptor = commandDescriptor(command)
   const system = (descriptor.role && systemRoles[descriptor.role]) ?? systemCommands[command]
   if (system) return { source: 'system', reason: system }
+  const dialog = dialogCommands[command]
+  if (dialog) return { source: 'dialog', reason: dialog }
   if (!descriptor.role && (descriptor.keybindings ?? []).some(spec => spec.native && !spec.bridge)) return { source: 'editor', reason: editorReason }
   return undefined
 }

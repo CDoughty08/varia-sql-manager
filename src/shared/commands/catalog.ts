@@ -262,22 +262,27 @@ export const commandCatalog = {
     keybindings: [{ win: 'ctrl+m', linux: 'ctrl+m', when: 'editorFocus || queryBarFocus' }],
     menus: [{ menu: 'query', group: '1_execute', order: 3, mnemonic: 'i' }]
   },
+  'query.includeLivePlan': {
+    title: 'Include Live Execution Plan', category: 'Query', icon: 'execution-plan', keywords: ['profiling', 'statistics', 'progress'],
+    precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy', toggled: 'includeLivePlan',
+    menus: [{ menu: 'query', group: '1_execute', order: 4, mnemonic: 'l' }]
+  },
   'query.estimatePlan': {
     title: 'Display Estimated Execution Plan', category: 'Query', icon: 'execution-plan', keywords: ['compile', 'xml', 'showplan'],
     precondition: 'activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy',
     unavailableHint: 'Connect an idle query to a server to estimate its execution plan.',
     keybindings: [{ key: 'mod+l', when: 'editorFocus || queryBarFocus' }],
-    menus: [{ menu: 'query', group: '1_execute', order: 4, mnemonic: 'e' }, { menu: 'editor.context', group: '2_execute', order: 3, mnemonic: 'd' }]
+    menus: [{ menu: 'query', group: '1_execute', order: 5, mnemonic: 'e' }, { menu: 'editor.context', group: '2_execute', order: 3, mnemonic: 'd' }]
   },
   'query.includeClientStatistics': {
     title: 'Include Client Statistics', category: 'Query', icon: 'graph', keywords: ['bytes', 'roundtrips', 'timing'],
     precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy', toggled: 'includeClientStatistics',
     keybindings: [{ win: 'alt+shift+s', linux: 'alt+shift+s', when: 'editorFocus || queryBarFocus' }],
-    menus: [{ menu: 'query', group: '1_execute', order: 5, mnemonic: 's' }]
+    menus: [{ menu: 'query', group: '1_execute', order: 6, mnemonic: 's' }]
   },
   'query.resetClientStatistics': {
     title: 'Reset Client Statistics', category: 'Query', icon: 'clear-all', precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy',
-    menus: [{ menu: 'query', group: '1_execute', order: 6, mnemonic: 'r' }]
+    menus: [{ menu: 'query', group: '1_execute', order: 7, mnemonic: 'r' }]
   },
   'workbench.showCommands': {
     title: 'Show All Commands', palette: false,
@@ -431,12 +436,12 @@ export const commandCatalog = {
   },
   'explorer.cancelScripting': { title: 'Cancel Scripting', category: 'Object Explorer', icon: 'debug-stop', keywords: ['script', 'stop'], precondition: 'scriptingRunning', unavailableHint: 'Nothing is being scripted.' },
   // Peek: the object's definition and properties in a card beside its row (src/shared/explorer/peek.ts). Space on the selected
-  // row and Ctrl+hover (⌘ on macOS) open it too; the tree handles those, as it handles its other keys.
+  // row opens it too, except while type-ahead collects a name with spaces; Ctrl+hover (⌘ on macOS) is the tree's own.
   'explorer.peek': {
     title: 'Peek', category: 'Object Explorer', icon: 'eye', keywords: ['definition', 'properties', 'preview', 'describe'],
     precondition: "backendReady && (explorerSelectionKind == 'table' || explorerSelectionKind == 'view' || explorerSelectionKind == 'procedure' || explorerSelectionKind == 'function')",
     unavailableHint: 'Select a table, view, stored procedure, or function.',
-    keybindings: [{ key: 'alt+f12', when: "activePanel == 'explorer' && !inputFocus && !searchHitsFocus" }],
+    keybindings: [{ key: 'alt+f12', when: "activePanel == 'explorer' && !inputFocus && !searchHitsFocus" }, { key: 'space', when: 'explorerFocus && !textInputFocus && !explorerTypeAhead' }],
     menus: [{ menu: 'explorer.context', group: '1_query', order: 7, mnemonic: 'k', when: "(explorerNode == 'table' || explorerNode == 'view' || explorerNode == 'procedure' || explorerNode == 'function') && !explorerServerLost" }]
   },
   'explorer.copyName': {
@@ -694,6 +699,11 @@ export const commandCatalog = {
     title: 'Options…', category: 'Preferences', icon: 'settings-gear', keywords: ['settings', 'scripting', 'ssms', 'preferences', 'timeout', 'font', 'tab', 'wrap'],
     keybindings: [{ mac: 'mod+,' }], menus: [{ menu: 'tools', group: '1_options', order: 1, mnemonic: 'o' }]
   },
+  // The Options dialog's search box, as Visual Studio's Ctrl+E; the dialog is modal, so its key is too.
+  'options.focusSearch': {
+    title: 'Search Options', category: 'Preferences', palette: false, allowInModal: true,
+    keybindings: [{ key: 'mod+e', when: 'optionsDialogFocus', modal: true }]
+  },
   // Ctrl+Shift+= too: Electron's own Zoom In key (Ctrl++, ⌘+), which the menus used before they showed Ctrl+=.
   'view.zoomIn': {
     title: 'Zoom In', category: 'View', icon: 'zoom-in', role: 'zoomIn', keybindings: [{ key: 'mod+=', native: true }, { key: 'mod+shift+=', native: true }],
@@ -747,11 +757,11 @@ export const commandCatalog = {
     title: 'Release Notes', category: 'Help', icon: 'link-external', keywords: ['update', 'changelog', 'news', 'release', 'download', 'github'],
     menus: [{ menu: 'help', group: '2_updates', order: 3, mnemonic: 'n' }]
   },
-  // The Query Output menu and the results grid's keys: the grid copies its selected cells (Ctrl+C reaches its copy
-  // event, and Ctrl+A is its own), and Messages its selected text.
+  // The Query Output menu and the results grid's keys: the grid copies its selected cells, and Messages their selected
+  // text (Ctrl+C there is Chromium's copy). Select All selects the grid's cells, or only the text of Messages.
   'output.copy': {
     title: 'Copy', category: 'Query', icon: 'copy', palette: false,
-    keybindings: [{ key: 'mod+c', when: 'outputGridFocus', native: true }], menus: [{ menu: 'output.context', group: '1_copy', order: 1, mnemonic: 'c' }]
+    keybindings: [{ key: 'mod+c', when: 'outputGridFocus' }], menus: [{ menu: 'output.context', group: '1_copy', order: 1, mnemonic: 'c' }]
   },
   'output.copyWithHeaders': {
     title: 'Copy with Headers', category: 'Query', palette: false,
@@ -759,7 +769,7 @@ export const commandCatalog = {
   },
   'output.selectAll': {
     title: 'Select All', category: 'Query', palette: false,
-    keybindings: [{ key: 'mod+a', when: 'outputGridFocus', native: true }], menus: [{ menu: 'output.context', group: '2_select', order: 1, mnemonic: 'a' }]
+    keybindings: [{ key: 'mod+a', when: 'outputGridFocus || messagesFocus' }], menus: [{ menu: 'output.context', group: '2_select', order: 1, mnemonic: 'a' }]
   },
   // The grid the menu was opened for, else the focused grid, else the grid that last had focus (the only one, often).
   'output.saveResultsAs': {

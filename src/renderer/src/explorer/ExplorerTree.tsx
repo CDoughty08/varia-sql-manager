@@ -51,6 +51,18 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
   /** A row a key selected, scrolled into view once the rows it is among have rendered. */
   const reveal = useRef<number | undefined>(undefined)
   const typing = useMemo(() => new TypeAheadBuffer(), [])
+  // While type-ahead collects a name the tree carries data-type-ahead (explorerTypeAhead), so Space types a space rather
+  // than running Peek's catalogue key, until the buffer would start over.
+  const typeAheadTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const markTypeAhead = () => {
+    const tree = element.current
+    clearTimeout(typeAheadTimer.current)
+    if (!tree) return
+    if (!typing.value) { tree.removeAttribute('data-type-ahead'); return }
+    tree.setAttribute('data-type-ahead', '')
+    typeAheadTimer.current = setTimeout(() => tree.removeAttribute('data-type-ahead'), explorerLimits.typeAheadMs)
+  }
+  useEffect(() => () => clearTimeout(typeAheadTimer.current), [])
   const { rows, selected } = snapshot
   const selectedIndex = rowIndex(rows, selected)
   const layout = useMemo(() => rowLayout(rows), [rows])
@@ -245,21 +257,22 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
       const key = treeKeyOf(event.nativeEvent)
       if (key) {
         event.preventDefault()
-        typing.clear()
+        typing.clear(); markTypeAhead()
         const node = index >= 0 ? current.nodes[index] : undefined
         // Enter on a lost server reconnects it, as its button does.
         if (key === 'enter' && node?.lost) { run('connection.reconnect', node.id); return }
         act(treeKey(current, index, key, Math.max(1, Math.floor((element.current?.clientHeight ?? 0) / rowHeight))), current)
         return
       }
-      if (event.key === 'Escape' && typing.value) { typing.clear(); event.preventDefault(); return }
+      if (event.key === 'Escape' && typing.value) { typing.clear(); markTypeAhead(); event.preventDefault(); return }
       if (event.key === 'Escape' && peek.getSnapshot().open) { peek.close(); event.preventDefault(); return }
       const text = typing.accept(event.nativeEvent)
       if (text === undefined) {
-        // Space, which the tree otherwise ignores, peeks the selected row (Peek's Alt+F12 does too).
-        if (swallowedKey(event.nativeEvent)) { event.preventDefault(); if (!event.shiftKey && index >= 0) peek.peek(explorer.menuNode(now.selected), 'keyboard') }
+        // Space is Peek's catalogue key (explorer.peek); the tree swallows the Space it leaves, Shift+Space included.
+        if (swallowedKey(event.nativeEvent)) event.preventDefault()
         return
       }
+      markTypeAhead()
       event.preventDefault()
       const found = typeAhead(current, index, text)
       if (found >= 0) act({ type: 'select', index: found }, current)

@@ -65,12 +65,12 @@ function plansOf(tab: TabResults | undefined): readonly ResultSetEntry[] {
  * An estimate keeps its chosen output independently of ordinary runs. Otherwise show Messages until a set opens,
  * then Results unless the user picked a view; Execution plan only while the run has a plan. Undefined before either ran.
  */
-export function outputViewOf(tab: TabResults | undefined, estimated?: EstimatedPlanState): OutputViewName | undefined {
+export function outputViewOf(tab: TabResults | undefined, estimated?: EstimatedPlanState, livePlan = false): OutputViewName | undefined {
   if (estimated) return estimated.view ?? 'plan'
   if (!tab) return undefined
   if (tab.view === 'statistics') return 'statistics'
   const hasSets = tab.sets.length > 0 || tab.status === 'closed'
-  return tab.view === 'plan' && plansOf(tab).length > 0 ? 'plan' : tab.view !== 'messages' && hasSets ? 'results' : 'messages'
+  return tab.view === 'plan' && (plansOf(tab).length > 0 || livePlan) ? 'plan' : tab.view !== 'messages' && hasSets ? 'results' : 'messages'
 }
 
 /**
@@ -78,10 +78,10 @@ export function outputViewOf(tab: TabResults | undefined, estimated?: EstimatedP
  * place of the output panel its group shows. A group where the output panels share tabs with another panel stays as it is.
  */
 export function OutputViewSync({ tabId }: { tabId: string }) {
-  const { results, panes, queries } = useWorkbench()
+  const { results, panes, queries, queryPlans } = useWorkbench()
   const tab = useServiceSnapshot(results)[tabId]
   const estimated = useServiceSnapshot(queries)[tabId]?.estimated
-  const view = outputViewOf(tab, estimated)
+  const view = outputViewOf(tab, estimated, !!useServiceSnapshot(queryPlans)[tabId])
   useEffect(() => { if (view) panes.select(view) }, [panes, tabId, view, estimated?.requestId])
   return null
 }
@@ -137,7 +137,8 @@ const viewNames: Record<OutputPaneId, string> = { results: 'Results', messages: 
  * also holds the run summary and the copy and save strips, so they show once, wherever the panels are.
  */
 function OutputPane({ pane, tabId, query, connected, hint }: Props) {
-  const { results, panes, queries } = useWorkbench()
+  const { results, panes, queries, queryPlans } = useWorkbench()
+  const livePlan = useServiceSnapshot(queryPlans)[tabId]
   const all = useServiceSnapshot(results)
   const estimated = useServiceSnapshot(queries)[tabId]?.estimated
   const statistics = useServiceSnapshot(queries.statistics)[tabId] ?? []
@@ -155,7 +156,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
   const jobs = tab?.jobs.filter(job => job.visible) ?? []
   const id = useId(), panelId = id + 'panel', tabIds: Record<OutputPaneId, string> = { results: id + 'results', messages: id + 'messages', plan: id + 'plan', statistics: id + 'statistics' }
   const [viewRef, viewHeight] = useHeight()
-  const available: Record<OutputPaneId, boolean> = { results: hasSets, messages: !!tab, plan: plans.length > 0 || !!estimated, statistics: statistics.length > 0 }
+  const available: Record<OutputPaneId, boolean> = { results: hasSets, messages: !!tab, plan: plans.length > 0 || !!estimated || !!livePlan, statistics: statistics.length > 0 }
   // Only the panel its group shows lists the tabs: a hidden panel's tabs are gone, not merely out of sight.
   const views = (!tab && !estimated) || !visible[pane] ? [] : (peers.length ? peers : [pane]).filter(view => view === pane || available[view])
   // The strip line shows once there is something to read beyond row counts (or the user opened the strip); it opens itself
@@ -229,7 +230,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
             : hasSets ? <ResultsStack key={tab.queryId} tabId={tabId} tab={tab} />
             : <EmptyState className="output-empty" icon="table" detail={tab.status === 'running' ? 'Result sets appear here as the query returns them.' : 'The query returned no result sets.'} />}
           {showStrip && <MessagesStrip tabId={tabId} tab={tab} fits={stripFits} maxHeight={stripMax} />}
-        </> : pane === 'plan' ? plans.length > 0 ? <ResultPlans tabId={tabId} queryId={tab.queryId} plans={plans} order={tab.summary?.planOrder} />
+        </> : pane === 'plan' ? plans.length > 0 || livePlan ? <ResultPlans tabId={tabId} queryId={tab.queryId} plans={plans} order={tab.summary?.planOrder} live={livePlan} />
           : <EmptyState className="output-empty" icon="execution-plan" detail="A plan appears here when the query returns one, as SET SHOWPLAN_XML ON and SET STATISTICS XML ON do." />
           : <MessagesView tabId={tabId} tab={tab} />}
       </div>}

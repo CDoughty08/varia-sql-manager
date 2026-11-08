@@ -1,9 +1,9 @@
-import { useLayoutEffect, useRef, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type Ref } from 'react'
+import { useEffect, useLayoutEffect, useRef, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type Ref } from 'react'
 import { folderSpecs, kindSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import { childrenLeftOut, objectSearchLimits, type ObjectIndexStatus, type ObjectSearchHit } from '../../../shared/explorer/search.ts'
 import { onUnexpectedError } from '../core/errors'
-import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
+import { useServiceSelector, useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import ExplorerIcon from '../explorer/ExplorerIcon'
 import Icon from '../Icon'
 import EmptyState from '../kit/EmptyState'
@@ -13,6 +13,8 @@ import { isCopyKey, revealHit, searchHitTarget } from './hit-actions'
 import SearchFilters from './SearchFilters'
 import PaneSearchFilters from './PaneSearchFilters'
 import SearchPopover from './SearchPopover'
+import SearchDetails from './SearchDetails'
+import { detailsDrag, detailsKey, searchDetailsLimits } from './SearchDetailsService'
 import { paneBandDrag, paneBandKey, paneBandLimits } from './pane-band'
 
 const numbers = new Intl.NumberFormat('en-US')
@@ -101,8 +103,12 @@ export interface SearchPanelProps {
  */
 export default function SearchPanel({ searchId, layout, inputRef, onLeave, options }: SearchPanelProps) {
   const workbench = useWorkbench()
-  const { objectSearch, explorer, commands, platform } = workbench
+  const { objectSearch, explorer, commands, platform, searchDetails } = workbench
   const snapshot = useServiceSnapshot(objectSearch)
+  // Only the tab has a details pane, so Object Explorer's band reads nothing of it.
+  const detailsHidden = useServiceSelector(searchDetails, details => layout !== 'tab' || details.hidden)
+  const detailsShare = useServiceSelector(searchDetails, details => layout === 'tab' ? details.size : undefined)
+  const body = useRef<HTMLDivElement>(null)
   const root = useRef<HTMLDivElement>(null)
   const list = useRef<HTMLUListElement>(null)
   const state = snapshot.documents[searchId]
@@ -135,6 +141,10 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
     if (row) row.focus()
     else { focusInList.current = false; focusInput() }
   }, [current, selectedKey, state?.result])
+  // The tab's details pane follows the selection (and reads it once the selection settles); Object Explorer's band has none.
+  useEffect(() => {
+    if (layout === 'tab' && state) searchDetails.show(searchId, state.connectionId, selectedHit)
+  }, [layout, searchId, state?.connectionId, selectedHit, detailsHidden])
   if (!state) return null
   const entry = snapshot.indexes[state.connectionId]
   const result = state.result
@@ -235,6 +245,34 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
     target.addEventListener('pointermove', move)
     for (const type of dragEnds) target.addEventListener(type, end)
   }
+  const showDetails = !pane && !detailsHidden
+  const detailsSize = detailsShare ?? searchDetailsLimits.initial
+  const dragDetails = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const host = body.current
+    if (event.button !== 0 || !host) return
+    event.preventDefault()
+    const target = event.currentTarget, pointer = event.pointerId
+    target.setPointerCapture(pointer)
+    const move = (moved: PointerEvent) => {
+      const box = host.getBoundingClientRect()
+      if (moved.pointerId === pointer) searchDetails.setSize(detailsDrag(moved.clientX, box.left, box.right))
+    }
+    const end = (ended: PointerEvent) => {
+      if (ended.pointerId !== pointer) return
+      target.removeEventListener('pointermove', move)
+      for (const type of dragEnds) target.removeEventListener(type, end)
+    }
+    target.addEventListener('pointermove', move)
+    for (const type of dragEnds) target.addEventListener(type, end)
+  }
+  const detailsSashKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+    const next = detailsKey(detailsSize, event.key)
+    if (next === undefined) return
+    event.preventDefault()
+    event.stopPropagation()
+    searchDetails.setSize(next)
+  }
   const splitterKey = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
     const next = paneBandKey(snapshot.paneSize ?? share(), event.key)
@@ -243,6 +281,40 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
     event.stopPropagation()
     objectSearch.setPaneSize(next)
   }
+  const hitsView = asked && !result!.problem && result!.hits.length === 0 && !state.requestId
+    ? <EmptyState icon="search" title="No objects match" detail={entry?.requestId ? 'The index is still being built; results update when it finishes.' : `Try another spelling, turn off Match Case or Whole Word, or search names and definitions${state.types.length ? ' of every type' : ''}.`} />
+    : <ul ref={list} role="listbox" data-search-hits className="object-search-hits" aria-label={pane ? 'Search results' : 'Results'} onKeyDown={onListKey}
+      onCopy={event => { if (rows().some(row => row.contains(event.target as Node))) copyName(event) }}
+      onFocus={() => { focusInList.current = true; objectSearch.listFocused(searchId, true) }}
+      onBlur={event => {
+        const next = event.relatedTarget
+        if (next && event.currentTarget.contains(next as Node)) return
+        // A hit a new answer removes may blur as it goes; focus that leaves with its element is still the list's, for the
+        // effect above to hand on.
+        const left = event.target
+        queueMicrotask(() => { if (left.isConnected) { focusInList.current = false; objectSearch.listFocused(searchId, false) } })
+      }}>
+      {result?.hits.map((hit, index) => {
+        const spec = kindSpecs[hit.object.kind]
+        const path = searchHitPath(hit)
+        const key = hitKey(hit)
+        // A click selects; in the tab only a double-click (or Enter) reveals, so a click never takes focus away from the list.
+        // Each hit is an option, the tab stop on the selected one, which a screen reader announces as selected.
+        return <li key={key} role="presentation" className="object-search-hit">
+          <div ref={menuTarget} role="option" className="object-search-open" data-hit data-index={index} tabIndex={index === (current ?? 0) ? 0 : -1} aria-selected={index === current}
+            title={`Reveal in Object Explorer: ${displayText(hit.label)}`} onClick={() => { if (pane) open(index); else objectSearch.pick(searchId, index) }} onDoubleClick={pane ? undefined : () => open(index)}>
+            <ExplorerIcon name={(hit.subtype && spec.subtypeIcons?.[hit.subtype]) || spec.icon} />
+            <span className="object-search-name"><Marked text={hit.label} range={hit.range} approximate={hit.approximate} /></span>
+            <span className="object-search-path">{displayText(path)}</span>
+            {hit.definition && <span className="object-search-line">
+              <span className="object-search-line-number">{hit.definition.line}:</span>
+              {hit.definition.before && '…'}<Marked text={hit.definition.preview} range={hit.definition.range} />{hit.definition.after && '…'}
+              {hit.definition.matches > 1 && <span className="object-search-more"> (+{numbers.format(hit.definition.matches - 1)}{hit.definition.matches >= 999 ? '+' : ''} more)</span>}
+            </span>}
+          </div>
+        </li>
+      })}
+    </ul>
   return <div ref={root} className={`object-search object-search-${layout}`} data-sized={sized ? '' : undefined} style={sized ? { height: `${snapshot.paneSize! * 100}%` } : undefined}>
     <div className="object-search-query">
       <div className="object-search-field" role="search">
@@ -269,42 +341,22 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
         {showHits && <SearchPopover label="Search and index details" title="Search details" icon="info" compact>
           <p className="object-search-index">{indexText}</p>{summary && <p className="object-search-index">{summary}</p>}
         </SearchPopover>}
-      </div> : <p className={`object-search-summary${state.error || result?.problem ? ' error' : ''}`} role="status">{showHits ? summary : ''}</p>}
+      </div> : <div className="object-search-tab-status">
+        <p className={`object-search-summary${state.error || result?.problem ? ' error' : ''}`} role="status">{showHits ? summary : ''}</p>
+        <button type="button" className="icon-button" aria-pressed={!detailsHidden} aria-label="Details pane" title={detailsHidden ? 'Show the details pane' : 'Hide the details pane'}
+          onClick={() => searchDetails.setHidden(!detailsHidden)}><Icon name="split-horizontal" /></button>
+      </div>}
     </div>
-    {showHits && (asked && !result!.problem && result!.hits.length === 0 && !state.requestId
-      ? <EmptyState icon="search" title="No objects match" detail={entry?.requestId ? 'The index is still being built; results update when it finishes.' : `Try another spelling, turn off Match Case or Whole Word, or search names and definitions${state.types.length ? ' of every type' : ''}.`} />
-      : <ul ref={list} role="listbox" data-search-hits className="object-search-hits" aria-label={pane ? 'Search results' : 'Results'} onKeyDown={onListKey}
-        onCopy={event => { if (rows().some(row => row.contains(event.target as Node))) copyName(event) }}
-        onFocus={() => { focusInList.current = true; objectSearch.listFocused(searchId, true) }}
-        onBlur={event => {
-          const next = event.relatedTarget
-          if (next && event.currentTarget.contains(next as Node)) return
-          // A hit a new answer removes may blur as it goes; focus that leaves with its element is still the list's, for the
-          // effect above to hand on.
-          const left = event.target
-          queueMicrotask(() => { if (left.isConnected) { focusInList.current = false; objectSearch.listFocused(searchId, false) } })
-        }}>
-        {result?.hits.map((hit, index) => {
-          const spec = kindSpecs[hit.object.kind]
-          const path = searchHitPath(hit)
-          const key = hitKey(hit)
-          // A click selects; in the tab only a double-click (or Enter) reveals, so a click never takes focus away from the list.
-          // Each hit is an option, the tab stop on the selected one, which a screen reader announces as selected.
-          return <li key={key} role="presentation" className="object-search-hit">
-            <div ref={menuTarget} role="option" className="object-search-open" data-hit data-index={index} tabIndex={index === (current ?? 0) ? 0 : -1} aria-selected={index === current}
-              title={`Reveal in Object Explorer: ${displayText(hit.label)}`} onClick={() => { if (pane) open(index); else objectSearch.pick(searchId, index) }} onDoubleClick={pane ? undefined : () => open(index)}>
-              <ExplorerIcon name={(hit.subtype && spec.subtypeIcons?.[hit.subtype]) || spec.icon} />
-              <span className="object-search-name"><Marked text={hit.label} range={hit.range} approximate={hit.approximate} /></span>
-              <span className="object-search-path">{displayText(path)}</span>
-              {hit.definition && <span className="object-search-line">
-                <span className="object-search-line-number">{hit.definition.line}:</span>
-                {hit.definition.before && '…'}<Marked text={hit.definition.preview} range={hit.definition.range} />{hit.definition.after && '…'}
-                {hit.definition.matches > 1 && <span className="object-search-more"> (+{numbers.format(hit.definition.matches - 1)}{hit.definition.matches >= 999 ? '+' : ''} more)</span>}
-              </span>}
-            </div>
-          </li>
-        })}
-      </ul>)}
+    {pane ? showHits && hitsView
+      : <div ref={body} className="object-search-body">
+        <div className="object-search-results">{hitsView}</div>
+        {showDetails && <>
+          <div className="object-search-details-sash" role="separator" aria-orientation="vertical" aria-label="Resize the details pane" tabIndex={0} title="Drag to resize; double-click to reset"
+            aria-valuemin={Math.round(searchDetailsLimits.minimum * 100)} aria-valuemax={Math.round(searchDetailsLimits.maximum * 100)} aria-valuenow={Math.round(detailsSize * 100)}
+            onPointerDown={dragDetails} onKeyDown={detailsSashKey} onDoubleClick={() => searchDetails.setSize(undefined)} />
+          <div className="object-search-details" style={{ flexBasis: `${detailsSize * 100}%` }}><SearchDetails searchId={searchId} /></div>
+        </>}
+      </div>}
     {pane && showHits && <div className="object-search-splitter" role="separator" aria-orientation="horizontal" aria-label="Resize search results" tabIndex={0}
       title="Drag to resize; double-click to fit the results" aria-valuemin={Math.round(paneBandLimits.minimum * 100)} aria-valuemax={Math.round(paneBandLimits.maximum * 100)}
       aria-valuenow={snapshot.paneSize === undefined ? undefined : Math.round(snapshot.paneSize * 100)} aria-valuetext={snapshot.paneSize === undefined ? 'Fits the results' : undefined} onPointerDown={drag} onKeyDown={splitterKey} onDoubleClick={() => objectSearch.setPaneSize(undefined)} />}

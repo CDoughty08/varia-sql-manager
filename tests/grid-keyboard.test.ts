@@ -33,8 +33,11 @@ describe('grid keys', () => {
       expect(action(' ', 'Space', { ctrl: true })).toEqual({ type: 'selectColumns' })
       expect(action('Enter', 'Enter')).toEqual({ type: 'open' })
       expect(action('Escape', 'Escape')).toEqual({ type: 'escape' })
-      expect(action('a', 'KeyA', { mod: true })).toEqual({ type: 'selectAll' })
-      expect(action('c', 'KeyC', { mod: true })).toEqual({ type: 'copy' })
+      // A results grid's Select All and Copy are the catalogue's (KeybindingService); a live grid serves them itself.
+      expect([action('a', 'KeyA', { mod: true }), action('c', 'KeyC', { mod: true })]).toEqual([undefined, undefined])
+      expect(gridKeyAction(key(platform, 'a', 'KeyA', { mod: true }), platform, true)).toEqual({ type: 'selectAll' })
+      expect(gridKeyAction(key(platform, 'c', 'KeyC', { mod: true }), platform, true)).toEqual({ type: 'copy' })
+      expect(gridKeyAction(key(platform, 'ArrowUp', 'ArrowUp'), platform, true)).toEqual(move('up'))
     }
   })
   it('leave other keys to the browser and the workbench', () => {
@@ -56,14 +59,15 @@ describe('grid keys', () => {
     expect(gridKeyAction(key('darwin', 'a', 'KeyA', { ctrl: true }), 'darwin')).toBeUndefined()
     expect(gridKeyAction(key('win32', 'a', 'KeyA', { meta: true }), 'win32')).toBeUndefined()
   })
-  it('agree with the catalogue: Copy and Select All are the native rules the grid serves itself', () => {
+  it('agree with the catalogue: Copy and Select All are workbench rules on the keys a live grid serves itself', () => {
     for (const platform of platforms) {
-      const native = defaultRules(platform).filter(rule => rule.native && (rule.command === 'output.copy' || rule.command === 'output.selectAll'))
-      expect(native.map(rule => rule.command).sort(), platform).toEqual(['output.copy', 'output.selectAll'])
-      for (const rule of native) {
+      const rules = defaultRules(platform).filter(rule => rule.command === 'output.copy' || rule.command === 'output.selectAll')
+      expect(rules.map(rule => [rule.command, !!rule.native]).sort(), platform).toEqual([['output.copy', false], ['output.selectAll', false]])
+      for (const rule of rules) {
         const [modifiers, letter] = [rule.chords[0].split('+').slice(0, -1), rule.chords[0].split('+').at(-1)!]
         const event = { key: letter, code: 'Key' + letter.toUpperCase(), ctrlKey: modifiers.includes('ctrl'), shiftKey: modifiers.includes('shift'), altKey: modifiers.includes('alt'), metaKey: modifiers.includes('meta') }
-        expect(gridKeyAction(event, platform), `${platform} ${rule.command}`).toEqual({ type: rule.command === 'output.copy' ? 'copy' : 'selectAll' })
+        expect(gridKeyAction(event, platform), `${platform} ${rule.command}`).toBeUndefined()
+        expect(gridKeyAction(event, platform, true), `${platform} ${rule.command}`).toEqual({ type: rule.command === 'output.copy' ? 'copy' : 'selectAll' })
       }
     }
   })

@@ -18,14 +18,14 @@ import type { PeekRowsResult } from '../../../shared/explorer/peek.ts'
 const colouredLines = 3000
 
 /** A run of definition text in one SQL scope's colour. */
-interface Run { readonly text: string; readonly style?: SyntaxStyle }
+export interface Run { readonly text: string; readonly style?: SyntaxStyle }
 
 /**
  * Monaco's SQL tokens for the first `colouredLines` lines, merged into runs; the rest of the text is one plain run. SQL's
  * tokenizer loads lazily (start.tsx registers it), and tokenize answers plain text until it has: colorize waits for it,
  * and the runs are made again once it is there.
  */
-function useRuns(text: string | undefined): readonly Run[] {
+export function useRuns(text: string | undefined): readonly Run[] {
   const { monaco, theme } = useWorkbench()
   const { active } = useServiceSnapshot(theme)
   const [sqlLoaded, setSqlLoaded] = useState(false)

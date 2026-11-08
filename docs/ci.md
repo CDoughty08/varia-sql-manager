@@ -57,11 +57,11 @@ the previous one, about 64 s of the 75.6 s. The waits:
 | Live groups 2 and 3 skip setup-node and `npm ci` | About 20 runner-s a push |
 | `npm ci --no-audit --no-fund` | Cleaner logs. About 1 s a job, unmeasured. |
 | `VARIA_TEST_SLOW_MS=<ms>` prints each offline or live .NET check reached later than that after the previous one (offline suites then run in one lane) | A tool for finding waits |
-| Smoke `suiteSeconds` refreshed from PR #166's run, after the idle timers went | Declared weights matched reality again: shards 338/336 s (Linux) and 342/340 s (Windows) against the 360 s budget, where the old weights had drifted 12 to 21% low |
+| Smoke `suiteSeconds` refreshed from PR #166's run, after the idle timers went | Declared weights matched reality again: shards 338/336 s (Linux) and 342/340 s (Windows) against the 360 s budget, where the old weights had drifted 12 to 21% low. Main then added the 64 s Live Plan suite and a third Linux shard (about 250 s each) |
 | The Windows and macOS benchmarks run daily and by hand (`bench-desktop.yml`), not on every main push | 2 jobs (1 macOS) and about 5.7 runner-min off each of 9 to 20 main pushes a day, for one daily run |
 | A newer main push cancels the older main run (`ci.yml`'s concurrency), as pull requests already did | Up to 74 runner-min and 13 jobs per superseded main push; 30 of 73 main pushes came within 20 min of the previous one, so an estimated 1,000 to 2,000 slot-min a week. Each PR already tested its merge with main, and the newest main commit always gets a complete run. |
 
-After these changes, a PR push that does not touch packaging runs 11 jobs, an estimated 55 to 60 runner-min, and 1 macOS job (from 15
+After these changes, a PR push that does not touch packaging runs 11 jobs (12 since main's third Linux smoke shard), an estimated 55 to 60 runner-min, and 1 macOS job (from 15
 jobs, 89 runner-min, 3 macOS). That is about a quarter fewer jobs and 30% fewer runner-minutes. Since queueing dominates,
 expect most of that to show up as wall time on busy days.
 
@@ -111,7 +111,7 @@ Considered and rejected (do not re-propose without new numbers):
 
 ## Rules for keeping CI lean
 
-- **Budget per push across all workflows.** A pull request push starts at most 11 CI jobs, 1 of them macOS
+- **Budget per push across all workflows.** A pull request push starts at most 12 CI jobs, 1 of them macOS
   (`tests/ci-workflow.test.ts`), plus at most 3 packaging jobs, and those only when it changes packaging
   (`tests/release-workflow.test.ts`). Two overlapping pushes must fit in 20 slots.
 - **Cancel superseded runs.** Every workflow a pull request triggers has a concurrency group keyed by `github.ref` with

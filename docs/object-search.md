@@ -25,6 +25,8 @@ The same search runs in two places, with the same options and results:
   when more than one server is connected. Its hits are one tab stop on the selected hit: a click selects a hit, ↑ ↓,
   Page Up, Page Down (to the last hit in view first, then a page on), Home and End move the selection, and a double-click or Enter reveals the hit in Object Explorer, which
   shows without taking focus, so the keys go on walking the hits. ↑ on the first hit, and Escape, return to the box.
+  Beside the hits, behind a sash, is the *details pane* (below them when the tab is narrower than 760 px): see
+  *The details pane* below.
 - **In both,** the hits are a listbox whose options announce the selected one, and each has a context menu (right-click,
   which selects the hit, or Shift+F10 and the context-menu key on the selected hit). See *A hit's menu* below.
 
@@ -194,6 +196,19 @@ The same search runs in two places, with the same options and results:
   regular identifier or is a reserved keyword (`AppData.dbo.[Order Details].UnitPrice`); they are offered only for objects
   in a schema. Bracketed Name brackets every part, `]` doubled as QUOTENAME does (`[AppData].[dbo].[Orders]`); a login, a
   database or a database user has only its name, bracketed.
+- **The details pane** (`SearchDetails`, `SearchDetailsService`) shows the tab's selected hit. Its name, type and place
+  (database, schema, a child's parent) show at once; the reads start once the selection has rested 80 ms, so arrowing
+  through the hits reads only the hit the selection stops on. Tables, views, stored procedures and functions are read as
+  Object Explorer's Peek reads them (`PeekService.read`): their properties from `explorer.peek` in a strip above, and the
+  definition, a module's text from `sys.sql_modules` or a table's Script As CREATE script (kept in Peek's script cache,
+  so peeking or selecting the table again while it is unchanged starts no SMO job). Any other kind Script As can write (a
+  trigger, an index, a login…) shows its CREATE script; a kind it cannot write says it has no definition. The matched
+  line of a definition hit is marked and scrolled a third of the way into view: the index's line for a module's own text,
+  else the line of a script that holds the match's preview, nearest that line. A table or a view also shows its columns
+  (Definition and Columns), one page of 500 from Object Explorer's Columns folder, read the first time they are shown.
+  Script to New Query, Refresh (which never takes a kept script) and Hide are in its header; the Details pane button
+  beside the result count hides and shows it in every tab. A hidden pane reads nothing; a new hit, a closed tab, a hidden
+  pane or a lost server cancels the tab's reads. Object Explorer's own search has no details pane.
 
 ## Protocol
 

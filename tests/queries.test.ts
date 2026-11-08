@@ -37,6 +37,33 @@ function fixture(commandTimeout?: number, wait?: (ms: number) => Promise<void>, 
   return { ...docs, bus: docs.events, queries, queryApi: api, connection, tab, events, results, calls }
 }
 describe('query orchestration', () => {
+  it('requests live capture per query tab and retains run identity until the next execution', async () => {
+    const f = fixture()
+    f.documents.update(f.tab.id, { includeLivePlan: true })
+    await f.queries.execute()
+    const args = f.queryApi.execute.mock.calls[0][0]
+    expect(args.includeLivePlan).toBe(true)
+    expect(args).not.toHaveProperty('includeActualPlan')
+    expect(args).not.toHaveProperty('includeClientStatistics')
+    expect(f.queries.getSnapshot()[f.tab.id].livePlan?.queryId).toBe(args.queryId)
+    f.documents.update(f.tab.id, { includeLivePlan: false })
+    await f.queries.execute()
+    expect(f.queryApi.execute.mock.calls[1][0]).not.toHaveProperty('includeLivePlan')
+    expect(f.queries.getSnapshot()[f.tab.id].livePlan).toBeUndefined()
+  })
+  it('keeps client statistics opt-in independent and separates comparisons when live capture changes', async () => {
+    const f = fixture()
+    f.documents.update(f.tab.id, { includeClientStatistics: true })
+    await f.queries.execute()
+    expect(f.queryApi.execute.mock.calls[0][0]).toMatchObject({ includeClientStatistics: true })
+    expect(f.queryApi.execute.mock.calls[0][0]).not.toHaveProperty('includeLivePlan')
+    f.documents.update(f.tab.id, { includeLivePlan: true })
+    await f.queries.execute()
+    expect(f.queryApi.execute.mock.calls[1][0]).toMatchObject({ includeClientStatistics: true, includeLivePlan: true })
+    f.documents.update(f.tab.id, { includeLivePlan: false, includeActualPlan: true })
+    await f.queries.execute()
+    expect(f.queries.statistics.getSnapshot()[f.tab.id].map(run => [run.scope, run.actualPlan, run.livePlan])).toEqual([[1, false, false], [2, true, true], [3, true, false]])
+  })
   it('preserves an estimate output choice through completion and opens each new estimate on its plan', async () => {
     const { queries, queryApi, tab, bus } = fixture()
     bus.emit({ type: 'query.outputSelected', tabId: tab.id, view: 'messages' })
@@ -91,7 +118,7 @@ describe('query orchestration', () => {
   })
   it('estimates the selected text without streaming results or changing the ordinary session and actual-plan toggle', async () => {
     const f = fixture()
-    f.documents.update(f.tab.id, { includeActualPlan: true, includeClientStatistics: true })
+    f.documents.update(f.tab.id, { includeActualPlan: true, includeClientStatistics: true, includeLivePlan: true })
     f.queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ spid: 47, login: 'reader' }) })
     await f.queries.execute()
     const statistics = f.queries.statistics.getSnapshot()

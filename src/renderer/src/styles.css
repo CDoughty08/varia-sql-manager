@@ -517,7 +517,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .query-status-server { flex-shrink: 1000000; }
 .query-status-login { flex-shrink: 1000; }
 .query-status-database { flex-shrink: 1; }
-/* A query's own bar: Execute, Cancel, Actual Plan, Estimated Plan and Client Statistics, then the connection pill. A narrow
+/* A query's own bar: Execute, Cancel, Actual Plan, Live Plan, Estimated Plan and Client Statistics, then the connection pill. A narrow
    editor drops button words and key hints, then the lists give up width, then a long environment label is cut
    short, and the pill never wraps. Its own size keeps the tag's 12em as wide as elsewhere. */
 .query-bar { display: flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-bar); padding: 0 var(--varia-space-2); flex-shrink: 0; min-width: 0; overflow: hidden; container-type: inline-size; font-size: var(--varia-size-sm); background: var(--varia-editor-background); border-bottom: 1px solid var(--varia-editorGroup-border); }
@@ -543,7 +543,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
    shrink weight has them give way, down to their minimum, before the environment tag. */
 .query-connection select { flex: 0 1000 auto; min-width: 64px; max-width: 220px; height: 100%; padding: 0 2px; background: var(--varia-input-background); border: 0; text-overflow: ellipsis; }
 .query-connection select:focus-visible { outline-offset: 0; }
-@container (max-width: 760px) {
+@container (max-width: 960px) {
   .query-bar-action.execute kbd { display: none; }
   .query-bar-action.actual-plan-toggle .query-bar-label, .query-bar-action.estimated-plan-button .query-bar-label { display: none; }
 }
@@ -556,7 +556,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 }
 @container (max-width: 400px) {
   .query-bar-actions { gap: 0; }
-  .query-bar-action { padding: 0; }
+  .query-bar-action { padding: 0; min-width: var(--varia-space-4); }
+  .query-bar-action .codicon { font-size: var(--varia-glyph-sm); }
+  .query-connection { gap: 0; padding: 0; }
+  .query-bar-environment .status-pill.small { padding: 0 var(--varia-space-0); }
   .query-connection-divider, .query-connection .connection-swatch { display: none; }
 }
 @container (min-width: 300px) {
@@ -1676,6 +1679,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .object-search-splitter { background: CanvasText; forced-color-adjust: none; }
   /* Forced colors drop the selection's fill: an outline keeps the selected hit marked once focus leaves the list. */
   .object-search-hit:has(> [aria-selected="true"]) { outline: 1px solid Highlight; outline-offset: -1px; }
+  .search-details-match { outline: 1px solid Highlight; outline-offset: -1px; }
+  .object-search-details-sash:hover, .object-search-details-sash:focus-visible { background: Highlight; outline: 2px solid Highlight; }
   .object-search-splitter:hover, .object-search-splitter:focus-visible { background: Highlight; outline: 2px solid Highlight; }
 }
 /* What a document says under its header: its last action's progress or outcome, an inline error, or a note (an SSIS
@@ -2048,6 +2053,35 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-search-more { font-family: var(--varia-font-ui); }
 .object-search mark { background: transparent; color: var(--varia-list-highlightForeground); font-weight: 600; }
 .object-search mark[data-approximate] { font-weight: inherit; text-decoration: underline dotted; }
+/* The Search Objects tab: its results and, behind a sash, the selected hit's details; below the results when the tab is narrow. */
+.object-search-tab { container-type: inline-size; }
+.object-search-tab-status { display: flex; align-items: center; gap: var(--varia-space-2); min-height: var(--varia-line-md); }
+.object-search-tab-status > .object-search-summary { flex: 1; min-width: 0; }
+.object-search-body { flex: 1; min-height: 0; display: flex; }
+.object-search-results { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.object-search-details-sash { flex: none; width: 4px; margin: 0 -2px; position: relative; z-index: 1; cursor: col-resize; touch-action: none; }
+.object-search-details-sash:hover, .object-search-details-sash:focus-visible { background: var(--varia-sash-hoverBorder); outline: none; }
+.object-search-details { flex: 0 0 auto; min-width: 0; min-height: 0; display: flex; border-left: 1px solid var(--varia-editorGroup-border); }
+@container (max-width: 760px) {
+  .object-search-body { flex-direction: column; }
+  .object-search-details-sash { display: none; }
+  .object-search-details { border-left: 0; border-top: 1px solid var(--varia-editorGroup-border); }
+}
+.search-details { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.search-details-empty { align-self: center; margin-top: var(--varia-space-4); }
+.search-details-properties { flex-shrink: 0; max-height: 40%; overflow: auto; padding: var(--varia-space-1) var(--varia-space-3) var(--varia-space-2); border-bottom: 1px solid var(--varia-editorGroup-border); }
+.search-details-facts { margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(10em, 1fr)); gap: var(--varia-space-1) var(--varia-space-3); }
+.search-details-fact { min-width: 0; }
+.search-details-fact dt { font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.search-details-fact dd { margin: 0; font-size: var(--varia-size-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-details-views { flex-shrink: 0; padding: var(--varia-space-2) var(--varia-space-3) 0; }
+/* The matched line's band sits behind the text: the definition is its own stacking context, and the band below its content. */
+.search-details-definition { position: relative; isolation: isolate; }
+.search-details-match { position: absolute; left: 0; right: 0; z-index: -1; height: var(--varia-line-sm); background: var(--varia-list-inactiveSelectionBackground); pointer-events: none; }
+.search-details-columns { margin: 0; padding: var(--varia-space-1) var(--varia-space-3); list-style: none; }
+.search-details-columns li { display: flex; align-items: baseline; gap: var(--varia-space-2); line-height: var(--varia-line-md); }
+.search-details-column { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-details-column-type { flex-shrink: 0; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
 .index-status { display: flex; align-items: center; gap: var(--varia-space-1); margin-left: var(--varia-space-3); white-space: nowrap; }
 .index-status .codicon { font-size: var(--varia-glyph-sm); }
 .index-status button { color: inherit; background: transparent; border: 1px solid currentColor; padding: 0 var(--varia-space-1); font-size: var(--varia-size-xs); line-height: 14px; }

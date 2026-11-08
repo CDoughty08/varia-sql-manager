@@ -60,6 +60,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, onFocus, onWide
         const current = entry.handle.getSnapshot()
         results.announceSelection(tabId, describeSelection(selection, current.rowsAvailable, entry.descriptor.columns.length))
       },
+      // Edit › Copy's copy event; Ctrl+C and Ctrl+A are the catalogue's output.copy and output.selectAll.
       onCopy: () => { void commands.execute('output.copy', undefined, 'keybinding') },
       onEscape: () => results.cancelTabJob(tabId),
       onStatus: setStatus,

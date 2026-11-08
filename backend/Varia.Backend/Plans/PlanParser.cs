@@ -28,6 +28,8 @@ internal sealed class PlanNode
 }
 internal sealed class PlanStatement
 {
+    public string? StatementId { get; init; }
+    public string? QueryHash { get; init; }
     public required string Id { get; init; }
     public required string Text { get; init; }
     public required string Type { get; init; }
@@ -127,7 +129,7 @@ internal static class PlanParser
                 if (name.StartsWith("Stmt", StringComparison.Ordinal))
                 {
                     if (statements.Count >= Statements) throw Limit();
-                    statement = new PlanStatement { Id = "s" + statements.Count, Text = Bound(xml.GetAttribute("StatementText"), 16_384),
+                    statement = new PlanStatement { Id = "s" + statements.Count, StatementId = Core(xml.GetAttribute("StatementId"), 64), QueryHash = Core(xml.GetAttribute("QueryHash"), 64), Text = Bound(xml.GetAttribute("StatementText"), 16_384),
                         Type = Core(xml.GetAttribute("StatementType") ?? name, 128), EstimatedCost = Number(xml.GetAttribute("StatementSubTreeCost")) };
                     statements.Add(statement);
                     node = null;
