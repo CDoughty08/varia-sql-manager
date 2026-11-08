@@ -33,6 +33,8 @@ function PopoutSlot({ host, parking, hidden }: { host: HTMLElement; parking: HTM
 function PopoutTab({ view, pane, commands }: { view: PopoutView; pane: PopoutPaneId; commands: PopoutCommands }) {
   const { results, documents, menus, gestures } = useWorkbench()
   const menuFor = useServiceSnapshot(menus.menuFor)
+  // The tooltip names Move Back into Main Window's gesture: a remap re-renders it.
+  useServiceSnapshot(gestures)
   const element = useRef<HTMLDivElement | null>(null)
   const register = useMenuTarget<HTMLDivElement>(() => ({ kind: 'dockTab', pane, floating: false, popout: true }))
   const ref = useCallback((node: HTMLDivElement | null) => { element.current = node; register(node) }, [register])

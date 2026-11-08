@@ -15,6 +15,8 @@ export interface EditorOptions {
   readonly fontSize: number
   readonly dragAndDrop: boolean
   readonly highlightCurrentLine: boolean
+  /** Text Editor › General › Add a cursor with. */
+  readonly multiCursorModifier: 'alt' | 'ctrlCmd'
 }
 /** The Monaco editor options they map to. Bracket matching is DocumentService's: it also depends on the document. */
 export interface MonacoEditorOptions {
@@ -25,6 +27,7 @@ export interface MonacoEditorOptions {
   readonly fontSize: number
   readonly dragAndDrop: boolean
   readonly renderLineHighlight: 'line' | 'none'
+  readonly multiCursorModifier: 'alt' | 'ctrlCmd'
 }
 interface OptionsTarget { updateOptions(options: MonacoEditorOptions): void }
 
@@ -34,7 +37,8 @@ const fromSettings = (values: SettingsValues): EditorOptions => ({
   whitespace: values['textEditor.sql.viewWhiteSpace'],
   fontSize: values['environment.fonts.editorFontSize'],
   dragAndDrop: values['textEditor.dragAndDrop'],
-  highlightCurrentLine: values['textEditor.highlightCurrentLine']
+  highlightCurrentLine: values['textEditor.highlightCurrentLine'],
+  multiCursorModifier: values['textEditor.multiCursorModifier']
 })
 const same = (a: EditorOptions, b: EditorOptions) => (Object.keys(a) as (keyof EditorOptions)[]).every(key => a[key] === b[key])
 
@@ -64,7 +68,8 @@ export class EditorOptionsService extends SnapshotStore<EditorOptions> implement
       renderWhitespace: options.whitespace ? 'all' : 'none',
       fontSize: options.fontSize,
       dragAndDrop: options.dragAndDrop,
-      renderLineHighlight: options.highlightCurrentLine ? 'line' : 'none'
+      renderLineHighlight: options.highlightCurrentLine ? 'line' : 'none',
+      multiCursorModifier: options.multiCursorModifier
     }
   }
   /** Applies the options to an editor now and after every change. */

@@ -384,6 +384,38 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .options-row:has(:disabled) > label, .options-row :disabled, .options-form-row[data-disabled] { color: GrayText; }
   .options-dialog mark { color: Highlight; }
 }
+/* Tools › Options › Shortcuts, Mouse view: one row per gesture, a modifier dropdown for those that can be remapped. */
+.mouse-view { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.mouse-view th, .mouse-view td { padding: 3px 8px; text-align: left; vertical-align: top; font-weight: normal; overflow-wrap: anywhere; }
+.mouse-view thead th { position: sticky; top: 0; z-index: 1; background: var(--varia-editorWidget-background); color: var(--varia-descriptionForeground); border-bottom: 1px solid var(--varia-dialog-separatorBackground); }
+.mouse-col-gesture { width: 40%; }
+.mouse-col-binding { width: 28%; }
+.mouse-col-where { width: 18%; }
+.mouse-col-source { width: 14%; }
+.mouse-group th { padding-top: 8px; font-weight: 600; color: var(--varia-settings-headerForeground); }
+.mouse-gesture { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; }
+.mouse-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; align-self: center; }
+.mouse-dot[data-on] { background: var(--varia-focusBorder); }
+.mouse-id, .mouse-reason, .mouse-keyboard { font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.mouse-reason, .mouse-keyboard, .mouse-problems { flex-basis: 100%; padding-left: 12px; }
+.mouse-problems { display: flex; flex-direction: column; gap: 2px; }
+.mouse-problem { display: flex; align-items: baseline; gap: 4px; font-size: var(--varia-size-xs); }
+.mouse-problem[data-severity="error"] { color: var(--varia-errorForeground); }
+.mouse-problem[data-severity="warning"] { color: var(--varia-warningForeground); }
+.mouse-binding { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.options-dialog .mouse-binding select { height: 20px; padding: 0 4px; line-height: 16px; }
+.mouse-action { color: var(--varia-descriptionForeground); }
+.mouse-source { display: inline-flex; align-items: center; gap: 4px; }
+.mouse-source[data-source="user"] { font-weight: 600; }
+.mouse-source[data-source="fixed"], .mouse-source[data-source="setting"] { color: var(--varia-descriptionForeground); }
+.mouse-reset { margin-left: 4px; padding: 0 2px; }
+.mouse-link { padding: 0; border: 0; color: var(--varia-list-highlightForeground); text-decoration: underline; }
+.mouse-empty { margin: 8px 10px; color: var(--varia-descriptionForeground); }
+@media (forced-colors: active) {
+  .mouse-dot[data-on] { background: Highlight; }
+  .mouse-problem[data-severity] { color: CanvasText; }
+  .mouse-link { color: LinkText; }
+}
 /* The failure screen keeps a draggable strip where the title bar was, under the native window controls. */
 .shell-failure { height: 100vh; overflow: auto; padding: calc(env(titlebar-area-height, 34px) + 24px) 32px 32px; background: var(--varia-editor-background); color: var(--varia-foreground); font-size: var(--varia-size-md); }
 .shell-failure::before { content: ''; position: fixed; inset: 0 0 auto 0; height: env(titlebar-area-height, 34px); -webkit-app-region: drag; }
