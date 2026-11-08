@@ -70,15 +70,15 @@ describe('live subscriptions through main', () => {
     const [first] = port.posted.filter(message => message.t === 'live')
     expect(first.t === 'live' && first.event).toMatchObject({ type: 'live.opened', seq: 0, source: 'debug.synthetic' })
     expect(port.ticks(1)[0].samples.map(sample => [sample.probe, sample.gap])).toEqual([['debug.synthetic.table', 'baseline'], ['debug.synthetic.metrics', 'baseline'], ['debug.synthetic.status', 'baseline']])
+    // Stop-and-wait end to end: without the acknowledgement, the source sends nothing more. Held first, so the table read
+    // below stays stored: the source keeps two revisions, and a starved runner could see two 30 ms ticks before the read.
+    port.acking = false
+    await expect.poll(() => port.unacked.length).toBe(1)
+    const held = port.ticks(1).length
     const table = latestTable(port, 1)
     expect(table.descriptor).toMatchObject({ generation: 1, rowsAvailable: 3, state: 'complete' })
     port.send({ t: 'read', rid: 2, generation: 1, resultId: table.descriptor.resultId, firstRow: 0, maxRows: 10, credit: 65_536 })
     await expect.poll(() => port.end(2)).toMatchObject({ ok: true, result: { rows: 3, complete: true } })
-
-    // Stop-and-wait end to end: without the acknowledgement, the source sends nothing more.
-    port.acking = false
-    await expect.poll(() => port.unacked.length).toBe(1)
-    const held = port.ticks(1).length
     await new Promise(done => setTimeout(done, 300))
     expect(port.ticks(1).length).toBe(held)
     port.acking = true
