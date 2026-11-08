@@ -338,6 +338,8 @@ output.context, for a results grid with selected cells
   ---
   Show S&paces and Tabs [ ]  ++++
   Show All &White Space [ ]  ++++
+  Column Pro&file [ ]  ++++
+  Show Row Si&ze [x]  ++++
 output.context, for a results grid without
   &Copy  Ctrl+C  ----
   Copy with &Headers  Ctrl+Shift+C  ----
@@ -354,6 +356,8 @@ output.context, for a results grid without
   ---
   Show S&paces and Tabs [ ]  ++++
   Show All &White Space [ ]  ++++
+  Column Pro&file [ ]  ++++
+  Show Row Si&ze [x]  ++++
 output.context, for Messages with selected text
   &Copy  Ctrl+C  ++++
   ---

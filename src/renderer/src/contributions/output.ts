@@ -142,7 +142,9 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     }),
     // Saved, or applied for this session when the save fails (SettingsService.choose); a choice already on turns the marks off.
     commands.register('output.showSpaces', { run: () => showWhitespace('spaces') }),
-    commands.register('output.showAllWhitespace', { run: () => showWhitespace('all') })
+    commands.register('output.showAllWhitespace', { run: () => showWhitespace('all') }),
+    commands.register('output.toggleColumnProfile', { run: () => settings.toggle('queryResults.grid.columnProfile') }),
+    commands.register('output.toggleRowSize', { run: () => settings.toggle('queryResults.grid.rowSize') })
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }
 }

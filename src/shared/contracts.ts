@@ -230,6 +230,28 @@ export interface ResultsViewParams { resultId: number; sort: ViewSortKey[]; repl
 export interface ResultsViewResult { viewId: number; rows: number; complete: boolean; approximate: boolean }
 export interface ResultsViewCloseParams { resultId: number; viewIds: number[] }
 export interface ResultsViewCloseResult { closed: number }
+/** results.profile: up to `limits.profile.maxColumns` distinct columns of a result, through its view when `viewId` is
+ *  given; no columns answers only the rows' byte sizes. */
+export interface ResultsProfileParams { resultId: number; columns: number[]; viewId?: number }
+/** Lowest, highest and average of a length (characters, DATALENGTH or a row's bytes); `exact` is false when an estimate
+ *  took part. */
+export interface ProfileLengths { min: number; max: number; average: number; exact: boolean }
+/** What a histogram buckets: values (numbers), instants (date and time types, in .NET ticks), characters (text) or bytes
+ *  (binary). */
+export type ProfileBasis = 'value' | 'time' | 'chars' | 'bytes'
+/** `limits.profile.bins` equal buckets from `low` to `high`, both included. */
+export interface ProfileHistogram { basis: ProfileBasis; low: number; high: number; counts: number[] }
+/** One column's aggregates: `values` non-NULL cells, `nulls` the rest; `distinct` by the column's collation, an estimate
+ *  when `distinctExact` is false; `min` and `max` as display text (binary as 0x hex, at most `limits.profile.valueChars`
+ *  characters and "…"; absent without values); `approximate` when a truncated cell's stored prefix took part. `chars` and
+ *  `bytes` only for text and binary columns, `histogram` only for columns with something to bucket. */
+export interface ColumnProfile {
+  column: number; values: number; nulls: number; distinct: number; distinctExact: boolean; min?: string; max?: string; approximate: boolean
+  chars?: ProfileLengths; bytes?: ProfileLengths; histogram?: ProfileHistogram
+}
+/** `rows` profiled (the view's, or the rows sealed when it ran) and whether that was all of them; the rows' byte sizes
+ *  (absent without rows); the columns asked for, in order. */
+export interface ResultsProfileResult { rows: number; complete: boolean; rowBytes?: ProfileLengths; columns: ColumnProfile[] }
 /** `bytes[k]` is row `firstRow + k`'s sum of DATALENGTH over its cells (NULL counts 0; xml and json as their
  *  text, some sql_variant base types estimated: docs/ipc.md, Cell lengths and row sizes); it stops at the rows sealed so
  *  far (`rowsAvailable`), as results.read does. */
@@ -357,6 +379,8 @@ export interface PortMethods {
   'results.rowBytes': { params: ResultsRowBytesParams; result: ResultsRowBytesResult }
   'results.view': { params: ResultsViewParams; result: ResultsViewResult }
   'results.viewClose': { params: ResultsViewCloseParams; result: ResultsViewCloseResult }
+  /** Aggregates over a result's rows or a view's, for the column profile panel: never rows. */
+  'results.profile': { params: ResultsProfileParams; result: ResultsProfileResult }
   /** A live subscription (docs/ipc.md): its EVENTs are credited, one unacknowledged at a time, and it ends only by CANCEL,
    *  a disconnect, a backend shutdown, a failure or its source ending. */
   'live.subscribe': { params: LiveSubscribeParams; result: LiveEnd }

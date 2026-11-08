@@ -826,6 +826,15 @@ export const commandCatalog = {
   'output.sortTextByBytes': {
     title: 'Sort Text by Length in Bytes', category: 'Query', icon: 'symbol-ruler', keywords: ['sort', 'length', 'datalength', 'bytes', 'text', 'binary', 'grid'], toggled: 'resultsSortTextBytes'
   },
+  // The results toolbar's Profile and Row size toggles (queryResults.grid.columnProfile, queryResults.grid.rowSize).
+  'output.toggleColumnProfile': {
+    title: 'Show Column Profile', category: 'Query', icon: 'graph', keywords: ['profile', 'stats', 'statistics', 'distinct', 'nulls', 'histogram', 'grid', 'column'],
+    toggled: 'resultsColumnProfile', menus: [{ menu: 'output.context', group: '4_view', order: 3, title: 'Column Profile', mnemonic: 'f', when: "outputView == 'grid'" }]
+  },
+  'output.toggleRowSize': {
+    title: 'Show Row Size in Results', category: 'Query', icon: 'list-flat', keywords: ['row', 'size', 'bytes', 'datalength', 'bar', 'grid'],
+    toggled: 'resultsRowSize', menus: [{ menu: 'output.context', group: '4_view', order: 4, title: 'Show Row Size', mnemonic: 'z', when: "outputView == 'grid'" }]
+  },
   // A click or Enter on an XML, JSON or plan cell opens its whole value, formatted, in a new tab (the grid runs it).
   'output.openValue': { title: 'Open Value in New Tab', category: 'Query', icon: 'go-to-file', palette: false },
   // A panel's menu, from its tab or its ⋯ button: the panel comes from the menu's target, so these have no keys and are

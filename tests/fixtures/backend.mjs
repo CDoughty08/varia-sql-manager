@@ -518,6 +518,39 @@ function buildView(result, sort) {
     read: rows, complete: true, pages: new Map(), sealed: result.complete && rows === result.read
   }
 }
+// results.rowBytes and results.profile: a cell's bytes are its text's UTF-8 bytes (a binary cell's own), and a profile
+// compares as the fake views sort, ordinally; the real backend's DATALENGTH rules and collations have their own checks.
+const cellValue = cell => cell !== null && typeof cell === 'object' && !(cell instanceof Uint8Array) ? (cell.error ? null : cell.value) : cell
+const cellBytes = cell => { const value = cellValue(cell); return value === null || value === undefined ? 0 : value instanceof Uint8Array ? value.length : Buffer.byteLength(String(value)) }
+const rowBytesOf = (source, row) => source.rowAt(row).reduce((sum, cell) => sum + cellBytes(cell), 0)
+const lengthsOf = values => values.length ? { min: Math.min(...values), max: Math.max(...values), average: values.reduce((a, b) => a + b, 0) / values.length, exact: true } : undefined
+function histogramOf(basis, values) {
+  if (!values.length) return undefined
+  const low = Math.min(...values), high = Math.max(...values), counts = new Array(20).fill(0)
+  for (const value of values) counts[high <= low ? 0 : Math.min(19, Math.floor((value - low) / (high - low) * 20))]++
+  return { basis, low, high, counts }
+}
+function profileOf(source, columns) {
+  const rows = available(source), all = Array.from({ length: rows }, (_, row) => source.rowAt(row))
+  const show = value => value instanceof Uint8Array ? '0x' + Buffer.from(value).toString('hex').toUpperCase() : String(value).slice(0, 256)
+  return {
+    rows, complete: source.sealed ?? source.complete, ...rows ? { rowBytes: lengthsOf(all.map((_, row) => rowBytesOf(source, row))) } : {},
+    columns: columns.map(column => {
+      const numeric = numericTypes.has(source.columns[column].dataType), binary = source.columns[column].wire === 'binary'
+      const values = all.map(row => cellValue(row[column])).filter(value => value !== null && value !== undefined)
+      const key = value => value instanceof Uint8Array ? Buffer.from(value).toString('latin1') : String(value)
+      const sorted = [...values].sort((a, b) => numeric ? Number(a) - Number(b) : key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0)
+      const text = !numeric && !binary, sizes = values.map(value => cellBytes(value))
+      return {
+        column, values: values.length, nulls: rows - values.length, distinct: new Set(values.map(key)).size, distinctExact: true, approximate: false,
+        ...values.length ? { min: show(sorted[0]), max: show(sorted.at(-1)) } : {},
+        ...text && values.length ? { chars: lengthsOf(values.map(value => String(value).length)) } : {},
+        ...(text || binary) && values.length ? { bytes: lengthsOf(sizes) } : {},
+        ...values.length ? { histogram: numeric ? histogramOf('value', values.map(Number)) : binary ? histogramOf('bytes', sizes) : histogramOf('chars', values.map(value => String(value).length)) } : {}
+      }
+    })
+  }
+}
 /** The result, or the view of it a request names; undefined (after answering) when either is gone. */
 function sourceOf(id, resultId, viewId) {
   const result = stored.get(resultId)
@@ -1066,6 +1099,17 @@ async function workbench(id, method, params, credit) {
       result.views.set(view.viewId, view)
       if (params.replaces !== undefined) result.views.delete(params.replaces)
       return respond(id, { viewId: view.viewId, rows: view.read, complete: view.sealed, approximate: false })
+    }
+    case 'results.rowBytes': {
+      const source = sourceOf(id, params.resultId, params.viewId)
+      if (!source) return
+      const rows = available(source), end = Math.min(rows, params.firstRow + params.count)
+      return respond(id, { firstRow: params.firstRow, bytes: Array.from({ length: Math.max(0, end - params.firstRow) }, (_, k) => rowBytesOf(source, params.firstRow + k)), rowsAvailable: rows, estimated: [] })
+    }
+    case 'results.profile': {
+      const source = sourceOf(id, params.resultId, params.viewId)
+      if (!source) return
+      return respond(id, profileOf(source, params.columns))
     }
     case 'results.viewClose': {
       const result = stored.get(params.resultId)

@@ -95,6 +95,24 @@ internal sealed record ResultsViewArgs(uint ResultId, ViewSortArgs[] Sort, uint?
 internal sealed record ResultsViewResult(uint ViewId, long Rows, bool Complete, bool Approximate);
 internal sealed record ResultsViewCloseArgs(uint ResultId, uint[] ViewIds);
 internal sealed record ResultsViewCloseResult(int Closed);
+/// <summary>results.profile: aggregates for 0 to 32 distinct columns over a result's rows, or its view's (ViewId); 0 columns
+/// answers only the rows' byte sizes.</summary>
+internal sealed record ResultsProfileArgs(uint ResultId, int[] Columns, uint? ViewId = null);
+/// <summary>Minimum, maximum and average of a length (characters, DATALENGTH, or a row's bytes); Exact is false when any
+/// figure counted was an estimate.</summary>
+internal sealed record ProfileLengths(long Min, long Max, double Average, bool Exact);
+/// <summary>Counts in equal buckets from Low to High (both included) of a column's values ("value"), instants in .NET
+/// ticks ("time"), characters ("chars") or bytes ("bytes").</summary>
+internal sealed record ProfileHistogram(string Basis, double Low, double High, long[] Counts);
+/// <summary>One column's profile: Values non-NULL cells and Nulls the rest; Distinct, exact unless DistinctExact is false (an
+/// estimate past 16,384); Min and Max as display text (binary as 0x hex), at most 256 characters and "…"; Approximate
+/// when a truncated cell's stored prefix took part. Chars and Bytes are null for columns that are neither text nor
+/// binary, Histogram for those with nothing to bucket.</summary>
+internal sealed record ColumnProfile(int Column, long Values, long Nulls, long Distinct, bool DistinctExact, string? Min, string? Max, bool Approximate,
+    ProfileLengths? Chars, ProfileLengths? Bytes, ProfileHistogram? Histogram);
+/// <summary>Rows profiled (the view's, or the rows sealed when it ran), whether they were all the result's, the rows' byte
+/// sizes (null without rows), and the columns asked for, in order.</summary>
+internal sealed record ResultsProfileResult(long Rows, bool Complete, ProfileLengths? RowBytes, ColumnProfile[] Columns);
 /// <summary>results.rowBytes: Bytes[k] is row FirstRow + k's sum of DATALENGTH over its cells (NULL counts 0; xml and json
 /// as their text, some sql_variant base types estimated: docs/ipc.md, Cell lengths and row sizes); it stops at the rows sealed
 /// so far. Estimated lists, in order, the rows of the range whose sum includes an estimate.</summary>

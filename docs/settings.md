@@ -182,6 +182,8 @@ The query window's status bar: where it is, and what it shows. A property grid: 
 | `queryResults.grid.showColumnTypes` | Show column data types in the column headers | Boolean | True |  | All | At once | Each column header shows the column's SQL type after its name, in smaller text: int, nvarchar(50), decimal(18,2). The header's tooltip names the type either way. Column widths already set are kept when this changes. Not in SSMS. |
 | `queryResults.grid.whitespace` | Show white space in results | One of `none` (Off), `spaces` (Spaces and tabs), `all` (All white space) | Off |  | All | At once | Spaces show as a raised dot (·) and tabs as an arrow (→) in the results grid. All white space also names line breaks (CR, LF, CRLF) and the invisible characters that make values look alike: no-break and zero-width spaces, BOM and the other Unicode spaces. The marks are only drawn: Copy and Save Results As write the values as they are. The results toolbar changes this too. Not in SSMS. |
 | `queryResults.grid.sortText` | Sort text columns by | One of `value` (Value), `chars` (Length in characters), `bytes` (Length in bytes) | Value |  | All | At once | How a sorted results grid orders its text and binary columns. Value sorts as ORDER BY would, by the column's collation, with NULL first ascending. Length in characters counts every character, spaces included; length in bytes sorts by DATALENGTH. Other columns always sort by value. The results toolbar changes this too, and sorted grids sort again. Not in SSMS. |
+| `queryResults.grid.rowSize` | Show row size behind row numbers | Boolean | True |  | All | At once | A bar behind each row number shows the row's size, the sum of DATALENGTH over its columns, scaled to the largest row of the result (or of its filtered rows); rows over half the largest stand out. Hover a row number for the exact bytes. The results toolbar changes this too. Not in SSMS. |
+| `queryResults.grid.columnProfile` | Show the column profile panel | Boolean | False |  | All | At once | A panel beside the results describes each column of the result set that last had focus: its NULLs, distinct values (by the column's collation), lowest and highest values, lengths in characters and bytes, and a histogram. It describes the rows as the grid shows them, sorted or filtered, and is computed in the SQL backend. The results toolbar changes this too. Not in SSMS. |
 
 ### SQL Server Object Explorer › Commands
 
@@ -296,4 +298,4 @@ How Varia follows the SSIS Catalog (SSISDB) as it changes. Not in SSMS.
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (107 today).
+A patch holds at most one entry per setting (109 today).

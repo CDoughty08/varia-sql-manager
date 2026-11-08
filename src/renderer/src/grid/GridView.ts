@@ -18,6 +18,7 @@ import { gridKeyAction, pageStep } from './keyboard'
 import { ColumnLayout, hitTest, rowHeaderWidth, visibleRange, type VisibleRange } from './layout'
 import { fitWidth, initialWidth, measureCharWidth, sqlTypeLabel, typeHintChars } from './measure'
 import { freshRing, ringStep, rotation, slotOf, type RowRing } from './ring'
+import { RowSizes } from './row-sizes'
 import { applyWheel, ensureVisible, normalizeWheel, offsetsDropped, onNativeScroll, rebaseRow, remap, rowsContainerY, rowTop, scrollCap, scrollModel, topRowOf, type ScrollModel } from './scroll'
 import { columnTitle, covered, dragSelection, navigate, pressButton, pressSelection, selectAll, windowRanges, type CellRange, type GridHit, type GridSelection } from './selection'
 import type { GridStats } from './stats'
@@ -45,7 +46,8 @@ interface CellSlot { readonly el: HTMLDivElement; readonly text: Text; column: n
  * active row's spare slot has no mark: it is out of view.
  */
 interface RowSlot {
-  readonly el: HTMLDivElement; readonly header: HTMLDivElement; readonly number: Text; readonly mark?: { readonly el: HTMLDivElement; readonly text: Text }
+  /** `size` is what the mark's row-size bar shows ('' for none), so it is written only when it changes. */
+  readonly el: HTMLDivElement; readonly header: HTMLDivElement; readonly number: Text; readonly mark?: { readonly el: HTMLDivElement; readonly text: Text; size: string }
   readonly cells: CellSlot[]; readonly pin: CellSlot
   row: number; top: number; width: number; odd: boolean; headerSel: boolean; shown: boolean
   /** 0 for none, else 1 + the tone's index in liveTones. */
@@ -86,6 +88,8 @@ export interface GridViewOptions {
   readonly showTypes?: boolean
   /** How cells show spaces, tabs and line breaks (queryResults.grid.whitespace); `none` by default. */
   readonly whitespace?: WhitespaceMode
+  /** A bar behind each row number shows the row's bytes (queryResults.grid.rowSize); off by default. */
+  readonly rowSize?: boolean
   onSelection(selection: GridSelection): void
   /** Edit › Copy (the copy event), and a live grid's Ctrl+C: runs Copy. */
   onCopy(): void
@@ -173,6 +177,8 @@ export class GridView {
   private whitespace: WhitespaceMode
   /** Each sorted column's place among the keys and direction. */
   private sortKeys: ReadonlyMap<number, { readonly at: number; readonly descending: boolean }>
+  /** The row-size bar's sizes for the handle shown, while the bar is on. */
+  private sizes: RowSizes | undefined
   private rowHeader = 0
   private width = -1
   private spacerHeight = -1
@@ -239,6 +245,7 @@ export class GridView {
     this.showTypes = o.showTypes ?? true
     this.whitespace = o.whitespace ?? 'none'
     this.sortKeys = sortMap(o.sort)
+    if (o.rowSize) this.sizes = this.sizesFor(o.handle)
     this.capOverride = o.stats?.scrollCap
     this.cap = this.capOverride ?? scrollCap(windowOf(o.root).devicePixelRatio)
     // Widths belong to the grid's saved state; they are allocated on first mount, from the declared types.
@@ -327,8 +334,13 @@ export class GridView {
     this.setStatus({})
     this.schedule()
   }
-  update(o: { resultCount: number; showTypes?: boolean; whitespace?: WhitespaceMode; sort?: readonly HeaderSortKey[] }): void {
+  update(o: { resultCount: number; showTypes?: boolean; whitespace?: WhitespaceMode; sort?: readonly HeaderSortKey[]; rowSize?: boolean }): void {
     const showTypes = o.showTypes ?? this.showTypes, whitespace = o.whitespace ?? this.whitespace
+    if (o.rowSize !== undefined && o.rowSize !== !!this.sizes) {
+      this.sizes?.dispose()
+      this.sizes = o.rowSize ? this.sizesFor(this.handle) : undefined
+      this.schedule()
+    }
     if ('sort' in o) {
       const sortKeys = sortMap(o.sort)
       if (!sameSortMap(sortKeys, this.sortKeys)) { this.sortKeys = sortKeys; this.schedule() }
@@ -365,6 +377,7 @@ export class GridView {
     this.types = descriptor.columns.map(sqlTypeLabel)
     this.links = this.linksOf(descriptor)
     this.data = this.dataFor(handle)
+    if (this.sizes) { this.sizes.dispose(); this.sizes = this.sizesFor(handle) }
     this.stopHandle = handle.subscribe(() => this.schedule())
     this.muted = new Set(o.muted ?? [])
     const selection = this.selection()
@@ -414,12 +427,14 @@ export class GridView {
     this.cancelFrame?.()
     this.cancelFrame = undefined
     this.data.dispose()
+    this.sizes?.dispose()
     if (this.ariaTimer !== undefined) clearTimeout(this.ariaTimer)
     for (const dispose of this.cleanup.splice(0)) { try { dispose() } catch (error) { this.o.onError(error) } }
     this.scroller.replaceChildren()
   }
 
   private rows(): number { return this.handle.getSnapshot().rowsAvailable }
+  private sizesFor(handle: ResultHandle): RowSizes { return new RowSizes(handle, () => this.schedule()) }
   private dataFor(handle: ResultHandle): GridData {
     return new GridData({ handle, columns: this.columns, tone: this.tone, clientInflight: () => this.o.client.windowsInFlight, changed: () => this.schedule() })
   }
@@ -818,7 +833,7 @@ export class GridView {
     el.append(header)
     let mark: RowSlot['mark']
     if (withCells) {
-      mark = { el: doc.createElement('div'), text: doc.createTextNode('') }
+      mark = { el: doc.createElement('div'), text: doc.createTextNode(''), size: '' }
       mark.el.className = 'rg-rn'
       mark.el.style.display = 'none'
       mark.el.append(mark.text)
@@ -1025,6 +1040,7 @@ export class GridView {
     if (snapshot.state !== 'lost' && snapshot.state !== 'released') {
       const again = this.data.ensure(range, rows, state.topRow - this.lastTopRow, Math.max(1, bodyRows), state.selection?.active)
       if (again) this.schedule()
+      this.sizes?.ensure(range.firstRow, range.lastRow)
     }
     this.lastTopRow = state.topRow
     const tileError = this.data.error
@@ -1161,6 +1177,7 @@ export class GridView {
     let headerSel = false
     for (const item of ranges) if (row >= item.top && row <= item.bottom) { headerSel = true; break }
     if (headerSel !== slot.headerSel || tone !== slot.tone) { slot.headerSel = headerSel; if (slot.mark) slot.mark.el.className = markClasses[headerSel ? 1 : 0][tone] }
+    if (slot.mark) this.paintSize(slot.mark, row)
     slot.tone = tone
     let activeCell: CellSlot | undefined
     const perRow = slot.cells.length
@@ -1175,6 +1192,32 @@ export class GridView {
       activeCell = slot.pin
     } else this.hideCell(slot.pin)
     return activeCell
+  }
+
+  /**
+   * The row-size bar behind a row number: its share of the largest row (--rg-rs), marked large over half of it
+   * (data-large, which CSS draws in the warning colour), the number in italics when its size is an estimate, and the exact bytes in its tooltip. Written
+   * only when what it shows changes; a row whose size is not read yet shows none.
+   */
+  private paintSize(mark: NonNullable<RowSlot['mark']>, row: number): void {
+    const size = this.sizes?.get(row)
+    const share = size ? Math.round(size.share * 1000) / 1000 : 0
+    const key = size ? `${row}|${share}|${size.large ? 1 : 0}|${size.estimated ? 1 : 0}|${size.bytes}` : ''
+    if (key === mark.size) return
+    mark.size = key
+    const style = mark.el.style
+    if (!size) {
+      style.removeProperty('--rg-rs')
+      delete mark.el.dataset.large
+      style.fontStyle = ''
+      mark.el.removeAttribute('title')
+      return
+    }
+    style.setProperty('--rg-rs', String(share))
+    if (size.large) mark.el.dataset.large = ''
+    else delete mark.el.dataset.large
+    style.fontStyle = size.estimated ? 'italic' : ''
+    mark.el.title = `Row ${formatCount(row + 1)}: ${size.estimated ? 'about ' : ''}${formatCount(size.bytes)} ${plural(size.bytes, 'byte')} (the sum of DATALENGTH over its columns)`
   }
 
   /** A row's tone: muted when the revision lists it departed, else its tone column's (0 for none or an unknown name). */

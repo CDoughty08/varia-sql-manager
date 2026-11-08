@@ -45,10 +45,11 @@ const keysOf = (sort: GridSort | undefined) => sort?.keys.map(key => `${key.colu
 function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, onWide }: ResultGridProps) {
   const { results, resultClient, commands, platform, gridStats, panes, settings } = useWorkbench()
   const values = useServiceSnapshot(settings).values
-  const showTypes = values['queryResults.grid.showColumnTypes'], whitespace = values['queryResults.grid.whitespace']
-  const showTypesRef = useRef(showTypes), whitespaceRef = useRef(whitespace)
+  const showTypes = values['queryResults.grid.showColumnTypes'], whitespace = values['queryResults.grid.whitespace'], rowSize = values['queryResults.grid.rowSize']
+  const showTypesRef = useRef(showTypes), whitespaceRef = useRef(whitespace), rowSizeRef = useRef(rowSize)
   showTypesRef.current = showTypes
   whitespaceRef.current = whitespace
+  rowSizeRef.current = rowSize
   const rootRef = useRef<HTMLDivElement>(null), scrollRef = useRef<HTMLDivElement>(null), viewRef = useRef<GridView | undefined>(undefined)
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
   const [status, setStatus] = useState<GridStatus>({})
@@ -69,7 +70,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
     results.viewShown(tabId, index, sorted)
     const view = new GridView({
       root: rootRef.current!, scroller: scrollRef.current!, handle: shownRef.current.handle, client: resultClient, descriptor: entry.descriptor, state: results.gridState(tabId, index),
-      resultIndex: index, resultCount: countRef.current, platform, stats: gridStats, showTypes: showTypesRef.current, whitespace: whitespaceRef.current,
+      resultIndex: index, resultCount: countRef.current, platform, stats: gridStats, showTypes: showTypesRef.current, whitespace: whitespaceRef.current, rowSize: rowSizeRef.current,
       onSelection: selection => {
         const current = entry.handle.getSnapshot()
         results.announceSelection(tabId, describeSelection(selection, current.rowsAvailable, entry.descriptor.columns.length))
@@ -96,7 +97,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
       if (viewRef.current === view) viewRef.current = undefined
     }
   }, [tabId, index, entry, results, resultClient, commands, platform, gridStats, panes])
-  useEffect(() => { viewRef.current?.update({ resultCount: count, showTypes, whitespace, sort: sort?.keys }) }, [count, showTypes, whitespace, sort?.keys])
+  useEffect(() => { viewRef.current?.update({ resultCount: count, showTypes, whitespace, sort: sort?.keys, rowSize }) }, [count, showTypes, whitespace, sort?.keys, rowSize])
   // A built view replaces what the grid shows: its first rows are read before the swap, so it paints whole rows at once,
   // unless what it shows is already gone (its result released or lost). While a first sort runs the grid keeps the rows in
   // their order; the views it showed close once it has swapped (ResultsService.viewShown).

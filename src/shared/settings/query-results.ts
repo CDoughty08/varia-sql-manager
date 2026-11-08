@@ -34,5 +34,15 @@ export const queryResultsSettings = [
     values: [{ value: 'value', label: 'Value' }, { value: 'chars', label: 'Length in characters' }, { value: 'bytes', label: 'Length in bytes' }], default: 'value',
     keywords: ['sort', 'order', 'length', 'len', 'datalength', 'characters', 'bytes', 'text'],
     description: 'How a sorted results grid orders its text and binary columns. Value sorts as ORDER BY would, by the column\'s collation, with NULL first ascending. Length in characters counts every character, spaces included; length in bytes sorts by DATALENGTH. Other columns always sort by value. The results toolbar changes this too, and sorted grids sort again.'
+  },
+  {
+    key: 'queryResults.grid.rowSize', page: 'queryResults.sqlServer.grid', label: 'Show row size behind row numbers', type: 'boolean', default: true, varia: true,
+    keywords: ['row size', 'bytes', 'datalength', 'bar', 'gutter', 'row number'],
+    description: 'A bar behind each row number shows the row\'s size, the sum of DATALENGTH over its columns, scaled to the largest row of the result (or of its filtered rows); rows over half the largest stand out. Hover a row number for the exact bytes. The results toolbar changes this too.'
+  },
+  {
+    key: 'queryResults.grid.columnProfile', page: 'queryResults.sqlServer.grid', label: 'Show the column profile panel', type: 'boolean', default: false, varia: true,
+    keywords: ['profile', 'stats', 'statistics', 'distinct', 'nulls', 'min', 'max', 'histogram', 'length'],
+    description: 'A panel beside the results describes each column of the result set that last had focus: its NULLs, distinct values (by the column\'s collation), lowest and highest values, lengths in characters and bytes, and a histogram. It describes the rows as the grid shows them, sorted or filtered, and is computed in the SQL backend. The results toolbar changes this too.'
   }
 ] as const satisfies readonly SettingDef[]

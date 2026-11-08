@@ -29,7 +29,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
-        "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.peekRows", "explorer.index", "explorer.search", "results.copy", "results.export",
+        "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.profile", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.peekRows", "explorer.index", "explorer.search", "results.copy", "results.export",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
         "ssis.describe", "ssis.execute", "ssis.catalogSetup"
@@ -297,7 +297,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     public RequestLane LaneOf(string method) => method switch
     {
         "query.execute" or "plans.estimate" => RequestLane.Query,
-        "results.read" or "results.copy" or "results.export" or "results.view" => RequestLane.Results,
+        "results.read" or "results.copy" or "results.export" or "results.view" or "results.profile" => RequestLane.Results,
         "explorer.children" or "explorer.peek" or "explorer.peekDependencies" or "explorer.peekRows" or "explorer.index" or "explorer.search" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
         "ssis.describe" or "ssis.execute" or "ssis.catalogSetup" => RequestLane.Ssis,
@@ -354,6 +354,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "results.rowBytes" => RowBytes(Read<ResultsRowBytesArgs>(parameters, json)),
         "results.view" => await ViewAsync(Read<ResultsViewArgs>(parameters, json), Token(context)),
         "results.viewClose" => CloseViews(Read<ResultsViewCloseArgs>(parameters, json)),
+        "results.profile" => await ProfileAsync(Read<ResultsProfileArgs>(parameters, json), Token(context)),
         "results.copy" => await jobs.CopyAsync(Read<ResultsCopyArgs>(parameters, json), context),
         "results.export" => await jobs.ExportAsync(Read<ResultsExportArgs>(parameters, json), context),
         "explorer.children" => await explorer.ChildrenAsync(Read<ExplorerChildrenArgs>(parameters, json), Token(context)),
@@ -1548,6 +1549,34 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         store.Return(set.Budget, working);
         var view = store.AddView(set, sorted.Order, keys, sorted.Approximate, complete, kept, args.Replaces);
         return new ResultsViewResult(view.ViewId, view.Rows, view.Complete, view.Approximate);
+    }
+
+    /// <summary>results.profile: a column profile (ColumnProfiler) of a result's sealed rows or a view's, off the frame loop,
+    /// charging its working memory to the result's query budget while it runs; TOO_LARGE when the budget has no room.</summary>
+    private async Task<ResultsProfileResult> ProfileAsync(ResultsProfileArgs args, CancellationToken token)
+    {
+        if (args.ResultId == 0 || args.Columns is not { Length: <= ColumnProfiler.MaxColumns } || args.ViewId == 0)
+            throw new RequestException("INVALID_PARAMS", "Up to 32 columns are profiled at a time.");
+        var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        for (var i = 0; i < args.Columns.Length; i++)
+            if (args.Columns[i] < 0 || args.Columns[i] >= set.Columns.Count || Array.IndexOf(args.Columns, args.Columns[i], 0, i) >= 0)
+                throw new RequestException("INVALID_PARAMS", "Each profiled column must be a distinct column of the result.");
+        var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
+        var complete = view?.Complete ?? set.IsComplete;
+        var pages = set.SealedSnapshot();
+        long rows = 0;
+        foreach (var page in pages) rows += page.Rows;
+        var working = ColumnProfiler.WorkingBytes(rows, args.Columns.Length);
+        if (!store.TryReserve(set.Budget, working, false, out _))
+            throw new RequestException("TOO_LARGE", "There is not enough result memory to profile these rows. Close other results and try again.");
+        try
+        {
+            var result = await Task.Run(() => ColumnProfiler.Profile(set, pages, view, args.Columns, complete, token), token);
+            if (set.IsReleased) throw Unavailable(args.ResultId);
+            if (view is not null && !store.HasView(view)) throw ViewClosed();
+            return result;
+        }
+        finally { store.Return(set.Budget, working); }
     }
 
     private ResultsViewCloseResult CloseViews(ResultsViewCloseArgs args)

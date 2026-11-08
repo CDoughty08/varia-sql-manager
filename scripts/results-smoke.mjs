@@ -12,10 +12,10 @@ import { checkClientStatistics } from './fixtures/client-statistics.mjs'
 import { enlargeOutput, sizeResultStack } from './fixtures/results-pane.mjs'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
-  activeDocument, backendReady, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice,
+  activeDocument, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice,
   jobProgress, kindIcon, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
   outputPaneIds, outputPanel, outputToolbar, outputView, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, resultsToolbar, resultToggle, statusBar,
-  statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, unsavedMark
+  profileCard, profileFigures, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, unsavedMark
 } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -1390,7 +1390,7 @@ try {
   await page.keyboard.press('Shift+F10')
   const outputMenu = page.getByRole('menu', { name: 'Query output', exact: true })
   await expect(outputMenu).toBeVisible()
-  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space'])
+  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space', 'Column Profile', 'Show Row Size'])
   await page.keyboard.press('Escape')
   // Shift+F10 right after a click opens at the cell just clicked, though the grid paints it as active only on its next
   // frame: below it (or above, when there is no room), from its left edge (or to its right edge, near the window's).
@@ -1410,6 +1410,33 @@ try {
   await expect(cell(4, 2)).toHaveAttribute('aria-selected', 'false')
   await page.keyboard.press('Escape')
   await expect(outputMenu).toHaveCount(0)
+
+  // 13b. Column profile and row size: the results toolbar's Profile opens a card per column, computed by the backend over
+  // the set (results.profile), and closes from the panel; Row size draws a bar behind each row number with its bytes in
+  // the tooltip, and hides it when turned off.
+  await run('-- varia-fake: sets=W1*100')
+  await settled()
+  const show = name => resultsToolbar(page).getByRole('group', { name: 'Show', exact: true }).getByRole('button', { name, exact: true })
+  await expect(show('Profile')).toHaveAttribute('aria-pressed', 'false')
+  await show('Profile').click()
+  await expect(columnProfile(page)).toBeVisible()
+  await expect(show('Profile')).toHaveAttribute('aria-pressed', 'true')
+  await expect(columnProfile(page)).toContainText('100 rows')
+  await expect.poll(() => profileFigures(profileCard(page, 'id'))).toMatchObject({ NULLs: '0', Distinct: '100 · unique', Min: '0', Max: '99' })
+  await expect.poll(() => profileFigures(profileCard(page, 'score'))).toMatchObject({ NULLs: '20 (20%)' })
+  expect(await profileFigures(profileCard(page, 'name'))).toHaveProperty('Length')
+  await columnProfile(page).getByRole('button', { name: 'Close Column Profile', exact: true }).click()
+  await expect(columnProfile(page)).toHaveCount(0)
+  await expect(show('Profile')).toHaveAttribute('aria-pressed', 'false')
+  await expect(show('Row size')).toHaveAttribute('aria-pressed', 'true')
+  await expect(rowNumber(0)).toHaveAttribute('title', /^Row 1: [\d,]+ bytes/)
+  expect(Number(await rowNumber(0).evaluate(element => element.style.getPropertyValue('--rg-rs')))).toBeGreaterThan(0)
+  await show('Row size').click()
+  await expect(show('Row size')).toHaveAttribute('aria-pressed', 'false')
+  await expect(rowNumber(0)).not.toHaveAttribute('title', /bytes/)
+  await show('Row size').click()
+  await expect(rowNumber(0)).toHaveAttribute('title', /^Row 1: /)
+  console.log('Results checks: the column profile panel shows the figures the backend computes for each column, and the row-size bar shows and hides with its bytes.')
 
   // 14. Styling: NULL, truncation, read errors and the selection (focused or not) take their tokens; a theme change
   // recolours the same nodes.

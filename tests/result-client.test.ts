@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ResultClient, WindowCache, type PortMessageEvent, type RowWindow, type WindowLike, type WorkerLike } from '../src/renderer/src/results/ResultClient'
 import { ResultsWorkerCore } from '../src/renderer/src/results/worker-core'
 import type { WorkerRequest, WorkerResponse } from '../src/renderer/src/results/worker-protocol'
-import type { ApiResult, QueryResult, ResultDescriptor } from '../src/shared/contracts'
+import type { ApiResult, QueryResult, ResultDescriptor, ResultsProfileResult } from '../src/shared/contracts'
 import type { PortMessage, PortRequest } from '../src/shared/ipc/port-messages'
 import type { LiveEvent, LiveSubscribeParams } from '../src/shared/live/schema'
 import { columnViewBytes, encodePage } from '../src/shared/ipc/wire/pages'
@@ -325,6 +325,34 @@ describe('ResultClient', () => {
     worker().toWorker({ t: 'backend', generation: 2, status: 'ready' })
     await settle()
     expect([client.trackedViews, lostView.getSnapshot().state]).toEqual([0, 'lost'])
+  })
+
+  it('profiles a result or its view in the backend and refuses columns the result lacks before the port', async () => {
+    const { client, worker, handOver } = fixture()
+    handOver()
+    await client.ready()
+    worker().toWorker({ t: 'backend', generation: 1, status: 'ready' })
+    const handle = client.open(descriptor())
+    const answer = async (result: unknown) => {
+      await settle()
+      const request = worker().fromWorker.findLast(item => item.t === 'profile')!
+      worker().toWorker({ t: 'end', rid: request.rid, ok: true, result: result as ResultsProfileResult })
+      return request
+    }
+    const result = { rows: 10, complete: true, rowBytes: { min: 1, max: 9, average: 5, exact: false }, columns: [{ column: 0, values: 9, nulls: 1, distinct: 9, distinctExact: true, min: '1', max: '9', approximate: false }] }
+    const profiling = handle.profile([0])
+    expect(await answer(result)).toMatchObject({ t: 'profile', generation: 1, resultId: 3, columns: [0] })
+    expect(await profiling).toEqual(result)
+    const sorting = handle.sort([{ column: 0, descending: true, mode: 'value' }])
+    await settle()
+    const sort = worker().fromWorker.findLast(item => item.t === 'view')!
+    worker().toWorker({ t: 'end', rid: sort.rid, ok: true, result: { viewId: 2, rows: 10, complete: true, approximate: false } })
+    const view = await sorting
+    const viewed = view.profile([])
+    expect(await answer({ rows: 10, complete: true, columns: [] })).toMatchObject({ t: 'profile', resultId: 3, columns: [], viewId: 2 })
+    expect((await viewed).columns).toEqual([])
+    await expect(handle.profile([1])).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.profile([0, 0])).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
   })
 
   it('bounds the text of the windows a result remembers', async () => {
