@@ -65,8 +65,9 @@ internal static class SearchChecks
             "the resource fingerprint covers exactly the objects the shared set holds");
     }
 
+    // A generous match timeout: it fires only on a stall, and a starved CI runner can deschedule a match for a second.
     private static SearchMatcher Make(string text, bool caseSensitive = false, bool wholeWord = false, bool regex = false) =>
-        SearchMatcher.Create(text, caseSensitive, wholeWord, regex, TimeSpan.FromSeconds(1)).Matcher ?? throw new InvalidOperationException("No matcher for " + text);
+        SearchMatcher.Create(text, caseSensitive, wholeWord, regex, TimeSpan.FromSeconds(15)).Matcher ?? throw new InvalidOperationException("No matcher for " + text);
 
     private static void Matcher(Action<bool, string> check)
     {
@@ -87,10 +88,11 @@ internal static class SearchChecks
         check(broken is null && problem is not null && problem.Contains("lookarounds", StringComparison.Ordinal), "a lookaround is refused, since the matcher never backtracks");
         (broken, problem) = SearchMatcher.Create("(a)\\1", false, false, true, TimeSpan.FromSeconds(1));
         check(broken is null && problem is not null, "a backreference is refused");
-        // The classic catastrophic pattern runs in linear time under NonBacktracking.
+        // The classic catastrophic pattern runs in linear time under NonBacktracking; backtracking would never finish, so the
+        // bound is generous for a starved CI runner.
         var watch = System.Diagnostics.Stopwatch.StartNew();
         var evil = Make("(a+)+$", regex: true).Find(new string('a', 50_000) + "!", 0, out _, out _);
-        check(!evil && watch.Elapsed < TimeSpan.FromSeconds(2), "a pattern that backtracks exponentially elsewhere runs in linear time");
+        check(!evil && watch.Elapsed < TimeSpan.FromSeconds(15), "a pattern that backtracks exponentially elsewhere runs in linear time");
         check(!Make("x").Find("", 0, out _, out _) && Make("a").Find("a", 1, out _, out _) == false, "the matcher stops at the end of the text");
         check(Make("ord*s").Find("usp_GetOrders", 0, out at, out length) && at == 7 && length == 6, "a plain search's * stands for any characters");
         check(Make("*Orders*").Find("usp_GetOrders", 0, out at, out length) && at == 7 && length == 6, "a plain search's outer *s change nothing, since it matches anywhere");
@@ -147,7 +149,8 @@ internal static class SearchChecks
 
     private static ObjectSearchResult Search(ConnectionIndex index, string text, bool names = true, bool definitions = true, int limit = 200, HashSet<string>? kinds = null, string? database = null,
         bool wholeWord = false, ObjectIndexLimits? limits = null, CancellationToken token = default, bool fuzzy = false) =>
-        IndexSearch.Run(index, new(text, false, wholeWord, false, names, definitions, kinds, database, limit, fuzzy), Make(text, wholeWord: wholeWord), limits ?? new ObjectIndexLimits(), Ready, token);
+        // The default budget is widened so a starved CI runner cannot turn a small search partial; Deadline sets its own.
+        IndexSearch.Run(index, new(text, false, wholeWord, false, names, definitions, kinds, database, limit, fuzzy), Make(text, wholeWord: wholeWord), limits ?? new ObjectIndexLimits { SearchBudget = TimeSpan.FromMinutes(1) }, Ready, token);
 
     /// <summary>Fuzzy Match: how names split into words, the sound key, the bounded edit distance, and how approximate hits rank
     /// below exact ones, mark their words, honour Whole Word and dots, and leave definitions exact.</summary>
@@ -263,11 +266,16 @@ internal static class SearchChecks
         check(result.Partial && result.Total == 1 && result.Hits is [{ Label: "dbo.needle_first" }],
             $"a search past its budget answers partial with the hits it found, even after an early hit ({result.Total} hits, partial {result.Partial}, {result.ElapsedMs} ms)");
         var roomy = new ObjectIndexLimits { SearchBudget = TimeSpan.FromHours(1) };
-        using var stop = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+        // Stop from a dedicated thread: a CancellationTokenSource's own timer cancels from the thread pool, which the offline
+        // lanes saturate on a starved runner, so the scan could finish (in 561 ms) before that callback ran.
+        using var stop = new CancellationTokenSource();
+        var stopper = new Thread(() => { Thread.Sleep(50); stop.Cancel(); }) { IsBackground = true, Priority = ThreadPriority.AboveNormal };
         var watch = System.Diagnostics.Stopwatch.StartNew();
+        stopper.Start();
         var stopped = false;
         try { Search(index, "needle", limits: roomy, token: stop.Token); }
         catch (OperationCanceledException) { stopped = true; }
+        stopper.Join();
         check(stopped, $"a cancelled search stops scanning after an early hit ({watch.ElapsedMilliseconds} ms)");
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
@@ -652,7 +660,7 @@ internal static class SearchChecks
             }, token: only.Token);
             only.Cancel();
             try { await lone; } catch (OperationCanceledException) { }
-            check(await Task.WhenAny(stopped.Task, Task.Delay(5000)) == stopped.Task && catalog.Sets == 2, "the last waiter leaving stops the shared read and keeps nothing");
+            check(await Task.WhenAny(stopped.Task, Task.Delay(15_000)) == stopped.Task && catalog.Sets == 2, "the last waiter leaving stops the shared read and keeps nothing");
             abandon.SetResult();
         }
         // A shared read past its limit answers TimeoutException, not a caller's cancellation.

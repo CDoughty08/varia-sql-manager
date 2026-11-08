@@ -1,4 +1,4 @@
-import { electron, expect } from './fixtures/smoke.mjs'
+import { electron, expect, within } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerRow } from './fixtures/explorer-tree.mjs'
@@ -46,7 +46,7 @@ async function close() {
   app = undefined
   if (!current) return
   await current.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) }).catch(() => {})
-  const closed = await Promise.race([current.close().then(() => true, () => false), new Promise(resolve => setTimeout(() => resolve(false), 15000))])
+  const closed = await within(current.close().then(() => true, () => false), 15000, () => false)
   if (!closed) current.process()?.kill('SIGKILL')
 }
 const hooks = () => app.evaluate(() => ({ state: globalThis.__variaTest.state(), pid: globalThis.__variaTest.pid() }))
@@ -466,7 +466,7 @@ try {
   await launch({ VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }, profile)
   await expect(backendReady(page, 'fake')).toHaveText('Ready')
   await expect.poll(() => alive(stuck.pid), { timeout: 5000 }).toBe(false)
-  await Promise.race([quitting.close().catch(() => {}), new Promise(resolve => setTimeout(resolve, 5000))])
+  await within(quitting.close().catch(() => {}), 5000)
   await close()
   console.log('Relaunch while quitting passed: the quitting app released the single-instance lock, and the relaunch opened its window.')
 

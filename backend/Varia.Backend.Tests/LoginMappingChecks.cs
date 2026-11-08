@@ -189,7 +189,7 @@ internal static class LoginMappingChecks
         public Microsoft.Data.SqlClient.SqlConnection Connection(string connectionId)
         {
             Interlocked.Increment(ref Connections);
-            return new Microsoft.Data.SqlClient.SqlConnection("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false");
+            return new Microsoft.Data.SqlClient.SqlConnection("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false");
         }
         public Task OpenAsync(Microsoft.Data.SqlClient.SqlConnection connection, CancellationToken token) => connection.OpenAsync(token);
         public bool ClearPoolsFor(string connectionId, string database) => false;
