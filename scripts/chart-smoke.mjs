@@ -7,7 +7,7 @@
 // only for several series, stops calling a paused sample "now", draws a sparkline in a metric tile (which takes no
 // focus), follows a theme switch, and draws in the system colors the DOM resolves under forced colors, through a change
 // of contrast theme, legend included.
-import { electron, expect } from './fixtures/smoke.mjs'
+import { electron, expect, within } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { backendReady, chartLegend, chartSwatchLines, chartTableRegion, chartTooltip, part, toolbarButton } from './fixtures/ui.mjs'
@@ -342,7 +342,7 @@ try {
 } finally {
   clearTimeout(watchdog)
   await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) }).catch(() => {})
-  await Promise.race([app.close(), sleep(15000).then(() => app.process()?.kill())]).catch(() => {})
+  await within(app.close(), 15000, () => app.process()?.kill()).catch(() => {})
   await rm(profile, { recursive: true, force: true }).catch(() => {})
   await rm(control, { recursive: true, force: true }).catch(() => {})
 }

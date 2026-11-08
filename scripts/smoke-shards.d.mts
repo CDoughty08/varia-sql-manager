@@ -4,3 +4,4 @@ export const suiteSeconds: Readonly<Record<'linux' | 'windows', Readonly<Record<
 export const shardBudgetSeconds: number
 export function platformSeconds(platform?: string): Readonly<Record<string, number>>
 export function shardSuites(suites: readonly string[], count: number, seconds?: Readonly<Record<string, number>>): string[][]
+export function suiteLimitSeconds(suite: string, platform?: string): number

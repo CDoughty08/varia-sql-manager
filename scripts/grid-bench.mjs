@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
+import { within } from './fixtures/smoke.mjs'
 import { backendReady, documentTabs, gridCell, gridCellSelector, gridPart, jobNotice, outputStatus, part, statusBar, toolbarButton } from './fixtures/ui.mjs'
 
 // End-to-end results grid benchmarks (npm run bench:grid): the built app in test mode at 1600 × 1000 (or the screen, if
@@ -107,7 +108,7 @@ async function launch(env) {
 
 async function close() {
   if (!app) return
-  const closed = await Promise.race([app.close().then(() => true, () => false), new Promise(done => setTimeout(() => done(false), 15000))])
+  const closed = await within(app.close().then(() => true, () => false), 15000, () => false)
   if (!closed) app.process()?.kill('SIGKILL')
   app = undefined
 }

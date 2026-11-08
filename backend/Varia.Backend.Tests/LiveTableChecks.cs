@@ -699,8 +699,9 @@ internal static class LiveTableChecks
             "an update's view keeps the view's rows, and its filter matches stored text case-insensitively");
         await Stop(view);
 
-        // Paused while the track list is set, so the next revision is the first to see it.
-        var tracked = Subscribe(service, [SyntheticSampler.GridProbe], new { tickMs = 300, rows = 4 }, id: 2);
+        // Paused while the track list is set, so the next revision is the first to see it. 1.5 s between samples: the pause must
+        // come before the second sample, after a poll whose timer a starved CI runner can fire over 1 s late.
+        var tracked = Subscribe(service, [SyntheticSampler.GridProbe], new { tickMs = 1500, rows = 4 }, id: 2);
         await tracked.Recorder.WaitAsync(recorder => recorder.Ticks.Count >= 1);
         service.Live.Update(new LiveUpdateArgs(tracked.Id, SyntheticSampler.Source, Paused: true), Json);
         await Task.Delay(200);
