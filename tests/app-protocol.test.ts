@@ -61,6 +61,32 @@ describe('app:// renderer protocol', () => {
     expect(reads).toEqual([])
   })
 
+  it('keeps serving a file it served after a rebuild deletes it, but reads index.html afresh', async () => {
+    // A popout window loads the page's style sheet and fonts again; a rebuild of out/ must not leave it unstyled.
+    const files = new Map([[join(root, 'index.html'), 'old page'], [join(root, 'assets', 'style-1.css'), 'body{}']])
+    const reads: string[] = []
+    const handler = appProtocolHandler(root, contentSecurityPolicy(), async path => {
+      reads.push(path)
+      const text = files.get(path)
+      if (text === undefined) throw new Error('ENOENT')
+      return new TextEncoder().encode(text)
+    })
+    expect(await (await handler(new Request('app://varia/assets/style-1.css'))).text()).toBe('body{}')
+    expect(await (await handler(new Request(appIndexUrl))).text()).toBe('old page')
+    files.delete(join(root, 'assets', 'style-1.css'))
+    files.set(join(root, 'index.html'), 'new page')
+    const again = await handler(new Request('app://varia/assets/style-1.css'))
+    expect(again.status).toBe(200)
+    expect(again.headers.get('content-type')).toBe('text/css; charset=utf-8')
+    expect(await again.text()).toBe('body{}')
+    expect(await (await handler(new Request(appIndexUrl))).text()).toBe('new page')
+    // A file that was missing is looked for again: nothing is remembered from a failed read.
+    expect((await handler(new Request('app://varia/assets/later.js'))).status).toBe(404)
+    files.set(join(root, 'assets', 'later.js'), 'x')
+    expect((await handler(new Request('app://varia/assets/later.js'))).status).toBe(200)
+    expect(reads.filter(path => path.endsWith('style-1.css'))).toHaveLength(1)
+  })
+
   it('is a standard, secure origin that cannot bypass the CSP or register service workers', () => {
     expect(appSchemePrivileges).toMatchObject({ standard: true, secure: true, bypassCSP: false, allowServiceWorkers: false })
     expect(appMimeTypes['.js']).toMatch(/^text\/javascript/)

@@ -59,14 +59,25 @@ export function resolveAppPath(root: string, requestUrl: string): string | undef
   return path
 }
 
-/** The `protocol.handle` callback: GET and HEAD of files under `root`, with their type, the page's CSP and nosniff. */
+/**
+ * The `protocol.handle` callback: GET and HEAD of files under `root`, with their type, the page's CSP and nosniff.
+ * A file once served is served from memory from then on (the built renderer is a few MiB), as a packaged app's asar would:
+ * a rebuild of `out/` under an unpackaged app deletes the old content-hashed files, and a popout window, which loads the
+ * page's style sheets and fonts again, or a lazy chunk would otherwise get 404s for what the page is running. Only
+ * index.html is read every time, so a reload picks up a rebuild.
+ */
 export function appProtocolHandler(root: string, policy: string, read: (path: string) => Promise<Uint8Array> = readFile): (request: Request) => Promise<Response> {
+  const served = new Map<string, Uint8Array>()
+  const index = join(root, 'index.html')
   return async request => {
     if (request.method !== 'GET' && request.method !== 'HEAD') return new Response(null, { status: 405 })
     const path = resolveAppPath(root, request.url)
     if (!path) return new Response(null, { status: 404 })
-    let body: Uint8Array
-    try { body = await read(path) } catch { return new Response(null, { status: 404 }) }
+    let body = served.get(path)
+    if (!body) {
+      try { body = await read(path) } catch { return new Response(null, { status: 404 }) }
+      if (path !== index) served.set(path, body)
+    }
     const headers = { 'Content-Type': appMimeTypes[extname(path).toLowerCase()], 'Content-Security-Policy': policy, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-cache' }
     return new Response(request.method === 'HEAD' ? null : body as BodyInit, { status: 200, headers })
   }

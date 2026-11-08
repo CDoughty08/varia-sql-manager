@@ -83,6 +83,12 @@ try {
   // The popout has no preload: no window.varia, so no IPC of its own.
   expect(await results.evaluate(() => typeof window.varia)).toBe('undefined')
   expect(await page.evaluate(() => typeof window.varia)).toBe('object')
+  // The page's style sheets apply there (theme variables sit on the root element, so they alone would pass unstyled):
+  // every copied sheet loaded, and the body has the workbench's font, not the browser's default.
+  const styling = target => target.evaluate(() => ({ font: getComputedStyle(document.body).fontFamily, sheets: [...document.querySelectorAll('link[rel="stylesheet"]')].map(link => !!link.sheet && link.sheet.cssRules.length > 0) }))
+  const mainStyling = await styling(page)
+  await expect.poll(() => styling(results)).toEqual({ font: mainStyling.font, sheets: mainStyling.sheets })
+  expect(mainStyling.font).not.toMatch(/Times/)
   // The theme follows, now and when it changes.
   const background = '--varia-dock-background'
   expect(await variable(results, background)).toBe(await variable(page, background))
