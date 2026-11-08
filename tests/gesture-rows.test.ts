@@ -18,28 +18,34 @@ const ids = (rows: readonly { id: string }[]) => rows.map(row => row.id)
 describe('gesture rows', () => {
   it('list every gesture of the platform by group, with its choices, lock and keyboard path', () => {
     const rows = gestureRows(draft(), 'win32', '')
-    expect(rows.map(row => row.group)).toEqual(['modifier', 'modifier', 'modifier', 'pointerCommand', 'pointerCommand', 'pointerCommand', 'fixed', 'fixed', 'fixed', 'fixed', 'fixed', 'linked'])
+    expect(rows.map(row => row.kind)).toEqual(['modifier', 'modifier', 'modifier', 'pointerCommand', 'pointerCommand', 'pointerCommand', 'fixed', 'fixed', 'fixed', 'fixed', 'fixed'])
     // macOS's Control+click is a right-click there only.
     expect(ids(rows)).not.toContain('grid.secondaryClick')
     expect(ids(gestureRows(draft(), 'darwin', ''))).toContain('grid.secondaryClick')
     const float = rows.find(row => row.id === 'dock.floatWhileDragging')!
-    expect([float.binding, float.source, float.modified, float.options.map(option => option.label)]).toEqual(['Ctrl+Drag', 'default', false, ['Ctrl', 'Alt', 'Off']])
+    expect([float.label, float.source, float.changed, float.options.map(option => option.label)]).toEqual(['Ctrl+Drag', 'default', false, ['Ctrl', 'Alt', 'Off']])
     const toggle = gestureRows(draft(), 'darwin', '').find(row => row.id === 'dock.toggleFloat')!
-    expect([toggle.binding, toggle.options.map(option => option.label), toggle.keyboard]).toEqual(['⌘ Double-click', ['⌘', '⌥', '⇧', 'None'], ['pane.float', 'pane.dock']])
+    expect([toggle.label, toggle.options.map(option => option.label), toggle.keyboard]).toEqual(['⌘ Double-click', ['⌘', '⌥', '⇧', 'None'], ['pane.float', 'pane.dock']])
     const fit = rows.find(row => row.id === 'grid.fitColumn')!
     expect([fit.source, fit.options, fit.locked]).toEqual(['fixed', [], 'Double-clicking a column border fits it, as in SSMS.'])
     const rename = rows.find(row => row.id === 'documentTabs.rename')!
-    expect([rename.group, rename.options, rename.locked]).toEqual(['pointerCommand', [], expect.stringContaining('F2 renames')])
-    expect(rows.at(-1)).toMatchObject({ id: 'textEditor.multiCursorModifier', binding: 'Alt+Click', source: 'setting', page: 'textEditor.general' })
-    expect(gestureRows(draft(), 'darwin', '', { multiCursorModifier: 'ctrlCmd' }).at(-1)).toMatchObject({ binding: '⌘ Click', modified: true })
+    expect([rename.kind, rename.options, rename.locked]).toEqual(['pointerCommand', [], expect.stringContaining('F2 renames')])
+    // The linked editor setting shows only where the Mouse view passes its value, never in the All view's gesture rows.
+    expect(gestureRows(draft(), 'win32', '', { multiCursorModifier: 'alt' }).at(-1)).toMatchObject({ id: 'textEditor.multiCursorModifier', kind: 'linked', label: 'Alt+Click', source: 'setting', changed: false, page: 'textEditor.general' })
+    expect(gestureRows(draft(), 'darwin', '', { multiCursorModifier: 'ctrlCmd' }).at(-1)).toMatchObject({ label: '⌘ Click', changed: true })
+  })
+  it("keep the fields the All view reads, with the stub's names", () => {
+    const float = gestureRows(draft({ 'dock.floatWhileDragging': 'alt' }), 'win32', '').find(row => row.id === 'dock.floatWhileDragging')!
+    expect({ id: float.id, title: float.title, label: float.label, scopeTitle: float.scopeTitle, kind: float.kind, changed: float.changed, locked: float.locked })
+      .toEqual({ id: 'dock.floatWhileDragging', title: 'Float While Dragging', label: 'Alt+Drag', scopeTitle: 'Panels and Editor Tabs', kind: 'modifier', changed: true, locked: undefined })
   })
   it('follow edits to the draft, which keeps only changes, and reset per row', () => {
     let file = setGesture(draft({ 'later.gesture': 'alt' }), 'dock.floatWhileDragging', ['alt'], 'linux')
     file = setGesture(file, 'explorer.peekHover', null, 'linux')
     expect(file.gestures).toEqual({ 'later.gesture': 'alt', 'dock.floatWhileDragging': 'alt', 'explorer.peekHover': 'off' })
     const rows = gestureRows(file, 'linux', '')
-    expect(rows.find(row => row.id === 'dock.floatWhileDragging')).toMatchObject({ binding: 'Alt+Drag', currentToken: 'alt', source: 'user', modified: true, problems: [expect.objectContaining({ code: 'linuxAlt', severity: 'warning' })] })
-    expect(rows.find(row => row.id === 'explorer.peekHover')).toMatchObject({ binding: 'Off', currentToken: 'off', modified: true })
+    expect(rows.find(row => row.id === 'dock.floatWhileDragging')).toMatchObject({ label: 'Alt+Drag', currentToken: 'alt', source: 'user', changed: true, problems: [expect.objectContaining({ code: 'linuxAlt', severity: 'warning' })] })
+    expect(rows.find(row => row.id === 'explorer.peekHover')).toMatchObject({ label: 'Off', currentToken: 'off', changed: true })
     file = setGesture(file, 'dock.floatWhileDragging', undefined, 'linux')
     expect(file.gestures).toEqual({ 'later.gesture': 'alt', 'explorer.peekHover': 'off' })
     // The rest of the draft is untouched.

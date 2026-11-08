@@ -23,7 +23,7 @@ const sourceWords: Readonly<Record<GestureRow['source'], string>> = { default: '
 const domId = (id: string) => 'mouse-' + id.replace(/\./g, '-')
 
 function Binding({ row, platform, onPick }: { row: GestureRow; platform: Platform; onPick(token: string): void }) {
-  if (!row.options.length) return <span className="mouse-binding-text">{row.binding} {row.target}</span>
+  if (!row.options.length) return <span className="mouse-binding-text">{row.label} {row.target}</span>
   return <span className="mouse-binding">
     <select id={domId(row.id)} value={row.currentToken} aria-label={`${row.title}: modifier`} aria-describedby={row.problems.length ? domId(row.id) + '-problems' : undefined}
       aria-invalid={row.problems.some(problem => problem.severity === 'error') || undefined} onChange={event => onPick(event.target.value)}>
@@ -58,13 +58,13 @@ export default function MouseView({ draft, onChange, platform, search, onOpenPag
     <colgroup><col className="mouse-col-gesture" /><col className="mouse-col-binding" /><col className="mouse-col-where" /><col className="mouse-col-source" /></colgroup>
     <thead><tr><th scope="col">Gesture</th><th scope="col">Binding</th><th scope="col">Where</th><th scope="col">Source</th></tr></thead>
     {gestureRowGroups.map(group => {
-      const shown = rows.filter(row => row.group === group.id)
+      const shown = rows.filter(row => row.kind === group.id)
       if (!shown.length) return null
       return <tbody key={group.id}>
         <tr className="mouse-group"><th scope="rowgroup" colSpan={4}>{group.title}</th></tr>
-        {shown.map(row => <tr key={row.id} data-gesture={row.id} data-modified={row.modified || undefined}>
+        {shown.map(row => <tr key={row.id} data-gesture={row.id} data-modified={row.changed || undefined}>
           <th scope="row" className="mouse-gesture">
-            <span className="mouse-dot" aria-hidden="true" data-on={row.modified || undefined} />
+            <span className="mouse-dot" aria-hidden="true" data-on={row.changed || undefined} />
             <span className="mouse-title" title={row.description}>{row.title}</span>
             <span className="mouse-id">{row.id}</span>
             {row.locked && <span className="mouse-reason">{row.locked}</span>}
@@ -75,16 +75,16 @@ export default function MouseView({ draft, onChange, platform, search, onOpenPag
             </span>}
           </th>
           <td>
-            {row.group === 'linked'
-              ? <span className="mouse-binding-text">{row.binding} · {onOpenPage && row.page
+            {row.kind === 'linked'
+              ? <span className="mouse-binding-text">{row.label} · {onOpenPage && row.page
                 ? <button type="button" className="mouse-link" onClick={() => onOpenPage(row.page!)}>{pagePath(row.page).map(node => node.title).join(' › ')}</button>
                 : row.page && pagePath(row.page).map(node => node.title).join(' › ')}</span>
               : <Binding row={row} platform={platform} onPick={token => pick(row, token)} />}
           </td>
-          <td>{row.where}</td>
+          <td>{row.scopeTitle}</td>
           <td>
             <span className="mouse-source" data-source={row.source} title={row.locked}>{row.locked && <Icon name="lock" />}{sourceWords[row.source]}</span>
-            {row.options.length > 0 && <button type="button" className="icon-button mouse-reset" disabled={!row.modified} title={`Reset to ${row.defaultLabel}`}
+            {row.options.length > 0 && <button type="button" className="icon-button mouse-reset" disabled={!row.changed} title={`Reset to ${row.defaultLabel}`}
               aria-label={`Reset ${row.title} to ${row.defaultLabel}`} onClick={() => pick(row, undefined)}><Icon name="discard" /></button>}
           </td>
         </tr>)}
