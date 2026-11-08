@@ -1,5 +1,5 @@
-import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult } from '../../shared/contracts'
-import { portRequestSchema, rowBytesResultSchema, testPortRequestSchema, viewCloseResultSchema, viewResultSchema, type MemoryFeature, type MemoryReport, type PortMessage, type PortRequest } from '../../shared/ipc/port-messages'
+import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsFindRowsParams, ResultsFindRowsResult, ResultsIdentifyParams, ResultsIdentifyResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsRowIdsParams, ResultsRowIdsResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult } from '../../shared/contracts'
+import { findRowsResultSchema, identifyResultSchema, portRequestSchema, rowBytesResultSchema, rowIdsResultSchema, testPortRequestSchema, viewCloseResultSchema, viewResultSchema, type MemoryFeature, type MemoryReport, type PortEndResult, type PortMessage, type PortRequest } from '../../shared/ipc/port-messages'
 import { liveDescriptors, liveRetired, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../../shared/live/schema'
 import { cancelReasons, limits as wire, type CancelReason, type ErrorCode } from '../../shared/ipc/wire/protocol'
 import type { StreamSink } from './connection'
@@ -30,6 +30,10 @@ export interface ResultsBackend {
   /** A sort may take seconds: the worker's cancel (a newer sort, or the view no longer wanted) stops it. */
   view(generation: number, params: ResultsViewParams): { readonly done: Promise<ResultsViewResult>; cancel(reason: CancelReason): void }
   viewClose(generation: number, params: ResultsViewCloseParams): Promise<ResultsViewCloseResult>
+  /** Hashing a result's rows may take seconds: the worker's cancel stops it, as it does a sort. */
+  identify(generation: number, params: ResultsIdentifyParams): { readonly done: Promise<ResultsIdentifyResult>; cancel(reason: CancelReason): void }
+  rowIds(generation: number, params: ResultsRowIdsParams): Promise<ResultsRowIdsResult>
+  findRows(generation: number, params: ResultsFindRowsParams): Promise<ResultsFindRowsResult>
   live(generation: number, params: LiveSubscribeParams, onLive: (event: LiveEvent, bytes: number) => void, credit: number): LiveStreamHandle
   liveUpdate(generation: number, params: LiveUpdateParams): Promise<LiveUpdateResult>
 }
@@ -239,6 +243,9 @@ export class ResultsPortHost {
       case 'rowBytes': return this.rowBytes(request)
       case 'view': return this.view(request)
       case 'viewClose': return this.viewClose(request)
+      case 'identify': return this.identify(request)
+      case 'rowIds': return this.rowIds(request)
+      case 'findRows': return this.findRows(request)
       case 'live': return this.live(request)
       case 'liveUpdate': return this.liveUpdate(request)
     }
@@ -501,6 +508,69 @@ export class ResultsPortHost {
     })
   }
 
+  /** Row identities of a result this renderer owns (results.identify); cancelled like a sort, and counted with sorts. */
+  private identify(request: Extract<PortRequest, { t: 'identify' }>): void {
+    const { rid } = request
+    if (this.sorting.has(rid)) return this.end(rid, 'INVALID_REQUEST', 'The results request was invalid.')
+    if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
+    if (!this.current(request.generation, request.resultId)) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
+    const port = this.port
+    const params: ResultsIdentifyParams = { resultId: request.resultId, by: request.by }
+    if (request.column !== undefined) params.column = request.column
+    const identify = this.backend.identify(request.generation, params)
+    this.sorting.set(rid, identify)
+    identify.done.then(result => {
+      if (this.port !== port || this.sorting.get(rid) !== identify) return
+      this.sorting.delete(rid)
+      const parsed = identifyResultSchema.safeParse(result)
+      if (!parsed.success || (request.column !== undefined && parsed.data.column !== request.column)) return this.end(rid, 'BACKEND_ERROR', 'The rows could not be told apart.')
+      this.post({ t: 'end', rid, ok: true, result: parsed.data })
+    }, error => {
+      if (this.port !== port || this.sorting.get(rid) !== identify) return
+      this.sorting.delete(rid)
+      this.fail(rid, error)
+    })
+  }
+
+  /** A range's identities; the answer covers the range asked, at most as many rows as asked or as exist. */
+  private rowIds(request: Extract<PortRequest, { t: 'rowIds' }>): void {
+    const params: ResultsRowIdsParams = { resultId: request.resultId, firstRow: request.firstRow, count: request.count }
+    if (request.viewId !== undefined) params.viewId = request.viewId
+    this.counted(request.rid, request.generation, request.resultId, () => this.backend.rowIds(request.generation, params), result => {
+      const parsed = rowIdsResultSchema.safeParse(result)
+      return parsed.success && parsed.data.firstRow === request.firstRow && parsed.data.ids.length <= Math.min(request.count, Math.max(0, parsed.data.rows - request.firstRow)) ? parsed.data : undefined
+    })
+  }
+
+  /** The rows matching identities; every mark names one of the identities asked and every position is a row. */
+  private findRows(request: Extract<PortRequest, { t: 'findRows' }>): void {
+    const params: ResultsFindRowsParams = { resultId: request.resultId, ids: [...request.ids] }
+    if (request.viewId !== undefined) params.viewId = request.viewId
+    this.counted(request.rid, request.generation, request.resultId, () => this.backend.findRows(request.generation, params), result => {
+      const parsed = findRowsResultSchema.safeParse(result)
+      return parsed.success && parsed.data.marks.every(mark => mark < request.ids.length) && parsed.data.positions.every(position => position < parsed.data.rows) ? parsed.data : undefined
+    })
+  }
+
+  /** A request of a result this renderer owns, counted with live updates against the 64; `check` bounds its answer. */
+  private counted<T>(rid: number, generation: number, resultId: number, run: () => Promise<unknown>, check: (result: unknown) => T | undefined): void {
+    if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
+    if (!this.current(generation, resultId)) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
+    const port = this.port
+    this.updating++
+    run().then(result => {
+      if (this.port !== port) return
+      this.updating--
+      const answered = check(result)
+      if (answered === undefined) return this.end(rid, 'BACKEND_ERROR', 'The results could not be read.')
+      this.post({ t: 'end', rid, ok: true, result: answered as PortEndResult })
+    }, error => {
+      if (this.port !== port) return
+      this.updating--
+      this.fail(rid, error)
+    })
+  }
+
   /** The request names the current, ready generation and a result this renderer owns. */
   private current(generation: number, resultId: number): boolean {
     return generation === this.generation && this.backend.readyGeneration() === generation && this.owned.has(resultId)
@@ -542,6 +612,13 @@ export function supervisorResults(supervisor: BackendSupervisor): ResultsBackend
       return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
     },
     viewClose: (generation, params) => supervisor.request('results.viewClose', params, { generation }),
+    identify: (generation, params) => {
+      let id = 0
+      const done = supervisor.request('results.identify', params, { generation, onSent: sent => { id = sent } })
+      return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
+    },
+    rowIds: (generation, params) => supervisor.request('results.rowIds', params, { generation }),
+    findRows: (generation, params) => supervisor.request('results.findRows', params, { generation }),
     live: (generation, params, onLive, credit) => {
       let id = 0
       const done = supervisor.request('live.subscribe', params, { generation, credit, onLive, onSent: sent => { id = sent } })

@@ -514,9 +514,41 @@ function buildView(result, sort) {
   }
   order.sort((a, b) => { for (const key of sort) { const order = compareKey(a, b, key); if (order) return order } return a - b })
   return {
-    viewId: nextViewId++, resultId: result.resultId, columns: result.columns, rowAt: position => result.rowAt(order[position]), pageRows: result.pageRows,
+    viewId: nextViewId++, resultId: result.resultId, columns: result.columns, order, rowAt: position => result.rowAt(order[position]), pageRows: result.pageRows,
     read: rows, complete: true, pages: new Map(), sealed: result.complete && rows === result.read
   }
+}
+// results.identify: a row identity per row, the hash of a key column's text or of the whole row's. Text equality here is
+// case-insensitive and ignores trailing spaces (a CI collation); the real backend's collation-aware hashing is checked by
+// its own checks. Auto picks the first NULL-free unique column, names ending in id, key or guid first.
+function identityHash(text) {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) { hash ^= text.charCodeAt(i); hash = Math.imul(hash, 0x01000193) >>> 0 }
+  return hash
+}
+function buildIdentity(result, by, column) {
+  const rows = available(result)
+  const textOf = (row, at) => {
+    const cell = result.rowAt(row)[at], value = cell !== null && typeof cell === 'object' && !(cell instanceof Uint8Array) ? cell.value : cell
+    return value === null || value === undefined ? null : value instanceof Uint8Array ? Buffer.from(value).toString('hex') : String(value).replace(/ +$/, '').toLowerCase()
+  }
+  const idsBy = at => Array.from({ length: rows }, (_, row) => {
+    if (at >= 0) { const text = textOf(row, at); return text === null ? 0 : identityHash('v' + text) }
+    return identityHash(result.columns.map((_, c) => { const text = textOf(row, c); return text === null ? '\u0000' : 'v' + text }).join('\u0001'))
+  })
+  const distinct = ids => new Set(ids).size === ids.length
+  if (by === 'column') { const ids = idsBy(column); return { column, ids, unique: distinct(ids) } }
+  if (by === 'auto') {
+    const ranked = result.columns.map((item, at) => ({ at, named: /(^id|id|key|guid)$/i.test(item.name.trim()) })).filter(item => result.columns[item.at].wire !== 'binary')
+      .sort((a, b) => Number(b.named) - Number(a.named) || a.at - b.at)
+    for (const { at } of ranked) {
+      if (Array.from({ length: rows }, (_, row) => textOf(row, at)).some(text => text === null)) continue
+      const ids = idsBy(at)
+      if (distinct(ids)) return { column: at, ids, unique: true }
+    }
+  }
+  const ids = idsBy(-1)
+  return { column: -1, ids, unique: distinct(ids) }
 }
 /** The result, or the view of it a request names; undefined (after answering) when either is gone. */
 function sourceOf(id, resultId, viewId) {
@@ -1066,6 +1098,31 @@ async function workbench(id, method, params, credit) {
       result.views.set(view.viewId, view)
       if (params.replaces !== undefined) result.views.delete(params.replaces)
       return respond(id, { viewId: view.viewId, rows: view.read, complete: view.sealed, approximate: false })
+    }
+    case 'results.identify': {
+      const result = stored.get(params.resultId)
+      if (!result) return missing(id, params.resultId)
+      if (!result.complete) return fail(id, 'RESULT_OPEN', 'Highlight rows after this result set finishes loading.')
+      result.identity = buildIdentity(result, params.by, params.column)
+      return respond(id, { column: result.identity.column, unique: result.identity.unique, approximate: false, rows: result.identity.ids.length })
+    }
+    case 'results.rowIds': case 'results.findRows': {
+      const source = sourceOf(id, params.resultId, params.viewId)
+      if (!source) return
+      const result = stored.get(params.resultId), identity = result.identity
+      if (!identity) return fail(id, 'IDENTITY_NOT_FOUND', 'Tell the rows of this result apart first (results.identify).')
+      const rows = source === result ? identity.ids.length : source.read
+      // A view's rows are its result's in another order.
+      const baseRow = position => source === result ? position : source.order[position] ?? -1
+      const idAt = position => { const row = baseRow(position); return row < 0 ? -1 : identity.ids[row] }
+      if (method === 'results.rowIds') {
+        const end = Math.min(rows, params.firstRow + params.count)
+        return respond(id, { firstRow: params.firstRow, ids: Array.from({ length: Math.max(0, end - params.firstRow) }, (_, k) => idAt(params.firstRow + k)), rows })
+      }
+      const wanted = new Map(params.ids.map((value, mark) => [value, mark]).reverse())
+      const positions = [], marks = []
+      for (let position = 0; position < rows; position++) { const mark = wanted.get(idAt(position)); if (mark !== undefined) { positions.push(position); marks.push(mark) } }
+      return respond(id, { positions, marks, truncated: false, rows })
     }
     case 'results.viewClose': {
       const result = stored.get(params.resultId)

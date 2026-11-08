@@ -22,6 +22,7 @@ import { applyWheel, ensureVisible, normalizeWheel, offsetsDropped, onNativeScro
 import { columnTitle, covered, dragSelection, navigate, pressButton, pressSelection, selectAll, windowRanges, type CellRange, type GridHit, type GridSelection } from './selection'
 import type { GridStats } from './stats'
 import { remapSelection, remapTop, sameSelection, type RowMap } from './swap'
+import { colorAt, highlightColors, type RowHighlights } from './highlights'
 import { tileKey } from './tiles'
 import { whitespaceRuns, type WhitespaceMode } from './whitespace'
 import { displayText } from '../../../shared/ipc/wire/cells'
@@ -33,9 +34,13 @@ const classes = Array.from({ length: 128 }, (_, bits) => 'rg-c' + (bits & NULL ?
 const truncatedAt: Record<string, string> = { binary: '32,766 bytes', document: '2,097,152 characters', text: '65,535 characters' }
 // A row's look is one class string too: odd or even, and its tone (none, or one of liveTones); the row number's likewise.
 const toneIndex = new Map<string, number>(liveTones.map((tone, index) => [tone, index + 1]))
-const rowClasses = [false, true].map(odd => ['', ...liveTones].map(tone => 'rg-row' + (odd ? ' odd' : '') + (tone ? ' tone-' + tone : '')))
-const markClasses = [false, true].map(sel => ['', ...liveTones].map(tone => 'rg-rn' + (sel ? ' sel' : '') + (tone ? ' tone-' + tone : '')))
+// A highlight (highlights.ts) adds its colour's class to both: 0 for none, else 1 + its index in highlightColors.
+const highlightClass = ['', ...highlightColors.map(color => ' hl hl-' + color)]
+const rowClasses = [false, true].map(odd => ['', ...liveTones].map(tone => highlightClass.map(hl => 'rg-row' + (odd ? ' odd' : '') + (tone ? ' tone-' + tone : '') + hl)))
+const markClasses = [false, true].map(sel => ['', ...liveTones].map(tone => highlightClass.map(hl => 'rg-rn' + (sel ? ' sel' : '') + (tone ? ' tone-' + tone : '') + hl)))
 let nextGridId = 1
+/** What a screen reader hears on a highlighted row's header. */
+const highlightLabel = (highlight: number): string => 'Highlighted ' + highlightColors[highlight - 1]
 
 /** `mode` is the white space mode `value` was written under; `marked`, that the cell shows marks (runs of nodes) in place of `text` alone. */
 interface CellSlot { readonly el: HTMLDivElement; readonly text: Text; column: number; bits: number; value: string; mode: WhitespaceMode; marked: boolean; label: string; shown: boolean; left: number; width: number }
@@ -50,6 +55,8 @@ interface RowSlot {
   row: number; top: number; width: number; odd: boolean; headerSel: boolean; shown: boolean
   /** 0 for none, else 1 + the tone's index in liveTones. */
   tone: number
+  /** 0 for none, else 1 + the highlight's index in highlightColors. */
+  highlight: number
 }
 /** A pooled column header: the name, then the SQL type (`type`, in muted small text and hidden from screen readers, which read it in the tooltip). Each is
  *  in its own bidi isolate (.rg-cn, .rg-ct), so a name with an unterminated override cannot reorder the type after it. */
@@ -145,6 +152,9 @@ export class GridView {
   private readonly tone: number
   /** Rows a live revision lists as departed: muted, whatever their tone column says. */
   private muted: ReadonlySet<number> = new Set()
+  /** Highlighted rows (setHighlights); only those of the handle shown are drawn. */
+  private highlights: RowHighlights | undefined
+  private highlightSets: readonly RowHighlights[] = []
   private links: Uint8Array
   private readonly gid = nextGridId++
   private readonly slots = new WeakMap<Element, { row?: RowSlot; cell?: CellSlot; header?: HeaderSlot }>()
@@ -346,6 +356,16 @@ export class GridView {
   }
   invalidate(): void { this.schedule() }
 
+  /** The grid's highlighted rows, one set per handle it may show (its result's and a sorted view's): it draws the set of the
+   *  handle it shows, now and after a swap. */
+  setHighlights(sets: readonly RowHighlights[]): void {
+    this.highlightSets = sets
+    const shown = sets.find(set => set.handle === this.handle)
+    if (shown === this.highlights) return
+    this.highlights = shown
+    this.schedule()
+  }
+
   /**
    * Shows another result with the same columns in place of this one (a live table's next revision or segment): widths and
    * scroll stay, the first row shown, the active cell and each block move through `mapRow` (swap.ts), and `muted` rows
@@ -367,6 +387,7 @@ export class GridView {
     this.data = this.dataFor(handle)
     this.stopHandle = handle.subscribe(() => this.schedule())
     this.muted = new Set(o.muted ?? [])
+    this.highlights = this.highlightSets.find(set => set.handle === handle)
     const selection = this.selection()
     if (selection) {
       state.selection = remapSelection(selection, mapRow, handle.getSnapshot().rowsAvailable, this.columns)
@@ -824,7 +845,7 @@ export class GridView {
       mark.el.append(mark.text)
       this.marksRows.append(mark.el)
     }
-    const slot: RowSlot = { el, header, number, ...mark ? { mark } : {}, cells: [], pin: this.createCell(el), row: -1, top: Number.NaN, width: -1, odd: false, headerSel: false, shown: false, tone: 0 }
+    const slot: RowSlot = { el, header, number, ...mark ? { mark } : {}, cells: [], pin: this.createCell(el), row: -1, top: Number.NaN, width: -1, odd: false, headerSel: false, shown: false, tone: 0, highlight: 0 }
     this.slots.set(el, { row: slot })
     this.rowsEl.append(el)
     if (withCells) for (let index = 0; index < this.cellsPerRow; index++) slot.cells.push(this.createCell(el, slot))
@@ -1155,13 +1176,21 @@ export class GridView {
       if (top !== slot.top) { slot.top = top; slot.el.style.top = top + 'px'; if (slot.mark) slot.mark.el.style.top = top + 'px' }
       if (!slot.shown) { slot.shown = true; slot.el.style.display = ''; if (slot.mark) slot.mark.el.style.display = '' }
     }
-    const odd = row % 2 === 1, tone = this.toneOf(row, tile)
-    if (odd !== slot.odd || tone !== slot.tone) { slot.odd = odd; slot.el.className = rowClasses[odd ? 1 : 0][tone] }
+    const odd = row % 2 === 1, tone = this.toneOf(row, tile), highlight = colorAt(this.highlights, row)
+    if (odd !== slot.odd || tone !== slot.tone || highlight !== slot.highlight) {
+      slot.odd = odd
+      slot.el.className = rowClasses[odd ? 1 : 0][tone][highlight]
+      if (highlight !== slot.highlight) {
+        if (highlight) slot.header.setAttribute('aria-description', highlightLabel(highlight))
+        else slot.header.removeAttribute('aria-description')
+      }
+    }
     if (slot.width !== this.width) { slot.width = this.width; slot.el.style.width = this.width + 'px' }
     let headerSel = false
     for (const item of ranges) if (row >= item.top && row <= item.bottom) { headerSel = true; break }
-    if (headerSel !== slot.headerSel || tone !== slot.tone) { slot.headerSel = headerSel; if (slot.mark) slot.mark.el.className = markClasses[headerSel ? 1 : 0][tone] }
+    if (headerSel !== slot.headerSel || tone !== slot.tone || highlight !== slot.highlight) { slot.headerSel = headerSel; if (slot.mark) slot.mark.el.className = markClasses[headerSel ? 1 : 0][tone][highlight] }
     slot.tone = tone
+    slot.highlight = highlight
     let activeCell: CellSlot | undefined
     const perRow = slot.cells.length
     for (let column = range.firstColumn; column <= range.lastColumn; column++) {

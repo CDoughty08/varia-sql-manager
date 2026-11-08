@@ -39,6 +39,9 @@ being true.
   Peek's Top rows (`explorer.peekRows`): at most 10 rows of 100 values of 256 characters, decoded in the backend and answered
   as text over invoke, never stored. Results-port
   messages from the renderer are validated with `portRequestSchema`, ownership, and the current generation.
+- Rows are compared only in the backend: row identities for highlights (`Results/RowIdentity.cs`, `results.identify`,
+  `results.findRows`) hash collation-normalized values there, and the renderer only receives positions and ids, never rows
+  to compare. `GridView` draws highlights from sorted positions by binary search per painted row, with theme colours only.
 - The grid renders cells only through `GridView` pools, and text only through `nodeValue` (`tests/grid-lint.test.ts`
   forbids HTML sinks under `grid/`, `results/`, `designer/` and `live/`); no React per row or cell, and frames stay
   O(visible cells).

@@ -4,6 +4,7 @@ import { onUnexpectedError } from '../core/errors'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import type { ResultHandle } from '../results/ResultClient'
 import type { GridSort, ResultSetEntry } from '../results/ResultsService'
+import type { SetHighlights } from '../results/HighlightsService'
 import { formatBytes, formatCount } from '../results/status'
 import { GridView, type GridStatus } from './GridView'
 import { describeSelection } from './selection'
@@ -38,12 +39,23 @@ function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: n
   return undefined
 }
 
+/** What the strip says of a set's highlights: those this run lacks (kept, they return with their rows), or a key that is
+ *  not unique here (one highlight covers every row with its value). */
+function highlightText(marked: SetHighlights | undefined): string | undefined {
+  if (!marked || marked.count === 0) return undefined
+  const missing = marked.count - marked.found
+  if (missing > 0 && marked.rows.length > 0) return `${formatCount(missing)} highlighted ${missing === 1 ? 'row is' : 'rows are'} not in these results. ${missing === 1 ? 'It stays' : 'They stay'} highlighted for when ${missing === 1 ? 'it returns' : 'they return'}.`
+  if (!marked.unique && marked.found > 0) return marked.by ? `${marked.by} is not unique in these results, so a highlight can cover several rows.` : 'Some rows here are identical, so a highlight covers each of them.'
+  return undefined
+}
+
 /** The React shell of one grid: its root and scroller, strips and overlay. GridView renders and handles everything inside. */
 /** The sort's keys as a string: a new order puts the grid back at its first row; the same keys sorted again keep its place. */
 const keysOf = (sort: GridSort | undefined) => sort?.keys.map(key => `${key.column}${key.descending ? 'd' : 'a'}`).join(',') ?? ''
 
 function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, onWide }: ResultGridProps) {
-  const { results, resultClient, commands, platform, gridStats, panes, settings } = useWorkbench()
+  const { results, resultClient, commands, platform, gridStats, panes, settings, highlights } = useWorkbench()
+  const marked = useSyncExternalStore(highlights.subscribe, () => highlights.getSnapshot()[tabId]?.get(entry.index))
   const values = useServiceSnapshot(settings).values
   const showTypes = values['queryResults.grid.showColumnTypes'], whitespace = values['queryResults.grid.whitespace']
   const showTypesRef = useRef(showTypes), whitespaceRef = useRef(whitespace)
@@ -97,6 +109,9 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
     }
   }, [tabId, index, entry, results, resultClient, commands, platform, gridStats, panes])
   useEffect(() => { viewRef.current?.update({ resultCount: count, showTypes, whitespace, sort: sort?.keys }) }, [count, showTypes, whitespace, sort?.keys])
+  // The grid draws the highlighted rows of the handle it shows, and switches with its swaps.
+  const highlightRows = marked?.rows
+  useLayoutEffect(() => { viewRef.current?.setHighlights(highlightRows ?? []) }, [highlightRows, tabId, index, entry])
   // A built view replaces what the grid shows: its first rows are read before the swap, so it paints whole rows at once,
   // unless what it shows is already gone (its result released or lost). While a first sort runs the grid keeps the rows in
   // their order; the views it showed close once it has swapped (ResultsService.viewShown).
@@ -125,6 +140,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
   const lost = snapshot.state === 'lost'
   const truncation = truncationText({ truncated: snapshot.truncated, rowsStored: snapshot.rowsStored, rowsRead: snapshot.rowsRead, budget })
   const retry = () => viewRef.current?.retry()
+  const highlightNote = !lost && snapshot.state === 'complete' ? highlightText(marked) : undefined
   // The grid holds only rows; its strip and the lost overlay are its siblings, outside the table structure.
   return <div className="rg-frame">
     <div ref={rootRef} className="results-grid rg" role="grid" tabIndex={0} data-result-grid="" data-output-view="grid" data-tab-id={tabId} data-result-index={index}
@@ -135,7 +151,8 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
     {!lost && status.renderError ? <div className="rg-strip error" role="status">This result could not be displayed. <button onClick={retry}>Retry</button></div>
       : !lost && status.tileError ? <div className="rg-strip error" role="status">Some rows could not be loaded: {status.tileError} <button onClick={retry}>Retry</button></div>
         : !lost && snapshot.incomplete ? <div className="rg-strip" role="status" title={incompleteText}>{incompleteText}</div>
-          : !lost && truncation ? <div className="rg-strip" role="status" title={truncation}>{truncation}</div> : null}
+          : !lost && truncation ? <div className="rg-strip" role="status" title={truncation}>{truncation}</div>
+            : highlightNote ? <div className="rg-strip" role="status" title={highlightNote}>{highlightNote}</div> : null}
   </div>
 }
 

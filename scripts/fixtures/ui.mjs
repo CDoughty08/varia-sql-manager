@@ -285,6 +285,8 @@ export const gridPart = {
   sortedButton: '.rg-cs.on',
   sortOrder: '.rg-co',
   borderHover: '.rg-border-hover',
+  /** A highlighted row (Highlight Rows), drawn in its colour; its row header's aria-description names the colour. */
+  highlightedRow: '[role="rowgroup"] > [role="row"][aria-rowindex].hl',
   /** A live grid's row tones (LiveGrid), drawn with no ARIA of their own: the active cell's label names the tone. */
   toneError: '.tone-error',
   toneWarning: '.tone-warning',

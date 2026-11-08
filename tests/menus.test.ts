@@ -360,7 +360,9 @@ describe('menu state', () => {
       // The results toolbar's White space choices, also in the grid's menu.
       'output.showSpaces', 'output.showAllWhitespace',
       // Sorting a grid: its menu and its headers' sort buttons; Sort text by is the results toolbar's and the palette's.
-      'output.sortAscending', 'output.sortDescending', 'output.thenSortAscending', 'output.thenSortDescending', 'output.clearSort', 'output.sortTextByChars', 'output.sortTextByBytes']
+      'output.sortAscending', 'output.sortDescending', 'output.thenSortAscending', 'output.thenSortDescending', 'output.clearSort', 'output.sortTextByChars', 'output.sortTextByBytes',
+      // The grid menu's Highlight submenu and its key.
+      'output.highlightRows', 'output.highlightYellow', 'output.highlightGreen', 'output.highlightBlue', 'output.highlightPurple', 'output.highlightRed', 'output.clearHighlight', 'output.clearAllHighlights']
     expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))
     // Query › Connection is a native submenu too.
     for (const id of ['preferences.colorTheme', 'connection.connect', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'file.closeAll', 'view.toggleResultsPane'] as const) expect(menuCommandIds).toContain(id)

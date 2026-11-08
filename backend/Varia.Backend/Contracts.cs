@@ -95,6 +95,20 @@ internal sealed record ResultsViewArgs(uint ResultId, ViewSortArgs[] Sort, uint?
 internal sealed record ResultsViewResult(uint ViewId, long Rows, bool Complete, bool Approximate);
 internal sealed record ResultsViewCloseArgs(uint ResultId, uint[] ViewIds);
 internal sealed record ResultsViewCloseResult(int Closed);
+/// <summary>results.identify: how the result's rows are told apart, for highlights. By "auto" picks a unique key column, else
+/// the whole row; "column" uses Column (unique or not); "row" hashes every value. The result must have finished loading.</summary>
+internal sealed record ResultsIdentifyArgs(uint ResultId, string By, int? Column = null);
+/// <summary>Column is the key column, or -1 for the whole row; Unique says no two rows share an identity; Approximate that a
+/// truncated value's stored prefix was hashed.</summary>
+internal sealed record ResultsIdentifyResult(int Column, bool Unique, bool Approximate, long Rows);
+/// <summary>results.rowIds: the identities (results.identify) of up to 16,384 rows from FirstRow, view positions with ViewId.</summary>
+internal sealed record ResultsRowIdsArgs(uint ResultId, long FirstRow, int Count, uint? ViewId = null);
+internal sealed record ResultsRowIdsResult(long FirstRow, long[] Ids, long Rows);
+/// <summary>results.findRows: every row (view position with ViewId) whose identity is one of Ids (1 to 10,000).</summary>
+internal sealed record ResultsFindRowsArgs(uint ResultId, long[] Ids, uint? ViewId = null);
+/// <summary>Positions ascend; Marks[k] is the index in Ids of position k's identity. Truncated: more than 100,000 rows matched
+/// and only the first are listed.</summary>
+internal sealed record ResultsFindRowsResult(long[] Positions, int[] Marks, bool Truncated, long Rows);
 /// <summary>results.rowBytes: Bytes[k] is row FirstRow + k's sum of DATALENGTH over its cells (NULL counts 0; xml and json
 /// as their text, some sql_variant base types estimated: docs/ipc.md, Cell lengths and row sizes); it stops at the rows sealed
 /// so far. Estimated lists, in order, the rows of the range whose sum includes an estimate.</summary>

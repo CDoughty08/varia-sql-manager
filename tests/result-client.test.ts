@@ -267,6 +267,45 @@ describe('ResultClient', () => {
     expect(client.trackedResults).toBe(0)
   })
 
+  it('identifies the rows of a result, reads and finds identities by view position, and refuses bad arguments in the page', async () => {
+    const { client, worker, handOver } = fixture()
+    handOver()
+    await client.ready()
+    worker().toWorker({ t: 'backend', generation: 1, status: 'ready' })
+    const handle = client.open(descriptor())
+    const answer = async (t: string, result: unknown) => {
+      await settle()
+      const request = worker().fromWorker.findLast(item => item.t === t)!
+      worker().toWorker({ t: 'end', rid: request.rid, ok: true, result } as never)
+      return request
+    }
+    const identifying = handle.identify('auto')
+    expect(await answer('identify', { column: 1, unique: true, approximate: false, rows: 10 })).toMatchObject({ t: 'identify', generation: 1, resultId: 3, by: 'auto' })
+    expect(await identifying).toEqual({ column: 1, unique: true, approximate: false, rows: 10 })
+    const sorting = handle.sort([{ column: 0, descending: true, mode: 'value' }])
+    await answer('view', { viewId: 2, rows: 10, complete: true, approximate: false })
+    const view = await sorting
+    const reading = view.rowIds(4, 2)
+    expect(await answer('rowIds', { firstRow: 4, ids: [11, 12], rows: 10 })).toMatchObject({ resultId: 3, firstRow: 4, count: 2, viewId: 2 })
+    expect((await reading).ids).toEqual([11, 12])
+    const finding = view.findRows([12])
+    expect(await answer('findRows', { positions: [5], marks: [0], truncated: false, rows: 10 })).toMatchObject({ resultId: 3, ids: [12], viewId: 2 })
+    expect((await finding).positions).toEqual([5])
+    // A view identifies its result: identities belong to the result, whatever order shows it.
+    const again = view.identify('row')
+    const sent = await answer('identify', { column: -1, unique: true, approximate: false, rows: 10 })
+    expect(sent).not.toHaveProperty('viewId')
+    await again
+    const before = worker().fromWorker.length
+    await expect(handle.identify('column')).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.identify('column', { column: 99 })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.findRows([])).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.findRows([-1])).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.rowIds(-1, 1)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    expect(await handle.rowIds(0, 0)).toMatchObject({ ids: [] })
+    expect(worker().fromWorker.length).toBe(before)
+  })
+
   it('sorts a result into a view read by position, replaces and closes views, and drops them with their result', async () => {
     const { client, worker, handOver, serve } = fixture()
     handOver()

@@ -80,6 +80,12 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // Sorts a result's stored rows in memory off the frame loop (5 million rows take seconds); Stop cancels it.
   'results.view': { kind: 'unary', lane: 'results', deadlineMs: 120_000 },
   'results.viewClose': control,
+  // Hashes every row of a stored result off the frame loop (seconds for millions of rows when no key is unique).
+  'results.identify': { kind: 'unary', lane: 'results', deadlineMs: 120_000 },
+  // Reads at most 16,384 stored identities.
+  'results.rowIds': control,
+  // Scans a result's identities in memory: milliseconds per million rows.
+  'results.findRows': { kind: 'unary', lane: 'results', deadlineMs: 60_000 },
   // The backend answers its own 40 s budget as a TIMEOUT value; main cancels it from the renderer (varia:explorer-cancel).
   'explorer.children': { kind: 'unary', lane: 'explorer', deadlineMs: 45_000 },
   // A build reads every database (each within its own 120 s budget) and only Stop (varia:explorer-cancel), a newer build or a

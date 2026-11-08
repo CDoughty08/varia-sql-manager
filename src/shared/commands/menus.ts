@@ -26,6 +26,7 @@ export const submenuIds = [
   'explorer.tasks',
   'explorer.tasks.restore',
   ...scriptSubmenuIds,
+  'output.highlight',
   'search.copy'
 ] as const
 export type SubmenuId = typeof submenuIds[number]
@@ -62,6 +63,7 @@ export const menuIds: readonly MenuId[] = [
   'tableDesigner.context',
   'documentTab.context',
   'output.context',
+  'output.highlight',
   'dockTab.context',
   'input.context',
   'ssis.operation.context',
@@ -122,6 +124,8 @@ export const submenus: Readonly<Record<SubmenuId, SubmenuDescriptor>> = {
   'explorer.tasks.restore': { title: 'Restore', nativeId: 'explorer.tasks.restore', placements: [{ menu: 'explorer.tasks', group: '4_backup', order: 2, mnemonic: 'r' }] },
   // Script as › <verb> To, from src/shared/scripting/catalog.ts.
   ...scriptSubmenuEntries(),
+  // The results grid's Highlight submenu (results PR 8): a colour for the selected rows, or none.
+  'output.highlight': { title: 'Highlight', nativeId: 'output.highlight', placements: [{ menu: 'output.context', group: '2_sort', order: 6, mnemonic: 'g', when: "outputView == 'grid'" }] },
   // A Search Objects hit's names, from src/shared/explorer/search.ts' `searchHitNames`.
   'search.copy': { title: 'Copy', nativeId: 'search.copy', placements: [{ menu: 'search.hit.context', group: '5_copy', order: 1, mnemonic: 'c' }] }
 }

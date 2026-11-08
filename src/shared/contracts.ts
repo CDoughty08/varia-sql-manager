@@ -230,6 +230,22 @@ export interface ResultsViewParams { resultId: number; sort: ViewSortKey[]; repl
 export interface ResultsViewResult { viewId: number; rows: number; complete: boolean; approximate: boolean }
 export interface ResultsViewCloseParams { resultId: number; viewIds: number[] }
 export interface ResultsViewCloseResult { closed: number }
+/** How results.identify tells a result's rows apart: a unique key column it picks (else the whole row), a given column,
+ *  or every value in the row. */
+export type IdentityBy = 'auto' | 'column' | 'row'
+/** results.identify (highlights): `column` only with `by: 'column'`. The result must have finished loading. */
+export interface ResultsIdentifyParams { resultId: number; by: IdentityBy; column?: number }
+/** `column` is the key column, -1 for the whole row; `unique`, that no two rows share an identity; `approximate`, that a
+ *  truncated value's stored prefix was hashed. */
+export interface ResultsIdentifyResult { column: number; unique: boolean; approximate: boolean; rows: number }
+/** Identities (below 2^53; -1 for a row past those identified) of up to `limits.identity.maxRows` rows or view positions. */
+export interface ResultsRowIdsParams { resultId: number; firstRow: number; count: number; viewId?: number }
+export interface ResultsRowIdsResult { firstRow: number; ids: number[]; rows: number }
+/** Every row (view position with `viewId`) whose identity is one of `ids`. */
+export interface ResultsFindRowsParams { resultId: number; ids: number[]; viewId?: number }
+/** `positions` ascend; `marks[k]` is the index in `ids` of position k's identity; `truncated`, that more rows matched
+ *  than `limits.identity.maxMatches`. */
+export interface ResultsFindRowsResult { positions: number[]; marks: number[]; truncated: boolean; rows: number }
 /** `bytes[k]` is row `firstRow + k`'s sum of DATALENGTH over its cells (NULL counts 0; xml and json as their
  *  text, some sql_variant base types estimated: docs/ipc.md, Cell lengths and row sizes); it stops at the rows sealed so
  *  far (`rowsAvailable`), as results.read does. */
@@ -357,6 +373,10 @@ export interface PortMethods {
   'results.rowBytes': { params: ResultsRowBytesParams; result: ResultsRowBytesResult }
   'results.view': { params: ResultsViewParams; result: ResultsViewResult }
   'results.viewClose': { params: ResultsViewCloseParams; result: ResultsViewCloseResult }
+  /** Row identities for highlights (and the diff): a key column's values or whole rows, hashed by their collation. */
+  'results.identify': { params: ResultsIdentifyParams; result: ResultsIdentifyResult }
+  'results.rowIds': { params: ResultsRowIdsParams; result: ResultsRowIdsResult }
+  'results.findRows': { params: ResultsFindRowsParams; result: ResultsFindRowsResult }
   /** A live subscription (docs/ipc.md): its EVENTs are credited, one unacknowledged at a time, and it ends only by CANCEL,
    *  a disconnect, a backend shutdown, a failure or its source ending. */
   'live.subscribe': { params: LiveSubscribeParams; result: LiveEnd }

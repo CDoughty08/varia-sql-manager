@@ -135,6 +135,11 @@ export const contrastPairs: readonly ContrastPair[] = [
   // NULL cells are tinted, over the grid and over a striped row.
   ...text(['resultsGrid.nullForeground'], [...panel, 'resultsGrid.nullBackground'], [...striped, 'resultsGrid.nullBackground']),
   ...text(['resultsGrid.linkForeground'], ['resultsGrid.background'], ['resultsGrid.background', 'resultsGrid.alternateRowBackground']),
+  // A highlighted row's colour replaces the stripe; its row number is tinted with it over the header.
+  ...(['Yellow', 'Green', 'Blue', 'Purple', 'Red'] as const).flatMap(color => [
+    ...text(['resultsGrid.foreground', 'resultsGrid.nullForeground'], ['resultsGrid.background', `resultsGrid.highlight${color}Background`]),
+    ...text(['resultsGrid.highlightRowNumberForeground'], ['resultsGrid.headerBackground', `resultsGrid.highlight${color}Background`])
+  ]),
   // A toned live grid row has its own background instead of the stripe; its NULL cells drop their tint, keeping their colour.
   ...([['resultsGrid.rowErrorForeground', 'resultsGrid.rowErrorBackground'], ['resultsGrid.rowWarningForeground', 'resultsGrid.rowWarningBackground'],
     ['resultsGrid.rowRunningForeground', 'resultsGrid.rowRunningBackground'], ['resultsGrid.rowMutedForeground', 'resultsGrid.rowMutedBackground']] as const)
