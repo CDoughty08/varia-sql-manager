@@ -119,3 +119,10 @@ export function meterWork<T>(run: () => T | Promise<T>): { result: T; work: Work
   stop()
   return { result, work }
 }
+
+/**
+ * The vitest timeout for a test that builds 50,000 or more rows. These tests bound their work with the meter, not a clock,
+ * but take 3 to 4 s locally and over 20 s (vitest's default here) on a shared 4-vCPU Windows runner, which runs the .NET
+ * build beside vitest (docs/ci.md). The timeout only stops a hang, so it is generous; tests/idle-waits.test.ts requires it.
+ */
+export const heavyTimeout = 90_000

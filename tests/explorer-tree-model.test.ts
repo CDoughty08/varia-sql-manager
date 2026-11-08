@@ -5,7 +5,7 @@ import {
   computeWindow, flatten, layoutWindow, needsQuery, pinnedServerBands, rowLayout, parentIndex, renderedIndices, revealScroll, rowIndex, rowKindOf, RowKind, rowOwner, siblingPlan, swallowedKey, syntheticId, treeKey, treeKeyOf, typeAhead,
   TypeAheadBuffer, type TreeNode, type VisibleRows
 } from '../src/renderer/src/explorer/tree-model'
-import { meterWork } from './fixtures/work-meter'
+import { heavyTimeout, meterWork } from './fixtures/work-meter'
 
 /** A node table built by hand: `add` appends a child (or a root), and fields can be set on the result. */
 function table() {
@@ -355,7 +355,7 @@ describe('type-ahead', () => {
     const wrapped = typeAhead(rows, last, 'table0')
     expect(nodes.get(rows.ids[wrapped])!.label).toBe('dbo.table0')
     expect(visited).toEqual([last, 0, wrapped])
-  })
+  }, heavyTimeout)
   it('collects printable keys until a pause of a second, ignoring IME, modifiers and leading spaces', () => {
     let now = 0
     const buffer = new TypeAheadBuffer(() => now)

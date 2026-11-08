@@ -284,9 +284,10 @@ internal static class ActionChecks
         tries = 0;
         var single = await Run(() => { tries++; throw Sql(924); }, CancellationToken.None);
         var singleTries = tries;
-        using var stop = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        // Stop's timer starts at the second try, so a starved CI runner that stalls past 100 ms still sees the rename try again first.
+        using var stop = new CancellationTokenSource();
         tries = 0;
-        var stopped = await Run(() => { tries++; throw Sql(5030); }, stop.Token);
+        var stopped = await Run(() => { if (++tries == 2) stop.CancelAfter(TimeSpan.FromMilliseconds(100)); throw Sql(5030); }, stop.Token);
         // Stop that lands while the statement runs and SQL Server refuses it as in use (seen on a slow runner) is Stop too.
         using var during = new CancellationTokenSource();
         var stoppedDuring = await Run(() => { during.Cancel(); throw Sql(5030); }, during.Token);
@@ -487,7 +488,7 @@ internal static class ActionChecks
         public SqlConnection Connection(string connectionId)
         {
             Interlocked.Increment(ref Connections);
-            return new SqlConnection("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false");
+            return new SqlConnection("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false");
         }
         public Task OpenAsync(SqlConnection connection, CancellationToken token) => connection.OpenAsync(token);
         public bool ClearPoolsFor(string connectionId, string database) { Cleared.Add(database); return true; }
