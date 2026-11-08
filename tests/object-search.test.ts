@@ -22,6 +22,10 @@ import { colorKeys } from '../src/shared/theme/registry'
 import { layoutFilters, minimumChips } from '../src/renderer/src/search/filter-layout'
 import { searchFilterSummary, toggleSearchType } from '../src/renderer/src/search/SearchFilters'
 import { clampPaneBand, paneBandDrag, paneBandKey, paneBandLimits } from '../src/renderer/src/search/pane-band'
+import ServerPicker, { allServersValue, serverOptionName, serverPickerOptions, typeAheadMatch } from '../src/renderer/src/search/ServerPicker'
+
+// The server picker draws each server's colour through the theme, which server rendering has no store for.
+vi.mock('../src/renderer/src/core/WorkbenchContext', async original => ({ ...await original<object>(), useConnectionAccent: () => undefined }))
 
 const csharp = (file: string) => readFileSync(new URL('../backend/Varia.Backend/Search/' + file, import.meta.url), 'utf8')
 
@@ -739,6 +743,61 @@ describe('ObjectSearchService', () => {
     expect(calls.cancel).toContainEqual([calls.search[0].requestId])
     service.dispose()
     expect(hasListener()).toBe(false)
+  })
+})
+
+describe('Search Objects\' server picker', () => {
+  const live = [
+    { ...connection('a'), displayName: 'Primary', color: 'red', options: { environment: 'Production' } },
+    connection('b'),
+    { ...connection('c'), options: { environment: 'QA lab' } }
+  ] as unknown as LiveConnection[]
+  const result = (total: number, extra: Partial<ObjectSearchResult> = {}): ObjectSearchResult => ({ hits: Array.from({ length: Math.min(total, 2) }, () => hit), total, partial: false, elapsedMs: 1, index: status(), ...extra })
+  const base = { id: 'tab1', connectionId: 'a', text: 'x', caseSensitive: false, wholeWord: false, regex: false, fuzzy: false, scope: 'all' as const, types: [], asked: { text: 'x', caseSensitive: false, wholeWord: false, regex: false, fuzzy: false, scope: 'all' as const, types: [] } }
+
+  it('labels All servers and each connected server with its colour, environment and its results for the current search', () => {
+    const servers = [
+      { connectionId: 'a', label: 'Primary', result: result(12) },
+      { connectionId: 'b', label: 'srv-b', error: 'The search timed out.' },
+      { connectionId: 'c', label: 'srv-c', pending: true }
+    ]
+    const options = serverPickerOptions({ ...base, allServers: true, servers, result: mergeAnswers(servers), requestId: 'r' }, live)
+    expect(options.map(option => [option.value, option.label, option.color, option.environment, option.count, !!option.pending])).toEqual([
+      [allServersValue, 'All servers', undefined, undefined, 12, true],
+      ['a', 'Primary', 'red', 'Production', 12, false],
+      ['b', 'srv-b', undefined, undefined, undefined, false],
+      ['c', 'srv-c', undefined, 'QA lab', undefined, true]
+    ])
+    expect(options.map(serverOptionName)).toEqual(['All servers, 12 results, searching', 'Primary, Production environment, 12 results', 'srv-b', 'srv-c, QA lab environment, searching'])
+    // One server searched: only it has a count (the picker asks nothing of its own); with no search, none has.
+    expect(serverPickerOptions({ ...base, result: result(1) }, live).map(option => option.count)).toEqual([undefined, 1, undefined, undefined])
+    expect(serverPickerOptions({ ...base, result: result(0, { problem: 'The regular expression is not valid.' }) }, live).map(option => option.count)).toEqual([undefined, undefined, undefined, undefined])
+    expect(serverPickerOptions({ ...base, text: '', asked: undefined }, live).every(option => option.count === undefined && !option.pending)).toBe(true)
+  })
+
+  it('moves by type-ahead as a native select does: a prefix, or one letter typed again cycling', () => {
+    const options = serverPickerOptions({ ...base, text: '' }, [connection('alpha'), connection('beta'), connection('bravo')])
+    expect(options.map(option => option.label)).toEqual(['All servers', 'srv-alpha', 'srv-beta', 'srv-bravo'])
+    expect(typeAheadMatch(options, 'a', 1)).toBe(0)
+    expect(typeAheadMatch(options, 's', 0)).toBe(1)
+    expect(typeAheadMatch(options, 's', 1)).toBe(2)
+    expect(typeAheadMatch(options, 'ss', 1)).toBe(2)
+    expect(typeAheadMatch(options, 'srv-br', 0)).toBe(3)
+    expect(typeAheadMatch(options, 'SRV-B', 0)).toBe(2)
+    expect(typeAheadMatch(options, 'zz', 0)).toBeUndefined()
+  })
+
+  it('renders a combobox named by its label, its listbox of options in the top layer, the chosen one selected', () => {
+    const options = serverPickerOptions({ ...base, allServers: true, servers: [{ connectionId: 'a', label: 'Primary', result: result(3) }], result: result(3) }, live)
+    const markup = renderToStaticMarkup(createElement(ServerPicker, { id: 'p', labelledBy: 'label', options, value: 'a', onChange: () => {} }))
+    expect(markup).toMatch(/^<button type="button" role="combobox" id="p" class="object-search-server-button" aria-labelledby="label" aria-haspopup="listbox" aria-expanded="false" aria-controls="p-servers"/)
+    expect(markup).toContain('<div id="p-servers" class="object-search-server-list" popover="manual" role="listbox" aria-labelledby="label">')
+    expect([...markup.matchAll(/role="option" class="object-search-server-option" aria-selected="(\w+)" aria-label="([^"]*)"/g)].map(match => [match[1], match[2]]))
+      .toEqual([['false', 'All servers, 3 results'], ['true', 'Primary, Production environment, 3 results'], ['false', 'srv-b'], ['false', 'srv-c, QA lab environment']])
+    // The PROD tag and the count show in the rows; the closed combobox shows the chosen server without a count.
+    expect(markup).toContain('<span class="object-search-server-count">3</span>')
+    expect(markup.split('<div id="p-servers"')[0]).not.toContain('object-search-server-count')
+    expect(markup.split('<div id="p-servers"')[0]).toContain('PROD')
   })
 })
 

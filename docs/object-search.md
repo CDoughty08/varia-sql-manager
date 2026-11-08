@@ -218,6 +218,12 @@ The same search runs in two places, with the same options and results:
   server of the tree's selection. Search Objects from the palette, View or the toolbar opens on All servers when more
   than one server is connected; from a server's or database's menu it opens on that server. The tab then belongs to
   no server, and Rebuild Search Index rebuilds every server's index.
+- **The picker.** A themed select-only combobox (`ServerPicker`; WAI-ARIA's pattern, its listbox in Chromium's top layer
+  and drawn with the menus' theme keys): each server shows its connection colour (or `connection.default`), its
+  environment tag and its result count for the current search, and *All servers* its total, all read from the answers
+  the tab already has, with no request of its own; a server still searching shows "…". Focus stays on the combobox: ↓, ↑,
+  Enter, Space and Alt+↓ open it, Home and End open it on the first or last option, letters type ahead (one letter again
+  cycles), Enter, Space and Alt+↑ choose, Tab chooses and moves on, and Escape or a click outside closes it unchosen.
 - **How.** The renderer sends one `explorer.search` per connected server at once, each on that server's own index, and
   shows each server's group as its answer lands (`ObjectSearchService`, `searchAll`), in Object Explorer's order, so a
   slow server holds back only its own group, marked "searching…", and the selection stays on its server's hit. Each
