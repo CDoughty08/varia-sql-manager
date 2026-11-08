@@ -18,7 +18,7 @@ static class OfflineSuites
     public static readonly Dictionary<string, double> Weights = new()
     {
         ["Host"] = 10.0, ["Explorer"] = 7.1, ["LiveScheduler"] = 4.5, ["Ssis"] = 4.2, ["Restore"] = 4.0, ["Store"] = 3.5,
-        ["ServerFiles"] = 3.0, ["ActivityAction"] = 3.0, ["LiveTable"] = 2.8, ["Live"] = 2.7, ["Entra"] = 2.4, ["Seam"] = 2.2,
+        ["ServerFiles"] = 3.0, ["ActivityAction"] = 5.7, ["LiveTable"] = 2.8, ["Live"] = 2.7, ["Entra"] = 2.4, ["Seam"] = 2.2,
         ["Login"] = 2.2, ["Peek"] = 2.2, ["Text"] = 2.1, ["ActionProgress"] = 1.7, ["Action"] = 1.7, ["Scripting"] = 1.5,
         ["LoginDelete"] = 0.8, ["LoginAction"] = 0.8, ["Unlock"] = 0.7, ["Page"] = 0.4, ["ActivitySource"] = 0.3, ["Search"] = 0.3,
     };

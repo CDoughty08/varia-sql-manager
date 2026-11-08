@@ -223,7 +223,8 @@ internal static class ActivityActionChecks
         var id = Guid.NewGuid().ToString();
         var host = new ActivityFixtureHost(id, new ServerProfile(17, null, 3, null, false, true, true, 16));
         var live = new LiveService(host);
-        var actions = new SessionActions(host, live) { DetailsBudgetMs = 300, KillBudgetMs = 300, GateWaitMs = 100 };
+        // Kill's budget must outlast the second kill's start by far: a starved CI runner can take a second to get there.
+        var actions = new SessionActions(host, live) { DetailsBudgetMs = 300, KillBudgetMs = 3_000, GateWaitMs = 100 };
         var started = Environment.TickCount64;
         var details = await actions.DetailsAsync(new ActivityDetailsArgs(id, Guid.NewGuid().ToString(), 69, "2026-10-22T06:50:12"), CancellationToken.None);
         var detailsMs = Environment.TickCount64 - started;

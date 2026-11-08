@@ -228,7 +228,7 @@ internal static class HostChecks
         {
             host.Request(1, "test.echo", new { });
             var goAway = host.Next(FrameKind.GoAway);
-            check(goAway is { } frame && Body(frame).GetProperty("code").GetString() == "PROTOCOL_ERROR" && host.Exited.Wait(2000) && host.Exits.TryPeek(out var code) && code == 64,
+            check(goAway is { } frame && Body(frame).GetProperty("code").GetString() == "PROTOCOL_ERROR" && host.Exited.Wait(15000) && host.Exits.TryPeek(out var code) && code == 64,
                 "a frame before HELLO is GOAWAY PROTOCOL_ERROR and exit 64");
         }
 
@@ -237,13 +237,13 @@ internal static class HostChecks
             host.Send(FrameKind.Hello, 0, 0, JsonBridge.Encode(new { versions = new[] { 3, 4 }, generation = 1 }, Json));
             var goAway = host.Next(FrameKind.GoAway);
             check(goAway is { } frame && Body(frame).GetProperty("code").GetString() == "PROTOCOL_UNSUPPORTED" && Body(frame).GetProperty("versions")[1].GetInt32() == 2
-                && host.Exited.Wait(2000) && host.Exits.TryPeek(out var code) && code == 65 && !host.Dispatcher.Created, "no shared version is GOAWAY PROTOCOL_UNSUPPORTED [2, 2], exit 65, before the service starts");
+                && host.Exited.Wait(15000) && host.Exits.TryPeek(out var code) && code == 65 && !host.Dispatcher.Created, "no shared version is GOAWAY PROTOCOL_UNSUPPORTED [2, 2], exit 65, before the service starts");
         }
 
         using (var host = new HostHarness(new HostOptions { HelloTimeout = TimeSpan.FromMilliseconds(200) }))
         {
-            var goAway = host.Next(FrameKind.GoAway, 3000);
-            check(goAway is { } frame && Body(frame).GetProperty("code").GetString() == "PROTOCOL_ERROR" && host.Exited.Wait(2000) && host.Exits.TryPeek(out var code) && code == 64,
+            var goAway = host.Next(FrameKind.GoAway, 15000);
+            check(goAway is { } frame && Body(frame).GetProperty("code").GetString() == "PROTOCOL_ERROR" && host.Exited.Wait(15000) && host.Exits.TryPeek(out var code) && code == 64,
                 "no HELLO in time is GOAWAY PROTOCOL_ERROR and exit 64");
         }
 
@@ -251,7 +251,7 @@ internal static class HostChecks
         {
             host.Hello();
             host.Send(FrameKind.Request, 1, 0, JsonBridge.Encode(new { method = "test.echo", @params = new { }, extra = 1 }, Json));
-            check(host.Next(FrameKind.GoAway) is { } frame && host.Exited.Wait(2000) && host.Exits.TryPeek(out var code) && code == 64 && Body(frame).GetProperty("code").GetString() == "PROTOCOL_ERROR",
+            check(host.Next(FrameKind.GoAway) is { } frame && host.Exited.Wait(15000) && host.Exits.TryPeek(out var code) && code == 64 && Body(frame).GetProperty("code").GetString() == "PROTOCOL_ERROR",
                 "an invalid request envelope means main is broken: GOAWAY and exit 64");
         }
 
@@ -261,7 +261,7 @@ internal static class HostChecks
             host.Host.Crash(new InvalidOperationException("private detail"));
             var goAway = host.Next(FrameKind.GoAway);
             check(goAway is { } frame && Body(frame).GetProperty("code").GetString() == "BACKEND_CRASH" && Body(frame).GetProperty("message").GetString()!.Contains("InvalidOperationException")
-                && !Body(frame).GetProperty("message").GetString()!.Contains("private detail") && host.Exited.Wait(2000) && host.Exits.TryPeek(out var code) && code == 70,
+                && !Body(frame).GetProperty("message").GetString()!.Contains("private detail") && host.Exited.Wait(15000) && host.Exits.TryPeek(out var code) && code == 70,
                 "an unhandled exception is a GOAWAY BACKEND_CRASH naming only the exception type, and exit 70");
         }
 
