@@ -1,12 +1,13 @@
 // Pixi's interpreter replaces generated functions, retaining the application's strict CSP.
 import 'pixi.js/unsafe-eval'
-import { Application, CanvasTextMetrics, Container, Graphics, Text, TextStyle } from 'pixi.js'
+import { Application, CanvasTextMetrics, Container, Graphics, Text, TextStyle, TexturePool } from 'pixi.js'
 import type { PlanStatement } from '../../../shared/plans'
 import { radii, typeScale } from '../../../shared/theme/metrics'
 import type { Disposable } from '../core/types'
 import { observeIntersection, observeResize, windowOf, windows } from '../core/windows'
 import { uiFontFamily } from '../fonts'
 import { SpatialIndex, fit, intersects, viewport, zoomAt, type Camera, type PlanLayout, type PlacedNode, type PlacedEdge, type Rect } from './geometry'
+import { LabelPool } from './labels'
 
 export interface CanvasColors { background: string; card: string; text: string; muted: string; border: string; accent: string; warning: string }
 export interface HoveredOperator { id: string; anchor: Rect }
@@ -24,7 +25,11 @@ export class PlanCanvas {
   private readonly edges = new Graphics()
   private readonly cards = new Graphics()
   private readonly labels = new Container()
-  private readonly pool: Text[] = []
+  private readonly pool = new LabelPool<Text>(() => {
+    const sprite = new Text({ text: '', style: this.textStyle })
+    this.labels.addChild(sprite)
+    return sprite
+  }, sprite => { sprite.visible = false }, sprite => sprite.destroy())
   private readonly textStyle = new TextStyle({ fontFamily: uiFontFamily, fontSize: typeScale.sm.size, fontWeight: '600' })
   private readonly mutedStyle = new TextStyle({ fontFamily: uiFontFamily, fontSize: typeScale.sm.size })
   private readonly fittedLabels = new Map<string, string>()
@@ -139,7 +144,7 @@ export class PlanCanvas {
     this.invalidate()
   }
   colors(colors: CanvasColors): void { this.options.colors = colors; this.invalidate() }
-  update(statements: readonly PlanStatement[]): void { this.options.statements = statements; if (this.fittedLabels.size > 4000) this.fittedLabels.clear(); this.invalidate() }
+  update(statements: readonly PlanStatement[]): void { this.options.statements = statements; this.invalidate() }
   private wheel = (event: WheelEvent) => {
     event.preventDefault()
     const bounds = this.options.root.getBoundingClientRect()
@@ -264,13 +269,13 @@ export class PlanCanvas {
     this.world.position.set(this.camera.x, this.camera.y)
     this.world.scale.set(this.camera.scale)
     this.edges.clear(); this.cards.clear()
-    let used = 0
-    const label = (text: string, x: number, y: number, muted = false) => {
-      let sprite = this.pool[used]
+    this.pool.begin()
+    const label = (key: string, text: string, x: number, y: number, muted = false) => {
+      const sprite = this.pool.get(key)
       const style = muted ? this.mutedStyle : this.textStyle
-      if (!sprite) { sprite = new Text({ text, style }); this.pool.push(sprite); this.labels.addChild(sprite) }
-      else { if (sprite.text !== text) sprite.text = text; if (sprite.style !== style) sprite.style = style }
-      sprite.position.set(x, y); sprite.visible = true; used++
+      if (sprite.text !== text) sprite.text = text
+      if (sprite.style !== style) sprite.style = style
+      sprite.position.set(x, y); sprite.visible = true
     }
     for (const section of this.options.layout.statements) {
       if (!intersects(section, area)) continue
@@ -278,7 +283,7 @@ export class PlanCanvas {
       if (this.camera.scale >= 0.3) {
         const statement = this.options.statements[section.index]
         const heading = `Statement ${section.index + 1} · ${statement.type} · ${statement.nodes.length} ${statement.nodes.length === 1 ? 'operator' : 'operators'}`
-        label(this.fitLabel(heading, section.width - 20, this.mutedStyle), section.x + 10, section.y + 7, true)
+        label('section:' + statement.id, this.fitLabel(heading, section.width - 20, this.mutedStyle), section.x + 10, section.y + 7, true)
       }
     }
     for (const edge of this.edgeIndex.query(area)) {
@@ -299,13 +304,15 @@ export class PlanCanvas {
       this.cards.roundRect(placed.x, placed.y, placed.width, placed.height, radii.sm.px).fill(colors.card).stroke({ color: stroke, width: highlighted ? 2 : 1 })
       if (this.camera.scale < 0.35) continue
       const labelWidth = placed.width - 20
-      label(this.fitLabel(node.physicalOp, labelWidth, this.textStyle), placed.x + 10, placed.y + 8)
+      label(placed.id + ':op', this.fitLabel(node.physicalOp, labelWidth, this.textStyle), placed.x + 10, placed.y + 8)
       if (this.camera.scale < 0.55) continue
       const rows = node.actualRows ?? node.estimatedRows
       const caption = node.actualRows !== null ? `Rows ${rowCountFormat.format(node.actualRows)}` : node.object || (rows === null ? node.logicalOp : `Est. rows ${rowCountFormat.format(rows)}`)
-      if (caption) label(this.fitLabel(caption, labelWidth, this.mutedStyle, !!node.object), placed.x + 10, placed.y + 28, true)
+      if (caption) label(placed.id + ':caption', this.fitLabel(caption, labelWidth, this.mutedStyle, !!node.object), placed.x + 10, placed.y + 28, true)
     }
-    for (let i = used; i < this.pool.length; i++) this.pool[i].visible = false
+    // Text.destroy returns its managed texture to Pixi's global idle pool. Release that surplus too;
+    // clear only touches idle textures, so other canvases' borrowed textures remain valid.
+    if (this.pool.end()) TexturePool.clear(true)
     this.app.render()
   }
   dispose(): void {
@@ -315,6 +322,9 @@ export class PlanCanvas {
     root.removeEventListener('pointerup', this.up); root.removeEventListener('pointercancel', this.cancelDrag); root.removeEventListener('lostpointercapture', this.cancelDrag)
     root.removeEventListener('pointerleave', this.leaveHover)
     this.ownerDocument.removeEventListener('visibilitychange', this.visibilityChanged)
+    this.pool.dispose(); this.fittedLabels.clear()
     if (this.ready) { this.app.canvas.removeEventListener('webglcontextlost', this.contextLost); this.app.destroy(true, { children: true, texture: true, textureSource: true }) }
+    TexturePool.clear(true)
+    this.textStyle.destroy(); this.mutedStyle.destroy()
   }
 }
