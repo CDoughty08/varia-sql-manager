@@ -120,13 +120,14 @@ internal static class RestoreChecks
     {
         var host = new ServerFilesChecks.StuckHost();
         using var service = new ActionService(host);
-        service.Options.RestoreDescribeBudget = TimeSpan.FromMilliseconds(400);
+        // Every describe must reach the stuck host before its budget cancels it, which a starved CI runner can delay past 400 ms.
+        service.Options.RestoreDescribeBudget = TimeSpan.FromMilliseconds(1_500);
         service.Options.GateWait = TimeSpan.FromSeconds(5);
         var servers = Enumerable.Range(0, service.Options.ReadTotal).Select(_ => Guid.NewGuid().ToString()).ToList();
         ActionDescribeArgs Media(string connectionId) => new(connectionId, Guid.NewGuid().ToString(), "restoreDatabase", new ObjectRefDto("server"), null, new("devices", Devices: ["\\\\unreachable\\share\\x.bak"]));
         var stuck = servers.Select(Media).Append(Media(servers[0])).Select(args => service.DescribeAsync(args, CancellationToken.None)).ToList();
         var watch = System.Diagnostics.Stopwatch.StartNew();
-        while (host.Held < stuck.Count && watch.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(10);
+        while (host.Held < stuck.Count && watch.Elapsed < TimeSpan.FromSeconds(15)) await Task.Delay(10);
         var timedOut = await Task.WhenAll(stuck);
         host.Blocking = false;
         async Task<string> Describe(string connectionId, string dialog, ObjectRefDto target)
@@ -140,7 +141,7 @@ internal static class RestoreChecks
         var heldWhile = host.Held;
         host.Release();
         watch.Restart();
-        while (service.ActiveJobs > 0 && watch.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(10);
+        while (service.ActiveJobs > 0 && watch.Elapsed < TimeSpan.FromSeconds(15)) await Task.Delay(10);
         check(timedOut.All(result => result.Error?.Code == "TIMEOUT") && heldWhile == stuck.Count && properties == "CONNECTION_LOST" && delete == "CONNECTION_LOST" && other == "CONNECTION_LOST"
             && service.ActiveJobs == 0 && service.RunningCount == 0,
             "restore describes stuck past their budget hold only their own gate: Database Properties and Delete Object still open on that server and others (their unreachable fake answers CONNECTION_LOST, not BUSY): "

@@ -92,14 +92,16 @@ internal static class HostChecks
             check(secret?.Header.Id == 61 && Body(secret.Value).GetProperty("result").GetProperty("value").GetString() == "s3cret" && host.Dispatcher.AskedSensitive.Contains("test.secret"),
                 "the host asks the dispatcher whether a request is sensitive before it parses the frame, and still answers it");
 
+            // The answer must come before the handler's own end, not on time: a starved CI runner fires the 100 ms timer up to
+            // a second late, so the handler outlasts the deadline by 2.4 s and the bound sits 500 ms short of its end.
             var watch = Stopwatch.StartNew();
-            host.Request(3, "test.slow", new { ms = 1500 }, deadline: 100);
+            host.Request(3, "test.slow", new { ms = 2500 }, deadline: 100);
             var timedOut = host.Next(FrameKind.Response);
             var elapsed = watch.ElapsedMilliseconds;
-            check(timedOut?.Header.Id == 3 && ErrorCode(timedOut.Value) == "TIMEOUT" && elapsed is >= 90 and < 600 && host.Dispatcher.Completed == 0,
-                "a deadline answers TIMEOUT within 100 ms while the handler keeps running (" + elapsed + " ms)");
+            check(timedOut?.Header.Id == 3 && ErrorCode(timedOut.Value) == "TIMEOUT" && elapsed is >= 90 and < 2000 && host.Dispatcher.Completed == 0,
+                "a deadline answers TIMEOUT at 100 ms, before the handler ends, while the handler keeps running (" + elapsed + " ms)");
             check(Body(timedOut!.Value).GetProperty("error").GetProperty("message").GetString() == "The operation exceeded its time limit of 1 seconds.", "TIMEOUT names the deadline");
-            SpinWait.SpinUntil(() => host.Dispatcher.Completed == 1, 5000);
+            SpinWait.SpinUntil(() => host.Dispatcher.Completed == 1, 15000);
             check(host.Dispatcher.Completed == 1 && host.Next(FrameKind.Response, 300) is null, "the late result of a timed-out request is discarded: exactly one RESPONSE per id");
 
             host.Send(FrameKind.Request, 4, 0, new byte[ProtocolLimits.RequestBody + 1]);
@@ -193,34 +195,41 @@ internal static class HostChecks
                 && thirdEvent?.Body.Length > 1024 * 1024 && eventsDone?.Header.Id == 8 && host.ArrivalOf(eventsDone.Value) > host.ArrivalOf(thirdEvent.Value) && host.Next(FrameKind.Event, 200) is null,
                 "a request's EVENT frames precede its RESPONSE; a droppable event over 256 KiB and an essential one over 4 MiB are dropped, a 1 MiB descriptor event is not");
 
-            for (var id = 10u; id < 18; id++) host.Request(id, "test.slow", new { ms = 1500 });
+            // A PONG queued behind the slots would come when they free at 3 s; the 2 s bound leaves a starved CI runner
+            // seconds to answer. Shutdown waits for these handlers at most DrainTimeout (1.5 s), as it did at 1.5 s each.
+            for (var id = 10u; id < 18; id++) host.Request(id, "test.slow", new { ms = 3000 });
             Thread.Sleep(100);
             watch.Restart();
             host.Send(FrameKind.Ping, 0, 4242, []);
             var pong = host.Next(FrameKind.Pong);
-            check(pong?.Header.Arg == 4242 && watch.ElapsedMilliseconds < 500, "PING is answered by the reader thread while every metadata slot is busy");
+            check(pong?.Header.Arg == 4242 && watch.ElapsedMilliseconds < 2000, "PING is answered by the reader thread while every metadata slot is busy (" + watch.ElapsedMilliseconds + " ms)");
 
             host.Request(20, "test.wait", new { });
             Thread.Sleep(100);
             host.Dispatcher.DrainFor = TimeSpan.FromMilliseconds(400);
             var closing = Stopwatch.StartNew();
             host.CloseInput();
-            check(host.Exited.Wait(5000) && host.Exits.TryPeek(out var code) && code == 0 && host.Dispatcher.CancelAllCalls == 1 && host.Dispatcher.Disposed
+            // Shutdown waits for Dispose's pool task only DrainTimeout, then exits and leaves it running: on a starved CI runner
+            // that task can start after the exit, so wait for it rather than read Disposed at once.
+            var exited = host.Exited.Wait(15000);
+            check(exited && host.Exits.TryPeek(out var code) && code == 0 && host.Dispatcher.CancelAllCalls == 1 && SpinWait.SpinUntil(() => host.Dispatcher.Disposed, 15000)
                 && host.Dispatcher.DrainCalls == 1 && !host.Dispatcher.DisposedBeforeDrain && closing.ElapsedMilliseconds >= 400,
                 "stdin EOF cancels everything, waits for the work that must not end half done (a Create Catalog past its restore), then disposes the service and exits 0 ("
                 + closing.ElapsedMilliseconds + " ms)");
         }
 
-        using (var host = new HostHarness(new HostOptions { MaxInFlight = 2, MetadataSlots = 1, MetadataWait = TimeSpan.FromMilliseconds(200) }))
+        // Requests 1 and 2 race for the one slot on their own tasks, so either may lose. The slot wait (1 s) must outlast the
+        // reader reaching request 3, and the winner's 2.2 s must outlast the loser's wait, both with a second to spare for
+        // a starved CI runner.
+        using (var host = new HostHarness(new HostOptions { MaxInFlight = 2, MetadataSlots = 1, MetadataWait = TimeSpan.FromMilliseconds(1000) }))
         {
             host.Hello();
-            host.Request(1, "test.slow", new { ms = 1000 });
-            Thread.Sleep(50);
-            host.Request(2, "test.slow", new { ms = 1000 });
+            host.Request(1, "test.slow", new { ms = 2200 });
+            host.Request(2, "test.slow", new { ms = 2200 });
             host.Request(3, "test.echo", new { });
             var busy = host.Next(FrameKind.Response);
             var waited = host.Next(FrameKind.Response);
-            check(busy?.Header.Id == 3 && ErrorCode(busy.Value) == "BUSY" && waited?.Header.Id == 2 && ErrorCode(waited.Value) == "BUSY",
+            check(busy?.Header.Id == 3 && ErrorCode(busy.Value) == "BUSY" && waited?.Header.Id is 1 or 2 && ErrorCode(waited.Value) == "BUSY",
                 "past the in-flight cap a request is answered BUSY, and a metadata request answers BUSY once its slot wait expires");
         }
 
@@ -268,7 +277,7 @@ internal static class HostChecks
         using (var host = new HostHarness(output: new BrokenStream()))
         {
             host.Send(FrameKind.Hello, 0, 0, JsonBridge.Encode(new { versions = new[] { 2, 2 }, generation = 1 }, Json));
-            check(host.Exited.Wait(5000) && host.Exits.TryPeek(out var code) && code == 0, "a stdout that fails to write ends the writer and exits 0");
+            check(host.Exited.Wait(15000) && host.Exits.TryPeek(out var code) && code == 0, "a stdout that fails to write ends the writer and exits 0");
         }
 
         OutboundChecks(check);
@@ -318,7 +327,7 @@ internal static class HostChecks
         host.Request(1, SqlService.SynthesizeMethod, new { shape = "W1", rows = 10_000 });
         var resultId = Body(host.Next(FrameKind.Response)!.Value).GetProperty("result").GetProperty("resultId").GetUInt32();
         host.Request(2, "test.summary", new { });
-        var held = taken.Wait(5000);
+        var held = taken.Wait(15000);
         host.Request(3, "results.close", new { resultIds = new[] { resultId } });
         var closed = host.Next(FrameKind.Response);
         release.Set();
@@ -361,14 +370,14 @@ internal static class HostChecks
                     return body.GetProperty("usedBytes").GetInt64();
             return -1;
         }
-        var rise = Memory(3000, used => used > 0);
+        var rise = Memory(15000, used => used > 0);
         // Main stops reading: the writer blocks on its first frame, then a thousand queued events fill the control lane.
         host.Valve!.Shut();
         host.Host.Publish(new { Type = "test.filler" });
-        var blocked = SpinWait.SpinUntil(() => host.Valve.Blocked, 2000);
+        var blocked = SpinWait.SpinUntil(() => host.Valve.Blocked, 15000);
         for (var i = 0; i < Outbound.MaxDroppableFrames + 10; i++) host.Host.Publish(new { Type = "test.filler" });
         host.Request(2, "results.close", new { resultIds = new[] { resultId } });
-        var closedWhileFull = SpinWait.SpinUntil(() => store.UsedBytes == 0 && host.Host.InFlight == 0, 5000);
+        var closedWhileFull = SpinWait.SpinUntil(() => store.UsedBytes == 0 && host.Host.InFlight == 0, 15000);
         // A timer tick while the lane is still full.
         Thread.Sleep(1200);
         host.Valve.Open();
@@ -387,7 +396,8 @@ internal static class HostChecks
         outbound.Start();
         var large = Frames.Encode(FrameKind.Data, 1, 1, new byte[70 * 1024]);
         outbound.Bulk(large);
-        SpinWait.SpinUntil(() => output.Blocked, 2000);
+        // The order checked below needs the writer parked on the large frame first; on a starved runner that can take seconds.
+        SpinWait.SpinUntil(() => output.Blocked, 15000);
         outbound.Bulk(Frames.Encode(FrameKind.Data, 2, 1, [2]));
         outbound.Control(Frames.Encode(FrameKind.Response, 3, 0, [3]));
         var accepted = 0;
@@ -396,7 +406,7 @@ internal static class HostChecks
         check(accepted == Outbound.MaxDroppableFrames - 1 && outbound.DroppedFrames == 2 && essential,
             "while main is not reading, droppable events past 1,000 queued frames are dropped and responses are not");
         output.Release();
-        check(outbound.Complete(TimeSpan.FromSeconds(5)) && !broken, "the writer drains its queue when completed");
+        check(outbound.Complete(TimeSpan.FromSeconds(15)) && !broken, "the writer drains its queue when completed");
         var reader = new FrameReader(new MemoryStream(output.Written), FrameDirection.ToMain, 16 * 1024 * 1024);
         var ids = new List<uint>();
         while (reader.Read() is { } frame) ids.Add(frame.Header.Id);
@@ -604,7 +614,7 @@ internal sealed class HostHarness : IDisposable
     }
 
     /// <summary>The next frame of a kind; frames of other kinds stay queued in arrival order.</summary>
-    public Frame? Next(FrameKind kind, int timeoutMs = 5000)
+    public Frame? Next(FrameKind kind, int timeoutMs = 15000)
     {
         var deadline = Environment.TickCount64 + timeoutMs;
         while (true)

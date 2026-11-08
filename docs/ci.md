@@ -119,6 +119,13 @@ Considered and rejected (do not re-propose without new numbers):
 - **Don't starve small runners.** CI's runners have 3 or 4 vCPUs. Running every check lane at once there made tsc 13 times
   slower and failed 1 to 3 s polls. Add work as a lane in a chain (`scripts/check.mjs`), and give waits that return as soon
   as their condition holds generous bounds.
+- **Stress timing checks before pushing them.** Even in chains, the offline lanes share CI's 3 or 4 vCPUs with vitest, and
+  timers there fire 300 ms to over 1 s late. Three rounds of PR #166's CI each failed on a different offline check with a
+  sub-second race (a 300 ms budget against a 50 ms delay, a 200 ms grace against a 20 ms job, a 2 s exit wait). A sweep of
+  every offline suite then made 65 such changes, adding about 9 s of suite time (Host is now 12.5 s, still the lanes'
+  floor). `node scripts/offline-stress.mjs` runs five copies of the offline checks on three CPUs at once. Before the sweep,
+  three copies failed every run; after it, every run of five copies passed. Give two racing timers about a second between them, and
+  make a wait that returns early generous. Vitest's CPU-bound tests take `heavyTimeout` (`tests/fixtures/work-meter.ts`).
 - **Offline .NET suites run in lanes.** Put a new suite in Program.cs's `offlineSuites` list with its weight in
   `OfflineSuites.Weights`, and in `OfflineSuites.Alone` if it touches process-wide state.
 - **Fold work into an existing job before adding one.** Each job costs 40 to 70 s of setup (plus about 23 s with a SQL

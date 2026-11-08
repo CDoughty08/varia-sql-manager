@@ -322,6 +322,8 @@ internal static class SeamChecks
         using var service = new ActionService(new Host(3));
         await using var connection = new SqlConnection("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false");
         var ran = new List<string>();
+        // The cleanup budget starts before the due steps run, which fail at once here: a short one could run out first on a starved CI runner.
+        var cleanupBudget = TimeSpan.FromSeconds(30);
         RunStep Step(string title, Exception? fails = null, StepKind kind = StepKind.Main, int? undoes = null, Func<IReadOnlyList<string>, bool>? when = null) =>
             new(title, _ => { ran.Add(title); return fails is null ? Task.CompletedTask : Task.FromException(fails); }, kind, undoes, when);
         var taken = ConnectionFailureChecks.Sql(1801, 1, 16, "server", "Database 'B' already exists. Choose a different database name.");
@@ -331,7 +333,7 @@ internal static class SeamChecks
             Step("Restore multi-user access", kind: StepKind.Compensation, undoes: 0), Step("Undo the rename", kind: StepKind.Compensation, undoes: 1),
             Step("Remove what was made", kind: StepKind.Cleanup, when: statuses => statuses.Contains("cancelled"))
         };
-        var outcome = await service.RunStepsAsync(connection, plan, null, CancellationToken.None, TimeSpan.FromSeconds(1));
+        var outcome = await service.RunStepsAsync(connection, plan, null, CancellationToken.None, cleanupBudget);
         // The connection is closed here (so the failure maps to CONNECTION_LOST, and the live checks see NAME_IN_USE), and the due
         // compensation cannot run: it is listed as failed, and the message says so.
         check(outcome.Steps.Select(step => step.Status + ":" + step.Title + ":" + (step.Compensates == true)).SequenceEqual(
@@ -345,7 +347,7 @@ internal static class SeamChecks
         ran.Clear();
         // A main step that finds it must not go on (StepRefusedException) fails with its own error, as a SqlException does.
         var refusal = ActionErrors.Create(ActionsCatalog.Current, "RESTORE_SEQUENCE", "The log was backed up during the run.");
-        var refused = await service.RunStepsAsync(connection, [Step("Restore"), Step("Back up", new StepRefusedException(refusal)), Step("Restore it")], null, CancellationToken.None, TimeSpan.FromSeconds(1));
+        var refused = await service.RunStepsAsync(connection, [Step("Restore"), Step("Back up", new StepRefusedException(refusal)), Step("Restore it")], null, CancellationToken.None, cleanupBudget);
         check(refused.Steps.Select(step => step.Status + ":" + step.Title + ":" + step.Message).SequenceEqual(["done:Restore:", "failed:Back up:The log was backed up during the run.", "skipped:Restore it:"])
             && refused.Failure is { Code: "RESTORE_SEQUENCE" } && refused.Failure.Message == "The log was backed up during the run. Completed before the failure: Restore." && refused.Done == 1
             && ran.SequenceEqual(["Restore", "Back up"]),
@@ -353,13 +355,13 @@ internal static class SeamChecks
         ran.Clear();
         using var stopped = new CancellationTokenSource();
         stopped.Cancel();
-        var cancelled = await service.RunStepsAsync(connection, plan, null, stopped.Token, TimeSpan.FromSeconds(1));
+        var cancelled = await service.RunStepsAsync(connection, plan, null, stopped.Token, cleanupBudget);
         check(cancelled.Steps.Select(step => step.Status + ":" + step.Title).SequenceEqual(["cancelled:Close existing connections", "skipped:Rename", "skipped:Delete backup and restore history", "failed:Remove what was made"])
             && cancelled.Failure is { Code: "CANCELLED" } && ran.Count == 0, "after Stop, no compensation is due for steps that never completed; a cleanup whose condition holds still runs under its own budget");
         // A first step that checks the server again and refuses (Unlock's recheck) answers with exactly that refusal.
         ran.Clear();
         var changed = ActionErrors.Create(ActionsCatalog.Current, "NOT_SUPPORTED", ActionsCatalog.Current.Logins.Message("unlockChanged"));
-        var recheck = await service.RunStepsAsync(connection, [Step("Recheck", new StepRefusedException(changed)), Step("Last")], null, CancellationToken.None, TimeSpan.FromSeconds(1));
+        var recheck = await service.RunStepsAsync(connection, [Step("Recheck", new StepRefusedException(changed)), Step("Last")], null, CancellationToken.None, cleanupBudget);
         check(recheck.Failure == changed && recheck.Steps.Select(step => step.Status + ":" + step.Message).SequenceEqual(["failed:" + changed.Message, "skipped:"]) && recheck.Done == 0,
             "a first step that refuses after checking the server again answers with that refusal alone, and the rest are skipped");
         static async Task<bool> Refuses(Func<Task> run)
@@ -367,9 +369,9 @@ internal static class SeamChecks
             try { await run(); return false; }
             catch (InvalidOperationException) { return true; }
         }
-        check(await Refuses(() => service.RunStepsAsync(connection, [Step("A"), Step("Undo", kind: StepKind.Compensation, undoes: 1)], null, CancellationToken.None, TimeSpan.FromSeconds(1)))
-            && await Refuses(() => service.RunStepsAsync(connection, [Step("A"), Step("Undo", kind: StepKind.Compensation)], null, CancellationToken.None, TimeSpan.FromSeconds(1)))
-            && await Refuses(() => service.RunStepsAsync(connection, [Step("A"), Step("Clean", kind: StepKind.Cleanup)], null, CancellationToken.None, TimeSpan.FromSeconds(1), transaction: true)),
+        check(await Refuses(() => service.RunStepsAsync(connection, [Step("A"), Step("Undo", kind: StepKind.Compensation, undoes: 1)], null, CancellationToken.None, cleanupBudget))
+            && await Refuses(() => service.RunStepsAsync(connection, [Step("A"), Step("Undo", kind: StepKind.Compensation)], null, CancellationToken.None, cleanupBudget))
+            && await Refuses(() => service.RunStepsAsync(connection, [Step("A"), Step("Clean", kind: StepKind.Cleanup)], null, CancellationToken.None, cleanupBudget, transaction: true)),
             "a compensation names a main step it undoes, and a transaction's plan has no compensation or cleanup (its rollback undoes it)");
         var bounded = ActionSteps.Bound(new("failed", new string('t', 100), new string('m', 5000), new string('d', 300), true, 150));
         check(bounded.Title.Length == ActionSteps.MaxTitle && bounded.Message!.Length == ActionErrors.MaxMessage && bounded.Detail!.Length == ActionSteps.MaxDetail && bounded.Progress == 100

@@ -117,7 +117,7 @@ internal static class EstimatedPlanChecks
             var reads = ids.Select((id, index) => Call("plans.estimate", new EstimatedPlanArgs(info.Id, compilerSessions[index], id, "master", "SELECT 1;"))).ToArray();
             try
             {
-                await both.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                await both.Task.WaitAsync(TimeSpan.FromSeconds(30));
                 await Refused("SELECT 1;", "BUSY", "a third estimate is refused without queuing behind blocked compilers");
                 await Call("query.cancel", new CancelArgs(ids[0]));
                 await Call("query.session.close", new SessionArgs(compilerSessions[1]));

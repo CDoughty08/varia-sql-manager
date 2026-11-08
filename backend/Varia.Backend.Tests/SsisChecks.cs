@@ -334,13 +334,13 @@ internal static class SsisChecks
             var connection = Guid.NewGuid().ToString();
             var held = new[] { service.DescribeAsync(Args("folder", folder, connection), CancellationToken.None), service.DescribeAsync(Args("folder", folder, connection), CancellationToken.None) };
             var watch = Stopwatch.StartNew();
-            while (host.Opens < 2 && watch.ElapsedMilliseconds < 5000) await Task.Delay(10);
+            while (host.Opens < 2 && watch.ElapsedMilliseconds < 15_000) await Task.Delay(10);
             string busy;
             try { await service.DescribeAsync(Args("folder", folder, connection), CancellationToken.None); busy = "answered"; }
             catch (RequestException error) { busy = error.Code; }
             // Another connection has its own gate.
             var other = service.DescribeAsync(Args("folder", folder), CancellationToken.None);
-            while (host.Opens < 3 && watch.ElapsedMilliseconds < 5000) await Task.Delay(10);
+            while (host.Opens < 3 && watch.ElapsedMilliseconds < 15_000) await Task.Delay(10);
             host.Hold.Release(3);
             var answers = await Task.WhenAll([.. held, other]);
             check(busy == "BUSY" && host.Opens == 3 && answers.All(answer => answer.Error is { Code: "AUTH_KERBEROS", Retryable: true } && answer.Model is null) && service.RunningCount == 0,
@@ -351,7 +351,7 @@ internal static class SsisChecks
             try { await service.DescribeAsync(Args("folder", folder, connection), cancelled.Token); check(false, "a cancelled describe runs"); }
             catch (OperationCanceledException) { check(host.Opens == before && service.RunningCount == 0, "a describe cancelled before it runs takes no gate and opens nothing"); }
             var waiting = service.DescribeAsync(Args("folder", folder, connection), CancellationToken.None);
-            while (host.Opens == before && watch.ElapsedMilliseconds < 10_000) await Task.Delay(10);
+            while (host.Opens == before && watch.ElapsedMilliseconds < 30_000) await Task.Delay(10);
             service.Forget(connection);
             try { await waiting; check(false, "a disconnected describe answers"); }
             catch (RequestException error) { check(error.Code == "CANCELLED" && service.RunningCount == 0, "a disconnect cancels the connection's describes"); }

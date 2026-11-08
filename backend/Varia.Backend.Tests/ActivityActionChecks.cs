@@ -229,7 +229,7 @@ internal static class ActivityActionChecks
         var details = await actions.DetailsAsync(new ActivityDetailsArgs(id, Guid.NewGuid().ToString(), 69, "2026-10-22T06:50:12"), CancellationToken.None);
         var detailsMs = Environment.TickCount64 - started;
         check(details is { State: "unknown", Error: { Code: "TIMEOUT", Retryable: true } } && details.Error.Message == "Reading the session took longer than 1 second. Refresh to try again."
-            && detailsMs < 5_000 && live.Gates.Busy == 0,
+            && detailsMs < 15_000 && live.Gates.Busy == 0,
             $"a Details read past its budget (a server that never answers) is a TIMEOUT value, and its live gate is back ({detailsMs} ms)");
         // A kill holds its connection's gate; a second kill on the same connection is BUSY rather than queueing behind it.
         using var stop = new CancellationTokenSource();
@@ -248,7 +248,8 @@ internal static class ActivityActionChecks
         // Details waits for a live gate as long as its budget allows (C-critic G12), not Kill's fixed gate wait.
         var gates = new List<IDisposable>();
         for (var index = 0; index < LiveCatalog.Current.Limits.StatementsPerConnection; index++) gates.Add((await live.Gates.WaitAsync(id, 0, CancellationToken.None))!);
-        var patient = new SessionActions(host, live) { DetailsBudgetMs = 2_000, GateWaitMs = 100 };
+        // Freed at 600 ms within a 2.5 s budget: a starved CI runner can fire the 600 ms delay a second or more late.
+        var patient = new SessionActions(host, live) { DetailsBudgetMs = 2_500, GateWaitMs = 100 };
         started = Environment.TickCount64;
         var waiting = patient.DetailsAsync(new ActivityDetailsArgs(id, Guid.NewGuid().ToString(), 69, "2026-10-22T06:50:12"), CancellationToken.None);
         await Task.Delay(600);
@@ -258,7 +259,7 @@ internal static class ActivityActionChecks
         string? waitCode = null;
         try { afterWait = await waiting; } catch (RequestException error) { waitCode = error.Code; }
         var waitedMs = Environment.TickCount64 - started;
-        check(waitCode is null && afterWait is { State: "unknown", Error.Code: "TIMEOUT" } && waitedMs >= 1_500 && live.Gates.Busy == 0,
+        check(waitCode is null && afterWait is { State: "unknown", Error.Code: "TIMEOUT" } && waitedMs >= 2_000 && live.Gates.Busy == 0,
             $"Details waits past Kill's gate wait for a live gate freed within its budget, then reads (here until its budget ends): {waitCode ?? afterWait?.Error?.Code} after {waitedMs} ms");
         for (var index = 0; index < LiveCatalog.Current.Limits.StatementsPerConnection; index++) gates.Add((await live.Gates.WaitAsync(id, 0, CancellationToken.None))!);
         var full = new SessionActions(host, live) { DetailsBudgetMs = 300 };
@@ -268,7 +269,7 @@ internal static class ActivityActionChecks
         catch (RequestException error) { (fullCode, fullMessage) = (error.Code, error.Message); }
         var fullMs = Environment.TickCount64 - started;
         foreach (var gate in gates) gate.Dispose();
-        check(fullCode == "BUSY" && fullMessage == SessionActions.DetailsBusy && fullMs < 4_000 && live.Gates.Busy == 0,
+        check(fullCode == "BUSY" && fullMessage == SessionActions.DetailsBusy && fullMs < 15_000 && live.Gates.Busy == 0,
             $"Details whose whole budget goes waiting for a live gate answers BUSY, not TIMEOUT: {fullCode} after {fullMs} ms");
 
         // Something other than a SqlException in one session's batch still answers the outcomes gathered, as values.

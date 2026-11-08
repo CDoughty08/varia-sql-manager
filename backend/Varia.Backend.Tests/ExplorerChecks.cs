@@ -760,7 +760,8 @@ internal static class ExplorerChecks
         check(folders.Nodes.Select(node => node.Label).SequenceEqual(["Columns", "Indexes", "Statistics"]) && host.Connections == 0, "a history table's folder set");
         var watch = Stopwatch.StartNew();
         var many = await Task.WhenAll(Enumerable.Range(0, 64).Select(_ => service.ChildrenAsync(Args(Folder(database, "programmability")), CancellationToken.None)));
-        check(many.All(page => page.Nodes.Count == 9) && watch.ElapsedMilliseconds < 2000 && host.Connections == 0, "64 concurrent static expansions take no slot (" + watch.ElapsedMilliseconds + " ms)");
+        // Only a hang fails the bound: a starved CI runner can take seconds over 64 cheap requests.
+        check(many.All(page => page.Nodes.Count == 9) && watch.ElapsedMilliseconds < 15_000 && host.Connections == 0, "64 concurrent static expansions take no slot (" + watch.ElapsedMilliseconds + " ms)");
         var json = JsonSerializer.Serialize(root, Json);
         check(json.Contains("\"ref\":{\"type\":\"folder\",\"owner\":{\"kind\":\"server\"},\"folder\":\"databases\"}") && !json.Contains("null"), "nodes serialize without null members");
         var cloud = new ExplorerService(new FakeHost(16, 5));
@@ -818,12 +819,12 @@ internal static class ExplorerChecks
         var requestId = Guid.NewGuid().ToString();
         // The fake host blocks inside the gates on the caller's thread, so each held request starts on its own.
         var first = Task.Run(() => limited.ChildrenAsync(Args(Folder(server, "logins"), requestId: requestId) with { ConnectionId = connection }, CancellationToken.None));
-        SpinWait.SpinUntil(() => gated.Connections == 1, 5000);
+        SpinWait.SpinUntil(() => gated.Connections == 1, 15_000);
         try { await limited.ChildrenAsync(Args(Folder(server, "logins"), requestId: requestId) with { ConnectionId = connection }, CancellationToken.None); check(false, "a duplicate request runs"); }
         catch (RequestException error) { check(error.Code == "DUPLICATE_REQUEST", "a running requestId cannot be sent again"); }
         var waiting = Task.Run(() => limited.ChildrenAsync(Args(Folder(server, "credentials")) with { ConnectionId = connection }, CancellationToken.None));
         var other = Task.Run(() => limited.ChildrenAsync(Args(Folder(server, "audits")) with { ConnectionId = Guid.NewGuid().ToString() }, CancellationToken.None));
-        SpinWait.SpinUntil(() => gated.Connections == 2 && limited.RunningCount == 3, 5000);
+        SpinWait.SpinUntil(() => gated.Connections == 2 && limited.RunningCount == 3, 15_000);
         check(gated.Connections == 2 && !waiting.IsCompleted, "the per-connection gate holds a connection's next statement, not another connection's");
         try { await limited.ChildrenAsync(Args(Folder(server, "logins")), CancellationToken.None); check(false, "more registered requests than allowed"); }
         catch (RequestException error) { check(error.Code == "BUSY", "registered requests are bounded"); }
@@ -842,12 +843,14 @@ internal static class ExplorerChecks
         var busy = Guid.NewGuid().ToString();
         var orders = new ObjectRefDto("table", "Sales", "dbo", "Orders");
         var tree = Task.Run(() => lanes.ChildrenAsync(Args(Folder(server, "logins")) with { ConnectionId = busy }, CancellationToken.None));
-        SpinWait.SpinUntil(() => held.Connections == 1, 5000);
+        SpinWait.SpinUntil(() => held.Connections == 1, 15_000);
         var peekA = Task.Run(() => lanes.PeekAsync(new PeekArgs(busy, Guid.NewGuid().ToString(), orders), CancellationToken.None));
-        SpinWait.SpinUntil(() => held.Connections == 2, 5000);
+        SpinWait.SpinUntil(() => held.Connections == 2, 15_000);
         check(held.Connections == 2, "a peek runs while tree reads hold every shared slot");
         var peekB = Task.Run(() => lanes.PeekAsync(new PeekArgs(busy, Guid.NewGuid().ToString(), orders), CancellationToken.None));
-        // Longer than the budget: a budget counted from the request would have timed the queued peek out by now.
+        // Counted from peekB's registration, not its Task.Run (which a starved runner can start late), and longer than the
+        // budget: a budget counted from the request would have timed the queued peek out by now.
+        SpinWait.SpinUntil(() => lanes.RunningCount == 3, 15_000);
         await Task.Delay(300);
         check(held.Connections == 2 && !peekB.IsCompleted, "a second peek waits for the connection's peek slot, without its budget running");
         held.Hold.Release(10);

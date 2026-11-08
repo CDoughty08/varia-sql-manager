@@ -287,7 +287,7 @@ internal static class EntraChecks
         var watch = Stopwatch.StartNew();
         try { await provider.AcquireTokenAsync(Parameters(SqlAuthenticationMethod.ActiveDirectoryDefault, id, timeout: 1)); }
         catch (EntraProviderException) { }
-        check(watch.ElapsedMilliseconds < 5000 && service.Attempts.Take(id) is EntraFailure { Message: EntraFailures.Messages.TokenTimedOut }, "a non-interactive type is bounded by the connect timeout");
+        check(watch.ElapsedMilliseconds < 15_000 && service.Attempts.Take(id) is EntraFailure { Message: EntraFailures.Messages.TokenTimedOut }, "a non-interactive type is bounded by the connect timeout");
         fake = new FakeSource { Other = (_, _, _) => throw new MsalServiceException("invalid_client", "AADSTS7000215: Invalid client secret provided.") };
         service.Source = fake;
         id = Guid.NewGuid();
@@ -337,7 +337,8 @@ internal static class EntraChecks
         catch (RequestException error) { pooled = error; }
         check(pooled is { Code: "AUTH_ENTRA", Message: EntraFailures.Messages.SignInExpired, Details: null } && fake.Count("interactive") == 0,
             "a pool connection that needs a sign-in answers AUTH_ENTRA (connect again) and never opens the browser");
-        // Stop while the browser waits: cancelled within a second, and MSAL saw its token cancelled.
+        // Stop while the browser waits: cancelled at once (the bound allows a starved CI runner; the sign-in itself would wait
+        // 3 minutes), and MSAL saw its token cancelled.
         var waiting = new TaskCompletionSource();
         fake = new FakeSource { Interactive = async (_, token) => { waiting.TrySetResult(); await Task.Delay(Timeout.Infinite, token); return Token("never"); } };
         service.Source = fake;
@@ -345,13 +346,13 @@ internal static class EntraChecks
         using (var stop = new CancellationTokenSource())
         {
             var connect = service.OpenForUserAsync(start, "srv", Open, NoId, stop.Token);
-            await waiting.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await waiting.Task.WaitAsync(TimeSpan.FromSeconds(15));
             var watch = Stopwatch.StartNew();
             stop.Cancel();
             Exception? stopped = null;
             try { await connect; } catch (Exception error) { stopped = error; }
-            check(stopped is OperationCanceledException && watch.ElapsedMilliseconds < 1000 && fake.InteractiveTokens[0].IsCancellationRequested && opened.Count == 1,
-                "Stop ends a sign-in waiting for the browser within a second, cancelling MSAL's wait, and nothing is opened again");
+            check(stopped is OperationCanceledException && watch.ElapsedMilliseconds < 10_000 && fake.InteractiveTokens[0].IsCancellationRequested && opened.Count == 1,
+                "Stop ends a sign-in waiting for the browser at once, cancelling MSAL's wait, and nothing is opened again");
         }
         // Two connects at once: one sign-in; the second finds its token.
         var gate = new TaskCompletionSource();
@@ -367,7 +368,7 @@ internal static class EntraChecks
         var second = service.OpenForUserAsync(start, "srv", Open, NoId, CancellationToken.None);
         await Task.Delay(100);
         gate.SetResult();
-        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(15));
         check(fake.Count("interactive") == 1, "two connects that need a sign-in at once open the browser once; the second waits, then uses the token");
         // Stop on one of two waiting connects leaves the other to finish.
         gate = new TaskCompletionSource();
@@ -381,9 +382,9 @@ internal static class EntraChecks
             await Task.Delay(100);
             stopFirst.Cancel();
             Exception? stopped = null;
-            try { await first.WaitAsync(TimeSpan.FromSeconds(5)); } catch (Exception error) { stopped = error; }
+            try { await first.WaitAsync(TimeSpan.FromSeconds(15)); } catch (Exception error) { stopped = error; }
             gate.SetResult();
-            var (other, _) = await second.WaitAsync(TimeSpan.FromSeconds(5));
+            var (other, _) = await second.WaitAsync(TimeSpan.FromSeconds(15));
             check(stopped is OperationCanceledException && other == "connection", "Stop on one waiting connect leaves the other to sign in and connect");
         }
         // The 3-minute limit (shortened here) answers its own message.
@@ -392,7 +393,7 @@ internal static class EntraChecks
         service.Source = fake;
         signedIn = false;
         RequestException? timedOut = null;
-        try { await service.OpenForUserAsync(start, "srv", Open, NoId, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)); }
+        try { await service.OpenForUserAsync(start, "srv", Open, NoId, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15)); }
         catch (RequestException error) { timedOut = error; }
         check(timedOut is { Code: "AUTH_ENTRA", Message: EntraFailures.Messages.TimedOut } && timedOut.Details?.Server == "srv", "a sign-in that takes longer than its limit says so");
         service.SignInLimit = TimeSpan.FromMinutes(3);
@@ -439,10 +440,10 @@ internal static class EntraChecks
         using (var stopHolder = new CancellationTokenSource())
         {
             var holder = service.SignInAsync(Request(), "srv", stopHolder.Token);
-            for (var waited = 0; fake.Count("interactive") == 0 && waited < 5000; waited += 10) await Task.Delay(10);
+            for (var waited = 0; fake.Count("interactive") == 0 && waited < 15_000; waited += 10) await Task.Delay(10);
             service.SignInLimit = TimeSpan.FromMilliseconds(200);
             object queued;
-            try { await service.SignInAsync(Request(), "srv", CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)); queued = "signed in"; }
+            try { await service.SignInAsync(Request(), "srv", CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15)); queued = "signed in"; }
             catch (RequestException error) { queued = error; }
             catch (TimeoutException) { queued = "still waiting"; }
             check(queued is RequestException { Code: "AUTH_ENTRA", Message: EntraFailures.Messages.TimedOut } && fake.Count("interactive") == 1,
@@ -547,10 +548,10 @@ internal static class EntraChecks
             fake.Calls.Clear();
             using var stop = new CancellationTokenSource();
             var running = run(stop.Token);
-            await waiting.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await waiting.Task.WaitAsync(TimeSpan.FromSeconds(15));
             stop.Cancel();
             Exception? stopped = null;
-            try { await running.WaitAsync(TimeSpan.FromSeconds(1)); } catch (Exception error) { stopped = error; }
+            try { await running.WaitAsync(TimeSpan.FromSeconds(15)); } catch (Exception error) { stopped = error; }
             check(stopped is OperationCanceledException && fake.Count("interactive") == 1, name + " signs in through the browser when MFA has no token, and Stop ends the wait");
         }
         // Load databases keeps one deadline for its opens (and its read): the browser sign-in between them is not counted, the
@@ -628,11 +629,11 @@ internal static class EntraChecks
         stop.CancelAfter(50);
         var watch = Stopwatch.StartNew();
         Exception? thrown = null;
-        try { await open.WaitAsync(TimeSpan.FromSeconds(5)); } catch (Exception error) { thrown = error; }
-        check(thrown is OperationCanceledException && watch.ElapsedMilliseconds < 1000 && !disposed.Task.IsCompleted,
+        try { await open.WaitAsync(TimeSpan.FromSeconds(15)); } catch (Exception error) { thrown = error; }
+        check(thrown is OperationCanceledException && watch.ElapsedMilliseconds < 10_000 && !disposed.Task.IsCompleted,
             "Stop answers a connect at once while SqlClient still waits for its login (a token or a credential chain)");
         release.SetException(new InvalidOperationException("late failure"));
-        await disposed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await disposed.Task.WaitAsync(TimeSpan.FromSeconds(15));
         check(disposed.Task.IsCompleted, "the abandoned connection is closed when its login finally ends");
         var failing = new SqlConnection("Data Source=localhost");
         var failed = false;

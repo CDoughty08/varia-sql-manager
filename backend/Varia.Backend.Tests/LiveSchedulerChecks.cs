@@ -524,7 +524,7 @@ internal static class LiveSchedulerChecks
         var c1 = await gates.WaitAsync("c", 50, CancellationToken.None);
         check(a1 is not null && a2 is not null && a3 is null && waited >= 90 && b1 is not null && c1 is null && gates.Busy == 3,
             "live statements take a gate per connection (2) and one in the backend (here 3); a wait over its budget gives up with nothing held");
-        var queued = gates.WaitAsync("a", 5000, CancellationToken.None);
+        var queued = gates.WaitAsync("a", 15_000, CancellationToken.None);
         await Task.Delay(50);
         var stillWaiting = !queued.IsCompleted;
         a1!.Dispose();
@@ -533,7 +533,7 @@ internal static class LiveSchedulerChecks
         check(stillWaiting && acquired is not null && gates.Busy == 3, "a waiting statement gets the gate as soon as one is released (a lease releases once)");
         using var stop = new CancellationTokenSource(50);
         var cancelled = false;
-        try { await gates.WaitAsync("c", 5000, stop.Token); }
+        try { await gates.WaitAsync("c", 15_000, stop.Token); }
         catch (OperationCanceledException) { cancelled = true; }
         foreach (var lease in new[] { a2, b1, acquired }) lease!.Dispose();
         check(cancelled && gates.Busy == 0, "a cancelled wait holds nothing");
@@ -652,7 +652,7 @@ internal static class LiveSchedulerChecks
         var store = new ResultStore(1L << 20, 1L << 19);
         uint next = 100;
         async Task<(LiveEnd? End, LiveRecorder Recorder, ScriptedSampler Sampler, string Id, LiveService Service)> Start(Action<ScriptedSampler>? setup = null, bool acknowledge = true,
-            string[]? probes = null, string? resume = null, int? periodMs = 10, Func<LiveRecorder, bool>? until = null, Action<LiveService, string>? during = null)
+            string[]? probes = null, string? resume = null, int? periodMs = 10, Func<LiveRecorder, bool>? until = null, Action<LiveService, string, ScriptedSampler>? during = null)
         {
             var sampler = new ScriptedSampler(periodMs);
             setup?.Invoke(sampler);
@@ -661,8 +661,9 @@ internal static class LiveSchedulerChecks
             var id = Guid.NewGuid().ToString();
             var task = service.SubscribeAsync(new LiveSubscribeArgs(id, connection, "fx", [.. (probes ?? ["fx.b"]).Select(probe => new LiveProbeArgs(probe, 1000))], Resume: resume), recorder.Context, HostChecks.Json);
             if (until is not null) await recorder.WaitAsync(until);
-            during?.Invoke(service, id);
-            if (await Task.WhenAny(task, Task.Delay(until is null ? 3000 : 300)) != task) service.CancelAll();
+            during?.Invoke(service, id, sampler);
+            // Without until, the subscription ends by itself: that wait returns as soon as it does.
+            if (await Task.WhenAny(task, Task.Delay(until is null ? 15_000 : 300)) != task) service.CancelAll();
             LiveEnd? end = null;
             try { end = await task.WaitAsync(TimeSpan.FromSeconds(10)); }
             catch (RequestException) { }
@@ -679,7 +680,7 @@ internal static class LiveSchedulerChecks
             await Task.Delay(300);
             var before = sampler.Calls;
             recorder.Grant();
-            var after = await recorder.WaitAsync(r => r.Ticks.Count == 1, 3000);
+            var after = await recorder.WaitAsync(r => r.Ticks.Count == 1, 15_000);
             await Task.Delay(200);
             check(recorder.Opened is not null && before == 0 && after && sampler.Calls == 1 && recorder.Ticks.Count == 1,
                 "the scheduler runs no probe while a frame is unacknowledged: nothing before the opened frame's acknowledgement, one tick after it, and nothing more until that is acknowledged");
@@ -704,13 +705,14 @@ internal static class LiveSchedulerChecks
             "a tick names the probe's retry delay (the period, then doubled with jitter) and the session the source reopened");
 
         // Paused: the source is told to give back its connection while nothing is due.
-        var idle = await Start(until: r => r.Ticks.Count >= 1, during: (service, id) =>
+        // Each waits for the Idle call rather than a fixed 200 ms, which a starved CI runner's scheduler thread can miss.
+        var idle = await Start(until: r => r.Ticks.Count >= 1, during: (service, id, sampler) =>
         {
             service.Update(new LiveUpdateArgs(id, "fx", Paused: true), HostChecks.Json);
-            Thread.Sleep(200);
+            SpinWait.SpinUntil(() => Volatile.Read(ref sampler.Idles) >= 1, 15_000);
         });
         check(idle.Sampler.Idles >= 1, "while every probe is paused the source gives back its connection (Idle)");
-        var slowPeriod = await Start(periodMs: 30_000, until: r => r.Ticks.Count >= 1, during: (_, _) => Thread.Sleep(200));
+        var slowPeriod = await Start(periodMs: 30_000, until: r => r.Ticks.Count >= 1, during: (_, _, sampler) => SpinWait.SpinUntil(() => Volatile.Read(ref sampler.Idles) >= 1, 15_000));
         check(slowPeriod.Sampler.Idles >= 1 && slowPeriod.Sampler.Calls == 1, "between the samples of a 30 s probe the source gives back its connection (Idle) without a pause");
 
         // A refused sign-in on reconnect stops the probe: no attempt follows on its own, and the view ends failed.
@@ -753,12 +755,12 @@ internal static class LiveSchedulerChecks
         {
             var host = new HangingHost(id);
             using var sampler = new SqlSampler(host, new LiveGates(2, 8, host.IsConnected), Guid.NewGuid().ToString(), id, activity, LiveCatalog.Current.Limits, null, null, new ActivityReader(host, id)) { ConnectBudgetMs = 200 };
-            var opening = await sampler.OpenAsync([new LiveProbeState(overview, 2000) { Paused = true }], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+            var opening = await sampler.OpenAsync([new LiveProbeState(overview, 2000) { Paused = true }], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15));
             check(host.Pooled == 0 && host.Opens == 0 && opening is { Spid: null, Probes: [{ State: "ok" }] },
                 "a view subscribed with every probe paused opens no connection and runs no SQL (the session is read when a probe first runs)");
             var pending = LiveCatalog.Current.Probes["activity.resources"];
             using var stub = new SqlSampler(host, new LiveGates(2, 8, host.IsConnected), Guid.NewGuid().ToString(), id, activity, LiveCatalog.Current.Limits, null, null, new ActivityReader(host, id));
-            var declared = await stub.OpenAsync([new LiveProbeState(overview, 2000) { Paused = true }, new LiveProbeState(pending, 5000) { Paused = true }], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+            var declared = await stub.OpenAsync([new LiveProbeState(overview, 2000) { Paused = true }, new LiveProbeState(pending, 5000) { Paused = true }], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15));
             check(declared.Probes is [{ State: "ok" }, { State: "unavailable", Reason: "NOT_SUPPORTED" } resources] && resources.Note == ActivityCatalog.Current.Pending["activity.resources"] && host.Opens == 0,
                 "a probe the live catalogue declares before its sampling arrives (Resource Waits) opens unavailable with its note, and never runs");
         }
@@ -766,15 +768,18 @@ internal static class LiveSchedulerChecks
             var host = new HangingHost(id);
             // One gate in the backend: were the connect holding it, the other connection could not have it.
             var gates = new LiveGates(2, 1, other => other == id || other == "other");
-            using var sampler = new SqlSampler(host, gates, Guid.NewGuid().ToString(), id, activity, LiveCatalog.Current.Limits, null, null, new ActivityReader(host, id)) { ConnectBudgetMs = 400 };
+            // A 1 s connect bound: the sample's connect must still be waiting when the gate is checked, which a starved CI runner
+            // can delay by a second.
+            using var sampler = new SqlSampler(host, gates, Guid.NewGuid().ToString(), id, activity, LiveCatalog.Current.Limits, null, null, new ActivityReader(host, id)) { ConnectBudgetMs = 1000 };
             var probe = new LiveProbeState(overview, 2000);
-            var opening = await sampler.OpenAsync([probe], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+            var opening = await sampler.OpenAsync([probe], [], CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(15));
             var sampling = sampler.SampleAsync([new LiveDue(probe, null, null, null, null, new Dictionary<int, LiveTrackArgs>(), probe.BudgetMs, 2000)], CancellationToken.None);
-            await Task.Delay(100);
+            // The sample's connect has begun once the host counts its second open (SampleAsync reaches it before it yields).
+            SpinWait.SpinUntil(() => Volatile.Read(ref host.Opens) >= 2, 15_000);
             var busyWhileConnecting = gates.Busy;
             using (var lease = await gates.WaitAsync("other", 50, CancellationToken.None)) check(lease is not null && busyWhileConnecting == 0 && !sampling.IsCompleted,
                 "a live connect holds no gate: while one server does not answer a login, a view on another connection still gets the backend's only gate");
-            var batch = await sampling.WaitAsync(TimeSpan.FromSeconds(5));
+            var batch = await sampling.WaitAsync(TimeSpan.FromSeconds(15));
             check(opening is { Spid: null, Probes: [{ State: "ok" }] } && batch is { Samples: [], Errors: [{ Code: "TIMEOUT", Number: null, Terminal: false }] } && host.Opens == 2 && gates.Busy == 0,
                 "a connect that never finishes ends at its own bound: the opened frame still goes (state ok, session unknown) and the next sample is a TIMEOUT value, holding nothing");
         }
