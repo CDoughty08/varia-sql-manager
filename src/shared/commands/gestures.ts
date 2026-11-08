@@ -95,6 +95,11 @@ export const gestureCatalog = {
     // Not Alt: hovering presses nothing, so releasing Alt afterwards would count as a bare-Alt tap and focus the menu bar.
     choices: [['mod'], ['shift']], keyboard: ['explorer.peek']
   },
+  'explorer.openPeekTab': {
+    title: 'Open Peek as Tab', description: 'Opens Peek on a table, view, procedure or function in a document tab.',
+    kind: 'pointerCommand', scope: 'objectExplorer', action: 'click', target: 'an object', modifiers: ['mod'],
+    choices: [['mod'], ['shift']], keyboard: ['explorer.openPeekTab']
+  },
   'explorer.dragName': {
     title: 'Insert Name', description: 'Dropping an object in a query inserts its quoted name.',
     kind: 'fixed', scope: 'objectExplorer', action: 'drag', target: 'an object', modifiers: [], keyboard: ['explorer.copyName'],

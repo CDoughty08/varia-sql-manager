@@ -561,10 +561,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .peek-item-note { flex-shrink: 0; color: var(--varia-descriptionForeground); }
 .peek-follow { display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; padding: 0; color: var(--varia-list-highlightForeground); }
 .peek-follow:hover .peek-item-name { text-decoration: underline; }
-.peek-rows { border-collapse: collapse; margin: var(--varia-space-1) var(--varia-space-3) var(--varia-space-2); font: var(--varia-size-sm)/var(--varia-line-sm) var(--varia-font-mono); color: var(--varia-resultsGrid-foreground); }
-.peek-rows th, .peek-rows td { max-width: 240px; padding: 0 var(--varia-space-2); overflow: hidden; text-overflow: ellipsis; white-space: pre; border: 1px solid var(--varia-resultsGrid-gridlines); text-align: left; user-select: text; }
-.peek-rows th { position: sticky; top: 0; background: var(--varia-resultsGrid-headerBackground); color: var(--varia-resultsGrid-headerForeground); font: 600 var(--varia-size-xs)/var(--varia-line-sm) var(--varia-font-ui); }
-.peek-rows .peek-null { background: var(--varia-resultsGrid-nullBackground); color: var(--varia-resultsGrid-nullForeground); }
+/* Top rows: the results grid fills the panel, which does not scroll itself. */
+.peek-grid { display: flex; flex-direction: column; overflow: hidden; }
+.peek-rows { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+/* A promoted tab: the card's body with the room of a document. */
+.peek-tab-body { display: flex; flex: 1; flex-direction: column; min-height: 0; border-top: 1px solid var(--varia-editorWidget-border); }
+.document-frame[data-peek-tab] .document-content { display: flex; flex-direction: column; overflow: hidden; }
+.peek-tab-body .peek-body { grid-template-columns: minmax(0, 1fr) minmax(260px, 360px); }
 .peek-fact dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; user-select: text; }
 .explorer-error { flex-shrink: 0; font-size: var(--varia-size-xs); color: var(--varia-errorForeground); line-height: 1.6; padding: 0 12px; margin: 5px 0 8px; overflow-wrap: anywhere; }
 @media (forced-colors: active) {

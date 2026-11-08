@@ -18,7 +18,7 @@ const ids = (rows: readonly { id: string }[]) => rows.map(row => row.id)
 describe('gesture rows', () => {
   it('list every gesture of the platform by group, with its choices, lock and keyboard path', () => {
     const rows = gestureRows(draft(), 'win32', '')
-    expect(rows.map(row => row.kind)).toEqual(['modifier', 'modifier', 'modifier', 'pointerCommand', 'pointerCommand', 'pointerCommand', 'fixed', 'fixed', 'fixed', 'fixed', 'fixed'])
+    expect(rows.map(row => row.kind)).toEqual(['modifier', 'modifier', 'modifier', 'pointerCommand', 'pointerCommand', 'pointerCommand', 'pointerCommand', 'fixed', 'fixed', 'fixed', 'fixed', 'fixed'])
     // macOS's Control+click is a right-click there only.
     expect(ids(rows)).not.toContain('grid.secondaryClick')
     expect(ids(gestureRows(draft(), 'darwin', ''))).toContain('grid.secondaryClick')
@@ -58,7 +58,7 @@ describe('gesture rows', () => {
     expect(ids(gestureRows(file, 'win32', '@modified'))).toEqual(['dock.floatWhileDragging'])
     expect(ids(gestureRows(file, 'win32', '@source:fixed shift'))).toEqual(['grid.extendSelection', 'dock.dragFloatingTitleBar'])
     // Keyboard commands are searchable: Peek on Hover's keyboard path is Peek.
-    expect(ids(gestureRows(file, 'win32', 'object explorer peek'))).toEqual(['explorer.peekHover'])
+    expect(ids(gestureRows(file, 'win32', 'object explorer peek'))).toEqual(['explorer.peekHover', 'explorer.openPeekTab'])
     expect(gestureRows(file, 'win32', '@kind:keyboard')).toEqual([])
     expect(gestureRows(file, 'win32', 'nothing like this')).toEqual([])
   })

@@ -32,6 +32,8 @@ export interface RowActions {
   cancelRename(refocus: boolean): void
   /** The pointer moved over a node row (with the keys held then) or left it (`held` absent): Peek on Hover's gesture peeks (Ctrl, ⌘ on macOS). */
   peekHover(rowId: number, held?: GestureEvent): void
+  /** A click on a node row: Open Peek as Tab's gesture (Ctrl+click, ⌘-click on macOS) opens the object in a Peek tab. */
+  click(rowId: number, event: GestureEvent): void
 }
 export interface RowProps {
   readonly rowId: number
@@ -276,6 +278,7 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
     aria-level={level} aria-setsize={setsize || undefined} aria-posinset={posinset || undefined} aria-expanded={expandable ? node.expanded : undefined} aria-selected={selected}
     aria-busy={node.load === 'loading' || undefined} aria-label={name} aria-description={rowDescription(node, note)} title={clip(tooltip)} style={style} draggable={(draggable && !renaming) || undefined}
     onMouseDown={select} onDoubleClick={() => { if (expandable) actions.toggle(rowId); else actions.activate(rowId) }}
+    onClick={(event: MouseEvent) => { if (!(event.target as Element).closest('.oe-twistie')) actions.click(rowId, event) }}
     onMouseMove={(event: MouseEvent) => actions.peekHover(rowId, event)} onMouseLeave={() => actions.peekHover(rowId)}
     onDragStart={draggable ? (event: DragEvent) => { if (!actions.dragStart(rowId, event.dataTransfer)) event.preventDefault() } : undefined}>
     {root && <Accent color={color} />}
