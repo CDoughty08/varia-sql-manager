@@ -1,7 +1,7 @@
 // Runs one CI shard of the smoke suites: `node scripts/smoke-shards.mjs <shard>/<count>`, for example 2/3. The suites are
 // package.json's `test:smoke` list, so a suite added there runs locally and in exactly one shard. Every suite of the shard
 // runs even after one fails, so one run reports them all.
-import { spawnSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
@@ -61,6 +61,38 @@ export const platformSeconds = (platform = process.platform) => suiteSeconds[pla
  */
 export const suiteLimitSeconds = (suite, platform = process.platform) => Math.max(300, 4 * (platformSeconds(platform)[suite] ?? 75))
 
+/**
+ * Runs one suite, killing its whole process tree if it runs past `limitMs`. Killing only the suite's node process (what
+ * spawnSync's timeout did) left its Electron app and backend running beside the shard's later suites, holding the clipboard
+ * on Windows and SQL sessions on Linux: on Windows Electron runs under cmd.exe, a grandchild, and the fixture kills it only
+ * from its exit handler, which SIGKILL skips. Windows: taskkill /T /F on the suite's tree. POSIX: the suite leads its own
+ * process group, which gets SIGTERM first, so Playwright's handlers can end the browser's own group, then SIGKILL after
+ * `graceMs`.
+ */
+export function runSuite(suite, limitMs, { graceMs = 5000, stdio = 'inherit', args = [] } = {}) {
+  return new Promise(resolve => {
+    const posix = process.platform !== 'win32'
+    const child = spawn(process.execPath, [suite, ...args], { stdio, detached: posix })
+    let timedOut = false, grace
+    const timer = setTimeout(() => {
+      timedOut = true
+      if (!posix) {
+        try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* Already gone. */ }
+        return
+      }
+      try { process.kill(-child.pid, 'SIGTERM') } catch { /* Already gone. */ }
+      grace = setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL') } catch { /* Already gone. */ } }, graceMs)
+    }, limitMs)
+    child.once('error', error => { clearTimeout(timer); resolve({ status: null, signal: null, timedOut, error }) })
+    child.once('exit', (status, signal) => {
+      clearTimeout(timer)
+      // The suite has gone; on POSIX anything it left in its group still gets the SIGKILL after the grace period.
+      if (posix && timedOut && grace) { clearTimeout(grace); try { process.kill(-child.pid, 'SIGKILL') } catch { /* Already gone. */ } }
+      resolve({ status, signal, timedOut })
+    })
+  })
+}
+
 /** Splits `suites` into `count` shards of similar time (longest first, each to the lightest shard), each in suite order. */
 export function shardSuites(suites, count, seconds = platformSeconds()) {
   const shards = Array.from({ length: count }, () => ({ total: 0, suites: new Set() }))
@@ -86,9 +118,8 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     const started = Date.now()
     if (process.env.GITHUB_ACTIONS) console.log(`::group::${suite}`)
     const limit = suiteLimitSeconds(suite)
-    const { status, signal, error } = spawnSync(process.execPath, [suite], { stdio: 'inherit', timeout: limit * 1000, killSignal: 'SIGKILL' })
+    const { status, signal, timedOut } = await runSuite(suite, limit * 1000)
     if (process.env.GITHUB_ACTIONS) console.log('::endgroup::')
-    const timedOut = error?.code === 'ETIMEDOUT'
     results.push({ suite, ok: status === 0, seconds: Math.round((Date.now() - started) / 1000), code: timedOut ? `timed out at ${limit} s` : signal ?? status })
     if (timedOut) console.error(`${suite} ran past its ${limit} s limit and was killed; the shard's later suites still run.`)
     else if (status !== 0) console.error(`${suite} failed (${signal ?? `exit ${status}`}).`)
