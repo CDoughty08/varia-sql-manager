@@ -20,6 +20,7 @@ import { BackendStateService } from '../services/backend'
 import { ResultClient } from '../results/ResultClient'
 import { ResultsService } from '../results/ResultsService'
 import { HighlightsService } from '../results/HighlightsService'
+import { CompareService } from '../results/CompareService'
 import { MemoryUsageService } from '../results/memory'
 import { documentOwner, documentPage, eitherHidden, LiveService, mainWindowPage } from '../live/LiveService'
 import { QueryPlansService } from '../plans/QueryPlansService'
@@ -54,6 +55,7 @@ import { menusContribution } from '../contributions/menus'
 import { explorerContribution } from '../contributions/explorer'
 import { outputContribution } from '../contributions/output'
 import { highlightsContribution } from '../contributions/highlights'
+import { compareContribution } from '../contributions/compare'
 import { scriptingContribution } from '../contributions/scripting'
 import { settingsContribution } from '../contributions/settings'
 import { editingContribution } from '../contributions/editing'
@@ -127,6 +129,7 @@ export interface Workbench extends Disposable {
   readonly results: ResultsService
   /** Rows highlighted in each query tab's grids, found again by identity after sorts and re-runs. */
   readonly highlights: HighlightsService
+  readonly compare: CompareService
   /** What the backend holds for results, for the status bar. */
   readonly resultMemory: MemoryUsageService
   readonly indexMemory: MemoryUsageService
@@ -264,6 +267,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     // Sorted grids follow Sort text by as it changes, from the toolbar, the palette or Options.
     onSortTextChange: listener => settings.subscribe(listener) })
   const highlights = new HighlightsService(results)
+  const compare = new CompareService(results)
   const resultMemory = new MemoryUsageService(resultClient, 'results', events)
   const indexMemory = new MemoryUsageService(resultClient, 'index')
   // The backend caps live views per server it reaches; a typed name is the closest this side knows.
@@ -450,6 +454,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     resultClient,
     results,
     highlights,
+    compare,
     resultMemory,
     indexMemory,
     live,
@@ -521,6 +526,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       planReleases.dispose(); planGenerations.dispose(); planEvents.dispose(); planPreparation.dispose()
       queries.dispose()
       highlights.dispose()
+      compare.dispose()
       results.dispose()
       resultMemory.dispose()
       indexMemory.dispose()
@@ -586,6 +592,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     explorerContribution(workbench, api),
     outputContribution(workbench, api),
     highlightsContribution(workbench),
+    compareContribution(workbench),
     paletteContribution(workbench),
     themeContribution(workbench, api),
     backendContribution(workbench),

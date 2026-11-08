@@ -1390,7 +1390,7 @@ try {
   await page.keyboard.press('Shift+F10')
   const outputMenu = page.getByRole('menu', { name: 'Query output', exact: true })
   await expect(outputMenu).toBeVisible()
-  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Highlight', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space'])
+  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Highlight', 'Compare with Previous Result', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space'])
   await page.keyboard.press('Escape')
   // Shift+F10 right after a click opens at the cell just clicked, though the grid paints it as active only on its next
   // frame: below it (or above, when there is no room), from its left edge (or to its right edge, near the window's).
@@ -1576,6 +1576,38 @@ try {
   await highlightMenu(0, 'Clear All Highlights')
   await expect(highlighted()).toHaveCount(0)
   console.log('Results checks: Highlight Rows and the Highlight submenu colour rows, which keep their colours through a sort and a re-run, and Clear All Highlights clears them.')
+
+  // 14e. Compare with Previous Result: the second result against the first, aligned by ItemId in the backend, adds their
+  // unified diff as a third result: a changed row as its old row (−) then its new one (+) with the changed price marked, a
+  // name changed only in case underlined (equal by the collation), a removed and an added row, a row of context between.
+  await run('SELECT * FROM Items -- DIFF_FIXTURE')
+  await expect(cell(3, 0, grid(1))).toHaveText('5')
+  await cell(0, 0, grid(1)).click({ button: 'right' })
+  await outputMenu.getByRole('menuitem', { name: 'Compare with Previous Result', exact: true }).click()
+  const diff = grid(2)
+  await expect(cell(5, 3, diff)).toHaveText('5')
+  for (const name of ['Change', 'R1', 'R2', 'ItemId', 'Name', 'Price']) await expect(diff.getByRole('columnheader', { name: new RegExp(`^${name}`) })).toHaveCount(1)
+  const diffRows = () => Promise.all([0, 1, 2, 3, 4, 5].map(row => Promise.all([0, 1, 2, 3, 4, 5].map(column => cell(row, column, diff).textContent()))))
+  expect(await diffRows()).toEqual([
+    ['\u2212', '1', 'NULL', '1', 'apple', '1.50'],
+    ['+', 'NULL', '1', '1', 'apple', '1.75'],
+    [' ', '2', '2', '2', 'PEAR', '2.00'],
+    ['\u2212', '3', 'NULL', '3', 'plum', '3.00'],
+    [' ', '4', '3', '4', 'fig', '4.00'],
+    ['+', 'NULL', '4', '5', 'kiwi', '5.00']
+  ])
+  await expect(diff.locator(gridPart.removedRow)).toHaveCount(2)
+  await expect(diff.locator(gridPart.addedRow)).toHaveCount(2)
+  await expect(diff.locator(gridPart.changedCell)).toHaveCount(2)
+  await expect(cell(0, 5, diff).and(diff.locator(gridPart.changedCell))).toHaveCount(1)
+  await expect(cell(1, 5, diff).and(diff.locator(gridPart.changedCell))).toHaveCount(1)
+  await expect(cell(2, 4, diff).and(diff.locator(gridPart.softCell))).toHaveCount(1)
+  await expect(strip(2)).toContainText('Result 1 \u2192 Result 2, rows matched by ItemId: 1 changed row, 1 added row, 1 removed row, 2 unchanged.')
+  await expect(page.getByText('Differences: Result 1 \u2192 Result 2', { exact: true })).toBeVisible()
+  // The active cell names a changed value and its row's kind for screen readers.
+  await cell(1, 5, diff).click()
+  await expect(cell(1, 5, diff)).toHaveAttribute('aria-label', '1.75, changed, added row')
+  console.log('Results checks: Compare with Previous Result adds a unified diff of the two results, aligned by their key, with changed, soft, added and removed rows marked.')
 
   // 15. Panes and tabs: F6 goes to the results and back; Ctrl+R hides and shows them keeping scroll, selection and a
   // resized column; a tab switch restores all three.

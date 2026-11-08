@@ -149,7 +149,8 @@ export interface ResultDescriptor {
   index: number
   batchNumber: number
   iteration: number
-  kind: 'rows' | 'executionPlan'
+  /** `diff`: a unified diff of two other results of the query (results.diff). */
+  kind: 'rows' | 'executionPlan' | 'diff'
   columns: ResultColumn[]
   rowsRead: number
   rowsStored: number
@@ -246,6 +247,16 @@ export interface ResultsFindRowsParams { resultId: number; ids: number[]; viewId
 /** `positions` ascend; `marks[k]` is the index in `ids` of position k's identity; `truncated`, that more rows matched
  *  than `limits.identity.maxMatches`. */
 export interface ResultsFindRowsResult { positions: number[]; marks: number[]; truncated: boolean; rows: number }
+/** results.diff: compares two complete results of the same query, `left` the earlier and `right` the later, and stores
+ *  the unified diff as a new result of that query. `context`: unchanged rows shown around each change (default 1; -1 for
+ *  all); `exact`: text compared character for character instead of by collation. */
+export interface ResultsDiffParams { left: number; right: number; exact?: boolean; context?: number }
+/** `descriptor` is the diff's result (kind `diff`); `key` the shared column whose values matched rows (null: whole rows
+ *  did); counts by kind, `soft` the values equal only by collation; `leftOnly` and `rightOnly` the columns not compared. */
+export interface ResultsDiffResult {
+  descriptor: ResultDescriptor; key: string | null; same: number; changed: number; added: number; removed: number; soft: number; approximate: boolean
+  leftOnly: string[]; rightOnly: string[]
+}
 /** `bytes[k]` is row `firstRow + k`'s sum of DATALENGTH over its cells (NULL counts 0; xml and json as their
  *  text, some sql_variant base types estimated: docs/ipc.md, Cell lengths and row sizes); it stops at the rows sealed so
  *  far (`rowsAvailable`), as results.read does. */
@@ -377,6 +388,8 @@ export interface PortMethods {
   'results.identify': { params: ResultsIdentifyParams; result: ResultsIdentifyResult }
   'results.rowIds': { params: ResultsRowIdsParams; result: ResultsRowIdsResult }
   'results.findRows': { params: ResultsFindRowsParams; result: ResultsFindRowsResult }
+  /** A unified diff of two results of one query, aligned by a key both share or by whole rows, stored as a new result. */
+  'results.diff': { params: ResultsDiffParams; result: ResultsDiffResult }
   /** A live subscription (docs/ipc.md): its EVENTs are credited, one unacknowledged at a time, and it ends only by CANCEL,
    *  a disconnect, a backend shutdown, a failure or its source ending. */
   'live.subscribe': { params: LiveSubscribeParams; result: LiveEnd }

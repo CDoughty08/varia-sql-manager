@@ -78,7 +78,7 @@ resultsGrid.headerBackground #16181d #ffffff|resultsGrid.headerForeground #a3a9b
 resultsGrid.gridlines #1f2228 #eceef2|resultsGrid.alternateRowBackground #d9dce305 #1c1f2605|resultsGrid.rowErrorBackground #f39a9a1f #b422291f
 resultsGrid.rowErrorForeground #d9dce3 #1c1f26|resultsGrid.rowWarningBackground #e4bb6a1f #8758001f|resultsGrid.rowWarningForeground #d9dce3 #1c1f26
 resultsGrid.rowRunningBackground #8f9cff1a #4453d01a|resultsGrid.rowRunningForeground #d9dce3 #1c1f26|resultsGrid.rowMutedBackground #16181d #ffffff
-resultsGrid.rowMutedForeground #a3a9b5 #4d5461|resultsGrid.highlightYellowBackground #d8bf5e24 #8f6b0024|resultsGrid.highlightGreenBackground #6fbf8a24 #2e7d4f24|resultsGrid.highlightBlueBackground #6ea4ea24 #2563a824|resultsGrid.highlightPurpleBackground #ab95ea24 #7a4bbf24|resultsGrid.highlightRedBackground #e6676724 #c42b3c24|resultsGrid.highlightRowNumberForeground #f5f6f8 #0a0c10|resultsGrid.rowNumberForeground #9298a4 #5c6370
+resultsGrid.rowMutedForeground #a3a9b5 #4d5461|resultsGrid.highlightYellowBackground #d8bf5e24 #8f6b0024|resultsGrid.highlightGreenBackground #6fbf8a24 #2e7d4f24|resultsGrid.highlightBlueBackground #6ea4ea24 #2563a824|resultsGrid.highlightPurpleBackground #ab95ea24 #7a4bbf24|resultsGrid.highlightRedBackground #e6676724 #c42b3c24|resultsGrid.highlightRowNumberForeground #f5f6f8 #0a0c10|resultsGrid.diffAddedBackground #6fbf8a1f #2e7d4f1f|resultsGrid.diffRemovedBackground #e667671f #c42b3c1f|resultsGrid.diffChangedAddedBackground #6fbf8a2e #2e7d4f2e|resultsGrid.diffChangedRemovedBackground #e667672e #c42b3c2e|resultsGrid.diffSoftUnderline #e4bb6a #875800|resultsGrid.rowNumberForeground #9298a4 #5c6370
 resultsGrid.nullForeground #9298a4 #5c6370|resultsGrid.nullBackground #d9dce300 #1c1f2600|resultsGrid.truncationForeground #e4bb6a #875800|resultsGrid.whitespaceForeground #9298a4 #5c6370
 resultsGrid.selectionBackground #29314f #d9e0fb|resultsGrid.selectionForeground #d9dce3 #1c1f26
 resultsGrid.inactiveSelectionBackground #21273b #e7ebfc|resultsGrid.activeCellBorder #8f9cff #4453d0|resultsGrid.hoverBackground #262a32 #dfe2e7
@@ -137,10 +137,10 @@ describe('built-in themes', () => {
       await expect(JSON.stringify(result.theme, null, 2) + '\n').toMatchFileSnapshot(`fixtures/themes/varia-${type}.resolved.json`)
     }
   })
-  it('have 67 slots, 275 keys and 16 scopes, with an acyclic and complete reference graph', () => {
+  it('have 67 slots, 280 keys and 16 scopes, with an acyclic and complete reference graph', () => {
     expect(paletteSlots).toHaveLength(67)
-    expect(colorKeys).toHaveLength(275)
-    expect(new Set(colorKeys).size).toBe(275)
+    expect(colorKeys).toHaveLength(280)
+    expect(new Set(colorKeys).size).toBe(280)
     expect(sqlScopes).toHaveLength(16)
     expect([...colorKeyOrder].sort()).toEqual([...colorKeys].sort())
     for (const key of colorKeys) {
@@ -155,7 +155,7 @@ describe('built-in themes', () => {
       expect(key.includes('-'), key).toBe(false)
       expect(cssVariable(key)).toBe('--varia-' + key.split('.').join('-'))
     }
-    expect(new Set(colorKeys.map(cssVariable)).size).toBe(275)
+    expect(new Set(colorKeys.map(cssVariable)).size).toBe(280)
     for (const value of Object.values(syntaxDefaults)) expect(isPaletteSlot(value!.slice(1))).toBe(true)
     for (const type of types) for (const slot of paletteSlots) {
       const value = builtinPalettes[type][slot]
@@ -257,7 +257,7 @@ describe('theme resolution', () => {
     for (const type of types) {
       const theme = resolveBuiltin(type)
       expect(isResolvedTheme(theme)).toBe(true)
-      expect(Object.keys(theme.colors)).toHaveLength(275)
+      expect(Object.keys(theme.colors)).toHaveLength(280)
       for (const key of colorKeys) expect(theme.colors[key]).toMatch(/^#[0-9a-f]{6}([0-9a-f]{2})?$/)
       for (const scope of sqlScopes) expect(theme.syntax[scope].foreground).toMatch(/^#[0-9a-f]{6}$/)
     }

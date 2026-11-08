@@ -1,7 +1,7 @@
 // The renderer's access to stored query results (the PR7 grid contract). Rows stay in the backend; the results worker
 // reads and decodes pages, and the UI thread receives only windows of display text. Live subscriptions run through the
 // same worker and port: their tables are ordinary stored results, opened with the same handles.
-import type { ApiResult, BackendStatus, IdentityBy, QueryEvent, QueryResult, ResultColumn, ResultDescriptor, ResultsFindRowsResult, ResultsIdentifyResult, ResultsRowIdsResult, TruncationReason, VariaApi, ViewSortKey, WireKind } from '../../../shared/contracts'
+import type { ApiResult, BackendStatus, IdentityBy, QueryEvent, QueryResult, ResultColumn, ResultDescriptor, ResultsDiffResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsRowIdsResult, TruncationReason, VariaApi, ViewSortKey, WireKind } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport } from '../../../shared/ipc/port-messages'
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
@@ -92,6 +92,11 @@ export interface ResultHandle extends Disposable {
   rowIds(first: number, count: number, signal?: AbortSignal): Promise<ResultsRowIdsResult>
   /** Every row (view position on a view) whose identity is one of `ids` (1 to 10,000). */
   findRows(ids: readonly number[], signal?: AbortSignal): Promise<ResultsFindRowsResult>
+  /** Compares this result (the earlier) with `right` (the later), both complete results of the same query, in the backend
+   *  (results.diff), and stores their unified diff as a new result, whose descriptor the answer carries: open it with
+   *  `ResultClient.open`. On a view, compares its result. `context`: unchanged rows around each change (default 1, -1 for
+   *  all); `exact`: text compared character for character instead of by collation. */
+  diff(right: ResultHandle, o?: { exact?: boolean; context?: number; signal?: AbortSignal }): Promise<ResultsDiffResult>
 }
 /** A sorted view: the rows that were sealed when it was built (`complete` when that was all of them), in key order;
  *  `approximate` when a key compared a stored prefix or an estimated length. It never grows. */
@@ -359,6 +364,16 @@ export class ResultClient implements Disposable {
         const response = await this.request(id => ({ type: 'identity', id, key: state.key, request: { method: 'findRows', ids: [...ids] } }), signal)
         if (response.type !== 'identity') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
         return response.result as ResultsFindRowsResult
+      },
+      diff: async (right, o = {}) => {
+        this.usable(state)
+        const context = o.context ?? 1
+        if (right.key.generation !== state.key.generation || right.key.resultId === state.key.resultId || !Number.isInteger(context) || context < -1 || context > wire.diff.maxContext)
+          throw new ResultError('INVALID_PARAMS', 'Two results of the same query and a context of -1 to 100 rows are required.')
+        const key = { generation: state.key.generation, resultId: state.key.resultId }
+        const response = await this.request(id => ({ type: 'identity', id, key, request: { method: 'diff', right: right.key.resultId, exact: o.exact ?? false, context } }), o.signal)
+        if (response.type !== 'identity') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
+        return response.result as ResultsDiffResult
       },
       dispose: () => {
         for (const listener of listeners) state.listeners.delete(listener)

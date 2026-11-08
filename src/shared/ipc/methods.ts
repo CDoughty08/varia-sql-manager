@@ -86,6 +86,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'results.rowIds': control,
   // Scans a result's identities in memory: milliseconds per million rows.
   'results.findRows': { kind: 'unary', lane: 'results', deadlineMs: 60_000 },
+  // Aligns two stored results and writes their unified diff off the frame loop (seconds for millions of rows).
+  'results.diff': { kind: 'unary', lane: 'results', deadlineMs: 120_000 },
   // The backend answers its own 40 s budget as a TIMEOUT value; main cancels it from the renderer (varia:explorer-cancel).
   'explorer.children': { kind: 'unary', lane: 'explorer', deadlineMs: 45_000 },
   // A build reads every database (each within its own 120 s budget) and only Stop (varia:explorer-cancel), a newer build or a

@@ -67,7 +67,7 @@ internal static class RowIdentity
     /// <summary>Hashes each row's identity into <paramref name="ids"/> (column -1: the whole row); whether they were all
     /// distinct (a key column also needs no NULL), and whether a truncated value was hashed. With <paramref name="stopEarly"/>
     /// it stops at the first NULL, truncated value or repeat, leaving the rest of the array unset.</summary>
-    private static (bool Unique, bool Approximate) Fill(CellHasher hasher, StoredPage[] pages, int column, long[] ids, bool stopEarly, CancellationToken token)
+    internal static (bool Unique, bool Approximate) Fill(CellHasher hasher, StoredPage[] pages, int column, long[] ids, bool stopEarly, CancellationToken token)
     {
         var seen = new HashSet<long>(ids.Length);
         var unique = true;
@@ -170,6 +170,9 @@ internal sealed class CellHasher
 
     public int Count { get; }
 
+    /// <summary>A character column, whose equal values may differ in case or trailing spaces (a diff's soft difference).</summary>
+    public bool IsText(int column) => kinds[column] is Kind.Collated or Kind.Trimmed;
+
     /// <summary>One cell's hash (not masked).</summary>
     public long Cell(PageView view, int column, int row) =>
         view.IsNull(column, row) ? (long)Finish(NullHash) : (long)Finish(Value(view.Span(column, row), column, Offset));
@@ -182,19 +185,29 @@ internal sealed class CellHasher
     public long Row(PageView view, int row, ref bool approximate)
     {
         var hash = Offset;
-        for (var c = 0; c < Count; c++)
-        {
-            if (hidden[c]) continue;
-            if (view.IsNull(c, row)) hash = Step(hash, 0);
-            else
-            {
-                if (view.IsTruncated(c, row)) approximate = true;
-                hash = Step(hash, 1);
-                hash = Value(view.Span(c, row), c, hash);
-            }
-            hash = Step(hash, 0xff);
-        }
+        for (var c = 0; c < Count; c++) if (!hidden[c]) hash = Column(view, c, row, hash, ref approximate);
         return (long)Finish(hash);
+    }
+
+    /// <summary>The hash of the given columns' values, in that order: a diff's whole-row identity over the shared columns,
+    /// which hashes alike in both results when their values compare equal.</summary>
+    public long Row(PageView view, int row, int[] columns, ref bool approximate)
+    {
+        var hash = Offset;
+        foreach (var c in columns) hash = Column(view, c, row, hash, ref approximate);
+        return (long)Finish(hash);
+    }
+
+    private ulong Column(PageView view, int c, int row, ulong hash, ref bool approximate)
+    {
+        if (view.IsNull(c, row)) hash = Step(hash, 0);
+        else
+        {
+            if (view.IsTruncated(c, row)) approximate = true;
+            hash = Step(hash, 1);
+            hash = Value(view.Span(c, row), c, hash);
+        }
+        return Step(hash, 0xff);
     }
 
     private ulong Value(ReadOnlySpan<byte> cell, int column, ulong hash)

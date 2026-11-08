@@ -861,6 +861,14 @@ export const commandCatalog = {
     title: 'Clear All Highlights', category: 'Query', icon: 'clear-all', keywords: ['highlight', 'unmark', 'reset', 'grid'], palette: false,
     menus: [{ menu: 'output.highlight', group: '2_clear', order: 2, mnemonic: 'a', when: "outputView == 'grid'" }]
   },
+  // Compares the grid's result with the run's result before it (results.diff) and adds their unified diff as a result.
+  'output.compareWithPrevious': {
+    title: 'Compare with Previous Result', category: 'Query', icon: 'git-compare', keywords: ['diff', 'compare', 'difference', 'changes', 'grid', 'result'],
+    menus: [{ menu: 'output.context', group: '2_sort', order: 7, mnemonic: 'm', when: "outputView == 'grid'" }]
+  },
+  'output.compareWithPreviousExact': {
+    title: 'Compare with Previous Result (Exact Text)', category: 'Query', icon: 'git-compare', keywords: ['diff', 'compare', 'difference', 'case', 'collation', 'exact', 'grid']
+  },
   // A click or Enter on an XML, JSON or plan cell opens its whole value, formatted, in a new tab (the grid runs it).
   'output.openValue': { title: 'Open Value in New Tab', category: 'Query', icon: 'go-to-file', palette: false },
   // A panel's menu, from its tab or its ⋯ button: the panel comes from the menu's target, so these have no keys and are

@@ -42,6 +42,9 @@ being true.
 - Rows are compared only in the backend: row identities for highlights (`Results/RowIdentity.cs`, `results.identify`,
   `results.findRows`) hash collation-normalized values there, and the renderer only receives positions and ids, never rows
   to compare. `GridView` draws highlights from sorted positions by binary search per painted row, with theme colours only.
+  Result diffs (`Results/ResultDiff.cs`, `results.diff`) align and compare rows in the backend too and store the unified
+  diff as a new result of the same query; the grid reads it like any result and marks its rows and cells from its hidden
+  tone column.
 - The grid renders cells only through `GridView` pools, and text only through `nodeValue` (`tests/grid-lint.test.ts`
   forbids HTML sinks under `grid/`, `results/`, `designer/` and `live/`); no React per row or cell, and frames stay
   O(visible cells).

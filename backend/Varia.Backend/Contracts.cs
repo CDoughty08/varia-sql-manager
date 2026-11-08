@@ -109,6 +109,15 @@ internal sealed record ResultsFindRowsArgs(uint ResultId, long[] Ids, uint? View
 /// <summary>Positions ascend; Marks[k] is the index in Ids of position k's identity. Truncated: more than 100,000 rows matched
 /// and only the first are listed.</summary>
 internal sealed record ResultsFindRowsResult(long[] Positions, int[] Marks, bool Truncated, long Rows);
+/// <summary>results.diff: compares two complete results of the same query (Left the earlier, Right the later) and stores
+/// the unified diff as a new result of that query (UnifiedDiff). Context is how many unchanged rows show around each change
+/// (-1: all); Exact compares text character for character instead of by collation.</summary>
+internal sealed record ResultsDiffArgs(uint Left, uint Right, bool Exact = false, int Context = 1);
+/// <summary>Key is the shared column whose values matched rows, or null when whole rows did; LeftOnly and RightOnly are the
+/// columns (at most 64 names each) without a namesake in the other result, which are not compared; Soft counts values equal
+/// only by collation (case or trailing spaces, say).</summary>
+internal sealed record ResultsDiffResult(ResultDescriptor Descriptor, string? Key, long Same, long Changed, long Added, long Removed, long Soft, bool Approximate,
+    string[] LeftOnly, string[] RightOnly);
 /// <summary>results.rowBytes: Bytes[k] is row FirstRow + k's sum of DATALENGTH over its cells (NULL counts 0; xml and json
 /// as their text, some sql_variant base types estimated: docs/ipc.md, Cell lengths and row sizes); it stops at the rows sealed
 /// so far. Estimated lists, in order, the rows of the range whose sum includes an estimate.</summary>

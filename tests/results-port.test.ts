@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ResultsPortHost, toExactArrayBuffer, type FrameLike, type LiveStreamHandle, type PortMainLike, type ReadStream, type ResultsBackend } from '../src/main/backend/results-port'
 import { BackendError } from '../src/main/backend/errors'
 import type { StreamSink } from '../src/main/backend/connection'
-import type { QueryEvent, ResultDescriptor, ResultsFindRowsParams, ResultsIdentifyParams, ResultsIdentifyResult, ResultsReadParams, ResultsRowBytesParams, ResultsRowIdsParams, ResultsViewCloseParams, ResultsViewParams, ResultsViewResult } from '../src/shared/contracts'
+import type { QueryEvent, ResultDescriptor, ResultsDiffParams, ResultsDiffResult, ResultsFindRowsParams, ResultsIdentifyParams, ResultsIdentifyResult, ResultsReadParams, ResultsRowBytesParams, ResultsRowIdsParams, ResultsViewCloseParams, ResultsViewParams, ResultsViewResult } from '../src/shared/contracts'
 import { cancelReasons, type CancelReason } from '../src/shared/ipc/wire/protocol'
 import { buildPortRequestSchema, type PortMessage, type portRequestSchema } from '../src/shared/ipc/port-messages'
 import { buildLiveSchemas } from '../src/shared/live/schema'
@@ -34,6 +34,7 @@ interface FakeRead { generation: number; params: ResultsReadParams; sink: Stream
 interface FakeLive { generation: number; params: LiveSubscribeParams; onLive: (event: LiveEvent, bytes: number) => void; credit: number; credits: number[]; cancels: number[]; resolve(value: LiveEnd): void; reject(error: unknown): void }
 interface FakeView { generation: number; params: ResultsViewParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeIdentify { generation: number; params: ResultsIdentifyParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
+interface FakeDiff { generation: number; params: ResultsDiffParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeUpdate { generation: number; params: LiveUpdateParams; resolve(value: LiveUpdateResult): void; reject(error: unknown): void }
 
 function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof portRequestSchema } = {}) {
@@ -42,6 +43,7 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
   const updates: FakeUpdate[] = []
   const views: FakeView[] = []
   const identifies: FakeIdentify[] = []
+  const diffs: FakeDiff[] = []
   let ready: number | undefined = 1
   const backend: ResultsBackend = {
     readyGeneration: () => ready,
@@ -60,6 +62,13 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
       const identify: FakeIdentify = { generation, params, cancels: [], resolve, reject }
       identifies.push(identify)
       return { done, cancel: reason => identify.cancels.push(reason) }
+    },
+    diff: (generation, params) => {
+      let resolve!: (value: unknown) => void, reject!: (error: unknown) => void
+      const done = new Promise<ResultsDiffResult>((onResolve, onReject) => { resolve = onResolve as (value: unknown) => void; reject = onReject })
+      const diff: FakeDiff = { generation, params, cancels: [], resolve, reject }
+      diffs.push(diff)
+      return { done, cancel: reason => diff.cancels.push(reason) }
     },
     rowIds: vi.fn(async (_generation: number, params: ResultsRowIdsParams) => ({ firstRow: params.firstRow, ids: [7, 9], rows: 2 })),
     findRows: vi.fn(async (_generation: number, params: ResultsFindRowsParams) => ({ positions: [0, 5], marks: [0, params.ids.length - 1], truncated: false, rows: 6 })),
@@ -92,7 +101,7 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
     port().send({ t: 'live', rid, generation, params })
     return params
   }
-  return { host, backend, reads, lives, updates, views, identifies, ports, port, frame, read, live, setReady: (generation: number | undefined) => { ready = generation } }
+  return { host, backend, reads, lives, updates, views, identifies, diffs, ports, port, frame, read, live, setReady: (generation: number | undefined) => { ready = generation } }
 }
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
 const descriptor = (resultId: number, generation = 1): Pick<ResultDescriptor, 'generation' | 'resultId'> => ({ generation, resultId })
@@ -401,6 +410,41 @@ describe('ResultsPortHost', () => {
     port().send({ t: 'identify', rid: 18, generation: 1, resultId: 7, by: 'row' })
     port().send({ t: 'cancel', rid: 18 })
     expect(identifies[2].cancels).toEqual([cancelReasons.user])
+  })
+  it('compares only two owned results of the current generation, owns the diff it answers, and closes one answered after its port went', async () => {
+    const { host, backend, port, diffs } = fixture()
+    host.own([descriptor(7), descriptor(8)])
+    const diffDescriptor = (resultId: number) => ({
+      resultId, index: 1, batchNumber: 1, iteration: 1, kind: 'diff', columns: [{ name: '', dataType: 'nvarchar(1)', wire: 'text', nullable: true }],
+      rowsRead: 2, rowsStored: 2, rowsAvailable: 2, bytesStored: 10, truncatedCells: 0, state: 'complete', incomplete: false
+    })
+    const answer = (resultId: number) => ({ descriptor: diffDescriptor(resultId), key: 'Id', same: 1, changed: 0, added: 1, removed: 0, soft: 0, approximate: false, leftOnly: [], rightOnly: ['Extra'] })
+    port().send({ t: 'diff', rid: 1, generation: 1, resultId: 7, right: 8, exact: false, context: 1 })
+    port().send({ t: 'diff', rid: 2, generation: 1, resultId: 7, right: 9, exact: false, context: 1 })
+    port().send({ t: 'diff', rid: 3, generation: 1, resultId: 7, right: 7, exact: false, context: 1 })
+    port().send({ t: 'diff', rid: 4, generation: 1, resultId: 7, right: 8, exact: false, context: 101 })
+    port().send({ t: 'diff', rid: 5, generation: 2, resultId: 7, right: 8, exact: true, context: -1 })
+    expect(diffs.map(item => item.params)).toEqual([{ left: 7, right: 8, exact: false, context: 1 }])
+    diffs[0].resolve(answer(20))
+    await settle()
+    expect(codes(port())).toEqual([[2, 'RESULT_UNAVAILABLE'], [3, 'INVALID_REQUEST'], [4, 'INVALID_REQUEST'], [5, 'RESULT_UNAVAILABLE'], [1, 'ok']])
+    expect(port().ends().find(end => end.rid === 1)).toEqual({ t: 'end', rid: 1, ok: true, result: { ...answer(20), descriptor: { ...diffDescriptor(20), generation: 1 } } })
+    expect(host.owns(1, 20)).toBe(true)
+    // A diff whose descriptor is not a diff's is refused; the worker's cancel stops one.
+    port().send({ t: 'diff', rid: 6, generation: 1, resultId: 7, right: 8, exact: true, context: 0 })
+    diffs[1].resolve({ ...answer(21), descriptor: { ...diffDescriptor(21), kind: 'rows' } })
+    port().send({ t: 'diff', rid: 7, generation: 1, resultId: 8, right: 7, exact: false, context: 1 })
+    port().send({ t: 'cancel', rid: 7 })
+    await settle()
+    expect(codes(port()).slice(-1)).toEqual([[6, 'BACKEND_ERROR']])
+    expect(diffs[2].cancels).toEqual([cancelReasons.user])
+    expect(host.owns(1, 21)).toBe(false)
+    // Answered after the page reloaded: no port owns the diff, so main closes it.
+    port().send({ t: 'diff', rid: 8, generation: 1, resultId: 7, right: 8, exact: false, context: 1 })
+    host.open({ postMessage() {} })
+    diffs[3].resolve(answer(22))
+    await settle()
+    expect(backend.close).toHaveBeenLastCalledWith(1, [22])
   })
   it('forwards a row sizes answer only when it is well formed and answers the range asked', async () => {
     const { host, backend, port } = fixture()

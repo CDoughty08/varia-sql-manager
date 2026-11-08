@@ -29,7 +29,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
-        "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.identify", "results.rowIds", "results.findRows", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.peekRows", "explorer.index", "explorer.search", "results.copy", "results.export",
+        "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.identify", "results.rowIds", "results.findRows", "results.diff", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.peekRows", "explorer.index", "explorer.search", "results.copy", "results.export",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
         "ssis.describe", "ssis.execute", "ssis.catalogSetup"
@@ -297,7 +297,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     public RequestLane LaneOf(string method) => method switch
     {
         "query.execute" or "plans.estimate" => RequestLane.Query,
-        "results.read" or "results.copy" or "results.export" or "results.view" or "results.identify" or "results.findRows" => RequestLane.Results,
+        "results.read" or "results.copy" or "results.export" or "results.view" or "results.identify" or "results.findRows" or "results.diff" => RequestLane.Results,
         "explorer.children" or "explorer.peek" or "explorer.peekDependencies" or "explorer.peekRows" or "explorer.index" or "explorer.search" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
         "ssis.describe" or "ssis.execute" or "ssis.catalogSetup" => RequestLane.Ssis,
@@ -357,6 +357,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "results.identify" => await IdentifyAsync(Read<ResultsIdentifyArgs>(parameters, json), Token(context)),
         "results.rowIds" => RowIds(Read<ResultsRowIdsArgs>(parameters, json)),
         "results.findRows" => await FindRowsAsync(Read<ResultsFindRowsArgs>(parameters, json), Token(context)),
+        "results.diff" => await DiffAsync(Read<ResultsDiffArgs>(parameters, json), Token(context)),
         "results.copy" => await jobs.CopyAsync(Read<ResultsCopyArgs>(parameters, json), context),
         "results.export" => await jobs.ExportAsync(Read<ResultsExportArgs>(parameters, json), context),
         "explorer.children" => await explorer.ChildrenAsync(Read<ExplorerChildrenArgs>(parameters, json), Token(context)),
@@ -1626,6 +1627,52 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var (positions, marks, truncated) = await Task.Run(() => IdentityMatches.Find(identity, view, args.Ids, MaxFindMatches, token), token);
         return new ResultsFindRowsResult([.. positions], [.. marks], truncated, view?.Rows ?? identity.Rows);
+    }
+
+    /// <summary>The most unchanged rows a diff shows around a change, and the most one-sided column names it lists
+    /// (src/shared/ipc/wire/protocol.ts limits.diff).</summary>
+    public const int MaxDiffContext = 100, MaxDiffColumnNames = 64;
+
+    /// <summary>results.diff: aligns two complete results of one query off the frame loop (ResultDiffer), charging its working
+    /// memory to their query budget, and stores the unified diff as a new result of the query, released with its others.</summary>
+    private async Task<ResultsDiffResult> DiffAsync(ResultsDiffArgs args, CancellationToken token)
+    {
+        if (args.Left == 0 || args.Right == 0 || args.Left == args.Right || args.Context is < -1 or > MaxDiffContext)
+            throw new RequestException("INVALID_PARAMS", "Two different results and a context of -1 to 100 rows are required.");
+        var left = store.Find(args.Left) ?? throw Unavailable(args.Left);
+        var right = store.Find(args.Right) ?? throw Unavailable(args.Right);
+        if (!ReferenceEquals(left.Budget, right.Budget) || left.Kind == "diff" || right.Kind == "diff")
+            throw new RequestException("INVALID_PARAMS", "Only two result sets of the same query can be compared.");
+        if (!left.IsComplete || !right.IsComplete) throw new RequestException("RESULT_OPEN", "Compare the results after they finish loading.");
+        var leftPages = left.SealedSnapshot();
+        var rightPages = right.SealedSnapshot();
+        long leftRows = 0, rightRows = 0;
+        foreach (var page in leftPages) leftRows += page.Rows;
+        foreach (var page in rightPages) rightRows += page.Rows;
+        var working = ResultDiffer.WorkingBytes(leftRows, rightRows);
+        if (!store.TryReserve(left.Budget, working, false, out _))
+            throw new RequestException("TOO_LARGE", "There is not enough result memory to compare these results. Close other results and try again.");
+        try
+        {
+            var model = await Task.Run(() => ResultDiffer.Compare(left, leftPages, right, rightPages, args.Exact, token), token);
+            var set = store.Open(left.Budget, right.Index, right.BatchNumber, right.Iteration, "diff", UnifiedDiff.Columns(right, model), UnifiedDiff.Wires(right, model),
+                lengths: UnifiedDiff.Lengths(right, model))
+                ?? throw new RequestException("TOO_LARGE", "There is not enough result memory to show the differences. Close other results and try again.");
+            try { await Task.Run(() => UnifiedDiff.Write(set, left, leftPages, right, rightPages, model, args.Context, token), token); }
+            catch
+            {
+                store.Release(set.ResultId);
+                throw;
+            }
+            var (same, changed, added, removed, soft) = model.Counts();
+            var paired = model.Pairs;
+            string[] OneSided(IReadOnlyList<ResultColumn> columns, Func<(int Left, int Right), int> side) =>
+                [.. columns.Select((column, index) => (column, index)).Where(item => !ResultTextWriter.Hidden(item.column) && !paired.Any(pair => side(pair) == item.index))
+                    .Take(MaxDiffColumnNames).Select(item => item.column.Name)];
+            return new ResultsDiffResult(set.Describe(), model.KeyPair < 0 ? null : right.Columns[paired[model.KeyPair].Right].Name, same, changed, added, removed, soft,
+                model.Approximate, OneSided(left.Columns, pair => pair.Left), OneSided(right.Columns, pair => pair.Right));
+        }
+        finally { store.Return(left.Budget, working); }
     }
 
     /// <summary>The most views one results.viewClose names (src/shared/ipc/wire/protocol.ts limits.views.maxClose).</summary>

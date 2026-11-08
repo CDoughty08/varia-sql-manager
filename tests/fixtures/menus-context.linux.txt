@@ -342,6 +342,7 @@ output.context, for a results grid with selected cells
     ---
     &Clear Highlight  ++++
     Clear &All Highlights  ----
+  Co&mpare with Previous Result  ++++
   ---
   Sa&ve Results As…  Ctrl+S  ----
   ---
@@ -367,6 +368,7 @@ output.context, for a results grid without
     ---
     &Clear Highlight  ++++
     Clear &All Highlights  ----
+  Co&mpare with Previous Result  ----
   ---
   Sa&ve Results As…  Ctrl+S  ----
   ---

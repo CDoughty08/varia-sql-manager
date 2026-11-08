@@ -1,5 +1,5 @@
-import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsFindRowsParams, ResultsFindRowsResult, ResultsIdentifyParams, ResultsIdentifyResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsRowIdsParams, ResultsRowIdsResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult } from '../../shared/contracts'
-import { findRowsResultSchema, identifyResultSchema, portRequestSchema, rowBytesResultSchema, rowIdsResultSchema, testPortRequestSchema, viewCloseResultSchema, viewResultSchema, type MemoryFeature, type MemoryReport, type PortEndResult, type PortMessage, type PortRequest } from '../../shared/ipc/port-messages'
+import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsDiffParams, ResultsDiffResult, ResultsFindRowsParams, ResultsFindRowsResult, ResultsIdentifyParams, ResultsIdentifyResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsRowIdsParams, ResultsRowIdsResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult } from '../../shared/contracts'
+import { diffResultSchema, findRowsResultSchema, identifyResultSchema, portRequestSchema, rowBytesResultSchema, rowIdsResultSchema, testPortRequestSchema, viewCloseResultSchema, viewResultSchema, type MemoryFeature, type MemoryReport, type PortEndResult, type PortMessage, type PortRequest } from '../../shared/ipc/port-messages'
 import { liveDescriptors, liveRetired, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../../shared/live/schema'
 import { cancelReasons, limits as wire, type CancelReason, type ErrorCode } from '../../shared/ipc/wire/protocol'
 import type { StreamSink } from './connection'
@@ -34,6 +34,8 @@ export interface ResultsBackend {
   identify(generation: number, params: ResultsIdentifyParams): { readonly done: Promise<ResultsIdentifyResult>; cancel(reason: CancelReason): void }
   rowIds(generation: number, params: ResultsRowIdsParams): Promise<ResultsRowIdsResult>
   findRows(generation: number, params: ResultsFindRowsParams): Promise<ResultsFindRowsResult>
+  /** Comparing two results may take seconds: the worker's cancel stops it, as it does a sort. */
+  diff(generation: number, params: ResultsDiffParams): { readonly done: Promise<ResultsDiffResult>; cancel(reason: CancelReason): void }
   live(generation: number, params: LiveSubscribeParams, onLive: (event: LiveEvent, bytes: number) => void, credit: number): LiveStreamHandle
   liveUpdate(generation: number, params: LiveUpdateParams): Promise<LiveUpdateResult>
 }
@@ -246,6 +248,7 @@ export class ResultsPortHost {
       case 'identify': return this.identify(request)
       case 'rowIds': return this.rowIds(request)
       case 'findRows': return this.findRows(request)
+      case 'diff': return this.diff(request)
       case 'live': return this.live(request)
       case 'liveUpdate': return this.liveUpdate(request)
     }
@@ -552,6 +555,34 @@ export class ResultsPortHost {
     })
   }
 
+  /** A unified diff of two results this renderer owns (results.diff); cancelled like a sort, and counted with sorts. The
+   *  diff is a new result: the port owns it once answered, and main closes one answered after its port went (a reload). */
+  private diff(request: Extract<PortRequest, { t: 'diff' }>): void {
+    const { rid, generation } = request
+    if (this.sorting.has(rid)) return this.end(rid, 'INVALID_REQUEST', 'The results request was invalid.')
+    if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
+    if (!this.current(generation, request.resultId) || !this.current(generation, request.right)) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
+    const port = this.port
+    const diff = this.backend.diff(generation, { left: request.resultId, right: request.right, exact: request.exact, context: request.context })
+    this.sorting.set(rid, diff)
+    diff.done.then(result => {
+      const parsed = diffResultSchema.safeParse(result)
+      if (this.port !== port || this.sorting.get(rid) !== diff) {
+        if (parsed.success) void this.backend.close(generation, [parsed.data.descriptor.resultId]).catch(() => undefined)
+        return
+      }
+      this.sorting.delete(rid)
+      if (!parsed.success) return this.end(rid, 'BACKEND_ERROR', 'The results could not be compared.')
+      const descriptor: ResultDescriptor = { ...parsed.data.descriptor, generation }
+      if (generation === this.generation) this.own([descriptor])
+      this.post({ t: 'end', rid, ok: true, result: { ...parsed.data, descriptor } })
+    }, error => {
+      if (this.port !== port || this.sorting.get(rid) !== diff) return
+      this.sorting.delete(rid)
+      this.fail(rid, error)
+    })
+  }
+
   /** A request of a result this renderer owns, counted with live updates against the 64; `check` bounds its answer. */
   private counted<T>(rid: number, generation: number, resultId: number, run: () => Promise<unknown>, check: (result: unknown) => T | undefined): void {
     if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
@@ -619,6 +650,11 @@ export function supervisorResults(supervisor: BackendSupervisor): ResultsBackend
     },
     rowIds: (generation, params) => supervisor.request('results.rowIds', params, { generation }),
     findRows: (generation, params) => supervisor.request('results.findRows', params, { generation }),
+    diff: (generation, params) => {
+      let id = 0
+      const done = supervisor.request('results.diff', params, { generation, onSent: sent => { id = sent } })
+      return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
+    },
     live: (generation, params, onLive, credit) => {
       let id = 0
       const done = supervisor.request('live.subscribe', params, { generation, credit, onLive, onSent: sent => { id = sent } })
