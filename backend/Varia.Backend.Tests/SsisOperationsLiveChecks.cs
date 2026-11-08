@@ -12,7 +12,8 @@ namespace Varia.Backend.Tests;
 /// Running, then Stopping with its stopper, then Canceled, the tiles' counts over every operation whatever the filters, args that
 /// read the window again (kinds, statuses, a folder whose name holds LIKE's wildcards, by prefix, a validation's and a
 /// deployment's project), the lock policy (a writer's lock on an operation never blocks the view: READ UNCOMMITTED reads through
-/// it, READ COMMITTED under READ_COMMITTED_SNAPSHOT reads the committed row), 10,000 rows within the probe's budget, a catalog
+/// it, READ COMMITTED under READ_COMMITTED_SNAPSHOT reads the committed row), 10,000 rows within the probe's budget, the tiles' counts reading only above their
+/// watermarks as the catalog's history grows, a catalog
 /// that does not exist ending the view CATALOG_MISSING, and a login that cannot open it told so (PERMISSION_DENIED), even when it
 /// cannot see the catalog's row. Nothing here claims real SSIS behaviour: no package runs. With VARIA_TEST_SSIS=1 and SSISDB,
 /// <see cref="RealAsync"/> reads the real catalog's operations (no objects created).</summary>
@@ -220,6 +221,7 @@ internal static class SsisOperationsLiveChecks
             await Rcsi(on: false);
 
             await BudgetAsync(check, views, info, Exec);
+            await WatermarksAsync(check, Exec);
             await MissingAsync(check, service, views, info, db);
             await AccessAsync(check, service, views, json, db, Exec, sql, connect, scratch);
         }
@@ -263,6 +265,46 @@ internal static class SsisOperationsLiveChecks
             Console.WriteLine("Operations sample of 10,000 rows on the fake catalog: " + cost + " ms.");
         }
         finally { await exec("DELETE FROM [catalog].[operations] WHERE operation_id > " + first + " AND object_name = N'VariaOpsBulk';", null); }
+    }
+
+    /// <summary>The tiles' counts read a range of the clustered key above their watermarks: as ended operations created days ago
+    /// pile up below them, the logical reads of the open and 24-hour counts stay flat, while the open count read from 0 grows with
+    /// the table. Each runs as the reader runs it (sp_executesql with its watermark as a parameter), measured as the request's own
+    /// logical reads (sys.dm_exec_requests) before and after it in one batch, so no other run's load changes them.</summary>
+    private static async Task WatermarksAsync(Action<bool, string> check, Func<string, string?, Task<SqlRun>> exec)
+    {
+        const int Rows = 20_000;
+        var statements = LiveSql.Operations(counts: true, baseline: false).Split(";\n");
+        var (openCount, dayCount) = (statements[^2] + ";", statements[^1]);
+        async Task<long> Top() => long.Parse((await exec("SELECT ISNULL(MAX(operation_id), 0) FROM [catalog].[operations];", null)).Scalar!, CultureInfo.InvariantCulture);
+        async Task<long> Reads(string statement, long from)
+        {
+            var value = from.ToString(CultureInfo.InvariantCulture);
+            var run = "EXEC sys.sp_executesql " + Literal(statement) + ", N'@openFrom bigint, @countFrom bigint', @openFrom = " + value + ", @countFrom = " + value + ";\n";
+            // The first run may compile and update the table's statistics after a bulk insert (a read of every page): only the second counts.
+            var result = await exec(run + "DECLARE @reads bigint = (SELECT r.logical_reads FROM sys.dm_exec_requests AS r WHERE r.session_id = @@SPID);\n" + run
+                + "SELECT (SELECT r.logical_reads FROM sys.dm_exec_requests AS r WHERE r.session_id = @@SPID) - @reads;", null);
+            return long.Parse(result.Sets[^1][0][0]!, CultureInfo.InvariantCulture);
+        }
+        // Ended operations created two to three days ago: below both watermarks once newer ids exist.
+        Task<SqlRun> Aged() => exec("INSERT INTO [catalog].[operations] (operation_type, created_time, object_type, object_name, status, start_time, end_time, caller_sid, caller_name)\n"
+            + "SELECT TOP (" + Rows.ToString(CultureInfo.InvariantCulture) + ") 200, DATEADD(second, -172800 - CONVERT(int, ROW_NUMBER() OVER (ORDER BY (SELECT NULL))), SYSDATETIMEOFFSET()), 20,\n"
+            + "    N'VariaOpsAged', 7, SYSDATETIMEOFFSET(), SYSDATETIMEOFFSET(), SUSER_SID(), SUSER_SNAME() FROM sys.all_columns AS a CROSS JOIN sys.all_columns AS b;", null);
+        var first = await Top();
+        try
+        {
+            await Aged();
+            var smallTop = await Top();
+            var small = (Open: await Reads(openCount, smallTop + 1), Day: await Reads(dayCount, smallTop + 1), Full: await Reads(openCount, 0));
+            await Aged();
+            await Aged();
+            var largeTop = await Top();
+            var large = (Open: await Reads(openCount, largeTop + 1), Day: await Reads(dayCount, largeTop + 1), Full: await Reads(openCount, 0));
+            check(large.Open <= small.Open + 2 && large.Day <= small.Day + 2 && large.Full > small.Full + 50 && large.Full > 10 * Math.Max(large.Open, large.Day),
+                "the tiles' counts read only above their watermarks: with " + 3 * Rows + " ended operations below them instead of " + Rows + ", the open and 24-hour counts read "
+                + small.Open + " → " + large.Open + " and " + small.Day + " → " + large.Day + " pages, while the open count from 0 reads " + small.Full + " → " + large.Full);
+        }
+        finally { await exec("DELETE FROM [catalog].[operations] WHERE operation_id > " + first.ToString(CultureInfo.InvariantCulture) + " AND object_name = N'VariaOpsAged';", null); }
     }
 
     /// <summary>A catalog that does not exist ends the view: there is nothing to wait for.</summary>
