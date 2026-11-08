@@ -6,15 +6,17 @@ import { requestSchemas } from '../src/main/validation'
 import { cancellableRequests } from '../src/main/backend/renderer-requests'
 import { indexProgressRelay } from '../src/main/index-progress'
 import {
-  childrenLeftOut, objectIndexParamsSchema, objectIndexProgressEventSchema, objectSearchLimits, objectSearchParamsSchema, searchKinds, searchTypeKinds, searchTypes,
+  childrenLeftOut, objectIndexParamsSchema, objectIndexProgressEventSchema, objectSearchLimits, objectSearchParamsSchema, searchKindBadge, searchKinds, searchKindTones, searchTypeKinds, searchTypes,
   type ObjectIndexProgress, type ObjectIndexResult, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult
 } from '../src/shared/explorer/search'
 import { SnapshotStore } from '../src/renderer/src/core/store'
 import type { Timers } from '../src/renderer/src/core/timers'
 import type { LiveConnection } from '../src/renderer/src/services/connections'
-import { explorerSearchId, ObjectSearchService, revealPaths, type ObjectSearchOptions, type RevealHost } from '../src/renderer/src/search/ObjectSearchService'
+import { explorerSearchId, hitServer, mergeAnswers, ObjectSearchService, revealPaths, serverGroups, type ObjectSearchOptions, type RevealHost } from '../src/renderer/src/search/ObjectSearchService'
 import { indexSummary, searchHitPath } from '../src/renderer/src/search/ObjectSearch'
+import { allIndexesSummary, allServersSummary, groupNote } from '../src/renderer/src/search/SearchPanel'
 import { kindSpecs, nodeKinds } from '../src/shared/explorer/catalog'
+import { colorKeys } from '../src/shared/theme/registry'
 import { layoutFilters, minimumChips } from '../src/renderer/src/search/filter-layout'
 import { searchFilterSummary, toggleSearchType } from '../src/renderer/src/search/SearchFilters'
 import { clampPaneBand, paneBandDrag, paneBandKey, paneBandLimits } from '../src/renderer/src/search/pane-band'
@@ -51,6 +53,18 @@ describe('object search contracts', () => {
     const typed = searchTypes.flatMap(type => [...type.kinds])
     expect([...typed].sort()).toEqual([...searchKinds].sort())
     expect(new Set(searchTypes.map(type => type.id)).size).toBe(searchTypes.length)
+  })
+
+  it('gives every kind a one-letter badge in a tone the theme colours', () => {
+    expect(searchKinds.map(kind => searchKindBadge(kind)).every(badge => /^[A-Z]$/.test(badge.letters) && searchKindTones.includes(badge.tone))).toBe(true)
+    expect((['table', 'view', 'procedure', 'function', 'column', 'login', 'index', 'database', 'synonym'] as const).map(kind => Object.values(searchKindBadge(kind)).join(' ')))
+      .toEqual(['T table', 'V view', 'P procedure', 'F function', 'C column', 'L security', 'I key', 'D database', 'S other'])
+    // Every tone has its theme key, and the stylesheet draws each one.
+    const css = readFileSync(new URL('../src/renderer/src/styles.css', import.meta.url), 'utf8')
+    for (const tone of searchKindTones) {
+      expect(colorKeys, tone).toContain(`searchKind.${tone}Background`)
+      expect(css, tone).toContain(`.object-search-kind[data-tone="${tone}"] { background: var(--varia-searchKind-${tone}Background); }`)
+    }
   })
 
   it('validates requests strictly, in both directions of every bound', () => {
@@ -332,6 +346,108 @@ describe('ObjectSearchService', () => {
     expect(service.focusedHit()).toMatchObject({ searchId: id, connectionId: 'a', index: 2, hit: hits[1] })
     service.listFocused(id, false)
     expect(service.focusedHit()).toBeUndefined()
+  })
+
+  it('searches all servers at once, each on its own index, and merges their answers in Object Explorer\'s order', async () => {
+    const { service, calls, pendingSearch, connections, timers, api } = harness({ indexOnConnect: false })
+    connections.set([connection('a'), connection('b')])
+    const id = service.open(undefined, undefined, true)!
+    // The tab belongs to no server, and every server gets an index.
+    expect(vi.mocked(api.explorerIndex).mock.calls.map(([params]) => params.connectionId)).toEqual(['a', 'b'])
+    expect(service.getSnapshot().documents[id]).toMatchObject({ allServers: true, connectionId: 'a' })
+    const hits = ['A', 'B'].map(name => ({ ...hit, label: `dbo.${name}`, object: { ...hit.object, name } }))
+    const answer = (value: ObjectSearchHit[], extra: Partial<ObjectSearchResult> = {}): ApiResult<ObjectSearchResult> => ({ ok: true, value: { hits: value, total: value.length, partial: false, elapsedMs: 1, index: status(), ...extra } })
+    service.setQuery(id, { text: 'x' })
+    timers.run()
+    expect(calls.search.map(call => [call.connectionId, call.requestId, call.text])).toEqual([['a', 'req4', 'x'], ['b', 'req5', 'x']])
+    // A search that replaces it cancels it on every server.
+    service.setQuery(id, { caseSensitive: true })
+    expect(calls.cancel.at(-1)).toEqual(['req4', 'req5'])
+    // Nothing shows until every server has answered; a's own server is first, then b's, the same object on both.
+    pendingSearch[2](answer(hits, { elapsedMs: 3 }))
+    await settle()
+    expect(service.getSnapshot().documents[id].servers).toBeUndefined()
+    pendingSearch[3](answer([hits[0]!], { elapsedMs: 7, total: 40 }))
+    await settle()
+    const answered = service.getSnapshot().documents[id]
+    expect(answered.requestId).toBeUndefined()
+    expect(answered.result).toMatchObject({ total: 42, elapsedMs: 7, hits: [hits[0], hits[1], hits[0]] })
+    expect(serverGroups(answered).map(group => [group.connectionId, group.label, group.start, group.hits.length])).toEqual([['a', 'srv-a', 0, 2], ['b', 'srv-b', 2, 1]])
+    expect([0, 1, 2, 3].map(index => hitServer(answered, index))).toEqual(['a', 'a', 'b', undefined])
+    // The same object on two servers is two hits: a menu's hit and the keys act on the hit's own server.
+    service.pickHit(id, hits[0]!, 'b')
+    expect(service.getSnapshot().documents[id].current).toBe(2)
+    service.listFocused(id, true)
+    expect(service.focusedHit()).toMatchObject({ connectionId: 'b', index: 2, hit: hits[0] })
+    // The selection follows its server's hit when the answer moves it.
+    void service.search(id)
+    pendingSearch[4](answer([hits[1]!, hits[0]!, { ...hit, label: 'dbo.C', object: { ...hit.object, name: 'C' } }]))
+    pendingSearch[5](answer([hits[0]!]))
+    await settle()
+    expect(service.getSnapshot().documents[id].current).toBe(3)
+    // A group collapses and expands.
+    service.toggleGroup(id, 'a')
+    expect(service.getSnapshot().documents[id].collapsed).toEqual(['a'])
+    service.toggleGroup(id, 'a')
+    expect(service.getSnapshot().documents[id].collapsed).toEqual([])
+    service.dispose()
+  })
+
+  it('adds servers that connect to an All servers search, names the ones that leave, and shows a failed server in its group', async () => {
+    const { service, calls, pendingSearch, connections, timers } = harness({ indexOnConnect: false })
+    connections.set([connection('a'), connection('b')])
+    const id = service.open('a', undefined, true)!
+    const answer = (value: ObjectSearchHit[]): ApiResult<ObjectSearchResult> => ({ ok: true, value: { hits: value, total: value.length, partial: false, elapsedMs: 1, index: status() } })
+    service.setQuery(id, { text: 'x' })
+    timers.run()
+    pendingSearch[0](answer([hit]))
+    pendingSearch[1](answer([hit]))
+    await settle()
+    // A server connects: it gets an index, and the search runs again on all three.
+    connections.set([connection('a'), connection('b'), connection('c')])
+    expect(calls.index.map(call => call.connectionId)).toEqual(['a', 'b', 'c'])
+    expect(calls.search.slice(2).map(call => call.connectionId)).toEqual(['a', 'b', 'c'])
+    pendingSearch[2](answer([hit]))
+    pendingSearch[3](answer([hit]))
+    pendingSearch[4]({ ok: false, error: 'The search timed out.', code: 'TIMEOUT' })
+    await settle()
+    const document = service.getSnapshot().documents[id]
+    expect(serverGroups(document).map(group => [group.connectionId, group.hits.length, group.error])).toEqual([['a', 1, undefined], ['b', 1, undefined], ['c', 0, 'The search timed out.']])
+    expect(groupNote(serverGroups(document)[2]!, undefined)).toBe('The search timed out.')
+    expect(allServersSummary(document, {})).toBe('3 servers · 2 results · 1 ms · srv-c could not be searched')
+    // A server is lost: the search runs again without it and names it.
+    connections.set([connection('a'), connection('b', true), connection('c')])
+    expect(calls.search.slice(5).map(call => call.connectionId)).toEqual(['a', 'c'])
+    pendingSearch[5](answer([hit]))
+    pendingSearch[6](answer([]))
+    await settle()
+    expect(service.getSnapshot().documents[id].left).toEqual(['srv-b'])
+    expect(allServersSummary(service.getSnapshot().documents[id], { c: { connectionId: 'c', requestId: 'r', done: 1, total: 3, objects: 5 } }))
+      .toBe('2 servers · 1 result · 1 ms · srv-c still indexing (1 of 3 databases) · srv-b disconnected')
+    // Choosing one server ends the All servers search; choosing All again searches every server.
+    service.setConnection(id, 'c')
+    expect(service.getSnapshot().documents[id]).toMatchObject({ connectionId: 'c' })
+    expect(service.getSnapshot().documents[id].allServers).toBeUndefined()
+    expect(calls.search.at(-1)?.connectionId).toBe('c')
+    service.setAllServers(id)
+    expect(calls.search.slice(-2).map(call => call.connectionId)).toEqual(['a', 'c'])
+    // Object Explorer's box never searches all servers.
+    service.followExplorer('a')
+    service.setAllServers(explorerSearchId)
+    expect(service.getSnapshot().documents[explorerSearchId].allServers).toBeUndefined()
+    service.dispose()
+  })
+
+  it('merges server answers: totals added, the slowest time, partial when any stopped early, and a problem only when every server had one', () => {
+    const result = (overrides: Partial<ObjectSearchResult>): ObjectSearchResult => ({ hits: [hit], total: 1, partial: false, elapsedMs: 1, index: status(), ...overrides })
+    expect(mergeAnswers([{ connectionId: 'a', label: 'a', error: 'down' }])).toBeUndefined()
+    expect(mergeAnswers([{ connectionId: 'a', label: 'a', result: result({ partial: true, elapsedMs: 9 }) }, { connectionId: 'b', label: 'b', result: result({ problem: 'Too many matches.', hits: [], total: 0 }) }]))
+      .toMatchObject({ total: 1, partial: true, elapsedMs: 9, hits: [hit] })
+    expect(mergeAnswers([{ connectionId: 'a', label: 'a', result: result({ problem: 'The regular expression is not valid.', hits: [], total: 0 }) }]))
+      .toMatchObject({ problem: 'The regular expression is not valid.' })
+    expect(allIndexesSummary([])).toBe('No server has an index yet.')
+    expect(allIndexesSummary([{ connectionId: 'a', done: 2, total: 2, objects: 40, status: status() }, { connectionId: 'b', requestId: 'r', done: 1, total: 4, objects: 7 }]))
+      .toBe('Indexes: 47 objects on 2 servers · 1 indexing')
   })
 
   it('reports a failed search and clears results for empty text', async () => {

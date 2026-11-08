@@ -64,6 +64,8 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['descriptionForeground'], ['menu.background']),
   ...text(['input.foreground', 'input.placeholderForeground'], input),
   ...text(['badge.foreground', 'errorForeground'], ['panelTitle.background', 'badge.background']),
+  // The kind badges of Search Objects results: the letters on each tone.
+  ...text(['searchKind.foreground'], ['editor.background', 'searchKind.tableBackground'], ['editor.background', 'searchKind.viewBackground'], ['editor.background', 'searchKind.procedureBackground'], ['editor.background', 'searchKind.functionBackground'], ['editor.background', 'searchKind.columnBackground'], ['editor.background', 'searchKind.keyBackground'], ['editor.background', 'searchKind.securityBackground'], ['editor.background', 'searchKind.databaseBackground'], ['editor.background', 'searchKind.otherBackground']),
   ...text(['inputValidation.errorForeground'], ['editorWidget.background', 'inputValidation.errorBackground']),
   ...text(['banner.errorForeground'], ['editor.background', 'banner.errorBackground']),
   ...text(['banner.warningForeground'], ['editor.background', 'banner.warningBackground']),
