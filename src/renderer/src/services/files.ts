@@ -1,4 +1,4 @@
-import type { ApiResult, OpenedFiles, OpenSqlFile, SqlFile, VariaApi } from '../../../shared/contracts'
+import type { ApiResult, DocumentKind, OpenedFiles, OpenSqlFile, SqlFile, VariaApi } from '../../../shared/contracts'
 import { lineEndingLabel } from '../../../shared/files/encoding'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
@@ -217,11 +217,11 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
    * file, or undefined when the user cancelled or the save failed (reported like any file error). A script arrives
    * whenever its request ends, so behind another file task (a Save dialog, Open, a close prompt) it waits its turn.
    */
-  async saveCopy(name: string, content: string): Promise<SqlFile | undefined> {
+  async saveCopy(name: string, content: string, kind?: DocumentKind): Promise<SqlFile | undefined> {
     while (!this.disposed && this.documents.getSnapshot().busy) await this.idle()
     let saved: SqlFile | undefined
     await this.perform(async () => {
-      const file = unwrap(await this.api.saveSqlFile({ name, content, saveAs: true }))
+      const file = unwrap(await this.api.saveSqlFile({ name, content, saveAs: true, ...kind ? { kind } : {} }))
       if (file) { unwrap(await this.api.releaseSqlFile(file.id)); saved = file }
     })
     return saved

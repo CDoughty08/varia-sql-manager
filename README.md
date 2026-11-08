@@ -2,6 +2,8 @@
 
 [Client Statistics](docs/client-statistics.md) compares per-execution SqlClient traffic, counters and reply-wait timings in its own output tab.
 
+[Retained Plans](docs/retained-plans.md) keeps bounded in-memory XML history with pinning, original execution/SQL context, reopening and explicit `.sqlplan`/XML saving. Open **Window › Execution Plan › Plan history**; snapshots survive re-execution, closed results/tabs and backend loss until this workbench window closes.
+
 Varia is a cross-platform desktop workbench for Microsoft SQL Server. It combines a SQL editor, query results, and database management tools in one application. It is under active development.
 
 ## Features

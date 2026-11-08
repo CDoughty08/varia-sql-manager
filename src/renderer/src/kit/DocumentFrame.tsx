@@ -6,7 +6,7 @@ import type { IconId } from '../../../shared/icons'
 import { commandTitle, type SettingsValues } from '../../../shared/settings/catalog'
 import { nextFrame } from '../core/frame'
 import type { CommandArgs, CommandId } from '../core/types'
-import { useCommandsEnabled, useCommandsToggled } from '../core/useCommand'
+import { useCommandsEnabled, useCommandsToggled, useKeybindingsRevision } from '../core/useCommand'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import { restoredSection, revealBy, scrolledTo, sectionKey, sectionLabel, selectSection, setScriptOpen, spySection, toggleSection, resizeScript, verbTooltip, type FrameState, type SectionInfo } from './document-frame'
@@ -313,6 +313,8 @@ export function useHeaderVerbs(verbs: readonly Verb[]): readonly HeaderVerb[] {
   const enabled = useCommandsEnabled(verbs.map(verb => ({ id: verb.command, args: verb.args })))
   const toggled = useCommandsToggled(verbs.map(verb => verb.command))
   const { values } = useServiceSnapshot(workbench.settings)
+  // Tooltips name each verb's key, which the Shortcuts page can change.
+  useKeybindingsRevision()
   return headerVerbs(verbs, { platform: workbench.platform, settings: values, enabled, toggled, keyOf: id => workbench.keybindings.lookup(id), execute: (id, args) => void workbench.commands.execute(id, args, 'toolbar') })
 }
 
