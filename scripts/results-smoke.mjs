@@ -1551,11 +1551,20 @@ try {
   // Pooled slots out of view keep their last classes while hidden, so only shown marks count.
   const marked = selector => grid().locator(selector).filter({ visible: true })
   const currentMatch = marked(gridPart.searchCurrent)
-  // A step's reveal may still scroll the grid as its menu opens, and a scroll closes menus: open it again until it stays.
-  const searchSort = (column, name) => expect(async () => {
-    await cell(0, column).click({ button: 'right' })
+  // The menu opens on the active match, in "clipped" and in view: a cell out of view would scroll the grid, which closes
+  // menus; a step's reveal may still be scrolling as it opens, so it opens again until it stays.
+  const searchSort = name => expect(async () => {
+    await currentMatch.click({ button: 'right' })
     await outputMenu.getByRole('menuitem', { name: new RegExp(`^${name}`) }).click({ timeout: 2_000 })
   }).toPass({ timeout: 30_000 })
+  // A 1024-wide window, as on a CI display: the box keeps its buttons clear of the groups after it.
+  await resize(1024, 700)
+  const clear = () => page.evaluate(() => {
+    const search = document.querySelector('[role="toolbar"][aria-label="Results tools"] [role="group"][aria-label="Search in"]').parentElement
+    let next = search.nextElementSibling
+    while (next && next.getBoundingClientRect().width === 0) next = next.nextElementSibling
+    return !!next && search.getBoundingClientRect().right <= next.getBoundingClientRect().left + 0.5
+  })
   await cell(0, 0).click()
   await page.keyboard.press('Control+F')
   await expect(searchBox).toBeFocused()
@@ -1570,16 +1579,28 @@ try {
   await expect(marked(gridPart.searchMatch)).not.toHaveCount(0)
   await page.keyboard.press('Shift+Enter')
   await expect(searchCount).toHaveText('1 of 8')
-  await cell(0, 0).click()
+  // F3 from the grid, on the active match (in view in this short pane, where the first rows may not be).
+  await currentMatch.click()
   await page.keyboard.press('F3')
   await expect(searchCount).toHaveText('2 of 8')
   await expect(currentMatch).toHaveText('complete 11')
   // Sorted descending, the matches follow the text order ("complete 19" first); the active one keeps its place.
-  await searchSort(3, 'Sort Descending')
+  // A search again keeps the active match's place without scrolling; a step there and back shows it.
+  const stepThereAndBack = async () => {
+    await searchBox.press('Enter')
+    await expect(searchCount).toHaveText('3 of 8')
+    await searchBox.press('Shift+Enter')
+    await expect(searchCount).toHaveText('2 of 8')
+  }
+  await searchSort('Sort Descending')
   await expect(header('clipped')).toHaveAttribute('aria-sort', 'descending')
-  await expect(currentMatch).toHaveText('complete 18')
   await expect(searchCount).toHaveText('2 of 8')
-  await searchSort(0, 'Clear Sort')
+  await stepThereAndBack()
+  await expect(currentMatch).toHaveText('complete 18')
+  await searchSort('Clear Sort')
+  await expect(header('clipped')).not.toHaveAttribute('aria-sort', /./)
+  await expect(searchCount).toHaveText('2 of 8')
+  await stepThereAndBack()
   await expect(currentMatch).toHaveText('complete 11')
   // Columns: id, unicode, clipped and failed hold an "i"; the others fade.
   await searchMode('Columns').click()
@@ -1587,6 +1608,7 @@ try {
   const columnBox = resultsToolbar(page).getByRole('textbox', { name: 'Search column names', exact: true })
   await columnBox.fill('I')
   await expect(searchCount).toHaveText('4 of 7 columns')
+  expect(await clear()).toBe(true)
   await expect(marked(gridPart.searchColumn)).toHaveCount(4)
   await expect(marked(gridPart.searchDimmedHeader)).toHaveCount(3)
   await expect(marked(gridPart.searchMatch)).toHaveCount(0)
@@ -1596,6 +1618,9 @@ try {
   await expect(marked(gridPart.searchColumn)).toHaveCount(0)
   await expect(marked(gridPart.searchDimmedHeader)).toHaveCount(0)
   await searchMode('Data').click()
+  expect(await clear()).toBe(true)
+  await resize(...fullSize)
+  await enlargeOutput(page)
   console.log('Results checks: Ctrl+F searches every grid in the backend, Enter, Shift+Enter and F3 step through the marked matches, a sort searches again in its order, Columns matches column names, and Escape clears it.')
 
   // 15. Panes and tabs: F6 goes to the results and back; Ctrl+R hides and shows them keeping scroll, selection and a
