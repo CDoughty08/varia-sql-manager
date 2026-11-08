@@ -101,7 +101,7 @@ internal static class AttachChecks
         // Recorded paths: only those on the server's own disks are probed; a share the file names is unknown, and never reached.
         var local = new[] { "C:\\Data\\a.ndf", "c:/data/a.ndf", "/var/opt/mssql/data/a.ndf", "/" };
         var remote = new[] { "\\\\attacker.example\\share\\db_log.ldf", "//attacker.example/share/a.ndf", "\\\\?\\C:\\a.ndf", "\\\\.\\pipe\\x\\y" };
-        await using var closed = new SqlConnection("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false");
+        await using var closed = new SqlConnection("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false");
         var unprobed = await ServerFiles.FilesExistAsync(closed, [.. remote, "relative.ndf", ""], CancellationToken.None);
         check(local.All(path => ServerPath.Local(path, 260)) && !remote.Any(path => ServerPath.Local(path, 260)) && !ServerPath.Local("relative.ndf", 260)
             && unprobed.SequenceEqual(new bool?[] { null, null, false, null, false, false }) && closed.State == System.Data.ConnectionState.Closed,
@@ -169,7 +169,7 @@ internal static class AttachChecks
         public SqlConnection Connection(string connectionId)
         {
             Interlocked.Increment(ref Connections);
-            return new SqlConnection("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false");
+            return new SqlConnection("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false");
         }
         public Task OpenAsync(SqlConnection connection, CancellationToken token) => connection.OpenAsync(token);
         public bool ClearPoolsFor(string connectionId, string database) => true;

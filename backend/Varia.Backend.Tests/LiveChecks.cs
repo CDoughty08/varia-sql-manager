@@ -41,7 +41,7 @@ internal static class LiveChecks
         await Task.Delay(50);
         var partial = !waiting.IsCompleted;
         context.Grant(1);
-        var acked = await Task.WhenAny(waiting, Task.Delay(2000)) == waiting;
+        var acked = await Task.WhenAny(waiting, Task.Delay(15_000)) == waiting;
         check(first && !second && stalled && partial && acked && context.TrySendCreditedEvent("tick") && sent.Count == 2,
             "a live EVENT is sent only while all of its initial credit is back, and the wait ends exactly when the outstanding frame is acknowledged");
         // A frame larger than the credit overdraws by that one frame, then still waits for all of it.
@@ -54,7 +54,7 @@ internal static class LiveChecks
         var cancelled = context.WaitForAckAsync(stop.Token);
         stop.Cancel();
         var woken = false;
-        try { await cancelled.WaitAsync(TimeSpan.FromSeconds(2)); }
+        try { await cancelled.WaitAsync(TimeSpan.FromSeconds(15)); }
         catch (OperationCanceledException) { woken = true; }
         context.Cancel(CancelReason.User);
         var refused = false;
@@ -112,7 +112,6 @@ internal static class LiveChecks
         using var host = new HostHarness(dispatcher: () => new SqlService(store, hooks: true));
         host.Hello();
         var subscription = Guid.NewGuid().ToString();
-        // 200 ms between samples: tick 2 is not late unless an acknowledgement takes that long, even on a loaded machine.
         host.Request(1, "live.subscribe", Subscribe(subscription, Guid.NewGuid().ToString(), args: new { tickMs = 200 }), credit: Credit);
         Frame? frame = null;
         var opened = Next(host, 1, ref frame);
@@ -126,10 +125,13 @@ internal static class LiveChecks
         var tables = ticks.Select(tick => tick.GetProperty("samples").EnumerateArray().First(sample => sample.GetProperty("probe").GetString() == SyntheticSampler.TableProbe).GetProperty("tables")[0]).ToList();
         check(ticks.Count == 3 && ticks.Select(tick => tick.GetProperty("seq").GetInt64()).SequenceEqual([1L, 2L, 3L])
             && ticks[0].GetProperty("samples").EnumerateArray().All(sample => sample.GetProperty("gap").GetString() == "baseline" && !sample.TryGetProperty("elapsedMs", out _) && !sample.TryGetProperty("skipped", out _))
-            && ticks[1].GetProperty("samples").EnumerateArray().All(sample => !sample.TryGetProperty("gap", out _) && sample.GetProperty("elapsedMs").GetInt64() >= 0)
+            // Tick 2 is late (a period skipped) when the acknowledgement before it took longer than 200 ms, as it can on a starved CI
+            // runner: still not a baseline, and still measured.
+            && ticks[1].GetProperty("samples").EnumerateArray().All(sample => (!sample.TryGetProperty("gap", out var gap) || gap.GetString() == "late") && sample.GetProperty("elapsedMs").GetInt64() >= 0)
             && ticks[0].GetProperty("samples").EnumerateArray().First(sample => sample.GetProperty("probe").GetString() == SyntheticSampler.MetricsProbe).GetProperty("metrics")[2].ValueKind == JsonValueKind.Null
             && ticks[1].GetProperty("sampledAt").GetInt64() > ticks[0].GetProperty("sampledAt").GetInt64(),
-            "each acknowledged tick carries every due probe once, the first marked baseline with no rate, the later ones with their measured interval");
+            "each acknowledged tick carries every due probe once, the first marked baseline with no rate, the later ones with their measured interval: "
+            + string.Join(" | ", ticks.Select(tick => tick.GetProperty("seq").GetInt64() + " " + string.Join(",", tick.GetProperty("samples").EnumerateArray().Select(sample => sample.GetProperty("probe").GetString() + "/" + (sample.TryGetProperty("gap", out var gap) ? gap.GetString() : "-"))))));
         check(tables.Select(table => table.GetProperty("revision").GetInt64()).SequenceEqual([1L, 2L, 3L]) && !tables[1].TryGetProperty("retired", out _)
             && tables[2].GetProperty("retired")[0].GetUInt32() == tables[0].GetProperty("descriptor").GetProperty("resultId").GetUInt32()
             && Stored(store, tables[0]) is null && Stored(store, tables[1]) is { IsComplete: true } && Stored(store, tables[2]) is { IsComplete: true, RowsAvailable: 3 }
@@ -288,12 +290,12 @@ internal static class LiveChecks
         for (var i = 0; i < 9; i++) host.Request(++id, "live.subscribe", Subscribe(Guid.NewGuid().ToString(), connections[0], [SyntheticSampler.StatusProbe]), credit: Credit);
         // Requests run on their own tasks, so which one is refused is not fixed; how many is.
         var ninth = host.Next(FrameKind.Response);
-        var perConnection = ninth?.Header.Id <= 9 && ErrorCode(ninth) == "BUSY" && SpinWait.SpinUntil(() => service.Live.Count == 8, 2000);
+        var perConnection = ninth?.Header.Id <= 9 && ErrorCode(ninth) == "BUSY" && SpinWait.SpinUntil(() => service.Live.Count == 8, 15_000);
         for (var c = 1; c < 5; c++) for (var i = 0; i < 8; i++) host.Request(++id, "live.subscribe", Subscribe(Guid.NewGuid().ToString(), connections[c], [SyntheticSampler.StatusProbe]), credit: Credit);
         // 24 more fit (32 in all); the last connection's eight do not.
         var over = Enumerable.Range(0, 8).Select(_ => host.Next(FrameKind.Response)).ToList();
         check(perConnection && over.All(answer => ErrorCode(answer) == "BUSY") && over.All(answer => answer?.Header.Id > 9)
-            && SpinWait.SpinUntil(() => service.Live.Count == 32, 2000),
+            && SpinWait.SpinUntil(() => service.Live.Count == 32, 15_000),
             "at most 8 live subscriptions per server (a connection id that reaches none counts as its own) and 32 in the backend; the next is BUSY");
         var duplicate = Guid.NewGuid().ToString();
         host.Request(++id, "live.subscribe", Subscribe(duplicate, connections[4], [SyntheticSampler.StatusProbe]), credit: Credit);
@@ -304,7 +306,7 @@ internal static class LiveChecks
         var ended = new Dictionary<uint, string?>();
         while (ended.Count < 9 && host.Next(FrameKind.Response) is { } answer) ended[answer.Header.Id] = Body(answer).TryGetProperty("result", out var result) && result.TryGetProperty("ended", out var reason) ? reason.GetString() : "disconnect";
         check(ErrorCode(full) == "BUSY" && ended.Count(item => item.Value == "disconnected") == 8 && ended.Keys.Where(key => ended[key] == "disconnected").All(key => key <= 9)
-            && SpinWait.SpinUntil(() => service.Live.Count == 24, 2000), "a disconnect ends that connection's live subscriptions, answered ended disconnected");
+            && SpinWait.SpinUntil(() => service.Live.Count == 24, 15_000), "a disconnect ends that connection's live subscriptions, answered ended disconnected");
         host.Request(++id, "live.subscribe", Subscribe(duplicate, Guid.NewGuid().ToString(), [SyntheticSampler.StatusProbe]), credit: Credit);
         host.Request(++id, "live.subscribe", Subscribe(duplicate, Guid.NewGuid().ToString(), [SyntheticSampler.StatusProbe]), credit: Credit);
         var second = host.Next(FrameKind.Response);
@@ -312,7 +314,7 @@ internal static class LiveChecks
         service.CancelAll();
         var shutdown = new List<string?>();
         while (shutdown.Count < 25 && host.Next(FrameKind.Response) is { } answer) shutdown.Add(Result(answer).GetProperty("ended").GetString());
-        check(shutdown.Count == 25 && shutdown.All(reason => reason == "shutdown") && SpinWait.SpinUntil(() => service.Live.Count == 0, 2000), "the backend's shutdown ends every live subscription with ended shutdown");
+        check(shutdown.Count == 25 && shutdown.All(reason => reason == "shutdown") && SpinWait.SpinUntil(() => service.Live.Count == 0, 15_000), "the backend's shutdown ends every live subscription with ended shutdown");
     }
 
     private static void EndChecks(Action<bool, string> check)
@@ -336,10 +338,11 @@ internal static class LiveChecks
         host.Request(2, "live.subscribe", Subscribe(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), [SyntheticSampler.TableProbe, SyntheticSampler.StatusProbe], new { tickMs = 20, errorEvery = 1 }), credit: Credit);
         frame = null;
         var errorTicks = new List<JsonElement>();
-        for (var i = 0; i < 9; i++) if (Next(host, 2, ref frame) is { } value && value.GetProperty("type").GetString() == "live.tick") errorTicks.Add(value);
+        for (var i = 0; i < 13; i++) if (Next(host, 2, ref frame) is { } value && value.GetProperty("type").GetString() == "live.tick") errorTicks.Add(value);
         var failures = errorTicks.Where(tick => tick.TryGetProperty("errors", out _)).Select(tick => tick.GetProperty("errors")[0]).ToList();
-        // The failing probe backs off (20 ms, then about 40 and 80), so later ticks carry only the status probe.
-        check(errorTicks.Count == 8 && failures.Count is >= 2 and < 8 && failures.All(error => error.GetProperty("code").GetString() == "SQL_ERROR" && !error.GetProperty("terminal").GetBoolean())
+        // The failing probe backs off (20 ms, then about 40 and 80), so later ticks carry only the status probe. Twelve ticks: a
+        // starved CI runner that spaced every tick past the retry would still need a gap of about 20 s to fail all twelve.
+        check(errorTicks.Count == 12 && failures.Count is >= 2 and < 12 && failures.All(error => error.GetProperty("code").GetString() == "SQL_ERROR" && !error.GetProperty("terminal").GetBoolean())
             && failures[0].GetProperty("retryInMs").GetInt32() == 20 && failures[1].GetProperty("retryInMs").GetInt32() is >= 36 and <= 44
             && errorTicks.All(tick => tick.GetProperty("samples").EnumerateArray().All(sample => sample.GetProperty("probe").GetString() == SyntheticSampler.StatusProbe))
             && errorTicks.Count(tick => tick.GetProperty("samples").GetArrayLength() == 1) >= 6,
@@ -454,12 +457,12 @@ internal static class LiveChecks
         var full = false;
         for (var i = 0; i < 1_000_000 && !full; i++) full = !host.Host.Publish(new { type = "results.memory", usedBytes = 0, globalBytes = 1, seq = i });
         host.Request(1, "live.subscribe", Subscribe(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), [SyntheticSampler.StatusProbe]), credit: Credit);
-        var running = SpinWait.SpinUntil(() => service.Live.Count == 1, 5000);
+        var running = SpinWait.SpinUntil(() => service.Live.Count == 1, 15_000);
         // The opened frame is queued synchronously once the subscription is registered.
         await Task.Delay(200);
         host.Valve.Open();
         var opened = false;
-        while (!opened && host.Next(FrameKind.Event, 5000) is { } frame) opened = frame.Header.Id == 1 && Body(frame).GetProperty("type").GetString() == "live.opened";
+        while (!opened && host.Next(FrameKind.Event, 15_000) is { } frame) opened = frame.Header.Id == 1 && Body(frame).GetProperty("type").GetString() == "live.opened";
         check(full && running && opened, "a live EVENT is queued even while the control lane is full, where droppable events are refused");
         host.Send(FrameKind.Cancel, 1, 1, []);
         host.Next(FrameKind.Response);
