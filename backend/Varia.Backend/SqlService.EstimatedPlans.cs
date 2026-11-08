@@ -84,7 +84,8 @@ internal sealed partial class SqlService
         catch (SqlException error) when (!token.IsCancellationRequested)
         {
             throw new RequestException("SQL_ERROR", (error.Message.Length > 16_000 ? error.Message[..16_000] : error.Message)
-                + " Capture cleanup completed; the query session remains usable. @@ROWCOUNT and @@ERROR may have changed.");
+                + (session.HasOpened ? " Capture cleanup completed; the query session remains usable. @@ROWCOUNT and @@ERROR may have changed."
+                    : " The SQL session could not be opened. No query session remains open. No submitted SQL was executed."));
         }
         finally
         {

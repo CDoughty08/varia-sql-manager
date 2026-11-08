@@ -24,6 +24,14 @@ internal static class SessionEstimatedPlanChecks
         }
         try
         {
+            var open = service.Open;
+            service.Open = (_, _) => throw ConnectionFailureChecks.Sql(0, 0, 16, "", "injected opening failure");
+            try
+            {
+                try { await Estimate("SELECT 1;"); check(false, "session estimate opening failure"); }
+                catch (RequestException error) { check(error.Code == "SQL_ERROR" && error.Message.Contains("No query session remains open"), "opening failure does not claim that a usable query session survived"); }
+            }
+            finally { service.Open = open; }
             // A new tab opens precisely the same persistent session as ordinary execution, without creating result handles.
             await Estimate("SELECT 1;");
             var before = await Run("CREATE TABLE #session_estimate(n int); INSERT #session_estimate VALUES(42); SET ARITHABORT OFF; SET TEXTSIZE 1234; SET QUOTED_IDENTIFIER OFF; BEGIN TRAN; INSERT #session_estimate VALUES(43);");
