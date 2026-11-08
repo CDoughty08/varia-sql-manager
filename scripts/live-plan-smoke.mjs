@@ -2,6 +2,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { connectLive } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
+import { checkLargePlan } from './fixtures/large-plan.mjs'
 import { backendReady, outputStatus, outputView, planCanvas, planViewer, queryBarButton } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
@@ -87,9 +88,17 @@ try {
   await expect(planViewer(page).getByRole('button', { name: 'Actual', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect(planViewer(page).getByRole('combobox', { name: 'Plan statement' }).getByRole('option')).toHaveCount(1)
   expect(errors).toEqual([])
+  await checkLargePlan({ application, page, profile, expect })
+  expect(errors).toEqual([])
   console.log('Live Plan: changing real operator rows; stable Pixi canvas, zoom and selection through actual capture; cancelled partial plan and GO repetitions.')
+} catch (error) {
+  // Report the failed assertion before cleanup: closing a running query can wait for a native prompt.
+  console.error(error)
+  await page.screenshot({ path: resolve('artifacts/live-plan-failure.png'), timeout: 5_000 }).catch(() => {})
+  process.exitCode = 1
 } finally {
-  clearTimeout(watchdog)
   await application.close()
+  // Keep the process deadline active through shutdown, including a close that the query session refuses.
+  clearTimeout(watchdog)
   await rm(profile, { recursive: true, force: true })
 }

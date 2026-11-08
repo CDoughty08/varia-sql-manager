@@ -5,6 +5,7 @@ import type { CellValue } from '../src/renderer/src/results/ResultClient'
 import { retainedPlanLimits, RetainedPlansService, type PlanExecutionContext, type PlanOutcome, type SnapshotSource } from '../src/renderer/src/plans/RetainedPlansService'
 import { ResultsService } from '../src/renderer/src/results/ResultsService'
 import { QueryService } from '../src/renderer/src/services/queries'
+import { PlanPreparationCache } from '../src/renderer/src/plans/preparation'
 import { deferred, documentFixture } from './fixtures/documents'
 import { descriptor, fakeResultClient, summaryOf } from './fixtures/results'
 
@@ -20,6 +21,22 @@ function history(limits: Partial<typeof retainedPlanLimits> | { entries?: number
 afterEach(() => { for (const service of services.splice(0).reverse()) service.dispose(); vi.useRealTimers() })
 
 describe('immutable bounded retained XML', () => {
+  it('reopens original XML after preparation-cache eviction and release of the originating result identity', async () => {
+    const service = history(), cache = new PlanPreparationCache()
+    services.push(cache)
+    await service.capture(context, outcome, [{ ...source('1:42:0', '<original/>'), resultId: 42 }])
+    const entry = service.getSnapshot().entries[0]
+    service.pin(entry.id, true)
+    const read = vi.fn(async () => entry.xml)
+    const retained = { key: entry.sourceKey, label: entry.label, read }
+    const parse = vi.fn(async () => ({ ok: true as const, value: { version: '1.6', build: '17', statements: [], notices: [] } }))
+    const scope = 'retained:' + entry.id
+    await cache.prepare(scope, retained, parse, new AbortController().signal)
+    cache.release([{ generation: 1, resultId: 42 }]); cache.clear()
+    expect(service.getSnapshot().entries[0]).toMatchObject({ id: entry.id, pinned: true, xml: '<original/>' })
+    await cache.prepare(scope, retained, parse, new AbortController().signal)
+    expect(read).toHaveBeenCalledTimes(2); expect(parse).toHaveBeenCalledTimes(2)
+  })
   it('copies context and provenance with stable source identity, independent of later source edits', async () => {
     const service = history(), original = { ...context }, end = { ...outcome }, input = source('7:42:0', '<original/>')
     await service.capture(original, end, [input])

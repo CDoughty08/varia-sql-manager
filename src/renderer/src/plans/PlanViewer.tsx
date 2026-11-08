@@ -1,7 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { type PlanNode, type PlanStatement } from '../../../shared/plans'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
-import { observeResize } from '../core/windows'
+import { observeIntersection, observeResize, windows } from '../core/windows'
 import EmptyState from '../kit/EmptyState'
 import type { CanvasColors, HoveredOperator, PlanCanvas } from './PlanCanvas'
 import type { Camera, PlanLayout } from './geometry'
@@ -11,9 +11,6 @@ import type { QueryPlanState } from './QueryPlansService'
 import { completedPlanView, planTopology, queryPlanStatements } from './live-model'
 
 interface Content { statements: SourceStatement[]; notices: string[]; layout?: PlanLayout; error?: string; empty?: boolean }
-type StatementSelection = Pick<SourceStatement, 'id' | 'sourceKey'>
-interface SavedView { camera?: Camera; selected: string; statement?: StatementSelection; xmlSource?: string; query: string }
-const views = new Map<string, SavedView>()
 const message = (error: unknown) => error instanceof Error ? error.message : 'The execution plan could not be opened.'
 
 export function findOperators(statements: readonly PlanStatement[], query: string, warningsOnly: boolean): { node: PlanNode; statement: number }[] {
@@ -23,8 +20,13 @@ export function findOperators(statements: readonly PlanStatement[], query: strin
 }
 
 /** One shared world, a virtual operator outline and a text inspector. No statement owns a nested graph scroller. */
-export default function PlanViewer({ sources, identity, openDocument, live }: { sources: readonly PlanSource[]; identity: string; openDocument?(sourceKey: string): void; live?: QueryPlanState }) {
-  const { theme } = useWorkbench()
+export default function PlanViewer({ sources, identity, scope = identity, visible = true, openDocument, live }: { sources: readonly PlanSource[]; identity: string; scope?: string; visible?: boolean; openDocument?(sourceKey: string): void; live?: QueryPlanState }) {
+  const { theme, planPreparation, resultClient, documents } = useWorkbench()
+  const [generation, setGeneration] = useState(resultClient.backendGeneration)
+  useEffect(() => {
+    const subscription = resultClient.onGeneration(setGeneration)
+    return () => subscription.dispose()
+  }, [resultClient])
   const colors = useServiceSnapshot(theme).active.colors
   const [parsed, setParsed] = useState<Content>({ statements: [], notices: [] })
   const [layoutState, setLayoutState] = useState<{ topology?: string; layout?: PlanLayout; error?: string }>({})
@@ -38,7 +40,7 @@ export default function PlanViewer({ sources, identity, openDocument, live }: { 
   const content: Content = { ...parsed, ...layoutState.topology === topology ? layoutState : {}, statements: statements as SourceStatement[], notices: [...parsed.notices, ...parsed.error && statements.length ? [parsed.error] : [],
     ...display.omitted ? ['Some partial snapshots were omitted to stay within the combined viewer limits. Captured actual plans take priority; use Live mode to inspect retained snapshots.'] : [], ...live?.note ? [live.note] : []] }
   useEffect(() => { if (live && !live.running) setMode('actual') }, [live?.running])
-  const saved = views.get(identity)
+  const saved = planPreparation.view(identity)
   const [selected, setSelected] = useState(saved?.selected ?? '')
   const [statement, setStatement] = useState(saved?.statement)
   const [xmlSource, setXmlSource] = useState(saved?.xmlSource)
@@ -50,7 +52,26 @@ export default function PlanViewer({ sources, identity, openDocument, live }: { 
   const [inspector, setInspector] = useState(true)
   const [zoom, setZoom] = useState(saved?.camera?.scale ?? 1)
   const [hovered, setHovered] = useState<HoveredOperator>()
+  const viewer = useRef<HTMLElement>(null)
   const root = useRef<HTMLDivElement>(null), canvas = useRef<PlanCanvas | undefined>(undefined), tree = useRef<HTMLDivElement>(null)
+  const [onScreen, setOnScreen] = useState(false)
+  const [canvasOnScreen, setCanvasOnScreen] = useState(false)
+  useEffect(() => {
+    const element = viewer.current, surface = root.current
+    if (!element || !surface) return
+    let intersecting = false, owner = element.ownerDocument
+    const changed = () => setOnScreen(intersecting && !owner.hidden)
+    const visibility = observeIntersection(element, entries => { intersecting = entries.some(entry => entry.isIntersecting); changed() })
+    const surfaceVisibility = observeIntersection(surface, entries => setCanvasOnScreen(entries.some(entry => entry.isIntersecting)))
+    owner.addEventListener('visibilitychange', changed)
+    const adoption = windows.onDidAdopt(() => {
+      owner.removeEventListener('visibilitychange', changed); owner = element.ownerDocument
+      owner.addEventListener('visibilitychange', changed); changed()
+    })
+    return () => { visibility.dispose(); surfaceVisibility.dispose(); adoption.dispose(); owner.removeEventListener('visibilitychange', changed) }
+  }, [])
+  const active = visible && onScreen
+  const graphActive = active && canvasOnScreen
   const [scroll, setScroll] = useState(0), [height, setHeight] = useState(400)
   const camera = useRef<Camera | undefined>(saved?.camera)
   const selection = useRef<(id: string) => void>(() => {})
@@ -58,46 +79,65 @@ export default function PlanViewer({ sources, identity, openDocument, live }: { 
   latest.current = { selected, statement, xmlSource, query }
   const sourceRef = useRef(sources)
   sourceRef.current = sources
+  const preparedSources = useRef<{ generation: number; sources: readonly PlanSource[] } | undefined>(undefined)
   const sourceKey = useMemo(() => JSON.stringify(sources.map(({ key, revision }) => [key, revision])), [sources])
   const labelId = useId()
   useEffect(() => () => {
-    views.delete(identity)
-    views.set(identity, { ...latest.current, camera: camera.current })
-    if (views.size > 64) views.delete(views.keys().next().value!)
-  }, [identity])
+    if (scope === identity || documents.get(scope)) planPreparation.rememberView(scope, identity, { ...latest.current, camera: camera.current })
+  }, [identity, scope, planPreparation, documents])
   useEffect(() => {
+    if (!active) return
     const stop = new AbortController()
-    setParsed({ statements: [], notices: [] })
-    void loadPlanSources(sourceRef.current, xml => window.varia.parsePlan(xml), stop.signal).then(
-      value => { if (!stop.signal.aborted) setParsed({ ...value, empty: !value.statements.length }) },
+    const input = sourceRef.current, previous = preparedSources.current
+    // Keep already prepared statements while streaming adds or reorders immutable sources.
+    if (!previous || previous.generation !== generation || !previous.sources.every(old => input.some(source => source.key === old.key && source.revision === old.revision)))
+      setParsed({ statements: [], notices: [] })
+    const parse = (xml: string) => window.varia.parsePlan(xml)
+    void loadPlanSources(sourceRef.current, parse, stop.signal, (source, signal, remaining) => planPreparation.prepare(scope, source, parse, signal, remaining)).then(
+      value => { if (!stop.signal.aborted) { preparedSources.current = { generation, sources: input }; setParsed({ ...value, empty: !value.statements.length }) } },
       error => { if (!stop.signal.aborted) setParsed({ statements: [], notices: [], error: message(error) }) })
     return () => stop.abort()
-  }, [identity, sourceKey, retry])
+  }, [identity, scope, sourceKey, retry, active, generation, planPreparation])
   useEffect(() => {
-    setLayoutState({})
+    if (!graphActive) return
+    const cached = planPreparation.layout(scope, topology)
+    setLayoutState(cached ? { topology, layout: cached } : {})
     setGpuFailed(false)
-    if (!statementsRef.current.length) return
-    const worker = new Worker(new URL('./layout.worker.ts', import.meta.url), { type: 'module' })
+    if (cached || !statementsRef.current.length) return
+    const epoch = planPreparation.epoch
+    let worker: Worker
+    try { worker = new Worker(new URL('./layout.worker.ts', import.meta.url), { type: 'module' }) }
+    catch {
+      setLayoutState({ topology, error: 'The plan layout worker could not be started. Its operator outline and XML source are available.' })
+      return
+    }
     let stopped = false
-    const failed = () => { if (!stopped) setLayoutState({ topology, error: 'The plan could not be laid out within 20 seconds. Its operator outline and XML source are available.' }); worker.terminate() }
+    const failed = () => {
+      if (stopped) return
+      stopped = true; clearTimeout(timer); worker.terminate()
+      setLayoutState({ topology, error: 'The plan could not be laid out within 20 seconds. Its operator outline and XML source are available.' })
+    }
     const timer = setTimeout(failed, 20_000)
     worker.onerror = failed
     worker.onmessageerror = failed
     worker.onmessage = (event: MessageEvent<{ ok: boolean; layout: PlanLayout; error?: string }>) => {
       clearTimeout(timer)
       worker.terminate()
-      if (!stopped) setLayoutState(event.data.ok ? { topology, layout: event.data.layout } : { topology, error: event.data.error })
+      if (!stopped) {
+        if (event.data.ok) planPreparation.rememberLayout(scope, topology, event.data.layout, sourceRef.current, epoch)
+        setLayoutState(event.data.ok ? { topology, layout: event.data.layout } : { topology, error: event.data.error })
+      }
     }
     worker.postMessage(statementsRef.current.map(entry => ({ id: entry.id, nodes: entry.nodes.map(node => ({ id: node.id, parentId: node.parentId })) })))
     return () => { stopped = true; clearTimeout(timer); worker.terminate() }
-  }, [identity, topology, retry])
+  }, [identity, scope, topology, retry, graphActive, planPreparation])
   const palette: CanvasColors = useMemo(() => ({ background: colors['panel.background'], card: colors['input.background'], text: colors.foreground,
     muted: colors.descriptionForeground, border: colors['panel.border'], accent: colors.focusBorder, warning: colors.warningForeground }), [colors])
   const paletteRef = useRef(palette)
   paletteRef.current = palette
   useEffect(() => {
     const element = root.current, layout = content.layout
-    if (!element || !layout) return
+    if (!graphActive || !element || !layout) return
     let disposed = false
     void import('./PlanCanvas').then(({ PlanCanvas }) => {
       if (disposed) return
@@ -107,7 +147,7 @@ export default function PlanViewer({ sources, identity, openDocument, live }: { 
       canvas.current.select(latest.current.selected)
     }).catch(() => { if (!disposed) setGpuFailed(true) })
     return () => { disposed = true; canvas.current?.dispose(); canvas.current = undefined }
-  }, [content.layout])
+  }, [content.layout, graphActive, retry])
   useEffect(() => { canvas.current?.update(content.statements) }, [content.statements])
   useEffect(() => { canvas.current?.colors(palette) }, [palette])
   useEffect(() => { canvas.current?.select(selected, true) }, [selected])
@@ -170,7 +210,7 @@ export default function PlanViewer({ sources, identity, openDocument, live }: { 
   const preferredSource = xmlSource ?? current?.sourceKey ?? statement?.sourceKey ?? sources[0]?.key
   const selectedSource = sources.find(source => source.key === preferredSource)
   const warnings = useMemo(() => [...allNodes.values()].filter(({ node }) => node.warnings.length).length, [allNodes])
-  return <section className="plan-viewer" aria-label="Execution plan viewer" onKeyDownCapture={event => {
+  return <section ref={viewer} className="plan-viewer" aria-label="Execution plan viewer" onKeyDownCapture={event => {
     if (event.key !== 'Escape' || !hovered) return
     canvas.current?.dismissHover()
     event.preventDefault()
