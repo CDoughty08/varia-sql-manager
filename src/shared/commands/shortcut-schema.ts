@@ -211,7 +211,7 @@ function prettyBytesWithin(value: unknown, limit: number): boolean {
   const walk = (node: unknown, depth: number): boolean => {
     if (Array.isArray(node)) {
       if (!node.length) return add(2)
-      if (!add(2 + 2 * depth + 1)) return false // "[\n" … "\n" + indent + "]"
+      if (!add(4 + 2 * depth)) return false // "[\n" (2), then "\n" + indent + "]" (2 + 2 * depth)
       for (let index = 0; index < node.length; index++) {
         const item = node[index]
         if (!add(2 * (depth + 1) + (index ? 2 : 0))) return false // indent, and ",\n" before every item but the first
@@ -222,7 +222,7 @@ function prettyBytesWithin(value: unknown, limit: number): boolean {
     if (node !== null && typeof node === 'object') {
       const entries = Object.entries(node).filter(([, item]) => item !== undefined && typeof item !== 'function' && typeof item !== 'symbol')
       if (!entries.length) return add(2)
-      if (!add(2 + 2 * depth + 1)) return false
+      if (!add(4 + 2 * depth)) return false
       for (let index = 0; index < entries.length; index++) {
         const [key, item] = entries[index]
         if (!add(2 * (depth + 1) + (index ? 2 : 0) + utf8Bytes(JSON.stringify(key)) + 2)) return false // indent, key and ": "
