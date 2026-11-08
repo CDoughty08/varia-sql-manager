@@ -78,11 +78,23 @@ internal sealed record SessionStateArgs(string SessionId);
 /// session's SET options (SHOWPLAN_*, NOEXEC, PARSEONLY, FMTONLY) kept the SELECT from returning it; TransactionCount is
 /// then 0 and the session may hold a transaction.</summary>
 internal sealed record SessionState(int TransactionCount, bool Checked);
-internal sealed record ResultsReadArgs(uint ResultId, long FirstRow, int MaxRows);
+/// <summary>results.read: ViewId reads through a view of the result (results.view), FirstRow then counting view positions.</summary>
+internal sealed record ResultsReadArgs(uint ResultId, long FirstRow, int MaxRows, uint? ViewId = null);
 internal sealed record ResultsReadResult(long NextRow, long RowsAvailable, bool Complete, int Pages, int Rows);
 internal sealed record ResultsCloseArgs(uint[] ResultIds);
 internal sealed record ResultsCloseResult(int Closed, long UsedBytes);
-internal sealed record ResultsRowBytesArgs(uint ResultId, long FirstRow, int Count);
+internal sealed record ResultsRowBytesArgs(uint ResultId, long FirstRow, int Count, uint? ViewId = null);
+/// <summary>One results.view sort key: a column, its direction, and Mode "value" (by SQL type and collation), "chars" or
+/// "bytes" (each cell's length; text and binary columns only, others sort by value).</summary>
+internal sealed record ViewSortArgs(int Column, bool Descending, string Mode);
+/// <summary>results.view: a view of a result sorted by 1 to 16 keys (distinct columns); Replaces names a view of the same
+/// result that it supersedes (closed once this one exists).</summary>
+internal sealed record ResultsViewArgs(uint ResultId, ViewSortArgs[] Sort, uint? Replaces = null);
+/// <summary>Rows is the view's row count (the rows sealed when it was built); Complete says those were all the result's rows;
+/// Approximate says a key compared a truncated value's prefix or an estimated length.</summary>
+internal sealed record ResultsViewResult(uint ViewId, long Rows, bool Complete, bool Approximate);
+internal sealed record ResultsViewCloseArgs(uint ResultId, uint[] ViewIds);
+internal sealed record ResultsViewCloseResult(int Closed);
 /// <summary>results.rowBytes: Bytes[k] is row FirstRow + k's sum of DATALENGTH over its cells (NULL counts 0; xml and json
 /// as their text, some sql_variant base types estimated: docs/ipc.md, Cell lengths and row sizes); it stops at the rows sealed
 /// so far. Estimated lists, in order, the rows of the range whose sum includes an estimate.</summary>
@@ -90,11 +102,13 @@ internal sealed record ResultsRowBytesResult(long FirstRow, long[] Bytes, long R
 /// <summary>A piece of a copy: inclusive row ranges (a last row of 2^53 - 1 runs to the end) by inclusive column ranges.</summary>
 internal sealed record CopyPartArgs(long[][] Rows, int[][] Columns);
 /// <summary>results.copy (main only): the parts' text streams as DATA; eol is "crlf" or "lf".</summary>
-internal sealed record ResultsCopyArgs(uint ResultId, CopyPartArgs[] Parts, bool Headers, string Eol, long MaxBytes);
+/// ViewId copies through a view of the result (results.view): rows are view positions.
+internal sealed record ResultsCopyArgs(uint ResultId, CopyPartArgs[] Parts, bool Headers, string Eol, long MaxBytes, uint? ViewId = null);
 /// <summary>results.export (main only): Path comes from main's save dialog; Format is csv, tsv or json; NullText is
 /// "empty" or "NULL"; TemporaryId (32 hex digits) names the temporary file, .varia-{id}.tmp beside the target, which main
 /// removes if the backend dies while writing it.</summary>
-internal sealed record ResultsExportArgs(uint ResultId, string Path, string Format, bool Headers, string NullText, string TemporaryId);
+/// ViewId saves a view's rows, in its order.
+internal sealed record ResultsExportArgs(uint ResultId, string Path, string Format, bool Headers, string NullText, string TemporaryId, uint? ViewId = null);
 internal sealed record ResultsJobResult(long Rows, long Bytes, long TruncatedCells, bool Partial);
 /// <summary>debug.results.synthesize (VARIA_BACKEND_TEST_HOOKS=1 only).</summary>
 internal sealed record SynthesizeArgs(string Shape, int Rows);

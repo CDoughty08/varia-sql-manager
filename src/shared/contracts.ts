@@ -211,12 +211,25 @@ export type QueryEvent =
   | { type: 'resultSet.closed'; descriptor: ResultDescriptor }
   | { type: 'progress'; completedBatches: number; totalBatches: number; batchNumber: number; iteration: number; results: ResultProgress[] }
   | { type: 'messages'; messages: MessageEntry[] }
-export interface ResultsReadParams { resultId: number; firstRow: number; maxRows: number }
+/** `viewId` reads through a view of the result (results.view); `firstRow` then counts view positions. */
+export interface ResultsReadParams { resultId: number; firstRow: number; maxRows: number; viewId?: number }
 /** `nextRow` follows the last row sent; `complete` means no rows remain to be read. */
 export interface ResultsReadResult { nextRow: number; rowsAvailable: number; complete: boolean; pages: number; rows: number }
 export interface ResultsCloseResult { closed: number; usedBytes: number }
 /** Up to `limits.rowSizes.maxRows` rows' byte sizes from `firstRow`. */
-export interface ResultsRowBytesParams { resultId: number; firstRow: number; count: number }
+export interface ResultsRowBytesParams { resultId: number; firstRow: number; count: number; viewId?: number }
+/** How a sort key compares a column: by value (its SQL type and collation, NULL lowest), or, for text and binary
+ *  columns, by each cell's characters or bytes (other columns sort by value). */
+export type ViewSortMode = 'value' | 'chars' | 'bytes'
+export interface ViewSortKey { column: number; descending: boolean; mode: ViewSortMode }
+/** results.view: 1 to `limits.views.maxKeys` keys on distinct columns; `replaces` names a view of the same result that
+ *  this one supersedes. */
+export interface ResultsViewParams { resultId: number; sort: ViewSortKey[]; replaces?: number }
+/** `rows` is the view's row count (the rows sealed when it was built), `complete` that they were all the result's rows,
+ *  `approximate` that a key compared a truncated value's stored prefix or an estimated length. */
+export interface ResultsViewResult { viewId: number; rows: number; complete: boolean; approximate: boolean }
+export interface ResultsViewCloseParams { resultId: number; viewIds: number[] }
+export interface ResultsViewCloseResult { closed: number }
 /** `bytes[k]` is row `firstRow + k`'s sum of DATALENGTH over its cells (NULL counts 0; xml and json as their
  *  text, some sql_variant base types estimated: docs/ipc.md, Cell lengths and row sizes); it stops at the rows sealed so
  *  far (`rowsAvailable`), as results.read does. */
@@ -233,9 +246,10 @@ export type BackendResultDescriptor = Omit<ResultDescriptor, 'generation'>
 export type ResultsFormat = 'csv' | 'tsv' | 'json'
 /** Copy a grid selection: main runs results.copy and writes the text to the clipboard. `jobId` names the job for
  *  cancellation and progress. */
-export interface ResultsCopyRequest { jobId: string; generation: number; resultId: number; headers: boolean; parts: readonly CopyPart[] }
+/** `viewId` copies through a sorted view (results.view): rows are then view positions. */
+export interface ResultsCopyRequest { jobId: string; generation: number; resultId: number; headers: boolean; parts: readonly CopyPart[]; viewId?: number }
 /** Save Results As: main shows the save dialog (the renderer never supplies a path) and runs results.export. */
-export interface ResultsSaveRequest { jobId: string; generation: number; resultId: number; format?: ResultsFormat; suggestedName: string }
+export interface ResultsSaveRequest { jobId: string; generation: number; resultId: number; format?: ResultsFormat; suggestedName: string; viewId?: number }
 /** `partial`: the set was still open, so open-ended selections ended at the rows stored then. */
 export interface ResultsJobResult { rows: number; bytes: number; truncatedCells: number; partial: boolean }
 /** Only the file's name returns to the renderer, never its path. */
@@ -243,10 +257,10 @@ export interface SavedResults extends ResultsJobResult { fileName: string; forma
 /** Pushed on `varia:results-job` at most 4 times a second per job. A save reports once as soon as its file is chosen;
  *  its reports carry the file's name (never its path). */
 export interface ResultsJobProgress { jobId: string; kind: 'copy' | 'save'; rowsDone: number; rowsTotal: number; bytes: number; fileName?: string }
-export interface ResultsCopyParams { resultId: number; parts: readonly CopyPart[]; headers: boolean; eol: 'crlf' | 'lf'; maxBytes: number }
+export interface ResultsCopyParams { resultId: number; parts: readonly CopyPart[]; headers: boolean; eol: 'crlf' | 'lf'; maxBytes: number; viewId?: number }
 /** `temporaryId` (32 hex digits) names the file written beside the target, `.varia-{temporaryId}.tmp`, which main removes
  *  if the backend dies before it does. */
-export interface ResultsExportParams { resultId: number; path: string; format: ResultsFormat; headers: boolean; nullText: 'empty' | 'NULL'; temporaryId: string }
+export interface ResultsExportParams { resultId: number; path: string; format: ResultsFormat; headers: boolean; nullText: 'empty' | 'NULL'; temporaryId: string; viewId?: number }
 /** One Object Explorer node. Labels are SSMS's text (≤ 300), sublabels the "(…)" part (≤ 200), detail tooltip-only facts
  *  (≤ 512); `created` is server local time, `yyyy-MM-ddTHH:mm:ss`; `database`, a database node's runtime state as listed;
  *  `connectDenied`, a login denied CONNECT SQL (its status says `disabled` when it is disabled too). */
@@ -341,6 +355,8 @@ export interface PortMethods {
   'results.close': { params: { resultIds: number[] }; result: ResultsCloseResult }
   /** Each row's bytes for a range of a stored result, from the lengths the backend recorded as it read the rows. */
   'results.rowBytes': { params: ResultsRowBytesParams; result: ResultsRowBytesResult }
+  'results.view': { params: ResultsViewParams; result: ResultsViewResult }
+  'results.viewClose': { params: ResultsViewCloseParams; result: ResultsViewCloseResult }
   /** A live subscription (docs/ipc.md): its EVENTs are credited, one unacknowledged at a time, and it ends only by CANCEL,
    *  a disconnect, a backend shutdown, a failure or its source ending. */
   'live.subscribe': { params: LiveSubscribeParams; result: LiveEnd }

@@ -69,23 +69,30 @@ internal sealed class ResultJobs(ResultStore store)
     /// <summary>Called after each page is written: the checks release or cancel mid-job through it.</summary>
     internal Action? AfterPage { get; init; }
 
+    /// <summary>What a job reads: a result's stored rows, or a view of them (rows are then view positions).</summary>
+    private sealed record Source(ResultSetBuffer Set, ResultView? View)
+    {
+        public long Available => View?.Rows ?? Set.RowsAvailable;
+    }
+
     /// <summary>A part with its rows clamped to what is stored and its column ranges expanded to indexes.</summary>
     private sealed record Plan(List<(long First, long Last)> Rows, int[] Columns);
 
     public async Task<ResultsJobResult> CopyAsync(ResultsCopyArgs args, RequestContext? context)
     {
         if (args.ResultId == 0 || args.Parts is not { Length: >= 1 and <= MaxParts } || args.Parts.Any(part => part is null) || args.Eol is not ("crlf" or "lf")
-            || args.MaxBytes is < 1 or > MaxCopyBytes)
+            || args.MaxBytes is < 1 or > MaxCopyBytes || args.ViewId == 0)
             throw new RequestException("INVALID_PARAMS", "The copy request is invalid.");
         if (context is not { IsStream: true }) throw new RequestException("INVALID_REQUEST", "Copied text is sent as a stream with credit.");
         var set = Lease(args.ResultId);
         try
         {
-            var available = set.RowsAvailable;
-            var partial = set.IsOpen;
+            var source = SourceOf(set, args.ResultId, args.ViewId);
+            var available = source.Available;
+            var partial = source.View is { } view ? !view.Complete : set.IsOpen;
             var plans = args.Parts.Select(part => Resolve(part, set.Columns, available)).ToList();
             var eolBytes = args.Eol == "crlf" ? 2 : 1;
-            var estimate = Estimate(set, plans, args.Headers, eolBytes);
+            var estimate = Estimate(source, plans, args.Headers, eolBytes);
             if (estimate > args.MaxBytes)
                 throw new RequestException("TOO_LARGE", "The selection is too large to copy (" + Size(estimate) + "; the limit is " + Size(args.MaxBytes) + "). Use Save Results As instead.");
             var output = new ChunkedBuffer();
@@ -97,7 +104,7 @@ internal sealed class ResultJobs(ResultStore store)
             {
                 if (args.Headers) writer.Header(plan.Columns);
                 foreach (var (first, last) in plan.Rows)
-                    await WriteRowsAsync(set, writer, plan.Columns, first, last, async () =>
+                    await WriteRowsAsync(source, writer, plan.Columns, first, last, async () =>
                     {
                         while (output.TryTake(out var chunk)) await context.SendDataAsync(chunk);
                         progress.Report(writer.Rows, writer.Bytes);
@@ -115,13 +122,16 @@ internal sealed class ResultJobs(ResultStore store)
     {
         var format = args.Format switch { "csv" => TextFormat.Csv, "tsv" => TextFormat.Tsv, "json" => TextFormat.Json, _ => (TextFormat?)null };
         if (args.ResultId == 0 || format is null || args.NullText is not ("empty" or "NULL") || !IsExportPath(args.Path)
-            || args.TemporaryId is not { Length: 32 } || !Guid.TryParseExact(args.TemporaryId, "N", out _))
+            || args.TemporaryId is not { Length: 32 } || !Guid.TryParseExact(args.TemporaryId, "N", out _) || args.ViewId == 0)
             throw new RequestException("INVALID_PARAMS", "The export request is invalid.");
         var set = Lease(args.ResultId);
         string? temporary = null;
         try
         {
             if (!set.IsComplete) throw new RequestException("RESULT_OPEN", "Save the results after this result set finishes loading.");
+            var source = SourceOf(set, args.ResultId, args.ViewId);
+            // A view sorted while rows were still arriving lacks the later ones; the grid sorts again once they are in.
+            if (source.View is { Complete: false }) throw new RequestException("RESULT_OPEN", "Save the results after they are sorted again.");
             var token = context?.Token ?? CancellationToken.None;
             var directory = Path.GetDirectoryName(args.Path);
             if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory)) throw Failed("NOT_FOUND");
@@ -130,7 +140,7 @@ internal sealed class ResultJobs(ResultStore store)
             temporary = Path.Combine(directory, ".varia-" + args.TemporaryId + ".tmp");
             var output = new ChunkedBuffer();
             var writer = new ResultTextWriter(output, TextOptions.Export(format.Value, args.Headers, args.NullText), set.Columns);
-            var progress = new Progress(context, set.RowsAvailable);
+            var progress = new Progress(context, source.Available);
             int[] all = [.. Enumerable.Range(0, set.Columns.Count).Where(column => !ResultTextWriter.Hidden(set.Columns[column]))];
             // A file the user chose to replace keeps its permissions: a private (0600) results file must not come back
             // readable by others. A symbolic link there is replaced, not followed; the file it points to may only narrow
@@ -161,7 +171,7 @@ internal sealed class ResultJobs(ResultStore store)
                 }
                 writer.Begin();
                 writer.Header(all);
-                if (set.RowsAvailable > 0) await WriteRowsAsync(set, writer, all, 0, set.RowsAvailable - 1, Drain, token);
+                if (source.Available > 0) await WriteRowsAsync(source, writer, all, 0, source.Available - 1, Drain, token);
                 writer.End();
                 output.Seal();
                 await Drain();
@@ -253,6 +263,10 @@ internal sealed class ResultJobs(ResultStore store)
             : new RequestException("RESULT_NOT_FOUND", "These results do not exist.");
     }
 
+    /// <summary>The result itself, or its view: a view that was closed or replaced is VIEW_NOT_FOUND.</summary>
+    private Source SourceOf(ResultSetBuffer set, uint resultId, uint? viewId) =>
+        new(set, viewId is { } id ? store.FindView(resultId, id) ?? throw new RequestException("VIEW_NOT_FOUND", "This sorted view was closed. Sort the results again.") : null);
+
     /// <summary>Validates a part (1 to 64 ascending, disjoint ranges of each kind) and clamps its rows to the rows stored
     /// now: open-ended blocks end at the last available row. Hidden columns (a live table's row tone) are left out.</summary>
     private static Plan Resolve(CopyPartArgs part, IReadOnlyList<ResultColumn> columnList, long available)
@@ -281,18 +295,19 @@ internal sealed class ResultJobs(ResultStore store)
     internal static long EstimateCopy(ResultSetBuffer set, CopyPartArgs[] parts, bool headers, bool crlf)
     {
         var available = set.RowsAvailable;
-        return Estimate(set, [.. parts.Select(part => Resolve(part, set.Columns, available))], headers, crlf ? 2 : 1);
+        return Estimate(new Source(set, null), [.. parts.Select(part => Resolve(part, set.Columns, available))], headers, crlf ? 2 : 1);
     }
 
-    private static long Estimate(ResultSetBuffer set, List<Plan> plans, bool headers, int eolBytes)
+    private static long Estimate(Source source, List<Plan> plans, bool headers, int eolBytes)
     {
         long total = 0;
+        var set = source.Set;
         var scratch = new int[PageView.ScratchLength(set.Columns.Count)];
         foreach (var plan in plans)
         {
             if (headers) total += ResultTextWriter.EstimateHeader(set.Columns, plan.Columns, eolBytes);
             foreach (var (first, last) in plan.Rows)
-                foreach (var page in Pages(set, first, last))
+                foreach (var page in Pages(source, first, last))
                 {
                     var (from, to) = Within(page, first, last);
                     total += EstimatePage(page, from, to, plan.Columns, eolBytes, scratch, set.Columns.Count);
@@ -304,9 +319,15 @@ internal sealed class ResultJobs(ResultStore store)
     private static long EstimatePage(StoredPage page, int from, int to, int[] columns, int eolBytes, int[] scratch, int columnCount) =>
         ResultTextWriter.EstimateCopyRows(PageView.Parse(page.Body, columnCount, scratch), from, to, columns, eolBytes);
 
-    /// <summary>The pages holding rows [first, last], fetched a bounded batch at a time.</summary>
-    private static IEnumerable<StoredPage> Pages(ResultSetBuffer set, long first, long last)
+    /// <summary>The pages holding rows [first, last], fetched a bounded batch at a time; a view's are built in its order.</summary>
+    private static IEnumerable<StoredPage> Pages(Source source, long first, long last)
     {
+        if (source.View is { } view)
+        {
+            foreach (var page in ViewPages.Stored(view, first, (int)Math.Min(last - first + 1, int.MaxValue))) yield return page;
+            yield break;
+        }
+        var set = source.Set;
         for (var row = first; row <= last;)
         {
             var pages = set.PagesFor(row, (int)Math.Min(last - row + 1, 1 << 24));
@@ -324,10 +345,11 @@ internal sealed class ResultJobs(ResultStore store)
 
     /// <summary>Writes rows [first, last] page by page; after each page the token is checked and <paramref name="drain"/>
     /// sends or writes what is ready.</summary>
-    private async Task WriteRowsAsync(ResultSetBuffer set, ResultTextWriter writer, int[] columns, long first, long last, Func<Task> drain, CancellationToken token)
+    private async Task WriteRowsAsync(Source source, ResultTextWriter writer, int[] columns, long first, long last, Func<Task> drain, CancellationToken token)
     {
+        var set = source.Set;
         var scratch = new int[PageView.ScratchLength(set.Columns.Count)];
-        foreach (var page in Pages(set, first, last))
+        foreach (var page in Pages(source, first, last))
         {
             token.ThrowIfCancellationRequested();
             var (from, to) = Within(page, first, last);

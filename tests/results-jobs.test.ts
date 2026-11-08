@@ -236,6 +236,27 @@ describe('ResultsJobHost save', () => {
     expect(await failure(late.jobs.save(saveRequest()))).toMatchObject({ code: 'RESULT_UNAVAILABLE', message: jobSentences.closedBeforeSave })
     expect(late.calls).toEqual([])
   })
+  it('copies and saves a sorted grid through its view, and never swaps a view\'s result for a live revision', async () => {
+    const liveNewest = vi.fn<NonNullable<JobHostDeps['liveNewest']>>(() => () => 9)
+    const { jobs, calls } = host({ liveNewest })
+    const copying = jobs.copy(copyRequest({ viewId: 3 }))
+    await settle()
+    expect(calls[0].params).toMatchObject({ resultId: 7, viewId: 3 })
+    calls[0].resolve(done)
+    await copying
+    const saving = jobs.save(saveRequest({ viewId: 3 }))
+    await settle()
+    expect(calls[1]).toMatchObject({ method: 'export', params: { resultId: 7, viewId: 3 } })
+    expect(liveNewest).not.toHaveBeenCalled()
+    calls[1].resolve(done)
+    await saving
+    // Without a view neither request names one.
+    const plain = jobs.copy(copyRequest())
+    await settle()
+    expect(calls[2].params).not.toHaveProperty('viewId')
+    calls[2].resolve(done)
+    await plain
+  })
   it('saves a live table\'s newest revision when the samples retired the one shown while the dialog was open', async () => {
     // Revision 7 was shown at the click; two samples later 7 is retired and 9 is the table's newest.
     const owned = new Set([7])

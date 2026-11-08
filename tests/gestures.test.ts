@@ -102,6 +102,8 @@ describe('GestureService', () => {
       'grid.extendSelection': event => !!event.shiftKey,
       'grid.secondaryClick': (event, platform) => !!event.ctrlKey && platform === 'darwin',
       'grid.fitColumn': () => true,
+      // New with the catalogue: Shift+click on a header's sort button adds its column to the sort.
+      'grid.addSortKey': event => !!event.shiftKey,
       'global.wheelZoom': event => !!event.ctrlKey,
       'explorer.peekHover': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
       // macOS: ⌘, since Control+press is a right-click there (the tab's menu opened instead of the drag starting).

@@ -35,6 +35,7 @@ The code is the reference implementation; this document describes it.
 - [Result pages](#result-pages)
 - [Result store and memory budget](#result-store-and-memory-budget)
 - [Cell lengths and row sizes](#cell-lengths-and-row-sizes)
+- [Sorted views](#sorted-views)
 - [Messages](#messages)
 - [Copy and Save Results As](#copy-and-save-results-as)
 - [Live subscriptions](#live-subscriptions)
@@ -229,6 +230,8 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `results.read` | port | stream | results | 60 s |
 | `results.close` | port | unary | control | 10 s |
 | `results.rowBytes` | port | unary | control | 10 s; each row's bytes for 1 – 16,384 sealed rows ([Cell lengths and row sizes](#cell-lengths-and-row-sizes)) |
+| `results.view` | port | unary | results | 120 s; a sorted view of a result's sealed rows ([Sorted views](#sorted-views)) |
+| `results.viewClose` | port | unary | control | 10 s |
 | `live.subscribe` | port | stream of credited EVENTs ([Live subscriptions](#live-subscriptions)) | live (no slot) | none, and no backstop: only CANCEL, a disconnect, a shutdown, a failure or its source ending ends it |
 | `live.update` | port | unary | control | 10 s |
 | `explorer.children` | invoke; cancelled with `explorerCancel` | unary | explorer | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value |
@@ -1296,6 +1299,43 @@ renderer adds its `error` as one.
 - **`budget`** is `{ usedBytes, globalBytes, queryBytes, seq }` when the summary was built; main adds `generation`. `seq`
   orders it with the `results.memory` events (see [Query events](#query-events)).
 
+## Sorted views
+
+A results grid sorts in the backend, over the rows it already holds (`Results/ResultViews.cs`); nothing re-reads SQL
+Server. A view is an order of a result's base rows, read through the same calls as the result itself by view position.
+
+- **`results.view { resultId, sort: 1 – 16 keys, replaces? }`** answers `{ viewId, rows, complete, approximate }`. A key
+  is `{ column, descending, mode: 'value' | 'chars' | 'bytes' }`, columns distinct and within the result
+  (`INVALID_PARAMS`). The view covers the rows sealed when it was built (`rows`); `complete` says that was every row of a
+  finished set. `approximate` says a key compared a truncated value's stored prefix or a length that is only an estimate.
+  `replaces` names a view of the same result that the new one supersedes: it is dropped once the new one is built, and
+  left as it was when the sort fails or is cancelled. A result keeps at most 8 views; a ninth drops its oldest.
+- **Order.** A stable sort, as SQL Server's ORDER BY would put the rows: NULL and unreadable cells lowest (first
+  ascending, last descending); exact numerics as numbers at any precision, real and float as doubles, uniqueidentifier in
+  SQL Server's byte order, datetimeoffset by its UTC instant, other date and time types by their fixed-width text, binary
+  byte by byte, character columns by their collation (its locale and Ignore flags, or code points for _BIN and _BIN2),
+  ignoring trailing spaces; other types by their display text's code points. `chars` and `bytes` sort character, xml and
+  json columns (and binary, for `bytes`) by each cell's length from [Cell lengths and row sizes](#cell-lengths-and-row-sizes);
+  other columns ignore the mode and sort by value. Equal rows keep their base order.
+- **Memory.** A sort holds 8 to 16 bytes per row and key while it runs, and a view keeps 4 bytes a row, both charged to
+  the result's query budget (`TOO_LARGE` past it) and freed when the view is closed, replaced, or its result released.
+- **Reading through a view.** `results.read`, `results.rowBytes`, `results.copy` and `results.export` take `viewId`;
+  rows are then view positions. Read pages are built in view order from the stored cells (flags and truncation kept) and
+  numbered by view position, so the worker caches them as it does a result's own (keyed `generation:resultId#viewId`). A
+  view that is gone answers `VIEW_NOT_FOUND`. Copy through a view of a set still loading says `partial`; Save refuses it
+  (`RESULT_OPEN`, "Save the results after they are sorted again.").
+- **`results.viewClose { resultId, viewIds: 1 – 64 }`** answers `{ closed }`. Views end with their result too: a released
+  result's views go with it, without a close.
+- **Renderer.** `ResultHandle.sort(keys, { replaces, signal })` validates the keys before sending and returns a
+  `ResultView` handle (`viewId`, `base`, `keys`, `rows`, `complete`, `approximate`) that reads, measures and copies like
+  any handle; closing it sends `viewClose`, and it ends (released or lost) with its base. `ResultsService` keeps a view
+  per grid: a newer sort aborts the running one, and it sends no `replaces`, so the view a grid shows stays readable until
+  the grid has read the new one's rows and swapped (`viewShown`), and only then closes. A view of a set still loading is
+  sorted again once the set completes, also when it completes during the sort, and the text mode (Tools › Options ›
+  Query Results › Grid, Sort text columns by, and the results toolbar) sorts again every grid sorted by a text, xml, json
+  or binary column when it changes. A view main sees built after its port went (a reload) is closed by main. Copy, Save Results As and opening a value follow the
+  grid's order through its view; Save waits until a running or pending sort is built.
+
 ## Copy and Save Results As
 
 All Copy and Save text comes from one formatter, `ResultTextWriter` (C#), which reads stored pages in place through
@@ -1319,7 +1359,7 @@ because every byte that needs attention is ASCII (and U+2028/U+2029, matched as 
 takes `headers` and `nullText` as parameters. `tests/fixtures/results-text/cases.json` holds the golden bytes, checked
 against the C# writer (`TextChecks.cs`) and the fake backend's JavaScript twin (`tests/results-text.test.ts`).
 
-- **`results.copy { resultId, parts, headers, eol: 'crlf' | 'lf', maxBytes: 1 … 67,108,864 }`** (stream). A part is 1 –
+- **`results.copy { resultId, parts, headers, eol: 'crlf' | 'lf', maxBytes: 1 … 67,108,864, viewId? }`** (stream). A part is 1 –
   64 ascending, disjoint inclusive row ranges (a last row of 2⁵³ − 1 runs to the end) by 1 – 64 column ranges; up to 64
   parts, written in order. Open-ended rows end at the rows available when the copy starts, and `partial` says the set was
   still open. Before any work, `EstimateBytes` (O(pages × columns): the stored text spans, `2 × bytes + 2` per binary
@@ -1327,7 +1367,7 @@ against the C# writer (`TextChecks.cs`) and the fake backend's JavaScript twin (
   answers `TOO_LARGE` ("The selection is too large to copy ({n} MB; the limit is {m} MB). Use Save Results As
   instead.") with no DATA. Otherwise the text streams as DATA bodies of at most 1 MiB under the usual credit rules,
   checked for cancellation per page, then the RESPONSE `{ rows, bytes, truncatedCells, partial }`.
-- **`results.export { resultId, path, format: 'csv' | 'tsv' | 'json', headers, nullText: 'empty' | 'NULL', temporaryId }`**
+- **`results.export { resultId, path, format: 'csv' | 'tsv' | 'json', headers, nullText: 'empty' | 'NULL', temporaryId, viewId? }`**
   (unary). The path must be fully qualified, without NUL and without a `\\.\` or `\\?\` prefix, and `temporaryId` 32
   hex digits that main chose (`INVALID_PARAMS`); the set must be complete (`RESULT_OPEN`). It writes
   `{folder}/.varia-{temporaryId}.tmp` (`CreateNew`, `FileShare.None`, 1 MiB chunks), checking cancellation per page,
@@ -1349,8 +1389,8 @@ against the C# writer (`TextChecks.cs`) and the fake backend's JavaScript twin (
   at most 4 times a second. A save's pushes also carry `fileName` (the chosen file's name, never its path), and main
   pushes one as soon as the dialog closes, so the renderer's strip ("Saving {fileName}…") starts from the export, not
   from the dialog.
-- **Main (`ResultsJobHost`).** `varia:results-copy { jobId, generation, resultId, headers, parts }` and
-  `varia:results-save { jobId, generation, resultId, format?, suggestedName ≤ 128 }` are `trusted()`, strictly
+- **Main (`ResultsJobHost`).** `varia:results-copy { jobId, generation, resultId, headers, parts, viewId? }` and
+  `varia:results-save { jobId, generation, resultId, format?, suggestedName ≤ 128, viewId? }` are `trusted()`, strictly
   validated, and checked against `ResultsPortHost.owns(generation, resultId)` and the ready generation
   (`RESULT_UNAVAILABLE`). A copy decodes the chunks with a streaming `TextDecoder` (so a character split across chunks
   survives), regrants their credit, cancels with `TOO_LARGE` past 64 MiB + 1 MiB received, and writes the clipboard once,
@@ -1934,16 +1974,18 @@ crash and window close; a backend loss ends its streams but keeps the port.
 100th invalid message closes the port):
 
 ```ts
-{ t: 'read'; rid: u31; generation; resultId: u32; firstRow: 0..2^53-1; maxRows: 1..65_536; credit: 65_536..16_777_216 }
+{ t: 'read'; rid: u31; generation; resultId: u32; firstRow: 0..2^53-1; maxRows: 1..65_536; credit: 65_536..16_777_216; viewId?: u32 }
 { t: 'credit'; rid; bytes: 1..16_777_216 }
 { t: 'cancel'; rid }
 { t: 'close'; rid; generation; resultIds: u32[1..1024] }
-{ t: 'rowBytes'; rid; generation; resultId: u32; firstRow: 0..2^53-1; count: 1..16_384 }
+{ t: 'rowBytes'; rid; generation; resultId: u32; firstRow: 0..2^53-1; count: 1..16_384; viewId?: u32 }
+{ t: 'view'; rid; generation; resultId: u32; sort: ViewSortKey[1..16]; replaces?: u32 }
+{ t: 'viewClose'; rid; generation; resultId: u32; viewIds: u32[1..64] }
 { t: 'live'; rid; generation; params: live.subscribe params }
 { t: 'liveUpdate'; rid; generation; params: live.update params }
 ```
 
-A read, close or rowBytes must name the current generation and a result the renderer owns (from a query summary or event, at most
+A read, close, rowBytes, view or viewClose must name the current generation and a result the renderer owns (from a query summary or event, at most
 100,000 per generation), or it ends `RESULT_UNAVAILABLE`; at most 64 requests may be outstanding. A `live` request must name
 the current, ready generation (`RESULT_UNAVAILABLE`) and a subscription id not already running on the port
 (`DUPLICATE_REQUEST`); at most 16 live streams run per port (`TOO_MANY_REQUESTS`), counted apart from the 64. A
@@ -2125,6 +2167,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Descriptors per summary | 8 MiB (bounded per set by names, types and 96 bytes per column) | backend |
 | FOR XML / FOR JSON value | 2,097,152 characters, the rest marks it truncated | backend |
 | Row sizes a request | `results.rowBytes`: 1 – 16,384 rows (`rowSizes.maxRows`) | zod and backend |
+| Sorted views | 1 – 16 keys a sort, 1 – 64 ids a `results.viewClose`, 8 views a result (`limits.views`); 8 – 16 bytes per row and key while sorting, 4 bytes a row kept, under the query budget | zod and backend |
 | Copy | 64 MiB of UTF-8 (estimated before any work; main cancels past 65 MiB received); DATA ≤ 1 MiB; 16 MiB initial credit; 120 s; one per window | backend and main |
 | Save Results As | one per window; 1 MiB writes; no deadline; suggested name ≤ 128 characters, path ≤ 32,767 | main and backend |
 | Job progress | EVENTs every ≥ 250 ms; pushed to the renderer ≤ 4 a second | backend and main |
@@ -2198,7 +2241,7 @@ access, choose Help › Clear Entra ID Token Cache, then connect again." The sam
 
 | Origin | Codes |
 | --- | --- |
-| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN` |
+| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN` |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
 | Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads, scripting, object actions and SSIS requests), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs), `STALE` (a shortcuts save based on an older revision), `DUPLICATE_REQUEST` and `NOT_FOUND` (live streams of the results port); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |

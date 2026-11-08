@@ -46,7 +46,7 @@ export function validateGestures(platform: Platform, choices: ReadonlyMap<Gestur
     const gesture = gestureDescriptor(id), modifiers = effective.get(id)!, held = physicalModifiers(modifiers, platform)
     // Gestures match when all their modifiers are held, so a press that holds both sets starts both.
     for (const other of active) {
-      if (other === id || gestureDescriptor(other).action !== gesture.action) continue
+      if (other === id || gestureDescriptor(other).action !== gesture.action || gestureDescriptor(other).place !== gesture.place) continue
       const scope = sharedScope(id, other)
       if (!scope) continue
       const otherHeld = physicalModifiers(effective.get(other)!, platform)

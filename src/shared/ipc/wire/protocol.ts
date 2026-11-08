@@ -19,6 +19,9 @@ export const limits = {
   rowBytes: 8 * MiB,
   /** results.rowBytes: the most rows one request asks for (SqlService.MaxRowBytesRows in C#). */
   rowSizes: { maxRows: 16_384 },
+  /** results.view: sort keys a view takes, views one results.viewClose names (ViewSorter.MaxKeys and
+   *  SqlService.MaxViewIds in C#), and views a result keeps (ResultStore.MaxViewsPerResult). */
+  views: { maxKeys: 16, maxClose: 64, perResult: 8 },
   /** Stored cell caps: characters for text, bytes for binary. */
   cell: { text: 65_535, document: 2_097_152, vector: 65_535, binary: 32_766 },
   maxResultSets: { min: 1, max: 1000, default: 10 },
@@ -80,6 +83,8 @@ export const errorCodes = [
   'AUTH_ENTRA',
   // Backend, new in v2.
   'TIMEOUT', 'TOO_LARGE', 'RESPONSE_TOO_LARGE', 'RESULT_NOT_FOUND', 'RESULT_RELEASED',
+  // Backend: a view of a result (results.view) that was closed, replaced, or never existed for that result.
+  'VIEW_NOT_FOUND',
   // Backend, results jobs: an export failure (its message is one token: ACCESS, DISK_FULL, IN_USE, NOT_FOUND,
   // IS_DIRECTORY or IO) and an export of a set still loading.
   'EXPORT_FAILED', 'RESULT_OPEN',

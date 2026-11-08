@@ -18,7 +18,7 @@ const ids = (rows: readonly { id: string }[]) => rows.map(row => row.id)
 describe('gesture rows', () => {
   it('list every gesture of the platform by group, with its choices, lock and keyboard path', () => {
     const rows = gestureRows(draft(), 'win32', '')
-    expect(rows.map(row => row.kind)).toEqual(['modifier', 'modifier', 'modifier', 'pointerCommand', 'pointerCommand', 'pointerCommand', 'fixed', 'fixed', 'fixed', 'fixed', 'fixed'])
+    expect(rows.map(row => row.kind)).toEqual(['modifier', 'modifier', 'modifier', 'modifier', 'pointerCommand', 'pointerCommand', 'pointerCommand', 'fixed', 'fixed', 'fixed', 'fixed', 'fixed'])
     // macOS's Control+click is a right-click there only.
     expect(ids(rows)).not.toContain('grid.secondaryClick')
     expect(ids(gestureRows(draft(), 'darwin', ''))).toContain('grid.secondaryClick')
@@ -71,7 +71,7 @@ describe('gesture rows follow the page', () => {
     for (const query of ['@kind:', '@kind:m', '@kind:mo', '@kind:mouse', '@conflict', '@whatever:x']) expect(gestureRows(file, 'win32', query), query).toHaveLength(all)
     expect(gestureRows(file, 'win32', '@kind:k')).toEqual([])
     expect(ids(gestureRows(file, 'win32', '@source:u'))).toEqual(['explorer.peekHover', 'dock.floatWhileDragging'])
-    expect(ids(gestureRows(file, 'win32', '@scope:grid'))).toEqual(['grid.addToSelection', 'grid.extendSelection', 'grid.fitColumn'])
+    expect(ids(gestureRows(file, 'win32', '@scope:grid'))).toEqual(['grid.addToSelection', 'grid.addSortKey', 'grid.extendSelection', 'grid.fitColumn'])
     expect(ids(gestureRows(file, 'win32', '@unbound'))).toEqual(['explorer.peekHover'])
     expect(ids(gestureRows(file, 'win32', '@command:pane.dock'))).toEqual(['dock.toggleFloat'])
     // Problems: Alt on Linux warns.
