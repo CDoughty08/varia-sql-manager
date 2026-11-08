@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { gestureChoiceTexts } from '../src/shared/commands/gesture-choices'
-import { emptyShortcutFile, parseShortcutText, readShortcutFile, shortcutFileSchema, shortcutFileText, shortcutLimits, type ShortcutFile, type ShortcutReadResult } from '../src/shared/commands/shortcut-schema'
+import { emptyShortcutFile, parseShortcutText, readShortcutFile, shortcutFileSchema, shortcutFileText, shortcutLimits, type ShortcutBinding, type ShortcutFile, type ShortcutReadResult } from '../src/shared/commands/shortcut-schema'
 
 const read = (raw: unknown, options?: Parameters<typeof readShortcutFile>[1]) => {
   const result = readShortcutFile(raw, options)
@@ -208,6 +208,20 @@ describe('shortcuts file size', () => {
       const text = shortcutFileText(file)
       expect(text).toBe(JSON.stringify(file, null, 2) + '\n')
     }
+  })
+  it('writes the indented form exactly up to the limit and the compact form one byte past it', () => {
+    // Many non-empty containers, so a miscount of even one byte per container shows as kilobytes.
+    const bindings: ShortcutBinding[] = Array.from({ length: 300 }, (_, index) => ({ command: 'query.execute', key: `ctrl+shift+f${index % 12 + 1}`, platform: 'darwin' }))
+    const nested = [[[{ a: [1, { b: 'é' }] }]], { c: {} }]
+    const padded = (length: number): ShortcutFile => ({ ...emptyShortcutFile, bindings, unknown: [nested, 'x'.repeat(length)] })
+    const prettyBytes = (file: ShortcutFile) => Buffer.byteLength(JSON.stringify(file, null, 2) + '\n')
+    const exact = shortcutLimits.fileBytes - prettyBytes(padded(0))
+    expect(prettyBytes(padded(exact))).toBe(shortcutLimits.fileBytes)
+    expect(shortcutFileText(padded(exact))).toBe(JSON.stringify(padded(exact), null, 2) + '\n')
+    expect(shortcutFileText(padded(exact + 1))).toBe(JSON.stringify(padded(exact + 1)))
+    // What main writes reads back.
+    expect(parseShortcutText(shortcutFileText(padded(exact))!).ok).toBe(true)
+    expect(parseShortcutText(shortcutFileText(padded(exact + 1))!).ok).toBe(true)
   })
   it('never builds the indented text of a deeply nested file that cannot fit indented (#240)', () => {
     // 127 records nested about 500 arrays deep: each is under 1 KiB compact but indents to half a megabyte.
