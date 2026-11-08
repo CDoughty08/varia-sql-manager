@@ -3,18 +3,23 @@
 // CI; before this existed, three copies on three CPUs failed every run. Needs the Release backend tests built (npm run check,
 // or npm run backend:test).
 //
-//   node scripts/offline-stress.mjs [--copies 5] [--cpus 3] [--rounds 2]
+//   node scripts/offline-stress.mjs [--copies 5] [--cpus 3] [--rounds 2] [--deadline 300]
+//
+// A copy still running after --deadline seconds is killed and reported with the suites that never finished: a hang.
 //
 // Pinning sets each process's affinity through PowerShell on Windows and uses taskset on Linux; macOS cannot pin, so there
 // it oversubscribes every CPU.
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { availableParallelism } from 'node:os'
 import { resolve } from 'node:path'
 
 const args = process.argv.slice(2)
 const option = (name, fallback) => { const index = args.indexOf(name); return index >= 0 ? Number(args[index + 1]) : fallback }
 const cpus = Math.min(option('--cpus', 3), availableParallelism()), copies = option('--copies', 5), rounds = option('--rounds', 2)
+const deadline = option('--deadline', 300) * 1000
+const block = /offlineSuites =([\s\S]*?)\];/.exec(readFileSync('backend/Varia.Backend.Tests/Program.cs', 'utf8'))?.[1] ?? ''
+const suites = [...block.matchAll(/\("([\w.]+)", /g)].map(match => match[1])
 const dll = resolve('backend/Varia.Backend.Tests/bin/Release/net10.0/Varia.Backend.Tests.dll')
 if (!existsSync(dll)) { console.error('Build the Release checks first: npm run backend:test'); process.exit(2) }
 
@@ -31,7 +36,15 @@ const run = () => new Promise(done => {
   let output = ''
   child.stdout.on('data', chunk => { output += chunk })
   child.stderr.on('data', chunk => { output += chunk })
-  child.on('close', code => done({ code, summary: /Offline suites: .*/.exec(output)?.[0] ?? '', failures: output.split('\n').filter(line => line.includes('FAIL:')).map(line => line.trim().slice(0, 400)) }))
+  let hung = false
+  const timer = setTimeout(() => { hung = true; child.kill() }, deadline)
+  child.on('close', code => {
+    clearTimeout(timer)
+    const finished = new Set([...output.matchAll(/^Offline suite ([\w.]+): /gm)].map(match => match[1]))
+    const unfinished = suites.filter(name => !finished.has(name))
+    if (hung) return done({ code: 'hung', summary: '', failures: [`HUNG after ${deadline / 1000} s; suites that never finished: ${unfinished.join(', ')}`] })
+    done({ code, summary: /Offline suites: .*/.exec(output)?.[0] ?? '', failures: output.split('\n').filter(line => line.includes('FAIL:')).map(line => line.trim().slice(0, 400)) })
+  })
 })
 
 let failed = 0
