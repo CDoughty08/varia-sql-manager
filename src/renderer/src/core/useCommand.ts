@@ -39,7 +39,18 @@ function useEnablementChanges(): (listener: () => void) => () => void {
   }, [commands, context])
 }
 
-/** The command's primary keybinding as shown on this platform, for tooltips and hints. */
+/**
+ * Re-renders the component whenever the keybinding rules change (a remap on the Shortcuts page), so labels and tooltips
+ * it reads from `keybindings.lookup` follow. Returns the rules' revision.
+ */
+export function useKeybindingsRevision(): number {
+  const { keybindings } = useWorkbench()
+  const revision = () => keybindings.getRevision()
+  return useSyncExternalStore(keybindings.subscribe, revision, revision)
+}
+
+/** The command's primary keybinding as shown on this platform, for tooltips and hints; it follows remaps. */
 export function useKeybindingLabel(id: CommandId): KeybindingLabel | undefined {
+  useKeybindingsRevision()
   return useWorkbench().keybindings.lookup(id)
 }
