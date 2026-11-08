@@ -90,9 +90,11 @@ cancel superseded main runs, now done).
    GitHub is retiring, even for tags. Packaging at `--dir` skips the DMG and hdiutil step behind 2 of the 3 false failures.
 6. **Split the Host offline suite** (S). At 10 s it is the floor of the offline lanes (its `Thread.Sleep(1200)` and
    budget waits); split in two, 8 lanes would reach about 15 s.
-7. **Harden the CPU-bound vitest files for shared runners** (S). In the starved macOS run, explorer-service's
-   99,000-row reconcile tests ran out their 20 s timeout; they are CPU-bound by design, so they are the first to fail when a
-   runner is shared.
+7. **Shrink the CPU-bound vitest files** (S). Explorer-service's 99,000-row reconcile tests take 3 to 4 s locally and ran
+   out vitest's 20 s default on a shared 4-vCPU Windows runner. They now pass `heavyTimeout` (90 s,
+   `tests/fixtures/work-meter.ts`, required by `tests/idle-waits.test.ts` for every test of 50,000 rows or more), which
+   stops the false failures but not the minutes: explorer-service.test.ts is about 33 s of Windows's vitest lane. Their
+   work bounds come from the meter, not the size, so a smaller input (10,000 rows) may prove the same bound.
 
 Considered and rejected (do not re-propose without new numbers):
 

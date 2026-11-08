@@ -25,6 +25,23 @@ describe('idle waits', () => {
     const offenders = readdirSync(dir).filter(name => name.endsWith('.cs') && name !== 'Unreachable.cs' && /tcp:127\.0\.0\.1,1\b/.test(readFileSync(join(dir, name), 'utf8')))
     expect(offenders).toEqual([])
   })
+  // A test that builds 50,000 or more rows ran past vitest's 20 s default on a shared Windows runner (3 to 4 s locally):
+  // it passes heavyTimeout (tests/fixtures/work-meter.ts) and bounds its work with the meter, not a clock.
+  it('give every test that builds 50,000 rows or more the heavy timeout', () => {
+    const offenders = readdirSync('tests').filter(name => name.endsWith('.test.ts')).flatMap(name => {
+      const lines = readFileSync(join('tests', name), 'utf8').split('\n')
+      return lines.flatMap((line, index) => {
+        const size = /\blength: ([\d_]+)/.exec(line)
+        if (!size || Number(size[1].replace(/_/g, '')) < 50_000) return []
+        let start = index
+        while (start > 0 && !/^\s*it\(/.test(lines[start])) start--
+        const indent = /^\s*/.exec(lines[start])![0]
+        const end = lines.findIndex((candidate, at) => at > start && candidate.startsWith(indent + '}') && /^\}(\)|, )/.test(candidate.slice(indent.length)))
+        return end >= 0 && lines[end].trim() === '}, heavyTimeout)' ? [] : [`tests/${name}:${index + 1}`]
+      })
+    })
+    expect(offenders).toEqual([])
+  })
   // check.mjs runs vitest beside the .NET build, and only its needsBackend files after it.
   it('run every vitest file that starts the Release backend after the build', () => {
     const source = readFileSync('scripts/check.mjs', 'utf8')
