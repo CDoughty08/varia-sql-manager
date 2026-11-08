@@ -922,7 +922,13 @@ lost.
   unsupported server, and incomplete capture are reported in Messages. The observer needs lightweight plan profiling
   and permission to create, enable, read and drop its event session. SQL Server 2025 and Azure SQL Database also set
   a maximum collector duration. If a process exits abruptly before cleanup, a collector's connection ID filter prevents
-  a later session that reuses the SPID from being captured.
+  a later session that reuses the SPID from being captured. A server-scoped collector's name records its client event GUID
+  and both query/observer physical server connection IDs. A later capture checks up to 16 candidates within a one-second
+  slice of its 5 s setup budget. Recovery requires both connections to be absent and the ownership/predicate shape to
+  match; it rechecks the definition and liveness immediately before server-quoted DROP. Database-scoped and older
+  single-GUID collectors are not swept because their observer ownership cannot be proved. SQL in `Plans/ActualPlanSql.cs`
+  binds values as typed parameters and quotes identifiers on the server; offline builder checks and real hostile-name
+  round trips cover that boundary. See [collector recovery](plan-capture-hardening.md) for limits and validation.
   When `SET STATISTICS XML` also returned the same execution, Varia keeps the complete SQL-returned plan and pairs it with
   one observer event in the same batch and repetition. The optional `planOrder` lists matched and retained observer result
   IDs in event order so the canvas can interleave both sources within a batch. Across batches it uses batch and repetition.
@@ -2396,7 +2402,7 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
 ## Benchmarks
 
 ```sh
-npm run bench                                   # node harness: codecs, main ↔ Release backend ↔ results worker, grid models, chart draw, plan layout
+npm run bench                                   # node harness: codecs, main ↔ Release backend ↔ results worker, grid models, chart draw, plan layout, object search
 npm run bench:e2e                               # Electron, real backend with test hooks (add -- --live for SQL Server)
 npm run bench:grid                              # Electron, the results grid on the fake backend (add -- --live for SQL Server)
 node scripts/check-bench.mjs [--enforce]        # compare with tests/bench/floors.json; markdown to $GITHUB_STEP_SUMMARY
@@ -2432,10 +2438,16 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
   planning, and the shared window cache (full, so every insert evicts). **The chart draw** (`tests/bench/chart.bench.ts`)
   times `ChartView`'s whole draw of a full ring (7,200 samples, two hours at 1 s) of six series over a 1,600 px chart
   with axes, into a context that only counts calls: what a live chart costs a frame at most.
+- **The object search** (`tests/bench/search.bench.ts`) runs the .NET test program's `--search-bench` mode
+  (`backend/Varia.Backend.Tests/SearchBench.cs`, built by `dotnet run` when out of date): Search Objects' in-memory search
+  over a synthetic index of 1,000,000 objects in 20 databases (5,000 tables each, with 9 columns), for one letter, as the
+  first key typed is. 700,000 objects match, so the scan runs far past the 20,000-candidate cap: it reports the p95 time
+  of 20 warm searches and the memory one allocates, which stays bounded by the cap rather than by the hits.
 - **The e2e run** reads every row through `window.__variaResults` in the built app (four windows in flight), watching
   the UI thread for long tasks and animation-frame gaps, and times 500 live ticks of the real backend's `debug.synthetic`
   source through `ResultClient.live` as the node pipeline does; `--live` stores a million W1-like rows from SQL Server with
-  `maxRows: 0`, and times 200 executions of `SELECT 1` in a warm tab.
+  `maxRows: 0`, then 200,000 rows that each hold a small xml value (parsed and serialised cell by cell, as SqlClient's
+  GetChars would), and times 200 executions of `SELECT 1` in a warm tab.
 - **The grid run** (`scripts/grid-bench.mjs`) drives the built app in a 1600 × 1000 window (or the screen, if smaller)
   on the fake backend's synthetic sets: the first data cell painted after `resultSet.opened`, the UI thread's busy share
   while a million rows stream, `GridView.frame()` times from `window.__variaGrid` while the wheel scrolls a million rows
@@ -2465,6 +2477,8 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | Grid frame: Mode B scroll mapping, 100M rows | ≥ 5,000,000 ops/s | ≥ 1,000,000 ops/s | 6,500,000 – 7,600,000 ops/s | 6,800,000 – 7,300,000 ops/s |
 | Grid frame: visible range, tiles and prefetch ring, 300 columns | ≥ 500,000 ops/s | ≥ 100,000 ops/s | 700,000 – 850,000 ops/s | 800,000 – 870,000 ops/s |
 | Grid frame: window cache, 3 lookups and 1 insert at 256 windows | ≥ 100,000 ops/s | ≥ 25,000 ops/s | 157,000 – 174,000 ops/s | 178,000 ops/s |
+| Object search: one letter over 1,000,000 indexed objects (700,000 hits), p95 | ≤ 75 ms | ≤ 500 ms | 55 ms (Windows, 24 CPUs; 166 ms before hits were built lazily) | not measured |
+| Object search: memory allocated by that search, median | ≤ 16 MB | ≤ 64 MB | 9 MB (322 MB before) | not measured |
 | Plan ordered layout: 2,000 operators, 1,999 ordered inputs, p95 | ≤ 20 ms | ≤ 500 ms | 2.8 – 4.1 ms (Windows, 24 CPUs) | not measured |
 | Plan ordered layout: 10,000 operators, four-way tree, p95 | ≤ 75 ms | ≤ 1,000 ms | 9.9 – 12 ms (Windows, 24 CPUs) | not measured |
 | Plan cached layout lookup: 10,000 operators, p95 | ≤ 5 ms | ≤ 50 ms | 0.92 – 1.08 ms (Windows, 24 CPUs) | not measured |
@@ -2477,6 +2491,7 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | UI long tasks over 50 ms during W1 | 0 | ≤ 2 | 0 | 0 |
 | Largest animation-frame gap during W1 | ≤ 50 ms | ≤ 300 ms | 17 – 33 ms | 133 ms |
 | Live: 1,000,000 W1-like rows ingested and stored | ≥ 300,000 rows/s | ≥ 75,000 rows/s | 280,000 – 298,000 rows/s | 280,000 rows/s |
+| Live: 200,000 rows with a small xml cell ingested and stored | ≥ 200,000 cells/s | ≥ 25,000 cells/s | 156,000 cells/s (Windows, 24 CPUs, local SQL Server 2025) | not measured |
 | Live: first 100-row window after `resultSet.opened` | ≤ 50 ms | ≤ 250 ms | 45 – 103 ms | 102 ms |
 | Live: `SELECT 1` in a warm tab, end to end, p50 | ≤ 5 ms | ≤ 50 ms | 0.6 ms, p99 1.3 ms (Windows, 24 CPUs, local SQL Server; 0.7 ms when every execution was followed by a session probe) | not measured |
 | Grid: `resultSet.opened` → first data cell painted, median of 5 | ≤ 50 ms | ≤ 250 ms | 56 ms | 57 ms |

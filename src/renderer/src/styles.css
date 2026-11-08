@@ -198,7 +198,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-search-pane .object-search-options { gap: var(--varia-space-2); }
 .object-search-pane .object-search-hit { padding: 0 var(--varia-space-1); }
 .object-search-pane .object-search-open { grid-template-columns: auto minmax(0, 1fr); }
-.object-search-pane .object-search-path { grid-column: 2; }
+.object-search-pane .object-search-path { grid-column: 2; max-width: none; text-align: start; }
 .object-search-pane .empty-state { flex: none; padding: var(--varia-space-2) var(--varia-space-3); }
 /*
  * The footer: how fresh the selection's listing is, then the connected servers. It is one line as tall as the stale
@@ -383,6 +383,38 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .options-pages [aria-selected="true"], .options-row[data-focused], .options-form-row[data-focused] { outline: 1px solid CanvasText; outline-offset: -1px; }
   .options-row:has(:disabled) > label, .options-row :disabled, .options-form-row[data-disabled] { color: GrayText; }
   .options-dialog mark { color: Highlight; }
+}
+/* Tools › Options › Shortcuts, Mouse view: one row per gesture, a modifier dropdown for those that can be remapped. */
+.mouse-view { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.mouse-view th, .mouse-view td { padding: 3px 8px; text-align: left; vertical-align: top; font-weight: normal; overflow-wrap: anywhere; }
+.mouse-view thead th { position: sticky; top: 0; z-index: 1; background: var(--varia-editorWidget-background); color: var(--varia-descriptionForeground); border-bottom: 1px solid var(--varia-dialog-separatorBackground); }
+.mouse-col-gesture { width: 40%; }
+.mouse-col-binding { width: 28%; }
+.mouse-col-where { width: 18%; }
+.mouse-col-source { width: 14%; }
+.mouse-group th { padding-top: 8px; font-weight: 600; color: var(--varia-settings-headerForeground); }
+.mouse-gesture { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; }
+.mouse-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; align-self: center; }
+.mouse-dot[data-on] { background: var(--varia-focusBorder); }
+.mouse-id, .mouse-reason, .mouse-keyboard { font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.mouse-reason, .mouse-keyboard, .mouse-problems { flex-basis: 100%; padding-left: 12px; }
+.mouse-problems { display: flex; flex-direction: column; gap: 2px; }
+.mouse-problem { display: flex; align-items: baseline; gap: 4px; font-size: var(--varia-size-xs); }
+.mouse-problem[data-severity="error"] { color: var(--varia-errorForeground); }
+.mouse-problem[data-severity="warning"] { color: var(--varia-warningForeground); }
+.mouse-binding { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.options-dialog .mouse-binding select { height: 20px; padding: 0 4px; line-height: 16px; }
+.mouse-action { color: var(--varia-descriptionForeground); }
+.mouse-source { display: inline-flex; align-items: center; gap: 4px; }
+.mouse-source[data-source="user"] { font-weight: 600; }
+.mouse-source[data-source="fixed"], .mouse-source[data-source="setting"] { color: var(--varia-descriptionForeground); }
+.mouse-reset { margin-left: 4px; padding: 0 2px; }
+.mouse-link { padding: 0; border: 0; color: var(--varia-list-highlightForeground); text-decoration: underline; }
+.mouse-empty { margin: 8px 10px; color: var(--varia-descriptionForeground); }
+@media (forced-colors: active) {
+  .mouse-dot[data-on] { background: Highlight; }
+  .mouse-problem[data-severity] { color: CanvasText; }
+  .mouse-link { color: LinkText; }
 }
 /* The failure screen keeps a draggable strip where the title bar was, under the native window controls. */
 .shell-failure { height: 100vh; overflow: auto; padding: calc(env(titlebar-area-height, 34px) + 24px) 32px 32px; background: var(--varia-editor-background); color: var(--varia-foreground); font-size: var(--varia-size-md); }
@@ -2053,13 +2085,35 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-search-summary:empty { display: none; }
 .object-search-hits { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 0 0 var(--varia-space-2); list-style: none; }
 .object-search-hit { display: flex; align-items: start; gap: var(--varia-space-1); padding: 0 var(--varia-space-3) 0 var(--varia-space-2); }
+/* All servers: a group per server, its header a disclosure button with the server's colour, name, environment tag and note. */
+.object-search-group-head { position: sticky; top: 0; z-index: 1; margin: 0; font: inherit; background: var(--varia-editor-background); border-top: 1px solid var(--varia-sideBarSectionHeader-border); }
+.object-search-group-head button { display: flex; align-items: center; gap: var(--varia-space-2); width: 100%; min-height: var(--varia-row); padding: var(--varia-space-1) var(--varia-space-3) var(--varia-space-0) var(--varia-space-1); color: var(--varia-objectExplorer-countForeground); background: transparent; border: 0; border-radius: 0; text-align: start; font-size: var(--varia-size-xs); font-weight: normal; cursor: pointer; }
+.object-search-group-head button:hover { background: var(--varia-list-hoverBackground); }
+.object-search-group-head button:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: -2px; }
+.object-search-group-head .icon { margin-inline-end: calc(-1 * var(--varia-space-1)); color: var(--varia-objectExplorer-chevronForeground); }
+.object-search-group-dot { flex: none; width: var(--varia-space-2); height: var(--varia-space-2); border-radius: var(--varia-radius-pill); }
+.object-search-group-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-objectExplorer-sublabelForeground); font-weight: 600; }
+.object-search-group-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-objectExplorer-countForeground); }
+.object-search-group-note.error { color: var(--varia-errorForeground); }
+.object-search-group-hits { margin: 0; padding: 0; list-style: none; }
+.object-search-group-more { margin: 0; padding: var(--varia-space-0) var(--varia-space-3) var(--varia-space-1) calc(var(--varia-space-2) + var(--varia-space-1) + var(--varia-glyph-md) + var(--varia-space-2)); color: var(--varia-objectExplorer-countForeground); font-size: var(--varia-size-xs); }
 .object-search-hit:hover { background: var(--varia-list-hoverBackground); }
 .object-search-hit:has(> [aria-selected="true"]) { color: var(--varia-list-inactiveSelectionForeground); background: var(--varia-list-inactiveSelectionBackground); }
 .object-search-hit:has(> [aria-selected="true"]:focus) { color: var(--varia-list-activeSelectionForeground); background: var(--varia-list-activeSelectionBackground); }
-.object-search-open { flex: 1; min-width: 0; display: grid; grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr); column-gap: var(--varia-space-2); align-items: center; padding: var(--varia-space-1); text-align: start; color: inherit; background: transparent; border: 0; border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); cursor: pointer; }
+.object-search-open { flex: 1; min-width: 0; display: grid; grid-template-columns: var(--varia-glyph-md) minmax(0, 1fr) auto; column-gap: var(--varia-space-2); align-items: center; padding: var(--varia-space-1); text-align: start; color: inherit; background: transparent; border: 0; border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); cursor: pointer; }
 .object-search-open:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: -2px; }
+.object-search-kind { display: grid; place-items: center; width: var(--varia-glyph-md); height: var(--varia-glyph-md); border-radius: var(--varia-radius-sm); color: var(--varia-searchKind-foreground); font: 700 var(--varia-size-xs)/var(--varia-line-xs) var(--varia-font-mono); }
+.object-search-kind[data-tone="table"] { background: var(--varia-searchKind-tableBackground); }
+.object-search-kind[data-tone="view"] { background: var(--varia-searchKind-viewBackground); }
+.object-search-kind[data-tone="procedure"] { background: var(--varia-searchKind-procedureBackground); }
+.object-search-kind[data-tone="function"] { background: var(--varia-searchKind-functionBackground); }
+.object-search-kind[data-tone="column"] { background: var(--varia-searchKind-columnBackground); }
+.object-search-kind[data-tone="key"] { background: var(--varia-searchKind-keyBackground); }
+.object-search-kind[data-tone="security"] { background: var(--varia-searchKind-securityBackground); }
+.object-search-kind[data-tone="database"] { background: var(--varia-searchKind-databaseBackground); }
+.object-search-kind[data-tone="other"] { background: var(--varia-searchKind-otherBackground); }
 .object-search-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.object-search-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.object-search-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 50cqw; text-align: end; color: var(--varia-objectExplorer-countForeground); font-size: var(--varia-size-xs); }
 .object-search-line { grid-column: 2 / -1; overflow: hidden; text-overflow: ellipsis; white-space: pre; font: var(--varia-size-xs) var(--varia-font-mono); color: var(--varia-descriptionForeground); }
 .object-search-line-number { margin-inline-end: var(--varia-space-1); }
 .object-search-more { font-family: var(--varia-font-ui); }

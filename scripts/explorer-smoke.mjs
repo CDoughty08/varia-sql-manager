@@ -7,7 +7,7 @@ import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.
 import {
   activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
   explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, searchHitApproximate, explorerSublabel, explorerToolbar, itemCount,
-  menuItemNames, messages, movePane, objectSearchBox, objectSearchHits, objectSearchSelected, outputView, paneMenuButton, part, popoutDockButton, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
+  menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, outputView, paneMenuButton, part, popoutDockButton, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
 } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
@@ -668,6 +668,10 @@ try {
   // A value the readers could not read shows as NULL, as the grid shows it, with a note.
   await expect(topRows.getByRole('cell', { name: 'NULL', exact: true })).toHaveCount(2)
   await expect(peekCard.getByRole('tabpanel')).toContainText('1 value could not be read and show as NULL.')
+  // A cut value ends in an ellipsis, and its tooltip says it was cut; a whole one's is just the value.
+  const cutValue = topRows.getByRole('cell', { name: `${'B'.repeat(256)}…`, exact: true })
+  await expect(cutValue).toHaveAttribute('title', `${'B'.repeat(256)}…\nCut at 256 characters; Select Top 1000 Rows shows all of it.`)
+  await expect(topRows.getByRole('cell', { name: 'Alice', exact: true })).toHaveAttribute('title', 'Alice')
   expect((await stubCalls('explorer.peekRows')).at(-1).target).toMatchObject({ kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' })
   await page.keyboard.press('Escape')
   await expect(peekCard).toBeHidden()
@@ -680,7 +684,7 @@ try {
   await expect(tree()).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(peekCard).toBeHidden()
-  console.log('Object Explorer checks: Peek opens on dbo.Orders by Space, the menu and Ctrl+hover, shows its properties and CREATE script, its Columns, Dependencies (followed and back) and Top rows tabs, and Esc returns to the tree.')
+  console.log('Object Explorer checks: Peek opens on dbo.Orders by Space, the menu and Ctrl+hover, shows its properties and CREATE script, its Columns, Dependencies (followed and back) and Top rows tabs (a cut value says so in its tooltip), and Esc returns to the tree.')
 
   // 9. An offline database is listed, dimmed, with no chevron.
   await select('server-a', 'Databases', 'AppData')
@@ -1021,6 +1025,10 @@ try {
     await page.keyboard.type('search objects')
     await quickInput(page).getByRole('option', { name: /^Object Explorer: Search Objects…/ }).click()
     await expect(objectSearchBox(page)).toBeFocused()
+    // With two servers connected the palette's tab searches all servers; these checks walk one server's hits.
+    await expect(objectSearchServer(page)).toHaveValue('*')
+    await objectSearchServer(page).selectOption({ label: 'server-a' })
+    await objectSearchBox(page).focus()
     await page.keyboard.type('table')
     const tabHits = objectSearchHits(page)
     await expect(tabHits).toHaveCount(2)
@@ -1193,6 +1201,31 @@ try {
     await objectSearchBox(page).fill('table')
     await expect(tabHits).toHaveCount(2)
     console.log('Object Explorer checks: the Search Objects details pane follows the selection with properties, a definition or script, and columns, and hides and shows.')
+    // All servers: one search per server, each server's hits a list of its own below a header that collapses it; the arrows
+    // walk across the groups, and a hit reveals on its own server.
+    await objectSearchServer(page).selectOption({ label: 'All servers (2)' })
+    await expect(objectSearchGroup(page, 'server-a').getByRole('option')).toHaveCount(2)
+    await expect(objectSearchGroup(page, 'server-b').getByRole('option')).toHaveCount(2)
+    await expect(page.locator(part.objectSearchTab).getByRole('status')).toContainText('2 servers · 4 results')
+    await selectRevealed('server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders')
+    await objectSearchGroup(page, 'server-a').getByRole('option').nth(1).click()
+    await page.keyboard.press('ArrowDown')
+    await expect(objectSearchGroup(page, 'server-b').getByRole('option').first()).toBeFocused()
+    await page.keyboard.press('Enter')
+    await expect(await explorerRow(page, 'server-b', 'Databases', 'AppData', 'Tables', 'dbo.table1')).toHaveAttribute('aria-selected', 'true')
+    await expect(objectSearchGroup(page, 'server-b').getByRole('option').first()).toBeFocused()
+    const groupHead = page.locator(part.objectSearchTab).getByRole('button', { name: /^server-a/ })
+    await expect(groupHead).toHaveAttribute('aria-expanded', 'true')
+    await groupHead.click()
+    await expect(groupHead).toHaveAttribute('aria-expanded', 'false')
+    await expect(objectSearchGroup(page, 'server-a')).toHaveCount(0)
+    await expect(objectSearchGroup(page, 'server-b').getByRole('option')).toHaveCount(2)
+    await page.screenshot({ path: resolve('artifacts', 'explorer-search-all-servers.png') })
+    await groupHead.click()
+    await expect(objectSearchGroup(page, 'server-a').getByRole('option')).toHaveCount(2)
+    await objectSearchServer(page).selectOption({ label: 'server-a' })
+    await expect(tabHits).toHaveCount(2)
+    console.log('Object Explorer checks: an All servers search groups each server\'s hits under a header that collapses them, walks them with the arrows, and reveals a hit on its own server.')
     // Forced colors drop the selection's fill, so the selected hit keeps an outline once focus leaves the list.
     await tabHits.first().click()
     await objectSearchBox(page).focus()

@@ -81,6 +81,23 @@ describe('a Search Objects result\'s context menu', () => {
     connections.remove('server-a')
     expect(commands.isEnabled('search.copyQualifiedName')).toBe(false)
   })
+
+  it('opens Search Objects on all servers when several are connected, and on a server from its own menu', async () => {
+    const { commands, objectSearch, explorer, connections, documents } = connected()
+    const opened = () => Object.values(objectSearch.getSnapshot().documents).at(-1)
+    expect(await commands.execute('explorer.searchObjects', undefined, 'palette')).toBe(true)
+    expect(opened()).toMatchObject({ connectionId: 'server-a' })
+    expect(opened()?.allServers).toBeUndefined()
+    connections.add(connectionInfo('server-b'), connectionOptions)
+    expect(await commands.execute('explorer.searchObjects', undefined, 'palette')).toBe(true)
+    expect(opened()).toMatchObject({ allServers: true })
+    // The All servers tab belongs to no server.
+    expect(documents.get(opened()!.id)?.connectionId).toBeUndefined()
+    const node = { ...explorer.objectNode('server-b', { kind: 'server' }, 'server-b'), id: 1 }
+    expect(await commands.execute('explorer.searchObjects', argsFor({ kind: 'explorer', node }), 'menu')).toBe(true)
+    expect(opened()).toMatchObject({ connectionId: 'server-b' })
+    expect(opened()?.allServers).toBeUndefined()
+  })
 })
 
 describe('a Search Objects result\'s Copy key', () => {

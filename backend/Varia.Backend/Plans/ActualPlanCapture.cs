@@ -9,13 +9,12 @@ namespace Varia.Backend.Plans;
 /// <summary>Collects completed plans through a separate connection. The executing session receives only the user's SQL.</summary>
 internal sealed class ActualPlanCapture(SqlConnection observer, bool databaseScoped, string? recoveryName = null)
 {
-    private const string PlanEvent = "query_post_execution_plan_profile";
-    private const string BatchEvent = "sql_batch_starting";
+    private const string PlanEvent = ActualPlanSql.PlanEvent;
+    private const string BatchEvent = ActualPlanSql.BatchEvent;
     private const int MaxTargetCharacters = 4 * 1024 * 1024;
     private static readonly XName AggregateName = PlanParser.ShowplanName.Namespace + "Aggregate";
     private string name = "";
     private readonly List<(int Batch, int Iteration)> submitted = [];
-    private string Dmv => databaseScoped ? "dm_xe_database_session" : "dm_xe_session";
     private bool attempted;
     public bool Started { get; private set; }
 
@@ -25,22 +24,9 @@ internal sealed class ActualPlanCapture(SqlConnection observer, bool databaseSco
         if (spid is < 1 or > 32767) return "This connection does not expose a session for actual plan capture.";
 
         // Check every privilege before creating a session, including the one needed to remove it.
-        var permissionScope = databaseScoped ? "DB_NAME(), 'DATABASE'" : "NULL, NULL";
-        var eventScope = databaseScoped ? "DATABASE " : "";
-        string Permission(string permission) => $"HAS_PERMS_BY_NAME({permissionScope}, '{permission}')";
-        var administer = Permission($"ALTER ANY {eventScope}EVENT SESSION");
-        var create = Permission($"CREATE ANY {eventScope}EVENT SESSION");
-        var enable = Permission($"ALTER ANY {eventScope}EVENT SESSION ENABLE");
-        var drop = Permission($"DROP ANY {eventScope}EVENT SESSION");
-        // A granular DENY overrides the parent grant. Use the parent only on engines without granular permissions.
-        var manage = $"(({create}=1 AND {enable}=1 AND {drop}=1) OR ({drop} IS NULL AND {administer}=1))";
-        var performance = Permission("VIEW SERVER PERFORMANCE STATE");
-        var inspect = databaseScoped ? $"{Permission("VIEW DATABASE STATE")}=1"
-            : $"({performance}=1 OR ({performance} IS NULL AND {Permission("VIEW SERVER STATE")}=1))";
-
         await using var command = observer.CreateCommand();
         command.CommandTimeout = 0;
-        command.CommandText = $"SELECT CASE WHEN {manage} AND {inspect} THEN 1 ELSE 0 END;";
+        command.CommandText = ActualPlanSql.Permissions(databaseScoped);
         if (await command.ExecuteScalarAsync(token) is not 1)
             return "Actual plan capture requires permission to create, start, read and drop Extended Events sessions.";
 
@@ -85,11 +71,7 @@ internal sealed class ActualPlanCapture(SqlConnection observer, bool databaseSco
     {
         await using var command = observer.CreateCommand();
         command.CommandTimeout = 0;
-        command.CommandText = $"""
-            SELECT CONVERT(bigint,s.dropped_event_count), CONVERT(bigint,s.dropped_buffer_count), t.target_data
-            FROM sys.{Dmv}s AS s JOIN sys.{Dmv}_targets AS t ON s.address=t.event_session_address
-            WHERE s.name=@name AND t.target_name=N'ring_buffer';
-            """;
+        command.CommandText = ActualPlanSql.Read(databaseScoped);
         command.Parameters.Add("@name", SqlDbType.NVarChar, 128).Value = name;
         // XmlReader's underlying TextReader reads do not take a token. Bound those reads with a SQL attention.
         using var cancel = token.Register(() =>

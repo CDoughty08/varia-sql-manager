@@ -3,6 +3,36 @@ namespace Varia.Backend.Plans;
 /// <summary>Collector DDL has only fixed scope/event keywords. Identifiers are quoted by SQL Server; all values are parameters.</summary>
 internal static class ActualPlanSql
 {
+    internal const string PlanEvent = "query_post_execution_plan_profile";
+    internal const string BatchEvent = "sql_batch_starting";
+    public static string Permissions(bool databaseScoped)
+    {
+        var permissionScope = databaseScoped ? "DB_NAME(), 'DATABASE'" : "NULL, NULL";
+        var eventScope = databaseScoped ? "DATABASE " : "";
+        string Permission(string permission) => $"HAS_PERMS_BY_NAME({permissionScope}, '{permission}')";
+        var administer = Permission($"ALTER ANY {eventScope}EVENT SESSION");
+        var create = Permission($"CREATE ANY {eventScope}EVENT SESSION");
+        var enable = Permission($"ALTER ANY {eventScope}EVENT SESSION ENABLE");
+        var drop = Permission($"DROP ANY {eventScope}EVENT SESSION");
+        // A granular DENY overrides the parent grant. Use the parent only on engines without granular permissions.
+        var manage = $"(({create}=1 AND {enable}=1 AND {drop}=1) OR ({drop} IS NULL AND {administer}=1))";
+        var performance = Permission("VIEW SERVER PERFORMANCE STATE");
+        var inspect = databaseScoped ? $"{Permission("VIEW DATABASE STATE")}=1"
+            : $"({performance}=1 OR ({performance} IS NULL AND {Permission("VIEW SERVER STATE")}=1))";
+        return $"SELECT CASE WHEN {manage} AND {inspect} THEN 1 ELSE 0 END;";
+    }
+
+    /// <summary>The session's ring buffer and drop counts, by @name.</summary>
+    public static string Read(bool databaseScoped)
+    {
+        var dmv = databaseScoped ? "dm_xe_database_session" : "dm_xe_session";
+        return $"""
+            SELECT CONVERT(bigint,s.dropped_event_count), CONVERT(bigint,s.dropped_buffer_count), t.target_data
+            FROM sys.{dmv}s AS s JOIN sys.{dmv}_targets AS t ON s.address=t.event_session_address
+            WHERE s.name=@name AND t.target_name=N'ring_buffer';
+            """;
+    }
+
     internal const int RecoveryLimit = 16;
     internal static string Create(bool databaseScoped, bool duration) => $$"""
         DECLARE @predicate nvarchar(3000) = N'[sqlserver].[session_id]=(' + CONVERT(nvarchar(11),@spid)

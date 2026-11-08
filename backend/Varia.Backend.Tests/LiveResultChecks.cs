@@ -547,8 +547,9 @@ internal static class LiveResultChecks
             && growth < 64L * 1024 * 1024 && ms < 15_000, "a 100,000,000-character value named like FOR XML output is kept to its cap and read past (" + Measured(growth, ms) + ")");
     }
 
-    /// <summary>Small xml cells reuse the column plan's sink and feed: a fresh pair per cell cost about 16 KB more than reading
-    /// each value whole with GetSqlXml. Read here through ColumnPlan alone, on one thread, so only the cells' own cost counts.</summary>
+    /// <summary>Small xml cells reuse the column plan's sink, feed, XmlWriter and NameTable (XmlCellWriter): fresh ones per cell
+    /// cost about 28 KB, more than reading each value whole with GetSqlXml. Read here through ColumnPlan alone, on one thread, so
+    /// only the cells' own cost counts.</summary>
     private static async Task XmlCellCost(Action<bool, string> check, ConnectOptions options)
     {
         const int cells = 20_000;
@@ -576,8 +577,9 @@ internal static class LiveResultChecks
         var perCell = (GC.GetAllocatedBytesForCurrentThread() - before) / Math.Max(read, 1);
         Console.WriteLine("xml cells (reported only): " + (read / watch.Elapsed.TotalSeconds).ToString("N0", CultureInfo.InvariantCulture) + " cells/s, "
             + perCell.ToString("N0", CultureInfo.InvariantCulture) + " bytes allocated per cell.");
-        // About 28 KB now (XmlReader's and XmlWriter's own buffers), 33 KB through GetSqlXml, 45 KB with a fresh sink per cell.
-        check(read == cells && truncated == 0 && !warned && perCell < 36 * 1024, "a small xml cell allocates under 36 KB (" + perCell + " bytes)");
+        // About 10 KB now (each cell's own XmlReader and its 8 KB character buffer), 28 KB with a fresh writer, reader buffers and
+        // NameTable per cell, 33 KB through GetSqlXml.
+        check(read == cells && truncated == 0 && !warned && perCell < 14 * 1024, "a small xml cell allocates under 14 KB (" + perCell + " bytes)");
     }
 
     /// <summary>xml read through GetXmlReader, as when SequentialXml.Open finds no stream of the column's own (forced here

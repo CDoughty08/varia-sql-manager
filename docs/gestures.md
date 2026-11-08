@@ -20,7 +20,7 @@ Chromium, or a library and cannot be remapped. "Choices" are the modifiers the S
 
 | Gesture | Id | What it does | Kind | Windows | Linux | macOS | Choices or lock | Keyboard |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Add to Selection (also Table Designer) | `grid.addToSelection` | Adds a block of cells, rows or columns to the selection instead of replacing it. | Modifier | Ctrl+Click a cell or header | Ctrl+Click a cell or header | ⌘ Click a cell or header | Choose: Ctrl / ⌘, Alt / ⌥ | — |
+| Add to Selection (also Table Designer) | `grid.addToSelection` | Adds a block of cells, rows or columns to the selection instead of replacing it. | Modifier | Ctrl+Click a cell or header | Ctrl+Click a cell or header | ⌘ Click a cell or header | Choose: Ctrl / ⌘, Alt / ⌥, Off | — |
 | Extend Selection (also Table Designer) | `grid.extendSelection` | Extends the selection from the active cell to the pressed one. | Fixed | Shift+Click a cell or header | Shift+Click a cell or header | ⇧ Click a cell or header | Locked: Shift extends a selection everywhere, as in SSMS and the operating system. | — |
 | Context Menu Click (also Table Designer) | `grid.secondaryClick` | Control+click is a right-click on macOS: it opens the context menu and keeps a selected block. | Fixed | — | — | ⌃ Click a cell or header | Locked: macOS treats Control+click as a right-click. | — |
 | Fit Column | `grid.fitColumn` | Fits a column to its widest loaded value. | Fixed | Double-click a column border | Double-click a column border | Double-click a column border | Locked: Double-clicking a column border fits it, as in SSMS. | — |
@@ -29,22 +29,22 @@ Chromium, or a library and cannot be remapped. "Choices" are the modifiers the S
 
 | Gesture | Id | What it does | Kind | Windows | Linux | macOS | Choices or lock | Keyboard |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Peek on Hover | `explorer.peekHover` | Peeks a table, view, procedure or function while the pointer rests on its row. | Modifier | Ctrl+Hover an object | Ctrl+Hover an object | ⌘ Hover an object | Choose: Ctrl / ⌘, Shift / ⇧ | Peek (`explorer.peek`) |
+| Peek on Hover | `explorer.peekHover` | Peeks a table, view, procedure or function while the pointer rests on its row. | Modifier | Ctrl+Hover an object | Ctrl+Hover an object | ⌘ Hover an object | Choose: Ctrl / ⌘, Shift / ⇧, Off | Peek (`explorer.peek`) |
 | Insert Name | `explorer.dragName` | Dropping an object in a query inserts its quoted name. | Fixed | Drag an object | Drag an object | Drag an object | Locked: Dragging is the only way to drop text; Copy Name does the same from the keyboard. | Copy Name (`explorer.copyName`) |
 
 ### Panels and Editor Tabs
 
 | Gesture | Id | What it does | Kind | Windows | Linux | macOS | Choices or lock | Keyboard |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Float While Dragging | `dock.floatWhileDragging` | Holding the modifier while dragging a tab floats it instead of docking it on a guide. | Modifier | Ctrl+Drag a tab | Ctrl+Drag a tab | ⌃ Drag a tab | Choose: Ctrl / ⌃, Alt / ⌥ | Float (`pane.float`), Float Editor (`editor.float`) |
+| Float While Dragging | `dock.floatWhileDragging` | Holding the modifier while dragging a tab floats it instead of docking it on a guide. | Modifier | Ctrl+Drag a tab | Ctrl+Drag a tab | ⌃ Drag a tab | Choose: Ctrl / ⌃, Alt / ⌥, Off | Float (`pane.float`), Float Editor (`editor.float`) |
 | Drag Floating Panel | `dock.dragFloatingTitleBar` | Shift-dragging a floating panel's title bar hands the drag to Dockview instead of Varia's docking guides. | Fixed | Shift+Drag a floating title bar | Shift+Drag a floating title bar | ⇧ Drag a floating title bar | Locked: Dockview's own gesture. | — |
-| Toggle Docking | `dock.toggleFloat` | Floats a docked panel, or docks a floating one. | Command | Ctrl+Double-click a panel tab | Ctrl+Double-click a panel tab | ⌃ Double-click a panel tab | Choose: Ctrl / ⌃, Alt / ⌥, Shift / ⇧ | Float (`pane.float`), Dock (`pane.dock`) |
+| Toggle Docking | `dock.toggleFloat` | Floats a docked panel, or docks a floating one. | Command | Ctrl+Double-click a panel tab | Ctrl+Double-click a panel tab | ⌘ Double-click a panel tab | Choose: Ctrl / ⌘, Alt / ⌥, Shift / ⇧, None | Float (`pane.float`), Dock (`pane.dock`) |
 
 ### Popout Windows
 
 | Gesture | Id | What it does | Kind | Windows | Linux | macOS | Choices or lock | Keyboard |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Move Back into Main Window | `popout.returnToMain` | Docks a popout window's panel back into the main window. | Command | Ctrl+Double-click a popout tab | Ctrl+Double-click a popout tab | ⌃ Double-click a popout tab | Choose: Ctrl / ⌃, Alt / ⌥, Shift / ⇧ | Move Back into Main Window (`pane.moveToMainWindow`) |
+| Move Back into Main Window | `popout.returnToMain` | Docks a popout window's panel back into the main window. | Command | Ctrl+Double-click a popout tab | Ctrl+Double-click a popout tab | ⌘ Double-click a popout tab | Choose: Ctrl / ⌘, Alt / ⌥, Shift / ⇧, None | Move Back into Main Window (`pane.moveToMainWindow`) |
 
 ### Document Tabs
 

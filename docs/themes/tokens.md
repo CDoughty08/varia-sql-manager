@@ -79,7 +79,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `shadow` | Shadows. | `#00000085` | `#10182824` |
 | `backdrop` | Modal scrim. | `#0a0c10b3` | `#1c1f2652` |
 
-## Color keys (259)
+## Color keys (269)
 
 ### Base
 
@@ -182,6 +182,16 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `objectExplorer.connectedIndicator` | Varia | `$success` | `#74d19c` | `#146f3b` | Dot at the end of a connected server's row. |
 | `objectExplorer.connectionErrorIndicator` | Varia | `@errorForeground` | `#f39a9a` | `#b42229` | Ring at the end of a server's row while its connection fails to load. |
 | `objectExplorer.disconnectedIndicator` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Ring at the end of a server's row once its connection was lost with the SQL backend. |
+| `searchKind.foreground` | Varia | `$canvas` | `#16181d` | `#ffffff` | Letters on the kind badges of Search Objects results (T, V, P, F). |
+| `searchKind.tableBackground` | Varia | `$blue` | `#6ea4ea` | `#2563a8` | Kind badge of tables in Search Objects results. |
+| `searchKind.viewBackground` | Varia | `$green` | `#6fbf8a` | `#2e7d4f` | Kind badge of views in Search Objects results. |
+| `searchKind.procedureBackground` | Varia | `$purple` | `#ab95ea` | `#7a4bbf` | Kind badge of procedures and triggers in Search Objects results. |
+| `searchKind.functionBackground` | Varia | `$orange` | `#e09358` | `#b45309` | Kind badge of functions in Search Objects results. |
+| `searchKind.columnBackground` | Varia | `$iconMuted` | `#7f8694` | `#6b7280` | Kind badge of columns and parameters in Search Objects results. |
+| `searchKind.keyBackground` | Varia | `$neutral` | `#8d939f` | `#6b7280` | Kind badge of keys, constraints, indexes and statistics in Search Objects results. |
+| `searchKind.securityBackground` | Varia | `$yellow` | `#d8bf5e` | `#8f6b00` | Kind badge of logins, users, roles and other security objects in Search Objects results. |
+| `searchKind.databaseBackground` | Varia | `$iconFolder` | `#bfa878` | `#7d6532` | Kind badge of databases and schemas in Search Objects results. |
+| `searchKind.otherBackground` | Varia | `$neutral` | `#8d939f` | `#6b7280` | Kind badge of every other kind in Search Objects results. |
 
 ### Dock and docking compass
 

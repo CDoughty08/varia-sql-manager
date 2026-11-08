@@ -10,6 +10,8 @@ internal static class ActualPlanRecoveryChecks
 {
     public static void Run(Action<bool, string> check)
     {
+        // Replaces the older interpolated-DDL lint: the builders take only scope/version booleans, all values
+        // are bound as typed parameters, and the live lane also round-trips a hostile identifier through QUOTENAME.
         var client = Guid.Parse("29a1b709-41ab-4c1e-bc93-acd76bd66e96");
         var target = Guid.Parse("49a1b709-41ab-4c1e-bc93-acd76bd66e96");
         var owner = Guid.Parse("39a1b709-41ab-4c1e-bc93-acd76bd66e96");
@@ -44,6 +46,10 @@ internal static class ActualPlanRecoveryChecks
                 && sql.Contains("MAX_DURATION") == duration && sql.Contains(database ? "ON DATABASE" : "ON SERVER")
                 && !sql.Contains("STATISTICS XML") && !sql.Contains("SHOWPLAN"), "collector SQL uses parameter-only values, bounded targets and fixed scope/version variants");
             check(ActualPlanSql.Drop(database).Contains("QUOTENAME(@name)"), "collector cleanup quotes its identifier on the server");
+            check(ActualPlanSql.Read(database).Contains(database ? "sys.dm_xe_database_sessions" : "sys.dm_xe_sessions")
+                && ActualPlanSql.Read(database).Contains("s.name=@name"), "collector reads preserve scope and parameterized ownership");
+            check(ActualPlanSql.Permissions(database).Contains(database ? "DROP ANY DATABASE EVENT SESSION" : "DROP ANY EVENT SESSION")
+                && ActualPlanSql.Permissions(database).Contains("IS NULL"), "collector permission preflight preserves granular DENY and legacy permission fallback");
         }
         check(ActualPlanSql.Candidates.Contains("TOP (17)") && ActualPlanSql.Candidates.Contains("ORDER BY s.event_session_id")
             && ActualPlanSql.DropAbandoned.Contains("s.event_session_id=@id") && ActualPlanSql.DropAbandoned.Contains("b.predicate=@batch AND p.predicate=@plan")
@@ -177,6 +183,20 @@ internal static class ActualPlanRecoveryChecks
         }
         try
         {
+            var hostile = "VariaQuote_" + Guid.NewGuid().ToString("N") + "]'; SELECT 1;--";
+            created.Add(hostile);
+            await using (var quoted = control.CreateCommand())
+            {
+                quoted.CommandTimeout = 5;
+                quoted.CommandText = ActualPlanSql.Create(false, false);
+                quoted.Parameters.Add("@name", SqlDbType.NVarChar, 128).Value = hostile;
+                quoted.Parameters.Add("@spid", SqlDbType.Int).Value = 32767;
+                quoted.Parameters.Add("@client", SqlDbType.UniqueIdentifier).Value = Guid.NewGuid();
+                await quoted.ExecuteNonQueryAsync(token);
+            }
+            check(await Exists(hostile), "parameterized collector creation quotes bracket, literal and comment characters as one identifier");
+            await Scalar(ActualPlanSql.Drop(false), hostile);
+            check(!await Exists(hostile), "parameterized collector cleanup drops precisely the quoted hostile identifier");
             // Render the pre-2025 path on the real server: no MAX_DURATION can conceal a missing recovery implementation.
             foreach (var mars in new[] { false, true })
             {

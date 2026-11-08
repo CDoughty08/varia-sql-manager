@@ -1,5 +1,5 @@
 import { commandDescriptor } from './catalog'
-import { gestureDescriptor, gestureIds, gestureLabel, gestureScopes, modifiersLabel, type GestureKind } from './gestures'
+import { gestureDefault, gestureDescriptor, gestureIds, gestureLabel, gestureOptions, gestureScopes, modifiersLabel, type GestureKind } from './gestures'
 import { platforms, type Platform } from './keybindings'
 
 const platformNames: Readonly<Record<Platform, string>> = { win32: 'Windows', linux: 'Linux', darwin: 'macOS' }
@@ -29,8 +29,12 @@ export function renderGestureDocs(): string {
       row(['---', '---', '---', '---', ...platforms.map(() => '---'), '---', '---']))
     for (const id of ids) {
       const gesture = gestureDescriptor(id)
-      const on = (platform: Platform) => gesture.platforms && !gesture.platforms.includes(platform) ? '—' : `${gestureLabel(gesture.action, gesture.modifiers, platform)} ${gesture.target}`
-      const choices = gesture.choices ? 'Choose: ' + gesture.choices.map(choice => platforms.map(platform => modifiersLabel(choice, platform)).filter((label, index, all) => all.indexOf(label) === index).join(' / ')).join(', ') : `Locked: ${gesture.locked}`
+      const on = (platform: Platform) => gesture.platforms && !gesture.platforms.includes(platform) ? '—' : `${gestureLabel(gesture.action, gestureDefault(id, platform), platform)} ${gesture.target}`
+      // The nth choice on each platform (macOS may offer its own, in the same order), then Off where allowed.
+      const choices = gesture.choices ? 'Choose: ' + gestureOptions(id, 'win32').map((_, index) => platforms.map(platform => {
+        const choice = gestureOptions(id, platform)[index]
+        return choice === null ? 'Off' : modifiersLabel(choice, platform)
+      }).filter((label, at, all) => all.indexOf(label) === at).join(' / ')).join(', ') : `Locked: ${gesture.locked}`
       const keyboard = gesture.keyboard?.map(command => commandDescriptor(command).title + ` (\`${command}\`)`).join(', ') ?? '—'
       const title = gesture.title + (gesture.alsoIn ? ` (also ${gesture.alsoIn.map(other => gestureScopes[other]).join(', ')})` : '')
       lines.push(row([title, `\`${id}\``, gesture.description, kindNames[gesture.kind], ...platforms.map(on), choices, keyboard]))

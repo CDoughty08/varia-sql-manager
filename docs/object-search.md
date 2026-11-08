@@ -22,7 +22,7 @@ The same search runs in two places, with the same options and results:
   concise, with index counts, result limits and timing under Search and index details. Index progress, errors and
   incomplete indexes remain visible. Escape or a click outside dismisses a popover; Escape returns focus to its button.
 - **The Search Objects tab** (View › Search Objects…, a server or database node's menu, or the palette), with a server picker
-  when more than one server is connected. Its hits are one tab stop on the selected hit: a click selects a hit, ↑ ↓,
+  when more than one server is connected, which can also search *All servers* (see *All servers* below). Its hits are one tab stop on the selected hit: a click selects a hit, ↑ ↓,
   Page Up, Page Down (to the last hit in view first, then a page on), Home and End move the selection, and a double-click or Enter reveals the hit in Object Explorer, which
   shows without taking focus, so the keys go on walking the hits. ↑ on the first hit, and Escape, return to the box.
   Beside the hits, behind a sash, is the *details pane* (below them when the tab is narrower than 760 px): see
@@ -78,11 +78,12 @@ The same search runs in two places, with the same options and results:
   a text is charged when it first comes in and given back when the last database or system set holding it is dropped.
   So msdb's procedures and their definitions, master's `spt_` objects, schemas and common column names are held once
   however many servers are connected. Definitions stop being kept once less than 128 MiB is free, so names always have
-  room. A rebuild may reuse the memory of the build it replaces, so a database that fitted before still fits when the
+  room; past that point they are not even read from the server. A rebuild may reuse the memory of the build it replaces, so a database that fitted before still fits when the
   budget is full; the swap moves that share over rather than charging it twice.
 - **Large databases.** A database that does not fit in what is free with its children is read again without its columns,
   indexes, statistics and parameters. It still counts as indexed, and the status says children were left out
-  (`CHILDREN_LEFT_OUT`). A database that does not fit even without them is skipped as `TOO_LARGE`.
+  (`CHILDREN_LEFT_OUT`). A database that does not fit even without them is skipped as `TOO_LARGE`. A read that runs out of
+  room cancels its batch at once rather than reading the rest of it only to throw it away.
 - **The resource database's objects.** The `sys` and `INFORMATION_SCHEMA` views, procedures and functions that every database
   shows (with their columns and parameters) come from SQL Server's hidden resource database, so they are the same in every database. The index reads them once
   per build, not once per database, and a search shows each of them once, as master's (or as the database a search names).
@@ -158,7 +159,8 @@ The same search runs in two places, with the same options and results:
     index memory. A letter-set check skips most edit-distance work, and a sound key stops at its first differing code. On a
     million synthetic names a fuzzy search took 0.3 to 0.7 s where an exact one took about 0.1 s (Release build, one desktop
     core); the search's 5 s budget and Stop bound it as any search. Past the 20,000 candidates a search sorts, a better hit
-    takes the worst one's place, so approximate hits never push out exact ones.
+    takes the worst one's place, so approximate hits never push out exact ones; every other hit past them is only counted.
+    Labels are built only for the candidates kept, and hits (previews, match counts, dates) only for the ones answered.
 - **Scope.** Search names and definitions (All), names only, or definitions only.
 - **Object types.** Chips narrow a search to kinds of object: Tables, Views, Columns, Procedures, Functions, Parameters,
   Triggers, Keys and indexes, Schemas, Types, Security and Other. Several can be on at once, and All types turns them all off.
@@ -209,6 +211,25 @@ The same search runs in two places, with the same options and results:
   Script to New Query, Refresh (which never takes a kept script) and Hide are in its header; the Details pane button
   beside the result count hides and shows it in every tab. A hidden pane reads nothing; a new hit, a closed tab, a hidden
   pane or a lost server cancels the tab's reads. Object Explorer's own search has no details pane.
+
+### All servers
+
+- **Where.** The tab's server picker offers *All servers*; only the tab has it, as Object Explorer's box searches the
+  server of the tree's selection. Search Objects from the palette, View or the toolbar opens on All servers when more
+  than one server is connected; from a server's or database's menu it opens on that server. The tab then belongs to
+  no server, and Rebuild Search Index rebuilds every server's index.
+- **How.** The renderer sends one `explorer.search` per connected server at once, each on that server's own index, and
+  shows the answers together once every server has answered (`ObjectSearchService`, `searchAll`). Each server's limit is
+  its own, so a large server cannot crowd the others out. Every server gets an index if it has none; a server that
+  connects joins the search, and one that disconnects drops out, named in the summary. No backend method changes.
+- **Results.** Each server's hits are a list of their own, named "Results on *server*", below a header that collapses
+  it: the server's colour, name, environment tag (the red PROD tag for Production) and its results or why it has none
+  (indexing, an error, a problem with the query on that server), with "… *n* more" below a group the result cap
+  cut short. Every hit (on one server too) starts with its kind's badge, a letter on a tone (T tables, V views, P
+  procedures and triggers, F functions, C columns; `searchKind.*` theme keys), and ends with its path. The arrows, Page keys, Home and End walk every shown
+  hit across the groups, one tab stop for all of them. A hit's Reveal, menu, Copy and details pane act on its own
+  server. The summary gives the servers, the results in all, the slowest server's time, the servers still indexing, the
+  ones that could not be searched, and the ones that disconnected.
 
 ## Protocol
 

@@ -2,7 +2,7 @@
 // a filter's page in place of the manifest shows as a failure with its remedy, then a real manifest downloads with
 // progress in the status bar, verifies, and Restart to Update closes the app and "installs" (the test feed's install
 // writes update-applied.json instead of running the file).
-import { electron, expect } from './fixtures/smoke.mjs'
+import { electron, expect, within } from './fixtures/smoke.mjs'
 import { createHash, randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
@@ -96,7 +96,7 @@ try {
   const exited = new Promise(resolveExit => application.process().once('exit', resolveExit))
   await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
   await restart.click()
-  await Promise.race([exited, delay(30000).then(() => { throw new Error('Restart to Update did not close the app.') })])
+  await within(exited, 30000, () => { throw new Error('Restart to Update did not close the app.') })
   const applied = JSON.parse(await readFile(join(profile, 'update-applied.json'), 'utf8'))
   if (applied.kind !== 'nsis' || applied.version !== version || applied.file !== name) throw new Error(`Unexpected install: ${JSON.stringify(applied)}`)
   if ((await readdir(join(profile, 'updates'))).some(file => file.endsWith('.partial'))) throw new Error('A partial download was left behind.')

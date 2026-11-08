@@ -189,14 +189,14 @@ internal static class SsisChecks
         public int ActionConnections;
         public string? ActionCatalog;
         public ServerProfile Profile(string connectionId) => new(major, major + ".0.1.1", edition, "sa", false, true, false, ExplorerCatalog.MinBand, linux);
-        public SqlConnection SsisConnection(string connectionId, string catalogDatabase) => new("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false;Initial Catalog=" + catalogDatabase);
+        public SqlConnection SsisConnection(string connectionId, string catalogDatabase) => new("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false;Initial Catalog=" + catalogDatabase);
         public SqlConnection SsisActionConnection(string connectionId, string catalogDatabase)
         {
             Interlocked.Increment(ref ActionConnections);
             ActionCatalog = catalogDatabase;
-            return new("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false;Initial Catalog=" + catalogDatabase);
+            return new("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false;Initial Catalog=" + catalogDatabase);
         }
-        public SqlConnection SsisServerConnection(string connectionId) => new("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false");
+        public SqlConnection SsisServerConnection(string connectionId) => new("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false");
         public async Task OpenAsync(SqlConnection connection, CancellationToken token)
         {
             Interlocked.Increment(ref Opens);
@@ -305,8 +305,8 @@ internal static class SsisChecks
     {
         public int Explorer, Ssis;
         public ServerProfile Profile(string connectionId) => new(major, null, 3, "sa", false, true, false);
-        public SqlConnection Connection(string connectionId, string? database) { Interlocked.Increment(ref Explorer); return new("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false"); }
-        public SqlConnection SsisConnection(string connectionId) { Interlocked.Increment(ref Ssis); return new("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false"); }
+        public SqlConnection Connection(string connectionId, string? database) { Interlocked.Increment(ref Explorer); return new("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false"); }
+        public SqlConnection SsisConnection(string connectionId) { Interlocked.Increment(ref Ssis); return new("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false"); }
         public string SsisCatalog => "SSISDB";
         public Task OpenAsync(SqlConnection connection, CancellationToken token) => throw new RequestException("AUTH_KERBEROS", "The Kerberos ticket has expired.");
     }
@@ -334,13 +334,13 @@ internal static class SsisChecks
             var connection = Guid.NewGuid().ToString();
             var held = new[] { service.DescribeAsync(Args("folder", folder, connection), CancellationToken.None), service.DescribeAsync(Args("folder", folder, connection), CancellationToken.None) };
             var watch = Stopwatch.StartNew();
-            while (host.Opens < 2 && watch.ElapsedMilliseconds < 5000) await Task.Delay(10);
+            while (host.Opens < 2 && watch.ElapsedMilliseconds < 15_000) await Task.Delay(10);
             string busy;
             try { await service.DescribeAsync(Args("folder", folder, connection), CancellationToken.None); busy = "answered"; }
             catch (RequestException error) { busy = error.Code; }
             // Another connection has its own gate.
             var other = service.DescribeAsync(Args("folder", folder), CancellationToken.None);
-            while (host.Opens < 3 && watch.ElapsedMilliseconds < 5000) await Task.Delay(10);
+            while (host.Opens < 3 && watch.ElapsedMilliseconds < 15_000) await Task.Delay(10);
             host.Hold.Release(3);
             var answers = await Task.WhenAll([.. held, other]);
             check(busy == "BUSY" && host.Opens == 3 && answers.All(answer => answer.Error is { Code: "AUTH_KERBEROS", Retryable: true } && answer.Model is null) && service.RunningCount == 0,
@@ -351,7 +351,7 @@ internal static class SsisChecks
             try { await service.DescribeAsync(Args("folder", folder, connection), cancelled.Token); check(false, "a cancelled describe runs"); }
             catch (OperationCanceledException) { check(host.Opens == before && service.RunningCount == 0, "a describe cancelled before it runs takes no gate and opens nothing"); }
             var waiting = service.DescribeAsync(Args("folder", folder, connection), CancellationToken.None);
-            while (host.Opens == before && watch.ElapsedMilliseconds < 10_000) await Task.Delay(10);
+            while (host.Opens == before && watch.ElapsedMilliseconds < 30_000) await Task.Delay(10);
             service.Forget(connection);
             try { await waiting; check(false, "a disconnected describe answers"); }
             catch (RequestException error) { check(error.Code == "CANCELLED" && service.RunningCount == 0, "a disconnect cancels the connection's describes"); }

@@ -35,11 +35,28 @@ export interface SearchQueryState {
   /** The type filters chosen (searchTypes); none searches every kind. */
   readonly types: readonly SearchType[]
 }
+/** One server's part of an All servers search: its answer, or why it has none. */
+export interface ServerAnswer {
+  readonly connectionId: string
+  /** The server's name as it was searched, so a server that leaves can still be named. */
+  readonly label: string
+  readonly result?: ObjectSearchResult
+  readonly error?: string
+}
 export interface SearchDocumentState extends SearchQueryState {
   readonly id: string
+  /** The server searched; with `allServers`, the one the tab opened on (searches go to every connected server). */
   readonly connectionId: string
-  /** The search on its way. */
+  /** The search on its way (with `allServers`, the whole fan-out's). */
   readonly requestId?: string
+  /** All servers: the search runs on every connected server, each with its own index, and its hits are grouped by server. */
+  readonly allServers?: boolean
+  /** All servers: each server's answer, in Object Explorer's order; `result` merges them, so a hit's index runs across groups. */
+  readonly servers?: readonly ServerAnswer[]
+  /** All servers: the servers the last search had that have since disconnected, by name. */
+  readonly left?: readonly string[]
+  /** All servers: the groups collapsed in the list, by connection. */
+  readonly collapsed?: readonly string[]
   /** The answer to the last search, and what it asked. */
   readonly result?: ObjectSearchResult
   readonly asked?: SearchQueryState
@@ -126,15 +143,53 @@ export function revealPaths(hit: ObjectSearchHit, grouped = false): RevealPath[]
 }
 /** The hit's identity across answers: its object and the folder that lists it, as the list keys its rows. */
 export const hitKey = (hit: ObjectSearchHit): string => JSON.stringify([hit.object, hit.folder])
+/** A hit's identity across servers: the same object may be on several. */
+export const serverHitKey = (connectionId: string, hit: ObjectSearchHit): string => JSON.stringify([connectionId, hit.object, hit.folder])
+
+/** An All servers search's groups: each server's answer with where its hits start in the merged result. */
+export interface ServerGroup extends ServerAnswer { readonly start: number; readonly hits: readonly ObjectSearchHit[] }
+export function serverGroups(document: SearchDocumentState): readonly ServerGroup[] {
+  let start = 0
+  return (document.servers ?? []).map(answer => {
+    const hits = answer.result?.hits ?? [], group = { ...answer, start, hits }
+    start += hits.length
+    return group
+  })
+}
+/** The server of the hit at `index` in the search's result: the search's own server, or with All servers its group's. */
+export function hitServer(document: SearchDocumentState, index: number): string | undefined {
+  if (!document.allServers) return document.connectionId
+  return serverGroups(document).find(group => index >= group.start && index < group.start + group.hits.length)?.connectionId
+}
+/**
+ * One result from each server's answer, in their order: their hits one group after another, totals added up, partial when
+ * any stopped early, as slow as the slowest, and a problem only when every server that answered had one (the query itself,
+ * such as an invalid regular expression); a server's own problem shows with its group.
+ */
+export function mergeAnswers(answers: readonly ServerAnswer[]): ObjectSearchResult | undefined {
+  const results = answers.flatMap(answer => answer.result ? [answer.result] : [])
+  if (!results.length) return undefined
+  const problems = results.flatMap(result => result.problem ? [result.problem] : [])
+  return {
+    hits: results.flatMap(result => result.hits), total: results.reduce((sum, result) => sum + result.total, 0), partial: results.some(result => result.partial),
+    elapsedMs: Math.max(...results.map(result => result.elapsedMs)), index: results[0]!.index, ...problems.length === results.length ? { problem: problems[0]! } : {}
+  }
+}
+
+/** The selected hit's identity, with its server when the search spans several. */
+function selectedKey(document: SearchDocumentState): string | undefined {
+  const index = document.current, hit = index === undefined ? undefined : document.result?.hits[index]
+  return hit && index !== undefined ? serverHitKey(hitServer(document, index) ?? '', hit) : undefined
+}
 /**
  * Where the selected hit is in a new answer to the same query (a build's end runs it again, as may the user: Enter, or text
- * typed and taken back), so the selection, and the focus on it, survive while the user walks the hits; undefined after any
- * other query, or when the hit is gone.
+ * typed and taken back, or a server joining an All servers search), so the selection, and the focus on it, survive while the
+ * user walks the hits; undefined after any other query, or when the hit is gone.
  */
-function keptHit(document: SearchDocumentState, asked: SearchQueryState, hits: readonly ObjectSearchHit[]): number | undefined {
-  const selected = document.current === undefined ? undefined : document.result?.hits[document.current]
-  if (!selected || JSON.stringify(document.asked) !== JSON.stringify(asked)) return undefined
-  const key = hitKey(selected), at = hits.findIndex(hit => hitKey(hit) === key)
+function keptHit(document: SearchDocumentState, asked: SearchQueryState, next: SearchDocumentState): number | undefined {
+  const key = selectedKey(document), hits = next.result?.hits ?? []
+  if (key === undefined || JSON.stringify(document.asked) !== JSON.stringify(asked)) return undefined
+  const at = hits.findIndex((hit, index) => serverHitKey(hitServer(next, index) ?? '', hit) === key)
   return at < 0 ? undefined : at
 }
 const emptyQuery: SearchQueryState = { text: '', caseSensitive: false, wholeWord: false, regex: false, fuzzy: false, scope: 'all', types: [] }
@@ -154,6 +209,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   private readonly timers: Timers
   private readonly newId: () => string
   private readonly typing = new Map<string, unknown>()
+  /** An All servers search's requests on their way, one per server, by search. */
+  private readonly fanouts = new Map<string, readonly string[]>()
   private focusedList: string | undefined
   private readonly registrations: Disposable[] = []
   private known = new Set<string>()
@@ -199,13 +256,16 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     if (ids.length) void this.o.api.explorerCancel(ids).catch(onUnexpectedError)
   }
 
-  /** Opens a Search Objects tab on the server (the first connected one when none is named), with `text` if given. */
-  open(connectionId?: string, text?: string): string | undefined {
+  /**
+   * Opens a Search Objects tab on the server (the first connected one when none is named), with `text` if given; `allServers`
+   * searches every connected server instead, and the tab belongs to none of them.
+   */
+  open(connectionId?: string, text?: string, allServers = false): string | undefined {
     const connection = connectionId ? this.o.connections.get(connectionId) : this.o.connections.getSnapshot().find(live)
     if (!live(connection)) throw new Error('Connect to a server to search its objects.')
-    const document = this.o.documents.openCustom('objectSearch', searchTitle, connection.id, 'master')
-    this.putDocument({ id: document.id, connectionId: connection.id, ...emptyQuery, ...text ? { text } : {} })
-    if (!this.getSnapshot().indexes[connection.id]?.status && !this.getSnapshot().indexes[connection.id]?.requestId) this.build(connection.id)
+    const document = this.o.documents.openCustom('objectSearch', searchTitle, allServers ? undefined : connection.id, 'master')
+    this.putDocument({ id: document.id, connectionId: connection.id, ...emptyQuery, ...text ? { text } : {}, ...allServers ? { allServers: true } : {} })
+    for (const id of allServers ? this.liveIds() : [connection.id]) this.ensureIndex(id)
     if (text) void this.search(document.id)
     this.o.focus?.(document.id)
     return document.id
@@ -262,12 +322,29 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   /** Points a tab at another connected server. */
   setConnection(id: string, connectionId: string): void {
     const document = this.getSnapshot().documents[id]
-    if (!document || document.connectionId === connectionId || !live(this.o.connections.get(connectionId))) return
+    if (!document || (document.connectionId === connectionId && !document.allServers) || !live(this.o.connections.get(connectionId))) return
     this.cancelSearch(document)
     this.putDocument({ id, connectionId, ...this.query(document) })
-    const entry = this.getSnapshot().indexes[connectionId]
-    if (!entry?.status && !entry?.requestId) this.build(connectionId)
+    this.ensureIndex(connectionId)
     void this.search(id)
+  }
+
+  /** Points a tab at every connected server: each gets an index if it has none, and servers that connect later join in. */
+  setAllServers(id: string): void {
+    const document = this.getSnapshot().documents[id]
+    if (!document || document.allServers || id === explorerSearchId) return
+    this.cancelSearch(document)
+    this.putDocument({ id, connectionId: document.connectionId, ...this.query(document), allServers: true })
+    for (const connectionId of this.liveIds()) this.ensureIndex(connectionId)
+    void this.search(id)
+  }
+
+  /** Collapses or expands an All servers search's group. */
+  toggleGroup(id: string, connectionId: string): void {
+    const document = this.getSnapshot().documents[id]
+    if (!document?.allServers) return
+    const collapsed = document.collapsed ?? []
+    this.putDocument({ ...document, collapsed: collapsed.includes(connectionId) ? collapsed.filter(other => other !== connectionId) : [...collapsed, connectionId] })
   }
 
   /** Runs a tab's search now; a search still on its way is cancelled. Settles once it has answered. */
@@ -276,19 +353,17 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     if (!document || this.disposed) return Promise.resolve()
     this.cancelSearch(document)
     const asked = this.query(document)
-    if (!asked.text.trim()) { this.putDocument({ ...this.query(document), id, connectionId: document.connectionId }); return Promise.resolve() }
+    const kept = { id, connectionId: document.connectionId, ...document.allServers ? { allServers: true as const, ...document.collapsed ? { collapsed: document.collapsed } : {} } : {} }
+    if (!asked.text.trim()) { this.putDocument({ ...this.query(document), ...kept }); return Promise.resolve() }
+    if (document.allServers) return this.searchAll(document, asked)
     if (!live(this.o.connections.get(document.connectionId))) { this.putDocument({ ...document, requestId: undefined, error: 'The server is not connected.' }); return Promise.resolve() }
     const requestId = this.newId()
     this.putDocument({ ...document, requestId, error: undefined })
-    const kinds = searchTypeKinds(asked.types)
-    return this.o.api.explorerSearch({
-      connectionId: document.connectionId, requestId, text: asked.text, caseSensitive: asked.caseSensitive, wholeWord: asked.wholeWord, regex: asked.regex, in: asked.scope, ...kinds ? { kinds } : {},
-      ...asked.fuzzy && !asked.regex ? { match: 'fuzzy' as const } : {}
-    }).then(result => {
+    return this.ask(document.connectionId, requestId, asked).then(result => {
       const current = this.getSnapshot().documents[id]
       if (this.disposed || current?.requestId !== requestId) return
       const { requestId: _done, ...rest } = current
-      if (result.ok) this.putDocument({ ...rest, result: result.value, asked, error: undefined, current: keptHit(current, asked, result.value.hits) })
+      if (result.ok) { const next = { ...rest, result: result.value, asked, error: undefined }; this.putDocument({ ...next, current: keptHit(current, asked, next) }) }
       else if (result.code !== 'CANCELLED') this.putDocument({ ...rest, error: result.error })
       else this.putDocument(rest)
     }, onUnexpectedError)
@@ -322,9 +397,15 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const document = this.getSnapshot().documents[id]
     if (document?.result && current >= 0 && current < document.result.hits.length) this.putDocument({ ...document, current })
   }
-  /** Selects `hit` wherever the search's current result has it: a menu's hit may have moved, or gone, since the menu opened. */
-  pickHit(id: string, hit: ObjectSearchHit): void {
-    const key = hitKey(hit), at = this.getSnapshot().documents[id]?.result?.hits.findIndex(other => hitKey(other) === key) ?? -1
+  /**
+   * Selects `hit` (on `connectionId`, which an All servers search needs, as the same object may be on several servers) wherever
+   * the search's current result has it: a menu's hit may have moved, or gone, since the menu opened.
+   */
+  pickHit(id: string, hit: ObjectSearchHit, connectionId?: string): void {
+    const document = this.getSnapshot().documents[id]
+    if (!document) return
+    const key = hitKey(hit), spanning = document.allServers && connectionId !== undefined
+    const at = document.result?.hits.findIndex((other, index) => hitKey(other) === key && (!spanning || hitServer(document, index) === connectionId)) ?? -1
     this.pick(id, at)
   }
 
@@ -337,7 +418,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   focusedHit(): FocusedHit | undefined {
     const id = this.focusedList, document = id === undefined ? undefined : this.getSnapshot().documents[id]
     const index = document?.current ?? 0, hit = document?.result?.hits[index]
-    return id !== undefined && document && hit ? { searchId: id, connectionId: document.connectionId, index, hit } : undefined
+    const connectionId = document && hitServer(document, index)
+    return id !== undefined && document && hit && connectionId ? { searchId: id, connectionId, index, hit } : undefined
   }
 
   /** Reveal in Object Explorer: walks the hit's path from the server down, loading what it needs, and selects its node. */
@@ -375,13 +457,63 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     return { text: document.text, caseSensitive: document.caseSensitive, wholeWord: document.wholeWord, regex: document.regex, fuzzy: document.fuzzy, scope: document.scope, types: document.types }
   }
 
-  private cancelSearch(document: SearchDocumentState): void {
-    if (document.requestId) void this.o.api.explorerCancel([document.requestId]).catch(onUnexpectedError)
+  private ask(connectionId: string, requestId: string, asked: SearchQueryState) {
+    const kinds = searchTypeKinds(asked.types)
+    return this.o.api.explorerSearch({
+      connectionId, requestId, text: asked.text, caseSensitive: asked.caseSensitive, wholeWord: asked.wholeWord, regex: asked.regex, in: asked.scope, ...kinds ? { kinds } : {},
+      ...asked.fuzzy && !asked.regex ? { match: 'fuzzy' as const } : {}
+    })
   }
 
-  /** Re-runs the searches of a connection's tabs once its build ends, so they see the whole index. */
+  /**
+   * An All servers search: one explorer.search per connected server, at once, each on its own index (so each server's limit is
+   * its own, and one large server cannot crowd the others out). The answers are shown together once all are in; a server
+   * that fails shows its error in its group, and the servers the last search had that are gone are named.
+   */
+  private searchAll(document: SearchDocumentState, asked: SearchQueryState): Promise<void> {
+    const id = document.id, servers = this.o.connections.getSnapshot().filter(live)
+    if (!servers.length) { this.putDocument({ ...document, requestId: undefined, error: 'No server is connected.' }); return Promise.resolve() }
+    const requestId = this.newId(), requests = servers.map(() => this.newId())
+    this.fanouts.set(id, requests)
+    this.putDocument({ ...document, requestId, error: undefined })
+    const label = (connection: LiveConnection) => connection.displayName || connection.server
+    return Promise.all(servers.map((connection, index) => this.ask(connection.id, requests[index]!, asked).then(result => ({ connection, result }))))
+      .then(answers => {
+        const current = this.getSnapshot().documents[id]
+        if (this.disposed || current?.requestId !== requestId) return
+        this.fanouts.delete(id)
+        const { requestId: _done, ...rest } = current
+        // A search cancelled on one server (it disconnected as it ran) answers nothing there; the rest still stand.
+        const kept = answers.filter(({ result }) => result.ok || result.code !== 'CANCELLED')
+        if (!kept.length) { this.putDocument(rest); return }
+        const results: ServerAnswer[] = kept.map(({ connection, result }) => ({ connectionId: connection.id, label: label(connection), ...result.ok ? { result: result.value } : { error: result.error } }))
+        const searched = new Set(results.map(answer => answer.connectionId))
+        const left = (current.servers ?? []).filter(answer => !searched.has(answer.connectionId) && !live(this.o.connections.get(answer.connectionId))).map(answer => answer.label)
+        const { left: _left, ...base } = rest
+        const next: SearchDocumentState = { ...base, servers: results, asked, error: undefined, ...left.length ? { left } : {} }
+        const merged = mergeAnswers(results)
+        const answered = merged ? { ...next, result: merged } : (({ result: _result, ...without }) => without)(next)
+        this.putDocument({ ...answered, current: keptHit(current, asked, answered) })
+      }, onUnexpectedError)
+  }
+
+  private cancelSearch(document: SearchDocumentState): void {
+    const ids = this.fanouts.get(document.id) ?? (document.requestId ? [document.requestId] : [])
+    this.fanouts.delete(document.id)
+    if (ids.length) void this.o.api.explorerCancel(ids).catch(onUnexpectedError)
+  }
+
+  private liveIds(): string[] { return this.o.connections.getSnapshot().filter(live).map(connection => connection.id) }
+
+  /** Builds a server's index when it has none and none is building. */
+  private ensureIndex(connectionId: string): void {
+    const entry = this.getSnapshot().indexes[connectionId]
+    if (!entry?.status && !entry?.requestId) this.build(connectionId)
+  }
+
+  /** Re-runs the searches of a connection's tabs (and every All servers tab) once its build ends, so they see the whole index. */
   private refresh(connectionId: string): void {
-    for (const document of Object.values(this.getSnapshot().documents)) if (document.connectionId === connectionId && document.text.trim()) void this.search(document.id)
+    for (const document of Object.values(this.getSnapshot().documents)) if ((document.allServers || document.connectionId === connectionId) && document.text.trim()) void this.search(document.id)
   }
 
   /** A new connection gets a build (when Options says so); a disconnected or lost one's entry goes, as its index went. */
@@ -397,7 +529,13 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
       this.publish({ ...this.getSnapshot(), indexes: kept })
     }
     for (const id of ids) if (!this.known.has(id) && this.o.settings.get('objectExplorer.search.indexOnConnect')) this.build(id)
+    const changed = ids.size !== this.known.size || [...ids].some(id => !this.known.has(id))
     this.known = ids
+    if (!changed) return
+    // A server that connects joins every All servers search (with an index if it has none); one that leaves drops out of it.
+    const spanning = Object.values(this.getSnapshot().documents).filter(document => document.allServers)
+    if (spanning.length) for (const id of ids) this.ensureIndex(id)
+    for (const document of spanning) if (document.text.trim()) void this.search(document.id)
   }
 
   private progress(progress: ObjectIndexProgress): void {

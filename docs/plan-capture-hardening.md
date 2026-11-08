@@ -14,7 +14,7 @@ Recovery inspection, permission or DROP failure produces a bounded notice and is
 
 ## Deliberate limitations
 
-- Legacy random-GUID collector names do not identify their observer. Recovery leaves them for an administrator to inspect and remove; it cannot safely distinguish them from an active legacy collector finishing collection after its query connection closed.
+- Legacy single-GUID collector names (random GUIDs or the query connection's GUID) do not identify their observer. Recovery leaves them for an administrator to inspect and remove; it cannot safely distinguish them from an active legacy collector finishing collection after its query connection closed.
 - Azure SQL database-scoped connection DMVs cannot prove global absence after `USE` moves a query to another database. Database-scoped collectors keep normal cleanup and `MAX_DURATION`, but do not use the server sweep. No Azure tenant was available for live validation.
 - Unknown or modified ownership/predicate shapes are left alone. A permission failure or delayed server observation of a disconnected connection defers recovery. Large backlogs require subsequent capture attempts. An application that never starts another capture cannot run client recovery.
 - SQL Server 2016 remains unsupported for lightweight Actual/Live capture. Execution remains available.
