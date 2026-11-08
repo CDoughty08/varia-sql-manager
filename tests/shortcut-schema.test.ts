@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { emptyShortcutFile, parseShortcutText, readShortcutFile, shortcutFileSchema, shortcutLimits, type ShortcutReadResult } from '../src/shared/commands/shortcut-schema'
+import { emptyShortcutFile, parseShortcutText, readShortcutFile, shortcutFileSchema, shortcutFileText, shortcutLimits, type ShortcutFile, type ShortcutReadResult } from '../src/shared/commands/shortcut-schema'
 
 const read = (raw: unknown, options?: Parameters<typeof readShortcutFile>[1]) => {
   const result = readShortcutFile(raw, options)
@@ -101,5 +101,43 @@ describe('shortcuts.json', () => {
     const wide = JSON.stringify(v1({ scheme: 'default', pad: 'é'.repeat(shortcutLimits.fileBytes / 2) }))
     expect(wide.length).toBeLessThan(shortcutLimits.fileBytes)
     expect(fails(parseShortcutText(wide))).toBe('size')
+  })
+  it("refuses gesture ids that are Object.prototype's names", () => {
+    const names = ['constructor', 'hasOwnProperty', 'toString', 'valueOf', 'isPrototypeOf', 'propertyIsEnumerable', 'toLocaleString']
+    for (const name of names) {
+      expect(shortcutFileSchema.safeParse(v1({ gestures: { [name]: 'alt' } })).success, name).toBe(false)
+      expect(read(v1({ gestures: { [name]: 'alt' } })).problems, name).toEqual(['Gesture 1 was dropped: it is not a gesture setting.'])
+    }
+    // Names that only contain one are still ids.
+    expect(shortcutFileSchema.safeParse(v1({ gestures: { 'grid.toString': 'alt', constructors: 'alt' } })).success).toBe(true)
+  })
+  it('measures the limit on the form main writes, indented when that fits and compact when only that does', () => {
+    // Records of many small values: indenting puts each value on its own line, about five times the compact size.
+    const fileWith = (count: number, values: number): ShortcutFile => ({ ...emptyShortcutFile, unknown: Array.from({ length: count }, () => Array.from({ length: values }, (_, index) => index % 10)) })
+    const small = fileWith(1, 10)
+    expect(shortcutFileText(small)).toBe(JSON.stringify(small, null, 2) + '\n')
+    // About 120 KB compact, well over the limit indented: written compact, and its compact text reads back cleanly.
+    const near = fileWith(shortcutLimits.unknown, 230)
+    const compact = JSON.stringify(near)
+    expect(Buffer.byteLength(compact)).toBeGreaterThan(shortcutLimits.fileBytes * 0.9)
+    expect(Buffer.byteLength(compact)).toBeLessThanOrEqual(shortcutLimits.fileBytes)
+    expect(Buffer.byteLength(JSON.stringify(near, null, 2))).toBeGreaterThan(shortcutLimits.fileBytes)
+    expect(shortcutFileText(near)).toBe(compact)
+    const parsed = parseShortcutText(compact)
+    expect(parsed.ok && parsed.problems).toEqual([])
+    expect(shortcutFileText(fileWith(shortcutLimits.unknown, 260))).toBeUndefined()
+  })
+  it('refuses a file under the limit that would be over it once its records move to unknown', () => {
+    // Each member this build does not know is kept wrapped as { name: value }, two bytes more than it took.
+    const count = 250, length = Math.floor(shortcutLimits.fileBytes / count) - 20
+    const members: Record<string, string> = Object.fromEntries(Array.from({ length: count }, (_, index) => [`m${index}`, 'x'.repeat(length)]))
+    const base = Buffer.byteLength(JSON.stringify(v1(members)))
+    // Spread the rest over the members, so each stays an unknown record under its own limit.
+    const spare = shortcutLimits.fileBytes - 50 - base
+    for (let index = 0; index < count; index++) members[`m${index}`] += 'x'.repeat(Math.floor(spare / count) + (index < spare % count ? 1 : 0))
+    const text = JSON.stringify(v1(members))
+    expect(Buffer.byteLength(text)).toBe(shortcutLimits.fileBytes - 50)
+    const result = parseShortcutText(text)
+    expect(result.ok ? 'ok' : result.error).toBe('size')
   })
 })

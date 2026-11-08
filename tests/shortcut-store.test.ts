@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readdir, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { resetNotice, salvageNotice, shortcutHandlers, shortcutSentences, ShortcutStore, type ShortcutDialogs } from '../src/main/shortcut-store'
 import { emptyShortcutFile, shortcutLimits, type ShortcutFile } from '../src/shared/commands/shortcut-schema'
@@ -11,7 +11,7 @@ import { heavyTimeout, meterWork } from './fixtures/work-meter'
 let failWrites = false
 vi.mock('../src/main/json-file', async importOriginal => {
   const actual = await importOriginal<typeof import('../src/main/json-file')>()
-  return { ...actual, writeJsonAtomic: (...args: Parameters<typeof actual.writeJsonAtomic>) => failWrites ? Promise.reject(new Error(`EACCES: permission denied, open '${args[0]}'`)) : actual.writeJsonAtomic(...args) }
+  return { ...actual, writeBytesAtomic: (...args: Parameters<typeof actual.writeBytesAtomic>) => failWrites ? Promise.reject(new Error(`EACCES: permission denied, open '${args[0]}'`)) : actual.writeBytesAtomic(...args) }
 })
 
 let directory: string
@@ -31,6 +31,13 @@ const onDisk = async () => JSON.parse(await readFile(path(), 'utf8')) as Shortcu
 const quarantined = async () => (await readdir(directory)).filter(entry => entry.startsWith('shortcuts.json.invalid-'))
 const withBindings = (bindings: ShortcutFile['bindings'], extra: Partial<ShortcutFile> = {}): ShortcutFile => ({ ...emptyShortcutFile, bindings, ...extra })
 const remap: ShortcutFile = withBindings([{ command: 'query.execute', key: 'ctrl+e', scope: 'global' }, { command: 'query.execute', key: 'f5', remove: true }])
+/** Links `shortcuts.json` to `target`; Windows lets only administrators and Developer Mode create links, so elsewhere the test is skipped. */
+async function linkOrSkip(target: string, skip: (note: string) => never): Promise<void> {
+  try { await symlink(target, path(), 'file') } catch (error) {
+    if (process.platform === 'win32' && (error as NodeJS.ErrnoException).code === 'EPERM') skip('this Windows account cannot create symbolic links')
+    throw error
+  }
+}
 const failure = (promise: Promise<unknown>) => promise.then(() => { throw new Error('expected a failure') }, (error: unknown) => error)
 
 describe('shortcuts file', () => {
@@ -104,14 +111,14 @@ describe('shortcuts file', () => {
     const raw = {
       version: 1, scheme: 'default',
       bindings: [{ command: 'query.execute', key: 'ctrl+e' }, 42, foreign, { command: 'query.execute', key: 'f5', remove: true, extra: 1 }],
-      gestures: { 'explorer.peekHover': 'alt' }, unknown: [{ kept: true }], futureMember: [1]
+      gestures: { 'explorer.peekHover': 'shift' }, unknown: [{ kept: true }], futureMember: [1]
     }
     await writeFile(path(), JSON.stringify(raw))
     const load = await store().load()
     expect(load.salvaged).toBe(true)
     expect(load.notice).toBe(salvageNotice)
     expect(load.file.bindings).toEqual([{ command: 'query.execute', key: 'ctrl+e' }])
-    expect(load.file.gestures).toEqual({ 'explorer.peekHover': 'alt' })
+    expect(load.file.gestures).toEqual({ 'explorer.peekHover': 'shift' })
     // The unknown record, the newer build's command, the newer member and the binding with an unknown member are kept.
     expect(load.file.unknown).toEqual([{ kept: true }, foreign, { command: 'query.execute', key: 'f5', remove: true, extra: 1 }, { futureMember: [1] }])
     expect(await onDisk()).toEqual(load.file)
@@ -123,7 +130,7 @@ describe('shortcuts file', () => {
     await writeFile(path(), JSON.stringify(file))
     const shortcuts = store()
     expect(await shortcuts.load()).toEqual({ file, revision: 1, salvaged: false })
-    const next = { ...file, gestures: { 'grid.addToSelection': 'ctrl' } }
+    const next = { ...file, gestures: { 'grid.addToSelection': 'alt' } }
     await shortcuts.save(next, 1)
     expect(await onDisk()).toEqual(next)
     expect(await quarantined()).toEqual([])
@@ -196,6 +203,89 @@ describe('shortcuts file', () => {
     const big = { ...emptyShortcutFile, unknown: Array.from({ length: shortcutLimits.unknown }, (_, index) => ({ filler: 'x'.repeat(shortcutLimits.unknownBytes - 40), index })) }
     expect((await failure(shortcuts.save(big, 1)) as Error).message).toBe(shortcutSentences.tooLarge)
     expect(await readdir(directory)).toEqual([])
+  })
+
+  it('saves a compact file near the limit that it loaded, so the read and write limits measure the same form', async () => {
+    // 256 unknown records of small values: about 118 KB compact, several times that indented.
+    const near: ShortcutFile = { ...emptyShortcutFile, unknown: Array.from({ length: shortcutLimits.unknown }, () => Array.from({ length: 230 }, (_, index) => index % 10)) }
+    const compact = JSON.stringify(near)
+    expect(Buffer.byteLength(compact)).toBeGreaterThan(shortcutLimits.fileBytes * 0.9)
+    await writeFile(path(), compact)
+    const shortcuts = store()
+    expect(await shortcuts.load()).toEqual({ file: near, revision: 1, salvaged: false })
+    const next = { ...near, bindings: remap.bindings }
+    expect(await shortcuts.save(next, 1)).toEqual({ revision: 2 })
+    expect(Buffer.byteLength(await readFile(path()))).toBeLessThanOrEqual(shortcutLimits.fileBytes)
+    expect(await onDisk()).toEqual(next)
+    expect(await shortcuts.load()).toMatchObject({ revision: 2, salvaged: false })
+    // A small file stays indented for hand edits.
+    await shortcuts.save(remap, 2)
+    expect(await readFile(path(), 'utf8')).toBe(JSON.stringify(remap, null, 2) + '\n')
+  })
+
+  it('moves gesture choices the catalogue does not offer to unknown, and writes them back there', async () => {
+    const raw = { ...emptyShortcutFile, gestures: { 'explorer.peekHover': 'hyper', 'grid.addToSelection': 'alt', 'dock.future': 'mod' } }
+    await writeFile(path(), JSON.stringify(raw))
+    const shortcuts = store()
+    const load = await shortcuts.load()
+    expect(load).toMatchObject({ revision: 1, salvaged: false })
+    expect(load.file.gestures).toEqual({ 'grid.addToSelection': 'alt' })
+    expect(load.file.unknown).toEqual([{ gesture: 'explorer.peekHover', choice: 'hyper' }, { gesture: 'dock.future', choice: 'mod' }])
+    await shortcuts.save({ ...load.file, bindings: remap.bindings }, 1)
+    expect((await onDisk()).unknown).toEqual(load.file.unknown)
+    expect((await onDisk()).gestures).toEqual({ 'grid.addToSelection': 'alt' })
+    expect(await quarantined()).toEqual([])
+  })
+
+  it('reads through a symbolic link, then replaces the link rather than writing through it', async ({ skip }) => {
+    const target = join(directory, 'target.json')
+    await writeFile(target, JSON.stringify(remap))
+    await linkOrSkip(target, skip)
+    const shortcuts = store()
+    expect(await shortcuts.load()).toEqual({ file: remap, revision: 1, salvaged: false })
+    await shortcuts.save(emptyShortcutFile, 1)
+    expect((await lstat(path())).isSymbolicLink()).toBe(false)
+    expect(await onDisk()).toEqual(emptyShortcutFile)
+    expect(JSON.parse(await readFile(target, 'utf8'))).toEqual(remap)
+  })
+
+  it('quarantines a symbolic link to a damaged file by renaming the link itself', async ({ skip }) => {
+    const target = join(directory, 'target.json')
+    await writeFile(target, '{ broken')
+    await linkOrSkip(target, skip)
+    expect(await store().load()).toEqual({ file: emptyShortcutFile, revision: 1, salvaged: true, notice: resetNotice('json') })
+    const [original] = await quarantined()
+    expect((await lstat(join(directory, original))).isSymbolicLink()).toBe(true)
+    expect(resolve(directory, await readlink(join(directory, original)))).toBe(target)
+    expect(await readFile(target, 'utf8')).toBe('{ broken')
+    expect((await lstat(path())).isSymbolicLink()).toBe(false)
+    expect(await onDisk()).toEqual(emptyShortcutFile)
+  })
+
+  it("saves again once a newer version's file is deleted while the app runs", async () => {
+    await writeFile(path(), JSON.stringify({ version: 2, bindings: [] }))
+    const shortcuts = store()
+    expect(await shortcuts.load()).toMatchObject({ revision: 1, notice: shortcutSentences.newer })
+    await rm(path())
+    expect(await shortcuts.load()).toEqual({ file: emptyShortcutFile, revision: 1, salvaged: false })
+    expect(await shortcuts.save(remap, 1)).toEqual({ revision: 2 })
+    expect(await onDisk()).toEqual(remap)
+  })
+
+  it("saves again once a newer version's file is replaced by this version's while the app runs", async () => {
+    await writeFile(path(), JSON.stringify({ version: 2, bindings: [] }))
+    const shortcuts = store(), events: ShortcutsSnapshot[] = []
+    shortcuts.onDidChange(snapshot => events.push(snapshot))
+    await shortcuts.load()
+    expect((await failure(shortcuts.save(remap, 1)) as Error).message).toBe(shortcutSentences.newer)
+    // Downgraded by hand: the save's re-read notices it, a new revision, so the save based on revision 1 is stale.
+    const downgraded = withBindings([{ command: 'query.execute', key: 'ctrl+shift+e' }])
+    await writeFile(path(), JSON.stringify(downgraded))
+    expect(await failure(shortcuts.save(remap, 1))).toMatchObject({ code: 'STALE' })
+    expect(events).toEqual([{ file: downgraded, revision: 2 }])
+    expect(await shortcuts.load()).toEqual({ file: downgraded, revision: 2, salvaged: false })
+    expect(await shortcuts.save(remap, 2)).toEqual({ revision: 3 })
+    expect(await onDisk()).toEqual(remap)
   })
 
   it('runs work one task at a time, so two saves from the same revision cannot both win', async () => {
@@ -329,10 +419,29 @@ describe('shortcuts IPC handlers', () => {
     expect(await shortcutHandlers(store(), dialogs().value).exportFile({ file: remap })).toEqual({ cancelled: true })
   })
 
+  it('imports gesture choices the catalogue does not offer into unknown', async () => {
+    const chosen = join(directory, 'chosen.json')
+    await writeFile(chosen, JSON.stringify({ ...emptyShortcutFile, gestures: { 'grid.addToSelection': 'hyper', 'explorer.peekHover': 'mod' } }))
+    expect(await shortcutHandlers(store(), dialogs({ import: chosen }).value).importFile(undefined)).toEqual({
+      file: { ...emptyShortcutFile, gestures: { 'explorer.peekHover': 'mod' }, unknown: [{ gesture: 'grid.addToSelection', choice: 'hyper' }] }, problems: []
+    })
+  })
+
+  it('saves a compact imported file near the limit', async () => {
+    const chosen = join(directory, 'chosen.json')
+    const near: ShortcutFile = { ...emptyShortcutFile, unknown: Array.from({ length: shortcutLimits.unknown }, () => Array.from({ length: 230 }, (_, index) => index % 10)) }
+    await writeFile(chosen, JSON.stringify(near))
+    const shortcuts = store(), handlers = shortcutHandlers(shortcuts, dialogs({ import: chosen }).value)
+    const imported = await handlers.importFile(undefined)
+    expect(imported).toEqual({ file: near, problems: [] })
+    await handlers.get(undefined)
+    expect(await handlers.save({ file: { ...near, bindings: remap.bindings }, baseRevision: 1 })).toEqual({ revision: 2 })
+  })
+
   it('round-trips an exported file through import', async () => {
     const chosen = join(directory, 'roundtrip.json')
     const handlers = shortcutHandlers(store(), dialogs({ import: chosen, export: chosen }).value)
-    const file = withBindings(remap.bindings, { gestures: { 'grid.addToSelection': 'ctrl' }, unknown: [{ command: 'future.command', key: 'ctrl+alt+q' }] })
+    const file = withBindings(remap.bindings, { gestures: { 'grid.addToSelection': 'alt' }, unknown: [{ command: 'future.command', key: 'ctrl+alt+q' }] })
     await handlers.exportFile({ file })
     expect(await handlers.importFile(undefined)).toEqual({ file, problems: [] })
   })
