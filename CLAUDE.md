@@ -165,6 +165,9 @@ pages, limits, error codes, display formats, benchmarks).
   menus and the palette run it through `varia:run-role`. Two-part chords that Varia owns are `bridge` keybindings,
   registered with Monaco from the catalogue by `registerEditorBridge`; Monaco dispatches them. After catalogue changes,
   regenerate `docs/commands.md` with `npx vitest run tests/commands-docs.test.ts -u`.
+  User shortcuts reach the renderer only through `ShortcutsService` (`src/renderer/src/core/ShortcutsService.ts`), which
+  hands `effectiveRules` to `KeybindingService.setRules` (labels, menus, the palette and the editor bridge follow) and the
+  file's gestures to `GestureService.setModifiers`; the Shortcuts page records keys only through `KeybindingService.capture`.
   Monaco's own default keys (the modules `start.tsx` imports, all three platforms) are generated into
   `src/shared/commands/monaco-keys.generated.ts` from the installed Monaco by `tests/fixtures/monaco-runtime.ts`; after a Monaco
   upgrade or a change to those imports, regenerate it with `npx vitest run tests/monaco-keybindings.test.ts -u`.

@@ -20,6 +20,8 @@ import App from './App'
 import { createWorkbench } from './core/workbench'
 import { registerJson } from './languages/json'
 import { WorkbenchProvider } from './core/WorkbenchContext'
+import { ShortcutsService } from './core/ShortcutsService'
+import { toPlatform } from '../../shared/commands/keybindings'
 import { domThemeTarget, ThemeService } from './services/theme'
 import { SettingsService } from './settings/SettingsService'
 import { ShellErrorBoundary, ShellFaultProbe } from './ShellFailure'
@@ -37,10 +39,14 @@ export async function start(root: Root): Promise<void> {
   // Bundle Monaco locally; the editor never downloads scripts from a CDN.
   self.MonacoEnvironment = { getWorker: () => new EditorWorker() }
   registerJson(monaco)
-  // React renders only after a theme is applied, so the first frame already has its colors, and with settings, so the
-  // editor's first frame has its font and options; neither waits for main longer than its timeout.
-  const [theme, settings] = await Promise.all([ThemeService.create(window.varia, domThemeTarget(monaco)), SettingsService.create(window.varia)])
-  const workbench = createWorkbench(window.varia, monaco, theme, settings)
+  // React renders only after a theme is applied, so the first frame already has its colors, with settings, so the
+  // editor's first frame has its font and options, and with the user's shortcuts, so the first key and label follow
+  // them; none waits for main longer than its timeout.
+  const [theme, settings, shortcuts] = await Promise.all([
+    ThemeService.create(window.varia, domThemeTarget(monaco)), SettingsService.create(window.varia),
+    ShortcutsService.create({ api: window.varia.shortcuts, platform: toPlatform(window.varia.platform) })
+  ])
+  const workbench = createWorkbench(window.varia, monaco, theme, settings, shortcuts)
   // Smoke tests drive the results API directly (backend-smoke.mjs), read the grids' counters (results-smoke.mjs), save
   // AutoRecover's copies on demand (files-smoke.mjs) and open live views and their grids (live-smoke.mjs, live-grid-smoke.mjs); main enables test mode only in
   // unpackaged smoke runs.

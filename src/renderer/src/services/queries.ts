@@ -10,6 +10,7 @@ import type { OutputViewName, ResultsService } from '../results/ResultsService'
 import { isQueryDocument, type SessionNotice } from '../documents'
 import { DocumentService } from './documents'
 import { ClientStatisticsService } from '../statistics/ClientStatisticsService'
+import type { PlanExecutionContext, RetainedPlansService } from '../plans/RetainedPlansService'
 
 export interface RunningQuery { readonly queryId: string; readonly connectionId: string; readonly startedAt: number; readonly kind?: 'estimate'; readonly estimateMode?: EstimatedPlanMode }
 export interface EstimatedPlanState { readonly requestId: string; readonly mode?: EstimatedPlanMode; readonly result?: EstimatedPlanResult; readonly error?: string; readonly loading?: true; readonly view?: OutputViewName }
@@ -61,7 +62,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   private readonly subscription: Disposable
   constructor(private documents: DocumentService, private api: QueryApi, private getConnection: (id: string) => QueryConnection | undefined, private events: EventBus,
     private results: Pick<ResultsService, 'begin' | 'finish'>, private now: () => number = () => Date.now(), private wait: (ms: number) => Promise<void> = ms => new Promise(resolve => { setTimeout(resolve, ms) }),
-    private settings: () => SettingsValues = () => defaultSettings) {
+    private settings: () => SettingsValues = () => defaultSettings, private retainedPlans?: RetainedPlansService) {
     super({})
     this.subscription = events.subscribe(event => {
       if (event.type === 'session.ended') this.sessionEnded(event.tabId)
@@ -159,6 +160,14 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       ...settings['queryExecution.stopOnError'] ? { stopOnError: true } : {}
     }
   }
+  private planContext(tabId: string, executionId: string, sql: string, startLine: number, startedAt: number, estimateMode?: EstimatedPlanMode): PlanExecutionContext {
+    const document = this.documents.get(tabId)!, connection = this.getConnection(document.connectionId!)
+    return Object.freeze({ executionId, tabId, name: document.name, file: document.file?.path,
+      connectionId: document.connectionId!, server: connection?.server, database: document.database,
+      sql, startLine, sqlScope: sql === this.documents.getModel(tabId)?.getValue() ? 'document' : 'selection', startedAt,
+      includeActualPlan: !estimateMode && !!document.includeActualPlan, includeLivePlan: !estimateMode && !!document.includeLivePlan,
+      ...estimateMode ? { estimateMode } : {} })
+  }
   /** Runs the active query, or the query `tabId` names. */
   execute(tabId = this.documents.getSnapshot().activeId): Promise<void> {
     if (!this.canExecute(tabId)) return Promise.resolve()
@@ -178,6 +187,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const { sql, startLine } = this.documents.getExecuteText(tabId)
     if (!sql.trim()) return
     const requestId = crypto.randomUUID(), previous = this.getSnapshot()[tabId]
+    const planContext = this.retainedPlans ? this.planContext(tabId, requestId, sql, startLine, this.now(), mode) : undefined
     this.update(tabId, { ...previous, running: { queryId: requestId, connectionId, startedAt: this.now(), kind: 'estimate', estimateMode: mode }, estimated: { requestId, mode, loading: true, view: 'plan' } })
     this.events.emit({ type: 'query.estimateStarted', tabId })
     let result: EstimatedPlanResult | undefined, error: string | undefined, code: ErrorCode | undefined
@@ -192,7 +202,15 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       this.sessionEnded(tabId)
       if (code === 'SESSION_LOST') this.documents.update(tabId, { sessionNotice: 'lost' })
     }
-    if (mode === 'session' && result?.session) {
+    if (result && planContext && this.retainedPlans) {
+      await this.retainedPlans.capture(planContext, { status: 'completed', endedAt: this.now(), database: result.database,
+        spid: result.session?.spid, login: result.session?.login }, result.plans.map((plan, index) => ({
+        key: `${requestId}:${index}`, label: `Estimated plan ${index + 1}`, captureType: 'estimated',
+        batchNumber: plan.batchNumber, iteration: plan.iteration, read: async () => ({ text: plan.xml })
+      })))
+      if (this.disposed || !this.documents.get(tabId) || this.getSnapshot()[tabId]?.running?.queryId !== requestId) return
+    }
+    if (mode === 'session' && result?.session && this.documents.get(tabId)?.connectionId === connectionId && this.connected(tabId)) {
       this.update(tabId, { ...this.getSnapshot()[tabId], session: { connectionId, ...result.session } })
     }
     const next = { ...this.getSnapshot(), [tabId]: { ...this.getSnapshot()[tabId], running: undefined, estimated: { requestId, mode, result, error, view: this.getSnapshot()[tabId].estimated?.view } } }
@@ -212,6 +230,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const { sql, startLine } = this.documents.getExecuteText(tabId)
     if (!sql.trim()) return
     const queryId = crypto.randomUUID(), previous = this.getSnapshot()[tabId]?.session
+    const planContext = this.retainedPlans ? this.planContext(tabId, queryId, sql, startLine, this.now()) : undefined
     // Reserve before the first await so repeated commands cannot start a second script.
     const livePlan = document.includeLivePlan ? { queryId, connectionId: connection.id } : undefined
     this.update(tabId, { running: { queryId, connectionId: connection.id, startedAt: this.now() }, session: previous, ...livePlan ? { livePlan } : {} })
@@ -249,8 +268,12 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     // that left no session ends it, and any other failure leaves the session as it was.
     const session: QuerySession | undefined = summary ? summary.spid === undefined ? undefined : { connectionId: connection.id, spid: summary.spid, login: summary.login }
       : sessionGone.has(code) ? undefined : this.getSnapshot()[tabId]?.session
-    this.results.finish(tabId, queryId, { summary, error, code, notice })
-    this.update(tabId, { summary, error, session, ...livePlan ? { livePlan } : {} })
+    // A new backend execution releases this session's old results. Keep Execute reserved until original XML is copied.
+    await this.results.finish(tabId, queryId, { summary, error, code, notice, ...planContext ? { planContext } : {} })
+    if (this.disposed || !this.documents.get(tabId) || this.getSnapshot()[tabId]?.running?.queryId !== queryId) return
+    // Backend/connection loss can arrive while XML is copied; never restore that execution's now-dead session.
+    const liveSession = this.documents.get(tabId)?.connectionId === connection.id && this.connected(tabId) ? session : undefined
+    this.update(tabId, { summary, error, session: liveSession, ...livePlan ? { livePlan } : {} })
     this.events.emit({ type: 'query.finished', tabId, queryId, summary, error })
   }
   /** Cancels the active query, or the one running in `tabId`. */

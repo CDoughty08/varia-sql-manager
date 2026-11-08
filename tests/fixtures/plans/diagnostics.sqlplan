@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ShowPlanXML xmlns="http://schemas.microsoft.com/sqlserver/2004/07/showplan" Version="1.6" Build="16.0.1000.6">
+  <BatchSequence><Batch><Statements>
+    <StmtSimple StatementId="1" StatementType="SELECT" StatementText="SELECT Amount FROM dbo.Orders WHERE Status = @status" StatementSubTreeCost="2">
+      <QueryPlan DegreeOfParallelism="2">
+        <MemoryGrantInfo SerialRequiredMemory="512" SerialDesiredMemory="2048" RequestedMemory="2048" GrantedMemory="1024" MaxUsedMemory="1024" GrantWaitTime="0" IsMemoryGrantFeedbackAdjusted="No: First Execution" />
+        <MissingIndexes><MissingIndexGroup Impact="72.4"><MissingIndex Database="[Sales]" Schema="[dbo]" Table="[Orders]">
+          <ColumnGroup Usage="EQUALITY"><Column Name="[Status]" /></ColumnGroup><ColumnGroup Usage="INEQUALITY"><Column Name="[OrderId]" /></ColumnGroup><ColumnGroup Usage="INCLUDE"><Column Name="[Amount]" /></ColumnGroup>
+        </MissingIndex></MissingIndexGroup></MissingIndexes>
+        <Warnings><PlanAffectingConvert ConvertIssue="Seek Plan" Expression="CONVERT_IMPLICIT(int,[@status],0)" /></Warnings>
+        <RelOp NodeId="0" PhysicalOp="Sort" LogicalOp="Sort" EstimateRows="20" EstimateRebinds="0" EstimateRewinds="0" EstimatedTotalSubtreeCost="2" Parallel="true" EstimatedExecutionMode="Row">
+          <OutputList><ColumnReference Database="[Sales]" Schema="[dbo]" Table="[Orders]" Column="[Amount]" /></OutputList>
+          <Warnings><SpillToTempDb SpillLevel="2" SpilledThreadCount="2"><SortSpillDetails GrantedMemoryKb="1024" UsedMemoryKb="1024" WritesToTempDb="16" ReadsFromTempDb="16" /></SpillToTempDb></Warnings>
+          <RunTimeInformation>
+            <RunTimeCountersPerThread Thread="0" ActualRows="0" ActualRowsRead="0" ActualExecutions="0" ActualCPUms="0" ActualElapsedms="0" ActualExecutionMode="Row" />
+            <RunTimeCountersPerThread Thread="1" ActualRows="40" ActualRowsRead="60" ActualExecutions="1" ActualCPUms="10" ActualElapsedms="30" ActualExecutionMode="Row" />
+            <RunTimeCountersPerThread Thread="2" ActualRows="60" ActualRowsRead="60" ActualExecutions="1" ActualCPUms="8" ActualElapsedms="28" ActualExecutionMode="Row" />
+          </RunTimeInformation>
+          <Sort><RelOp NodeId="1" PhysicalOp="Index Seek" LogicalOp="Index Seek" EstimateRows="2" EstimateRebinds="4" EstimateRewinds="0" EstimatedTotalSubtreeCost="1" Parallel="false" EstimatedExecutionMode="Row">
+            <OutputList><ColumnReference Column="[Amount]" /></OutputList>
+            <RunTimeInformation><RunTimeCountersPerThread Thread="0" ActualRows="10" ActualRowsRead="12" ActualExecutions="5" ActualCPUms="0" ActualElapsedms="1" ActualExecutionMode="Row" /></RunTimeInformation>
+            <IndexScan><Object Database="[Sales]" Schema="[dbo]" Table="[Orders]" Index="[IX_Status]" />
+              <SeekPredicates><SeekPredicateNew><SeekKeys><Prefix ScanType="EQ"><RangeColumns><ColumnReference Column="[Status]" /></RangeColumns><RangeExpressions><ScalarOperator ScalarString="[@status]"><Identifier><ColumnReference Column="@status" /></Identifier></ScalarOperator></RangeExpressions></Prefix>
+                <StartRange ScanType="GT"><RangeColumns><ColumnReference Column="[OrderId]" /></RangeColumns><RangeExpressions><ScalarOperator ScalarString="(0)" /></RangeExpressions></StartRange>
+              </SeekKeys></SeekPredicateNew></SeekPredicates>
+              <Predicate><ScalarOperator ScalarString="[Amount]&gt;(0)"><Compare CompareOp="GT"><ScalarOperator ScalarString="[Amount]" /><ScalarOperator ScalarString="(0)" /></Compare></ScalarOperator></Predicate>
+            </IndexScan>
+          </RelOp></Sort>
+        </RelOp>
+        <ParameterList><ColumnReference Column="@status" ParameterDataType="nvarchar(20)" ParameterCompiledValue="N'新規'" ParameterRuntimeValue="N'完了'" /><ColumnReference Column="@absent" ParameterDataType="int" ParameterCompiledValue="(0)" /></ParameterList>
+      </QueryPlan>
+    </StmtSimple>
+  </Statements></Batch></BatchSequence>
+</ShowPlanXML>

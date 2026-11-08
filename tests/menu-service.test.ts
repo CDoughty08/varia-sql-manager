@@ -8,6 +8,8 @@ import type { ResolvedMenuItem } from '../src/renderer/src/menus/resolve'
 import { MenuTargetService } from '../src/renderer/src/menus/targets'
 import { fakeDocument, FakeElement } from './fixtures/elements'
 import { connectionInfo, connectionOptions, manualTimers, readyBackend, workbenchFixture } from './fixtures/workbench'
+import { effectiveRules } from '../src/shared/commands/effective'
+import { emptyShortcutFile } from '../src/shared/commands/shortcut-schema'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
@@ -603,5 +605,20 @@ describe('context menus', () => {
     expect(level(menus).label).toBe('Query tab')
     attached.dispose()
     expect(listeners.has('contextmenu')).toBe(false)
+  })
+})
+
+describe('menu service with remapped keys', () => {
+  it.each(['win32', 'darwin'] as const)('labels items with the effective rules once they change, on %s', platform => {
+    const { menus, fixture } = setup({ platform })
+    const newQuery = () => menus.resolve('file').find(item => item.kind === 'command' && item.id === 'file.new')
+    expect(newQuery()).toMatchObject({ keybinding: { text: platform === 'darwin' ? '⌘N' : 'Ctrl+N' } })
+    const effective = effectiveRules(platform, { ...emptyShortcutFile, bindings: [{ command: 'file.new', key: 'mod+n', remove: true }, { command: 'file.new', key: 'mod+shift+f9' }] })
+    fixture.keybindings.setRules(effective.rules)
+    expect(newQuery()).toMatchObject({ keybinding: { text: platform === 'darwin' ? '⇧⌘F9' : 'Ctrl+Shift+F9' } })
+    // A removal with nothing in its place leaves the item without a key.
+    fixture.keybindings.setRules(effectiveRules(platform, { ...emptyShortcutFile, bindings: [{ command: 'file.new', key: 'mod+n', remove: true }] }).rules)
+    const item = newQuery()
+    expect(item?.kind === 'command' && item.keybinding).toBeFalsy()
   })
 })
