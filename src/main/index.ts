@@ -35,7 +35,8 @@ import { prepare as prepareConnection, settle as settleConnection, type Settled 
 import { connectionLibrary } from './connection-library'
 import { clearEntraPrompt, clearEntraTokenCache } from './entra'
 import { SettingsStore } from './settings-store'
-import { sandboxRefusal } from './sandbox-guard'
+import { sandboxRefusal, stripRemoteDebugging } from './sandbox-guard'
+import { refuseDownloads } from './download-guard'
 import { ShortcutStore, shortcutHandlers } from './shortcut-store'
 import { effectiveRules } from '../shared/commands/effective'
 import { toPlatform } from '../shared/commands/keybindings'
@@ -78,6 +79,8 @@ import { Updater } from './updater'
 import { applyUpdate, installTargetFor, removeReplacedPortable, testUpdateTarget, type InstallTarget } from './update-install'
 import { assetUrl, releasesPageUrl, updateErrors, updateFeedUrl, type InstallKind } from '../shared/updates'
 
+// First, before Chromium reads its command line for the DevTools handler: a packaged build never opens a debugging port.
+const remoteDebugging = stripRemoteDebugging(app.commandLine, app.isPackaged)
 const here = dirname(fileURLToPath(import.meta.url))
 const rendererDir = join(here, '../renderer')
 const developmentUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined
@@ -712,12 +715,14 @@ function reloadLostRenderer(window: BrowserWindow): void {
 
 app.whenReady().then(async () => {
   if (!primaryInstance) return
-  const refusal = sandboxRefusal({ packaged: app.isPackaged, platform: process.platform, noSandbox: app.commandLine.hasSwitch('no-sandbox') })
+  const refusal = sandboxRefusal({ packaged: app.isPackaged, platform: process.platform, noSandbox: app.commandLine.hasSwitch('no-sandbox'), remoteDebugging })
   if (refusal) {
     dialog.showErrorBox('Varia cannot start', refusal)
     app.exit(1)
     return
   }
+  // The page and its popouts share the default session; any download there is the page's own (download-guard.ts).
+  refuseDownloads(session.defaultSession)
   if (!developmentUrl) protocol.handle(appScheme, appProtocolHandler(rendererDir, contentSecurityPolicy()))
   const root = app.getAppPath()
   // Smoke tests shorten the silence that counts as unresponsive; PING then runs often enough for a healthy backend.
@@ -744,6 +749,8 @@ app.whenReady().then(async () => {
   // unreadable, or a retention reset because settings.json was invalid, nothing is deleted under a retention the user
   // may have changed.
   void recovery.purge(retentionDays(settings))
+  // Hot exit's quarantined sessions and interrupted writes hold query text too: they go by the same retention.
+  void openSession.purge(retentionDays(settings))
   settings.onDidChange(state => {
     updater?.settingsChanged()
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:settings-changed', state)
