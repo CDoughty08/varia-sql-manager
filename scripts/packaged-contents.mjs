@@ -6,7 +6,10 @@
 //
 // The backend: the release publish is ReadyToRun (Varia.Backend.csproj), so Varia and its packages carry native code
 // instead of being JIT-compiled on every launch and first use.
-import { openSync, readFileSync, readSync, closeSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs'
+import { isBuiltin } from 'node:module'
+import { join, sep } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 /** The archive's files by path ('/'-separated, no leading slash), each with a reader of its bytes. */
 export function readAsar(path) {
@@ -43,9 +46,24 @@ export function bareImports(code) {
   return [...names]
 }
 
-const builtIn = name => name === 'electron' || name.startsWith('node:')
+// Node's own modules load whether or not they carry the node: prefix (`path` as well as `node:path`).
+const builtIn = name => name === 'electron' || name.startsWith('node:') || isBuiltin(name)
 
-/** Problems with the files an app.asar holds: any node_modules, and any main or preload module a script loads by a name other than Electron's or a node: one. */
+/** out/main's and out/preload's scripts under `root` (the project), keyed as app.asar keys them ('out/main/index.js'). */
+export function builtScripts(root) {
+  const contents = new Map()
+  for (const part of ['main', 'preload']) {
+    const folder = join(root, 'out', part)
+    if (!existsSync(folder)) continue
+    for (const name of readdirSync(folder, { recursive: true, encoding: 'utf8' })) {
+      const path = join(folder, name)
+      if (/\.(c|m)?js$/.test(name) && statSync(path).isFile()) contents.set(`out/${part}/${name.split(sep).join('/')}`, readFileSync(path))
+    }
+  }
+  return contents
+}
+
+/** Problems with the files an app.asar holds: any node_modules, and any main or preload module a script loads by a name other than Electron's or Node's own. */
 export function asarProblems(contents) {
   const problems = []
   const modules = [...contents.keys()].filter(name => name.split('/').includes('node_modules'))
@@ -86,3 +104,13 @@ function readyToRunHeader(pe) {
 
 /** The backend assemblies a package must carry precompiled: Varia's own and the ones every connect and Script As loads. */
 export const readyToRunAssemblies = ['Varia.Backend.dll', 'Microsoft.Data.SqlClient.dll', 'Microsoft.SqlServer.Smo.dll']
+
+// node scripts/packaged-contents.mjs: the same check of main and preload on the build in out/ (npm run check and
+// build:smoke run it after electron-vite build), so a pull request learns of an unbundled import before a release does.
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+  const built = builtScripts(process.cwd())
+  if (!built.has('out/main/index.js')) { console.error('out/main/index.js is missing: run electron-vite build first.'); process.exit(1) }
+  const problems = asarProblems(built)
+  if (problems.length) { console.error(`The build loads modules it does not bundle: ${problems.join('; ')}`); process.exit(1) }
+  console.log(`out/main and out/preload load only Electron and Node's own modules (${built.size} scripts).`)
+}

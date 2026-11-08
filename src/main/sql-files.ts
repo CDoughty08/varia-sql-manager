@@ -126,6 +126,8 @@ export class SqlFileStore {
   private conflicts = new Set<string>()
   /** Change-check comparisons not settled yet, including ones a check stopped waiting for. */
   private comparing = new Map<string, Promise<Comparison>>()
+  /** The last registration a read started (`serially`). */
+  private registering: Promise<unknown> = Promise.resolve()
   constructor(private readonly options: SqlFileStoreOptions = {}) {}
 
   /**
@@ -148,24 +150,33 @@ export class SqlFileStore {
     if (bytes.length > limits.maxBytes) throw new Error(limits.tooLarge)
     if (decoded.text.length > limits.maxChars) throw new Error('The document is too large to open.')
     const { eol, mixed } = detectEol(decoded.text, this.platform)
+    const [readOnly, info] = await Promise.all([isReadOnly(absolutePath), stat(absolutePath)])
     // One file keeps one registration, path and name, whatever case or link it is reached through, so the page finds
-    // its tab instead of opening a second one that would save over the first.
-    const existing = await this.owner(absolutePath, undefined, targets)
-    // The tab of a file opened again keeps the text it has, so its Save must keep writing what that text was read as.
-    const file: SqlFile = existing && !reload ? existing : {
-      id: existing?.id ?? randomUUID(), name: existing?.name ?? basename(absolutePath), path: existing?.path ?? absolutePath, encoding: decoded.encoding,
-      ...decoded.codePage ? { codePage: decoded.codePage } : {}, readOnly: await isReadOnly(absolutePath)
-    }
-    if (!existing || reload || !this.stamps.has(file.id)) {
-      const hash = sha256(bytes)
-      if (!existing || reload) this.files.set(file.id, restore
-        ? { file, kind, restored: true, baseSha256: restore.baseSha256 }
-        : { file, kind, baseSha256: hash })
-      const info = await stat(absolutePath)
-      this.stamps.set(file.id, { size: info.size, mtimeMs: info.mtimeMs, sha256: hash })
-    }
-    if (reload) this.conflicts.delete(file.id)
-    return { ...file, content: decoded.text, eol, mixedEol: mixed, ...kind === 'sqlplan' ? { kind } : {} }
+    // its tab instead of opening a second one that would save over the first. Concurrent opens (one Open dialog's files)
+    // look for the owner and register one at a time, or a file and a link to it would both find none and both register.
+    return this.serially(async () => {
+      const existing = await this.owner(absolutePath, undefined, targets ?? new Map())
+      // The tab of a file opened again keeps the text it has, so its Save must keep writing what that text was read as.
+      const file: SqlFile = existing && !reload ? existing : {
+        id: existing?.id ?? randomUUID(), name: existing?.name ?? basename(absolutePath), path: existing?.path ?? absolutePath, encoding: decoded.encoding,
+        ...decoded.codePage ? { codePage: decoded.codePage } : {}, readOnly
+      }
+      if (!existing || reload || !this.stamps.has(file.id)) {
+        const hash = sha256(bytes)
+        if (!existing || reload) this.files.set(file.id, restore
+          ? { file, kind, restored: true, baseSha256: restore.baseSha256 }
+          : { file, kind, baseSha256: hash })
+        this.stamps.set(file.id, { size: info.size, mtimeMs: info.mtimeMs, sha256: hash })
+      }
+      if (reload) this.conflicts.delete(file.id)
+      return { ...file, content: decoded.text, eol, mixedEol: mixed, ...kind === 'sqlplan' ? { kind } : {} }
+    })
+  }
+  /** Runs `task` once every registration started before it has settled. */
+  private serially<T>(task: () => Promise<T>): Promise<T> {
+    const next = this.registering.then(task)
+    this.registering = next.catch(() => {})
+    return next
   }
 
   /**
@@ -209,7 +220,7 @@ export class SqlFileStore {
     if (fileId && !existing) throw new Error('Unknown SQL file.')
     if (!selectedPath && !existing) throw new Error('Select a file using Save As first.')
     const path = resolve(selectedPath ?? existing!.path)
-    const owner = await this.owner(path, existing?.id)
+    const owner = await this.owner(path, existing?.id, new Map())
     if (owner) throw new Error(`${owner.name} is open in another query tab. Close that tab before saving over it.`)
     const encoding = options.encoding ?? existing?.encoding ?? 'utf8'
     if (encoding === 'legacy') throw new Error(`${existing?.name ?? basename(path)} was read as ${existing?.codePage ?? 'ANSI'}, which Varia SQL Manager does not write. Save it as Unicode.`)
@@ -351,7 +362,7 @@ export class SqlFileStore {
    * The registration, other than `except`, of the file at `path`: the same path (in any case on Windows), or the same
    * file reached through a symbolic link, which a save would write too.
    */
-  private async owner(path: string, except?: string, targets: TargetCache = new Map()): Promise<SqlFile | undefined> {
+  private async owner(path: string, except: string | undefined, targets: TargetCache): Promise<SqlFile | undefined> {
     const others = [...this.files.values()].map(entry => entry.file).filter(file => file.id !== except)
     const literal = others.find(entry => samePath(entry.path, path, this.platform))
     if (literal || !others.length) return literal

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, expect, it } from 'vitest'
 import { existsSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { isReadyToRun, readyToRunAssemblies } from '../../scripts/packaged-contents.mjs'
 import { MessageChannel, Worker, type MessagePort } from 'node:worker_threads'
 import { monitorEventLoopDelay } from 'node:perf_hooks'
 import { BackendSupervisor } from '../../src/main/backend/supervisor'
@@ -64,14 +65,12 @@ it('round-trips system.health between main and the backend', async () => {
   )
 })
 
-// A fresh backend's start: spawn to HELLO answered (the supervisor's ready), then its first system.health. Release
-// packages are ReadyToRun (issue #163); VARIA_BENCH_BACKEND=<published Varia.Backend executable> times one of those
-// instead of the IL build (dotnet publish -r <rid> --self-contained -c Release).
-it('starts a fresh backend', async () => {
-  const published = process.env.VARIA_BENCH_BACKEND
+// A fresh backend's start: spawn to HELLO answered (the supervisor's ready), then its first system.health. Six starts;
+// the first warms the disk cache, and the rest are what a relaunch costs.
+async function startTimes(command: string, args: string[]): Promise<{ starts: number[]; firsts: number[] }> {
   const starts: number[] = [], firsts: number[] = []
   for (let i = 0; i < 6; i++) {
-    const fresh = new BackendSupervisor({ command: published ? resolve(published) : 'dotnet', args: published ? [] : [dll], cwd: process.cwd(), packaged: false, env: { ...process.env } })
+    const fresh = new BackendSupervisor({ command, args, cwd: process.cwd(), packaged: false, env: { ...process.env } })
     const started = performance.now()
     const ready = new Promise<void>((done, fail) => fresh.onState(state => { if (state.status === 'ready') done(); else if (state.status === 'failed') fail(new Error(state.message)) }))
     fresh.start()
@@ -79,13 +78,29 @@ it('starts a fresh backend', async () => {
       await ready
       const readyAt = performance.now()
       await fresh.request('system.health', {})
-      // The first start warms the disk cache; the rest are what a relaunch costs.
       if (i > 0) { starts.push(readyAt - started); firsts.push(performance.now() - readyAt) }
     } finally { await fresh.stop() }
   }
+  return { starts, firsts }
+}
+it('starts a fresh backend', async () => {
+  const { starts, firsts } = await startTimes('dotnet', [dll])
   record(
-    { id: 'node.backend.readyMs', value: median(starts), unit: 'ms', detail: `median of ${starts.length} warm-cache starts, ${published ? 'published' : 'IL'} backend` },
+    { id: 'node.backend.readyMs', value: median(starts), unit: 'ms', detail: `median of ${starts.length} warm-cache starts, IL Release build` },
     { id: 'node.backend.firstHealthMs', value: median(firsts), unit: 'ms', detail: 'the first system.health after ready, median' }
+  )
+}, 120_000)
+// Release packages publish the backend ReadyToRun (issue #163). VARIA_BENCH_BACKEND=<published Varia.Backend executable>
+// (CI's Linux benchmarks publish one as package.yml does) checks that the publish really precompiled the assemblies a
+// connect and Script As load, which no timing would show for certain, and times that backend's start.
+it.runIf(!!process.env.VARIA_BENCH_BACKEND)('starts a published ReadyToRun backend', async () => {
+  const published = resolve(process.env.VARIA_BENCH_BACKEND!)
+  const interpreted = readyToRunAssemblies.filter(name => !isReadyToRun(join(dirname(published), name)))
+  expect(interpreted, 'published assemblies that are not ReadyToRun').toEqual([])
+  const { starts, firsts } = await startTimes(published, [])
+  record(
+    { id: 'node.backend.publishedReadyMs', value: median(starts), unit: 'ms', detail: `median of ${starts.length} warm-cache starts, ReadyToRun self-contained publish` },
+    { id: 'node.backend.publishedFirstHealthMs', value: median(firsts), unit: 'ms', detail: 'the first system.health after ready, median' }
   )
 }, 120_000)
 

@@ -321,6 +321,46 @@ describe('SQL file encodings and save hardening', () => {
     expect(await store.read(alias, { targets: store.targets() })).toMatchObject({ id: registered[1]?.id })
     expect(calls).toContain(paths[0])
   })
+  it('registers a file and a link to it once when one Open dialog selection reads both at the same time', async () => {
+    const target = join(directory, 'real.sql'), alias = join(directory, 'alias.sql')
+    // A slow volume: every resolution takes a while, so both reads look for an owner before either has registered.
+    const store = new SqlFileStore({ realpath: async path => { await new Promise(done => setTimeout(done, 20)); return path === alias ? target : path } })
+    await writeFile(target, 'SELECT 1')
+    await writeFile(alias, 'SELECT 1')
+    // Another tab is open, so each read resolves paths before it can tell it owns none.
+    await writeFile(join(directory, 'open.sql'), 'SELECT 0')
+    await store.read(join(directory, 'open.sql'))
+    const targets = store.targets()
+    const [real, viaAlias, again] = await Promise.all([store.read(target, { targets }), store.read(alias, { targets }), store.read(target, { targets })])
+    expect(viaAlias.id).toBe(real.id)
+    expect(again.id).toBe(real.id)
+    // One registration: a Save As onto either path from another query is refused.
+    const other = await store.save('SELECT 2', undefined, join(directory, 'other.sql'))
+    await expect(store.save('SELECT 3', other.id, alias)).rejects.toThrow('is open in another query tab')
+    // A failed read does not stall the next one.
+    await expect(store.read(join(directory, 'missing.sql'))).rejects.toThrow()
+    expect((await store.read(target)).id).toBe(real.id)
+  })
+  // The restore that #163 names, the Open dialog and the files handed to main (arguments, a second instance, a drop) each
+  // share one cache across their burst; a per-file cache would bring back n² resolutions with every check above green.
+  it('shares one target cache across every open of a burst in main', async () => {
+    const main = await readFile('src/main/index.ts', 'utf8')
+    const body = (start: string) => { const from = main.indexOf(start); expect(from, start).toBeGreaterThan(-1); return main.slice(from, main.indexOf('\n}', from)) }
+    const restore = main.slice(main.indexOf("handle('varia:session-take'"), main.indexOf("handle('varia:session-restored'"))
+    expect(restore.match(/files\.targets\(\)/g)).toHaveLength(1)
+    expect(restore.indexOf('files.targets()')).toBeLessThan(restore.indexOf('for (const [index, document]'))
+    expect(restore).toContain('reopenDocument(document, targets)')
+    const reopen = body('async function reopenDocument(')
+    expect(reopen).toMatch(/files\.register\([^)]*, targets\)/)
+    expect(reopen).toMatch(/files\.read\(path, \{[^}]*\btargets\b[^}]*\}\)/)
+    const launch = body('async function openPaths(')
+    expect(launch.indexOf('files.targets()')).toBeGreaterThan(-1)
+    expect(launch.indexOf('files.targets()')).toBeLessThan(launch.indexOf('for (const path'))
+    expect(launch).toContain('openPath(path, targets)')
+    expect(body('async function openPath(')).toContain('files.read(path, { targets })')
+    const dialog = main.slice(main.indexOf("title: 'Open SQL query'"), main.indexOf('return opened', main.indexOf("title: 'Open SQL query'")))
+    expect(dialog).toMatch(/const targets = files\.targets\(\), opened = await Promise\.all\(selected\.filePaths\.map\(path => files\.read\(path, \{ targets \}\)\)\)/)
+  })
 })
 
 /** Answers from a queue and records what was asked. */

@@ -326,20 +326,20 @@ function openError(error: unknown): string {
  * skipped without a word, and each opened file put first in Recent Files. What fails is reported as "name: reason".
  */
 async function openPaths(paths: readonly string[]): Promise<OpenedFiles> {
-  const opened: OpenSqlFile[] = [], errors: string[] = []
+  const opened: OpenSqlFile[] = [], errors: string[] = [], targets = files.targets()
   for (const path of paths.slice(0, maxLaunchFiles)) {
     try {
-      const file = await openPath(path)
+      const file = await openPath(path, targets)
       if (file) opened.push(file)
     } catch (error) { errors.push(openFailure(path, error)) }
   }
   return { files: opened, errors }
 }
 /** One file main was handed, read as Open reads it and put first in Recent Files; undefined for a folder. */
-async function openPath(path: string): Promise<OpenSqlFile | undefined> {
+async function openPath(path: string, targets: TargetCache = files.targets()): Promise<OpenSqlFile | undefined> {
   if (!isAbsolute(path)) throw new Error('The path is not absolute.')
   if ((await stat(path)).isDirectory()) return undefined
-  const file = await files.read(path)
+  const file = await files.read(path, { targets })
   void recent.add(file.path).catch(() => {})
   return file
 }

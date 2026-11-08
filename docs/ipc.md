@@ -2423,9 +2423,12 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
   it arrived, so the next sample is overdue when its credit reaches the backend: the time from an acknowledgement to the
   next event is the whole loop (page → worker → main → backend → main → worker → page), not the source's schedule.
   Its backend start spawns six fresh backends and times the last five (warm disk cache) from spawn to HELLO answered and
-  then their first `system.health`. It runs the IL Release build; `VARIA_BENCH_BACKEND=<Varia.Backend executable>` times a
-  published one instead, such as the ReadyToRun build release packages carry (`dotnet publish -r <rid> --self-contained
-  -c Release`): about 235 ms against 280 – 330 ms IL on a busy 24-CPU Windows desktop, 9 against 13 – 15 ms to the first answer.
+  then their first `system.health`, for the IL Release build and, with `VARIA_BENCH_BACKEND=<Varia.Backend executable>`, a
+  published one such as the ReadyToRun build release packages carry (`dotnet publish -r <rid> --self-contained -c Release`):
+  about 235 ms against 280 – 330 ms IL on a busy 24-CPU Windows desktop, 9 against 13 – 15 ms to the first answer. CI's
+  Linux benchmarks publish that build as package.yml does and set the variable, and the bench first fails unless
+  `Varia.Backend.dll`, `Microsoft.Data.SqlClient.dll` and `Microsoft.SqlServer.Smo.dll` there are ReadyToRun, so a publish
+  that stops precompiling them fails a pull request rather than slowing a release.
 - **The live snapshot churn** runs main's live path (`ResultsPortHost` with the test sources, the supervisor, the Release
   backend's table writer) with a worker stand-in that acknowledges each frame at once: `debug.synthetic.wide` stores 5,000
   rows of 23 typed columns every 10 ms if it can, each revision owned, retired, forgotten and released one at a time, for 5 s.
@@ -2470,6 +2473,8 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | 256 concurrent `system.health` | ≤ 150 ms | ≤ 1 s | 4 – 7 ms | 7 ms |
 | Backend start: spawn to HELLO answered, warm disk cache, median | ≤ 300 ms | ≤ 3 s | 280 – 330 ms (IL, Windows, 24 CPUs) | not measured |
 | Backend start: the first `system.health` after HELLO, median | ≤ 20 ms | reported only | 13 – 15 ms (IL, Windows, 24 CPUs) | not measured |
+| Published ReadyToRun backend start: spawn to HELLO answered, median | ≤ 250 ms | reported only | about 235 ms (Windows, 24 CPUs) | not measured |
+| Published ReadyToRun backend start: the first `system.health` after HELLO, median | ≤ 15 ms | reported only | about 9 ms (Windows, 24 CPUs) | not measured |
 | Live snapshot revisions, 5,000 × 23, stored, sent, acknowledged and released | ≥ 50 swaps/s | ≥ 10 swaps/s | – | – |
 | Backend gen2 collections a minute of a 1 s snapshot of them (per revision × 60) | ≤ 60 | ≤ 120 | – | – |
 | W1, 500,000 rows, store → main → port → worker | ≥ 1,000,000 rows/s, ≥ 200 MB/s | ≥ 250,000 rows/s, ≥ 50 MB/s | 710,000 – 935,000 rows/s, 150 – 203 MB/s | 514,000 – 612,000 rows/s, 112 – 133 MB/s |

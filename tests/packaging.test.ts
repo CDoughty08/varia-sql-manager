@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { readdirSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import { asarProblems, bareImports, isReadyToRun, readAsar, readyToRunAssemblies } from '../scripts/packaged-contents.mjs'
+import { asarProblems, bareImports, builtScripts, isReadyToRun, readAsar, readyToRunAssemblies } from '../scripts/packaged-contents.mjs'
 
 /** An archive as electron-builder writes one: the header's size, the JSON header (both Chromium pickles), then the files. */
 function asar(files: Record<string, string>): Buffer {
@@ -60,6 +60,41 @@ describe('Packaging (issue #163)', () => {
     expect(asarProblems(contents)).toEqual([])
     expect(asarProblems(readAsar(shipped))).toEqual(['app.asar holds 1 node_modules files, such as node_modules/zod/package.json', 'out/main/index.js loads zod, which is not bundled'])
   })
+  it("accepts Node's own modules with or without the node: prefix", () => {
+    const contents = new Map([['out/main/index.js', Buffer.from('import { join } from "path";\nimport fs from "fs";\nimport { app } from "electron";\nconst w = require("worker_threads");\nimport { z } from "zod";\n')]])
+    expect(asarProblems(contents)).toEqual(['out/main/index.js loads zod, which is not bundled'])
+  })
+  it('checks the built main and preload in every npm run check and build:smoke, not only in a release', async () => {
+    const { steps, plan } = await import('../scripts/check.mjs')
+    expect(steps['electron-vite build']).toBe('npx electron-vite build && node scripts/packaged-contents.mjs')
+    expect(JSON.stringify(plan({ cpus: 4, build: true }))).toContain('electron-vite build')
+    await mkdir('artifacts', { recursive: true })
+    directory = await mkdtemp(join(resolve('artifacts'), 'out-test-'))
+    await mkdir(join(directory, 'out', 'main', 'chunks'), { recursive: true })
+    await mkdir(join(directory, 'out', 'preload'), { recursive: true })
+    await mkdir(join(directory, 'out', 'renderer'), { recursive: true })
+    await writeFile(join(directory, 'out', 'main', 'index.js'), 'import { app } from "electron";\nimport "./chunks/a.js";\n')
+    await writeFile(join(directory, 'out', 'main', 'chunks', 'a.js'), 'import { z } from "zod";\n')
+    await writeFile(join(directory, 'out', 'preload', 'index.cjs'), 'const e = require("electron");')
+    await writeFile(join(directory, 'out', 'renderer', 'index.js'), 'import "react";')
+    const built = builtScripts(directory)
+    expect([...built.keys()].sort()).toEqual(['out/main/chunks/a.js', 'out/main/index.js', 'out/preload/index.cjs'])
+    expect(asarProblems(built)).toEqual(['out/main/chunks/a.js loads zod, which is not bundled'])
+    const run = (cwd: string) => spawnSync(process.execPath, [resolve('scripts/packaged-contents.mjs')], { cwd, encoding: 'utf8' })
+    const failed = run(directory)
+    expect(failed.status).toBe(1)
+    expect(failed.stderr).toContain('out/main/chunks/a.js loads zod')
+    await writeFile(join(directory, 'out', 'main', 'chunks', 'a.js'), 'import { join } from "node:path";\n')
+    expect(run(directory).status).toBe(0)
+  })
+  // The packages main and the page run (zod, React, Monaco, DOMPurify through Monaco) are devDependencies only because
+  // electron-vite bundles them; `npm audit --omit=dev` and other production-only gates would pass over them.
+  it('audits every package, since the bundled ones are devDependencies', async () => {
+    const workflows = await Promise.all(readdirSync('.github/workflows').map(name => readFile(join('.github/workflows', name), 'utf8')))
+    for (const text of [...workflows, await readFile('package.json', 'utf8')]) expect(text).not.toMatch(/npm audit[^\n]*(--omit[= ]dev|--production|--only[= ]prod)/)
+    const readme = await readFile('README.md', 'utf8')
+    expect(readme).toMatch(/devDependencies[^\n]*ship/)
+  })
   it('publishes the release backend ReadyToRun, restored locked from packages.lock.json for every release RID', async () => {
     const project = await readFile('backend/Varia.Backend/Varia.Backend.csproj', 'utf8')
     const release = await readFile('.github/workflows/release.yml', 'utf8'), pack = await readFile('.github/workflows/package.yml', 'utf8')
@@ -73,6 +108,14 @@ describe('Packaging (issue #163)', () => {
     // Without locked mode, the RID's restore re-resolves packages silently instead of using the lock file.
     expect(pack).toMatch(/dotnet publish backend\/Varia\.Backend\/Varia\.Backend\.csproj -c Release -r \$\{\{ inputs\.rid \}\} --self-contained true -p:RestoreLockedMode=true -o artifacts\/release-backend\n/)
     expect(readyToRunAssemblies).toContain('Varia.Backend.dll')
+    // CI's Linux benchmarks publish the same way on every pull request and hand it to the node bench, which fails unless
+    // those assemblies are ReadyToRun (tests/bench/backend.bench.ts).
+    const ci = await readFile('.github/workflows/ci.yml', 'utf8')
+    const bench = ci.slice(ci.indexOf('\n  bench-linux:'), ci.indexOf('\n  regressions:'))
+    expect(bench).toContain('dotnet publish backend/Varia.Backend/Varia.Backend.csproj -c Release -r linux-x64 --self-contained true -p:RestoreLockedMode=true -o artifacts/bench-backend\n')
+    expect(bench).toMatch(/env:\n {10}VARIA_BENCH_BACKEND: artifacts\/bench-backend\/Varia\.Backend\n {8}run: \|\n {10}npm run bench\n/)
+    const nodeBench = await readFile('tests/bench/backend.bench.ts', 'utf8')
+    expect(nodeBench).toContain("readyToRunAssemblies.filter(name => !isReadyToRun(join(dirname(published), name)))")
   })
   it('tells ReadyToRun assemblies from IL-only ones, as the packaged smoke test reads the backend', () => {
     // The shared framework ships ReadyToRun; its reference pack is IL only.
