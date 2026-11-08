@@ -924,11 +924,15 @@ lost.
   a maximum collector duration. If a process exits abruptly before cleanup, a collector's connection ID filter prevents
   a later session that reuses the SPID from being captured. A server-scoped collector's name records its client event GUID
   and both query/observer physical server connection IDs. A later capture checks up to 16 candidates within a one-second
-  slice of its 5 s setup budget. Recovery requires both connections to be absent and the ownership/predicate shape to
-  match; it rechecks the definition and liveness immediately before server-quoted DROP. Database-scoped and older
-  single-GUID collectors are not swept because their observer ownership cannot be proved. SQL in `Plans/ActualPlanSql.cs`
-  binds values as typed parameters and quotes identifiers on the server; offline builder checks and real hostile-name
-  round trips cover that boundary. See [collector recovery](plan-capture-hardening.md) for limits and validation.
+  slice of its 5 s setup budget, resuming after the last one the previous capture examined on that server, so refused or
+  failing definitions cannot hide later ones; a drop the server refuses skips to the next. Recovery requires both
+  connections to be absent and the ownership/predicate shape to match; it rechecks the definition and liveness
+  immediately before server-quoted DROP. Server-scoped single-GUID collectors from earlier builds cannot prove observer
+  ownership, so they are swept only when clearly abandoned: collector-shaped with Varia's exact predicates, and either
+  stopped while no connection holds the session id they watch, or created more than a day ago. Database-scoped
+  collectors are not swept. SQL in `Plans/ActualPlanSql.cs` is rendered once per variant, binds
+  values as typed parameters and quotes identifiers on the server; its offline lint (`ActualPlanSql.Lint`) and real
+  hostile-name round trips cover that boundary. See [collector recovery](plan-capture-hardening.md) for limits and validation.
   When `SET STATISTICS XML` also returned the same execution, Varia keeps the complete SQL-returned plan and pairs it with
   one observer event in the same batch and repetition. The optional `planOrder` lists matched and retained observer result
   IDs in event order so the canvas can interleave both sources within a batch. Across batches it uses batch and repetition.

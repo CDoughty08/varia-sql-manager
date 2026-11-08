@@ -51,10 +51,111 @@ internal static class ActualPlanRecoveryChecks
             check(ActualPlanSql.Permissions(database).Contains(database ? "DROP ANY DATABASE EVENT SESSION" : "DROP ANY EVENT SESSION")
                 && ActualPlanSql.Permissions(database).Contains("IS NULL"), "collector permission preflight preserves granular DENY and legacy permission fallback");
         }
-        check(ActualPlanSql.Candidates.Contains("TOP (17)") && ActualPlanSql.Candidates.Contains("ORDER BY s.event_session_id")
+        check(ActualPlanSql.Candidates.Contains("TOP (17)") && ActualPlanSql.Candidates.Contains("ORDER BY CASE WHEN c.id>@after THEN 0 ELSE 1 END, c.id")
             && ActualPlanSql.DropAbandoned.Contains("s.event_session_id=@id") && ActualPlanSql.DropAbandoned.Contains("b.predicate=@batch AND p.predicate=@plan")
             && ActualPlanSql.DropAbandoned.Contains("c.parent_connection_id IN (@target,@owner)") && ActualPlanSql.DropAbandoned.Contains("QUOTENAME(@name)"),
-            "collector recovery bounds its scan and rechecks definition and MARS/physical connection liveness before quoted DROP");
+            "collector recovery bounds and rotates its scan and rechecks definition and MARS/physical connection liveness before quoted DROP");
+        // Single-GUID names from earlier builds go only when clearly abandoned: stopped, or created more than a day ago.
+        check(ActualPlanSql.Candidates.Contains(ActualPlanSql.LegacyName) && ActualPlanSql.Candidates.Contains(ActualPlanSql.LegacyAbandoned(ActualPlanSql.LegacySpid))
+            && ActualPlanSql.DropLegacy.Contains(ActualPlanSql.LegacyName) && ActualPlanSql.DropLegacy.Contains(ActualPlanSql.LegacyAbandoned("@spid"))
+            && ActualPlanSql.DropLegacy.Contains("s.event_session_id=@id AND s.name=@name") && ActualPlanSql.DropLegacy.Contains("b.predicate=@batch AND p.predicate=@plan")
+            && ActualPlanSql.DropLegacy.Contains("QUOTENAME(@name)") && ActualPlanSql.LegacyAbandoned("@spid").Contains("NOT EXISTS (SELECT 1 FROM sys.dm_exec_connections c WHERE c.session_id=@spid)")
+            && ActualPlanSql.LegacyAbandoned("@spid").Contains("create_time<DATEADD(day,-1,GETDATE())")
+            && ActualPlanSql.LegacyName.Contains("DATALENGTH(s.name)=88"), "legacy collectors are selected and rechecked only when stopped with their session id unheld, or a day old");
+        // A legacy definition must carry exactly the predicates every earlier build wrote; its name's GUID is not tied to them.
+        var legacy = candidate with { Name = "VariaActual_" + Guid.NewGuid().ToString("N"), Legacy = true };
+        check(ActualPlanRecovery.OwnsLegacy(legacy, out var legacySpid) && legacySpid == 99, "a legacy collector with Varia's predicates is recognised with the session id it watches");
+        foreach (var changed in new[] {
+            legacy with { Name = candidate.Name },
+            legacy with { Name = "VariaActual_" + new string('g', 32) },
+            legacy with { BatchXml = Batch.Replace("<value>99", "<value>0") },
+            legacy with { BatchXml = Batch.Replace("session_id", "database_id") },
+            legacy with { BatchXml = Batch.Replace("</and>", "<leaf><comparator name=\"equal_uint64\" package=\"package0\"/><global name=\"session_id\" package=\"sqlserver\"/><value>5</value></leaf></and>") },
+            legacy with { PlanXml = Plan.Replace("false", "true") },
+            legacy with { PlanXml = Plan.Replace("<value>99", "<value>100") },
+            legacy with { BatchXml = "", PlanXml = "" } })
+            check(!ActualPlanRecovery.OwnsLegacy(changed, out _), "a legacy-named collector with other predicates or another name is refused");
+
+        // #165: every collector statement, each variant, passes the collector lint, and the lint refuses what it is for.
+        var all = ActualPlanSql.All().ToList();
+        check(all.Count == 13 &&all.Distinct().Count() == all.Count, "the collector lint sees every rendered variant");
+        foreach (var sql in all)
+        {
+            var problems = ActualPlanSql.Lint(sql);
+            check(problems.Count == 0, "collector SQL passes its lint: " + string.Join("; ", problems));
+        }
+        check(ReferenceEquals(ActualPlanSql.Create(false, true), ActualPlanSql.Create(false, true)) && ReferenceEquals(ActualPlanSql.Drop(true), ActualPlanSql.Drop(true)),
+            "collector SQL is rendered once per variant, the text the lint checked");
+        foreach (var (bad, why) in new[] {
+            ("DECLARE @sql nvarchar(max) = N'DROP EVENT SESSION [' + @name + N'] ON SERVER;'; EXEC sys.sp_executesql @sql;", "raw identifier"),
+            ("DECLARE @sql nvarchar(max) = N'DROP EVENT SESSION ' + CONVERT(nvarchar(128),@name) + N' ON SERVER;'; EXEC sys.sp_executesql @sql;", "converted identifier"),
+            ("DECLARE @sql nvarchar(max) = N'DROP EVENT SESSION ' + QUOTENAME(@name) + N' ON SERVER;'; EXEC(@sql);", "EXEC of a string"),
+            ("DECLARE @sql nvarchar(max) = N'DROP EVENT SESSION ' + QUOTENAME(@name) + N' ON {Scope};'; EXEC sys.sp_executesql @sql;", "unrendered hole"),
+            ("DECLARE @sql nvarchar(max) = N'DROP EVENT SESSION [VariaActual_1] ON SERVER;'; SET @sql = @sql + @name; EXEC sys.sp_executesql @sql;", "late assignment"),
+            ("DECLARE @sql nvarchar(max) = N'DROP DATABASE ' + QUOTENAME(@name) + N';'; EXEC sys.sp_executesql @sql;", "other DDL"),
+            ("DECLARE @sql nvarchar(max) = N'GRANT CONTROL SERVER TO ' + QUOTENAME(@name) + N';'; EXEC sys.sp_executesql @sql;", "other statement"),
+            ("SELECT name FROM sys.server_event_sessions WHERE name=@other;", "unknown variable"),
+            ("DROP EVENT SESSION [x] ON SERVER;", "static DDL outside the dynamic text"),
+            ("SELECT N'unterminated;", "unterminated literal") })
+            check(ActualPlanSql.Lint(bad).Count > 0, "the collector lint refuses " + why);
+
+        ScanChecks(check);
+    }
+
+    /// <summary>#258 and #234: a backlog of definitions that recovery refuses, or that fail to drop, ahead of real
+    /// orphans. Bounded passes must still reach every orphan and never drop a refused one.</summary>
+    private static void ScanChecks(Action<bool, string> check)
+    {
+        const string Batch = "<and><leaf><comparator name=\"equal_uint64\" package=\"package0\"/><global name=\"session_id\" package=\"sqlserver\"/><value>7</value></leaf>"
+            + "<leaf><comparator name=\"equal_guid\" package=\"package0\"/><global name=\"client_connection_id\" package=\"sqlserver\"/><value>{0}</value></leaf></and>";
+        const string Plan = "<and>" + Batch + "<leaf><comparator name=\"equal_boolean\" package=\"package0\"/><global name=\"is_system\" package=\"sqlserver\"/><value>false</value></leaf></and>";
+        ActualPlanRecovery.Candidate Make(int id, bool owned)
+        {
+            var client = Guid.NewGuid();
+            var shown = (owned ? client : Guid.NewGuid()).ToString("D").ToUpperInvariant();
+            return new(id, ActualPlanRecovery.Name(client, Guid.NewGuid(), Guid.NewGuid()), string.Format(Batch, shown), string.Format(Plan, shown), "", "");
+        }
+        // Ids 1-20 are refused (their predicates name another client), 21-23 always fail to drop, 24-40 are orphans,
+        // 41-42 are legacy orphans, and 43 is a legacy name whose predicates were changed.
+        var server = new SortedDictionary<int, ActualPlanRecovery.Candidate>();
+        for (var id = 1; id <= 40; id++) server[id] = Make(id, id > 20);
+        for (var id = 41; id <= 43; id++)
+        {
+            var shown = Guid.NewGuid().ToString("D").ToUpperInvariant();
+            server[id] = new(id, "VariaActual_" + Guid.NewGuid().ToString("N"), string.Format(id == 43 ? Batch.Replace("<value>7", "<value>8") : Batch, shown),
+                string.Format(Plan, shown), "", "", true);
+        }
+        var failing = new HashSet<int> { 21, 22, 23 };
+        // The candidate query's order: ids after the resume point first, then the scan wraps; TOP (limit + 1).
+        Task<List<ActualPlanRecovery.Candidate>> Select(int after) => Task.FromResult(server.Values
+            .OrderBy(candidate => candidate.Id > after ? 0 : 1).ThenBy(candidate => candidate.Id).Take(ActualPlanSql.RecoveryLimit + 1).ToList());
+        var dropped = new List<int>();
+        Task<bool> Drop(ActualPlanRecovery.Candidate candidate, Guid target, Guid owner)
+        {
+            if (failing.Contains(candidate.Id)) return Task.FromResult(false);
+            dropped.Add(candidate.Id);
+            server.Remove(candidate.Id);
+            return Task.FromResult(true);
+        }
+        var key = "scan-check\n" + Guid.NewGuid();
+        var notices = new List<string?>();
+        bool Orphan(int id) => id is > 23 and < 43;
+        for (var pass = 0; pass < 6 && server.Keys.Any(Orphan); pass++)
+            notices.Add(ActualPlanRecovery.ScanAsync(key, Select, Drop).GetAwaiter().GetResult());
+        check(!server.Keys.Any(Orphan) && dropped.Order().SequenceEqual(Enumerable.Range(24, 19)),
+            "bounded recovery passes reach every orphan behind refused and failing definitions: left " + string.Join(",", server.Keys.Where(Orphan)));
+        check(Enumerable.Range(1, 23).Append(43).All(server.ContainsKey), "rotated recovery never drops a refused definition, legacy ones included, and keeps one it failed to drop");
+        check(notices.Count > 1 && notices.All(notice => notice == ActualPlanRecovery.Notice), "a pass that defers or fails a drop reports the notice");
+
+        // Once only refused definitions remain beyond the limit, passes keep wrapping without dropping anything.
+        var quiet = new SortedDictionary<int, ActualPlanRecovery.Candidate>();
+        for (var id = 1; id <= 3; id++) quiet[id] = Make(id, false);
+        var none = ActualPlanRecovery.ScanAsync("scan-check\n" + Guid.NewGuid(), after => Task.FromResult(quiet.Values.Where(c => c.Id > after).ToList()),
+            (_, _, _) => { check(false, "a refused definition is never dropped"); return Task.FromResult(true); }).GetAwaiter().GetResult();
+        check(none is null, "a pass that examined every candidate and dropped none needs no notice");
+        var (examine, next) = ActualPlanRecovery.Window([.. Enumerable.Range(5, 17).Select(id => Make(id, true))]);
+        check(examine.Length == ActualPlanSql.RecoveryLimit && next == 20 && ActualPlanRecovery.Window([Make(9, true)]).Next == 0,
+            "the next scan resumes after the last examined definition, or starts over once all were examined");
     }
 
     public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json)
@@ -85,6 +186,21 @@ internal static class ActualPlanRecoveryChecks
             return await command.ExecuteScalarAsync(token);
         }
         async Task<bool> Exists(string name) => await Scalar("SELECT COUNT(*) FROM sys.server_event_sessions WHERE name=@name;", name) is 1;
+        // A collector definition with production DDL (no MAX_DURATION) for a session that does not exist, optionally stopped.
+        async Task Define(string name, Guid client, bool stop, int spid = 32767)
+        {
+            created.Add(name);
+            await using (var command = control.CreateCommand())
+            {
+                command.CommandTimeout = 5;
+                command.CommandText = ActualPlanSql.Create(false, false);
+                command.Parameters.Add("@name", SqlDbType.NVarChar, 128).Value = name;
+                command.Parameters.Add("@spid", SqlDbType.Int).Value = spid;
+                command.Parameters.Add("@client", SqlDbType.UniqueIdentifier).Value = client;
+                await command.ExecuteNonQueryAsync(token);
+            }
+            if (stop) await Scalar("DECLARE @sql nvarchar(max)=N'ALTER EVENT SESSION '+QUOTENAME(@name)+N' ON SERVER STATE=STOP;'; EXEC sys.sp_executesql @sql;", name);
+        }
         async Task<int> Spid(SqlConnection connection)
         {
             await using var command = connection.CreateCommand();
@@ -175,11 +291,12 @@ internal static class ActualPlanRecoveryChecks
             }
             await using var candidate = control.CreateCommand();
             candidate.CommandText = ActualPlanSql.Candidates;
-            candidate.Parameters.Add("@onlyName", SqlDbType.NVarChar, 128).Value = name;
+            candidate.Parameters.Add("@only", SqlDbType.NVarChar, 128).Value = name;
+            candidate.Parameters.Add("@after", SqlDbType.Int).Value = 0;
             await using var reader = await candidate.ExecuteReaderAsync(token);
             check(await reader.ReadAsync(token), "abandoned test collector passes SQL ownership-shape/liveness filter");
-            var value = new ActualPlanRecovery.Candidate(reader.GetInt32(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5));
-            check(ActualPlanRecovery.Owns(value, out _, out _), "real predicate XML proves ownership: " + value.BatchXml + " | " + value.PlanXml);
+            var value = new ActualPlanRecovery.Candidate(reader.GetInt32(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetBoolean(6));
+            check(!value.Legacy && ActualPlanRecovery.Owns(value, out _, out _), "real predicate XML proves ownership: " + value.BatchXml + " | " + value.PlanXml);
         }
         try
         {
@@ -257,6 +374,54 @@ internal static class ActualPlanRecoveryChecks
             await Scalar("DECLARE @sql nvarchar(max)=N'ALTER EVENT SESSION '+QUOTENAME(@name)+N' ON SERVER DROP EVENT sqlserver.sql_batch_starting;'; EXEC sys.sp_executesql @sql;", modified.Name);
             await Recover(modified.Name);
             check(await Exists(modified.Name), "recovery leaves a modified collector definition alone even with matching ownership-shaped name");
+
+            // #233: a single-GUID collector from an earlier build stays while it runs (less than a day) and goes once stopped.
+            var legacy = "VariaActual_" + Guid.NewGuid().ToString("N");
+            await Define(legacy, Guid.NewGuid(), stop: false);
+            await Recover(legacy);
+            check(await Exists(legacy), "a running legacy collector created less than a day ago is kept");
+            await Scalar("DECLARE @sql nvarchar(max)=N'ALTER EVENT SESSION '+QUOTENAME(@name)+N' ON SERVER STATE=STOP;'; EXEC sys.sp_executesql @sql;", legacy);
+            await Recover(legacy);
+            check(!await Exists(legacy), "a stopped legacy collector is removed");
+            // An older build creates its collector, then starts it in a second statement, with its query connection open.
+            // Between the two the definition is stopped, and the session id its predicates watch is held: it must stay.
+            var starting = "VariaActual_" + Guid.NewGuid().ToString("N");
+            await Define(starting, Guid.NewGuid(), stop: true, spid: await Spid(control));
+            await Recover(starting);
+            check(await Exists(starting), "a stopped legacy collector whose watched session id is held (between an older build's CREATE and START) is kept");
+            // A legacy name whose predicates were changed (here: session 32766, unheld, in database 1) is not Varia's to remove.
+            var repointed = "VariaActual_" + Guid.NewGuid().ToString("N");
+            await Define(repointed, Guid.NewGuid(), stop: true);
+            await Scalar("""
+                DECLARE @sql nvarchar(max)=N'ALTER EVENT SESSION '+QUOTENAME(@name)+N' ON SERVER DROP EVENT sqlserver.sql_batch_starting;
+                    ALTER EVENT SESSION '+QUOTENAME(@name)+N' ON SERVER ADD EVENT sqlserver.sql_batch_starting(SET collect_batch_text=(0)
+                    ACTION(package0.event_sequence) WHERE ([sqlserver].[session_id]=(32766) AND [sqlserver].[database_id]=(1)));'; EXEC sys.sp_executesql @sql;
+                """, repointed);
+            await Recover(repointed);
+            check(await Exists(repointed), "a stopped legacy-named collector with modified predicates is left alone");
+            // The day-old rule compares create_time with GETDATE(): a session started now must read as local time.
+            var clock = "VariaActual_" + Guid.NewGuid().ToString("N");
+            await Define(clock, Guid.NewGuid(), stop: false);
+            check(await Scalar("""
+                SELECT CASE WHEN ABS(DATEDIFF(second,x.create_time,GETDATE()))<=300 THEN 1 ELSE 0 END
+                FROM sys.dm_xe_sessions x WHERE x.name=@name;
+                """, clock) is 1, "sys.dm_xe_sessions.create_time is the server's local time, as the legacy day-old rule assumes");
+
+            // #258: sixteen definitions recovery refuses (their predicates name another client) ahead of a real orphan,
+            // all under one random prefix. Bounded passes must still reach the orphan and leave the refused ones.
+            var client = Guid.NewGuid();
+            string Under() => ActualPlanRecovery.Name(client, Guid.NewGuid(), Guid.NewGuid());
+            var prefix = Under()[..44];
+            var refused = Enumerable.Range(0, ActualPlanSql.RecoveryLimit).Select(_ => Under()).ToList();
+            foreach (var name in refused) await Define(name, Guid.NewGuid(), stop: true);
+            var orphan = Under();
+            await Define(orphan, client, stop: true);
+            var passes = 0;
+            for (; passes < 4 && await Exists(orphan); passes++) await ActualPlanRecovery.RecoverAsync(control, token, prefix);
+            check(!await Exists(orphan), "recovery reaches an orphan behind sixteen refused definitions within bounded passes: " + passes);
+            var kept = 0;
+            foreach (var name in refused) if (await Exists(name)) kept++;
+            check(kept == refused.Count, "rotated recovery leaves every refused definition: " + kept);
 
             // Failure to inspect connection state must not be interpreted as proof that every owner is dead.
             await using var denied = await Open();
