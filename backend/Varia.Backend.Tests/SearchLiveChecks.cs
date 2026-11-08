@@ -136,8 +136,10 @@ internal static class SearchLiveChecks
             check((await Find("FindList", "names")).Hits.Count == 1, "a stopped build keeps the index it had");
         }
 
-        // A budget the system objects alone fill: every database read stops at its first record, cancelling its batch rather than
-        // draining it, and the build still ends ready, with the database skipped as TOO_LARGE.
+        // A budget the system objects alone fill: every database read stops at its first record, and the build still ends ready,
+        // with the database skipped as TOO_LARGE. This proves that path against a real server only; that the stopped read cancels
+        // its batch rather than draining it is SearchCostChecks.Reads' check (a scratch database is too small for a drain to show
+        // in the build's time).
         using (var tight = new ObjectSearchService(service, new ObjectIndexLimits { MemoryBytes = 64 * 1024, NamesReserveBytes = 0 }))
         {
             var small = await tight.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), CancellationToken.None);

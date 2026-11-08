@@ -5,7 +5,8 @@ namespace Varia.Backend.Tests;
 
 /// <summary>Offline checks of what a search and a build spend: hits past the candidate cap are counted without being kept, results
 /// are built only for the answered hits, a read past the budget cancels its batch instead of draining it, definitions the budget
-/// would refuse stay unread, and one connection reads two databases at once.</summary>
+/// would refuse are read only as far as a repeat the read holds, and one connection reads two databases at once, both stopped
+/// when one fails or on Stop, with progress that only grows and skipped databases in listing order.</summary>
 internal static class SearchCostChecks
 {
     public static void Run(Action<bool, string> check)
@@ -66,6 +67,7 @@ internal static class SearchCostChecks
         public bool FailOnClose;
         public int Drained;
         public int CharReads;
+        public long CharsRead;
 
         public override long GetChars(int ordinal, long dataOffset, char[]? buffer, int bufferOffset, int length)
         {
@@ -73,6 +75,7 @@ internal static class SearchCostChecks
             CharReads++;
             var value = inner.GetString(ordinal);
             var count = (int)Math.Max(0, Math.Min(length, value.Length - dataOffset));
+            CharsRead += count;
             if (buffer is not null) value.CopyTo((int)dataOffset, buffer, bufferOffset, count);
             return count;
         }
@@ -125,8 +128,9 @@ internal static class SearchCostChecks
         return table;
     }
 
-    /// <summary>A database batch without children and with definitions: <paramref name="count"/> procedures, each with one.</summary>
-    private static Batch Procedures(int count)
+    /// <summary>A database batch without children and with definitions: <paramref name="count"/> procedures, each with one
+    /// (<paramref name="text"/>'s, or its own), after plan guides with their names and statements.</summary>
+    private static Batch Procedures(int count, (string Name, string Text)[]? guides = null, string? text = null)
     {
         var at = DateTime.UnixEpoch;
         var ids = Enumerable.Range(1, count).ToList();
@@ -136,8 +140,8 @@ internal static class SearchCostChecks
             Rows([("id", typeof(int)), ("schema", typeof(string)), ("name", typeof(string)), ("table", typeof(bool)), ("assembly", typeof(bool)), ("object", typeof(int))], []),
             Rows([("code", typeof(string)), ("schema", typeof(string)), ("name", typeof(string)), ("modified", typeof(DateTime)), ("system", typeof(bool))], []),
             Rows([("id", typeof(int)), ("name", typeof(string)), ("modified", typeof(DateTime)), ("system", typeof(bool))], []),
-            Rows([("name", typeof(string)), ("modified", typeof(DateTime)), ("text", typeof(string))], []),
-            Rows([("id", typeof(int)), ("text", typeof(string))], ids.Select(id => new object?[] { id, "CREATE PROCEDURE dbo.p" + id + " AS SELECT " + id }))
+            Rows([("name", typeof(string)), ("modified", typeof(DateTime)), ("text", typeof(string))], (guides ?? []).Select(guide => new object?[] { guide.Name, at, guide.Text })),
+            Rows([("id", typeof(int)), ("text", typeof(string))], ids.Select(id => new object?[] { id, text ?? "CREATE PROCEDURE dbo.p" + id + " AS SELECT " + id }))
         ]);
     }
 
@@ -177,11 +181,28 @@ internal static class SearchCostChecks
         held.Dispose();
         check(threw && used > 0 && budget.Used == 0, "a read whose reader fails as it closes is already held, so dropping the index gives back all it took: " + budget.Used);
 
-        // Below the names' reserve the pool refuses every definition, so none is streamed, and each counts as cut.
-        var starved = Procedures(3);
+        // Below the names' reserve the pool refuses every definition the read does not hold yet: each counts as cut, and only as
+        // much of it is read as could show it is a short text the read holds.
+        var starved = Procedures(3, text: new string('x', 100_000));
         index = await new DatabaseReader("Sales", new ObjectIndexLimits { NamesReserveBytes = 1 << 20 }, new StringPool(new IndexBudget(1 << 20))).ReadAsync(starved, true, CancellationToken.None, children: false);
-        check(index is { Modules: 0, Cut: 3 } && index.Objects.Length == 3 && index.Objects.All(item => item.Definition is null) && starved.CharReads == 0,
-            "below the names' reserve a definition is left unread and counted as cut");
+        check(index is { Modules: 0, Cut: 3 } && index.Objects.Length == 3 && index.Objects.All(item => item.Definition is null) && starved.CharsRead <= 3 * (DatabaseReader.RepeatChars + 1),
+            "below the names' reserve a definition is left out, counted as cut, after at most a short text's length: " + starved.CharsRead + " characters read");
+
+        // A short definition the read already holds costs nothing, so it is kept even below the reserve: the first plan guide's
+        // statement is pooled while there is room, the second guide's long name (names may use the reserve) then takes free
+        // memory below it, and every later repeat of that statement is still kept. The budget is sized from a names-only read.
+        const string repeat = "((0))";
+        (string, string)[] guides = [("g1", repeat), (new string('g', 2000), repeat)];
+        var measure = new IndexBudget(1 << 20);
+        await new DatabaseReader("Sales", new ObjectIndexLimits { NamesReserveBytes = 0 }, new StringPool(measure)).ReadAsync(Procedures(3, guides, repeat), false, CancellationToken.None, children: false);
+        const long reserve = 1 << 20;
+        var tight = new IndexBudget(measure.Used + reserve - 2000);
+        var repeats = Procedures(3, guides, repeat);
+        index = await new DatabaseReader("Sales", new ObjectIndexLimits { NamesReserveBytes = reserve }, new StringPool(tight)).ReadAsync(repeats, true, CancellationToken.None, children: false);
+        var first = index?.Objects.FirstOrDefault(item => item.Kind == "planGuide")?.Definition;
+        check(index is { Modules: 5, Cut: 0 } && tight.Limit - tight.Used < reserve && first == repeat
+            && index.Objects.All(item => ReferenceEquals(item.Definition, first)),
+            $"below the names' reserve a repeated short definition the read holds is still kept ({index?.Modules} kept, {index?.Cut} cut, {tight.Limit - tight.Used} bytes free)");
     }
 
     private static async Task FanOut(Action<bool, string> check)
@@ -191,7 +212,10 @@ internal static class SearchCostChecks
         var ran = 0;
         var both = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var reached = true;
-        await ObjectSearchService.ForEachBoundedAsync(["a", "b", "c", "d", "e", "f"], new ObjectIndexLimits().Total, async _ =>
+        var progress = new List<int>();
+        var outcomes = new System.Collections.Concurrent.ConcurrentDictionary<int, ObjectIndexSkip?>();
+        string[] names = ["a", "b", "c", "d", "e", "f"];
+        await ObjectSearchService.ReadDatabasesAsync(names, new ObjectIndexLimits().Total, async (name, _) =>
         {
             var now = Interlocked.Increment(ref running);
             InterlockedMax(ref most, now);
@@ -200,8 +224,61 @@ internal static class SearchCostChecks
             catch (TimeoutException) { reached = false; }
             Interlocked.Increment(ref ran);
             Interlocked.Decrement(ref running);
-        }, CancellationToken.None);
+            return name is "b" or "e" ? new(name, "TIMEOUT", "") : null;
+        }, (at, skip) => outcomes[at] = skip, progress.Add, CancellationToken.None);
         check(reached && most == 2 && ran == 6, "one connection reads two databases at once, and never more: " + most);
+        check(outcomes.Count == 6 && outcomes.All(pair => pair.Value is null ? names[pair.Key] is not ("b" or "e") : pair.Value.Database == names[pair.Key]),
+            "each read's outcome comes back with its place in the listing");
+        check(progress is [0, .., 6] && progress.Zip(progress.Skip(1)).All(pair => pair.First < pair.Second), "progress starts at 0, only grows, and ends with every database: " + string.Join(",", progress));
+
+        // A read that fails while the other blocks: the blocked read sees the loop's token, so the error comes out at once rather
+        // than after the blocked read's own budget (120 s in a build).
+        var blocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        Exception? failure = null;
+        try
+        {
+            await ObjectSearchService.ReadDatabasesAsync(["slow", "broken", "never"], 2, async (name, loop) =>
+            {
+                if (name == "slow")
+                {
+                    blocked.TrySetResult();
+                    await Task.Delay(TimeSpan.FromSeconds(60), loop);
+                    return null;
+                }
+                await blocked.Task;
+                throw new InvalidCastException("A catalog column had another type.");
+            }, (_, _) => { }, null, CancellationToken.None);
+        }
+        catch (Exception error) { failure = error; }
+        check(failure is InvalidCastException && watch.Elapsed < TimeSpan.FromSeconds(30),
+            $"a read that fails stops the other read in flight, and its own error comes out at once ({failure?.GetType().Name}, {watch.ElapsedMilliseconds} ms)");
+
+        // Stop with two reads in flight ends both.
+        using var stop = new CancellationTokenSource();
+        var started = 0;
+        var stopped = false;
+        watch.Restart();
+        var build = ObjectSearchService.ReadDatabasesAsync(["a", "b", "c"], 2, async (_, loop) =>
+        {
+            if (Interlocked.Increment(ref started) == 2) stop.Cancel();
+            await Task.Delay(TimeSpan.FromSeconds(60), loop);
+            return null;
+        }, (_, _) => { }, null, stop.Token);
+        try { await build; }
+        catch (OperationCanceledException) { stopped = true; }
+        check(stopped && started == 2 && watch.Elapsed < TimeSpan.FromSeconds(30), $"Stop ends both reads in flight and starts no more ({started} started, {watch.ElapsedMilliseconds} ms)");
+
+        // Skipped databases are listed in the listing's order whatever order their reads end in, the first ones listed past the cap.
+        var skipped = new SkipList(2);
+        skipped.Add(5, new("e", "TIMEOUT", ""));
+        skipped.Add(1, new("a", "TIMEOUT", ""));
+        skipped.Add(SkipList.Resource, new(ObjectSearchService.ResourceDatabase, "TIMEOUT", ""));
+        skipped.Add(3, new("c", "TIMEOUT", ""));
+        skipped.Add(SkipList.Server, new(ObjectSearchService.ServerScope, "TIMEOUT", ""));
+        skipped.Add(9, new("i", "TIMEOUT", ""));
+        var order = string.Join(",", skipped.ToList().Select(skip => skip.Database));
+        check(order == "," + ObjectSearchService.ResourceDatabase + ",a,c", "skipped databases keep the listing's order and the first ones listed past the cap, after the server and system objects: " + order);
     }
 
     private static void InterlockedMax(ref int target, int value)

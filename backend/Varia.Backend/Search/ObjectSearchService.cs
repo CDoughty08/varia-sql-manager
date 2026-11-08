@@ -64,7 +64,7 @@ internal sealed class ObjectSearchService : IDisposable
         public bool Definitions = true;
         public int Databases;
         public int Indexed;
-        public List<ObjectIndexSkip> Skipped = [];
+        public SkipList Skipped = new(MaxSkipped);
         public DateTime? BuiltAt;
     }
 
@@ -108,7 +108,7 @@ internal sealed class ObjectSearchService : IDisposable
             state.Building = true;
             state.Definitions = definitions;
             state.Indexed = 0;
-            state.Skipped = [];
+            state.Skipped = new(MaxSkipped);
         }
         try
         {
@@ -116,32 +116,17 @@ internal sealed class ObjectSearchService : IDisposable
             lock (state.Gate) state.Databases = names.Count;
             state.Index.Keep(names.ToHashSet(StringComparer.Ordinal));
             if (await ReadServerAsync(args.ConnectionId, state, !explorer.Cloud, definitions, source.Token) is { } serverSkip)
-                lock (state.Gate) state.Skipped.Add(serverSkip);
+                lock (state.Gate) state.Skipped.Add(SkipList.Server, serverSkip);
             if (await ReadResourceAsync(args.ConnectionId, profile, state, definitions, source.Token) is { } resourceSkip)
-                lock (state.Gate) state.Skipped.Add(resourceSkip);
-            var last = Stopwatch.StartNew();
-            progress?.Invoke(new { Type = "explorer.index.progress", Done = 0, Total = names.Count, Objects = state.Index.Objects });
-            var done = 0;
-            var reported = new object();
-            await ForEachBoundedAsync(names, Limits.Total, async name =>
+                lock (state.Gate) state.Skipped.Add(SkipList.Resource, resourceSkip);
+            await ReadDatabasesAsync(names, Limits.Total, (name, loop) => ReadAsync(args.ConnectionId, state, name, render, definitions, perDatabase, loop), (at, skip) =>
             {
-                var skip = await ReadAsync(args.ConnectionId, state, name, render, definitions, perDatabase, source.Token);
                 lock (state.Gate)
                 {
                     if (skip is null or { Code: ChildrenLeftOut }) state.Indexed++;
-                    if (skip is not null && state.Skipped.Count < MaxSkipped) state.Skipped.Add(skip);
+                    if (skip is not null) state.Skipped.Add(at, skip);
                 }
-                // Progress counts completions, whichever read ends first, and goes out one EVENT at a time.
-                lock (reported)
-                {
-                    done++;
-                    if (progress is not null && (last.Elapsed >= ProgressEvery || done == names.Count))
-                    {
-                        progress(new { Type = "explorer.index.progress", Done = done, Total = names.Count, Objects = state.Index.Objects });
-                        last.Restart();
-                    }
-                }
-            }, source.Token);
+            }, progress is null ? null : done => progress(new { Type = "explorer.index.progress", Done = done, Total = names.Count, Objects = state.Index.Objects }), source.Token);
             lock (state.Gate)
             {
                 if (ReferenceEquals(state.Build, source)) { state.Building = false; state.Built = true; state.BuiltAt = DateTime.UtcNow; }
@@ -155,7 +140,11 @@ internal sealed class ObjectSearchService : IDisposable
         catch (SqlException error)
         {
             // The database list itself failed: the index keeps what it had, and the build answers as a value.
-            lock (state.Gate) state.Skipped = [new("", "CATALOG_ERROR", ExplorerErrors.From(error, ErrorPhase.Statement, "Databases", null).Message)];
+            lock (state.Gate)
+            {
+                state.Skipped = new(MaxSkipped);
+                state.Skipped.Add(SkipList.Server, new("", "CATALOG_ERROR", ExplorerErrors.From(error, ErrorPhase.Statement, "Databases", null).Message));
+            }
             return new(Status(state), watch.ElapsedMilliseconds);
         }
         finally
@@ -220,14 +209,36 @@ internal sealed class ObjectSearchService : IDisposable
         lock (state.Gate)
             return new(state.Building ? "building" : state.Built ? "ready" : databases.Count > 0 ? "ready" : "none", state.Databases, state.Building ? state.Indexed : databases.Count,
                 state.Index.Objects, databases.Sum(value => value.Modules) + (state.Index.Resource?.Modules ?? 0) + (state.Index.Server?.Modules ?? 0),
-                databases.Sum(value => value.Cut) + (state.Index.Resource?.Cut ?? 0) + (state.Index.Server?.Cut ?? 0), [.. state.Skipped], state.Definitions,
+                databases.Sum(value => value.Cut) + (state.Index.Resource?.Cut ?? 0) + (state.Index.Server?.Cut ?? 0), state.Skipped.ToList(), state.Definitions,
                 state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture));
     }
 
-    /// <summary>Runs <paramref name="read"/> for each name, at most <paramref name="degree"/> at once (each read still waits for
-    /// one of the index's slots across every connection).</summary>
-    internal static Task ForEachBoundedAsync(IReadOnlyList<string> names, int degree, Func<string, Task> read, CancellationToken token) =>
-        Parallel.ForEachAsync(names, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, degree), CancellationToken = token }, async (name, _) => await read(name));
+    /// <summary>Reads each database, at most <paramref name="degree"/> at once (each read still waits for one of the index's
+    /// slots across every connection), hands each read's outcome to <paramref name="completed"/> with its place in the listing,
+    /// and reports progress: Done 0 first, then completions, whichever read ends first, one call at a time, at most one per
+    /// <see cref="ProgressEvery"/> but always the last. Each read takes the loop's token, so one that fails stops the read
+    /// still in flight and its error comes out at once, rather than after that read's own budget.</summary>
+    internal static async Task ReadDatabasesAsync(IReadOnlyList<string> names, int degree, Func<string, CancellationToken, Task<ObjectIndexSkip?>> read,
+        Action<int, ObjectIndexSkip?> completed, Action<int>? progress, CancellationToken token)
+    {
+        var last = Stopwatch.StartNew();
+        progress?.Invoke(0);
+        var done = 0;
+        var reported = new object();
+        await Parallel.ForEachAsync(Enumerable.Range(0, names.Count), new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, degree), CancellationToken = token }, async (at, loop) =>
+        {
+            completed(at, await read(names[at], loop));
+            lock (reported)
+            {
+                done++;
+                if (progress is not null && (last.Elapsed >= ProgressEvery || done == names.Count))
+                {
+                    progress(done);
+                    last.Restart();
+                }
+            }
+        });
+    }
 
     /// <summary>Opens a batch's rows and reads them. A read that stops early (past the budget, answering null) cancels the batch
     /// before its reader closes: closing a reader short of its end reads, and throws away, every row and definition left. A
@@ -432,6 +443,36 @@ internal sealed class ObjectSearchService : IDisposable
     }
 
     private string Size => (Limits.MemoryBytes / (1024 * 1024)).ToString("N0", CultureInfo.InvariantCulture) + " MiB";
+}
+
+/// <summary>A build's skipped list in listing order whatever order its reads end in: the server's and the resource database's
+/// entries first, then the databases by their place in the listing, at most <paramref name="capacity"/> of them, the first ones
+/// listed, so which databases a status reports never depends on timing. Not thread safe: the state's gate guards it.</summary>
+internal sealed class SkipList(int capacity)
+{
+    public const int Server = -2;
+    public const int Resource = -1;
+    private readonly List<(int Order, ObjectIndexSkip Skip)> items = [];
+    private int databases;
+
+    /// <summary>Adds <paramref name="skip"/> at <paramref name="order"/> (a database's index in the listing, or <see cref="Server"/>
+    /// or <see cref="Resource"/>); past the capacity, the database listed last gives way.</summary>
+    public void Add(int order, ObjectIndexSkip skip)
+    {
+        var at = items.FindLastIndex(item => item.Order <= order) + 1;
+        if (order >= 0)
+        {
+            if (databases >= capacity)
+            {
+                if (capacity <= 0 || order > items[^1].Order) return;
+                items.RemoveAt(items.Count - 1);
+            }
+            else databases++;
+        }
+        items.Insert(Math.Min(at, items.Count), (order, skip));
+    }
+
+    public List<ObjectIndexSkip> ToList() => [.. items.Select(item => item.Skip)];
 }
 
 /// <summary>Reads the server batch (<see cref="ObjectSearchSql.Server"/>) or one database's batch (<see cref="ObjectSearchSql.Batch"/>)
@@ -765,15 +806,35 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     private (string Text, bool Longer) Text(DbDataReader reader, int ordinal)
     {
         if (reader.IsDBNull(ordinal)) return ("", false);
-        // Below the names' reserve with no credit for a slot, the pool refuses every definition: leave it unread rather than
-        // stream it only to throw it away.
-        if (creditLeft < IndexMemory.SlotBytes && budget.Limit - budget.Used < limits.NamesReserveBytes) { cut++; return ("", false); }
+        // Below the names' reserve with no credit for a slot, the pool refuses every definition the read does not hold yet: read
+        // no more than a short one's length, which finds a repeated default or computed column expression (((0)), (getdate()))
+        // the read already holds at no cost, rather than stream a long one only to throw it away.
+        if (creditLeft < IndexMemory.SlotBytes && budget.Limit - budget.Used < limits.NamesReserveBytes) return Repeated(reader, ordinal);
         var (text, longer) = ReadText(reader, ordinal, ref buffer, limits.DefinitionChars);
         if (text.Length == 0) return ("", false);
         if (Pooled(text, limits.NamesReserveBytes) is not { } copy) { cut++; return ("", false); }
         modules++;
         if (longer) cut++;
         return (copy, longer);
+    }
+
+    /// <summary>The longest definition the read looks for among the texts it holds once it is below the names' reserve.</summary>
+    public const int RepeatChars = 256;
+
+    /// <summary>A definition read below the names' reserve: the read's own copy when it is at most <see cref="RepeatChars"/> long
+    /// and the read already holds it, else left out (counted as cut) after at most that many characters.</summary>
+    private (string Text, bool Longer) Repeated(DbDataReader reader, int ordinal)
+    {
+        var most = Math.Min(RepeatChars, buffer.Length - 1);
+        var read = (int)reader.GetChars(ordinal, 0, buffer, 0, most + 1);
+        if (read <= 0) return ("", false);
+        if (read <= most && held.GetAlternateLookup<ReadOnlySpan<char>>().TryGetValue(buffer.AsSpan(0, read), out var copy))
+        {
+            modules++;
+            return (copy, false);
+        }
+        cut++;
+        return ("", false);
     }
 
     private static (string Text, bool Longer) ReadText(DbDataReader reader, int ordinal, ref char[] buffer, int limit)
