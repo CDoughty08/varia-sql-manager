@@ -154,7 +154,7 @@ const cells = (list: readonly (readonly [number, number])[] | undefined) => new 
  * The first rows as the results grid shows their values: NULL in the grid's NULL style, cut values ending in an ellipsis (their
  * tooltips say so), and values that could not be read as NULL, as the grid shows them, with a note.
  */
-function Rows({ part }: { part: PeekPart<PeekRowsResult> | undefined }) {
+export function PeekRows({ part }: { part: PeekPart<PeekRowsResult> | undefined }) {
   const value = part?.status === 'ready' ? part.value : undefined
   const cut = useMemo(() => cells(value?.cut), [value]), unread = useMemo(() => cells(value?.unread), [value])
   if (!value) return <Pending part={part} loading="Reading the top rows…" />
@@ -165,7 +165,8 @@ function Rows({ part }: { part: PeekPart<PeekRowsResult> | undefined }) {
       <tbody>{rows.map((row, r) => <tr key={r}>{row.map((value, c) => {
         const at = `${r}:${c}`
         return value === null ? <td key={c} className="peek-null" title={unread.has(at) ? peekMessages.unreadCell : undefined}>NULL</td>
-          : cut.has(at) ? <td key={c} title={`${value}…\n${peekMessages.cutCell}`}>{`${value}…`}</td>
+          // The title repeats the value for the mouse; assistive technology, which reads the value as the cell's name, gets the note alone.
+          : cut.has(at) ? <td key={c} title={`${value}…\n${peekMessages.cutCell}`} aria-description={peekMessages.cutCell}>{`${value}…`}</td>
             : <td key={c} title={value}>{value}</td>
       })}</tr>)}</tbody>
     </table>
@@ -204,7 +205,7 @@ function PaneTitle({ title, children }: { title: string; children?: ReactNode })
 function panel(open: OpenPeek): ReactNode {
   const tab: PeekTab = open.tab
   return tab === 'definition' ? <Definition part={open.definition} /> : tab === 'members' ? <Members part={open.members} />
-    : tab === 'dependencies' ? <Dependencies part={open.dependencies} /> : <Rows part={open.rows} />
+    : tab === 'dependencies' ? <Dependencies part={open.dependencies} /> : <PeekRows part={open.rows} />
 }
 
 /**

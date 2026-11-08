@@ -15,7 +15,7 @@ from Microsoft's documentation, so Varia keeps its own.
   - AutoRecover (`environment.autoRecover`)
   - Documents (`environment.documents`)
   - Fonts and Colors (`environment.fontsAndColors`)
-  - Keyboard (`environment.keyboard`)
+  - Shortcuts (`environment.shortcuts`)
   - Product Updates (`environment.productUpdates`)
   - Live Data (`environment.liveData`)
   - Object Explorer (`environment.objectExplorer`)
@@ -81,9 +81,9 @@ Colors come from the color theme (View › Theme).
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `environment.fonts.editorFontSize` | Size | Integer 8–72 px | 13 px | 10 pt Consolas (SSMS 18–20; SSMS 22 not verified) | All | At once | The query editor's font size, in CSS pixels. |
 
-### Environment › Keyboard
+### Environment › Shortcuts
 
-Shortcuts follow SSMS's defaults and cannot be changed yet. The command palette (F1) shows each command's shortcut.
+Keyboard and mouse shortcuts: SSMS's defaults, your changes, and the scope each works in. Changes apply when you choose OK. Not settings: a table of the shortcuts of every command above an inspector, with mouse gestures beside them. They are stored in `shortcuts.json`, not `settings.json` (docs/commands.md lists the defaults).
 
 _No settings yet._
 
@@ -171,6 +171,12 @@ The query window's status bar: where it is, and what it shows. A property grid: 
 
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| `queryResults.plan.outline` | Show execution plan outline | Boolean | True |  | All | At once | Show the searchable, keyboard accessible operator outline. Not in SSMS. |
+| `queryResults.plan.properties` | Show execution plan properties | Boolean | True |  | All | At once | Show properties for the selected statement or operator. Not in SSMS. |
+| `queryResults.plan.minimap` | Show execution plan minimap | Boolean | True |  | All | At once | Show a bounded overview of the plan and its viewport. Not in SSMS. |
+| `queryResults.plan.rowFlow` | Show execution plan row flow | Boolean | True |  | All | At once | Label edges with actual, estimated, unavailable or partial live rows. Not in SSMS. |
+| `queryResults.plan.outlineWidth` | Execution plan outline width | Integer 120–600 | 220 |  | All | At once | Preferred outline width in pixels. The pane shrinks to fit a small window. Not in SSMS. |
+| `queryResults.plan.propertiesWidth` | Execution plan properties width | Integer 140–600 | 260 |  | All | At once | Preferred properties width in pixels. The pane shrinks to fit a small window. Not in SSMS. |
 | `queryResults.grid.includeColumnHeaders` | Include column headers when copying or saving the results | Boolean | False |  | All | At once | Copy and Save Results As (CSV and tab-delimited text) start with a row of column names. JSON always names its keys, and Copy with Headers always includes them. |
 | `queryResults.grid.maxResultSets` | Maximum result sets kept per execution | Integer 1–1,000 | 1,000 |  | All | Next execution | Result sets after this many still run and are counted, but their rows are not kept; the Messages tab says so. Not in SSMS. |
 | `queryResults.grid.showColumnTypes` | Show column data types in the column headers | Boolean | True |  | All | At once | Each column header shows the column's SQL type after its name, in smaller text: int, nvarchar(50), decimal(18,2). The header's tooltip names the type either way. Column widths already set are kept when this changes. Not in SSMS. |
@@ -289,4 +295,4 @@ How Varia follows the SSIS Catalog (SSISDB) as it changes. Not in SSMS.
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (100 today).
+A patch holds at most one entry per setting (106 today).

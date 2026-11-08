@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import EmptyState from '../kit/EmptyState'
 import PlanViewer from './PlanViewer'
+import PlanComparison from './PlanComparison'
 import { retainedPlanLimits, type RetainedPlan } from './RetainedPlansService'
 
 const types = { actual: 'Actual', estimated: 'Estimated', 'query-returned': 'SQL-returned (capture type unspecified)' } as const
@@ -11,9 +12,10 @@ const description = (entry: RetainedPlan) => `${entry.label} · ${position(entry
 
 /** A window-wide XML history, available from Execution Plan even after all originating tabs close. */
 export default function RetainedPlans({ active }: { active: boolean }) {
-  const { retainedPlans, documents, files } = useWorkbench()
+  const { retainedPlans, documents, files, planPreparation } = useWorkbench()
   const history = useServiceSnapshot(retainedPlans), busy = useServiceSnapshot(documents).busy
   const [selected, setSelected] = useState(history.entries[0]?.id ?? '')
+  const [comparing, setComparing] = useState(false)
   const entry = history.entries.find(entry => entry.id === selected) ?? history.entries[0]
   const sources = useMemo(() => entry ? [{ key: entry.sourceKey, label: entry.label, batchNumber: entry.batchNumber, iteration: entry.iteration,
     batchLabel: `${types[entry.captureType]} · ${position(entry)}`, read: async () => entry.xml }] : [], [entry?.id])
@@ -24,6 +26,7 @@ export default function RetainedPlans({ active }: { active: boolean }) {
     documents.openText({ name, text: entry.xml, kind: 'sqlplan' })
     documents.focusActive()
   }
+  if (comparing) return <PlanComparison initialSnapshot={entry?.id} active={active} close={() => setComparing(false)} />
   return <section className="retained-plans" aria-label="Retained plans" data-retained-plans="">
     <div className="retained-plan-controls">
       <label>Snapshot <select aria-label="Retained plan" value={entry?.id ?? ''} disabled={!entry} onChange={event => setSelected(event.target.value)}>
@@ -33,6 +36,7 @@ export default function RetainedPlans({ active }: { active: boolean }) {
       <button type="button" disabled={!entry} aria-label={entry?.pinned ? 'Unpin snapshot' : 'Pin snapshot'} aria-pressed={entry?.pinned ?? false} onClick={() => entry && retainedPlans.pin(entry.id, !entry.pinned)}>{entry?.pinned ? 'Unpin' : 'Pin'}</button>
       <button type="button" disabled={!entry || busy} aria-label="Open snapshot document" onClick={() => open()}>Open</button>
       <button type="button" disabled={!entry || busy} aria-label="Save plan as…" onClick={() => open(true)}>Save as…</button>
+      <button type="button" onClick={() => setComparing(true)}>Compare plans</button>
       <button type="button" disabled={!entry} aria-label="Remove snapshot" onClick={() => entry && retainedPlans.remove(entry.id)}>Remove</button>
       <button type="button" disabled={!history.pending && !history.entries.some(entry => !entry.pinned)} onClick={() => retainedPlans.clear()}>Clear unpinned</button>
       <button type="button" disabled={!history.pending && !history.entries.length} onClick={() => retainedPlans.clear(true)}>Clear all snapshots</button>
@@ -54,7 +58,9 @@ export default function RetainedPlans({ active }: { active: boolean }) {
         </dl>
         <pre aria-label="Captured SQL context">{entry.context.sql}</pre>
       </details>
-      {active && <PlanViewer key={'viewer:' + entry.id} sources={sources} identity={'retained:' + entry.id} />}
+      {active && <PlanViewer key={'viewer:' + entry.id} sources={sources} identity={'retained:' + entry.id} openDocument={(_, target) => {
+        const doc = documents.openText({ name: 'Retained Plan.sqlplan', text: entry.xml, kind: 'sqlplan' }); if (target) planPreparation.requestXml(doc.id, { ...target, revision: undefined }); documents.focusActive()
+      }} />}
     </> : <EmptyState icon="execution-plan" title="No retained plans" detail="Completed actual and estimated plan documents are copied here automatically. Pin a snapshot to protect it from history eviction. Closing results or query tabs keeps this history." />}
   </section>
 }

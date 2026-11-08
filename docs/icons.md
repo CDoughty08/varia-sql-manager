@@ -9,7 +9,7 @@ half pixels, so they are sharp at 100 % zoom where the icon's box starts on a wh
 same name. Icons are sized with the `--varia-glyph-*` tokens ([metrics](themes/metrics.md)) and coloured
 with theme keys; Microsoft's SSMS icons are never used.
 
-## Varia's icons (16)
+## Varia's icons (22)
 
 | Id | Use |
 | --- | --- |
@@ -24,14 +24,20 @@ with theme keys; Microsoft's SSMS icons are never used.
 | `role` | Server, database and application roles. |
 | `shield` | Audits, audit specifications, security policies. |
 | `execution-plan` | Execution plan documents. |
+| `plan-join` | Execution plan joins and nested loops. |
+| `plan-sort` | Execution plan sorting. |
+| `plan-filter` | Execution plan filters and assertions. |
+| `plan-aggregate` | Execution plan aggregation. |
+| `plan-parallel` | Execution plan parallel exchanges. |
+| `plan-compute` | Execution plan scalar and constant computations. |
 | `agent-job` | SQL Server Agent: Object Explorer's running-jobs chip, and jobs (planned). |
 | `ssis-package` | Integration Services packages (planned). |
 | `drive` | Drives in the server file picker. |
 | `ssis-environment` | Integration Services environments (planned). |
 | `fuzzy-match` | The Fuzzy Match toggle in Search Objects (an approximately-equal sign). |
 
-## Codicons (123)
+## Codicons (124)
 
 From the codicon font bundled with Monaco ([reference](https://microsoft.github.io/vscode-codicons/dist/codicon.html)):
 
-`add`, `archive`, `arrow-left`, `arrow-small-down`, `bell`, `book`, `bookmark`, `case-sensitive`, `check`, `chevron-down`, `chevron-right`, `chevron-up`, `circle-filled`, `circle-outline`, `circle-slash`, `circuit-board`, `clear-all`, `clippy`, `close`, `close-all`, `cloud`, `cloud-download`, `code`, `collapse-all`, `comment`, `copy`, `debug-disconnect`, `debug-pause`, `debug-restart`, `debug-stop`, `device-camera`, `discard`, `edit`, `ellipsis`, `error`, `export`, `eye`, `file`, `file-code`, `filter`, `filter-filled`, `folder`, `folder-library`, `folder-opened`, `git-compare`, `go-to-file`, `graph`, `graph-line`, `history`, `info`, `insert`, `json`, `law`, `layers`, `layout`, `link`, `link-external`, `list-flat`, `list-ordered`, `list-tree`, `loading`, `lock`, `milestone`, `multiple-windows`, `new-file`, `output`, `package`, `pass`, `person`, `play`, `plug`, `project`, `pulse`, `redo`, `references`, `pin`, `pinned`, `refresh`, `regex`, `remote`, `remove`, `replace`, `save`, `save-all`, `save-as`, `screen-full`, `search`, `settings-gear`, `split-horizontal`, `star-empty`, `star-full`, `symbol-color`, `symbol-constant`, `symbol-field`, `symbol-file`, `symbol-function`, `symbol-key`, `symbol-namespace`, `symbol-numeric`, `symbol-operator`, `symbol-parameter`, `symbol-ruler`, `symbol-snippet`, `symbol-structure`, `symbol-variable`, `sync`, `tag`, `tools`, `trash`, `triangle-right`, `type-hierarchy`, `unlock`, `verified`, `warning`, `watch`, `whitespace`, `whole-word`, `window`, `word-wrap`, `workspace-trusted`, `zap`, `zoom-in`, `zoom-out`.
+`add`, `archive`, `arrow-left`, `arrow-small-down`, `bell`, `book`, `bookmark`, `case-sensitive`, `check`, `chevron-down`, `chevron-right`, `chevron-up`, `circle-filled`, `circle-outline`, `circle-slash`, `circuit-board`, `clear-all`, `clippy`, `close`, `close-all`, `cloud`, `cloud-download`, `code`, `collapse-all`, `comment`, `copy`, `debug-disconnect`, `debug-pause`, `debug-restart`, `debug-stop`, `device-camera`, `discard`, `edit`, `ellipsis`, `error`, `export`, `eye`, `file`, `file-code`, `filter`, `filter-filled`, `folder`, `folder-library`, `folder-opened`, `git-compare`, `go-to-file`, `graph`, `graph-line`, `history`, `info`, `insert`, `json`, `law`, `layers`, `layout`, `link`, `link-external`, `list-flat`, `list-ordered`, `list-tree`, `loading`, `lock`, `milestone`, `multiple-windows`, `new-file`, `output`, `package`, `pass`, `person`, `play`, `plug`, `project`, `pulse`, `record-keys`, `redo`, `references`, `pin`, `pinned`, `refresh`, `regex`, `remote`, `remove`, `replace`, `save`, `save-all`, `save-as`, `screen-full`, `search`, `settings-gear`, `split-horizontal`, `star-empty`, `star-full`, `symbol-color`, `symbol-constant`, `symbol-field`, `symbol-file`, `symbol-function`, `symbol-key`, `symbol-namespace`, `symbol-numeric`, `symbol-operator`, `symbol-parameter`, `symbol-ruler`, `symbol-snippet`, `symbol-structure`, `symbol-variable`, `sync`, `tag`, `tools`, `trash`, `triangle-right`, `type-hierarchy`, `unlock`, `verified`, `warning`, `watch`, `whitespace`, `whole-word`, `window`, `word-wrap`, `workspace-trusted`, `zap`, `zoom-in`, `zoom-out`.

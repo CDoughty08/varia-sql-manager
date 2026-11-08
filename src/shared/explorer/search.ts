@@ -98,9 +98,13 @@ const kindLetters: Record<SearchKind, string> = {
   fullTextCatalog: 'X', fullTextStoplist: 'X', partitionScheme: 'P', partitionFunction: 'P', searchPropertyList: 'X', planGuide: 'G',
   xmlSchemaCollection: 'X', rule: 'R', default: 'D', securityPolicy: 'P', column: 'C', key: 'K', constraint: 'K', index: 'I', statistic: 'S', parameter: 'A'
 }
-export function searchKindBadge(kind: SearchKind): { readonly letters: string; readonly tone: SearchKindTone } {
-  const type = searchTypes.find(item => (item.kinds as readonly SearchKind[]).includes(kind))!
-  return { letters: kindLetters[kind], tone: kind === 'database' ? 'database' : typeTones[type.id] }
+/** A kind the renderer does not know (a newer backend's) still gets a badge, so one row can never take the list down. */
+export const unknownKindBadge = { letters: '?', tone: 'other' } as const satisfies { readonly letters: string; readonly tone: SearchKindTone }
+export function searchKindBadge(kind: SearchKind | string): { readonly letters: string; readonly tone: SearchKindTone } {
+  const type = searchTypes.find(item => (item.kinds as readonly string[]).includes(kind))
+  const letters = Object.hasOwn(kindLetters, kind) ? kindLetters[kind as SearchKind] : undefined
+  if (!type || !letters) return unknownKindBadge
+  return { letters, tone: kind === 'database' ? 'database' : typeTones[type.id] }
 }
 
 /** The kinds a search with these type filters names, in the index's order; undefined (every kind) when none is chosen. */
@@ -155,6 +159,8 @@ export interface DefinitionMatch {
   readonly after: boolean
   readonly matches: number
   readonly cut: boolean
+  /** The search ran past its budget before counting every match: matches is only a lower bound. */
+  readonly uncounted?: boolean
 }
 export interface ObjectSearchHit {
   readonly object: ObjectRef

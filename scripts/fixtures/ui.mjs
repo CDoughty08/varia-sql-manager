@@ -504,6 +504,8 @@ export const explorerSearchCurrent = page => page.locator(part.explorerSearch).g
 export const objectSearchBox = page => page.locator(part.objectSearchTab).getByRole('textbox', { name: 'Search objects', exact: true })
 /** The Search Objects tab's server picker (shown with several servers): a server, or All servers. */
 export const objectSearchServer = page => page.locator(part.objectSearchTab).getByRole('combobox', { name: 'Server', exact: true })
+/** The server picker's options while it is open (its listbox, named Server too): each named by its server, environment and results. */
+export const objectSearchServerOptions = page => page.locator(part.objectSearchTab).getByRole('listbox', { name: 'Server', exact: true }).getByRole('option')
 /** An All servers search's hits on one server: a list of their own, named by the server. */
 export const objectSearchGroup = (page, server) => page.locator(part.objectSearchTab).getByRole('listbox', { name: `Results on ${server}`, exact: true })
 export const objectSearchHits = page => page.locator(part.objectSearchTab).getByRole('listbox', { name: 'Results', exact: true }).getByRole('option')
@@ -594,6 +596,14 @@ export const optionsHeading = dialog => dialog.getByRole('heading', { level: 3 }
 export const optionsNotes = dialog => dialog.locator(part.optionsNote)
 export const optionsForm = dialog => dialog.locator(part.optionsForm)
 export const optionsDescription = dialog => dialog.locator(part.optionsDescription)
+/** Options › Environment › Shortcuts: the table of commands' shortcuts, a command's first row, its inspector, and the page's sheets. */
+export const shortcutsTable = dialog => dialog.getByRole('grid', { name: 'Shortcuts', exact: true })
+/** A command's first row in the table, by its title. */
+export const shortcutsRow = (dialog, title) => shortcutsTable(dialog).getByRole('row').filter({ has: dialog.page().getByText(title, { exact: true }) }).first()
+export const shortcutsSearch = dialog => dialog.getByRole('searchbox', { name: 'Search shortcuts', exact: true })
+export const shortcutsInspector = (dialog, title) => dialog.getByRole('region', { name: `Shortcuts for ${title}`, exact: true })
+/** A sheet over the page (Reset All, Import, a conflict): a dialog, or an alert dialog when it refuses. */
+export const shortcutsSheet = (dialog, title) => dialog.getByRole('dialog', { name: title, exact: true }).or(dialog.getByRole('alertdialog', { name: title, exact: true }))
 /** Saved connections in the Connect dialog's history, by the text they show. */
 export const savedConnections = (dialog, text) => dialog.locator(part.connectionChoice, { hasText: text })
 /** A connection's environment tag (its pill) in a place: explorer, tab, query or status. */

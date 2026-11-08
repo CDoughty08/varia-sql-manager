@@ -38,7 +38,9 @@ The same search runs in two places, with the same options and results:
 - **Progress.** The status bar shows "Indexing objects N / M" and a Stop button while a build runs. A newer build of the
   same connection stops the older one.
 - **What it reads.** First the server's own objects, in one constant batch on the server's connection. Then every online
-  database the login can open (`HAS_DBACCESS`, not snapshots or `tempdb`), at most two at a time. Each database is one
+  database the login can open (`HAS_DBACCESS`, not snapshots or `tempdb`), at most two at a time. A read that fails with
+  anything but a value the build reports (a skipped database) stops the other read in flight, so the error comes out at
+  once rather than after that read's own 120 s. Each database is one
   constant batch of catalog views on the " - Object Search" pool (`READ UNCOMMITTED`, `LOCK_TIMEOUT 5000`,
   `DEADLOCK_PRIORITY LOW`) through `QUOTENAME(@db).sys.sp_executesql`. On Azure SQL Database each database gets its own
   connection instead. No metadata built-ins are used. Definitions come from `sys.sql_modules`, `sys.check_constraints`,
@@ -78,7 +80,11 @@ The same search runs in two places, with the same options and results:
   a text is charged when it first comes in and given back when the last database or system set holding it is dropped.
   So msdb's procedures and their definitions, master's `spt_` objects, schemas and common column names are held once
   however many servers are connected. Definitions stop being kept once less than 128 MiB is free, so names always have
-  room; past that point they are not even read from the server. A rebuild may reuse the memory of the build it replaces, so a database that fitted before still fits when the
+  room. Past that point the build reads at most the first 256 characters of each (the server still sends the rest, which
+  SqlClient skips without building a string), only to keep a short text the read already holds at no cost, such as a
+  default's `((0))` or `(getdate())` repeated across tables; every other definition is left out and counted as cut. A
+  rebuild with its predecessor's share left still reads definitions whole, since a text the build before it holds costs it
+  only its reference. A rebuild may reuse the memory of the build it replaces, so a database that fitted before still fits when the
   budget is full; the swap moves that share over rather than charging it twice.
 - **Large databases.** A database that does not fit in what is free with its children is read again without its columns,
   indexes, statistics and parameters. It still counts as indexed, and the status says children were left out
@@ -93,6 +99,8 @@ The same search runs in two places, with the same options and results:
   version string. If the read fails, the status lists it as skipped as `mssqlsystemresource`.
 - **Skipped databases.** A database the build could not read is reported as skipped, with a reason, and the build
   carries on: `TIMEOUT` (120 s per database), `NO_DB_ACCESS`, `DATABASE_UNAVAILABLE`, `CATALOG_ERROR` or `TOO_LARGE`.
+  The status lists the server and the system objects first, then databases in the listing's order whichever read ends
+  first; past 256, the first 256 listed.
 - **Definitions.** Setting `objectExplorer.search.definitions` controls whether definitions are indexed. With it off,
   only names are indexed.
 
@@ -161,6 +169,11 @@ The same search runs in two places, with the same options and results:
     core); the search's 5 s budget and Stop bound it as any search. Past the 20,000 candidates a search sorts, a better hit
     takes the worst one's place, so approximate hits never push out exact ones; every other hit past them is only counted.
     Labels are built only for the candidates kept, and hits (previews, match counts, dates) only for the ones answered.
+    The budget and Stop bound that building too, since counting a definition's matches can read it many times: once the
+    budget has passed, a definition hit shows the match the scan found with only the matches counted so far (marked
+    `uncounted`, shown as "+N+ more", or "more not counted" after the first), and a name hit left to build shows no
+    definition match. Only a search the budget left out this way makes the result partial: a late hit with nothing left to
+    search (names only, or no definition) is as complete as an early one.
 - **Scope.** Search names and definitions (All), names only, or definitions only.
 - **Object types.** Chips narrow a search to kinds of object: Tables, Views, Columns, Procedures, Functions, Parameters,
   Triggers, Keys and indexes, Schemas, Types, Security and Other. Several can be on at once, and All types turns them all off.
@@ -218,18 +231,32 @@ The same search runs in two places, with the same options and results:
   server of the tree's selection. Search Objects from the palette, View or the toolbar opens on All servers when more
   than one server is connected; from a server's or database's menu it opens on that server. The tab then belongs to
   no server, and Rebuild Search Index rebuilds every server's index.
+- **The picker.** A themed select-only combobox (`ServerPicker`; WAI-ARIA's pattern, its listbox in Chromium's top layer
+  and drawn with the menus' theme keys): each server shows its connection colour (or `connection.default`), its
+  environment tag and its result count for the current search, and *All servers* its total, all read from the answers
+  the tab already has, with no request of its own; a server still searching shows "…". Focus stays on the combobox: ↓, ↑,
+  Enter, Space and Alt+↓ open it, Home and End open it on the first or last option, letters type ahead (one letter again
+  cycles), Enter, Space and Alt+↑ choose, Tab chooses and moves on, and Escape or a click outside closes it unchosen.
 - **How.** The renderer sends one `explorer.search` per connected server at once, each on that server's own index, and
-  shows the answers together once every server has answered (`ObjectSearchService`, `searchAll`). Each server's limit is
-  its own, so a large server cannot crowd the others out. Every server gets an index if it has none; a server that
-  connects joins the search, and one that disconnects drops out, named in the summary. No backend method changes.
+  shows each server's group as its answer lands (`ObjectSearchService`, `searchAll`), in Object Explorer's order, so a
+  slow server holds back only its own group, marked "searching…", and the selection stays on its server's hit. Each
+  server's limit is its own, so a large server cannot crowd the others out. Every server gets an index if it has none.
+  When a server's build ends, or a server connects, only that server is asked again and its answer merged in (until it
+  lands its group keeps its answer to the same query), within the search still on its way if there is one, so N builds
+  ending or N servers connecting cost N requests, not N per server; a server that disconnects drops out, named in the
+  summary, and when none is left no group is still marked searching. No backend method changes.
 - **Results.** Each server's hits are a list of their own, named "Results on *server*", below a header that collapses
   it: the server's colour, name, environment tag (the red PROD tag for Production) and its results or why it has none
   (indexing, an error, a problem with the query on that server), with "… *n* more" below a group the result cap
   cut short. Every hit (on one server too) starts with its kind's badge, a letter on a tone (T tables, V views, P
-  procedures and triggers, F functions, C columns; `searchKind.*` theme keys), and ends with its path. The arrows, Page keys, Home and End walk every shown
-  hit across the groups, one tab stop for all of them. A hit's Reveal, menu, Copy and details pane act on its own
-  server. The summary gives the servers, the results in all, the slowest server's time, the servers still indexing, the
-  ones that could not be searched, and the ones that disconnected.
+  procedures and triggers, F functions, C columns; `searchKind.*` theme keys; "?" for a kind this build does not know, whose details show it as an Object and which cannot be revealed), and ends with its path. The list is one tab
+  stop, which roves to a header while it has focus (so Tab from anywhere leaves the list), walked as a tree grid: ↑ and ↓ move through the headers and every shown hit (↑ on a group's first hit reaches its
+  header), ← on a hit goes to its header, ← and → on a header collapse and expand it (→ on an expanded header goes to its
+  first hit), and Page keys, Home and End walk the hits. A group that collapses on the selected hit hands the selection to
+  the next shown hit, so the copy keys and the details pane never act on a hidden one. A hit's Reveal, menu, Copy and details pane act on its own
+  server. The summary gives the servers, the results in all, the slowest server's time, the servers still searching or indexing, the
+  ones that could not be searched, and the ones that disconnected. The index line counts every server's index and names
+  each server whose index leaves objects out (databases skipped, names only, no index, or a failed build).
 
 ## Protocol
 

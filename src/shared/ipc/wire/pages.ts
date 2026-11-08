@@ -37,6 +37,18 @@ export interface ColumnView {
 }
 export interface PageView { readonly resultId: number; readonly firstRow: number; readonly rowCount: number; readonly columns: readonly ColumnView[]; readonly byteLength: number }
 
+/**
+ * What one decoded ColumnView holds besides the page's bytes: the view object and up to five typed-array views over the
+ * buffer (about 288 bytes in V8), rounded up. A cache of pages charges this per column, since a wide page of few rows
+ * holds far more in views than on the wire.
+ */
+export const columnViewBytes = 320
+
+/** The memory a decoded page holds: its bytes plus its column views. */
+export function pageMemoryBytes(view: PageView): number {
+  return view.byteLength + view.columns.length * columnViewBytes
+}
+
 const littleEndian = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1
 const U32 = 0xffffffff
 

@@ -1,4 +1,6 @@
 import { readFileSync } from 'node:fs'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ApiResult, VariaApi } from '../src/shared/contracts'
 import { methodPolicies } from '../src/shared/ipc/methods'
@@ -6,20 +8,26 @@ import { requestSchemas } from '../src/main/validation'
 import { cancellableRequests } from '../src/main/backend/renderer-requests'
 import { indexProgressRelay } from '../src/main/index-progress'
 import {
-  childrenLeftOut, objectIndexParamsSchema, objectIndexProgressEventSchema, objectSearchLimits, objectSearchParamsSchema, searchKindBadge, searchKinds, searchKindTones, searchTypeKinds, searchTypes,
+  childrenLeftOut, unknownKindBadge, objectIndexParamsSchema, objectIndexProgressEventSchema, objectSearchLimits, objectSearchParamsSchema, searchKindBadge, searchKinds, searchKindTones, searchTypeKinds, searchTypes,
   type ObjectIndexProgress, type ObjectIndexResult, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult
 } from '../src/shared/explorer/search'
 import { SnapshotStore } from '../src/renderer/src/core/store'
 import type { Timers } from '../src/renderer/src/core/timers'
 import type { LiveConnection } from '../src/renderer/src/services/connections'
-import { explorerSearchId, hitServer, mergeAnswers, ObjectSearchService, revealPaths, serverGroups, type ObjectSearchOptions, type RevealHost } from '../src/renderer/src/search/ObjectSearchService'
+import { explorerSearchId, hitServer, mergeAnswers, ObjectSearchService, revealPaths, serverGroups, shownHits, unknownKindReveal, type ObjectSearchOptions, type RevealHost } from '../src/renderer/src/search/ObjectSearchService'
+import { searchHitTarget } from '../src/renderer/src/search/hit-actions'
+import { insertTextFor } from '../src/shared/explorer/refs'
 import { indexSummary, searchHitPath } from '../src/renderer/src/search/ObjectSearch'
-import { allIndexesSummary, allServersSummary, groupNote } from '../src/renderer/src/search/SearchPanel'
+import { allIndexesSummary, allServersSummary, groupNote, indexGap, indexIncomplete, KindBadge, listTabStop, moreMatches } from '../src/renderer/src/search/SearchPanel'
 import { kindSpecs, nodeKinds } from '../src/shared/explorer/catalog'
 import { colorKeys } from '../src/shared/theme/registry'
 import { layoutFilters, minimumChips } from '../src/renderer/src/search/filter-layout'
 import { searchFilterSummary, toggleSearchType } from '../src/renderer/src/search/SearchFilters'
 import { clampPaneBand, paneBandDrag, paneBandKey, paneBandLimits } from '../src/renderer/src/search/pane-band'
+import ServerPicker, { allServersValue, serverOptionName, serverPickerOptions, typeAheadMatch } from '../src/renderer/src/search/ServerPicker'
+
+// The server picker draws each server's colour through the theme, which server rendering has no store for.
+vi.mock('../src/renderer/src/core/WorkbenchContext', async original => ({ ...await original<object>(), useConnectionAccent: () => undefined }))
 
 const csharp = (file: string) => readFileSync(new URL('../backend/Varia.Backend/Search/' + file, import.meta.url), 'utf8')
 
@@ -59,6 +67,11 @@ describe('object search contracts', () => {
     expect(searchKinds.map(kind => searchKindBadge(kind)).every(badge => /^[A-Z]$/.test(badge.letters) && searchKindTones.includes(badge.tone))).toBe(true)
     expect((['table', 'view', 'procedure', 'function', 'column', 'login', 'index', 'database', 'synonym'] as const).map(kind => Object.values(searchKindBadge(kind)).join(' ')))
       .toEqual(['T table', 'V view', 'P procedure', 'F function', 'C column', 'L security', 'I key', 'D database', 'S other'])
+    // A kind this build does not know (a newer backend's, or one missing from the type filters) still renders, as '?'.
+    expect(searchKindBadge('futureKind')).toEqual(unknownKindBadge)
+    expect(searchKindBadge('toString')).toEqual(unknownKindBadge)
+    expect(renderToStaticMarkup(createElement(KindBadge, { kind: 'futureKind' }))).toBe('<span class="object-search-kind" data-tone="other" aria-hidden="true">?</span>')
+    expect(renderToStaticMarkup(createElement(KindBadge, { kind: 'table' }))).toBe('<span class="object-search-kind" data-tone="table" aria-hidden="true">T</span>')
     // Every tone has its theme key, and the stylesheet draws each one.
     const css = readFileSync(new URL('../src/renderer/src/styles.css', import.meta.url), 'utf8')
     for (const tone of searchKindTones) {
@@ -363,14 +376,22 @@ describe('ObjectSearchService', () => {
     // A search that replaces it cancels it on every server.
     service.setQuery(id, { caseSensitive: true })
     expect(calls.cancel.at(-1)).toEqual(['req4', 'req5'])
-    // Nothing shows until every server has answered; a's own server is first, then b's, the same object on both.
+    // Each server's group shows as its answer lands: a's hits while b's answer is still on its way, b's group marked pending.
     pendingSearch[2](answer(hits, { elapsedMs: 3 }))
     await settle()
-    expect(service.getSnapshot().documents[id].servers).toBeUndefined()
+    const landing = service.getSnapshot().documents[id]
+    expect(landing.requestId).toBe('req6')
+    expect(landing.result?.hits).toEqual(hits)
+    expect(serverGroups(landing).map(group => [group.connectionId, group.hits.length, !!group.pending])).toEqual([['a', 2, false], ['b', 0, true]])
+    expect(groupNote(serverGroups(landing)[1]!, undefined)).toBe('searching…')
+    expect(allServersSummary(landing, {})).toBe('2 servers · 2 results · 3 ms · srv-b searching…')
+    // The selection made while b is pending survives b's answer, which lands after a's group, the same object on both.
+    service.pick(id, 1)
     pendingSearch[3](answer([hits[0]!], { elapsedMs: 7, total: 40 }))
     await settle()
     const answered = service.getSnapshot().documents[id]
     expect(answered.requestId).toBeUndefined()
+    expect(answered.current).toBe(1)
     expect(answered.result).toMatchObject({ total: 42, elapsedMs: 7, hits: [hits[0], hits[1], hits[0]] })
     expect(serverGroups(answered).map(group => [group.connectionId, group.label, group.start, group.hits.length])).toEqual([['a', 'srv-a', 0, 2], ['b', 'srv-b', 2, 1]])
     expect([0, 1, 2, 3].map(index => hitServer(answered, index))).toEqual(['a', 'a', 'b', undefined])
@@ -379,12 +400,18 @@ describe('ObjectSearchService', () => {
     expect(service.getSnapshot().documents[id].current).toBe(2)
     service.listFocused(id, true)
     expect(service.focusedHit()).toMatchObject({ connectionId: 'b', index: 2, hit: hits[0] })
-    // The selection follows its server's hit when the answer moves it.
+    // The selection follows its server's hit when the answer moves it, and survives while its server's answer is pending: b keeps
+    // its answer to the same query until the new one lands.
     void service.search(id)
     pendingSearch[4](answer([hits[1]!, hits[0]!, { ...hit, label: 'dbo.C', object: { ...hit.object, name: 'C' } }]))
+    await settle()
+    const rerun = service.getSnapshot().documents[id]
+    expect(serverGroups(rerun).map(group => [group.connectionId, group.hits.length, !!group.pending])).toEqual([['a', 3, false], ['b', 1, true]])
+    expect(rerun.current).toBe(3)
     pendingSearch[5](answer([hits[0]!]))
     await settle()
     expect(service.getSnapshot().documents[id].current).toBe(3)
+    expect(service.getSnapshot().documents[id].servers?.some(answer => answer.pending)).toBe(false)
     // A group collapses and expands.
     service.toggleGroup(id, 'a')
     expect(service.getSnapshot().documents[id].collapsed).toEqual(['a'])
@@ -403,13 +430,12 @@ describe('ObjectSearchService', () => {
     pendingSearch[0](answer([hit]))
     pendingSearch[1](answer([hit]))
     await settle()
-    // A server connects: it gets an index, and the search runs again on all three.
+    // A server connects: it gets an index, and only it is searched; a's and b's answers stand.
     connections.set([connection('a'), connection('b'), connection('c')])
     expect(calls.index.map(call => call.connectionId)).toEqual(['a', 'b', 'c'])
-    expect(calls.search.slice(2).map(call => call.connectionId)).toEqual(['a', 'b', 'c'])
-    pendingSearch[2](answer([hit]))
-    pendingSearch[3](answer([hit]))
-    pendingSearch[4]({ ok: false, error: 'The search timed out.', code: 'TIMEOUT' })
+    expect(calls.search.slice(2).map(call => call.connectionId)).toEqual(['c'])
+    expect(serverGroups(service.getSnapshot().documents[id]).map(group => [group.connectionId, !!group.pending])).toEqual([['a', false], ['b', false], ['c', true]])
+    pendingSearch[2]({ ok: false, error: 'The search timed out.', code: 'TIMEOUT' })
     await settle()
     const document = service.getSnapshot().documents[id]
     expect(serverGroups(document).map(group => [group.connectionId, group.hits.length, group.error])).toEqual([['a', 1, undefined], ['b', 1, undefined], ['c', 0, 'The search timed out.']])
@@ -417,9 +443,9 @@ describe('ObjectSearchService', () => {
     expect(allServersSummary(document, {})).toBe('3 servers · 2 results · 1 ms · srv-c could not be searched')
     // A server is lost: the search runs again without it and names it.
     connections.set([connection('a'), connection('b', true), connection('c')])
-    expect(calls.search.slice(5).map(call => call.connectionId)).toEqual(['a', 'c'])
-    pendingSearch[5](answer([hit]))
-    pendingSearch[6](answer([]))
+    expect(calls.search.slice(3).map(call => call.connectionId)).toEqual(['a', 'c'])
+    pendingSearch[3](answer([hit]))
+    pendingSearch[4](answer([]))
     await settle()
     expect(service.getSnapshot().documents[id].left).toEqual(['srv-b'])
     expect(allServersSummary(service.getSnapshot().documents[id], { c: { connectionId: 'c', requestId: 'r', done: 1, total: 3, objects: 5 } }))
@@ -438,6 +464,142 @@ describe('ObjectSearchService', () => {
     service.dispose()
   })
 
+  it('asks each server that connects while an All servers search runs on its own, within that search: N joins cost N requests', async () => {
+    const { service, calls, pendingSearch, connections, timers } = harness({ indexOnConnect: false })
+    connections.set([connection('a')])
+    const id = service.open('a', undefined, true)!
+    const answer = (value: ObjectSearchHit[]): ApiResult<ObjectSearchResult> => ({ ok: true, value: { hits: value, total: value.length, partial: false, elapsedMs: 1, index: status() } })
+    service.setQuery(id, { text: 'x' })
+    timers.run()
+    expect(calls.search.map(call => call.connectionId)).toEqual(['a'])
+    // Servers connect one by one, each before the search before has answered: each is asked alone, and a's request stands.
+    connections.set([connection('a'), connection('b')])
+    connections.set([connection('a'), connection('b'), connection('c')])
+    connections.set([connection('a'), connection('b'), connection('c'), connection('d')])
+    expect(calls.search.map(call => call.connectionId)).toEqual(['a', 'b', 'c', 'd'])
+    expect(calls.cancel).toEqual([])
+    expect(service.getSnapshot().documents[id].requestId).toBeDefined()
+    // Every answer lands in its group, in Object Explorer's order, whatever order they come in.
+    for (const index of [3, 1, 0, 2]) pendingSearch[index]!(answer([hit]))
+    await settle()
+    const document = service.getSnapshot().documents[id]
+    expect(serverGroups(document).map(group => [group.connectionId, group.hits.length, !!group.pending])).toEqual(['a', 'b', 'c', 'd'].map(name => [name, 1, false]))
+    expect(document.requestId).toBeUndefined()
+    expect(calls.search).toHaveLength(4)
+    service.dispose()
+  })
+
+  it('clears the pending marks of an All servers search when no server is left to answer it', async () => {
+    const { service, pendingSearch, connections, timers } = harness({ indexOnConnect: false })
+    connections.set([connection('a'), connection('b')])
+    const id = service.open('a', undefined, true)!
+    const answer = (value: ObjectSearchHit[]): ApiResult<ObjectSearchResult> => ({ ok: true, value: { hits: value, total: value.length, partial: false, elapsedMs: 1, index: status() } })
+    service.setQuery(id, { text: 'x' })
+    timers.run()
+    pendingSearch[0](answer([hit]))
+    await settle()
+    expect(serverGroups(service.getSnapshot().documents[id]).map(group => [group.connectionId, !!group.pending])).toEqual([['a', false], ['b', true]])
+    // Every server goes (the backend was lost): nothing says it is still searching, and a's answer stays in view.
+    connections.set([])
+    const document = service.getSnapshot().documents[id]
+    expect(document.error).toBe('No server is connected.')
+    expect(document.requestId).toBeUndefined()
+    expect(document.servers?.map(answer => [answer.connectionId, !!answer.pending])).toEqual([['a', false]])
+    expect(allServersSummary(document, {})).not.toContain('searching')
+    service.dispose()
+  })
+
+  it('roves the All servers list\'s one tab stop to the group header that has focus, so Tab from a header leaves the list', () => {
+    const heads = ['a', 'b', 'c']
+    // The selected hit holds it, or the first shown when the selection is hidden or none.
+    expect(listTabStop(heads, [0, 1, 4], 4, undefined)).toEqual({ hit: 4 })
+    expect(listTabStop(heads, [0, 1, 4], 2, undefined)).toEqual({ hit: 0 })
+    expect(listTabStop(heads, [0, 1, 4], undefined, undefined)).toEqual({ hit: 0 })
+    // A focused header takes it from the selected hit, before or after it, and no hit keeps one.
+    expect(listTabStop(heads, [0, 1, 4], 4, 'c')).toEqual({ head: 'c' })
+    expect(listTabStop(heads, [0, 1, 4], 0, 'b')).toEqual({ head: 'b' })
+    // A header whose group has gone holds nothing; with every group collapsed, the first header holds it.
+    expect(listTabStop(heads, [0, 1, 4], 1, 'z')).toEqual({ hit: 1 })
+    expect(listTabStop(heads, [], undefined, undefined)).toEqual({ head: 'a' })
+    expect(listTabStop([], [], undefined, undefined)).toEqual({})
+  })
+
+  it('asks only the server whose build ended again in an All servers search: N builds ending cost N requests, not N²', async () => {
+    const { service, calls, pendingSearch, pendingIndex, connections, timers } = harness()
+    const servers = ['a', 'b', 'c', 'd']
+    connections.set(servers.map(name => connection(name)))
+    const id = service.open('a', undefined, true)!
+    const answer = (value: ObjectSearchHit[]): ApiResult<ObjectSearchResult> => ({ ok: true, value: { hits: value, total: value.length, partial: false, elapsedMs: 1, index: status() } })
+    service.setQuery(id, { text: 'x' })
+    timers.run()
+    expect(calls.search.map(call => call.connectionId)).toEqual(servers)
+    // Two builds end while the search is on its way: each server is asked again within it, its first request cancelled.
+    pendingIndex[0]({ ok: true, value: { status: status(), elapsedMs: 1 } })
+    pendingIndex[1]({ ok: true, value: { status: status(), elapsedMs: 1 } })
+    await settle()
+    expect(calls.search.slice(4).map(call => call.connectionId)).toEqual(['a', 'b'])
+    expect(calls.cancel.slice(-2)).toEqual([[calls.search[0]!.requestId], [calls.search[1]!.requestId]])
+    for (const index of [0, 1, 2, 3, 4, 5]) pendingSearch[index]!(answer([hit]))
+    await settle()
+    const settled = service.getSnapshot().documents[id]
+    expect(settled.requestId).toBeUndefined()
+    expect(serverGroups(settled).map(group => [group.connectionId, group.hits.length, !!group.pending])).toEqual(servers.map(name => [name, 1, false]))
+    // The other two builds end after the search answered: one request each, the other servers' answers kept.
+    pendingIndex[2]({ ok: true, value: { status: status(), elapsedMs: 1 } })
+    await settle()
+    expect(calls.search.slice(6).map(call => call.connectionId)).toEqual(['c'])
+    expect(service.getSnapshot().documents[id].result?.hits).toHaveLength(4)
+    pendingIndex[3]({ ok: true, value: { status: status(), elapsedMs: 1 } })
+    await settle()
+    expect(calls.search.slice(7).map(call => call.connectionId)).toEqual(['d'])
+    pendingSearch[6]!(answer([]))
+    pendingSearch[7]!(answer([hit, { ...hit, label: 'dbo.B', object: { ...hit.object, name: 'B' } }]))
+    await settle()
+    const document = service.getSnapshot().documents[id]
+    expect(serverGroups(document).map(group => [group.connectionId, group.hits.length])).toEqual([['a', 1], ['b', 1], ['c', 0], ['d', 2]])
+    expect(document.requestId).toBeUndefined()
+    // Four builds ended: eight requests in all, four for the search and one per build.
+    expect(calls.search).toHaveLength(8)
+    service.dispose()
+  })
+
+  it('moves the selection out of a group that collapses on it, so the copy keys never act on a hidden hit', async () => {
+    const { service, pendingSearch, connections, timers } = harness({ indexOnConnect: false })
+    connections.set([connection('a'), connection('b'), connection('c')])
+    const id = service.open('a', undefined, true)!
+    const named = (name: string) => ({ ...hit, label: `dbo.${name}`, object: { ...hit.object, name } })
+    const answer = (value: ObjectSearchHit[]): ApiResult<ObjectSearchResult> => ({ ok: true, value: { hits: value, total: value.length, partial: false, elapsedMs: 1, index: status() } })
+    service.setQuery(id, { text: 'x' })
+    timers.run()
+    pendingSearch[0](answer([named('A1'), named('A2')]))
+    pendingSearch[1](answer([named('B1')]))
+    pendingSearch[2](answer([named('C1')]))
+    await settle()
+    service.listFocused(id, true)
+    // b's hit is selected; collapsing b hands the selection to the next shown hit, c's.
+    service.pick(id, 2)
+    service.toggleGroup(id, 'b')
+    expect(service.getSnapshot().documents[id].current).toBe(3)
+    expect(shownHits(service.getSnapshot().documents[id])).toEqual([0, 1, 3])
+    expect(service.focusedHit()).toMatchObject({ connectionId: 'c', index: 3 })
+    // With nothing after it shown, the selection goes to the last shown hit before it.
+    service.toggleGroup(id, 'c')
+    expect(service.getSnapshot().documents[id].current).toBe(1)
+    expect(service.focusedHit()).toMatchObject({ connectionId: 'a', index: 1 })
+    // Expanding a group leaves the selection; collapsing every group clears it, and the keys act on nothing.
+    service.toggleGroup(id, 'b')
+    expect(service.getSnapshot().documents[id].current).toBe(1)
+    service.toggleGroup(id, 'b')
+    service.toggleGroup(id, 'a')
+    expect(service.getSnapshot().documents[id].current).toBeUndefined()
+    expect(shownHits(service.getSnapshot().documents[id])).toEqual([])
+    expect(service.focusedHit()).toBeUndefined()
+    // With no selection the keys act on the first shown hit, never on a hidden one.
+    service.toggleGroup(id, 'c')
+    expect(service.focusedHit()).toMatchObject({ connectionId: 'c', index: 3 })
+    service.dispose()
+  })
+
   it('merges server answers: totals added, the slowest time, partial when any stopped early, and a problem only when every server had one', () => {
     const result = (overrides: Partial<ObjectSearchResult>): ObjectSearchResult => ({ hits: [hit], total: 1, partial: false, elapsedMs: 1, index: status(), ...overrides })
     expect(mergeAnswers([{ connectionId: 'a', label: 'a', error: 'down' }])).toBeUndefined()
@@ -448,6 +610,19 @@ describe('ObjectSearchService', () => {
     expect(allIndexesSummary([])).toBe('No server has an index yet.')
     expect(allIndexesSummary([{ connectionId: 'a', done: 2, total: 2, objects: 40, status: status() }, { connectionId: 'b', requestId: 'r', done: 1, total: 4, objects: 7 }]))
       .toBe('Indexes: 47 objects on 2 servers · 1 indexing')
+    // A healthy first server does not hide a second whose index leaves objects out: the line (always shown in the tab) names it.
+    const healthy = { connectionId: 'a', done: 2, total: 2, objects: 40, status: status() }
+    const incomplete = { connectionId: 'b', done: 2, total: 2, objects: 30, status: status({ objects: 30, definitions: false, skipped: [{ database: 'x', code: 'NO_DB_ACCESS', message: 'm' }, { database: 'y', code: 'TIMEOUT', message: 'm' }] }) }
+    const label = (id: string) => `srv-${id}`
+    expect(indexGap(healthy)).toBeUndefined()
+    expect(indexIncomplete(healthy, healthy.status)).toBe(false)
+    expect(indexGap(incomplete)).toBe('2 databases skipped, names only')
+    expect(indexIncomplete(incomplete, incomplete.status)).toBe(true)
+    expect(allIndexesSummary([healthy, incomplete], label)).toBe('Indexes: 70 objects on 2 servers · srv-b: 2 databases skipped, names only')
+    expect(allIndexesSummary([healthy, { connectionId: 'c', done: 0, total: 0, objects: 0, error: 'Denied.' }], label)).toBe('Indexes: 40 objects on 2 servers · srv-c: index could not be built')
+    expect(indexGap({ connectionId: 'c', done: 0, total: 0, objects: 0, status: status({ skipped: [{ database: '', code: 'CATALOG_ERROR', message: 'm' }, { database: 'Big', code: childrenLeftOut, message: 'm' }] }) }))
+      .toBe('server objects skipped, children left out of 1 database')
+    expect(indexGap({ connectionId: 'c', done: 0, total: 0, objects: 0 })).toBe('no index yet')
   })
 
   it('reports a failed search and clears results for empty text', async () => {
@@ -461,6 +636,19 @@ describe('ObjectSearchService', () => {
     const cleared = service.getSnapshot().documents[id]
     expect(cleared).toMatchObject({ text: '', scope: 'names' })
     expect([cleared.error, cleared.result]).toEqual([undefined, undefined])
+  })
+
+  it('handles a hit whose kind this build does not know without failing: no reveal path, no insert text, a menu target', async () => {
+    const { service } = harness()
+    const future = { object: { kind: 'futureKind', database: 'Sales', schema: 'dbo', name: 'X' }, folder: 'futureFolder', label: 'dbo.X' } as unknown as ObjectSearchHit
+    expect(revealPaths(future)).toEqual([])
+    const seek = vi.fn()
+    expect(await service.reveal({ seek }, 'a', future)).toEqual({ ok: false, message: unknownKindReveal })
+    expect(seek).not.toHaveBeenCalled()
+    expect(insertTextFor({ type: 'object', object: future.object })).toBeUndefined()
+    const explorer = { objectNode: (connectionId: string, object: ObjectSearchHit['object'], label: string) => ({ connectionId, ref: { type: 'object' as const, object }, kind: object.kind, label, linux: false, lost: false }) }
+    expect(searchHitTarget(explorer as never, 'a', 'tab', 0, future, false)).toMatchObject({ kind: 'searchHit', hit: future })
+    service.dispose()
   })
 
   it('reveals a hit by its path from the server: the database, the folders above its listing, a trigger\'s table or view', async () => {
@@ -633,6 +821,61 @@ describe('ObjectSearchService', () => {
   })
 })
 
+describe('Search Objects\' server picker', () => {
+  const live = [
+    { ...connection('a'), displayName: 'Primary', color: 'red', options: { environment: 'Production' } },
+    connection('b'),
+    { ...connection('c'), options: { environment: 'QA lab' } }
+  ] as unknown as LiveConnection[]
+  const result = (total: number, extra: Partial<ObjectSearchResult> = {}): ObjectSearchResult => ({ hits: Array.from({ length: Math.min(total, 2) }, () => hit), total, partial: false, elapsedMs: 1, index: status(), ...extra })
+  const base = { id: 'tab1', connectionId: 'a', text: 'x', caseSensitive: false, wholeWord: false, regex: false, fuzzy: false, scope: 'all' as const, types: [], asked: { text: 'x', caseSensitive: false, wholeWord: false, regex: false, fuzzy: false, scope: 'all' as const, types: [] } }
+
+  it('labels All servers and each connected server with its colour, environment and its results for the current search', () => {
+    const servers = [
+      { connectionId: 'a', label: 'Primary', result: result(12) },
+      { connectionId: 'b', label: 'srv-b', error: 'The search timed out.' },
+      { connectionId: 'c', label: 'srv-c', pending: true }
+    ]
+    const options = serverPickerOptions({ ...base, allServers: true, servers, result: mergeAnswers(servers), requestId: 'r' }, live)
+    expect(options.map(option => [option.value, option.label, option.color, option.environment, option.count, !!option.pending])).toEqual([
+      [allServersValue, 'All servers', undefined, undefined, 12, true],
+      ['a', 'Primary', 'red', 'Production', 12, false],
+      ['b', 'srv-b', undefined, undefined, undefined, false],
+      ['c', 'srv-c', undefined, 'QA lab', undefined, true]
+    ])
+    expect(options.map(serverOptionName)).toEqual(['All servers, 12 results, searching', 'Primary, Production environment, 12 results', 'srv-b', 'srv-c, QA lab environment, searching'])
+    // One server searched: only it has a count (the picker asks nothing of its own); with no search, none has.
+    expect(serverPickerOptions({ ...base, result: result(1) }, live).map(option => option.count)).toEqual([undefined, 1, undefined, undefined])
+    expect(serverPickerOptions({ ...base, result: result(0, { problem: 'The regular expression is not valid.' }) }, live).map(option => option.count)).toEqual([undefined, undefined, undefined, undefined])
+    expect(serverPickerOptions({ ...base, text: '', asked: undefined }, live).every(option => option.count === undefined && !option.pending)).toBe(true)
+  })
+
+  it('moves by type-ahead as a native select does: a prefix, or one letter typed again cycling', () => {
+    const options = serverPickerOptions({ ...base, text: '' }, [connection('alpha'), connection('beta'), connection('bravo')])
+    expect(options.map(option => option.label)).toEqual(['All servers', 'srv-alpha', 'srv-beta', 'srv-bravo'])
+    expect(typeAheadMatch(options, 'a', 1)).toBe(0)
+    expect(typeAheadMatch(options, 's', 0)).toBe(1)
+    expect(typeAheadMatch(options, 's', 1)).toBe(2)
+    expect(typeAheadMatch(options, 'ss', 1)).toBe(2)
+    expect(typeAheadMatch(options, 'srv-br', 0)).toBe(3)
+    expect(typeAheadMatch(options, 'SRV-B', 0)).toBe(2)
+    expect(typeAheadMatch(options, 'zz', 0)).toBeUndefined()
+  })
+
+  it('renders a combobox named by its label, its listbox of options in the top layer, the chosen one selected', () => {
+    const options = serverPickerOptions({ ...base, allServers: true, servers: [{ connectionId: 'a', label: 'Primary', result: result(3) }], result: result(3) }, live)
+    const markup = renderToStaticMarkup(createElement(ServerPicker, { id: 'p', labelledBy: 'label', options, value: 'a', onChange: () => {} }))
+    expect(markup).toMatch(/^<button type="button" role="combobox" id="p" class="object-search-server-button" aria-labelledby="label" aria-haspopup="listbox" aria-expanded="false" aria-controls="p-servers"/)
+    expect(markup).toContain('<div id="p-servers" class="object-search-server-list" popover="manual" role="listbox" aria-labelledby="label">')
+    expect([...markup.matchAll(/role="option" class="object-search-server-option" aria-selected="(\w+)" aria-label="([^"]*)"/g)].map(match => [match[1], match[2]]))
+      .toEqual([['false', 'All servers, 3 results'], ['true', 'Primary, Production environment, 3 results'], ['false', 'srv-b'], ['false', 'srv-c, QA lab environment']])
+    // The PROD tag and the count show in the rows; the closed combobox shows the chosen server without a count.
+    expect(markup).toContain('<span class="object-search-server-count">3</span>')
+    expect(markup.split('<div id="p-servers"')[0]).not.toContain('object-search-server-count')
+    expect(markup.split('<div id="p-servers"')[0]).toContain('PROD')
+  })
+})
+
 describe('Search Objects\' summary', () => {
   it('says what the index holds, or how far its build got', () => {
     expect(indexSummary({ connectionId: 'a', requestId: 'r', done: 1, total: 3, objects: 1200 }, undefined)).toBe('Indexing 1 of 3 databases (1,200 objects so far)…')
@@ -677,5 +920,17 @@ describe('Search Objects type filters', () => {
     // The tab's server picker takes its share of the scope row.
     expect(layoutFilters({ ...base, options: 100, available: 242 })).toEqual({ collapsed: true, shown: 0 })
     expect(layoutFilters({ ...base, available: 0 })).toEqual({ collapsed: true, shown: 0 })
+  })
+})
+
+describe('definition match counts', () => {
+  const match = (matches: number, uncounted?: boolean) => ({ line: 1, column: 1, preview: 'x', range: [0, 1] as const, before: false, after: false, matches, cut: false, ...(uncounted ? { uncounted } : {}) })
+  it('shows a count cut short by the search budget as a lower bound', () => {
+    expect(moreMatches(match(1))).toBeUndefined()
+    expect(moreMatches(match(13))).toBe('+12 more')
+    expect(moreMatches(match(999))).toBe('+998+ more')
+    // Past the budget the backend stops counting: 13 counted may be 50 in the definition, and 1 counted may be more.
+    expect(moreMatches(match(13, true))).toBe('+12+ more')
+    expect(moreMatches(match(1, true))).toBe('more not counted')
   })
 })

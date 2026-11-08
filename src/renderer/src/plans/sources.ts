@@ -11,7 +11,7 @@ export function orderPlanEntries<T extends { descriptor: Pick<ResultDescriptor, 
 }
 
 export interface PlanSource { key: string; revision?: number; result?: ResultKey; label: string; batchLabel?: string; batchNumber?: number; iteration?: number; read(signal: AbortSignal): Promise<string> }
-export type SourceStatement = PlanStatement & { sourceKey: string; batchLabel?: string; batchNumber?: number; iteration?: number; partial?: boolean }
+export type SourceStatement = PlanStatement & { sourceKey: string; sourceStatementIndex?: number; sourceRevision?: number; batchLabel?: string; batchNumber?: number; iteration?: number; partial?: boolean; captureLabel?: string }
 export class PlanInputBudgetError extends Error {
   constructor() { super('The combined input budget was exceeded. Remaining plan documents were not loaded.') }
 }
@@ -54,9 +54,9 @@ export async function loadPlanSources(sources: readonly PlanSource[], parse: (xm
       if (operators + count > planLimits.nodes || statements.length + prepared.document.statements.length > planLimits.statements)
         throw new Error('The combined operator or statement limit was exceeded.')
       operators += count
-      for (const entry of prepared.document.statements) {
+      for (const [sourceStatementIndex, entry] of prepared.document.statements.entries()) {
         const prefix = source.key + ':'
-        statements.push({ ...entry, sourceKey: source.key, batchLabel: source.batchLabel, batchNumber: source.batchNumber, iteration: source.iteration, id: prefix + entry.id,
+        statements.push({ ...entry, sourceKey: source.key, sourceStatementIndex, sourceRevision: source.revision, batchLabel: source.batchLabel, batchNumber: source.batchNumber, iteration: source.iteration, id: prefix + entry.id,
           nodes: entry.nodes.map(node => ({ ...node, id: prefix + node.id, parentId: node.parentId ? prefix + node.parentId : null })) })
       }
       for (const notice of prepared.document.notices) if (!notices.includes(notice) && notices.length < 7) notices.push(notice)

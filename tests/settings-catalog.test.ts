@@ -19,7 +19,7 @@ const expectedTree = [
   '  AutoRecover (environment.autoRecover)',
   '  Documents (environment.documents)',
   '  Fonts and Colors (environment.fontsAndColors)',
-  '  Keyboard (environment.keyboard)',
+  '  Shortcuts (environment.shortcuts)',
   '  Product Updates (environment.productUpdates)',
   '  Live Data (environment.liveData)',
   '  Object Explorer (environment.objectExplorer)',

@@ -1,14 +1,14 @@
-import { useEffect, useLayoutEffect, useRef, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type Ref } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type Ref } from 'react'
 import { folderSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
-import { childrenLeftOut, objectSearchLimits, searchKindBadge, type ObjectIndexStatus, type ObjectSearchHit, type SearchKind } from '../../../shared/explorer/search.ts'
+import { childrenLeftOut, objectSearchLimits, searchKindBadge, type DefinitionMatch, type ObjectIndexStatus, type ObjectSearchHit } from '../../../shared/explorer/search.ts'
 import { onUnexpectedError } from '../core/errors'
 import { useConnectionAccent, useServiceSelector, useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import EmptyState from '../kit/EmptyState'
 import { useMenuTarget } from '../menus/useMenuTarget'
 import EnvironmentTag from '../EnvironmentTag'
-import { hitServer, serverGroups, serverHitKey, type IndexEntry, type SearchDocumentState, type SearchQueryState, type ServerGroup } from './ObjectSearchService'
+import { hitServer, serverGroups, serverHitKey, shownHits, type IndexEntry, type SearchDocumentState, type SearchQueryState, type ServerGroup } from './ObjectSearchService'
 import { isCopyKey, revealHit, searchHitTarget } from './hit-actions'
 import SearchFilters from './SearchFilters'
 import PaneSearchFilters from './PaneSearchFilters'
@@ -68,6 +68,14 @@ export function searchHitPath(hit: ObjectSearchHit): string {
   return `${hit.object.database} › ${folderSpecs[hit.folder].label}`
 }
 
+/** The note after a definition match for the matches past it: "+N more", "+N+ more" when the count is only a lower bound (it
+ * stopped at the 999 counted, or a search past its budget stopped counting), and "more not counted" when it stopped at the first. */
+export function moreMatches(definition: DefinitionMatch): string | undefined {
+  const atLeast = definition.uncounted === true || definition.matches >= 999
+  if (definition.matches > 1) return `+${numbers.format(definition.matches - 1)}${atLeast ? '+' : ''} more`
+  return definition.uncounted === true ? 'more not counted' : undefined
+}
+
 /** What the index holds, for the summary line. */
 export function indexSummary(entry: IndexEntry | undefined, status: ObjectIndexStatus | undefined): string {
   if (entry?.requestId) return `Indexing ${numbers.format(entry.done)} of ${count(entry.total, 'database')} (${count(entry.objects, 'object')} so far)…`
@@ -83,20 +91,44 @@ export function indexSummary(entry: IndexEntry | undefined, status: ObjectIndexS
   return `Index: ${count(status.objects, 'object')}${modules} in ${count(status.indexed, 'database')}${skipped}`
 }
 
-/** What every server's index holds, for an All servers search's index line. */
-export function allIndexesSummary(entries: readonly IndexEntry[]): string {
+/** Whether the index line should stay in view: a build running or failed, or an index that leaves objects out (not ready, with
+ *  databases skipped, or names only). A healthy index's detail is a click away. */
+export function indexIncomplete(entry: IndexEntry | undefined, status: ObjectIndexStatus | undefined): boolean {
+  return !!entry?.requestId || !!entry?.error || !status || status.state !== 'ready' || !!status.skipped.length || !status.definitions
+}
+
+/** What a finished server index leaves out, in a few words, or undefined when it holds everything (a build still running is
+ *  reported apart, as indexing). */
+export function indexGap(entry: IndexEntry): string | undefined {
+  if (entry.requestId) return undefined
+  if (entry.error) return 'index could not be built'
+  const status = entry.status
+  if (!status || status.state === 'none') return 'no index yet'
+  const databases = status.skipped.filter(skip => skip.database && skip.code !== childrenLeftOut).length
+  const partial = status.skipped.filter(skip => skip.code === childrenLeftOut).length
+  const gaps = [
+    databases ? `${count(databases, 'database')} skipped` : '', status.skipped.some(skip => !skip.database) ? 'server objects skipped' : '',
+    partial ? `children left out of ${count(partial, 'database')}` : '', status.definitions ? '' : 'names only'
+  ].filter(Boolean)
+  return gaps.length ? gaps.join(', ') : undefined
+}
+
+/** What every server's index holds, for an All servers search's index line, naming each server whose index leaves objects out. */
+export function allIndexesSummary(entries: readonly IndexEntry[], label: (connectionId: string) => string = id => id): string {
   if (!entries.length) return 'No server has an index yet.'
   const building = entries.filter(entry => entry.requestId).length
   const objects = entries.reduce((sum, entry) => sum + (entry.status?.objects ?? entry.objects), 0)
-  return `Indexes: ${count(objects, 'object')} on ${count(entries.length, 'server')}${building ? ` · ${numbers.format(building)} indexing` : ''}`
+  const gaps = entries.flatMap(entry => { const gap = indexGap(entry); return gap ? [` · ${label(entry.connectionId)}: ${gap}`] : [] })
+  return `Indexes: ${count(objects, 'object')} on ${count(entries.length, 'server')}${building ? ` · ${numbers.format(building)} indexing` : ''}${gaps.join('')}`
 }
 
-/** A group's own note, beside its server's name: its results, or what kept them back. */
+/** A group's own note, beside its server's name: its results, or what kept them back, and whether its answer is on its way. */
 export function groupNote(group: ServerGroup, entry: IndexEntry | undefined): string {
   if (group.error) return group.error
   const result = group.result
-  if (result?.problem) return result.problem
-  return [result ? count(result.total, 'result') : '', entry?.requestId ? `indexing ${numbers.format(entry.done)} of ${numbers.format(entry.total)}…` : ''].filter(Boolean).join(' · ')
+  if (result?.problem && !group.pending) return result.problem
+  return [result && !result.problem ? count(result.total, 'result') : '', entry?.requestId ? `indexing ${numbers.format(entry.done)} of ${numbers.format(entry.total)}…` : '',
+    group.pending ? 'searching…' : ''].filter(Boolean).join(' · ')
 }
 
 /**
@@ -108,6 +140,7 @@ export function allServersSummary(document: SearchDocumentState, indexes: Readon
   const parts = [count(groups.length, 'server'), count(result?.total ?? 0, 'result'), `${numbers.format(result?.elapsedMs ?? 0)} ms`]
   for (const group of groups) {
     const entry = indexes[group.connectionId]
+    if (group.pending) parts.push(`${group.label} searching…`)
     if (entry?.requestId) parts.push(`${group.label} still indexing (${numbers.format(entry.done)} of ${count(entry.total, 'database')})`)
     if (group.error) parts.push(`${group.label} could not be searched`)
   }
@@ -116,14 +149,33 @@ export function allServersSummary(document: SearchDocumentState, indexes: Readon
   return parts.join(' · ')
 }
 
+/**
+ * An All servers list's one tab stop, which roves with focus as a tree grid's does: the group header that has focus (reached
+ * with the arrows), else the selected hit (the first shown when the selection is hidden or none), else the first header when
+ * every group is collapsed. Tab and Shift+Tab from anywhere in the list therefore leave it.
+ */
+export function listTabStop(heads: readonly string[], shown: readonly number[], current: number | undefined, focusedHead: string | undefined): { readonly hit?: number; readonly head?: string } {
+  if (focusedHead !== undefined && heads.includes(focusedHead)) return { head: focusedHead }
+  const hit = current !== undefined && shown.includes(current) ? current : shown[0]
+  return hit !== undefined ? { hit } : heads.length ? { head: heads[0] } : {}
+}
+
+/** A hit's kind badge; a kind this build does not know shows as '?' rather than failing the list. */
+export function KindBadge({ kind }: { readonly kind: string }) {
+  const badge = searchKindBadge(kind)
+  return <span className="object-search-kind" data-tone={badge.tone} aria-hidden="true">{badge.letters}</span>
+}
+
 /** An All servers group's header: a button that collapses or expands it, with the server's colour, name, environment and note. */
-function GroupHead({ group, color, environment, note, expanded, controls, onToggle }: {
+function GroupHead({ group, color, environment, note, expanded, controls, tabbable, onToggle }: {
   readonly group: ServerGroup; readonly color: string | undefined; readonly environment: string | undefined; readonly note: string
-  readonly expanded: boolean; readonly controls: string; readonly onToggle: () => void
+  readonly expanded: boolean; readonly controls: string; readonly tabbable: boolean; readonly onToggle: () => void
 }) {
   const accent = useConnectionAccent(color)
+  // The list's one tab stop roves to a header while it has focus (listTabStop), so Tab from a header leaves the list.
   return <h3 className="object-search-group-head">
-    <button type="button" aria-expanded={expanded} aria-controls={expanded ? controls : undefined} onClick={onToggle} title={expanded ? 'Collapse' : 'Expand'}>
+    <button type="button" data-group-head={group.connectionId} tabIndex={tabbable ? 0 : -1} aria-expanded={expanded} aria-controls={expanded ? controls : undefined} onClick={onToggle}
+      title={expanded ? 'Collapse (Left Arrow)' : 'Expand (Right Arrow)'}>
       <Icon name={expanded ? 'chevron-down' : 'chevron-right'} />
       <span className="object-search-group-dot" aria-hidden="true" style={{ background: accent ?? 'var(--varia-connection-default)' }} />
       <bdi className="object-search-group-name">{group.label}</bdi>
@@ -167,6 +219,8 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   // Whether keyboard focus is on a hit (the list's focus and blur events keep it): a new answer that drops the focused hit hands
   // focus to the list's tab stop, or to the box when no hits are left, rather than leaving it on the page, where keys reach nothing.
   const focusInList = useRef(false)
+  // The group header that has focus (All servers): it holds the list's tab stop while it does.
+  const [focusedHead, setFocusedHead] = useState<string | undefined>(undefined)
   // A hit's menu is for the hit it opens on, which it selects first, as Object Explorer's does; its Object Explorer commands read
   // the hit's own selection keys, not the tree's.
   const menuTarget = useMenuTarget<HTMLElement>(element => {
@@ -234,12 +288,49 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   /** The list is one tab stop on the selected hit; the arrows, Page keys, Home and End move the selection and focus with it,
    *  Enter reveals the selected hit (focus stays here), ↑ on the first hit and Escape return to the box. Ctrl+C (⌘C) copies its
    *  name: the key is the clipboard's, so the catalogue's rule only labels it (`native`) and the list runs it. */
+  /** The list's stops in order: with All servers, each group's header and then its shown hits. */
+  const stops = () => [...(list.current?.querySelectorAll<HTMLElement>('[data-hit], [data-group-head]') ?? [])]
+  /** Focuses a stop; a hit is selected too. */
+  const moveTo = (stop: HTMLElement | undefined) => {
+    if (!stop) return
+    if (stop.dataset.hit !== undefined) objectSearch.pick(searchId, Number(stop.dataset.index))
+    stop.focus()
+  }
+  /** A group header, as a tree grid's group row: ↑ and ↓ walk the stops, ← collapses, → expands (or, expanded, goes to the
+   *  first hit), Home and End go to the first and last stop, Escape returns to the box; Enter and Space are the button's own. */
+  const onHeadKey = (event: KeyboardEvent<HTMLElement>, head: HTMLElement) => {
+    if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+    const all = stops(), at = all.indexOf(head), expanded = head.getAttribute('aria-expanded') === 'true', connectionId = head.dataset.groupHead!
+    const below = all[at + 1], hitBelow = below?.dataset.hit !== undefined ? below : undefined
+    if (event.key === 'ArrowDown') moveTo(below)
+    else if (event.key === 'ArrowUp') { if (at > 0) moveTo(all[at - 1]); else focusInput() }
+    else if (event.key === 'ArrowLeft') { if (expanded) objectSearch.toggleGroup(searchId, connectionId) }
+    else if (event.key === 'ArrowRight') { if (!expanded) objectSearch.toggleGroup(searchId, connectionId); else moveTo(hitBelow) }
+    else if (event.key === 'Home') moveTo(all[0])
+    else if (event.key === 'End') moveTo(all.at(-1))
+    else if (event.key === 'Escape') focusInput()
+    else return
+    event.preventDefault()
+    event.stopPropagation()
+  }
   const onListKey = (event: KeyboardEvent<HTMLElement>) => {
+    const head = spanning ? (event.target as HTMLElement).closest<HTMLElement>('[data-group-head]') : null
+    if (head) { onHeadKey(event, head); return }
     const all = rows(), at = all.findIndex(row => row === event.target)
     if (at < 0) return
     if (isCopyKey(event, platform)) { copyName(event); return }
     // Shift+Enter reveals too, as in the box (where it goes back a hit).
     if (event.ctrlKey || event.metaKey || event.altKey || (event.shiftKey && event.key !== 'Enter')) return
+    // All servers: ↑ and ↓ walk the headers too (↑ on a group's first hit reaches its header), and ← goes to the hit's header.
+    if (spanning && (event.key === 'ArrowUp' || event.key === 'ArrowDown' || event.key === 'ArrowLeft')) {
+      event.preventDefault()
+      const items = stops(), position = items.indexOf(all[at]!)
+      if (event.key === 'ArrowLeft') moveTo(items.slice(0, position).reverse().find(item => item.dataset.groupHead !== undefined))
+      else if (event.key === 'ArrowDown') moveTo(items[position + 1])
+      else if (position > 0) moveTo(items[position - 1])
+      else focusInput()
+      return
+    }
     const next = event.key === 'ArrowDown' ? at + 1 : event.key === 'ArrowUp' ? at - 1 : event.key === 'PageDown' ? pageFrom(all, at, 1)
       : event.key === 'PageUp' ? pageFrom(all, at, -1) : event.key === 'Home' ? 0 : event.key === 'End' ? all.length - 1 : undefined
     if (event.key === 'Enter' || event.key === 'Escape') {
@@ -266,16 +357,24 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
     reveal(hit, server)
   }
   const asked = !!(result && state.asked?.text)
-  const summary = state.requestId ? 'Searching…'
+  // An All servers search on its way shows what has landed, its pending servers named, once one server has answered.
+  const landing = spanning && !!state.servers?.some(answer => answer.pending) && state.servers.some(answer => !answer.pending)
+  const summary = landing && !state.error ? allServersSummary(state, snapshot.indexes)
+    : state.requestId ? 'Searching…'
     : state.error ? state.error
     : result?.problem ? result.problem
     : spanning && result && asked ? allServersSummary(state, snapshot.indexes)
     : result && asked ? `${count(result.total, 'result')}${result.total > result.hits.length ? `, showing the first ${numbers.format(result.hits.length)}` : ''}${result.partial ? ' (the search stopped early; narrow it to see everything)' : ''} · ${numbers.format(result.elapsedMs)} ms`
     : ''
   const index = entry?.status ?? result?.index
-  const indexText = spanning ? allIndexesSummary(Object.values(snapshot.indexes)) : indexSummary(entry, index)
-  // Progress and incomplete indexes stay visible; the healthy index's detail is available from the information button.
-  const indexNotice = !!entry?.requestId || !!entry?.error || !index || index.state !== 'ready' || !!index.skipped.length || !index.definitions
+  const serverLabel = (connectionId: string) => {
+    const connection = workbench.connections.get(connectionId)
+    return connection ? connection.displayName || connection.server : state.servers?.find(answer => answer.connectionId === connectionId)?.label ?? connectionId
+  }
+  const indexText = spanning ? allIndexesSummary(Object.values(snapshot.indexes), serverLabel) : indexSummary(entry, index)
+  // In Object Explorer's band, progress and an incomplete index stay visible and a healthy index's detail is a click away; the
+  // tab (All servers included, which is tab only) always shows the line, naming each server whose index leaves objects out.
+  const indexNotice = indexIncomplete(entry, index)
   const paneSummary = result && asked && !state.requestId && !state.error && !result.problem && !result.partial
     ? `${count(result.total, 'result')} · ${count(result.index.indexed, 'database')}` : summary
   const showHits = !pane || !!state.text.trim()
@@ -342,24 +441,24 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   // All servers: one group per server, its header a button that collapses it; a collapsed group's hits leave the list.
   const groups = spanning ? serverGroups(state) : []
   const collapsed = new Set(spanning ? state.collapsed ?? [] : [])
-  const shown = spanning ? groups.filter(group => !collapsed.has(group.connectionId)).flatMap(group => group.hits.map((_hit, offset) => group.start + offset)) : undefined
-  // One tab stop for the hits: the selected one, or the first shown when the selection is in a collapsed group.
-  const tabStop = shown ? (current !== undefined && shown.includes(current) ? current : shown[0]) : current ?? 0
+  const shown = spanning ? shownHits(state) : undefined
+  // One tab stop for the list (listTabStop): the focused header, the selected hit, the first shown, or the first header.
+  const stop = shown ? listTabStop(groups.map(group => group.connectionId), shown, current, focusedHead) : { hit: current ?? 0 }
+  const tabStop = stop.hit
   const hitRow = (hit: ObjectSearchHit, index: number, server: string) => {
-    const badge = searchKindBadge(hit.object.kind as SearchKind)
     const path = searchHitPath(hit)
     // A click selects; in the tab only a double-click (or Enter) reveals, so a click never takes focus away from the list.
     // Each hit is an option, the tab stop on the selected one, which a screen reader announces as selected.
     return <li key={serverHitKey(server, hit)} role="presentation" className="object-search-hit">
       <div ref={menuTarget} role="option" className="object-search-open" data-hit data-index={index} tabIndex={index === tabStop ? 0 : -1} aria-selected={index === current}
         title={`Reveal in Object Explorer: ${displayText(hit.label)}`} onClick={() => { if (pane) open(index); else objectSearch.pick(searchId, index) }} onDoubleClick={pane ? undefined : () => open(index)}>
-        <span className="object-search-kind" data-tone={badge.tone} aria-hidden="true">{badge.letters}</span>
+        <KindBadge kind={hit.object.kind} />
         <span className="object-search-name"><Marked text={hit.label} range={hit.range} approximate={hit.approximate} /></span>
         <span className="object-search-path">{displayText(path)}</span>
         {hit.definition && <span className="object-search-line">
           <span className="object-search-line-number">{hit.definition.line}:</span>
           {hit.definition.before && '…'}<Marked text={hit.definition.preview} range={hit.definition.range} />{hit.definition.after && '…'}
-          {hit.definition.matches > 1 && <span className="object-search-more"> (+{numbers.format(hit.definition.matches - 1)}{hit.definition.matches >= 999 ? '+' : ''} more)</span>}
+          {moreMatches(hit.definition) && <span className="object-search-more"> ({moreMatches(hit.definition)})</span>}
         </span>}
       </div>
     </li>
@@ -367,10 +466,15 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   const listEvents = {
     onKeyDown: onListKey,
     onCopy: (event: { target: EventTarget; preventDefault(): void }) => { if (rows().some(row => row.contains(event.target as Node))) copyName(event) },
-    onFocus: () => { focusInList.current = true; objectSearch.listFocused(searchId, true) },
+    onFocus: (event: { target: EventTarget }) => {
+      focusInList.current = true
+      objectSearch.listFocused(searchId, true)
+      setFocusedHead((event.target as HTMLElement).dataset?.groupHead)
+    },
     onBlur: (event: { relatedTarget: EventTarget | null; currentTarget: HTMLElement; target: EventTarget }) => {
       const next = event.relatedTarget
       if (next && event.currentTarget.contains(next as Node)) return
+      setFocusedHead(undefined)
       // A hit a new answer removes may blur as it goes; focus that leaves with its element is still the list's, for the
       // effect above to hand on.
       const left = event.target as Node
@@ -389,7 +493,7 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
           const expanded = !collapsed.has(group.connectionId), controls = `${searchId}-group-${group.connectionId}`
           return <section key={group.connectionId} className="object-search-group">
             <GroupHead group={group} color={connection?.color} environment={connection?.options.environment} note={groupNote(group, snapshot.indexes[group.connectionId])}
-              expanded={expanded} controls={controls} onToggle={() => objectSearch.toggleGroup(searchId, group.connectionId)} />
+              expanded={expanded} controls={controls} tabbable={stop.head === group.connectionId} onToggle={() => objectSearch.toggleGroup(searchId, group.connectionId)} />
             {expanded && group.hits.length > 0 && <ul id={controls} role="listbox" className="object-search-group-hits" aria-label={`Results on ${group.label}`}>
               {group.hits.map((hit, offset) => hitRow(hit, group.start + offset, group.connectionId))}
             </ul>}

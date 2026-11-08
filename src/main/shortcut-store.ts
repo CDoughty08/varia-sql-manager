@@ -36,8 +36,9 @@ const canonical = (file: ShortcutFile) => JSON.stringify(file)
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
 /**
- * The strict file from the renderer, as plain JSON values. Its counts are checked first: zod checks every element (each key parsed on every
- * platform) before an array's maximum, so a page that sent a huge list would hold main for seconds before the refusal.
+ * The strict file from the renderer, as plain JSON values. Its counts are checked first, so a page over a limit gets the
+ * one fixed sentence rather than zod's issues (the schema also refuses an oversized list or gesture map before parsing
+ * its elements: zod caps arrays itself, and `boundedRecord` the map).
  */
 function parseFile(value: unknown): ShortcutFile {
   if (isRecord(value)) {
