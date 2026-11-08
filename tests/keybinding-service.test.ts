@@ -572,3 +572,46 @@ describe('key capture', () => {
     expect(chords).toEqual(['ctrl+k ctrl+x'])
   })
 })
+
+describe('key capture beside menus and teardown', () => {
+  it('leaves keys to a menu that owns the keyboard while a capture records', () => {
+    const calls: string[] = [], menu = { owns: true }
+    const menus: MenuKeyRouter = {
+      noteKeyDown: event => { calls.push(`note ${event.key}`) }, ownsKeyboard: () => menu.owns,
+      handleKeyDown: event => { calls.push(`menu ${event.key}`); return 'consumed' },
+      handleAccessKey: () => false, handleKeyUp: event => { calls.push(`up ${event.key}`) }
+    }
+    const { keybindings, press } = service('win32', { menus })
+    const chords: string[] = []
+    keybindings.capture(chord => { chords.push(chord) })
+    press(key('Escape', 'Escape'))
+    keybindings.handleKeyUp(key('Escape', 'Escape'))
+    expect([calls, chords]).toEqual([['note Escape', 'menu Escape', 'up Escape'], []])
+    menu.owns = false
+    calls.length = 0
+    press(key('Escape', 'Escape'))
+    keybindings.handleKeyUp(key('Escape', 'Escape'))
+    expect([calls, chords]).toEqual([[], ['escape']])
+  })
+  it('says when a waiting Ctrl+K is dropped: Tab, a dead key, or a key after the timeout', () => {
+    const { keybindings, press, state } = service('win32')
+    const events: string[] = []
+    keybindings.capture(chord => { events.push(chord) }, { onPrefix: chord => { events.push(`prefix ${chord}`) }, onPrefixCancel: () => { events.push('cancel') } })
+    const ctrlK = () => key('KeyK', 'k', { ctrl: true })
+    press(ctrlK()); press(key('Tab', 'Tab'))
+    press(ctrlK()); press(key('BracketLeft', 'Dead'))
+    press(ctrlK()); state.now += nativeChordTimeout + 1; press(key('F7', 'F7'))
+    // Nothing waits, so these cancel nothing; a completed chord is not a cancel either.
+    press(key('Tab', 'Tab')); press(ctrlK()); press(key('KeyC', 'c', { ctrl: true }))
+    expect(events).toEqual(['prefix ctrl+k', 'cancel', 'prefix ctrl+k', 'cancel', 'prefix ctrl+k', 'cancel', 'f7', 'prefix ctrl+k', 'ctrl+k ctrl+c'])
+  })
+  it('forgets the capture when the service is disposed', () => {
+    const { keybindings, press, ran } = service('win32')
+    const chords: string[] = []
+    keybindings.capture(chord => { chords.push(chord) })
+    keybindings.dispose()
+    expect(keybindings.capturing).toBe(false)
+    press(key('F8', 'F8'))
+    expect([chords, ran()]).toEqual([[], ['window.explorer']])
+  })
+})

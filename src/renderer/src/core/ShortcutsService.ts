@@ -5,7 +5,8 @@ import type { GestureId, GestureModifiers } from '../../../shared/commands/gestu
 import type { Platform, ResolvedRule } from '../../../shared/commands/keybindings'
 import { emptyShortcutFile, shortcutFileSchema, type ShortcutFile } from '../../../shared/commands/shortcut-schema'
 import { onUnexpectedError } from './errors'
-import type { Disposable, ExternalStore } from './types'
+import { SnapshotStore } from './store'
+import type { Disposable } from './types'
 
 /** Main's shortcuts as the page receives them. */
 export interface ShortcutsFileSnapshot { readonly file: ShortcutFile; readonly revision: number }
@@ -59,6 +60,7 @@ export interface ShortcutsServiceOptions extends ShortcutsTargets {
   readonly loaded?: boolean
 }
 
+type ShortcutsReport = (message: string, kind: 'error' | 'warning') => void
 const errorText = (error: unknown) => error instanceof Error && error.message ? error.message : 'The operation failed.'
 
 /**
@@ -67,18 +69,17 @@ const errorText = (error: unknown) => error instanceof Error && error.message ? 
  * menus, the palette, labels, the editor bridge) and the gesture service. Every file from main is validated, and a push
  * no newer than the revision held is ignored. One service serves the main window and its popouts.
  */
-export class ShortcutsService implements ExternalStore<ShortcutsSnapshot>, Disposable {
-  // Not a SnapshotStore: its private `snapshot` field would clash with the contract's `snapshot()`.
-  private current: ShortcutsSnapshot
-  private readonly listeners = new Set<() => void>()
+export class ShortcutsService extends SnapshotStore<ShortcutsSnapshot> implements Disposable {
   private targets: ShortcutsTargets
+  private report?: ShortcutsReport
+  private readonly queued: [string, 'error' | 'warning'][] = []
   private loading?: Promise<boolean>
   private disposed = false
   private readonly unsubscribe: () => void
 
   constructor(private readonly options: ShortcutsServiceOptions) {
     const initial = options.initial ?? { file: emptyShortcutFile, revision: 0 }
-    this.current = { ...initial, effective: effectiveRules(options.platform, initial.file), loaded: options.loaded ?? false, salvaged: false }
+    super({ ...initial, effective: effectiveRules(options.platform, initial.file), loaded: options.loaded ?? false, salvaged: false })
     this.targets = { keybindings: options.keybindings, gestures: options.gestures }
     let unsubscribe = () => {}
     try { unsubscribe = options.api.onChanged(snapshot => this.accept(snapshot)) } catch (error) { onUnexpectedError(error) }
@@ -93,18 +94,16 @@ export class ShortcutsService implements ExternalStore<ShortcutsSnapshot>, Dispo
     clearTimeout(timer)
     return service
   }
-  getSnapshot = (): ShortcutsSnapshot => this.current
   /** The contract's name for `getSnapshot`. */
-  snapshot(): ShortcutsSnapshot { return this.current }
-  subscribe = (listener: () => void): (() => void) => {
-    this.listeners.add(listener)
-    return () => { this.listeners.delete(listener) }
+  snapshot(): ShortcutsSnapshot { return this.getSnapshot() }
+  /** Where load failures and main's notice go: the command banner. Messages from before this are shown now. */
+  setReporter(report: ShortcutsReport): void {
+    this.report = report
+    for (const [message, kind] of this.queued.splice(0)) report(message, kind)
   }
-  private publish(snapshot: ShortcutsSnapshot): void {
-    this.current = snapshot
-    for (const listener of [...this.listeners]) {
-      try { listener() } catch (error) { onUnexpectedError(error) }
-    }
+  private notify(message: string, kind: 'error' | 'warning'): void {
+    if (this.report) this.report(message, kind)
+    else this.queued.push([message, kind])
   }
   /** Connects the services a snapshot applies to (the workbench creates them after this) and applies the current one. */
   bind(targets: ShortcutsTargets): Disposable {
@@ -130,15 +129,21 @@ export class ShortcutsService implements ExternalStore<ShortcutsSnapshot>, Dispo
     })
   }
   private async read(): Promise<boolean> {
-    let ok = false
+    let ok = false, failure: string | undefined, notice: string | undefined
     try {
       const result = await this.options.api.get()
-      if (result.ok) {
-        const { salvaged, notice } = result.value
-        ok = this.accept(result.value, { loaded: true, salvaged: salvaged === true, ...typeof notice === 'string' ? { notice } : {} })
+      if (!result.ok) failure = result.error
+      else {
+        const { salvaged } = result.value
+        notice = typeof result.value.notice === 'string' ? result.value.notice : undefined
+        ok = this.accept(result.value, { loaded: true, salvaged: salvaged === true, ...notice ? { notice } : {} })
+        if (!ok) failure = 'Main sent shortcuts this version does not support.'
       }
-    } catch (error) { onUnexpectedError(error) }
-    if (!ok && !this.disposed && !this.getSnapshot().loaded) this.publish({ ...this.getSnapshot(), loaded: true })
+    } catch (error) { failure = errorText(error) }
+    if (this.disposed) return false
+    if (!ok && !this.getSnapshot().loaded) this.publish({ ...this.getSnapshot(), loaded: true })
+    if (failure) this.notify(`Your shortcuts could not be loaded, so the default keys are used: ${failure}`, 'error')
+    else if (notice) this.notify(notice, 'warning')
     return ok
   }
   /**
@@ -157,8 +162,15 @@ export class ShortcutsService implements ExternalStore<ShortcutsSnapshot>, Dispo
       if (Object.keys(extra).length) this.publish({ ...current, ...extra })
       return true
     }
+    // A newer file without its own notice (a save, a push) replaces the load's salvage notice.
+    const notice = extra.loaded ? {} : { salvaged: false, notice: undefined }
+    // The same content again (an echo, a re-push) keeps the file object, so its memoised rules and labels stay put.
+    if (JSON.stringify(parsed.data) === JSON.stringify(current.file)) {
+      this.publish({ ...current, ...notice, ...extra, revision })
+      return true
+    }
     const file = parsed.data as ShortcutFile
-    this.publish({ ...current, ...extra, file, revision, effective: effectiveRules(this.options.platform, file) })
+    this.publish({ ...current, ...notice, ...extra, file, revision, effective: effectiveRules(this.options.platform, file) })
     this.applyTargets()
     return true
   }
@@ -190,6 +202,6 @@ export class ShortcutsService implements ExternalStore<ShortcutsSnapshot>, Dispo
     this.disposed = true
     this.targets = {}
     try { this.unsubscribe() } catch (error) { onUnexpectedError(error) }
-    this.listeners.clear()
+    this.clearListeners()
   }
 }

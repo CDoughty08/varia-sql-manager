@@ -51,6 +51,11 @@ export type CaptureListener = (chord: string, event: KeyDownEvent) => void
 export interface CaptureOptions {
   /** Ctrl/⌘+K was pressed and waits for a second chord (the box shows "Ctrl+K, …"). */
   readonly onPrefix?: (chord: string, event: KeyDownEvent) => void
+  /**
+   * The waiting prefix was dropped without a second chord: Tab, a dead key, or a key after `nativeChordTimeout` (which
+   * is then recorded on its own). The service keeps no timer, so a box that should clear itself on time uses its own.
+   */
+  readonly onPrefixCancel?: () => void
 }
 interface CaptureState { readonly onChord: CaptureListener; readonly options: CaptureOptions; prefix?: { readonly chord: string; readonly at: number } }
 /** Monaco leaves chord mode 5 s after the prefix (`_scheduleLeaveChordMode`); from then on the next key is a plain key again. */
@@ -125,7 +130,8 @@ export class KeybindingService implements Disposable {
    * (the Shortcuts page's capture box), so this stays the only key listener. Every chord is recorded, Escape and Enter
    * included, but Tab and Shift+Tab are never captured, so focus can leave the box; modifier presses, IME composition and
    * dead keys record nothing. After Ctrl/⌘+K the next chord within `nativeChordTimeout` makes a two-part chord
-   * (`ctrl+k ctrl+c`), as Monaco's would; the prefix alone goes to `onPrefix`. A later capture replaces an earlier one.
+   * (`ctrl+k ctrl+c`), as Monaco's would; the prefix alone goes to `onPrefix`, and dropping it to `onPrefixCancel`. A
+   * menu that owns the keyboard still takes keys first. A later capture replaces an earlier one.
    */
   capture(onChord: CaptureListener, options: CaptureOptions = {}): () => void {
     const state: CaptureState = { onChord, options }
@@ -167,8 +173,9 @@ export class KeybindingService implements Disposable {
   handleKeyDown(event: KeyDownEvent): void {
     try {
       if (event.defaultPrevented) return
-      if (this.captureState) { this.captureKey(this.captureState, event); return }
       const { platform, menus } = this.options
+      // An open menu keeps its keys (Escape, arrows, Enter) even while a capture box is recording.
+      if (this.captureState && !menus?.ownsKeyboard()) { this.captureKey(this.captureState, event); return }
       // Every press counts for a bare-Alt tap, even one the menus then consume (an Alt tap also leaves the menubar).
       menus?.noteKeyDown(event)
       if (menus?.ownsKeyboard() && menus.handleKeyDown(event) === 'consumed') return
@@ -208,22 +215,27 @@ export class KeybindingService implements Disposable {
     const { platform } = this.options
     if (event.isComposing || event.keyCode === 229) return
     const chord = chordFromEvent(event, platform)
+    const forget = () => { if (state.prefix) { state.prefix = undefined; state.options.onPrefixCancel?.() } }
     // Tab and Shift+Tab move focus out of the box (and forget a prefix); every other chord is the box's.
-    if (chord === 'tab' || chord === 'shift+tab') { state.prefix = undefined; return }
-    if (!chord) { if (event.key === 'Dead') state.prefix = undefined; return }
+    if (chord === 'tab' || chord === 'shift+tab') { forget(); return }
+    if (!chord) { if (event.key === 'Dead') forget(); return }
     event.preventDefault()
     event.stopPropagation()
     if (event.repeat) return
     const now = (this.options.now ?? Date.now)(), prefix = state.prefix
-    state.prefix = undefined
-    if (prefix && now - prefix.at <= nativeChordTimeout) { state.onChord(`${prefix.chord} ${chord}`, event); return }
+    if (prefix && now - prefix.at <= nativeChordTimeout) { state.prefix = undefined; state.onChord(`${prefix.chord} ${chord}`, event); return }
+    // A prefix older than Monaco's chord timeout is forgotten first, so the box stops showing it.
+    forget()
     if (chord === captureChordPrefix(platform)) { state.prefix = { chord, at: now }; state.options.onPrefix?.(chord, event); return }
     state.onChord(chord, event)
   }
   handleKeyUp(event: KeyDownEvent): void {
     // While a capture box records, a bare Alt release is part of a chord, not a tap that focuses the menubar.
-    if (!this.captureState) try { this.options.menus?.handleKeyUp(event) } catch (error) { onUnexpectedError(error) }
+    if (!this.captureState || this.options.menus?.ownsKeyboard()) try { this.options.menus?.handleKeyUp(event) } catch (error) { onUnexpectedError(error) }
     try { this.options.keyUp?.(event) } catch (error) { onUnexpectedError(error) }
   }
-  dispose(): void { for (const detach of [...this.detachers]) detach() }
+  dispose(): void {
+    this.captureState = undefined
+    for (const detach of [...this.detachers]) detach()
+  }
 }

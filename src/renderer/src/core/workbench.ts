@@ -574,6 +574,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // SettingsService.create started the load: services use the defaults until main's settings arrive. A warning about the
   // file, or a failed load, shows in the command banner, including one from before the workbench existed.
   settings.setReporter((message, kind) => kind === 'warning' ? commands.reportWarning(message) : commands.reportError(message))
+  userShortcuts.setReporter((message, kind) => kind === 'warning' ? commands.reportWarning(message) : commands.reportError(message))
   // The tabs the last close kept (hot exit), else the welcome query; what an earlier run or page left unsaved is offered
   // once the workbench is up.
   const welcome = () => { if (!disposed) documents.create('SQLQuery1.sql', '-- Connect this query to a server and press F5 to execute.\n\nSELECT\n    @@SERVERNAME AS server_name,\n    DB_NAME() AS database_name,\n    SYSDATETIME() AS server_time;\n', 'master') }

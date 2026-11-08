@@ -4,6 +4,7 @@ import { gestureDescriptor, gestureIds } from '../src/shared/commands/gestures'
 import { defaultRules } from '../src/shared/commands/keybindings'
 import { emptyShortcutFile, readShortcutFile, type ShortcutFile } from '../src/shared/commands/shortcut-schema'
 import { GestureService } from '../src/renderer/src/core/gestures'
+import { KeybindingService } from '../src/renderer/src/core/keybindings'
 import { ShortcutsService, shortcutsApiOf, type ShortcutsApi } from '../src/renderer/src/core/ShortcutsService'
 import { createFakeShortcutsService } from '../src/renderer/src/core/ShortcutsService.fake'
 
@@ -161,5 +162,60 @@ describe('gesture choice text', () => {
     const gestures = new GestureService('win32')
     gestures.setModifiers(overrides)
     expect([gestures.matches('grid.addToSelection', { altKey: true }), gestures.matches('grid.addToSelection', { ctrlKey: true }), gestures.label('explorer.peekHover')]).toEqual([true, false, 'Off'])
+  })
+})
+
+describe('shortcuts service reporting and pushes', () => {
+  it("reports a failed load and main's notice, including ones from before the reporter", async () => {
+    const failing = new ShortcutsService({ api: api({ get: vi.fn(async () => ({ ok: false as const, error: 'Access denied.' })) }).api, platform: 'win32' })
+    await failing.load()
+    const reported: [string, string][] = []
+    failing.setReporter((message, kind) => { reported.push([message, kind]) })
+    expect(reported).toEqual([['Your shortcuts could not be loaded, so the default keys are used: Access denied.', 'error']])
+    const invalid = new ShortcutsService({ api: api({ get: vi.fn(async () => ({ ok: true as const, value: { file: { version: 2 } as never, revision: 1, salvaged: false } })) }).api, platform: 'win32' })
+    invalid.setReporter((message, kind) => { reported.push([message, kind]) })
+    await invalid.load()
+    const salvaged = new ShortcutsService({ api: api().api, platform: 'win32' })
+    salvaged.setReporter((message, kind) => { reported.push([message, kind]) })
+    await salvaged.load()
+    expect(reported.slice(1)).toEqual([
+      ['Your shortcuts could not be loaded, so the default keys are used: Main sent shortcuts this version does not support.', 'error'],
+      ['Some shortcuts were set aside.', 'warning']
+    ])
+  })
+  it("clears the load's salvage notice once a newer file arrives", async () => {
+    const service = new ShortcutsService({ api: api().api, platform: 'win32' })
+    await service.load()
+    expect(service.snapshot()).toMatchObject({ salvaged: true, notice: 'Some shortcuts were set aside.' })
+    await service.save(emptyShortcutFile)
+    expect(service.snapshot().salvaged).toBe(false)
+    expect(service.snapshot().notice).toBeUndefined()
+  })
+  it('keeps the file object and rules for a push of the same content', async () => {
+    const { api: main, push } = api(), { setRules, ...bound } = targets()
+    const service = new ShortcutsService({ api: main, platform: 'win32', ...bound })
+    await service.load()
+    const { file, effective } = service.snapshot()
+    setRules.mockClear()
+    push({ file: structuredClone(remap), revision: 4 })
+    expect(service.snapshot().revision).toBe(4)
+    expect(service.snapshot().file).toBe(file)
+    expect(service.snapshot().effective).toBe(effective)
+    expect(setRules).not.toHaveBeenCalled()
+  })
+})
+
+describe('shortcuts service bound as the workbench binds it', () => {
+  it('drives a real KeybindingService and GestureService, and stops after the binding is disposed', async () => {
+    const keybindings = new KeybindingService({ platform: 'win32', commands: { execute: async () => true }, context: { get: () => ({}) as never }, modalOpen: () => false, editorHasTextFocus: () => false })
+    const gestures = new GestureService('win32')
+    const fake = createFakeShortcutsService()
+    const binding = fake.bind({ keybindings, gestures })
+    expect(keybindings.lookup('file.new')?.text).toBe('Ctrl+N')
+    await fake.save(remap)
+    expect([keybindings.lookup('file.new')?.text, gestures.label('explorer.peekHover')]).toEqual(['Ctrl+Shift+F9', 'Shift+Hover'])
+    binding.dispose()
+    fake.changeElsewhere(emptyShortcutFile)
+    expect(keybindings.lookup('file.new')?.text).toBe('Ctrl+Shift+F9')
   })
 })

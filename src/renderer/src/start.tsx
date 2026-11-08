@@ -20,7 +20,6 @@ import App from './App'
 import { createWorkbench } from './core/workbench'
 import { registerJson } from './languages/json'
 import { WorkbenchProvider } from './core/WorkbenchContext'
-import { ShortcutsProvider } from './core/ShortcutsContext'
 import { ShortcutsService, shortcutsApiOf } from './core/ShortcutsService'
 import { toPlatform } from '../../shared/commands/keybindings'
 import { domThemeTarget, ThemeService } from './services/theme'
@@ -77,7 +76,7 @@ export async function start(root: Root): Promise<void> {
       }, workbench.ssisTree)
     })
   }
-  root.render(<React.StrictMode><ShellErrorBoundary><WorkbenchProvider workbench={workbench}><ShortcutsProvider shortcuts={workbench.shortcuts}><ShellFaultProbe /><App /></ShortcutsProvider></WorkbenchProvider></ShellErrorBoundary></React.StrictMode>)
+  root.render(<React.StrictMode><ShellErrorBoundary><WorkbenchProvider workbench={workbench}><ShellFaultProbe /><App /></WorkbenchProvider></ShellErrorBoundary></React.StrictMode>)
   // Workbench lifetime is outside React effects, including StrictMode's effect replay.
   // Reloading discards unsaved queries and ends every SQL session; main asks before allowing it.
   // A confirmed exit has already handled each document, so it is never blocked here.
