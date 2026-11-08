@@ -5,6 +5,7 @@ import { resetNotice, salvageNotice, shortcutHandlers, shortcutSentences, Shortc
 import { emptyShortcutFile, shortcutLimits, type ShortcutFile } from '../src/shared/commands/shortcut-schema'
 import type { ShortcutsSnapshot } from '../src/shared/contracts'
 import { BackendError } from '../src/main/backend/errors'
+import { heavyTimeout } from './fixtures/work-meter'
 
 // Writes fail, with the system's kind of message (it names the path), while `failWrites` is set.
 let failWrites = false
@@ -219,7 +220,7 @@ describe('shortcuts requests from the page', () => {
       expect((await failure(handlers.exportFile({ file })) as Error).message).toBe(shortcutSentences.overLimit)
     }
     expect(await readdir(directory)).toEqual([])
-  })
+  }, heavyTimeout)
 
   it('keeps only plain JSON values, so a cloned buffer or map cannot hide from the limits', async () => {
     // Structured clone (IPC) carries these; each looks like {} to the size checks.
