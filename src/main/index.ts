@@ -35,6 +35,7 @@ import { prepare as prepareConnection, settle as settleConnection, type Settled 
 import { connectionLibrary } from './connection-library'
 import { clearEntraPrompt, clearEntraTokenCache } from './entra'
 import { SettingsStore } from './settings-store'
+import { sandboxRefusal } from './sandbox-guard'
 import { ShortcutStore, shortcutHandlers } from './shortcut-store'
 import { effectiveRules } from '../shared/commands/effective'
 import { toPlatform } from '../shared/commands/keybindings'
@@ -711,6 +712,12 @@ function reloadLostRenderer(window: BrowserWindow): void {
 
 app.whenReady().then(async () => {
   if (!primaryInstance) return
+  const refusal = sandboxRefusal({ packaged: app.isPackaged, platform: process.platform, noSandbox: app.commandLine.hasSwitch('no-sandbox') })
+  if (refusal) {
+    dialog.showErrorBox('Varia cannot start', refusal)
+    app.exit(1)
+    return
+  }
   if (!developmentUrl) protocol.handle(appScheme, appProtocolHandler(rendererDir, contentSecurityPolicy()))
   const root = app.getAppPath()
   // Smoke tests shorten the silence that counts as unresponsive; PING then runs often enough for a healthy backend.
