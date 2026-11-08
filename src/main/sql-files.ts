@@ -1,5 +1,5 @@
 import { constants } from 'node:fs'
-import { access, chmod, lstat, open, realpath, rm, stat } from 'node:fs/promises'
+import { access, chmod, lstat, open, readlink, realpath, rm, stat } from 'node:fs/promises'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
@@ -90,6 +90,21 @@ export const fileCheckLimits = { concurrency: 2, timeoutMs: 2000 } as const
 /** The largest file any document kind saves: a change check hashes up to this, so a large saved value is not misread. */
 const maxStampBytes = Math.max(...Object.values(fileKinds).map(kind => kind.maxBytes))
 
+interface OwnerFacts { readonly mode: number; readonly uid: number }
+interface LinkFacts extends OwnerFacts { isSymbolicLink(): boolean }
+/** Links a save follows at most, as Linux's own limit (MAXSYMLINKS). */
+const maxLinkHops = 40
+
+/**
+ * Whether Linux's fs.protected_symlinks would refuse `uid` to follow `link` in `folder`: a world-writable sticky folder
+ * (/tmp) where the link belongs neither to the follower nor to the folder's owner. Varia resolves a link before it saves,
+ * and writes beside the target, so it must refuse what the kernel would: otherwise another user's link in /tmp would
+ * point a save at any file the saver may write.
+ */
+export function protectedLinkRefused(folder: OwnerFacts, link: OwnerFacts, uid: number): boolean {
+  return (folder.mode & 0o1002) === 0o1002 && link.uid !== uid && link.uid !== folder.uid
+}
+
 export interface SqlFileStoreOptions {
   /** The ANSI code page's WHATWG label for files that are neither UTF-8 nor UTF-16 (`legacyCodePage`); read when needed. */
   readonly legacyLabel?: () => string
@@ -99,6 +114,11 @@ export interface SqlFileStoreOptions {
   readonly replace?: typeof replaceFile
   /** Resolves symbolic links; tests make it fail as it does on some volumes. */
   readonly realpath?: (path: string) => Promise<string>
+  /** Looks at a path without following a link, and at a link's folder; tests give a link and its folder other owners. */
+  readonly lstat?: (path: string) => Promise<LinkFacts>
+  readonly folderStat?: (path: string) => Promise<OwnerFacts>
+  /** The saving user's id on POSIX (`process.getuid`); tests stand in for another user. */
+  readonly uid?: number
   /** Looks at a registered file for a change check; tests make it slow, as a network share can be. */
   readonly stat?: (path: string) => Promise<{ isFile(): boolean; size: number; mtimeMs: number }>
 }
@@ -327,14 +347,34 @@ export class SqlFileStore {
   release(fileId: string): void { this.files.delete(fileId); this.stamps.delete(fileId); this.conflicts.delete(fileId) }
   clear(): void { this.files.clear(); this.stamps.clear(); this.conflicts.clear() }
   private get platform(): NodeJS.Platform { return this.options.platform ?? process.platform }
-  /** Where a save writes: a symbolic link's target, so the link stays a link; the path itself for a new file. */
+  /**
+   * Where a save writes: a symbolic link's target, so the link stays a link; the path itself for a new file. A link the
+   * kernel would not let the user follow (`protectedLinkRefused`) is refused.
+   */
   private async writeTarget(path: string): Promise<string> {
+    await this.refuseProtectedLinks(path)
     try { return await (this.options.realpath ?? realpath)(path) }
     catch (error) {
       if (missing(error)) return path
       // Windows' realpath fails on some volumes (RAM disks, some virtual drives); only a link needs resolving.
       if (!(await lstat(path)).isSymbolicLink()) return path
       throw error
+    }
+  }
+  /** Follows the links at `path` itself, one by one, refusing one in a shared sticky folder that another user owns. */
+  private async refuseProtectedLinks(path: string): Promise<void> {
+    const uid = this.options.uid ?? process.getuid?.()
+    if (this.platform === 'win32' || uid === undefined) return
+    let current = path
+    for (let hop = 0; hop < maxLinkHops; hop++) {
+      let link: LinkFacts
+      try { link = await (this.options.lstat ?? lstat)(current) } catch { return }
+      if (!link.isSymbolicLink()) return
+      const folder = dirname(current)
+      if (protectedLinkRefused(await (this.options.folderStat ?? stat)(folder), link, uid)) {
+        throw new Error(`${basename(path)} is a symbolic link another user made in a shared folder. Varia SQL Manager does not save through it; use Save As to choose another file.`)
+      }
+      try { current = resolve(folder, await readlink(current)) } catch { return }
     }
   }
   /**

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { chmod, chown, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve, sep } from 'node:path'
-import { fileCheckLimits, fileKinds, isReadOnly, saveDocument, saveFileSchema, SqlFileStore, type SavePrompts } from '../src/main/sql-files'
+import { fileCheckLimits, fileKinds, isReadOnly, protectedLinkRefused, saveDocument, saveFileSchema, SqlFileStore, type SavePrompts } from '../src/main/sql-files'
 
 let directory: string
 beforeEach(async () => {
@@ -287,6 +287,32 @@ describe('SQL file encodings and save hardening', () => {
     expect(await store.read(target)).toMatchObject({ id: viaLink.id, path: link })
     await expect(store.save('SELECT 3', other.id, target)).rejects.toThrow('link.sql is open in another query tab')
     expect(await readFile(target, 'utf8')).toBe('SELECT 1')
+  })
+  it('refuses to save through another user\'s link in a shared sticky folder, as Linux\'s protected_symlinks would', async () => {
+    expect(protectedLinkRefused({ mode: 0o41777, uid: 0 }, { mode: 0o120777, uid: 2000 }, 1000)).toBe(true)
+    // The follower's own link, the folder owner's link, and a folder that is not both sticky and world-writable are followed.
+    expect(protectedLinkRefused({ mode: 0o41777, uid: 0 }, { mode: 0o120777, uid: 1000 }, 1000)).toBe(false)
+    expect(protectedLinkRefused({ mode: 0o41777, uid: 2000 }, { mode: 0o120777, uid: 2000 }, 1000)).toBe(false)
+    expect(protectedLinkRefused({ mode: 0o40777, uid: 0 }, { mode: 0o120777, uid: 2000 }, 1000)).toBe(false)
+    expect(protectedLinkRefused({ mode: 0o41775, uid: 0 }, { mode: 0o120777, uid: 2000 }, 1000)).toBe(false)
+    // A stand-in for /tmp/link.sql that another user made (links of other owners need root to make): the save writes nothing.
+    const link = join(directory, 'link.sql')
+    await writeFile(link, 'SELECT 1')
+    const facts = (linkOwner: number) => ({
+      platform: 'linux' as const, uid: 1000, folderStat: async () => ({ mode: 0o41777, uid: 0 }),
+      lstat: async (path: string) => path === link ? { mode: 0o120777, uid: linkOwner, isSymbolicLink: () => true } : lstat(path)
+    })
+    const store = new SqlFileStore(facts(2000))
+    const opened = await store.read(link)
+    await expect(store.save('SELECT 2', opened.id)).rejects.toThrow('link.sql is a symbolic link another user made in a shared folder')
+    await expect(new SqlFileStore(facts(2000)).save('SELECT 2', undefined, link)).rejects.toThrow('another user made')
+    await expect(store.readOnly(opened.id)).rejects.toThrow('another user made')
+    expect(await readFile(link, 'utf8')).toBe('SELECT 1')
+    // Windows has no such rule; the user's own link saves.
+    expect((await new SqlFileStore({ ...facts(2000), platform: 'win32' }).save('SELECT 3', undefined, link)).path).toBe(link)
+    const own = new SqlFileStore(facts(1000))
+    await own.save('SELECT 4', (await own.read(link)).id)
+    expect(await readFile(link, 'utf8')).toBe('SELECT 4')
   })
   it('compares the files paths resolve to, wherever links can be made', async () => {
     // A stand-in for a link (Windows makes symbolic links only for administrators or in Developer Mode): realpath maps
