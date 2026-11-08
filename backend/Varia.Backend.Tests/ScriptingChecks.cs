@@ -556,7 +556,7 @@ internal static class ScriptingChecks
         {
             Interlocked.Increment(ref Connections);
             Hold?.Wait();
-            return new SqlConnection("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false");
+            return new SqlConnection("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false");
         }
         /// <summary>Replaces the open, as SqlService's does for a Kerberos token failure.</summary>
         public Func<SqlConnection, CancellationToken, Task>? Opening { get; set; }
@@ -599,13 +599,13 @@ internal static class ScriptingChecks
             catch (OperationCanceledException) { check(host.Connections == 0 && service.RunningCount == 0 && service.ActiveJobs == 0, "a request cancelled before it runs opens nothing and takes no gate"); }
         }
         var unreachable = await service.ScriptAsync(Args(), CancellationToken.None);
-        check(unreachable.Error is { Retryable: true } && unreachable.Text is null && unreachable.Database == "Sales" && SpinWait.SpinUntil(() => service.ActiveJobs == 0, 2000),
+        check(unreachable.Error is { Retryable: true } && unreachable.Text is null && unreachable.Database == "Sales" && SpinWait.SpinUntil(() => service.ActiveJobs == 0, 15_000),
             "a connection that cannot open is an error value: " + unreachable.Error?.Code);
         using (var expired = new ScriptingService(new FakeHost { Opening = ConnectionFailureChecks.ExpiredTicket }))
         {
             var refused = await expired.ScriptAsync(Args(), CancellationToken.None);
             check(refused.Error is { Code: "AUTH_KERBEROS", Retryable: true } && refused.Error.Message == "Could not script dbo.Orders: " + ConnectionFailures.Messages.Expired
-                && refused.Text is null && refused.Database == "Sales" && SpinWait.SpinUntil(() => expired.ActiveJobs == 0 && expired.RunningCount == 0, 2000),
+                && refused.Text is null && refused.Database == "Sales" && SpinWait.SpinUntil(() => expired.ActiveJobs == 0 && expired.RunningCount == 0, 15_000),
                 "a scripting connection whose Kerberos ticket expired is the job's retryable AUTH_KERBEROS value with the kinit advice, as Object Explorer's node shows it");
         }
         var cloud = await new ScriptingService(new FakeHost(5)).ScriptAsync(Args(new ObjectRefDto("login", Name: "sa")), CancellationToken.None);
@@ -617,12 +617,12 @@ internal static class ScriptingChecks
         var connection = Guid.NewGuid().ToString();
         var requestId = Guid.NewGuid().ToString();
         var held = limited.ScriptAsync(Args(connectionId: connection, requestId: requestId), CancellationToken.None);
-        check(SpinWait.SpinUntil(() => gated.Connections == 1, 5000), "the first job takes the connection's gate");
+        check(SpinWait.SpinUntil(() => gated.Connections == 1, 15_000), "the first job takes the connection's gate");
         try { await limited.ScriptAsync(Args(connectionId: connection, requestId: requestId), CancellationToken.None); check(false, "a duplicate request ran"); }
         catch (RequestException error) { check(error.Code == "DUPLICATE_REQUEST", "a running requestId cannot be sent again"); }
         var waiting = limited.ScriptAsync(Args(connectionId: connection), CancellationToken.None);
         var other = limited.ScriptAsync(Args(connectionId: Guid.NewGuid().ToString()), CancellationToken.None);
-        SpinWait.SpinUntil(() => gated.Connections == 2 && limited.RunningCount == 3, 5000);
+        SpinWait.SpinUntil(() => gated.Connections == 2 && limited.RunningCount == 3, 15_000);
         check(gated.Connections == 2 && !waiting.IsCompleted, "the per-connection gate holds a connection's second job, not another connection's");
         try { await limited.ScriptAsync(Args(), CancellationToken.None); check(false, "more registered requests than allowed"); }
         catch (RequestException error) { check(error.Code == "BUSY", "registered requests are bounded"); }
@@ -632,7 +632,7 @@ internal static class ScriptingChecks
         try { await held; check(false, "a forgotten connection's running job answered"); }
         catch (RequestException error) { check(error.Code == "CANCELLED" && limited.ActiveJobs == 2, "disconnect answers a running job at once, which keeps its gate until its work ends"); }
         gated.Hold.Release(2);
-        check((await other).Error is not null && SpinWait.SpinUntil(() => limited.ActiveJobs == 0 && limited.RunningCount == 0, 5000),
+        check((await other).Error is not null && SpinWait.SpinUntil(() => limited.ActiveJobs == 0 && limited.RunningCount == 0, 15_000),
             "another connection's job is unaffected, and every job releases its gates when its work ends");
 
         // The JSON contract: every option is required, and unknown members are refused.

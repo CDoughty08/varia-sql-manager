@@ -238,7 +238,7 @@ internal static class StoreChecks
         var collections = GC.CollectionCount(2);
         var stored = store.UsedBytes;
         store.Release(set.ResultId);
-        SpinWait.SpinUntil(() => GC.CollectionCount(2) > collections, 5000);
+        SpinWait.SpinUntil(() => GC.CollectionCount(2) > collections, 15_000);
         var after = GC.GetTotalMemory(false);
         check(stored > 64L * 1024 * 1024 && GC.CollectionCount(2) > collections && held - after > stored / 2,
             "releasing more than 64 MiB of results collects them (" + held / 1048576 + " MB held, " + after / 1048576 + " MB after)");
@@ -260,7 +260,7 @@ internal static class StoreChecks
             stored = store.UsedBytes;
             var largest = sets.Max(item => item.Describe().BytesStored);
             var released = together ? store.Release(sets.Select(item => item.ResultId)) : sets.Count(item => store.Release(item.ResultId));
-            SpinWait.SpinUntil(() => GC.CollectionCount(2) > collections, 5000);
+            SpinWait.SpinUntil(() => GC.CollectionCount(2) > collections, 15_000);
             after = GC.GetTotalMemory(false);
             check(largest < 64L * 1024 * 1024 && stored > 64L * 1024 * 1024 && released == 4 && store.UsedBytes == 0 && GC.CollectionCount(2) > collections && held - after > stored / 2,
                 "releasing more than 64 MiB in results under 64 MiB each, " + (together ? "in one call" : "one at a time") + ", collects them ("
@@ -285,7 +285,7 @@ internal static class StoreChecks
         {
             var index = GC.GetGCMemoryInfo(GCKind.FullBlocking).Index;
             release();
-            SpinWait.SpinUntil(() => GC.GetGCMemoryInfo(GCKind.FullBlocking).Index > index, 5000);
+            SpinWait.SpinUntil(() => GC.GetGCMemoryInfo(GCKind.FullBlocking).Index > index, 15_000);
             var info = GC.GetGCMemoryInfo(GCKind.FullBlocking);
             return info.Index > index && info.Compacted;
         }
@@ -341,25 +341,41 @@ internal static class StoreChecks
         check(events.Count == count, "nothing is emitted after the sink is disposed");
 
         // Every set's first page is reported at once, within the 100 ms spacing too, so a script of one-row sets shows each
-        // set's row without waiting for a tick; a set's later pages still wait for the spacing.
-        var firstSeals = 0;
-        using (var sink = new QueryEventSink((value, _) => { if (JsonSerializer.SerializeToElement(value, HostChecks.Json).GetProperty("type").GetString() == "progress") Interlocked.Increment(ref firstSeals); }))
+        // set's row without waiting for a tick; a set's later pages still wait for the spacing. A first page is reported
+        // before Sealed returns (by Sealed, or by a tick that got there first); a later page may be reported once 100 ms
+        // passed since the first, which a starved CI runner can make happen between two calls, so only sets whose two seals
+        // fell within 100 ms judge the spacing.
+        var reports = new List<(uint ResultId, long RowsAvailable)>();
+        using (var sink = new QueryEventSink((value, _) =>
         {
+            var body = JsonSerializer.SerializeToElement(value, HostChecks.Json);
+            if (body.GetProperty("type").GetString() != "progress") return;
+            lock (reports) foreach (var result in body.GetProperty("results").EnumerateArray()) reports.Add((result.GetProperty("resultId").GetUInt32(), result.GetProperty("rowsAvailable").GetInt64()));
+        }))
+        {
+            bool Reported(uint id, long rows) { lock (reports) return reports.Any(item => item.ResultId == id && item.RowsAvailable >= rows); }
             var query = store.BeginQuery("one-row sets");
-            for (var i = 0; i < 3; i++)
+            int sets = 0, firstAtOnce = 0, spaced = 0, laterAtOnce = 0;
+            for (var i = 0; i < 20 && (i < 3 || spaced == 0); i++)
             {
                 var single = Open(store, query, i);
+                sets++;
                 sink.Opened(single);
                 Fill(single, 0, 1);
                 single.Seal();
+                var before = Environment.TickCount64;
                 sink.Sealed(single);
+                if (Reported(single.ResultId, 1)) firstAtOnce++;
                 Fill(single, 1, 1);
                 single.Seal();
                 sink.Sealed(single);
+                var later = Reported(single.ResultId, 2);
+                if (Environment.TickCount64 - before < 100) { spaced++; if (later) laterAtOnce++; }
                 single.Complete();
                 sink.Closed(single);
             }
-            check(Volatile.Read(ref firstSeals) == 3, "each set's first sealed page is reported at once, bypassing the coalescing; its later pages are not (" + firstSeals + " progress events)");
+            check(firstAtOnce == sets && spaced > 0 && laterAtOnce == 0, "each set's first sealed page is reported at once, bypassing the coalescing; its later pages are not ("
+                + firstAtOnce + " of " + sets + " first pages at once, " + laterAtOnce + " of " + spaced + " later pages within 100 ms)");
         }
     }
 
@@ -400,16 +416,20 @@ internal static class StoreChecks
         var hello = host.Hello();
         check(hello.GetProperty("methods").EnumerateArray().Any(method => method.GetString() == SqlService.SynthesizeMethod), "test hooks announce debug.results.synthesize");
         host.Request(1, SqlService.SynthesizeMethod, new { shape = "W1", rows = 10_000 });
-        var synthesized = JsonBridge.ParseControl(host.Next(FrameKind.Response)!.Value.Body).GetProperty("result");
+        var synthesized = JsonBridge.ParseControl(host.Next(FrameKind.Response, 15_000)!.Value.Body).GetProperty("result");
         var id = synthesized.GetProperty("resultId").GetUInt32();
         check(synthesized.GetProperty("rowsAvailable").GetInt64() == 10_000 && synthesized.GetProperty("state").GetString() == "complete", "synthetic rows are stored through the budgeted path");
         host.Request(2, "results.read", new { resultId = id, firstRow = 4000, maxRows = 5000 }, credit: 64 * 1024);
+        // The first page may be late on a starved CI runner; a later one that misses the 300 ms of quiet only lowers the
+        // count before more credit, and the frames after the credit are taken up to the response, not until a quiet spell.
         var frames = new List<Frame>();
+        if (host.Next(FrameKind.Data, 15_000) is { } firstData) frames.Add(firstData);
         while (host.Next(FrameKind.Data, 300) is { } data) frames.Add(data);
         var stalled = frames.Count;
         host.Send(FrameKind.Credit, 2, 16 * 1024 * 1024, []);
-        while (host.Next(FrameKind.Data, 300) is { } data) frames.Add(data);
-        var end = JsonBridge.ParseControl(host.Next(FrameKind.Response)!.Value.Body).GetProperty("result");
+        var endFrame = host.Next(FrameKind.Response, 15_000);
+        while (host.Next(FrameKind.Data, 0) is { } data) frames.Add(data);
+        var end = JsonBridge.ParseControl(endFrame!.Value.Body).GetProperty("result");
         var decoded = frames.Select(frame => PageReader.Read(frame.Body, W1Wires)).ToList();
         var contiguous = decoded.Select((page, i) => i == 0 || page.FirstRow == decoded[i - 1].FirstRow + decoded[i - 1].Rows.Length).All(ok => ok);
         check(stalled is >= 1 and < 4 && frames.Select(frame => frame.Header.Arg).SequenceEqual(Enumerable.Range(1, frames.Count).Select(i => (uint)i)) && contiguous
@@ -417,19 +437,20 @@ internal static class StoreChecks
             && end.GetProperty("nextRow").GetInt64() == decoded[^1].FirstRow + decoded[^1].Rows.Length && end.GetProperty("pages").GetInt32() == frames.Count && !end.GetProperty("complete").GetBoolean(),
             "results.read streams the stored pages covering a range, in sequence, within credit (" + stalled + " pages before more credit)");
         host.Request(3, "results.read", new { resultId = id, firstRow = 9000, maxRows = 65_536 }, credit: 16 * 1024 * 1024);
-        while (host.Next(FrameKind.Data, 300) is not null) { }
-        var tail = JsonBridge.ParseControl(host.Next(FrameKind.Response)!.Value.Body).GetProperty("result");
+        var tailFrame = host.Next(FrameKind.Response, 15_000);
+        while (host.Next(FrameKind.Data, 0) is not null) { }
+        var tail = JsonBridge.ParseControl(tailFrame!.Value.Body).GetProperty("result");
         check(tail.GetProperty("complete").GetBoolean() && tail.GetProperty("nextRow").GetInt64() == 10_000, "reading to the end of a complete result reports complete");
         string? Code(uint request, string method, object parameters, long? credit = null)
         {
             host.Request(request, method, parameters, credit: credit);
-            var body = JsonBridge.ParseControl(host.Next(FrameKind.Response)!.Value.Body);
+            var body = JsonBridge.ParseControl(host.Next(FrameKind.Response, 15_000)!.Value.Body);
             return body.TryGetProperty("error", out var error) ? error.GetProperty("code").GetString() : null;
         }
         check(Code(4, "results.read", new { resultId = id, firstRow = 0, maxRows = 10 }) == "INVALID_REQUEST" && Code(5, "results.read", new { resultId = 999, firstRow = 0, maxRows = 10 }, 65_536) == "RESULT_NOT_FOUND"
             && Code(6, "results.read", new { resultId = id, firstRow = 0, maxRows = 65_537 }, 65_536) == "INVALID_PARAMS", "results.read needs credit, an existing result, and a bounded range");
         host.Request(7, "results.close", new { resultIds = new[] { id, 12345u } });
-        var closed = JsonBridge.ParseControl(host.Next(FrameKind.Response)!.Value.Body).GetProperty("result");
+        var closed = JsonBridge.ParseControl(host.Next(FrameKind.Response, 15_000)!.Value.Body).GetProperty("result");
         check(closed.GetProperty("closed").GetInt32() == 1 && closed.GetProperty("usedBytes").GetInt64() == 0 && Code(8, "results.read", new { resultId = id, firstRow = 0, maxRows = 10 }, 65_536) == "RESULT_RELEASED",
             "results.close returns the memory, and later reads answer RESULT_RELEASED");
         check(Code(9, "results.close", new { resultIds = Array.Empty<uint>() }) == "INVALID_PARAMS", "results.close needs 1 to 1024 ids");

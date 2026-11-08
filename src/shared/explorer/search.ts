@@ -82,6 +82,27 @@ export const searchTypes = [
 ] as const satisfies readonly { readonly id: string; readonly label: string; readonly kinds: readonly SearchKind[] }[]
 export type SearchType = typeof searchTypes[number]['id']
 
+/** A result's kind badge: its tone (a theme key, `searchKind.<tone>Background`) and a letter, as Search Objects' mock draws
+ *  T, V, P and F (the tone and the path tell kinds that share a letter apart); tests/object-search.test.ts checks every kind has one. */
+export const searchKindTones = ['table', 'view', 'procedure', 'function', 'column', 'key', 'security', 'database', 'other'] as const
+export type SearchKindTone = typeof searchKindTones[number]
+const typeTones: Record<SearchType, SearchKindTone> = {
+  tables: 'table', views: 'view', columns: 'column', procedures: 'procedure', functions: 'function', parameters: 'column', triggers: 'procedure',
+  indexes: 'key', schemas: 'database', types: 'other', security: 'security', other: 'other'
+}
+const kindLetters: Record<SearchKind, string> = {
+  table: 'T', view: 'V', procedure: 'P', function: 'F', synonym: 'S', sequence: 'Q', trigger: 'G', type: 'Y', tableType: 'Y', databaseTrigger: 'G',
+  login: 'L', serverRole: 'R', credential: 'C', cryptographicProvider: 'P', audit: 'A', serverAuditSpecification: 'A', backupDevice: 'B', linkedServer: 'L',
+  serverTrigger: 'G', database: 'D', user: 'U', databaseRole: 'R', applicationRole: 'R', schema: 'S', assembly: 'A', asymmetricKey: 'K', certificate: 'C',
+  symmetricKey: 'K', columnMasterKey: 'K', columnEncryptionKey: 'K', databaseAuditSpecification: 'A', externalDataSource: 'E', externalFileFormat: 'E',
+  fullTextCatalog: 'X', fullTextStoplist: 'X', partitionScheme: 'P', partitionFunction: 'P', searchPropertyList: 'X', planGuide: 'G',
+  xmlSchemaCollection: 'X', rule: 'R', default: 'D', securityPolicy: 'P', column: 'C', key: 'K', constraint: 'K', index: 'I', statistic: 'S', parameter: 'A'
+}
+export function searchKindBadge(kind: SearchKind): { readonly letters: string; readonly tone: SearchKindTone } {
+  const type = searchTypes.find(item => (item.kinds as readonly SearchKind[]).includes(kind))!
+  return { letters: kindLetters[kind], tone: kind === 'database' ? 'database' : typeTones[type.id] }
+}
+
 /** The kinds a search with these type filters names, in the index's order; undefined (every kind) when none is chosen. */
 export function searchTypeKinds(types: readonly SearchType[]): SearchKind[] | undefined {
   if (!types.length) return undefined

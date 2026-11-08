@@ -10,7 +10,10 @@ pages, limits, error codes, display formats, benchmarks).
 
 - `npm ci`: install. Use `npm install <pkg>` only to change dependencies, and commit `package-lock.json`.
 - `npm run dev`: Debug backend build, then electron-vite with renderer hot reload. Restart after C# changes.
-- `npm run check`: typecheck, Release .NET checks, vitest, production build. Run before every commit.
+- `npm run check`: typecheck, Release .NET checks, vitest, production build, as concurrent lanes (`scripts/check.mjs`, which
+  prints each lane's seconds): every lane at once with 8 or more CPUs, otherwise (CI's runners) two chains side by side, so
+  time-bounded tests are not starved (`VARIA_CHECK_CPUS=<n>` tries either; `VARIA_CHECK_SKIP=typecheck`, as CI's Windows and
+  macOS jobs set, leaves out tsc, which Linux's job runs). A stopped check prints its running lanes' output. Run before every commit.
 - `npm run test:smoke`: the Electron suites listed in package.json's `test:smoke`. Needs the Release backend and `out/`
   from `npm run check` (or just those, from `npm run build:smoke`). `node scripts/smoke-shards.mjs 2/2`: one CI shard.
   The fixture launches the hidden smoke window with `--disable-frame-rate-limit`: Chromium otherwise draws it at one
@@ -31,8 +34,8 @@ pages, limits, error codes, display formats, benchmarks).
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 1624 offline
-  checks; how many depends on the server version and authentication (2382 against a local SQL Server 2025 in Mixed Mode, which
+  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its about 1650 offline
+  checks (a few are platform-specific); how many depends on the server version and authentication (2382 against a local SQL Server 2025 in Mixed Mode, which
   adds the low-privilege login checks, with Windows authentication and `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer, Script As and object action
   scratch-database checks (the last in their own `VariaScratch_…_act` database) and the script goldens in `tests/fixtures/scripting/`; `VARIA_UPDATE_SCRIPT_GOLDENS=1`
   rewrites the goldens whose manifest source is `varia`),
@@ -73,7 +76,9 @@ pages, limits, error codes, display formats, benchmarks).
   workbench's next render throw), and passes the backend `VARIA_BACKEND_TEST_HOOKS` (synthetic results)
   and `VARIA_RESULT_BUDGET_BYTES`. Suites import `electron` and `expect` from `scripts/fixtures/smoke.mjs`: assertions
   wait 15 s on Windows, whose runners can take seconds to write a file, and closing the app logs main's file operations
-  that took 500 ms or more.
+  that took 500 ms or more. A close that has not finished in 45 s kills the app and fails the suite without hiding its own
+  error (`boundedClose`), and `smoke-shards.mjs` kills a suite past four times its weight (at least 5 min), so one hang
+  cannot run its shard to the job's timeout.
 
 ## Architecture invariants
 
@@ -327,7 +332,10 @@ pages, limits, error codes, display formats, benchmarks).
 
 - vitest: `tests/*.test.ts`, fixtures in `tests/fixtures/`.
 - .NET: `backend/Varia.Backend.Tests/Program.cs`, a console program of `Check(condition, name)` calls. Offline checks come
-  first; live checks follow and create only session-local temporary objects. They create databases (and logins) only
+  first, their suites in concurrent lanes (`OfflineSuites.cs`: six by default, `VARIA_TEST_OFFLINE_LANES=<n>`; one when
+  `VARIA_TEST_SLOW_MS` is set): a new offline suite goes in Program.cs's `offlineSuites` list, with its measured seconds in
+  `OfflineSuites.Weights` if over 0.3 s, and runs in `OfflineSuites.Alone` if it changes process-wide state (the console,
+  environment variables, a static override, GC measurements); live checks follow and create only session-local temporary objects. They create databases (and logins) only
   when `VARIA_TEST_SQL_SCRATCH=1`; scratch objects are uniquely named, marked, and dropped in `finally`
   (`ScratchDatabase.cs` also sweeps stale `VariaScratch_` ones by name and age). `InjectionMatrix.cs` (scratch only)
   scripts objects named to break out of SMO's comments, strings, brackets and lines with every DDL verb and runs each
@@ -340,8 +348,15 @@ pages, limits, error codes, display formats, benchmarks).
   metric needs a `tests/bench/floors.json` entry (`tests/bench-floors.test.ts` checks both lists) and a row in
   docs/ipc.md. Floors must stay well below what slow shared CI runners measure.
 - Every behaviour change or bug fix comes with a check that would have caught it.
-- Keep CI fast. Each smoke shard and live group has a time budget (`shardBudgetSeconds` in `scripts/smoke-shards.mjs`,
+- Keep CI fast: docs/ci.md holds the measurements, the plan and the rules (queueing for the 20 shared runners sets most of a
+  run's wall time, so a job removed beats a step trimmed); measure with `node scripts/ci-timings.mjs`. Race a close or exit only
+  through `within()` (`tests/idle-waits.test.ts`), settle tests without `setTimeout` loops, fail offline connections with
+  `Unreachable.Source`, and find .NET waits with `VARIA_TEST_SLOW_MS=500`. Each smoke shard and live group has a time budget (`shardBudgetSeconds` in `scripts/smoke-shards.mjs`,
   `LiveGroups.BudgetSeconds`, both 360 s); exceeding it fails `tests/ci-workflow.test.ts` or the offline .NET checks.
+  A bound on a wait that returns as soon as its condition holds costs nothing when it passes: make it generous (CI's 3 and
+  4 vCPU runners stall for seconds), and keep tight bounds for what the check means to time. Two timers that race (a budget
+  that must outlast a delay or a second call) need about a second between them. A CancellationTokenSource timer cancels from the thread pool, so a Stop that must land before CPU-bound work ends comes from a dedicated thread. Before pushing an offline .NET timing check,
+  run `node scripts/offline-stress.mjs` (five copies of the offline checks pinned to three CPUs, as starved as CI's).
   A new smoke suite needs its seconds on Linux and Windows in `suiteSeconds`, and a new live .NET suite runs through
   `Suite(...)` in `Program.cs` with an entry in `LiveGroups.Suites`. Copy times from CI's logs: each shard's summary and
   each `Live suite name: n s` line. Before you add a smoke suite, check whether an existing suite's launch can take the
@@ -356,16 +371,20 @@ pages, limits, error codes, display formats, benchmarks).
 - One `claude/<topic>` branch per PR, off `main` or, for a stacked PR, off the branch it builds on. Merge with merge
   commits (never squash or rebase), so stacked branches need no rebase; imperative commit subjects.
 - CI (`.github/workflows/ci.yml`) runs on every PR, drafts included (any base branch, so stacked PRs are tested), every
-  push to main and manual runs; the repository is public, so its minutes cost nothing, but GitHub runs only 20 of its jobs
+  push to main and manual runs (a newer push cancels the older run of its PR, or of main; manual runs always finish); the
+  repository is public, so its minutes cost nothing, but GitHub runs only 20 of its jobs
   at once (5 on macOS), so a PR runs at most 12 and no job repeats another's work. Every job starts at once and builds
   what it needs, so one failure hides nothing and the run takes as long as its longest job: `npm run check` on Linux,
   Windows and macOS; the live .NET checks on Linux in three groups (`--live-group k/3`, each against its own SQL Server
   service; the first also runs `tests/*-live.test.ts` and Kerberos); the smoke suites in three shards on Linux (sandboxed,
   under xvfb, with SQL Server) and two on Windows (`scripts/smoke-shards.mjs`, which splits `test:smoke` by each platform's times
-  in its `suiteSeconds`); and the Linux benchmarks (floors enforced). Report-only work runs on main pushes only: the
-  Windows and macOS benchmarks, and Linux's 1024x768 repeats of the scripting and results suites (Windows runners' own
-  display is 1024x768). macOS skips the smoke tests until they cover its window chrome. `tests/ci-workflow.test.ts` holds
+  in its `suiteSeconds`); and the Linux benchmarks (floors enforced). Report-only work stays off PRs: Linux's 1024x768
+  repeats of the scripting and results suites (Windows runners' own display is 1024x768) run on main pushes, and the
+  Windows and macOS benchmarks run daily and by hand (`bench-desktop.yml`). macOS skips the smoke tests until they cover its window chrome. `tests/ci-workflow.test.ts` holds
   this layout.
+  Release builds (`release.yml`, through `package.yml`) package main pushes, tags and manual runs, and a pull request only when
+  it changes what packaging reads (its `paths`); Intel macOS packages only for tags and manual runs, and installers upload only
+  then (`tests/release-workflow.test.ts`). Every workflow a pull request triggers cancels its superseded runs.
   `sql-matrix.yml` (manual runs only) repeats the .NET checks against SQL Server 2017, 2019, 2022 and 2025.
 - No license has been chosen; do not add one.
 
