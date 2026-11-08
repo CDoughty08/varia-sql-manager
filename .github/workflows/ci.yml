@@ -60,6 +60,12 @@ jobs:
           cache: true
           cache-dependency-path: backend/Varia.Backend/packages.lock.json
       - run: npm ci --no-audit --no-fund
+      # The lockfile is the same everywhere, so Linux alone audits it. Moderate and low advisories only report: some have no
+      # fix short of a major upgrade of the build tools (docs/ci.md).
+      - name: Audit dependencies (high and critical advisories)
+        if: matrix.os == 'ubuntu-24.04'
+        timeout-minutes: 3
+        run: npm audit --audit-level=high
       - name: Type check, offline .NET checks, vitest, production build
         id: check
         timeout-minutes: 20

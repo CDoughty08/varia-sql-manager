@@ -122,6 +122,17 @@ describe('CI workflow', () => {
       for (const command of ['npm run bench', 'npm run bench:e2e', 'npm run bench:grid', 'scripts/check-bench.mjs']) expect(job.steps.some(step => step.run.includes(command)), command).toBe(true)
     }
   })
+  // npm audit ran nowhere in CI, so dompurify and undici sat on critical and high advisories with fixes available (#267).
+  it('audits the lockfile on Linux in every run, failing on high and critical advisories only', () => {
+    const check = workflow.get('check')!
+    const audit = check.steps.filter(step => /\bnpm audit\b/.test(step.run))
+    expect(audit).toHaveLength(1)
+    expect(audit[0].run.trim()).toBe('npm audit --audit-level=high')
+    expect(audit[0].if).toBe("matrix.os == 'ubuntu-24.04'")
+    expect(audit[0].timeout).toBeGreaterThan(0)
+    const at = (pattern: RegExp) => check.steps.findIndex(step => pattern.test(step.run))
+    expect(at(/^npm ci\b/)).toBeLessThan(at(/\bnpm audit\b/))
+  })
   it('type-checks on Linux in every run, and states its job count truly', () => {
     const yaml = readFileSync('.github/workflows/ci.yml', 'utf8')
     // Windows and macOS skip tsc: it reads only sources and installed types, and Linux's case-sensitive paths are strictest.
