@@ -103,6 +103,21 @@ describe('immutable bounded retained XML', () => {
     expect(service.getSnapshot().entries[0].partialExecution).toBe(true)
     expect(service.getSnapshot().notice).toContain('Backend lost')
   })
+  it('keeps cancelled reads inside the concurrency budget until the reader acknowledges cancellation', async () => {
+    vi.useFakeTimers()
+    const service = history({ acquisitions: 1, acquisitionMs: 100 }), waiting = deferred<{ text: string }>()
+    const pending = service.capture(context, outcome, [{ ...source('hung'), read: () => waiting.promise }])
+    await vi.advanceTimersByTimeAsync(100); await pending
+    service.clear(true)
+    const read = vi.fn(async () => ({ text: '<new/>' }))
+    await service.capture(context, outcome, [{ ...source('next'), read }])
+    expect(read).not.toHaveBeenCalled()
+    expect(service.getSnapshot().notice).toContain('busy')
+    waiting.resolve({ text: '<late/>' }); await Promise.resolve()
+    await service.capture(context, outcome, [{ ...source('next'), read }])
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(service.getSnapshot().entries).toMatchObject([{ sourceKey: 'next' }])
+  })
   it('clear keeps pins, aborts pending reads, and a late completion cannot repopulate cleared/disposed history', async () => {
     const service = history(), waiting = deferred<{ text: string }>()
     await service.capture(context, outcome, [source('pin')]); const id = service.getSnapshot().entries[0].id

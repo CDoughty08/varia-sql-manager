@@ -36,6 +36,8 @@ export interface PlanHistoryState { readonly entries: readonly RetainedPlan[]; r
 /** Owns original immutable XML only. Closing query/results/viewers never clears this window's history. */
 export class RetainedPlansService extends SnapshotStore<PlanHistoryState> implements Disposable {
   private readonly pending = new Set<AbortController>()
+  /** A stopped acquisition still occupies its slot until its last underlying reader settles. */
+  private readonly acquisitions = new Set<AbortController>()
   private disposed = false
   constructor(private readonly limits: Readonly<{ entries: number; bytes: number; documentsPerRun: number; acquisitions: number; acquisitionMs: number }> = retainedPlanLimits) {
     super(Object.freeze({ entries: Object.freeze([]), bytes: 0, pending: 0, notice: '' }))
@@ -47,20 +49,29 @@ export class RetainedPlansService extends SnapshotStore<PlanHistoryState> implem
    * Callers keep their originating handles alive until this settles. Reset aborts pending reads before publishing. */
   async capture(context: PlanExecutionContext, outcome: PlanOutcome, sources: readonly SnapshotSource[], omittedSources = 0): Promise<void> {
     if (this.disposed || !sources.length) return
-    if (this.pending.size >= this.limits.acquisitions) { this.change({ notice: 'Plan history is busy copying two executions. This execution was not retained.' }); return }
+    if (this.acquisitions.size >= this.limits.acquisitions) { this.change({ notice: 'Plan history is busy copying or stopping earlier XML reads. This execution was not retained.' }); return }
     const stop = new AbortController()
     const immutableContext = Object.freeze({ ...context }), immutableOutcome = Object.freeze({ ...outcome })
     this.pending.add(stop)
+    this.acquisitions.add(stop)
     this.change({ pending: this.pending.size, notice: '' })
     const timer = setTimeout(() => stop.abort(new Error('The plan history copy exceeded its time budget.')), this.limits.acquisitionMs)
+    let reading: ReturnType<SnapshotSource['read']> | undefined
     let skipped = omittedSources + Math.max(0, sources.length - this.limits.documentsPerRun), reason = skipped ? 'The per-execution document limit was reached.' : ''
     try {
       for (const source of sources.slice(0, this.limits.documentsPerRun)) {
         if (stop.signal.aborted) break
         try {
           const { key: sourceKey, read: _read, ...metadata } = source
+          const request = source.read(stop.signal)
+          reading = request
+          const settled = () => {
+            if (reading === request) reading = undefined
+            if (!this.pending.has(stop)) this.acquisitions.delete(stop)
+          }
+          void request.then(settled, settled)
           // A racing backend loss/reset must settle this acquisition even if a reader ignores AbortSignal.
-          const value = await abortable(source.read(stop.signal), stop.signal)
+          const value = await abortable(request, stop.signal)
           if (stop.signal.aborted || this.disposed) break
           if (!value.text.length || value.text.length > planLimits.characters) throw new Error('The XML is empty or exceeds the plan document limit.')
           const id = crypto.randomUUID()
@@ -80,6 +91,7 @@ export class RetainedPlansService extends SnapshotStore<PlanHistoryState> implem
     } finally {
       clearTimeout(timer)
       this.pending.delete(stop)
+      if (!reading) this.acquisitions.delete(stop)
       this.change({ pending: this.pending.size })
     }
   }
