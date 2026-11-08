@@ -10,14 +10,14 @@ import { Chip, ChipGroup } from '../../kit/Chip'
 import Segmented from '../../kit/Segmented'
 import CaptureField, { KeyCaps, type CaptureSource } from './CaptureField'
 import { Sheet } from './ConflictSheet'
-import { gestureRows } from './gesture-rows'
+import { gestureRows, type LinkedSettings } from './gesture-rows'
 import ImportPreview, { type ImportMode } from './ImportPreview'
 import Inspector, { captureFieldId } from './Inspector'
 import MouseView from './MouseView'
 import {
   commandRows, draftProblems, importSummary, mergeImport, removeEntries, replaceImport, resetAll, resetAllCounts, resetRow, stagedChanges, type CommandRow, type ImportSummary
 } from './shortcut-draft'
-import { chipCounts, chipTokens, commandCount, filterShortcutRows, hasToken, isEmptyQuery, parseShortcutQuery, shortcutSearchChars, showsKind, toggleToken, type ChipToken } from './shortcuts-search'
+import { chipCounts, chipTokens, commandCount, filterShortcutRows, hasToken, isEmptyQuery, parseShortcutQuery, shortcutSearchChars, showsKind, toggleToken, type ChipToken, type ShortcutRowMatch } from './shortcuts-search'
 import ShortcutTable, { platformTitles, selectionKey, type ShortcutSelection } from './ShortcutTable'
 
 /** Main's file dialogs, through `ShortcutsService`: Import reads and validates a file without saving it; Export writes one. */
@@ -38,11 +38,28 @@ interface Props {
   readonly capture?: CaptureSource
   /** Main set part of the file aside when it read it: the fixed notice to show once. */
   readonly salvaged?: string
+  /** The Options dialog's unsaved value of the settings the Mouse view links to. */
+  readonly linked?: LinkedSettings
 }
 
 const chipTitles: Readonly<Record<ChipToken, string>> = { modified: 'Modified', conflicts: 'Conflicts', unbound: 'Unbound' }
 const plural = (count: number, one: string, many = one + 's') => `${count} ${count === 1 ? one : many}`
 const salvageText = 'Some shortcuts could not be read. Varia kept the valid ones and moved the original file aside. Nothing else changed.'
+const selectionOf = (match: ShortcutRowMatch): ShortcutSelection => ({ command: match.row.id, index: match.binding ? match.row.bindings.indexOf(match.binding) : -1 })
+/**
+ * The row the inspector shows: the selected one; else the same command's first row in the table (its keys changed, or
+ * Show other platforms keeps one row a command); else, for a `pinned` command just edited that the filter no longer
+ * matches, that command from every row, so the inspector does not jump to another command.
+ */
+function selectedMatch(order: readonly ShortcutRowMatch[], rows: readonly CommandRow[], selected: ShortcutSelection | undefined, pinned?: CommandId): ShortcutRowMatch | undefined {
+  if (!selected) return undefined
+  const exact = order.find(match => selectionKey(selectionOf(match)) === selectionKey(selected))
+  if (exact) return exact
+  const same = order.find(match => match.row.id === selected.command)
+  if (same || pinned !== selected.command) return same
+  const row = rows.find(item => item.id === pinned)
+  return row && { row, binding: row.bindings[selected.index] ?? row.bindings[0], first: true }
+}
 
 type SheetState =
   | { readonly kind: 'resetAll'; readonly everywhere: boolean }
@@ -55,7 +72,7 @@ type SheetState =
  * Record Keys; the table lists every command with its shortcuts, and the inspector below edits the selected one.
  * Every change is staged in `draft` until OK.
  */
-export default function ShortcutsPage({ draft, stored, onChange, platform, files, capture, salvaged }: Props) {
+export default function ShortcutsPage({ draft, stored, onChange, platform, files, capture, salvaged, linked }: Props) {
   const [view, setView] = useState<ShortcutsView>('all')
   const [query, setQuery] = useState('')
   const [recording, setRecording] = useState(false)
@@ -67,18 +84,27 @@ export default function ShortcutsPage({ draft, stored, onChange, platform, files
   const [notice, setNotice] = useState<{ readonly kind: 'info' | 'error'; readonly text: string }>()
   const [showSalvage, setShowSalvage] = useState(true)
   const [busy, setBusy] = useState(false)
+  const [pinned, setPinned] = useState<{ readonly command: CommandId; readonly query: string }>()
 
   const effective = effectiveRules(platform, draft)
   const rows = useMemo(() => commandRows(draft, platform, effective), [draft, platform, effective])
-  const parsed = parseShortcutQuery(query)
-  const groups = filterShortcutRows(rows, query, recording && record.length ? record : undefined)
-  const gestures = view === 'all' && showsKind(parsed, 'mouse') && !(recording && record.length) && !parsed.tokens.some(token => token.name !== 'kind') ? gestureRows(draft, platform, query) : []
+  // Record Keys replaces the search box, so the text it hides does not filter (and the chips that edit it are disabled).
+  const searched = recording ? '' : query
+  const parsed = parseShortcutQuery(searched)
+  const groups = filterShortcutRows(rows, searched, recording && record.length ? record : undefined)
+  const gestures = view === 'all' && showsKind(parsed, 'mouse') && !(recording && record.length) && !parsed.tokens.some(token => token.name !== 'kind') ? gestureRows(draft, platform, searched, linked) : []
   const platformRows = useMemo(() => byPlatform ? Object.fromEntries(allPlatforms.map(item => [item, new Map(commandRows(draft, item).map(row => [row.id, row]))])) as unknown as Record<Platform, ReadonlyMap<CommandId, CommandRow>> : undefined, [byPlatform, draft])
   const counts = chipCounts(rows)
   const problems = draftProblems(draft, platform, effective)
   const shownCommands = commandCount(groups)
-  const order = groups.flatMap(group => group.rows)
-  const current = (selected && order.find(match => selectionKey({ command: match.row.id, index: match.binding ? match.row.bindings.indexOf(match.binding) : -1 }) === selectionKey(selected))) ?? order[0]
+  // The table's order: with Show other platforms, one row a command.
+  const order = groups.flatMap(group => group.rows.filter(match => !platformRows || match.first))
+  const current = selectedMatch(order, rows, selected, pinned?.query === searched ? pinned.command : undefined) ?? order[0]
+  /** The inspector edited `current`: it stays on that command while the filter is unchanged, even if it no longer matches. */
+  const editCurrent = (next: ShortcutFile) => {
+    if (current) { setSelected(selectionOf(current)); setPinned({ command: current.row.id, query: searched }) }
+    onChange(next)
+  }
   const filtering = !isEmptyQuery(parsed) || (recording && record.length > 0)
 
   const clearFilters = () => { setQuery(''); setRecord([]); setRecording(false) }
@@ -131,7 +157,7 @@ export default function ShortcutsPage({ draft, stored, onChange, platform, files
     {problems.length > 0 && <div className="shortcuts-banner" data-kind="warning" role="status"><Icon name="warning" /><div>
       <strong>{problems.length === 1 ? '1 shortcut no longer applies.' : `${problems.length} shortcuts no longer apply.`}</strong> They stay in the file until you remove them.
       <ul>{problems.slice(0, 5).map(problem => <li key={problem.index}>{problem.label ? <KeyCaps label={problem.label} /> : <code>{problem.binding.key}</code>} for {problem.binding.command}: {problem.message}</li>)}</ul>
-    </div><button type="button" onClick={() => onChange(removeEntries(draft, problems.map(problem => problem.index)))}>Remove</button></div>}
+    </div><button type="button" onClick={() => onChange(removeEntries(draft, problems.map(problem => problem.index), platform))}>Remove</button></div>}
     {notice && <div className="shortcuts-banner" data-kind={notice.kind} role={notice.kind === 'error' ? 'alert' : 'status'}><Icon name={notice.kind === 'error' ? 'error' : 'pass'} /><div>{notice.text}</div>
       <button type="button" className="icon-button" aria-label="Dismiss" onClick={() => setNotice(undefined)}><Icon name="close" /></button></div>}
     <div className="shortcuts-scheme">
@@ -158,21 +184,21 @@ export default function ShortcutsPage({ draft, stored, onChange, platform, files
     </div>
     {view !== 'mouse' && <div className="shortcuts-toolbar">
       <ChipGroup label="Filters">
-        {chipTokens.map(token => <Chip key={token} label={chipTitles[token]} count={counts[token]} pressed={hasToken(query, token)} onToggle={() => setQuery(toggleToken(query, token))} />)}
+        {chipTokens.map(token => <Chip key={token} label={chipTitles[token]} count={counts[token]} pressed={!recording && hasToken(query, token)} disabled={recording} onToggle={() => setQuery(toggleToken(query, token))} />)}
       </ChipGroup>
       <label className="shortcuts-check"><input type="checkbox" checked={byPlatform} onChange={event => setByPlatform(event.target.checked)} />Show other platforms</label>
       <span className="shortcuts-count" role="status">{plural(shownCommands, 'command')}{byPlatform ? ` · ${allPlatforms.map(item => platformTitles[item]).join(', ')}` : ''}</span>
     </div>}
     {view === 'mouse'
-      ? <MouseView draft={draft} onChange={onChange} platform={platform} search={query} />
+      ? <MouseView draft={draft} onChange={onChange} platform={platform} search={query} multiCursorModifier={linked?.multiCursorModifier} />
       : <>
         <ShortcutTable groups={groups} platform={platform} gestures={gestures} onShowMouse={() => setView('mouse')}
-          selected={current ? { command: current.row.id, index: current.binding ? current.row.bindings.indexOf(current.binding) : -1 } : undefined}
-          onSelect={setSelected} onActivate={() => document.getElementById(captureFieldId)?.focus()} onReset={binding => onChange(resetRow(draft, binding))}
+          selected={current ? selectionOf(current) : undefined}
+          onSelect={setSelected} onActivate={() => document.getElementById(captureFieldId)?.focus()} onReset={binding => { if (current) setPinned({ command: current.row.id, query: searched }); onChange(resetRow(draft, binding)) }}
           builtIn={filtering ? undefined : { open: builtInOpen, onToggle: () => setBuiltInOpen(!builtInOpen) }}
           byPlatform={platformRows}
           empty={<><div>{recording && record.length ? 'No shortcut uses those keys.' : 'No shortcuts match.'}</div><button type="button" className="shortcuts-link" onClick={clearFilters}>Clear filters</button></>} />
-        {current && <Inspector key={current.row.id} row={current.row} draft={draft} platform={platform} onChange={onChange} capture={capture} />}
+        {current && <Inspector key={current.row.id} row={current.row} draft={draft} platform={platform} onChange={editCurrent} capture={capture} />}
       </>}
     <span className="visually-hidden" role="status">{staged ? `${plural(staged, 'shortcut change')} staged` : ''}</span>
     {sheet?.kind === 'resetAll' && <Sheet title="Reset all shortcuts?" onCancel={() => setSheet(undefined)}>

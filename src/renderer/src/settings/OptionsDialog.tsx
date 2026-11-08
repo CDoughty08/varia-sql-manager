@@ -13,7 +13,7 @@ import { useShortcuts, useShortcutsSnapshot } from '../core/ShortcutsContext'
 import type { ShortcutFile } from '../../../shared/commands/shortcut-schema'
 import type { CaptureSource } from './shortcuts/CaptureField'
 import ShortcutsPage from './shortcuts/ShortcutsPage'
-import { followStored, saveRevision, shortcutsToSave, stagedChanges, startShortcutEdit, type ShortcutEdit } from './shortcuts/shortcut-draft'
+import { followStored, gestureClash, saveRevision, shortcutsToSave, stagedChanges, startShortcutEdit, type ShortcutEdit } from './shortcuts/shortcut-draft'
 
 const shortcutsPage = 'environment.shortcuts'
 /** Fonts and Colors names the display item its rows are for, as SSMS's "Show settings for" list does (fixed for now). */
@@ -64,6 +64,8 @@ export default function OptionsDialog({ page: requested }: { page?: string }) {
   useEffect(() => { void shortcuts.reload() }, [shortcuts])
   useEffect(() => { setShortcutEdit(edit => followStored(edit, shortcutsState)) }, [shortcutsState])
   const staged = stagedChanges(shortcutDraft, shortcutEdit.base.file)
+  // The Mouse view shows the linked Text Editor setting as this dialog's draft has it, before OK.
+  const linked = { multiCursorModifier: draft['textEditor.multiCursorModifier'] === 'ctrlCmd' ? 'ctrlCmd' as const : 'alt' as const }
   // KeybindingService.capture routes every key but Tab to the capture box while it records, so it stays the only key listener.
   const capture = useMemo<CaptureSource>(() => (onChord, options) => keybindings.capture(onChord, options), [keybindings])
   const [page, setPage] = useState(() => firstPage(requested && pageById(requested) ? requested : 'environment.general'))
@@ -134,19 +136,22 @@ export default function OptionsDialog({ page: requested }: { page?: string }) {
     const patch = patchFrom(settings.getSnapshot().values, result.values)
     const shortcutFile = shortcutsToSave(shortcutEdit)
     if (!Object.keys(patch).length && !shortcutFile) { close(); return }
+    const clash = shortcutFile && gestureClash(shortcutFile, platform)
+    if (clash) { setError(`Shortcuts were not saved: ${clash} Choose another modifier in the Mouse view.`); if (page !== shortcutsPage) showPage(shortcutsPage); return }
     // Settings first, then shortcuts; a failure keeps the dialog open on the page that failed, with its draft.
     const asking = settings.dialog.getSnapshot()
     setSaving(true); setError('')
-    const saved = await commitOptions({ update: next => settings.update(next), saveShortcuts: file => shortcuts.save(file, saveRevision(shortcutEdit, shortcuts.getSnapshot().revision)) }, patch, shortcutFile)
+    const saved = await commitOptions({ update: next => settings.update(next), saveShortcuts: file => shortcuts.save(file, saveRevision(shortcutEdit)) }, patch, shortcutFile, { early: shortcutEdit.early })
     if (!saved.ok) {
       setError(saved.message); setSaving(false)
-      // The message offers OK again to replace the other window's shortcuts; only that choice may overwrite them.
-      if (saved.stale) setShortcutEdit(edit => ({ ...edit, replace: true }))
+      // The message offers OK again to replace the other window's shortcuts (the service has read them by now); only that
+      // choice may overwrite them, and only that revision.
+      if (saved.stale) { const shown = shortcuts.getSnapshot().revision; setShortcutEdit(edit => ({ ...edit, replace: shown })) }
       if (saved.stage === 'shortcuts' && page !== shortcutsPage) showPage(shortcutsPage)
       return
     }
     // A dialog that closed, or was opened again, while the saves were on their way is left as it is.
-    if (settings.dialog.getSnapshot() !== asking) return
+    if (settings.dialog.getSnapshot() !== asking) { setSaving(false); return }
     settings.closeDialog()
     restoreFocus()
   }
@@ -217,7 +222,7 @@ export default function OptionsDialog({ page: requested }: { page?: string }) {
         {/* A form page's own note (Fonts and Colors: where colors come from) stays above its rows. */}
         {form.page.layout === 'form' && form.page.description && <p className="options-note">{highlight(form.page.description)}</p>}
         {form.page.layout === 'shortcuts'
-          ? <ShortcutsPage draft={shortcutDraft} stored={shortcutEdit.base.file} platform={platform} files={shortcuts} capture={capture}
+          ? <ShortcutsPage draft={shortcutDraft} stored={shortcutEdit.base.file} platform={platform} files={shortcuts} capture={capture} linked={linked}
             salvaged={shortcutsState.salvaged ? shortcutsState.notice ?? '' : undefined} onChange={next => { setShortcutDraft(next); setError('') }} />
           : form.page.layout === 'propertyGrid'
             ? <PropertyGrid label={form.page.title} groups={form.groups.map(group => ({ ...group, rows: group.rows.map(settingGridRow) }))} idPrefix="setting-" focused={focused} errors={errors} onFocusRow={key => setFocused(key)} onChange={(key, text) => change(key as SettingKey, text)} renderLabel={highlight} />

@@ -1,4 +1,4 @@
-import { useId, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useId, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { commandDescriptor } from '../../../../shared/commands/catalog'
 import type { ShortcutVerdict } from '../../../../shared/commands/conflicts'
 import type { KeybindingLabel } from '../../../../shared/commands/keybindings'
@@ -21,11 +21,23 @@ interface SheetProps {
  */
 export function Sheet({ title, role = 'alertdialog', onCancel, children, className }: SheetProps) {
   const id = useId()
+  // The element that opened the sheet (read while rendering, before the sheet's autoFocus moves focus) takes focus back
+  // when the sheet closes, so Options' focus trap and Escape keep working.
+  const [opener] = useState(() => document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : undefined)
+  useEffect(() => () => {
+    // Only when focus was lost with the sheet: an action that focused something else keeps it, and StrictMode's
+    // replayed cleanup (focus still in the sheet) does nothing.
+    const active = document.activeElement
+    if (active && active !== document.body) return
+    const target = opener?.isConnected ? opener : document.querySelector<HTMLElement>('.shortcuts-table [data-row][tabindex="0"]')
+    target?.focus()
+  }, [opener])
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Tab') { trapFocus(event); event.stopPropagation() }
     else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onCancel() }
-    // Enter presses the focused button; it never reaches Options' OK.
-    else if (event.key === 'Enter') event.stopPropagation()
+    // Enter presses the focused button; it never reaches Options' OK, and on a radio, checkbox or list it does not
+    // submit the Options form either.
+    else if (event.key === 'Enter') { event.stopPropagation(); if (!(event.target instanceof HTMLButtonElement)) event.preventDefault() }
   }
   return <div className="shortcuts-scrim">
     <div className={'shortcuts-sheet' + (className ? ' ' + className : '')} role={role} aria-modal="true" aria-labelledby={id} tabIndex={-1} onKeyDown={keyDown}>

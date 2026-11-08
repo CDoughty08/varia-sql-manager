@@ -226,13 +226,14 @@ internal static class HostChecks
         }
 
         // Requests 1 and 2 race for the one slot on their own tasks, so either may lose. The slot wait (1 s) must outlast the
-        // reader reaching request 3, and the winner's 2.2 s must outlast the loser's wait, both with a second to spare for
-        // a starved CI runner.
+        // reader reaching request 3, and the winner's 5 s must outlast the loser's wait even when a starved CI runner (macOS's
+        // 3 vCPUs) starts the loser's task seconds late. It costs nothing: the harness's close waits for the winner only the
+        // host's DrainTimeout (1.5 s).
         using (var host = new HostHarness(new HostOptions { MaxInFlight = 2, MetadataSlots = 1, MetadataWait = TimeSpan.FromMilliseconds(1000) }))
         {
             host.Hello();
-            host.Request(1, "test.slow", new { ms = 2200 });
-            host.Request(2, "test.slow", new { ms = 2200 });
+            host.Request(1, "test.slow", new { ms = 5000 });
+            host.Request(2, "test.slow", new { ms = 5000 });
             host.Request(3, "test.echo", new { });
             var busy = host.Next(FrameKind.Response);
             var waited = host.Next(FrameKind.Response);

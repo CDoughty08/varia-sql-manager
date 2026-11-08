@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
-import { act, createElement, useState } from 'react'
+import { act, createElement, StrictMode, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { effectiveRules } from '../src/shared/commands/effective'
 import { parseKeySpec, type Platform } from '../src/shared/commands/keybindings'
 import { emptyShortcutFile, shortcutFileSchema, shortcutLimits, type ShortcutFile } from '../src/shared/commands/shortcut-schema'
@@ -9,9 +9,17 @@ import { createFakeShortcutsService, type FakeShortcutsService } from '../src/re
 import { commitOptions } from '../src/renderer/src/settings/options-form'
 import type { CaptureSource } from '../src/renderer/src/settings/shortcuts/CaptureField'
 import ShortcutsPage from '../src/renderer/src/settings/shortcuts/ShortcutsPage'
+import OptionsDialog from '../src/renderer/src/settings/OptionsDialog'
+import { SettingsService } from '../src/renderer/src/settings/SettingsService'
+import { ShortcutsProvider } from '../src/renderer/src/core/ShortcutsContext'
+import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
+import type { Workbench } from '../src/renderer/src/core/workbench'
+import { defaultSettings } from '../src/shared/settings/catalog'
+
+const shortcutsPageId = 'environment.shortcuts'
 import {
-  assignShortcut, commandRows, followStored, importSummary, mergeImport, removeRule, replaceImport, resetAll, resetAllCounts, resetCommand, restoreRule, saveRevision, shortcutsToSave,
-  stagedChanges, startShortcutEdit, storedKey, verdictFor
+  assignShortcut, commandRows, followStored, importSummary, mergeImport, removeEntries, removeRule, replaceImport, storable, resetAll, resetAllCounts, resetCommand, restoreRule, saveRevision, shortcutsToSave,
+  stagedChanges, startShortcutEdit, storedKey, verdictFor, gestureClash, type ShortcutEdit
 } from '../src/renderer/src/settings/shortcuts/shortcut-draft'
 
 const file = (bindings: ShortcutFile['bindings'], extra: Partial<ShortcutFile> = {}): ShortcutFile => ({ ...emptyShortcutFile, bindings, ...extra })
@@ -77,13 +85,63 @@ describe('Shortcuts draft', () => {
     const draft = file([{ command: 'file.saveAs', key: 'mod+shift+e' }])
     const incoming = file([{ command: 'file.saveAs', key: 'mod+shift+e' }, { command: 'file.closeAll', key: 'mod+u' }], { gestures: { 'grid.addToSelection': 'alt' }, unknown: [{ command: 'query.fromTheFuture', key: 'f9' }] })
     const summary = importSummary(draft, incoming, 'win32')
-    expect([summary.shortcuts, summary.added, summary.same, summary.unknown, summary.gestures, summary.yours, summary.tooMany]).toEqual([2, 1, 1, 1, 1, 1, false])
+    expect([summary.shortcuts, summary.added, summary.same, summary.unknown, summary.gestures, summary.yours, summary.clashes, summary.ignored, summary.fits]).toEqual([2, 1, 1, 1, 1, 1, 0, 0, { merge: true, replace: true }])
     expect(summary.conflicts.map(conflict => [conflict.label.text, conflict.command, conflict.with])).toEqual([['Ctrl+U', 'Close All', ['Change Database…']]])
     const merged = mergeImport(draft, incoming, 'win32')
     expect(merged.bindings).toEqual([draft.bindings[0], { command: 'query.changeDatabase', key: 'mod+u', remove: true }, { command: 'file.closeAll', key: 'mod+u' }])
     expect(merged.gestures).toEqual({ 'grid.addToSelection': 'alt' })
     expect(merged.unknown).toEqual(incoming.unknown)
     expect(effectiveRules('win32', merged).problems).toEqual([])
+  })
+  it('merges a platform-scoped entry\'s reassignment on that platform alone, and writes each removal once', () => {
+    // #248: Close All takes Ctrl+U on Windows only, so Change Database keeps it on Linux and macOS.
+    const scoped = mergeImport(emptyShortcutFile, file([{ command: 'file.closeAll', key: 'mod+u', platform: 'win32' }]), 'win32')
+    expect(scoped.bindings).toEqual([{ command: 'query.changeDatabase', key: 'mod+u', platform: 'win32', remove: true }, { command: 'file.closeAll', key: 'mod+u', platform: 'win32' }])
+    expect(effectiveRules('linux', scoped).rules.some(rule => rule.command === 'query.changeDatabase' && rule.chords.join(' ') === 'ctrl+u')).toBe(true)
+    // #251: a removal the file already holds is not written again, so one Restore brings the key back.
+    const both = mergeImport(emptyShortcutFile, file([{ command: 'query.changeDatabase', key: 'mod+u', remove: true }, { command: 'file.closeAll', key: 'mod+u' }]), 'win32')
+    expect(both.bindings.filter(binding => binding.remove)).toHaveLength(1)
+  })
+  it('treats scope Global written or not as the same entry, and keeps the draft\'s scheme on Merge', () => {
+    // #252
+    const draft = file([{ command: 'file.saveAs', key: 'mod+shift+e' }], { scheme: 'mine' })
+    const incoming = file([{ command: 'file.saveAs', key: 'mod+shift+e', scope: 'global' }])
+    expect([importSummary(draft, incoming, 'win32').added, importSummary(draft, incoming, 'win32').same]).toEqual([0, 1])
+    const merged = mergeImport(draft, incoming, 'win32')
+    expect(merged.bindings).toEqual(draft.bindings)
+    // #220: the file's default scheme does not replace the user's; Replace takes the file's.
+    expect(merged.scheme).toBe('mine')
+    expect(replaceImport(draft, incoming).scheme).toBe('default')
+  })
+  it('previews entries that clash within the file and removals that will be ignored', () => {
+    // #222 and #253
+    const incoming = file([{ command: 'file.saveAs', key: 'mod+shift+e' }, { command: 'file.closeAll', key: 'mod+shift+e' }, { command: 'file.saveAs', key: 'mod+shift+e' }, { command: 'edit.copy', key: 'mod+c', remove: true }, { command: 'file.new', key: 'f12', remove: true }])
+    const summary = importSummary(emptyShortcutFile, incoming, 'win32')
+    expect([summary.added, summary.clashes, summary.ignored]).toEqual([4, 1, 2])
+    expect(mergeImport(emptyShortcutFile, incoming, 'win32').bindings.filter(binding => binding.command === 'file.saveAs')).toHaveLength(1)
+  })
+  it('checks either mode against main\'s limits, Replace keeping the draft\'s unreadable records', () => {
+    // #219 and #225
+    const records = (from: number) => Array.from({ length: 200 }, (_, index) => ({ record: from + index }))
+    const draft = file([], { unknown: records(0) }), incoming = file([], { unknown: records(1000) })
+    expect(importSummary(draft, incoming, 'win32').fits).toEqual({ merge: false, replace: false })
+    expect(storable(replaceImport(draft, incoming))).toBe(false)
+    expect(importSummary(emptyShortcutFile, incoming, 'win32').fits).toEqual({ merge: true, replace: true })
+  })
+  it('keeps a key another platform refuses to this one, and Remove in the banner narrows an entry rather than deleting it', () => {
+    // #249: macOS reserves ⌥ letters, so Alt+J recorded on Windows is written for Windows.
+    expect(assignShortcut(emptyShortcutFile, 'file.saveAs', chords('alt+j'), 'global', 'win32').bindings).toEqual([{ command: 'file.saveAs', key: 'alt+j', platform: 'win32' }])
+    expect(assignShortcut(emptyShortcutFile, 'file.saveAs', chords('ctrl+shift+e'), 'global', 'win32').bindings).toEqual([{ command: 'file.saveAs', key: 'mod+shift+e' }])
+    const shared = file([{ command: 'file.saveAs', key: 'alt+j' }])
+    expect(removeEntries(shared, [0], 'darwin').bindings).toEqual([{ command: 'file.saveAs', key: 'alt+j', platform: 'win32' }, { command: 'file.saveAs', key: 'alt+j', platform: 'linux' }])
+    expect(removeEntries(file([{ command: 'file.saveAs', key: 'alt+j', platform: 'darwin' }]), [0], 'darwin').bindings).toEqual([])
+  })
+  it('finds a user rule by what it is when Reassign removes several', () => {
+    // #221: the second conflict was resolved against the draft before the first removal.
+    const draft = file([{ command: 'file.saveAs', key: 'mod+shift+e' }, { command: 'file.closeAll', key: 'mod+shift+e', scope: 'queryEditor' }])
+    const conflicts = [ruleOf(draft, 'file.saveAs', 'ctrl+shift+e'), ruleOf(draft, 'file.closeAll', 'ctrl+shift+e')]
+    const next = assignShortcut(draft, 'file.saveAll', chords('ctrl+shift+e'), 'global', 'win32', conflicts)
+    expect(next.bindings).toEqual([{ command: 'file.saveAll', key: 'mod+shift+e' }])
   })
   it('stages only files main can store: a key with both Ctrl and Win (⌃⌘) is written as pressed, for its platform', () => {
     expect(storedKey(chords('ctrl+meta+j'), 'win32')).toEqual({ key: 'ctrl+meta+j', platform: 'win32' })
@@ -151,14 +209,38 @@ describe('Options OK', () => {
     service.changeElsewhere(theirs)
     edit = followStored(edit, service.getSnapshot())
     expect(edit.base.revision).toBe(0)
-    const commit = () => commitOptions({ update: async () => {}, saveShortcuts: next => service.save(next, saveRevision(edit, service.getSnapshot().revision)) }, {} as never, shortcutsToSave(edit))
+    const commit = () => commitOptions({ update: async () => {}, saveShortcuts: next => service.save(next, saveRevision(edit)) }, {} as never, shortcutsToSave(edit))
     const first = await commit()
     expect(first).toMatchObject({ ok: false, stale: true })
     expect(service.stored().file).toBe(theirs)
     // The message offers OK again to replace them: only then does the save start from the newer revision.
-    edit = { ...edit, replace: true }
+    edit = followStored({ ...edit, replace: service.getSnapshot().revision }, service.getSnapshot())
     expect(await commit()).toEqual({ ok: true })
     expect(service.stored().file).toEqual(edit.draft)
+  })
+  it('replaces only the revision the user was told about, and offers no replace to a draft begun before the file loaded', async () => {
+    // #224: a third save after the warning is not overwritten without a new warning.
+    const service = createFakeShortcutsService()
+    service.changeElsewhere(file([{ command: 'file.closeAll', key: 'mod+shift+q' }]))
+    let edit: ShortcutEdit = { ...startShortcutEdit({ file: emptyShortcutFile, revision: 0 }), draft: file([{ command: 'file.saveAs', key: 'mod+shift+e' }]), replace: service.getSnapshot().revision }
+    const later = file([{ command: 'file.closeAll', key: 'mod+shift+w' }])
+    service.changeElsewhere(later)
+    edit = followStored(edit, service.getSnapshot())
+    expect(edit.replace).toBeUndefined()
+    expect(saveRevision(edit)).toBe(0)
+    expect(await service.save(edit.draft, saveRevision(edit))).toMatchObject({ ok: false, code: 'STALE' })
+    expect(service.stored().file).toBe(later)
+    const early = startShortcutEdit({ file: emptyShortcutFile, revision: 0, loaded: false })
+    expect(early.early).toBe(true)
+    const result = await commitOptions({ update: async () => {}, saveShortcuts: async () => ({ ok: false, error: 'Stale.', code: 'STALE' }) as never }, {} as never, emptyShortcutFile, { early: true })
+    expect(result).toEqual({ ok: false, stage: 'shortcuts', message: 'Shortcuts were not saved: your saved shortcuts finished loading after you began editing, so your changes were made to the defaults. Choose Cancel and open Options again to edit them.' })
+  })
+  it('finds a gesture clash OK must refuse, on the platform it is on', () => {
+    // #213: no choice the Mouse view offers clashes today, so the check guards future choices; the validator stands in.
+    expect(gestureClash(file([], { gestures: { 'grid.addToSelection': 'alt' } }), 'win32')).toBeUndefined()
+    const clashing = (_platform: Platform, choices: ReadonlyMap<string, unknown>) => choices.size ? [{ id: 'grid.addToSelection' as const, severity: 'error' as const, code: 'clash' as const, message: 'One press would do both.' }] : []
+    expect(gestureClash(file([], { gestures: { 'grid.addToSelection': 'alt' } }), 'win32', clashing)).toBe('One press would do both.')
+    expect(gestureClash(emptyShortcutFile, 'win32', clashing)).toBeUndefined()
   })
   it('lets an untouched draft follow the stored file, so OK saves nothing and stages nothing', () => {
     const service = createFakeShortcutsService({ file: file([{ command: 'file.saveAs', key: 'mod+shift+e' }]), revision: 3 })
@@ -272,6 +354,26 @@ describe('Shortcuts page', () => {
     await act(() => { field.blur() })
     expect(stopped).toBe(1)
   })
+  it('restarts the capture StrictMode stopped, keeps typed text out, and lets a Ctrl+K prompt lapse after 5 s', async () => {
+    // #226, #184 and #256
+    let listener: ((chord: string) => void) | undefined, prefix: ((chord: string) => void) | undefined
+    const capture: CaptureSource = (onChord, options) => { listener = onChord; prefix = options.onPrefix; return () => { listener = undefined } }
+    vi.useFakeTimers()
+    try {
+      await act(() => root.render(createElement(StrictMode, null, createElement(Harness, { initial: emptyShortcutFile, capture }))))
+      await click(button('Record Keys'))
+      const field = q<HTMLInputElement>('#shortcuts-record')!
+      expect(document.activeElement).toBe(field)
+      expect(listener).toBeDefined()
+      const typed = new InputEvent('beforeinput', { data: 'é', inputType: 'insertCompositionText', bubbles: true, cancelable: true })
+      field.dispatchEvent(typed)
+      expect(typed.defaultPrevented).toBe(true)
+      await act(() => prefix!('ctrl+k'))
+      expect(field.value).toBe('Ctrl+K, …')
+      await act(() => { vi.advanceTimersByTime(5000) })
+      expect(field.value).toBe('')
+    } finally { vi.useRealTimers() }
+  })
   it('shows a locked command\'s reason and keeps it from being changed', async () => {
     await render()
     await search('edit.copy')
@@ -298,6 +400,21 @@ describe('Shortcuts page', () => {
     // Nothing is saved until OK.
     expect(service.saves).toEqual([])
   })
+  it('keeps Enter on a sheet\'s radio from submitting Options, and gives focus back to the opener when a sheet closes', async () => {
+    // #217 and #218
+    await render()
+    service.answerImport({ file: file([{ command: 'file.closeAll', key: 'mod+shift+q' }]) })
+    const opener = button('Import…')!
+    await act(async () => { opener.focus(); opener.click() })
+    await act(async () => {})
+    const radio = q<HTMLInputElement>('[role="dialog"] input[type="radio"]')!
+    const enter = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true })
+    await act(() => { radio.dispatchEvent(enter) })
+    expect(enter.defaultPrevented).toBe(true)
+    await press(radio, { key: 'Escape', code: 'Escape' })
+    expect(q('[role="dialog"]')).toBeNull()
+    expect(document.activeElement).toBe(opener)
+  })
   it('exports the draft and resets all of it after asking', async () => {
     await render(file([{ command: 'file.closeAll', key: 'mod+shift+q' }, { command: 'file.closeAll', key: 'meta+q', platform: 'darwin' }]))
     await click(button('Export…'))
@@ -309,10 +426,125 @@ describe('Shortcuts page', () => {
     await click([...q('[role="alertdialog"]')!.querySelectorAll('button')].find(item => item.textContent === 'Reset All'))
     expect(latest.bindings).toEqual([{ command: 'file.closeAll', key: 'meta+q', platform: 'darwin' }])
   })
+  it('keeps the inspector\'s command highlighted when Show other platforms keeps one row a command', async () => {
+    // #223
+    await render(file([{ command: 'file.saveAs', key: 'mod+shift+e' }, { command: 'file.saveAs', key: 'mod+shift+r' }]))
+    await search('file.saveAs')
+    await click(row('file.saveAs', 1))
+    await click([...host.querySelectorAll('label')].find(item => item.textContent === 'Show other platforms')!.querySelector('input'))
+    expect(row('file.saveAs', 0)?.getAttribute('aria-selected')).toBe('true')
+    expect(q('section')?.getAttribute('aria-label')).toBe('Shortcuts for Save As…')
+  })
+  it('records keys without the search text it hides', async () => {
+    // #228
+    await render()
+    await search('foo')
+    await click(button('Record Keys'))
+    expect([...host.querySelectorAll<HTMLButtonElement>('.chip')].every(chip => chip.disabled)).toBe(true)
+    await press(q('#shortcuts-record')!, { key: 's', code: 'KeyS', ctrlKey: true })
+    expect(host.textContent).not.toContain('No shortcut uses those keys.')
+    expect(row('file.save')).not.toBeNull()
+  })
+  it('stays on the command it just edited when the filter no longer matches it', async () => {
+    // #229
+    await render()
+    await search('@unbound file.saveAs')
+    await click(row('file.saveAs', -1))
+    await press(q<HTMLInputElement>('#shortcuts-capture')!, { key: 'E', code: 'KeyE', ctrlKey: true, shiftKey: true })
+    await click(button('Assign'))
+    expect(latest.bindings).toEqual([{ command: 'file.saveAs', key: 'mod+shift+e' }])
+    expect(q('section')?.getAttribute('aria-label')).toBe('Shortcuts for Save As…')
+    // A new filter lets it go.
+    await search('@unbound')
+    expect(q('section')?.getAttribute('aria-label')).not.toBe('Shortcuts for Save As…')
+  })
+  it('shows gesture rows without the empty message, and reaches them from the keyboard', async () => {
+    // #254 and #255
+    await render()
+    await search('@kind:mouse')
+    expect(host.textContent).not.toContain('No shortcuts match.')
+    const gestures = [...host.querySelectorAll<HTMLElement>('tr.shortcuts-gesture')]
+    expect(gestures.length).toBeGreaterThan(1)
+    await act(() => { gestures[0].focus() })
+    await press(gestures[0], { key: 'ArrowDown', code: 'ArrowDown' })
+    expect(document.activeElement).toBe(gestures[1])
+    // Enter opens the Mouse view, which reads the workbench's settings.
+    const store = <T>(value: T) => ({ getSnapshot: () => value, subscribe: () => () => {} })
+    const workbench = { settings: store({ values: defaultSettings }), keybindings: { ...store(0), getRevision: () => 0, lookup: () => undefined } } as unknown as Workbench
+    await act(() => root.render(createElement(WorkbenchProvider, { workbench, children: createElement(Harness, { initial: emptyShortcutFile }) })))
+    await press(host.querySelectorAll<HTMLElement>('tr.shortcuts-gesture')[1], { key: 'Enter', code: 'Enter' })
+    expect(host.querySelector('[role="radio"][aria-checked="true"]')?.textContent).toBe('Mouse')
+  })
+  it('shows the Options draft\'s multi-cursor modifier in both views, not the saved one', async () => {
+    // #214, page side: the saved setting is Alt+Click; the dialog's draft says Ctrl+Click.
+    const store = <T>(value: T) => ({ getSnapshot: () => value, subscribe: () => () => {} })
+    const workbench = { settings: store({ values: defaultSettings }), keybindings: { ...store(0), getRevision: () => 0, lookup: () => undefined } } as unknown as Workbench
+    const page = createElement(ShortcutsPage, { draft: emptyShortcutFile, stored: emptyShortcutFile, onChange: () => {}, platform: 'win32', files: service, linked: { multiCursorModifier: 'ctrlCmd' } })
+    await act(() => root.render(createElement(WorkbenchProvider, { workbench, children: page })))
+    const addCursor = () => [...host.querySelectorAll('tr')].find(item => item.textContent?.includes('Add Cursor'))?.textContent
+    expect(addCursor()).toContain('Ctrl+Click')
+    await click([...host.querySelectorAll('[role="radio"]')].find(item => item.textContent === 'Mouse'))
+    expect(addCursor()).toContain('Ctrl+Click')
+  })
   it('lists entries that no longer apply, and removes them', async () => {
     await render(file([{ command: 'file.saveAs', key: 'mod+u' }]))
     expect(host.textContent).toContain('1 shortcut no longer applies.')
     await click(button('Remove'))
     expect(latest.bindings).toEqual([])
+  })
+})
+
+// #250: the dialog itself, so dropping saveRevision, the followStored effect or the replace choice fails here.
+describe('Options dialog over the shortcuts service', () => {
+  let root: Root, host: HTMLElement
+  beforeEach(() => {
+    globalThis.IS_REACT_ACT_ENVIRONMENT = true
+    host = document.createElement('div')
+    document.body.append(host)
+    root = createRoot(host)
+  })
+  afterEach(() => { act(() => root.unmount()); host.remove() })
+  const mount = async (service: FakeShortcutsService) => {
+    const settings = new SettingsService({
+      getSettings: async () => ({ ok: true, value: { revision: 1, values: defaultSettings } }),
+      updateSettings: async () => ({ ok: true, value: { revision: 1, values: defaultSettings } }),
+      onSettingsChanged: () => () => {}
+    } as never)
+    settings.openDialog(shortcutsPageId)
+    const workbench = { settings, platform: 'win32', keybindings: { capture: () => () => {} } } as unknown as Workbench
+    await act(async () => root.render(createElement(WorkbenchProvider, { workbench, children: createElement(ShortcutsProvider, { shortcuts: service, children: createElement(OptionsDialog, { page: shortcutsPageId }) }) })))
+    return settings
+  }
+  const button = (name: string) => [...host.querySelectorAll<HTMLButtonElement>('button')].find(item => (item.getAttribute('aria-label') ?? item.textContent?.trim()) === name)!
+  const ok = () => act(async () => { button('OK').click() })
+  const alert = () => host.querySelector('[role="alert"]')?.textContent ?? ''
+
+  it('refuses to overwrite another window\'s save until the user chooses OK again, and then only that save', async () => {
+    const service = createFakeShortcutsService()
+    const settings = await mount(service)
+    await act(async () => { button('Remove Ctrl+N').click() })
+    const theirs = file([{ command: 'file.closeAll', key: 'mod+shift+q' }])
+    await act(async () => service.changeElsewhere(theirs))
+    await ok()
+    expect(alert()).toContain('they changed in another window')
+    expect(service.stored().file).toBe(theirs)
+    // A third save after the warning is not the one the user agreed to replace: OK warns again.
+    const later = file([{ command: 'file.closeAll', key: 'mod+shift+w' }])
+    await act(async () => service.changeElsewhere(later))
+    await ok()
+    expect(service.stored().file).toBe(later)
+    expect(settings.dialog.getSnapshot().open).toBe(true)
+    await ok()
+    expect(service.stored().file.bindings).toEqual([{ command: 'file.new', key: 'mod+n', remove: true }])
+    expect(settings.dialog.getSnapshot().open).toBe(false)
+  })
+  it('lets an untouched draft follow another window\'s save, so OK saves nothing', async () => {
+    const service = createFakeShortcutsService()
+    await mount(service)
+    const theirs = file([{ command: 'file.closeAll', key: 'mod+shift+q' }])
+    await act(async () => service.changeElsewhere(theirs))
+    const revision = service.stored().revision
+    await ok()
+    expect([service.stored().file, service.stored().revision]).toEqual([theirs, revision])
   })
 })
