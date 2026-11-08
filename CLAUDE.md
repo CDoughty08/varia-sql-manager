@@ -349,7 +349,7 @@ pages, limits, error codes, display formats, benchmarks).
   `LiveGroups.BudgetSeconds`, both 360 s); exceeding it fails `tests/ci-workflow.test.ts` or the offline .NET checks.
   A bound on a wait that returns as soon as its condition holds costs nothing when it passes: make it generous (CI's 3 and
   4 vCPU runners stall for seconds), and keep tight bounds for what the check means to time. Two timers that race (a budget
-  that must outlast a delay or a second call) need about a second between them. Before pushing an offline .NET timing check,
+  that must outlast a delay or a second call) need about a second between them. A CancellationTokenSource timer cancels from the thread pool, so a Stop that must land before CPU-bound work ends comes from a dedicated thread. Before pushing an offline .NET timing check,
   run `node scripts/offline-stress.mjs` (five copies of the offline checks pinned to three CPUs, as starved as CI's).
   A new smoke suite needs its seconds on Linux and Windows in `suiteSeconds`, and a new live .NET suite runs through
   `Suite(...)` in `Program.cs` with an entry in `LiveGroups.Suites`. Copy times from CI's logs: each shard's summary and

@@ -125,7 +125,7 @@ Considered and rejected (do not re-propose without new numbers):
   every offline suite then made 65 such changes, adding about 9 s of suite time (Host is now 12.5 s, still the lanes'
   floor). `node scripts/offline-stress.mjs` runs five copies of the offline checks on three CPUs at once. Before the sweep,
   three copies failed every run; after it, every run of five copies passed. Give two racing timers about a second between them, and
-  make a wait that returns early generous. Vitest's CPU-bound tests take `heavyTimeout` (`tests/fixtures/work-meter.ts`).
+  make a wait that returns early generous. A CancellationTokenSource timer cancels from the thread pool, which the lanes saturate: when the work it stops can finish first, cancel from a dedicated thread (SearchChecks.Deadline). Vitest's CPU-bound tests take `heavyTimeout` (`tests/fixtures/work-meter.ts`).
 - **Offline .NET suites run in lanes.** Put a new suite in Program.cs's `offlineSuites` list with its weight in
   `OfflineSuites.Weights`, and in `OfflineSuites.Alone` if it touches process-wide state.
 - **Fold work into an existing job before adding one.** Each job costs 40 to 70 s of setup (plus about 23 s with a SQL

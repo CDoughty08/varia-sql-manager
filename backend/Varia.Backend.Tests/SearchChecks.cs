@@ -266,11 +266,16 @@ internal static class SearchChecks
         check(result.Partial && result.Total == 1 && result.Hits is [{ Label: "dbo.needle_first" }],
             $"a search past its budget answers partial with the hits it found, even after an early hit ({result.Total} hits, partial {result.Partial}, {result.ElapsedMs} ms)");
         var roomy = new ObjectIndexLimits { SearchBudget = TimeSpan.FromHours(1) };
-        using var stop = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+        // Stop from a dedicated thread: a CancellationTokenSource's own timer cancels from the thread pool, which the offline
+        // lanes saturate on a starved runner, so the scan could finish (in 561 ms) before that callback ran.
+        using var stop = new CancellationTokenSource();
+        var stopper = new Thread(() => { Thread.Sleep(50); stop.Cancel(); }) { IsBackground = true, Priority = ThreadPriority.AboveNormal };
         var watch = System.Diagnostics.Stopwatch.StartNew();
+        stopper.Start();
         var stopped = false;
         try { Search(index, "needle", limits: roomy, token: stop.Token); }
         catch (OperationCanceledException) { stopped = true; }
+        stopper.Join();
         check(stopped, $"a cancelled search stops scanning after an early hit ({watch.ElapsedMilliseconds} ms)");
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();

@@ -43,7 +43,10 @@ const run = () => new Promise(done => {
     const finished = new Set([...output.matchAll(/^Offline suite ([\w.]+): /gm)].map(match => match[1]))
     const unfinished = suites.filter(name => !finished.has(name))
     if (hung) return done({ code: 'hung', summary: '', failures: [`HUNG after ${deadline / 1000} s; suites that never finished: ${unfinished.join(', ')}`] })
-    done({ code, summary: /Offline suites: .*/.exec(output)?.[0] ?? '', failures: output.split('\n').filter(line => line.includes('FAIL:')).map(line => line.trim().slice(0, 400)) })
+    const failures = output.split('\n').filter(line => line.includes('FAIL:') || line.startsWith('Unhandled exception')).map(line => line.trim().slice(0, 400))
+    // An exit without a FAIL line is a crash: show where it stopped.
+    if (code !== 0 && !failures.length) failures.push(`exit ${code}; suites that never finished: ${unfinished.join(', ')}`, ...output.trimEnd().split('\n').slice(-12).map(line => line.trim().slice(0, 300)))
+    done({ code, summary: /Offline suites: .*/.exec(output)?.[0] ?? '', failures })
   })
 })
 
