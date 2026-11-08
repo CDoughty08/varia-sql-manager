@@ -383,8 +383,9 @@ pages, limits, error codes, display formats, benchmarks).
   Windows and macOS benchmarks run daily and by hand (`bench-desktop.yml`). macOS skips the smoke tests until they cover its window chrome. `tests/ci-workflow.test.ts` holds
   this layout.
   Release builds (`release.yml`, through `package.yml`) package main pushes, tags and manual runs, and a pull request only when
-  it changes what packaging reads (its `paths`); Intel macOS packages only for tags and manual runs, and installers upload only
-  then (`tests/release-workflow.test.ts`). Every workflow a pull request triggers cancels its superseded runs.
+  it changes what packaging reads (its `paths`); Intel macOS packages only for tags, manual runs and a weekly scheduled run on
+  main (Intel alone), and installers upload only for tags and manual runs (`tests/release-workflow.test.ts`). A pull request
+  over 300 changed files may skip Release builds (GitHub reads only its first 300 for `paths`): run them by hand then. Every workflow a pull request triggers cancels its superseded runs.
   `sql-matrix.yml` (manual runs only) repeats the .NET checks against SQL Server 2017, 2019, 2022 and 2025.
 - No license has been chosen; do not add one.
 
