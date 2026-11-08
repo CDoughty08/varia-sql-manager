@@ -49,6 +49,11 @@ export interface GestureDescriptor {
   readonly platforms?: readonly Platform[]
   /** The modifier sets the user may choose, the default first; `[]` is "no modifier" where the action alone is free. */
   readonly choices?: readonly GestureModifiers[]
+  /**
+   * macOS's own default and choices, where the others' would not work there: Control+click is a right-click on macOS,
+   * so a Control+double-click opens the context menu and never arrives as a double-click.
+   */
+  readonly darwin?: { readonly modifiers: GestureModifiers; readonly choices?: readonly GestureModifiers[] }
   /** Why the gesture cannot be remapped; every gesture without `choices` has one. */
   readonly locked?: string
   /** Commands that do the same from the keyboard (a key, or a context menu that Shift+F10 opens). Required for `pointerCommand`. */
@@ -107,12 +112,12 @@ export const gestureCatalog = {
   'dock.toggleFloat': {
     title: 'Toggle Docking', description: 'Floats a docked panel, or docks a floating one.',
     kind: 'pointerCommand', scope: 'panels', action: 'doubleClick', target: 'a panel tab', modifiers: ['ctrl'],
-    choices: [['ctrl'], ['alt'], ['shift']], keyboard: ['pane.float', 'pane.dock']
+    choices: [['ctrl'], ['alt'], ['shift'], []], darwin: { modifiers: ['meta'], choices: [['meta'], ['alt'], ['shift'], []] }, keyboard: ['pane.float', 'pane.dock']
   },
   'popout.returnToMain': {
     title: 'Move Back into Main Window', description: 'Docks a popout window\'s panel back into the main window.',
     kind: 'pointerCommand', scope: 'popouts', action: 'doubleClick', target: 'a popout tab', modifiers: ['ctrl'],
-    choices: [['ctrl'], ['alt'], ['shift']], keyboard: ['pane.moveToMainWindow']
+    choices: [['ctrl'], ['alt'], ['shift'], []], darwin: { modifiers: ['meta'], choices: [['meta'], ['alt'], ['shift'], []] }, keyboard: ['pane.moveToMainWindow']
   },
   'documentTabs.rename': {
     title: 'Rename Tab', description: 'Opens the rename box on a query tab.',
@@ -126,6 +131,29 @@ export const gestureIds = Object.keys(gestureCatalog) as GestureId[]
 export const isGestureId = (value: unknown): value is GestureId => typeof value === 'string' && Object.hasOwn(gestureCatalog, value)
 export const gestureDescriptor = (id: GestureId): GestureDescriptor => gestureCatalog[id]
 export const gestureAvailable = (id: GestureId, platform: Platform): boolean => gestureDescriptor(id).platforms?.includes(platform) ?? true
+
+/** A gesture's modifiers on a platform until the user chooses others. */
+export const gestureDefault = (id: GestureId, platform: Platform): GestureModifiers => {
+  const gesture = gestureDescriptor(id)
+  return platform === 'darwin' && gesture.darwin ? gesture.darwin.modifiers : gesture.modifiers
+}
+/** The modifier sets a gesture offers on a platform, its default first; undefined when it is locked. */
+export const gestureChoices = (id: GestureId, platform: Platform): readonly GestureModifiers[] | undefined => {
+  const gesture = gestureDescriptor(id)
+  return platform === 'darwin' && gesture.darwin ? gesture.darwin.choices ?? gesture.choices : gesture.choices
+}
+/** Only a modifier behaviour can be turned off: a pointer command always keeps a gesture (and its keyboard path). */
+export const gestureCanTurnOff = (id: GestureId): boolean => gestureDescriptor(id).kind === 'modifier' && !!gestureDescriptor(id).choices
+/** A user's choice for a gesture: a modifier set, or null for Off. */
+export type GestureChoice = GestureModifiers | null
+export const sameModifiers = (a: GestureModifiers, b: GestureModifiers): boolean => a.length === b.length && a.every(modifier => b.includes(modifier))
+export const sameChoice = (a: GestureChoice, b: GestureChoice): boolean => a === null || b === null ? a === b : sameModifiers(a, b)
+/** What a gesture's dropdown offers on a platform: its choices, then Off where allowed; empty when it is locked. */
+export function gestureOptions(id: GestureId, platform: Platform): readonly GestureChoice[] {
+  const choices = gestureChoices(id, platform)
+  if (!choices) return []
+  return gestureCanTurnOff(id) ? [...choices, null] : choices
+}
 
 /** The modifier an event field reports, after `mod` is resolved for the platform. */
 export type PhysicalModifier = 'ctrl' | 'alt' | 'shift' | 'meta'

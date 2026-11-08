@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { commandDescriptor, isCommandId } from '../src/shared/commands/catalog'
 import { renderGestureDocs } from '../src/shared/commands/gesture-docs'
-import { gestureDescriptor, gestureIds, gestureLabel, gesturePhrase, gestureScopes, modifiersLabel, physicalModifiers, type GestureModifiers } from '../src/shared/commands/gestures'
+import { gestureChoices, gestureDefault, gestureDescriptor, gestureIds, gestureLabel, gesturePhrase, gestureScopes, modifiersLabel, physicalModifiers, type GestureModifiers } from '../src/shared/commands/gestures'
 import { platforms, specForPlatform, type Platform } from '../src/shared/commands/keybindings'
 import { contextMenuIds } from '../src/shared/commands/menus'
 import { GestureService, gesturesFor, paneTabTitle, popoutTabTitle, type GestureEvent } from '../src/renderer/src/core/gestures'
@@ -28,13 +28,16 @@ describe('gesture catalogue', () => {
       expect(!!gesture.choices !== !!gesture.locked, id).toBe(true)
       if (gesture.kind === 'fixed') expect(gesture.choices, id).toBeUndefined()
       if (gesture.choices) {
-        expect(same(gesture.choices[0], gesture.modifiers), `${id}: the default is the first choice`).toBe(true)
-        // Each choice means something different on every platform, and none is a bare Control on macOS, which is a right-click there.
+        // Each choice means something different on every platform, and the default is the first; on macOS no click or
+        // double-click holds Control, which makes it a right-click there (the context menu opens, no double-click arrives).
         for (const platform of platforms) {
-          const labels = gesture.choices.map(choice => modifiersLabel(choice, platform))
+          const choices = gestureChoices(id, platform)!
+          expect(same(choices[0], gestureDefault(id, platform)), `${id} on ${platform}: the default is the first choice`).toBe(true)
+          const labels = choices.map(choice => modifiersLabel(choice, platform))
           expect(new Set(labels).size, `${id} on ${platform}`).toBe(labels.length)
-          if (gesture.action === 'click') expect(gesture.choices.some(choice => same(physicalModifiers(choice, 'darwin'), ['ctrl'])), id).toBe(false)
+          if (gesture.darwin) expect(gesture.darwin.choices?.length ?? choices.length, `${id}: macOS offers as many choices, in the same order`).toBe(gesture.choices.length)
         }
+        if (gesture.action === 'click' || gesture.action === 'doubleClick') expect(gestureChoices(id, 'darwin')!.some(choice => physicalModifiers(choice, 'darwin').includes('ctrl')), id).toBe(false)
       }
       for (const command of gesture.keyboard ?? []) expect(isCommandId(command), `${id}: ${command}`).toBe(true)
     }
@@ -74,7 +77,7 @@ describe('gesture labels', () => {
   })
   it('builds the tooltips that mention a gesture from the catalogue', () => {
     expect(paneTabTitle(new GestureService('win32'))).toBe('Drag to dock; Ctrl-drag to float; Ctrl-double-click to toggle docking')
-    expect(paneTabTitle(new GestureService('darwin'))).toBe('Drag to dock; Control-drag to float; Control-double-click to toggle docking')
+    expect(paneTabTitle(new GestureService('darwin'))).toBe('Drag to dock; Control-drag to float; Command-double-click to toggle docking')
     expect(popoutTabTitle(new GestureService('linux'))).toBe('Drag onto the main window to dock it there; Ctrl-double-click to move it back')
     // A remap reaches the tooltip.
     const remapped = new GestureService('win32')
@@ -84,7 +87,8 @@ describe('gesture labels', () => {
   it('keeps docs/gestures.md in sync', async () => {
     const docs = renderGestureDocs()
     for (const id of gestureIds) expect(docs, id).toContain(`| \`${id}\` |`)
-    expect(docs).toContain('| Toggle Docking | `dock.toggleFloat` | Floats a docked panel, or docks a floating one. | Command | Ctrl+Double-click a panel tab | Ctrl+Double-click a panel tab | ⌃ Double-click a panel tab | Choose: Ctrl / ⌃, Alt / ⌥, Shift / ⇧ | Float (`pane.float`), Dock (`pane.dock`) |')
+    expect(docs).toContain('| Toggle Docking | `dock.toggleFloat` | Floats a docked panel, or docks a floating one. | Command | Ctrl+Double-click a panel tab | Ctrl+Double-click a panel tab | ⌘ Double-click a panel tab | Choose: Ctrl / ⌘, Alt / ⌥, Shift / ⇧, None | Float (`pane.float`), Dock (`pane.dock`) |')
+    expect(docs).toContain('Choose: Ctrl / ⌘, Shift / ⇧, Off')
     await expect(docs).toMatchFileSnapshot('../docs/gestures.md')
   })
 })
@@ -101,8 +105,9 @@ describe('GestureService', () => {
       'explorer.peekHover': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
       'dock.floatWhileDragging': event => !!event.ctrlKey,
       'dock.dragFloatingTitleBar': event => !!event.shiftKey,
-      'dock.toggleFloat': event => !!event.ctrlKey,
-      'popout.returnToMain': event => !!event.ctrlKey,
+      // Except on macOS, where Control+double-click never arrived (Control+click is a right-click): ⌘ instead.
+      'dock.toggleFloat': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
+      'popout.returnToMain': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
       'documentTabs.rename': () => true
     }
     for (const platform of platforms) {
@@ -129,7 +134,7 @@ describe('GestureService', () => {
     expect(service.matches('grid.secondaryClick', {})).toBe(false)
     expect(service.matches('grid.secondaryClick', { ctrlKey: true })).toBe(true)
     expect(service.matches('explorer.peekHover', { altKey: true })).toBe(false)
-    expect(service.matches('dock.toggleFloat', { ctrlKey: true })).toBe(true)
+    expect(service.matches('dock.toggleFloat', { metaKey: true })).toBe(true)
     expect(service.matches('grid.addToSelection', { altKey: true })).toBe(true)
     // Ids left out return to their defaults.
     service.setModifiers(new Map())

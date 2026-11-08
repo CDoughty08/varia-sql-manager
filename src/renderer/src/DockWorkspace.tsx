@@ -61,6 +61,8 @@ function EmptyWorkspace() {
 function PaneTab(props: IDockviewPanelHeaderProps) {
   const commands = useContext(PaneCommandContext)!, element = useRef<HTMLDivElement>(null)
   const { results, documents, gestures } = useWorkbench()
+  // The tooltip names the gestures' modifiers: a remap re-renders it.
+  useServiceSnapshot(gestures)
   // An output panel's dock tab chosen by the user is the active query's view, as its toolbar tab is.
   const choose = () => { const id = props.api.id, tabId = documents.getSnapshot().activeId; if (isOutputPane(id) && tabId) results.setView(tabId, id) }
   // The tab's menu (Float or Dock, and Close) replaces Dockview's own, which shows only when it has items.

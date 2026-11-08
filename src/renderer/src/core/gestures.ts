@@ -1,5 +1,10 @@
-import { gestureAvailable, gestureDescriptor, gestureLabel, gesturePhrase, physicalModifiers, type GestureId, type GestureModifiers, type PhysicalModifier } from '../../../shared/commands/gestures'
+import {
+  gestureAvailable, gestureDefault, gestureDescriptor, gestureLabel, gestureOptions, gesturePhrase, physicalModifiers, sameChoice,
+  type GestureChoice, type GestureId, type GestureModifiers, type PhysicalModifier
+} from '../../../shared/commands/gestures'
+import { gestureOverrides } from '../../../shared/commands/gesture-choices'
 import type { Platform } from '../../../shared/commands/keybindings'
+import { SnapshotStore } from './store'
 
 /** The modifier fields of a pointer, mouse, wheel or drag event (or a test's plain object). */
 export interface GestureEvent {
@@ -15,26 +20,28 @@ const keyNames: Readonly<Record<PhysicalModifier, readonly string[]>> = { ctrl: 
  * The one reader of pointer modifiers (`tests/gesture-lint.test.ts`): handlers ask whether an event is a catalogued
  * gesture (`src/shared/commands/gestures.ts`) instead of checking `ctrlKey` and the rest themselves. A gesture matches
  * when every one of its modifiers is held; other modifiers do not matter. One service per platform is shared by the
- * main window and its popouts, so a remap (PR D2, through `setModifiers`) reaches every handler at once.
+ * main window and its popouts, so a remap (through `setModifiers`) reaches every handler at once. Its snapshot is a
+ * revision that changes with every remap: text that names a gesture (tab tooltips) subscribes to follow it.
  */
-export class GestureService {
-  private overrides = new Map<GestureId, GestureModifiers | null>()
-  constructor(readonly platform: Platform) {}
+export class GestureService extends SnapshotStore<number> {
+  private overrides = new Map<GestureId, GestureChoice>()
+  constructor(readonly platform: Platform) { super(0) }
 
   /** The gesture's modifiers now, or null when it is turned off. */
   modifiers(id: GestureId): GestureModifiers | null {
-    return this.overrides.has(id) ? this.overrides.get(id)! : gestureDescriptor(id).modifiers
+    return this.overrides.has(id) ? this.overrides.get(id)! : gestureDefault(id, this.platform)
   }
   /**
    * Replaces the user's choices (null turns a modifier gesture off); ids left out return to their defaults. A locked
-   * gesture, or a modifier set it does not offer, keeps its default.
+   * gesture, or a choice it does not offer on this platform, keeps its default. Takes the shortcuts file's `gestures`
+   * as stored (`{ "dock.floatWhileDragging": "alt" }`) or choices already read.
    */
-  setModifiers(choices: ReadonlyMap<GestureId, GestureModifiers | null>): void {
-    this.overrides = new Map([...choices].filter(([id, modifiers]) => {
-      const gesture = gestureDescriptor(id)
-      if (!gesture.choices) return false
-      return modifiers === null ? gesture.kind === 'modifier' : gesture.choices.some(choice => choice.length === modifiers.length && choice.every(modifier => modifiers.includes(modifier)))
-    }))
+  setModifiers(choices: ReadonlyMap<GestureId, GestureChoice> | Readonly<Record<string, string>>): void {
+    const read = choices instanceof Map ? choices as ReadonlyMap<GestureId, GestureChoice> : gestureOverrides(choices as Readonly<Record<string, string>>, this.platform)
+    const next = new Map([...read].filter(([id, choice]) => gestureOptions(id, this.platform).some(option => sameChoice(option, choice))))
+    const same = next.size === this.overrides.size && [...next].every(([id, choice]) => this.overrides.has(id) && sameChoice(this.overrides.get(id)!, choice))
+    this.overrides = next
+    if (!same) this.publish(this.getSnapshot() + 1)
   }
 
   /** Whether `event` holds the gesture's modifiers on this platform. */
@@ -54,9 +61,12 @@ export class GestureService {
   phrase(id: GestureId): string { const modifiers = this.modifiers(id); return modifiers ? gesturePhrase(gestureDescriptor(id).action, modifiers, this.platform) : 'off' }
 }
 
-/** A panel tab's tooltip, with the gestures' modifiers as they are now: `Drag to dock; Ctrl-drag to float; Ctrl-double-click to toggle docking`. */
+/**
+ * A panel tab's tooltip, with the gestures' modifiers as they are now: `Drag to dock; Ctrl-drag to float; Ctrl-double-click
+ * to toggle docking`. Float while dragging, turned off, drops out.
+ */
 export const paneTabTitle = (gestures: GestureService): string =>
-  `Drag to dock; ${gestures.phrase('dock.floatWhileDragging')} to float; ${gestures.phrase('dock.toggleFloat')} to toggle docking`
+  ['Drag to dock', gestures.modifiers('dock.floatWhileDragging') && `${gestures.phrase('dock.floatWhileDragging')} to float`, `${gestures.phrase('dock.toggleFloat')} to toggle docking`].filter(Boolean).join('; ')
 /** A popout tab's tooltip, with Move Back into Main Window's gesture as it is now. */
 export const popoutTabTitle = (gestures: GestureService): string => `Drag onto the main window to dock it there; ${gestures.phrase('popout.returnToMain')} to move it back`
 

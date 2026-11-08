@@ -7,6 +7,11 @@ export const textEditorSettings = [
     keywords: ['drag', 'drop'], description: 'Selected text can be dragged to move it, or copied with Ctrl held (Option on macOS).'
   },
   {
+    key: 'textEditor.multiCursorModifier', page: 'textEditor.general', group: 'Settings', label: 'Add a cursor with', type: 'enum', varia: true, default: 'alt',
+    values: [{ value: 'alt', label: 'Alt+Click (Option on macOS)' }, { value: 'ctrlCmd', label: 'Ctrl+Click (Command on macOS)' }], keywords: ['multi-cursor', 'multiple cursors', 'caret', 'mouse'],
+    description: 'The modifier that adds another cursor where you click in the query editor. The mouse gestures list shows it too.'
+  },
+  {
     key: 'textEditor.delimiterHighlighting', page: 'textEditor.general', group: 'Settings', label: 'Automatic delimiter highlighting', type: 'boolean', default: true,
     keywords: ['brackets', 'parentheses', 'match'], description: 'Highlights the bracket or parenthesis that matches the one at the caret. Large values opened from the results never match brackets.'
   },
