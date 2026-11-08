@@ -442,15 +442,18 @@ describe('keybinding rules at run time', () => {
     keybindings.setRules(rules)
     expect(changes).toHaveBeenCalledTimes(2)
   })
-  it('logs conflicting rules from setRules instead of throwing, and a failing listener does not stop the others', () => {
+  it('leaves the conflict scan to the constructor (setRules takes validated rules), and a failing listener does not stop the others', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { keybindings, press, ran } = service('win32')
     const second = vi.fn()
     keybindings.subscribe(() => { throw new Error('listener failed') })
     keybindings.subscribe(second)
     const clash = [resolveKeybinding('file.new', { key: 'f6' }, 'win32')!, resolveKeybinding('file.open', { key: 'f6' }, 'win32')!]
+    const options = { platform: 'win32' as const, commands: { execute: vi.fn() }, context: { get: () => contextRecord('win32') }, modalOpen: () => false, editorHasTextFocus: () => false, rules: clash }
+    // The development build's check of the rules a service starts with stays.
+    expect(() => new KeybindingService(options)).toThrow('file.new and file.open both match f6')
     expect(() => keybindings.setRules(clash)).not.toThrow()
-    expect(error).toHaveBeenCalled()
+    expect(error.mock.calls.flat().some(value => String(value).includes('Keybinding conflicts'))).toBe(false)
     expect(second).toHaveBeenCalledOnce()
     press(key('F6', 'F6'))
     expect(ran()).toEqual(['file.new'])

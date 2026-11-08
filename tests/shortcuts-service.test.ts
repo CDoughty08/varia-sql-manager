@@ -68,7 +68,7 @@ describe('shortcuts service', () => {
     await service.load()
     const changes = vi.fn()
     service.subscribe(changes)
-    expect(await service.save(emptyShortcutFile)).toEqual({ ok: true, value: { revision: 4 } })
+    expect(await service.save(emptyShortcutFile, 3)).toEqual({ ok: true, value: { revision: 4 } })
     expect(main.save).toHaveBeenCalledWith(emptyShortcutFile, 3)
     expect(service.snapshot()).toMatchObject({ revision: 4, file: emptyShortcutFile })
     expect(setRules).toHaveBeenLastCalledWith(defaultRules('darwin'))
@@ -79,12 +79,13 @@ describe('shortcuts service', () => {
     const { api: main } = api({ save: vi.fn(async () => ({ ok: false as const, error: 'The shortcuts changed in another window.' })) })
     const service = new ShortcutsService({ api: main, platform: 'win32' })
     await service.load()
-    expect(await service.save(emptyShortcutFile)).toEqual({ ok: false, error: 'The shortcuts changed in another window.' })
-    expect(await service.save({ ...emptyShortcutFile, bindings: [{ command: 'file.new', key: 'x'.repeat(65) }] })).toMatchObject({ ok: false })
+    expect(await service.save(emptyShortcutFile, 3)).toEqual({ ok: false, error: 'The shortcuts changed in another window.' })
+    expect(await service.save({ ...emptyShortcutFile, bindings: [{ command: 'file.new', key: 'x'.repeat(65) }] }, 3)).toMatchObject({ ok: false })
+    expect(await service.save(emptyShortcutFile, -1)).toMatchObject({ ok: false })
     expect(main.save).toHaveBeenCalledOnce()
     expect(service.snapshot().revision).toBe(3)
     const throwing = new ShortcutsService({ api: api({ save: vi.fn(async () => { throw new Error('gone') }), importFile: vi.fn(async () => { throw new Error('no dialog') }) }).api, platform: 'win32' })
-    expect(await throwing.save(emptyShortcutFile)).toEqual({ ok: false, error: 'gone' })
+    expect(await throwing.save(emptyShortcutFile, 0)).toEqual({ ok: false, error: 'gone' })
     expect(await throwing.importFile()).toEqual({ ok: false, error: 'no dialog' })
   })
   it("keeps the catalogue's keys when main cannot be read, and reads again next time", async () => {
@@ -118,12 +119,12 @@ describe('fake shortcuts service', () => {
     const fake = createFakeShortcutsService({ file: remap, revision: 2, ...bound })
     expect(fake.snapshot()).toMatchObject({ loaded: true, revision: 2, file: remap })
     expect(setRules).toHaveBeenLastCalledWith(fake.snapshot().effective.rules)
-    expect(await fake.save(emptyShortcutFile)).toEqual({ ok: true, value: { revision: 3 } })
+    expect(await fake.save(emptyShortcutFile, 2)).toEqual({ ok: true, value: { revision: 3 } })
     expect(fake.saves).toEqual([{ file: emptyShortcutFile, baseRevision: 2 }])
     fake.changeElsewhere(remap)
     expect(fake.snapshot()).toMatchObject({ revision: 4, file: remap })
     fake.failNextSave('Disk full.')
-    expect(await fake.save(emptyShortcutFile)).toEqual({ ok: false, error: 'Disk full.' })
+    expect(await fake.save(emptyShortcutFile, 4)).toEqual({ ok: false, error: 'Disk full.' })
     expect(fake.stored().revision).toBe(4)
     fake.answerImport({ file: remap, problems: ['One binding was left out.'] })
     expect(await fake.importFile()).toEqual({ ok: true, value: { file: remap, problems: ['One binding was left out.'] } })
@@ -180,7 +181,7 @@ describe('shortcuts service reporting and pushes', () => {
     const service = new ShortcutsService({ api: api().api, platform: 'win32' })
     await service.load()
     expect(service.snapshot()).toMatchObject({ salvaged: true, notice: 'Some shortcuts were set aside.' })
-    await service.save(emptyShortcutFile)
+    await service.save(emptyShortcutFile, 3)
     expect(service.snapshot().salvaged).toBe(false)
     expect(service.snapshot().notice).toBeUndefined()
   })
@@ -205,7 +206,7 @@ describe('shortcuts service bound as the workbench binds it', () => {
     const fake = createFakeShortcutsService()
     const binding = fake.bind({ keybindings, gestures })
     expect(keybindings.lookup('file.new')?.text).toBe('Ctrl+N')
-    await fake.save(remap)
+    await fake.save(remap, 0)
     expect([keybindings.lookup('file.new')?.text, gestures.label('explorer.peekHover')]).toEqual(['Ctrl+Shift+F9', 'Shift+Hover'])
     binding.dispose()
     fake.changeElsewhere(emptyShortcutFile)
@@ -241,5 +242,85 @@ describe('shortcuts service reload reports', () => {
     await service.reload()
     expect(reported).toEqual(['Some shortcuts were set aside.', 'Your shortcuts could not be read again, so the ones already loaded stay: Busy.'])
     expect(service.snapshot()).toMatchObject({ revision: 1, file: remap })
+  })
+})
+
+describe('shortcuts service revisions', () => {
+  it('saves from the revision the draft was based on, so a hand edit pushed meanwhile is refused, not replaced (#191)', async () => {
+    const fake = createFakeShortcutsService({ file: emptyShortcutFile, revision: 2 })
+    const base = fake.snapshot().revision
+    const handEdit: ShortcutFile = { ...emptyShortcutFile, bindings: [{ command: 'file.open', key: 'mod+shift+f8' }] }
+    fake.changeElsewhere(handEdit)
+    expect(fake.snapshot().revision).toBe(3)
+    expect(await fake.save(remap, base)).toMatchObject({ ok: false, code: 'STALE' })
+    // Pressing OK again with the same draft is refused again: only a draft based on the newer file saves.
+    expect(await fake.save(remap, base)).toMatchObject({ ok: false, code: 'STALE' })
+    expect(fake.stored()).toEqual({ file: handEdit, revision: 3 })
+    expect(fake.saves.map(save => save.baseRevision)).toEqual([2, 2])
+    expect(await fake.save(remap, fake.snapshot().revision)).toEqual({ ok: true, value: { revision: 4 } })
+  })
+  it('reads main again after STALE and adopts its file when the first get failed (#193)', async () => {
+    let fail = true
+    const get = vi.fn(async () => fail ? { ok: false as const, error: 'Busy.' } : { ok: true as const, value: { file: remap, revision: 1, salvaged: false } })
+    const save = vi.fn(async (_file: ShortcutFile, base: number) => base === 1 ? { ok: true as const, value: { revision: 2 } } : { ok: false as const, error: 'The shortcuts changed.', code: 'STALE' as const })
+    const service = new ShortcutsService({ api: api({ get, save }).api, platform: 'win32' })
+    expect(await service.load()).toBe(false)
+    expect(service.snapshot()).toMatchObject({ loaded: true, revision: 0 })
+    fail = false
+    expect(await service.save(emptyShortcutFile, service.snapshot().revision)).toMatchObject({ ok: false, code: 'STALE' })
+    expect(get).toHaveBeenCalledTimes(2)
+    expect(service.snapshot()).toMatchObject({ revision: 1, file: remap })
+    expect(await service.save(emptyShortcutFile, service.snapshot().revision)).toEqual({ ok: true, value: { revision: 2 } })
+  })
+  it('ignores the notice of a reload answer that a save overtook (#182)', async () => {
+    let answer: (value: unknown) => void = () => {}
+    const loaded = { ok: true as const, value: { file: remap, revision: 3, salvaged: true, notice: 'Some shortcuts were set aside.' } }
+    const get = vi.fn().mockResolvedValueOnce(loaded).mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    const service = new ShortcutsService({ api: api({ get }).api, platform: 'win32' })
+    const reported: string[] = []
+    service.setReporter(message => { reported.push(message) })
+    await service.load()
+    const reloading = service.reload()
+    expect(await service.save(emptyShortcutFile, 3)).toEqual({ ok: true, value: { revision: 4 } })
+    answer(loaded)
+    expect(await reloading).toBe(true)
+    expect(service.snapshot()).toMatchObject({ revision: 4, file: emptyShortcutFile, salvaged: false, loaded: true })
+    expect(service.snapshot().notice).toBeUndefined()
+    expect(reported).toEqual(['Some shortcuts were set aside.'])
+  })
+  it('shows a notice in the same words again for a new revision, and a push keeps a notice (#192)', async () => {
+    let revision = 1
+    const notice = 'Some shortcuts were set aside.'
+    const get = vi.fn(async () => ({ ok: true as const, value: { file: revision > 1 ? remap : emptyShortcutFile, revision, salvaged: true, notice } }))
+    const { api: main, push } = api({ get })
+    const service = new ShortcutsService({ api: main, platform: 'win32' })
+    const reported: string[] = []
+    service.setReporter(message => { reported.push(message) })
+    await service.load()
+    await service.reload()
+    revision = 2
+    await service.reload()
+    expect(reported).toEqual([notice, notice])
+    push({ file: emptyShortcutFile, revision: 3 })
+    expect(service.snapshot()).toMatchObject({ revision: 3, salvaged: true, notice })
+  })
+  it("shows the notice main kept when a save's own re-read set a hand edit aside (#192)", async () => {
+    let revision = 3, notice: string | undefined
+    const get = vi.fn(async () => ({ ok: true as const, value: { file: revision > 3 ? remap : emptyShortcutFile, revision, salvaged: notice !== undefined, ...notice ? { notice } : {} } }))
+    const { api: main, push } = api({ get })
+    main.save = vi.fn(async () => {
+      // Main's re-read salvages the damaged hand edit as revision 4, pushes it, and refuses the draft.
+      revision = 4
+      notice = 'Some shortcuts were set aside.'
+      push({ file: remap, revision })
+      return { ok: false as const, error: 'The shortcuts changed.', code: 'STALE' as const }
+    })
+    const service = new ShortcutsService({ api: main, platform: 'win32' })
+    const reported: string[] = []
+    service.setReporter(message => { reported.push(message) })
+    await service.load()
+    expect(await service.save(emptyShortcutFile, 3)).toMatchObject({ ok: false, code: 'STALE' })
+    expect(service.snapshot()).toMatchObject({ revision: 4, file: remap, salvaged: true, notice: 'Some shortcuts were set aside.' })
+    expect(reported).toEqual(['Some shortcuts were set aside.'])
   })
 })
