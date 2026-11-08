@@ -10,7 +10,7 @@ import { deferred } from './fixtures/documents'
 import { descriptor, fakeResultClient, summaryOf, type FakeHandle } from './fixtures/results'
 import { manualTimers } from './fixtures/workbench'
 
-function fixture(o: { sortText?: () => ViewSortMode } = {}) {
+function fixture(o: { sortText?: () => ViewSortMode; onSortTextChange?: (listener: () => void) => () => void } = {}) {
   const client = fakeResultClient(), events = new EventBus(), timers = manualTimers()
   const frames: (() => void)[] = []
   const progress = new Set<(value: ResultsJobProgress) => void>()
@@ -673,7 +673,7 @@ describe('results service sorting', () => {
     f.service.finish('t1', 'q1', { summary: summaryOf([descriptor(1)]) })
     return { ...f, handle: f.client.handle(1)! }
   }
-  it('sorts a grid by a column, keeps showing its rows while the view is built, and replaces the view on a new sort', async () => {
+  it('sorts a grid by a column, keeps showing its rows while the view is built, and closes a view once the grid shows another', async () => {
     const { service, handle, flush, tab } = sorted()
     const first = deferred<ResultView>()
     handle.sort.mockReturnValueOnce(first.promise)
@@ -689,18 +689,34 @@ describe('results service sorting', () => {
     const second = fakeView(handle, 2, [])
     handle.sort.mockResolvedValueOnce(second)
     service.sortBy('t1', 0, 0, 'ascending', true)
-    expect(handle.sort).toHaveBeenLastCalledWith([{ column: 1, descending: true, mode: 'value' }, { column: 0, descending: false, mode: 'value' }], { replaces: view, signal: expect.any(AbortSignal) })
+    expect(handle.sort).toHaveBeenLastCalledWith([{ column: 1, descending: true, mode: 'value' }, { column: 0, descending: false, mode: 'value' }], { signal: expect.any(AbortSignal) })
     expect(service.sortOf('t1', 0)).toMatchObject({ view, sorting: true })
+    service.viewShown('t1', 0, view)
     await settle()
     expect(service.sortOf('t1', 0)).toMatchObject({ view: second, sorting: false })
-    // Clear Sort closes the view and shows the rows in the order SQL Server sent them.
+    // The grid still paints the first view until it has read the second one's rows and swapped.
+    expect(view.close).not.toHaveBeenCalled()
+    service.viewShown('t1', 0, second)
+    expect(view.close).toHaveBeenCalledTimes(1)
+    // Clear Sort shows the rows in the order SQL Server sent them; the view closes once the grid shows them.
     service.clearSort('t1', 0)
-    expect(second.close).toHaveBeenCalledTimes(1)
     expect(service.sortOf('t1', 0)).toBeUndefined()
+    expect(second.close).not.toHaveBeenCalled()
+    service.viewShown('t1', 0, undefined)
+    expect(second.close).toHaveBeenCalledTimes(1)
+    // A view the grid never showed (its tab hidden) closes as soon as a newer one replaces it.
+    const hidden = fakeView(handle, 3, []), newer = fakeView(handle, 4, [])
+    handle.sort.mockResolvedValueOnce(hidden).mockResolvedValueOnce(newer)
+    service.sortBy('t1', 0, 0, 'ascending')
+    await settle()
+    service.sortBy('t1', 0, 0, 'descending')
+    await settle()
+    expect([hidden.close.mock.calls.length, newer.close.mock.calls.length]).toEqual([1, 0])
+    service.clearSort('t1', 0)
     // Out-of-range columns and grids sort nothing.
     service.sortBy('t1', 0, 2, 'ascending')
     service.sortBy('t1', 3, 0, 'ascending')
-    expect(handle.sort).toHaveBeenCalledTimes(2)
+    expect(handle.sort).toHaveBeenCalledTimes(4)
   })
   it('cycles a header from ascending to descending to unsorted, and changes an added key in place', async () => {
     const { service, handle } = sorted()
@@ -713,6 +729,15 @@ describe('results service sorting', () => {
     service.cycleSort('t1', 0, 0, true)
     expect(await keys()).toEqual(['0d', '1a'])
     service.cycleSort('t1', 0, 0, true)
+    expect(await keys()).toEqual(['1a'])
+    // A plain click on a key among several starts a new sort by it, ascending, whatever its direction was.
+    service.cycleSort('t1', 0, 0, true)
+    service.cycleSort('t1', 0, 0, true)
+    expect(await keys()).toEqual(['1a', '0d'])
+    service.cycleSort('t1', 0, 0)
+    expect(await keys()).toEqual(['0a'])
+    service.cycleSort('t1', 0, 1, true)
+    service.cycleSort('t1', 0, 1)
     expect(await keys()).toEqual(['1a'])
     // Without the modifier the column becomes the only key.
     service.cycleSort('t1', 0, 0)
@@ -747,9 +772,11 @@ describe('results service sorting', () => {
     expect(late.close).toHaveBeenCalledTimes(1)
     expect(service.sortOf('t1', 0)?.view).toBe(newest)
   })
-  it('sorts a view again once its set has every row, and sorts every grid again when the text mode changes', async () => {
+  it('sorts a view again once its set has every row, and sorts text-sorted grids again when the text mode changes', async () => {
     let mode: ViewSortMode = 'value'
-    const { service, client, flush } = fixture({ sortText: () => mode })
+    const changes = new Set<() => void>()
+    const { service, client, flush } = fixture({ sortText: () => mode, onSortTextChange: listener => { changes.add(listener); return () => changes.delete(listener) } })
+    const change = (next: ViewSortMode) => { mode = next; for (const listener of changes) listener() }
     service.begin('t1', 'q1')
     client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { state: 'open', rowsAvailable: 1 }) })
     flush()
@@ -762,13 +789,45 @@ describe('results service sorting', () => {
     const whole = fakeView(handle, 2, [])
     handle.sort.mockResolvedValueOnce(whole)
     client.emit('q1', { type: 'resultSet.closed', descriptor: descriptor(1) })
-    expect(handle.sort).toHaveBeenLastCalledWith([{ column: 1, descending: false, mode: 'value' }], { replaces: partial, signal: expect.any(AbortSignal) })
+    expect(handle.sort).toHaveBeenLastCalledWith([{ column: 1, descending: false, mode: 'value' }], { signal: expect.any(AbortSignal) })
     await settle()
     expect(service.sortOf('t1', 0)).toMatchObject({ view: whole, stale: false })
-    mode = 'chars'
+    // Settings that change something else sort nothing again; Sort text by sorts the text column's grid again.
     handle.sort.mockResolvedValueOnce(fakeView(handle, 3, []))
-    service.resort()
-    expect(handle.sort).toHaveBeenLastCalledWith([{ column: 1, descending: false, mode: 'chars' }], { replaces: whole, signal: expect.any(AbortSignal) })
+    change('value')
+    expect(handle.sort).toHaveBeenCalledTimes(2)
+    change('chars')
+    expect(handle.sort).toHaveBeenLastCalledWith([{ column: 1, descending: false, mode: 'chars' }], { signal: expect.any(AbortSignal) })
+    await settle()
+    // A grid sorted only by an int column keeps its order: the mode cannot change it.
+    handle.sort.mockResolvedValueOnce(fakeView(handle, 4, []))
+    service.sortBy('t1', 0, 0, 'ascending')
+    await settle()
+    const sorts = handle.sort.mock.calls.length
+    change('bytes')
+    expect(handle.sort).toHaveBeenCalledTimes(sorts)
+    service.dispose()
+    expect(changes.size).toBe(0)
+  })
+  it('sorts again when the set finishes while its sort runs', async () => {
+    const { service, client, flush } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { state: 'open', rowsAvailable: 1 }) })
+    flush()
+    const handle = client.handle(1)!
+    const pending = deferred<ResultView>()
+    handle.sort.mockReturnValueOnce(pending.promise)
+    service.sortBy('t1', 0, 1, 'ascending')
+    // The set completes before the backend answers, with the rows sealed when the sort began.
+    client.emit('q1', { type: 'resultSet.closed', descriptor: descriptor(1) })
+    expect(handle.sort).toHaveBeenCalledTimes(1)
+    const whole = fakeView(handle, 2, [])
+    handle.sort.mockResolvedValueOnce(whole)
+    pending.resolve(fakeView(handle, 1, [], false))
+    await settle()
+    expect(handle.sort).toHaveBeenCalledTimes(2)
+    expect(service.sortOf('t1', 0)).toMatchObject({ view: whole, stale: false, sorting: false })
+    expect(await service.saveAs('t1', 0, 'SQLQuery1')).toBeUndefined()
   })
   it('copies and saves in the sorted order, and saves only once the sort is built', async () => {
     const { service, handle, api } = sorted()

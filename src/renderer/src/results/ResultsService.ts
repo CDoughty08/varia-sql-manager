@@ -127,6 +127,9 @@ interface Run {
   sorts: ReadonlyMap<number, GridSort>
   /** The sort each grid is waiting for, by set index. */
   readonly sorting: Map<number, AbortController>
+  /** Each grid's views still open (its current one, the one it shows, and those superseded since), by set index: a view
+   *  closes only once the grid shows another or none, so a re-sort keeps painting the old order until the new one is read. */
+  readonly held: Map<number, { shown?: ResultHandle; readonly views: Set<ResultView> }>
 }
 interface RunningJob { job: ResultJob; readonly tabId: string; timer?: unknown }
 
@@ -214,6 +217,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary' | 'release' | 'onGeneration'>; api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'>; events: EventBus
     documents?: Pick<DocumentService, 'openText'>; frame?: (callback: () => void) => void; timers?: Timers; now?: () => number; newId?: () => string; retainedPlans?: RetainedPlansService
     sortText?: () => ViewSortMode
+    /** Calls the listener when settings change; sorted grids sort again when the text mode did. Returns the unsubscribe. */
+    onSortTextChange?: (listener: () => void) => () => void
   }) {
     super({})
     this.client = o.client
@@ -222,6 +227,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.documents = o.documents
     this.retainedPlans = o.retainedPlans
     this.sortText = o.sortText ?? (() => 'value')
+    let sortText = this.sortText()
+    if (o.onSortTextChange) this.subscriptions.push(o.onSortTextChange(() => { const next = this.sortText(); if (next !== sortText) { sortText = next; this.resort() } }))
     this.frame = o.frame ?? (callback => requestFrame(callback))
     this.timers = o.timers ?? browserTimers
     this.now = o.now ?? (() => Date.now())
@@ -244,7 +251,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const run: Run = {
       queryId, startedAt: this.now(), status: 'running', sets: [], planSets: [], setKeys: new Set(), setsPublished: false, rowsRead: new Map(), messages: [], notices: [], messagesTruncated: false,
       completedBatches: 0, totalBatches: 0, view: 'messages', manualView: false, strip: this.stripChoices.get(tabId) === true, stripManual: false,
-      settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: '', sorts: new Map(), sorting: new Map()
+      settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: '', sorts: new Map(), sorting: new Map(), held: new Map()
     }
     run.subscription = this.client.onQueryEvent(queryId, event => {
       if (event.type === 'session.opened') {
@@ -354,6 +361,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (!run || run.status === 'running' || run.status === 'closed') return
     for (const controller of run.sorting.values()) controller.abort()
     run.sorting.clear()
+    run.held.clear()
     run.sorts = new Map()
     this.closeHandles(run)
     run.sets = []
@@ -553,7 +561,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const run = this.runs.get(tabId), keys = run?.sorts.get(index)?.keys ?? []
     if (!run) return
     const at = keys.findIndex(key => key.column === column), current = keys[at]
-    const next: SortDirection = !current ? 'ascending' : current.descending ? 'none' : 'descending'
+    // Without the modifier only the sole key cycles; any other click starts a new sort by the column, ascending.
+    const cycles = add || keys.length === 1
+    const next: SortDirection = !current || !cycles ? 'ascending' : current.descending ? 'none' : 'descending'
     if (!add || !current) return this.sortBy(tabId, index, column, next, add)
     const changed = next === 'none' ? keys.filter(key => key.column !== column) : keys.map(key => key.column === column ? { ...key, descending: true } : key)
     this.applySort(tabId, run, index, changed)
@@ -564,9 +574,20 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (run?.sorts.has(index)) this.applySort(tabId, run, index, [])
   }
 
-  /** The text sort mode changed: every sorted grid sorts again by it. */
+  /** The text sort mode changed: every grid sorted by a column the mode orders (text, xml, json, binary) sorts again. */
   resort(): void {
-    for (const [tabId, run] of this.runs) for (const [index, sort] of run.sorts) this.applySort(tabId, run, index, sort.keys)
+    for (const [tabId, run] of this.runs) for (const [index, sort] of run.sorts) {
+      const columns = run.sets[index]?.descriptor.columns
+      if (columns && sort.keys.some(key => columns[key.column] && lengthSortable(columns[key.column]))) this.applySort(tabId, run, index, sort.keys)
+    }
+  }
+
+  /** The grid now shows `view` (undefined: its result's own order): the views it held before close. */
+  viewShown(tabId: string, index: number, view: ResultHandle | undefined): void {
+    const run = this.runs.get(tabId), held = run?.held.get(index)
+    if (!held) return
+    held.shown = view
+    this.closeHeld(run!, index)
   }
 
   /** Cancels a copy or save by its job id (Cancel on its strip). */
@@ -749,18 +770,27 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     run.sorting.delete(index)
     const current = run.sorts.get(index)
     if (keys.length === 0) {
-      if (current?.view) void current.view.close()
+      // The view closes once the grid shows the rows in SQL Server's order (viewShown).
       this.setSort(tabId, run, index, undefined)
+      this.closeHeld(run, index)
       return
     }
     const mode = this.sortText(), sort = keys.map(key => ({ column: key.column, descending: key.descending, mode }))
     const controller = new AbortController()
     run.sorting.set(index, controller)
     this.setSort(tabId, run, index, { keys: sort, ...current?.view ? { view: current.view } : {}, sorting: true, approximate: current?.approximate ?? false, stale: current?.stale ?? false })
-    set.handle.sort(sort, { ...current?.view ? { replaces: current.view } : {}, signal: controller.signal }).then(view => {
+    // No `replaces`: the old view stays readable until the grid has swapped to the new one, and a sort given up after the
+    // backend built it cannot take the shown view with it.
+    set.handle.sort(sort, { signal: controller.signal }).then(view => {
       if (run.sorting.get(index) !== controller || this.runs.get(tabId) !== run) { void view.close(); return }
       run.sorting.delete(index)
+      const held = run.held.get(index) ?? { views: new Set<ResultView>() }
+      held.views.add(view)
+      run.held.set(index, held)
       this.setSort(tabId, run, index, { keys: sort, view, sorting: false, approximate: view.approximate, stale: !view.complete })
+      this.closeHeld(run, index)
+      // The set finished while this sort ran (refreshSorts skipped it): sort its every row now.
+      if (!view.complete && set.handle.getSnapshot().state === 'complete') this.applySort(tabId, run, index, sort)
     }, (error: unknown) => {
       if (run.sorting.get(index) !== controller || this.runs.get(tabId) !== run) return
       run.sorting.delete(index)
@@ -768,6 +798,19 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       this.setSort(tabId, run, index, last?.view ? { ...last, keys: last.view.keys, sorting: false } : undefined)
       this.notify(tabId, 'Could not sort the results: ' + (error instanceof Error ? error.message : 'The rows could not be sorted.'))
     })
+  }
+
+  /** Closes the grid's views but its current one and the one it shows. */
+  private closeHeld(run: Run, index: number): void {
+    const held = run.held.get(index)
+    if (!held) return
+    const keep = run.sorts.get(index)?.view
+    for (const view of [...held.views]) {
+      if (view === keep || view === held.shown) continue
+      held.views.delete(view)
+      void view.close()
+    }
+    if (held.views.size === 0) run.held.delete(index)
   }
 
   private setSort(tabId: string, run: Run, index: number, sort: GridSort | undefined): void {
@@ -807,6 +850,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     // Releasing a set frees its views too.
     for (const controller of run.sorting.values()) controller.abort()
     run.sorting.clear()
+    run.held.clear()
     this.closeHandles(run)
     this.runs.delete(tabId)
     for (const key of [...this.controllers.keys()]) if (key.startsWith(tabId + ':')) this.controllers.delete(key)
@@ -864,4 +908,12 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       jobNotice: run.jobNotice, sorts: run.sorts
     }
   }
+}
+
+/** A column whose order Sort text by changes (ViewSorter.IsText in C#, plus binary for Bytes). */
+const lengthTypes = new Set(['char', 'varchar', 'nchar', 'nvarchar', 'text', 'ntext', 'sysname', 'xml', 'json'])
+function lengthSortable(column: ResultColumn): boolean {
+  if (column.wire === 'binary' || column.collation !== undefined || column.role === 'xml' || column.role === 'json') return true
+  const cut = column.dataType.indexOf('(')
+  return lengthTypes.has((cut < 0 ? column.dataType : column.dataType.slice(0, cut)).trim().toLowerCase())
 }

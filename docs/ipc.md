@@ -1328,10 +1328,12 @@ Server. A view is an order of a result's base rows, read through the same calls 
   result's views go with it, without a close.
 - **Renderer.** `ResultHandle.sort(keys, { replaces, signal })` validates the keys before sending and returns a
   `ResultView` handle (`viewId`, `base`, `keys`, `rows`, `complete`, `approximate`) that reads, measures and copies like
-  any handle; closing it sends `viewClose`, and it ends (released or lost) with its base. `ResultsService` keeps one view
-  per grid: a newer sort aborts the running one and replaces the last view, a view of a set still loading is sorted again
-  once the set completes, and the text mode (Tools › Options › Query Results › Grid, Sort text columns by, and the
-  results toolbar) sorts every sorted grid again when it changes. Copy, Save Results As and opening a value follow the
+  any handle; closing it sends `viewClose`, and it ends (released or lost) with its base. `ResultsService` keeps a view
+  per grid: a newer sort aborts the running one, and it sends no `replaces`, so the view a grid shows stays readable until
+  the grid has read the new one's rows and swapped (`viewShown`), and only then closes. A view of a set still loading is
+  sorted again once the set completes, also when it completes during the sort, and the text mode (Tools › Options ›
+  Query Results › Grid, Sort text columns by, and the results toolbar) sorts again every grid sorted by a text, xml, json
+  or binary column when it changes. A view main sees built after its port went (a reload) is closed by main. Copy, Save Results As and opening a value follow the
   grid's order through its view; Save waits until a running or pending sort is built.
 
 ## Copy and Save Results As

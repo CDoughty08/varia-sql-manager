@@ -119,6 +119,7 @@ internal static class ViewChecks
         check(Show(Order(set, (5, false, SortMode.Value), (0, true, SortMode.Value))) == "4,2,1,0,3" && Show(Order(set, (6, true, SortMode.Value), (0, false, SortMode.Value))) == "0,2,3,1,4",
             "later keys order rows the first key ties");
         check(Show(Order(set, (0, false, SortMode.Chars))) == Show(ids), "a length mode on a column that is not text sorts it by value");
+        check(Show(Order(set, (7, false, SortMode.Chars))) == Show(Order(set, (7, false, SortMode.Value))), "Chars sorts a binary column by value, as documented");
         var cancelled = false;
         try { ViewSorter.Sort(set, set.SealedSnapshot(), [new ViewKey(0, false, SortMode.Value)], new CancellationToken(canceled: true)); }
         catch (OperationCanceledException) { cancelled = true; }

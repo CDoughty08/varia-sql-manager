@@ -466,9 +466,13 @@ export class ResultsPortHost {
     const sort = this.backend.view(request.generation, params)
     this.sorting.set(rid, sort)
     sort.done.then(result => {
-      if (this.port !== port || this.sorting.get(rid) !== sort) return
-      this.sorting.delete(rid)
       const parsed = viewResultSchema.safeParse(result)
+      if (this.port !== port || this.sorting.get(rid) !== sort) {
+        // Built after its port went (a reload): nobody can close the view, so main does.
+        if (parsed.success) this.backend.viewClose(request.generation, { resultId: request.resultId, viewIds: [parsed.data.viewId] }).catch(() => {})
+        return
+      }
+      this.sorting.delete(rid)
       if (!parsed.success) return this.end(rid, 'BACKEND_ERROR', 'The results could not be sorted.')
       this.post({ t: 'end', rid, ok: true, result: parsed.data })
     }, error => {

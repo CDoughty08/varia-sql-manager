@@ -105,6 +105,8 @@ export class ResultsWorkerCore {
   private readonly sorts = new Map<number, { readonly id: number; readonly key: ResultKey; readonly replaces?: number; cancelled?: boolean }>()
   /** results.viewClose requests in flight: the page's id by rid. */
   private readonly viewCloses = new Map<number, number>()
+  /** The worker's own viewCloses (a view built after its sort was given up), whose rids stay taken until main answers. */
+  private readonly orphanCloses = new Set<number>()
   private readonly lives = new Map<number, Live>()
   private readonly liveIds = new Map<number, Live>()
   /** Live updates in flight: the page's id and the generation they were sent to, by rid. */
@@ -143,6 +145,7 @@ export class ResultsWorkerCore {
         this.sorts.delete(rid)
         this.error(sort.id, 'PORT_CLOSED', portClosed)
       }
+      this.orphanCloses.clear()
       this.status = undefined
     }
     this.port = port
@@ -189,7 +192,7 @@ export class ResultsWorkerCore {
   /** The next port rid, skipping those still in use (a live stream may outlive 2^31 reads). */
   private allocate(): number {
     let rid = this.nextRid
-    while (this.reads.has(rid) || this.closes.has(rid) || this.sizes.has(rid) || this.sorts.has(rid) || this.viewCloses.has(rid) || this.lives.has(rid) || this.updates.has(rid)) rid = rid >= 2 ** 31 - 1 ? 1 : rid + 1
+    while (this.reads.has(rid) || this.closes.has(rid) || this.sizes.has(rid) || this.sorts.has(rid) || this.viewCloses.has(rid) || this.orphanCloses.has(rid) || this.lives.has(rid) || this.updates.has(rid)) rid = rid >= 2 ** 31 - 1 ? 1 : rid + 1
     this.nextRid = rid >= 2 ** 31 - 1 ? 1 : rid + 1
     return rid
   }
@@ -527,6 +530,7 @@ export class ResultsWorkerCore {
   }
 
   private ended(rid: number, result: PortEndResult): void {
+    if (this.orphanCloses.delete(rid)) return
     const live = this.lives.get(rid)
     if (live) {
       this.lives.delete(rid)
@@ -546,7 +550,11 @@ export class ResultsWorkerCore {
       const view = result as ResultsViewResult
       if (sort.replaces !== undefined) this.drop(resultOf({ ...sort.key, view: sort.replaces }))
       // Built before the cancel reached it: nobody holds the view, so it goes (the answer is not awaited).
-      if (sort.cancelled) return this.send({ t: 'viewClose', rid: this.allocate(), generation: sort.key.generation, resultId: sort.key.resultId, viewIds: [view.viewId] })
+      if (sort.cancelled) {
+        const close = this.allocate()
+        this.orphanCloses.add(close)
+        return this.send({ t: 'viewClose', rid: close, generation: sort.key.generation, resultId: sort.key.resultId, viewIds: [view.viewId] })
+      }
       this.post({ type: 'view', id: sort.id, viewId: view.viewId, rows: view.rows, complete: view.complete, approximate: view.approximate })
       return
     }
@@ -580,6 +588,7 @@ export class ResultsWorkerCore {
   }
 
   private failed(rid: number, code: ErrorCode, message: string): void {
+    if (this.orphanCloses.delete(rid)) return
     const live = this.lives.get(rid)
     if (live) {
       this.lives.delete(rid)

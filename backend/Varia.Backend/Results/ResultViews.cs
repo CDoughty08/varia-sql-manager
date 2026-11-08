@@ -70,7 +70,9 @@ internal static class ViewSorter
         var column = sort.Column;
         var meta = set.Columns[column];
         var wire = set.Wires[column];
-        var kind = sort.Mode != SortMode.Value && (wire == WireKind.Binary || IsText(meta)) ? KindFor(sort.Mode) : KindOf(meta, wire);
+        // Chars orders character, xml and json columns by length; Bytes those and binary ones (DATALENGTH). Others sort by value.
+        var byLength = sort.Mode == SortMode.Chars ? IsText(meta) : sort.Mode == SortMode.Bytes && (wire == WireKind.Binary || IsText(meta));
+        var kind = byLength ? KindFor(sort.Mode) : KindOf(meta, wire);
         Key key = kind switch
         {
             Kind.Chars or Kind.Bytes => new LengthKey(rows),

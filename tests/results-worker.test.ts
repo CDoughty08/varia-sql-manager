@@ -329,6 +329,12 @@ describe('results worker core', () => {
     core.receive({ t: 'end', rid: 3, ok: true, result: { viewId: 7, rows: 1, complete: true, approximate: false } })
     expect(posted.length).toBe(before)
     expect(sent.at(-1)).toMatchObject({ t: 'viewClose', resultId: 5, viewIds: [7] })
+    // That close's rid stays taken until main answers it, and its answer goes to nobody.
+    const orphan = (sent.at(-1) as { rid: number }).rid
+    core.handle({ type: 'rowBytes', id: 95, key, firstRow: 0, count: 1 })
+    expect((sent.at(-1) as { rid: number }).rid).not.toBe(orphan)
+    core.receive({ t: 'end', rid: orphan, ok: true, result: { closed: 1 } })
+    expect(posted.length).toBe(before)
     core.handle({ type: 'view', id: 93, key: { ...key, generation: 2 }, sort })
     expect(posted.at(-1)).toMatchObject({ type: 'error', id: 93, code: 'RESULT_UNAVAILABLE' })
     core.handle({ type: 'view', id: 94, key, sort })

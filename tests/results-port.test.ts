@@ -346,6 +346,10 @@ describe('ResultsPortHost', () => {
     port().send({ t: 'view', rid: 6, generation: 1, resultId: 7, sort: [key] })
     port().hangUp()
     expect(views[1].cancels).toHaveLength(1)
+    // Built before the cancel reached the backend: with no port left to own it, main closes the view itself.
+    views[1].resolve({ viewId: 9, rows: 1, complete: true, approximate: false })
+    await settle()
+    expect(backend.viewClose).toHaveBeenLastCalledWith(1, { resultId: 7, viewIds: [9] })
   })
   it('forwards a row sizes answer only when it is well formed and answers the range asked', async () => {
     const { host, backend, port } = fixture()

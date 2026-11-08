@@ -256,10 +256,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const closeSuccessor = documents.useCloseSuccessor(id => editorGroups.successor(id))
   const resultClient = new ResultClient({ api, createWorker: () => new ResultsWorker(), window, schedule: callback => { frame(callback) } })
   const retainedPlans = new RetainedPlansService()
-  const results = new ResultsService({ client: resultClient, api, events, documents, retainedPlans, frame: callback => { frame(callback) }, sortText: () => settings.get('queryResults.grid.sortText') })
-  // Sorted grids follow Sort text by as it changes, from the toolbar, the palette or Options.
-  let sortText = settings.get('queryResults.grid.sortText')
-  const resortGrids = settings.subscribe(() => { const next = settings.get('queryResults.grid.sortText'); if (next !== sortText) { sortText = next; results.resort() } })
+  const results = new ResultsService({ client: resultClient, api, events, documents, retainedPlans, frame: callback => { frame(callback) }, sortText: () => settings.get('queryResults.grid.sortText'),
+    // Sorted grids follow Sort text by as it changes, from the toolbar, the palette or Options.
+    onSortTextChange: listener => settings.subscribe(listener) })
   const resultMemory = new MemoryUsageService(resultClient, 'results', events)
   const indexMemory = new MemoryUsageService(resultClient, 'index')
   // The backend caps live views per server it reaches; a typed name is the closest this side knows.
@@ -506,7 +505,6 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       contributions.forEach(contribution => contribution.dispose())
       cleanup.dispose()
       refreshDocuments()
-      resortGrids()
       closeSuccessor.dispose()
       commands.dispose()
       context.dispose()

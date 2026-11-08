@@ -66,6 +66,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
     // A grid mounted again (a tab switch) shows its sorted view from the start.
     const sorted = sortRef.current?.view
     shownRef.current = { handle: sorted ?? entry.handle, keys: sorted ? keysOf(sortRef.current) : '' }
+    results.viewShown(tabId, index, sorted)
     const view = new GridView({
       root: rootRef.current!, scroller: scrollRef.current!, handle: shownRef.current.handle, client: resultClient, descriptor: entry.descriptor, state: results.gridState(tabId, index),
       resultIndex: index, resultCount: countRef.current, platform, stats: gridStats, showTypes: showTypesRef.current, whitespace: whitespaceRef.current,
@@ -97,7 +98,8 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
   }, [tabId, index, entry, results, resultClient, commands, platform, gridStats, panes])
   useEffect(() => { viewRef.current?.update({ resultCount: count, showTypes, whitespace, sort: sort?.keys }) }, [count, showTypes, whitespace, sort?.keys])
   // A built view replaces what the grid shows: its first rows are read before the swap, so it paints whole rows at once,
-  // unless what it shows is already gone (a replaced view). While a first sort runs the grid keeps the rows in their order.
+  // unless what it shows is already gone (its result released or lost). While a first sort runs the grid keeps the rows in
+  // their order; the views it showed close once it has swapped (ResultsService.viewShown).
   const target = sort?.view ?? (sort ? undefined : entry.handle)
   useEffect(() => {
     const view = viewRef.current, shown = shownRef.current
@@ -108,6 +110,8 @@ function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, 
       if (abort.signal.aborted || viewRef.current !== view) return
       shownRef.current = { handle: target, keys }
       view.swap(target, entry.descriptor, row => row, top === undefined ? {} : { top })
+      // The views it showed before can close now.
+      results.viewShown(tabId, index, target === entry.handle ? undefined : target)
     }
     const state = shown.handle.getSnapshot().state
     if (state === 'released' || state === 'lost') swap()
