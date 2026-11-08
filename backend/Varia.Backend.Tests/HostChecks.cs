@@ -94,8 +94,10 @@ internal static class HostChecks
 
             // The answer comes at the deadline, before the handler's own end. A starved CI runner fires the 100 ms timer late, so
             // the bound leaves 900 ms; CancelAfter never fires early, so a deadline rounded to whole seconds still fails it.
+            // test.late takes no lane: a metadata request whose deadline passes before its task reaches the slot wait (the
+            // thread pool late on a starved runner) is rightly never dispatched, and would leave no late result to discard.
             var watch = Stopwatch.StartNew();
-            host.Request(3, "test.slow", new { ms = 2500 }, deadline: 100);
+            host.Request(3, "test.late", new { ms = 2500 }, deadline: 100);
             var timedOut = host.Next(FrameKind.Response);
             var elapsed = watch.ElapsedMilliseconds;
             check(timedOut?.Header.Id == 3 && ErrorCode(timedOut.Value) == "TIMEOUT" && elapsed is >= 90 and < 1000 && host.Dispatcher.Completed == 0,
@@ -452,8 +454,8 @@ internal static class HostChecks
     }
 }
 
-/// <summary>Methods that exercise the host: an echo, a slow handler that ignores its token, one that waits for its
-/// token, and a stream of DATA pages.</summary>
+/// <summary>Methods that exercise the host: an echo, a slow handler that ignores its token (test.slow on the metadata
+/// lane, test.late on none, so it always runs), one that waits for its token, and a stream of DATA pages.</summary>
 internal sealed class StubDispatcher : IRequestDispatcher
 {
     public int Completed;
@@ -461,7 +463,7 @@ internal sealed class StubDispatcher : IRequestDispatcher
     public int Unsent;
     public bool Disposed;
     public bool Created;
-    public IReadOnlyList<string> Methods { get; } = ["test.echo", "test.slow", "test.wait", "test.stream", "test.events", "test.unsent", "test.failure", "test.certificate", "test.crash", "test.settle", "test.settleSsis", "test.secret"];
+    public IReadOnlyList<string> Methods { get; } = ["test.echo", "test.slow", "test.late", "test.wait", "test.stream", "test.events", "test.unsent", "test.failure", "test.certificate", "test.crash", "test.settle", "test.settleSsis", "test.secret"];
     public RequestLane LaneOf(string method) => method switch { "test.slow" => RequestLane.Metadata, "test.stream" => RequestLane.Results, "test.settle" => RequestLane.Actions, "test.settleSsis" => RequestLane.Ssis, _ => RequestLane.Control };
     public bool AnswersStop(string method) => method is "test.settle" or "test.settleSsis";
     public readonly ConcurrentQueue<string> AskedSensitive = new();
@@ -477,7 +479,7 @@ internal sealed class StubDispatcher : IRequestDispatcher
         switch (method)
         {
             case "test.echo" or "test.secret": return parameters;
-            case "test.slow":
+            case "test.slow" or "test.late":
                 await Task.Delay(parameters.GetProperty("ms").GetInt32());
                 Interlocked.Increment(ref Completed);
                 return new { Done = true };
