@@ -28,7 +28,7 @@ describe('shortcut labels and the shortcuts hook', () => {
   it('re-renders key labels and tooltips when the rules change', () => {
     const service = keybindings()
     function Hint() { return createElement('span', { 'data-hint': '' }, useKeybindingLabel('file.new')?.text ?? 'none') }
-    const view = mount(createElement(WorkbenchProvider, { workbench: { keybindings: service } as unknown as Workbench }, createElement(Keybinding, { id: 'file.new' }), createElement(Hint)))
+    const view = mount(createElement(WorkbenchProvider, { workbench: { keybindings: service } as unknown as Workbench, children: [createElement(Keybinding, { id: 'file.new', key: 'key' }), createElement(Hint, { key: 'hint' })] }))
     const text = () => [view.container.querySelector('.keybinding')?.getAttribute('aria-label'), view.container.querySelector('[data-hint]')?.textContent]
     expect(text()).toEqual(['Control+N', 'Ctrl+N'])
     act(() => { service.setRules(remap) })
@@ -39,8 +39,8 @@ describe('shortcut labels and the shortcuts hook', () => {
     const own = createFakeShortcutsService({ revision: 7 }), workbenchService = createFakeShortcutsService({ revision: 3 })
     function Revision() { return createElement('span', null, String(useShortcuts().snapshot().revision)) }
     const workbench = { shortcuts: workbenchService } as unknown as Workbench
-    const fromWorkbench = mount(createElement(WorkbenchProvider, { workbench }, createElement(Revision)))
-    const fromProvider = mount(createElement(WorkbenchProvider, { workbench }, createElement(ShortcutsProvider, { shortcuts: own }, createElement(Revision))))
+    const fromWorkbench = mount(createElement(WorkbenchProvider, { workbench, children: createElement(Revision) }))
+    const fromProvider = mount(createElement(WorkbenchProvider, { workbench, children: createElement(ShortcutsProvider, { shortcuts: own, children: createElement(Revision) }) }))
     expect([fromWorkbench.container.textContent, fromProvider.container.textContent]).toEqual(['3', '7'])
     fromWorkbench.unmount(); fromProvider.unmount()
   })
