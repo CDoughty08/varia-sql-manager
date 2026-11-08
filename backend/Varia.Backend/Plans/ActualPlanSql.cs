@@ -97,13 +97,18 @@ internal static class ActualPlanSql
     // Builds before the three-GUID names (a random GUID, or the query connection's ID) named server collectors
     // VariaActual_ plus 32 hex digits; this build names only database-scoped collectors so, and those are never swept.
     // Such a name cannot prove its observer is gone, so it is swept only when clearly abandoned: stopped (defined but not
-    // running), or running for more than a day (create_time is the server's local time).
+    // running) while no connection holds the session id its predicates watch, or running for more than a day (create_time
+    // is the server's local time). Every such build created the session and then started it in a second statement, sent
+    // while its query connection was open, so that connection's session id protects a session between the two.
     internal static readonly string LegacyName = "DATALENGTH(s.name)=88 AND s.name COLLATE Latin1_General_100_BIN2 LIKE N'VariaActual[_]"
         + string.Concat(Enumerable.Repeat("[0-9A-Fa-f]", 32)) + "'";
-    internal const string LegacyAbandoned = """
-        (NOT EXISTS (SELECT 1 FROM sys.dm_xe_sessions x WHERE x.name COLLATE Latin1_General_100_BIN2=s.name COLLATE Latin1_General_100_BIN2)
+    internal static string LegacyAbandoned(string spid) => $"""
+        ((NOT EXISTS (SELECT 1 FROM sys.dm_xe_sessions x WHERE x.name COLLATE Latin1_General_100_BIN2=s.name COLLATE Latin1_General_100_BIN2)
+                AND {spid} IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.dm_exec_connections c WHERE c.session_id={spid}))
             OR EXISTS (SELECT 1 FROM sys.dm_xe_sessions x WHERE x.name COLLATE Latin1_General_100_BIN2=s.name COLLATE Latin1_General_100_BIN2 AND x.create_time<DATEADD(day,-1,GETDATE())))
         """;
+    // The batch event's first predicate value: the session id every legacy build watched. C# proves the whole shape.
+    internal const string LegacySpid = "TRY_CONVERT(int,TRY_CONVERT(xml,b.predicate_xml).value(N'(/and/leaf/value/text())[1]',N'nvarchar(11)'))";
 
     // @after rotates the scan: definitions after the last one examined come first, then the scan wraps. Refused or failing
     // definitions at the front therefore cannot hide later ones from every capture.
@@ -127,12 +132,12 @@ internal static class ActualPlanSql
                     WHERE c.connection_id IN (ids.target,ids.owner) OR c.parent_connection_id IN (ids.target,ids.owner))
                 AND {{Shape}}
             UNION ALL
-            SELECT s.event_session_id,s.name,NULL,NULL,NULL,NULL,CONVERT(bit,1)
+            SELECT s.event_session_id,s.name,b.predicate_xml,p.predicate_xml,b.predicate,p.predicate,CONVERT(bit,1)
             {{Events}}
             WHERE {{LegacyName}}
                 AND {{Only}}
                 AND {{Shape}}
-                AND {{LegacyAbandoned}}
+                AND {{LegacyAbandoned(LegacySpid)}}
         ) c
         ORDER BY CASE WHEN c.id>@after THEN 0 ELSE 1 END, c.id;
         """;
@@ -150,12 +155,13 @@ internal static class ActualPlanSql
         END;
         """;
 
-    // The same recheck for a legacy name: still that definition, collector-shaped, and still abandoned.
+    // The same recheck for a legacy name: still the definition whose predicates C# proved (watching @spid),
+    // collector-shaped, and still abandoned.
     internal static readonly string DropLegacy = $$"""
         IF EXISTS (SELECT 1 {{Events}}
-            WHERE s.event_session_id=@id AND s.name=@name AND {{LegacyName}}
+            WHERE s.event_session_id=@id AND s.name=@name AND {{LegacyName}} AND b.predicate=@batch AND p.predicate=@plan
                 AND {{Shape}}
-                AND {{LegacyAbandoned}})
+                AND {{LegacyAbandoned("@spid")}})
         BEGIN
             {{Drop(false)}}
         END;

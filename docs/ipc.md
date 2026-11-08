@@ -928,8 +928,9 @@ lost.
   failing definitions cannot hide later ones; a drop the server refuses skips to the next. Recovery requires both
   connections to be absent and the ownership/predicate shape to match; it rechecks the definition and liveness
   immediately before server-quoted DROP. Server-scoped single-GUID collectors from earlier builds cannot prove observer
-  ownership, so they are swept only when clearly abandoned: collector-shaped and stopped, or created more than a day
-  ago. Database-scoped collectors are not swept. SQL in `Plans/ActualPlanSql.cs` is rendered once per variant, binds
+  ownership, so they are swept only when clearly abandoned: collector-shaped with Varia's exact predicates, and either
+  stopped while no connection holds the session id they watch, or created more than a day ago. Database-scoped
+  collectors are not swept. SQL in `Plans/ActualPlanSql.cs` is rendered once per variant, binds
   values as typed parameters and quotes identifiers on the server; its offline lint (`ActualPlanSql.Lint`) and real
   hostile-name round trips cover that boundary. See [collector recovery](plan-capture-hardening.md) for limits and validation.
   When `SET STATISTICS XML` also returned the same execution, Varia keeps the complete SQL-returned plan and pairs it with

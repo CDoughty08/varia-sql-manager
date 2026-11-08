@@ -11,8 +11,8 @@ internal static class ActualPlanRecovery
 {
     internal const string Notice = "Abandoned actual plan collectors could not all be checked or removed. Recovery will be retried on a later capture.";
     internal static string Name(Guid client, Guid target, Guid owner) => $"VariaActual_{client:N}_{target:N}_{owner:N}";
-    /// <summary>A recovery candidate. A legacy one (a single-GUID name from an earlier build) carries no predicates: the
-    /// candidate query and the drop's recheck select it only when it is clearly abandoned.</summary>
+    /// <summary>A recovery candidate. A legacy one (a single-GUID name from an earlier build) cannot prove its observer
+    /// is gone: the candidate query and the drop's recheck select it only when it is clearly abandoned.</summary>
     internal sealed record Candidate(int Id, string Name, string BatchXml, string PlanXml, string Batch, string Plan, bool Legacy = false);
 
     internal static bool Owns(Candidate candidate, out Guid target, out Guid owner)
@@ -23,11 +23,32 @@ internal static class ActualPlanRecovery
             || !Guid.TryParseExact(name.AsSpan(12, 32), "N", out var client) || !Guid.TryParseExact(name.AsSpan(45, 32), "N", out target)
             || !Guid.TryParseExact(name.AsSpan(78, 32), "N", out owner)
             || client == Guid.Empty || target == Guid.Empty || owner == Guid.Empty || name != Name(client, target, owner)) return false;
+        return Predicates(candidate, out _, out var watched) && watched == client;
+    }
+
+    /// <summary>A single-GUID collector from an earlier build: the name every such build used and Varia's predicates
+    /// (each build filtered on the query connection's session id and client connection id), with that session id. The
+    /// name's GUID was random or the connection's DMV id, so unlike <see cref="Owns"/> it is not tied to the predicate.</summary>
+    internal static bool OwnsLegacy(Candidate candidate, out int spid)
+    {
+        spid = 0;
+        var name = candidate.Name;
+        return name.Length == 44 && name.StartsWith("VariaActual_", StringComparison.Ordinal) && name[12..].All(char.IsAsciiHexDigit)
+            && Predicates(candidate, out spid, out _);
+    }
+
+    // Exactly the predicates every build's collector DDL writes: session_id and client_connection_id on the batch event,
+    // and those plus is_system=false on the plan event. Anything modified or foreign proves nothing.
+    private static bool Predicates(Candidate candidate, out int spid, out Guid client)
+    {
+        spid = 0;
+        client = Guid.Empty;
         try
         {
             var batch = XElement.Parse(candidate.BatchXml);
-            if (!int.TryParse(batch.Element("leaf")?.Element("value")?.Value, NumberStyles.None, CultureInfo.InvariantCulture, out var spid)
-                || spid is < 1 or > 32767) return false;
+            var values = batch.Elements("leaf").Select(leaf => leaf.Element("value")?.Value).ToList();
+            if (values.Count != 2 || !int.TryParse(values[0], NumberStyles.None, CultureInfo.InvariantCulture, out spid) || spid is < 1 or > 32767
+                || !Guid.TryParseExact(values[1], "D", out client) || client == Guid.Empty) return false;
             XElement Leaf(string comparison, string global, string value) => new("leaf",
                 new XElement("comparator", new XAttribute("name", comparison), new XAttribute("package", "package0")),
                 new XElement("global", new XAttribute("name", global), new XAttribute("package", "sqlserver")), new XElement("value", value));
@@ -92,7 +113,7 @@ internal static class ActualPlanRecovery
             // Move past each definition before touching it, so one that hangs until the slice ends is not first again.
             Remember(key, candidate.Id);
             Guid target = Guid.Empty, owner = Guid.Empty;
-            if (!candidate.Legacy && !Owns(candidate, out target, out owner)) continue;
+            if (candidate.Legacy ? !OwnsLegacy(candidate, out _) : !Owns(candidate, out target, out owner)) continue;
             if (!await drop(candidate, target, owner)) failed = true;
         }
         Remember(key, next);
@@ -121,12 +142,17 @@ internal static class ActualPlanRecovery
         command.CommandTimeout = 0;
         command.Parameters.Add("@id", SqlDbType.Int).Value = candidate.Id;
         command.Parameters.Add("@name", SqlDbType.NVarChar, 128).Value = candidate.Name;
-        if (candidate.Legacy) command.CommandText = ActualPlanSql.DropLegacy;
+        command.Parameters.Add("@batch", SqlDbType.NVarChar, 3000).Value = candidate.Batch;
+        command.Parameters.Add("@plan", SqlDbType.NVarChar, 3000).Value = candidate.Plan;
+        if (candidate.Legacy)
+        {
+            if (!OwnsLegacy(candidate, out var spid)) return true;
+            command.CommandText = ActualPlanSql.DropLegacy;
+            command.Parameters.Add("@spid", SqlDbType.Int).Value = spid;
+        }
         else
         {
             command.CommandText = ActualPlanSql.DropAbandoned;
-            command.Parameters.Add("@batch", SqlDbType.NVarChar, 3000).Value = candidate.Batch;
-            command.Parameters.Add("@plan", SqlDbType.NVarChar, 3000).Value = candidate.Plan;
             command.Parameters.Add("@target", SqlDbType.UniqueIdentifier).Value = target;
             command.Parameters.Add("@owner", SqlDbType.UniqueIdentifier).Value = owner;
         }
