@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { MenuItemConstructorOptions } from 'electron'
 import { applicationMenuTemplate, type ApplicationMenuActions } from '../src/main/application-menu'
-import { platforms } from '../src/shared/commands/keybindings'
+import { platforms, toPlatform } from '../src/shared/commands/keybindings'
+import { effectiveRules } from '../src/shared/commands/effective'
+import { emptyShortcutFile, type ShortcutFile } from '../src/shared/commands/shortcut-schema'
 import type { ThemeSummary } from '../src/shared/theme/types'
 
 const theme = (id: string, name: string, types: ThemeSummary['types'], usable = true): ThemeSummary => ({ id, name, source: 'user', types, usable, errors: usable ? 0 : 1, warnings: 0 })
@@ -92,5 +94,35 @@ describe('native application menu template', () => {
     click('edit.selectAll')
     click('edit.delete')
     expect(calls).toEqual([['command', 'edit.selectAll'], ['command', 'edit.delete']])
+  })
+
+  describe("with the user's shortcuts", () => {
+    // New Query moves from mod+N to mod+Shift+Y; Zoom In gains mod+Shift+J; Open File… gains F9 (no ⌘, so never a macOS accelerator).
+    const file: ShortcutFile = { ...emptyShortcutFile, bindings: [
+      { command: 'file.new', key: 'mod+n', remove: true }, { command: 'file.new', key: 'mod+shift+y' }, { command: 'view.zoomIn', key: 'mod+shift+j' }, { command: 'file.open', key: 'f9' }
+    ] }
+    const withRules = (platform: NodeJS.Platform, menu: string) => {
+      const effective = effectiveRules(toPlatform(platform), file)
+      expect(effective.problems).toEqual([])
+      const template = applicationMenuTemplate({ theme: { preference: { version: 1, mode: 'dark', darkTheme: 'varia-dark', lightTheme: 'varia-light' }, themes }, rules: effective.rules }, actions, platform)
+      return template.find(item => item.id === 'menu.' + menu)!.submenu as MenuItemConstructorOptions[]
+    }
+    it.each(platforms)("shows a remapped command's key and drops the removed one on %s", platform => {
+      const mod = platform === 'darwin' ? 'Cmd' : 'Ctrl'
+      expect(withRules(platform, 'file').find(item => item.id === 'file.new')?.accelerator).toBe(`${mod}+Shift+Y`)
+      expect(items(platform, 'file').find(item => item.id === 'file.new')?.accelerator).toBe(`${mod}+N`)
+    })
+    it.each(platforms)("registers a role command's added key as a hidden accelerator on %s", platform => {
+      const mod = platform === 'darwin' ? 'Cmd' : 'Ctrl'
+      const zoomIn = withRules(platform, 'view').filter(item => item.role === 'zoomIn')
+      // The user's key is the primary key now (user rules come first), and the catalogue's keys are hidden copies.
+      expect(zoomIn.map(item => [item.accelerator, item.visible ?? true])).toEqual([[`${mod}+Shift+J`, true], [`${mod}+=`, false], [`${mod}+Shift+=`, false]])
+    })
+    it('shows a key without ⌘ in no macOS accelerator, and elsewhere as the label it is', () => {
+      // The user's key is the primary one; on macOS F9 cannot be a key equivalent (AppKit would take it from the page), so
+      // the item shows none and the dispatcher alone owns the key.
+      expect(withRules('darwin', 'file').find(item => item.id === 'file.open')).not.toHaveProperty('accelerator')
+      expect(withRules('win32', 'file').find(item => item.id === 'file.open')?.accelerator).toBe('F9')
+    })
   })
 })
