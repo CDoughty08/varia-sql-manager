@@ -36,7 +36,7 @@ const canonical = (file: ShortcutFile) => JSON.stringify(file)
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
 /**
- * The strict file from the renderer. Its counts are checked first: zod checks every element (each key parsed on every
+ * The strict file from the renderer, as plain JSON values. Its counts are checked first: zod checks every element (each key parsed on every
  * platform) before an array's maximum, so a page that sent a huge list would hold main for seconds before the refusal.
  */
 function parseFile(value: unknown): ShortcutFile {
@@ -45,7 +45,9 @@ function parseFile(value: unknown): ShortcutFile {
     if (over(value.bindings, shortcutLimits.bindings) || over(value.unknown, shortcutLimits.unknown) ||
       (isRecord(value.gestures) && Object.keys(value.gestures).length > shortcutLimits.gestures)) throw new Error(shortcutSentences.overLimit)
   }
-  return shortcutFileSchema.parse(value) as ShortcutFile
+  // IPC is a structured clone, which also carries ArrayBuffers, Maps and Dates: each serializes to a few bytes of JSON, so
+  // the limits never saw them. Only what JSON carries is kept, which is exactly what the file will hold.
+  return JSON.parse(JSON.stringify(shortcutFileSchema.parse(value))) as ShortcutFile
 }
 /** Writes `file` to `path`; a failure is a fixed sentence, since the system's message names the path (and the user). */
 async function writeFile(path: string, file: ShortcutFile, failed: string): Promise<void> {

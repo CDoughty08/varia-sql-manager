@@ -221,6 +221,22 @@ describe('shortcuts requests from the page', () => {
     expect(await readdir(directory)).toEqual([])
   })
 
+  it('keeps only plain JSON values, so a cloned buffer or map cannot hide from the limits', async () => {
+    // Structured clone (IPC) carries these; each looks like {} to the size checks.
+    const cloned = structuredClone({ ...remap, unknown: [new ArrayBuffer(8 * 1024 * 1024), new Map(Array.from({ length: 1000 }, (_, index) => [index, index])), { at: new Date(0) }] })
+    const shortcuts = store(), events: ShortcutsSnapshot[] = []
+    shortcuts.onDidChange(snapshot => events.push(snapshot))
+    await shortcuts.load()
+    await shortcuts.save(cloned, 1)
+    const plain = { ...remap, unknown: [{}, {}, { at: '1970-01-01T00:00:00.000Z' }] }
+    expect(shortcuts.current()).toEqual(plain)
+    expect(shortcuts.current().unknown[0]).not.toBeInstanceOf(ArrayBuffer)
+    expect(events.at(-1)?.file).toEqual(plain)
+    expect(await onDisk()).toEqual(plain)
+    // What main holds is what the file holds, so a load sees no change.
+    expect(await shortcuts.load()).toMatchObject({ revision: 2 })
+  })
+
   it('answers a failed write with a fixed sentence that names no path', async () => {
     // A folder where the export goes makes the real write fail; a mocked failure stands in for a denied save.
     const taken = join(directory, 'taken.json')
