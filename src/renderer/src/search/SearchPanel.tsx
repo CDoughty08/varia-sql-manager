@@ -1,10 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type Ref } from 'react'
-import { folderSpecs, kindSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
+import { folderSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
-import { childrenLeftOut, objectSearchLimits, type ObjectIndexStatus, type ObjectSearchHit } from '../../../shared/explorer/search.ts'
+import { childrenLeftOut, objectSearchLimits, searchKindBadge, type ObjectIndexStatus, type ObjectSearchHit, type SearchKind } from '../../../shared/explorer/search.ts'
 import { onUnexpectedError } from '../core/errors'
 import { useConnectionAccent, useServiceSelector, useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
-import ExplorerIcon from '../explorer/ExplorerIcon'
 import Icon from '../Icon'
 import EmptyState from '../kit/EmptyState'
 import { useMenuTarget } from '../menus/useMenuTarget'
@@ -97,8 +96,7 @@ export function groupNote(group: ServerGroup, entry: IndexEntry | undefined): st
   if (group.error) return group.error
   const result = group.result
   if (result?.problem) return result.problem
-  const results = result ? `${count(result.total, 'result')}${result.total > result.hits.length ? `, showing ${numbers.format(result.hits.length)}` : ''}` : ''
-  return [results, entry?.requestId ? `indexing ${numbers.format(entry.done)} of ${numbers.format(entry.total)}` : ''].filter(Boolean).join(' · ')
+  return [result ? count(result.total, 'result') : '', entry?.requestId ? `indexing ${numbers.format(entry.done)} of ${numbers.format(entry.total)}…` : ''].filter(Boolean).join(' · ')
 }
 
 /**
@@ -127,7 +125,7 @@ function GroupHead({ group, color, environment, note, expanded, controls, onTogg
   return <h3 className="object-search-group-head">
     <button type="button" aria-expanded={expanded} aria-controls={expanded ? controls : undefined} onClick={onToggle} title={expanded ? 'Collapse' : 'Expand'}>
       <Icon name={expanded ? 'chevron-down' : 'chevron-right'} />
-      <span className="object-search-group-accent" style={accent ? { background: accent } : undefined} />
+      <span className="object-search-group-dot" aria-hidden="true" style={{ background: accent ?? 'var(--varia-connection-default)' }} />
       <bdi className="object-search-group-name">{group.label}</bdi>
       <EnvironmentTag environment={environment} place="list" about={group.label} />
       {note && <span className={`object-search-group-note${group.error || group.result?.problem ? ' error' : ''}`}>{note}</span>}
@@ -348,14 +346,14 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   // One tab stop for the hits: the selected one, or the first shown when the selection is in a collapsed group.
   const tabStop = shown ? (current !== undefined && shown.includes(current) ? current : shown[0]) : current ?? 0
   const hitRow = (hit: ObjectSearchHit, index: number, server: string) => {
-    const spec = kindSpecs[hit.object.kind]
+    const badge = searchKindBadge(hit.object.kind as SearchKind)
     const path = searchHitPath(hit)
     // A click selects; in the tab only a double-click (or Enter) reveals, so a click never takes focus away from the list.
     // Each hit is an option, the tab stop on the selected one, which a screen reader announces as selected.
     return <li key={serverHitKey(server, hit)} role="presentation" className="object-search-hit">
       <div ref={menuTarget} role="option" className="object-search-open" data-hit data-index={index} tabIndex={index === tabStop ? 0 : -1} aria-selected={index === current}
         title={`Reveal in Object Explorer: ${displayText(hit.label)}`} onClick={() => { if (pane) open(index); else objectSearch.pick(searchId, index) }} onDoubleClick={pane ? undefined : () => open(index)}>
-        <ExplorerIcon name={(hit.subtype && spec.subtypeIcons?.[hit.subtype]) || spec.icon} />
+        <span className="object-search-kind" data-tone={badge.tone} aria-hidden="true">{badge.letters}</span>
         <span className="object-search-name"><Marked text={hit.label} range={hit.range} approximate={hit.approximate} /></span>
         <span className="object-search-path">{displayText(path)}</span>
         {hit.definition && <span className="object-search-line">
@@ -395,6 +393,7 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
             {expanded && group.hits.length > 0 && <ul id={controls} role="listbox" className="object-search-group-hits" aria-label={`Results on ${group.label}`}>
               {group.hits.map((hit, offset) => hitRow(hit, group.start + offset, group.connectionId))}
             </ul>}
+            {expanded && group.result && group.result.total > group.hits.length && <p className="object-search-group-more">… {numbers.format(group.result.total - group.hits.length)} more</p>}
           </section>
         })}
       </div>

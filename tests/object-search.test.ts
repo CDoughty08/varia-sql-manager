@@ -6,7 +6,7 @@ import { requestSchemas } from '../src/main/validation'
 import { cancellableRequests } from '../src/main/backend/renderer-requests'
 import { indexProgressRelay } from '../src/main/index-progress'
 import {
-  childrenLeftOut, objectIndexParamsSchema, objectIndexProgressEventSchema, objectSearchLimits, objectSearchParamsSchema, searchKinds, searchTypeKinds, searchTypes,
+  childrenLeftOut, objectIndexParamsSchema, objectIndexProgressEventSchema, objectSearchLimits, objectSearchParamsSchema, searchKindBadge, searchKinds, searchKindTones, searchTypeKinds, searchTypes,
   type ObjectIndexProgress, type ObjectIndexResult, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult
 } from '../src/shared/explorer/search'
 import { SnapshotStore } from '../src/renderer/src/core/store'
@@ -16,6 +16,7 @@ import { explorerSearchId, hitServer, mergeAnswers, ObjectSearchService, revealP
 import { indexSummary, searchHitPath } from '../src/renderer/src/search/ObjectSearch'
 import { allIndexesSummary, allServersSummary, groupNote } from '../src/renderer/src/search/SearchPanel'
 import { kindSpecs, nodeKinds } from '../src/shared/explorer/catalog'
+import { colorKeys } from '../src/shared/theme/registry'
 import { layoutFilters, minimumChips } from '../src/renderer/src/search/filter-layout'
 import { searchFilterSummary, toggleSearchType } from '../src/renderer/src/search/SearchFilters'
 import { clampPaneBand, paneBandDrag, paneBandKey, paneBandLimits } from '../src/renderer/src/search/pane-band'
@@ -52,6 +53,18 @@ describe('object search contracts', () => {
     const typed = searchTypes.flatMap(type => [...type.kinds])
     expect([...typed].sort()).toEqual([...searchKinds].sort())
     expect(new Set(searchTypes.map(type => type.id)).size).toBe(searchTypes.length)
+  })
+
+  it('gives every kind a one-letter badge in a tone the theme colours', () => {
+    expect(searchKinds.map(kind => searchKindBadge(kind)).every(badge => /^[A-Z]$/.test(badge.letters) && searchKindTones.includes(badge.tone))).toBe(true)
+    expect((['table', 'view', 'procedure', 'function', 'column', 'login', 'index', 'database', 'synonym'] as const).map(kind => Object.values(searchKindBadge(kind)).join(' ')))
+      .toEqual(['T table', 'V view', 'P procedure', 'F function', 'C column', 'L security', 'I key', 'D database', 'S other'])
+    // Every tone has its theme key, and the stylesheet draws each one.
+    const css = readFileSync(new URL('../src/renderer/src/styles.css', import.meta.url), 'utf8')
+    for (const tone of searchKindTones) {
+      expect(colorKeys, tone).toContain(`searchKind.${tone}Background`)
+      expect(css, tone).toContain(`.object-search-kind[data-tone="${tone}"] { background: var(--varia-searchKind-${tone}Background); }`)
+    }
   })
 
   it('validates requests strictly, in both directions of every bound', () => {

@@ -222,7 +222,9 @@ The same search runs in two places, with the same options and results:
   connects joins the search, and one that disconnects drops out, named in the summary. No backend method changes.
 - **Results.** Each server's hits are a list of their own, named "Results on *server*", below a header that collapses
   it: the server's colour, name, environment tag (the red PROD tag for Production) and its results or why it has none
-  (indexing, an error, a problem with the query on that server). The arrows, Page keys, Home and End walk every shown
+  (indexing, an error, a problem with the query on that server), with "… *n* more" below a group the result cap
+  cut short. Every hit (on one server too) starts with its kind's badge, a letter on a tone (T tables, V views, P
+  procedures and triggers, F functions, C columns; `searchKind.*` theme keys), and ends with its path. The arrows, Page keys, Home and End walk every shown
   hit across the groups, one tab stop for all of them. A hit's Reveal, menu, Copy and details pane act on its own
   server. The summary gives the servers, the results in all, the slowest server's time, the servers still indexing, the
   ones that could not be searched, and the ones that disconnected.
