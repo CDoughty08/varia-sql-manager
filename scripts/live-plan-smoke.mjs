@@ -100,6 +100,7 @@ try {
   await expect(planViewer(page).getByRole('button', { name: 'Actual', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect(planViewer(page).getByRole('combobox', { name: 'Plan statement' }).getByRole('option')).toHaveCount(1)
   expect(errors).toEqual([])
+  step = 'large saved plan'
   await checkLargePlan({ application, page, profile, expect })
   expect(errors).toEqual([])
   console.log('Live Plan: changing real operator rows; stable Pixi canvas, zoom and selection through actual capture; cancelled partial plan and GO repetitions.')
