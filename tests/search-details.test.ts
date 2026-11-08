@@ -5,7 +5,7 @@ import type { ObjectSearchHit } from '../src/shared/explorer/search'
 import type { ScriptingOptions } from '../src/shared/scripting/options'
 import { PeekService } from '../src/renderer/src/explorer/PeekService'
 import { detailsDrag, detailsKey, scriptable, searchDetailsLimits, SearchDetailsService } from '../src/renderer/src/search/SearchDetailsService'
-import { hitProperties, matchedLine } from '../src/renderer/src/search/SearchDetails'
+import { hitProperties, matchedLine, scrollKey } from '../src/renderer/src/search/SearchDetails'
 
 const ok = <T>(value: T): ApiResult<T> => ({ ok: true, value })
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -204,6 +204,10 @@ describe('Search Objects details pane', () => {
     expect(matchedLine(script, procedure, false)).toBe(7)
     expect(matchedLine(module, table, true)).toBeUndefined()
     expect(matchedLine('SELECT 1', procedure, true)).toBeUndefined()
+    // A new answer's hit for the same object (same read) matching another line scrolls again; the same line does not.
+    const later: ObjectSearchHit = { ...procedure, definition: { ...procedure.definition!, line: 1, preview: 'CREATE PROCEDURE' } }
+    expect(scrollKey(1, matchedLine(module, later, true))).not.toBe(scrollKey(1, matchedLine(module, procedure, true)))
+    expect(scrollKey(1, 3)).toBe(scrollKey(1, matchedLine(module, procedure, true)))
   })
 
   it('lists a hit\'s type and place before anything is read', () => {

@@ -36,6 +36,12 @@ export function matchedLine(text: string, hit: ObjectSearchHit, exact: boolean):
   return best
 }
 
+/**
+ * What the definition last scrolled for: a read (`id`) and its matched line. A new answer's hit for the same object keeps the
+ * read but may match another line, which is scrolled to in turn.
+ */
+export const scrollKey = (id: number, line: number | undefined): string => `${id}:${line ?? ''}`
+
 /** The hit's own properties, known before anything is read: its type, and where it is. */
 export function hitProperties(hit: ObjectSearchHit): readonly { readonly label: string; readonly value: string }[] {
   const { object } = hit
@@ -52,13 +58,14 @@ function Definition({ details, part }: { readonly details: Details; readonly par
   const runs = useRuns(text)
   const pre = useRef<HTMLPreElement>(null)
   const line = text === undefined ? undefined : matchedLine(text, details.hit, !!details.kind && peekSpecs[details.kind].definition === 'module')
-  // The matched line comes into view once per hit (a third of the way down), not again as the user scrolls.
-  const scrolled = useRef<number | undefined>(undefined)
+  // The matched line comes into view once per hit and match (a third of the way down), not again as the user scrolls.
+  const scrolled = useRef<string | undefined>(undefined)
   useLayoutEffect(() => {
     const element = pre.current, scroller = element?.parentElement
     if (!element || !scroller || text === undefined) return
-    if (scrolled.current === details.id) return
-    scrolled.current = details.id
+    const key = scrollKey(details.id, line)
+    if (scrolled.current === key) return
+    scrolled.current = key
     if (line === undefined) { scroller.scrollTop = 0; return }
     const height = parseFloat(getComputedStyle(element).lineHeight) || 0
     scroller.scrollTop = Math.max(0, element.offsetTop + (line - 1) * height - scroller.clientHeight / 3)
