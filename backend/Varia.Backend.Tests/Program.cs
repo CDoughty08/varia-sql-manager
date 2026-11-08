@@ -14,6 +14,12 @@ if (args is [ConnectionFailureChecks.IdentityArgument])
     Console.WriteLine(identity.State + "|" + identity.Principal);
     return;
 }
+// tests/bench/search.bench.ts: measures only, no checks.
+if (args is [SearchBench.Argument])
+{
+    SearchBench.Run();
+    return;
+}
 
 var passed = 0;
 var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);

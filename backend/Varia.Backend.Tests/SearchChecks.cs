@@ -31,6 +31,7 @@ internal static class SearchChecks
         Reader(check).GetAwaiter().GetResult();
         ResourceSets(check).GetAwaiter().GetResult();
         Requests(check);
+        SearchCostChecks.Run(check);
     }
 
     private static void Sql(Action<bool, string> check)

@@ -2396,7 +2396,7 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
 ## Benchmarks
 
 ```sh
-npm run bench                                   # node harness: codecs, main ↔ Release backend ↔ results worker, grid models, chart draw, plan layout
+npm run bench                                   # node harness: codecs, main ↔ Release backend ↔ results worker, grid models, chart draw, plan layout, object search
 npm run bench:e2e                               # Electron, real backend with test hooks (add -- --live for SQL Server)
 npm run bench:grid                              # Electron, the results grid on the fake backend (add -- --live for SQL Server)
 node scripts/check-bench.mjs [--enforce]        # compare with tests/bench/floors.json; markdown to $GITHUB_STEP_SUMMARY
@@ -2432,6 +2432,11 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
   planning, and the shared window cache (full, so every insert evicts). **The chart draw** (`tests/bench/chart.bench.ts`)
   times `ChartView`'s whole draw of a full ring (7,200 samples, two hours at 1 s) of six series over a 1,600 px chart
   with axes, into a context that only counts calls: what a live chart costs a frame at most.
+- **The object search** (`tests/bench/search.bench.ts`) runs the .NET test program's `--search-bench` mode
+  (`backend/Varia.Backend.Tests/SearchBench.cs`, built by `dotnet run` when out of date): Search Objects' in-memory search
+  over a synthetic index of 1,000,000 objects in 20 databases (5,000 tables each, with 9 columns), for one letter, as the
+  first key typed is. 700,000 objects match, so the scan runs far past the 20,000-candidate cap: it reports the p95 time
+  of 20 warm searches and the memory one allocates, which stays bounded by the cap rather than by the hits.
 - **The e2e run** reads every row through `window.__variaResults` in the built app (four windows in flight), watching
   the UI thread for long tasks and animation-frame gaps, and times 500 live ticks of the real backend's `debug.synthetic`
   source through `ResultClient.live` as the node pipeline does; `--live` stores a million W1-like rows from SQL Server with
@@ -2465,6 +2470,8 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | Grid frame: Mode B scroll mapping, 100M rows | ≥ 5,000,000 ops/s | ≥ 1,000,000 ops/s | 6,500,000 – 7,600,000 ops/s | 6,800,000 – 7,300,000 ops/s |
 | Grid frame: visible range, tiles and prefetch ring, 300 columns | ≥ 500,000 ops/s | ≥ 100,000 ops/s | 700,000 – 850,000 ops/s | 800,000 – 870,000 ops/s |
 | Grid frame: window cache, 3 lookups and 1 insert at 256 windows | ≥ 100,000 ops/s | ≥ 25,000 ops/s | 157,000 – 174,000 ops/s | 178,000 ops/s |
+| Object search: one letter over 1,000,000 indexed objects (700,000 hits), p95 | ≤ 75 ms | ≤ 500 ms | 55 ms (Windows, 24 CPUs; 166 ms before hits were built lazily) | not measured |
+| Object search: memory allocated by that search, median | ≤ 16 MB | ≤ 64 MB | 9 MB (322 MB before) | not measured |
 | Plan ordered layout: 2,000 operators, 1,999 ordered inputs, p95 | ≤ 20 ms | ≤ 500 ms | 2.8 – 4.1 ms (Windows, 24 CPUs) | not measured |
 | Plan ordered layout: 10,000 operators, four-way tree, p95 | ≤ 75 ms | ≤ 1,000 ms | 9.9 – 12 ms (Windows, 24 CPUs) | not measured |
 | Plan cached layout lookup: 10,000 operators, p95 | ≤ 5 ms | ≤ 50 ms | 0.92 – 1.08 ms (Windows, 24 CPUs) | not measured |

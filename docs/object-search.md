@@ -78,11 +78,12 @@ The same search runs in two places, with the same options and results:
   a text is charged when it first comes in and given back when the last database or system set holding it is dropped.
   So msdb's procedures and their definitions, master's `spt_` objects, schemas and common column names are held once
   however many servers are connected. Definitions stop being kept once less than 128 MiB is free, so names always have
-  room. A rebuild may reuse the memory of the build it replaces, so a database that fitted before still fits when the
+  room; past that point they are not even read from the server. A rebuild may reuse the memory of the build it replaces, so a database that fitted before still fits when the
   budget is full; the swap moves that share over rather than charging it twice.
 - **Large databases.** A database that does not fit in what is free with its children is read again without its columns,
   indexes, statistics and parameters. It still counts as indexed, and the status says children were left out
-  (`CHILDREN_LEFT_OUT`). A database that does not fit even without them is skipped as `TOO_LARGE`.
+  (`CHILDREN_LEFT_OUT`). A database that does not fit even without them is skipped as `TOO_LARGE`. A read that runs out of
+  room cancels its batch at once rather than reading the rest of it only to throw it away.
 - **The resource database's objects.** The `sys` and `INFORMATION_SCHEMA` views, procedures and functions that every database
   shows (with their columns and parameters) come from SQL Server's hidden resource database, so they are the same in every database. The index reads them once
   per build, not once per database, and a search shows each of them once, as master's (or as the database a search names).
@@ -158,7 +159,8 @@ The same search runs in two places, with the same options and results:
     index memory. A letter-set check skips most edit-distance work, and a sound key stops at its first differing code. On a
     million synthetic names a fuzzy search took 0.3 to 0.7 s where an exact one took about 0.1 s (Release build, one desktop
     core); the search's 5 s budget and Stop bound it as any search. Past the 20,000 candidates a search sorts, a better hit
-    takes the worst one's place, so approximate hits never push out exact ones.
+    takes the worst one's place, so approximate hits never push out exact ones; every other hit past them is only counted.
+    Labels are built only for the candidates kept, and hits (previews, match counts, dates) only for the ones answered.
 - **Scope.** Search names and definitions (All), names only, or definitions only.
 - **Object types.** Chips narrow a search to kinds of object: Tables, Views, Columns, Procedures, Functions, Parameters,
   Triggers, Keys and indexes, Schemas, Types, Security and Other. Several can be on at once, and All types turns them all off.
