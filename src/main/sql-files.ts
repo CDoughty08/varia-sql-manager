@@ -82,7 +82,7 @@ interface FileReadOptions {
 }
 /**
  * The write targets one burst of opens has resolved (a session restore, one Open dialog's files), by path: each open
- * compares its file with every registered one, so without it n files cost n² realpath calls, seconds at the tab cap on a
+ * compares its file with every registered one, so without it n files cost n² resolutions, seconds at the tab cap on a
  * network or OneDrive folder. Kept only for the burst, so a link retargeted later is seen.
  */
 export type TargetCache = Map<string, Promise<string>>
@@ -120,7 +120,8 @@ export interface SqlFileStoreOptions {
   readonly platform?: NodeJS.Platform
   /** The rename that replaces a file; tests watch it. */
   readonly replace?: typeof replaceFile
-  /** Resolves symbolic links; tests make it fail as it does on some volumes. */
+  /** Resolves symbolic links on Windows, and names the walk's target on POSIX (`identity`); tests make it fail as it does
+   *  on some volumes, map one path to another as a link would, or fold case as macOS does. */
   readonly realpath?: (path: string) => Promise<string>
   /** Looks at a path without following a link, and at a link's folder; tests give a link and its folder other owners. */
   readonly lstat?: (path: string) => Promise<LinkFacts>
@@ -376,8 +377,8 @@ export class SqlFileStore {
    * escapes the kernel's fs.protected_symlinks rule.
    */
   private async writeTarget(path: string): Promise<string> {
-    const uid = this.options.uid ?? process.getuid?.()
-    if (this.platform !== 'win32' && uid !== undefined) return this.resolveCheckingLinks(path, uid)
+    const uid = this.walkingUid
+    if (uid !== undefined) return this.resolveCheckingLinks(path, uid)
     try { return await (this.options.realpath ?? realpath)(path) }
     catch (error) {
       if (missing(error)) return path
@@ -386,11 +387,18 @@ export class SqlFileStore {
       throw error
     }
   }
+  /** The saving user's id where `resolveCheckingLinks` resolves paths (POSIX), undefined where realpath does (Windows). */
+  private get walkingUid(): number | undefined {
+    return this.platform === 'win32' ? undefined : this.options.uid ?? process.getuid?.()
+  }
   /**
    * Resolves `path` component by component as realpath does, but refuses every link, at any component, that Linux's
    * fs.protected_symlinks would not let `uid` follow (`protectedLinkRefused`, judged against the real folder holding the
    * link). It fails closed: a component it cannot look at is an error, unless it is missing, when it and the rest of the
    * path are a new file. Its result is the write target, so no unchecked resolution runs after the check.
+   * A dangling link at the end of the path (its target, or a folder on the way to it, is missing) is itself the target,
+   * as it was when realpath failed on it: Save replaces the link with the file rather than create its target's file, or
+   * fail on its target's missing folder.
    */
   private async resolveCheckingLinks(path: string, uid: number): Promise<string> {
     const lookAt = this.options.lstat ?? lstat
@@ -400,6 +408,8 @@ export class SqlFileStore {
     let resolved = parse(absolute).root
     let rest = parts(absolute.slice(resolved.length))
     let hops = 0
+    // The first link followed as the path's last component: everything resolved after it is that link's target.
+    let finalLink: string | undefined
     while (rest.length > 0) {
       const part = rest.shift() as string
       if (part === '..') { resolved = dirname(resolved); continue }
@@ -407,10 +417,11 @@ export class SqlFileStore {
       let facts: LinkFacts
       try { facts = await lookAt(candidate) }
       catch (error) {
-        if (missing(error)) return join(candidate, ...rest)
+        if (missing(error)) return finalLink ?? join(candidate, ...rest)
         throw error
       }
       if (!facts.isSymbolicLink()) { resolved = candidate; continue }
+      if (rest.length === 0) finalLink ??= candidate
       if (++hops > maxLinkHops) throw new Error(`${basename(path)} goes through too many symbolic links.`)
       if (protectedLinkRefused(await (this.options.folderStat ?? stat)(resolved), facts, uid)) {
         throw new Error(`${basename(path)} goes through a symbolic link another user made in a shared folder. Varia SQL Manager does not save through it; use Save As to choose another file.`)
@@ -423,8 +434,23 @@ export class SqlFileStore {
     return resolved
   }
   /**
+   * The name that identifies the file at `path`, so two spellings of one file compare equal: its write target, and on
+   * POSIX that target's realpath. The walk keeps the caller's case, but macOS's realpath gives each name its case on
+   * disk, so on a case-insensitive volume /Users/u/Q/Report.sql and /Users/u/q/report.sql are one file, as they were
+   * before the walk replaced realpath. realpath runs only after the walk, which has refused any link the kernel would,
+   * and only names the file for this comparison: the save still writes the walk's target. A path realpath cannot
+   * resolve (a new file, a dangling link) is named by its write target.
+   */
+  private async identity(path: string): Promise<string> {
+    const target = await this.writeTarget(path)
+    if (this.walkingUid === undefined) return target
+    try { return await (this.options.realpath ?? realpath)(target) }
+    catch { return target }
+  }
+  /**
    * The registration, other than `except`, of the file at `path`: the same path (in any case on Windows), or the same
-   * file reached through a symbolic link, which a save would write too.
+   * file reached through a symbolic link or, on a case-insensitive macOS volume, in another case (`identity`), which a
+   * save would write too.
    */
   private async owner(path: string, except: string | undefined, targets: TargetCache): Promise<SqlFile | undefined> {
     const others = [...this.files.values()].map(entry => entry.file).filter(file => file.id !== except)
@@ -433,7 +459,7 @@ export class SqlFileStore {
     // A file this burst registers is cached under its own path, so the next open does not resolve it again.
     const resolved = (candidate: string) => {
       let target = targets.get(candidate)
-      if (!target) targets.set(candidate, target = this.writeTarget(candidate).catch(() => candidate))
+      if (!target) targets.set(candidate, target = this.identity(candidate).catch(() => candidate))
       return target
     }
     const target = await resolved(path)
