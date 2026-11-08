@@ -82,16 +82,21 @@ export class KeybindingService implements Disposable {
   private captureState?: CaptureState
   private readonly detachers = new Set<() => void>()
   constructor(private readonly options: KeybindingServiceOptions) {
-    this.apply(options.rules ?? defaultRules(options.platform), options.onConflict ?? (import.meta.env?.DEV ? 'throw' : 'log'))
+    const rules = options.rules ?? defaultRules(options.platform)
+    this.checkConflicts(rules, options.onConflict ?? (import.meta.env?.DEV ? 'throw' : 'log'))
+    this.apply(rules)
   }
-  private apply(rules: readonly ResolvedRule[], onConflict: 'throw' | 'log'): void {
+  /** The catalogue's own check (a development build throws), run once on the rules the service starts with. */
+  private checkConflicts(rules: readonly ResolvedRule[], onConflict: 'throw' | 'log'): void {
     const { platform } = this.options
     const conflicts = findConflicts(rules, platform).filter(conflict => isBlockingConflict(conflict, platform))
-    if (conflicts.length) {
-      const message = 'Keybinding conflicts:\n' + conflicts.map(conflict => conflict.message).join('\n')
-      if (onConflict === 'throw') throw new Error(message)
-      console.error(message)
-    }
+    if (!conflicts.length) return
+    const message = 'Keybinding conflicts:\n' + conflicts.map(conflict => conflict.message).join('\n')
+    if (onConflict === 'throw') throw new Error(message)
+    console.error(message)
+  }
+  private apply(rules: readonly ResolvedRule[]): void {
+    const { platform } = this.options
     const primary = (id: CommandId) => rules.find(rule => rule.command === id && rule.chords.length === 1)
     this.rules = rules
     this.table = workbenchRules(rules)
@@ -105,12 +110,13 @@ export class KeybindingService implements Disposable {
   }
   /**
    * Replaces the rules every key, label and menu reads (the Shortcuts page's effective rules), then tells subscribers.
-   * Conflicts are logged, never thrown: `effectiveRules` already refused any it would have caused. A pending native chord
+   * The rules are not scanned for conflicts again: `effectiveRules` already refused every user addition that would have
+   * caused one (`validateShortcut`), and the scan costs tens of milliseconds on every swap. A pending native chord
    * prefix is kept: Monaco, not the rules, waits for the chord's second key, and still takes it within its timeout.
    */
   setRules(rules: readonly ResolvedRule[]): void {
     if (rules === this.rules) return
-    this.apply(rules, 'log')
+    this.apply(rules)
     this.revision++
     for (const listener of [...this.listeners]) {
       try { listener() } catch (error) { onUnexpectedError(error) }
