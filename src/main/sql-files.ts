@@ -77,7 +77,15 @@ interface FileReadOptions {
   readonly kind?: DocumentKind
   /** The version under the restored buffer. An older checkpoint may not know it. */
   readonly restore?: FileBaseline
+  /** Resolved targets shared with the other opens of one burst (`SqlFileStore.targets`). */
+  readonly targets?: TargetCache
 }
+/**
+ * The write targets one burst of opens has resolved (a session restore, one Open dialog's files), by path: each open
+ * compares its file with every registered one, so without it n files cost n² realpath calls, seconds at the tab cap on a
+ * network or OneDrive folder. Kept only for the burst, so a link retargeted later is seen.
+ */
+export type TargetCache = Map<string, Promise<string>>
 type Comparison = { readonly change?: FileChange['change']; readonly stamp: Stamp } | undefined
 const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
 /**
@@ -124,7 +132,7 @@ export class SqlFileStore {
    * Reads and registers the file at `path`. A file already registered keeps its id, and keeps what it was last read as:
    * an Open that finds its tab must not hide a change the tab has not seen (`reload` is the read that does show it).
    */
-  async read(path: string, { reload = false, kind: requestedKind, restore }: FileReadOptions = {}): Promise<OpenSqlFile> {
+  async read(path: string, { reload = false, kind: requestedKind, restore, targets }: FileReadOptions = {}): Promise<OpenSqlFile> {
     const absolutePath = resolve(path)
     const extension = extname(absolutePath).toLowerCase()
     const inferXml = requestedKind === undefined && extension === '.xml'
@@ -142,7 +150,7 @@ export class SqlFileStore {
     const { eol, mixed } = detectEol(decoded.text, this.platform)
     // One file keeps one registration, path and name, whatever case or link it is reached through, so the page finds
     // its tab instead of opening a second one that would save over the first.
-    const existing = await this.owner(absolutePath)
+    const existing = await this.owner(absolutePath, undefined, targets)
     // The tab of a file opened again keeps the text it has, so its Save must keep writing what that text was read as.
     const file: SqlFile = existing && !reload ? existing : {
       id: existing?.id ?? randomUUID(), name: existing?.name ?? basename(absolutePath), path: existing?.path ?? absolutePath, encoding: decoded.encoding,
@@ -165,10 +173,10 @@ export class SqlFileStore {
    * supplies the saved buffer's baseline separately. If the file cannot be read or is already open, the query
    * reopens without a file.
    */
-  async register(path: string, kind: DocumentKind = 'sql', restore?: FileBaseline): Promise<SqlFile | undefined> {
-    if (await this.owner(resolve(path))) return undefined
+  async register(path: string, kind: DocumentKind = 'sql', restore?: FileBaseline, targets: TargetCache = new Map()): Promise<SqlFile | undefined> {
+    if (await this.owner(resolve(path), undefined, targets)) return undefined
     try {
-      const { id, name, path: registered, encoding, codePage, readOnly } = await this.read(path, { kind, restore })
+      const { id, name, path: registered, encoding, codePage, readOnly } = await this.read(path, { kind, restore, targets })
       return { id, name, path: registered, encoding, ...codePage ? { codePage } : {}, readOnly }
     } catch { return undefined }
   }
@@ -324,6 +332,8 @@ export class SqlFileStore {
     return seen.sha256 === stamp.sha256 ? { stamp: seen } : { change: 'modified', stamp: seen }
   }
 
+  /** A cache for one burst of opens: pass it to each `read` or `register` of the burst, then drop it. */
+  targets(): TargetCache { return new Map() }
   release(fileId: string): void { this.files.delete(fileId); this.stamps.delete(fileId); this.conflicts.delete(fileId) }
   clear(): void { this.files.clear(); this.stamps.clear(); this.conflicts.clear() }
   private get platform(): NodeJS.Platform { return this.options.platform ?? process.platform }
@@ -341,11 +351,16 @@ export class SqlFileStore {
    * The registration, other than `except`, of the file at `path`: the same path (in any case on Windows), or the same
    * file reached through a symbolic link, which a save would write too.
    */
-  private async owner(path: string, except?: string): Promise<SqlFile | undefined> {
+  private async owner(path: string, except?: string, targets: TargetCache = new Map()): Promise<SqlFile | undefined> {
     const others = [...this.files.values()].map(entry => entry.file).filter(file => file.id !== except)
     const literal = others.find(entry => samePath(entry.path, path, this.platform))
     if (literal || !others.length) return literal
-    const resolved = async (candidate: string) => this.writeTarget(candidate).catch(() => candidate)
+    // A file this burst registers is cached under its own path, so the next open does not resolve it again.
+    const resolved = (candidate: string) => {
+      let target = targets.get(candidate)
+      if (!target) targets.set(candidate, target = this.writeTarget(candidate).catch(() => candidate))
+      return target
+    }
     const target = await resolved(path)
     for (const entry of others) if (samePath(await resolved(entry.path), target, this.platform)) return entry
     return undefined

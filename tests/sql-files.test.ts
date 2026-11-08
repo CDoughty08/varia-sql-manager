@@ -301,6 +301,26 @@ describe('SQL file encodings and save hardening', () => {
     await expect(store.save('SELECT 3', other.id, alias)).rejects.toThrow('real.sql is open in another query tab')
     expect(await readFile(target, 'utf8')).toBe('SELECT 1')
   })
+  it('resolves each path once in a burst of opens, as a 64-tab restore makes, and again in the next burst', async () => {
+    const calls: string[] = []
+    let aliasTarget = join(directory, 'tab0.sql')
+    const alias = join(directory, 'alias.sql')
+    const store = new SqlFileStore({ realpath: async path => { calls.push(path); return path === alias ? aliasTarget : path } })
+    const paths = Array.from({ length: 64 }, (_, index) => join(directory, `tab${index}.sql`))
+    for (const path of [...paths, alias]) await writeFile(path, 'SELECT 1')
+    const restore = store.targets()
+    const registered = []
+    for (const path of paths) registered.push(await store.register(path, 'sql', undefined, restore))
+    expect(new Set(registered.map(file => file?.id)).size).toBe(64)
+    // One resolution per file, not one per registered file per open (2,016 for register's two lookups at 64 tabs).
+    expect(calls.length).toBeLessThanOrEqual(64)
+    expect(await store.read(alias, { targets: restore })).toMatchObject({ id: registered[0]?.id })
+    // A later burst resolves again, so a link retargeted since is seen.
+    aliasTarget = paths[1]
+    calls.length = 0
+    expect(await store.read(alias, { targets: store.targets() })).toMatchObject({ id: registered[1]?.id })
+    expect(calls).toContain(paths[0])
+  })
 })
 
 /** Answers from a queue and records what was asked. */
