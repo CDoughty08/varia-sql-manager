@@ -3,7 +3,7 @@ import type { ResultKey } from '../results/worker-protocol'
 import { planLimits, type PlanDocument } from '../../../shared/plans'
 import type { Disposable } from '../core/types'
 import type { Camera, PlanLayout } from './geometry'
-import { PlanInputBudgetError, type PlanSource, type SourceStatement } from './sources'
+import { parseSourceXml, PlanInputBudgetError, PlanSourceParseError, type PlanSource, type SourceStatement } from './sources'
 
 export const preparationLimits = { entries: 64, nodes: 20_000, units: 16 * 1024 * 1024, layouts: 32, layoutNodes: 20_000, layoutUnits: 4 * 1024 * 1024 } as const
 export interface PreparedSource { document: PlanDocument; characters: number }
@@ -38,13 +38,14 @@ class Budget<T> {
   }
   get stats() { return { entries: this.entries.size, nodes: this.nodes, units: this.units } }
 }
-interface Pending { scope: string; results: string[]; stop: AbortController; promise: Promise<PreparedSource>; users: number; remaining: number }
+interface Pending { scope: string; results: string[]; stop: AbortController; promise: Promise<PreparedSource>; users: number; remaining: number; parsing: boolean; complete: boolean }
 
 /** Rendering preparation has its own budgets and lifetime, independent of saved/retained snapshots. No XML is retained. */
 export class PlanPreparationCache implements Disposable {
   private readonly parsed = new Budget<PreparedSource>(preparationLimits)
   private readonly layouts = new Budget<PlanLayout>({ entries: preparationLimits.layouts, nodes: preparationLimits.layoutNodes, units: preparationLimits.layoutUnits })
   private readonly pending = new Map<string, Pending>()
+  private readonly producers = new Set<Pending>()
   private readonly views = new Map<string, { scope: string; view: SavedPlanView }>()
   private readonly documents = new Map<string, Disposable>()
   private disposed = false
@@ -57,27 +58,27 @@ export class PlanPreparationCache implements Disposable {
     if (cached) { if (cached.characters > remaining) throw new PlanInputBudgetError(); return cached }
     let pending = this.pending.get(key)
     if (!pending) {
+      if (this.producers.size >= preparationLimits.entries) throw new Error('Too many execution plan preparations are already in progress. Retry when the current plans finish.')
       const stop = new AbortController(), results = source.result ? [resultKey(source.result)] : []
-      pending = { scope, results, stop, users: 0, remaining, promise: undefined! }
+      pending = { scope, results, stop, users: 0, remaining, parsing: false, complete: false, promise: undefined! }
       const entry = pending
       this.pending.set(key, entry)
-      // Bound work waiting on the backend as well as completed entries.
-      if (this.pending.size > preparationLimits.entries) {
-        const oldest = this.pending.keys().next().value!
-        this.pending.get(oldest)!.stop.abort(); this.pending.delete(oldest)
-      }
+      this.producers.add(entry)
       entry.promise = (async () => {
         const xml = await source.read(stop.signal)
         stop.signal.throwIfAborted()
         if (xml.length > entry.remaining) throw new PlanInputBudgetError()
-        const result = await parse(xml)
+        entry.parsing = true
+        const document = await parseSourceXml(xml, parse, stop.signal)
         stop.signal.throwIfAborted()
-        if (!result.ok) throw new Error(result.error)
-        const value = { document: result.value, characters: xml.length }
+        const value = { document, characters: xml.length }
         if (this.pending.get(key) === entry) this.parsed.set(key, { scope, value, results,
-          nodes: result.value.statements.reduce((sum, s) => sum + s.nodes.length, 0), units: JSON.stringify(result.value).length + key.length })
+          nodes: document.statements.reduce((sum, s) => sum + s.nodes.length, 0), units: JSON.stringify(document).length + key.length })
         return value
-      })().finally(() => { if (this.pending.get(key) === entry) this.pending.delete(key) })
+      })().finally(() => {
+        entry.complete = true; this.producers.delete(entry)
+        if (!entry.users && this.pending.get(key) === entry) this.pending.delete(key)
+      })
     }
     const entry = pending
     entry.remaining = Math.max(entry.remaining, remaining)
@@ -87,12 +88,18 @@ export class PlanPreparationCache implements Disposable {
       const finish = (value?: PreparedSource, error?: unknown) => {
         if (done) return
         done = true; signal.removeEventListener('abort', cancelled); entry.users--
-        if (!entry.users && this.pending.get(key) === entry) { this.pending.delete(key); entry.stop.abort() }
+        // Reads can be cancelled; the unary backend parse cannot. Keep that producer shared until
+        // it settles, including across a hide/show, and count invalidated producers against the bound.
+        if (!entry.users && this.pending.get(key) === entry && (entry.complete || !entry.parsing)) {
+          this.pending.delete(key)
+          if (!entry.complete) entry.stop.abort()
+        }
         if (error) reject(error); else resolve(value!)
       }
       const cancelled = () => finish(undefined, abort())
       signal.addEventListener('abort', cancelled, { once: true })
-      entry.promise.then(value => value.characters > remaining ? finish(undefined, new PlanInputBudgetError()) : finish(value), error => finish(undefined, error))
+      entry.promise.then(value => entry.stop.signal.aborted ? finish(undefined, abort()) : value.characters > remaining ? finish(undefined, new PlanInputBudgetError()) : finish(value),
+        error => finish(undefined, entry.stop.signal.aborted ? abort() : error instanceof PlanSourceParseError && error.characters > remaining ? new PlanInputBudgetError() : error))
       if (signal.aborted) cancelled()
     })
   }
@@ -134,6 +141,6 @@ export class PlanPreparationCache implements Disposable {
     for (const entry of this.pending.values()) entry.stop.abort()
     this.pending.clear()
   }
-  get stats() { return { parsed: this.parsed.stats, layouts: this.layouts.stats, pending: this.pending.size } }
+  get stats() { return { parsed: this.parsed.stats, layouts: this.layouts.stats, pending: this.producers.size } }
   dispose(): void { this.disposed = true; this.clear(); this.views.clear(); for (const watcher of this.documents.values()) watcher.dispose(); this.documents.clear() }
 }

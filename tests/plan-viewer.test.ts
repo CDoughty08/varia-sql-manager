@@ -11,15 +11,20 @@ import type { QueryPlanState } from '../src/renderer/src/plans/QueryPlansService
 import type { PlanSource } from '../src/renderer/src/plans/sources'
 import { resolveBuiltin } from '../src/shared/theme/resolve'
 
-const mocks = vi.hoisted(() => ({ canvas: vi.fn(), update: vi.fn(), dispose: vi.fn(), worker: vi.fn(), observe: undefined as ((visible: boolean) => void) | undefined }))
+const mocks = vi.hoisted(() => ({ canvas: vi.fn(), update: vi.fn(), dispose: vi.fn(), worker: vi.fn(),
+  viewerVisibility: undefined as ((visible: boolean) => void) | undefined, canvasVisibility: undefined as ((visible: boolean) => void) | undefined,
+  observe: undefined as ((visible: boolean, canvasVisible?: boolean) => void) | undefined }))
 vi.mock('../src/renderer/src/plans/PlanCanvas', () => ({ PlanCanvas: class {
   constructor(options: unknown) { mocks.canvas(options) }
   select() {} update = mocks.update; colors() {} dispose = mocks.dispose
 } }))
 vi.mock('../src/renderer/src/core/windows', () => ({
-  observeIntersection: (_: unknown, callback: (entries: { isIntersecting: boolean }[]) => void) => {
-    mocks.observe = visible => callback([{ isIntersecting: visible }])
-    return { dispose() {} }
+  observeIntersection: (element: Element, callback: (entries: { isIntersecting: boolean }[]) => void) => {
+    const field = element.getAttribute('aria-label') === 'Query plan canvas' ? 'canvasVisibility' : 'viewerVisibility'
+    const changed = (visible: boolean) => callback([{ isIntersecting: visible }])
+    mocks[field] = changed
+    mocks.observe = (visible, canvasVisible = visible) => { mocks.viewerVisibility?.(visible); mocks.canvasVisibility?.(canvasVisible) }
+    return { dispose() { if (mocks[field] === changed) mocks[field] = undefined } }
   }, observeResize: () => ({ dispose() {} }), windows: { onDidAdopt: () => ({ dispose() {} }) }
 }))
 
@@ -96,4 +101,20 @@ it('does no hidden preparation, reuses parsed plans and layout on remount, and p
   await render([{ ...input, revision: 2 }])
   await act(async () => mocks.observe?.(true))
   expect(parse).toHaveBeenCalledTimes(5)
+  await render(null)
+  cache.clear()
+  const priorWorkers = mocks.worker.mock.calls.length, priorCanvases = mocks.canvas.mock.calls.length
+  await render([input])
+  await act(async () => mocks.observe?.(true, false))
+  expect(parse).toHaveBeenCalledTimes(6)
+  expect(host.querySelector('[role="treeitem"]')?.textContent).toContain('Scan')
+  expect(mocks.worker).toHaveBeenCalledTimes(priorWorkers)
+  expect(mocks.canvas).toHaveBeenCalledTimes(priorCanvases)
+  await render(null)
+  cache.clear()
+  vi.stubGlobal('Worker', class { constructor() { throw new Error('Worker creation refused') } })
+  await render([input])
+  await act(async () => mocks.observe?.(true))
+  expect(host.textContent).toContain('operator outline and XML source are available')
+  expect(host.querySelector('[role="treeitem"]')?.textContent).toContain('Scan')
 })

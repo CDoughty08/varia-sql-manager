@@ -15,6 +15,21 @@ export type SourceStatement = PlanStatement & { sourceKey: string; batchLabel?: 
 export class PlanInputBudgetError extends Error {
   constructor() { super('The combined input budget was exceeded. Remaining plan documents were not loaded.') }
 }
+export class PlanSourceParseError extends Error {
+  constructor(error: unknown, readonly characters: number) { super(error instanceof Error ? error.message : 'The plan could not be parsed.') }
+}
+/** Failed attempts still consume input: malformed XML must not bypass the combined viewer budget. */
+export async function parseSourceXml(xml: string, parse: (xml: string) => Promise<ApiResult<PlanDocument>>, signal: AbortSignal): Promise<PlanDocument> {
+  try {
+    const result = await parse(xml)
+    signal.throwIfAborted()
+    if (!result.ok) throw new Error(result.error)
+    return result.value
+  } catch (error) {
+    signal.throwIfAborted()
+    throw new PlanSourceParseError(error, xml.length)
+  }
+}
 /** Treat a failed/truncated source separately so an earlier valid plan in the same run remains usable. */
 export async function loadPlanSources(sources: readonly PlanSource[], parse: (xml: string) => Promise<ApiResult<PlanDocument>>, signal: AbortSignal,
   prepare?: (source: PlanSource, signal: AbortSignal, remaining: number) => Promise<{ document: PlanDocument; characters: number }>): Promise<{ statements: SourceStatement[]; notices: string[] }> {
@@ -30,9 +45,7 @@ export async function loadPlanSources(sources: readonly PlanSource[], parse: (xm
         const xml = await source.read(signal)
         signal.throwIfAborted()
         if (xml.length > remaining) throw new PlanInputBudgetError()
-        const result = await parse(xml)
-        if (!result.ok) throw new Error(result.error)
-        return { document: result.value, characters: xml.length }
+        return { document: await parseSourceXml(xml, parse, signal), characters: xml.length }
       })()
       signal.throwIfAborted()
       characters += prepared.characters
@@ -49,8 +62,9 @@ export async function loadPlanSources(sources: readonly PlanSource[], parse: (xm
       for (const notice of prepared.document.notices) if (!notices.includes(notice) && notices.length < 7) notices.push(notice)
     } catch (error) {
       signal.throwIfAborted()
+      if (error instanceof PlanSourceParseError) characters += error.characters
       errors.push(source.label + ': ' + (error instanceof Error ? error.message : 'The plan could not be read.'))
-      if (error instanceof PlanInputBudgetError) break
+      if (error instanceof PlanInputBudgetError || characters > planLimits.characters * 2) break
     }
   }
   if (errors.length) {

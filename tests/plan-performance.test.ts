@@ -5,7 +5,7 @@ import { LabelPool } from '../src/renderer/src/plans/labels'
 import { layoutPlans } from '../src/renderer/src/plans/layout'
 import { card, intersects, SpatialIndex } from '../src/renderer/src/plans/geometry'
 import { planTopology } from '../src/renderer/src/plans/live-model'
-import { loadPlanSources } from '../src/renderer/src/plans/sources'
+import { loadPlanSources, type PlanSource } from '../src/renderer/src/plans/sources'
 import { largePlan } from './fixtures/plans/large'
 
 const document: PlanDocument = { version: '', build: '', notices: [], statements: [{ id: 's', text: 'SELECT 1', type: 'SELECT', estimatedCost: null, warnings: [], nodes: [
@@ -40,6 +40,56 @@ describe('bounded plan preparation', () => {
     expect(parse).toHaveBeenCalledTimes(1)
     expect(cache.stats.pending).toBe(0)
     cache.dispose()
+  })
+  it('reuses an uncancellable backend parse when the last viewer hides and returns before it completes', async () => {
+    const cache = new PlanPreparationCache(), input = source(), controller = new AbortController()
+    let finish!: (result: { ok: true; value: PlanDocument }) => void
+    const pending = new Promise<{ ok: true; value: PlanDocument }>(resolve => { finish = resolve })
+    const parse = vi.fn(() => pending)
+    const first = cache.prepare('tab', input, parse, controller.signal)
+    await vi.waitFor(() => expect(parse).toHaveBeenCalledTimes(1))
+    const rejected = expect(first).rejects.toMatchObject({ name: 'AbortError' })
+    controller.abort()
+    const returned = cache.prepare('tab', input, parse, signal())
+    finish({ ok: true, value: document })
+    await rejected
+    expect((await returned).document).toBe(document)
+    expect(input.read).toHaveBeenCalledTimes(1)
+    expect(parse).toHaveBeenCalledTimes(1)
+    cache.dispose()
+  })
+  it('counts cancelled producers against the work limit until their backend parses settle', async () => {
+    const cache = new PlanPreparationCache(), controllers = Array.from({ length: preparationLimits.entries }, () => new AbortController())
+    let finish!: (result: { ok: true; value: PlanDocument }) => void
+    const pending = new Promise<{ ok: true; value: PlanDocument }>(resolve => { finish = resolve })
+    const parse = vi.fn(() => pending)
+    const preparations = controllers.map((controller, index) => cache.prepare('tab', source(String(index)), parse, controller.signal))
+    const settled = Promise.allSettled(preparations)
+    await vi.waitFor(() => expect(parse).toHaveBeenCalledTimes(preparationLimits.entries))
+    cache.clear()
+    const extra = cache.prepare('tab', source('extra'), parse, signal())
+    const extraSettled = Promise.allSettled([extra])
+    // Release the held backend replies before asserting, so a failed check cannot leave promises behind.
+    finish({ ok: true, value: document })
+    const [result] = await extraSettled
+    expect(result.status).toBe('rejected')
+    if (result.status === 'rejected') expect(result.reason.message).toContain('already in progress')
+    await settled
+    expect(parse).toHaveBeenCalledTimes(preparationLimits.entries)
+    expect(cache.stats.pending).toBe(0)
+    cache.dispose()
+  })
+  it.each([2, 3, 4])('rejects invalidation before delivery, across %s completion microtasks', async depth => {
+    for (const valid of [true, false]) {
+      const cache = new PlanPreparationCache()
+      const parse = valid ? parser() : async () => ({ ok: false as const, error: 'Malformed XML' })
+      const prepared = cache.prepare('tab', source(), parse, signal())
+      const invalidate = (remaining: number) => queueMicrotask(() => remaining > 1 ? invalidate(remaining - 1) : cache.clear())
+      invalidate(depth)
+      await expect(prepared).rejects.toMatchObject({ name: 'AbortError' })
+      expect(cache.stats.parsed.entries).toBe(0)
+      cache.dispose()
+    }
   })
   it('invalidates result releases, generations, revisions and document edits, including late replies', async () => {
     const cache = new PlanPreparationCache(), parse = parser(), input = source()
@@ -121,6 +171,17 @@ describe('bounded plan preparation', () => {
     expect(parse).toHaveBeenCalledTimes(1)
     cache.dispose()
   })
+  it.each([false, true])('charges malformed XML to the combined budget (cache enabled: %s)', async cached => {
+    const cache = new PlanPreparationCache()
+    const inputs = ['valid', 'bad', 'overflow', 'unread'].map(key => ({ key, label: key, read: vi.fn(async () => key.padEnd(planLimits.characters, 'x')) }))
+    const parse = vi.fn(async (xml: string) => xml.startsWith('valid') ? { ok: true as const, value: document } : { ok: false as const, error: 'Malformed XML' })
+    const prepared = cached ? (source: PlanSource, signal: AbortSignal, remaining: number) => cache.prepare('tab', source, parse, signal, remaining) : undefined
+    const loaded = await loadPlanSources(inputs, parse, signal(), prepared)
+    expect(loaded.statements).toHaveLength(1)
+    expect(parse).toHaveBeenCalledTimes(2)
+    expect(inputs[3].read).not.toHaveBeenCalled()
+    cache.dispose()
+  })
 })
 
 describe('ordered tree layout', () => {
@@ -146,6 +207,31 @@ describe('ordered tree layout', () => {
     expect(layout.nodes[1].y).toBeLessThan(layout.nodes[3].y)
     expect(intersects(layout.statements[0], layout.statements[1])).toBe(false)
     expect(layoutPlans([]).nodes).toEqual([])
+  })
+  it('routes exact parent/input ports without crossing cards in irregular ordered forests', () => {
+    let random = 719
+    const next = () => { random = Math.imul(random, 1664525) + 1013904223 | 0; return random >>> 0 }
+    for (let sample = 0; sample < 25; sample++) {
+      const nodes = Array.from({ length: 200 }, (_, index) => ({ id: String(index), parentId: index % 19 === 0 ? null : String(next() % index) }))
+      for (let index = nodes.length - 1; index > 0; index--) { const other = next() % (index + 1); [nodes[index], nodes[other]] = [nodes[other], nodes[index]] }
+      const layout = layoutPlans([{ id: String(sample), nodes }]), positions = new Map(layout.nodes.map(node => [node.id, node])), index = new SpatialIndex(layout.nodes)
+      for (const parent of nodes) {
+        const inputs = nodes.filter(node => node.parentId === parent.id).map(node => positions.get(node.id)!)
+        for (let at = 1; at < inputs.length; at++) expect(inputs[at].y).toBeGreaterThan(inputs[at - 1].y)
+      }
+      const inputs = nodes.filter(node => node.parentId !== null)
+      for (let at = 0; at < layout.edges.length; at++) {
+        const edge = layout.edges[at], child = positions.get(inputs[at].id)!, parent = positions.get(inputs[at].parentId!)!
+        expect(edge.points[0]).toEqual({ x: parent.x + parent.width, y: parent.y + parent.height / 2 })
+        expect(edge.points.at(-1)).toEqual({ x: child.x, y: child.y + child.height / 2 })
+        for (let point = 1; point < edge.points.length; point++) {
+          const a = edge.points[point - 1], b = edge.points[point]
+          expect(a.x === b.x || a.y === b.y).toBe(true)
+          const hits = index.query({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.abs(a.x - b.x), height: Math.abs(a.y - b.y) })
+          expect(hits.filter(node => node !== parent && node !== child)).toEqual([])
+        }
+      }
+    }
   })
   it.each([
     [{ id: 'a', parentId: 'missing' }], [{ id: 'a', parentId: 'a' }],

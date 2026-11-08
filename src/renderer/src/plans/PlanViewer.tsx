@@ -52,22 +52,26 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
   const [inspector, setInspector] = useState(true)
   const [zoom, setZoom] = useState(saved?.camera?.scale ?? 1)
   const [hovered, setHovered] = useState<HoveredOperator>()
+  const viewer = useRef<HTMLElement>(null)
   const root = useRef<HTMLDivElement>(null), canvas = useRef<PlanCanvas | undefined>(undefined), tree = useRef<HTMLDivElement>(null)
   const [onScreen, setOnScreen] = useState(false)
+  const [canvasOnScreen, setCanvasOnScreen] = useState(false)
   useEffect(() => {
-    const element = root.current
-    if (!element) return
+    const element = viewer.current, surface = root.current
+    if (!element || !surface) return
     let intersecting = false, owner = element.ownerDocument
     const changed = () => setOnScreen(intersecting && !owner.hidden)
     const visibility = observeIntersection(element, entries => { intersecting = entries.some(entry => entry.isIntersecting); changed() })
+    const surfaceVisibility = observeIntersection(surface, entries => setCanvasOnScreen(entries.some(entry => entry.isIntersecting)))
     owner.addEventListener('visibilitychange', changed)
     const adoption = windows.onDidAdopt(() => {
       owner.removeEventListener('visibilitychange', changed); owner = element.ownerDocument
       owner.addEventListener('visibilitychange', changed); changed()
     })
-    return () => { visibility.dispose(); adoption.dispose(); owner.removeEventListener('visibilitychange', changed) }
+    return () => { visibility.dispose(); surfaceVisibility.dispose(); adoption.dispose(); owner.removeEventListener('visibilitychange', changed) }
   }, [])
   const active = visible && onScreen
+  const graphActive = active && canvasOnScreen
   const [scroll, setScroll] = useState(0), [height, setHeight] = useState(400)
   const camera = useRef<Camera | undefined>(saved?.camera)
   const selection = useRef<(id: string) => void>(() => {})
@@ -95,13 +99,18 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
     return () => stop.abort()
   }, [identity, scope, sourceKey, retry, active, generation, planPreparation])
   useEffect(() => {
-    if (!active) return
+    if (!graphActive) return
     const cached = planPreparation.layout(scope, topology)
     setLayoutState(cached ? { topology, layout: cached } : {})
     setGpuFailed(false)
     if (cached || !statementsRef.current.length) return
     const epoch = planPreparation.epoch
-    const worker = new Worker(new URL('./layout.worker.ts', import.meta.url), { type: 'module' })
+    let worker: Worker
+    try { worker = new Worker(new URL('./layout.worker.ts', import.meta.url), { type: 'module' }) }
+    catch {
+      setLayoutState({ topology, error: 'The plan layout worker could not be started. Its operator outline and XML source are available.' })
+      return
+    }
     let stopped = false
     const failed = () => {
       if (stopped) return
@@ -121,14 +130,14 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
     }
     worker.postMessage(statementsRef.current.map(entry => ({ id: entry.id, nodes: entry.nodes.map(node => ({ id: node.id, parentId: node.parentId })) })))
     return () => { stopped = true; clearTimeout(timer); worker.terminate() }
-  }, [identity, scope, topology, retry, active, planPreparation])
+  }, [identity, scope, topology, retry, graphActive, planPreparation])
   const palette: CanvasColors = useMemo(() => ({ background: colors['panel.background'], card: colors['input.background'], text: colors.foreground,
     muted: colors.descriptionForeground, border: colors['panel.border'], accent: colors.focusBorder, warning: colors.warningForeground }), [colors])
   const paletteRef = useRef(palette)
   paletteRef.current = palette
   useEffect(() => {
     const element = root.current, layout = content.layout
-    if (!active || !element || !layout) return
+    if (!graphActive || !element || !layout) return
     let disposed = false
     void import('./PlanCanvas').then(({ PlanCanvas }) => {
       if (disposed) return
@@ -138,7 +147,7 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
       canvas.current.select(latest.current.selected)
     }).catch(() => { if (!disposed) setGpuFailed(true) })
     return () => { disposed = true; canvas.current?.dispose(); canvas.current = undefined }
-  }, [content.layout, active, retry])
+  }, [content.layout, graphActive, retry])
   useEffect(() => { canvas.current?.update(content.statements) }, [content.statements])
   useEffect(() => { canvas.current?.colors(palette) }, [palette])
   useEffect(() => { canvas.current?.select(selected, true) }, [selected])
@@ -201,7 +210,7 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
   const preferredSource = xmlSource ?? current?.sourceKey ?? statement?.sourceKey ?? sources[0]?.key
   const selectedSource = sources.find(source => source.key === preferredSource)
   const warnings = useMemo(() => [...allNodes.values()].filter(({ node }) => node.warnings.length).length, [allNodes])
-  return <section className="plan-viewer" aria-label="Execution plan viewer" onKeyDownCapture={event => {
+  return <section ref={viewer} className="plan-viewer" aria-label="Execution plan viewer" onKeyDownCapture={event => {
     if (event.key !== 'Escape' || !hovered) return
     canvas.current?.dismissHover()
     event.preventDefault()
