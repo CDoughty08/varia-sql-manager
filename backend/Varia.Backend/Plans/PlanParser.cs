@@ -89,8 +89,11 @@ internal static class PlanParser
             var build = "";
             var count = 0;
             var remaining = Text;
+            var stagedRemaining = Text;
             var omitted = false;
-            var diagnostics = new PlanDiagnostics((value, cap) => Bound(value, cap), () => omitted = true);
+            // Stage at most one text budget of details, then fit them into what legacy fields leave unused.
+            // Details must never change the identity-bearing raw properties of the same live/actual XML.
+            var diagnostics = new PlanDiagnostics((value, cap) => Budget(value, cap, ref stagedRemaining), () => omitted = true);
             // Essential labels keep their own per-field caps: verbose early properties must not blank later operators.
             string Core(string? value, int cap = 1024)
             {
@@ -99,11 +102,12 @@ internal static class PlanParser
                 omitted = true;
                 return value[..(cap - 1)] + "…";
             }
-            string Bound(string? value, int cap = 1024)
+            string Bound(string? value, int cap = 1024) => Budget(value, cap, ref remaining);
+            string Budget(string? value, int cap, ref int available)
             {
                 value ??= "";
-                var length = Math.Min(value.Length, Math.Min(cap, remaining));
-                remaining -= length;
+                var length = Math.Min(value.Length, Math.Min(cap, available));
+                available -= length;
                 if (length == value.Length) return value;
                 omitted = true;
                 return length == 0 ? "" : value[..(length - 1)] + "…";
@@ -189,6 +193,7 @@ internal static class PlanParser
                 if (scoped && xml.IsEmptyElement) { statement = previous.statement; node = previous.node; warning = previous.warning; }
             }
             if (!found) throw new RequestException("INVALID_PARAMS", "This document is not SQL Server Showplan XML.");
+            if (includeDiagnostics) PlanDiagnostics.ApplyTextBudget(statements, (value, cap) => Bound(value, cap), token);
             var result = new PlanDocument(version, build, statements, omitted ? ["Some plan text, properties or diagnostic details were shortened to stay within the viewer's budgets. The XML source is unchanged."] : []);
             if (JsonSerializer.SerializeToUtf8Bytes(result).Length > ReplyBytes) throw Limit();
             return result;

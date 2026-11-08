@@ -112,5 +112,20 @@ internal static class PlanChecks
         var live = PlanParser.Parse(new StringReader(File.ReadAllText(Path.Combine("tests", "fixtures", "plans", "diagnostics.sqlplan"))), includeDiagnostics: false);
         check(live.Statements[0].DiagnosticPayload is null && live.Statements[0].Nodes.All(n => n.DiagnosticPayload is null)
             && live.Statements[0].Nodes[0] is { ActualRows: 100, CpuMs: 18, ElapsedMs: 30 }, "live parse skips detailed text allocation and serialization while retaining aggregate counters");
+        var verbosePredicates = Open + "<StmtSimple><QueryPlan>" + string.Concat(Enumerable.Range(0, 215).Select(i =>
+            "<RelOp NodeId=\"" + i + "\" PhysicalOp=\"Filter\"><Predicate><ScalarOperator ScalarString=\"" + new string('x', 4096) + "\"/></Predicate></RelOp>"))
+            + "<RelOp NodeId=\"215\" PhysicalOp=\"Compute Scalar\"><Const ConstValue=\"identity literal\"/></RelOp></QueryPlan></StmtSimple>" + Close;
+        var verboseActual = Parse(verbosePredicates);
+        var verboseLive = PlanParser.Parse(new StringReader(verbosePredicates), includeDiagnostics: false);
+        check(verbosePredicates.Length < 1_048_576 && verboseActual.Statements[0].Nodes.SelectMany(n => n.Properties).SequenceEqual(verboseLive.Statements[0].Nodes.SelectMany(n => n.Properties)),
+            "diagnostic text exhaustion cannot change legacy raw fields or live-to-actual scalar identity");
+        var emptyGrant = new StatementDiagnostics();
+        emptyGrant.Parameters.Add(new("@missing", "int", "(0)", "(1)"));
+        emptyGrant.Parameters.Add(new("@empty", "nvarchar(1)", "", ""));
+        var exhausted = new PlanStatement { Id = "s", Text = "", Type = "" };
+        exhausted.Diagnostics.Parameters.AddRange(emptyGrant.Parameters);
+        PlanDiagnostics.ApplyTextBudget([exhausted], (_, _) => "", default);
+        check(exhausted.Diagnostics.Parameters is [{ CompiledValue: null, RuntimeValue: null }, { CompiledValue: "", RuntimeValue: "" }],
+            "budget-omitted parameter values are unavailable while genuinely empty values remain available");
     }
 }

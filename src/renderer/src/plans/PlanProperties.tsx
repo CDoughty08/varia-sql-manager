@@ -10,8 +10,9 @@ function Facts({ values }: { values: readonly (readonly [string, string])[] }) {
 function Attributes({ properties }: { properties: readonly Property[] }) {
   return <Facts values={properties.map(property => [property.name, property.value])} />
 }
-function Details({ title, items }: { title: string; items: readonly { kind: string; properties: Property[] }[] }) {
-  return <details><summary>{title} ({items.length})</summary>{items.length ? items.map((item, index) => <div key={index} className="plan-diagnostic-detail"><strong>{item.kind}</strong><Attributes properties={item.properties} /></div>) : <p>None reported in this XML.</p>}</details>
+function Details({ title, items }: { title: string; items?: readonly { kind: string; properties: Property[] }[] }) {
+  return <details><summary>{title} ({items?.length ?? 0})</summary>{items?.length ? items.map((item, index) => <div key={index} className="plan-diagnostic-detail"><strong>{item.kind || 'Unavailable'}</strong><Attributes properties={item.properties} /></div>)
+    : <p>{items ? 'No details retained. Inspect the XML source for complete information.' : 'Detailed data unavailable in this view. Inspect the XML source for complete information.'}</p>}</details>
 }
 
 export function PlanProperties({ statement, node, liveRunning }: { statement?: SourceStatement; node?: PlanNode; liveRunning?: boolean }) {
@@ -27,8 +28,8 @@ export function PlanProperties({ statement, node, liveRunning }: { statement?: S
       ]} />
       <p className="plan-diagnostic-note">Costs are optimizer estimates, including in actual plans. Operator times may overlap and include child work; do not add them to obtain query time.</p>
       {statement.warnings.map((warning, index) => <p className="plan-warning" key={index}>{warning}</p>)}
-      <Details title="Statement warning details" items={data?.warnings ?? []} />
-      <details><summary>Parameters ({data?.parameters.length ?? 0})</summary>{data?.parameters.length ? data.parameters.map((parameter, index) => <div key={index} className="plan-diagnostic-detail"><strong>{parameter.name}</strong><Facts values={[
+      <Details title="Statement warning details" items={data?.warnings} />
+      <details><summary>Parameters ({data?.parameters.length ?? 0})</summary>{data?.parameters.length ? data.parameters.map((parameter, index) => <div key={index} className="plan-diagnostic-detail"><strong>{parameter.name || 'Unavailable'}</strong><Facts values={[
         ['Data type', parameter.dataType], ['Compiled value', parameter.compiledValue === '' ? '(empty)' : parameter.compiledValue ?? 'Unavailable'], ['Runtime value', parameter.runtimeValue === '' ? '(empty)' : parameter.runtimeValue ?? 'Unavailable']
       ]} /></div>) : <p>Parameter values unavailable in this XML.</p>}</details>
       <details><summary>Memory grant</summary>{data?.memoryGrant.length ? <><p className="plan-diagnostic-note">Memory amounts are KiB; GrantWaitTime is milliseconds. Other attributes retain their XML names and values.</p><Attributes properties={data.memoryGrant} /></> : <p>{statement.partial ? 'Grant details require captured actual XML.' : 'Unavailable in this XML.'}</p>}</details>
@@ -37,7 +38,7 @@ export function PlanProperties({ statement, node, liveRunning }: { statement?: S
         {data.missingIndexes.map((index, position) => <div key={position} className="plan-diagnostic-detail"><strong>{[index.database, index.schema, index.table].filter(Boolean).join('.')}</strong><Facts values={[
           ['Estimated impact (%)', amount(index.impact)], ...index.columns.map(column => [column.usage || 'Usage unavailable', column.name] as const)
         ]} /></div>)}
-      </> : <p>No structured suggestions reported in this XML.</p>}</details>
+      </> : <p>No structured suggestions retained. Inspect the XML source for complete information.</p>}</details>
     </>}
     {node ? <>
       <Facts values={[
@@ -53,10 +54,10 @@ export function PlanProperties({ statement, node, liveRunning }: { statement?: S
       <details><summary>Predicates ({diagnostic?.predicates.filter(p => p.columns.length || p.expressions.length).length ?? 0})</summary>{diagnostic?.predicates.filter(p => p.columns.length || p.expressions.length).map((predicate, index) => <div key={index} className="plan-diagnostic-detail"><strong>{predicate.kind}</strong><Facts values={[
         ['Comparison', predicate.comparison], ['Columns', predicate.columns.join(', ')], ['Expressions', predicate.expressions.join('; ')]
       ]} /></div>)}{!diagnostic?.predicates.some(p => p.columns.length || p.expressions.length) && <p>Unavailable in this XML.</p>}</details>
-      <details><summary>Output columns ({diagnostic?.outputColumns.length ?? 0})</summary>{diagnostic?.outputColumns.length ? <ul>{diagnostic.outputColumns.map((column, index) => <li key={index}>{column}</li>)}</ul> : <p>Unavailable in this XML.</p>}</details>
+      <details><summary>Output columns ({diagnostic?.outputColumns.length ?? 0})</summary>{diagnostic?.outputColumns.length ? <ul>{diagnostic.outputColumns.map((column, index) => <li key={index}>{column || 'Unavailable'}</li>)}</ul> : <p>Unavailable in this XML.</p>}</details>
       {node.warnings.map((warning, index) => <p className="plan-warning" key={index}>{warning}</p>)}
-      <Details title="Operator warning details" items={diagnostic?.warnings ?? []} />
-      <Details title="Spill details" items={diagnostic?.spills ?? []} />
+      <Details title="Operator warning details" items={diagnostic?.warnings} />
+      <Details title="Spill details" items={diagnostic?.spills} />
       <details><summary>Thread runtime ({diagnostic?.threads.length ?? 0} retained entries)</summary>
         <p className="plan-diagnostic-note">Each entry contains SQL Server's cumulative counters across its executions. Entries are preserved separately, even with repeated thread IDs. Thread 0 can be a coordinator. Detail retention is bounded; aggregates use all entries. Missing values are unavailable.</p>
         {diagnostic?.threads.length ? diagnostic.threads.map((thread, index) => <details key={index}><summary>Thread {amount(thread.thread)} · entry {index + 1}</summary><Facts values={[

@@ -43,6 +43,9 @@ Existing XML, depth, operator, statement, property, text and reply caps remain u
 64 items, thread details at most 128 entries per operator, and all structured list entries share a 16,384-entry document
 budget. Diagnostic strings use the existing 1 Mi-character text budget, with per-field caps. Omission produces a notice;
 runtime aggregates still process every entry after detail truncation. The original XML is the complete fallback.
+Legacy raw fields take text-budget priority so adding details cannot alter identity-bearing scalar properties.
+Diagnostic text is staged under a separate bounded 1 Mi-character allowance, then trimmed to the unused portion of
+the existing output text budget. A parameter value omitted entirely by that budget is unavailable, not an empty value.
 
 Live sampling retains the existing bounded topology/counter protocol and does not send per-thread diagnostic objects
 or spill/grant details, which would become stale on subsequent counter-only samples. Live CPU/elapsed rankings use

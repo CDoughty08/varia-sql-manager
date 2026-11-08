@@ -34,6 +34,8 @@ describe('plan diagnostics', () => {
     const markup = renderToStaticMarkup(createElement(PlanProperties, { statement: { ...parsed.statements[0], sourceKey: 'old' }, node: parsed.statements[0].nodes[0] }))
     expect(markup).toContain('Unavailable')
     expect(markup).toContain('Costs are optimizer estimates')
+    expect(markup).toContain('Detailed data unavailable in this view')
+    expect(markup).not.toContain('None reported in this XML')
   })
   it('renders untrusted details as text and exposes unavailable parameter values explicitly', () => {
     const entry = node('a')

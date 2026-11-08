@@ -64,6 +64,12 @@ internal sealed class PlanDiagnostics(Func<string?, int, string> bound, Action o
         object? value = null;
         var diagnostic = node?.Diagnostics;
         string Field(string field, int cap = 1024) => bound(xml.GetAttribute(field), cap);
+        string? OptionalField(string field)
+        {
+            if (xml.GetAttribute(field) is not { } original) return null;
+            var retained = bound(original, 4096);
+            return retained.Length == 0 && original.Length > 0 ? null : retained;
+        }
         string Column() => bound(string.Join('.', new[] { "Database", "Schema", "Table", "Column" }.Select(xml.GetAttribute).Where(v => !string.IsNullOrEmpty(v))), 2048);
         if (name == "RelOp" && diagnostic is not null)
         {
@@ -82,8 +88,7 @@ internal sealed class PlanDiagnostics(Func<string?, int, string> bound, Action o
             }
             if (name == "MemoryGrantInfo") foreach (var property in Attributes(xml)) Add(data.MemoryGrant, () => property);
             if (name == "ColumnReference" && In("ParameterList")) Add(data.Parameters, () => new(Field("Column"), Field("ParameterDataType"),
-                xml.GetAttribute("ParameterCompiledValue") is { } compiled ? bound(compiled, 4096) : null,
-                xml.GetAttribute("ParameterRuntimeValue") is { } runtime ? bound(runtime, 4096) : null));
+                OptionalField("ParameterCompiledValue"), OptionalField("ParameterRuntimeValue")));
             if (name == "MissingIndexGroup") value = new Impact(PlanParser.Number(xml.GetAttribute("Impact")));
             if (name == "MissingIndex")
             {
@@ -138,6 +143,63 @@ internal sealed class PlanDiagnostics(Func<string?, int, string> bound, Action o
     private sealed record Impact(double? Value);
     private sealed record Usage(string Value);
     private sealed record RenderedScalar;
+
+    internal static void ApplyTextBudget(IEnumerable<PlanStatement> statements, Func<string?, int, string> retain, CancellationToken token)
+    {
+        string Text(string? value) => retain(value, 16_384);
+        string? Optional(string? value)
+        {
+            if (value is null) return null;
+            var retained = Text(value);
+            return retained.Length == 0 && value.Length > 0 ? null : retained;
+        }
+        void Strings(List<string> values) { for (var i = 0; i < values.Count; i++) values[i] = Text(values[i]); }
+        void Properties(List<PlanProperty> values)
+        {
+            for (var i = 0; i < values.Count; i++) values[i] = new(Text(values[i].Name), Text(values[i].Value));
+        }
+        void Details(List<PlanDetail> values)
+        {
+            for (var i = 0; i < values.Count; i++) { values[i] = values[i] with { Kind = Text(values[i].Kind) }; Properties(values[i].Properties); }
+        }
+        foreach (var statement in statements)
+        {
+            token.ThrowIfCancellationRequested();
+            var data = statement.Diagnostics;
+            Properties(data.MemoryGrant);
+            Details(data.Warnings);
+            for (var i = 0; i < data.Parameters.Count; i++)
+            {
+                var parameter = data.Parameters[i];
+                data.Parameters[i] = new(Text(parameter.Name), Text(parameter.DataType), Optional(parameter.CompiledValue), Optional(parameter.RuntimeValue));
+            }
+            for (var i = 0; i < data.MissingIndexes.Count; i++)
+            {
+                var index = data.MissingIndexes[i];
+                data.MissingIndexes[i] = index with { Database = Text(index.Database), Schema = Text(index.Schema), Table = Text(index.Table) };
+                for (var c = 0; c < index.Columns.Count; c++) index.Columns[c] = new(Text(index.Columns[c].Usage), Text(index.Columns[c].Name));
+            }
+            foreach (var node in statement.Nodes)
+            {
+                token.ThrowIfCancellationRequested();
+                var diagnostic = node.Diagnostics;
+                diagnostic.EstimatedExecutionMode = Text(diagnostic.EstimatedExecutionMode);
+                Strings(diagnostic.OutputColumns);
+                for (var i = 0; i < diagnostic.Predicates.Count; i++)
+                {
+                    var predicate = diagnostic.Predicates[i];
+                    diagnostic.Predicates[i] = predicate with { Kind = Text(predicate.Kind), Comparison = Text(predicate.Comparison) };
+                    Strings(predicate.Columns); Strings(predicate.Expressions);
+                }
+                Details(diagnostic.Warnings); Details(diagnostic.Spills);
+                for (var i = 0; i < diagnostic.Threads.Count; i++)
+                {
+                    diagnostic.Threads[i] = diagnostic.Threads[i] with { ExecutionMode = Text(diagnostic.Threads[i].ExecutionMode) };
+                    Properties(diagnostic.Threads[i].Properties);
+                }
+            }
+        }
+    }
 
     public void Runtime(XmlReader xml, PlanNode node, bool retainDetails)
     {
