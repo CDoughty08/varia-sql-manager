@@ -9,6 +9,8 @@
     "node.page.mbPerSecond": { "title": "decodePage and the text of every cell, W1 page", "unit": "MB/s", "better": "higher", "target": 300, "floor": 75 },
     "node.health.p50Ms": { "title": "main ↔ backend system.health round trip, p50", "unit": "ms", "better": "lower", "target": 0.3, "floor": 2 },
     "node.health.p99Ms": { "title": "main ↔ backend system.health round trip, p99", "unit": "ms", "better": "lower", "target": 2, "floor": null },
+    "node.backend.readyMs": { "title": "Backend start: spawn to HELLO answered, warm disk cache, median", "unit": "ms", "better": "lower", "target": 300, "floor": 3000 },
+    "node.backend.firstHealthMs": { "title": "Backend start: the first system.health after HELLO, median", "unit": "ms", "better": "lower", "target": 20, "floor": null },
     "node.health.concurrent256Ms": { "title": "256 concurrent system.health requests", "unit": "ms", "better": "lower", "target": 150, "floor": 1000 },
     "node.w1.rowsPerSecond": { "title": "W1, 500,000 rows: store → main → port → worker, every cell decoded", "unit": "rows/s", "better": "higher", "target": 1000000, "floor": 250000 },
     "node.w1.mbPerSecond": { "title": "W1 through the same path", "unit": "MB/s", "better": "higher", "target": 200, "floor": 50 },

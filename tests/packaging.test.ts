@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { spawnSync } from 'node:child_process'
+import { readdirSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
-import { asarProblems, bareImports, readAsar } from '../scripts/asar-contents.mjs'
+import { dirname, join, resolve } from 'node:path'
+import { asarProblems, bareImports, isReadyToRun, readAsar, readyToRunAssemblies } from '../scripts/packaged-contents.mjs'
 
 /** An archive as electron-builder writes one: the header's size, the JSON header (both Chromium pickles), then the files. */
 function asar(files: Record<string, string>): Buffer {
@@ -57,5 +59,31 @@ describe('Packaging (issue #163)', () => {
     expect(contents.get('out/preload/index.cjs')?.toString()).toBe('const e = require("electron");')
     expect(asarProblems(contents)).toEqual([])
     expect(asarProblems(readAsar(shipped))).toEqual(['app.asar holds 1 node_modules files, such as node_modules/zod/package.json', 'out/main/index.js loads zod, which is not bundled'])
+  })
+  it('publishes the release backend ReadyToRun, restored locked from packages.lock.json for every release RID', async () => {
+    const project = await readFile('backend/Varia.Backend/Varia.Backend.csproj', 'utf8')
+    const release = await readFile('.github/workflows/release.yml', 'utf8'), pack = await readFile('.github/workflows/package.yml', 'utf8')
+    // Only a RID-specific publish: Debug and Release builds, the checks and the benchmarks stay IL.
+    expect(project).toContain(`<PublishReadyToRun Condition="'$(RuntimeIdentifier)' != ''">true</PublishReadyToRun>`)
+    const rids = [...release.matchAll(/^ +rid: ([\w-]+)$/gm)].map(match => match[1]).sort()
+    expect(rids).toEqual(['linux-x64', 'osx-arm64', 'osx-x64', 'win-x64'])
+    expect(/<RuntimeIdentifiers>([^<]+)<\/RuntimeIdentifiers>/.exec(project)?.[1].split(';').sort()).toEqual(rids)
+    const lock = JSON.parse(await readFile('backend/Varia.Backend/packages.lock.json', 'utf8'))
+    for (const rid of rids) expect(Object.keys(lock.dependencies), rid).toContain(`net10.0/${rid}`)
+    // Without locked mode, the RID's restore re-resolves packages silently instead of using the lock file.
+    expect(pack).toMatch(/dotnet publish backend\/Varia\.Backend\/Varia\.Backend\.csproj -c Release -r \$\{\{ inputs\.rid \}\} --self-contained true -p:RestoreLockedMode=true -o artifacts\/release-backend\n/)
+    expect(readyToRunAssemblies).toContain('Varia.Backend.dll')
+  })
+  it('tells ReadyToRun assemblies from IL-only ones, as the packaged smoke test reads the backend', () => {
+    // The shared framework ships ReadyToRun; its reference pack is IL only.
+    const runtimes = spawnSync('dotnet', ['--list-runtimes'], { encoding: 'utf8' }).stdout
+    const [, version, folder] = /^Microsoft\.NETCore\.App (10\.\S+) \[(.+)\]$/m.exec(runtimes) ?? []
+    expect(version, runtimes).toBeDefined()
+    const shared = join(folder, version)
+    expect(isReadyToRun(join(shared, 'System.Text.Json.dll'))).toBe(true)
+    const refs = join(dirname(dirname(folder)), 'packs', 'Microsoft.NETCore.App.Ref')
+    const ref = join(refs, readdirSync(refs).filter(name => name.startsWith('10.')).sort().at(-1)!, 'ref', 'net10.0', 'System.Text.Json.dll')
+    expect(isReadyToRun(ref)).toBe(false)
+    expect(isReadyToRun(join(shared, 'Microsoft.NETCore.App.deps.json'))).toBe(false)
   })
 })

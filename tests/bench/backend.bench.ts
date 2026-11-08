@@ -64,6 +64,31 @@ it('round-trips system.health between main and the backend', async () => {
   )
 })
 
+// A fresh backend's start: spawn to HELLO answered (the supervisor's ready), then its first system.health. Release
+// packages are ReadyToRun (issue #163); VARIA_BENCH_BACKEND=<published Varia.Backend executable> times one of those
+// instead of the IL build (dotnet publish -r <rid> --self-contained -c Release).
+it('starts a fresh backend', async () => {
+  const published = process.env.VARIA_BENCH_BACKEND
+  const starts: number[] = [], firsts: number[] = []
+  for (let i = 0; i < 6; i++) {
+    const fresh = new BackendSupervisor({ command: published ? resolve(published) : 'dotnet', args: published ? [] : [dll], cwd: process.cwd(), packaged: false, env: { ...process.env } })
+    const started = performance.now()
+    const ready = new Promise<void>((done, fail) => fresh.onState(state => { if (state.status === 'ready') done(); else if (state.status === 'failed') fail(new Error(state.message)) }))
+    fresh.start()
+    try {
+      await ready
+      const readyAt = performance.now()
+      await fresh.request('system.health', {})
+      // The first start warms the disk cache; the rest are what a relaunch costs.
+      if (i > 0) { starts.push(readyAt - started); firsts.push(performance.now() - readyAt) }
+    } finally { await fresh.stop() }
+  }
+  record(
+    { id: 'node.backend.readyMs', value: median(starts), unit: 'ms', detail: `median of ${starts.length} warm-cache starts, ${published ? 'published' : 'IL'} backend` },
+    { id: 'node.backend.firstHealthMs', value: median(firsts), unit: 'ms', detail: 'the first system.health after ready, median' }
+  )
+}, 120_000)
+
 it('answers 256 concurrent system.health requests', async () => {
   const run = async () => {
     const started = performance.now()
