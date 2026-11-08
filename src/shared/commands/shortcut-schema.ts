@@ -61,6 +61,9 @@ const additionSchema = z.strictObject({ ...bindingFields, scope: z.enum(scopeIds
 const removalSchema = z.strictObject({ ...bindingFields, remove: z.literal(true) })
 export const shortcutBindingSchema = z.union([additionSchema, removalSchema])
 const gestureIdPattern = new RegExp(`^[a-z][A-Za-z0-9.]{0,${shortcutLimits.gestureId - 1}}$`)
+/** `Object.prototype`'s names (`constructor`, `toString`, ...) are refused too, so no `in` or `obj.hasOwnProperty` check ever mistakes one for a gesture. */
+const prototypeNames: ReadonlySet<string> = new Set(Object.getOwnPropertyNames(Object.prototype))
+const isGestureIdText = (id: string) => gestureIdPattern.test(id) && !prototypeNames.has(id)
 const gestureChoicePattern = new RegExp(`^[a-z][A-Za-z0-9]{0,${shortcutLimits.gestureChoice - 1}}$`)
 const unknownRecordSchema = z.custom<unknown>(value => value !== undefined && jsonBytes(value) <= shortcutLimits.unknownBytes, `an unknown record is limited to ${shortcutLimits.unknownBytes} bytes`)
 
@@ -69,7 +72,7 @@ export const shortcutFileSchema = z.strictObject({
   version: z.literal(shortcutFileVersion),
   scheme: z.string().regex(/^[a-z][A-Za-z0-9]*$/).max(shortcutLimits.scheme),
   bindings: z.array(shortcutBindingSchema).max(shortcutLimits.bindings),
-  gestures: z.record(z.string().regex(gestureIdPattern), z.string().regex(gestureChoicePattern)).refine(value => Object.keys(value).length <= shortcutLimits.gestures, `at most ${shortcutLimits.gestures} gestures`),
+  gestures: z.record(z.string().regex(gestureIdPattern).refine(isGestureIdText, 'not a gesture id'), z.string().regex(gestureChoicePattern)).refine(value => Object.keys(value).length <= shortcutLimits.gestures, `at most ${shortcutLimits.gestures} gestures`),
   unknown: z.array(unknownRecordSchema).max(shortcutLimits.unknown)
 })
 
@@ -131,7 +134,7 @@ export function readShortcutFile(raw: unknown, options: ShortcutReadOptions = {}
   const gestures: Record<string, string> = Object.create(null)
   if (isRecord(raw.gestures)) Object.entries(raw.gestures).forEach(([id, choice], index) => {
     const what = `Gesture ${index + 1}`
-    if (!gestureIdPattern.test(id) || typeof choice !== 'string' || !gestureChoicePattern.test(choice)) { problems.push(`${what} was dropped: it is not a gesture setting.`); return }
+    if (!isGestureIdText(id) || typeof choice !== 'string' || !gestureChoicePattern.test(choice)) { problems.push(`${what} was dropped: it is not a gesture setting.`); return }
     const choices = options.gestures?.get(id)
     if (options.gestures && !choices?.includes(choice)) keepUnknown({ gesture: id, choice }, what)
     else if (Object.keys(gestures).length >= shortcutLimits.gestures) problems.push(`${what} was dropped: the file keeps at most ${shortcutLimits.gestures} gestures.`)
@@ -140,7 +143,23 @@ export function readShortcutFile(raw: unknown, options: ShortcutReadOptions = {}
   else if (raw.gestures !== undefined) problems.push('The gesture settings were dropped: they were not an object.')
 
   for (const key of Object.keys(raw)) if (!['version', 'scheme', 'bindings', 'gestures', 'unknown'].includes(key)) keepUnknown({ [key]: raw[key] }, 'A member this build does not know')
-  return { ok: true, file: { version: shortcutFileVersion, scheme, bindings, gestures: { ...gestures }, unknown }, problems }
+  const file: ShortcutFile = { version: shortcutFileVersion, scheme, bindings, gestures: { ...gestures }, unknown }
+  // Moving records to `unknown` can make the file a little larger than the text it came from: a file that loads must also save.
+  if (shortcutFileText(file) === undefined) return { ok: false, error: 'size' }
+  return { ok: true, file, problems }
+}
+
+/**
+ * The file's text as main writes it, or undefined when it is over `shortcutLimits.fileBytes`. It is indented for hand
+ * edits when that fits and compact when only that fits, so the limit measures the same form on read (the raw bytes) and
+ * on write: a compact file near the limit that loads can also be saved.
+ */
+export function shortcutFileText(file: ShortcutFile): string | undefined {
+  const pretty = JSON.stringify(file, null, 2) + '\n'
+  if (utf8Bytes(pretty) <= shortcutLimits.fileBytes) return pretty
+  // No newline here: a hand-written file at the limit may end without one.
+  const compact = JSON.stringify(file)
+  return utf8Bytes(compact) <= shortcutLimits.fileBytes ? compact : undefined
 }
 
 /** Parses and reads the file's text: `size` when it is over `shortcutLimits.fileBytes`, `invalid` when it is not JSON. */

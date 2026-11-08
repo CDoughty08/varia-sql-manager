@@ -121,6 +121,7 @@ Live views, such as the Activity Monitor: when they pause while hidden, and how 
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `textEditor.dragAndDrop` | Enable mouse click to perform drag-and-drop text editing | Boolean | True |  | All | At once | Selected text can be dragged to move it, or copied with Ctrl held (Option on macOS). |
+| `textEditor.multiCursorModifier` | Add a cursor with | One of `alt` (Alt+Click (Option on macOS)), `ctrlCmd` (Ctrl+Click (Command on macOS)) | Alt+Click (Option on macOS) |  | All | At once | The modifier that adds another cursor where you click in the query editor. The mouse gestures list shows it too. Not in SSMS. |
 | `textEditor.delimiterHighlighting` | Automatic delimiter highlighting | Boolean | True |  | All | At once | Highlights the bracket or parenthesis that matches the one at the caret. Large values opened from the results never match brackets. |
 | `textEditor.highlightCurrentLine` | Highlight current line | Boolean | True |  | All | At once | Highlights the line that holds the caret. |
 
@@ -294,4 +295,4 @@ How Varia follows the SSIS Catalog (SSISDB) as it changes. Not in SSMS.
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (105 today).
+A patch holds at most one entry per setting (106 today).

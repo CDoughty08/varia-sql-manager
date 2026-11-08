@@ -151,8 +151,8 @@ function Dependencies({ part }: { part: PeekPart<PeekDependencies> | undefined }
 const cells = (list: readonly (readonly [number, number])[] | undefined) => new Set((list ?? []).map(([row, column]) => `${row}:${column}`))
 
 /**
- * The first rows as the results grid shows their values: NULL in the grid's NULL style, cut values ending in an ellipsis, and
- * values that could not be read as NULL, as the grid shows them, with a note.
+ * The first rows as the results grid shows their values: NULL in the grid's NULL style, cut values ending in an ellipsis (their
+ * tooltips say so), and values that could not be read as NULL, as the grid shows them, with a note.
  */
 function Rows({ part }: { part: PeekPart<PeekRowsResult> | undefined }) {
   const value = part?.status === 'ready' ? part.value : undefined
@@ -165,7 +165,8 @@ function Rows({ part }: { part: PeekPart<PeekRowsResult> | undefined }) {
       <tbody>{rows.map((row, r) => <tr key={r}>{row.map((value, c) => {
         const at = `${r}:${c}`
         return value === null ? <td key={c} className="peek-null" title={unread.has(at) ? peekMessages.unreadCell : undefined}>NULL</td>
-          : <td key={c} title={value}>{cut.has(at) ? `${value}…` : value}</td>
+          : cut.has(at) ? <td key={c} title={`${value}…\n${peekMessages.cutCell}`}>{`${value}…`}</td>
+            : <td key={c} title={value}>{value}</td>
       })}</tr>)}</tbody>
     </table>
     {rows.length === 0 && <p className="peek-note">{peekMessages.noRows}</p>}
