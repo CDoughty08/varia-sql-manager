@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { FuseV1Options, FuseVersion } from '@electron/fuses'
 
@@ -42,6 +43,25 @@ describe('Electron fuses', () => {
     const unbounded = installed.replace(/^.*lstrcpynW.*$/m, "        System::Call '*$2(&w${NSIS_MAX_STRLEN} .s)'")
     expect(nsisTemplateProblem(unbounded)).toMatch(/without a bound/)
     expect(nsisTemplateProblem(installed.replace(/^.*lstrcpynW.*$/m, ''))).toMatch(/template changed/)
+    // The unbounded copy however spelled: double quotes, a fixed width, other spacing, or beside the bounded block.
+    for (const spelling of ['System::Call "*$2(&w${NSIS_MAX_STRLEN} .s)"', "System::Call '*$2(&w1024 .s)'", "System::Call   '* $2 (&w${NSIS_MAX_STRLEN} .s)'"]) {
+      expect(nsisTemplateProblem(installed.replace(/^.*lstrcpynW.*$/m, spelling)), spelling).toMatch(/without a bound/)
+      expect(nsisTemplateProblem(installed.replace(/^(\s*)StrCpy \$INSTDIR "\$0\\\$\{APP_FILENAME\}"$/m, `$1${spelling}\n$&`)), spelling).toMatch(/without a bound/)
+    }
+    // The rest of the fix: $2 initialised, CoTaskMemFree guarded, $1 and $2 saved and restored.
+    for (const [part, broken] of [[/^\s*StrCpy \$2 0\r?\n/m, ''], [/\$\{If\} \$2 != 0/, '${If} 1 == 1'], [/^\s*Pop \$1\r?\n/m, ''], [/^\s*Push \$2\r?\n/m, '']] as const) {
+      expect(installed, String(part)).toMatch(part)
+      expect(nsisTemplateProblem(installed.replace(part, broken)), String(part)).toMatch(/template changed/)
+    }
+    // Comments, indentation and line endings do not matter; a second SHGetKnownFolderPath call does.
+    expect(nsisTemplateProblem(installed.replace(/\n/g, '\r\n').replace(/^ +/gm, '\t'))).toBeNull()
+    expect(nsisTemplateProblem(installed + "\nSystem::Call 'SHELL32::SHGetKnownFolderPath(g \"x\", i 0, p 0, *p .r3)i.r1'\n")).toMatch(/template changed/)
+  })
+  it('check the app-builder-lib electron-builder loads, not whichever copy build/ resolves', () => {
+    const builder = dirname(require.resolve('electron-builder/package.json'))
+    const lib = dirname(require.resolve('app-builder-lib/package.json', { paths: [builder] }))
+    expect(nsisTemplatePath()).toBe(join(lib, 'templates/nsis/multiUser.nsh'))
+    expect(readFileSync('build/nsis-check.cjs', 'utf8')).toMatch(/require\.resolve\('app-builder-lib\/package\.json', \{ paths: \[builder\] \}\)/)
   })
 
   it('are read back from a packaged executable by name', () => {
