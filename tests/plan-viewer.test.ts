@@ -1,22 +1,24 @@
 // @vitest-environment happy-dom
-import { act, createElement } from 'react'
+import { act, createElement, createRef } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
-import PlanViewer from '../src/renderer/src/plans/PlanViewer'
+import PlanViewer, { type PlanViewerHandle } from '../src/renderer/src/plans/PlanViewer'
 import { PlanPreparationCache } from '../src/renderer/src/plans/preparation'
 import { layoutPlans, type LayoutStatement } from '../src/renderer/src/plans/layout'
 import type { QueryPlanState } from '../src/renderer/src/plans/QueryPlansService'
 import type { PlanSource } from '../src/renderer/src/plans/sources'
 import { resolveBuiltin } from '../src/shared/theme/resolve'
+import { defaultSettings } from '../src/shared/settings/catalog'
+import type { PlanDocument } from '../src/shared/plans'
 
 const mocks = vi.hoisted(() => ({ canvas: vi.fn(), update: vi.fn(), dispose: vi.fn(), worker: vi.fn(),
   viewerVisibility: undefined as ((visible: boolean) => void) | undefined, canvasVisibility: undefined as ((visible: boolean) => void) | undefined,
   observe: undefined as ((visible: boolean, canvasVisible?: boolean) => void) | undefined }))
 vi.mock('../src/renderer/src/plans/PlanCanvas', () => ({ PlanCanvas: class {
   constructor(options: unknown) { mocks.canvas(options) }
-  select() {} update = mocks.update; colors() {} dispose = mocks.dispose
+  select() {} preferences() {} update = mocks.update; colors() {} dispose = mocks.dispose
 } }))
 vi.mock('../src/renderer/src/core/windows', () => ({
   observeIntersection: (element: Element, callback: (entries: { isIntersecting: boolean }[]) => void) => {
@@ -33,9 +35,11 @@ document.body.append(host)
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 let generation: ((value: number) => void) | undefined
 const workbench = { planPreparation: cache, theme: { getSnapshot: () => theme, subscribe: () => () => {} },
+  settings: { getSnapshot: () => settings, subscribe: () => () => {} },
   resultClient: { backendGeneration: 1, onGeneration: (listener: typeof generation) => { generation = listener; return { dispose() {} } } } } as unknown as Workbench
 const theme = { active: resolveBuiltin('dark') }
-const model = { version: '', build: '', notices: [], statements: [{ id: 's', type: 'SELECT', text: '', estimatedCost: null, warnings: [], nodes: [
+const settings = { values: defaultSettings }
+const model: PlanDocument = { version: '', build: '', notices: [], statements: [{ id: 's', type: 'SELECT', text: '', estimatedCost: null, warnings: [], nodes: [
   { id: 'n', parentId: null, nodeId: '0', physicalOp: 'Scan', logicalOp: 'Scan', object: '', estimatedRows: 1, estimatedCost: null, actualRows: null, elapsedMs: null, cpuMs: null, executions: null, warnings: [], properties: [] }
 ] }] }
 const parse = vi.fn(async () => ({ ok: true, value: model }))
@@ -47,8 +51,11 @@ vi.stubGlobal('Worker', class {
   terminate() {}
 })
 const input: PlanSource = { key: 'document', revision: 1, label: 'Plan', read: vi.fn(async () => '<ShowPlanXML/>') }
+const controller = createRef<PlanViewerHandle>()
+const selectedEvents: string[] = []
 async function render(sources: PlanSource[] | null, visible = true, live?: QueryPlanState) {
-  await act(async () => root.render(createElement(WorkbenchProvider, { workbench, children: sources ? createElement(PlanViewer, { sources, identity: 'doc', scope: 'doc', visible, live }) : null })))
+  await act(async () => root.render(createElement(WorkbenchProvider, { workbench, children: sources ? createElement(PlanViewer, { sources, identity: 'doc', scope: 'doc', visible, live, controllerRef: controller,
+    onSelectionChanged: id => { selectedEvents.push(id); controller.current?.selectOperator(id) } }) : null })))
 }
 afterEach(async () => { await act(async () => root.unmount()); cache.dispose(); host.remove(); vi.unstubAllGlobals() })
 
@@ -62,6 +69,12 @@ it('does no hidden preparation, reuses parsed plans and layout on remount, and p
   expect(parse).toHaveBeenCalledTimes(1)
   expect(mocks.worker).toHaveBeenCalledTimes(1)
   expect(mocks.canvas).toHaveBeenCalledTimes(1)
+  expect(Array.from(host.querySelectorAll('button')).find(button => button.textContent === 'Statement SQL')!.disabled).toBe(true)
+  const camera = { x: 25, y: 30, scale: 0.8 }
+  await act(async () => mocks.canvas.mock.calls[0][0].cameraChanged(camera))
+  expect(controller.current?.getCamera()).toEqual(camera)
+  controller.current!.getCamera()!.x = 100
+  expect(controller.current?.getCamera()?.x).toBe(25)
   // A GPU retry must recreate Pixi even when the layout cache returns the identical object.
   await act(async () => (mocks.canvas.mock.calls[0][0] as { failed(): void }).failed())
   await act(async () => Array.from(host.querySelectorAll('button')).find(button => button.textContent === 'Retry plan viewer')!.click())
@@ -73,6 +86,7 @@ it('does no hidden preparation, reuses parsed plans and layout on remount, and p
   await act(async () => mocks.observe?.(true))
   expect(parse).toHaveBeenCalledTimes(1)
   expect(input.read).toHaveBeenCalledTimes(1)
+  expect(mocks.canvas.mock.lastCall?.[0].camera).toEqual(camera)
   expect(mocks.worker).toHaveBeenCalledTimes(1)
   const next = { ...input, key: 'appended' }
   await render([input, next])
@@ -112,6 +126,37 @@ it('does no hidden preparation, reuses parsed plans and layout on remount, and p
   expect(mocks.canvas).toHaveBeenCalledTimes(priorCanvases)
   await render(null)
   cache.clear()
+  // A hidden input stays searchable and selecting it expands its ancestors. The projected layout
+  // must still address the original model indices, including after Graph/XML-style unmounts.
+  const nodes = model.statements[0].nodes
+  nodes.push({ ...nodes[0], id: 'child', parentId: 'n', nodeId: '1', physicalOp: 'Hidden input' })
+  await render([input])
+  await act(async () => mocks.observe?.(true))
+  await act(async () => host.querySelector<HTMLElement>('[role="treeitem"]')!.click())
+  expect(controller.current?.getSelectedOperator()).toBe('document:n')
+  expect(selectedEvents.filter(id => id === 'document:n')).toHaveLength(1)
+  const button = (text: string) => Array.from(host.querySelectorAll('button')).find(button => button.textContent === text)!
+  await act(async () => button('Collapse inputs').click())
+  expect(mocks.canvas.mock.lastCall?.[0].layout.nodes).toHaveLength(1)
+  expect(host.querySelector('[role="treeitem"]')?.getAttribute('aria-expanded')).toBe('false')
+  await act(async () => Array.from(host.querySelectorAll<HTMLElement>('[role="treeitem"]')).find(row => row.textContent?.includes('Hidden input'))!.click())
+  expect(mocks.canvas.mock.lastCall?.[0].layout.nodes).toHaveLength(2)
+  await act(async () => controller.current?.selectOperator('document:n'))
+  expect(controller.current?.getSelectedOperator()).toBe('document:n')
+  await act(async () => controller.current?.selectOperator('unavailable'))
+  expect(controller.current?.getSelectedOperator()).toBe('document:n')
+  await act(async () => controller.current?.selectOperator('document:child'))
+  expect(host.querySelector('[role="treeitem"]')?.getAttribute('aria-expanded')).toBe('true')
+  await act(async () => button('Collapse inputs').click()) // leaf selection cannot collapse
+  await act(async () => host.querySelector<HTMLElement>('[role="treeitem"]')!.click())
+  await act(async () => button('Collapse inputs').click())
+  await render(null)
+  await render([input])
+  await act(async () => mocks.observe?.(true))
+  expect(host.querySelector('[role="treeitem"]')?.getAttribute('aria-expanded')).toBe('false')
+  expect(mocks.canvas.mock.lastCall?.[0].layout.nodes).toHaveLength(1)
+  await render(null)
+  nodes.pop(); cache.clear()
   vi.stubGlobal('Worker', class { constructor() { throw new Error('Worker creation refused') } })
   await render([input])
   await act(async () => mocks.observe?.(true))

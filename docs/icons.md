@@ -9,7 +9,7 @@ half pixels, so they are sharp at 100 % zoom where the icon's box starts on a wh
 same name. Icons are sized with the `--varia-glyph-*` tokens ([metrics](themes/metrics.md)) and coloured
 with theme keys; Microsoft's SSMS icons are never used.
 
-## Varia's icons (16)
+## Varia's icons (22)
 
 | Id | Use |
 | --- | --- |
@@ -24,6 +24,12 @@ with theme keys; Microsoft's SSMS icons are never used.
 | `role` | Server, database and application roles. |
 | `shield` | Audits, audit specifications, security policies. |
 | `execution-plan` | Execution plan documents. |
+| `plan-join` | Execution plan joins and nested loops. |
+| `plan-sort` | Execution plan sorting. |
+| `plan-filter` | Execution plan filters and assertions. |
+| `plan-aggregate` | Execution plan aggregation. |
+| `plan-parallel` | Execution plan parallel exchanges. |
+| `plan-compute` | Execution plan scalar and constant computations. |
 | `agent-job` | SQL Server Agent: Object Explorer's running-jobs chip, and jobs (planned). |
 | `ssis-package` | Integration Services packages (planned). |
 | `drive` | Drives in the server file picker. |

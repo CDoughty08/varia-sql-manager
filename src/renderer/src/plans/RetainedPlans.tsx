@@ -11,7 +11,7 @@ const description = (entry: RetainedPlan) => `${entry.label} · ${position(entry
 
 /** A window-wide XML history, available from Execution Plan even after all originating tabs close. */
 export default function RetainedPlans({ active }: { active: boolean }) {
-  const { retainedPlans, documents, files } = useWorkbench()
+  const { retainedPlans, documents, files, planPreparation } = useWorkbench()
   const history = useServiceSnapshot(retainedPlans), busy = useServiceSnapshot(documents).busy
   const [selected, setSelected] = useState(history.entries[0]?.id ?? '')
   const entry = history.entries.find(entry => entry.id === selected) ?? history.entries[0]
@@ -54,7 +54,9 @@ export default function RetainedPlans({ active }: { active: boolean }) {
         </dl>
         <pre aria-label="Captured SQL context">{entry.context.sql}</pre>
       </details>
-      {active && <PlanViewer key={'viewer:' + entry.id} sources={sources} identity={'retained:' + entry.id} />}
+      {active && <PlanViewer key={'viewer:' + entry.id} sources={sources} identity={'retained:' + entry.id} openDocument={(_, target) => {
+        const doc = documents.openText({ name: 'Retained Plan.sqlplan', text: entry.xml, kind: 'sqlplan' }); if (target) planPreparation.requestXml(doc.id, { ...target, revision: undefined }); documents.focusActive()
+      }} />}
     </> : <EmptyState icon="execution-plan" title="No retained plans" detail="Completed actual and estimated plan documents are copied here automatically. Pin a snapshot to protect it from history eviction. Closing results or query tabs keeps this history." />}
   </section>
 }

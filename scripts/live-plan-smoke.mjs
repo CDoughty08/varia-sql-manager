@@ -3,7 +3,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { connectLive } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { checkLargePlan } from './fixtures/large-plan.mjs'
-import { backendReady, outputStatus, outputView, planCanvas, planViewer, queryBarButton } from './fixtures/ui.mjs'
+import { backendReady, documentTabs, outputStatus, outputView, planCanvas, planViewer, queryBarButton } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
@@ -47,6 +47,12 @@ try {
   const operator = viewer.getByRole('treeitem').filter({ hasText: /Nested Loops/ }).first()
   await operator.click()
   const selected = await operator.getAttribute('id')
+  await canvas.evaluate(element => { window.__beforeCollapseCanvas = element.querySelector('canvas') })
+  await viewer.getByRole('button', { name: 'Collapse inputs', exact: true }).click()
+  await expect(operator).toHaveAttribute('aria-expanded', 'false')
+  await expect.poll(() => canvas.evaluate(element => !!element.querySelector('canvas') && element.querySelector('canvas') !== window.__beforeCollapseCanvas)).toBe(true)
+  await expect(operator).toContainText('Live partial')
+  await expect(viewer.getByRole('button', { name: 'Go to XML', exact: true })).toBeDisabled()
   await viewer.getByRole('button', { name: 'Reset plan zoom to 100%', exact: true }).click()
   await viewer.getByRole('button', { name: 'Zoom in plan', exact: true }).click()
   const zoom = await viewer.getByRole('button', { name: 'Reset plan zoom to 100%', exact: true }).innerText()
@@ -58,17 +64,27 @@ try {
   console.log('Live Plan: operator rows changed while executing.')
   expect(await canvas.evaluate(element => window.__livePlanCanvas === element.querySelector('canvas'))).toBe(true)
   await expect(page.locator(`[id="${selected}"]`)).toHaveAttribute('aria-selected', 'true')
+  await expect(page.locator(`[id="${selected}"]`)).toHaveAttribute('aria-expanded', 'false')
   await expect(viewer.getByRole('button', { name: 'Reset plan zoom to 100%', exact: true })).toHaveText(zoom)
   step = 'actual completion'
   await expect(outputStatus(page)).toContainText(/^Completed/, { timeout: 60_000 })
   await expect(viewer.getByRole('button', { name: 'Actual', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect(page.locator(`[id="${selected}"]`)).toHaveAttribute('aria-selected', 'true')
+  await expect(page.locator(`[id="${selected}"]`)).toHaveAttribute('aria-expanded', 'false')
   await expect(viewer.getByRole('button', { name: 'Reset plan zoom to 100%', exact: true })).toHaveText(zoom)
   expect(await canvas.evaluate(element => window.__livePlanCanvas === element.querySelector('canvas'))).toBe(true)
   await expect(viewer.getByText('Partial live snapshot', { exact: true })).toHaveCount(0)
   await expect(viewer.getByRole('button', { name: 'Open plan document', exact: true })).toBeEnabled()
+  await expect(viewer.getByRole('button', { name: 'Go to XML', exact: true })).toBeEnabled()
+  await expect(page.locator(`[id="${selected}"]`)).toContainText('Actual')
   await page.screenshot({ path: resolve('artifacts/live-plan-actual.png') })
   console.log('Live Plan: actual capture preserved canvas, selection and zoom.')
+  const origin = await documentTabs(page).getByRole('tab', { selected: true }).getAttribute('aria-label')
+  await viewer.getByRole('button', { name: 'Go to XML', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'XML source', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await page.getByRole('button', { name: 'Graph', exact: true }).click()
+  await expect(planViewer(page).getByRole('treeitem', { selected: true })).toContainText('Nested Loops')
+  await documentTabs(page).getByRole('tab', { name: origin, exact: true }).click()
   step = 'client statistics'
   await outputView(page, 'Client Statistics').click()
   const statistics = page.getByRole('table', { name: 'Client statistics comparison', exact: true })

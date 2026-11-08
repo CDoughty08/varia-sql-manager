@@ -2,6 +2,12 @@ import type { SettingDef } from './types'
 
 /** Query Results pages. */
 export const queryResultsSettings = [
+  { key: 'queryResults.plan.outline', page: 'queryResults.sqlServer.grid', label: 'Show execution plan outline', type: 'boolean', default: true, varia: true, description: 'Show the searchable, keyboard accessible operator outline.' },
+  { key: 'queryResults.plan.properties', page: 'queryResults.sqlServer.grid', label: 'Show execution plan properties', type: 'boolean', default: true, varia: true, description: 'Show properties for the selected statement or operator.' },
+  { key: 'queryResults.plan.minimap', page: 'queryResults.sqlServer.grid', label: 'Show execution plan minimap', type: 'boolean', default: true, varia: true, description: 'Show a bounded overview of the plan and its viewport.' },
+  { key: 'queryResults.plan.rowFlow', page: 'queryResults.sqlServer.grid', label: 'Show execution plan row flow', type: 'boolean', default: true, varia: true, description: 'Label edges with actual, estimated, unavailable or partial live rows.' },
+  { key: 'queryResults.plan.outlineWidth', page: 'queryResults.sqlServer.grid', label: 'Execution plan outline width', type: 'integer', min: 120, max: 600, default: 220, varia: true, description: 'Preferred outline width in pixels. The pane shrinks to fit a small window.' },
+  { key: 'queryResults.plan.propertiesWidth', page: 'queryResults.sqlServer.grid', label: 'Execution plan properties width', type: 'integer', min: 140, max: 600, default: 260, varia: true, description: 'Preferred properties width in pixels. The pane shrinks to fit a small window.' },
   {
     key: 'queryResults.grid.includeColumnHeaders', page: 'queryResults.sqlServer.grid', label: 'Include column headers when copying or saving the results', type: 'boolean', default: false,
     keywords: ['headers', 'copy', 'csv', 'export', 'save'],

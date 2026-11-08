@@ -1,13 +1,15 @@
 // Pixi's interpreter replaces generated functions, retaining the application's strict CSP.
 import 'pixi.js/unsafe-eval'
-import { Application, CanvasTextMetrics, Container, Graphics, Text, TextStyle, TexturePool } from 'pixi.js'
+import { Application, CanvasTextMetrics, Container, Graphics, GraphicsPath, Text, TextStyle, TexturePool } from 'pixi.js'
 import type { PlanStatement } from '../../../shared/plans'
+import { svgIcons, iconStroke } from '../../../shared/icons'
 import { radii, typeScale } from '../../../shared/theme/metrics'
 import type { Disposable } from '../core/types'
 import { observeIntersection, observeResize, windowOf, windows } from '../core/windows'
 import { uiFontFamily } from '../fonts'
 import { SpatialIndex, fit, intersects, viewport, zoomAt, type Camera, type PlanLayout, type PlacedNode, type PlacedEdge, type Rect } from './geometry'
 import { LabelPool } from './labels'
+import { operatorIcon, rowFlow } from './presentation'
 
 export interface CanvasColors { background: string; card: string; text: string; muted: string; border: string; accent: string; warning: string }
 export interface HoveredOperator { id: string; anchor: Rect }
@@ -15,16 +17,22 @@ export interface CanvasOptions {
   root: HTMLElement; statements: readonly PlanStatement[]; layout: PlanLayout; camera?: Camera; colors: CanvasColors
   select(id: string): void; cameraChanged(camera: Camera): void; failed(): void
   hover(operator: HoveredOperator | undefined): void
+  minimap?: boolean; rowFlow?: boolean; collapsed?: ReadonlySet<string>
 }
 const hoverDelayMs = 180
 const hoverExitMs = 160
-const rowCountFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 })
+const iconPaths = new Map(Object.entries(svgIcons).map(([key, icon]) => [key, new GraphicsPath(icon.path)]))
+export const minimapSize = { width: 160, height: 96, margin: 12 } as const
 export class PlanCanvas {
   private readonly app = new Application()
   private readonly world = new Container()
   private readonly edges = new Graphics()
   private readonly cards = new Graphics()
   private readonly labels = new Container()
+  private readonly overview = new Graphics()
+  private readonly overviewCamera = new Graphics()
+  private readonly overviewCells: { x: number; y: number }[]
+  private overviewDirty = true
   private readonly pool = new LabelPool<Text>(() => {
     const sprite = new Text({ text: '', style: this.textStyle })
     this.labels.addChild(sprite)
@@ -58,6 +66,13 @@ export class PlanCanvas {
     this.index = new SpatialIndex(options.layout.nodes)
     this.placed = new Map(options.layout.nodes.map(node => [node.id, node]))
     this.edgeIndex = new SpatialIndex(options.layout.edges)
+    const bounds = options.layout.bounds, cells = new Map<number, { x: number; y: number }>()
+    // At most 80 × 48 cells. Counter frames never rebuild the overview.
+    for (const node of options.layout.nodes) {
+      const x = Math.min(79, Math.floor((node.x - bounds.x) / bounds.width * 80)), y = Math.min(47, Math.floor((node.y - bounds.y) / bounds.height * 48))
+      cells.set(y * 80 + x, { x: x * 2, y: y * 2 })
+    }
+    this.overviewCells = [...cells.values()]
     this.camera = options.camera ?? { x: 0, y: 0, scale: 1 }
     this.owner = windowOf(options.root)
     this.ownerDocument = options.root.ownerDocument
@@ -98,6 +113,7 @@ export class PlanCanvas {
       this.options.root.append(this.app.canvas)
       this.world.addChild(this.edges, this.cards, this.labels)
       this.app.stage.addChild(this.world)
+      this.app.stage.addChild(this.overview, this.overviewCamera)
       this.resize()
       if (!this.options.camera) this.fit()
     } catch {
@@ -123,12 +139,24 @@ export class PlanCanvas {
   private invalidate(): void {
     if (!this.frame && this.ready && !this.disposed && this.visible && !this.ownerDocument.hidden) this.frame = this.owner.requestAnimationFrame(() => { this.frame = 0; this.draw() })
   }
-  private setCamera(camera: Camera): void {
+  /** Public camera hook for linked viewers. Values are copied and invalid cameras are ignored. */
+  setCamera(camera: Camera): void {
+    if (![camera.x, camera.y, camera.scale].every(Number.isFinite) || camera.scale <= 0) return
+    if (this.camera.x === camera.x && this.camera.y === camera.y && this.camera.scale === camera.scale) return
     this.dismissHover()
-    this.camera = camera
-    this.options.cameraChanged({ ...camera })
+    this.camera = { ...camera, scale: Math.max(0.00001, Math.min(3, camera.scale)) }
+    this.options.cameraChanged({ ...this.camera })
     this.invalidate()
   }
+  getCamera(): Camera { return { ...this.camera } }
+  pan(x: number, y: number): void { this.setCamera({ ...this.camera, x: this.camera.x + x, y: this.camera.y + y }) }
+  navigateMinimap(x: number, y: number): void {
+    const bounds = this.options.layout.bounds
+    const worldX = bounds.x + Math.max(0, Math.min(1, x / minimapSize.width)) * bounds.width
+    const worldY = bounds.y + Math.max(0, Math.min(1, y / minimapSize.height)) * bounds.height
+    this.setCamera({ ...this.camera, x: this.width / 2 - worldX * this.camera.scale, y: this.height / 2 - worldY * this.camera.scale })
+  }
+  preferences(minimap: boolean, flow: boolean, collapsed: ReadonlySet<string>): void { this.options.minimap = minimap; this.options.rowFlow = flow; this.options.collapsed = collapsed; this.invalidate() }
   fit(statement?: number): void {
     const bounds = statement === undefined ? this.options.layout.bounds : this.options.layout.statements[statement] ?? this.options.layout.bounds
     this.setCamera(fit(bounds, this.width, this.height))
@@ -143,7 +171,7 @@ export class PlanCanvas {
       this.setCamera({ scale: this.camera.scale, x: this.width / 2 - (node.x + node.width / 2) * this.camera.scale, y: this.height / 2 - (node.y + node.height / 2) * this.camera.scale })
     this.invalidate()
   }
-  colors(colors: CanvasColors): void { this.options.colors = colors; this.invalidate() }
+  colors(colors: CanvasColors): void { this.options.colors = colors; this.overviewDirty = true; this.invalidate() }
   update(statements: readonly PlanStatement[]): void { this.options.statements = statements; this.invalidate() }
   private wheel = (event: WheelEvent) => {
     event.preventDefault()
@@ -291,10 +319,17 @@ export class PlanCanvas {
       if (!start || !next) continue
       this.edges.moveTo(start.x, start.y)
       for (const point of edge.points.slice(1)) this.edges.lineTo(point.x, point.y)
-      this.edges.stroke({ color: colors.muted, width: 1.5 })
+      const node = edge.statement === undefined || edge.index === undefined ? undefined : this.options.statements[edge.statement]?.nodes[edge.index]
+      const flow = node ? rowFlow(node, (this.options.statements[edge.statement!] as { partial?: boolean }).partial) : undefined
+      const color = flow?.kind === 'partial' ? colors.warning : colors.muted
+      this.edges.stroke({ color, width: this.options.rowFlow ? flow?.width ?? 1.5 : 1.5, alpha: flow?.kind === 'estimated' ? 0.65 : 1 })
       const angle = Math.atan2(next.y - start.y, next.x - start.x), dx = Math.cos(angle), dy = Math.sin(angle)
       this.edges.moveTo(start.x + dx * 6 - dy * 4, start.y + dy * 6 + dx * 4).lineTo(start.x, start.y)
-        .lineTo(start.x + dx * 6 + dy * 4, start.y + dy * 6 - dx * 4).stroke({ color: colors.muted, width: 1.5 })
+        .lineTo(start.x + dx * 6 + dy * 4, start.y + dy * 6 - dx * 4).stroke({ color, width: 1.5 })
+      if (this.options.rowFlow && flow && this.camera.scale >= 0.75) {
+        const end = edge.points.at(-1)!
+        label('flow:' + edge.childId, this.fitLabel(flow.label, 106, this.mutedStyle), end.x - 108, end.y - 18, true)
+      }
     }
     for (const placed of this.index.query(area)) {
       const node = this.options.statements[placed.statement].nodes[placed.index]
@@ -303,16 +338,31 @@ export class PlanCanvas {
       const stroke = highlighted ? colors.accent : node.warnings.length ? colors.warning : colors.border
       this.cards.roundRect(placed.x, placed.y, placed.width, placed.height, radii.sm.px).fill(colors.card).stroke({ color: stroke, width: highlighted ? 2 : 1 })
       if (this.camera.scale < 0.35) continue
-      const labelWidth = placed.width - 20
-      label(placed.id + ':op', this.fitLabel(node.physicalOp, labelWidth, this.textStyle), placed.x + 10, placed.y + 8)
+      const labelWidth = placed.width - 38
+      this.cards.context.save().translate(placed.x + 8, placed.y + 8).path(iconPaths.get(operatorIcon(node.physicalOp, node.logicalOp))!).stroke({ color: colors.text, width: iconStroke }).restore()
+      label(placed.id + ':op', this.fitLabel(node.physicalOp, labelWidth, this.textStyle), placed.x + 30, placed.y + 8)
       if (this.camera.scale < 0.55) continue
-      const rows = node.actualRows ?? node.estimatedRows
-      const caption = node.actualRows !== null ? `Rows ${rowCountFormat.format(node.actualRows)}` : node.object || (rows === null ? node.logicalOp : `Est. rows ${rowCountFormat.format(rows)}`)
-      if (caption) label(placed.id + ':caption', this.fitLabel(caption, labelWidth, this.mutedStyle, !!node.object), placed.x + 10, placed.y + 28, true)
+      const caption = this.options.collapsed?.has(node.id) ? 'Inputs collapsed' : node.object || rowFlow(node, (this.options.statements[placed.statement] as { partial?: boolean }).partial).label
+      if (caption) label(placed.id + ':caption', this.fitLabel(caption, placed.width - 20, this.mutedStyle, !!node.object), placed.x + 10, placed.y + 28, true)
     }
     // Text.destroy returns its managed texture to Pixi's global idle pool. Release that surplus too;
     // clear only touches idle textures, so other canvases' borrowed textures remain valid.
     if (this.pool.end()) TexturePool.clear(true)
+    const showOverview = !!this.options.minimap && this.width >= 240 && this.height >= 160
+    this.overview.visible = this.overviewCamera.visible = showOverview
+    if (showOverview) {
+      const { width, height, margin } = minimapSize, x = this.width - width - margin, y = this.height - height - margin
+      this.overview.position.set(x, y); this.overviewCamera.position.set(x, y)
+      if (this.overviewDirty) {
+        this.overview.clear().rect(0, 0, width, height).fill(colors.background).stroke({ color: colors.border, width: 1 })
+        for (const cell of this.overviewCells) this.overview.rect(cell.x, cell.y, 2, 2).fill(colors.muted)
+        this.overviewDirty = false
+      }
+      const bounds = this.options.layout.bounds
+      const left = Math.max(0, Math.min(width, (area.x - bounds.x) / bounds.width * width)), top = Math.max(0, Math.min(height, (area.y - bounds.y) / bounds.height * height))
+      const right = Math.max(0, Math.min(width, (area.x + area.width - bounds.x) / bounds.width * width)), bottom = Math.max(0, Math.min(height, (area.y + area.height - bounds.y) / bounds.height * height))
+      this.overviewCamera.clear().rect(left, top, Math.max(1, right - left), Math.max(1, bottom - top)).stroke({ color: colors.accent, width: 2 })
+    }
     this.app.render()
   }
   dispose(): void {
