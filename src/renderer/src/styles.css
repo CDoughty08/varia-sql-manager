@@ -223,13 +223,18 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .explorer-row:hover { background: var(--varia-list-hoverBackground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
 .explorer-row[aria-selected="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
 .explorer-tree:focus .explorer-row[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); outline: 1px solid var(--varia-list-focusOutline); outline-offset: -1px; transition: none; }
-/* Pinned shortcuts reserve whole rows outside the scroll window. The overflow menu opens towards the tree. */
-.explorer-pin-band { flex: none; background: var(--varia-editorGroupHeader-tabsBackground); }
-.explorer-pin-band[data-edge="top"] { anchor-name: --explorer-pins-top; }
-.explorer-pin-band[data-edge="bottom"] { anchor-name: --explorer-pins-bottom; }
+/* Pinned shortcuts overlay a fixed scroll window, stopping before its native scrollbars. */
+.explorer-pin-band { position: absolute; left: 0; z-index: 1; width: var(--explorer-tree-width); overflow: clip; background: var(--varia-editorGroupHeader-tabsBackground); }
+.explorer-pin-band[data-edge="top"] { top: 0; anchor-name: --explorer-pins-top; }
+.explorer-pin-band[data-edge="bottom"] { bottom: var(--explorer-scrollbar-height); anchor-name: --explorer-pins-bottom; }
 .explorer-pinned-server.explorer-row, .explorer-pin-more { position: relative; width: 100%; padding: 0 var(--varia-space-2) 0 0; border: 0; border-radius: 0; color: inherit; text-align: start; cursor: pointer; }
+.explorer-pin-band > .explorer-pinned-server { position: absolute; }
+.explorer-pin-overflow { position: absolute; left: 0; right: 0; z-index: 1; overflow: clip; background: var(--varia-editorGroupHeader-tabsBackground); }
+.explorer-pin-band[data-edge="top"] > .explorer-pin-overflow { top: 0; }
+.explorer-pin-band[data-edge="bottom"] > .explorer-pin-overflow { bottom: 0; }
+.explorer-pin-band[data-edge="bottom"] > .explorer-pin-overflow > .explorer-pin-more { position: absolute; bottom: 0; }
 .explorer-pin-band > .explorer-pinned-server, .explorer-pin-more { box-shadow: inset 0 -1px var(--varia-sideBarSectionHeader-border); }
-.explorer-pin-band[data-edge="bottom"] > .explorer-pinned-server, .explorer-pin-band[data-edge="bottom"] > .explorer-pin-more { box-shadow: inset 0 1px var(--varia-sideBarSectionHeader-border); }
+.explorer-pin-band[data-edge="bottom"] > .explorer-pinned-server, .explorer-pin-band[data-edge="bottom"] .explorer-pin-more { box-shadow: inset 0 1px var(--varia-sideBarSectionHeader-border); }
 .explorer-pin-band > .explorer-pinned-server[data-current-section] { background: var(--varia-list-inactiveSelectionBackground); border-inline-start: 2px solid var(--varia-focusBorder); padding-inline-end: 6px; }
 .explorer-pin-more { display: flex; align-items: center; justify-content: space-between; height: var(--varia-row); padding-inline-start: var(--varia-space-2); color: var(--varia-descriptionForeground); }
 .explorer-pinned-server.explorer-row:hover, .explorer-pin-more:hover:not(:disabled) { background: var(--varia-list-hoverBackground); color: inherit; }
