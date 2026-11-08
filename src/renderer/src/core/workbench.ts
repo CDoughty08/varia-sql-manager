@@ -21,6 +21,9 @@ import { ResultClient } from '../results/ResultClient'
 import { ResultsService } from '../results/ResultsService'
 import { MemoryUsageService } from '../results/memory'
 import { documentOwner, documentPage, eitherHidden, LiveService, mainWindowPage } from '../live/LiveService'
+import { QueryPlansService } from '../plans/QueryPlansService'
+import { RetainedPlansService } from '../plans/RetainedPlansService'
+import { PlanPreparationCache } from '../plans/preparation'
 import { ActivityMonitorService } from '../activity/ActivityMonitorService'
 import { activityContribution } from '../contributions/activity'
 import { searchContribution } from '../contributions/search'
@@ -76,6 +79,7 @@ import { DatabasePropertiesService } from '../properties/DatabasePropertiesServi
 import { NewDatabaseService } from '../new-database/NewDatabaseService'
 import { RestoreService } from '../restore/RestoreService'
 import { SsisOperationsService } from '../ssis/SsisOperationsService'
+import { SearchDetailsService } from '../search/SearchDetailsService'
 import { ObjectSearchService } from '../search/ObjectSearchService'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
@@ -90,6 +94,7 @@ import { domFocusAdapter } from './focus'
 import { InputModeService } from './input-mode'
 import { KeybindingService } from './keybindings'
 import { gesturesFor, type GestureService } from './gestures'
+import { ShortcutsService } from './ShortcutsService'
 import { MenuStatePublisher } from './menu-state'
 import { focusHeld, focusWhenDrawn, modalOpen } from './modal'
 import { nextFrame as frame } from './frame'
@@ -123,6 +128,9 @@ export interface Workbench extends Disposable {
   readonly indexMemory: MemoryUsageService
   /** Live views (Activity Monitor, SSIS monitoring): their subscriptions, pauses while hidden, and history. */
   readonly live: LiveService
+  readonly queryPlans: QueryPlansService
+  readonly retainedPlans: RetainedPlansService
+  readonly planPreparation: PlanPreparationCache
   /** Test mode only: the grids' frame times and counters (`window.__variaGrid`). */
   readonly gridStats?: GridStats
   readonly files: FileService
@@ -159,6 +167,8 @@ export interface Workbench extends Disposable {
   readonly resultSelection: ResultSelectionService
   /** Tools › Options: the settings main stores, which the services apply, and the Options dialog. */
   readonly settings: SettingsService
+  /** The user's keyboard and mouse shortcuts main stores; each change applies to the keys, labels, menus, the editor bridge and gestures. */
+  readonly shortcuts: ShortcutsService
   /** Script As requests: their status, cancellation, and destinations. */
   readonly scripting: ScriptingService
   /** Object Explorer's Peek card: the object it shows and its reads. */
@@ -191,6 +201,8 @@ export interface Workbench extends Disposable {
   readonly operations: SsisOperationsService
   /** Search Objects: each connected server's object index (built in the backend) and the Search Objects tabs. */
   readonly objectSearch: ObjectSearchService
+  /** The Search Objects tabs' details pane: the selected hit's properties and definition. */
+  readonly searchDetails: SearchDetailsService
   readonly theme: ThemeService
   /** Toasts for work that finished out of sight, such as a save whose query is not the active document. */
   readonly notifications: NotificationService
@@ -223,8 +235,10 @@ function editorCaret(documents: DocumentService, monaco: typeof Monaco) {
   const left = box.left + caret.left, top = box.top + caret.top
   return { left, top, right: left, bottom: top + caret.height }
 }
-export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: ThemeService, settings: SettingsService): Workbench {
+export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: ThemeService, settings: SettingsService, shortcuts?: ShortcutsService): Workbench {
   const platform = toPlatform(api.platform)
+  // Normally loaded before the workbench (start.tsx), so the first key already follows the user's shortcuts.
+  const userShortcuts = shortcuts ?? new ShortcutsService({ api: api.shortcuts, platform })
   const events = new EventBus(), connections = new ConnectionService(), editorOptions = new EditorOptionsService(settings), shellOptions = new ShellOptionsService(settings), panes = new PaneService()
   // Group by Schema follows its setting (the toolbar button and the palette flip it).
   const groupBySchema = { get: () => settings.get('objectExplorer.groupBySchema'), subscribe: settings.subscribe }
@@ -241,7 +255,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // Closing the active document shows the next one in its own editor group.
   const closeSuccessor = documents.useCloseSuccessor(id => editorGroups.successor(id))
   const resultClient = new ResultClient({ api, createWorker: () => new ResultsWorker(), window, schedule: callback => { frame(callback) } })
-  const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => { frame(callback) } })
+  const retainedPlans = new RetainedPlansService()
+  const results = new ResultsService({ client: resultClient, api, events, documents, retainedPlans, frame: callback => { frame(callback) } })
   const resultMemory = new MemoryUsageService(resultClient, 'results', events)
   const indexMemory = new MemoryUsageService(resultClient, 'index')
   // The backend caps live views per server it reaches; a typed name is the closest this side knows.
@@ -251,7 +266,15 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const explorerRuntime = explorer.useStatus(explorerStatus)
   const ssisTree = new SsisTreeProbe({ explorer, live, settings, events, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe, popout: () => panes.location('explorer') === 'window' } })
   const gridStats = api.testMode ? new GridStats() : undefined
-  const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
+  const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values, retainedPlans)
+  const queryPlans = new QueryPlansService(live, documents, queries, panes, results)
+  const planPreparation = new PlanPreparationCache()
+  const planReleases = resultClient.onRelease(keys => planPreparation.release(keys))
+  const planGenerations = resultClient.onGeneration(() => planPreparation.clear())
+  const planEvents = events.subscribe(event => {
+    if (event.type === 'documents.closed') planPreparation.close(event.tabId)
+    if (event.type === 'query.started') planPreparation.forgetScope(event.tabId)
+  })
   const files = new FileService(documents, queries, api, {
     autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'],
     // Hot exit keeps a query's server name (never a login or connection string), so it keeps its database when it connects there again.
@@ -336,6 +359,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     api, documents, connections, settings,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-object-search="${CSS.escape(id)}"] [data-object-search-focus]`)?.focus())
   })
+  const searchDetails = new SearchDetailsService({ api, peek, connections, searches: objectSearch, scriptingOptions })
   const context = new ContextKeyService({
     platform,
     settings,
@@ -379,6 +403,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     keyArgs: command => { const tabId = actsOnTab(command) ? editorGroups.focusedDocument() : undefined; return tabId ? { tabId } : undefined }, editorHasTextFocus: () => documents.boundEditor?.hasTextFocus() ?? false,
     editorContains: target => target instanceof Node && !!documents.boundEditor?.getContainerDomNode().contains(target),
     keyUp: event => peek.keyUp(event.key) })
+  const shortcutsBinding = userShortcuts.bind({ keybindings, gestures: gesturesFor(platform) })
+  if (!shortcuts) void userShortcuts.load()
   const menuState = new MenuStatePublisher({ commands, context, send: state => api.setMenuState(state) })
   const actions = new ObjectActionService({
     api, explorer, documents, queries, connections, selectTopCount: () => settings.get('objectExplorer.selectTopRows'),
@@ -419,6 +445,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     resultMemory,
     indexMemory,
     live,
+    queryPlans,
+    retainedPlans,
+    planPreparation,
     ...gridStats ? { gridStats } : {},
     files,
     recentFiles,
@@ -439,6 +468,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     databaseList,
     resultSelection,
     settings,
+    shortcuts: userShortcuts,
     scripting,
     peek,
     actions,
@@ -455,6 +485,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     activity,
     operations,
     objectSearch,
+    searchDetails,
     theme,
     notifications,
     updates,
@@ -477,12 +508,17 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       context.dispose()
       files.dispose()
       recentFiles.dispose()
+      queryPlans.dispose()
+      retainedPlans.dispose()
+      planReleases.dispose(); planGenerations.dispose(); planEvents.dispose(); planPreparation.dispose()
       queries.dispose()
       results.dispose()
       resultMemory.dispose()
       indexMemory.dispose()
       actionProgress.dispose()
       // Before the live views: its documents' views and stops are cancelled while the service still runs them.
+      // Before Search Objects and Peek, whose reads its details pane shares.
+      searchDetails.dispose()
       objectSearch.dispose()
       operations.dispose()
       // Before the live views: each monitor disposes its own; then the client, while the port is still there.
@@ -522,6 +558,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       resultSelection.dispose()
       peek.dispose()
       settings.dispose()
+      shortcutsBinding.dispose()
+      userShortcuts.dispose()
       notifications.dispose()
       updates.dispose()
       theme.dispose()
@@ -564,6 +602,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // SettingsService.create started the load: services use the defaults until main's settings arrive. A warning about the
   // file, or a failed load, shows in the command banner, including one from before the workbench existed.
   settings.setReporter((message, kind) => kind === 'warning' ? commands.reportWarning(message) : commands.reportError(message))
+  userShortcuts.setReporter((message, kind) => kind === 'warning' ? commands.reportWarning(message) : commands.reportError(message))
   // The tabs the last close kept (hot exit), else the welcome query; what an earlier run or page left unsaved is offered
   // once the workbench is up.
   const welcome = () => { if (!disposed) documents.create('SQLQuery1.sql', '-- Connect this query to a server and press F5 to execute.\n\nSELECT\n    @@SERVERNAME AS server_name,\n    DB_NAME() AS database_name,\n    SYSDATETIME() AS server_time;\n', 'master') }

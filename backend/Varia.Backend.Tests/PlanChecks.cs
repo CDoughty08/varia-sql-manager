@@ -13,6 +13,7 @@ internal static class PlanChecks
     {
         var fixture = File.ReadAllText(Path.Combine("tests", "fixtures", "plans", "multiple.sqlplan"));
         var plan = Parse(fixture);
+        DiagnosticChecks(check);
         check(plan.Statements.Count == 2 && plan.Version == "1.6" && plan.Build == "16.0.1000.6", "showplan batch statements and version");
         var root = plan.Statements[0].Nodes[0];
         var scan = plan.Statements[0].Nodes[1];
@@ -21,6 +22,14 @@ internal static class PlanChecks
         check(scan.Properties.Any(property => property.Name == "RunTimeCountersPerThread[Thread=1].ActualRows" && property.Value == "40")
             && scan.Properties.Any(property => property.Name == "RunTimeCountersPerThread[Thread=2].ActualRows" && property.Value == "60"), "raw thread properties retain their thread identity");
         check(scan.Object == "[Sales].[dbo].[Orders].[IX_Status]" && scan.Warnings.Contains("PlanAffectingConvert") && plan.Statements[0].Warnings.Any(warning => warning.Contains("72.4")), "objects, conversion warnings and missing indexes");
+        var target = new LivePlanTarget(1, Guid.Empty, "master", 1, 1);
+        var signature = LivePlanSampler.Signature(target, plan);
+        scan.ActualRows++;
+        check(LivePlanSampler.Signature(target, plan) == signature, "live runtime counters do not resend a plan document");
+        scan.Properties.Add(new("Const.ConstValue", "2"));
+        check(LivePlanSampler.Signature(target, plan) != signature, "changed literal expressions resend topology even when live SQL text is omitted");
+        scan.Properties.RemoveAt(scan.Properties.Count - 1);
+        scan.ActualRows--;
         check(scan.Properties.Any(property => property.Value.Contains("完了")), "Unicode scalar expressions remain data");
         check(plan.Statements[1].Nodes[0] is { PhysicalOp: "Future SQL Operator", ActualRows: null } && plan.Statements[1].Nodes[0].Id != root.Id, "unknown operators and duplicate source node ids across statements");
         check(plan.Statements[1].Nodes[0].Properties.Any(property => property.Name == "FutureOperator.NewProperty"), "unknown operator properties preserved");
@@ -56,5 +65,75 @@ internal static class PlanChecks
         cancelled.Cancel();
         try { Parse(fixture, cancelled.Token); check(false, "plan parse cancellation"); }
         catch (OperationCanceledException) { check(true, "plan parse cancellation"); }
+    }
+
+    private static void DiagnosticChecks(Action<bool, string> check)
+    {
+        var plan = Parse(File.ReadAllText(Path.Combine("tests", "fixtures", "plans", "diagnostics.sqlplan")));
+        var statement = plan.Statements[0];
+        var sort = statement.Nodes[0];
+        var seek = statement.Nodes[1];
+        check(sort.Id == "s0n1" && seek.Id == "s0n2" && seek.ParentId == sort.Id, "diagnostic extraction preserves stable traversal IDs and hierarchy");
+        check(sort.Diagnostics.Parallel == true && sort.Diagnostics.EstimatedExecutionMode == "Row" && statement.Diagnostics.DegreeOfParallelism == 2,
+            "parallelism and estimated execution mode are independent fields");
+        check(sort.ActualRows == 100 && sort.CpuMs == 18 && sort.ElapsedMs == 30 && sort.Executions == 2 && sort.Diagnostics.Threads.Count == 3
+            && sort.Diagnostics.Threads[0] is { Rows: 0, Executions: 0, CpuMs: 0 }, "parallel counters retain coordinator zeros and worker entries");
+        check(seek.Diagnostics.EstimatedExecutions == 5 && seek.ActualRows == 10 && seek.Executions == 5 && seek.CpuMs == 0,
+            "repeated executions use cumulative rows and CPU without multiplying counters");
+        check(sort.Diagnostics.OutputColumns.SequenceEqual(["[Sales].[dbo].[Orders].[Amount]"]) && seek.Diagnostics.OutputColumns.SequenceEqual(["[Amount]"]),
+            "output columns belong only to their enclosing operator");
+        var predicates = seek.Diagnostics.Predicates;
+        check(predicates.Any(p => p.Kind == "Seek Prefix" && p.Comparison == "EQ" && p.Columns.SequenceEqual(["[Status]"]) && p.Expressions.SequenceEqual(["[@status]"]))
+            && predicates.Any(p => p.Kind == "Seek StartRange" && p.Comparison == "GT" && p.Expressions.SequenceEqual(["(0)"]))
+            && predicates.Any(p => p.Kind == "Residual" && p.Expressions.SequenceEqual(["[Amount]>(0)"])) && sort.Diagnostics.Predicates.Count == 0,
+            "seek ranges and residuals retain structure, outer expressions and owner scope");
+        check(statement.Diagnostics.Parameters is [{ CompiledValue: "N'新規'", RuntimeValue: "N'完了'" }, { CompiledValue: "(0)", RuntimeValue: null }],
+            "parameter values retain Unicode, zeros and absent runtime availability");
+        check(statement.Diagnostics.MemoryGrant.Any(p => p.Name == "GrantWaitTime" && p.Value == "0")
+            && sort.Diagnostics.Spills.Any(s => s.Kind == "SortSpillDetails" && s.Properties.Any(p => p.Name == "WritesToTempDb" && p.Value == "16")),
+            "memory grants and spill detail attributes are retained");
+        check(statement.Diagnostics.MissingIndexes is [{ Impact: 72.4, Columns.Count: 3 }] && statement.Diagnostics.MissingIndexes[0].Columns.Select(c => c.Usage).SequenceEqual(["EQUALITY", "INEQUALITY", "INCLUDE"])
+            && statement.Diagnostics.Warnings.Single().Properties.Any(p => p.Name == "Expression"), "missing-index usage and statement warning details survive outside RelOp");
+        string Wrap(string body) => Open + "<StmtSimple><QueryPlan><RelOp NodeId=\"0\" PhysicalOp=\"Scan\">" + body + "</RelOp></QueryPlan></StmtSimple>" + Close;
+        var partial = Parse(Wrap("<RunTimeInformation><RunTimeCountersPerThread Thread=\"1\" ActualRows=\"0\" ActualCPUms=\"0\" ActualElapsedms=\"0\" ActualExecutions=\"1\"/><RunTimeCountersPerThread Thread=\"2\" ActualRows=\"0\" ActualElapsedms=\"3\"/></RunTimeInformation>")).Statements[0].Nodes[0];
+        check(partial.ActualRows == 0 && partial.CpuMs is null && partial.ElapsedMs == 3 && partial.Executions is null, "missing counters on one worker never masquerade as complete sums");
+        var repeated = Parse(Wrap("<RunTimeInformation>" + string.Concat(Enumerable.Repeat("<RunTimeCountersPerThread Thread=\"0\" ActualRows=\"2\" ActualCPUms=\"1\" ActualElapsedms=\"4\" ActualExecutions=\"3\"/>", 140)) + "</RunTimeInformation>"));
+        check(repeated.Statements[0].Nodes[0] is { ActualRows: 280, CpuMs: 140, ElapsedMs: 4, Executions: 420, Diagnostics.Threads.Count: 128 } && repeated.Notices.Count == 1,
+            "repeated thread IDs remain separate and detail truncation does not truncate aggregates");
+        var hugeColumns = Parse(Wrap("<OutputList>" + string.Concat(Enumerable.Repeat("<ColumnReference Column=\"x\"/>", 100)) + "</OutputList>"));
+        check(hugeColumns.Statements[0].Nodes[0].Diagnostics.OutputColumns.Count == 64 && hugeColumns.Notices.Count == 1, "structured diagnostic collections are capped explicitly");
+        var sparse = Parse(Wrap("<IndexScan><SeekPredicates><SeekPredicate><StartRange ScanType=\"GE\"><RangeColumns><ColumnReference Column=\"[id]\"/></RangeColumns><RangeExpressions><ScalarOperator><Const ConstValue=\"(0)\"/></ScalarOperator></RangeExpressions></StartRange></SeekPredicate></SeekPredicates></IndexScan>"));
+        check(sparse.Statements[0].Nodes[0].Diagnostics.Predicates.Any(p => p.Comparison == "GE" && p.Expressions.SequenceEqual(["(0)"])), "legacy SeekPredicate and missing scalar display text preserve available leaves");
+        var invalid = Parse(Wrap("<Warnings NoJoinPredicate=\"0\"/><RunTimeInformation><RunTimeCountersPerThread Thread=\"0\" ActualRows=\"NaN\" ActualCPUms=\"-1\" ActualElapsedms=\"INF\" ActualExecutions=\"bad\"/></RunTimeInformation>"));
+        check(invalid.Statements[0].Nodes[0] is { ActualRows: null, CpuMs: null, ElapsedMs: null, Executions: null, Warnings.Count: 0, Diagnostics.Warnings.Count: 0 }, "invalid measurements remain unavailable and numeric false is not a warning");
+        var exhaustive = Parse(Open + "<StmtSimple><QueryPlan>" + string.Concat(Enumerable.Range(0, 300).Select(i => "<RelOp PhysicalOp=\"Scan\"><OutputList>" + string.Concat(Enumerable.Repeat("<ColumnReference Column=\"c\"/>", 64))
+            + "</OutputList><RunTimeInformation><RunTimeCountersPerThread Thread=\"0\" ActualRows=\"1\" ActualCPUms=\"0\" ActualElapsedms=\"0\" ActualExecutions=\"1\"/></RunTimeInformation></RelOp>")) + "</QueryPlan></StmtSimple>" + Close);
+        check(exhaustive.Notices.Count == 1 && exhaustive.Statements[0].Nodes[^1] is { ActualRows: 1, CpuMs: 0, Diagnostics.Threads.Count: 0 }, "document diagnostic-entry exhaustion preserves all later runtime aggregates");
+        var live = PlanParser.Parse(new StringReader(File.ReadAllText(Path.Combine("tests", "fixtures", "plans", "diagnostics.sqlplan"))), includeDiagnostics: false);
+        check(live.Statements[0].DiagnosticPayload is null && live.Statements[0].Nodes.All(n => n.DiagnosticPayload is null)
+            && live.Statements[0].Nodes[0] is { ActualRows: 100, CpuMs: 18, ElapsedMs: 30 }, "live parse skips detailed text allocation and serialization while retaining aggregate counters");
+        var verbosePredicates = Open + "<StmtSimple><QueryPlan>" + string.Concat(Enumerable.Range(0, 215).Select(i =>
+            "<RelOp NodeId=\"" + i + "\" PhysicalOp=\"Filter\"><Predicate><ScalarOperator ScalarString=\"" + new string('x', 4096) + "\"/></Predicate></RelOp>"))
+            + "<RelOp NodeId=\"215\" PhysicalOp=\"Compute Scalar\"><Const ConstValue=\"identity literal\"/></RelOp></QueryPlan></StmtSimple>" + Close;
+        var verboseActual = Parse(verbosePredicates);
+        var verboseLive = PlanParser.Parse(new StringReader(verbosePredicates), includeDiagnostics: false);
+        check(verbosePredicates.Length < 1_048_576 && verboseActual.Statements[0].Nodes.SelectMany(n => n.Properties).SequenceEqual(verboseLive.Statements[0].Nodes.SelectMany(n => n.Properties)),
+            "diagnostic text exhaustion cannot change legacy raw fields or live-to-actual scalar identity");
+        var emptyGrant = new StatementDiagnostics();
+        emptyGrant.Parameters.Add(new("@missing", "int", "(0)", "(1)"));
+        emptyGrant.Parameters.Add(new("@empty", "nvarchar(1)", "", ""));
+        var exhausted = new PlanStatement { Id = "s", Text = "", Type = "" };
+        exhausted.Diagnostics.Parameters.AddRange(emptyGrant.Parameters);
+        PlanDiagnostics.ApplyTextBudget([exhausted], (_, _) => "", default);
+        check(exhausted.Diagnostics.Parameters is [{ CompiledValue: null, RuntimeValue: null }, { CompiledValue: "", RuntimeValue: "" }],
+            "budget-omitted parameter values are unavailable while genuinely empty values remain available");
+        var shortAttributes = string.Join(' ', "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".Select(letter => letter + "=\"\""));
+        var nearReplyLimit = Open + "<StmtSimple><QueryPlan>" + string.Concat(Enumerable.Repeat("<RelOp PhysicalOp=\"x\"><X " + shortAttributes + "/></RelOp>", 6500))
+            + string.Concat(Enumerable.Repeat("<RelOp PhysicalOp=\"Index Scan\"><Object Table=\"[" + new string('t', 126) + "]\"/></RelOp>", 3500)) + "</QueryPlan></StmtSimple>" + Close;
+        var legacyReply = PlanParser.Parse(new StringReader(nearReplyLimit), includeDiagnostics: false);
+        var diagnosticReply = Parse(nearReplyLimit);
+        check(diagnosticReply.Statements[0].Nodes.Count == legacyReply.Statements[0].Nodes.Count
+            && diagnosticReply.Statements[0].Nodes.All(n => n.DiagnosticPayload is null) && diagnosticReply.Notices.Any(n => n.Contains("reply budget")),
+            "optional diagnostics yield to a legacy graph at the existing reply budget");
     }
 }

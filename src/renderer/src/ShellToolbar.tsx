@@ -61,6 +61,7 @@ export default function StandardToolbar({ variant }: { variant: 'header' | 'clas
         <Icon name="play" />Execute{keys.execute && <kbd>{keys.execute.text}</kbd>}</button>
       <button disabled={!enabled.cancel} onClick={() => run('query.cancel')}><Icon name="debug-stop" />Cancel</button>
       <ActualPlanToggle classic />
+      <ActualPlanToggle classic live />
       <EstimatedPlanButton classic />
       <ClientStatisticsToggle classic />
       <span className="toolbar-divider" />

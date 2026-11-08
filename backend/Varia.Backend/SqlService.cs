@@ -105,6 +105,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         public string SessionId { get; } = sessionId;
         public CancellationTokenSource Source { get; } = source;
         public bool UserCancelled { get; private set; }
+        public Plans.LivePlanTarget? PlanTarget;
         public void Cancel() { UserCancelled = true; TryCancel(Source); }
     }
 
@@ -118,7 +119,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     internal int SessionLimit { get; set; } = 1000;
     /// <summary>Follows the SET prologue in the same command, so opening a session costs no extra round trip. The login
     /// is the session's as it opened, as SSMS shows it from the connection.</summary>
-    internal const string LoginSql = "SELECT SUSER_SNAME();";
+    internal const string LoginSql = "SELECT SUSER_SNAME(), (SELECT connection_id FROM sys.dm_exec_requests WHERE session_id=@@SPID);";
     /// <summary>What a query tab's session runs before it closes with commit: every nesting level of its transaction
     /// committed, then what is left. Only the live checks change it, to break the connection while it runs.</summary>
     internal string CommitSql { get; set; } = DefaultCommitSql;
@@ -213,6 +214,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     internal SessionActions SessionActions => sessionActions;
     bool ILiveHost.TestHooks => hooks;
     bool ILiveHost.IsConnected(string connectionId) => connections.ContainsKey(connectionId);
+    Plans.LivePlanTarget? ILiveHost.QueryPlan(string connectionId, string queryId) => queries.TryGetValue(queryId, out var query) && query.ConnectionId == connectionId
+        ? Volatile.Read(ref query.PlanTarget) : null;
     string? ILiveHost.ServerOf(string connectionId) => ServerOf(connectionId);
     ResultStore ILiveHost.Store => store;
     ServerProfile? ILiveHost.Profile(string connectionId) => connections.ContainsKey(connectionId) && profiles.TryGetValue(connectionId, out var profile) ? profile : null;
@@ -1021,37 +1024,13 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             var connection = session.Connection;
             connection.FireInfoMessageEventOnUserErrors = false;
             connection.InfoMessage += onInfo;
-            if (connection.State != System.Data.ConnectionState.Open)
-            {
-                if (session.HasOpened) throw new RequestException("SESSION_LOST", "The SQL session was lost. This script was not executed. Execute again to open a new session; previous SET options, temporary objects, and open transactions are gone.");
-                // A Kerberos or Entra failure answers the request (AUTH_KERBEROS, AUTH_ENTRA), as SESSION_LOST does: no batch was sent.
-                await Open(connection, token);
-                try
-                {
-                    await using var prologue = connection.CreateCommand();
-                    prologue.CommandText = Prologue + " " + LoginSql;
-                    prologue.CommandTimeout = 0;
-                    await using var reader = await prologue.ExecuteReaderAsync(token);
-                    session.Login = await reader.ReadAsync(token) && reader.FieldCount == 1 && !reader.IsDBNull(0) ? reader.GetString(0) : null;
-                    // The SPID comes with the login acknowledgement: no round trip, and it never changes, since idle
-                    // connection recovery is off for query sessions.
-                    session.Spid = connection.ServerProcessId;
-                }
-                catch
-                {
-                    // A session without SSMS's settings must not run a script later; closing it makes the next execution open
-                    // a new one.
-                    connection.Close();
-                    throw;
-                }
-                session.HasOpened = true;
-            }
+            await OpenSessionAsync(session, token);
             if (session.Spid is { } openedSpid) events.SessionOpened(openedSpid, session.Login);
             // ChangeDatabase must still throw for a missing database, so user errors become events only for script batches.
             if (!string.Equals(connection.Database, args.Database, StringComparison.Ordinal))
                 await connection.ChangeDatabaseAsync(args.Database, token);
             database = connection.Database;
-            if (args.IncludeActualPlan && session.Spid is { } captureSpid)
+            if ((args.IncludeActualPlan || args.IncludeLivePlan) && session.Spid is { } captureSpid)
             {
                 var profile = Profile(args.ConnectionId);
                 if (profile.Major is > 0 and < 14 && profile.EngineEdition is not (5 or 8))
@@ -1110,6 +1089,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                         // (ColumnPlan reads past the rest of a truncated one).
                         // A Stop between the loop's check and here found no statement to cancel.
                         token.ThrowIfCancellationRequested();
+                        if (args.IncludeLivePlan && session.ServerConnectionId is { } serverConnectionId)
+                            Volatile.Write(ref running.PlanTarget, new Plans.LivePlanTarget(session.Spid!.Value, serverConnectionId, database, batchNumber, iteration));
                         if (capture?.Started == true) capture.BatchSubmitted(batchNumber, iteration);
                         reader = await command.ExecuteReaderAsync(System.Data.CommandBehavior.SequentialAccess, CancellationToken.None);
                         // Positioned on a result set not yet read, or on the batch's end.
@@ -1812,6 +1793,40 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         session?.Close();
         // The session's results stay until the renderer closes them (results.close) or its next query replaces them.
         return new { Closed = removed };
+    }
+
+    private async Task OpenSessionAsync(QuerySession session, CancellationToken token)
+    {
+        var connection = session.Connection;
+        if (connection.State != System.Data.ConnectionState.Open)
+        {
+            if (session.HasOpened) throw new RequestException("SESSION_LOST", "The SQL session was lost. This script was not executed. Execute again to open a new session; previous SET options, temporary objects, and open transactions are gone.");
+            // A Kerberos or Entra failure answers the request (AUTH_KERBEROS, AUTH_ENTRA), as SESSION_LOST does: no batch was sent.
+            await Open(connection, token);
+            try
+            {
+                await using var prologue = connection.CreateCommand();
+                prologue.CommandText = Prologue + " " + LoginSql;
+                prologue.CommandTimeout = 0;
+                await using var reader = await prologue.ExecuteReaderAsync(token);
+                if (await reader.ReadAsync(token))
+                {
+                    session.Login = reader.FieldCount >= 1 && !reader.IsDBNull(0) ? reader.GetString(0) : null;
+                    session.ServerConnectionId = reader.FieldCount >= 2 && !reader.IsDBNull(1) ? reader.GetGuid(1) : null;
+                }
+                // The SPID comes with the login acknowledgement: no round trip, and it never changes, since idle
+                // connection recovery is off for query sessions.
+                session.Spid = connection.ServerProcessId;
+            }
+            catch
+            {
+                // A session without SSMS's settings must not run a script later; closing it makes the next execution open
+                // a new one.
+                connection.Close();
+                throw;
+            }
+            session.HasOpened = true;
+        }
     }
 
     private QuerySession Session(QueryArgs args)

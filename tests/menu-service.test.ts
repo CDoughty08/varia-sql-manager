@@ -8,6 +8,8 @@ import type { ResolvedMenuItem } from '../src/renderer/src/menus/resolve'
 import { MenuTargetService } from '../src/renderer/src/menus/targets'
 import { fakeDocument, FakeElement } from './fixtures/elements'
 import { connectionInfo, connectionOptions, manualTimers, readyBackend, workbenchFixture } from './fixtures/workbench'
+import { effectiveRules } from '../src/shared/commands/effective'
+import { emptyShortcutFile } from '../src/shared/commands/shortcut-schema'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
@@ -127,7 +129,7 @@ describe('menu access keys', () => {
     const [query] = menus.controller.view.levels
     expect(menus.controller.view).toMatchObject({ source: 'menubar', mnemonics: true, menubar: { focused: 'query', open: 'query' } })
     expect(query.items[query.active]).toMatchObject({ kind: 'submenu', title: 'Connection' })
-    expect(titles(query.items)).toEqual(['Connection', 'Change Database…', '-', 'Execute', 'Cancel Executing Query', 'Include Actual Execution Plan', 'Display Estimated Execution Plan', 'Include Client Statistics', 'Reset Client Statistics'])
+    expect(titles(query.items)).toEqual(['Connection', 'Change Database…', '-', 'Execute', 'Cancel Executing Query', 'Include Actual Execution Plan', 'Include Live Execution Plan', 'Display Estimated Execution Plan', 'Display Estimated Plan in Query Session', 'Include Client Statistics', 'Reset Client Statistics'])
   })
   it('opens Tools with Alt+T, where Options… opens the Options dialog once the stored settings are in', async () => {
     const { menus, fixture, order } = setup()
@@ -449,7 +451,7 @@ describe('context menus', () => {
     doc.activeElement = line
     expect(menus.openForElement(line.dom, { keyboard: true })).toBe(true)
     expect(level(menus)).toMatchObject({ label: 'Query editor', active: 0, anchor: { kind: 'below', rect: caret } })
-    expect(titles(level(menus).items)).toEqual(['Insert Snippet…', 'Surround With…', '-', 'Connection', '-', 'Execute', 'Cancel Executing Query', 'Display Estimated Execution Plan', '-', 'Cut', 'Copy', 'Paste', '-', 'Command Palette…'])
+    expect(titles(level(menus).items)).toEqual(['Insert Snippet…', 'Surround With…', '-', 'Connection', '-', 'Execute', 'Cancel Executing Query', 'Display Estimated Execution Plan', 'Display Estimated Plan in Query Session', '-', 'Cut', 'Copy', 'Paste', '-', 'Command Palette…'])
     expect(menus.openForElement(null, { keyboard: true })).toBe(false)
   })
   it('opens a menu button\'s menu below it as a pointer menu from a click, and names what the open menu is for', () => {
@@ -603,5 +605,20 @@ describe('context menus', () => {
     expect(level(menus).label).toBe('Query tab')
     attached.dispose()
     expect(listeners.has('contextmenu')).toBe(false)
+  })
+})
+
+describe('menu service with remapped keys', () => {
+  it.each(['win32', 'darwin'] as const)('labels items with the effective rules once they change, on %s', platform => {
+    const { menus, fixture } = setup({ platform })
+    const newQuery = () => menus.resolve('file').find(item => item.kind === 'command' && item.id === 'file.new')
+    expect(newQuery()).toMatchObject({ keybinding: { text: platform === 'darwin' ? '⌘N' : 'Ctrl+N' } })
+    const effective = effectiveRules(platform, { ...emptyShortcutFile, bindings: [{ command: 'file.new', key: 'mod+n', remove: true }, { command: 'file.new', key: 'mod+shift+f9' }] })
+    fixture.keybindings.setRules(effective.rules)
+    expect(newQuery()).toMatchObject({ keybinding: { text: platform === 'darwin' ? '⇧⌘F9' : 'Ctrl+Shift+F9' } })
+    // A removal with nothing in its place leaves the item without a key.
+    fixture.keybindings.setRules(effectiveRules(platform, { ...emptyShortcutFile, bindings: [{ command: 'file.new', key: 'mod+n', remove: true }] }).rules)
+    const item = newQuery()
+    expect(item?.kind === 'command' && item.keybinding).toBeFalsy()
   })
 })

@@ -37,6 +37,75 @@ function fixture(commandTimeout?: number, wait?: (ms: number) => Promise<void>, 
   return { ...docs, bus: docs.events, queries, queryApi: api, connection, tab, events, results, calls }
 }
 describe('query orchestration', () => {
+  it('requests session estimation explicitly, publishes its SPID and preserves grids, toggles and statistics', async () => {
+    const f = fixture()
+    f.documents.update(f.tab.id, { includeActualPlan: true, includeClientStatistics: true, includeLivePlan: true })
+    await f.queries.execute()
+    const previous = f.queries.getSnapshot()[f.tab.id], statistics = f.queries.statistics.getSnapshot()
+    f.queryApi.estimatePlan.mockResolvedValueOnce({ ok: true, value: { database: 'tempdb', plans: [], session: { spid: 55, login: 'reader' } } })
+    await f.queries.estimate(f.tab.id, 'session')
+    expect(f.queryApi.estimatePlan).toHaveBeenCalledWith(expect.objectContaining({ mode: 'session' }))
+    expect(f.queries.getSnapshot()[f.tab.id]).toMatchObject({ summary: previous.summary, session: { connectionId: f.connection.id, spid: 55 }, estimated: { mode: 'session' } })
+    expect(f.documents.get(f.tab.id)).toMatchObject({ database: 'master', includeActualPlan: true, includeLivePlan: true, includeClientStatistics: true })
+    expect(f.queries.statistics.getSnapshot()).toBe(statistics)
+    expect(f.results.begin).toHaveBeenCalledTimes(1)
+    expect(f.results.finish).toHaveBeenCalledTimes(1)
+  })
+  it('forgets a session lost during estimate cleanup, keeps grids, and marks the next execution as a new session', async () => {
+    const f = fixture()
+    f.queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ spid: 51 }) })
+    await f.queries.execute()
+    const summary = f.queries.getSnapshot()[f.tab.id].summary
+    f.queryApi.estimatePlan.mockResolvedValueOnce({ ok: false, code: 'SESSION_LOST', error: 'Capture cleanup failed; session closed.' })
+    await f.queries.estimate(f.tab.id, 'session')
+    expect(f.queries.getSnapshot()[f.tab.id]).toMatchObject({ summary, estimated: { error: expect.stringContaining('session closed') } })
+    expect(f.queries.getSnapshot()[f.tab.id].session).toBeUndefined()
+    expect(f.documents.get(f.tab.id)?.sessionNotice).toBe('lost')
+  })
+  it('uses the running-query close prompt while session estimation owns the session, without trying to read its transaction', async () => {
+    const f = fixture()
+    const pending = deferred<Awaited<ReturnType<VariaApi['estimatePlan']>>>()
+    f.queryApi.estimatePlan.mockReturnValueOnce(pending.promise)
+    const run = f.queries.estimate(f.tab.id, 'session')
+    expect(await f.queries.confirmSessions('close', [f.tab.id])).toBeUndefined()
+    expect(f.queryApi.querySessionState).not.toHaveBeenCalled()
+    expect(f.queryApi.confirmSessions).toHaveBeenCalledWith({ action: 'close', tabs: [{ name: 'query.sql', running: true, transactions: 0 }] })
+    expect(f.queryApi.cancel).not.toHaveBeenCalled()
+    f.queryApi.confirmSessions.mockResolvedValueOnce({ ok: true, value: 'proceed' })
+    f.queryApi.cancel.mockImplementationOnce(async () => {
+      pending.resolve({ ok: false, code: 'CANCELLED', error: 'Cancelled; capture cleanup completed.' })
+      return { ok: true, value: { cancelled: true } }
+    })
+    expect(await f.queries.confirmSessions('close', [f.tab.id])).toEqual(new Map([[f.tab.id, 'rollback']]))
+    await run
+  })
+  it('requests live capture per query tab and retains run identity until the next execution', async () => {
+    const f = fixture()
+    f.documents.update(f.tab.id, { includeLivePlan: true })
+    await f.queries.execute()
+    const args = f.queryApi.execute.mock.calls[0][0]
+    expect(args.includeLivePlan).toBe(true)
+    expect(args).not.toHaveProperty('includeActualPlan')
+    expect(args).not.toHaveProperty('includeClientStatistics')
+    expect(f.queries.getSnapshot()[f.tab.id].livePlan?.queryId).toBe(args.queryId)
+    f.documents.update(f.tab.id, { includeLivePlan: false })
+    await f.queries.execute()
+    expect(f.queryApi.execute.mock.calls[1][0]).not.toHaveProperty('includeLivePlan')
+    expect(f.queries.getSnapshot()[f.tab.id].livePlan).toBeUndefined()
+  })
+  it('keeps client statistics opt-in independent and separates comparisons when live capture changes', async () => {
+    const f = fixture()
+    f.documents.update(f.tab.id, { includeClientStatistics: true })
+    await f.queries.execute()
+    expect(f.queryApi.execute.mock.calls[0][0]).toMatchObject({ includeClientStatistics: true })
+    expect(f.queryApi.execute.mock.calls[0][0]).not.toHaveProperty('includeLivePlan')
+    f.documents.update(f.tab.id, { includeLivePlan: true })
+    await f.queries.execute()
+    expect(f.queryApi.execute.mock.calls[1][0]).toMatchObject({ includeClientStatistics: true, includeLivePlan: true })
+    f.documents.update(f.tab.id, { includeLivePlan: false, includeActualPlan: true })
+    await f.queries.execute()
+    expect(f.queries.statistics.getSnapshot()[f.tab.id].map(run => [run.scope, run.actualPlan, run.livePlan])).toEqual([[1, false, false], [2, true, true], [3, true, false]])
+  })
   it('preserves an estimate output choice through completion and opens each new estimate on its plan', async () => {
     const { queries, queryApi, tab, bus } = fixture()
     bus.emit({ type: 'query.outputSelected', tabId: tab.id, view: 'messages' })
@@ -91,7 +160,7 @@ describe('query orchestration', () => {
   })
   it('estimates the selected text without streaming results or changing the ordinary session and actual-plan toggle', async () => {
     const f = fixture()
-    f.documents.update(f.tab.id, { includeActualPlan: true, includeClientStatistics: true })
+    f.documents.update(f.tab.id, { includeActualPlan: true, includeClientStatistics: true, includeLivePlan: true })
     f.queryApi.execute.mockResolvedValueOnce({ ok: true, value: output({ spid: 47, login: 'reader' }) })
     await f.queries.execute()
     const statistics = f.queries.statistics.getSnapshot()

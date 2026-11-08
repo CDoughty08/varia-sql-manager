@@ -4,7 +4,8 @@ import type { Workbench } from '../core/workbench'
 import { defaultRules, type Platform, type ResolvedRule } from '../../../shared/commands/keybindings'
 import { focusedEditor } from '../editor/actions'
 import { caretFindSeed } from '../editor/find-seed'
-import { registerEditorBridge, type BridgeMonaco } from '../editor/keybinding-bridge'
+import { followEditorBridge, registerEditorBridge, type BridgeMonaco } from '../editor/keybinding-bridge'
+import { onUnexpectedError } from '../core/errors'
 import { snippetById, snippets, type Snippet } from '../editor/snippets'
 import { applyTextOp, caseEdits, checkSelectionSize, indentEdits, type TextSelection } from '../editor/text-ops'
 import type { QuickPickItem } from '../quickinput/QuickInputService'
@@ -36,6 +37,7 @@ const seededFindActions = [
  * instead of Monaco's actions, so the keys seed as the menus and the palette do. In the find widget Monaco's own actions
  * still have them.
  */
+// They stay on the catalogue's keys: Monaco-native keys cannot be remapped in v1 (PR H).
 const seededFindRules = (platform: Platform): ResolvedRule[] => defaultRules(platform).filter(rule => seededFindActions.some(([id]) => id === rule.command))
 
 /**
@@ -44,7 +46,7 @@ const seededFindRules = (platform: Platform): ResolvedRule[] => defaultRules(pla
  * editor, focused first; with no editor or document it does nothing. Varia's own editor chords reach Monaco through the
  * keybinding bridge.
  */
-export function editingContribution(workbench: Pick<Workbench, 'commands' | 'documents' | 'editorOptions' | 'bookmarks' | 'editorDialogs' | 'quickInput' | 'platform'>, monaco: BridgeMonaco): Disposable {
+export function editingContribution(workbench: Pick<Workbench, 'commands' | 'documents' | 'editorOptions' | 'bookmarks' | 'editorDialogs' | 'quickInput' | 'platform' | 'keybindings'>, monaco: BridgeMonaco): Disposable {
   const { commands, documents, editorOptions, bookmarks, editorDialogs, quickInput } = workbench
   const withEditor = (run: (target: editor.IStandaloneCodeEditor, model: editor.ITextModel) => void) => () => {
     const target = focusedEditor(documents), model = target?.getModel()
@@ -98,7 +100,8 @@ export function editingContribution(workbench: Pick<Workbench, 'commands' | 'doc
     })
   })
   const registrations = [
-    registerEditorBridge(monaco, commands, workbench.platform),
+    // Varia's own editor chords follow the Shortcuts page's rules.
+    followEditorBridge(monaco, commands, workbench.platform, workbench.keybindings, onUnexpectedError),
     registerEditorBridge(monaco, commands, workbench.platform, seededFindRules(workbench.platform)),
     ...seededFindActions.map(([id, action, when]) => commands.register(id, { run: seededFind(action, when) })),
     commands.register('edit.goToLine', { run: goToLine }),
