@@ -2,12 +2,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { explorerCatalogJson, maxBand, minBand } from '../src/shared/explorer/catalog'
-import { isPeekKind, peekCatalogBlock, peekFacts, peekFormats, peekKinds, peekLimits, peekSpecs, peekTabsOf, peekTabTitle, type PeekDependenciesResult, type PeekResult, type PeekRowsResult } from '../src/shared/explorer/peek'
-import { peekParamsSchema, peekRowsParamsSchema } from '../src/shared/explorer/schema'
+import { isPeekKind, isPeekListTab, peekCatalogBlock, peekFacts, peekFormats, peekHas, peekKinds, peekLimits, peekLists, peekListsOf, peekSpecs, peekTabsOf, peekTabTitle, type PeekDependenciesResult, type PeekResult, type PeekRowsResult } from '../src/shared/explorer/peek'
+import { peekDependenciesParamsSchema, peekParamsSchema, peekRowsParamsSchema } from '../src/shared/explorer/schema'
 import { requestSchemas } from '../src/main/validation'
 import { methodPolicies } from '../src/shared/ipc/methods'
 import { cancellableRequests } from '../src/main/backend/renderer-requests'
-import { PeekBoundary, PeekRows } from '../src/renderer/src/explorer/PeekCard'
+import { PeekBoundary, PeekListView, PeekRows, Properties } from '../src/renderer/src/explorer/PeekCard'
 import { formatPeekValue, placePeek, cardWidth } from '../src/renderer/src/explorer/peek-format'
 import { PeekService, peekMessages } from '../src/renderer/src/explorer/PeekService'
 import type { ApiResult, ExplorerChildrenResult } from '../src/shared/contracts'
@@ -15,14 +15,14 @@ import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import type { ScriptingOptions } from '../src/shared/scripting/options'
 
 const connectionId = '11111111-1111-4111-8111-111111111111', requestId = '22222222-2222-4222-8222-222222222222'
-const node = (kind: 'table' | 'procedure' | 'login', id = 1, name = 'Customer'): ExplorerMenuNode => ({
+const node = (kind: 'table' | 'procedure' | 'login' | 'user', id = 1, name = 'Customer'): ExplorerMenuNode => ({
   id, connectionId, kind, label: name, lost: false,
-  ref: { type: 'object', object: kind === 'login' ? { kind, name } : { kind, database: 'Sales', schema: 'dbo', name } }
+  ref: { type: 'object', object: kind === 'login' ? { kind, name } : kind === 'user' ? { kind, database: 'Sales', name } : { kind, database: 'Sales', schema: 'dbo', name } }
 })
 
 describe('Peek catalogue', () => {
   it('describes each kind with distinct fact ids and labels, known formats, and bands the tree serves', () => {
-    expect(peekKinds).toEqual(['table', 'view', 'procedure', 'function'])
+    expect(peekKinds).toEqual(['table', 'view', 'procedure', 'function', 'index', 'trigger', 'databaseTrigger', 'serverTrigger', 'database', 'login', 'synonym', 'sequence', 'type', 'tableType'])
     for (const kind of peekKinds) {
       const facts = peekFacts(kind)
       expect(new Set(facts.map(fact => fact.id)).size, kind).toBe(facts.length)
@@ -32,30 +32,35 @@ describe('Peek catalogue', () => {
         expect(fact.id, fact.id).toMatch(/^[a-z][A-Za-z]+$/)
         if (fact.since !== undefined) expect(fact.since > minBand && fact.since <= maxBand, fact.id).toBe(true)
       }
-      expect(facts.slice(0, 4).map(fact => fact.id), kind).toEqual(['schema', 'created', 'modified', 'systemObject'])
     }
-    // Only tables have no stored text: Script As writes their definition.
-    expect(peekKinds.filter(kind => peekSpecs[kind].definition === 'script')).toEqual(['table'])
+    // Schema-scoped objects start as SSMS's General page does.
+    for (const kind of ['table', 'view', 'procedure', 'function', 'synonym', 'sequence'] as const) expect(peekFacts(kind).slice(0, 4).map(fact => fact.id), kind).toEqual(['schema', 'created', 'modified', 'systemObject'])
+    // Kinds with stored text read it from sys.sql_modules; Script As writes the others' definition.
+    expect(peekKinds.filter(kind => peekSpecs[kind].definition === 'module')).toEqual(['view', 'procedure', 'function', 'trigger', 'databaseTrigger', 'serverTrigger'])
   })
   it('embeds the facts in reply order for the backend', () => {
     const embedded = JSON.parse(explorerCatalogJson()) as { peek: ReturnType<typeof peekCatalogBlock> }
     expect(embedded.peek).toEqual(JSON.parse(JSON.stringify(peekCatalogBlock())))
-    expect(embedded.peek.kinds.find(kind => kind.kind === 'table')?.facts.find(fact => fact.id === 'ledger')).toEqual({ id: 'ledger', format: 'text', since: 16 })
+    expect(embedded.peek.kinds.find(kind => kind.kind === 'table')?.facts.find(fact => fact.id === 'ledger')).toEqual({ id: 'ledger', format: 'code', since: 16, optional: false })
     expect(embedded.peek.budgetMs).toBe(peekLimits.budgetMs)
   })
 })
 
 describe('explorer.peek requests', () => {
-  it('accepts a table, view, procedure or function and refuses any other kind or extra field', () => {
+  it('accepts the kinds the catalogue describes and refuses any other kind or extra field', () => {
     const target = { kind: 'table', database: 'Sales', schema: 'dbo', name: 'Customer' }
     expect(peekParamsSchema.safeParse({ connectionId, requestId, target }).success).toBe(true)
     expect(peekParamsSchema.safeParse({ connectionId, requestId, target: { ...target, kind: 'procedure' } }).success).toBe(true)
-    expect(peekParamsSchema.safeParse({ connectionId, requestId, target: { kind: 'login', name: 'sa' } }).success).toBe(false)
+    expect(peekParamsSchema.safeParse({ connectionId, requestId, target: { kind: 'login', name: 'sa' } }).success).toBe(true)
+    expect(peekParamsSchema.safeParse({ connectionId, requestId, target: { kind: 'database', name: 'Sales' } }).success).toBe(true)
+    expect(peekParamsSchema.safeParse({ connectionId, requestId, target: { kind: 'index', database: 'Sales', parent: { kind: 'table', schema: 'dbo', name: 'Customer' }, name: 'PK_Customer' } }).success).toBe(true)
+    expect(peekParamsSchema.safeParse({ connectionId, requestId, target: { kind: 'user', database: 'Sales', name: 'app' } }).success).toBe(false)
     expect(peekParamsSchema.safeParse({ connectionId, requestId, target: { ...target, schema: undefined } }).success).toBe(false)
     expect(peekParamsSchema.safeParse({ connectionId, requestId, target: { ...target, name: 'x'.repeat(129) } }).success).toBe(false)
     expect(peekParamsSchema.safeParse({ connectionId, requestId, target, extra: 1 }).success).toBe(false)
     expect(peekParamsSchema.safeParse({ connectionId: 'nope', requestId, target }).success).toBe(false)
-    expect(isPeekKind('index')).toBe(false)
+    expect(isPeekKind('index')).toBe(true)
+    expect(isPeekKind('column')).toBe(false)
   })
   it('is validated by main, runs on the explorer lane within its deadline, and is cancellable', () => {
     expect(requestSchemas['explorer.peek']).toBe(peekParamsSchema)
@@ -164,7 +169,7 @@ describe('PeekService', () => {
   })
   it('opens on a Ctrl+hover only after the pointer rests, and never for other kinds', () => {
     const { service, api, timers } = setup()
-    service.hover(node('login'))
+    service.hover(node('user'))
     expect(timers.callback).toBeUndefined()
     service.hover(node('table'))
     expect(timers.ms).toBe(peekLimits.hoverMs)
@@ -474,7 +479,7 @@ describe('Peek tabs', () => {
     expect(peekRowsParamsSchema.safeParse({ connectionId, requestId, target: { ...target, kind: 'procedure' } }).success).toBe(false)
     expect(peekRowsParamsSchema.safeParse({ connectionId, requestId, target, extra: 1 }).success).toBe(false)
     expect(requestSchemas['explorer.peekRows']).toBe(peekRowsParamsSchema)
-    expect(requestSchemas['explorer.peekDependencies']).toBe(peekParamsSchema)
+    expect(requestSchemas['explorer.peekDependencies']).toBe(peekDependenciesParamsSchema)
     expect(methodPolicies['explorer.peekDependencies']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 30_000 })
     expect(methodPolicies['explorer.peekRows']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 30_000 })
     expect(cancellableRequests('explorer.peekRows', { explorer: 'explorer', scripting: 'scripting', actions: 'actions', ssis: 'ssis', activity: 'activity', connections: 'connections' })).toBe('explorer')
@@ -564,7 +569,10 @@ describe('Peek tabs', () => {
     expect(service.canFollow({ ...view, database: 'Sales' })).toBe(false)
     expect(service.canFollow({ ...view, server: 'LINKED' })).toBe(false)
     expect(service.canFollow({ name: 'trg', schema: 'dbo' })).toBe(false)
-    expect(service.canFollow({ ...view, kind: 'synonym' })).toBe(false)
+    expect(service.canFollow({ ...view, kind: 'synonym' })).toBe(true)
+    expect(service.canFollow({ ...view, kind: 'sequence' })).toBe(true)
+    expect(service.canFollow({ ...view, kind: 'trigger' })).toBe(false)
+    expect(service.canFollow({ ...view, kind: 'column' as never })).toBe(false)
     service.follow(view)
     expect(open()).toMatchObject({ rowId: 7, kind: 'view', tab: 'definition', node: { kind: 'view', label: 'Sales.vOrders', ref: { type: 'object', object: { kind: 'view', database: 'Sales', schema: 'Sales', name: 'vOrders' } } } })
     expect(open().back).toHaveLength(1)
@@ -583,5 +591,143 @@ describe('Peek tabs', () => {
     service.follow(view)
     service.peek(node('table', 7), 'keyboard')
     expect(open()).toMatchObject({ kind: 'table', back: [], tab: 'definition' })
+  })
+})
+
+describe('Peek kinds beyond modules', () => {
+  const ok = <T>(value: T): ApiResult<T> => ({ ok: true, value })
+  const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+  const embedded = () => (JSON.parse(explorerCatalogJson()) as { peek: ReturnType<typeof peekCatalogBlock> }).peek
+
+  it('declares each kind\'s tabs in the catalogue, Definition first, and lists only where the kind has them', () => {
+    const tabs = Object.fromEntries(peekKinds.map(kind => [kind, peekTabsOf(kind)]))
+    expect(tabs).toEqual({
+      table: ['definition', 'members', 'dependencies', 'rows'], view: ['definition', 'members', 'dependencies', 'rows'],
+      procedure: ['definition', 'members', 'dependencies'], function: ['definition', 'members', 'dependencies'],
+      index: ['definition', 'indexColumns'], trigger: ['definition', 'events', 'dependencies'],
+      databaseTrigger: ['definition', 'events'], serverTrigger: ['definition', 'events'],
+      database: ['definition', 'files'], login: ['definition', 'serverRoles', 'userMapping'],
+      synonym: ['definition', 'dependencies'], sequence: ['definition', 'dependencies'], type: ['definition', 'dependencies'],
+      tableType: ['definition', 'members', 'dependencies']
+    })
+    // A synonym has no Top rows, a sequence no Parameters, a database or a login no Dependencies.
+    expect([peekHas('synonym', 'rows'), peekHas('sequence', 'members'), peekHas('database', 'dependencies'), peekHas('login', 'dependencies')]).toEqual([false, false, false, false])
+    for (const kind of peekKinds) {
+      expect(peekTabsOf(kind)[0], kind).toBe('definition')
+      expect(peekHas(kind, 'members'), kind).toBe(peekSpecs[kind].members !== undefined)
+    }
+    expect(peekTabTitle('login', 'userMapping')).toBe('User mapping')
+    expect(peekTabTitle('index', 'indexColumns')).toBe(peekLists.indexColumns.title)
+    expect(peekTabTitle('tableType', 'members')).toBe('Columns')
+    expect(isPeekListTab('files')).toBe(true)
+    expect(isPeekListTab('rows')).toBe(false)
+    expect(peekListsOf('login')).toEqual(['serverRoles', 'userMapping'])
+  })
+
+  it('embeds tabs, lists and the optional usage group for the backend, the optional facts last', () => {
+    const peek = embedded()
+    const kind = (id: string) => peek.kinds.find(item => item.kind === id)!
+    expect(peek.listRows).toBe(peekLimits.listRows)
+    expect(peek.mappingDatabases).toBe(peekLimits.mappingDatabases)
+    expect(peek.kinds.filter(item => !item.dependencies).map(item => item.kind)).toEqual(['index', 'databaseTrigger', 'serverTrigger', 'database', 'login'])
+    expect(peek.kinds.filter(item => item.optionalGroup).map(item => item.kind)).toEqual(['index'])
+    expect(kind('index').optionalGroup).toBe('usage')
+    const facts = kind('index').facts
+    const first = facts.findIndex(item => item.optional)
+    expect(facts.slice(first).every(item => item.optional)).toBe(true)
+    expect(facts.slice(first).map(item => item.id)).toEqual(peekSpecs.index.groups.find(group => group.id === 'usage')!.facts.map(item => item.id))
+    expect(kind('login').lists.map(list => list.id)).toEqual(['serverRoles', 'userMapping'])
+    expect(kind('database').lists[0]!.columns).toEqual(peekLists.files.columns.map(column => ({ id: column.id, format: column.format })))
+    // Facts newer than the oldest band are gated.
+    expect(facts.find(item => item.id === 'optimizeForSequentialKey')?.since).toBe(15)
+    expect(kind('sequence').facts.find(item => item.id === 'lastUsedValue')?.since).toBe(14)
+    for (const list of Object.values(peekLists)) expect(new Set(list.columns.map(column => column.label)).size, list.id).toBe(list.columns.length)
+  })
+
+  it('takes a dependencies request only for kinds with that tab', () => {
+    const schemaObject = (kind: string) => ({ connectionId, requestId, target: { kind, database: 'Sales', schema: 'dbo', name: 'x' } })
+    expect(peekDependenciesParamsSchema.safeParse(schemaObject('synonym')).success).toBe(true)
+    expect(peekDependenciesParamsSchema.safeParse(schemaObject('sequence')).success).toBe(true)
+    expect(peekDependenciesParamsSchema.safeParse({ connectionId, requestId, target: { kind: 'login', name: 'sa' } }).success).toBe(false)
+    expect(peekDependenciesParamsSchema.safeParse({ connectionId, requestId, target: { kind: 'database', name: 'Sales' } }).success).toBe(false)
+    expect(peekDependenciesParamsSchema.safeParse({ connectionId, requestId, target: { kind: 'index', database: 'Sales', parent: { kind: 'table', schema: 'dbo', name: 'T' }, name: 'IX' } }).success).toBe(false)
+    expect(peekRowsParamsSchema.safeParse(schemaObject('synonym')).success).toBe(false)
+  })
+
+  it('words catalog codes for any fact or list column whose format is code', () => {
+    expect(formatPeekValue({ format: 'code' }, 'ROWS')).toBe('Rows')
+    expect(formatPeekValue({ format: 'code' }, 'CREATE_TABLE')).toBe('Create table')
+    expect(formatPeekValue({ format: 'code' }, 'mixed Value')).toBe('mixed Value')
+    expect(formatPeekValue({ format: 'text' }, 'ROWS')).toBe('ROWS')
+    expect(formatPeekValue({ format: 'kb' }, 8192)).toBe('8.00 MB')
+  })
+
+  it('shows a list\'s rows in its columns, says when it is empty, cut or partly unread, and waits for the facts', () => {
+    const ready = { status: 'ready' as const, value: {} }
+    const markup = renderToStaticMarkup(createElement(PeekListView, { id: 'files', part: ready, list: { rows: [['Sales', 'ROWS', 8192, 'By 64 MB, unlimited', 'C:\\data\\Sales.mdf']], truncated: true } }))
+    expect(markup).toContain('aria-label="Files"')
+    expect(markup.match(/<th[^>]*>.*?<\/th>/g)).toHaveLength(peekLists.files.columns.length)
+    expect(markup).toContain('<td title="Rows">Rows</td>')
+    expect(markup).toContain('<td title="8.00 MB">8.00 MB</td>')
+    expect(markup).toContain('There are more than the card lists.')
+    const empty = renderToStaticMarkup(createElement(PeekListView, { id: 'userMapping', part: ready, list: { rows: [], unread: 3 } }))
+    expect(empty).toContain(peekLists.userMapping.empty)
+    expect(empty).toContain('3 databases could not be read.')
+    expect(renderToStaticMarkup(createElement(PeekListView, { id: 'serverRoles', part: ready, list: undefined }))).toContain(peekLists.serverRoles.empty)
+  })
+
+  it('shows only the groups of the node\'s subtype, and says why a refused group is missing', () => {
+    const open = (kind: 'type' | 'index', subtype: string | undefined, facts: Record<string, string | number | boolean | null>, refused?: string[]) => ({
+      kind, ...(refused ? { refused } : {}), facts: { status: 'ready', value: facts },
+      node: { id: 1, connectionId, kind, label: 'x', lost: false, ...(subtype ? { subtype } : {}), ref: { type: 'object', object: { kind, database: 'Sales', schema: 'dbo', name: 'x' } } }
+    }) as never
+    const alias = renderToStaticMarkup(createElement(Properties, { peek: open('type', 'alias', { schema: 'dbo', baseType: 'nvarchar(20)', assembly: 'Geo' }) }))
+    expect(alias).toContain('aria-label="Alias type"')
+    expect(alias).not.toContain('aria-label="CLR type"')
+    const usage = peekSpecs.index.groups.find(group => group.id === 'usage')!
+    expect(renderToStaticMarkup(createElement(Properties, { peek: open('index', undefined, { indexType: 'Clustered' }, ['usage']) }))).toContain(usage.refused)
+    expect(renderToStaticMarkup(createElement(Properties, { peek: open('index', undefined, { indexType: 'Clustered' }) }))).not.toContain(usage.refused)
+  })
+
+  it('keeps a peek\'s lists and refused groups with its facts, reads nothing for a list tab, and tells children of different parents apart', async () => {
+    const peeks: ((value: ApiResult<PeekResult>) => void)[] = []
+    const api = {
+      explorerPeek: vi.fn(() => new Promise<ApiResult<PeekResult>>(resolve => { peeks.push(resolve) })),
+      explorerPeekDependencies: vi.fn(() => new Promise<never>(() => {})),
+      explorerChildren: vi.fn(() => new Promise<never>(() => {})),
+      explorerPeekRows: vi.fn(() => new Promise<never>(() => {})),
+      explorerCancel: vi.fn(async () => ok({ cancelled: 1 })),
+      scriptObjects: vi.fn(() => new Promise<never>(() => {})),
+      cancelScripting: vi.fn(async () => ok({ cancelled: 1 })),
+      writeClipboardText: vi.fn(async () => ok(undefined))
+    }
+    let ids = 0
+    const service = new PeekService({
+      api: api as never, connections: { getSnapshot: () => [{ id: connectionId }], subscribe: () => () => {} },
+      scriptingOptions: { getSnapshot: () => ({ options: {} as ScriptingOptions }), subscribe: () => () => {} },
+      timers: { setTimeout: () => 1, clearTimeout: () => {} }, newId: () => `id-${++ids}`
+    })
+    const target = (parent: string) => ({ kind: 'index' as const, database: 'Sales', parent: { kind: 'table' as const, schema: 'dbo', name: parent }, name: 'IX' })
+    const index = (parent: string): ExplorerMenuNode => ({ id: 3, connectionId, kind: 'index', label: 'IX', lost: false, ref: { type: 'object', object: target(parent) } })
+    service.peek(index('Orders'), 'menu')
+    expect(api.explorerPeek).toHaveBeenCalledWith({ connectionId, requestId: 'id-1', target: target('Orders') })
+    // An index has no stored text: Script As writes it.
+    expect(api.scriptObjects).toHaveBeenCalledTimes(1)
+    peeks[0]!(ok({ facts: { indexType: 'Nonclustered' }, lists: { indexColumns: { rows: [['Id', false, false, 'int']] } }, refused: ['usage'], elapsedMs: 1 }))
+    await flush()
+    expect(service.getSnapshot().open).toMatchObject({ lists: { indexColumns: { rows: [['Id', false, false, 'int']] } }, refused: ['usage'] })
+    service.selectTab('indexColumns')
+    expect(service.getSnapshot().open?.tab).toBe('indexColumns')
+    expect(api.explorerChildren).not.toHaveBeenCalled()
+    expect(api.explorerPeekDependencies).not.toHaveBeenCalled()
+    // A tab the kind lacks is not chosen.
+    service.selectTab('dependencies')
+    expect(service.getSnapshot().open?.tab).toBe('indexColumns')
+    // The same index name below another table is another object: it reads and scripts again.
+    service.peek(index('Orders'), 'keyboard')
+    expect(api.explorerPeek).toHaveBeenCalledTimes(1)
+    service.peek(index('Returns'), 'keyboard')
+    expect(api.explorerPeek).toHaveBeenCalledTimes(2)
+    expect(api.scriptObjects).toHaveBeenCalledTimes(2)
   })
 })

@@ -6,79 +6,208 @@ import type { ExplorerError } from '../contracts.ts'
 import type { NodeKind, NodeSubtype } from './catalog.ts'
 import type { ObjectRef } from './refs.ts'
 
-export const peekKinds = ['table', 'view', 'procedure', 'function'] as const satisfies readonly NodeKind[]
+export const peekKinds = ['table', 'view', 'procedure', 'function', 'index', 'trigger', 'databaseTrigger', 'serverTrigger', 'database', 'login', 'synonym', 'sequence', 'type',
+  'tableType'] as const satisfies readonly NodeKind[]
 export type PeekKind = typeof peekKinds[number]
 export const isPeekKind = (kind: string): kind is PeekKind => (peekKinds as readonly string[]).includes(kind)
 
 /**
- * How a fact's value travels and shows: `text` a string, `date` the server's local time as `yyyy-mm-ddThh:mm:ss`, `bool` a
- * boolean, `count` a whole number, `kb` a whole number of kilobytes.
+ * How a fact's value travels and shows: `text` a string, `code` a catalog code (`NON_TEMPORAL_TABLE`, `PAGE`) shown in words
+ * as SSMS shows it, `date` the server's local time as `yyyy-mm-ddThh:mm:ss`, `bool` a boolean, `count` a whole number, `kb`
+ * a whole number of kilobytes.
  */
-export const peekFormats = ['text', 'date', 'bool', 'count', 'kb'] as const
+export const peekFormats = ['text', 'code', 'date', 'bool', 'count', 'kb'] as const
 export type PeekFormat = typeof peekFormats[number]
 /** `since`: the first version band whose catalog has the fact; on older servers the reply leaves it out. */
 export interface PeekFact { readonly id: string; readonly label: string; readonly format: PeekFormat; readonly since?: number }
-export interface PeekGroup { readonly id: string; readonly title: string; readonly facts: readonly PeekFact[] }
 /**
- * The card's tabs beside Definition: `members` lists the object's Columns or Parameters folder (explorer.children, as the tree
- * lists it), `dependencies` what the object uses and what uses it (explorer.peekDependencies), and `rows` its first rows
- * (explorer.peekRows). Each is read the first time its tab is chosen, never with the facts: Dependencies stays its own request
- * so that a login refused sys.sql_expression_dependencies still sees the properties.
+ * `subtypes`: the card shows the group only for these subtypes of the kind (an alias type's base type, a CLR type's assembly).
+ * `refused`: the group is read by a statement of its own, last in the batch, which a login may be refused (a DMV that needs
+ * VIEW SERVER STATE): the reply then names the group in `refused`, the other facts still come, and the card shows these words.
  */
-export const peekTabs = ['definition', 'members', 'dependencies', 'rows'] as const
+export interface PeekGroup { readonly id: string; readonly title: string; readonly facts: readonly PeekFact[]; readonly subtypes?: readonly NodeSubtype[]; readonly refused?: string }
+/**
+ * Lists a peek reads with its facts, in the same batch, each on a tab of its own: an index's key and included columns, a
+ * trigger's events, a database's files, a login's server roles, and its user mapping (one statement in each database it can
+ * read, after the batch). Each keeps at most `peekLimits.listRows` rows, in the order the backend reads them.
+ */
+export const peekListIds = ['indexColumns', 'events', 'files', 'serverRoles', 'userMapping'] as const
+export type PeekListId = typeof peekListIds[number]
+export interface PeekListColumn { readonly id: string; readonly label: string; readonly format: PeekFormat }
+export interface PeekListSpec { readonly id: PeekListId; readonly title: string; readonly columns: readonly PeekListColumn[]; readonly empty: string }
+const column = (id: string, label: string, format: PeekFormat): PeekListColumn => ({ id, label, format })
+export const peekLists: { readonly [L in PeekListId]: PeekListSpec } = {
+  indexColumns: {
+    id: 'indexColumns', title: 'Columns', empty: 'No columns.',
+    columns: [column('name', 'Column', 'text'), column('included', 'Included', 'bool'), column('descending', 'Descending', 'bool'), column('type', 'Type', 'text')]
+  },
+  events: { id: 'events', title: 'Events', empty: 'No events.', columns: [column('event', 'Event', 'code'), column('first', 'First', 'bool'), column('last', 'Last', 'bool')] },
+  files: {
+    id: 'files', title: 'Files', empty: 'None the login can see (that needs VIEW ANY DEFINITION, CREATE DATABASE or ALTER ANY DATABASE).',
+    columns: [column('name', 'Logical name', 'text'), column('type', 'Type', 'code'), column('size', 'Size', 'kb'), column('growth', 'Autogrowth / Maxsize', 'text'), column('path', 'Path', 'text')]
+  },
+  serverRoles: { id: 'serverRoles', title: 'Server roles', empty: 'Only public.', columns: [column('role', 'Role', 'text'), column('fixed', 'Fixed role', 'bool')] },
+  userMapping: {
+    id: 'userMapping', title: 'User mapping', empty: 'No user in the databases the login can read.',
+    columns: [column('database', 'Database', 'text'), column('user', 'User', 'text'), column('defaultSchema', 'Default schema', 'text')]
+  }
+}
+/**
+ * The card's tabs: `definition` the object's text, `members` its Columns or Parameters folder (explorer.children, as the tree
+ * lists it), `dependencies` what the object uses and what uses it (explorer.peekDependencies), `rows` its first rows
+ * (explorer.peekRows), and the kind's lists (`peekLists`), which come with the facts. Members, Dependencies and Top rows are
+ * read the first time their tab is chosen, never with the facts: Dependencies stays its own request so that a login refused
+ * sys.sql_expression_dependencies still sees the properties.
+ */
+export const peekTabs = ['definition', 'members', 'dependencies', 'rows', ...peekListIds] as const
 export type PeekTab = typeof peekTabs[number]
 /**
- * `module`: the definition is the module's text from sys.sql_modules, read with the facts. `script`: the kind has no stored
- * text, so the card asks Script As (scripting.script, CREATE) for it. `members`: the folder the Columns or Parameters tab
- * lists. `rows`: whether the kind has rows to sample.
+ * `module`: the definition is the module's text from sys.sql_modules (sys.server_sql_modules for a server trigger), read with
+ * the facts. `script`: the kind has no stored text, so the card asks Script As (scripting.script, CREATE) for it. `tabs`: the
+ * card's tabs in order, Definition first. `members`: the folder the Columns or Parameters tab lists, for kinds with that tab.
  */
 export interface PeekKindSpec {
   readonly kind: PeekKind
   readonly definition: 'module' | 'script'
-  readonly members: 'columns' | 'parameters'
-  readonly rows: boolean
+  readonly tabs: readonly PeekTab[]
+  readonly members?: 'columns' | 'parameters'
   readonly groups: readonly PeekGroup[]
 }
 
 const fact = (id: string, label: string, format: PeekFormat, since?: number): PeekFact => since === undefined ? { id, label, format } : { id, label, format, since }
-const owned = [fact('schema', 'Schema', 'text'), fact('created', 'Created', 'date'), fact('modified', 'Last modified', 'date'), fact('systemObject', 'System object', 'bool')]
+const dated = [fact('created', 'Created', 'date'), fact('modified', 'Last modified', 'date')]
+const owned = [fact('schema', 'Schema', 'text'), ...dated, fact('systemObject', 'System object', 'bool')]
 const sqlOptions = [fact('ansiNulls', 'ANSI NULLs', 'bool'), fact('quotedIdentifier', 'Quoted identifier', 'bool')]
+const triggerGeneral = [...dated, fact('systemObject', 'System object', 'bool'), fact('disabled', 'Disabled', 'bool'), fact('clr', 'CLR', 'bool')]
+const triggerOptions = [fact('executeAs', 'Execute as', 'text'), ...sqlOptions]
 
 export const peekSpecs: { readonly [K in PeekKind]: PeekKindSpec } = {
   table: {
-    kind: 'table', definition: 'script', members: 'columns', rows: true, groups: [
-      { id: 'general', title: 'General', facts: [...owned, fact('replicated', 'Replicated', 'bool'), fact('lockEscalation', 'Lock escalation', 'text'),
-        fact('memoryOptimized', 'Memory optimized', 'bool'), fact('temporal', 'Temporal', 'text', 13), fact('ledger', 'Ledger', 'text', 16)] },
+    kind: 'table', definition: 'script', tabs: ['definition', 'members', 'dependencies', 'rows'], members: 'columns', groups: [
+      { id: 'general', title: 'General', facts: [...owned, fact('replicated', 'Replicated', 'bool'), fact('lockEscalation', 'Lock escalation', 'code'),
+        fact('memoryOptimized', 'Memory optimized', 'bool'), fact('temporal', 'Temporal', 'code', 13), fact('ledger', 'Ledger', 'code', 16)] },
       { id: 'storage', title: 'Storage', facts: [fact('rowCount', 'Row count', 'count'), fact('dataSpace', 'Data space', 'kb'), fact('indexSpace', 'Index space', 'kb'),
-        fact('filegroup', 'Filegroup', 'text'), fact('textFilegroup', 'Text filegroup', 'text'), fact('partitioned', 'Partitioned', 'bool'), fact('compression', 'Data compression', 'text')] }
+        fact('filegroup', 'Filegroup', 'text'), fact('textFilegroup', 'Text filegroup', 'text'), fact('partitioned', 'Partitioned', 'bool'), fact('compression', 'Data compression', 'code')] }
     ]
   },
   view: {
-    kind: 'view', definition: 'module', members: 'columns', rows: true, groups: [
+    kind: 'view', definition: 'module', tabs: ['definition', 'members', 'dependencies', 'rows'], members: 'columns', groups: [
       { id: 'general', title: 'General', facts: owned },
       { id: 'options', title: 'Options', facts: [fact('schemaBound', 'Schema bound', 'bool'), fact('indexed', 'Indexed', 'bool'), ...sqlOptions] }
     ]
   },
   procedure: {
-    kind: 'procedure', definition: 'module', members: 'parameters', rows: false, groups: [
+    kind: 'procedure', definition: 'module', tabs: ['definition', 'members', 'dependencies'], members: 'parameters', groups: [
       { id: 'general', title: 'General', facts: owned },
       { id: 'options', title: 'Options', facts: [fact('executeAs', 'Execute as', 'text'), fact('recompile', 'Recompile', 'bool'), fact('nativelyCompiled', 'Natively compiled', 'bool'), ...sqlOptions] }
     ]
   },
   function: {
-    kind: 'function', definition: 'module', members: 'parameters', rows: false, groups: [
+    kind: 'function', definition: 'module', tabs: ['definition', 'members', 'dependencies'], members: 'parameters', groups: [
       { id: 'general', title: 'General', facts: [...owned, fact('functionType', 'Function type', 'text')] },
       { id: 'options', title: 'Options', facts: [fact('executeAs', 'Execute as', 'text'), fact('schemaBound', 'Schema bound', 'bool'), fact('nativelyCompiled', 'Natively compiled', 'bool'),
         fact('nullOnNullInput', 'Returns NULL on NULL input', 'bool'), ...sqlOptions] }
+    ]
+  },
+  // Index Properties' General, Options and Storage pages, and the usage sys.dm_db_index_usage_stats has kept since the server started.
+  index: {
+    kind: 'index', definition: 'script', tabs: ['definition', 'indexColumns'], groups: [
+      { id: 'general', title: 'General', facts: [fact('indexType', 'Index type', 'text'), fact('unique', 'Unique', 'bool'), fact('primaryKey', 'Primary key', 'bool'),
+        fact('uniqueConstraint', 'Unique constraint', 'bool'), fact('disabled', 'Disabled', 'bool'), fact('filter', 'Filter', 'text')] },
+      { id: 'options', title: 'Options', facts: [fact('fillFactor', 'Fill factor', 'count'), fact('padIndex', 'Pad index', 'bool'), fact('ignoreDupKey', 'Ignore duplicate values', 'bool'),
+        fact('allowRowLocks', 'Allow row locks', 'bool'), fact('allowPageLocks', 'Allow page locks', 'bool'), fact('noRecompute', 'Statistics not recomputed', 'bool'),
+        fact('optimizeForSequentialKey', 'Optimize for sequential key', 'bool', 15)] },
+      { id: 'storage', title: 'Storage', facts: [fact('rowCount', 'Row count', 'count'), fact('space', 'Space used', 'kb'), fact('filegroup', 'Filegroup', 'text'),
+        fact('partitionScheme', 'Partition scheme', 'text'), fact('partitions', 'Partitions', 'count'), fact('compression', 'Data compression', 'code')] },
+      { id: 'usage', title: 'Usage since the server started', refused: 'The login cannot read index usage (that needs VIEW SERVER STATE).', facts: [
+        fact('userSeeks', 'User seeks', 'count'), fact('userScans', 'User scans', 'count'), fact('userLookups', 'User lookups', 'count'), fact('userUpdates', 'User updates', 'count'),
+        fact('lastSeek', 'Last seek', 'date'), fact('lastScan', 'Last scan', 'date'), fact('lastLookup', 'Last lookup', 'date'), fact('lastUpdate', 'Last update', 'date')] }
+    ]
+  },
+  trigger: {
+    kind: 'trigger', definition: 'module', tabs: ['definition', 'events', 'dependencies'], groups: [
+      { id: 'general', title: 'General', facts: [...triggerGeneral, fact('insteadOf', 'Instead of', 'bool')] },
+      { id: 'options', title: 'Options', facts: [fact('notForReplication', 'Not for replication', 'bool'), ...triggerOptions] }
+    ]
+  },
+  databaseTrigger: {
+    kind: 'databaseTrigger', definition: 'module', tabs: ['definition', 'events'], groups: [
+      { id: 'general', title: 'General', facts: triggerGeneral },
+      { id: 'options', title: 'Options', facts: triggerOptions }
+    ]
+  },
+  serverTrigger: {
+    kind: 'serverTrigger', definition: 'module', tabs: ['definition', 'events'], groups: [
+      { id: 'general', title: 'General', facts: triggerGeneral },
+      { id: 'options', title: 'Options', facts: triggerOptions }
+    ]
+  },
+  // Database Properties' General and Options pages, from sys.databases and sys.master_files on the server, so a database that is
+  // offline or restoring still peeks.
+  database: {
+    kind: 'database', definition: 'script', tabs: ['definition', 'files'], groups: [
+      { id: 'general', title: 'General', facts: [fact('status', 'Status', 'code'), fact('owner', 'Owner', 'text'), fact('created', 'Date created', 'date'), fact('size', 'Size', 'kb'),
+        fact('dataSize', 'Data files', 'kb'), fact('logSize', 'Log files', 'kb'), fact('userAccess', 'Restrict access', 'code'), fact('readOnly', 'Read only', 'bool')] },
+      { id: 'options', title: 'Options', facts: [fact('recoveryModel', 'Recovery model', 'code'), fact('compatibilityLevel', 'Compatibility level', 'count'), fact('collation', 'Collation', 'text'),
+        fact('containment', 'Containment type', 'code'), fact('pageVerify', 'Page verify', 'text'), fact('autoClose', 'Auto close', 'bool'), fact('autoShrink', 'Auto shrink', 'bool'),
+        fact('autoCreateStats', 'Auto create statistics', 'bool'), fact('autoUpdateStats', 'Auto update statistics', 'bool'), fact('autoUpdateStatsAsync', 'Auto update statistics asynchronously', 'bool'),
+        fact('snapshotIsolation', 'Snapshot isolation', 'code'), fact('readCommittedSnapshot', 'Read committed snapshot', 'bool'), fact('encrypted', 'Encryption enabled', 'bool'),
+        fact('queryStore', 'Query Store', 'bool', 13), fact('acceleratedRecovery', 'Accelerated database recovery', 'bool', 15), fact('ledger', 'Ledger', 'bool', 16)] }
+    ]
+  },
+  // Login Properties' General and Status pages. Nothing reads LOGINPROPERTY or a password hash (CatalogSql.SecretUses), so
+  // Must change and Locked out are not shown.
+  login: {
+    kind: 'login', definition: 'script', tabs: ['definition', 'serverRoles', 'userMapping'], groups: [
+      { id: 'general', title: 'General', facts: [fact('loginType', 'Login type', 'text'), ...dated, fact('defaultDatabase', 'Default database', 'text'),
+        fact('defaultLanguage', 'Default language', 'text')] },
+      { id: 'status', title: 'Status', facts: [fact('disabled', 'Disabled', 'bool'), fact('connectDenied', 'Connect denied', 'bool'), fact('enforcePolicy', 'Enforce password policy', 'bool'),
+        fact('enforceExpiration', 'Enforce password expiration', 'bool')] }
+    ]
+  },
+  synonym: {
+    kind: 'synonym', definition: 'script', tabs: ['definition', 'dependencies'], groups: [
+      { id: 'general', title: 'General', facts: owned },
+      { id: 'base', title: 'Base object', facts: [fact('baseObject', 'Base object', 'text'), fact('baseServer', 'Server', 'text'), fact('baseDatabase', 'Database', 'text'),
+        fact('baseSchema', 'Object schema', 'text'), fact('baseName', 'Object name', 'text')] }
+    ]
+  },
+  sequence: {
+    kind: 'sequence', definition: 'script', tabs: ['definition', 'dependencies'], groups: [
+      { id: 'general', title: 'General', facts: owned },
+      { id: 'sequence', title: 'Sequence', facts: [fact('dataType', 'Data type', 'text'), fact('startValue', 'Start value', 'text'), fact('increment', 'Increment by', 'text'),
+        fact('minimum', 'Minimum value', 'text'), fact('maximum', 'Maximum value', 'text'), fact('cycle', 'Cycle', 'bool'), fact('cache', 'Cache', 'text'),
+        fact('currentValue', 'Current value', 'text'), fact('lastUsedValue', 'Last used value', 'text', 14), fact('exhausted', 'Exhausted', 'bool')] }
+    ]
+  },
+  type: {
+    kind: 'type', definition: 'script', tabs: ['definition', 'dependencies'], groups: [
+      { id: 'general', title: 'General', facts: [fact('schema', 'Schema', 'text'), fact('allowNulls', 'Allow NULLs', 'bool'), fact('maxLength', 'Bytes', 'count')] },
+      { id: 'alias', title: 'Alias type', subtypes: ['alias'], facts: [fact('baseType', 'Data type', 'text'), fact('collation', 'Collation', 'text'), fact('default', 'Default', 'text'),
+        fact('rule', 'Rule', 'text')] },
+      { id: 'clr', title: 'CLR type', subtypes: ['clr'], facts: [fact('assembly', 'Assembly', 'text'), fact('className', 'Class', 'text'), fact('binaryOrdered', 'Binary ordered', 'bool'),
+        fact('fixedLength', 'Fixed length', 'bool')] }
+    ]
+  },
+  tableType: {
+    kind: 'tableType', definition: 'script', tabs: ['definition', 'members', 'dependencies'], members: 'columns', groups: [
+      { id: 'general', title: 'General', facts: [fact('schema', 'Schema', 'text'), ...dated, fact('memoryOptimized', 'Memory optimized', 'bool')] }
     ]
   }
 }
 
 /** The tabs a kind's card shows, in order. */
-export const peekTabsOf = (kind: PeekKind): readonly PeekTab[] => peekTabs.filter(tab => tab !== 'rows' || peekSpecs[kind].rows)
+export const peekTabsOf = (kind: PeekKind): readonly PeekTab[] => peekSpecs[kind].tabs
+/** Whether a kind's card has a tab. */
+export const peekHas = (kind: PeekKind, tab: PeekTab): boolean => peekSpecs[kind].tabs.includes(tab)
+/** A tab that shows one of the kind's lists. */
+export const isPeekListTab = (tab: PeekTab): tab is PeekListId => (peekListIds as readonly string[]).includes(tab)
+/** The lists a kind reads with its facts, in reply order. */
+export const peekListsOf = (kind: PeekKind): readonly PeekListId[] => peekSpecs[kind].tabs.filter(isPeekListTab)
 /** A tab's title for a kind. */
 export const peekTabTitle = (kind: PeekKind, tab: PeekTab): string =>
-  tab === 'definition' ? 'Definition' : tab === 'members' ? (peekSpecs[kind].members === 'columns' ? 'Columns' : 'Parameters') : tab === 'dependencies' ? 'Dependencies' : 'Top rows'
+  tab === 'definition' ? 'Definition' : tab === 'members' ? (peekSpecs[kind].members === 'parameters' ? 'Parameters' : 'Columns') : tab === 'dependencies' ? 'Dependencies'
+    : tab === 'rows' ? 'Top rows' : peekLists[tab].title
 
 /** A kind's facts in reply-column order. */
 export const peekFacts = (kind: PeekKind): readonly PeekFact[] => peekSpecs[kind].groups.flatMap(group => group.facts)
@@ -114,7 +243,11 @@ export const peekLimits = {
   /** Columns the Top rows tab shows; wider objects say how many more they have. */
   rowColumns: 100,
   /** UTF-16 code units of a value the Top rows tab keeps; longer values are cut and marked. */
-  rowCellChars: 256
+  rowCellChars: 256,
+  /** Rows each of a kind's lists keeps (`peekLists`); a list with more is marked `truncated`. */
+  listRows: 1024,
+  /** Databases a login's User mapping reads, in name order; more are counted as `unread`. */
+  mappingDatabases: 256
 } as const
 
 export type PeekValue = string | number | boolean | null
@@ -137,8 +270,17 @@ export interface PeekParams {
   readonly connectionId: string
   /** The renderer's id for this read, which cancellation (varia:explorer-cancel) names. */
   readonly requestId: string
-  /** A table, view, procedure or function. */
+  /** An object of a kind Peek describes (`peekKinds`); explorer.peekDependencies only one whose card has that tab. */
   readonly target: ObjectRef
+}
+/**
+ * One of a kind's lists: rows of the list's columns, in order. `truncated`: there were more than `peekLimits.listRows`.
+ * `unread`: databases a login's User mapping could not read (gone, offline, refused, or past `peekLimits.mappingDatabases`).
+ */
+export interface PeekList {
+  readonly rows: readonly (readonly PeekValue[])[]
+  readonly truncated?: true
+  readonly unread?: number
 }
 export interface PeekResult {
   /** Fact id to value, for the kind's facts the server's band has; null where the catalog has no value (a heap's index space is 0, not null). */
@@ -146,6 +288,10 @@ export interface PeekResult {
   /** `module` kinds: the module's text; absent when it is encrypted or the login may not see it. */
   readonly definition?: string
   readonly definitionTruncated?: true
+  /** The kind's lists (`peekListsOf`), by id. */
+  readonly lists?: Readonly<Partial<Record<PeekListId, PeekList>>>
+  /** Groups with `refused` words whose statement the login was refused: their facts are absent. */
+  readonly refused?: readonly string[]
   readonly elapsedMs: number
   /** Facts and definition are empty with an error. */
   readonly error?: ExplorerError
@@ -194,11 +340,18 @@ export interface PeekRowsResult {
 
 /** The block explorerCatalogJson embeds for the backend. */
 export const peekCatalogBlock = () => ({
-  kinds: peekKinds.map(kind => ({ kind, definition: peekSpecs[kind].definition, rows: peekSpecs[kind].rows, facts: peekFacts(kind).map(({ id, format, since }) => ({ id, format, since: since ?? null })) })),
+  kinds: peekKinds.map(kind => ({
+    kind, definition: peekSpecs[kind].definition, rows: peekHas(kind, 'rows'), dependencies: peekHas(kind, 'dependencies'),
+    optionalGroup: peekSpecs[kind].groups.find(group => group.refused !== undefined)?.id ?? null,
+    facts: peekSpecs[kind].groups.flatMap(group => group.facts.map(({ id, format, since }) => ({ id, format, since: since ?? null, optional: group.refused !== undefined }))),
+    lists: peekListsOf(kind).map(id => ({ id, columns: peekLists[id].columns.map(item => ({ id: item.id, format: item.format })) }))
+  })),
   definitionChars: peekLimits.definitionChars,
   budgetMs: peekLimits.budgetMs,
   dependencies: peekLimits.dependencies,
   rows: peekLimits.rows,
   rowColumns: peekLimits.rowColumns,
-  rowCellChars: peekLimits.rowCellChars
+  rowCellChars: peekLimits.rowCellChars,
+  listRows: peekLimits.listRows,
+  mappingDatabases: peekLimits.mappingDatabases
 })

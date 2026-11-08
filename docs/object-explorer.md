@@ -373,9 +373,26 @@ count and connection dot keep their size, and the label gives up the row's empty
 Peek (the context menu's Peek, Space on the selected row, or resting the pointer on a row with Ctrl held, Cmd on macOS)
 opens a card beside the row with the object's definition and its properties. One `explorer.peek` request reads the
 properties (and a module's text) on the Object Explorer pool, in one constant batch per kind (`Explorer/PeekSql.cs`)
-within 15,000 ms; a table's definition comes from Script As (CREATE). A fact whose
+within 15,000 ms; the definition of a kind without stored text comes from Script As (CREATE). A fact whose
 catalog column is newer than the server is left out. Esc, a click elsewhere or another peek closes the card, and
-cancels a read still running.
+cancels a read still running. Each kind declares its tabs in the catalogue (`peekSpecs`), and the card shows exactly those.
+
+Database-scoped kinds are read in their database, as the tree reads them; a database, a login and a server trigger on the
+server (sys.databases and sys.master_files, so an offline or restoring database still peeks). An index or a trigger is found
+below its table or view. Some kinds have lists, read in the same batch as their facts and shown on tabs of their own, at most
+1,024 rows each: an index's key and included columns, a trigger's events, a database's files, a login's server roles,
+and its user mapping, read after the batch in each database the login may enter (at most 256, in name order), through
+`QUOTENAME` as every database statement is, on the same connection; a database it cannot read is counted, not shown. Nothing
+reads LOGINPROPERTY or a password hash. An index's usage comes from `sys.dm_db_index_usage_stats` in a statement of its own,
+last in the batch, inside TRY…CATCH: a login without VIEW SERVER STATE gets the other facts and the card says why usage is missing.
+
+| List | Kinds | Columns |
+| --- | --- | --- |
+| Columns | `index` | Column, Included, Descending, Type |
+| Events | `trigger`, `databaseTrigger`, `serverTrigger` | Event, First, Last |
+| Files | `database` | Logical name, Type, Size, Autogrowth / Maxsize, Path |
+| Server roles | `login` | Role, Fixed role |
+| User mapping | `login` | Database, User, Default schema |
 
 Beside Definition, the card has tabs. **Columns** (tables and views) or **Parameters** (procedures and functions) lists the
 object's folder with `explorer.children`, as the tree does, up to 1,024 rows. **Dependencies**
@@ -397,16 +414,55 @@ rather than split a surrogate pair) and ended with an ellipsis, whose tooltip sa
 shows more of it (a value the readers cannot read shows as NULL, as the grid shows it, with a note); the tab shows the first 100 columns.
 These few bounded values are decoded in the backend and answered as text, outside the result store and the results port.
 
-| Kind | Definition | Group | Facts |
-| --- | --- | --- | --- |
-| `table` | Script As | General | Schema, Created, Last modified, System object, Replicated, Lock escalation, Memory optimized, Temporal (band 13+), Ledger (band 16+) |
-| `table` | Script As | Storage | Row count, Data space, Index space, Filegroup, Text filegroup, Partitioned, Data compression |
-| `view` | sys.sql_modules | General | Schema, Created, Last modified, System object |
-| `view` | sys.sql_modules | Options | Schema bound, Indexed, ANSI NULLs, Quoted identifier |
-| `procedure` | sys.sql_modules | General | Schema, Created, Last modified, System object |
-| `procedure` | sys.sql_modules | Options | Execute as, Recompile, Natively compiled, ANSI NULLs, Quoted identifier |
-| `function` | sys.sql_modules | General | Schema, Created, Last modified, System object, Function type |
-| `function` | sys.sql_modules | Options | Execute as, Schema bound, Natively compiled, Returns NULL on NULL input, ANSI NULLs, Quoted identifier |
+| Kind | Definition | Tabs |
+| --- | --- | --- |
+| `table` | Script As | Definition, Columns, Dependencies, Top rows |
+| `view` | sys.sql_modules | Definition, Columns, Dependencies, Top rows |
+| `procedure` | sys.sql_modules | Definition, Parameters, Dependencies |
+| `function` | sys.sql_modules | Definition, Parameters, Dependencies |
+| `index` | Script As | Definition, Columns |
+| `trigger` | sys.sql_modules | Definition, Events, Dependencies |
+| `databaseTrigger` | sys.sql_modules | Definition, Events |
+| `serverTrigger` | sys.server_sql_modules | Definition, Events |
+| `database` | Script As | Definition, Files |
+| `login` | Script As | Definition, Server roles, User mapping |
+| `synonym` | Script As | Definition, Dependencies |
+| `sequence` | Script As | Definition, Dependencies |
+| `type` | Script As | Definition, Dependencies |
+| `tableType` | Script As | Definition, Columns, Dependencies |
+
+| Kind | Group | Facts |
+| --- | --- | --- |
+| `table` | General | Schema, Created, Last modified, System object, Replicated, Lock escalation, Memory optimized, Temporal (band 13+), Ledger (band 16+) |
+| `table` | Storage | Row count, Data space, Index space, Filegroup, Text filegroup, Partitioned, Data compression |
+| `view` | General | Schema, Created, Last modified, System object |
+| `view` | Options | Schema bound, Indexed, ANSI NULLs, Quoted identifier |
+| `procedure` | General | Schema, Created, Last modified, System object |
+| `procedure` | Options | Execute as, Recompile, Natively compiled, ANSI NULLs, Quoted identifier |
+| `function` | General | Schema, Created, Last modified, System object, Function type |
+| `function` | Options | Execute as, Schema bound, Natively compiled, Returns NULL on NULL input, ANSI NULLs, Quoted identifier |
+| `index` | General | Index type, Unique, Primary key, Unique constraint, Disabled, Filter |
+| `index` | Options | Fill factor, Pad index, Ignore duplicate values, Allow row locks, Allow page locks, Statistics not recomputed, Optimize for sequential key (band 15+) |
+| `index` | Storage | Row count, Space used, Filegroup, Partition scheme, Partitions, Data compression |
+| `index` | Usage since the server started (may be refused) | User seeks, User scans, User lookups, User updates, Last seek, Last scan, Last lookup, Last update |
+| `trigger` | General | Created, Last modified, System object, Disabled, CLR, Instead of |
+| `trigger` | Options | Not for replication, Execute as, ANSI NULLs, Quoted identifier |
+| `databaseTrigger` | General | Created, Last modified, System object, Disabled, CLR |
+| `databaseTrigger` | Options | Execute as, ANSI NULLs, Quoted identifier |
+| `serverTrigger` | General | Created, Last modified, System object, Disabled, CLR |
+| `serverTrigger` | Options | Execute as, ANSI NULLs, Quoted identifier |
+| `database` | General | Status, Owner, Date created, Size, Data files, Log files, Restrict access, Read only |
+| `database` | Options | Recovery model, Compatibility level, Collation, Containment type, Page verify, Auto close, Auto shrink, Auto create statistics, Auto update statistics, Auto update statistics asynchronously, Snapshot isolation, Read committed snapshot, Encryption enabled, Query Store (band 13+), Accelerated database recovery (band 15+), Ledger (band 16+) |
+| `login` | General | Login type, Created, Last modified, Default database, Default language |
+| `login` | Status | Disabled, Connect denied, Enforce password policy, Enforce password expiration |
+| `synonym` | General | Schema, Created, Last modified, System object |
+| `synonym` | Base object | Base object, Server, Database, Object schema, Object name |
+| `sequence` | General | Schema, Created, Last modified, System object |
+| `sequence` | Sequence | Data type, Start value, Increment by, Minimum value, Maximum value, Cycle, Cache, Current value, Last used value (band 14+), Exhausted |
+| `type` | General | Schema, Allow NULLs, Bytes |
+| `type` | Alias type (alias) | Data type, Collation, Default, Rule |
+| `type` | CLR type (clr) | Assembly, Class, Binary ordered, Fixed length |
+| `tableType` | General | Schema, Created, Last modified, Memory optimized |
 
 ## Limits
 

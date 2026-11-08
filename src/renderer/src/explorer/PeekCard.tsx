@@ -1,7 +1,7 @@
 import { Component, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { kindSpecs } from '../../../shared/explorer/catalog.ts'
-import { peekSpecs, peekTabsOf, peekTabTitle, type PeekDependency, type PeekTab } from '../../../shared/explorer/peek.ts'
+import { isPeekListTab, peekLists, peekSpecs, peekTabsOf, peekTabTitle, type PeekDependency, type PeekList, type PeekListId, type PeekTab } from '../../../shared/explorer/peek.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import { scriptCommandId } from '../../../shared/scripting/catalog.ts'
 import { isSqlScope } from '../../../shared/theme/registry'
@@ -78,12 +78,17 @@ function Definition({ part }: { part: PeekPart<{ readonly text?: string; readonl
   </>
 }
 
-function Properties({ peek }: { peek: OpenPeek }) {
+export function Properties({ peek }: { peek: OpenPeek }) {
   const { facts } = peek
   if (facts.status === 'loading') return <p className="peek-note" role="status">Loading properties…</p>
   if (facts.status === 'error') return <p className="peek-note error" role="alert">{facts.message}</p>
+  const subtype = peek.node.subtype
   return <div className="peek-properties">
-    {peekSpecs[peek.kind].groups.map(group => {
+    {peekSpecs[peek.kind].groups.filter(group => !group.subtypes || (subtype !== undefined && group.subtypes.includes(subtype))).map(group => {
+      if (group.refused && peek.refused?.includes(group.id)) return <section key={group.id} aria-label={group.title}>
+        <h3 className="peek-group">{group.title}</h3>
+        <p className="peek-note">{group.refused}</p>
+      </section>
       const shown = group.facts.filter(fact => Object.hasOwn(facts.value, fact.id))
       return shown.length > 0 && <section key={group.id} aria-label={group.title}>
         <h3 className="peek-group">{group.title}</h3>
@@ -176,6 +181,23 @@ export function PeekRows({ part }: { part: PeekPart<PeekRowsResult> | undefined 
   </>
 }
 
+/** One of the kind's lists (`peekLists`), which come with the facts: a table of the list's columns, values formatted as facts are. */
+export function PeekListView({ id, part, list }: { id: PeekListId; part: OpenPeek['facts']; list: PeekList | undefined }) {
+  if (part.status !== 'ready') return <Pending part={part} loading="Loading…" />
+  const spec = peekLists[id], rows = list?.rows ?? []
+  return <>
+    {rows.length === 0 ? <p className="peek-note">{spec.empty}</p> : <table className="peek-rows" aria-label={spec.title}>
+      <thead><tr>{spec.columns.map(column => <th key={column.id} scope="col"><bdi>{column.label}</bdi></th>)}</tr></thead>
+      <tbody>{rows.map((row, r) => <tr key={r}>{spec.columns.map((column, c) => {
+        const text = formatPeekValue(column, row[c] ?? null)
+        return <td key={column.id} title={text}>{text}</td>
+      })}</tr>)}</tbody>
+    </table>}
+    {list?.truncated && <p className="peek-note">There are more than the card lists.</p>}
+    {list?.unread !== undefined && <p className="peek-note">{list.unread === 1 ? '1 database' : `${list.unread.toLocaleString()} databases`} could not be read.</p>}
+  </>
+}
+
 /**
  * The left pane's tabs: Left and Right (Home, End) move focus between them, and Enter or Space shows the focused one. Tabs
  * are chosen, not shown as focus passes them, since Top rows reads the table or view.
@@ -204,6 +226,7 @@ function PaneTitle({ title, children }: { title: string; children?: ReactNode })
 
 function panel(open: OpenPeek): ReactNode {
   const tab: PeekTab = open.tab
+  if (isPeekListTab(tab)) return <PeekListView id={tab} part={open.facts} list={open.lists?.[tab]} />
   return tab === 'definition' ? <Definition part={open.definition} /> : tab === 'members' ? <Members part={open.members} />
     : tab === 'dependencies' ? <Dependencies part={open.dependencies} /> : <PeekRows part={open.rows} />
 }
@@ -298,7 +321,8 @@ function PeekCardView() {
   }
   const node = open?.node
   const object = node?.ref.type === 'object' ? node.ref.object : undefined
-  const name = object ? displayText(object.schema === undefined ? object.name ?? '' : `${object.schema}.${object.name ?? ''}`) : ''
+  // A child (an index, a trigger) is named below its parent.
+  const name = object ? displayText([object.parent?.schema, object.parent?.name, object.schema, object.name].filter(part => part !== undefined).join('.')) : ''
   const definition = open?.definition.status === 'ready' ? open.definition.value : undefined
   const copyable = definition?.text !== undefined && !definition.truncated
   const script = scriptCommandId('create', 'newQuery')

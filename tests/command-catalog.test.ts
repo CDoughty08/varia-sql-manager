@@ -225,7 +225,7 @@ describe('context keys', () => {
     expect(contextRecord('win32')).toMatchObject({ isWindows: true, activePanel: '', hasActiveDocument: false, explorerNode: '', outputView: '', paneFloating: false })
     expect(contextRecord('linux', { explorerNode: 'table', paneFloating: true })).toMatchObject({ explorerNode: 'table', outputView: '', paneFloating: true })
     expect(keysOfScope('target')).toEqual([
-      'explorerNode', 'explorerServerLost', 'explorerFolderFilterable', 'explorerFolderFiltered', 'explorerFolder', 'explorerFolderInsertable', 'explorerNodeStatus', 'explorerServerEngine', 'explorerServerLinux',
+      'explorerNode', 'explorerServerLost', 'explorerFolderFilterable', 'explorerFolderFiltered', 'explorerFolder', 'explorerNodePeekable', 'explorerFolderInsertable', 'explorerNodeStatus', 'explorerServerEngine', 'explorerServerLinux',
       'outputView', 'pane', 'paneFloating', 'panePopout', 'documentTabFloating', 'searchHitSchema'
     ])
     expect(isContextKey('__proto__')).toBe(false)

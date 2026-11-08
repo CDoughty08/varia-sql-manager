@@ -150,12 +150,16 @@ internal sealed record ExplorerDatabase(int State, int UserAccess, bool ReadOnly
 internal sealed record ExplorerError(string Code, string Message, bool Retryable, string? Action = null);
 /// <summary>A page of children: static folders first (first page only), then rows. Total is on the first page only.</summary>
 internal sealed record ExplorerChildrenResult(List<ExplorerNode> Nodes, long ElapsedMs, string? Cursor = null, int? Total = null, ExplorerError? Error = null);
-/// <summary>explorer.peek (src/shared/explorer/peek.ts): a table, view, procedure or function's Properties facts and, for
-/// modules, its text. Cancellation is a CANCEL frame for the request (or varia:explorer-cancel), as explorer.children's.</summary>
+/// <summary>explorer.peek (src/shared/explorer/peek.ts): an object's Properties facts and lists and, for modules, its text. Cancellation is a CANCEL frame for the request (or varia:explorer-cancel), as explorer.children's.</summary>
 internal sealed record PeekArgs(string ConnectionId, string RequestId, ObjectRefDto Target);
 /// <summary>Facts: fact id to a string, bool, whole number or null, for the facts the server's band has. Definition: a module's
-/// text, absent when it is encrypted or hidden; DefinitionTruncated is true only when it was cut. Facts are empty with an Error.</summary>
-internal sealed record PeekResult(Dictionary<string, object?> Facts, long ElapsedMs, string? Definition = null, bool? DefinitionTruncated = null, ExplorerError? Error = null);
+/// text, absent when it is encrypted or hidden; DefinitionTruncated is true only when it was cut. Facts are empty with an Error.
+/// Lists: the kind's lists by id. Refused: the optional groups whose statement the login was refused (their facts are absent).</summary>
+internal sealed record PeekResult(Dictionary<string, object?> Facts, long ElapsedMs, string? Definition = null, bool? DefinitionTruncated = null, ExplorerError? Error = null,
+    Dictionary<string, PeekList>? Lists = null, List<string>? Refused = null);
+/// <summary>One of a peek's lists: its rows (values by the list's column formats); Truncated when there were more than the
+/// catalogue keeps; Unread, for a login's User mapping, the databases that could not be read.</summary>
+internal sealed record PeekList(List<object?[]> Rows, bool? Truncated = null, int? Unread = null);
 /// <summary>explorer.peekDependencies (its args are PeekArgs): what the object references and the tables its foreign keys
 /// point at (Uses), and what references it or points at it by a foreign key (UsedBy), each truncated when there were more.
 /// Both lists are empty with an Error.</summary>

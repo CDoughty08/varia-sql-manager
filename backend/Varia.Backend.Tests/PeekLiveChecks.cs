@@ -26,7 +26,12 @@ internal static class PeekLiveChecks
         var extended = new ObjectRefDto("procedure", "master", "sys", "xp_msver");
         var jobs = new ObjectRefDto("table", "msdb", "dbo", "sysjobs");
         var hex = new ObjectRefDto("function", "master", "sys", "fn_varbintohexstr");
-        ObjectRefDto[] targets = [objects, help, extended, jobs, hex];
+        var master = new ObjectRefDto("database", null, null, "master");
+        var clustered = new ObjectRefDto("index", "msdb", null, "clust", new ParentRefDto("table", "dbo", "sysjobs"));
+        // sa may be renamed: it is peeked only where it keeps its name.
+        var sa = new ObjectRefDto("login", null, null, "sa");
+        var hasSa = (await Peek(service, connectionId, sa, json)).Error is null;
+        ObjectRefDto[] targets = [objects, help, extended, jobs, hex, master, clustered, .. hasSa ? new[] { sa } : []];
         var errors = new List<string>();
         var top = Math.Min(major, ExplorerCatalog.MaxBand);
         for (var band = ExplorerCatalog.MinBand; band <= top; band++)
@@ -35,7 +40,8 @@ internal static class PeekLiveChecks
             foreach (var target in targets)
             {
                 var peek = await Peek(service, connectionId, target, json);
-                var expected = ExplorerCatalog.Current.Peek.Kinds[target.Kind].FactsFor(band).Select(fact => fact.Id);
+                // A login refused an optional group (index usage) gets the other facts.
+                var expected = ExplorerCatalog.Current.Peek.Kinds[target.Kind].FactsFor(band).Where(fact => !fact.Optional || peek.Refused is null).Select(fact => fact.Id);
                 if (peek.Error is not null || !peek.Facts.Keys.SequenceEqual(expected)) errors.Add(target.Name + " @" + band + ": " + (peek.Error?.Message ?? string.Join(",", peek.Facts.Keys)));
             }
         }
@@ -44,7 +50,7 @@ internal static class PeekLiveChecks
         foreach (var target in targets)
             if ((await Peek(service, connectionId, target, json)).Error is { } error) errors.Add(target.Name + " per database: " + error.Message);
         options.ForcePerDatabaseScope = false;
-        check(errors.Count == 0, "Peek reads system views, procedures, extended procedures, tables and functions for bands 12-" + top + " and with a pool per database, with exactly the band's facts: "
+        check(errors.Count == 0, "Peek reads system views, procedures, extended procedures, tables, functions, an index, master and sa for bands 12-" + top + " and with a pool per database, with exactly the band's facts: "
             + string.Join(" | ", errors.Take(5)));
 
         var view = await Peek(service, connectionId, objects, json);
@@ -61,6 +67,21 @@ internal static class PeekLiveChecks
         check(table is { Error: null, Definition: null } && table.Facts["rowCount"] is long rows && rows >= 0 && table.Facts["lockEscalation"] as string == "TABLE" && table.Facts["systemObject"] is true
             && table.Facts["dataSpace"] is long && table.Facts["indexSpace"] is long && table.Facts["filegroup"] as string == "PRIMARY" && table.Facts["partitioned"] is false,
             "msdb's sysjobs peeks as a system table with its row count, space and filegroup, and no text: " + JsonSerializer.Serialize(table.Facts));
+        var masterPeek = await Peek(service, connectionId, master, json);
+        var masterFiles = masterPeek.Lists?.GetValueOrDefault("files")?.Rows ?? [];
+        check(masterPeek is { Error: null, Definition: null } && masterPeek.Facts["status"] as string == "ONLINE" && masterPeek.Facts["owner"] as string is { Length: > 0 }
+            && masterFiles.Any(row => row[0] as string == "master" && row[1] as string == "ROWS") && masterFiles.Any(row => row[1] as string == "LOG"),
+            "master peeks on the server with its status, owner and files: " + (masterPeek.Error?.Message ?? JsonSerializer.Serialize(masterFiles.Select(row => row[0]))));
+        var jobsIndex = await Peek(service, connectionId, clustered, json);
+        check(jobsIndex is { Error: null } && jobsIndex.Facts["indexType"] as string == "Clustered" && jobsIndex.Lists?["indexColumns"].Rows is [["job_id", false, false, _]],
+            "msdb's sysjobs clustered index peeks with its key column: " + (jobsIndex.Error?.Message ?? JsonSerializer.Serialize(jobsIndex.Facts)));
+        if (hasSa)
+        {
+            var saPeek = await Peek(service, connectionId, sa, json);
+            check(saPeek is { Error: null } && saPeek.Facts["loginType"] as string == "SQL Server authentication" && saPeek.Lists?["serverRoles"].Rows.Any(row => row is ["sysadmin", true]) == true,
+                "sa peeks as a SQL login in sysadmin: " + (saPeek.Error?.Message ?? JsonSerializer.Serialize(saPeek.Facts)));
+        }
+        else Console.WriteLine("Peek's sa check skipped: this server has no login named sa.");
         var function = await Peek(service, connectionId, hex, json);
         check(function is { Error: null } && function.Facts["functionType"] as string == "Scalar-valued", "a system scalar function says Scalar-valued");
 
@@ -129,8 +150,9 @@ internal static class PeekLiveChecks
     }
 
     public static async Task ScratchAsync(Action<bool, string> check, SqlService service, string connectionId, string database, int major, Func<string, string, Task<SqlRun>> sql,
-        JsonSerializerOptions json, Func<Task<string>> memoryOptimized, Func<Task> dropMemoryOptimized)
+        JsonSerializerOptions json, Func<Task<string>> memoryOptimized, Func<Task> dropMemoryOptimized, Func<string, string> ownLogin)
     {
+        await KindsAsync(check, service, connectionId, database, major, sql, json, ownLogin("peek"), ownLogin("peeku"));
         try { await MemoryOptimizedAsync(check, service, connectionId, sql, json, memoryOptimized); }
         finally { await dropMemoryOptimized(); }
         // Hostile names, dropped afterwards so the fixture checks that follow see the database as the fixtures made it.
@@ -254,6 +276,172 @@ internal static class PeekLiveChecks
             await sql("DROP USER IF EXISTS [peek_dep];\nDROP USER IF EXISTS [peek_low];\n", database);
             var dropped = await sql("DROP VIEW IF EXISTS [Peek]]'Ü].[VC];\nDROP VIEW IF EXISTS [Peek]]'Ü].[VB];\nDROP PROCEDURE IF EXISTS [Peek]]'Ü].[PL];\nDROP VIEW IF EXISTS [Peek]]'Ü].[VF];\nDROP FUNCTION IF EXISTS [Peek]]'Ü].[F];\nDROP TABLE IF EXISTS [Peek]]'Ü].[Blob];\nDROP VIEW IF EXISTS [Peek]]'Ü].[V]]'表];\nDROP TABLE IF EXISTS [Peek]]'Ü].[Child];\nDROP PROCEDURE IF EXISTS [Peek]]'Ü].[P]]'表];\nDROP TABLE IF EXISTS [Peek]]'Ü].[T]]'表];\nDROP SCHEMA IF EXISTS [Peek]]'Ü];\n", database);
             check(dropped.Status == "completed", "the peek fixtures are dropped: " + dropped.Error);
+        }
+    }
+
+    /// <summary>The kinds beyond modules (P4) on hostile-named objects in the scratch database: an index with key, descending
+    /// and included columns, a filter and options, and its usage; a DML trigger with its events and text, and a disabled
+    /// database trigger; a synonym of a local table (followed) and of a remote one; a sequence a default uses; an alias type
+    /// and a table type a procedure takes; the scratch database with its files; and a scratch login with a server role, a
+    /// denied connect and a user in the scratch database. Usage is refused alone to a user who may not read server state.
+    /// Every object is dropped in finally; the login is also the scratch database's to drop.</summary>
+    internal static async Task KindsAsync(Action<bool, string> check, SqlService service, string connectionId, string database, int major, Func<string, string, Task<SqlRun>> sql,
+        JsonSerializerOptions json, string login, string usageLogin)
+    {
+        const string schema = "Pk4]'Ü";
+        const string s = "[Pk4]]'Ü]";
+        static bool Bit(string? value) => value is "1" or "True" or "true";
+        var created = await sql("CREATE SCHEMA " + s + ";\nGO\n"
+            + "CREATE TABLE " + s + ".[T]]'表] (Id int NOT NULL CONSTRAINT [PK]]'表] PRIMARY KEY CLUSTERED, Name nvarchar(50) NULL, Amount decimal(9, 2) NULL);\n"
+            + "CREATE UNIQUE INDEX [IX]]'表] ON " + s + ".[T]]'表] (Name DESC, Id) INCLUDE (Amount) WHERE Name IS NOT NULL WITH (FILLFACTOR = 80, PAD_INDEX = ON);\n"
+            + "INSERT " + s + ".[T]]'表] (Id, Name, Amount) VALUES (1, N'a', 1.5), (2, N'b', NULL), (3, NULL, NULL);\nGO\n"
+            + "CREATE SEQUENCE " + s + ".[S]]'表] AS bigint START WITH 10 INCREMENT BY 5 MINVALUE 10 MAXVALUE 1000 CYCLE CACHE 20;\nGO\n"
+            + "CREATE TABLE " + s + ".[UsesS] (Id bigint NOT NULL CONSTRAINT [DF_Pk4S] DEFAULT (NEXT VALUE FOR " + s + ".[S]]'表]));\nGO\n"
+            + "CREATE TRIGGER " + s + ".[TR]]'表] ON " + s + ".[T]]'表] AFTER INSERT, UPDATE AS SET NOCOUNT ON; SELECT COUNT(*) FROM " + s + ".[UsesS];\nGO\n"
+            + "CREATE TRIGGER [DTR]]'表] ON DATABASE FOR CREATE_TABLE, DROP_TABLE AS SET NOCOUNT ON;\nGO\nDISABLE TRIGGER [DTR]]'表] ON DATABASE;\nGO\n"
+            + "CREATE SYNONYM " + s + ".[SY]]'表] FOR " + s + ".[T]]'表];\nCREATE SYNONYM " + s + ".[SYR] FOR [Remote]]Srv].[Db].[dbo].[X];\nGO\n"
+            + "CREATE TYPE " + s + ".[AT]]'表] FROM nvarchar(20) NOT NULL;\nCREATE TYPE " + s + ".[TT]]'表] AS TABLE (Id int NOT NULL PRIMARY KEY, Name nvarchar(10) NULL);\nGO\n"
+            + "CREATE PROCEDURE " + s + ".[UsesTypes] @a " + s + ".[AT]]'表], @t " + s + ".[TT]]'表] READONLY AS SELECT 1;\nGO\n"
+            + "SELECT NEXT VALUE FOR " + s + ".[S]]'表];\nGO\n", database);
+        // The scratch login: random password (never printed), a server role, CONNECT SQL denied, and a hostile-named user here.
+        var password = "Vx9!" + Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(12));
+        var bracketed = "[" + login.Replace("]", "]]") + "]";
+        var usageBracketed = "[" + usageLogin.Replace("]", "]]") + "]";
+        var madeLogin = await sql("CREATE LOGIN " + bracketed + " WITH PASSWORD = N'" + password + "', CHECK_POLICY = OFF, DEFAULT_DATABASE = [master];\n"
+            + "ALTER SERVER ROLE [dbcreator] ADD MEMBER " + bracketed + ";\nDENY CONNECT SQL TO " + bracketed + ";\nALTER LOGIN " + bracketed + " DISABLE;\n", "master");
+        var mapped = madeLogin.Status == "completed" ? await sql("CREATE USER [U]]'表] FOR LOGIN " + bracketed + " WITH DEFAULT_SCHEMA = " + s + ";\n", database) : madeLogin;
+        try
+        {
+            check(created.Status == "completed" && mapped.Status == "completed", "the P4 peek fixtures and the scratch login are created: " + (created.Error ?? mapped.Error));
+            ObjectRefDto Child(string kind, string parent, string name, string parentKind = "table") => new(kind, database, null, name, new ParentRefDto(parentKind, schema, parent));
+            ObjectRefDto Own(string kind, string name) => new(kind, database, schema, name);
+            string Facts(PeekResult peek) => peek.Error?.Message ?? JsonSerializer.Serialize(peek.Facts);
+
+            // Index.
+            var index = await Peek(service, connectionId, Child("index", "T]'表", "IX]'表"), json);
+            var f = index.Facts;
+            var columns = index.Lists?.GetValueOrDefault("indexColumns")?.Rows ?? [];
+            check(index is { Error: null, Definition: null, Refused: null } && f["indexType"] as string == "Nonclustered" && f["unique"] is true && f["primaryKey"] is false
+                && f["filter"] as string == "([Name] IS NOT NULL)" && f["fillFactor"] is 80L && f["padIndex"] is true && f["rowCount"] is 2L && f["filegroup"] as string == "PRIMARY"
+                && f["partitions"] is 1L && f["compression"] as string == "NONE" && (major < 15 ? !f.ContainsKey("optimizeForSequentialKey") : f["optimizeForSequentialKey"] is false)
+                && f["userUpdates"] is long updates && updates >= 1 && f.ContainsKey("lastSeek")
+                && columns.Count == 3 && columns[0] is ["Name", false, true, string nameType] && nameType.StartsWith("nvarchar", StringComparison.Ordinal)
+                && columns[1] is ["Id", false, false, "int"] && columns[2] is ["Amount", true, false, string amountType] && amountType.StartsWith("decimal", StringComparison.Ordinal),
+                "a hostile-named filtered unique index peeks with its type, filter, options, storage and usage, and its key, descending and included columns: "
+                + Facts(index) + " " + JsonSerializer.Serialize(columns));
+            var primary = await Peek(service, connectionId, Child("index", "T]'表", "PK]'表"), json);
+            check(primary is { Error: null } && primary.Facts["indexType"] as string == "Clustered" && primary.Facts["primaryKey"] is true && primary.Facts["filter"] is null
+                && primary.Lists?["indexColumns"].Rows is [["Id", false, false, "int"]], "a primary key's clustered index says so: " + Facts(primary));
+            var wrongParent = await Peek(service, connectionId, Child("index", "UsesS", "IX]'表"), json);
+            check(wrongParent is { Error.Code: "NOT_FOUND" }, "an index is found only below its own table");
+
+            // Triggers.
+            var trigger = await Peek(service, connectionId, Child("trigger", "T]'表", "TR]'表"), json);
+            var events = trigger.Lists?.GetValueOrDefault("events")?.Rows ?? [];
+            check(trigger is { Error: null, Definition: { } triggerText } && triggerText.StartsWith("CREATE TRIGGER", StringComparison.Ordinal) && trigger.Facts["disabled"] is false
+                && trigger.Facts["insteadOf"] is false && trigger.Facts["clr"] is false && trigger.Facts["executeAs"] as string == "CALLER"
+                && events.Select(row => row[0] as string).Order(StringComparer.Ordinal).SequenceEqual(["INSERT", "UPDATE"]) && events.All(row => row[1] is false && row[2] is false),
+                "a hostile-named DML trigger peeks with its text, options and events: " + Facts(trigger) + " " + JsonSerializer.Serialize(events));
+            var triggerUses = await Dependencies(service, connectionId, Child("trigger", "T]'表", "TR]'表"), json);
+            check(triggerUses is { Error: null } && triggerUses.Uses.Any(item => item is { Name: "UsesS", Kind: "table", Database: null } && item.Schema == schema),
+                "a trigger's dependencies list the table its code reads: " + (triggerUses.Error?.Message ?? string.Join(", ", triggerUses.Uses.Select(item => item.Name))));
+            var databaseTrigger = await Peek(service, connectionId, new ObjectRefDto("databaseTrigger", database, null, "DTR]'表"), json);
+            var ddl = databaseTrigger.Lists?.GetValueOrDefault("events")?.Rows ?? [];
+            check(databaseTrigger is { Error: null, Definition: { } ddlText } && ddlText.Contains("ON DATABASE", StringComparison.Ordinal) && databaseTrigger.Facts["disabled"] is true
+                && ddl.Select(row => row[0] as string).Order(StringComparer.Ordinal).SequenceEqual(["CREATE_TABLE", "DROP_TABLE"]),
+                "a disabled hostile-named database trigger peeks with its text and DDL events: " + Facts(databaseTrigger) + " " + JsonSerializer.Serialize(ddl));
+
+            // Synonyms, followed to their base as the card follows a dependency.
+            var synonym = await Peek(service, connectionId, Own("synonym", "SY]'表"), json);
+            var synonymUses = await Dependencies(service, connectionId, Own("synonym", "SY]'表"), json);
+            var baseObject = synonymUses.Uses.FirstOrDefault();
+            var followed = baseObject is { Kind: { } baseKind, Schema: { } baseSchema, Database: null, Server: null } ? await Peek(service, connectionId, new ObjectRefDto(baseKind, database, baseSchema, baseObject.Name), json) : null;
+            check(synonym is { Error: null, Definition: null } && synonym.Facts["schema"] as string == schema && synonym.Facts["baseObject"] as string == "[Pk4]]'Ü].[T]]'表]"
+                && synonym.Facts["baseName"] as string == "T]'表" && synonym.Facts["baseSchema"] as string == schema && synonym.Facts["baseServer"] is null
+                && synonymUses is { Error: null, Uses.Count: 1 } && baseObject is { Name: "T]'表", Kind: "table" } && followed is { Error: null } && followed.Facts["rowCount"] is 3L,
+                "a hostile-named synonym peeks with its base object's parts, and its dependency is the table, which peeks when followed: " + Facts(synonym) + " " + followed?.Error?.Message);
+            var remote = await Dependencies(service, connectionId, Own("synonym", "SYR"), json);
+            var remoteFacts = await Peek(service, connectionId, Own("synonym", "SYR"), json);
+            check(remote is { Error: null, Uses: [{ Server: "Remote]Srv", Database: "Db", Schema: "dbo", Name: "X" }] } && remoteFacts.Facts["baseServer"] as string == "Remote]Srv"
+                && remoteFacts.Facts["baseDatabase"] as string == "Db", "a synonym of a remote object lists the parts it names, which the card does not follow: " + Facts(remoteFacts));
+
+            // Sequence.
+            var sequence = await Peek(service, connectionId, Own("sequence", "S]'表"), json);
+            var sf = sequence.Facts;
+            var sequenceUses = await Dependencies(service, connectionId, Own("sequence", "S]'表"), json);
+            check(sequence is { Error: null, Definition: null } && sf["dataType"] as string == "bigint" && sf["startValue"] as string == "10" && sf["increment"] as string == "5"
+                && sf["minimum"] as string == "10" && sf["maximum"] as string == "1000" && sf["cycle"] is true && sf["cache"] as string == "20" && sf["currentValue"] as string == "10"
+                && (major < 14 ? !sf.ContainsKey("lastUsedValue") : sf["lastUsedValue"] as string == "10") && sf["exhausted"] is false
+                && sequenceUses is { Error: null } && sequenceUses.UsedBy.Count > 0,
+                "a hostile-named sequence peeks with its type, bounds, cycle, cache and current value, and lists the default that uses it: " + Facts(sequence) + " "
+                + (sequenceUses.Error?.Message ?? string.Join(", ", sequenceUses.UsedBy.Select(item => item.Name))));
+
+            // Types.
+            var alias = await Peek(service, connectionId, Own("type", "AT]'表"), json);
+            var aliasUses = await Dependencies(service, connectionId, Own("type", "AT]'表"), json);
+            check(alias is { Error: null } && alias.Facts["schema"] as string == schema && alias.Facts["baseType"] as string == "nvarchar(20)" && alias.Facts["allowNulls"] is false
+                && alias.Facts["maxLength"] is 40L && alias.Facts["default"] is null && aliasUses is { Error: null, Uses.Count: 0 } && aliasUses.UsedBy.Any(item => item is { Name: "UsesTypes", Kind: "procedure" }),
+                "a hostile-named alias type peeks with its base type and nullability, uses nothing, and is used by the procedure that takes it: " + Facts(alias));
+            var tableType = await Peek(service, connectionId, Own("tableType", "TT]'表"), json);
+            var tableTypeUses = await Dependencies(service, connectionId, Own("tableType", "TT]'表"), json);
+            check(tableType is { Error: null } && tableType.Facts["memoryOptimized"] is false && tableType.Facts["schema"] as string == schema
+                && tableTypeUses.UsedBy.Any(item => item is { Name: "UsesTypes", Kind: "procedure" }) && !tableTypeUses.UsedBy.Any(item => item.Name.StartsWith("TT_", StringComparison.Ordinal)),
+                "a hostile-named table type peeks, and lists the procedure that takes it but not its own table object: " + Facts(tableType));
+
+            // The scratch database, read on the server.
+            var scratch = await Peek(service, connectionId, new ObjectRefDto("database", null, null, database), json);
+            var files = scratch.Lists?.GetValueOrDefault("files")?.Rows ?? [];
+            check(scratch is { Error: null, Definition: null } && scratch.Facts["status"] as string == "ONLINE" && scratch.Facts["size"] is long size && size > 0
+                && scratch.Facts["compatibilityLevel"] is long && scratch.Facts["recoveryModel"] is string && files.Any(row => row[1] as string == "ROWS") && files.Any(row => row[1] as string == "LOG")
+                && files.All(row => row[2] is long fileSize && fileSize > 0 && row[3] is string { Length: > 0 } && row[4] is string { Length: > 0 }),
+                "the scratch database peeks on the server with its status, size and options, and its data and log files: " + Facts(scratch) + " " + JsonSerializer.Serialize(files.Select(row => row[1])));
+
+            // The scratch login.
+            var peekLogin = await Peek(service, connectionId, new ObjectRefDto("login", null, null, login), json);
+            var roles = peekLogin.Lists?.GetValueOrDefault("serverRoles")?.Rows ?? [];
+            var mapping = peekLogin.Lists?.GetValueOrDefault("userMapping");
+            check(peekLogin is { Error: null, Definition: null } && peekLogin.Facts["loginType"] as string == "SQL Server authentication" && peekLogin.Facts["disabled"] is true
+                && peekLogin.Facts["connectDenied"] is true && peekLogin.Facts["enforcePolicy"] is false && peekLogin.Facts["defaultDatabase"] as string == "master"
+                && roles.Any(row => row is ["dbcreator", true]) && mapping is { } map && map.Rows.Any(row => row[0] as string == database && row[1] as string == "U]'表" && row[2] as string == schema)
+                && map.Rows.Count(row => row[0] as string == database) == 1,
+                "a scratch login peeks with its type, status, server role and its hostile-named user in the scratch database, read without LOGINPROPERTY: " + Facts(peekLogin) + " "
+                + JsonSerializer.Serialize(roles) + " " + JsonSerializer.Serialize(mapping?.Rows.Where(row => row[0] as string == database)));
+            var missingLogin = await Peek(service, connectionId, new ObjectRefDto("login", null, null, login + "_gone"), json);
+            var missingDatabase = await Peek(service, connectionId, new ObjectRefDto("database", null, null, database + "_gone"), json);
+            check(missingLogin is { Error.Code: "NOT_FOUND" } && missingDatabase is { Error.Code: "NOT_FOUND" }, "a missing login and a missing database are NOT_FOUND values");
+
+            // The per-database strategy reads children and server objects too.
+            service.Explorer.Options.ForcePerDatabaseScope = true;
+            var perDatabase = await Peek(service, connectionId, Child("index", "T]'表", "IX]'表"), json);
+            var perDatabaseLogin = await Peek(service, connectionId, new ObjectRefDto("login", null, null, login), json);
+            service.Explorer.Options.ForcePerDatabaseScope = false;
+            check(perDatabase is { Error: null } && perDatabase.Facts["unique"] is true && perDatabaseLogin is { Error: null } && perDatabaseLogin.Facts["disabled"] is true,
+                "the per-database strategy peeks an index and a login too");
+
+            // Usage refused alone: a login that may not read server state (impersonated as a login, since a user without one is
+            // refused every server-scoped view with 15562 instead) gets the index's other facts and lists, and a refused row.
+            var band = Math.Min(major, ExplorerCatalog.MaxBand);
+            var batch = PeekSql.Render(ExplorerCatalog.Current.Peek.Kinds["index"], new SqlRender(band), ExplorerCatalog.Current.Peek.DefinitionChars, "table");
+            var usagePassword = "Vx9!" + Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(12));
+            var madeUsage = await sql("CREATE LOGIN " + usageBracketed + " WITH PASSWORD = N'" + usagePassword + "', CHECK_POLICY = OFF;\n", "master");
+            var granted = madeUsage.Status == "completed" ? await sql("CREATE USER [peek_usage] FOR LOGIN " + usageBracketed + ";\nGRANT VIEW DEFINITION TO [peek_usage];\n", database) : madeUsage;
+            var refused = await sql("EXECUTE AS LOGIN = N'" + usageLogin.Replace("'", "''") + "';\nDECLARE @object_schema sysname = N'Pk4]''Ü', @object_name sysname = N'T]''表', @k1 sysname = N'IX]''表', @take int = 1025;\n"
+                + "BEGIN TRY\n" + batch.Text + "END TRY\nBEGIN CATCH\nREVERT;\nTHROW;\nEND CATCH;\nREVERT;\n", database);
+            var last = refused.Sets.Count > 0 && refused.Sets[^1].Count == 1 ? refused.Sets[^1][0] : null;
+            check(granted.Status == "completed" && refused.Status == "completed" && refused.Sets.Count == 4 && refused.Sets[1].Count == 1 && refused.Sets[2].Count == 3
+                && last is [var flag] && Bit(flag),
+                "a login without VIEW SERVER STATE reads the index's facts and columns, and its usage statement answers one refused column: "
+                + (granted.Error ?? refused.Error ?? JsonSerializer.Serialize(refused.Sets.Select(set => set.Count))));
+        }
+        finally
+        {
+            var dropped = await sql("DROP USER IF EXISTS [peek_usage];\nDROP USER IF EXISTS [U]]'表];\nDROP PROCEDURE IF EXISTS " + s + ".[UsesTypes];\nDROP TYPE IF EXISTS " + s + ".[TT]]'表];\n"
+                + "DROP TYPE IF EXISTS " + s + ".[AT]]'表];\nDROP SYNONYM IF EXISTS " + s + ".[SYR];\nDROP SYNONYM IF EXISTS " + s + ".[SY]]'表];\n"
+                + "IF EXISTS (SELECT 1 FROM sys.triggers WHERE parent_class = 0 AND name = N'DTR]''表') DROP TRIGGER [DTR]]'表] ON DATABASE;\n"
+                + "DROP TABLE IF EXISTS " + s + ".[T]]'表];\nDROP TABLE IF EXISTS " + s + ".[UsesS];\nDROP SEQUENCE IF EXISTS " + s + ".[S]]'表];\nDROP SCHEMA IF EXISTS " + s + ";\n", database);
+            var droppedLogin = await sql("IF EXISTS (SELECT 1 FROM sys.server_principals WHERE name = N'" + login.Replace("'", "''") + "') DROP LOGIN " + bracketed + ";\n"
+                + "IF EXISTS (SELECT 1 FROM sys.server_principals WHERE name = N'" + usageLogin.Replace("'", "''") + "') DROP LOGIN " + usageBracketed + ";\n", "master");
+            check(dropped.Status == "completed" && droppedLogin.Status == "completed", "the P4 peek fixtures and the scratch login are dropped: " + (dropped.Error ?? droppedLogin.Error));
         }
     }
 

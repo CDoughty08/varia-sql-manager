@@ -73,14 +73,21 @@ internal static class ExplorerRefs
         return new(args.ConnectionId, args.RequestId, node, target, folder, database, args.Subtype, args.Cursor, args.PageSize ?? MaxPageSize, effective, list, grouped);
     }
 
-    /// <summary>explorer.peek's request, as peekParamsSchema accepts it: GUIDs, and a schema object ref of a kind Peek describes.</summary>
+    /// <summary>explorer.peek's request, as peekParamsSchema accepts it: GUIDs, and a ref of a kind Peek describes.</summary>
     public static PeekKindSpec ValidatePeek(PeekArgs args, ExplorerCatalog catalog)
     {
         if (!Guid.TryParse(args.ConnectionId, out _)) throw Invalid("connectionId.");
         if (!Guid.TryParse(args.RequestId, out _)) throw Invalid("requestId.");
         var target = args.Target ?? throw Invalid("target.");
         Object(target, catalog);
-        return catalog.Peek.Kinds.GetValueOrDefault(target.Kind) ?? throw Invalid("Peek describes tables, views, procedures and functions.");
+        return catalog.Peek.Kinds.GetValueOrDefault(target.Kind) ?? throw Invalid("Peek does not describe this kind of object.");
+    }
+
+    /// <summary>explorer.peekDependencies' request, as peekDependenciesParamsSchema accepts it: a peek whose kind has the tab.</summary>
+    public static PeekKindSpec ValidatePeekDependencies(PeekArgs args, ExplorerCatalog catalog)
+    {
+        var spec = ValidatePeek(args, catalog);
+        return spec.Dependencies ? spec : throw Invalid("Peek lists no dependencies of this kind of object.");
     }
 
     /// <summary>explorer.peekRows' request, as peekRowsParamsSchema accepts it: GUIDs, and a table or view ref.</summary>

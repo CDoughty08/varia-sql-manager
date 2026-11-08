@@ -107,27 +107,73 @@ internal sealed class ExplorerService : IDisposable
         finally { running.Unregister(request.RequestId, entry); }
     }
 
-    /// <summary>explorer.peek: one constant batch (PeekSql) in the object's database, the kind's facts and a module's text.</summary>
+    /// <summary>explorer.peek: one constant batch (PeekSql) in the object's database or on the server, the kind's facts, lists and
+    /// a module's text; a login's User mapping then reads each database it may enter on the same connection.</summary>
     public Task<PeekResult> PeekAsync(PeekArgs args, CancellationToken token)
     {
         var spec = ExplorerRefs.ValidatePeek(args, catalog);
         var profile = PeekProfile(args.ConnectionId);
-        var batch = PeekSql.Render(spec, new SqlRender(profile.Band), catalog.Peek.DefinitionChars);
-        return RunPeekAsync(args.ConnectionId, args.RequestId, args.Target, profile, batch.Text, 0,
-            async (reader, ct) => await reader.ReadAsync(ct) ? PeekSql.Read(reader, spec, batch, profile.Band, catalog.Peek.DefinitionChars) : null,
+        var limits = catalog.Peek;
+        var batch = PeekSql.Render(spec, new SqlRender(profile.Band), limits.DefinitionChars, args.Target.Parent?.Kind);
+        // One more list row than the card keeps tells it there were more.
+        return RunPeekAsync(args.ConnectionId, args.RequestId, args.Target, profile, batch.Text, limits.ListRows + 1,
+            async (command, values, reader, ct) =>
+            {
+                if (await PeekSql.ReadAsync(reader, spec, batch, profile.Band, limits, ct) is not var (result, databases)) return null;
+                if (!batch.Mapping) return result;
+                await reader.CloseAsync();
+                var mapping = await MappingAsync(command.Connection, profile, values, databases, ct);
+                return result with { Lists = new(result.Lists ?? [], StringComparer.Ordinal) { ["userMapping"] = mapping } };
+            },
             error => new PeekResult([], 0, Error: error), (result, elapsed) => result with { ElapsedMs = elapsed }, "the properties", CommandBehavior.Default, token);
+    }
+
+    /// <summary>A login's User mapping: its user in each database it may enter (at most the catalogue's databases, in name order),
+    /// each read there through the scope wrapper on the peek's own connection, whose prologue still holds. A database that fails
+    /// (dropped, offline or refused since the batch listed it) is counted as unread, as are those past the limit; a cloud
+    /// database cannot reach others, so it reads none.</summary>
+    private async Task<PeekList> MappingAsync(SqlConnection connection, ExplorerProfile profile, Values values, List<string> databases, CancellationToken token)
+    {
+        var limits = catalog.Peek;
+        var rows = new List<object?[]>();
+        var unread = 0;
+        var more = false;
+        List<string> read = profile.Cloud ? [] : [.. databases.Take(limits.MappingDatabases)];
+        unread += databases.Count - read.Count;
+        foreach (var database in read)
+        {
+            if (more) { unread++; continue; }
+            try
+            {
+                await using var command = connection.CreateCommand();
+                command.CommandTimeout = 30;
+                command.CommandText = CatalogSql.ModuleCall;
+                Add(command, "@db", SqlDbType.NVarChar, 128, database);
+                Add(command, "@stmt", SqlDbType.NVarChar, -1, PeekSql.MappingUsers);
+                Add(command, "@decl", SqlDbType.NVarChar, -1, CatalogSql.Declarations);
+                command.Parameters.AddRange(Bind(values));
+                await using var reader = await command.ExecuteReaderAsync(token);
+                while (await reader.ReadAsync(token))
+                {
+                    if (rows.Count == limits.ListRows) { more = true; break; }
+                    rows.Add([database, reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1)]);
+                }
+            }
+            catch (SqlException) when (!token.IsCancellationRequested) { unread++; }
+        }
+        return new(rows, more ? true : null, unread > 0 ? unread : null);
     }
 
     /// <summary>explorer.peekDependencies: the Dependencies tab's two listings (<see cref="PeekSql.Dependencies"/>), read only when
     /// the tab is chosen, so that a login that may not read sys.sql_expression_dependencies still gets the facts.</summary>
     public Task<PeekDependenciesResult> PeekDependenciesAsync(PeekArgs args, CancellationToken token)
     {
-        var spec = ExplorerRefs.ValidatePeek(args, catalog);
+        var spec = ExplorerRefs.ValidatePeekDependencies(args, catalog);
         var profile = PeekProfile(args.ConnectionId);
         var max = catalog.Peek.Dependencies;
         // One more dependency than the card lists tells it there were more.
-        return RunPeekAsync(args.ConnectionId, args.RequestId, args.Target, profile, PeekSql.Dependencies(spec.Kind, new SqlRender(profile.Band)), max + 1,
-            async (reader, ct) => await PeekSql.ReadDependenciesAsync(reader, max, ct),
+        return RunPeekAsync(args.ConnectionId, args.RequestId, args.Target, profile, PeekSql.Dependencies(spec.Kind, new SqlRender(profile.Band), args.Target.Parent?.Kind), max + 1,
+            async (_, _, reader, ct) => await PeekSql.ReadDependenciesAsync(reader, max, ct),
             error => new PeekDependenciesResult([], [], 0, Error: error), (result, elapsed) => result with { ElapsedMs = elapsed }, "the dependencies", CommandBehavior.Default, token);
     }
 
@@ -138,7 +184,7 @@ internal sealed class ExplorerService : IDisposable
         var spec = ExplorerRefs.ValidatePeekRows(args, catalog);
         var limits = catalog.Peek;
         return RunPeekAsync(args.ConnectionId, args.RequestId, args.Target, PeekProfile(args.ConnectionId), PeekRowsSql.Render(spec.Kind), limits.Rows,
-            async (reader, ct) => await PeekRowsSql.ReadAsync(reader, limits.Rows, limits.RowColumns, limits.RowCellChars, ct),
+            async (_, _, reader, ct) => await PeekRowsSql.ReadAsync(reader, limits.Rows, limits.RowColumns, limits.RowCellChars, ct),
             error => new PeekRowsResult([], [], 0, Error: error), (result, elapsed) => result with { ElapsedMs = elapsed }, "the rows", CommandBehavior.SequentialAccess, token);
     }
 
@@ -148,12 +194,14 @@ internal sealed class ExplorerService : IDisposable
         return Options.ForceBand is { } band ? real with { Band = band } : real;
     }
 
-    /// <summary>One of Peek's reads: a batch that starts with <see cref="CatalogSql.ParentLookup"/>, in the object's database on
-    /// the same pools and with the same error values as explorer.children, under the connection's peek slot rather than the
-    /// tree's gates, within the catalogue's budget from the moment it has its slot (a TIMEOUT value past it). <paramref name="read"/>
-    /// reads what follows the lookup's row; a null from it, like a missing object, is NOT_FOUND.</summary>
+    /// <summary>One of Peek's reads: a batch that starts with a lookup (<see cref="PeekSql.Lookup"/>), in the object's database (or
+    /// on the server, for a database, a login or a server trigger) on the same pools and with the same error values as
+    /// explorer.children, under the connection's peek slot rather than the tree's gates, within the catalogue's budget from the
+    /// moment it has its slot (a TIMEOUT value past it). The lookup's names: a child's parent in @object_schema and @object_name
+    /// and its own name in @k1, any other object's name in @object_name. <paramref name="read"/> reads what follows the lookup's
+    /// row; a null from it, like a missing object, is NOT_FOUND.</summary>
     private async Task<T> RunPeekAsync<T>(string connectionId, string requestId, ObjectRefDto target, ExplorerProfile profile, string statement, int take,
-        Func<SqlDataReader, CancellationToken, Task<T?>> read, Func<ExplorerError, T> failed, Func<T, long, T> timed, string what, CommandBehavior behavior, CancellationToken token)
+        Func<SqlCommand, Values, SqlDataReader, CancellationToken, Task<T?>> read, Func<ExplorerError, T> failed, Func<T, long, T> timed, string what, CommandBehavior behavior, CancellationToken token)
         where T : class
     {
         var watch = Stopwatch.StartNew();
@@ -164,9 +212,14 @@ internal sealed class ExplorerService : IDisposable
         {
             token.ThrowIfCancellationRequested();
             var lane = peekGates.GetOrAdd(connectionId, _ => new SemaphoreSlim(Options.PeekPerConnection));
-            var values = new Values(target.Schema, target.Name, null, false, take, null, null, null, null, null, null, null);
-            var result = await RunAsync(connectionId, target.Database, target.Schema + "." + target.Name, profile, QueryScope.Database, statement, values,
-                async (_, reader) => (await ParentExistsAsync(reader, source.Token) ? await read(reader, source.Token) : null) ?? failed(NotFound(target)),
+            var scope = catalog.KindOf(target.Kind).Scope;
+            var values = target.Parent is { } parent
+                ? new Values(parent.Schema, parent.Name, new CursorKey(target.Name, null, null), false, take, null, null, null, null, null, null, null)
+                : new Values(target.Schema, target.Name, null, false, take, null, null, null, null, null, null, null);
+            var server = scope is "database" or "serverObject";
+            var subject = target.Parent is { } owner ? owner.Schema + "." + owner.Name + "." + target.Name : target.Schema is null ? target.Name ?? target.Kind : target.Schema + "." + target.Name;
+            var result = await RunAsync(connectionId, server ? null : target.Database, subject, profile, server ? QueryScope.Server : QueryScope.Database, statement, values,
+                async (command, reader) => (await ParentExistsAsync(reader, source.Token) ? await read(command, values, reader, source.Token) : null) ?? failed(NotFound(target)),
                 failed, source.Token, lane, () => source.CancelAfter(budget), behavior);
             return timed(result, watch.ElapsedMilliseconds);
         }

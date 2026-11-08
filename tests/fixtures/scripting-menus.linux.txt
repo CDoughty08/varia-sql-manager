@@ -468,6 +468,7 @@ explorer.context, for an aggregate
   Re&fresh
 explorer.context, for a DML trigger
   Modif&y
+  Pee&k (disabled)
   ---
   &Script Trigger as >
     &CREATE To >
@@ -497,6 +498,7 @@ explorer.context, for a DML trigger
 explorer.context, for a database
   New &Query
   Searc&h Objects…
+  Pee&k (disabled)
   ---
   &Script Database as >
     &CREATE To >
@@ -537,6 +539,7 @@ explorer.context, for a database
 explorer.context, for a database snapshot
   New &Query
   Searc&h Objects…
+  Pee&k (disabled)
   ---
   &Script Database as >
     &CREATE To >
@@ -565,6 +568,8 @@ explorer.context, for a database snapshot
   ---
   &Properties
 explorer.context, for an index
+  Pee&k (disabled)
+  ---
   &Script Index as >
     &CREATE To >
       &New Query Editor Window
@@ -619,6 +624,8 @@ explorer.context, for a user
   ---
   Re&fresh
 explorer.context, for a login
+  Pee&k (disabled)
+  ---
   &Script Login as >
     &CREATE To >
       &New Query Editor Window
@@ -668,6 +675,8 @@ explorer.context, for an extended procedure (deferred)
   ---
   Re&fresh
 explorer.context, for a table type's index (not scriptable)
+  Pee&k (disabled)
+  ---
   Copy N&ame
   ---
   Re&fresh

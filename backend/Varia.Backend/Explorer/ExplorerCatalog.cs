@@ -20,19 +20,28 @@ internal sealed record CatalogKind(string Kind, string Title, string Scope, stri
     IReadOnlyList<string> HistoryLookup, IReadOnlyList<string> Parents, string? List, IReadOnlyList<string> Rows, int MaxName);
 internal sealed record CatalogScope(IReadOnlyList<string> Required, IReadOnlyList<string> Forbidden);
 /// <summary>One of Peek's facts (src/shared/explorer/peek.ts): its id (the reply key and the batch's column alias), how its
-/// value travels (text, date, bool, count or kb), and the first band whose catalog has it (null: every band).</summary>
-internal sealed record PeekFactSpec(string Id, string Format, int? Since);
+/// value travels (text, code, date, bool, count or kb), the first band whose catalog has it (null: every band), and whether it
+/// is in a group read by a statement of its own that the login may be refused (Optional).</summary>
+internal sealed record PeekFactSpec(string Id, string Format, int? Since, bool Optional = false);
+/// <summary>One of a kind's lists, read with its facts: its id and its columns' ids and formats, in reply order.</summary>
+internal sealed record PeekListSpec(string Id, IReadOnlyList<PeekFactSpec> Columns);
 /// <summary>A kind Peek describes: its facts in reply-column order, where its definition comes from (module: the batch
-/// reads sys.all_sql_modules; script: the renderer asks Script As), and whether explorer.peekRows samples its rows.</summary>
-internal sealed record PeekKindSpec(string Kind, string Definition, IReadOnlyList<PeekFactSpec> Facts, bool Rows = false)
+/// reads the module's text; script: the renderer asks Script As), whether explorer.peekRows samples its rows and
+/// explorer.peekDependencies lists its dependencies, and the lists its batch reads after the facts.
+/// OptionalGroup names the group of its optional facts, which a refused reply lists.
+internal sealed record PeekKindSpec(string Kind, string Definition, IReadOnlyList<PeekFactSpec> Facts, bool Rows = false, bool Dependencies = true, IReadOnlyList<PeekListSpec>? Lists = null,
+    string? OptionalGroup = null)
 {
     public bool Module => Definition == "module";
+    public IReadOnlyList<PeekListSpec> ListSpecs => Lists ?? [];
     /// <summary>The facts a server of this band has, in reply order.</summary>
     public IReadOnlyList<PeekFactSpec> FactsFor(int band) => [.. Facts.Where(fact => (fact.Since ?? ExplorerCatalog.MinBand) <= band)];
 }
 /// <summary>Peek's kinds and limits: module text kept (UTF-16 code units), the backend's budget for one peek or rows read, the
-/// dependencies listed each way, and the Top rows tab's rows, columns and value length.</summary>
-internal sealed record CatalogPeek(IReadOnlyDictionary<string, PeekKindSpec> Kinds, int DefinitionChars, int BudgetMs, int Dependencies, int Rows, int RowColumns, int RowCellChars);
+/// dependencies listed each way, the Top rows tab's rows, columns and value length, the rows each list keeps, and the databases
+/// a login's User mapping reads.</summary>
+internal sealed record CatalogPeek(IReadOnlyDictionary<string, PeekKindSpec> Kinds, int DefinitionChars, int BudgetMs, int Dependencies, int Rows, int RowColumns, int RowCellChars,
+    int ListRows = 1024, int MappingDatabases = 256);
 
 /// <summary>What a server can browse: its version band (12 below SQL Server 2016, else the major version up to 17, or the
 /// band of the catalog columns it has when that is higher), whether it is a cloud edition, whether it runs on Linux, and whether
@@ -62,12 +71,16 @@ internal sealed class ExplorerCatalog
     private sealed record KindJson(string Kind, string Title, string Scope, string Icon, List<string> Subtypes, Dictionary<string, string> SubtypeIcons,
         Dictionary<string, string> VariantIcons, List<string> Folders, Dictionary<string, List<string>> SubtypeFolders, List<string> HistoryLookup, List<string> Parents,
         string? List, List<string> Rows, int MaxName);
-    private sealed record PeekFactJson(string Id, string Format, int? Since);
-    private sealed record PeekKindJson(string Kind, string Definition, bool Rows, List<PeekFactJson> Facts);
-    private sealed record PeekJson(int BudgetMs, int DefinitionChars, int Dependencies, int Rows, int RowColumns, int RowCellChars, List<PeekKindJson> Kinds);
+    private sealed record PeekFactJson(string Id, string Format, int? Since, bool Optional = false);
+    private sealed record PeekListJson(string Id, List<PeekFactJson> Columns);
+    private sealed record PeekKindJson(string Kind, string Definition, bool Rows, bool Dependencies, string? OptionalGroup, List<PeekFactJson> Facts, List<PeekListJson> Lists);
+    private sealed record PeekJson(int BudgetMs, int DefinitionChars, int Dependencies, int Rows, int RowColumns, int RowCellChars, int ListRows, int MappingDatabases, List<PeekKindJson> Kinds);
     private sealed record CatalogJson(int Version, List<int> CloudEngineEditions, List<FolderJson> Folders, List<KindJson> Kinds, List<int> ManagedInstanceEngineEditions, List<string> Queries,
         CatalogSchemaGroups SchemaGroups, Dictionary<string, CatalogScope> Scopes, PeekJson? Peek);
-    private static readonly string[] PeekFormats = ["text", "date", "bool", "count", "kb"];
+    private static readonly string[] PeekFormats = ["text", "code", "date", "bool", "count", "kb"];
+    /// <summary>The scopes Peek reads: a schema object, a table's or view's child, a database-scoped object, a database, a
+    /// server-scoped object.</summary>
+    private static readonly string[] PeekScopes = ["schemaObject", "child", "databaseObject", "database", "serverObject"];
 
     private readonly Dictionary<string, CatalogFolder> folders;
     private readonly Dictionary<string, CatalogKind> kinds;
@@ -108,26 +121,46 @@ internal sealed class ExplorerCatalog
     {
         if (peek is null) throw new InvalidOperationException("The Object Explorer catalogue has no peek block.");
         if (peek.DefinitionChars is < 1 or > 4_000_000 || peek.BudgetMs is < 1000 or > 60_000 || peek.Dependencies is < 1 or > 10_000 || peek.Rows is < 1 or > 1000
-            || peek.RowColumns is < 1 or > 4096 || peek.RowCellChars is < 16 or > 65_535) throw new InvalidOperationException("Peek's limits are out of range.");
+            || peek.RowColumns is < 1 or > 4096 || peek.RowCellChars is < 16 or > 65_535 || peek.ListRows is < 1 or > 10_000 || peek.MappingDatabases is < 1 or > 32_767) throw new InvalidOperationException("Peek's limits are out of range.");
         var specs = new Dictionary<string, PeekKindSpec>(StringComparer.Ordinal);
         foreach (var kind in peek.Kinds ?? throw new InvalidOperationException("Peek has no kinds."))
         {
-            if (!kinds.TryGetValue(kind.Kind, out var spec) || spec.Scope != "schemaObject") throw new InvalidOperationException("Peek names a kind that is not a schema object: " + kind.Kind + ".");
+            if (!kinds.TryGetValue(kind.Kind, out var spec) || !PeekScopes.Contains(spec.Scope)) throw new InvalidOperationException("Peek names a kind of a scope it does not read: " + kind.Kind + ".");
             if (kind.Definition is not ("module" or "script")) throw new InvalidOperationException("Peek's definition source is unknown for " + kind.Kind + ".");
-            if (kind.Facts is not { Count: > 0 } facts) throw new InvalidOperationException("Peek's " + kind.Kind + " has no facts.");
-            var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "definition" };
-            foreach (var fact in facts)
-            {
-                if (fact.Id is not { Length: >= 1 and <= 64 } id || !char.IsAsciiLetterLower(id[0]) || !id.All(char.IsAsciiLetter) || !ids.Add(id))
-                    throw new InvalidOperationException("Peek's " + kind.Kind + " has an invalid or repeated fact id.");
-                if (!PeekFormats.Contains(fact.Format) || fact.Since is { } since && (since <= MinBand || since > MaxBand))
-                    throw new InvalidOperationException("Peek's fact " + kind.Kind + "." + fact.Id + " has an unknown format or band.");
-            }
+            var facts = Words(kind.Kind, kind.Facts, "fact");
+            // Optional facts come from the batch's last statement, after every fact it always reads.
+            if (facts.SkipWhile(fact => !fact.Optional).Any(fact => !fact.Optional)) throw new InvalidOperationException("Peek's " + kind.Kind + " has an optional fact before a fact it always reads.");
+            if (facts.Any(fact => fact.Optional) != kind.OptionalGroup is { Length: > 0 }) throw new InvalidOperationException("Peek's " + kind.Kind + " has optional facts without their group, or a group without them.");
             if (kind.Rows && kind.Kind is not ("table" or "view")) throw new InvalidOperationException("Peek samples rows only of tables and views, not " + kind.Kind + ".");
-            if (!specs.TryAdd(kind.Kind, new(kind.Kind, kind.Definition, [.. facts.Select(fact => new PeekFactSpec(fact.Id, fact.Format, fact.Since))], kind.Rows)))
+            var lists = new List<PeekListSpec>();
+            foreach (var list in kind.Lists ?? [])
+            {
+                if (list.Id is not { Length: >= 1 and <= 64 } || !list.Id.All(char.IsAsciiLetter) || lists.Any(other => other.Id == list.Id))
+                    throw new InvalidOperationException("Peek's " + kind.Kind + " has an invalid or repeated list.");
+                var columns = Words(kind.Kind + "." + list.Id, list.Columns, "column");
+                if (columns.Any(item => item.Since is not null || item.Optional)) throw new InvalidOperationException("Peek's list " + kind.Kind + "." + list.Id + " has a banded or optional column.");
+                lists.Add(new(list.Id, [.. columns.Select(item => new PeekFactSpec(item.Id, item.Format, null))]));
+            }
+            if (!specs.TryAdd(kind.Kind, new(kind.Kind, kind.Definition, [.. facts.Select(fact => new PeekFactSpec(fact.Id, fact.Format, fact.Since, fact.Optional))], kind.Rows, kind.Dependencies, lists, kind.OptionalGroup)))
                 throw new InvalidOperationException("Peek names " + kind.Kind + " twice.");
         }
-        return new(specs, peek.DefinitionChars, peek.BudgetMs, peek.Dependencies, peek.Rows, peek.RowColumns, peek.RowCellChars);
+        return new(specs, peek.DefinitionChars, peek.BudgetMs, peek.Dependencies, peek.Rows, peek.RowColumns, peek.RowCellChars, peek.ListRows, peek.MappingDatabases);
+    }
+
+    /// <summary>Fact and list column ids become column aliases in PeekSql's batches, so they are plain words, distinct, never
+    /// "definition", with a known format and band.</summary>
+    private static List<PeekFactJson> Words(string owner, List<PeekFactJson>? items, string what)
+    {
+        if (items is not { Count: > 0 }) throw new InvalidOperationException("Peek's " + owner + " has no " + what + "s.");
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "definition" };
+        foreach (var item in items)
+        {
+            if (item.Id is not { Length: >= 1 and <= 64 } id || !char.IsAsciiLetterLower(id[0]) || !id.All(char.IsAsciiLetter) || !ids.Add(id))
+                throw new InvalidOperationException("Peek's " + owner + " has an invalid or repeated " + what + " id.");
+            if (!PeekFormats.Contains(item.Format) || item.Since is { } since && (since <= MinBand || since > MaxBand))
+                throw new InvalidOperationException("Peek's " + what + " " + owner + "." + item.Id + " has an unknown format or band.");
+        }
+        return items;
     }
 
     private static bool OwnsChildren(CatalogKind kind) => kind.Folders.Count > 0 || kind.SubtypeFolders.Count > 0 || kind.HistoryLookup.Count > 0 || kind.List is not null;

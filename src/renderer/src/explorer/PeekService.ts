@@ -1,5 +1,6 @@
 import type { ApiResult, ExplorerError, ExplorerNode, VariaApi } from '../../../shared/contracts'
-import { isPeekKind, peekLimits, peekSpecs, peekTabsOf, type PeekDependency, type PeekKind, type PeekResult, type PeekRowsResult, type PeekTab } from '../../../shared/explorer/peek.ts'
+import { isPeekKind, peekHas, peekLimits, peekSpecs, peekTabsOf, type PeekDependency, type PeekKind, type PeekResult, type PeekRowsResult, type PeekTab } from '../../../shared/explorer/peek.ts'
+import { kindSpecs } from '../../../shared/explorer/catalog.ts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
 import type { ScriptingOptions } from '../../../shared/scripting/options.ts'
 import { onUnexpectedError } from '../core/errors'
@@ -29,8 +30,14 @@ export interface OpenPeek {
   readonly kind: PeekKind
   readonly source: PeekSource
   readonly facts: PeekPart<PeekResult['facts']>
+  /** The kind's lists and the optional groups the login was refused, which come with the facts. */
+  readonly lists?: PeekResult['lists']
+  readonly refused?: PeekResult['refused']
   readonly definition: PeekPart<PeekDefinition>
-  /** The tab shown; every tab but Definition is read the first time it is chosen, and again when it is chosen after failing. */
+  /**
+   * The tab shown; Columns or Parameters, Dependencies and Top rows are read the first time they are chosen, and again when
+   * chosen after failing. The kind's lists come with the facts.
+   */
   readonly tab: PeekTab
   readonly members?: PeekPart<PeekMembers>
   readonly dependencies?: PeekPart<PeekDependencies>
@@ -42,7 +49,7 @@ export interface PeekSnapshot { readonly open?: OpenPeek }
 /** What a read describes: a table, view, procedure or function on a connection. */
 export interface PeekTarget { readonly connectionId: string; readonly object: ObjectRef; readonly kind: PeekKind }
 /** A read's parts as they arrive. */
-export type PeekChange = Partial<{ readonly facts: PeekPart<PeekResult['facts']>; readonly definition: PeekPart<PeekDefinition> }>
+export type PeekChange = Partial<{ readonly facts: PeekPart<PeekResult['facts']>; readonly definition: PeekPart<PeekDefinition>; readonly lists: PeekResult['lists']; readonly refused: PeekResult['refused'] }>
 /**
  * A running read: a Search Objects tab's details pane's. Releasing it cancels the properties read, and the table's script
  * unless `keep` and the facts gave its modified time, when it finishes in the background to be cached.
@@ -142,7 +149,7 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
     this.unsubscribe = () => { connections(); scripting() }
   }
 
-  /** Whether a node can be peeked: a table, view, procedure or function on a live server. */
+  /** Whether a node can be peeked: an object of a kind the catalogue describes (`peekKinds`) on a live server. */
   canPeek(node: ExplorerMenuNode | undefined): node is ExplorerMenuNode {
     return !!node && node.ref.type === 'object' && node.kind !== 'folder' && isPeekKind(node.kind) && !node.lost && this.isLive(node.connectionId)
   }
@@ -173,7 +180,8 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
    * names no server or database for an object SQL Server resolved there, however the code spelled the database.
    */
   canFollow(dependency: PeekDependency): boolean {
-    return dependency.kind !== undefined && isPeekKind(dependency.kind) && dependency.server === undefined && dependency.database === undefined && dependency.schema !== undefined
+    // Only an object named by its schema: a trigger a module uses is named below its table, which a dependency does not give.
+    return dependency.kind !== undefined && isPeekKind(dependency.kind) && kindSpecs[dependency.kind].scope === 'schemaObject' && dependency.server === undefined && dependency.database === undefined && dependency.schema !== undefined
   }
 
   /** Peeks a dependency in the same card, beside the same row; Back returns to this one. */
@@ -343,7 +351,7 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
         return
       }
       const value = result.value, modified = typeof value.facts.modified === 'string' ? value.facts.modified : undefined
-      tell({ facts: { status: 'ready', value: value.facts },
+      tell({ facts: { status: 'ready', value: value.facts }, ...(value.lists ? { lists: value.lists } : {}), ...(value.refused ? { refused: value.refused } : {}),
         ...(key === undefined ? { definition: { status: 'ready', value: value.definition === undefined ? {} : { text: value.definition, ...(value.definitionTruncated ? { truncated: true } : {}) } } } : {}) })
       if (key === undefined) return
       if (job && modified !== undefined) {
@@ -375,12 +383,17 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
     if (!open || open.node.ref.type !== 'object' || this.disposed || open.tab === 'definition') return
     const connectionId = open.node.connectionId, target = open.node.ref.object, subtype = open.node.subtype
     switch (open.tab) {
-      case 'members': return this.loadPart(open, 'members', requestId => this.options.api.explorerChildren({ connectionId, requestId,
-        node: { type: 'folder', owner: target, folder: peekSpecs[open.kind].members }, ...(subtype === undefined ? {} : { subtype }), pageSize: peekLimits.members }),
-        value => ({ nodes: value.nodes, more: value.cursor !== undefined }))
-      case 'dependencies': return this.loadPart(open, 'dependencies', requestId => this.options.api.explorerPeekDependencies({ connectionId, requestId, target }),
-        value => ({ uses: value.uses, usesTruncated: !!value.usesTruncated, usedBy: value.usedBy, usedByTruncated: !!value.usedByTruncated }))
-      case 'rows': return peekSpecs[open.kind].rows ? this.loadPart(open, 'rows', requestId => this.options.api.explorerPeekRows({ connectionId, requestId, target }), value => value) : undefined
+      case 'members': {
+        const folder = peekSpecs[open.kind].members
+        return folder && this.loadPart(open, 'members', requestId => this.options.api.explorerChildren({ connectionId, requestId,
+          node: { type: 'folder', owner: target, folder }, ...(subtype === undefined ? {} : { subtype }), pageSize: peekLimits.members }),
+          value => ({ nodes: value.nodes, more: value.cursor !== undefined }))
+      }
+      case 'dependencies': return peekHas(open.kind, 'dependencies') ? this.loadPart(open, 'dependencies', requestId => this.options.api.explorerPeekDependencies({ connectionId, requestId, target }),
+        value => ({ uses: value.uses, usesTruncated: !!value.usesTruncated, usedBy: value.usedBy, usedByTruncated: !!value.usedByTruncated })) : undefined
+      case 'rows': return peekHas(open.kind, 'rows') ? this.loadPart(open, 'rows', requestId => this.options.api.explorerPeekRows({ connectionId, requestId, target }), value => value) : undefined
+      // The kind's lists came with the facts.
+      default: return undefined
     }
   }
 
@@ -471,13 +484,14 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
 
 const isPeekKindOf = (node: ExplorerMenuNode): PeekKind => node.kind as PeekKind
 /** The tabs read apart from the properties, each kept on the card under its own name. */
-type TabPart = Exclude<PeekTab, 'definition'>
+type TabPart = 'members' | 'dependencies' | 'rows'
 type PartValue<K extends TabPart> = NonNullable<OpenPeek[K]> extends PeekPart<infer V> ? V : never
 const sameObject = (a: ExplorerMenuNode, b: ExplorerMenuNode) => a.ref.type === 'object' && b.ref.type === 'object' && a.kind === b.kind
   && a.ref.object.database === b.ref.object.database && a.ref.object.schema === b.ref.object.schema && a.ref.object.name === b.ref.object.name
-/** A table's place in the cache: its connection and its three-part name. */
-const scriptKey = (connectionId: string, object: { readonly database?: string; readonly schema?: string; readonly name?: string }) =>
-  JSON.stringify([connectionId, object.database ?? null, object.schema ?? null, object.name ?? null])
+  && a.ref.object.parent?.kind === b.ref.object.parent?.kind && a.ref.object.parent?.schema === b.ref.object.parent?.schema && a.ref.object.parent?.name === b.ref.object.parent?.name
+/** A scripted object's place in the cache: its connection, its kind and its names (a child's with its parent's). */
+const scriptKey = (connectionId: string, object: ObjectRef) =>
+  JSON.stringify([connectionId, object.kind, object.database ?? null, object.schema ?? null, object.parent?.kind ?? null, object.parent?.schema ?? null, object.parent?.name ?? null, object.name ?? null])
 /** Cancels are fire and forget: a failure is reported, never shown. */
 const report = (result: Promise<ApiResult<unknown>>) => { void result.then(value => { if (!value.ok) onUnexpectedError(new Error(value.error)) }, onUnexpectedError) }
 /** A request that throws (a lost IPC channel) settles as a failure value, as every other failure does. */

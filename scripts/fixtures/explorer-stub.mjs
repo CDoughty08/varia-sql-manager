@@ -153,7 +153,14 @@ export function installExplorerStub({ ipcMain }, { statics }) {
       case 'explorer.search':
         if (stub.holdSearch) await new Promise(resolve => { stub.held.set(params.requestId, resolve) })
         return ok(search(params))
-      case 'explorer.peek': return ok({
+      // A login's facts and lists, as the backend reads them on the server (Peek P4).
+      case 'explorer.peek': if (params.target.kind === 'login') return ok({
+        facts: { loginType: 'SQL Server authentication', created: '2024-01-02T03:04:05', modified: '2024-02-03T04:05:06', defaultDatabase: 'master', defaultLanguage: 'us_english',
+          disabled: false, connectDenied: false, enforcePolicy: true, enforceExpiration: false },
+        lists: { serverRoles: { rows: [['sysadmin', true]] }, userMapping: { rows: [['AppData', 'dbo', 'dbo']], unread: 1 } },
+        elapsedMs: 1
+      })
+      return ok({
         facts: { schema: params.target.schema ?? null, created: '2024-01-02T03:04:05', modified: '2024-02-03T04:05:06', systemObject: false, replicated: false, lockEscalation: 'TABLE',
           memoryOptimized: false, temporal: 'NON_TEMPORAL_TABLE', ledger: 'NON_LEDGER_TABLE', rowCount: 12345, dataSpace: 2048, indexSpace: 64, filegroup: 'PRIMARY', textFilegroup: null,
           partitioned: false, compression: 'NONE' },

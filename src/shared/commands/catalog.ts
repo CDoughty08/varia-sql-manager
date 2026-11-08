@@ -445,10 +445,10 @@ export const commandCatalog = {
   // row opens it too, except while type-ahead collects a name with spaces; Ctrl+hover (⌘ on macOS) is the tree's own.
   'explorer.peek': {
     title: 'Peek', category: 'Object Explorer', icon: 'eye', keywords: ['definition', 'properties', 'preview', 'describe'],
-    precondition: "backendReady && (explorerSelectionKind == 'table' || explorerSelectionKind == 'view' || explorerSelectionKind == 'procedure' || explorerSelectionKind == 'function')",
-    unavailableHint: 'Select a table, view, stored procedure, or function.',
+    precondition: 'backendReady && explorerSelectionPeekable',
+    unavailableHint: 'Select an object Peek describes: a table, view, procedure, function, index, trigger, database, login, synonym, sequence, or type.',
     keybindings: [{ key: 'alt+f12', when: "activePanel == 'explorer' && !inputFocus && !searchHitsFocus" }, { key: 'space', when: 'explorerFocus && !textInputFocus && !explorerTypeAhead' }],
-    menus: [{ menu: 'explorer.context', group: '1_query', order: 7, mnemonic: 'k', when: "(explorerNode == 'table' || explorerNode == 'view' || explorerNode == 'procedure' || explorerNode == 'function') && !explorerServerLost" }]
+    menus: [{ menu: 'explorer.context', group: '1_query', order: 7, mnemonic: 'k', when: 'explorerNodePeekable && !explorerServerLost' }]
   },
   'explorer.copyName': {
     title: 'Copy Name', category: 'Object Explorer', icon: 'copy', precondition: 'hasConnection', unavailableHint: 'Select an object that has a name.',
