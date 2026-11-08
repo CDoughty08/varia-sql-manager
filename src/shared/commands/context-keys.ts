@@ -49,7 +49,7 @@ export const contextKeys = {
   outputGridFocus: { type: 'boolean', scope: 'focus', description: 'Focus is in a results grid, which copies its selected cells rather than text.' },
   messagesFocus: { type: 'boolean', scope: 'focus', description: "Focus is in a Messages view; activePanel is then 'output'." },
   searchHitsFocus: { type: 'boolean', scope: 'focus', description: "Focus is on a Search Objects result (the Search Objects tab's or Object Explorer's search), whose Copy copies the object's name." },
-  explorerFocus: { type: 'boolean', scope: 'focus', description: "Focus is on Object Explorer's tree, not its search box, toolbar or Peek card; activePanel is then 'explorer'." },
+  explorerFocus: { type: 'boolean', scope: 'focus', description: "Focus is in Object Explorer's tree (a row's inline rename box included), not its search box, toolbar or Peek card; activePanel is then 'explorer'." },
   explorerTypeAhead: { type: 'boolean', scope: 'focus', description: "Object Explorer's tree is collecting a type-ahead name, so Space types a space rather than peeking." },
   optionsDialogFocus: { type: 'boolean', scope: 'focus', description: 'Focus is in the Options dialog.' },
   designerFocus: { type: 'boolean', scope: 'focus', description: "Focus is in the active table designer; activePanel is then 'editor'." },

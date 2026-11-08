@@ -850,7 +850,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `outputGridFocus` | boolean | focus | Focus is in a results grid, which copies its selected cells rather than text. |
 | `messagesFocus` | boolean | focus | Focus is in a Messages view; activePanel is then 'output'. |
 | `searchHitsFocus` | boolean | focus | Focus is on a Search Objects result (the Search Objects tab's or Object Explorer's search), whose Copy copies the object's name. |
-| `explorerFocus` | boolean | focus | Focus is on Object Explorer's tree, not its search box, toolbar or Peek card; activePanel is then 'explorer'. |
+| `explorerFocus` | boolean | focus | Focus is in Object Explorer's tree (a row's inline rename box included), not its search box, toolbar or Peek card; activePanel is then 'explorer'. |
 | `explorerTypeAhead` | boolean | focus | Object Explorer's tree is collecting a type-ahead name, so Space types a space rather than peeking. |
 | `optionsDialogFocus` | boolean | focus | Focus is in the Options dialog. |
 | `designerFocus` | boolean | focus | Focus is in the active table designer; activePanel is then 'editor'. |

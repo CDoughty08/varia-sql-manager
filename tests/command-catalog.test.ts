@@ -295,7 +295,7 @@ describe('keybinding conflicts', () => {
     expect(kinds([rule('file.new', { key: 'meta+e', when: 'optionsDialogFocus' }, 'darwin')], 'darwin')).toEqual([])
     expect(kinds([rule('edit.undo', { key: 'ctrl+c', when: 'optionsDialogFocus', modal: true })])).toEqual([['reserved', 'ctrl+c', 'edit.undo']])
     // Surfaces that hold text fields of their own: the table designer's cell editors and the Activity Monitor's filter.
-    for (const when of ['designerFocus', 'activityMonitorFocus', "activePanel == 'explorer'", 'documentTabFocus', 'queryBarFocus']) {
+    for (const when of ['designerFocus', 'activityMonitorFocus', "activePanel == 'explorer'", 'explorerFocus', "activePanel == 'output'", 'documentTabFocus', 'queryBarFocus']) {
       expect(kinds([rule('file.new', { key: 'ctrl+a', when })]), when).toEqual([['reserved', 'ctrl+a', 'file.new']])
     }
     expect(kinds([rule('file.new', { key: 'meta+e', when: 'editorFocus' }, 'darwin')], 'darwin')).toEqual([['reserved', 'meta+e', 'file.new']])
@@ -308,7 +308,10 @@ describe('keybinding conflicts', () => {
     }
     // Object Explorer's search box is in the explorer pane too, so a typing key there needs !textInputFocus.
     expect(kinds([rule('file.new', { key: 'x', when: "activePanel == 'explorer'" })])).toEqual([['typing', 'x', 'file.new']])
-    expect(kinds([rule('file.new', { key: 'x', when: 'explorerFocus' })])).toEqual([])
+    // So is a row's inline rename box, inside the tree.
+    expect(kinds([rule('file.new', { key: 'x', when: 'explorerFocus' })])).toEqual([['typing', 'x', 'file.new']])
+    expect(kinds([rule('file.new', { key: 'x', when: 'explorerFocus && !textInputFocus' })])).toEqual([])
+    expect(kinds([rule('file.new', { key: 'x', when: "activePanel == 'output'" })])).toEqual([['typing', 'x', 'file.new']])
     expect(kinds([rule('file.new', { key: 'x', when: 'editorFocus' })])).toEqual([['typing', 'x', 'file.new']])
     for (const key of ['f6', 'ctrl+shift+x', 'alt+x', 'meta+x', 'pause']) expect(kinds([rule('file.new', { key })]), key).toEqual([])
   })
