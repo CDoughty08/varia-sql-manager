@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { boundedRecord } from '../src/shared/zod-bounds'
 import { actionExecuteRequestSchema } from '../src/shared/actions/schema'
 import { shortcutFileSchema, shortcutLimits } from '../src/shared/commands/shortcut-schema'
+import { heavyTimeout } from './fixtures/work-meter'
 
 // Main's modules that read `electron` at import only need it to exist; main's entry point itself runs the app on import.
 vi.mock('electron', () => ({ app: {}, dialog: {}, shell: {}, BrowserWindow: class {}, Menu: class {}, nativeTheme: {}, screen: {}, safeStorage: {} }))
@@ -255,5 +256,5 @@ describe('schema lint', () => {
     expect(small.safeParse({ a: 1, b: 2 }).success).toBe(true)
     expect(small.safeParse({ a: 1, b: 2, c: 3 }).error?.issues).toHaveLength(1)
     expect(small.safeParse('a').error?.issues[0].code).toBe('invalid_type')
-  })
+  }, heavyTimeout)
 })

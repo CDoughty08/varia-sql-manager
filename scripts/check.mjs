@@ -45,6 +45,29 @@ export function plan({ cpus, build = false, skip = [] }) {
     : { all: [{ chain: [...typecheck, 'vitest'] }, { chain: [dotnet, 'electron-vite build'] }] }
 }
 
+/** The lanes VARIA_CHECK_SKIP may leave out, by the name it takes. */
+export const skippable = { typecheck: 'Type check' }
+
+/**
+ * VARIA_CHECK_SKIP's entries, trimmed. Any name other than the skippable ones is refused, so a typo cannot skip nothing
+ * while the summary reports it skipped.
+ */
+export function parseSkip(value = '') {
+  const skip = value.split(',').map(entry => entry.trim()).filter(Boolean)
+  const unknown = skip.filter(entry => !Object.hasOwn(skippable, entry))
+  if (unknown.length) throw new Error(`VARIA_CHECK_SKIP: unknown ${unknown.length > 1 ? 'names' : 'name'} ${unknown.map(entry => `'${entry}'`).join(', ')}; it takes a comma-separated list of ${Object.keys(skippable).join(', ')}`)
+  return skip
+}
+
+/** The summary's note of the lanes left out: only those the layout actually dropped. */
+export function skippedNote(layout, skip) {
+  const names = new Set()
+  const walk = node => { if (typeof node === 'string') names.add(node); else if (node.all) node.all.forEach(walk); else if (node.chain) node.chain.forEach(walk); else { walk(node.gate); walk(node.then) } }
+  walk(layout)
+  const left = [...new Set(skip)].filter(entry => !names.has(skippable[entry]))
+  return left.length ? ` (skipped: ${left.join(', ')}, VARIA_CHECK_SKIP)` : ''
+}
+
 /** The lanes still running, so a signal can print what they held. */
 export const running = new Set()
 
@@ -82,7 +105,11 @@ const execute = node => {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const cpus = Number(process.env.VARIA_CHECK_CPUS) || availableParallelism()
-  const skip = (process.env.VARIA_CHECK_SKIP ?? '').split(',').filter(Boolean)
+  let skip
+  try { skip = parseSkip(process.env.VARIA_CHECK_SKIP) } catch (error) {
+    console.error(error.message)
+    process.exit(2)
+  }
   const build = process.argv.includes('--build')
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
     console.log(`\nCheck stopped by ${signal}; the lanes still running held:`)
@@ -90,9 +117,10 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     process.exit(1)
   })
   const started = performance.now()
-  const results = await execute(plan({ cpus, build, skip }))
+  const layout = plan({ cpus, build, skip })
+  const results = await execute(layout)
   const failed = results.filter(result => result.code)
-  const skipped = build || !skip.length ? '' : ` (skipped: ${skip.join(', ')}, VARIA_CHECK_SKIP)`
+  const skipped = build ? '' : skippedNote(layout, skip)
   console.log(`
 ${failed.length ? 'Check failed' : 'Check passed'} in ${((performance.now() - started) / 1000).toFixed(1)} s (${cpus} CPUs, ${cpus >= 8 ? 'every lane at once' : 'two chains'})${skipped}: ` + results.map(({ name, seconds, code }) => `${name} ${seconds.toFixed(1)} s${code ? ' FAILED' : ''}`).join(', '))
   process.exitCode = failed.length ? 1 : 0

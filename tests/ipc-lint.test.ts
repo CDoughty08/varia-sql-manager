@@ -58,7 +58,7 @@ await import(${JSON.stringify(core)})`
     expect(main).toContain('const livenessMs = testSeams ? Number(process.env.VARIA_BACKEND_LIVENESS_MS) : NaN')
     expect(main).toContain("...(testSeams ? ['--varia-test-mode'] : [])")
     // Remember password's reversible test cipher, for smoke runs on machines without a keyring.
-    expect(main).toContain("const secretCipher = testSeams && process.env.VARIA_TEST_SAFE_STORAGE === 'test' ? testCipher() : safeStorageCipher(safeStorage, process.platform)")
+    expect(main).toContain("const secretCipher = smokeProfile ? lockedCipher() : testSeams && process.env.VARIA_TEST_SAFE_STORAGE === 'test' ? testCipher() : safeStorageCipher(safeStorage, process.platform)")
     // Updates follow a loopback test feed (plain http) only in unpackaged smoke runs; every other build reads GitHub over https.
     expect(main).toContain("const testUpdateFeed = testSeams && /^http:\\/\\/127\\.0\\.0\\.1:\\d{1,5}\\/$/.test(process.env.VARIA_TEST_UPDATE_FEED ?? '') ? process.env.VARIA_TEST_UPDATE_FEED : undefined")
     expect(main.match(/VARIA_TEST_UPDATE_FEED/g)).toHaveLength(2)

@@ -52,7 +52,7 @@ the previous one, about 64 s of the 75.6 s. The waits:
 | The offline .NET suites run in six concurrent lanes (`OfflineSuites.cs`), after the three that change process-wide state run alone; each prints its time | Offline run 65 s to **22 to 24 s** locally (1 lane 65 s, 4 lanes 26 s, 6 lanes 22 s, 8 lanes 19 s; Host's 10 s is the floor) |
 | `npm run build:smoke` builds the Release backend and electron-vite side by side | Estimate: 8 to 20 s per smoke and bench job (5 a push) |
 | Smoke suites race `close()` through `within()` (`scripts/fixtures/smoke.mjs`), which clears its timer. `tests/idle-waits.test.ts` holds the rule. | updates-smoke 34.2 s to **7.0 s**, live-smoke 39.0 s to **24.1 s** (local). About 123 s of idle timers per OS per run, about **4 runner-min a PR push**. The packaged and portable smoke tests, and both Electron benches, had the same leak. |
-| The offline .NET checks fail their connections on a missing named pipe on Windows instead of `tcp:127.0.0.1,1` (`Unreachable.cs`) | Windows offline run 75.6 s to **65.6 s** |
+| The offline .NET checks fail their connections on a malformed named-pipe address on Windows instead of `tcp:127.0.0.1,1` (`Unreachable.cs`) | Windows offline run 75.6 s to **65.6 s** |
 | Release builds: packages main pushes, tags, manual runs, and only pull requests that touch packaging inputs. Superseded runs are cancelled. Intel macOS packages only for tags, manual runs and a weekly run on main. A typecheck runs only for tags. Installers upload only for tags and manual runs. `tests/release-workflow.test.ts` holds the layout. | About 21 runner-min, 13 of them macOS, and 4 jobs removed from about 9 in 10 PR pushes. A packaging PR runs 3 jobs (1 macOS) instead of 4 (2 macOS). |
 | Live groups 2 and 3 skip setup-node and `npm ci` | About 20 runner-s a push |
 | `npm ci --no-audit --no-fund` | Cleaner logs. About 1 s a job, unmeasured. |
@@ -191,7 +191,14 @@ Considered and rejected (do not re-propose without new numbers):
 
 - **Budget per push across all workflows.** A pull request push starts at most 12 CI jobs, 1 of them macOS
   (`tests/ci-workflow.test.ts`), plus at most 3 packaging jobs, and those only when it changes packaging
-  (`tests/release-workflow.test.ts`). Two overlapping pushes must fit in 20 slots.
+  (`tests/release-workflow.test.ts`). Two overlapping pushes must fit in 20 slots. GitHub matches a pull request's `paths`
+  against its first 300 changed files only, so a pull request over 300 changed files may skip Release builds silently: run
+  them by hand (`workflow_dispatch`) when it touches packaging.
+- **Audit gate.** Check (ubuntu) runs `npm audit --audit-level=high` after `npm run check`, whatever its outcome, so an advisory
+  or a registry outage never hides the check's results. A high or critical advisory fails the job,
+  so upgrade or override the package (and add its floor to `tests/dependency-floors.test.ts`). Moderate and low ones only
+  report: minimatch's GHSA-g3hv-75wg-m249 (a glob-pattern DoS) has no fix below 11.0.1, a major version under
+  electron-builder's own dependencies, and its patterns come only from Varia's build configuration.
 - **Cancel superseded runs.** Every workflow a pull request triggers has a concurrency group keyed by `github.ref` with
   `cancel-in-progress`, and so do main pushes. Tags and manual runs are never cancelled.
 - **Don't starve small runners.** CI's runners have 3 or 4 vCPUs. Running every check lane at once there made tsc 13 times

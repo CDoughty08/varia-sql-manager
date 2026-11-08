@@ -1,7 +1,8 @@
 name: Package
 
 # One platform's packaging for Release builds (release.yml): electron-builder's installers, the packaged and portable smoke
-# tests (Electron fuses and asar integrity read back) and, on Windows, the installer. Only release.yml calls it.
+# tests (Electron fuses and asar integrity read back), on Linux the AppImage itself (scripts/appimage-check.mjs) and, on
+# Windows, the installer. Only release.yml calls it.
 on:
   workflow_call:
     inputs:
@@ -95,6 +96,31 @@ jobs:
           else
             node scripts/packaged-smoke.mjs
           fi
+      # The AppImage itself, which the smoke test above (linux-unpacked) never runs: its runtime, squashfs, generated AppRun
+      # and bundled files. Inspect extracts it, reads back the fuses and runs AppRun with the search paths unset, empty and set.
+      - name: Inspect AppImage
+        if: runner.os == 'Linux'
+        shell: bash
+        run: node scripts/appimage-check.mjs inspect "dist/Varia-SQL-Manager-$(node -p "require('./package.json').version")-linux-x86_64.AppImage"
+      # APPIMAGE_EXTRACT_AND_RUN: the runtime unpacks itself instead of mounting through FUSE, which the runner may lack.
+      - name: Smoke test AppImage
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: |
+          VARIA_PACKAGED_EXECUTABLE="dist/Varia-SQL-Manager-$(node -p "require('./package.json').version")-linux-x86_64.AppImage" xvfb-run -a -s "-screen 0 1600x1000x24" node scripts/packaged-smoke.mjs
+      # Where unprivileged user namespaces are restricted (stock Ubuntu 23.10+), AppRun adds --no-sandbox; main must refuse to
+      # start rather than run the renderer unsandboxed. The restriction is lifted again whatever the outcome.
+      - name: AppImage refuses to run without the sandbox
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1
+          status=0
+          xvfb-run -a -s "-screen 0 1600x1000x24" node scripts/appimage-check.mjs refusal "dist/Varia-SQL-Manager-$(node -p "require('./package.json').version")-linux-x86_64.AppImage" || status=$?
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          exit $status
       - name: Smoke test Windows portable application
         if: runner.os == 'Windows'
         shell: pwsh

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { backendSpawnSpec } from '../src/main/backend/spawn-spec'
 
 // Pull request runs compete for GitHub's 20 concurrent jobs (5 macOS) across every open pull request, so the queue, not the
 // jobs, set most of a run's wall time (docs/ci.md). These checks keep the cost a pull request push adds outside ci.yml small:
@@ -25,7 +27,7 @@ describe('Release builds', () => {
     expect(triggers(release)).toMatch(/\n {2}push:\n {4}branches: \[main\]\n {4}tags: \['v\*'\]\n {2}schedule:\n {4}- cron: '[^']+'\n {2}workflow_dispatch:/)
     // Everything electron-builder, the fuses and the packaged smoke tests read, and nothing every pull request touches:
     // the smoke selectors (scripts/fixtures/ui.mjs) and main's index changed in a third of recent pull requests.
-    for (const path of ['.github/workflows/release.yml', '.github/workflows/package.yml', 'electron-builder.yml', 'build/**', 'package-lock.json', 'scripts/packaged-smoke.mjs', 'scripts/packaged-contents.mjs', 'scripts/portable-smoke.mjs', 'scripts/windows-installer-smoke.ps1', 'scripts/update-manifest.mjs']) expect(releasePaths).toContain(path)
+    for (const path of ['.github/workflows/release.yml', '.github/workflows/package.yml', 'electron-builder.yml', 'build/**', 'package-lock.json', 'scripts/packaged-smoke.mjs', 'scripts/packaged-contents.mjs', 'scripts/portable-smoke.mjs', 'scripts/windows-installer-smoke.ps1', 'scripts/update-manifest.mjs', 'src/main/app-protocol.ts', 'src/main/backend/spawn-spec.ts', 'src/main/update-install.ts', 'scripts/appimage-check.mjs']) expect(releasePaths).toContain(path)
     for (const path of releasePaths) expect(path, path).not.toMatch(/^(src\/\*\*|src\/main\/index\.ts|scripts\/fixtures|package\.json|tests\/)/)
   })
   it('adds at most three jobs and one macOS job to a pull request push, and packages Intel macOS only for tags, manual runs and weekly', () => {
@@ -52,5 +54,24 @@ describe('Release builds', () => {
     }
     expect(pack).toMatch(/- name: Type check\n {8}if: startsWith\(github\.ref, 'refs\/tags\/'\)\n/)
     expect(pack).toMatch(/- name: Upload release assets\n {8}if: startsWith\(github\.ref, 'refs\/tags\/'\) \|\| github\.event_name == 'workflow_dispatch'\n/)
+  })
+  // What the docs say about packaging must match the workflow: the weekly Intel run, and the paths filter's 300-file limit.
+  it('documents the weekly Intel run and the paths filter\'s 300-file limit', () => {
+    const claude = readFileSync('CLAUDE.md', 'utf8').replace(/\n\s*/g, ' '), ci = readFileSync('docs/ci.md', 'utf8').replace(/\n\s*/g, ' ')
+    expect(claude).toContain('Intel macOS packages only for tags, manual runs and a weekly scheduled run on main')
+    for (const [name, doc] of [['release.yml', release.replace(/\n# /g, ' ')], ['CLAUDE.md', claude], ['docs/ci.md', ci]]) expect(doc, name).toMatch(/first 300/)
+    // Unreachable.Source is a malformed pipe address on purpose (a well-formed missing pipe crashed offline-stress copies).
+    for (const file of ['docs/ci.md', 'backend/Varia.Backend.Tests/Unreachable.cs', 'tests/idle-waits.test.ts']) expect(readFileSync(file, 'utf8'), file).not.toMatch(/missing named pipe/)
+  })
+  // Packaged main starts the backend from resources/<extraResources' to:>; a rename on one side only broke the packaged
+  // smoke test on the next main push, so it fails npm run check on every pull request instead.
+  it('starts the packaged backend from the folder electron-builder copies it to', () => {
+    const builder = readFileSync('electron-builder.yml', 'utf8')
+    const to = /\n {2}- from: artifacts\/release-backend\n {4}to: (\S+)\n/.exec(builder)?.[1]
+    expect(to).toBeDefined()
+    const resourcesPath = join('opt', 'varia', 'resources')
+    for (const [platform, exe] of [['win32', 'Varia.Backend.exe'], ['linux', 'Varia.Backend'], ['darwin', 'Varia.Backend']] as const) {
+      expect(backendSpawnSpec({ packaged: true, root: 'app', resourcesPath, platform, smokeTest: false }).command, platform).toBe(join(resourcesPath, to!, exe))
+    }
   })
 })

@@ -133,7 +133,7 @@ describe('flatten', () => {
     expect(rows.nodes.every((node, index) => node === t.nodes.get(rows.ids[index]))).toBe(true)
     expect([rows.levels[5], rows.posinset[5], rows.setsize[5]]).toEqual([5, 1, 250_000])
     expect([rows.levels.at(-2), rows.posinset.at(-2), rows.setsize.at(-2)]).toEqual([5, 250_000, 250_000])
-  })
+  }, heavyTimeout)
 })
 
 describe('windowing', () => {

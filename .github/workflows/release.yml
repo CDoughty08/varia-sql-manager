@@ -6,6 +6,8 @@ name: Release builds
 # (docs/ci.md). It now runs on every main push (so packaging is checked within minutes of a merge), on tags and by hand, and
 # on pull requests only when they change what packaging reads. Intel macOS, twice as slow as arm64 on a scarcer runner,
 # packages for tags and manual runs, and once a week on main alone, so an x64-only break shows before a tag it would block.
+# GitHub matches a pull request's paths against its first 300 changed files only, so a larger pull request (a big stacked
+# branch, or a merge of main) can skip Release builds silently: run them by hand (workflow_dispatch) when it touches packaging.
 on:
   pull_request:
     paths:
@@ -18,9 +20,12 @@ on:
       - global.json
       - backend/Varia.Backend/Varia.Backend.csproj
       - src/main/app-protocol.ts
+      - src/main/backend/spawn-spec.ts
+      - src/main/update-install.ts
       - scripts/packaged-smoke.mjs
       - scripts/packaged-contents.mjs
       - scripts/portable-smoke.mjs
+      - scripts/appimage-check.mjs
       - scripts/windows-installer-smoke.ps1
       - scripts/update-manifest.mjs
   push:

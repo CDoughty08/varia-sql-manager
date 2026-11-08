@@ -1,7 +1,9 @@
 import { chromium, expect } from '@playwright/test'
 import { spawn, spawnSync } from 'node:child_process'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { createServer } from 'node:net'
-import { resolve } from 'node:path'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { backendReady } from './fixtures/ui.mjs'
 
@@ -9,14 +11,16 @@ const executable = process.env.VARIA_PORTABLE_EXECUTABLE
 if (!executable || process.platform !== 'win32') throw new Error('Set VARIA_PORTABLE_EXECUTABLE to the Windows portable executable.')
 
 // The portable launcher extracts and starts Electron as a child; it does not forward the inspector output that
-// Playwright's Electron launcher expects. Connect to the child's Chromium debugging port instead.
+// Playwright's Electron launcher expects. Connect to the child's Chromium debugging port instead, which a packaged build
+// keeps only with VARIA_PACKAGED_SMOKE=1 and a profile other than the user's (sandbox-guard.ts).
 const server = createServer()
 await new Promise((resolveListen, reject) => server.once('error', reject).listen(0, '127.0.0.1', resolveListen))
 const port = server.address().port
 await new Promise(resolveClose => server.close(resolveClose))
-const env = { ...process.env }
+const env = { ...process.env, VARIA_PACKAGED_SMOKE: '1' }
 delete env.ELECTRON_RUN_AS_NODE
-const child = spawn(resolve(executable), [`--remote-debugging-port=${port}`], { env, stdio: 'ignore' })
+const profile = mkdtempSync(join(tmpdir(), 'varia-portable-smoke-'))
+const child = spawn(resolve(executable), [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`], { env, stdio: 'ignore' })
 let browser
 try {
   const endpoint = `http://127.0.0.1:${port}`
@@ -43,4 +47,5 @@ try {
 } finally {
   await browser?.close().catch(() => {})
   if (child.exitCode === null) spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
+  rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 })
 }

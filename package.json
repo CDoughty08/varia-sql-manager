@@ -27,7 +27,7 @@
     "package": "electron-builder --publish never"
   },
   "overrides": {
-    "dompurify": "3.4.16"
+    "dompurify": "3.4.17"
   },
   "devDependencies": {
     "@electron/fuses": "1.8.0",

@@ -1,8 +1,10 @@
 import { chromium, expect } from '@playwright/test'
 import { spawn, spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { createServer } from 'node:net'
-import { dirname, resolve } from 'node:path'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { getCurrentFuseWire } from '@electron/fuses'
 import { backendReady } from './fixtures/ui.mjs'
@@ -13,29 +15,38 @@ const executablePath = process.env.VARIA_PACKAGED_EXECUTABLE
 if (!executablePath) throw new Error('VARIA_PACKAGED_EXECUTABLE must name the packaged application executable.')
 const executable = resolve(executablePath)
 
-// The packaged executable carries build/fuses.cjs's fuses: no file: privileges, no Node mode, NODE_OPTIONS or --inspect.
-const wrong = fuseMismatches(await getCurrentFuseWire(fuseTarget(executable)))
-if (wrong.length) throw new Error(`Packaged fuses not applied: ${wrong.join(', ')}`)
+// An AppImage's executable and resources sit compressed in its squashfs: appimage-check.mjs inspect reads its fuses after
+// extracting it, and the same build's linux-unpacked run checks the archive and backend below. Here it is only launched.
+const appImage = executable.endsWith('.AppImage')
+if (!appImage) {
+  // The packaged executable carries build/fuses.cjs's fuses: no file: privileges, no Node mode, NODE_OPTIONS or --inspect.
+  const wrong = fuseMismatches(await getCurrentFuseWire(fuseTarget(executable)))
+  if (wrong.length) throw new Error(`Packaged fuses not applied: ${wrong.join(', ')}`)
 
-// Every package is bundled into out/: no node_modules in the archive, and main and preload load only Electron and node: modules.
-const resources = process.platform === 'darwin' ? resolve(dirname(executable), '../Resources') : resolve(dirname(executable), 'resources')
-const asar = resolve(resources, 'app.asar')
-const contents = readAsar(asar)
-if (!contents.has('out/main/index.js')) throw new Error(`${asar} does not hold out/main/index.js.`)
-const problems = asarProblems(contents)
-if (problems.length) throw new Error(`Packaged app.asar: ${problems.join('; ')}`)
-// The backend is published ReadyToRun.
-const interpreted = readyToRunAssemblies.filter(name => !isReadyToRun(resolve(resources, 'backend', name)))
-if (interpreted.length) throw new Error(`Packaged backend assemblies are not ReadyToRun: ${interpreted.join(', ')}`)
+  // Every package is bundled into out/: no node_modules in the archive, and main and preload load only Electron and node: modules.
+  const resources = process.platform === 'darwin' ? resolve(dirname(executable), '../Resources') : resolve(dirname(executable), 'resources')
+  const asar = resolve(resources, 'app.asar')
+  const contents = readAsar(asar)
+  if (!contents.has('out/main/index.js')) throw new Error(`${asar} does not hold out/main/index.js.`)
+  const problems = asarProblems(contents)
+  if (problems.length) throw new Error(`Packaged app.asar: ${problems.join('; ')}`)
+  // The backend is published ReadyToRun.
+  const interpreted = readyToRunAssemblies.filter(name => !isReadyToRun(resolve(resources, 'backend', name)))
+  if (interpreted.length) throw new Error(`Packaged backend assemblies are not ReadyToRun: ${interpreted.join(', ')}`)
+}
 
-// VARIA_PACKAGED_PROFILE=<dir> runs it on its own profile instead of the user's (a local run). With --inspect fused off, Playwright's Electron launcher cannot attach to main; connect to Chromium's debugging port.
+// With --inspect fused off, Playwright's Electron launcher cannot attach to main; connect to Chromium's debugging port. A
+// packaged build keeps that port only with VARIA_PACKAGED_SMOKE=1 and a profile other than the user's (sandbox-guard.ts):
+// VARIA_PACKAGED_PROFILE=<dir>, or a fresh temporary one.
 const server = createServer()
 await new Promise((resolveListen, reject) => server.once('error', reject).listen(0, '127.0.0.1', resolveListen))
 const port = server.address().port
 await new Promise(resolveClose => server.close(resolveClose))
-const env = { ...process.env }
+const env = { ...process.env, VARIA_PACKAGED_SMOKE: '1' }
 delete env.ELECTRON_RUN_AS_NODE
-const args = [`--remote-debugging-port=${port}`, ...(process.env.VARIA_PACKAGED_PROFILE ? [`--user-data-dir=${resolve(process.env.VARIA_PACKAGED_PROFILE)}`] : []), ...(process.getuid?.() === 0 ? ['--no-sandbox'] : [])]
+const temporaryProfile = process.env.VARIA_PACKAGED_PROFILE ? undefined : mkdtempSync(join(tmpdir(), 'varia-packaged-smoke-'))
+const profile = temporaryProfile ?? resolve(process.env.VARIA_PACKAGED_PROFILE)
+const args = [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, ...(process.getuid?.() === 0 ? ['--no-sandbox'] : [])]
 const child = spawn(executable, args, { env, stdio: 'ignore' })
 let browser
 try {
@@ -70,4 +81,5 @@ try {
     if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
     else child.kill('SIGKILL')
   }
+  if (temporaryProfile) rmSync(temporaryProfile, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 })
 }

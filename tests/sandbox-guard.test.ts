@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { describe, expect, it } from 'vitest'
-import { remoteDebuggingSwitches, sandboxRefusal, stripRemoteDebugging } from '../src/main/sandbox-guard'
+import { join } from 'node:path'
+import { packagedSmokeVariable, remoteDebuggingSwitches, sandboxRefusal, smokeDebuggingProfile, stripRemoteDebugging } from '../src/main/sandbox-guard'
+import { lockedCipher } from '../src/main/secret-cipher'
 
 const require = createRequire(import.meta.url)
 
@@ -40,11 +42,69 @@ describe('Chromium sandbox guard', () => {
 
   it('strips remote debugging as main loads, before Chromium starts the DevTools handler', () => {
     const main = readFileSync('src/main/index.ts', 'utf8')
-    const strip = main.indexOf('const remoteDebugging = stripRemoteDebugging(app.commandLine, app.isPackaged)')
+    const strip = main.indexOf('const remoteDebugging = stripRemoteDebugging(app.commandLine, app.isPackaged, smokeProfile)')
     const lastImport = main.lastIndexOf('\nimport ')
     expect(strip).toBeGreaterThan(lastImport)
-    // Nothing runs between the imports and the strip.
-    expect(main.slice(main.indexOf('\n', lastImport + 1), strip).split('\n').filter(line => line.trim() && !line.trim().startsWith('//'))).toEqual([])
+    // Nothing runs between the imports and the strip but the smoke allowance it reads.
+    expect(main.slice(main.indexOf('\n', lastImport + 1), strip).split('\n').filter(line => line.trim() && !line.trim().startsWith('//')))
+      .toEqual(["const smokeProfile = smokeDebuggingProfile({ packaged: app.isPackaged, env: process.env, commandLine: app.commandLine, defaultProfile: join(app.getPath('appData'), app.getName()), platform: process.platform })"])
+  })
+
+  // #284 refused every packaged debugging port, which also stopped scripts/packaged-smoke.mjs and portable-smoke.mjs.
+  it('keeps the debugging port only for a packaged smoke run on a profile other than the user\'s', () => {
+    const home = process.platform === 'win32' ? 'C:\\Users\\me\\AppData\\Roaming' : '/home/me/.config'
+    const defaultProfile = join(home, 'Varia SQL Manager')
+    const throwaway = join(home, '..', 'smoke-profile')
+    const commandLine = (switches: Record<string, string>) => ({ hasSwitch: (name: string) => name in switches, getSwitchValue: (name: string) => switches[name] ?? '' })
+    const smoke = { [packagedSmokeVariable]: '1' }
+    const allowed = (options: { packaged?: boolean, env?: NodeJS.ProcessEnv, switches: Record<string, string> }) =>
+      smokeDebuggingProfile({ packaged: options.packaged ?? true, env: options.env ?? smoke, commandLine: commandLine(options.switches), defaultProfile, platform: process.platform })
+    const port = { 'remote-debugging-port': '9222', 'user-data-dir': throwaway }
+    expect(allowed({ switches: port })).toBe(throwaway)
+    expect(packagedSmokeVariable).toBe('VARIA_PACKAGED_SMOKE')
+    // Not packaged (nothing is stripped there anyway), no variable, or any other value of it.
+    expect(allowed({ packaged: false, switches: port })).toBeNull()
+    expect(allowed({ env: {}, switches: port })).toBeNull()
+    for (const value of ['true', 'yes', '0', ' 1', '']) expect(allowed({ env: { [packagedSmokeVariable]: value }, switches: port }), value).toBeNull()
+    // Only the port, listening on loopback: no pipe, no other address.
+    expect(allowed({ switches: { ...port, 'remote-debugging-pipe': '' } })).toBeNull()
+    expect(allowed({ switches: { ...port, 'remote-debugging-address': '0.0.0.0' } })).toBeNull()
+    expect(allowed({ switches: { 'remote-debugging-pipe': '', 'user-data-dir': throwaway } })).toBeNull()
+    // An explicit, absolute profile that is not the user's own, however it is spelled.
+    expect(allowed({ switches: { 'remote-debugging-port': '9222' } })).toBeNull()
+    expect(allowed({ switches: { ...port, 'user-data-dir': '' } })).toBeNull()
+    expect(allowed({ switches: { ...port, 'user-data-dir': 'relative/profile' } })).toBeNull()
+    expect(allowed({ switches: { ...port, 'user-data-dir': defaultProfile } })).toBeNull()
+    expect(allowed({ switches: { ...port, 'user-data-dir': `${defaultProfile}${process.platform === 'win32' ? '\\' : '/'}` } })).toBeNull()
+    expect(allowed({ switches: { ...port, 'user-data-dir': join(defaultProfile, '..', 'Varia SQL Manager') } })).toBeNull()
+    if (process.platform !== 'linux') expect(allowed({ switches: { ...port, 'user-data-dir': defaultProfile.toUpperCase() } })).toBeNull()
+    // Kept switches stay on the command line, and the refusal sees none.
+    const present = new Set(['remote-debugging-port', 'user-data-dir'])
+    const line = { hasSwitch: (name: string) => present.has(name), removeSwitch: (name: string) => { present.delete(name) } }
+    expect(stripRemoteDebugging(line, true, allowed({ switches: port }))).toBe(false)
+    expect([...present]).toEqual(['remote-debugging-port', 'user-data-dir'])
+    expect(stripRemoteDebugging(line, true, null)).toBe(true)
+    expect([...present]).toEqual(['user-data-dir'])
+  })
+
+  it('runs a packaged smoke run on its own profile with saved passwords locked', async () => {
+    const main = readFileSync('src/main/index.ts', 'utf8')
+    const switchProfile = main.indexOf("app.setPath('userData', smokeProfile)")
+    expect(switchProfile).toBeGreaterThan(main.indexOf('const remoteDebugging = stripRemoteDebugging('))
+    // Before anything reads the profile or takes the single-instance lock, which Chromium keeps in it.
+    expect(switchProfile).toBeLessThan(main.indexOf("app.getPath('userData')"))
+    expect(switchProfile).toBeLessThan(main.indexOf('app.requestSingleInstanceLock('))
+    expect(main).toContain('const secretCipher = smokeProfile ? lockedCipher() :')
+    const cipher = lockedCipher()
+    expect(await cipher.state()).toEqual({ available: false, reason: 'unavailable' })
+    await expect(cipher.encrypt('secret')).rejects.toThrow('The operating system could not protect the secret.')
+    await expect(cipher.decrypt(Buffer.from('ciphertext'))).rejects.toThrow('The operating system could not read the protected secret.')
+    // The smoke scripts that need the port ask for it, each on a profile of its own.
+    for (const file of ['scripts/packaged-smoke.mjs', 'scripts/portable-smoke.mjs']) {
+      const source = readFileSync(file, 'utf8')
+      expect(source, file).toContain("VARIA_PACKAGED_SMOKE: '1'")
+      expect(source, file).toContain('`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`')
+    }
   })
 
   it('runs before main registers the app protocol or opens a window', () => {
