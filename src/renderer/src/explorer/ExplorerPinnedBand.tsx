@@ -1,5 +1,6 @@
 import { useCallback, useId, useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react'
 import Icon from '../Icon'
+import type { PinnedBand } from './tree-model'
 
 function Overflow({ edge, overflow, renderServer }: {
   edge: 'top' | 'bottom'; overflow: readonly number[]; renderServer(index: number, menu: boolean): ReactNode
@@ -46,8 +47,8 @@ function Overflow({ edge, overflow, renderServer }: {
 }
 
 /** Pinned shortcuts sit outside the ARIA tree. The overflow is a light-dismiss popover, including in a popout window. */
-export default function ExplorerPinnedBand({ edge, headers, overflow, onWheel, renderServer }: {
-  edge: 'top' | 'bottom'; headers: readonly number[]; overflow: readonly number[]; onWheel(event: WheelEvent): void; renderServer(index: number, menu: boolean): ReactNode
+export default function ExplorerPinnedBand({ edge, band: { headers, offsets, overflow, overflowHeight, height }, onWheel, renderServer }: {
+  edge: 'top' | 'bottom'; band: PinnedBand; onWheel(event: WheelEvent): void; renderServer(index: number, menu: boolean, top?: number): ReactNode
 }) {
   const band = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
@@ -56,10 +57,10 @@ export default function ExplorerPinnedBand({ edge, headers, overflow, onWheel, r
     element?.addEventListener('wheel', onWheel, { passive: false })
     return () => element?.removeEventListener('wheel', onWheel)
   }, [onWheel])
-  const more = overflow.length > 0 && <Overflow edge={edge} overflow={overflow} renderServer={renderServer} />
-  return <div ref={band} className="explorer-pin-band" data-edge={edge} role="group" aria-label={edge === 'top' ? 'Servers above' : 'Servers below'}>
+  const more = overflow.length > 0 && <div className="explorer-pin-overflow" style={{ height: overflowHeight }}><Overflow edge={edge} overflow={overflow} renderServer={renderServer} /></div>
+  return <div ref={band} className="explorer-pin-band" style={{ height }} data-edge={edge} role="group" aria-label={edge === 'top' ? 'Servers above' : 'Servers below'}>
     {edge === 'top' && more}
-    {headers.map(index => renderServer(index, false))}
+    {headers.map((index, at) => renderServer(index, false, offsets[at]))}
     {edge === 'bottom' && more}
   </div>
 }
