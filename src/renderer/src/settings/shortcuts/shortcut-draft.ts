@@ -85,15 +85,17 @@ export function commandRows(file: ShortcutFile, platform: Platform, effective: E
  * with `platform` only when it uses a modifier one platform alone has (the Windows or Super key, or macOS's ⌃).
  */
 export function storedKey(chords: readonly string[], platform: Platform): { readonly key: string; readonly platform?: Platform } {
-  let local = false
+  const other = platform === 'darwin' ? 'ctrl' : 'meta'
+  // A key with the other modifier is this platform's alone, so it is written as pressed: `mod` there would name the
+  // modifier it already has on another platform (Ctrl+Win+J as `mod+meta+j` repeats ⌘ on macOS), which no file may hold.
+  if (chords.some(chord => splitChord(chord).modifiers.has(other))) return { key: chords.join(' '), platform }
+  const mod = platform === 'darwin' ? 'meta' : 'ctrl'
   const key = chords.map(chord => {
     const { modifiers, key: name } = splitChord(chord)
-    const mod = platform === 'darwin' ? 'meta' : 'ctrl', other = platform === 'darwin' ? 'ctrl' : 'meta'
-    if (modifiers.has(other)) local = true
     // `mod` first, as the catalogue writes it (`mod+shift+e`); the rest keep their canonical order.
     return [...modifiers.has(mod) ? ['mod'] : [], ...[...modifiers].filter(modifier => modifier !== mod), name].join('+')
   }).join(' ')
-  return local ? { key, platform } : { key }
+  return { key }
 }
 
 const withBindings = (file: ShortcutFile, bindings: readonly ShortcutBinding[]): ShortcutFile => ({ ...file, bindings })
@@ -196,7 +198,8 @@ export function importSummary(draft: ShortcutFile, incoming: ShortcutFile, platf
     if (binding.remove || !bindingApplies(binding, platform)) continue
     const chords = parses(binding.key, platform)
     if (!chords) continue
-    const verdict = verdictFor(draft, binding.command, chords, binding.scope ?? 'global', platform)
+    // The draft's rules are memoised, and the preview names no narrower scope, so each entry is one scan.
+    const verdict = validateShortcut(effectiveRules(platform, draft).rules, { command: binding.command, key: chords.join(' '), scope: binding.scope ?? 'global' }, platform, { narrowerScopes: false })
     if (verdict.verdict === 'conflict') conflicts.push({ label: keybindingLabel(chords, platform), command: commandDescriptor(binding.command).title, with: verdict.conflicts.map(rule => commandDescriptor(rule.command).title) })
   }
   return {
@@ -211,17 +214,29 @@ export function importSummary(draft: ShortcutFile, incoming: ShortcutFile, platf
  * gesture choices win; its unknown records are kept beside the draft's.
  */
 export function mergeImport(draft: ShortcutFile, incoming: ShortcutFile, platform: Platform): ShortcutFile {
-  const have = new Set(draft.bindings.map(entryKey))
-  let next: ShortcutFile = draft
+  // One pass over the draft's effective rules: re-resolving the growing file per entry made a 1,024-entry import
+  // quadratic, freezing the page for a minute or more. An entry that conflicts only with another of the file's stays,
+  // and shows in the problems banner.
+  const effective = effectiveRules(platform, draft)
+  const have = new Set(draft.bindings.map(entryKey)), taken = new Set<ResolvedRule>(), drop = new Set<number>()
+  const removals: ShortcutBinding[] = [], additions: ShortcutBinding[] = []
   for (const binding of incoming.bindings) {
-    if (have.has(entryKey(binding))) continue
+    const entry = entryKey(binding)
+    if (have.has(entry)) continue
+    have.add(entry)
     const chords = !binding.remove && bindingApplies(binding, platform) ? parses(binding.key, platform) : undefined
-    if (chords) {
-      const verdict = verdictFor(next, binding.command, chords, binding.scope ?? 'global', platform)
-      if (verdict.verdict === 'conflict') for (const rule of verdict.conflicts) next = removeRule(next, rule, platform)
+    const verdict = chords && validateShortcut(effective.rules, { command: binding.command, key: chords.join(' '), scope: binding.scope ?? 'global' }, platform, { narrowerScopes: false })
+    if (verdict?.verdict === 'conflict') for (const rule of verdict.conflicts) {
+      if (taken.has(rule) || shortcutLock(rule.command)) continue
+      taken.add(rule)
+      // As removeRule: the user's own addition is dropped, a default gets one removal entry.
+      const added = additionIndex(draft, rule, platform)
+      if (added >= 0 && effective.userRules.includes(rule)) drop.add(added)
+      else if (removalIndex(draft, rule, platform) < 0) removals.push({ command: rule.command, ...storedKey(rule.chords, platform), remove: true })
     }
-    next = withBindings(next, [...next.bindings, binding])
+    additions.push(binding)
   }
+  const next = withBindings(draft, [...draft.bindings.filter((_, index) => !drop.has(index)), ...removals, ...additions])
   const unknown = [...next.unknown, ...incoming.unknown.filter(record => !next.unknown.some(own => entryKey(own) === entryKey(record)))]
   return { ...next, scheme: incoming.scheme, gestures: { ...next.gestures, ...incoming.gestures }, unknown }
 }

@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { effectiveRules } from '../src/shared/commands/effective'
 import { parseKeySpec, type Platform } from '../src/shared/commands/keybindings'
-import { emptyShortcutFile, type ShortcutFile } from '../src/shared/commands/shortcut-schema'
+import { emptyShortcutFile, shortcutFileSchema, shortcutLimits, type ShortcutFile } from '../src/shared/commands/shortcut-schema'
 import { createFakeShortcutsService, type FakeShortcutsService } from '../src/renderer/src/core/ShortcutsService.fake'
 import { commitOptions } from '../src/renderer/src/settings/options-form'
 import type { CaptureSource } from '../src/renderer/src/settings/shortcuts/CaptureField'
@@ -84,6 +84,30 @@ describe('Shortcuts draft', () => {
     expect(merged.gestures).toEqual({ 'grid.addToSelection': 'alt' })
     expect(merged.unknown).toEqual(incoming.unknown)
     expect(effectiveRules('win32', merged).problems).toEqual([])
+  })
+  it('stages only files main can store: a key with both Ctrl and Win (⌃⌘) is written as pressed, for its platform', () => {
+    expect(storedKey(chords('ctrl+meta+j'), 'win32')).toEqual({ key: 'ctrl+meta+j', platform: 'win32' })
+    expect(storedKey(chords('ctrl+meta+f', 'darwin'), 'darwin')).toEqual({ key: 'ctrl+meta+f', platform: 'darwin' })
+    for (const platform of ['win32', 'linux', 'darwin'] as const) {
+      // Removing any default, macOS's ⌃⌘F full screen included, leaves a file the schema accepts.
+      for (const rule of effectiveRules(platform, emptyShortcutFile).rules) {
+        const removed = removeRule(emptyShortcutFile, rule, platform)
+        expect(shortcutFileSchema.safeParse(removed).success, `${platform} ${rule.command} ${rule.chords.join(' ')}`).toBe(true)
+      }
+      const assigned = assignShortcut(emptyShortcutFile, 'file.saveAs', chords('ctrl+meta+j', platform), 'global', platform)
+      expect(shortcutFileSchema.safeParse(assigned).success).toBe(true)
+      expect(rowOf(assigned, 'file.saveAs', platform).bindings.filter(binding => binding.source === 'user')).toHaveLength(1)
+    }
+  })
+  it('merges an import at the entry limit in one pass, not one effective-rules pass per entry', () => {
+    const commands = ['file.saveAs', 'file.closeAll', 'file.saveAll', 'edit.nextBookmark', 'query.changeDatabase', 'view.toggleResultsPane', 'explorer.refresh', 'file.open', 'query.execute', 'file.new'] as const
+    const keys = ['mod+alt', 'alt+shift', 'mod+alt+shift'].flatMap(mods => [...'abcdefghijklmnopqrstuvwxyz0123456789'].map(name => `${mods}+${name}`))
+    const bindings = keys.flatMap(key => commands.map(command => ({ command, key }))).slice(0, shortcutLimits.bindings)
+    const started = performance.now()
+    const merged = mergeImport(file([{ command: 'file.saveAs', key: 'mod+shift+e' }]), file(bindings), 'win32')
+    // It took about 100 s when each entry re-resolved the growing file; one pass takes well under a second.
+    expect(performance.now() - started).toBeLessThan(10_000)
+    expect(merged.bindings.filter(binding => !binding.remove)).toHaveLength(shortcutLimits.bindings + 1)
   })
   it('keeps records this version cannot read when an import replaces the user\'s entries', () => {
     const future = { command: 'query.fromTheFuture', key: 'f9' }
