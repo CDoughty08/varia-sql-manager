@@ -961,10 +961,20 @@ async function environmentLabels() {
   expect(look).toEqual({ color: true, fill: true, accent: true, inside: true, whole: true })
   // The tag is no control, so the query bar's server list, which its keys reach, describes the environment.
   await expect(queryServer(page)).toHaveAttribute('aria-description', 'Production environment')
-  // PROD stays whole beside both lists in a narrow editor.
-  let widen = await narrowBar(330)
-  expect(await barFit()).toEqual({ clear: true, inside: true, lists: true, cut: false })
-  await widen()
+  // Every compact layout keeps PROD whole beside both lists and the five query actions, including Linux font metrics.
+  let widen
+  for (const width of [760, 600, 500, 400, 330, 320]) {
+    widen = await narrowBar(width)
+    expect(await barFit(), `${width} px query bar`).toEqual({ clear: true, inside: true, lists: true, cut: false })
+    await widen()
+  }
+  // Exercise wider glyphs on Windows too, so the Linux font-metrics regression is reproducible locally.
+  const originalFamily = await queryBar(page).evaluate(bar => { const family = bar.style.fontFamily; bar.style.fontFamily = 'Verdana, sans-serif'; return family })
+  try {
+    widen = await narrowBar(320)
+    expect(await barFit(), '320 px query bar with wider glyphs').toEqual({ clear: true, inside: true, lists: true, cut: false })
+    await widen()
+  } finally { await queryBar(page).evaluate((bar, family) => { bar.style.fontFamily = family }, originalFamily) }
   await page.screenshot({ path: resolve('artifacts', 'environment-production.png') })
   // (2) From the server's menu: a Custom label left blank cannot be saved; one typed is saved and shown everywhere.
   let labelling = await serverMenu(row)
@@ -993,6 +1003,10 @@ async function environmentLabels() {
   await expect(labelling).toHaveCount(0)
   await shows('STAGING', 'info')
   await expect.poll(saved).toBe('Staging')
+  // The longer preset must also stay whole beside the two lists at the smallest supported bar width.
+  widen = await narrowBar(320)
+  expect(await barFit(), '320 px query bar with Staging').toEqual({ clear: true, inside: true, lists: true, cut: false })
+  await widen()
   // (4) The history row shows it, choosing the entry fills it in, and another server drops it with the name and colour.
   dialog = await open()
   // Opened once, Custom Properties stays open for this window's later dialogs.

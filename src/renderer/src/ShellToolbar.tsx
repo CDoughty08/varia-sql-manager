@@ -4,7 +4,7 @@ import type { CommandArgs, CommandId } from './core/types'
 import type { IconId } from '../../shared/icons'
 import Icon from './Icon'
 import ClientStatisticsToggle from './statistics/ClientStatisticsToggle'
-import { ActualPlanToggle, QueryPickers, useQueryContext } from './QueryBar'
+import { ActualPlanToggle, EstimatedPlanButton, QueryPickers, useQueryContext } from './QueryBar'
 import { lostHint, withKey } from './query-context'
 
 /**
@@ -61,6 +61,7 @@ export default function StandardToolbar({ variant }: { variant: 'header' | 'clas
         <Icon name="play" />Execute{keys.execute && <kbd>{keys.execute.text}</kbd>}</button>
       <button disabled={!enabled.cancel} onClick={() => run('query.cancel')}><Icon name="debug-stop" />Cancel</button>
       <ActualPlanToggle classic />
+      <EstimatedPlanButton classic />
       <ClientStatisticsToggle classic />
       <span className="toolbar-divider" />
       {/* SSMS's toolbar button: the server of the active query, else the one selected in Object Explorer. */}

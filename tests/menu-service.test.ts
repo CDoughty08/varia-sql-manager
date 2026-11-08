@@ -127,7 +127,7 @@ describe('menu access keys', () => {
     const [query] = menus.controller.view.levels
     expect(menus.controller.view).toMatchObject({ source: 'menubar', mnemonics: true, menubar: { focused: 'query', open: 'query' } })
     expect(query.items[query.active]).toMatchObject({ kind: 'submenu', title: 'Connection' })
-    expect(titles(query.items)).toEqual(['Connection', 'Change Database…', '-', 'Execute', 'Cancel Executing Query', 'Include Actual Execution Plan', 'Include Client Statistics', 'Reset Client Statistics'])
+    expect(titles(query.items)).toEqual(['Connection', 'Change Database…', '-', 'Execute', 'Cancel Executing Query', 'Include Actual Execution Plan', 'Display Estimated Execution Plan', 'Include Client Statistics', 'Reset Client Statistics'])
   })
   it('opens Tools with Alt+T, where Options… opens the Options dialog once the stored settings are in', async () => {
     const { menus, fixture, order } = setup()
@@ -449,7 +449,7 @@ describe('context menus', () => {
     doc.activeElement = line
     expect(menus.openForElement(line.dom, { keyboard: true })).toBe(true)
     expect(level(menus)).toMatchObject({ label: 'Query editor', active: 0, anchor: { kind: 'below', rect: caret } })
-    expect(titles(level(menus).items)).toEqual(['Insert Snippet…', 'Surround With…', '-', 'Connection', '-', 'Execute', 'Cancel Executing Query', '-', 'Cut', 'Copy', 'Paste', '-', 'Command Palette…'])
+    expect(titles(level(menus).items)).toEqual(['Insert Snippet…', 'Surround With…', '-', 'Connection', '-', 'Execute', 'Cancel Executing Query', 'Display Estimated Execution Plan', '-', 'Cut', 'Copy', 'Paste', '-', 'Command Palette…'])
     expect(menus.openForElement(null, { keyboard: true })).toBe(false)
   })
   it('opens a menu button\'s menu below it as a pointer menu from a click, and names what the open menu is for', () => {
