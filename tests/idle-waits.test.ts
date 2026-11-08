@@ -5,21 +5,69 @@ import { join } from 'node:path'
 // Time CI spent waiting rather than working (docs/ci.md): timers that outlived the app they raced, offline checks that
 // waited out a refused connection, and check lanes that waited for a build they did not need.
 
+// The lines of every Promise.race( whose whole span, to its matching parenthesis, races a close or an exit against a timer
+// that keeps Node alive. Quotes are skipped so a parenthesis inside a string does not end the span.
+function raceOffenders(text: string): number[] {
+  const offenders: number[] = []
+  for (const match of text.matchAll(/Promise\.race\(/g)) {
+    let depth = 0, at = match.index! + match[0].length - 1, quote = ''
+    for (; at < text.length; at++) {
+      const char = text[at]
+      if (quote) { if (char === '\\') at++; else if (char === quote) quote = ''; continue }
+      if (char === "'" || char === '"' || char === '`') quote = char
+      else if (char === '(') depth++
+      else if (char === ')' && --depth === 0) break
+    }
+    const span = text.slice(match.index, at + 1)
+    if (!/close\(\)|exit|exited/.test(span)) continue
+    if (/setTimeout\(|\bsleep\(|\bwait\(|\bdelay\(/.test(span) && !/ref: false/.test(span)) offenders.push(text.slice(0, match.index).split('\n').length)
+  }
+  return offenders
+}
+
+// The lines of every test that builds 50,000 rows or more (a literal length:, or a call with one numeric argument to a
+// helper the file defines that builds an array or loops), and those among them whose test does not pass heavyTimeout.
+function heavyTests(text: string): { matched: number[], offenders: number[] } {
+  const lines = text.split('\n'), matched: number[] = [], offenders: number[] = []
+  const builders = new Set([...text.matchAll(/function\s+(\w+)\s*\(|const\s+(\w+)\s*=\s*(?:\([^)]*\)|\w+)\s*=>/g)].filter(match => {
+    // The helper's own body: its line, or up to the brace that closes a body opened at the line's end.
+    const at = text.slice(0, match.index).split('\n').length - 1, indent = /^\s*/.exec(lines[at])![0]
+    const close = /\{\s*$/.test(lines[at]) ? lines.findIndex((candidate, index) => index > at && candidate.startsWith(indent + '}')) : at
+    return /Array\.from|\blength:|new Array|\bfor \(/.test(lines.slice(at, (close < 0 ? at : close) + 1).join('\n'))
+  }).map(match => match[1] ?? match[2]))
+  lines.forEach((line, index) => {
+    const literal = [...line.matchAll(/\blength:\s*([\d_]{5,})\b/g)].map(match => match[1])
+    const helped = [...line.matchAll(/(?<![.\w])(\w+)\(([\d_]{5,})\)/g)].filter(call => builders.has(call[1])).map(call => call[2])
+    if (![...literal, ...helped].some(size => Number(size.replace(/_/g, '')) >= 50_000)) return
+    let start = index
+    while (start > 0 && !/^\s*(?:it|test)(?:\.each\b.*?)?\(/.test(lines[start])) start--
+    const indent = /^\s*/.exec(lines[start])![0]
+    const end = lines.findIndex((candidate, at) => at > start && candidate.startsWith(indent + '}') && /^\}(\)|, )/.test(candidate.slice(indent.length)))
+    matched.push(index + 1)
+    if (!(end >= 0 && lines[end].trim() === '}, heavyTimeout)')) offenders.push(index + 1)
+  })
+  return { matched, offenders }
+}
+
 const scripts = ['scripts', 'scripts/fixtures'].flatMap(dir => readdirSync(dir).filter(name => name.endsWith('.mjs')).map(name => join(dir, name)))
 
 describe('idle waits', () => {
   // A suite that races app.close() or a process exit against a bare timer keeps Node alive for the timer's full length
   // after the app has gone: 10 to 30 s per suite, about 2 minutes of each OS's smoke run, before within() replaced them.
   it('never race a close or an exit against a timer that outlives it', () => {
-    const offenders = scripts.flatMap(file => readFileSync(file, 'utf8').split('\n').flatMap((line, index) => {
-      if (!/Promise\.race\(/.test(line) || !/close\(\)|exit|exited/.test(line)) return []
-      const timer = /setTimeout\(|\bsleep\(|\bwait\(|\bdelay\(/.test(line)
-      return timer && !/ref: false/.test(line) ? [`${file}:${index + 1}`] : []
-    }))
+    const offenders = scripts.flatMap(file => raceOffenders(readFileSync(file, 'utf8')).map(line => `${file}:${line}`))
     expect(offenders).toEqual([])
     expect(scripts.filter(file => /within\(/.test(readFileSync(file, 'utf8'))).length).toBeGreaterThanOrEqual(10)
   })
-  // Windows retries a refused TCP connection for about a second; a missing named pipe fails at once (Unreachable.cs).
+  // The project keeps races on one line, but a formatter or a long race wrapped by hand must not hide one.
+  it('find a close race wrapped over several lines', () => {
+    const wrapped = ['const a = 1', 'await Promise.race([', '  app.close(),', '  delay(30000),', '])', 'const b = 2'].join('\n')
+    expect(raceOffenders(wrapped)).toEqual([2])
+    expect(raceOffenders(wrapped.replace('delay(30000)', "delay(30000, false, { ref: false })"))).toEqual([])
+    expect(raceOffenders(['await Promise.race([', '  app.close(),', '  stream.done', '])', 'setTimeout(done, 30000)'].join('\n'))).toEqual([])
+    expect(raceOffenders("await Promise.race([app.close(), new Promise(resolve => setTimeout(resolve, 1000, ')'))])")).toEqual([1])
+  })
+  // Windows retries a refused TCP connection for about a second; a malformed named-pipe address fails at once (Unreachable.cs).
   it('fail the offline checks\' connections without a real TCP address', () => {
     const dir = 'backend/Varia.Backend.Tests'
     const offenders = readdirSync(dir).filter(name => name.endsWith('.cs') && name !== 'Unreachable.cs' && /tcp:127\.0\.0\.1,1\b/.test(readFileSync(join(dir, name), 'utf8')))
@@ -28,19 +76,21 @@ describe('idle waits', () => {
   // A test that builds 50,000 or more rows ran past vitest's 20 s default on a shared Windows runner (3 to 4 s locally):
   // it passes heavyTimeout (tests/fixtures/work-meter.ts) and bounds its work with the meter, not a clock.
   it('give every test that builds 50,000 rows or more the heavy timeout', () => {
-    const offenders = readdirSync('tests').filter(name => name.endsWith('.test.ts')).flatMap(name => {
-      const lines = readFileSync(join('tests', name), 'utf8').split('\n')
-      return lines.flatMap((line, index) => {
-        const size = /\blength: ([\d_]+)/.exec(line)
-        if (!size || Number(size[1].replace(/_/g, '')) < 50_000) return []
-        let start = index
-        while (start > 0 && !/^\s*it\(/.test(lines[start])) start--
-        const indent = /^\s*/.exec(lines[start])![0]
-        const end = lines.findIndex((candidate, at) => at > start && candidate.startsWith(indent + '}') && /^\}(\)|, )/.test(candidate.slice(indent.length)))
-        return end >= 0 && lines[end].trim() === '}, heavyTimeout)' ? [] : [`tests/${name}:${index + 1}`]
-      })
-    })
-    expect(offenders).toEqual([])
+    const found = readdirSync('tests').filter(name => name.endsWith('.test.ts') && name !== 'idle-waits.test.ts').map(name => ({ name, ...heavyTests(readFileSync(join('tests', name), 'utf8')) }))
+    expect(found.flatMap(({ name, offenders }) => offenders.map(line => `tests/${name}:${line}`))).toEqual([])
+    // A floor, so a pattern that stops matching cannot pass vacuously: rows built inline and through each kind of helper.
+    const lines = (name: string) => found.find(file => file.name === name)!.matched
+    expect(lines('explorer-tree-model.test.ts')).toContain(110)
+    expect(lines('explorer-service.test.ts').length).toBeGreaterThanOrEqual(4)
+    expect(lines('shortcut-store.test.ts').length).toBeGreaterThanOrEqual(1)
+  })
+  it('find heavy tests built through helpers, under test( and it.each(', () => {
+    const helper = 'const makeRows = (count: number) => Array.from({ length: count }, (_, at) => at)\n'
+    expect(heavyTests(helper + "test('builds', () => {\n  makeRows(200_000)\n})").offenders).toEqual([3])
+    expect(heavyTests(helper + "it.each([1, 2])('builds %i', () => {\n  makeRows(200_000)\n})").offenders).toEqual([3])
+    expect(heavyTests(helper + "function sample(count = 3) {\n  for (let at = 0; at < count; at++) add(at)\n}\nit('builds', () => {\n  makeRows(200_000)\n  sample(60_000)\n}, heavyTimeout)")).toEqual({ matched: [6, 7], offenders: [] })
+    // A numeric argument to anything that builds no rows (a timer, a format helper, String.repeat) is not a heavy test.
+    expect(heavyTests("const advance = (ms: number) => vi.advanceTimersByTime(ms)\nit('waits', () => {\n  advance(60_000)\n  'x'.repeat(1_000_000)\n})").matched).toEqual([])
   })
   // A suite whose app.close() never finished (live-plan-smoke after a failed assertion) ran Smoke (Linux 3/3) to its
   // 25 minute timeout seven times on 2026-11-08, printing nothing: its error waited behind the close in its finally block.
@@ -62,7 +112,7 @@ describe('idle waits', () => {
   })
   it('bound every smoke suite\'s run, so one hang cannot take its shard\'s later suites', async () => {
     const { platformSeconds, smokeSuites, suiteLimitSeconds } = await import('../scripts/smoke-shards.mjs')
-    expect(readFileSync('scripts/smoke-shards.mjs', 'utf8')).toContain("timeout: limit * 1000, killSignal: 'SIGKILL'")
+    expect(readFileSync('scripts/smoke-shards.mjs', 'utf8')).toContain('await runSuite(suite, limit * 1000)')
     for (const platform of ['linux', 'win32']) for (const suite of smokeSuites()) {
       const limit = suiteLimitSeconds(suite, platform)
       expect(limit, suite).toBeGreaterThanOrEqual(Math.max(300, 4 * platformSeconds(platform)[suite]))
@@ -101,6 +151,20 @@ describe('idle waits', () => {
     // Two chains: the build moved behind the .NET lanes balances them (vitest is the longest lane).
     expect(plan({ cpus: 4 })).toEqual({ all: [{ chain: ['Type check', 'vitest'] }, { chain: [{ gate: 'Release build (.NET)', then: { chain: ['Offline .NET checks', 'vitest (Release backend)'] } }, 'electron-vite build'] }] })
     expect(order(plan({ cpus: 4, build: true }) as Node).sort()).toEqual(['Release backend', 'electron-vite build'])
+  })
+  // VARIA_CHECK_SKIP=tsc used to skip nothing while the summary reported it skipped.
+  it('refuse an unknown VARIA_CHECK_SKIP name and report only the lanes left out', async () => {
+    const { parseSkip, plan, skippedNote } = await import('../scripts/check.mjs')
+    expect(parseSkip('')).toEqual([])
+    expect(parseSkip(undefined)).toEqual([])
+    expect(parseSkip(' typecheck , ')).toEqual(['typecheck'])
+    expect(() => parseSkip('tsc')).toThrow(/unknown name 'tsc'.*typecheck/)
+    expect(() => parseSkip('typecheck,vitest')).toThrow(/'vitest'/)
+    expect(skippedNote(plan({ cpus: 4, skip: ['typecheck'] }), ['typecheck'])).toBe(' (skipped: typecheck, VARIA_CHECK_SKIP)')
+    expect(skippedNote(plan({ cpus: 4 }), ['typecheck'])).toBe('')
+    expect(skippedNote(plan({ cpus: 24 }), [])).toBe('')
+    const source = readFileSync('scripts/check.mjs', 'utf8')
+    expect(source).toMatch(/parseSkip\(process\.env\.VARIA_CHECK_SKIP\)[\s\S]{0,80}process\.exit\(2\)/)
   })
   // A check stopped by CI's step timeout used to lose every running lane's held output: the hung suite left no trace.
   it('print what a running lane held when the check is stopped', async () => {

@@ -1771,7 +1771,7 @@ describe('ExplorerService: memory and speed', () => {
     expect(slices).toBeGreaterThan(1)
     expect(f.explorer.table.get(removed.id)).toBeUndefined()
     expect(f.explorer.node(selected)).toBe(before[2000])
-  })
+  }, heavyTimeout)
   it('deletes a 100,000-node subtree in slices of at most 10,000 while the surviving server stays usable', async () => {
     const f = fixture()
     f.state.tables = Array.from({ length: 100_000 }, (_, index) => `dbo.Table${index}`)

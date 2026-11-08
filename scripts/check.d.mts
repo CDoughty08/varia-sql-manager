@@ -8,3 +8,6 @@ export function plan(options: { cpus: number, build?: boolean, skip?: string[] }
 export const running: Set<{ name: string, started: number, output: Buffer[], child: ChildProcess }>
 export function run(name: string, command: string, write?: (text: string) => void): Promise<{ name: string, code: number, seconds: number }>
 export function flushRunning(write?: (text: string) => void): void
+export const skippable: Readonly<Record<string, string>>
+export function parseSkip(value?: string): string[]
+export function skippedNote(layout: CheckNode, skip: readonly string[]): string
