@@ -157,7 +157,12 @@ export function installExplorerStub({ ipcMain }, { statics }) {
         facts: { schema: params.target.schema ?? null, created: '2024-01-02T03:04:05', modified: '2024-02-03T04:05:06', systemObject: false, replicated: false, lockEscalation: 'TABLE',
           memoryOptimized: false, temporal: 'NON_TEMPORAL_TABLE', ledger: 'NON_LEDGER_TABLE', rowCount: 12345, dataSpace: 2048, indexSpace: 64, filegroup: 'PRIMARY', textFilegroup: null,
           partitioned: false, compression: 'NONE' },
-        ...params.target.kind === 'view' ? { definition: 'CREATE VIEW dbo.vOrders AS SELECT Id FROM dbo.Orders' } : {},
+        // A module's text comes with its facts, as the backend reads it from sys.sql_modules (Peek's followed view has its own).
+        ...(() => {
+          const definition = searchObjects.find(item => item.object.kind === params.target.kind && item.object.name === params.target.name)?.definition
+            ?? (params.target.kind === 'view' ? 'CREATE VIEW dbo.vOrders AS SELECT Id FROM dbo.Orders' : undefined)
+          return definition ? { definition } : {}
+        })(),
         elapsedMs: 1
       })
       case 'explorer.peekDependencies': return ok(params.target.kind === 'view' ? { uses: [{ name: 'Orders', schema: 'dbo', kind: 'table' }], usedBy: [], elapsedMs: 1 }

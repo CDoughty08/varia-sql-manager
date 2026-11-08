@@ -76,6 +76,7 @@ import { DatabasePropertiesService } from '../properties/DatabasePropertiesServi
 import { NewDatabaseService } from '../new-database/NewDatabaseService'
 import { RestoreService } from '../restore/RestoreService'
 import { SsisOperationsService } from '../ssis/SsisOperationsService'
+import { SearchDetailsService } from '../search/SearchDetailsService'
 import { ObjectSearchService } from '../search/ObjectSearchService'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
@@ -191,6 +192,8 @@ export interface Workbench extends Disposable {
   readonly operations: SsisOperationsService
   /** Search Objects: each connected server's object index (built in the backend) and the Search Objects tabs. */
   readonly objectSearch: ObjectSearchService
+  /** The Search Objects tabs' details pane: the selected hit's properties and definition. */
+  readonly searchDetails: SearchDetailsService
   readonly theme: ThemeService
   /** Toasts for work that finished out of sight, such as a save whose query is not the active document. */
   readonly notifications: NotificationService
@@ -336,6 +339,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     api, documents, connections, settings,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-object-search="${CSS.escape(id)}"] [data-object-search-focus]`)?.focus())
   })
+  const searchDetails = new SearchDetailsService({ api, peek, connections, searches: objectSearch, scriptingOptions })
   const context = new ContextKeyService({
     platform,
     settings,
@@ -455,6 +459,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     activity,
     operations,
     objectSearch,
+    searchDetails,
     theme,
     notifications,
     updates,
@@ -483,6 +488,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       indexMemory.dispose()
       actionProgress.dispose()
       // Before the live views: its documents' views and stops are cancelled while the service still runs them.
+      // Before Search Objects and Peek, whose reads its details pane shares.
+      searchDetails.dispose()
       objectSearch.dispose()
       operations.dispose()
       // Before the live views: each monitor disposes its own; then the client, while the port is still there.
