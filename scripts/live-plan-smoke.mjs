@@ -91,8 +91,14 @@ try {
   await checkLargePlan({ application, page, profile, expect })
   expect(errors).toEqual([])
   console.log('Live Plan: changing real operator rows; stable Pixi canvas, zoom and selection through actual capture; cancelled partial plan and GO repetitions.')
+} catch (error) {
+  // Report the failed assertion before cleanup: closing a running query can wait for a native prompt.
+  console.error(error)
+  await page.screenshot({ path: resolve('artifacts/live-plan-failure.png'), timeout: 5_000 }).catch(() => {})
+  process.exitCode = 1
 } finally {
-  clearTimeout(watchdog)
   await application.close()
+  // Keep the process deadline active through shutdown, including a close that the query session refuses.
+  clearTimeout(watchdog)
   await rm(profile, { recursive: true, force: true })
 }

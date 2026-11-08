@@ -22,6 +22,7 @@ import { ResultsService } from '../results/ResultsService'
 import { MemoryUsageService } from '../results/memory'
 import { documentOwner, documentPage, eitherHidden, LiveService, mainWindowPage } from '../live/LiveService'
 import { QueryPlansService } from '../plans/QueryPlansService'
+import { RetainedPlansService } from '../plans/RetainedPlansService'
 import { PlanPreparationCache } from '../plans/preparation'
 import { ActivityMonitorService } from '../activity/ActivityMonitorService'
 import { activityContribution } from '../contributions/activity'
@@ -128,6 +129,7 @@ export interface Workbench extends Disposable {
   /** Live views (Activity Monitor, SSIS monitoring): their subscriptions, pauses while hidden, and history. */
   readonly live: LiveService
   readonly queryPlans: QueryPlansService
+  readonly retainedPlans: RetainedPlansService
   readonly planPreparation: PlanPreparationCache
   /** Test mode only: the grids' frame times and counters (`window.__variaGrid`). */
   readonly gridStats?: GridStats
@@ -253,7 +255,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // Closing the active document shows the next one in its own editor group.
   const closeSuccessor = documents.useCloseSuccessor(id => editorGroups.successor(id))
   const resultClient = new ResultClient({ api, createWorker: () => new ResultsWorker(), window, schedule: callback => { frame(callback) } })
-  const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => { frame(callback) } })
+  const retainedPlans = new RetainedPlansService()
+  const results = new ResultsService({ client: resultClient, api, events, documents, retainedPlans, frame: callback => { frame(callback) } })
   const resultMemory = new MemoryUsageService(resultClient, 'results', events)
   const indexMemory = new MemoryUsageService(resultClient, 'index')
   // The backend caps live views per server it reaches; a typed name is the closest this side knows.
@@ -263,7 +266,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const explorerRuntime = explorer.useStatus(explorerStatus)
   const ssisTree = new SsisTreeProbe({ explorer, live, settings, events, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe, popout: () => panes.location('explorer') === 'window' } })
   const gridStats = api.testMode ? new GridStats() : undefined
-  const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
+  const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values, retainedPlans)
   const queryPlans = new QueryPlansService(live, documents, queries, panes, results)
   const planPreparation = new PlanPreparationCache()
   const planReleases = resultClient.onRelease(keys => planPreparation.release(keys))
@@ -443,6 +446,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     indexMemory,
     live,
     queryPlans,
+    retainedPlans,
     planPreparation,
     ...gridStats ? { gridStats } : {},
     files,
@@ -505,6 +509,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       files.dispose()
       recentFiles.dispose()
       queryPlans.dispose()
+      retainedPlans.dispose()
       planReleases.dispose(); planGenerations.dispose(); planEvents.dispose(); planPreparation.dispose()
       queries.dispose()
       results.dispose()

@@ -18,6 +18,7 @@ export function smokeSuites() {
  */
 export const suiteSeconds = {
   linux: {
+    'scripts/retained-plans-smoke.mjs': 20,
     'scripts/live-plan-smoke.mjs': 64,
     'scripts/electron-smoke.mjs': 26, 'scripts/layout-smoke.mjs': 11, 'scripts/popout-smoke.mjs': 8, 'scripts/connections-smoke.mjs': 24,
     'scripts/theme-smoke.mjs': 6, 'scripts/palette-smoke.mjs': 15, 'scripts/backend-smoke.mjs': 49,
@@ -29,6 +30,7 @@ export const suiteSeconds = {
     'scripts/ssis-smoke.mjs': 5, 'scripts/ssis-operations-smoke.mjs': 18, 'scripts/updates-smoke.mjs': 35
   },
   windows: {
+    'scripts/retained-plans-smoke.mjs': 20,
     'scripts/live-plan-smoke.mjs': 2,
     'scripts/electron-smoke.mjs': 19, 'scripts/layout-smoke.mjs': 13, 'scripts/popout-smoke.mjs': 12, 'scripts/connections-smoke.mjs': 20,
     'scripts/theme-smoke.mjs': 6, 'scripts/palette-smoke.mjs': 6, 'scripts/backend-smoke.mjs': 48,
