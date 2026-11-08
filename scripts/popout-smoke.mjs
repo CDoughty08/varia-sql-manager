@@ -183,6 +183,19 @@ try {
   await explorerSearchBox(explorer).focus()
   await explorer.keyboard.press('Escape')
   await expect(explorerTree(explorer)).toBeFocused()
+  // The popout tab's tooltip follows a remap of Move Back into Main Window as soon as it is saved, without reopening.
+  const returnTitle = gesture => `Drag onto the main window to dock it there; ${gesture} to move it back`
+  const saveGestures = gestures => page.evaluate(async gestures => {
+    const current = await window.varia.shortcuts.get()
+    if (!current.ok) throw new Error(current.error)
+    const saved = await window.varia.shortcuts.save({ ...current.value.file, gestures }, current.value.revision)
+    if (!saved.ok) throw new Error(saved.error)
+  }, gestures)
+  await expect(popoutTab(explorer, 'explorer')).toHaveAttribute('title', returnTitle('Ctrl-double-click'))
+  await saveGestures({ 'popout.returnToMain': 'alt' })
+  await expect(popoutTab(explorer, 'explorer')).toHaveAttribute('title', returnTitle('Alt-double-click'))
+  await saveGestures({})
+  await expect(popoutTab(explorer, 'explorer')).toHaveAttribute('title', returnTitle('Ctrl-double-click'))
   const editor = await pane(page, 'editor').boundingBox()
   await popoutTab(explorer, 'explorer').dispatchEvent('dragstart', { dataTransfer: await explorer.evaluateHandle(() => new DataTransfer()) })
   // Over the editor the main window's compass shows; dropped on its right cell, the panel docks right of the editor.

@@ -22,7 +22,7 @@ internal interface IObjectSearchHost
 
 /// <summary>
 /// explorer.index and explorer.search: an in-memory index per connection of the objects Object Explorer lists by schema and
-/// name (and their module definitions), read one database at a time from constant catalog SQL (<see cref="ObjectSearchSql"/>),
+/// name (and their module definitions), read two databases at a time (<see cref="ObjectIndexLimits.Total"/>) from constant catalog SQL (<see cref="ObjectSearchSql"/>),
 /// and searched in memory. Nothing reaches disk; a disconnect drops the connection's index. A database that cannot be read is
 /// skipped as a value, and the index keeps every other one.
 /// </summary>
@@ -121,21 +121,27 @@ internal sealed class ObjectSearchService : IDisposable
                 lock (state.Gate) state.Skipped.Add(resourceSkip);
             var last = Stopwatch.StartNew();
             progress?.Invoke(new { Type = "explorer.index.progress", Done = 0, Total = names.Count, Objects = state.Index.Objects });
-            for (var done = 0; done < names.Count; done++)
+            var done = 0;
+            var reported = new object();
+            await ForEachBoundedAsync(names, Limits.Total, async name =>
             {
-                var name = names[done];
                 var skip = await ReadAsync(args.ConnectionId, state, name, render, definitions, perDatabase, source.Token);
                 lock (state.Gate)
                 {
                     if (skip is null or { Code: ChildrenLeftOut }) state.Indexed++;
                     if (skip is not null && state.Skipped.Count < MaxSkipped) state.Skipped.Add(skip);
                 }
-                if (progress is not null && (last.Elapsed >= ProgressEvery || done + 1 == names.Count))
+                // Progress counts completions, whichever read ends first, and goes out one EVENT at a time.
+                lock (reported)
                 {
-                    progress(new { Type = "explorer.index.progress", Done = done + 1, Total = names.Count, Objects = state.Index.Objects });
-                    last.Restart();
+                    done++;
+                    if (progress is not null && (last.Elapsed >= ProgressEvery || done == names.Count))
+                    {
+                        progress(new { Type = "explorer.index.progress", Done = done, Total = names.Count, Objects = state.Index.Objects });
+                        last.Restart();
+                    }
                 }
-            }
+            }, source.Token);
             lock (state.Gate)
             {
                 if (ReferenceEquals(state.Build, source)) { state.Building = false; state.Built = true; state.BuiltAt = DateTime.UtcNow; }
@@ -218,6 +224,42 @@ internal sealed class ObjectSearchService : IDisposable
                 state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture));
     }
 
+    /// <summary>Runs <paramref name="read"/> for each name, at most <paramref name="degree"/> at once (each read still waits for
+    /// one of the index's slots across every connection).</summary>
+    internal static Task ForEachBoundedAsync(IReadOnlyList<string> names, int degree, Func<string, Task> read, CancellationToken token) =>
+        Parallel.ForEachAsync(names, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, degree), CancellationToken = token }, async (name, _) => await read(name));
+
+    /// <summary>Opens a batch's rows and reads them. A read that stops early (past the budget, answering null) cancels the batch
+    /// before its reader closes: closing a reader short of its end reads, and throws away, every row and definition left. A
+    /// read that completes is handed to <paramref name="keep"/> before the reader closes, so an error on close (a broken
+    /// transport, a statement after the last result set) still finds it held by the index, never charged and lost.</summary>
+    internal static async Task<T?> ReadThenStopAsync<T>(Func<Task<DbDataReader>> open, Func<DbDataReader, Task<T?>> read, Action cancel, Action<T> keep) where T : class
+    {
+        var rows = await open();
+        T? value;
+        try { value = await read(rows); }
+        catch
+        {
+            await rows.DisposeAsync();
+            throw;
+        }
+        if (value is not null)
+        {
+            try { keep(value); }
+            finally { await rows.DisposeAsync(); }
+            return value;
+        }
+        cancel();
+        // The read already answered TOO_LARGE: the cancelled batch's own error on close changes nothing.
+        try { await rows.DisposeAsync(); } catch (Exception error) when (error is DbException or InvalidOperationException) { }
+        return null;
+    }
+
+    private static void TryCancel(SqlCommand command)
+    {
+        try { command.Cancel(); } catch (Exception error) when (error is InvalidOperationException or SqlException) { /* Best effort: the reader then drains. */ }
+    }
+
     private async Task<List<string>> ListAsync(string connectionId, CancellationToken token)
     {
         await using var connection = host.Connection(connectionId, null);
@@ -250,8 +292,9 @@ internal sealed class ObjectSearchService : IDisposable
         CancellationToken token)
     {
         using var budgetSource = CancellationTokenSource.CreateLinkedTokenSource(token);
-        budgetSource.CancelAfter(Limits.DatabaseBudget);
         await total.WaitAsync(token);
+        // The budget is the read's own: time spent waiting for a slot behind other reads does not count.
+        budgetSource.CancelAfter(Limits.DatabaseBudget);
         var reader = new DatabaseReader(database, Limits, pool, state.Index.Databases.FirstOrDefault(value => value.Database == database));
         try
         {
@@ -267,10 +310,9 @@ internal sealed class ObjectSearchService : IDisposable
                 command.Parameters.Add(new SqlParameter("@db", SqlDbType.NVarChar, 128) { Value = database });
                 command.Parameters.Add(new SqlParameter("@stmt", SqlDbType.NVarChar, -1) { Value = batch });
             }
-            await using var rows = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, budgetSource.Token);
-            var index = await reader.ReadAsync(rows, definitions, budgetSource.Token, children);
+            var index = await ReadThenStopAsync(async () => await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, budgetSource.Token),
+                rows => reader.ReadAsync(rows, definitions, budgetSource.Token, children), () => TryCancel(command), state.Index.Put);
             if (index is null) return new(database, "TOO_LARGE", "The database does not fit in the index's memory (" + Size + " across every connection).");
-            state.Index.Put(index);
             return null;
         }
         catch (Exception error) when (error is OperationCanceledException or SqlException && budgetSource.IsCancellationRequested && !token.IsCancellationRequested)
@@ -307,8 +349,9 @@ internal sealed class ObjectSearchService : IDisposable
     private async Task<ObjectIndexSkip?> ReadServerAsync(string connectionId, State state, bool box, bool definitions, CancellationToken token)
     {
         using var budgetSource = CancellationTokenSource.CreateLinkedTokenSource(token);
-        budgetSource.CancelAfter(Limits.DatabaseBudget);
         await total.WaitAsync(token);
+        // The budget is the read's own: time spent waiting for a slot behind other reads does not count.
+        budgetSource.CancelAfter(Limits.DatabaseBudget);
         var reader = new DatabaseReader(ServerScope, Limits, pool, state.Index.Server);
         try
         {
@@ -317,10 +360,9 @@ internal sealed class ObjectSearchService : IDisposable
             await using var command = connection.CreateCommand();
             command.CommandTimeout = 0;
             command.CommandText = ObjectSearchSql.Prologue + ObjectSearchSql.Server(box, definitions);
-            await using var rows = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, budgetSource.Token);
-            var index = await reader.ReadServerAsync(rows, box, definitions, Actions.ActionsCatalog.Current.Logins, budgetSource.Token);
+            var index = await ReadThenStopAsync(async () => await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, budgetSource.Token),
+                rows => reader.ReadServerAsync(rows, box, definitions, Actions.ActionsCatalog.Current.Logins, budgetSource.Token), () => TryCancel(command), state.Index.PutServer);
             if (index is null) return new(ServerScope, "TOO_LARGE", "The server's objects do not fit in the index's memory (" + Size + " across every connection).");
-            state.Index.PutServer(index);
             return null;
         }
         catch (Exception error) when (error is OperationCanceledException or SqlException && budgetSource.IsCancellationRequested && !token.IsCancellationRequested)
@@ -723,6 +765,9 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     private (string Text, bool Longer) Text(DbDataReader reader, int ordinal)
     {
         if (reader.IsDBNull(ordinal)) return ("", false);
+        // Below the names' reserve with no credit for a slot, the pool refuses every definition: leave it unread rather than
+        // stream it only to throw it away.
+        if (creditLeft < IndexMemory.SlotBytes && budget.Limit - budget.Used < limits.NamesReserveBytes) { cut++; return ("", false); }
         var (text, longer) = ReadText(reader, ordinal, ref buffer, limits.DefinitionChars);
         if (text.Length == 0) return ("", false);
         if (Pooled(text, limits.NamesReserveBytes) is not { } copy) { cut++; return ("", false); }

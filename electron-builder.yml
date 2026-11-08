@@ -25,3 +25,5 @@ mac:
 linux:
   target: AppImage
   category: Development
+  # electron-builder's default desktop entry runs AppRun --no-sandbox; main refuses to run without the sandbox.
+  executableArgs: []

@@ -36,7 +36,7 @@ Chromium, or a library and cannot be remapped. "Choices" are the modifiers the S
 
 | Gesture | Id | What it does | Kind | Windows | Linux | macOS | Choices or lock | Keyboard |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Float While Dragging | `dock.floatWhileDragging` | Holding the modifier while dragging a tab floats it instead of docking it on a guide. | Modifier | Ctrl+Drag a tab | Ctrl+Drag a tab | ⌃ Drag a tab | Choose: Ctrl / ⌃, Alt / ⌥, Off | Float (`pane.float`), Float Editor (`editor.float`) |
+| Float While Dragging | `dock.floatWhileDragging` | Holding the modifier while dragging a tab floats it instead of docking it on a guide. | Modifier | Ctrl+Drag a tab | Ctrl+Drag a tab | ⌘ Drag a tab | Choose: Ctrl / ⌘, Alt / ⌥, Off | Float (`pane.float`), Float Editor (`editor.float`) |
 | Drag Floating Panel | `dock.dragFloatingTitleBar` | Shift-dragging a floating panel's title bar hands the drag to Dockview instead of Varia's docking guides. | Fixed | Shift+Drag a floating title bar | Shift+Drag a floating title bar | ⇧ Drag a floating title bar | Locked: Dockview's own gesture. | — |
 | Toggle Docking | `dock.toggleFloat` | Floats a docked panel, or docks a floating one. | Command | Ctrl+Double-click a panel tab | Ctrl+Double-click a panel tab | ⌘ Double-click a panel tab | Choose: Ctrl / ⌘, Alt / ⌥, Shift / ⇧, None | Float (`pane.float`), Dock (`pane.dock`) |
 

@@ -135,6 +135,15 @@ internal static class SearchLiveChecks
             catch (RequestException error) { check(error.Code == "CANCELLED", "Stop ends a build with CANCELLED"); }
             check((await Find("FindList", "names")).Hits.Count == 1, "a stopped build keeps the index it had");
         }
+
+        // A budget the system objects alone fill: every database read stops at its first record, cancelling its batch rather than
+        // draining it, and the build still ends ready, with the database skipped as TOO_LARGE.
+        using (var tight = new ObjectSearchService(service, new ObjectIndexLimits { MemoryBytes = 64 * 1024, NamesReserveBytes = 0 }))
+        {
+            var small = await tight.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), CancellationToken.None);
+            check(small.Status.State == "ready" && small.Status.Skipped.Any(skip => skip.Database == database && skip.Code == "TOO_LARGE"),
+                "a database past the memory budget stops its read, is skipped as TOO_LARGE, and the build ends ready (" + small.ElapsedMs + " ms)");
+        }
         await sql("DROP TYPE [srch].[FindList]; DROP TABLE [srch].[" + hostile.Replace("]", "]]") + "]; DROP TABLE [srch].[Priced]; DROP PROCEDURE [srch].[usp_Param];"
             + " ALTER TABLE [srch].[Rates] SET (SYSTEM_VERSIONING = OFF); DROP TABLE [srch].[Rates]; DROP TABLE [srch].[Rates_Archive]; DROP TABLE [srch].[Person];"
             + " DROP USER [srch_user]; DROP ROLE [srch_role]; DROP SCHEMA [srch];", database);
