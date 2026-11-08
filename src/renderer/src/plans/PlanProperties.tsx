@@ -23,7 +23,7 @@ export function PlanProperties({ statement, node, liveRunning }: { statement?: S
       <details><summary>Statement SQL</summary><p className="plan-statement-text">{statement.text.trim() ? statement.text : 'SQL text unavailable'}</p></details>
       <Facts values={[
         ...statement.batchLabel ? [['Position', statement.batchLabel] as const] : [],
-        ['Plan data', statement.partial ? liveRunning ? 'Live (partial)' : 'Partial live snapshot' : statement.nodes.some(n => [n.actualRows, n.cpuMs, n.elapsedMs, n.executions].some(value => value !== null) || n.diagnostics?.threads.length) ? 'Actual' : 'Estimated'],
+        ['Plan data', statement.captureLabel ?? (statement.partial ? liveRunning ? 'Live (partial)' : 'Partial live snapshot' : statement.nodes.some(n => [n.actualRows, n.cpuMs, n.elapsedMs, n.executions].some(value => value !== null) || n.diagnostics?.threads.length) ? 'Actual' : 'Estimated')],
         ['Statement estimated cost', amount(statement.estimatedCost)], ['Degree of parallelism', amount(data?.degreeOfParallelism)]
       ]} />
       <p className="plan-diagnostic-note">Costs are optimizer estimates, including in actual plans. Operator times may overlap and include child work; do not add them to obtain query time.</p>

@@ -123,11 +123,18 @@ export class PlanCanvas {
   private invalidate(): void {
     if (!this.frame && this.ready && !this.disposed && this.visible && !this.ownerDocument.hidden) this.frame = this.owner.requestAnimationFrame(() => { this.frame = 0; this.draw() })
   }
-  private setCamera(camera: Camera): void {
+  private setCamera(camera: Camera, notify = true): void {
     this.dismissHover()
     this.camera = camera
-    this.options.cameraChanged({ ...camera })
+    if (notify) this.options.cameraChanged({ ...camera })
     this.invalidate()
+  }
+  /** Apply a linked viewer's camera without echoing it back to the host. */
+  restoreCamera(camera: Camera): void {
+    if (Number.isFinite(camera.x) && Number.isFinite(camera.y) && Number.isFinite(camera.scale) && camera.scale > 0) {
+      this.options.camera = { ...camera }
+      this.setCamera({ ...camera }, false)
+    }
   }
   fit(statement?: number): void {
     const bounds = statement === undefined ? this.options.layout.bounds : this.options.layout.statements[statement] ?? this.options.layout.bounds
