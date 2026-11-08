@@ -50,8 +50,12 @@ export class ShortcutsService extends SnapshotStore<ShortcutsSnapshot> implement
   private report?: ShortcutsReport
   private readonly queued: [string, 'error' | 'warning'][] = []
   private loading?: Promise<boolean>
-  /** The revision whose notice the banner last showed: main repeats it on every read of that revision, in the same words. */
-  private noticeShown?: number
+  /**
+   * The notice the banner last showed: main repeats a notice on every read until a save, in the same words and across
+   * revisions (a valid hand edit after a salvage keeps it), and names each one (`noticeId`; the revision for a main that
+   * does not).
+   */
+  private noticeShown?: string
   private disposed = false
   private readonly unsubscribe: () => void
 
@@ -127,11 +131,12 @@ export class ShortcutsService extends SnapshotStore<ShortcutsSnapshot> implement
       else {
         const { salvaged, revision } = result.value
         const text = typeof result.value.notice === 'string' ? result.value.notice : undefined
+        const noticeKey = typeof result.value.noticeId === 'number' ? `id ${result.value.noticeId}` : `revision ${revision}`
         ok = this.accept(result.value, { loaded: true, salvaged: salvaged === true, notice: text })
         if (!ok) failure = 'Main sent shortcuts this version does not support.'
-        // An answer older than what is held (a save or push overtook it) is old news; so is a notice already shown for
-        // this revision. A new damaged edit is a new revision, so its notice shows even in the same words.
-        else if (text && revision >= this.getSnapshot().revision && revision !== this.noticeShown) { notice = text; this.noticeShown = revision }
+        // An answer older than what is held (a save or push overtook it) is old news; so is a notice already shown. A new
+        // damaged edit raises a new notice, so it shows even in the same words.
+        else if (text && revision >= this.getSnapshot().revision && noticeKey !== this.noticeShown) { notice = text; this.noticeShown = noticeKey }
       }
     } catch (error) { failure = errorText(error) }
     if (this.disposed) return false
@@ -194,8 +199,8 @@ export class ShortcutsService extends SnapshotStore<ShortcutsSnapshot> implement
         return result
       }
       if (typeof result.value?.revision !== 'number') return { ok: false, error: 'Main sent an answer this version does not support.' }
-      // Main clears its notice on a save. It keeps one only when the save's own re-read set a hand edit aside, which is
-      // nearly always a new revision and so answered STALE instead.
+      // Main clears its notice on a save. A save whose own re-read set a hand edit aside is refused with STALE instead, and
+      // the reload above shows that notice.
       this.accept({ file, revision: result.value.revision }, { salvaged: false, notice: undefined })
       return { ok: true, value: { revision: result.value.revision } }
     } catch (error) { return { ok: false, error: errorText(error) } }

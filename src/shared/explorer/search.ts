@@ -155,6 +155,8 @@ export interface DefinitionMatch {
   readonly after: boolean
   readonly matches: number
   readonly cut: boolean
+  /** The search ran past its budget before counting every match: matches is only a lower bound. */
+  readonly uncounted?: boolean
 }
 export interface ObjectSearchHit {
   readonly object: ObjectRef

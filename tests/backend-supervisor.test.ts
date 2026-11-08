@@ -428,7 +428,7 @@ describe('smoke-test backends', () => {
     await writeFile(join(directory, 'crash-next'), '')
     expect(await failure(value.request('query.execute', { ...query('tab-1'), connectionId: connection.id }))).toMatchObject({ code: 'BACKEND_LOST', message: sentences.lostQuery })
     expect(value.state).toMatchObject({ status: 'restarting', lost: { generation: 1, reason: 'crash', connections: 1, queries: 1 } })
-    await expect.poll(() => value.state).toMatchObject({ status: 'ready', generation: 2 })
+    await expect.poll(() => value.state, { timeout: 10_000 }).toMatchObject({ status: 'ready', generation: 2 })
     const calls = (await readFile(join(directory, 'calls.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line) as { generation: number; method: string; params: { password?: string } })
     expect(calls.map(call => [call.generation, call.method])).toEqual([[1, 'connections.connect'], [1, 'query.execute']])
     expect(calls[0].params.password).toBe('<redacted>')

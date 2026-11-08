@@ -135,6 +135,10 @@ internal static class ServerFilesChecks
             + string.Join(", ", timedOut.Select(result => result.Error?.Code)) + " | " + second.Error?.Code + " | " + sameServer + " | " + otherServer + " | " + host.Opened + " opened");
     }
 
+    // These checks exercise gates and error mapping. Real failed opens can time out in SqlClient's non-pooled-open
+    // throttle on a starved runner before reaching the deliberately unreachable endpoint.
+    private static SqlException Refused() => ConnectionFailureChecks.Sql(53, 0, 20, "offline", "The fixture refused the connection.");
+
     /// <summary>A server whose connections never open while Blocking holds them, whatever their token says, as a file-system call
     /// SQL Server is waiting on ignores the attention; Release lets them fail.</summary>
     internal sealed class StuckHost : IActionHost
@@ -156,7 +160,8 @@ internal static class ServerFilesChecks
                 await released.Task;
                 throw new OperationCanceledException(token);
             }
-            await connection.OpenAsync(token);
+            token.ThrowIfCancellationRequested();
+            throw Refused();
         }
         public bool ClearPoolsFor(string connectionId, string database) => true;
         public void DatabaseChanged(string connectionId, string database, string? newName) { }
@@ -173,7 +178,11 @@ internal static class ServerFilesChecks
             Interlocked.Increment(ref Connections);
             return new SqlConnection("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false");
         }
-        public Task OpenAsync(SqlConnection connection, CancellationToken token) => connection.OpenAsync(token);
+        public Task OpenAsync(SqlConnection connection, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            throw Refused();
+        }
         public bool ClearPoolsFor(string connectionId, string database) => true;
         public void DatabaseChanged(string connectionId, string database, string? newName) { }
         public bool FreeDatabase(string connectionId, string database) => false;

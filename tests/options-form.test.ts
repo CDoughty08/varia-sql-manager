@@ -45,8 +45,10 @@ describe('Options search', () => {
     expect(searchPages('transact-sql', 'win32')!.pages).toEqual(['textEditor.transactSql.general', 'textEditor.transactSql.tabs'])
     expect(searchPages('color theme', 'win32')!.pages).toContain('environment.general')
     // SSMS calls the page Keyboard; it also answers to Visual Studio Code's and other tools' words, and to mouse gestures.
-    for (const word of ['shortcut', 'Keyboard', 'keybinding', 'hotkey', 'keymap', 'chord', 'mapping'])
+    for (const word of ['shortcut', 'keybinding', 'hotkey', 'keymap', 'chord', 'mapping'])
       expect(searchPages(word, 'win32')!.pages, word).toEqual(['environment.shortcuts'])
+    // The execution plan outline setting also describes its keyboard support.
+    expect(searchPages('Keyboard', 'win32')!.pages).toEqual(['environment.shortcuts', 'queryResults.sqlServer.grid'])
     // Text Editor › General has a mouse gesture setting too.
     for (const word of ['mouse', 'gesture']) expect(searchPages(word, 'win32')!.pages, word).toEqual(['environment.shortcuts', 'textEditor.general'])
     expect(searchPages('follow active query', 'win32')!.pages).toEqual(['environment.objectExplorer'])

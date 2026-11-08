@@ -372,12 +372,24 @@ internal static class IndexSearch
             }
         }
     done:
-        var hits = found.UnorderedItems.Select(value => (Candidate: value.Element, Label: value.Element.Item.Label))
+        var best = found.UnorderedItems.Select(value => (Candidate: value.Element, Label: value.Element.Item.Label))
             .OrderBy(value => value.Candidate.Rank).ThenBy(value => value.Candidate.Score).ThenBy(value => value.Candidate.Item.System)
             .ThenBy(value => value.Candidate.Database ?? "", StringComparer.OrdinalIgnoreCase)
             .ThenBy(value => value.Label, StringComparer.OrdinalIgnoreCase).ThenBy(value => value.Label, StringComparer.Ordinal)
-            .Take(query.Limit).Select(value => Build(value.Candidate, value.Label, query, matcher, limits)).ToList();
-        return new(hits, total, partial, watch.ElapsedMilliseconds, status);
+            .Take(query.Limit);
+        // Counting a hit's definition matches can read its whole definition up to MatchesCounted times, so the budget and Stop
+        // bound this work too: past the budget the hits left are built only from what the scan found. Only a search the budget
+        // actually left out makes the result partial: a hit with nothing left to search is as complete late as early.
+        var hits = new List<ObjectSearchHit>(Math.Min(query.Limit, found.Count));
+        var late = watch.Elapsed > limits.SearchBudget;
+        var stopped = false;
+        foreach (var (candidate, label) in best)
+        {
+            token.ThrowIfCancellationRequested();
+            late = late || watch.Elapsed > limits.SearchBudget;
+            hits.Add(Build(candidate, label, query, matcher, limits, watch, token, ref late, ref stopped));
+        }
+        return new(hits, total, partial || stopped, watch.ElapsedMilliseconds, status);
     }
 
     /// <summary>The rank of a hit only its definition matched.</summary>
@@ -437,18 +449,32 @@ internal static class IndexSearch
         return true;
     }
 
-    /// <summary>The result of a hit the search answers: its definition's match count and preview, its ref and its date.</summary>
-    private static ObjectSearchHit Build(Candidate hit, string label, SearchQuery query, SearchMatcher matcher, ObjectIndexLimits limits)
+    /// <summary>The result of a hit the search answers: its definition's match count and preview, its ref and its date. Once the
+    /// search is <paramref name="late"/> (past its budget, which the count also checks) the definition is searched no further: a
+    /// definition hit shows the match the scan found, its count only what was counted (marked Uncounted), and a name hit shows no
+    /// definition match. <paramref name="stopped"/> is set only when lateness left out a search that would otherwise have run.</summary>
+    private static ObjectSearchHit Build(Candidate hit, string label, SearchQuery query, SearchMatcher matcher, ObjectIndexLimits limits, Stopwatch watch, CancellationToken token,
+        ref bool late, ref bool stopped)
     {
         var item = hit.Item;
         DefinitionMatch? definition = null;
         var (first, size) = (hit.DefinitionAt, hit.DefinitionLength);
-        if (query.Definitions && item.Definition is { } text && (first >= 0 || matcher.Find(text, 0, out first, out size)))
+        if (query.Definitions && item.Definition is not null && first < 0 && late) stopped = true;
+        else if (query.Definitions && item.Definition is { } text && (first >= 0 || matcher.Find(text, 0, out first, out size)))
         {
             var count = 1;
-            for (var next = first + Math.Max(1, size); count < limits.MatchesCounted && next <= text.Length && matcher.Find(text, next, out var again, out var width); count++)
+            var next = first + Math.Max(1, size);
+            for (; !late && count < limits.MatchesCounted && next <= text.Length && matcher.Find(text, next, out var again, out var width); count++)
+            {
                 next = again + Math.Max(1, width);
-            definition = Preview(text, first, size, count, limits.PreviewChars, item.DefinitionCut);
+                token.ThrowIfCancellationRequested();
+                late = watch.Elapsed > limits.SearchBudget;
+            }
+            // The loop ended on the budget alone, with more of the definition left to search: the count is only a lower bound. (From
+            // the definition's very end only an empty regular expression match could follow, which is not worth a partial answer.)
+            var uncounted = late && count < limits.MatchesCounted && next < text.Length;
+            stopped |= uncounted;
+            definition = Preview(text, first, size, count, limits.PreviewChars, item.DefinitionCut) with { Uncounted = uncounted ? true : null };
         }
         var value = new ObjectRefDto(item.Kind, hit.Database, item.Schema, item.Name, item.ParentName is null ? null : new ParentRefDto(item.ParentKind!, item.ParentSchema!, item.ParentName));
         return new(value, item.Folder, label, hit.From < 0 ? null : [hit.From, hit.Length], item.Modified?.ToString("yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture),

@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import { connectLive } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
+import { checkLargeComparison } from './fixtures/plan-comparison.mjs'
 import { backendReady, documentTabs, outputView, planCanvas, planViewer, queryBarButton, quickInputActive } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -22,6 +23,59 @@ async function showHistory() {
   const button = page.getByRole('button', { name: /^Plan history \(/ })
   if (await button.getAttribute('aria-pressed') !== 'true') await button.click()
   await expect(history()).toBeVisible()
+}
+async function compareHistory(savedFile, actualVersusEstimate = false) {
+  const pinnedId = await snapshots().inputValue()
+  await history().getByRole('button', { name: 'Compare plans', exact: true }).click()
+  const comparison = page.getByRole('region', { name: 'Plan comparison', exact: true })
+  const left = comparison.getByRole('combobox', { name: 'Left comparison input', exact: true })
+  const right = comparison.getByRole('combobox', { name: 'Right comparison input', exact: true })
+  await left.selectOption('snapshot:' + pinnedId)
+  if (savedFile) {
+    await application.evaluate(({ dialog }, filePath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [filePath] }) }, savedFile)
+    await comparison.getByRole('button', { name: 'Open saved plan…', exact: true }).click()
+    await expect(right.getByRole('option').filter({ hasText: /^Document · original.sqlplan/ })).toHaveCount(1)
+    await right.selectOption({ label: 'Document · original.sqlplan' })
+  } else if (actualVersusEstimate) await right.selectOption({ index: 1 })
+  else await right.selectOption('snapshot:' + pinnedId)
+  await comparison.getByRole('button', { name: 'Compare selected plans', exact: true }).click()
+  await expect(comparison.getByRole('status').filter({ hasText: /paired statements/ })).toContainText(/[1-9]\d* paired operators/)
+  const l = comparison.getByRole('region', { name: 'Left plan view', exact: true }), r = comparison.getByRole('region', { name: 'Right plan view', exact: true })
+  // Give the two canvases most of a short output pane; differences remain available on demand.
+  const differences = comparison.getByRole('button', { name: 'Differences', exact: true })
+  if (await differences.getAttribute('aria-pressed') === 'true') await differences.click()
+  await expect(planCanvas(l).locator('canvas')).toHaveCount(1)
+  await expect(planCanvas(r).locator('canvas')).toHaveCount(1)
+  await l.getByRole('treeitem').first().click()
+  await expect(r.getByRole('treeitem', { selected: true })).toHaveCount(1)
+  await l.getByRole('button', { name: 'Zoom in plan', exact: true }).click()
+  const zoom = scope => scope.getByRole('button', { name: 'Reset plan zoom to 100%', exact: true })
+  await expect.poll(async () => [await zoom(l).textContent(), await zoom(r).textContent()]).toEqual([await zoom(l).textContent(), await zoom(l).textContent()])
+  await comparison.getByLabel('Link selection, zoom and pan', { exact: true }).uncheck()
+  const prior = await zoom(r).textContent()
+  await l.getByRole('button', { name: 'Zoom in plan', exact: true }).click()
+  await expect(zoom(r)).toHaveText(prior)
+  if (savedFile) {
+    // Editing and saving the source after Compare must not mutate either frozen comparison input.
+    await page.getByRole('button', { name: 'XML source', exact: true }).click()
+    await editor().focus(); await page.keyboard.press(`${mod}+End`); await page.keyboard.insertText('\ncomparison source edited after freeze')
+    await page.keyboard.press(`${mod}+s`)
+    await expect.poll(() => readFile(savedFile, 'utf8')).toContain('comparison source edited after freeze')
+    await expect(comparison.getByRole('status').filter({ hasText: /paired statements/ })).toContainText(/[1-9]\d* paired operators/)
+  }
+  await comparison.getByRole('button', { name: 'Swap plans', exact: true }).click()
+  await expect(comparison.getByRole('status').filter({ hasText: /paired statements/ })).toContainText(/[1-9]\d* paired operators/)
+  await comparison.getByRole('button', { name: 'Differences', exact: true }).click()
+  await expect.poll(async () => (await l.getByRole('tree', { name: 'Plan operators', exact: true }).boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(32)
+  await expect(comparison.getByRole('table', { name: 'Operator differences', exact: true })).toContainText('Elapsed (ms, max thread)')
+  if (savedFile) {
+    await expect(comparison).toContainText('Capture type, estimation mode and execution status unavailable')
+    await page.screenshot({ path: resolve('artifacts/plan-comparison.png') })
+  }
+  if (actualVersusEstimate) { await expect(comparison).toContainText('Estimated'); await expect(comparison).toContainText('Actual') }
+  await comparison.getByRole('button', { name: 'Close comparison', exact: true }).click()
+  await expect(history()).toBeVisible()
+  await expect(comparison).toHaveCount(0)
 }
 async function close() {
   await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
@@ -69,6 +123,7 @@ try {
     await history().getByRole('button', { name: 'Save plan as…', exact: true }).click()
     await expect.poll(() => readFile(originalFile, 'utf8').catch(() => '')).toContain('ShowPlanXML')
     const originalXml = await readFile(originalFile, 'utf8')
+    await compareHistory()
     // Backend BeginQuery releases the old session's results; history must continue to open/save original XML.
     await execute(live ? 'SELECT TOP (2) name AS replaced FROM sys.columns;' : 'ACTUAL_PLAN_FIXTURE')
     await showHistory(); await snapshots().selectOption(pinned)
@@ -80,6 +135,7 @@ try {
     await palette('close results', 'Query: Close Results')
     await showHistory(); await snapshots().selectOption(pinned)
     await expect(planCanvas(page).locator('canvas')).toHaveCount(1)
+    await execute(live ? 'SELECT name FROM sys.objects;' : 'ACTUAL_PLAN_FIXTURE')
     // A toolbar estimate must keep just the selected SQL context even if the rest of the editor is invalid.
     await text('SELECT * FROM dbo.VariaRetainedMissing;\nSELECT name FROM sys.objects;')
     await page.keyboard.press('Home'); await page.keyboard.press('Shift+End')
@@ -91,6 +147,7 @@ try {
     await expect(history().getByLabel('Captured SQL context')).toHaveText('SELECT name FROM sys.objects;')
     await expect(history()).toContainText('Selected SQL, starting at line 2')
     await expect(history().locator('summary').first()).toContainText('Estimated')
+    if (live) await compareHistory(undefined, true)
     const removed = await snapshots().inputValue()
     await history().getByRole('button', { name: 'Remove snapshot', exact: true }).click()
     await expect(snapshots().getByRole('option').filter({ hasText: 'Estimated' })).toHaveCount(0)
@@ -114,6 +171,7 @@ try {
       await expect(queryBarButton(page, 'Display Estimated Execution Plan')).toBeEnabled({ timeout: 30_000 })
       await showHistory(); await snapshots().selectOption({ index: 0 })
       await expect(history().locator('summary').first()).toContainText('cancelled · Partial execution')
+      await compareHistory()
     }
     await history().getByRole('button', { name: 'Clear unpinned', exact: true }).click()
     await expect(snapshots().getByRole('option')).toHaveCount(1)
@@ -134,6 +192,8 @@ try {
     await page.screenshot({ path: resolve('artifacts', `retained-plan-${live ? 'live' : 'fake'}.png`) })
     await showHistory()
     await expect(snapshots()).toHaveValue(pinned)
+    await compareHistory(originalFile)
+    if (live) await checkLargeComparison({ application, page, folder: control, expect })
     await close()
     // A new window/profile launch has no retained history, even with hot-exit documents on disk.
     application = await electron.launch({ args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 })

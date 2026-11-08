@@ -1,6 +1,7 @@
 // Strict zod schemas for object actions, and the shapes of their results. Main validates every request with them before
 // the backend re-checks it against the catalogue and the subtype it derives itself in the action's own connection.
 import { z } from 'zod'
+import { boundedRecord } from '../zod-bounds.ts'
 import { kindSpecs } from '../explorer/catalog.ts'
 import type { ObjectRef } from '../explorer/refs.ts'
 import { ident, objectRefSchema } from '../explorer/schema.ts'
@@ -508,14 +509,14 @@ export const actionDescribeSchema = z.object({
     }
   }) satisfies z.ZodType<ActionDescribeRequest>
 
-/** Option and scoped-configuration changes: known settable keys, each with a token of that option. */
-const tokens = (keys: readonly string[]) => z.record(z.string().max(64), z.string().min(1).max(128)).superRefine((record, context) => {
+/** Option and scoped-configuration changes: known settable keys, each with a token of that option. More keys than there are settable ones must hold an unknown one. */
+const tokens = (keys: readonly string[]) => boundedRecord(z.record(z.string().max(64), z.string().min(1).max(128)).superRefine((record, context) => {
   for (const [key, token] of Object.entries(record)) {
     const def = keys.includes(key) ? optionDef(key) : undefined
     const problem = def ? tokenProblem(def, token) : 'Unknown option.'
     if (problem) context.addIssue({ code: 'custom', path: [key], message: problem })
   }
-})
+}), keys.length, 'Unknown option.')
 const changesSchema = z.object({ owner: ident.optional(), options: tokens(settableOptionKeys).optional(), scoped: tokens(settableScopedKeys).optional() }).strict()
 const exclusiveChange = (changes: DatabaseChanges) => Object.keys(changes.options ?? {}).some(key => optionDef(key)?.exclusive)
 /** How many statements a change set plans at most: one per option (incremental statistics shares one) and scoped configuration, and the owner. */

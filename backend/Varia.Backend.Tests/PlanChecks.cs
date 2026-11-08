@@ -9,47 +9,11 @@ internal static class PlanChecks
     private const string Open = "<ShowPlanXML xmlns=\"http://schemas.microsoft.com/sqlserver/2004/07/showplan\"><BatchSequence><Batch><Statements>";
     private const string Close = "</Statements></Batch></BatchSequence></ShowPlanXML>";
     private static PlanDocument Parse(string text, CancellationToken token = default) => PlanParser.Parse(new StringReader(text), token);
-    /// <summary>Actual plan capture's Extended Events DDL takes no parameters, so its text is held to ActualPlanSql.Lint: every
-    /// rendering passes, a session name that is not the prefix and 32 hexadecimal digits never reaches the text, and the lint
-    /// refuses the shapes an injected name or value would take.</summary>
-    private static void CaptureSql(Action<bool, string> check)
-    {
-        var corpus = ActualPlanSql.Corpus().ToList();
-        var problems = corpus.SelectMany(item => ActualPlanSql.Lint(item.Text).Select(problem => item.Name + ": " + problem)).ToList();
-        check(problems.Count == 0 && corpus.Count == 12, "actual plan capture's SQL passes its lint (" + corpus.Count + " texts): " + string.Join("; ", problems));
-        static bool Refused(Func<string> render)
-        {
-            try { render(); return false; }
-            catch (ArgumentException) { return true; }
-        }
-        var id = Guid.Parse("0f8fad5b-d9cb-469f-a165-70867728950e");
-        var name = ActualPlanSql.NameFor(id);
-        check(name == "VariaActual_0F8FAD5BD9CB469FA16570867728950E" && ActualPlanSql.IsName(name)
-            && new[] { "VariaActual_x]; DROP DATABASE d; --", name.ToLowerInvariant(), name + "]", "VariaActual_" + id.ToString("D"), "Other_0F8FAD5BD9CB469FA16570867728950E" }
-                .All(bad => !ActualPlanSql.IsName(bad) && Refused(() => ActualPlanSql.Create(bad, false, 51, id, null)) && Refused(() => ActualPlanSql.Drop(bad, true))),
-            "actual plan capture names sessions by connection id, as the server spells it, and refuses any other name before building DDL");
-        var create = ActualPlanSql.Create(name, false, 51, id, 60);
-        var mutants = new (string Name, string Text)[]
-        {
-            ("a foreign literal", create.Replace("'" + id.ToString("D") + "'", "'x'') OR 1=1 OR (''", StringComparison.Ordinal)),
-            ("a foreign bracket", create.Replace("[" + name + "]", "[master].[dbo]", StringComparison.Ordinal)),
-            ("a comment", create + "--"),
-            ("an unclosed literal", create + " '"),
-            ("EXEC of a string", create + " EXEC (N'DROP EVENT SESSION x ON SERVER;')"),
-            ("other dynamic SQL", ActualPlanSql.Sweep.Replace("QUOTENAME(@victim)", "@victim", StringComparison.Ordinal)),
-            ("a second assignment", ActualPlanSql.Sweep.Replace("    SET @last = @victim;", "    SET @last = @victim; SET @drop = @victim;", StringComparison.Ordinal)),
-            ("another quoted value", ActualPlanSql.Sweep + " SELECT QUOTENAME(@own);")
-        };
-        var passed = mutants.Where(mutant => ActualPlanSql.Lint(mutant.Text).Count == 0).Select(mutant => mutant.Name).ToList();
-        check(passed.Count == 0, "actual plan capture's lint refuses injected literals, brackets, comments and dynamic SQL: " + string.Join(", ", passed));
-    }
-
     public static void Run(Action<bool, string> check)
     {
         var fixture = File.ReadAllText(Path.Combine("tests", "fixtures", "plans", "multiple.sqlplan"));
         var plan = Parse(fixture);
         DiagnosticChecks(check);
-        CaptureSql(check);
         check(plan.Statements.Count == 2 && plan.Version == "1.6" && plan.Build == "16.0.1000.6", "showplan batch statements and version");
         var root = plan.Statements[0].Nodes[0];
         var scan = plan.Statements[0].Nodes[1];

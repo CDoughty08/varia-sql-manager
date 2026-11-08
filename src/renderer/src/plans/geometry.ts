@@ -2,9 +2,9 @@ export interface Rect { x: number; y: number; width: number; height: number }
 export interface Camera { x: number; y: number; scale: number }
 export interface PlacedNode extends Rect { id: string; statement: number; index: number }
 export interface PlacedStatement extends Rect { index: number }
-export interface PlacedEdge extends Rect { points: { x: number; y: number }[] }
+export interface PlacedEdge extends Rect { points: { x: number; y: number }[]; childId?: string; statement?: number; index?: number }
 export interface PlanLayout { nodes: PlacedNode[]; edges: PlacedEdge[]; statements: PlacedStatement[]; bounds: Rect }
-export const card = { width: 176, height: 52, gap: 18, padding: 12, heading: 30, layerGap: 40, nodeGap: 16 } as const
+export const card = { width: 192, height: 52, gap: 18, padding: 12, heading: 30, layerGap: 112, nodeGap: 16 } as const
 export const intersects = (a: Rect, b: Rect): boolean => a.x <= b.x + b.width && a.x + a.width >= b.x && a.y <= b.y + b.height && a.y + a.height >= b.y
 export function union(items: readonly Rect[]): Rect {
   if (!items.length) return { x: 0, y: 0, width: 1, height: 1 }

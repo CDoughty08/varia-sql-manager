@@ -922,12 +922,17 @@ lost.
   unsupported server, and incomplete capture are reported in Messages. The observer needs lightweight plan profiling
   and permission to create, enable, read and drop its event session. SQL Server 2025 and Azure SQL Database also set
   a maximum collector duration. If a process exits abruptly before cleanup, a collector's connection ID filter prevents
-  a later session that reuses the SPID from being captured. A server-scoped collector is named `VariaActual_` and its
-  query connection's `sys.dm_exec_connections.connection_id` (32 uppercase hexadecimal digits), so once it has started, each
-  capture drops up to 16 collectors of that form whose connection is gone (left by a backend that died; before SQL Server
-  2025 nothing else ends them), building each DROP on the server from `QUOTENAME` within the capture's 5 s start budget;
-  a failed sweep is a message, never a failed capture. Collectors that older builds named with a random GUID are left
-  alone, since one may still be capturing. Its SQL lives in `Plans/ActualPlanSql.cs`, held to `ActualPlanSql.Lint`.
+  a later session that reuses the SPID from being captured. A server-scoped collector's name records its client event GUID
+  and both query/observer physical server connection IDs. A later capture checks up to 16 candidates within a one-second
+  slice of its 5 s setup budget, resuming after the last one the previous capture examined on that server, so refused or
+  failing definitions cannot hide later ones; a drop the server refuses skips to the next. Recovery requires both
+  connections to be absent and the ownership/predicate shape to match; it rechecks the definition and liveness
+  immediately before server-quoted DROP. Server-scoped single-GUID collectors from earlier builds cannot prove observer
+  ownership, so they are swept only when clearly abandoned: collector-shaped with Varia's exact predicates, and either
+  stopped while no connection holds the session id they watch, or created more than a day ago. Database-scoped
+  collectors are not swept. SQL in `Plans/ActualPlanSql.cs` is rendered once per variant, binds
+  values as typed parameters and quotes identifiers on the server; its offline lint (`ActualPlanSql.Lint`) and real
+  hostile-name round trips cover that boundary. See [collector recovery](plan-capture-hardening.md) for limits and validation.
   When `SET STATISTICS XML` also returned the same execution, Varia keeps the complete SQL-returned plan and pairs it with
   one observer event in the same batch and repetition. The optional `planOrder` lists matched and retained observer result
   IDs in event order so the canvas can interleave both sources within a batch. Across batches it uses batch and repetition.
@@ -1952,7 +1957,8 @@ validated live event with its EVENT body's length, which the worker grants back 
 stream and an update end with `end` (`result`: the live end or the update answer).
 
 **The worker** (`worker-core.ts`) keeps an LRU of decoded pages keyed by generation, result and first row (64 MiB or 512
-pages; pages a pending window needs are never evicted, so once those alone pass 64 MiB, windows that already have rows
+pages, each page charged its bytes plus 320 bytes per column for its decoded column views, so a wide page of few rows
+counts what it holds; pages a pending window needs are never evicted, so once those alone pass 64 MiB, windows that already have rows
 answer with them, as a shorter window), reads each missing contiguous range once with 4 MiB of credit, waits for rows a
 read in flight will bring instead of reading them again, cancels a read nobody waits for, and grants credit after
 caching each page (a page that arrives twice, the boundary page of two adjacent reads, is credited without being
@@ -2268,7 +2274,7 @@ unread, the next `ReadAsync` would buffer all of it, in time quadratic in its si
 | datetimeoffset(n) | n fractional digits and the offset | `2026-10-08 12:34:56.1234567 +05:30`, `2026-10-08 12:34:56 -08:00` |
 | uniqueidentifier | uppercase | `6F9619FF-8B86-D011-B42D-00C04FC964FF` |
 | char, varchar, text, nchar, nvarchar, ntext, sysname | the text; lone surrogates become U+FFFD; truncation never splits a pair | `héllo 😀` |
-| xml, the showplan column | the text as SqlClient serialises it, role `xml` / `plan`, up to 2,097,152 characters. Streamed (`Results/SequentialXml.cs`): XmlReader parses the column's sequential stream as UTF-16 as it arrives, a text node's value is copied out in 8,192-character chunks, and once the cap is reached the rest of the value is read past as bytes, without parsing, so a long text node costs a few MB whatever its length (a 200 MB value allocates under 32 MB in all). XmlReader holds a whole start tag (all of its attributes together), comment or processing instruction before returning it, so the stream reports its end once 8 MiB pass with no new output; a node just inside that window is read whole, growing XmlReader's buffer to about 50 MB allocated in all. A cut value keeps only what the writer had written before that node, marked truncated: the parent's start tag without its `>` (`<r`), text before it (`<r>hello`), or nothing when the node is the root element. Every xml cell of a set reuses one output buffer and one feed, so a small cell allocates about 28 KB, mostly XmlReader's and XmlWriter's own buffers (the live .NET suite reports it and checks it stays under 36 KB). SqlClient 7.1.1's `GetXmlReader` lets XmlReader guess the encoding (a value that starts with text throws or, for some characters, reads as other text; fixed after 7.1.1), so the stream is opened as `GetXmlReader` opens it, through SqlClient internals that an offline check pins, with `GetXmlReader` as the fallback (a malformed tail past the cap keeps the stored prefix, with a column message). `GetChars` on xml holds each node whole and is quadratic in a large text node, `GetSqlXml` reads the whole value, and `GetStream` and `GetTextReader` reject xml | `abc`, `é<a b="1" />` |
+| xml, the showplan column | the text as SqlClient serialises it, role `xml` / `plan`, up to 2,097,152 characters. Streamed (`Results/SequentialXml.cs`): XmlReader parses the column's sequential stream as UTF-16 as it arrives, a text node's value is copied out in 8,192-character chunks, and once the cap is reached the rest of the value is read past as bytes, without parsing, so a long text node costs a few MB whatever its length (a 200 MB value allocates under 32 MB in all). XmlReader holds a whole start tag (all of its attributes together), comment or processing instruction before returning it, so the stream reports its end once 8 MiB pass with no new output; a node just inside that window is read whole, growing XmlReader's buffer to about 50 MB allocated in all. A cut value still keeps its first 2,097,152 characters, marked truncated: what the writer had written before that node, the parent's start tag closed with its `>`, then the node's own text as SQL Server sent it (`<r><a b="yyy…`, `<r>hello<a b="yyy…`, or `<a b="yyy…` when the node is the root element). The feed keeps that raw text from the node's `<` (it counts the `<` of every node XmlReader returns), at most the cap's worth, in 32 Ki-character chunks from the shared array pool that go back as XmlReader returns the nodes they hold and when the cell ends, so a long node read whole (most are) allocates nothing for it once the pool holds them. A cut node whose start the feed could not keep (one that follows, within XmlReader's look-ahead, a start tag read whole but longer than the cap and shrunk below it by character references), keeps only what was written before it, the parent's start tag closed. A NameTable that a cell's names grow past its cap (4,096 names or 262,144 characters) is dropped as that cell ends. Every xml cell of a set reuses one output buffer and one feed, so a small cell allocates about 28 KB, mostly XmlReader's and XmlWriter's own buffers (the live .NET suite reports it and checks it stays under 36 KB). SqlClient 7.1.1's `GetXmlReader` lets XmlReader guess the encoding (a value that starts with text throws or, for some characters, reads as other text; fixed after 7.1.1), so the stream is opened as `GetXmlReader` opens it, through SqlClient internals that an offline check pins, with `GetXmlReader` as the fallback (a malformed tail past the cap keeps the stored prefix, with a column message). `GetChars` on xml holds each node whole and is quadratic in a large text node, `GetSqlXml` reads the whole value, and `GetStream` and `GetTextReader` reject xml | `abc`, `é<a b="1" />` |
 | json (SQL Server 2025) | the text, role `json`, up to 2,097,152 characters | — |
 | vector (SQL Server 2025) | float32 values, shortest form, role `vector` | `[0.1,2,-3.5]` |
 | binary, varbinary, image | `0x` + uppercase hex, up to 32,766 bytes | `0x0001FF`, `0x` |
@@ -2422,6 +2428,13 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
   backend's `debug.synthetic` source every 10 ms and has the bench's thread (the page) acknowledge each event 20 ms after
   it arrived, so the next sample is overdue when its credit reaches the backend: the time from an acknowledgement to the
   next event is the whole loop (page → worker → main → backend → main → worker → page), not the source's schedule.
+  Its backend start spawns six fresh backends and times the last five (warm disk cache) from spawn to HELLO answered and
+  then their first `system.health`, for the IL Release build and, with `VARIA_BENCH_BACKEND=<Varia.Backend executable>`, a
+  published one such as the ReadyToRun build release packages carry (`dotnet publish -r <rid> --self-contained -c Release`):
+  about 235 ms against 280 – 330 ms IL on a busy 24-CPU Windows desktop, 9 against 13 – 15 ms to the first answer. CI's
+  Linux benchmarks publish that build as package.yml does and set the variable, and the bench first fails unless
+  `Varia.Backend.dll`, `Microsoft.Data.SqlClient.dll` and `Microsoft.SqlServer.Smo.dll` there are ReadyToRun, so a publish
+  that stops precompiling them fails a pull request rather than slowing a release.
 - **The live snapshot churn** runs main's live path (`ResultsPortHost` with the test sources, the supervisor, the Release
   backend's table writer) with a worker stand-in that acknowledges each frame at once: `debug.synthetic.wide` stores 5,000
   rows of 23 typed columns every 10 ms if it can, each revision owned, retired, forgotten and released one at a time, for 5 s.
@@ -2464,6 +2477,10 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | `decodePage` and the text of every cell, W1 page | ≥ 300 MB/s | ≥ 75 MB/s | 370 – 385 MB/s | 395 MB/s |
 | main ↔ backend `system.health`, p50 / p99 | ≤ 0.3 / 2 ms | p50 ≤ 2 ms | 0.12 – 0.14 / 0.4 – 0.5 ms | 0.09 / 0.8 ms |
 | 256 concurrent `system.health` | ≤ 150 ms | ≤ 1 s | 4 – 7 ms | 7 ms |
+| Backend start: spawn to HELLO answered, warm disk cache, median | ≤ 300 ms | ≤ 3 s | 280 – 330 ms (IL, Windows, 24 CPUs) | not measured |
+| Backend start: the first `system.health` after HELLO, median | ≤ 20 ms | reported only | 13 – 15 ms (IL, Windows, 24 CPUs) | not measured |
+| Published ReadyToRun backend start: spawn to HELLO answered, median | ≤ 250 ms | reported only | about 235 ms (Windows, 24 CPUs) | not measured |
+| Published ReadyToRun backend start: the first `system.health` after HELLO, median | ≤ 15 ms | reported only | about 9 ms (Windows, 24 CPUs) | not measured |
 | Live snapshot revisions, 5,000 × 23, stored, sent, acknowledged and released | ≥ 50 swaps/s | ≥ 10 swaps/s | – | – |
 | Backend gen2 collections a minute of a 1 s snapshot of them (per revision × 60) | ≤ 60 | ≤ 120 | – | – |
 | W1, 500,000 rows, store → main → port → worker | ≥ 1,000,000 rows/s, ≥ 200 MB/s | ≥ 250,000 rows/s, ≥ 50 MB/s | 710,000 – 935,000 rows/s, 150 – 203 MB/s | 514,000 – 612,000 rows/s, 112 – 133 MB/s |
@@ -2481,6 +2498,7 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | Plan ordered layout: 2,000 operators, 1,999 ordered inputs, p95 | ≤ 20 ms | ≤ 500 ms | 2.8 – 4.1 ms (Windows, 24 CPUs) | not measured |
 | Plan ordered layout: 10,000 operators, four-way tree, p95 | ≤ 75 ms | ≤ 1,000 ms | 9.9 – 12 ms (Windows, 24 CPUs) | not measured |
 | Plan cached layout lookup: 10,000 operators, p95 | ≤ 5 ms | ≤ 50 ms | 0.92 – 1.08 ms (Windows, 24 CPUs) | not measured |
+| Plan comparison: two 10,000-operator inputs, unique/ambiguous, worst p95 (worker transport excluded) | ≤ 200 ms | ≤ 2,000 ms | 27–167 ms (Windows, 24 CPUs, varying concurrent load) | not measured |
 | Chart draw: 7,200 samples × 6 series bucketed and stroked at 1,600 px | ≥ 1,000 ops/s | ≥ 100 ops/s | 770 – 780 ops/s (Windows, 24 CPUs) | not measured |
 | Renderer invoke → backend → renderer, p50 / p99 | ≤ 1 / 5 ms | p50 ≤ 5 ms | 0.4 / 1.2 – 1.6 ms | 0.4 / 2 ms |
 | Live tick round trip in the app, acknowledgement → next tick at the page, p50 / p99 | ≤ 2 / 10 ms | p50 ≤ 10 ms | 0.7 / 2.8 – 4 ms (Windows, 24 CPUs) | not measured |
@@ -2508,6 +2526,7 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | Grid: DOM elements, 8 / 300 / 300 bit columns | ≤ 1,500 / 4,000 / 4,000 | same | 535 / 931 / 1,811 | 535 / 931 / 1,811 |
 | Grid: UI window cache after a sweep and 300 jumps, windows / text | ≤ 256 / 16 Mi units | same | 256 / 5.8 Mi | 256 / 5.8 Mi |
 | Grid: worker page cache after the same | ≤ 64 MiB | same | 64 MiB | 64 MiB |
+| Grid: worker page cache after 60 jumps over 5,000 rows of 300 columns, bytes charged beyond page bytes per cached column (the column-view charge; 0 if pages were charged their wire bytes alone) | ≥ 320 bytes | same | 320 bytes (33.8 MiB for 79 pages, Windows, 24 CPUs) | not measured |
 | Grid: renderer heap growth, Ctrl+End then Ctrl+Home over 1,000,000 rows | ≤ 80 MB | ≤ 150 MB | 0.1 MB | 0.1 MB |
 | Grid: UI long tasks over 50 ms in the measured segments / the longest | 0 / ≤ 50 ms | reported / ≤ 250 ms | 32 / 101 ms | 18 / 70 ms |
 | Grid, live: Ctrl+A, Ctrl+C of 100,000 × 8 rows → clipboard (16.7 MB) | ≤ 1.5 s | ≤ 6 s | 0.57 – 0.81 s | 0.61 s |
