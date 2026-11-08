@@ -1,0 +1,193 @@
+import { z } from 'zod'
+import {
+  emptyShortcutFile, parseShortcutText, readShortcutFile, shortcutFileSchema, shortcutLimits, type ShortcutFile, type ShortcutReadOptions
+} from '../shared/commands/shortcut-schema'
+import type { ShortcutsExport, ShortcutsImport, ShortcutsLoad, ShortcutsSaved, ShortcutsSnapshot } from '../shared/contracts'
+import { BackendError } from './backend/errors'
+import { quarantine, readJsonFile, readRegularFile, writeJsonAtomic, type JsonInvalidReason } from './json-file'
+
+/**
+ * How gesture entries are read. The gesture catalogue's choices are modifier sets and the file's are words; until the
+ * Mouse view (PR D2) names that mapping, every well-formed gesture entry is kept as it is, and `GestureService` applies
+ * only the ones it knows.
+ */
+const readOptions: ShortcutReadOptions = {}
+
+/** Fixed sentences: never file content, paths or names. */
+export const shortcutSentences = {
+  unreadable: 'Shortcuts could not be read, so changes are not saved.',
+  newer: 'Shortcuts were saved by a newer version of Varia, so this version does not change them.',
+  stale: 'Shortcuts changed since they were opened. Review them and save again.',
+  tooLarge: `Shortcuts exceed their size limit of ${shortcutLimits.fileBytes / 1024} KiB.`,
+  importNotFile: 'The chosen file could not be read as a file.',
+  importInvalid: 'The chosen file is not a Varia shortcuts file.',
+  importNewer: 'The chosen file was saved by a newer version of Varia.',
+  importSize: `The chosen file is larger than ${shortcutLimits.fileBytes / 1024} KiB.`
+} as const
+const invalidWords: Record<JsonInvalidReason | 'values', string> = { size: `larger than ${shortcutLimits.fileBytes / 1024} KiB`, encoding: 'not UTF-8', json: 'not valid JSON', values: 'not a shortcuts file' }
+/** The notice for a file the store had to set aside. */
+export const resetNotice = (reason: JsonInvalidReason | 'values') => `Shortcuts were invalid (${invalidWords[reason]}) and were reset; the original file was kept.`
+export const salvageNotice = 'Some shortcuts could not be read and were left out; the original file was kept.'
+
+const canonical = (file: ShortcutFile) => JSON.stringify(file)
+type Read = { kind: 'missing' } | { kind: 'ok'; file: ShortcutFile } | { kind: 'salvage'; file: ShortcutFile } | { kind: 'reset'; reason: JsonInvalidReason | 'values' } | { kind: 'newer' }
+
+/** Reads shortcuts.json: file-system failures throw (so nothing is ever written over a file the store could not read). */
+async function readStored(path: string): Promise<Read> {
+  const read = await readJsonFile(path, shortcutLimits.fileBytes)
+  if (read.kind === 'missing') return read
+  if (read.kind === 'invalid') return { kind: 'reset', reason: read.reason ?? 'json' }
+  const parsed = readShortcutFile(read.value, readOptions)
+  if (!parsed.ok) return parsed.error === 'newer' ? { kind: 'newer' } : { kind: 'reset', reason: parsed.error === 'size' ? 'size' : 'values' }
+  return parsed.problems.length ? { kind: 'salvage', file: parsed.file } : { kind: 'ok', file: parsed.file }
+}
+
+/**
+ * `<userData>/shortcuts.json`, the user's keyboard and mouse shortcuts (Tools › Options › Environment › Shortcuts),
+ * following `SettingsStore`. Work runs one task at a time, and every save reads the file again first:
+ *
+ * - an unreadable file (not JSON, not UTF-8, too large, not a shortcuts file) is quarantined and replaced by an empty one;
+ * - a file with some entries this build cannot read is salvaged: quarantined, then written back with the entries it
+ *   could read. Records this build does not understand (a newer build's commands, scopes or members) are not damage:
+ *   `readShortcutFile` keeps them in `unknown`, which is written back verbatim;
+ * - a file from a newer version is left alone, applied as empty, and never written;
+ * - a read that fails (permissions, a folder at the path) throws and writes nothing.
+ *
+ * `revision` counts the content this session knows. A hand edit noticed by a save's re-read is a new revision (and a
+ * change event), so a save based on an earlier revision is refused with `STALE` instead of overwriting either edit.
+ */
+export class ShortcutStore {
+  private queue: Promise<void> = Promise.resolve()
+  private file: ShortcutFile = emptyShortcutFile
+  private revision = 0
+  private loaded = false
+  /** Since the last load that set something aside, until a save: the page shows the notice while this holds. */
+  private notice?: string
+  private newer = false
+  private listeners = new Set<(snapshot: ShortcutsSnapshot) => void>()
+  constructor(private readonly path: string) {}
+
+  private serial<T>(task: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(task)
+    this.queue = next.then(() => {}, () => {})
+    return next
+  }
+  /** The last file known, synchronously: empty until the first load. Main's menus read it. */
+  current(): ShortcutFile { return this.file }
+  onDidChange(listener: (snapshot: ShortcutsSnapshot) => void): () => void {
+    this.listeners.add(listener)
+    return () => { this.listeners.delete(listener) }
+  }
+  private snapshot(): ShortcutsSnapshot { return { file: this.file, revision: this.revision } }
+  private emit(): void {
+    const snapshot = this.snapshot()
+    // The file is written; a listener's failure must not report the save as failed.
+    for (const listener of [...this.listeners]) { try { listener(snapshot) } catch (error) { console.error(error) } }
+  }
+
+  /**
+   * The file, its revision, and whether a load set part or all of it aside. Every load reads the file again, so a page
+   * that opens Shortcuts sees a hand edit (as a new revision, announced to listeners too).
+   */
+  load(): Promise<ShortcutsLoad> {
+    return this.serial(async () => {
+      await this.refresh(this.loaded)
+      const notice = this.notice ?? (this.newer ? shortcutSentences.newer : undefined)
+      return { ...this.snapshot(), salvaged: this.notice !== undefined, ...(notice ? { notice } : {}) }
+    })
+  }
+
+  /** Writes `file` (strict) when the store's revision is still `baseRevision`; resolves to the new revision. */
+  async save(value: unknown, baseRevision: number): Promise<ShortcutsSaved> {
+    const file = shortcutFileSchema.parse(value) as ShortcutFile
+    return this.serial(async () => {
+      await this.refresh(true)
+      if (this.newer) throw new Error(shortcutSentences.newer)
+      if (baseRevision !== this.revision) throw new BackendError('STALE', shortcutSentences.stale)
+      if (canonical(file) !== canonical(this.file)) {
+        await writeJsonAtomic(this.path, file, shortcutLimits.fileBytes, shortcutSentences.tooLarge)
+        this.file = file
+        this.revision++
+        this.notice = undefined
+        this.emit()
+      }
+      return { revision: this.revision }
+    })
+  }
+
+  /**
+   * Reads the file again. When it differs from what the store knows, it becomes the next revision; `notify` (a save's
+   * re-read) announces it, since the page holds the old content. A first load starts at revision 1.
+   */
+  private async refresh(notify: boolean): Promise<void> {
+    let read: Read
+    try { read = await readStored(this.path) } catch { throw new Error(shortcutSentences.unreadable) }
+    let next: ShortcutFile
+    this.newer = read.kind === 'newer'
+    if (read.kind === 'missing' || read.kind === 'newer') next = emptyShortcutFile
+    else if (read.kind === 'ok') next = read.file
+    else {
+      next = read.kind === 'salvage' ? read.file : emptyShortcutFile
+      try { await quarantine(this.path) } catch { throw new Error(shortcutSentences.unreadable) }
+      this.notice = read.kind === 'salvage' ? salvageNotice : resetNotice(read.reason)
+      // The original is kept beside it; a failed write back leaves the file missing, which reads as empty.
+      await writeJsonAtomic(this.path, next, shortcutLimits.fileBytes, shortcutSentences.tooLarge).catch(() => {})
+    }
+    const first = !this.loaded
+    this.loaded = true
+    if (first) { this.file = next; this.revision = 1; return }
+    if (canonical(next) === canonical(this.file)) return
+    this.file = next
+    this.revision++
+    if (notify) this.emit()
+  }
+}
+
+/** The dialogs main opens for import and export; each resolves to the chosen path, or undefined when cancelled. */
+export interface ShortcutDialogs {
+  chooseImport(): Promise<string | undefined>
+  chooseExport(): Promise<string | undefined>
+}
+
+const noArgument = z.undefined()
+const saveRequestSchema = z.strictObject({ file: z.unknown(), baseRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER) })
+const exportRequestSchema = z.strictObject({ file: z.unknown() })
+
+/** Reads a file the user chose in main's open dialog; nothing is saved (the page previews it, then saves). */
+export async function importShortcuts(path: string): Promise<ShortcutsImport> {
+  let bytes: Buffer | undefined
+  try { bytes = await readRegularFile(path, shortcutLimits.fileBytes) } catch { throw new Error(shortcutSentences.importNotFile) }
+  if (!bytes) throw new Error(shortcutSentences.importNotFile)
+  if (bytes.length > shortcutLimits.fileBytes) throw new Error(shortcutSentences.importSize)
+  let text: string
+  try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes) } catch { throw new Error(shortcutSentences.importInvalid) }
+  const parsed = parseShortcutText(text, readOptions)
+  if (!parsed.ok) throw new Error(parsed.error === 'newer' ? shortcutSentences.importNewer : parsed.error === 'size' ? shortcutSentences.importSize : shortcutSentences.importInvalid)
+  return { file: parsed.file, problems: parsed.problems }
+}
+
+/**
+ * The IPC handlers behind `window.varia.shortcuts`, each taking the renderer's raw value. Import and export take no
+ * path from the renderer: the only paths are those main's own dialogs return.
+ */
+export function shortcutHandlers(store: ShortcutStore, dialogs: ShortcutDialogs) {
+  return {
+    get: async (value: unknown): Promise<ShortcutsLoad> => { noArgument.parse(value); return store.load() },
+    save: async (value: unknown): Promise<ShortcutsSaved> => {
+      const request = saveRequestSchema.parse(value)
+      return store.save(request.file, request.baseRevision)
+    },
+    importFile: async (value: unknown): Promise<ShortcutsImport> => {
+      noArgument.parse(value)
+      const path = await dialogs.chooseImport()
+      return path === undefined ? { cancelled: true } : importShortcuts(path)
+    },
+    exportFile: async (value: unknown): Promise<ShortcutsExport> => {
+      const file = shortcutFileSchema.parse(exportRequestSchema.parse(value).file)
+      const path = await dialogs.chooseExport()
+      if (path === undefined) return { cancelled: true }
+      await writeJsonAtomic(path, file, shortcutLimits.fileBytes, shortcutSentences.tooLarge)
+      return { cancelled: false }
+    }
+  }
+}
