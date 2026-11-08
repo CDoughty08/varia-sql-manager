@@ -147,7 +147,7 @@ export class ResultsWorkerCore {
       case 'close': return this.close(request.id, request.generation, request.resultIds)
       case 'rowBytes': return this.rowBytes(request)
       case 'measure': return this.measure(request)
-      case 'stats': this.post({ type: 'stats', id: request.id, bytes: this.cacheBytes, pages: this.cache.size }); return
+      case 'stats': this.post({ type: 'stats', id: request.id, bytes: this.cacheBytes, pages: this.cache.size, ...this.cacheShape() }); return
       case 'live': return this.live(request)
       case 'liveUpdate': return this.liveUpdate(request)
       case 'liveAck': return this.liveAck(request.id, request.bytes)
@@ -571,6 +571,13 @@ export class ResultsWorkerCore {
     index.splice(at, 0, page)
     this.indexes.set(read.result, index)
     this.evict()
+  }
+
+  /** Test mode's stats: the cached pages' wire bytes and columns, so a benchmark can tell what the column-view charge adds. */
+  private cacheShape(): { wireBytes: number; columns: number } {
+    let wireBytes = 0, columns = 0
+    for (const page of this.cache.values()) { wireBytes += page.view.byteLength; columns += page.view.columns.length }
+    return { wireBytes, columns }
   }
 
   /** Least recently used pages go first; pages a pending window covers stay. */

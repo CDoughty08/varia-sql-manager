@@ -96,7 +96,7 @@ export interface LiveStream {
   ack(bytes: number): void
 }
 /** Test mode's counters (the grid's `__variaGrid.stats()`). */
-export interface ClientStats { workerBytes: number; workerPages: number; uiWindows: number; uiUnits: number; inflight: number }
+export interface ClientStats { workerBytes: number; workerPages: number; workerWireBytes: number; workerColumns: number; uiWindows: number; uiUnits: number; inflight: number }
 
 const decoderFailed = 'Results cannot be displayed; reload the workbench.'
 const workerStopped = 'The results worker stopped. Try again.'
@@ -448,12 +448,12 @@ export class ResultClient implements Disposable {
 
   /** Test mode's cache counters; the worker's are 0 while it has no port. */
   async stats(): Promise<ClientStats> {
-    let workerBytes = 0, workerPages = 0
+    let workerBytes = 0, workerPages = 0, workerWireBytes = 0, workerColumns = 0
     if (this.portReady && !this.failure) {
       const response = await this.request(id => ({ type: 'stats', id })).catch(() => undefined)
-      if (response?.type === 'stats') { workerBytes = response.bytes; workerPages = response.pages }
+      if (response?.type === 'stats') { workerBytes = response.bytes; workerPages = response.pages; workerWireBytes = response.wireBytes; workerColumns = response.columns }
     }
-    return { workerBytes, workerPages, uiWindows: this.windows.size, uiUnits: this.windows.units, inflight: this.pending.size }
+    return { workerBytes, workerPages, workerWireBytes, workerColumns, uiWindows: this.windows.size, uiUnits: this.windows.units, inflight: this.pending.size }
   }
 
   dispose(): void {

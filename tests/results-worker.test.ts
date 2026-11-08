@@ -186,7 +186,9 @@ describe('results worker core', () => {
     expect(core.cachedPages).toBe(2)
     expect(core.cachedBytes).toBe(charged * 2)
     core.handle({ type: 'stats', id: 99 })
-    expect(posted.at(-1)).toEqual({ type: 'stats', id: 99, bytes: charged * 2, pages: 2 })
+    expect(posted.at(-1)).toEqual({ type: 'stats', id: 99, bytes: charged * 2, pages: 2, wireBytes: wireBytes * 2, columns: wide.length * 2 })
+    // What grid.x1.cache.viewBytesPerColumn measures in the real app: the charge beyond wire bytes, per cached column.
+    expect((charged * 2 - wireBytes * 2) / (wide.length * 2)).toBe(columnViewBytes)
   })
 
   it('waits for rows a read in flight brings instead of reading them again, and decodes a repeated page once', () => {
@@ -349,7 +351,7 @@ describe('results worker core', () => {
     const answer = posted.find(message => message.type === 'measure')
     expect(answer).toEqual({ type: 'measure', id: 7, rows: 3, widths: Uint16Array.of(512, 4, 6) })
     core.handle({ type: 'stats', id: 8 })
-    expect(posted.at(-1)).toEqual({ type: 'stats', id: 8, bytes: core.cachedBytes, pages: 1 })
+    expect(posted.at(-1)).toMatchObject({ type: 'stats', id: 8, bytes: core.cachedBytes, pages: 1 })
   })
 })
 
