@@ -668,6 +668,10 @@ try {
   // A value the readers could not read shows as NULL, as the grid shows it, with a note.
   await expect(topRows.getByRole('cell', { name: 'NULL', exact: true })).toHaveCount(2)
   await expect(peekCard.getByRole('tabpanel')).toContainText('1 value could not be read and show as NULL.')
+  // A cut value ends in an ellipsis, and its tooltip says it was cut; a whole one's is just the value.
+  const cutValue = topRows.getByRole('cell', { name: `${'B'.repeat(256)}…`, exact: true })
+  await expect(cutValue).toHaveAttribute('title', `${'B'.repeat(256)}…\nCut at 256 characters; Select Top 1000 Rows shows all of it.`)
+  await expect(topRows.getByRole('cell', { name: 'Alice', exact: true })).toHaveAttribute('title', 'Alice')
   expect((await stubCalls('explorer.peekRows')).at(-1).target).toMatchObject({ kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' })
   await page.keyboard.press('Escape')
   await expect(peekCard).toBeHidden()
@@ -680,7 +684,7 @@ try {
   await expect(tree()).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(peekCard).toBeHidden()
-  console.log('Object Explorer checks: Peek opens on dbo.Orders by Space, the menu and Ctrl+hover, shows its properties and CREATE script, its Columns, Dependencies (followed and back) and Top rows tabs, and Esc returns to the tree.')
+  console.log('Object Explorer checks: Peek opens on dbo.Orders by Space, the menu and Ctrl+hover, shows its properties and CREATE script, its Columns, Dependencies (followed and back) and Top rows tabs (a cut value says so in its tooltip), and Esc returns to the tree.')
 
   // 9. An offline database is listed, dimmed, with no chevron.
   await select('server-a', 'Databases', 'AppData')

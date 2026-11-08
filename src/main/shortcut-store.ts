@@ -1,17 +1,17 @@
 import { z } from 'zod'
 import {
-  emptyShortcutFile, parseShortcutText, readShortcutFile, shortcutFileSchema, shortcutLimits, type ShortcutFile, type ShortcutReadOptions
+  emptyShortcutFile, parseShortcutText, readShortcutFile, shortcutFileSchema, shortcutFileText, shortcutLimits, type ShortcutFile, type ShortcutReadOptions
 } from '../shared/commands/shortcut-schema'
+import { gestureChoiceTexts } from '../shared/commands/gesture-choices'
 import type { ShortcutsExport, ShortcutsImport, ShortcutsLoad, ShortcutsSaved, ShortcutsSnapshot } from '../shared/contracts'
 import { BackendError } from './backend/errors'
-import { quarantine, readJsonFile, readRegularFile, writeJsonAtomic, type JsonInvalidReason } from './json-file'
+import { quarantine, readJsonFile, readRegularFile, writeBytesAtomic, type JsonInvalidReason } from './json-file'
 
 /**
- * How gesture entries are read. The gesture catalogue's choices are modifier sets and the file's are words; until the
- * Mouse view (PR D2) names that mapping, every well-formed gesture entry is kept as it is, and `GestureService` applies
- * only the ones it knows.
+ * How gesture entries are read: a gesture this build does not offer, or a choice it does not offer for that gesture,
+ * moves to `unknown` (kept verbatim for the build that knows it) rather than staying a live entry no view can show.
  */
-const readOptions: ShortcutReadOptions = {}
+const readOptions: ShortcutReadOptions = { gestures: gestureChoiceTexts }
 
 /** Fixed sentences: never file content, paths or names. */
 export const shortcutSentences = {
@@ -49,10 +49,14 @@ function parseFile(value: unknown): ShortcutFile {
   // the limits never saw them. Only what JSON carries is kept, which is exactly what the file will hold.
   return JSON.parse(JSON.stringify(shortcutFileSchema.parse(value))) as ShortcutFile
 }
-/** Writes `file` to `path`; a failure is a fixed sentence, since the system's message names the path (and the user). */
+/**
+ * Writes `file` to `path` in `shortcutFileText`'s form, the one reads measure; a failure is a fixed sentence, since the
+ * system's message names the path (and the user).
+ */
 async function writeFile(path: string, file: ShortcutFile, failed: string): Promise<void> {
-  try { await writeJsonAtomic(path, file, shortcutLimits.fileBytes, shortcutSentences.tooLarge) }
-  catch (error) { throw new Error(error instanceof Error && error.message === shortcutSentences.tooLarge ? shortcutSentences.tooLarge : failed) }
+  const text = shortcutFileText(file)
+  if (text === undefined) throw new Error(shortcutSentences.tooLarge)
+  try { await writeBytesAtomic(path, Buffer.from(text)) } catch { throw new Error(failed) }
 }
 type Read = { kind: 'missing' } | { kind: 'ok'; file: ShortcutFile } | { kind: 'salvage'; file: ShortcutFile } | { kind: 'reset'; reason: JsonInvalidReason | 'values' } | { kind: 'newer' }
 
@@ -159,7 +163,7 @@ export class ShortcutStore {
       try { await quarantine(this.path) } catch { if (!this.loaded) this.readFailed = true; throw new Error(shortcutSentences.unreadable) }
       this.notice = read.kind === 'salvage' ? salvageNotice : resetNotice(read.reason)
       // The original is kept beside it; a failed write back leaves the file missing, which reads as empty.
-      await writeJsonAtomic(this.path, next, shortcutLimits.fileBytes, shortcutSentences.tooLarge).catch(() => {})
+      await writeFile(this.path, next, shortcutSentences.saveFailed).catch(() => {})
     }
     const setAside = read.kind === 'salvage' || read.kind === 'reset'
     const first = !this.loaded

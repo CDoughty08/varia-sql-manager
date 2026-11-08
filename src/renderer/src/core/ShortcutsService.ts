@@ -50,6 +50,8 @@ export class ShortcutsService extends SnapshotStore<ShortcutsSnapshot> implement
   private report?: ShortcutsReport
   private readonly queued: [string, 'error' | 'warning'][] = []
   private loading?: Promise<boolean>
+  /** The revision whose notice the banner last showed: main repeats it on every read of that revision, in the same words. */
+  private noticeShown?: number
   private disposed = false
   private readonly unsubscribe: () => void
 
@@ -123,22 +125,26 @@ export class ShortcutsService extends SnapshotStore<ShortcutsSnapshot> implement
       const result = await this.options.api.get()
       if (!result.ok) failure = result.error
       else {
-        const { salvaged } = result.value
-        notice = typeof result.value.notice === 'string' ? result.value.notice : undefined
-        ok = this.accept(result.value, { loaded: true, salvaged: salvaged === true, ...notice ? { notice } : {} })
+        const { salvaged, revision } = result.value
+        const text = typeof result.value.notice === 'string' ? result.value.notice : undefined
+        ok = this.accept(result.value, { loaded: true, salvaged: salvaged === true, notice: text })
         if (!ok) failure = 'Main sent shortcuts this version does not support.'
+        // An answer older than what is held (a save or push overtook it) is old news; so is a notice already shown for
+        // this revision. A new damaged edit is a new revision, so its notice shows even in the same words.
+        else if (text && revision >= this.getSnapshot().revision && revision !== this.noticeShown) { notice = text; this.noticeShown = revision }
       }
     } catch (error) { failure = errorText(error) }
     if (this.disposed) return false
     if (!ok && !this.getSnapshot().loaded) this.publish({ ...this.getSnapshot(), loaded: true })
     if (failure) this.notify(hadFile ? `Your shortcuts could not be read again, so the ones already loaded stay: ${failure}` : `Your shortcuts could not be loaded, so the default keys are used: ${failure}`, 'error')
-    // Main repeats its notice on every read until a save; the banner shows it once.
-    else if (notice && notice !== before.notice) this.notify(notice, 'warning')
+    else if (notice) this.notify(notice, 'warning')
     return ok
   }
   /**
    * Takes main's file when it is valid and newer than what is held, publishes it and applies its rules. Returns whether
-   * the value was valid (an old revision is valid, just not newer).
+   * the value was valid (an old revision is valid, just not newer). `extra` comes with a get answer (`loaded` and main's
+   * notice, which replaces the held one) or a save (which clears it); a push has none and keeps the notice, since main
+   * may keep a notice across the change it pushes (a save's re-read that set a hand edit aside).
    */
   private accept(value: unknown, extra: Partial<Pick<ShortcutsSnapshot, 'loaded' | 'salvaged' | 'notice'>> = {}): boolean {
     if (this.disposed) return false
@@ -149,34 +155,48 @@ export class ShortcutsService extends SnapshotStore<ShortcutsSnapshot> implement
     if (!parsed.success || typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0) return false
     const newer = revision > current.revision || (revision === current.revision && !current.loaded && extra.loaded === true)
     if (!newer) {
-      if (Object.keys(extra).length) this.publish({ ...current, ...extra })
+      // An answer for the revision held is main's current word on it: a get's notice (one a save's re-read kept arrives
+      // so, after its push), or a save's reply clearing the notice (main pushes the saved file before it replies, so the
+      // reply is never newer). An older answer is late: a save or push overtook it, and its notice may be one main has
+      // since cleared.
+      const fresh = revision === current.revision && (extra.loaded === true || 'notice' in extra)
+      if (fresh && (!current.loaded || extra.salvaged !== current.salvaged || extra.notice !== current.notice)) this.publish({ ...current, ...extra })
+      else if (!fresh && extra.loaded && !current.loaded) this.publish({ ...current, loaded: true })
       return true
     }
-    // A newer file without its own notice (a save, a push) replaces the load's salvage notice.
-    const notice = extra.loaded ? {} : { salvaged: false, notice: undefined }
     // The same content again (an echo, a re-push) keeps the file object, so its memoised rules and labels stay put.
     if (JSON.stringify(parsed.data) === JSON.stringify(current.file)) {
-      this.publish({ ...current, ...notice, ...extra, revision })
+      this.publish({ ...current, ...extra, revision })
       return true
     }
     const file = parsed.data as ShortcutFile
-    this.publish({ ...current, ...notice, ...extra, file, revision, effective: effectiveRules(this.options.platform, file) })
+    this.publish({ ...current, ...extra, file, revision, effective: effectiveRules(this.options.platform, file) })
     this.applyTargets()
     return true
   }
   /**
-   * Saves `file` through main, from `baseRevision` (by default the revision held; the Options dialog passes the one its
-   * draft started from), and applies it once main answers. A file that changed since (another window saved) fails with
-   * code `STALE`; the snapshot then follows main's push.
+   * Saves `file` through main and applies it once main answers. `baseRevision` is the revision the caller's draft was
+   * based on (the snapshot the Shortcuts page opened with), not the latest one: main refuses a save from an older
+   * revision with code `STALE` (another window saved, or the file was edited by hand), so a draft never silently replaces
+   * a change the user has not seen. After `STALE` the service reads main again and adopts its file, so the caller can show
+   * it and the next save can start from it.
    */
-  async save(file: ShortcutFile, baseRevision = this.getSnapshot().revision): Promise<ApiResult<{ revision: number }>> {
+  async save(file: ShortcutFile, baseRevision: number): Promise<ApiResult<{ revision: number }>> {
     const parsed = shortcutFileSchema.safeParse(file)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? 'The shortcuts are not valid.' }
+    if (!Number.isSafeInteger(baseRevision) || baseRevision < 0) return { ok: false, error: 'The shortcuts have no valid base revision.' }
     try {
       const result = await this.options.api.save(file, baseRevision)
-      if (!result.ok) return result
+      if (!result.ok) {
+        // Main pushes a newer file only when it saw a change; a renderer behind for another reason (a failed first get)
+        // would otherwise stay behind and every save would be STALE.
+        if (result.code === 'STALE') await this.reload()
+        return result
+      }
       if (typeof result.value?.revision !== 'number') return { ok: false, error: 'Main sent an answer this version does not support.' }
-      this.accept({ file, revision: result.value.revision })
+      // Main clears its notice on a save. It keeps one only when the save's own re-read set a hand edit aside, which is
+      // nearly always a new revision and so answered STALE instead.
+      this.accept({ file, revision: result.value.revision }, { salvaged: false, notice: undefined })
       return { ok: true, value: { revision: result.value.revision } }
     } catch (error) { return { ok: false, error: errorText(error) } }
   }

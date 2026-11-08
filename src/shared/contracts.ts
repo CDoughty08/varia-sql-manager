@@ -311,6 +311,7 @@ export interface RpcMethods {
   'explorer.search': { params: ObjectSearchParams; result: ObjectSearchResult }
   /** Peek: a table's, view's or module's properties (and a module's text), on the Object Explorer pool; Stop is varia:explorer-cancel. */
   'explorer.peek': { params: PeekParams; result: PeekResult }
+  /** Peek's Dependencies: what the object uses and what uses it (sys.sql_expression_dependencies and foreign keys), read apart from the facts when the tab is chosen, on Peek's slot; Stop is varia:explorer-cancel. */
   'explorer.peekDependencies': { params: PeekDependenciesParams; result: PeekDependenciesResult }
   /** Peek's Top rows: a table's or view's first rows (SELECT TOP (n) *), on Peek's slot; Stop is varia:explorer-cancel. */
   'explorer.peekRows': { params: PeekRowsParams; result: PeekRowsResult }

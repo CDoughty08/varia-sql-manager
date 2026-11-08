@@ -102,8 +102,11 @@ internal static class PeekSql
 
     /// <summary>What the object references by name (column references collapse into their object's row; itself left out), and
     /// the tables its foreign keys point at: server, database, schema, name, the object's id when it is in this database, and
-    /// whether a foreign key makes the link. A reference SQL Server resolved takes the object's current names.</summary>
-    private const string UsesRows = "SELECT d.referenced_server_name AS server_name, d.referenced_database_name AS database_name, COALESCE(rs.name, d.referenced_schema_name) AS schema_name, "
+    /// whether a foreign key makes the link. A reference SQL Server resolved takes the object's current names and no server or
+    /// database: referenced_id is set only for this database's objects, and referenced_database_name keeps the code's spelling,
+    /// so dropping it lets a reference that names this database in another case be followed, and merges one made both ways.</summary>
+    private const string UsesRows = "SELECT CASE WHEN ro.object_id IS NULL THEN d.referenced_server_name END AS server_name, "
+        + "CASE WHEN ro.object_id IS NULL THEN d.referenced_database_name END AS database_name, COALESCE(rs.name, d.referenced_schema_name) AS schema_name, "
         + "COALESCE(ro.name, d.referenced_entity_name) AS entity_name, ro.object_id AS id, CONVERT(bit, 0) AS via "
         + "FROM sys.sql_expression_dependencies AS d LEFT JOIN sys.all_objects AS ro ON ro.object_id = d.referenced_id LEFT JOIN sys.schemas AS rs ON rs.schema_id = ro.schema_id "
         + "WHERE d.referencing_id = @object_id AND d.referencing_class = 1 AND d.referenced_class = 1 AND d.referenced_entity_name IS NOT NULL "

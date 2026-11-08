@@ -68,7 +68,9 @@ export const peekMessages = {
   noRows: 'It has no rows.',
   noMembers: 'None.',
   noDependencies: 'None found.',
-  unreadCell: 'This value could not be read. The results grid shows it as NULL, with a warning.'
+  unreadCell: 'This value could not be read. The results grid shows it as NULL, with a warning.',
+  /** The second line of a cut value's tooltip, after the part kept. */
+  cutCell: `Cut at ${peekLimits.rowCellChars} characters; Select Top 1000 Rows shows all of it.`
 } as const
 
 type ScriptReply = Awaited<ReturnType<VariaApi['scriptObjects']>>
@@ -164,14 +166,11 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
   }
 
   /**
-   * Whether a dependency can be peeked from the card: an object of a kind Peek describes, in the card's database (a reference
-   * may name that database itself).
+   * Whether a dependency can be peeked from the card: an object of a kind Peek describes, in the card's database. The backend
+   * names no server or database for an object SQL Server resolved there, however the code spelled the database.
    */
   canFollow(dependency: PeekDependency): boolean {
-    const open = this.getSnapshot().open
-    const database = open?.node.ref.type === 'object' ? open.node.ref.object.database : undefined
-    return dependency.kind !== undefined && isPeekKind(dependency.kind) && dependency.server === undefined && dependency.schema !== undefined
-      && (dependency.database === undefined || dependency.database === database)
+    return dependency.kind !== undefined && isPeekKind(dependency.kind) && dependency.server === undefined && dependency.database === undefined && dependency.schema !== undefined
   }
 
   /** Peeks a dependency in the same card, beside the same row; Back returns to this one. */
