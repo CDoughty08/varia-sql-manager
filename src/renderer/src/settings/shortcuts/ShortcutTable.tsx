@@ -13,6 +13,7 @@ export const platformTitles: Readonly<Record<Platform, string>> = { win32: 'Wind
 /** A table row's identity: its command and the index of its shortcut in the command's row (−1 for a command without one). */
 export interface ShortcutSelection { readonly command: CommandId; readonly index: number }
 export const selectionKey = (selection: ShortcutSelection): string => `${selection.command}:${selection.index}`
+const gestureKey = 'gesture:'
 
 interface Props {
   readonly groups: readonly ShortcutGroup[]
@@ -53,18 +54,23 @@ export default function ShortcutTable({ groups, platform, selected, onSelect, on
     focusNext.current = false
     body.current?.querySelector<HTMLElement>(`[data-row="${current}"]`)?.focus()
   }, [current])
+  // Gesture rows follow the command rows in the arrow keys' order; they take focus but not the selection.
+  const keys = [...order.map(selectionKey), ...gestures?.map(gesture => gestureKey + gesture.id) ?? []]
   const keyDown = (event: KeyboardEvent<HTMLTableElement>) => {
     if (!(event.target instanceof HTMLElement) || !event.target.matches('[data-row]')) return
-    const at = order.findIndex(item => selectionKey(item) === current)
-    const to = event.key === 'ArrowDown' ? at + 1 : event.key === 'ArrowUp' ? at - 1 : event.key === 'Home' ? 0 : event.key === 'End' ? order.length - 1 : undefined
-    if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); onActivate(); return }
+    const focused = event.target.dataset.row ?? '', onGesture = focused.startsWith(gestureKey)
+    const at = keys.indexOf(onGesture ? focused : current ?? '')
+    const to = event.key === 'ArrowDown' ? at + 1 : event.key === 'ArrowUp' ? at - 1 : event.key === 'Home' ? 0 : event.key === 'End' ? keys.length - 1 : undefined
+    if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); if (onGesture) onShowMouse?.(); else onActivate(); return }
     if (to === undefined) return
     event.preventDefault()
     event.stopPropagation()
-    const next = order[Math.max(0, Math.min(order.length - 1, to))]
+    const next = keys[Math.max(0, Math.min(keys.length - 1, to))]
     if (!next) return
+    const selection = order.find(item => selectionKey(item) === next)
+    if (!selection || next === current) { body.current?.querySelector<HTMLElement>(`[data-row="${next}"]`)?.focus(); return }
     focusNext.current = true
-    onSelect(next)
+    onSelect(selection)
   }
   const columns = byPlatform ? ['Command', ...allPlatforms.map(item => platformTitles[item]), 'Source'] : ['Command', 'Shortcut', 'Scope', 'Source']
   const rows: ReactNode[] = []
@@ -97,7 +103,7 @@ export default function ShortcutTable({ groups, platform, selected, onSelect, on
   }
   if (gestures?.length) {
     rows.push(<tr key="group:mouse" className="shortcuts-group"><th colSpan={columns.length} scope="colgroup">Mouse</th></tr>)
-    for (const gesture of gestures) rows.push(<tr key={'gesture:' + gesture.id} className="shortcuts-gesture" onClick={onShowMouse} title="Choose to open the Mouse view">
+    for (const gesture of gestures) rows.push(<tr key={gestureKey + gesture.id} data-row={gestureKey + gesture.id} tabIndex={-1} className="shortcuts-gesture" onClick={onShowMouse} title="Choose to open the Mouse view">
       <td className="shortcuts-command">{gesture.changed ? <span className="shortcuts-dot" role="img" aria-label="Changed" /> : <span className="shortcuts-nodot" />}<span className="shortcuts-command-title">{gesture.title}</span></td>
       {byPlatform ? <td colSpan={allPlatforms.length}>{gesture.label}</td> : <><td>{gesture.label}</td><td>{gesture.scopeTitle}</td></>}
       <td className="shortcuts-source-cell"><SourceChip source={gesture.locked ? 'builtin' : gesture.changed ? 'user' : 'default'} lock={gesture.locked} /></td>
@@ -119,7 +125,7 @@ export default function ShortcutTable({ groups, platform, selected, onSelect, on
   return <div className="shortcuts-table">
     <table ref={body} role="grid" aria-label="Shortcuts" aria-rowcount={-1} data-platforms={byPlatform ? true : undefined} onKeyDown={keyDown}>
       <thead><tr>{columns.map(column => <th key={column} scope="col">{column}</th>)}</tr></thead>
-      <tbody>{rows}{!groups.length && empty && <tr><td colSpan={columns.length} className="shortcuts-empty">{empty}</td></tr>}</tbody>
+      <tbody>{rows}{!groups.length && !gestures?.length && empty && <tr><td colSpan={columns.length} className="shortcuts-empty">{empty}</td></tr>}</tbody>
     </table>
   </div>
 }

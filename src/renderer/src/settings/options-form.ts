@@ -139,9 +139,9 @@ const failureText = (error: unknown, fallback: string) => error instanceof Error
 /**
  * OK's two writes: the settings patch (when it has any), then the shortcuts draft (when it differs from main's file).
  * The first failure stops it and says what was saved, so the dialog stays open on the page that failed with its draft
- * kept, and OK can try again.
+ * kept, and OK can try again. `early`: the shortcuts draft was begun before the file loaded, so STALE offers no replace.
  */
-export async function commitOptions(targets: OptionsTargets, patch: SettingsPatch, shortcuts: ShortcutFile | undefined): Promise<CommitResult> {
+export async function commitOptions(targets: OptionsTargets, patch: SettingsPatch, shortcuts: ShortcutFile | undefined, options: { readonly early?: boolean } = {}): Promise<CommitResult> {
   const settingsChanged = Object.keys(patch).length > 0
   if (settingsChanged) {
     try { await targets.update(patch) } catch (error) { return { ok: false, stage: 'settings', message: failureText(error, 'The options could not be saved.') } }
@@ -153,6 +153,8 @@ export async function commitOptions(targets: OptionsTargets, patch: SettingsPatc
     const result = await targets.saveShortcuts(shortcuts)
     if (result.ok) return { ok: true }
     // Another window saved first: say so, and make replacing its shortcuts the user's choice rather than a silent retry.
+    // A draft begun before the file loaded was built on the defaults: replacing would drop every saved shortcut.
+    if ((result as { readonly code?: string }).code === 'STALE' && options.early) return { ok: false, stage: 'shortcuts', message: `${saved}: your saved shortcuts finished loading after you began editing, so your changes were made to the defaults. Choose Cancel and open Options again to edit them.` }
     if ((result as { readonly code?: string }).code === 'STALE') return { ok: false, stage: 'shortcuts', stale: true, message: `${saved}: they changed in another window. Choose OK again to replace them with yours, or Cancel to keep the other window's.` }
     reason = result.error.replace(/\.$/, '')
   } catch (error) { reason = failureText(error, 'they could not be written').replace(/\.$/, '') }

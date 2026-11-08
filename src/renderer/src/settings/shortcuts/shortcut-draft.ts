@@ -5,8 +5,10 @@ import { validateShortcut, type ShortcutVerdict } from '../../../../shared/comma
 import { effectiveRules, type EffectiveShortcuts } from '../../../../shared/commands/effective'
 import { keybindingLabel, KeySpecError, parseKeySpec, splitChord, type KeybindingLabel, type Platform, type ResolvedRule } from '../../../../shared/commands/keybindings'
 import { scopeOfWhen, shortcutScope, type ScopeId, type ScopeKind } from '../../../../shared/commands/scopes'
-import { bindingApplies, shortcutLimits, type ShortcutBinding, type ShortcutFile } from '../../../../shared/commands/shortcut-schema'
+import { bindingApplies, shortcutFileSchema, shortcutFileText, type ShortcutBinding, type ShortcutFile } from '../../../../shared/commands/shortcut-schema'
 import { sameChords, shortcutLock, type ShortcutLock } from '../../../../shared/commands/shortcut-rules'
+import { gestureOverrides } from '../../../../shared/commands/gesture-choices'
+import { gestureErrors, validateGestures } from '../../../../shared/commands/gesture-validate'
 
 /** Where a row's shortcut comes from: the catalogue, the user, a default the user removed, or a locked owner. */
 export type BindingSource = 'default' | 'user' | 'removed' | ShortcutLock['source']
@@ -39,6 +41,11 @@ export interface CommandRow {
 export const ruleScope = (rule: ResolvedRule): ScopeKind => rule.bridge ? 'queryEditor' : scopeOfWhen(rule.whenSource).id
 export const scopeTitle = (scope: ScopeKind): string => scope === 'custom' ? 'Custom' : shortcutScope(scope).title
 
+const platforms: readonly Platform[] = ['win32', 'linux', 'darwin']
+const otherPlatforms = (platform: Platform): Platform[] => platforms.filter(other => other !== platform)
+/** Whether `platform` would refuse `key` for `command` in `scope` (a key it reserves, or cannot read). */
+const refusedOn = (file: ShortcutFile, command: CommandId, key: string, scope: ScopeId, platform: Platform): boolean =>
+  validateShortcut(effectiveRules(platform, file).rules, { command, key, scope }, platform, { narrowerScopes: false }).verdict === 'refused'
 const parses = (key: string, platform: Platform): string[] | undefined => {
   try { return parseKeySpec(key, platform) } catch (error) { if (error instanceof KeySpecError) return undefined; throw error }
 }
@@ -104,11 +111,17 @@ const without = (file: ShortcutFile, indexes: Iterable<number>): ShortcutFile =>
   return withBindings(file, file.bindings.filter((_, index) => !drop.has(index)))
 }
 
+/**
+ * Whether `rule` is one of the user's: matched by command, chords and scope, since a rule resolved from an earlier draft
+ * (Reassign's conflicts after a first removal) is not the same object as the current draft's.
+ */
+export const isUserRule = (effective: EffectiveShortcuts, rule: ResolvedRule): boolean =>
+  effective.userRules.some(user => user === rule || (user.command === rule.command && sameChords(user.chords, rule.chords) && ruleScope(user) === ruleScope(rule)))
 /** The draft without `rule`: a user addition is dropped, a default gets a removal entry. Locked rules stay. */
 export function removeRule(file: ShortcutFile, rule: ResolvedRule, platform: Platform): ShortcutFile {
   if (shortcutLock(rule.command)) return file
   const added = additionIndex(file, rule, platform)
-  if (added >= 0 && effectiveRules(platform, file).userRules.includes(rule)) return without(file, [added])
+  if (added >= 0 && isUserRule(effectiveRules(platform, file), rule)) return without(file, [added])
   if (removalIndex(file, rule, platform) >= 0) return file
   return withBindings(file, [...file.bindings, { command: rule.command, ...storedKey(rule.chords, platform), remove: true }])
 }
@@ -148,7 +161,11 @@ export function assignShortcut(file: ShortcutFile, command: CommandId, chords: r
   for (const rule of reassign) next = removeRule(next, rule, platform)
   const removed = effectiveRules(platform, next).removed.find(rule => rule.command === command && sameChords(rule.chords, chords) && ruleScope(rule) === scope)
   if (removed) return restoreRule(next, removed, platform)
-  return withBindings(next, [...next.bindings, { command, ...storedKey(chords, platform), ...scope === 'global' ? {} : { scope } }])
+  const stored = storedKey(chords, platform)
+  // A key another platform refuses (macOS's ⌥ letters type characters, Windows' Ctrl+Alt is AltGr) is kept to this one,
+  // so it works here without turning into a problem there.
+  const local = !stored.platform && otherPlatforms(platform).some(other => refusedOn(next, command, stored.key, scope, other))
+  return withBindings(next, [...next.bindings, { command, ...stored, ...local ? { platform } : {}, ...scope === 'global' ? {} : { scope } }])
 }
 
 /** A user entry the draft keeps but does not apply, for the problems banner. */
@@ -159,7 +176,17 @@ export function draftProblems(file: ShortcutFile, platform: Platform, effective:
     return { index: problem.index, binding, ...chords ? { label: keybindingLabel(chords, platform) } : {}, message: problem.message }
   })
 }
-export const removeEntries = (file: ShortcutFile, indexes: Iterable<number>): ShortcutFile => without(file, indexes)
+/**
+ * The problems banner's Remove: entries that do not apply here are dropped. One written for every platform keeps working
+ * on the others, so it is narrowed to those where it still applies instead of deleted.
+ */
+export function removeEntries(file: ShortcutFile, indexes: Iterable<number>, platform: Platform): ShortcutFile {
+  const drop = new Set(indexes)
+  // An entry for every platform keeps a copy for each other platform where it still applies cleanly.
+  const fine = new Map(otherPlatforms(platform).map(other => [other, new Set(effectiveRules(other, file).problems.map(problem => problem.index))]))
+  return withBindings(file, file.bindings.flatMap((binding, index) => !drop.has(index) ? [binding]
+    : binding.platform ? [] : [...fine].filter(([, problems]) => !problems.has(index)).map(([other]) => ({ ...binding, platform: other }))))
+}
 
 const entryKey = (value: unknown) => JSON.stringify(value)
 /** How many entries differ between the draft and what main stored: additions, removals, gesture choices and the scheme. */
@@ -182,87 +209,132 @@ export interface ImportSummary {
   readonly same: number
   /** Additions on this platform that take a key from another command (Merge reassigns it). */
   readonly conflicts: readonly { readonly label: KeybindingLabel; readonly command: string; readonly with: readonly string[] }[]
+  /** Additions on this platform that take a key another of the file's entries has: they show as problems after Merge. */
+  readonly clashes: number
+  /** Removals of a locked key, or of a key no command has here: they show as problems. */
+  readonly ignored: number
   /** Records this build does not understand; kept in the file. */
   readonly unknown: number
   readonly gestures: number
   /** The user's own entries, which Replace drops. */
   readonly yours: number
-  /** Merge would leave more entries than the file may hold. */
-  readonly tooMany: boolean
+  /** Whether each mode's result is a file main can store (its limits, and its size as main writes it). */
+  readonly fits: Readonly<Record<'merge' | 'replace', boolean>>
+}
+/** A file main would store: valid, within every limit, and under the size limit in the form main writes. */
+export const storable = (file: ShortcutFile): boolean => shortcutFileSchema.safeParse(file).success && shortcutFileText(file) !== undefined
+/** An entry as the file compares it: Global is the same scope written or not. */
+const normalEntry = (binding: ShortcutBinding): ShortcutBinding => {
+  if (binding.remove || binding.scope !== 'global') return binding
+  const { scope: _global, ...rest } = binding
+  return rest
+}
+const sameKey = (a: ShortcutBinding, b: ShortcutBinding, platform: Platform): boolean => {
+  const left = parses(a.key, platform), right = parses(b.key, platform)
+  return !!left && !!right && sameChords(left, right)
 }
 export function importSummary(draft: ShortcutFile, incoming: ShortcutFile, platform: Platform): ImportSummary {
-  const have = new Set(draft.bindings.map(entryKey))
-  const added = incoming.bindings.filter(binding => !have.has(entryKey(binding)))
+  const have = new Set(draft.bindings.map(binding => entryKey(normalEntry(binding))))
+  const added: ShortcutBinding[] = []
+  for (const binding of incoming.bindings.map(normalEntry)) {
+    const entry = entryKey(binding)
+    if (!have.has(entry)) { have.add(entry); added.push(binding) }
+  }
+  const effective = effectiveRules(platform, draft)
   const conflicts: ImportSummary['conflicts'][number][] = []
-  for (const binding of added) {
-    if (binding.remove || !bindingApplies(binding, platform)) continue
+  let clashes = 0, ignored = 0
+  const applying = added.filter(binding => bindingApplies(binding, platform))
+  for (const [index, binding] of applying.entries()) {
     const chords = parses(binding.key, platform)
     if (!chords) continue
+    if (binding.remove) {
+      const known = [...effective.rules, ...effective.removed].some(rule => rule.command === binding.command && sameChords(rule.chords, chords))
+      if (shortcutLock(binding.command) || !known) ignored++
+      continue
+    }
     // The draft's rules are memoised, and the preview names no narrower scope, so each entry is one scan.
-    const verdict = validateShortcut(effectiveRules(platform, draft).rules, { command: binding.command, key: chords.join(' '), scope: binding.scope ?? 'global' }, platform, { narrowerScopes: false })
+    const verdict = validateShortcut(effective.rules, { command: binding.command, key: chords.join(' '), scope: binding.scope ?? 'global' }, platform, { narrowerScopes: false })
     if (verdict.verdict === 'conflict') conflicts.push({ label: keybindingLabel(chords, platform), command: commandDescriptor(binding.command).title, with: verdict.conflicts.map(rule => commandDescriptor(rule.command).title) })
+    if (applying.slice(0, index).some(earlier => !earlier.remove && (earlier.scope ?? 'global') === (binding.scope ?? 'global') && sameKey(earlier, binding, platform))) clashes++
   }
   return {
-    shortcuts: incoming.bindings.length, added: added.length, same: incoming.bindings.length - added.length, conflicts, unknown: incoming.unknown.length,
+    shortcuts: incoming.bindings.length, added: added.length, same: incoming.bindings.length - added.length, conflicts, clashes, ignored, unknown: incoming.unknown.length,
     gestures: Object.keys(incoming.gestures).length, yours: draft.bindings.length,
-    tooMany: draft.bindings.length + added.length > shortcutLimits.bindings || draft.unknown.length + incoming.unknown.length > shortcutLimits.unknown
+    fits: { merge: storable(mergeImport(draft, incoming, platform)), replace: storable(replaceImport(draft, incoming)) }
   }
 }
 /**
  * Merge: the file's entries join the draft's. An addition that conflicts on this platform reassigns the key (the other
- * command's shortcut is removed); one that is refused stays in the file and shows in the problems banner. The file's
- * gesture choices win; its unknown records are kept beside the draft's.
+ * command's shortcut is removed, on the addition's platform alone when it names one); one that is refused stays in the
+ * file and shows in the problems banner. The draft keeps its scheme, the file's gesture choices win, and its unknown
+ * records are kept beside the draft's.
  */
 export function mergeImport(draft: ShortcutFile, incoming: ShortcutFile, platform: Platform): ShortcutFile {
   // One pass over the draft's effective rules: re-resolving the growing file per entry made a 1,024-entry import
   // quadratic, freezing the page for a minute or more. An entry that conflicts only with another of the file's stays,
-  // and shows in the problems banner.
+  // and shows in the problems banner (the preview counts it).
   const effective = effectiveRules(platform, draft)
-  const have = new Set(draft.bindings.map(entryKey)), taken = new Set<ResolvedRule>(), drop = new Set<number>()
+  const have = new Set(draft.bindings.map(binding => entryKey(normalEntry(binding)))), taken = new Set<ResolvedRule>(), drop = new Set<number>()
   const removals: ShortcutBinding[] = [], additions: ShortcutBinding[] = []
-  for (const binding of incoming.bindings) {
+  for (const binding of incoming.bindings.map(normalEntry)) {
     const entry = entryKey(binding)
     if (have.has(entry)) continue
     have.add(entry)
+    additions.push(binding)
     const chords = !binding.remove && bindingApplies(binding, platform) ? parses(binding.key, platform) : undefined
     const verdict = chords && validateShortcut(effective.rules, { command: binding.command, key: chords.join(' '), scope: binding.scope ?? 'global' }, platform, { narrowerScopes: false })
-    if (verdict?.verdict === 'conflict') for (const rule of verdict.conflicts) {
+    if (verdict?.verdict !== 'conflict') continue
+    for (const rule of verdict.conflicts) {
       if (taken.has(rule) || shortcutLock(rule.command)) continue
       taken.add(rule)
       // As removeRule: the user's own addition is dropped, a default gets one removal entry.
-      const added = additionIndex(draft, rule, platform)
-      if (added >= 0 && effective.userRules.includes(rule)) drop.add(added)
-      else if (removalIndex(draft, rule, platform) < 0) removals.push({ command: rule.command, ...storedKey(rule.chords, platform), remove: true })
+      const own = isUserRule(effective, rule) ? additionIndex(draft, rule, platform) : -1
+      if (own >= 0) { drop.add(own); continue }
+      const stored = storedKey(rule.chords, platform)
+      const removal: ShortcutBinding = { command: rule.command, ...stored, ...binding.platform && !stored.platform ? { platform: binding.platform } : {}, remove: true }
+      if (removalIndex(draft, rule, platform) < 0 && !have.has(entryKey(removal))) { have.add(entryKey(removal)); removals.push(removal) }
     }
-    additions.push(binding)
   }
   const next = withBindings(draft, [...draft.bindings.filter((_, index) => !drop.has(index)), ...removals, ...additions])
   const unknown = [...next.unknown, ...incoming.unknown.filter(record => !next.unknown.some(own => entryKey(own) === entryKey(record)))]
-  return { ...next, scheme: incoming.scheme, gestures: { ...next.gestures, ...incoming.gestures }, unknown }
+  return { ...next, gestures: { ...next.gestures, ...incoming.gestures }, unknown }
 }
 /**
- * Replace: the file's entries instead of the user's. Records this version cannot read (a newer build's) are not the
- * user's to lose by importing, so the draft's stay beside the file's.
+ * Replace: the file's entries and scheme instead of the user's. Records this version cannot read (a newer build's) are
+ * not the user's to lose by importing, so the draft's stay beside the file's.
  */
 export const replaceImport = (draft: ShortcutFile, incoming: ShortcutFile): ShortcutFile => ({
   ...incoming, unknown: [...incoming.unknown, ...draft.unknown.filter(record => !incoming.unknown.some(own => entryKey(own) === entryKey(record)))]
 })
 
 /**
- * The Options dialog's shortcut edit: the stored file and revision it started from, and the draft. `replace` is set once
- * the user has been told another window saved first and chose OK again, so the next save replaces the newer file.
+ * The Options dialog's shortcut edit: the stored file and revision it started from, and the draft. `replace` is the newer
+ * revision the user was told another window saved, once they chose OK again: the next save replaces that revision and no
+ * later one. `early` marks a draft begun before the service had loaded main's file (so built on the defaults).
  */
-export interface ShortcutEdit { readonly base: { readonly file: ShortcutFile; readonly revision: number }; readonly draft: ShortcutFile; readonly replace?: boolean }
-export const startShortcutEdit = (stored: { readonly file: ShortcutFile; readonly revision: number }): ShortcutEdit => ({ base: { file: stored.file, revision: stored.revision }, draft: stored.file })
+export interface ShortcutEdit {
+  readonly base: { readonly file: ShortcutFile; readonly revision: number }
+  readonly draft: ShortcutFile
+  readonly replace?: number
+  readonly early?: true
+}
+export const startShortcutEdit = (stored: { readonly file: ShortcutFile; readonly revision: number; readonly loaded?: boolean }): ShortcutEdit =>
+  ({ base: { file: stored.file, revision: stored.revision }, draft: stored.file, ...stored.loaded === false ? { early: true as const } : {} })
 /**
  * An untouched draft follows the stored file (another window's save, a hand edit, a load that finished late); an edited
  * one keeps the revision it started from, so main refuses its save as STALE instead of overwriting the newer file.
  */
 export function followStored(edit: ShortcutEdit, stored: { readonly file: ShortcutFile; readonly revision: number }): ShortcutEdit {
   if (stored.revision === edit.base.revision && stored.file === edit.base.file) return edit
-  return sameShortcuts(edit.draft, edit.base.file) ? startShortcutEdit(stored) : edit
+  if (sameShortcuts(edit.draft, edit.base.file)) return startShortcutEdit(stored)
+  // A save newer than the one the user agreed to replace has not been shown to them: OK must warn again.
+  if (edit.replace !== undefined && stored.revision > edit.replace) { const { replace: _seen, ...rest } = edit; return rest }
+  return edit
 }
 /** The file OK saves, or undefined when the draft has no changes. */
 export const shortcutsToSave = (edit: ShortcutEdit): ShortcutFile | undefined => sameShortcuts(edit.draft, edit.base.file) ? undefined : edit.draft
-/** The revision a save starts from: the edit's own, or, once the user chose to replace a newer file, the latest. */
-export const saveRevision = (edit: ShortcutEdit, latest: number): number => edit.replace ? latest : edit.base.revision
+/** The revision a save starts from: the edit's own, or, once the user chose to replace a newer file, that file's. */
+export const saveRevision = (edit: ShortcutEdit): number => edit.replace ?? edit.base.revision
+/** The first gesture clash in the draft on `platform`, which OK refuses to save (a warning does not block). */
+export const gestureClash = (file: ShortcutFile, platform: Platform, validate = validateGestures): string | undefined =>
+  gestureErrors(validate(platform, gestureOverrides(file.gestures, platform)))[0]?.message

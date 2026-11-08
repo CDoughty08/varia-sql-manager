@@ -480,6 +480,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 @media (forced-colors: active) {
   .shortcuts-table tr[aria-selected="true"] td { outline: 1px solid CanvasText; outline-offset: -1px; }
   .shortcuts-dot { background: CanvasText; forced-color-adjust: none; }
+  /* Record Keys' pressed state is a fill otherwise, which forced colours drop. */
+  .shortcuts-toolbar > button[aria-pressed="true"] { outline: 1px solid Highlight; outline-offset: 1px; }
   .shortcuts-keys[data-source="removed"] kbd { color: GrayText; }
   .shortcuts-message, .shortcuts-banner { border: 1px solid CanvasText; }
 }

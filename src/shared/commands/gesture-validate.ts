@@ -7,7 +7,8 @@ import {
 /**
  * Checks gesture choices before they are saved: a clash between two gestures that one press would start in the same
  * place is an error, and a modifier the desktop usually takes first is a warning (the user may still choose it). The
- * catalogue's defaults raise neither on any platform (`tests/gesture-validate.test.ts`).
+ * catalogue's defaults raise neither on any platform (`tests/gesture-validate.test.ts`), and no choice the Mouse view offers
+ * today raises one either: the checks guard future catalogue choices and hand-edited files, and OK refuses a clash.
  */
 export type GestureProblemCode = 'clash' | 'linuxAlt' | 'macControlClick'
 export interface GestureProblem {

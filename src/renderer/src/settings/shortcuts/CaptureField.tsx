@@ -38,18 +38,33 @@ interface Props {
 export default function CaptureField({ id, platform, value, onChange, capture, label, placeholder = 'Press a shortcut', describedBy, autoFocus, className }: Props) {
   const [prefix, setPrefix] = useState<{ chord: string; at: number }>()
   const stop = useRef<() => void>(undefined)
+  const input = useRef<HTMLInputElement>(null)
   const prefixChord = parseKeySpec('mod+k', platform)[0]
   // The capture outlives the render that started it; it reports to the latest onChange.
-  const latest = useRef(onChange)
+  const latest = useRef(onChange), source = useRef(capture)
   latest.current = onChange
+  source.current = capture
   const record = (chord: string) => { setPrefix(undefined); latest.current(chord.split(' ')) }
   const start = () => {
-    if (!capture) return
+    if (!source.current) return
     stop.current?.()
-    stop.current = capture(record, { onPrefix: chord => setPrefix({ chord, at: Date.now() }), onPrefixCancel: () => setPrefix(undefined) })
+    stop.current = source.current(record, { onPrefix: chord => setPrefix({ chord, at: Date.now() }), onPrefixCancel: () => setPrefix(undefined) })
   }
   const end = () => { stop.current?.(); stop.current = undefined; setPrefix(undefined) }
-  useEffect(() => end, [])
+  useEffect(() => {
+    // autoFocus starts the capture during the commit; StrictMode's replayed cleanup ends it, so a focused box restarts it.
+    if (!stop.current && input.current && input.current === input.current.ownerDocument.activeElement) start()
+    // The box is read-only; this also keeps IME and dead-key text out of it whatever the browser does with read-only fields.
+    const element = input.current, cancel = (event: Event) => event.preventDefault()
+    element?.addEventListener('beforeinput', cancel)
+    return () => { element?.removeEventListener('beforeinput', cancel); end() }
+  }, [])
+  // A Ctrl/⌘+K prompt lapses as the chord does: after 5 s the next key is recorded on its own.
+  useEffect(() => {
+    if (!prefix) return
+    const timer = setTimeout(() => setPrefix(current => current === prefix ? undefined : current), Math.max(0, prefix.at + prefixTimeout - Date.now()))
+    return () => clearTimeout(timer)
+  }, [prefix])
   // Without the workbench's capture the field reads its own keys, with the same rules.
   const keyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (capture || event.nativeEvent.isComposing || event.keyCode === 229) return
@@ -65,6 +80,6 @@ export default function CaptureField({ id, platform, value, onChange, capture, l
     record(chord)
   }
   const text = prefix ? `${formatLabel(prefix.chord, platform)}, …` : value.length ? keybindingLabel(value, platform).text : ''
-  return <input id={id} type="text" readOnly className={'shortcuts-capture' + (className ? ' ' + className : '')} aria-label={label} aria-describedby={describedBy} placeholder={placeholder}
+  return <input ref={input} id={id} type="text" readOnly className={'shortcuts-capture' + (className ? ' ' + className : '')} aria-label={label} aria-describedby={describedBy} placeholder={placeholder}
     value={text} data-pending={prefix ? true : undefined} autoFocus={autoFocus} spellCheck={false} autoComplete="off" onFocus={start} onBlur={end} onKeyDown={keyDown} />
 }
