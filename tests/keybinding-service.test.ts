@@ -5,6 +5,8 @@ import { defaultRules, platforms, resolveKeybinding, type Platform } from '../sr
 import { CommandService } from '../src/renderer/src/core/commands'
 import { KeybindingService, nativeChordTimeout, type KeyDownEvent, type MenuKeyRouter } from '../src/renderer/src/core/keybindings'
 import { workbenchFixture } from './fixtures/workbench'
+import { effectiveRules } from '../src/shared/commands/effective'
+import { emptyShortcutFile, type ShortcutFile } from '../src/shared/commands/shortcut-schema'
 
 interface FakeEvent extends KeyDownEvent { consumed: boolean }
 function key(code: string, keyValue: string, modifiers: { ctrl?: boolean; shift?: boolean; alt?: boolean; meta?: boolean; repeat?: boolean; isComposing?: boolean; keyCode?: number; defaultPrevented?: boolean } = {}): FakeEvent {
@@ -403,5 +405,170 @@ describe('keybinding dispatch', () => {
     new KeybindingService({ ...options, commands: { execute }, onConflict: 'log' }).handleKeyDown(key('F6', 'F6'))
     expect(error).toHaveBeenCalledOnce()
     expect(execute).toHaveBeenCalledWith('file.new', undefined, 'keybinding')
+  })
+})
+
+const userFile = (bindings: ShortcutFile['bindings']): ShortcutFile => ({ ...emptyShortcutFile, bindings })
+/** New Query moved from Ctrl/⌘+N to Ctrl/⌘+Shift+F9, as the Shortcuts page would save it. */
+const remapped = (platform: Platform) => {
+  const effective = effectiveRules(platform, userFile([{ command: 'file.new', key: 'mod+n', remove: true }, { command: 'file.new', key: 'mod+shift+f9' }]))
+  expect(effective.problems, platform).toEqual([])
+  return effective.rules
+}
+const f9 = (platform: Platform) => key('F9', 'F9', { ...mod(platform), shift: true })
+
+describe('keybinding rules at run time', () => {
+  it.each(platforms)('swaps every table, label and listener at once with setRules on %s', platform => {
+    const { press, ran, keybindings } = service(platform)
+    const changes = vi.fn()
+    const unsubscribe = keybindings.subscribe(changes)
+    expect(keybindings.lookup('file.new')?.text).toBe(platform === 'darwin' ? '⌘N' : 'Ctrl+N')
+    const revision = keybindings.getRevision()
+    const rules = remapped(platform)
+    keybindings.setRules(rules)
+    expect([keybindings.getRules(), keybindings.getRevision(), changes.mock.calls.length]).toEqual([rules, revision + 1, 1])
+    expect(keybindings.lookup('file.new')?.text).toBe(platform === 'darwin' ? '⇧⌘F9' : 'Ctrl+Shift+F9')
+    // The old key is free (nothing else has it), and the new one runs the command.
+    expect(press(letter('n', platform)).consumed).toBe(false)
+    expect(press(f9(platform)).consumed).toBe(true)
+    expect(ran()).toEqual(['file.new'])
+    // The same rules again change nothing; going back restores the catalogue's key.
+    keybindings.setRules(rules)
+    expect(changes).toHaveBeenCalledOnce()
+    keybindings.setRules(defaultRules(platform))
+    expect(press(letter('n', platform)).consumed).toBe(true)
+    expect(press(f9(platform)).consumed).toBe(false)
+    unsubscribe()
+    keybindings.setRules(rules)
+    expect(changes).toHaveBeenCalledTimes(2)
+  })
+  it('logs conflicting rules from setRules instead of throwing, and a failing listener does not stop the others', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { keybindings, press, ran } = service('win32')
+    const second = vi.fn()
+    keybindings.subscribe(() => { throw new Error('listener failed') })
+    keybindings.subscribe(second)
+    const clash = [resolveKeybinding('file.new', { key: 'f6' }, 'win32')!, resolveKeybinding('file.open', { key: 'f6' }, 'win32')!]
+    expect(() => keybindings.setRules(clash)).not.toThrow()
+    expect(error).toHaveBeenCalled()
+    expect(second).toHaveBeenCalledOnce()
+    press(key('F6', 'F6'))
+    expect(ran()).toEqual(['file.new'])
+  })
+  it.each(platforms)("keeps Monaco's pending chord prefix across a swap on %s, and dispatches by the new rules after it", platform => {
+    const { press, ran, state, keybindings } = service(platform, { values: editorText, textFocus: true })
+    expect(press(letter('k', platform)).consumed).toBe(false)
+    keybindings.setRules(remapped(platform))
+    // Monaco still waits for the chord's second key, whatever the rules: it is not dispatched, even if it is now a shortcut.
+    expect(press(f9(platform)).consumed).toBe(false)
+    expect(press(f9(platform)).consumed).toBe(true)
+    // A swap after Monaco stopped waiting leaves nothing pending.
+    press(letter('k', platform))
+    state.now += nativeChordTimeout + 1
+    keybindings.setRules(defaultRules(platform))
+    expect(press(letter('n', platform)).consumed).toBe(true)
+    expect(ran()).toEqual(['file.new', 'file.new'])
+  })
+  it('follows the new rules for macOS menu key equivalents', () => {
+    const before = (platform: Platform) => [resolveKeybinding('query.execute', { key: 'mod+j', when: 'editorFocus' }, platform)!]
+    const after = (platform: Platform) => [resolveKeybinding('query.execute', { key: 'mod+l', when: 'editorFocus' }, platform)!]
+    for (const platform of platforms) {
+      const { press, ran, keybindings } = service(platform, { values: { activePanel: 'output' }, rules: before(platform) })
+      expect(press(letter('j', platform)).consumed, platform).toBe(platform === 'darwin')
+      keybindings.setRules(after(platform))
+      // ⌘J is no longer the Execute item's key equivalent, so the page leaves it alone; ⌘L is now.
+      expect(press(letter('j', platform)).consumed, platform).toBe(false)
+      expect(press(letter('l', platform)).consumed, platform).toBe(platform === 'darwin')
+      expect(ran(), platform).toEqual([])
+    }
+  })
+})
+
+describe('key capture', () => {
+  function capturing(platform: Platform, options: Parameters<typeof service>[1] = {}) {
+    const calls: string[] = []
+    const menus: MenuKeyRouter = {
+      noteKeyDown: event => { calls.push(`note ${event.key}`) }, ownsKeyboard: () => false, handleKeyDown: () => 'passthrough',
+      handleAccessKey: chord => { calls.push(`access ${chord}`); return false }, handleKeyUp: event => { calls.push(`up ${event.key}`) }
+    }
+    const setup = service(platform, { menus, ...options })
+    const chords: string[] = [], prefixes: string[] = []
+    const stop = setup.keybindings.capture(chord => { chords.push(chord) }, { onPrefix: chord => { prefixes.push(chord) } })
+    return { ...setup, calls, chords, prefixes, stop }
+  }
+  it.each(platforms)('records chords instead of menus, access keys and dispatch on %s, and dispatches again once stopped', platform => {
+    const { press, ran, calls, chords, stop, keybindings } = capturing(platform)
+    expect(keybindings.capturing).toBe(true)
+    expect(press(letter('n', platform)).consumed).toBe(true)
+    expect(press(key('F10', 'F10')).consumed).toBe(true)
+    expect(press(key('F4', 'F4', { alt: true })).consumed).toBe(true)
+    // Escape and Enter are recorded, as SSMS does; modifier presses alone record nothing and pass.
+    expect(press(key('Escape', 'Escape')).consumed).toBe(true)
+    expect(press(key('Enter', 'Enter')).consumed).toBe(true)
+    expect(press(key('ShiftLeft', 'Shift', { shift: true })).consumed).toBe(false)
+    expect(chords).toEqual([platform === 'darwin' ? 'meta+n' : 'ctrl+n', 'f10', 'alt+f4', 'escape', 'enter'])
+    expect([ran(), calls]).toEqual([[], []])
+    // A bare Alt release is part of a chord, not a tap that focuses the menubar.
+    keybindings.handleKeyUp(key('AltLeft', 'Alt'))
+    expect(calls).toEqual([])
+    stop()
+    expect(keybindings.capturing).toBe(false)
+    expect(press(letter('n', platform)).consumed).toBe(true)
+    expect(ran()).toEqual(['file.new'])
+    expect(chords).toHaveLength(5)
+  })
+  it.each(platforms)('never captures Tab or Shift+Tab, so focus leaves the box, on %s', platform => {
+    const { press, chords } = capturing(platform)
+    expect(press(key('Tab', 'Tab')).consumed).toBe(false)
+    expect(press(key('Tab', 'Tab', { shift: true })).consumed).toBe(false)
+    // Ctrl+Tab is a chord like any other.
+    expect(press(key('Tab', 'Tab', { ctrl: true })).consumed).toBe(true)
+    expect(chords).toEqual(['ctrl+tab'])
+  })
+  it.each(platforms)('makes a two-part chord from Ctrl/⌘+K and the next chord within the timeout on %s', platform => {
+    const { press, chords, prefixes, state } = capturing(platform)
+    const prefix = platform === 'darwin' ? 'meta+k' : 'ctrl+k', c = platform === 'darwin' ? 'meta+c' : 'ctrl+c'
+    expect(press(letter('k', platform)).consumed).toBe(true)
+    expect([chords, prefixes]).toEqual([[], [prefix]])
+    press(letter('c', platform))
+    expect(chords).toEqual([`${prefix} ${c}`])
+    // Escape after the prefix is the second part too.
+    press(letter('k', platform)); press(key('Escape', 'Escape'))
+    expect(chords.at(-1)).toBe(`${prefix} escape`)
+    // After the timeout the next chord stands alone; Tab forgets the prefix.
+    press(letter('k', platform))
+    state.now += nativeChordTimeout + 1
+    press(letter('c', platform))
+    press(letter('k', platform)); press(key('Tab', 'Tab')); press(letter('c', platform))
+    expect(chords.slice(2)).toEqual([c, c])
+    expect(prefixes).toHaveLength(4)
+  })
+  it('ignores repeats, IME composition and dead keys, and takes keys before modal rules', () => {
+    const { press, chords, ran } = capturing('win32', { modal: true, values: { optionsDialogFocus: true } as Partial<ContextKeys> })
+    // Options' Ctrl+E is a modal rule (options.focusSearch); the capture box in Options records it instead.
+    expect(press(key('KeyE', 'e', { ctrl: true })).consumed).toBe(true)
+    expect(press(key('KeyE', 'e', { ctrl: true, repeat: true })).consumed).toBe(true)
+    expect(press(key('KeyE', 'e', { isComposing: true })).consumed).toBe(false)
+    expect(press(key('BracketLeft', 'Dead')).consumed).toBe(false)
+    expect(press(key('KeyE', 'e', { ctrl: true, defaultPrevented: true })).consumed).toBe(false)
+    expect([chords, ran()]).toEqual([['ctrl+e'], []])
+  })
+  it('lets a later capture replace an earlier one, whose stop then does nothing', () => {
+    const { press, chords, stop, keybindings } = capturing('linux')
+    const later: string[] = []
+    const stopLater = keybindings.capture(chord => { later.push(chord) })
+    press(key('F7', 'F7'))
+    stop()
+    press(key('F8', 'F8'))
+    expect([chords, later]).toEqual([[], ['f7', 'f8']])
+    stopLater(); stopLater()
+    expect(keybindings.capturing).toBe(false)
+  })
+  it('keeps a capture prefix across setRules', () => {
+    const { press, chords, keybindings } = capturing('win32')
+    press(key('KeyK', 'k', { ctrl: true }))
+    keybindings.setRules(remapped('win32'))
+    press(key('KeyX', 'x', { ctrl: true }))
+    expect(chords).toEqual(['ctrl+k ctrl+x'])
   })
 })
