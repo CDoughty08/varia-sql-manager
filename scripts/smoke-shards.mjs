@@ -12,7 +12,7 @@ export function smokeSuites() {
 }
 
 /**
- * Seconds each suite took in CI's smoke jobs (Linux: PR #157's reviewed run under xvfb with SQL Server; Windows: recorded CI runs), to balance the
+ * Seconds each suite took in CI's smoke jobs (PR #166's run, 2026-11-08, after within() stopped the idle timers: Linux under xvfb with SQL Server, Windows without), to balance the
  * shards on each platform; macOS uses Linux's. Every suite in `test:smoke` needs one on each platform
  * (tests/smoke-shards.test.ts); rough is fine, and each shard's summary prints the times to copy from.
  */
@@ -20,26 +20,28 @@ export const suiteSeconds = {
   linux: {
     'scripts/retained-plans-smoke.mjs': 20,
     'scripts/live-plan-smoke.mjs': 64,
-    'scripts/electron-smoke.mjs': 26, 'scripts/layout-smoke.mjs': 11, 'scripts/popout-smoke.mjs': 8, 'scripts/connections-smoke.mjs': 24,
-    'scripts/theme-smoke.mjs': 6, 'scripts/palette-smoke.mjs': 15, 'scripts/backend-smoke.mjs': 49,
-    'scripts/live-smoke.mjs': 40, 'scripts/chart-smoke.mjs': 45, 'scripts/live-grid-smoke.mjs': 36,
-    'scripts/activity-monitor-smoke.mjs': 52, 'scripts/menus-smoke.mjs': 75, 'scripts/explorer-smoke.mjs': 52,
-    'scripts/scripting-smoke.mjs': 21, 'scripts/object-actions-smoke.mjs': 104, 'scripts/results-smoke.mjs': 92, 'scripts/estimated-plans-smoke.mjs': 12,
-    'scripts/options-resize-smoke.mjs': 2, 'scripts/options-smoke.mjs': 18, 'scripts/files-smoke.mjs': 13, 'scripts/hot-exit-smoke.mjs': 15,
-    'scripts/editor-smoke.mjs': 18, 'scripts/table-designer-smoke.mjs': 4, 'scripts/document-frame-smoke.mjs': 18,
-    'scripts/ssis-smoke.mjs': 5, 'scripts/ssis-operations-smoke.mjs': 18, 'scripts/updates-smoke.mjs': 35
+    'scripts/electron-smoke.mjs': 20, 'scripts/layout-smoke.mjs': 9, 'scripts/popout-smoke.mjs': 7,
+    'scripts/connections-smoke.mjs': 19, 'scripts/theme-smoke.mjs': 5, 'scripts/palette-smoke.mjs': 9,
+    'scripts/backend-smoke.mjs': 34, 'scripts/live-smoke.mjs': 28, 'scripts/chart-smoke.mjs': 31,
+    'scripts/live-grid-smoke.mjs': 21, 'scripts/activity-monitor-smoke.mjs': 38, 'scripts/menus-smoke.mjs': 70,
+    'scripts/explorer-smoke.mjs': 54, 'scripts/scripting-smoke.mjs': 19, 'scripts/object-actions-smoke.mjs': 106,
+    'scripts/results-smoke.mjs': 85, 'scripts/estimated-plans-smoke.mjs': 12, 'scripts/options-resize-smoke.mjs': 3, 'scripts/options-smoke.mjs': 18,
+    'scripts/files-smoke.mjs': 15, 'scripts/hot-exit-smoke.mjs': 18, 'scripts/editor-smoke.mjs': 21,
+    'scripts/table-designer-smoke.mjs': 5, 'scripts/document-frame-smoke.mjs': 16, 'scripts/ssis-smoke.mjs': 5,
+    'scripts/ssis-operations-smoke.mjs': 18, 'scripts/updates-smoke.mjs': 6
   },
   windows: {
     'scripts/retained-plans-smoke.mjs': 20,
     'scripts/live-plan-smoke.mjs': 2,
-    'scripts/electron-smoke.mjs': 19, 'scripts/layout-smoke.mjs': 13, 'scripts/popout-smoke.mjs': 12, 'scripts/connections-smoke.mjs': 20,
-    'scripts/theme-smoke.mjs': 6, 'scripts/palette-smoke.mjs': 6, 'scripts/backend-smoke.mjs': 48,
-    'scripts/live-smoke.mjs': 39, 'scripts/chart-smoke.mjs': 45, 'scripts/live-grid-smoke.mjs': 36,
-    'scripts/activity-monitor-smoke.mjs': 44, 'scripts/menus-smoke.mjs': 94, 'scripts/explorer-smoke.mjs': 25,
-    'scripts/scripting-smoke.mjs': 15, 'scripts/object-actions-smoke.mjs': 68, 'scripts/results-smoke.mjs': 55, 'scripts/estimated-plans-smoke.mjs': 12,
-    'scripts/options-resize-smoke.mjs': 2, 'scripts/options-smoke.mjs': 14, 'scripts/files-smoke.mjs': 15, 'scripts/hot-exit-smoke.mjs': 9,
-    'scripts/editor-smoke.mjs': 19, 'scripts/table-designer-smoke.mjs': 4, 'scripts/document-frame-smoke.mjs': 14,
-    'scripts/ssis-smoke.mjs': 6, 'scripts/ssis-operations-smoke.mjs': 18, 'scripts/updates-smoke.mjs': 20
+    'scripts/electron-smoke.mjs': 18, 'scripts/layout-smoke.mjs': 8, 'scripts/popout-smoke.mjs': 15,
+    'scripts/connections-smoke.mjs': 18, 'scripts/theme-smoke.mjs': 5, 'scripts/palette-smoke.mjs': 10,
+    'scripts/backend-smoke.mjs': 30, 'scripts/live-smoke.mjs': 25, 'scripts/chart-smoke.mjs': 32,
+    'scripts/live-grid-smoke.mjs': 21, 'scripts/activity-monitor-smoke.mjs': 29, 'scripts/menus-smoke.mjs': 73,
+    'scripts/explorer-smoke.mjs': 42, 'scripts/scripting-smoke.mjs': 18, 'scripts/object-actions-smoke.mjs': 149,
+    'scripts/results-smoke.mjs': 66, 'scripts/estimated-plans-smoke.mjs': 12, 'scripts/options-resize-smoke.mjs': 2, 'scripts/options-smoke.mjs': 16,
+    'scripts/files-smoke.mjs': 13, 'scripts/hot-exit-smoke.mjs': 13, 'scripts/editor-smoke.mjs': 25,
+    'scripts/table-designer-smoke.mjs': 7, 'scripts/document-frame-smoke.mjs': 22, 'scripts/ssis-smoke.mjs': 4,
+    'scripts/ssis-operations-smoke.mjs': 18, 'scripts/updates-smoke.mjs': 6
   }
 }
 
@@ -51,6 +53,13 @@ export const shardBudgetSeconds = 360
 
 /** This machine's weights: Windows's on Windows, Linux's elsewhere. */
 export const platformSeconds = (platform = process.platform) => suiteSeconds[platform === 'win32' ? 'windows' : 'linux']
+
+/**
+ * The most one suite may run before the shard kills it: four times its weight, at least five minutes. A hung suite used to run
+ * to the job's 25 minute timeout and take every later suite in its shard with it (seven Linux runs on 2026-11-08). The
+ * fixture's bounded app.close() catches most hangs first; this is the backstop for a suite stuck anywhere else.
+ */
+export const suiteLimitSeconds = (suite, platform = process.platform) => Math.max(300, 4 * (platformSeconds(platform)[suite] ?? 75))
 
 /** Splits `suites` into `count` shards of similar time (longest first, each to the lightest shard), each in suite order. */
 export function shardSuites(suites, count, seconds = platformSeconds()) {
@@ -76,10 +85,13 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   for (const suite of suites) {
     const started = Date.now()
     if (process.env.GITHUB_ACTIONS) console.log(`::group::${suite}`)
-    const { status, signal } = spawnSync(process.execPath, [suite], { stdio: 'inherit' })
+    const limit = suiteLimitSeconds(suite)
+    const { status, signal, error } = spawnSync(process.execPath, [suite], { stdio: 'inherit', timeout: limit * 1000, killSignal: 'SIGKILL' })
     if (process.env.GITHUB_ACTIONS) console.log('::endgroup::')
-    results.push({ suite, ok: status === 0, seconds: Math.round((Date.now() - started) / 1000), code: signal ?? status })
-    if (status !== 0) console.error(`${suite} failed (${signal ?? `exit ${status}`}).`)
+    const timedOut = error?.code === 'ETIMEDOUT'
+    results.push({ suite, ok: status === 0, seconds: Math.round((Date.now() - started) / 1000), code: timedOut ? `timed out at ${limit} s` : signal ?? status })
+    if (timedOut) console.error(`${suite} ran past its ${limit} s limit and was killed; the shard's later suites still run.`)
+    else if (status !== 0) console.error(`${suite} failed (${signal ?? `exit ${status}`}).`)
   }
   console.log(results.map(({ suite, ok, seconds, code }) => `${ok ? 'passed' : `FAILED (${code})`} ${String(seconds).padStart(4)} s  ${suite}`).join('\n'))
   if (results.some(result => !result.ok)) process.exitCode = 1

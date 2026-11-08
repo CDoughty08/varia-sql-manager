@@ -2,6 +2,7 @@ import { _electron as electron } from '@playwright/test'
 import { cpus, totalmem } from 'node:os'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
+import { within } from './fixtures/smoke.mjs'
 import { backendReady, statusBar } from './fixtures/ui.mjs'
 
 // End-to-end IPC benchmarks (npm run bench:e2e): the built app with the Release backend and its test hooks, measured
@@ -214,7 +215,7 @@ FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b;`
   clearTimeout(watchdog)
   if (app) {
     await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) }).catch(() => {})
-    const closed = await Promise.race([app.close().then(() => true, () => false), new Promise(done => setTimeout(() => done(false), 15000))])
+    const closed = await within(app.close().then(() => true, () => false), 15000, () => false)
     if (!closed) app.process()?.kill('SIGKILL')
   }
   await rm(profile, { recursive: true, force: true })

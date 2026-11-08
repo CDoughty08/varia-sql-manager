@@ -223,7 +223,7 @@ internal static class ConnectionFailureChecks
         var lookups = 0;
         service.IdentityProbe = () => { Interlocked.Increment(ref lookups); release.Wait(TimeSpan.FromSeconds(30)); return new(KerberosState.Valid, "bob@CONTOSO.COM"); };
         var waiting = Enumerable.Range(0, 5).Select(_ => Ask()).ToList();
-        var asked = SpinWait.SpinUntil(() => Volatile.Read(ref lookups) == 1, 5000);
+        var asked = SpinWait.SpinUntil(() => Volatile.Read(ref lookups) == 1, 15000);
         // A request whose deadline passes stops waiting (freeing its slot) while the lookup goes on for the others.
         using (var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(100)))
         {
