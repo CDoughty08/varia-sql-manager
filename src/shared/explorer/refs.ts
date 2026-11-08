@@ -94,7 +94,8 @@ export function refKey(connectionId: string, ref: ExplorerNodeRef): string {
 export function insertTextFor(ref: ExplorerNodeRef): string | undefined {
   if (ref.type !== 'object') return undefined
   const { kind, schema, name } = ref.object
-  if (name === undefined) return undefined
+  // A kind this build does not know (a newer backend's Search Objects hit) inserts nothing rather than failing its menu.
+  if (name === undefined || !Object.hasOwn(kindSpecs, kind)) return undefined
   switch (kindSpecs[kind].insert) {
     case 'onePart': return quoteName(name)
     case 'twoPart': return schema === undefined ? undefined : quoteName(schema) + '.' + quoteName(name)

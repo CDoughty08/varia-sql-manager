@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef } from 'react'
-import { kindSpecs } from '../../../shared/explorer/catalog.ts'
+import { kindSpecs, type KindSpec } from '../../../shared/explorer/catalog.ts'
 import { peekSpecs } from '../../../shared/explorer/peek.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import type { ObjectSearchHit } from '../../../shared/explorer/search.ts'
@@ -42,13 +42,19 @@ export function matchedLine(text: string, hit: ObjectSearchHit, exact: boolean):
  */
 export const scrollKey = (id: number, line: number | undefined): string => `${id}:${line ?? ''}`
 
+/** A hit's kind as this build's catalogue has it; a kind it does not know (a newer backend's) shows as a plain object. */
+export function hitKindSpec(kind: string): Pick<KindSpec, 'title' | 'icon' | 'subtypeIcons'> {
+  return Object.hasOwn(kindSpecs, kind) ? kindSpecs[kind as keyof typeof kindSpecs] : unknownKindSpec
+}
+const unknownKindSpec: Pick<KindSpec, 'title' | 'icon'> = { title: 'Object', icon: 'file' }
+
 /** The hit's own properties, known before anything is read: its type, and where it is. */
 export function hitProperties(hit: ObjectSearchHit): readonly { readonly label: string; readonly value: string }[] {
   const { object } = hit
   return [
-    { label: 'Type', value: kindSpecs[object.kind].title },
+    { label: 'Type', value: hitKindSpec(object.kind).title },
     ...object.database === undefined ? [] : [{ label: 'Database', value: object.database }],
-    ...object.parent ? [{ label: 'Schema', value: object.parent.schema ?? '' }, { label: kindSpecs[object.parent.kind].title, value: object.parent.name }]
+    ...object.parent ? [{ label: 'Schema', value: object.parent.schema ?? '' }, { label: hitKindSpec(object.parent.kind).title, value: object.parent.name }]
       : object.schema === undefined ? [] : [{ label: 'Schema', value: object.schema }]
   ].filter(row => row.value !== '')
 }
@@ -70,7 +76,7 @@ function Definition({ details, part }: { readonly details: Details; readonly par
     const height = parseFloat(getComputedStyle(element).lineHeight) || 0
     scroller.scrollTop = Math.max(0, element.offsetTop + (line - 1) * height - scroller.clientHeight / 3)
   }, [details.id, text, line])
-  if (part.status === 'none') return <p className="peek-note">{kindSpecs[details.hit.object.kind].title} has no definition to show.</p>
+  if (part.status === 'none') return <p className="peek-note">{hitKindSpec(details.hit.object.kind).title} has no definition to show.</p>
   if (part.status === 'loading') return <p className="peek-note">Loading the definition…</p>
   if (part.status === 'error') return <p className="peek-note error" role="alert">{part.message}</p>
   if (text === undefined) return <p className="peek-note">{peekMessages.noDefinition}</p>
@@ -120,7 +126,7 @@ export default function SearchDetails({ searchId }: { readonly searchId: string 
   const details = snapshot.documents[searchId]
   if (!details) return <section className="search-details" aria-label="Details"><p className="peek-note search-details-empty">Select a result to see its definition and properties.</p></section>
   const { hit } = details
-  const spec = kindSpecs[hit.object.kind]
+  const spec = hitKindSpec(hit.object.kind)
   const name = displayText(hit.label)
   const columns = columnsOf(hit.object) && snapshot.view === 'columns'
   const script = scriptCommandId('create', 'newQuery')
