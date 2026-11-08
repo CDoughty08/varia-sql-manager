@@ -99,7 +99,7 @@ describe('shortcuts file', () => {
       await rm(path(), { force: true })
       for (const name of await quarantined()) await rm(join(directory, name))
       await writeFile(path(), content)
-      expect(await store().load()).toEqual({ file: emptyShortcutFile, revision: 1, salvaged: true, notice: resetNotice(reason) })
+      expect(await store().load()).toEqual({ file: emptyShortcutFile, revision: 1, salvaged: true, notice: resetNotice(reason), noticeId: 1 })
       expect(await onDisk()).toEqual(emptyShortcutFile)
       const [original] = await quarantined()
       expect((await readFile(join(directory, original))).equals(content)).toBe(true)
@@ -158,26 +158,62 @@ describe('shortcuts file', () => {
     expect(events).toHaveLength(1)
   })
 
-  it("keeps the notice when a save's own re-read set part of a hand edit aside", async () => {
+  it("refuses a save with STALE when its own re-read set part of a hand edit aside, so the page reads the notice (#235)", async () => {
     const shortcuts = store()
     await shortcuts.load()
     await shortcuts.save(remap, 1)
-    // A hand edit that keeps the same readable entries and adds a damaged one: no new revision, so the save goes ahead.
+    // A hand edit that keeps the same readable entries and adds a damaged one: no new revision, but something was set aside.
     await writeFile(path(), JSON.stringify({ ...remap, bindings: [...remap.bindings, 42] }))
     const next = withBindings([{ command: 'query.execute', key: 'ctrl+shift+e' }])
-    expect(await shortcuts.save(next, 2)).toEqual({ revision: 3 })
+    expect(await failure(shortcuts.save(next, 2))).toMatchObject({ code: 'STALE' })
     expect(await quarantined()).toHaveLength(1)
-    expect(await shortcuts.load()).toEqual({ file: next, revision: 3, salvaged: true, notice: salvageNotice })
-    // A later save clears it.
-    await shortcuts.save(remap, 3)
-    expect(await shortcuts.load()).toMatchObject({ salvaged: false })
+    expect(await onDisk()).toEqual(remap)
+    // The page reads again (as ShortcutsService does after STALE) and gets the notice with its id; the same revision saves.
+    const load = await shortcuts.load()
+    expect(load).toEqual({ file: remap, revision: 2, salvaged: true, notice: salvageNotice, noticeId: 1 })
+    expect(await shortcuts.save(next, 2)).toEqual({ revision: 3 })
+    expect(await shortcuts.load()).toEqual({ file: next, revision: 3, salvaged: false })
+  })
+
+  it("reset to the empty file on a save's re-read is refused too, though the file equals what main holds (#235)", async () => {
+    const shortcuts = store()
+    await shortcuts.load()
+    await writeFile(path(), '{ broken')
+    expect(await failure(shortcuts.save(remap, 1))).toMatchObject({ code: 'STALE' })
+    expect(await shortcuts.load()).toMatchObject({ revision: 1, notice: resetNotice('json') })
+  })
+
+  it('names each notice, so one repeated after a valid hand edit is not a new one (#236)', async () => {
+    await writeFile(path(), '{ broken')
+    const shortcuts = store()
+    const first = await shortcuts.load()
+    expect(first).toMatchObject({ revision: 1, noticeId: 1 })
+    // A valid hand edit is a new revision; main keeps the old notice until a save, with the same id.
+    await writeFile(path(), JSON.stringify(remap))
+    expect(await shortcuts.load()).toMatchObject({ revision: 2, notice: first.notice, noticeId: 1 })
+    // A second damaged edit raises a new notice in the same words, with a new id.
+    await writeFile(path(), '{ broken again')
+    expect(await shortcuts.load()).toMatchObject({ revision: 3, notice: first.notice, noticeId: 2 })
+  })
+
+  it('saves twice in a row from the revision it answered, even with a gesture choice the catalogue does not offer (#238)', async () => {
+    const shortcuts = store(), events: ShortcutsSnapshot[] = []
+    shortcuts.onDidChange(snapshot => events.push(snapshot))
+    await shortcuts.load()
+    const draft = { ...emptyShortcutFile, gestures: { 'grid.addToSelection': 'shift' } }
+    expect(await shortcuts.save(draft, 1)).toEqual({ revision: 2 })
+    // Main holds what its re-read will read: the unoffered choice kept in unknown.
+    expect(shortcuts.current()).toEqual({ ...emptyShortcutFile, unknown: [{ gesture: 'grid.addToSelection', choice: 'shift' }] })
+    expect(await shortcuts.save(draft, 2)).toEqual({ revision: 2 })
+    expect(await shortcuts.save(shortcuts.current(), 2)).toEqual({ revision: 2 })
+    expect(events).toHaveLength(1)
   })
 
   it('leaves a newer version\'s file alone and refuses to write over it', async () => {
     const newer = JSON.stringify({ version: 2, bindings: [] })
     await writeFile(path(), newer)
     const shortcuts = store()
-    expect(await shortcuts.load()).toEqual({ file: emptyShortcutFile, revision: 1, salvaged: false, notice: shortcutSentences.newer })
+    expect(await shortcuts.load()).toEqual({ file: emptyShortcutFile, revision: 1, salvaged: false, notice: shortcutSentences.newer, noticeId: 1 })
     expect((await failure(shortcuts.save(remap, 1)) as Error).message).toBe(shortcutSentences.newer)
     expect(await readFile(path(), 'utf8')).toBe(newer)
     expect(await quarantined()).toEqual([])
@@ -253,7 +289,7 @@ describe('shortcuts file', () => {
     const target = join(directory, 'target.json')
     await writeFile(target, '{ broken')
     await linkOrSkip(target, skip)
-    expect(await store().load()).toEqual({ file: emptyShortcutFile, revision: 1, salvaged: true, notice: resetNotice('json') })
+    expect(await store().load()).toEqual({ file: emptyShortcutFile, revision: 1, salvaged: true, notice: resetNotice('json'), noticeId: 1 })
     const [original] = await quarantined()
     expect((await lstat(join(directory, original))).isSymbolicLink()).toBe(true)
     expect(resolve(directory, await readlink(join(directory, original)))).toBe(target)

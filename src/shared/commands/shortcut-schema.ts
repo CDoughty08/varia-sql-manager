@@ -105,12 +105,27 @@ export function readShortcutFile(raw: unknown, options: ShortcutReadOptions = {}
   if (raw.version !== shortcutFileVersion) return { ok: false, error: 'invalid' }
   const problems: string[] = []
   const unknown: unknown[] = []
-  const keepUnknown = (value: unknown, what: string) => {
-    if (unknown.length >= shortcutLimits.unknown) problems.push(`${what} was dropped: the file keeps at most ${shortcutLimits.unknown} unknown records.`)
-    else if (!unknownRecordSchema.safeParse(value).success) problems.push(`${what} was dropped: an unknown record is limited to ${shortcutLimits.unknownBytes} bytes.`)
-    else unknown.push(value)
+  /** Records this read moved to `unknown` (not those the file already kept there), by their index in `unknown`. */
+  const moved: { index: number; what: string }[] = []
+  const keepUnknown = (value: unknown, what: string, move = true): boolean => {
+    if (unknown.length >= shortcutLimits.unknown) { problems.push(`${what} was dropped: the file keeps at most ${shortcutLimits.unknown} unknown records.`); return false }
+    if (!unknownRecordSchema.safeParse(value).success) { problems.push(`${what} was dropped: an unknown record is limited to ${shortcutLimits.unknownBytes} bytes.`); return false }
+    if (move) moved.push({ index: unknown.length, what })
+    unknown.push(value)
+    return true
   }
-  if (Array.isArray(raw.unknown)) raw.unknown.forEach((value, index) => keepUnknown(value, `Unknown record ${index + 1}`))
+  // An earlier or older build kept these for a build that understands them: a binding that now parses and a gesture choice
+  // now offered go back where they belong (after the file's own entries, in their order), so a downgrade and an upgrade
+  // lose nothing. The rest stay verbatim.
+  const restoredBindings: ShortcutBinding[] = []
+  const restoredGestures: [string, string][] = []
+  if (Array.isArray(raw.unknown)) raw.unknown.forEach((value, index) => {
+    const binding = isRecord(value) ? shortcutBindingSchema.safeParse(value) : undefined
+    if (binding?.success) { restoredBindings.push(binding.data as ShortcutBinding); return }
+    if (options.gestures && isRecord(value) && Object.keys(value).length === 2 && typeof value.gesture === 'string' && typeof value.choice === 'string' &&
+      isGestureIdText(value.gesture) && options.gestures.get(value.gesture)?.includes(value.choice)) { restoredGestures.push([value.gesture, value.choice]); return }
+    keepUnknown(value, `Unknown record ${index + 1}`, false)
+  })
   else if (raw.unknown !== undefined) problems.push('The unknown records were dropped: they were not a list.')
 
   let scheme = 'default'
@@ -130,22 +145,39 @@ export function readShortcutFile(raw: unknown, options: ShortcutReadOptions = {}
     else problems.push(`${what} was dropped: it is not a shortcut.`)
   })
   else if (raw.bindings !== undefined) problems.push('The shortcuts were dropped: they were not a list.')
+  restoredBindings.forEach((binding, index) => {
+    if (bindings.length < shortcutLimits.bindings) bindings.push(binding)
+    else problems.push(`Restored shortcut ${index + 1} was dropped: the file keeps at most ${shortcutLimits.bindings} shortcuts.`)
+  })
 
   const gestures: Record<string, string> = Object.create(null)
   if (isRecord(raw.gestures)) Object.entries(raw.gestures).forEach(([id, choice], index) => {
     const what = `Gesture ${index + 1}`
     if (!isGestureIdText(id) || typeof choice !== 'string' || !gestureChoicePattern.test(choice)) { problems.push(`${what} was dropped: it is not a gesture setting.`); return }
     const choices = options.gestures?.get(id)
-    if (options.gestures && !choices?.includes(choice)) keepUnknown({ gesture: id, choice }, what)
+    // A choice this build does not offer moves to `unknown`; when that is full it stays here, where no view applies it.
+    if (options.gestures && !choices?.includes(choice) && unknown.length < shortcutLimits.unknown) keepUnknown({ gesture: id, choice }, what)
     else if (Object.keys(gestures).length >= shortcutLimits.gestures) problems.push(`${what} was dropped: the file keeps at most ${shortcutLimits.gestures} gestures.`)
     else gestures[id] = choice
   })
   else if (raw.gestures !== undefined) problems.push('The gesture settings were dropped: they were not an object.')
+  // The file's own setting wins over one kept for later.
+  restoredGestures.forEach(([id, choice], index) => {
+    if (Object.hasOwn(gestures, id)) return
+    if (Object.keys(gestures).length < shortcutLimits.gestures) gestures[id] = choice
+    else problems.push(`Restored gesture ${index + 1} was dropped: the file keeps at most ${shortcutLimits.gestures} gestures.`)
+  })
 
   for (const key of Object.keys(raw)) if (!['version', 'scheme', 'bindings', 'gestures', 'unknown'].includes(key)) keepUnknown({ [key]: raw[key] }, 'A member this build does not know')
-  const file: ShortcutFile = { version: shortcutFileVersion, scheme, bindings, gestures: { ...gestures }, unknown }
-  // Moving records to `unknown` can make the file a little larger than the text it came from: a file that loads must also save.
-  if (shortcutFileText(file) === undefined) return { ok: false, error: 'size' }
+  let file: ShortcutFile = { version: shortcutFileVersion, scheme, bindings, gestures: { ...gestures }, unknown }
+  // Moving records to `unknown` wraps each in a few bytes, so a file just under the limit can come out over it: a file that
+  // loads must also save. The records this read moved go first, last moved first, so the file's own entries stay.
+  while (!shortcutFileFits(file) && moved.length) {
+    const { index, what } = moved.pop()!
+    problems.push(`${what} was dropped: keeping it would make the file larger than ${shortcutLimits.fileBytes / 1024} KiB.`)
+    file = { ...file, unknown: file.unknown.filter((_, at) => at !== index) }
+  }
+  if (!shortcutFileFits(file)) return { ok: false, error: 'size' }
   return { ok: true, file, problems }
 }
 
@@ -155,11 +187,52 @@ export function readShortcutFile(raw: unknown, options: ShortcutReadOptions = {}
  * on write: a compact file near the limit that loads can also be saved.
  */
 export function shortcutFileText(file: ShortcutFile): string | undefined {
-  const pretty = JSON.stringify(file, null, 2) + '\n'
-  if (utf8Bytes(pretty) <= shortcutLimits.fileBytes) return pretty
-  // No newline here: a hand-written file at the limit may end without one.
-  const compact = JSON.stringify(file)
-  return utf8Bytes(compact) <= shortcutLimits.fileBytes ? compact : undefined
+  const form = shortcutFileForm(file)
+  // No newline after the compact form: a hand-written file at the limit may end without one.
+  return form === 'pretty' ? JSON.stringify(file, null, 2) + '\n' : form === 'compact' ? JSON.stringify(file) : undefined
+}
+/** Whether `shortcutFileText` has a form that fits, without building it. */
+const shortcutFileFits = (file: ShortcutFile): boolean => shortcutFileForm(file) !== undefined
+/**
+ * Which form fits. The compact text is about the size of what was read; the indented size is counted by walking the
+ * value with an early stop, since indentation grows with depth (a deeply nested unknown record under its 1 KiB limit
+ * indents to half a megabyte) and building that text on every read would stall main.
+ */
+function shortcutFileForm(file: ShortcutFile): 'pretty' | 'compact' | undefined {
+  const compact = utf8Bytes(JSON.stringify(file))
+  if (compact > shortcutLimits.fileBytes) return undefined
+  return prettyBytesWithin(file, shortcutLimits.fileBytes) ? 'pretty' : 'compact'
+}
+/** Whether `JSON.stringify(value, null, 2)` is at most `limit` UTF-8 bytes, for plain JSON values; stops once over. */
+function prettyBytesWithin(value: unknown, limit: number): boolean {
+  let total = 0
+  const add = (bytes: number) => (total += bytes) <= limit
+  const walk = (node: unknown, depth: number): boolean => {
+    if (Array.isArray(node)) {
+      if (!node.length) return add(2)
+      if (!add(2 + 2 * depth + 1)) return false // "[\n" … "\n" + indent + "]"
+      for (let index = 0; index < node.length; index++) {
+        const item = node[index]
+        if (!add(2 * (depth + 1) + (index ? 2 : 0))) return false // indent, and ",\n" before every item but the first
+        if (!walk(item === undefined || typeof item === 'function' || typeof item === 'symbol' ? null : item, depth + 1)) return false
+      }
+      return true
+    }
+    if (node !== null && typeof node === 'object') {
+      const entries = Object.entries(node).filter(([, item]) => item !== undefined && typeof item !== 'function' && typeof item !== 'symbol')
+      if (!entries.length) return add(2)
+      if (!add(2 + 2 * depth + 1)) return false
+      for (let index = 0; index < entries.length; index++) {
+        const [key, item] = entries[index]
+        if (!add(2 * (depth + 1) + (index ? 2 : 0) + utf8Bytes(JSON.stringify(key)) + 2)) return false // indent, key and ": "
+        if (!walk(item, depth + 1)) return false
+      }
+      return true
+    }
+    return add(utf8Bytes(JSON.stringify(node) ?? 'null'))
+  }
+  // The text ends with a newline.
+  return walk(value, 0) && add(1)
 }
 
 /** Parses and reads the file's text: `size` when it is over `shortcutLimits.fileBytes`, `invalid` when it is not JSON. */
