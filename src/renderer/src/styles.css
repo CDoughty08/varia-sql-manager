@@ -339,7 +339,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .recovery-dialog .connect-error { margin: 12px 0 0; }
 /* Tools › Options: SSMS's search box and page tree beside the page, dense rows (22 px), the focused row's description below. */
 /* Two classes: .connection-modal, later in this file, would otherwise set its own width. */
-.connection-modal.options-dialog { width: min(820px, calc(100vw - 48px)); height: min(600px, calc(100vh - 48px)); max-height: none; }
+.connection-modal.options-dialog { width: min(940px, calc(100vw - 48px)); height: min(680px, calc(100vh - 48px)); max-height: none; }
 .connection-modal.options-dialog:focus { outline: none; }
 .options-body { display: flex; flex: 1; min-height: 0; border-top: 1px solid var(--varia-dialog-separatorBackground); border-bottom: 1px solid var(--varia-dialog-separatorBackground); }
 .options-nav { flex: 0 0 clamp(180px, 28%, 240px); display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--varia-dialog-separatorBackground); }
@@ -383,6 +383,105 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .options-pages [aria-selected="true"], .options-row[data-focused], .options-form-row[data-focused] { outline: 1px solid CanvasText; outline-offset: -1px; }
   .options-row:has(:disabled) > label, .options-row :disabled, .options-form-row[data-disabled] { color: GrayText; }
   .options-dialog mark { color: Highlight; }
+}
+/* Tools › Options › Environment › Shortcuts: a table of the shortcuts of every command above SSMS's inspector. */
+.options-staged { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.shortcuts-page { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 4px 10px 8px; }
+.shortcuts-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.shortcuts-title { margin: 0; font-size: var(--varia-size-md); font-weight: 600; color: var(--varia-settings-headerForeground); }
+.shortcuts-head p { margin: 2px 0 0; }
+.shortcuts-muted { color: var(--varia-descriptionForeground); }
+.shortcuts-scheme, .shortcuts-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.shortcuts-scheme > span { flex: 1; }
+.shortcuts-scheme > button, .shortcuts-toolbar > button, .shortcuts-inspector button { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-color: var(--varia-button-border); }
+.shortcuts-toolbar > button[aria-pressed="true"] { background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); border-color: var(--varia-chip-activeBorder); transition: none; }
+.shortcuts-search { flex: 1 1 260px; display: flex; align-items: center; gap: 6px; min-width: 0; padding: 0 6px; border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); }
+.shortcuts-search[data-recording] { border-color: var(--varia-chip-activeBorder); }
+.connection-modal .shortcuts-search .shortcuts-search-input { flex: 1; min-width: 0; border: 0; background: transparent; padding: 3px 0; }
+.shortcuts-check { display: inline-flex; align-items: center; gap: 4px; }
+.shortcuts-count { margin-left: auto; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; }
+.shortcuts-table { flex: 1 1 160px; min-height: 120px; overflow: auto; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); }
+.shortcuts-table table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.shortcuts-table td { height: var(--varia-row); }
+.shortcuts-table th, .shortcuts-table td { padding: 0 6px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.shortcuts-table thead th { position: sticky; top: 0; z-index: 1; background: var(--varia-editorWidget-background); color: var(--varia-descriptionForeground); font-weight: 600; font-size: var(--varia-size-xs); border-bottom: 1px solid var(--varia-panel-border); }
+.shortcuts-table thead th:first-child { width: 42%; }
+.shortcuts-table table[data-platforms] thead th:first-child { width: 34%; }
+.shortcuts-group th { height: var(--varia-row); color: var(--varia-settings-headerForeground); font-weight: 600; font-size: var(--varia-size-xs); border-top: 1px solid var(--varia-panel-border); }
+.shortcuts-group-toggle { display: inline-flex; align-items: center; gap: 4px; padding: 0; font-weight: 600; font-size: var(--varia-size-xs); color: inherit; }
+.shortcuts-group-toggle[aria-expanded="true"] .codicon { transform: rotate(90deg); }
+.shortcuts-table tr[data-row] { cursor: default; }
+.shortcuts-table tr[data-row]:focus { outline: none; }
+.shortcuts-table tr[data-row]:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.shortcuts-table tr[aria-selected="true"] td { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); }
+.shortcuts-table tr[aria-selected="true"] .shortcuts-muted, .shortcuts-table tr[aria-selected="true"] .shortcuts-source { color: inherit; }
+.shortcuts-table tr.shortcuts-gesture { cursor: pointer; }
+.shortcuts-command { display: flex; align-items: center; gap: 6px; }
+.shortcuts-command-title { overflow: hidden; text-overflow: ellipsis; }
+.shortcuts-command-id { font-size: var(--varia-size-xs); overflow: hidden; text-overflow: ellipsis; }
+.shortcuts-dot, .shortcuts-nodot { flex: 0 0 6px; width: 6px; height: 6px; border-radius: var(--varia-radius-pill); }
+.shortcuts-dot { display: inline-block; background: var(--varia-documentTabs-modifiedIndicator); }
+.shortcuts-keys { display: inline-flex; gap: 3px; margin-right: 4px; }
+.shortcuts-keys[data-source="user"] kbd { border-color: var(--varia-chip-activeBorder); color: var(--varia-chip-activeForeground); background: var(--varia-chip-activeBackground); }
+.shortcuts-keys[data-source="removed"] kbd { text-decoration: line-through; color: var(--varia-disabledForeground); }
+.shortcuts-source-cell { display: flex; align-items: center; gap: 6px; }
+.shortcuts-source { display: inline-flex; align-items: center; gap: 3px; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.shortcuts-source[data-source="user"] { color: var(--varia-chip-activeForeground); font-weight: 600; }
+.shortcuts-source > .codicon { font-size: var(--varia-glyph-sm); }
+.shortcuts-reset { padding: 0 6px; font-size: var(--varia-size-xs); }
+.shortcuts-empty { text-align: center; padding: 12px; white-space: normal; }
+.shortcuts-link { padding: 0; text-decoration: underline; }
+.shortcuts-inspector { flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); }
+.shortcuts-inspector-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.shortcuts-inspector-head .shortcuts-muted { font-size: var(--varia-size-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shortcuts-inspector-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 12px; }
+.shortcuts-new { margin: 0; padding: 0; border: 0; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.shortcuts-new:disabled { opacity: .45; }
+.shortcuts-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.shortcuts-field > .shortcuts-muted { font-size: var(--varia-size-xs); }
+.shortcuts-list, .shortcuts-used { list-style: none; margin: 0; padding: 0; min-height: 22px; display: flex; flex-direction: column; gap: 2px; }
+.shortcuts-list > li { display: flex; align-items: center; gap: 6px; }
+.shortcuts-list > li > button { margin-left: auto; padding: 0 6px; }
+.shortcuts-lock { margin-left: auto; color: var(--varia-descriptionForeground); }
+.shortcuts-capture-row { display: flex; gap: 6px; }
+.connection-modal .shortcuts-capture { flex: 1; min-width: 0; }
+.shortcuts-capture[data-pending] { border-color: var(--varia-chip-activeBorder); }
+.shortcuts-message { display: flex; align-items: flex-start; gap: 6px; margin: 0; padding: 4px 8px; border-radius: var(--varia-radius-sm); overflow-wrap: anywhere; }
+.shortcuts-message > span { display: flex; flex-direction: column; gap: 2px; }
+.shortcuts-message[data-kind="refused"], .shortcuts-message[data-kind="conflict"] { background: var(--varia-banner-errorBackground); color: var(--varia-banner-errorForeground); }
+.shortcuts-message[data-kind="warning"], .shortcuts-message[data-kind="shadow"] { background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); }
+.shortcuts-message[data-kind="ok"], .shortcuts-message[data-kind="info"], .shortcuts-message[data-kind="pending"] { background: var(--varia-statusPill-infoBackground); color: var(--varia-statusPill-infoForeground); }
+.shortcuts-banner { display: flex; align-items: flex-start; gap: 8px; padding: 6px 10px; border-radius: var(--varia-radius-sm); overflow-wrap: anywhere; }
+.shortcuts-banner > div { flex: 1; min-width: 0; }
+.shortcuts-banner ul { margin: 3px 0 0; padding-left: 16px; }
+.shortcuts-banner > button { color: inherit; }
+.shortcuts-banner[data-kind="warning"] { background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); }
+.shortcuts-banner[data-kind="error"] { background: var(--varia-banner-errorBackground); color: var(--varia-banner-errorForeground); }
+.shortcuts-banner[data-kind="info"] { background: var(--varia-statusPill-infoBackground); color: var(--varia-statusPill-infoForeground); }
+.shortcuts-mouse { flex: 1; overflow: auto; list-style: none; margin: 0; padding: 0; }
+.shortcuts-mouse > li { display: flex; justify-content: space-between; gap: 12px; min-height: var(--varia-row); align-items: center; padding: 0 6px; }
+.shortcuts-scrim { position: absolute; inset: 0; z-index: 2; display: grid; place-items: center; background: var(--varia-dialog-backdropBackground); }
+.shortcuts-sheet { width: min(460px, calc(100% - 24px)); max-height: calc(100% - 24px); overflow: auto; display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-popover); }
+.shortcuts-sheet:focus { outline: none; }
+.shortcuts-sheet h4 { margin: 0; font-size: var(--varia-size-md); }
+.shortcuts-sheet p { margin: 0; }
+.shortcuts-sheet-options { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 4px; }
+.shortcuts-sheet-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-top: 4px; }
+.shortcuts-sheet-actions > button { min-width: 78px; border-color: var(--varia-button-border); }
+.shortcuts-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 0; }
+.shortcuts-facts > div { display: contents; }
+.shortcuts-facts dt { color: var(--varia-descriptionForeground); }
+.shortcuts-facts dd { margin: 0; }
+.shortcuts-facts ul { margin: 0; padding-left: 14px; }
+.shortcuts-import-mode { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; border: 0; }
+.shortcuts-import-mode label { display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); }
+.shortcuts-import-mode label:has(:checked) { border-color: var(--varia-chip-activeBorder); background: var(--varia-chip-activeBackground); }
+.shortcuts-import-mode label > span { display: flex; flex-direction: column; }
+@media (forced-colors: active) {
+  .shortcuts-table tr[aria-selected="true"] td { outline: 1px solid CanvasText; outline-offset: -1px; }
+  .shortcuts-dot { background: CanvasText; forced-color-adjust: none; }
+  .shortcuts-keys[data-source="removed"] kbd { color: GrayText; }
+  .shortcuts-message, .shortcuts-banner { border: 1px solid CanvasText; }
 }
 /* The failure screen keeps a draggable strip where the title bar was, under the native window controls. */
 .shell-failure { height: 100vh; overflow: auto; padding: calc(env(titlebar-area-height, 34px) + 24px) 32px 32px; background: var(--varia-editor-background); color: var(--varia-foreground); font-size: var(--varia-size-md); }

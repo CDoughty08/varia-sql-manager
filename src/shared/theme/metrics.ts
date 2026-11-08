@@ -82,7 +82,7 @@ export const glyphUse: Readonly<Record<GlyphSizeName, readonly string[]>> = {
   badge: ['.oe-icon .oe-badge'],
   sm: [
     '.tab-close .codicon', '.tab-pin .codicon', '.tab-select .tab-readonly', '.tab-select .tab-running', '.connection-save-actions .codicon', '.query-status-state .codicon', '.output-status .codicon', '.memory-indicator .codicon', '.update-status .codicon', '.oe-active > .codicon',
-    '.editor-status .codicon', '.index-status .codicon', '.status-pill > .codicon', '.status-pill > .icon', '.chip > .codicon', '.chip > .icon', '.live-pill > .codicon', '.stale-badge > .codicon',
+    '.editor-status .codicon', '.index-status .codicon', '.status-pill > .codicon', '.status-pill > .icon', '.chip > .codicon', '.chip > .icon', '.live-pill > .codicon', '.stale-badge > .codicon', '.shortcuts-source > .codicon',
     '.tile-caption > .codicon'
   ],
   md: ['.icon'],
@@ -119,7 +119,7 @@ export const densityUse: Readonly<Record<keyof DensityMetrics, readonly string[]
   header: ['.title-bar'],
   bar: ['.editor-empty > .editor-group-actions', '.explorer-header', '.peek-head', '.query-bar', '.output-toolbar', '.document-script-head', '.activity-pane-tabs [role="tab"]'],
   control: ['.icon-button', '.object-search-field', '.object-search-filter-button', '.command-centre', '.query-bar-action', '.query-connection', '.document-verb', '.property-input', '.property-field-control > .property-input-action > .property-input', '.property-value.restore-to', '.activity-select', '.activity-tile-toggle'],
-  row: ['.explorer-row', '.explorer-pin-more', '.skeleton-row', '.document-nav-item', '.server-files-head', '.server-files-row', '.new-database-cell', '.attach-database-grid .attach-database-cell', '.user-mapping-head', '.new-login-credentials-grid th', '.new-login-credentials-grid td'],
+  row: ['.explorer-row', '.explorer-pin-more', '.skeleton-row', '.document-nav-item', '.server-files-head', '.server-files-row', '.new-database-cell', '.attach-database-grid .attach-database-cell', '.user-mapping-head', '.new-login-credentials-grid th', '.new-login-credentials-grid td', '.shortcuts-table td', '.shortcuts-group th'],
   status: ['.status-bar', '.query-status-bar']
 }
 /** Bar and row heights in px. Compact is the default and the only one :root sets; Comfortable is the planned option. */

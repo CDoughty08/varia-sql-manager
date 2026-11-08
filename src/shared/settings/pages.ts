@@ -2,7 +2,7 @@ import type { SettingPage } from './types'
 
 /**
  * The Options tree in SSMS 22's order, one node a line. Pages added later go where SSMS has them: Environment ›
- * General, AutoRecover, Documents, Fonts and Colors, Keyboard, then Varia's own Live Data and Object Explorer; Text Editor › General, Editor
+ * General, AutoRecover, Documents, Fonts and Colors, Shortcuts (SSMS's Keyboard), then Varia's own Live Data and Object Explorer; Text Editor › General, Editor
  * Tab and Status Bar, Transact-SQL; Varia's own Activity Monitor last. tests/settings-catalog.test.ts's `expectedTree` lists the same tree.
  */
 export const settingPages = [
@@ -11,7 +11,7 @@ export const settingPages = [
   { id: 'environment.autoRecover', title: 'AutoRecover', parent: 'environment', layout: 'form', description: 'Copies of queries with unsaved changes, offered after Varia SQL Manager closes unexpectedly.' },
   { id: 'environment.documents', title: 'Documents', parent: 'environment', layout: 'form' },
   { id: 'environment.fontsAndColors', title: 'Fonts and Colors', parent: 'environment', layout: 'form', description: 'Colors come from the color theme (View › Theme).' },
-  { id: 'environment.keyboard', title: 'Keyboard', parent: 'environment', layout: 'keyboard', description: 'Shortcuts follow SSMS\'s defaults and cannot be changed yet. The command palette (F1) shows each command\'s shortcut.' },
+  { id: 'environment.shortcuts', title: 'Shortcuts', parent: 'environment', layout: 'shortcuts', description: 'Keyboard and mouse shortcuts: SSMS\'s defaults, your changes, and the scope each works in. Changes apply when you choose OK.' },
   { id: 'environment.productUpdates', title: 'Product Updates', parent: 'environment', layout: 'form', description: 'How Varia SQL Manager finds, downloads and installs new releases.' },
   { id: 'environment.liveData', title: 'Live Data', parent: 'environment', layout: 'form', description: 'Live views, such as the Activity Monitor: when they pause while hidden, and how much chart history they keep. Not in SSMS.' },
   { id: 'environment.objectExplorer', title: 'Object Explorer', parent: 'environment', layout: 'form' },

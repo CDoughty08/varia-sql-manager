@@ -39,12 +39,16 @@ describe('Options search', () => {
     expect(treeRows(new Set(), found.shown).map(row => row.page.title)).toEqual(['Query Execution', 'SQL Server', 'General'])
     expect(highlightParts('Execution time-out', ' TIME-out')).toEqual([{ text: 'Execution ', match: false }, { text: 'time-out', match: true }])
   })
-  it('matches descriptions, keywords, page paths, the theme note and the Keyboard page\'s words', () => {
+  it('matches descriptions, keywords, page paths, the theme note and the Shortcuts page\'s words', () => {
     expect(searchPages('waits indefinitely', 'win32')!.pages).toEqual(['queryExecution.sqlServer.general'])
     expect(searchPages('csv', 'win32')!.pages).toEqual(['queryResults.sqlServer.grid'])
     expect(searchPages('transact-sql', 'win32')!.pages).toEqual(['textEditor.transactSql.general', 'textEditor.transactSql.tabs'])
     expect(searchPages('color theme', 'win32')!.pages).toContain('environment.general')
-    expect(searchPages('shortcut', 'win32')!.pages).toEqual(['environment.keyboard'])
+    // SSMS calls the page Keyboard; it also answers to Visual Studio Code's and other tools' words, and to mouse gestures.
+    for (const word of ['shortcut', 'Keyboard', 'keybinding', 'gesture', 'hotkey', 'keymap', 'chord', 'mapping'])
+      expect(searchPages(word, 'win32')!.pages, word).toEqual(['environment.shortcuts'])
+    // Text Editor › General has a mouse setting too.
+    expect(searchPages('mouse', 'win32')!.pages).toEqual(['environment.shortcuts', 'textEditor.general'])
     expect(searchPages('follow active query', 'win32')!.pages).toEqual(['environment.objectExplorer'])
   })
   it('finds nothing for text nothing has, and filters nothing for an empty query', () => {

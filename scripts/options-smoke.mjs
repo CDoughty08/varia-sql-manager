@@ -2,7 +2,10 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
-import { backendReady, editorText as editorTextOf, optionsDescription, optionsForm, optionsHeading, optionsNotes, toolbarButton, warningBanner as warningBannerOf } from './fixtures/ui.mjs'
+import {
+  backendReady, documentTabSlots, editorText as editorTextOf, menubar, movePane, optionsDescription, optionsForm, optionsHeading, optionsNotes, pane, popoutDockButton, popoutTabs, resultGrid,
+  shortcutsInspector, shortcutsRow, shortcutsSearch, shortcutsSheet, shortcutsTable, toolbarButton, warningBanner as warningBannerOf
+} from './fixtures/ui.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 
 // Tools › Options over the fake backend (tests/fixtures/backend.mjs, workbench mode), which records each request in
@@ -96,7 +99,7 @@ try {
   await expect(optionsNotes(dialog()).first()).toHaveText('Color theme: View › Theme')
   for (const name of ['Text Editor', 'Transact-SQL', 'Query Execution', 'Query Results', 'SQL Server Object Explorer']) await node(name).click()
   expect(await treeNames()).toEqual([
-    'Environment', '  General', '  AutoRecover', '  Documents', '  Fonts and Colors', '  Keyboard', '  Product Updates', '  Live Data', '  Object Explorer', 'Text Editor', '  General', '  Editor Tab and Status Bar', '  Transact-SQL', '    General', '    Tabs', 'Query Execution', '  SQL Server', '    General', '    Advanced',
+    'Environment', '  General', '  AutoRecover', '  Documents', '  Fonts and Colors', '  Shortcuts', '  Product Updates', '  Live Data', '  Object Explorer', 'Text Editor', '  General', '  Editor Tab and Status Bar', '  Transact-SQL', '    General', '    Tabs', 'Query Execution', '  SQL Server', '    General', '    Advanced',
     'Query Results', '  SQL Server', '    Results to Grid', 'SQL Server Object Explorer', '  Commands', '  Scripting', 'Activity Monitor',
     'SQL Server Integration Services'
   ])
@@ -117,9 +120,11 @@ try {
   await page.keyboard.press('Home')
   await expect(node('Environment')).toBeFocused()
   await expect(heading()).toHaveText('Environment › General')
-  // The Keyboard page explains that shortcuts follow SSMS's and cannot be changed yet.
-  await node('Keyboard').click()
-  await expect(optionsNotes(dialog())).toContainText('cannot be changed yet')
+  // Shortcuts (SSMS's Keyboard) is a page of its own layout: no notes, no description pane, no Reset to Defaults.
+  await node('Shortcuts').click()
+  await expect(dialog().getByRole('heading', { name: 'Keyboard and mouse shortcuts', exact: true })).toBeVisible()
+  await expect(shortcutsTable(dialog())).toBeVisible()
+  await expect(optionsDescription(dialog())).toHaveCount(0)
   // Fonts and Colors says where colors are set, above its Size row and while that row is focused.
   await node('Fonts and Colors').click()
   await field('Size').focus()
@@ -150,7 +155,7 @@ try {
   console.log('Options checks: Alt+T, O opens Environment › General with the search box focused, the tree has SSMS\'s 22 nodes plus Live Data and its keys, AutoRecover has SSMS\'s defaults, and Live Data its own.')
 
   // 2. Ctrl+E (⌘E) searches: "time-out" leaves Query Execution › SQL Server › General, highlighted; Escape clears, then closes.
-  await node('Keyboard').focus()
+  await node('Shortcuts').focus()
   await page.keyboard.press(searchKey)
   await expect(search()).toBeFocused()
   await page.keyboard.type('time-out')
@@ -302,6 +307,104 @@ try {
     await expect.poll(async () => (await stored())?.values['textEditor.sql.wordWrap']).toBe(true)
   }
   console.log('Options checks: the values survive a restart, and Alt+Z saves word wrap.')
+
+  // 5b. Environment › Shortcuts: New Query's Ctrl+N removed and Shift+F9 assigned. Cancel discards both; OK stores them in
+  // shortcuts.json and applies them to the File menu, the main window's keys and a popout's; a file that is not a
+  // shortcuts file is refused without changing anything; Reset All brings Ctrl+N back.
+  const newKey = mac ? '⌘N' : 'Ctrl+N'
+  const shortcutsFile = () => readFile(join(profile, 'shortcuts.json'), 'utf8').then(JSON.parse, () => null)
+  const queryTabs = () => documentTabSlots(page).count()
+  const fileMenuKeys = async () => {
+    await menubar(page).getByRole('menuitem', { name: 'File', exact: true }).click()
+    const item = page.getByRole('menu', { name: 'File', exact: true }).getByRole('menuitem', { name: 'New Query', exact: true })
+    await expect(item).toBeVisible()
+    const keys = await item.getAttribute('aria-keyshortcuts')
+    await page.keyboard.press('Escape')
+    return keys
+  }
+  const editor = () => textbox().filter({ visible: true })
+  /** Presses a key after `focus` in `target`'s window, and checks how many query tabs it opened (0 or 1). */
+  const opens = async (target, focus, key, count) => {
+    const before = await queryTabs()
+    await focus()
+    await target.keyboard.press(key)
+    if (count) return expect.poll(queryTabs).toBe(before + count)
+    // A key that runs nothing changes nothing: two frames are enough for one that would.
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    expect(await queryTabs()).toBe(before)
+  }
+  async function remapNewQuery() {
+    await openOptions()
+    await node('Shortcuts').click()
+    await shortcutsSearch(dialog()).fill('New Query')
+    await shortcutsRow(dialog(), 'New Query').click()
+    const inspector = shortcutsInspector(dialog(), 'New Query')
+    await inspector.getByRole('button', { name: 'Remove ' + newKey, exact: true }).click()
+    const capture = inspector.getByLabel('Press shortcut keys', { exact: true })
+    await capture.focus()
+    await page.keyboard.press('Shift+F9')
+    await expect(capture).toHaveValue(mac ? '⇧F9' : 'Shift+F9')
+    await inspector.getByRole('button', { name: 'Assign', exact: true }).click()
+    await expect(dialog()).toContainText('2 shortcut changes staged · applied on OK')
+  }
+  if (!mac) {
+    await remapNewQuery()
+    await dialog().getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(dialog()).toHaveCount(0)
+    expect(await shortcutsFile()).toBeNull()
+    expect(await fileMenuKeys()).toBe('Control+N')
+
+    await remapNewQuery()
+    await dialog().getByRole('button', { name: 'OK', exact: true }).click()
+    await expect(dialog()).toHaveCount(0)
+    await expect.poll(async () => (await shortcutsFile())?.bindings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ command: 'file.new', key: 'mod+n', remove: true }), expect.objectContaining({ command: 'file.new', key: 'shift+f9' })
+    ]))
+    await expect.poll(fileMenuKeys).toBe('Shift+F9')
+    await opens(page, () => editor().focus(), 'Control+n', 0)
+    await opens(page, () => editor().focus(), 'Shift+F9', 1)
+    // A popout routes keys through the same rules: Shift+F9 in the Results window opens a query in the main window.
+    await editor().focus()
+    await page.keyboard.press('Control+A')
+    await page.keyboard.insertText('SELECT 1')
+    await page.keyboard.press('F5')
+    await expect(resultGrid(page)).toBeVisible()
+    const popped = application.waitForEvent('window', { timeout: 30000 })
+    await movePane(page, 'results', 'window')
+    const results = await popped
+    results.setDefaultTimeout(15000)
+    results.on('pageerror', error => failures.push(error.message))
+    await expect(popoutTabs(results)).toBeVisible()
+    await opens(results, () => resultGrid(results).click(), 'Shift+F9', 1)
+    await popoutDockButton(results).click()
+    await expect(pane(page, 'results')).toBeVisible()
+
+    // Import refuses a file that is not a shortcuts file, and says nothing changed.
+    const notShortcuts = join(control, 'not-shortcuts.json')
+    await writeFile(notShortcuts, '{ "version": 1, "bindings": 7 }')
+    await application.evaluate(({ dialog: dialogs }, path) => { dialogs.showOpenDialog = async () => ({ canceled: false, filePaths: [path] }) }, notShortcuts)
+    await openOptions()
+    await node('Shortcuts').click()
+    await dialog().getByRole('button', { name: 'Import…', exact: true }).click()
+    const refused = shortcutsSheet(dialog(), 'This file cannot be imported')
+    await expect(refused).toContainText('Nothing was changed.')
+    await refused.getByRole('button', { name: 'OK', exact: true }).click()
+    await expect(refused).toHaveCount(0)
+    await expect(dialog()).not.toContainText('staged · applied on OK')
+
+    // Reset All, then OK: the file keeps no bindings and Ctrl+N is New Query's again.
+    await dialog().getByRole('button', { name: 'Reset All…', exact: true }).click()
+    const reset = shortcutsSheet(dialog(), 'Reset all shortcuts?')
+    await reset.getByRole('button', { name: 'Reset All', exact: true }).click()
+    await expect(reset).toHaveCount(0)
+    await expect(dialog()).toContainText('2 shortcut changes staged · applied on OK')
+    await dialog().getByRole('button', { name: 'OK', exact: true }).click()
+    await expect(dialog()).toHaveCount(0)
+    await expect.poll(async () => (await shortcutsFile())?.bindings).toEqual([])
+    await expect.poll(fileMenuKeys).toBe('Control+N')
+    await opens(page, () => editor().focus(), 'Control+n', 1)
+    console.log('Options checks: Shortcuts remaps New Query; Cancel discards it, OK applies it to the menu, the main window and a popout, a bad import is refused, and Reset All restores Ctrl+N.')
+  }
 
   // 6. A value this version does not support is reset and named in a warning; the file is kept, the rest stays.
   await close()
