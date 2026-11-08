@@ -373,7 +373,8 @@ internal static class HostChecks
         Thread.Sleep(1200);
         host.Valve.Open();
         var closed = host.Next(FrameKind.Response);
-        var fall = Memory(3000, used => used == 0);
+        // Returns as soon as the event comes; the bound only matters on a starved runner (3 s missed on macOS beside vitest).
+        var fall = Memory(15000, used => used == 0);
         check(rise > 0 && blocked && closedWhileFull && closed?.Header.Id == 2 && fall == 0 && store.UsedBytes == 0,
             "a results.memory fall refused while the control lane is full is sent once it drains (rise " + rise + ", fall " + fall + ")");
     }

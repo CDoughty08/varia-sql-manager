@@ -47,7 +47,6 @@ function jobs(path: string): Map<string, Job> {
 const smoke = (step: Step) => /test:smoke|-smoke\.mjs|smoke-shards\.mjs/.test(step.run)
 const bench = (step: Step) => /npm run bench|check-bench/.test(step.run)
 const runAlways = "github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'"
-const mainOnly = "github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.regression-suite == 'none')"
 const liveGroups = Number(/CiGroups = (\d+);/.exec(readFileSync('backend/Varia.Backend.Tests/LiveGroups.cs', 'utf8'))?.[1])
 
 describe('CI workflow', () => {
@@ -60,7 +59,7 @@ describe('CI workflow', () => {
       expect(kinds.size, name).toBeLessThanOrEqual(1)
     }
     expect(own.filter(([, job]) => job.steps.some(smoke)).map(([name]) => name)).toEqual(['smoke-linux', 'smoke-windows'])
-    expect(own.filter(([, job]) => job.steps.some(bench)).map(([name]) => name)).toEqual(['bench-linux', 'bench-desktop'])
+    expect(own.filter(([, job]) => job.steps.some(bench)).map(([name]) => name)).toEqual(['bench-linux'])
     // The checks run on every platform; the live checks in LiveGroups' groups, and the live vitest suites and the Kerberos
     // check after the first group on Linux, whichever fails.
     expect(workflow.get('check')!.matrix.get('os')).toBe('ubuntu-24.04, windows-latest, macos-latest')
@@ -97,8 +96,7 @@ describe('CI workflow', () => {
   })
   it('runs every platform on every pull request, drafts included, in at most 11 jobs', () => {
     expect([...workflow.values()].map(job => job.if ?? '').filter(condition => /draft/.test(condition))).toEqual([])
-    // Only report-only work waits for main: the desktop benchmarks enforce no floors.
-    for (const [name, job] of own) expect(job.if, name).toBe(name === 'bench-desktop' ? mainOnly : runAlways)
+    for (const [name, job] of own) expect(job.if, name).toBe(runAlways)
     const pullRequest = own.filter(([, job]) => job.if === runAlways)
     const platforms = new Set(pullRequest.flatMap(([, job]) => job.runsOn === '${{ matrix.os }}' ? job.matrix.get('os')!.split(', ') : [job.runsOn!]))
     expect([...platforms].sort()).toEqual(['macos-latest', 'ubuntu-24.04', 'windows-latest'])
@@ -107,5 +105,13 @@ describe('CI workflow', () => {
     expect(pullRequest.reduce((sum, [, job]) => sum + size(job), 0)).toBeLessThanOrEqual(11)
     // Linux repeats at 1024x768 only on main: the Windows shards run those suites at that size on every pull request.
     for (const step of workflow.get('smoke-linux')!.steps.filter(step => /1024x768x24/.test(step.run))) expect(step.if, step.name).toMatch(/github\.event_name == 'push'/)
+  })
+  it('cancels a superseded pull request or main run, never a manual one, and runs report-only benchmarks daily, not per push', () => {
+    const yaml = readFileSync('.github/workflows/ci.yml', 'utf8')
+    expect(yaml).toContain("group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' || github.event_name == 'push') && github.ref || github.run_id }}")
+    expect(yaml).toMatch(/\n {2}cancel-in-progress: true\n/)
+    const desktop = readFileSync('.github/workflows/bench-desktop.yml', 'utf8'), on = desktop.slice(desktop.indexOf('\non:'), desktop.indexOf('\nconcurrency:'))
+    expect(on).toMatch(/\n {2}schedule:\n {4}- cron: '[^']+'\n {2}workflow_dispatch:\n?$/)
+    expect(desktop).toContain('os: [windows-latest, macos-latest]')
   })
 })

@@ -15,8 +15,10 @@ on:
         default: none
 
 concurrency:
-  # A new push supersedes a pull request's earlier run; every main commit and manual run gets its own complete run.
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  # A new push supersedes the earlier run of its pull request, or of main: each pull request already tested its merge with main,
+  # and main pushes often come minutes apart (30 of 73 within 20 minutes), so a superseded main run mostly repeats that work.
+  # The newest main commit always gets a complete run. Manual runs are never cancelled.
+  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' || github.event_name == 'push') && github.ref || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -30,8 +32,9 @@ env:
 # the benchmarks run side by side, so a failure in one hides nothing in the others and the run takes as long as its
 # longest job. Every pull request runs every platform, drafts included: the repository is public, so runners cost nothing.
 # What a public repository does pay in is concurrency (20 jobs at once across the account, 5 of them macOS), so a pull request
-# runs 11 jobs: no job repeats another's work, and report-only work (the desktop benchmarks, Linux's 1024x768 repeats of
-# suites the Windows shards already run at that size) runs on main only.
+# runs 11 jobs: no job repeats another's work. Report-only work stays off pull requests: Linux's 1024x768 repeats of suites the
+# Windows shards already run at that size run on main only, and the desktop benchmarks run daily (bench-desktop.yml).
+# docs/ci.md measures all of this and holds the rules.
 jobs:
   check:
     name: Check (${{ matrix.os }})
@@ -326,53 +329,6 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: bench-linux
-          path: artifacts/bench/
-          if-no-files-found: ignore
-          retention-days: 30
-
-  bench-desktop:
-    name: Benchmarks (${{ matrix.os }})
-    # Report only (no floors), so pull requests leave them out: they would hold two runners, one of them macOS, which has the
-    # fewest concurrent slots.
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.regression-suite == 'none')
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    # Room for every timed step below (tests/ci-workflow.test.ts) plus the setup before them.
-    timeout-minutes: 35
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: npm
-      - uses: actions/setup-dotnet@v6
-        with:
-          global-json-file: global.json
-          cache: true
-          cache-dependency-path: backend/Varia.Backend/packages.lock.json
-      - run: npm ci --no-audit --no-fund
-      - name: Build the app and the Release backend
-        id: build
-        timeout-minutes: 10
-        run: npm run build:smoke
-      - name: IPC benchmarks (report only)
-        # Shared Windows and macOS runners vary too much for floors; the end-to-end runs follow the smoke tests' platforms.
-        timeout-minutes: 15
-        shell: bash
-        run: |
-          npm run bench
-          if [ "$RUNNER_OS" != macOS ]; then npm run bench:e2e; npm run bench:grid; fi
-          node scripts/check-bench.mjs
-      - name: Upload IPC benchmark results
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: bench-${{ matrix.os }}
           path: artifacts/bench/
           if-no-files-found: ignore
           retention-days: 30

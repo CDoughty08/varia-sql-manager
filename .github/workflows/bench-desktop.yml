@@ -1,0 +1,65 @@
+name: Desktop benchmarks
+
+# The Windows and macOS benchmarks are report only (shared Windows and macOS runners vary too much for floors; Linux's
+# enforced benchmarks run in CI). They used to run on every main push, 9 to 20 a day, holding two runners, one of them on
+# the 5 macOS slots; once a day on main, and by hand, reports the same trend (docs/ci.md).
+on:
+  schedule:
+    - cron: '17 7 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+
+jobs:
+  bench-desktop:
+    name: Benchmarks (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    # Room for every timed step below plus the setup before them.
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: backend/Varia.Backend/packages.lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Build the app and the Release backend
+        id: build
+        timeout-minutes: 10
+        run: npm run build:smoke
+      - name: IPC benchmarks (report only)
+        # Shared Windows and macOS runners vary too much for floors; the end-to-end runs follow the smoke tests' platforms.
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          npm run bench
+          if [ "$RUNNER_OS" != macOS ]; then npm run bench:e2e; npm run bench:grid; fi
+          node scripts/check-bench.mjs
+      - name: Upload IPC benchmark results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-${{ matrix.os }}
+          path: artifacts/bench/
+          if-no-files-found: ignore
+          retention-days: 30
