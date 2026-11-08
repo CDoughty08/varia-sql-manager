@@ -44,8 +44,8 @@ export function createFakeShortcutsService(initial: FakeShortcutsOptions = {}): 
     get: async () => ({ ok: true, value: { ...stored, salvaged: false } }),
     save: async (file, baseRevision) => {
       saves.push({ file, baseRevision })
-      if (failure) { const { error, code } = failure; failure = undefined; return { ok: false, error, ...code ? { code } : {} } as unknown as ApiResult<never> }
-      if (baseRevision !== stored.revision) return { ok: false, error: 'The shortcuts changed in another window.', code: 'STALE' } as unknown as ApiResult<never>
+      if (failure) { const { error, code } = failure; failure = undefined; return { ok: false, error, ...code ? { code } : {} } as ApiResult<never> }
+      if (baseRevision !== stored.revision) return { ok: false, error: 'The shortcuts changed in another window.', code: 'STALE' }
       stored = { file, revision: stored.revision + 1 }
       for (const listener of [...listeners]) listener(stored)
       return { ok: true, value: { revision: stored.revision } }

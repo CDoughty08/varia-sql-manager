@@ -249,7 +249,10 @@ describe('ResultClient', () => {
     await pending
     expect(handles[0].peekWindow(0, 10)).toBeDefined()
     expect(client.trackedResults).toBe(3)
+    const released = vi.fn(), releaseSubscription = client.onRelease(released)
     const closing = client.release([handles[0].key, handles[1].key])
+    expect(released).toHaveBeenCalledWith([handles[0].key, handles[1].key])
+    releaseSubscription.dispose()
     await settle()
     worker().toWorker({ t: 'end', rid: worker().fromWorker.find(request => request.t === 'close')!.rid, ok: true, result: { closed: 2, usedBytes: 0 } })
     await closing

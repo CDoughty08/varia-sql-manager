@@ -5,7 +5,7 @@ import { chordFromEvent, formatLabel, keybindingLabel, parseKeySpec, type Keybin
  * Routes key presses to a capture box: `KeybindingService.capture` in the workbench, which takes every key before menus,
  * access keys and dispatch (Tab excepted) and joins Ctrl/⌘+K with the next chord. Returns the function that stops it.
  */
-export type CaptureSource = (onChord: (chord: string) => void, options: { readonly onPrefix?: (chord: string) => void }) => () => void
+export type CaptureSource = (onChord: (chord: string) => void, options: { readonly onPrefix?: (chord: string) => void; readonly onPrefixCancel?: () => void }) => () => void
 
 /** How long a Ctrl/⌘+K prefix waits for its second key, as Monaco's chord mode (`nativeChordTimeout`). */
 const prefixTimeout = 5000
@@ -46,7 +46,7 @@ export default function CaptureField({ id, platform, value, onChange, capture, l
   const start = () => {
     if (!capture) return
     stop.current?.()
-    stop.current = capture(record, { onPrefix: chord => setPrefix({ chord, at: Date.now() }) })
+    stop.current = capture(record, { onPrefix: chord => setPrefix({ chord, at: Date.now() }), onPrefixCancel: () => setPrefix(undefined) })
   }
   const end = () => { stop.current?.(); stop.current = undefined; setPrefix(undefined) }
   useEffect(() => end, [])

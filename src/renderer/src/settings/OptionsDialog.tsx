@@ -16,8 +16,6 @@ import ShortcutsPage from './shortcuts/ShortcutsPage'
 import { sameShortcuts, stagedChanges } from './shortcuts/shortcut-draft'
 
 const shortcutsPage = 'environment.shortcuts'
-/** `KeybindingService.capture`, which routes every key to the Shortcuts page's capture box while it records. */
-type CaptureCapable = { readonly capture?: (onChord: (chord: string) => void, options: { readonly onPrefix?: (chord: string) => void }) => () => void }
 /** Fonts and Colors names the display item its rows are for, as SSMS's "Show settings for" list does (fixed for now). */
 const groupHeading = (pageId: string, label: string) => pageId === 'environment.fontsAndColors' ? `Show settings for: ${label}` : label
 
@@ -61,10 +59,8 @@ export default function OptionsDialog({ page: requested }: { page?: string }) {
   const shortcutsState = useShortcutsSnapshot()
   const [shortcutDraft, setShortcutDraft] = useState<ShortcutFile>(() => shortcuts.getSnapshot().file)
   const staged = stagedChanges(shortcutDraft, shortcutsState.file)
-  const capture = useMemo<CaptureSource | undefined>(() => {
-    const service = keybindings as CaptureCapable
-    return service.capture ? (onChord, options) => service.capture!(onChord, options) : undefined
-  }, [keybindings])
+  // KeybindingService.capture routes every key but Tab to the capture box while it records, so it stays the only key listener.
+  const capture = useMemo<CaptureSource>(() => (onChord, options) => keybindings.capture(onChord, options), [keybindings])
   const [page, setPage] = useState(() => firstPage(requested && pageById(requested) ? requested : 'environment.general'))
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set(ancestorIds(page)))
   const [treeFocus, setTreeFocus] = useState(page)

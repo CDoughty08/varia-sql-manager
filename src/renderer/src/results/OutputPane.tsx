@@ -9,6 +9,7 @@ import { gridLimits as g } from '../grid/constants'
 import ResultsStack, { stackNeed } from '../grid/ResultsStack'
 import ResultPlans from '../plans/ResultPlans'
 import EstimatedPlans from '../plans/EstimatedPlans'
+import RetainedPlans from '../plans/RetainedPlans'
 import type { EstimatedPlanState } from '../services/queries'
 import ClientStatisticsPane from '../statistics/ClientStatisticsPane'
 import EmptyState from '../kit/EmptyState'
@@ -137,7 +138,9 @@ const viewNames: Record<OutputPaneId, string> = { results: 'Results', messages: 
  * also holds the run summary and the copy and save strips, so they show once, wherever the panels are.
  */
 function OutputPane({ pane, tabId, query, connected, hint }: Props) {
-  const { results, panes, queries, queryPlans } = useWorkbench()
+  const { results, panes, queries, queryPlans, retainedPlans } = useWorkbench()
+  const history = useServiceSnapshot(retainedPlans)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const livePlan = useServiceSnapshot(queryPlans)[tabId]
   const all = useServiceSnapshot(results)
   const estimated = useServiceSnapshot(queries)[tabId]?.estimated
@@ -213,6 +216,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
         {views.map(view => <button key={view} {...tabProps(view)} aria-label={labels[view]}>{viewNames[view]}{badges[view]}</button>)}
       </div>
       {showTools && <ResultsToolbar />}
+      {pane === 'plan' && <button type="button" aria-pressed={historyOpen} onClick={() => setHistoryOpen(value => !value)}>Plan history ({history.entries.length})</button>}
       {pane === 'plan' && estimated ? <span className="output-status">Estimated{estimated.loading ? ' · Compiling…' : estimated.error ? ' · Unavailable' : ''}</span>
         : leader && tab ? <RunSummaryView tab={tab} now={now} /> : <span className="output-spacer" />}
       {/* Visual progress only: the output's live region announces how a copy or save ended. */}
@@ -221,7 +225,8 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
       {leader && tab?.jobNotice && <div className="job-strip job-notice">{tab.jobNotice}</div>}
       <PaneMenuButton pane={pane} />
     </div>
-    {pane === 'plan' && estimated ? <div ref={viewRef} className="output-view" role="tabpanel" id={panelId} aria-labelledby={tabIds[pane]}><EstimatedPlans state={estimated} /></div>
+    {pane === 'plan' && historyOpen ? <div className="output-view" role="tabpanel" id={panelId} aria-labelledby={views.length ? tabIds[pane] : undefined} aria-label={views.length ? undefined : 'Plan history'}><RetainedPlans active={visible.plan} /></div>
+      : pane === 'plan' && estimated ? <div ref={viewRef} className="output-view" role="tabpanel" id={panelId} aria-labelledby={tabIds[pane]}>{visible.plan && <EstimatedPlans state={estimated} tabId={tabId} visible={visible.plan} />}</div>
       : pane === 'statistics' ? <div ref={viewRef} className="output-view" role="tabpanel" id={panelId} aria-labelledby={views.length ? tabIds[pane] : undefined} aria-label={views.length ? undefined : 'Client Statistics'}><ClientStatisticsPane tabId={tabId} /></div>
       : !tab ? <EmptyState className="output-empty" icon={emptyIcons[pane]} title={emptyTitles[pane]} detail={!query ? 'Query results appear here for query tabs.' : hint ?? (connected ? 'Execute a query to view results and messages.' : 'Connect this query to a server to execute it.')} />
       : <div ref={viewRef} className="output-view" role="tabpanel" id={panelId} aria-labelledby={tabIds[pane]}>
@@ -230,7 +235,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
             : hasSets ? <ResultsStack key={tab.queryId} tabId={tabId} tab={tab} />
             : <EmptyState className="output-empty" icon="table" detail={tab.status === 'running' ? 'Result sets appear here as the query returns them.' : 'The query returned no result sets.'} />}
           {showStrip && <MessagesStrip tabId={tabId} tab={tab} fits={stripFits} maxHeight={stripMax} />}
-        </> : pane === 'plan' ? plans.length > 0 || livePlan ? <ResultPlans tabId={tabId} queryId={tab.queryId} plans={plans} order={tab.summary?.planOrder} live={livePlan} />
+        </> : pane === 'plan' ? plans.length > 0 || livePlan ? visible.plan && <ResultPlans tabId={tabId} queryId={tab.queryId} plans={plans} visible={visible.plan} order={tab.summary?.planOrder} live={livePlan} />
           : <EmptyState className="output-empty" icon="execution-plan" detail="A plan appears here when the query returns one, as SET SHOWPLAN_XML ON and SET STATISTICS XML ON do." />
           : <MessagesView tabId={tabId} tab={tab} />}
       </div>}

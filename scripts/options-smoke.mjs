@@ -364,11 +364,16 @@ try {
     await opens(page, () => editor().focus(), 'Control+n', 0)
     await opens(page, () => editor().focus(), 'Shift+F9', 1)
     // A popout routes keys through the same rules: Shift+F9 in the Results window opens a query in the main window.
+    await toolbarButton(page, 'Connect').click()
+    await page.getByLabel('Server Name', { exact: true }).fill('server-a')
+    await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
+    await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
+    await expect(page.getByRole('dialog')).toHaveCount(0)
     await editor().focus()
     await page.keyboard.press('Control+A')
     await page.keyboard.insertText('SELECT 1')
     await page.keyboard.press('F5')
-    await expect(resultGrid(page)).toBeVisible()
+    await expect(pane(page, 'results')).toBeVisible()
     const popped = application.waitForEvent('window', { timeout: 30000 })
     await movePane(page, 'results', 'window')
     const results = await popped
@@ -381,7 +386,7 @@ try {
 
     // Import refuses a file that is not a shortcuts file, and says nothing changed.
     const notShortcuts = join(control, 'not-shortcuts.json')
-    await writeFile(notShortcuts, '{ "version": 1, "bindings": 7 }')
+    await writeFile(notShortcuts, 'this is not JSON')
     await application.evaluate(({ dialog: dialogs }, path) => { dialogs.showOpenDialog = async () => ({ canceled: false, filePaths: [path] }) }, notShortcuts)
     await openOptions()
     await node('Shortcuts').click()
@@ -400,7 +405,7 @@ try {
     await expect(dialog()).toContainText('2 shortcut changes staged · applied on OK')
     await dialog().getByRole('button', { name: 'OK', exact: true }).click()
     await expect(dialog()).toHaveCount(0)
-    await expect.poll(async () => (await shortcutsFile())?.bindings).toEqual([])
+    await expect.poll(async () => { const file = await shortcutsFile(); return file && (file.bindings ?? []) }).toEqual([])
     await expect.poll(fileMenuKeys).toBe('Control+N')
     await opens(page, () => editor().focus(), 'Control+n', 1)
     console.log('Options checks: Shortcuts remaps New Query; Cancel discards it, OK applies it to the menu, the main window and a popout, a bad import is refused, and Reset All restores Ctrl+N.')

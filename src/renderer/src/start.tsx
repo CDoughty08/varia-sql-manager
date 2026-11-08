@@ -20,8 +20,7 @@ import App from './App'
 import { createWorkbench } from './core/workbench'
 import { registerJson } from './languages/json'
 import { WorkbenchProvider } from './core/WorkbenchContext'
-import { ShortcutsProvider } from './core/ShortcutsContext'
-import { ShortcutsService, shortcutsApiOf } from './core/ShortcutsService'
+import { ShortcutsService } from './core/ShortcutsService'
 import { toPlatform } from '../../shared/commands/keybindings'
 import { domThemeTarget, ThemeService } from './services/theme'
 import { SettingsService } from './settings/SettingsService'
@@ -45,7 +44,7 @@ export async function start(root: Root): Promise<void> {
   // them; none waits for main longer than its timeout.
   const [theme, settings, shortcuts] = await Promise.all([
     ThemeService.create(window.varia, domThemeTarget(monaco)), SettingsService.create(window.varia),
-    ShortcutsService.create({ api: shortcutsApiOf(window.varia), platform: toPlatform(window.varia.platform) })
+    ShortcutsService.create({ api: window.varia.shortcuts, platform: toPlatform(window.varia.platform) })
   ])
   const workbench = createWorkbench(window.varia, monaco, theme, settings, shortcuts)
   // Smoke tests drive the results API directly (backend-smoke.mjs), read the grids' counters (results-smoke.mjs), save
@@ -77,7 +76,7 @@ export async function start(root: Root): Promise<void> {
       }, workbench.ssisTree)
     })
   }
-  root.render(<React.StrictMode><ShellErrorBoundary><WorkbenchProvider workbench={workbench}><ShortcutsProvider shortcuts={workbench.shortcuts}><ShellFaultProbe /><App /></ShortcutsProvider></WorkbenchProvider></ShellErrorBoundary></React.StrictMode>)
+  root.render(<React.StrictMode><ShellErrorBoundary><WorkbenchProvider workbench={workbench}><ShellFaultProbe /><App /></WorkbenchProvider></ShellErrorBoundary></React.StrictMode>)
   // Workbench lifetime is outside React effects, including StrictMode's effect replay.
   // Reloading discards unsaved queries and ends every SQL session; main asks before allowing it.
   // A confirmed exit has already handled each document, so it is never blocked here.

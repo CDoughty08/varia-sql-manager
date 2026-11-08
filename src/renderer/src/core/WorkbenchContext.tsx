@@ -6,6 +6,8 @@ const Context = createContext<Workbench | null>(null)
 export function WorkbenchProvider({ workbench, children }: { workbench: Workbench; children: ReactNode }) {
   return <Context.Provider value={workbench}>{children}</Context.Provider>
 }
+/** The workbench, or null outside a WorkbenchProvider (services with their own provider fall back to it). */
+export function useOptionalWorkbench(): Workbench | null { return useContext(Context) }
 export function useWorkbench(): Workbench {
   const workbench = useContext(Context)
   if (!workbench) throw new Error('WorkbenchProvider is missing.')

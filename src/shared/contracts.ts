@@ -26,6 +26,7 @@ import type { ReloadPins, RestoredSession, SessionWrite } from './files/session'
 import type { LiveEnd, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from './live/schema'
 import type { ActivityDetailsRequest, ActivityDetailsResult, ActivityKillRequest, ActivityKillResult } from './activity/schema.ts'
 import type { PlanDocument } from './plans'
+import type { ShortcutFile } from './commands/shortcut-schema'
 
 export interface AdvancedConnectionOptions {
   commandTimeout: number
@@ -417,6 +418,28 @@ export type { ReloadPins, RestoredDocument, RestoredSession, SessionDocumentWrit
 /** `kind` (default 'sql') picks the save dialog's filters and the size limit. */
 export interface SaveSqlFile { fileId?: string; name: string; content: string; saveAs: boolean; kind?: DocumentKind }
 
+/** The user's shortcuts as main last saved or read them (`<userData>/shortcuts.json`). `revision` counts the content main
+ *  knows in this session; a save names the revision it started from. */
+export interface ShortcutsSnapshot { file: ShortcutFile; revision: number }
+/** `salvaged`: main set part or all of the file aside on reading it (the original is kept beside it) and `notice` says so,
+ *  in fixed words; `notice` also explains a file from a newer version, which is applied as empty and never written. */
+export interface ShortcutsLoad extends ShortcutsSnapshot { salvaged: boolean; notice?: string }
+export interface ShortcutsSaved { revision: number }
+/** A file chosen in main's open dialog, read and validated but not saved; `problems` lists what was left out, in fixed words. */
+export type ShortcutsImport = { cancelled: true } | { file: ShortcutFile; problems: readonly string[] }
+export interface ShortcutsExport { cancelled: boolean }
+/** `window.varia.shortcuts`. Only main reads and writes the file, and it opens the import and export dialogs itself, so no
+ *  path ever comes from the page. */
+export interface ShortcutsApi {
+  get(): Promise<ApiResult<ShortcutsLoad>>
+  /** Fails with code `STALE` when the file changed since `baseRevision`: get it again, then save. */
+  save(file: ShortcutFile, baseRevision: number): Promise<ApiResult<ShortcutsSaved>>
+  importFile(): Promise<ApiResult<ShortcutsImport>>
+  exportFile(file: ShortcutFile): Promise<ApiResult<ShortcutsExport>>
+  /** Main sends every change it saves or notices; popouts share the page, so one subscription serves them. */
+  onChanged(callback: (snapshot: ShortcutsSnapshot) => void): () => void
+}
+
 export interface VariaApi {
   parsePlan(xml: string): Promise<ApiResult<PlanDocument>>
   /** Compile only, on a bounded isolated connection; cancel with cancel(requestId). */
@@ -512,6 +535,7 @@ export interface VariaApi {
   updateSettings(patch: SettingsPatch): Promise<ApiResult<SettingsState>>
   /** Main's state after every change, complete and validated. */
   onSettingsChanged(callback: (state: SettingsState) => void): () => void
+  shortcuts: ShortcutsApi
   execute(options: QueryOptions): Promise<ApiResult<QueryResult>>
   cancel(queryId: string): Promise<ApiResult<{ cancelled: boolean }>>
   /** Ends a query's session; `transaction` commits or rolls back its open transaction first. A commit that fails leaves
