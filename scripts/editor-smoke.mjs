@@ -1,4 +1,5 @@
 import { electron, expect } from './fixtures/smoke.mjs'
+import { resizeContent } from './fixtures/window-resize.mjs'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { activeDocumentName, backendReady, closeDocumentButton, documentTab, documentTabs, editorGroups, editorGroupTabs, floatingEditorGroups, menubar, part, pinDocumentButton, planCanvas, planViewer, quickInput, quickInputActive, unsavedMark } from './fixtures/ui.mjs'
@@ -338,19 +339,34 @@ try {
   await documentTab(page, secondTab).click()
   await expect.poll(() => activeDocumentName(page)).toBe(secondTab)
   // Raising an older floating window must also raise it as a compass destination.
+  // Use CI's compact size and its default split proportions even on a larger desktop.
+  const overlapSize = await page.evaluate(() => [innerWidth, innerHeight])
+  await resizeContent(application, page, 1024, 720)
+  await application.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('layout.reset').click())
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
   await textbox().focus()
   await page.keyboard.press('Control+N')
   const overlapProbe = await activeDocumentName(page)
-  for (const name of [secondTab, overlapProbe]) {
-    await documentTab(page, name).click({ button: 'right' })
+  const chooseQuery = async name => {
+    await page.keyboard.press('Control+P')
+    await quickInput(page).getByRole('combobox').fill(name)
+    await expect(quickInputActive(page)).toContainText(name)
+    await page.keyboard.press('Enter')
+    await expect(quickInput(page)).toHaveCount(0)
+    await expect.poll(() => activeDocumentName(page)).toBe(name)
+  }
+  for (const [index, name] of [secondTab, overlapProbe].entries()) {
+    // The first float can cover the next tab's pointer target. Arrange the fixture through its keyboard menu.
+    await chooseQuery(name)
+    await documentTab(page, name).focus()
+    await expect(documentTab(page, name)).toBeFocused()
+    await page.keyboard.press('Shift+F10')
     await menu('Query tab').getByRole('menuitem', { name: 'Float', exact: true }).click()
+    await expect(floatingEditorGroups(page)).toHaveCount(index + 1)
+    await expect(floatingEditorGroups(page).filter({ has: documentTab(page, name) }).locator('.monaco-editor [role="textbox"]')).toBeFocused()
   }
   await expect(floatingEditorGroups(page)).toHaveCount(2)
-  await page.keyboard.press('Control+P')
-  await quickInput(page).getByRole('combobox').fill(secondTab)
-  await expect(quickInputActive(page)).toContainText(secondTab)
-  await page.keyboard.press('Enter')
-  await expect(quickInput(page)).toHaveCount(0)
+  await chooseQuery(secondTab)
   const olderFloat = floatingEditorGroups(page).filter({ has: documentTab(page, secondTab) })
   const newerFloat = floatingEditorGroups(page).filter({ has: documentTab(page, overlapProbe) })
   const level = group => group.evaluate(element => Number(getComputedStyle(element.closest('.dv-resize-container')).zIndex))
@@ -371,6 +387,8 @@ try {
   await page.keyboard.press('Control+Shift+PageUp')
   await expect.poll(pair).toEqual([firstTab, secondTab])
   await documentTab(page, secondTab).click()
+  await resizeContent(application, page, ...overlapSize)
+  await application.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('layout.reset').click())
   // Closing a group's shown query shows the next one in that group (the one before, at the strip's end), not the next in
   // order, which is in another group.
   await textbox().focus()
