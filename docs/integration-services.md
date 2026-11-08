@@ -454,7 +454,10 @@ in a status it shows. A new window reads the open operations of its scope apart,
 operations above the newest id it has settled (2 samples and 5 s after it was first seen, the operations table's
 settle in the live catalogue: an id is assigned before its row commits), refreshes the open ones it holds (at most 256 a
 sample, in turn), counts the running and pending operations, and drops what it neither shows nor follows; every
-30 s it counts the last 24 hours by status. The counts ignore the filters and the limit. A row a refresh no longer
+30 s it counts the last 24 hours by status. The counts ignore the filters and the limit. The catalog's highest
+id settles like a row's, so the read stays above the newest operations even when the filters match none of them, and each
+count reads only from its watermark up: the lowest open id (an ended operation never opens again) and the lowest id created
+in the 24 hours, neither past the settled id, both 0 on a new window and the 24-hour one again if the server's clock goes back. A row a refresh no longer
 finds (removed by the retention cleanup, or a dirty read rolled back) leaves the window. Folder and Project match an
 execution's or a validation's names (`catalog.executions`, `catalog.validations`) and Project a deployment's project (its
 `object_name`); Package matches an execution's.

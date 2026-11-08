@@ -71,11 +71,18 @@ internal static class SsisOperationsChecks
             && full[1].Contains("WHERE o.status IN (1, 2, 5, 8)\n", StringComparison.Ordinal) && !full[1].Contains("DATEADD", StringComparison.Ordinal) && full[1].Contains("@folder", StringComparison.Ordinal)
             && !LiveSql.Operations(false, false).Contains("created_time >= DATEADD(hour, -24", StringComparison.Ordinal) && full[^1].Contains("created_time >= DATEADD(hour, -24", StringComparison.Ordinal),
             "a new window also reads the open operations of its scope whatever their age, and only the counting sample reads the last 24 hours; Other is every type the other kinds leave out");
-        // The tiles count every operation the login may see: neither count names the scope's parameters or joins.
+        // The tiles count every operation the login may see: neither count names the scope's parameters or joins, only its watermark.
         var tileCounts = new[] { full[^2], full[^1], steady[^1] };
-        check(tileCounts.All(text => text.StartsWith("SELECT COUNT_BIG(", StringComparison.Ordinal) && !text.Contains('@') && !text.Contains("JOIN", StringComparison.Ordinal))
-            && steady[^1].Contains("AS running, COUNT_BIG(CASE WHEN o.status IN (5) THEN 1 END) AS pending", StringComparison.Ordinal) && steady[^1].EndsWith("WHERE o.status IN (2, 5);", StringComparison.Ordinal),
-            "every sample counts Running and Pending, and every 30 s the last 24 hours, over every operation whatever the filters: " + string.Join(" | ", tileCounts));
+        static string[] Parameters(string text) => [.. System.Text.RegularExpressions.Regex.Matches(text, @"@\w+").Select(match => match.Value).Distinct()];
+        check(tileCounts.All(text => text.StartsWith("SELECT COUNT_BIG(", StringComparison.Ordinal) && !text.Contains("JOIN", StringComparison.Ordinal))
+            && Parameters(full[^2]) is ["@openFrom"] && Parameters(steady[^1]) is ["@openFrom"] && Parameters(full[^1]) is ["@countFrom"]
+            && steady[^1].Contains("AS running, COUNT_BIG(CASE WHEN o.status IN (5) THEN 1 END) AS pending, MIN(CASE WHEN o.status IN (1, 2, 5, 8) THEN o.operation_id END) AS lowest_open, "
+                + "MAX(o.operation_id) AS newest_id\n", StringComparison.Ordinal)
+            && steady[^1].EndsWith("FROM [catalog].[operations] AS o WHERE o.operation_id >= @openFrom;", StringComparison.Ordinal)
+            && full[^1].Contains("AS canceled24h, MIN(o.operation_id) AS lowest_recent FROM", StringComparison.Ordinal)
+            && full[^1].Contains("WHERE o.operation_id >= @countFrom AND o.created_time >= DATEADD(hour, -24, SYSDATETIMEOFFSET());", StringComparison.Ordinal),
+            "every sample counts Running and Pending, and every 30 s the last 24 hours, over every operation whatever the filters, each from its watermark up (a range of the "
+            + "clustered key, not a scan of every operation), with the lowest open id, the catalog's high-water mark and the lowest id of the 24 hours: " + string.Join(" | ", tileCounts));
         check(full[0].Contains("COALESCE(e.folder_name, v.folder_name)", StringComparison.Ordinal) && full[0].Contains("CASE WHEN o.operation_type = 101 THEN o.object_name END", StringComparison.Ordinal)
             && full[0].Contains("n.project_name LIKE @project", StringComparison.Ordinal) && full[0].Contains("e.package_name LIKE @package", StringComparison.Ordinal),
             "Folder and Project match a validation's names as an execution's, and Project a deployment's project; Package is an execution's");
@@ -175,6 +182,49 @@ internal static class SsisOperationsChecks
         check(Ids(open) is [31, 30], "a running operation created days ago stays in a one-hour window, and an ended one older than the window leaves (Active Operations finds a long run)");
         open.Merge([], [30], [new(30, 7, Now.AddDays(-3), Now, null, 3 * 86_400_000L)], Now, 1000);
         check(Ids(open) is [31], "once it ends, an operation older than the window leaves it");
+
+        // The scope matches none of the catalog's operations: the settled id still follows the catalog's high-water mark, so the
+        // window's read stays a range above the newest operations rather than reading down to 0 (or the last match) each sample.
+        var empty = New();
+        empty.Baseline([], Now, 0, highWater: 100);
+        var unsettled = empty.SettledId;
+        for (var tick = 0; tick < settle.Ticks - 1; tick++) empty.Merge([], [], [], Now, settle.Ms, highWater: 101 + tick);
+        empty.Merge([], [], [], Now, settle.Ms - 1, highWater: 100 + settle.Ticks);
+        var beforeDue = empty.SettledId;
+        empty.Merge([], [], [], Now, settle.Ms, highWater: 101 + settle.Ticks);
+        var marked = empty.SettledId;
+        for (var tick = 0; tick < 3 * settle.Ticks; tick++) empty.Merge([], [], [], Now, 3 * settle.Ms + tick, highWater: 101 + settle.Ticks);
+        check(unsettled == 0 && beforeDue == 0 && marked == 100 && empty.SettledId == 101 + settle.Ticks && empty.Marks == 0 && empty.Rows().Count == 0,
+            "after an empty baseline the settled id (@after) grows to the catalog's high-water mark once it has been seen for the settle window, not before: "
+            + unsettled + " " + beforeDue + " " + marked + " " + empty.SettledId);
+        var crowded = New();
+        crowded.Baseline([], Now, 0);
+        for (var id = 1; id <= 3 * SsisOperationsWindow.MaxMarks; id++) crowded.Merge([], [], [], Now, 0, highWater: id);
+        var waiting = crowded.Marks;
+        crowded.Baseline([], Now, 0, highWater: 5);
+        check(waiting == SsisOperationsWindow.MaxMarks && crowded.Marks == 1 && crowded.SettledId == 0, "high-water marks waiting to settle are bounded, and a baseline forgets them: " + waiting + " " + crowded.Marks);
+
+        // The tiles' watermarks: the open count reads from the lowest open id, the 24-hour count from the lowest id created within
+        // them, neither past the settled id (an id above it may still commit), and a baseline or a clock gone back reads from 0.
+        var marks = new SsisOperationsWatermarks();
+        var start = (marks.OpenFrom, marks.CountFrom);
+        var back0 = marks.Opened(null, 0, Now);
+        var empty0 = marks.OpenFrom;
+        marks.Opened(40, 90, Now.AddSeconds(2));
+        marks.Counted(70, 90);
+        var low = (marks.OpenFrom, marks.CountFrom);
+        marks.Opened(null, 120, Now.AddSeconds(4));
+        marks.Counted(null, 120);
+        var none = (marks.OpenFrom, marks.CountFrom);
+        marks.Opened(130, 120, Now.AddSeconds(6));
+        marks.Counted(150, 120);
+        var capped = (marks.OpenFrom, marks.CountFrom);
+        var back = marks.Opened(null, 200, Now.AddSeconds(5));
+        var afterBack = (marks.OpenFrom, marks.CountFrom);
+        marks.Reset();
+        check(start == (0, 0) && !back0 && empty0 == 1 && low == (40, 70) && none == (121, 121) && capped == (121, 121) && back && afterBack == (201, 0) && (marks.OpenFrom, marks.CountFrom) == (0, 0),
+            "the tiles' watermarks follow the lowest open id and the lowest id of the 24 hours, never pass the settled id plus one, and read from 0 after a baseline, "
+            + "the 24-hour one also after the server's clock goes back: " + low + " " + none + " " + capped + " " + afterBack);
 
         // More open operations than one sample reads again: they take turns, newest first, and every one is read within a few samples.
         var many = New();
