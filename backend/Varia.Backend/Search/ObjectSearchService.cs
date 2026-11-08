@@ -230,8 +230,10 @@ internal sealed class ObjectSearchService : IDisposable
         Parallel.ForEachAsync(names, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, degree), CancellationToken = token }, async (name, _) => await read(name));
 
     /// <summary>Opens a batch's rows and reads them. A read that stops early (past the budget, answering null) cancels the batch
-    /// before its reader closes: closing a reader short of its end reads, and throws away, every row and definition left.</summary>
-    internal static async Task<T?> ReadThenStopAsync<T>(Func<Task<DbDataReader>> open, Func<DbDataReader, Task<T?>> read, Action cancel) where T : class
+    /// before its reader closes: closing a reader short of its end reads, and throws away, every row and definition left. A
+    /// read that completes is handed to <paramref name="keep"/> before the reader closes, so an error on close (a broken
+    /// transport, a statement after the last result set) still finds it held by the index, never charged and lost.</summary>
+    internal static async Task<T?> ReadThenStopAsync<T>(Func<Task<DbDataReader>> open, Func<DbDataReader, Task<T?>> read, Action cancel, Action<T> keep) where T : class
     {
         var rows = await open();
         T? value;
@@ -241,7 +243,12 @@ internal sealed class ObjectSearchService : IDisposable
             await rows.DisposeAsync();
             throw;
         }
-        if (value is not null) { await rows.DisposeAsync(); return value; }
+        if (value is not null)
+        {
+            try { keep(value); }
+            finally { await rows.DisposeAsync(); }
+            return value;
+        }
         cancel();
         // The read already answered TOO_LARGE: the cancelled batch's own error on close changes nothing.
         try { await rows.DisposeAsync(); } catch (Exception error) when (error is DbException or InvalidOperationException) { }
@@ -304,9 +311,8 @@ internal sealed class ObjectSearchService : IDisposable
                 command.Parameters.Add(new SqlParameter("@stmt", SqlDbType.NVarChar, -1) { Value = batch });
             }
             var index = await ReadThenStopAsync(async () => await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, budgetSource.Token),
-                rows => reader.ReadAsync(rows, definitions, budgetSource.Token, children), () => TryCancel(command));
+                rows => reader.ReadAsync(rows, definitions, budgetSource.Token, children), () => TryCancel(command), state.Index.Put);
             if (index is null) return new(database, "TOO_LARGE", "The database does not fit in the index's memory (" + Size + " across every connection).");
-            state.Index.Put(index);
             return null;
         }
         catch (Exception error) when (error is OperationCanceledException or SqlException && budgetSource.IsCancellationRequested && !token.IsCancellationRequested)
@@ -355,9 +361,8 @@ internal sealed class ObjectSearchService : IDisposable
             command.CommandTimeout = 0;
             command.CommandText = ObjectSearchSql.Prologue + ObjectSearchSql.Server(box, definitions);
             var index = await ReadThenStopAsync(async () => await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, budgetSource.Token),
-                rows => reader.ReadServerAsync(rows, box, definitions, Actions.ActionsCatalog.Current.Logins, budgetSource.Token), () => TryCancel(command));
+                rows => reader.ReadServerAsync(rows, box, definitions, Actions.ActionsCatalog.Current.Logins, budgetSource.Token), () => TryCancel(command), state.Index.PutServer);
             if (index is null) return new(ServerScope, "TOO_LARGE", "The server's objects do not fit in the index's memory (" + Size + " across every connection).");
-            state.Index.PutServer(index);
             return null;
         }
         catch (Exception error) when (error is OperationCanceledException or SqlException && budgetSource.IsCancellationRequested && !token.IsCancellationRequested)

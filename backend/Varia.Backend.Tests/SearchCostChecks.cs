@@ -63,6 +63,7 @@ internal static class SearchCostChecks
     {
         private readonly DataTableReader inner = new(tables);
         public bool Cancelled;
+        public bool FailOnClose;
         public int Drained;
         public int CharReads;
 
@@ -81,6 +82,7 @@ internal static class SearchCostChecks
             if (!inner.IsClosed && !Cancelled)
                 do { while (inner.Read()) Drained++; } while (inner.NextResult());
             inner.Close();
+            if (FailOnClose) throw new InvalidOperationException("The batch failed as it closed.");
         }
 
         public override bool Read() => inner.Read();
@@ -145,17 +147,35 @@ internal static class SearchCostChecks
         var limits = new ObjectIndexLimits { NamesReserveBytes = 0 };
         var rows = Procedures(200);
         var index = await ObjectSearchService.ReadThenStopAsync<DatabaseIndex>(() => Task.FromResult<System.Data.Common.DbDataReader>(rows),
-            read => new DatabaseReader("Sales", limits, new StringPool(new IndexBudget(4096))).ReadAsync(read, true, CancellationToken.None, children: false), () => rows.Cancelled = true);
+            read => new DatabaseReader("Sales", limits, new StringPool(new IndexBudget(4096))).ReadAsync(read, true, CancellationToken.None, children: false), () => rows.Cancelled = true, _ => throw new InvalidOperationException("kept"));
         check(index is null && rows.Cancelled && rows.Drained == 0, "a read past the budget cancels its batch, so no row is read after it stopped: " + rows.Drained);
         // The fake drains as SqlClient does when nothing cancels it, so the check above bites.
         var uncancelled = Procedures(200);
         await ObjectSearchService.ReadThenStopAsync<DatabaseIndex>(() => Task.FromResult<System.Data.Common.DbDataReader>(uncancelled),
-            read => new DatabaseReader("Sales", limits, new StringPool(new IndexBudget(4096))).ReadAsync(read, true, CancellationToken.None, children: false), () => { });
+            read => new DatabaseReader("Sales", limits, new StringPool(new IndexBudget(4096))).ReadAsync(read, true, CancellationToken.None, children: false), () => { }, _ => { });
         check(uncancelled.Drained > 100, "a reader closed short of its end without a cancel drains the rest of the batch");
         var fits = Procedures(3);
         index = await ObjectSearchService.ReadThenStopAsync<DatabaseIndex>(() => Task.FromResult<System.Data.Common.DbDataReader>(fits),
-            read => new DatabaseReader("Sales", limits, new StringPool(new IndexBudget(1 << 20))).ReadAsync(read, true, CancellationToken.None, children: false), () => fits.Cancelled = true);
+            read => new DatabaseReader("Sales", limits, new StringPool(new IndexBudget(1 << 20))).ReadAsync(read, true, CancellationToken.None, children: false), () => fits.Cancelled = true, _ => { });
         check(index is { Modules: 3, Cut: 0 } && !fits.Cancelled && fits.CharReads > 0, "a read that fits is not cancelled and keeps its definitions");
+
+        // A read that completes is held before its reader closes: an error on close leaves it in the index, its memory
+        // accounted for, rather than charged to the shared budget and lost.
+        var budget = new IndexBudget(1 << 20);
+        var shared = new StringPool(budget);
+        var held = new ConnectionIndex(budget, pool: shared);
+        var failing = Procedures(3);
+        failing.FailOnClose = true;
+        var threw = false;
+        try
+        {
+            await ObjectSearchService.ReadThenStopAsync<DatabaseIndex>(() => Task.FromResult<System.Data.Common.DbDataReader>(failing),
+                read => new DatabaseReader("Sales", limits, shared).ReadAsync(read, true, CancellationToken.None, children: false), () => { }, held.Put);
+        }
+        catch (InvalidOperationException) { threw = true; }
+        var used = budget.Used;
+        held.Dispose();
+        check(threw && used > 0 && budget.Used == 0, "a read whose reader fails as it closes is already held, so dropping the index gives back all it took: " + budget.Used);
 
         // Below the names' reserve the pool refuses every definition, so none is streamed, and each counts as cut.
         var starved = Procedures(3);
