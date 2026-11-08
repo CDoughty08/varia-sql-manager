@@ -42,7 +42,7 @@ export default function RetainedPlans({ active }: { active: boolean }) {
     {history.notice && <div className="retained-plan-notice" role="status">{history.notice}</div>}
     {entry ? <>
       <details className="retained-plan-metadata" key={'metadata:' + entry.id}>
-        <summary>{types[entry.captureType]} · {entry.outcome.status}{entry.partialExecution ? ' · Partial execution' : ''}{entry.incomplete ? ' · Incomplete document' : ''}{entry.xmlTruncated ? ' · Truncated XML' : ''} · {entry.context.server ?? 'Server unavailable'} / {entry.context.database}</summary>
+        <summary>{types[entry.captureType]}{entry.context.estimateMode ? ` · ${entry.context.estimateMode === 'session' ? 'Query session' : 'Isolated'}` : ''} · {entry.outcome.status}{entry.partialExecution ? ' · Partial execution' : ''}{entry.incomplete ? ' · Incomplete document' : ''}{entry.xmlTruncated ? ' · Truncated XML' : ''} · {entry.context.server ?? 'Server unavailable'} / {entry.context.database}</summary>
         <dl>
           <dt>Source</dt><dd>{entry.context.file ?? entry.context.name}</dd>
           <dt>Execution</dt><dd>{entry.context.executionId} · {new Date(entry.context.startedAt).toLocaleString()} → {new Date(entry.outcome.endedAt).toLocaleString()}{entry.outcome.elapsedMs !== undefined ? ` · ${entry.outcome.elapsedMs} ms` : ''}</dd>

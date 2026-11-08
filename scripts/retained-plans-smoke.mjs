@@ -95,6 +95,17 @@ try {
     await history().getByRole('button', { name: 'Remove snapshot', exact: true }).click()
     await expect(snapshots().getByRole('option').filter({ hasText: 'Estimated' })).toHaveCount(0)
     expect(await snapshots().inputValue()).not.toBe(removed)
+    // Mode and returned session identity are retained with a session-aware estimate after history removal.
+    await page.getByRole('button', { name: /^Plan history \(/ }).click()
+    await page.getByRole('button', { name: 'Estimate in query session', exact: true }).click()
+    await expect(queryBarButton(page, 'Display Estimated Execution Plan')).toBeEnabled()
+    await showHistory(); await snapshots().selectOption({ index: 0 })
+    await expect(history().locator('summary').first()).toContainText('Estimated · Query session')
+    await history().locator('summary').first().click()
+    await expect(history().getByLabel('Captured SQL context')).toHaveText('SELECT name FROM sys.objects;')
+    if (live) await expect(history().getByText(/^SPID \d+/)).toBeVisible()
+    await history().getByRole('button', { name: 'Remove snapshot', exact: true }).click()
+    await expect(snapshots().getByRole('option').filter({ hasText: 'Estimated' })).toHaveCount(0)
     if (live) {
       await text("SELECT TOP (1) name AS before_cancel FROM sys.objects;\nGO\nWAITFOR DELAY '00:00:30';")
       await page.keyboard.press('F5')

@@ -1,4 +1,5 @@
 import type { QueryStatus } from '../../../shared/contracts'
+import type { EstimatedPlanMode } from '../../../shared/estimated-plans'
 import { planLimits } from '../../../shared/plans'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
@@ -10,6 +11,7 @@ export interface PlanExecutionContext {
   readonly connectionId: string; readonly server?: string; readonly database: string
   readonly sql: string; readonly startLine: number; readonly sqlScope: 'selection' | 'document'
   readonly startedAt: number; readonly includeActualPlan: boolean; readonly includeLivePlan: boolean
+  readonly estimateMode?: EstimatedPlanMode
 }
 export interface PlanOutcome {
   readonly status: QueryStatus | 'lost'; readonly endedAt: number; readonly completedAt?: string

@@ -114,6 +114,7 @@ Query
   &Include Actual Execution Plan  Ctrl+M [ ]  ++--
   Include &Live Execution Plan [ ]  ++--
   Display &Estimated Execution Plan  Ctrl+L  -+--
+  Display Estimated &Plan in Query Session  -+--
   Include Client &Statistics  Shift+Alt+S [ ]  ++--
   &Reset Client Statistics  ++--
 Tools

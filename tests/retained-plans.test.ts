@@ -221,7 +221,18 @@ describe('normal execution retention lifecycle', () => {
     f.retainedPlans.pin(snapshot.id, true)
     await f.queries.estimate()
     expect(f.retainedPlans.getSnapshot().entries.find(e => e.id === snapshot.id)).toMatchObject({ captureType: 'estimated', xml: '<original-estimate/>',
-      sourceKey: f.api.estimatePlan.mock.calls[0][0].requestId + ':0', context: { sql: 'SELECT chosen;', startLine: 2, includeActualPlan: false, includeLivePlan: false }, outcome: { database: 'tempdb' } })
+      sourceKey: f.api.estimatePlan.mock.calls[0][0].requestId + ':0', context: { sql: 'SELECT chosen;', startLine: 2, includeActualPlan: false, includeLivePlan: false, estimateMode: 'isolated' }, outcome: { database: 'tempdb' } })
+  })
+  it('retains query-session estimate mode and returned session identity independently of later requests', async () => {
+    const f = executionFixture()
+    f.api.estimatePlan.mockResolvedValueOnce({ ok: true, value: { plans: [{ xml: '<session/>', batchNumber: 1, iteration: 1 }], database: 'master', session: { spid: 79, login: 'session-reader' } } })
+    await f.queries.estimate(f.tab.id, 'session')
+    const snapshot = f.retainedPlans.getSnapshot().entries[0]
+    f.retainedPlans.pin(snapshot.id, true)
+    expect(snapshot).toMatchObject({ captureType: 'estimated', context: { estimateMode: 'session' }, outcome: { spid: 79, login: 'session-reader' } })
+    await f.queries.estimate(f.tab.id)
+    expect(f.retainedPlans.getSnapshot().entries.map(entry => entry.context.estimateMode)).toEqual(['isolated', 'session'])
+    expect(f.retainedPlans.getSnapshot().entries.find(entry => entry.id === snapshot.id)).toMatchObject({ pinned: true, xml: '<session/>', outcome: { spid: 79 } })
   })
   it('closing a still-running tab before completion abandons output and does not retain late summary plans', async () => {
     const f = executionFixture(), waiting = deferred<Awaited<ReturnType<VariaApi['execute']>>>()
