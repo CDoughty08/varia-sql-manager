@@ -285,6 +285,27 @@ internal static class SearchChecks
         catch (OperationCanceledException) { stopped = true; }
         check(stopped, "a search whose request was already cancelled does not scan");
         index.Dispose();
+
+        // Fewer objects than the scan's check interval, each definition full of matches: the scan never looks at the clock, so only
+        // building the answered hits (counting their matches) can notice the budget has passed, or that the search was stopped.
+        var counted = new ConnectionIndex(new IndexBudget(1 << 20));
+        var matches = string.Join(" ", Enumerable.Repeat("needle", 50));
+        counted.Put(new DatabaseIndex("Few", [
+            new("procedure", "storedProcedures", "dbo", "needle_named", Definition: matches),
+            new("procedure", "storedProcedures", "dbo", "p1", Definition: matches),
+            new("procedure", "storedProcedures", "dbo", "p2", Definition: matches)
+        ], 0, 3, 0));
+        result = Search(counted, "needle", limits: roomy);
+        check(!result.Partial && result.Hits.Count == 3 && result.Hits.All(hit => hit.Definition?.Matches == 50), "within its budget a search counts every definition match");
+        result = Search(counted, "needle", limits: new ObjectIndexLimits { SearchBudget = TimeSpan.Zero });
+        check(result is { Partial: true, Total: 3, Hits: [{ Label: "dbo.needle_named", Definition: null }, { Definition: { Matches: 1, Column: 1 } }, { Definition.Matches: 1 }] },
+            "past its budget a search builds the hits left from what the scan found, counting no more matches, and answers partial: "
+            + string.Join(", ", result.Hits.Select(hit => hit.Label + ":" + hit.Definition?.Matches)) + ", partial " + result.Partial);
+        stopped = false;
+        try { Search(counted, "needle", limits: roomy, token: cancelled.Token); }
+        catch (OperationCanceledException) { stopped = true; }
+        check(stopped, "Stop also ends building a search's hits, not only its scan");
+        counted.Dispose();
     }
 
     private static void Ranking(Action<bool, string> check)

@@ -372,12 +372,22 @@ internal static class IndexSearch
             }
         }
     done:
-        var hits = found.UnorderedItems.Select(value => (Candidate: value.Element, Label: value.Element.Item.Label))
+        var best = found.UnorderedItems.Select(value => (Candidate: value.Element, Label: value.Element.Item.Label))
             .OrderBy(value => value.Candidate.Rank).ThenBy(value => value.Candidate.Score).ThenBy(value => value.Candidate.Item.System)
             .ThenBy(value => value.Candidate.Database ?? "", StringComparer.OrdinalIgnoreCase)
             .ThenBy(value => value.Label, StringComparer.OrdinalIgnoreCase).ThenBy(value => value.Label, StringComparer.Ordinal)
-            .Take(query.Limit).Select(value => Build(value.Candidate, value.Label, query, matcher, limits)).ToList();
-        return new(hits, total, partial, watch.ElapsedMilliseconds, status);
+            .Take(query.Limit);
+        // Counting a hit's definition matches can read its whole definition up to MatchesCounted times, so the budget and Stop
+        // bound this work too: past the budget the result is partial, and the hits left are built only from what the scan found.
+        var hits = new List<ObjectSearchHit>(Math.Min(query.Limit, found.Count));
+        var late = watch.Elapsed > limits.SearchBudget;
+        foreach (var (candidate, label) in best)
+        {
+            token.ThrowIfCancellationRequested();
+            late = late || watch.Elapsed > limits.SearchBudget;
+            hits.Add(Build(candidate, label, query, matcher, limits, watch, token, ref late));
+        }
+        return new(hits, total, partial || late, watch.ElapsedMilliseconds, status);
     }
 
     /// <summary>The rank of a hit only its definition matched.</summary>
@@ -437,17 +447,24 @@ internal static class IndexSearch
         return true;
     }
 
-    /// <summary>The result of a hit the search answers: its definition's match count and preview, its ref and its date.</summary>
-    private static ObjectSearchHit Build(Candidate hit, string label, SearchQuery query, SearchMatcher matcher, ObjectIndexLimits limits)
+    /// <summary>The result of a hit the search answers: its definition's match count and preview, its ref and its date. Once the
+    /// search is <paramref name="late"/> (past its budget, which the count also checks) the definition is searched no further: a
+    /// definition hit shows the match the scan found, its count only what was counted, and a name hit shows no definition match.</summary>
+    private static ObjectSearchHit Build(Candidate hit, string label, SearchQuery query, SearchMatcher matcher, ObjectIndexLimits limits, Stopwatch watch, CancellationToken token,
+        ref bool late)
     {
         var item = hit.Item;
         DefinitionMatch? definition = null;
         var (first, size) = (hit.DefinitionAt, hit.DefinitionLength);
-        if (query.Definitions && item.Definition is { } text && (first >= 0 || matcher.Find(text, 0, out first, out size)))
+        if (query.Definitions && item.Definition is { } text && (first >= 0 || !late && matcher.Find(text, 0, out first, out size)))
         {
             var count = 1;
-            for (var next = first + Math.Max(1, size); count < limits.MatchesCounted && next <= text.Length && matcher.Find(text, next, out var again, out var width); count++)
+            for (var next = first + Math.Max(1, size); !late && count < limits.MatchesCounted && next <= text.Length && matcher.Find(text, next, out var again, out var width); count++)
+            {
                 next = again + Math.Max(1, width);
+                token.ThrowIfCancellationRequested();
+                late = watch.Elapsed > limits.SearchBudget;
+            }
             definition = Preview(text, first, size, count, limits.PreviewChars, item.DefinitionCut);
         }
         var value = new ObjectRefDto(item.Kind, hit.Database, item.Schema, item.Name, item.ParentName is null ? null : new ParentRefDto(item.ParentKind!, item.ParentSchema!, item.ParentName));
