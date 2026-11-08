@@ -8,7 +8,7 @@ matches; a gesture matches when all of its modifiers are held. "Modifier" gestur
 pointing; "Command" gestures run a command that the keyboard also reaches; "Fixed" gestures belong to the platform,
 Chromium, or a library and cannot be remapped. "Choices" are the modifiers the Shortcuts page will offer.
 
-## Gestures (12)
+## Gestures (13)
 
 ### Global
 
@@ -23,6 +23,7 @@ Chromium, or a library and cannot be remapped. "Choices" are the modifiers the S
 | Add to Selection (also Table Designer) | `grid.addToSelection` | Adds a block of cells, rows or columns to the selection instead of replacing it. | Modifier | Ctrl+Click a cell or header | Ctrl+Click a cell or header | ⌘ Click a cell or header | Choose: Ctrl / ⌘, Alt / ⌥, Off | — |
 | Extend Selection (also Table Designer) | `grid.extendSelection` | Extends the selection from the active cell to the pressed one. | Fixed | Shift+Click a cell or header | Shift+Click a cell or header | ⇧ Click a cell or header | Locked: Shift extends a selection everywhere, as in SSMS and the operating system. | — |
 | Context Menu Click (also Table Designer) | `grid.secondaryClick` | Control+click is a right-click on macOS: it opens the context menu and keeps a selected block. | Fixed | — | — | ⌃ Click a cell or header | Locked: macOS treats Control+click as a right-click. | — |
+| Add Sort Column | `grid.addSortKey` | Adds the column to the grid's sort after the columns it already sorts by, or changes its direction there. | Modifier | Shift+Click a column header's sort button | Shift+Click a column header's sort button | ⇧ Click a column header's sort button | Choose: Shift / ⇧, Ctrl / ⌘, Off | Then Sort Ascending (`output.thenSortAscending`), Then Sort Descending (`output.thenSortDescending`) |
 | Fit Column | `grid.fitColumn` | Fits a column to its widest loaded value. | Fixed | Double-click a column border | Double-click a column border | Double-click a column border | Locked: Double-clicking a column border fits it, as in SSMS. | — |
 
 ### Object Explorer

@@ -1,15 +1,16 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { ApiResult, ResultColumn, ResultsJobProgress, ResultsJobResult, SavedResults, VariaApi } from '../src/shared/contracts'
+import type { ApiResult, ResultColumn, ResultsJobProgress, ResultsJobResult, SavedResults, VariaApi, ViewSortKey, ViewSortMode } from '../src/shared/contracts'
+import type { ResultHandle, ResultView } from '../src/renderer/src/results/ResultClient'
 import type { DocumentService } from '../src/renderer/src/services/documents'
 import { EventBus } from '../src/renderer/src/core/events'
 import { ResultsService, resultLimits, suggestedName } from '../src/renderer/src/results/ResultsService'
 import { selectAll } from '../src/renderer/src/grid/selection'
 import { openEnd } from '../src/renderer/src/grid/constants'
 import { deferred } from './fixtures/documents'
-import { descriptor, fakeResultClient, summaryOf } from './fixtures/results'
+import { descriptor, fakeResultClient, summaryOf, type FakeHandle } from './fixtures/results'
 import { manualTimers } from './fixtures/workbench'
 
-function fixture() {
+function fixture(o: { sortText?: () => ViewSortMode } = {}) {
   const client = fakeResultClient(), events = new EventBus(), timers = manualTimers()
   const frames: (() => void)[] = []
   const progress = new Set<(value: ResultsJobProgress) => void>()
@@ -22,7 +23,7 @@ function fixture() {
   }
   const documents = { openText: vi.fn<DocumentService['openText']>(o => ({ id: 'doc', name: o.name, kind: o.kind, database: '', dirty: false, savedVersionId: 1 })) }
   const clock = { now: 1000 }
-  const service = new ResultsService({ client, api, events, documents, frame: callback => { frames.push(callback) }, timers: timers.timers, now: () => clock.now, newId: () => `job-${++ids}` })
+  const service = new ResultsService({ client, api, events, documents, frame: callback => { frames.push(callback) }, timers: timers.timers, now: () => clock.now, newId: () => `job-${++ids}`, ...o })
   const published = { count: 0 }
   service.subscribe(() => { published.count++ })
   const flush = () => { for (const callback of frames.splice(0)) callback() }
@@ -651,5 +652,163 @@ describe('results service', () => {
     expect(timers.pending.size).toBe(0)
     service.begin('t1', 'q2')
     expect(client.listening('q2')).toBe(0)
+  })
+})
+
+type FakeView = ResultView & { close: ReturnType<typeof vi.fn<() => Promise<void>>>; getCell: FakeHandle['getCell'] }
+/** A view of `base` as ResultClient builds one. */
+function fakeView(base: FakeHandle, viewId: number, keys: readonly ViewSortKey[], complete = true): FakeView {
+  return {
+    ...base, viewId, base, keys, rows: 2, complete, approximate: false,
+    close: vi.fn(async () => {}),
+    getCell: vi.fn<ResultHandle['getCell']>(async () => ({ text: '<a/>', isNull: false, truncated: false, error: false, formatted: true }))
+  }
+}
+const settle = async () => { for (let i = 0; i < 5; i++) await Promise.resolve() }
+
+describe('results service sorting', () => {
+  const sorted = () => {
+    const f = fixture()
+    f.service.begin('t1', 'q1')
+    f.service.finish('t1', 'q1', { summary: summaryOf([descriptor(1)]) })
+    return { ...f, handle: f.client.handle(1)! }
+  }
+  it('sorts a grid by a column, keeps showing its rows while the view is built, and replaces the view on a new sort', async () => {
+    const { service, handle, flush, tab } = sorted()
+    const first = deferred<ResultView>()
+    handle.sort.mockReturnValueOnce(first.promise)
+    service.sortBy('t1', 0, 1, 'descending')
+    expect(handle.sort).toHaveBeenLastCalledWith([{ column: 1, descending: true, mode: 'value' }], { signal: expect.any(AbortSignal) })
+    expect(service.sortOf('t1', 0)).toEqual({ keys: [{ column: 1, descending: true, mode: 'value' }], sorting: true, approximate: false, stale: false })
+    const view = fakeView(handle, 1, [{ column: 1, descending: true, mode: 'value' }])
+    first.resolve(view)
+    await settle()
+    flush()
+    expect(tab().sorts.get(0)).toEqual({ keys: [{ column: 1, descending: true, mode: 'value' }], view, sorting: false, approximate: false, stale: false })
+    // A second column added after the first: the new view replaces the old one, which the grid shows meanwhile.
+    const second = fakeView(handle, 2, [])
+    handle.sort.mockResolvedValueOnce(second)
+    service.sortBy('t1', 0, 0, 'ascending', true)
+    expect(handle.sort).toHaveBeenLastCalledWith([{ column: 1, descending: true, mode: 'value' }, { column: 0, descending: false, mode: 'value' }], { replaces: view, signal: expect.any(AbortSignal) })
+    expect(service.sortOf('t1', 0)).toMatchObject({ view, sorting: true })
+    await settle()
+    expect(service.sortOf('t1', 0)).toMatchObject({ view: second, sorting: false })
+    // Clear Sort closes the view and shows the rows in the order SQL Server sent them.
+    service.clearSort('t1', 0)
+    expect(second.close).toHaveBeenCalledTimes(1)
+    expect(service.sortOf('t1', 0)).toBeUndefined()
+    // Out-of-range columns and grids sort nothing.
+    service.sortBy('t1', 0, 2, 'ascending')
+    service.sortBy('t1', 3, 0, 'ascending')
+    expect(handle.sort).toHaveBeenCalledTimes(2)
+  })
+  it('cycles a header from ascending to descending to unsorted, and changes an added key in place', async () => {
+    const { service, handle } = sorted()
+    handle.sort.mockImplementation(async keys => fakeView(handle, 1, keys))
+    const keys = async () => { await settle(); return service.sortOf('t1', 0)?.keys.map(key => `${key.column}${key.descending ? 'd' : 'a'}`) }
+    service.cycleSort('t1', 0, 0)
+    expect(await keys()).toEqual(['0a'])
+    service.cycleSort('t1', 0, 1, true)
+    expect(await keys()).toEqual(['0a', '1a'])
+    service.cycleSort('t1', 0, 0, true)
+    expect(await keys()).toEqual(['0d', '1a'])
+    service.cycleSort('t1', 0, 0, true)
+    expect(await keys()).toEqual(['1a'])
+    // Without the modifier the column becomes the only key.
+    service.cycleSort('t1', 0, 0)
+    expect(await keys()).toEqual(['0a'])
+    service.cycleSort('t1', 0, 0)
+    expect(await keys()).toEqual(['0d'])
+    service.cycleSort('t1', 0, 0)
+    expect(await keys()).toBeUndefined()
+  })
+  it('keeps the last view and says why when a sort fails, and closes a view a newer sort overtook', async () => {
+    const { service, handle, flush, tab } = sorted()
+    const view = fakeView(handle, 1, [{ column: 0, descending: false, mode: 'value' }])
+    handle.sort.mockResolvedValueOnce(view)
+    service.sortBy('t1', 0, 0, 'ascending')
+    await settle()
+    handle.sort.mockRejectedValueOnce(new Error('The results use more memory than the result budget allows.'))
+    service.sortBy('t1', 0, 1, 'ascending')
+    await settle()
+    flush()
+    expect(tab().sorts.get(0)).toEqual({ keys: view.keys, view, sorting: false, approximate: false, stale: false })
+    expect(tab().jobNotice).toBe('Could not sort the results: The results use more memory than the result budget allows.')
+    // A sort overtaken by a newer one: its view is closed as soon as it arrives, and only the newer one shows.
+    const slow = deferred<ResultView>(), late = fakeView(handle, 2, []), newest = fakeView(handle, 3, [])
+    handle.sort.mockReturnValueOnce(slow.promise).mockResolvedValueOnce(newest)
+    service.sortBy('t1', 0, 1, 'descending')
+    const signal = handle.sort.mock.lastCall![1]!.signal!
+    service.sortBy('t1', 0, 0, 'descending')
+    expect(signal.aborted).toBe(true)
+    await settle()
+    slow.resolve(late)
+    await settle()
+    expect(late.close).toHaveBeenCalledTimes(1)
+    expect(service.sortOf('t1', 0)?.view).toBe(newest)
+  })
+  it('sorts a view again once its set has every row, and sorts every grid again when the text mode changes', async () => {
+    let mode: ViewSortMode = 'value'
+    const { service, client, flush } = fixture({ sortText: () => mode })
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { state: 'open', rowsAvailable: 1 }) })
+    flush()
+    const handle = client.handle(1)!
+    const partial = fakeView(handle, 1, [], false)
+    handle.sort.mockResolvedValueOnce(partial)
+    service.sortBy('t1', 0, 1, 'ascending')
+    await settle()
+    expect(service.sortOf('t1', 0)).toMatchObject({ view: partial, stale: true })
+    const whole = fakeView(handle, 2, [])
+    handle.sort.mockResolvedValueOnce(whole)
+    client.emit('q1', { type: 'resultSet.closed', descriptor: descriptor(1) })
+    expect(handle.sort).toHaveBeenLastCalledWith([{ column: 1, descending: false, mode: 'value' }], { replaces: partial, signal: expect.any(AbortSignal) })
+    await settle()
+    expect(service.sortOf('t1', 0)).toMatchObject({ view: whole, stale: false })
+    mode = 'chars'
+    handle.sort.mockResolvedValueOnce(fakeView(handle, 3, []))
+    service.resort()
+    expect(handle.sort).toHaveBeenLastCalledWith([{ column: 1, descending: false, mode: 'chars' }], { replaces: whole, signal: expect.any(AbortSignal) })
+  })
+  it('copies and saves in the sorted order, and saves only once the sort is built', async () => {
+    const { service, handle, api } = sorted()
+    const pending = deferred<ResultView>()
+    handle.sort.mockReturnValueOnce(pending.promise)
+    service.sortBy('t1', 0, 0, 'descending')
+    expect(await service.saveAs('t1', 0, 'SQLQuery1')).toBe('Save the results after they are sorted.')
+    expect(api.saveResults).not.toHaveBeenCalled()
+    const view = fakeView(handle, 7, [{ column: 0, descending: true, mode: 'value' }])
+    pending.resolve(view)
+    await settle()
+    service.setSelection('t1', 0, selectAll(0))
+    await service.copy('t1', 0, false)
+    expect(api.copyResults).toHaveBeenLastCalledWith(expect.objectContaining({ resultId: 1, viewId: 7 }))
+    await service.saveAs('t1', 0, 'SQLQuery1')
+    expect(api.saveResults).toHaveBeenLastCalledWith(expect.objectContaining({ resultId: 1, viewId: 7 }))
+    service.clearSort('t1', 0)
+    await service.copy('t1', 0, false)
+    expect(api.copyResults.mock.lastCall![0]).not.toHaveProperty('viewId')
+  })
+  it('opens a sorted grid\'s value from its view\'s row', async () => {
+    const f = fixture()
+    f.service.begin('t1', 'q1')
+    const columns = [{ name: 'Id', dataType: 'int', wire: 'text', nullable: false }, { name: 'Doc', dataType: 'xml', wire: 'text', nullable: true, role: 'xml' }] as ResultColumn[]
+    f.service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { columns })]) })
+    const handle = f.client.handle(1)!, view = fakeView(handle, 1, [])
+    handle.sort.mockResolvedValueOnce(view)
+    f.service.sortBy('t1', 0, 0, 'descending')
+    await settle()
+    expect(await f.service.openValue('t1', 0, 1, 1)).toEqual({ opened: true })
+    expect(view.getCell).toHaveBeenCalledWith(1, 1, { format: 'xml' })
+    expect(handle.getCell).not.toHaveBeenCalled()
+  })
+  it('stops a running sort when the results close', () => {
+    const { service, handle } = sorted()
+    handle.sort.mockReturnValueOnce(new Promise(() => {}))
+    service.sortBy('t1', 0, 0, 'ascending')
+    const signal = handle.sort.mock.lastCall![1]!.signal!
+    service.closeResults('t1')
+    expect(signal.aborted).toBe(true)
+    expect(service.sortOf('t1', 0)).toBeUndefined()
   })
 })

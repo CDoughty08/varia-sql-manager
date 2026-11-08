@@ -2,7 +2,8 @@ import { Component, useEffect, useLayoutEffect, useRef, useState, useSyncExterna
 import type { QueryResult } from '../../../shared/contracts'
 import { onUnexpectedError } from '../core/errors'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
-import type { ResultSetEntry } from '../results/ResultsService'
+import type { ResultHandle } from '../results/ResultClient'
+import type { GridSort, ResultSetEntry } from '../results/ResultsService'
 import { formatBytes, formatCount } from '../results/status'
 import { GridView, type GridStatus } from './GridView'
 import { describeSelection } from './selection'
@@ -15,6 +16,8 @@ export interface ResultGridProps {
   /** The grid F6 and the Query Output pane focus first: the one that last had focus. */
   readonly focused: boolean
   readonly budget?: QueryResult['budget']
+  /** The grid's sort, while it has one: the grid shows its view once it is built. */
+  readonly sort?: GridSort
   onFocus(index: number): void
   /** Whether the set's columns are wider than its grid (it needs a horizontal scroll bar), for sizing the stack to its rows. */
   onWide?(index: number, wide: boolean): void
@@ -36,7 +39,10 @@ function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: n
 }
 
 /** The React shell of one grid: its root and scroller, strips and overlay. GridView renders and handles everything inside. */
-function ResultGridShell({ tabId, entry, count, focused, budget, onFocus, onWide }: ResultGridProps) {
+/** The sort's keys as a string: a new order puts the grid back at its first row; the same keys sorted again keep its place. */
+const keysOf = (sort: GridSort | undefined) => sort?.keys.map(key => `${key.column}${key.descending ? 'd' : 'a'}`).join(',') ?? ''
+
+function ResultGridShell({ tabId, entry, count, focused, budget, sort, onFocus, onWide }: ResultGridProps) {
   const { results, resultClient, commands, platform, gridStats, panes, settings } = useWorkbench()
   const values = useServiceSnapshot(settings).values
   const showTypes = values['queryResults.grid.showColumnTypes'], whitespace = values['queryResults.grid.whitespace']
@@ -51,10 +57,17 @@ function ResultGridShell({ tabId, entry, count, focused, budget, onFocus, onWide
   countRef.current = count
   const onWideRef = useRef(onWide)
   onWideRef.current = onWide
+  const sortRef = useRef(sort)
+  sortRef.current = sort
+  /** The handle the view shows, and the keys it was sorted by. */
+  const shownRef = useRef<{ handle: ResultHandle; keys: string }>({ handle: entry.handle, keys: '' })
   // Before the shell paints: the view draws its first frame as it is built, so the grid never paints empty first.
   useLayoutEffect(() => {
+    // A grid mounted again (a tab switch) shows its sorted view from the start.
+    const sorted = sortRef.current?.view
+    shownRef.current = { handle: sorted ?? entry.handle, keys: sorted ? keysOf(sortRef.current) : '' }
     const view = new GridView({
-      root: rootRef.current!, scroller: scrollRef.current!, handle: entry.handle, client: resultClient, descriptor: entry.descriptor, state: results.gridState(tabId, index),
+      root: rootRef.current!, scroller: scrollRef.current!, handle: shownRef.current.handle, client: resultClient, descriptor: entry.descriptor, state: results.gridState(tabId, index),
       resultIndex: index, resultCount: countRef.current, platform, stats: gridStats, showTypes: showTypesRef.current, whitespace: whitespaceRef.current,
       onSelection: selection => {
         const current = entry.handle.getSnapshot()
@@ -66,7 +79,9 @@ function ResultGridShell({ tabId, entry, count, focused, budget, onFocus, onWide
       onStatus: setStatus,
       onWide: wide => onWideRef.current?.(index, wide),
       onError: onUnexpectedError,
-      onOpenValue: (row, column) => { void commands.execute('output.openValue', { tabId, cell: { resultIndex: index, row, column } }, 'keybinding') }
+      onOpenValue: (row, column) => { void commands.execute('output.openValue', { tabId, cell: { resultIndex: index, row, column } }, 'keybinding') },
+      sort: sortRef.current?.keys,
+      onSort: (column, add) => results.cycleSort(tabId, index, column, add)
     })
     viewRef.current = view
     const registration = results.registerGrid(tabId, index, { selectAll: () => view.selectAll(), repaint: () => view.repaint() })
@@ -80,7 +95,25 @@ function ResultGridShell({ tabId, entry, count, focused, budget, onFocus, onWide
       if (viewRef.current === view) viewRef.current = undefined
     }
   }, [tabId, index, entry, results, resultClient, commands, platform, gridStats, panes])
-  useEffect(() => { viewRef.current?.update({ resultCount: count, showTypes, whitespace }) }, [count, showTypes, whitespace])
+  useEffect(() => { viewRef.current?.update({ resultCount: count, showTypes, whitespace, sort: sort?.keys }) }, [count, showTypes, whitespace, sort?.keys])
+  // A built view replaces what the grid shows: its first rows are read before the swap, so it paints whole rows at once,
+  // unless what it shows is already gone (a replaced view). While a first sort runs the grid keeps the rows in their order.
+  const target = sort?.view ?? (sort ? undefined : entry.handle)
+  useEffect(() => {
+    const view = viewRef.current, shown = shownRef.current
+    if (!view || !target || target === shown.handle) return
+    const keys = target === entry.handle ? '' : keysOf(sortRef.current), top = keys !== shown.keys ? 0 : undefined
+    const abort = new AbortController()
+    const swap = () => {
+      if (abort.signal.aborted || viewRef.current !== view) return
+      shownRef.current = { handle: target, keys }
+      view.swap(target, entry.descriptor, row => row, top === undefined ? {} : { top })
+    }
+    const state = shown.handle.getSnapshot().state
+    if (state === 'released' || state === 'lost') swap()
+    else void view.prepare(target, 0, abort.signal).then(swap)
+    return () => abort.abort()
+  }, [target, entry])
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.defaultPrevented || (event.target as Element).closest('button')) return
     if (viewRef.current?.key(event.nativeEvent)) { event.preventDefault(); event.stopPropagation() }

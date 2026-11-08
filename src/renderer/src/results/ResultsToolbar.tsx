@@ -1,29 +1,38 @@
 import type { KeyboardEvent } from 'react'
 import type { CommandId } from '../../../shared/commands/catalog'
+import type { ViewSortMode } from '../../../shared/contracts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import type { WhitespaceMode } from '../grid/whitespace'
 import Icon from '../Icon'
 
+interface Choice<T> { readonly mode: T; readonly label: string; readonly title: string; readonly command?: CommandId }
+
 /** The White space choices, each the command that turns it on (and, when it is already on, off). */
-const whitespaceChoices: readonly { readonly mode: WhitespaceMode; readonly label: string; readonly title: string; readonly command?: CommandId }[] = [
+const whitespaceChoices: readonly Choice<WhitespaceMode>[] = [
   { mode: 'none', label: 'Off', title: 'Show values as they are' },
   { mode: 'spaces', label: 'Spaces', title: 'Show spaces (·) and tabs (→)', command: 'output.showSpaces' },
   { mode: 'all', label: 'All', title: 'Also name line breaks (CR, LF) and invisible spaces (NBSP, ZWSP, BOM…)', command: 'output.showAllWhitespace' }
 ]
-const commandFor = (mode: WhitespaceMode) => whitespaceChoices.find(choice => choice.mode === mode)?.command
+/** How sorted grids order text columns (queryResults.grid.sortText), the same way. */
+const sortTextChoices: readonly Choice<ViewSortMode>[] = [
+  { mode: 'value', label: 'Value', title: 'Sort text as ORDER BY would, by the column\'s collation' },
+  { mode: 'chars', label: 'Chars', title: 'Sort text by its length in characters, spaces included', command: 'output.sortTextByChars' },
+  { mode: 'bytes', label: 'Bytes', title: 'Sort text and binary values by their length in bytes (DATALENGTH)', command: 'output.sortTextByBytes' }
+]
 
 /**
  * The results toolbar, in the Results panel's head beside its views: what it changes applies to every grid in the run. It
- * holds White space for now; search, stats and the other result tools join it. The controls follow the ARIA toolbar
- * pattern: one Tab stop, Left and Right (Home, End) move between them.
+ * holds White space and Sort text by for now; search, stats and the other result tools join it. The controls follow the
+ * ARIA toolbar pattern: one Tab stop, Left and Right (Home, End) move between them.
  */
 export default function ResultsToolbar() {
   const { commands, settings } = useWorkbench()
-  const whitespace = useServiceSnapshot(settings).values['queryResults.grid.whitespace']
-  const choose = (mode: WhitespaceMode) => {
-    if (mode === whitespace) return
-    // Off runs the command of the choice that is on, which turns it off.
-    const command = commandFor(mode) ?? commandFor(whitespace)
+  const values = useServiceSnapshot(settings).values
+  const whitespace = values['queryResults.grid.whitespace'], sortText = values['queryResults.grid.sortText']
+  // Off (or Value) runs the command of the choice that is on, which turns it off.
+  const choose = <T,>(choices: readonly Choice<T>[], current: T, mode: T) => {
+    if (mode === current) return
+    const command = choices.find(choice => choice.mode === mode)?.command ?? choices.find(choice => choice.mode === current)?.command
     if (command) void commands.execute(command, undefined, 'toolbar')
   }
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -36,12 +45,17 @@ export default function ResultsToolbar() {
     event.preventDefault()
     items[next].focus()
   }
-  const current = whitespaceChoices.findIndex(choice => choice.mode === whitespace)
-  return <div className="results-toolbar" role="toolbar" aria-label="Results tools" onKeyDown={keyDown}>
-    <span className="results-toolbar-label" aria-hidden="true" title="White space"><Icon name="whitespace" /></span>
-    <div className="results-segments" role="group" aria-label="White space">
-      {whitespaceChoices.map((choice, index) => <button key={choice.mode} type="button" aria-pressed={choice.mode === whitespace} title={choice.title}
-        tabIndex={index === Math.max(0, current) ? 0 : -1} onClick={() => choose(choice.mode)}>{choice.label}</button>)}
+  // The toolbar's one Tab stop: the first group's chosen button.
+  const tabStop = Math.max(0, whitespaceChoices.findIndex(choice => choice.mode === whitespace))
+  const group = <T extends string>(label: string, icon: 'whitespace' | 'symbol-ruler', choices: readonly Choice<T>[], current: T, first: boolean) => <>
+    <span className="results-toolbar-label" aria-hidden="true" title={label}><Icon name={icon} /></span>
+    <div className="results-segments" role="group" aria-label={label}>
+      {choices.map((choice, index) => <button key={choice.mode} type="button" aria-pressed={choice.mode === current} title={choice.title}
+        tabIndex={first && index === tabStop ? 0 : -1} onClick={() => choose(choices, current, choice.mode)}>{choice.label}</button>)}
     </div>
+  </>
+  return <div className="results-toolbar" role="toolbar" aria-label="Results tools" onKeyDown={keyDown}>
+    {group('White space', 'whitespace', whitespaceChoices, whitespace, true)}
+    {group('Sort text by', 'symbol-ruler', sortTextChoices, sortText, false)}
   </div>
 }

@@ -13,10 +13,12 @@ internal readonly ref struct PageView
     private const int Stride = 11;
     private readonly ReadOnlySpan<byte> blob;
     private readonly int[] layout;
+    private readonly int blobStart;
 
-    private PageView(ReadOnlySpan<byte> blob, int[] layout, long firstRow, int rows, int columns)
+    private PageView(ReadOnlySpan<byte> blob, int blobStart, int[] layout, long firstRow, int rows, int columns)
     {
         this.blob = blob;
+        this.blobStart = blobStart;
         this.layout = layout;
         FirstRow = firstRow;
         Rows = rows;
@@ -45,7 +47,26 @@ internal readonly ref struct PageView
         }
         reader.ReadBinary();
         reader.ReadBinaryHeader();
-        return new PageView(page[reader.Consumed..], layout, firstRow, rows, columns);
+        return new PageView(page[reader.Consumed..], reader.Consumed, layout, firstRow, rows, columns);
+    }
+
+    /// <summary>A page parsed before (<see cref="Layout"/> and <see cref="BlobStart"/> kept from its first parse), without
+    /// reading its header again: views read scattered rows of many pages, and a wide page's header is O(columns).</summary>
+    public static PageView At(ReadOnlySpan<byte> page, int blobStart, int[] layout, long firstRow, int rows, int columns) =>
+        new(page[blobStart..], blobStart, layout, firstRow, rows, columns);
+
+    /// <summary>The column layout this view reads, for <see cref="At"/>: the scratch array when one was passed, so a caller
+    /// that keeps it parses without one.</summary>
+    public int[] Layout => layout;
+    /// <summary>Where the page's blob starts within the page, for <see cref="At"/>.</summary>
+    public int BlobStart => blobStart;
+
+    /// <summary>The page offsets of a column's offsets and data regions: a sort reads one column's cells straight from the
+    /// stored page (cell k's bytes are data[offsets[k]..offsets[k + 1]], offsets little-endian u32).</summary>
+    public (int Offsets, int Data) Regions(int column)
+    {
+        var at = column * Stride + 1;
+        return (blobStart + layout[at + 2], blobStart + layout[at + 4]);
     }
 
     public static int ScratchLength(int columns) => columns * Stride;

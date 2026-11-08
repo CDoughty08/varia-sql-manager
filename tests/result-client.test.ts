@@ -267,6 +267,66 @@ describe('ResultClient', () => {
     expect(client.trackedResults).toBe(0)
   })
 
+  it('sorts a result into a view read by position, replaces and closes views, and drops them with their result', async () => {
+    const { client, worker, handOver, serve } = fixture()
+    handOver()
+    await client.ready()
+    worker().toWorker({ t: 'backend', generation: 1, status: 'ready' })
+    const handle = client.open(descriptor())
+    const answerView = async (viewId: number, approximate = false) => {
+      await settle()
+      const request = worker().fromWorker.findLast(item => item.t === 'view')!
+      worker().toWorker({ t: 'end', rid: request.rid, ok: true, result: { viewId, rows: 10, complete: true, approximate } })
+      return request
+    }
+    const sorting = handle.sort([{ column: 0, descending: true, mode: 'value' }])
+    expect(await answerView(2)).toMatchObject({ t: 'view', generation: 1, resultId: 3, sort: [{ column: 0, descending: true, mode: 'value' }] })
+    const view = await sorting
+    expect([view.viewId, view.rows, view.complete, view.approximate, view.base === handle]).toEqual([2, 10, true, false, true])
+    expect(view.getSnapshot()).toMatchObject({ rowsAvailable: 10, state: 'complete' })
+    expect(client.trackedViews).toBe(1)
+    const pending = view.getWindow(0, 4)
+    await settle()
+    expect(worker().fromWorker.at(-1)).toMatchObject({ t: 'read', resultId: 3, viewId: 2 })
+    serve()
+    expect((await pending).count).toBe(4)
+    expect(view.peekWindow(0, 4)).toBeDefined()
+    expect(handle.peekWindow(0, 4)).toBeUndefined()
+    // A view's sort sorts its result again, replacing the view, which then reports itself released.
+    const resorting = view.sort([{ column: 0, descending: false, mode: 'chars' }], { replaces: view })
+    expect(await answerView(5, true)).toMatchObject({ replaces: 2 })
+    const next = await resorting
+    expect([next.viewId, next.approximate, next.base === handle]).toEqual([5, true, true])
+    expect(view.getSnapshot().state).toBe('released')
+    expect(view.peekWindow(0, 4)).toBeUndefined()
+    await expect(view.getWindow(0, 4)).rejects.toMatchObject({ code: 'RESULT_RELEASED' })
+    expect(client.trackedViews).toBe(1)
+    const closing = next.close()
+    await settle()
+    const close = worker().fromWorker.findLast(item => item.t === 'viewClose')!
+    expect(close).toMatchObject({ generation: 1, resultId: 3, viewIds: [5] })
+    worker().toWorker({ t: 'end', rid: close.rid, ok: true, result: { closed: 1 } })
+    await closing
+    expect([client.trackedViews, next.getSnapshot().state]).toEqual([0, 'released'])
+    // Refused before the port: no key, a repeated column, a column the result lacks.
+    await expect(handle.sort([])).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.sort([{ column: 0, descending: false, mode: 'value' }, { column: 0, descending: true, mode: 'value' }])).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(handle.sort([{ column: 1, descending: false, mode: 'value' }])).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    // Views go with their result: released with it, or lost with its backend.
+    const third = handle.sort([{ column: 0, descending: false, mode: 'bytes' }])
+    await answerView(6)
+    const last = await third
+    void client.release([handle.key])
+    expect([client.trackedViews, last.getSnapshot().state]).toEqual([0, 'released'])
+    const other = client.open(descriptor({ resultId: 4 }))
+    const fourth = other.sort([{ column: 0, descending: false, mode: 'value' }])
+    await answerView(1)
+    const lostView = await fourth
+    worker().toWorker({ t: 'backend', generation: 2, status: 'ready' })
+    await settle()
+    expect([client.trackedViews, lostView.getSnapshot().state]).toEqual([0, 'lost'])
+  })
+
   it('bounds the text of the windows a result remembers', async () => {
     const workers: FakeWorker[] = []
     const window = new FakeWindow()

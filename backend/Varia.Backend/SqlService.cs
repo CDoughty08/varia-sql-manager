@@ -29,7 +29,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
-        "results.read", "results.close", "results.rowBytes", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.peekRows", "explorer.index", "explorer.search", "results.copy", "results.export",
+        "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.peekRows", "explorer.index", "explorer.search", "results.copy", "results.export",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
         "ssis.describe", "ssis.execute", "ssis.catalogSetup"
@@ -297,14 +297,14 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     public RequestLane LaneOf(string method) => method switch
     {
         "query.execute" or "plans.estimate" => RequestLane.Query,
-        "results.read" or "results.copy" or "results.export" => RequestLane.Results,
+        "results.read" or "results.copy" or "results.export" or "results.view" => RequestLane.Results,
         "explorer.children" or "explorer.peek" or "explorer.peekDependencies" or "explorer.peekRows" or "explorer.index" or "explorer.search" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
         "ssis.describe" or "ssis.execute" or "ssis.catalogSetup" => RequestLane.Ssis,
         "live.subscribe" or "activity.details" => RequestLane.Live,
         // Kill Process takes no metadata slot: it runs at once under its own gates, as object actions do under theirs.
         "activity.kill" => RequestLane.Actions,
-        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "entra.cache.clear"
+        "system.health" or "connections.disconnect" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "entra.cache.clear"
             or "live.update" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
         _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
@@ -352,6 +352,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "results.read" => await ReadResultsAsync(Read<ResultsReadArgs>(parameters, json), context),
         "results.close" => CloseResults(Read<ResultsCloseArgs>(parameters, json)),
         "results.rowBytes" => RowBytes(Read<ResultsRowBytesArgs>(parameters, json)),
+        "results.view" => await ViewAsync(Read<ResultsViewArgs>(parameters, json), Token(context)),
+        "results.viewClose" => CloseViews(Read<ResultsViewCloseArgs>(parameters, json)),
         "results.copy" => await jobs.CopyAsync(Read<ResultsCopyArgs>(parameters, json), context),
         "results.export" => await jobs.ExportAsync(Read<ResultsExportArgs>(parameters, json), context),
         "explorer.children" => await explorer.ChildrenAsync(Read<ExplorerChildrenArgs>(parameters, json), Token(context)),
@@ -1446,6 +1448,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             throw new RequestException("INVALID_PARAMS", "The result range is invalid.");
         if (context is not { IsStream: true }) throw new RequestException("INVALID_REQUEST", "Result pages are read as a stream with credit.");
         var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        if (args.ViewId is { } viewId) return await ReadViewAsync(args, FindView(args.ResultId, viewId), context);
         var next = args.FirstRow;
         int pages = 0, rows = 0;
         foreach (var page in set.PagesFor(args.FirstRow, args.MaxRows))
@@ -1472,10 +1475,90 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             throw new RequestException("INVALID_PARAMS", "The result range is invalid.");
         var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
         var estimated = new List<long>();
+        if (args.ViewId is { } viewId)
+        {
+            var view = FindView(args.ResultId, viewId);
+            var sizes = ViewPages.RowBytes(view, args.FirstRow, args.Count, estimated);
+            if (set.IsReleased) throw Unavailable(args.ResultId);
+            return new ResultsRowBytesResult(args.FirstRow, sizes, view.Rows, [.. estimated]);
+        }
         var bytes = set.RowBytes(args.FirstRow, args.Count, estimated);
         if (set.IsReleased) throw Unavailable(args.ResultId);
         return new ResultsRowBytesResult(args.FirstRow, bytes, set.RowsAvailable, [.. estimated]);
     }
+
+    /// <summary>Streams a view's rows (results.read with a viewId) as pages built in view order, within the request's
+    /// credit; a view is fixed once built, so the read is complete at its end.</summary>
+    private async Task<ResultsReadResult> ReadViewAsync(ResultsReadArgs args, ResultView view, RequestContext context)
+    {
+        var set = view.Set;
+        var pages = 0;
+        foreach (var body in ViewPages.Build(view, args.FirstRow, args.MaxRows))
+        {
+            // A release or a closed view ends the read after the page already sent.
+            if (set.IsReleased) throw Unavailable(args.ResultId);
+            if (!store.HasView(view)) throw ViewClosed();
+            await context.SendDataAsync(body);
+            pages++;
+        }
+        var next = Math.Max(args.FirstRow, Math.Min(view.Rows, args.FirstRow + args.MaxRows));
+        return new ResultsReadResult(next, view.Rows, true, pages, (int)(next - args.FirstRow));
+    }
+
+    private ResultView FindView(uint resultId, uint viewId) => store.FindView(resultId, viewId) ?? throw ViewClosed();
+
+    private static RequestException ViewClosed() => new("VIEW_NOT_FOUND", "This sorted view was closed. Sort the results again.");
+
+    /// <summary>results.view: sorts a result's sealed rows (ViewSorter) off the frame loop, charging the sort's working
+    /// memory and then the view's order to the result's query budget; TOO_LARGE when the budget has no room.</summary>
+    private async Task<ResultsViewResult> ViewAsync(ResultsViewArgs args, CancellationToken token)
+    {
+        if (args.ResultId == 0 || args.Sort is not { Length: >= 1 and <= ViewSorter.MaxKeys } || args.Replaces == 0)
+            throw new RequestException("INVALID_PARAMS", "Between 1 and 16 sort keys are required.");
+        var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        var keys = new ViewKey[args.Sort.Length];
+        for (var i = 0; i < keys.Length; i++)
+        {
+            var sort = args.Sort[i];
+            if (sort.Column < 0 || sort.Column >= set.Columns.Count || Array.FindIndex(args.Sort, 0, i, other => other.Column == sort.Column) >= 0)
+                throw new RequestException("INVALID_PARAMS", "Each sort key needs a distinct column of the result.");
+            keys[i] = new ViewKey(sort.Column, sort.Descending, sort.Mode switch
+            {
+                "value" => SortMode.Value,
+                "chars" => SortMode.Chars,
+                "bytes" => SortMode.Bytes,
+                _ => throw new RequestException("INVALID_PARAMS", "A sort mode is value, chars or bytes.")
+            });
+        }
+        var complete = set.IsComplete;
+        var pages = set.SealedSnapshot();
+        long rows = 0;
+        foreach (var page in pages) rows += page.Rows;
+        var working = ViewSorter.WorkingBytes(rows, keys.Length);
+        var kept = 4 * rows + ResultStore.ViewOverhead;
+        if (!store.TryReserve(set.Budget, working + kept, false, out _))
+            throw new RequestException("TOO_LARGE", "There is not enough result memory to sort these rows. Close other results and try again.");
+        (int[] Order, bool Approximate) sorted;
+        try { sorted = await Task.Run(() => ViewSorter.Sort(set, pages, keys, token), token); }
+        catch
+        {
+            store.Return(set.Budget, working + kept);
+            throw;
+        }
+        store.Return(set.Budget, working);
+        var view = store.AddView(set, sorted.Order, keys, sorted.Approximate, complete, kept, args.Replaces);
+        return new ResultsViewResult(view.ViewId, view.Rows, view.Complete, view.Approximate);
+    }
+
+    private ResultsViewCloseResult CloseViews(ResultsViewCloseArgs args)
+    {
+        if (args.ResultId == 0 || args.ViewIds is not { Length: >= 1 and <= MaxViewIds } || args.ViewIds.Contains(0u))
+            throw new RequestException("INVALID_PARAMS", "Between 1 and 64 view IDs are required.");
+        return new ResultsViewCloseResult(store.CloseViews(args.ResultId, args.ViewIds));
+    }
+
+    /// <summary>The most views one results.viewClose names (src/shared/ipc/wire/protocol.ts limits.views.maxClose).</summary>
+    public const int MaxViewIds = 64;
 
     private RequestException Unavailable(uint resultId) => store.WasReleased(resultId)
         ? new RequestException("RESULT_RELEASED", "These results were closed. Execute the query again to see them.")

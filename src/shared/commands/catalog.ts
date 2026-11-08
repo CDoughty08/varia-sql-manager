@@ -797,6 +797,35 @@ export const commandCatalog = {
     title: 'Show All White Space in Results', category: 'Query', icon: 'whitespace', keywords: ['whitespace', 'crlf', 'nbsp', 'invisible', 'grid'],
     toggled: 'resultsWhitespaceAll', menus: [{ menu: 'output.context', group: '4_view', order: 2, title: 'Show All White Space', mnemonic: 'w', when: "outputView == 'grid'" }]
   },
+  // Sorting a grid (results.view): the menu's column, else the active cell's. Sort replaces the grid's sort; Then Sort adds
+  // the column as a further key. A header's sort button does the same with a click, and Shift+click (grid.addSortKey).
+  'output.sortAscending': {
+    title: 'Sort Ascending', category: 'Query', icon: 'arrow-up', keywords: ['order', 'sort', 'asc', 'grid', 'column'], palette: false,
+    menus: [{ menu: 'output.context', group: '2_sort', order: 1, mnemonic: 'o', when: "outputView == 'grid'" }]
+  },
+  'output.sortDescending': {
+    title: 'Sort Descending', category: 'Query', icon: 'arrow-down', keywords: ['order', 'sort', 'desc', 'grid', 'column'], palette: false,
+    menus: [{ menu: 'output.context', group: '2_sort', order: 2, mnemonic: 'd', when: "outputView == 'grid'" }]
+  },
+  'output.thenSortAscending': {
+    title: 'Then Sort Ascending', category: 'Query', keywords: ['order', 'sort', 'secondary', 'grid', 'column'], palette: false,
+    menus: [{ menu: 'output.context', group: '2_sort', order: 3, when: "outputView == 'grid'" }]
+  },
+  'output.thenSortDescending': {
+    title: 'Then Sort Descending', category: 'Query', keywords: ['order', 'sort', 'secondary', 'grid', 'column'], palette: false,
+    menus: [{ menu: 'output.context', group: '2_sort', order: 4, when: "outputView == 'grid'" }]
+  },
+  'output.clearSort': {
+    title: 'Clear Sort', category: 'Query', keywords: ['order', 'unsort', 'original', 'grid'], palette: false,
+    menus: [{ menu: 'output.context', group: '2_sort', order: 5, mnemonic: 'r', when: "outputView == 'grid'" }]
+  },
+  // The results toolbar's Sort text by choices (queryResults.grid.sortText); each goes back to Value when it is already on.
+  'output.sortTextByChars': {
+    title: 'Sort Text by Length in Characters', category: 'Query', icon: 'symbol-ruler', keywords: ['sort', 'length', 'len', 'characters', 'text', 'grid'], toggled: 'resultsSortTextChars'
+  },
+  'output.sortTextByBytes': {
+    title: 'Sort Text by Length in Bytes', category: 'Query', icon: 'symbol-ruler', keywords: ['sort', 'length', 'datalength', 'bytes', 'text', 'binary', 'grid'], toggled: 'resultsSortTextBytes'
+  },
   // A click or Enter on an XML, JSON or plan cell opens its whole value, formatted, in a new tab (the grid runs it).
   'output.openValue': { title: 'Open Value in New Tab', category: 'Query', icon: 'go-to-file', palette: false },
   // A panel's menu, from its tab or its ⋯ button: the panel comes from the menu's target, so these have no keys and are

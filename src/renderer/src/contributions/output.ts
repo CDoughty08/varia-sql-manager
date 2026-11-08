@@ -53,7 +53,29 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     const selection = shown && results.selection(target!.tabId, target!.resultIndex)
     return shown && selection && resolveBlocks(selection, shown.rows, shown.columns).length > 0 ? target : undefined
   }
+  const showSortText = (mode: 'chars' | 'bytes') =>
+    settings.choose('queryResults.grid.sortText', settings.getSnapshot().values['queryResults.grid.sortText'] === mode ? 'value' : mode)
+  /** The column a sort command acts on: the menu's (a right-press on a header selects its column), else the active cell's. */
+  const sortTarget = (args?: CommandArgs) => {
+    const target = targetOf(args), shown = grid(target)
+    const active = shown && results.selection(target!.tabId, target!.resultIndex)?.active
+    return shown && active && active.column < shown.columns ? { tabId: target!.tabId, index: target!.resultIndex, column: active.column } : undefined
+  }
+  const sortCommand = (direction: 'ascending' | 'descending', add: boolean) => ({
+    when: (args?: CommandArgs) => !!sortTarget(args),
+    run: (args?: CommandArgs) => { const at = sortTarget(args); if (at) results.sortBy(at.tabId, at.index, at.column, direction, add) }
+  })
   const registrations = [
+    commands.register('output.sortAscending', sortCommand('ascending', false)),
+    commands.register('output.sortDescending', sortCommand('descending', false)),
+    commands.register('output.thenSortAscending', sortCommand('ascending', true)),
+    commands.register('output.thenSortDescending', sortCommand('descending', true)),
+    commands.register('output.clearSort', {
+      when: args => { const target = targetOf(args); return !!grid(target) && !!results.sortOf(target!.tabId, target!.resultIndex) },
+      run: args => { const target = targetOf(args); if (target && grid(target)) results.clearSort(target.tabId, target.resultIndex) }
+    }),
+    commands.register('output.sortTextByChars', { run: () => showSortText('chars') }),
+    commands.register('output.sortTextByBytes', { run: () => showSortText('bytes') }),
     commands.register('output.copy', {
       when: args => { const target = targetOf(args); return !!selected(target) || (target?.view !== 'grid' && !!target?.selectedText) },
       run: async args => {

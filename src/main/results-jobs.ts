@@ -162,7 +162,7 @@ export class ResultsJobHost {
       }
     }
     try {
-      const result = await this.deps.backend.copy(request.generation, { resultId: request.resultId, parts: request.parts, headers: request.headers, eol: this.deps.platform === 'win32' ? 'crlf' : 'lf', maxBytes },
+      const result = await this.deps.backend.copy(request.generation, { resultId: request.resultId, parts: request.parts, headers: request.headers, eol: this.deps.platform === 'win32' ? 'crlf' : 'lf', maxBytes, ...(request.viewId === undefined ? {} : { viewId: request.viewId }) },
         { sink, credit: wire.jobs.copyCredit, onProgress: event => job.progress(event), onSent: id => job.sent(id) })
       if (overflow) throw new BackendError('TOO_LARGE', jobSentences.copyTooLarge)
       // The backend may finish a copy cancelled late (its credit covered the rest), but the chunks after the cancel were
@@ -189,7 +189,8 @@ export class ResultsJobHost {
     let writing: { path: string; temporaryId: string } | undefined
     try {
       this.check(request.generation, request.resultId)
-      const newest = this.deps.liveNewest?.(request.generation, request.resultId)
+      // A view is of one result: a live table's newer revision has none of its views.
+      const newest = request.viewId === undefined ? this.deps.liveNewest?.(request.generation, request.resultId) : undefined
       const requested = request.format ?? this.lastFormat ?? 'csv'
       // '{tab}-Result{n}' (ResultsService.suggestedName): a long tab name gives way, never the number that tells sets apart.
       const [, base, suffix] = /^([\s\S]*?)(-Result\d+)?$/.exec(request.suggestedName)!
@@ -210,7 +211,7 @@ export class ResultsJobHost {
       this.check(request.generation, resultId, jobSentences.closedBeforeSave)
       const job = this.saving = new Job(request.jobId, 'save', request.generation, this.deps, fileName)
       writing = { path, temporaryId: randomUUID().replaceAll('-', '') }
-      const result = await this.deps.backend.export(request.generation, { resultId, path, format, headers, nullText: exportDefaults.nullText[format], temporaryId: writing.temporaryId },
+      const result = await this.deps.backend.export(request.generation, { resultId, path, format, headers, nullText: exportDefaults.nullText[format], temporaryId: writing.temporaryId, ...(request.viewId === undefined ? {} : { viewId: request.viewId }) },
         { onProgress: event => job.progress(event), onSent: id => job.sent(id) })
       this.lastDir = dirname(path)
       this.lastFormat = format

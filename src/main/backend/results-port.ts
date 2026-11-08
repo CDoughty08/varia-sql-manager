@@ -1,5 +1,5 @@
-import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult } from '../../shared/contracts'
-import { portRequestSchema, rowBytesResultSchema, testPortRequestSchema, type MemoryFeature, type MemoryReport, type PortMessage, type PortRequest } from '../../shared/ipc/port-messages'
+import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult } from '../../shared/contracts'
+import { portRequestSchema, rowBytesResultSchema, testPortRequestSchema, viewCloseResultSchema, viewResultSchema, type MemoryFeature, type MemoryReport, type PortMessage, type PortRequest } from '../../shared/ipc/port-messages'
 import { liveDescriptors, liveRetired, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../../shared/live/schema'
 import { cancelReasons, limits as wire, type CancelReason, type ErrorCode } from '../../shared/ipc/wire/protocol'
 import type { StreamSink } from './connection'
@@ -27,6 +27,9 @@ export interface ResultsBackend {
   read(generation: number, params: ResultsReadParams, sink: StreamSink, credit: number): ReadStream
   close(generation: number, resultIds: number[]): Promise<ResultsCloseResult>
   rowBytes(generation: number, params: ResultsRowBytesParams): Promise<ResultsRowBytesResult>
+  /** A sort may take seconds: the worker's cancel (a newer sort, or the view no longer wanted) stops it. */
+  view(generation: number, params: ResultsViewParams): { readonly done: Promise<ResultsViewResult>; cancel(reason: CancelReason): void }
+  viewClose(generation: number, params: ResultsViewCloseParams): Promise<ResultsViewCloseResult>
   live(generation: number, params: LiveSubscribeParams, onLive: (event: LiveEvent, bytes: number) => void, credit: number): LiveStreamHandle
   liveUpdate(generation: number, params: LiveUpdateParams): Promise<LiveUpdateResult>
 }
@@ -78,6 +81,8 @@ export class ResultsPortHost {
   private status: BackendStatus = 'stopped'
   private closing = 0
   private updating = 0
+  /** results.view requests in flight, by rid, so the worker's cancel reaches them. */
+  private readonly sorting = new Map<number, { cancel(reason: CancelReason): void }>()
   private invalid = 0
   private opens: number[] = []
 
@@ -135,6 +140,8 @@ export class ResultsPortHost {
     }
     this.lives.clear()
     this.subscriptions.clear()
+    for (const sort of this.sorting.values()) sort.cancel(cancelReasons.consumerGone)
+    this.sorting.clear()
     this.closing = 0
     this.updating = 0
     try { port?.close() } catch { /* Already closed. */ }
@@ -224,9 +231,14 @@ export class ResultsPortHost {
     switch (request.t) {
       case 'read': return this.read(request)
       case 'credit': return this.credit(request.rid, request.bytes)
-      case 'cancel': (this.streams.get(request.rid) ?? this.lives.get(request.rid))?.handle?.cancel(cancelReasons.user); return
+      case 'cancel':
+        (this.streams.get(request.rid) ?? this.lives.get(request.rid))?.handle?.cancel(cancelReasons.user)
+        this.sorting.get(request.rid)?.cancel(cancelReasons.user)
+        return
       case 'close': return this.closeResults(request)
       case 'rowBytes': return this.rowBytes(request)
+      case 'view': return this.view(request)
+      case 'viewClose': return this.viewClose(request)
       case 'live': return this.live(request)
       case 'liveUpdate': return this.liveUpdate(request)
     }
@@ -239,8 +251,9 @@ export class ResultsPortHost {
     return total
   }
 
-  /** Requests counted against the 64 outstanding: reads, closes and live updates (live streams have their own cap). */
-  private busy(): number { return this.streams.size + this.closing + this.updating }
+  /** Requests counted against the 64 outstanding: reads, closes, sorts, row sizes and live updates (live streams have their
+   *  own cap). */
+  private busy(): number { return this.streams.size + this.closing + this.updating + this.sorting.size }
 
   private read(request: Extract<PortRequest, { t: 'read' }>): void {
     const { rid } = request
@@ -259,7 +272,9 @@ export class ResultsPortHost {
         this.grantWithheld()
       }
     }
-    stream.handle = this.backend.read(request.generation, { resultId: request.resultId, firstRow: request.firstRow, maxRows: request.maxRows }, sink, credit)
+    const params: ResultsReadParams = { resultId: request.resultId, firstRow: request.firstRow, maxRows: request.maxRows }
+    if (request.viewId !== undefined) params.viewId = request.viewId
+    stream.handle = this.backend.read(request.generation, params, sink, credit)
     stream.handle.done.then(result => {
       if (this.streams.get(rid) !== stream || this.port !== port) return
       this.streams.delete(rid)
@@ -419,7 +434,9 @@ export class ResultsPortHost {
     if (request.generation !== this.generation || this.backend.readyGeneration() !== request.generation || !this.owned.has(request.resultId)) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
     const port = this.port
     this.updating++
-    this.backend.rowBytes(request.generation, { resultId: request.resultId, firstRow: request.firstRow, count: request.count }).then(result => {
+    const params: ResultsRowBytesParams = { resultId: request.resultId, firstRow: request.firstRow, count: request.count }
+    if (request.viewId !== undefined) params.viewId = request.viewId
+    this.backend.rowBytes(request.generation, params).then(result => {
       if (this.port !== port) return
       this.updating--
       // Backend output is bounded before the renderer sees it: the range asked, at most as many rows as asked or as exist.
@@ -434,6 +451,55 @@ export class ResultsPortHost {
       this.updating--
       this.fail(rid, error)
     })
+  }
+
+  /** A view of a result this renderer owns: views belong to their result in the backend, which refuses another result's
+   *  view id, so main checks only the result. */
+  private view(request: Extract<PortRequest, { t: 'view' }>): void {
+    const { rid } = request
+    if (this.sorting.has(rid)) return this.end(rid, 'INVALID_REQUEST', 'The results request was invalid.')
+    if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
+    if (!this.current(request.generation, request.resultId)) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
+    const port = this.port
+    const params: ResultsViewParams = { resultId: request.resultId, sort: request.sort.map(key => ({ ...key })) }
+    if (request.replaces !== undefined) params.replaces = request.replaces
+    const sort = this.backend.view(request.generation, params)
+    this.sorting.set(rid, sort)
+    sort.done.then(result => {
+      if (this.port !== port || this.sorting.get(rid) !== sort) return
+      this.sorting.delete(rid)
+      const parsed = viewResultSchema.safeParse(result)
+      if (!parsed.success) return this.end(rid, 'BACKEND_ERROR', 'The results could not be sorted.')
+      this.post({ t: 'end', rid, ok: true, result: parsed.data })
+    }, error => {
+      if (this.port !== port || this.sorting.get(rid) !== sort) return
+      this.sorting.delete(rid)
+      this.fail(rid, error)
+    })
+  }
+
+  private viewClose(request: Extract<PortRequest, { t: 'viewClose' }>): void {
+    const { rid } = request
+    if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
+    if (!this.current(request.generation, request.resultId)) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
+    const port = this.port
+    this.updating++
+    this.backend.viewClose(request.generation, { resultId: request.resultId, viewIds: [...request.viewIds] }).then(result => {
+      if (this.port !== port) return
+      this.updating--
+      const parsed = viewCloseResultSchema.safeParse(result)
+      if (!parsed.success) return this.end(rid, 'BACKEND_ERROR', 'The results could not be read.')
+      this.post({ t: 'end', rid, ok: true, result: parsed.data })
+    }, error => {
+      if (this.port !== port) return
+      this.updating--
+      this.fail(rid, error)
+    })
+  }
+
+  /** The request names the current, ready generation and a result this renderer owns. */
+  private current(generation: number, resultId: number): boolean {
+    return generation === this.generation && this.backend.readyGeneration() === generation && this.owned.has(resultId)
   }
 
   private fail(rid: number, error: unknown): void {
@@ -466,6 +532,12 @@ export function supervisorResults(supervisor: BackendSupervisor): ResultsBackend
     },
     close: (generation, resultIds) => supervisor.request('results.close', { resultIds }, { generation }),
     rowBytes: (generation, params) => supervisor.request('results.rowBytes', params, { generation }),
+    view: (generation, params) => {
+      let id = 0
+      const done = supervisor.request('results.view', params, { generation, onSent: sent => { id = sent } })
+      return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
+    },
+    viewClose: (generation, params) => supervisor.request('results.viewClose', params, { generation }),
     live: (generation, params, onLive, credit) => {
       let id = 0
       const done = supervisor.request('live.subscribe', params, { generation, credit, onLive, onSent: sent => { id = sent } })

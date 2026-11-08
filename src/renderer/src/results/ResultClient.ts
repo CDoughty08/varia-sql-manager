@@ -1,7 +1,7 @@
 // The renderer's access to stored query results (the PR7 grid contract). Rows stay in the backend; the results worker
 // reads and decodes pages, and the UI thread receives only windows of display text. Live subscriptions run through the
 // same worker and port: their tables are ordinary stored results, opened with the same handles.
-import type { ApiResult, BackendStatus, QueryEvent, QueryResult, ResultColumn, ResultDescriptor, TruncationReason, VariaApi, WireKind } from '../../../shared/contracts'
+import type { ApiResult, BackendStatus, QueryEvent, QueryResult, ResultColumn, ResultDescriptor, TruncationReason, VariaApi, ViewSortKey, WireKind } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport } from '../../../shared/ipc/port-messages'
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
@@ -77,8 +77,23 @@ export interface ResultHandle extends Disposable {
   getCell(row: number, col: number, o?: { format?: ValueFormat; signal?: AbortSignal }): Promise<CellValue>
   /** Each row's bytes (sum of DATALENGTH over its cells) for up to 16,384 rows from `first`, as far as rows are available. */
   rowBytes(first: number, count: number, signal?: AbortSignal): Promise<RowBytes>
-  /** Releases the result in the backend (results.close); queued while the results port is down. */
+  /** Releases the result in the backend (results.close); queued while the results port is down. A view's close closes
+   *  only the view (results.viewClose). */
   close(): Promise<void>
+  /** A view of the result's stored rows sorted by `keys` in the backend (results.view), read through the same calls by
+   *  view position. On a view, sorts its result again. `replaces` is a view of the same result the new one supersedes:
+   *  the backend frees it once the new view is built, and its handle then reports itself released. */
+  sort(keys: readonly ViewSortKey[], o?: { replaces?: ResultView; signal?: AbortSignal }): Promise<ResultView>
+}
+/** A sorted view: the rows that were sealed when it was built (`complete` when that was all of them), in key order;
+ *  `approximate` when a key compared a stored prefix or an estimated length. It never grows. */
+export interface ResultView extends ResultHandle {
+  readonly viewId: number
+  readonly base: ResultHandle
+  readonly keys: readonly ViewSortKey[]
+  readonly rows: number
+  readonly complete: boolean
+  readonly approximate: boolean
 }
 /** What an update of a live stream may change: everything but which subscription and source it is. */
 export type LivePatch = Omit<LiveUpdateParams, 'subscriptionId' | 'source'>
@@ -116,6 +131,8 @@ interface ResultState {
   readonly listeners: Set<() => void>
   handle: ResultHandle | undefined
   scheduled: boolean
+  /** For a view's state, its result's state id. */
+  readonly base?: string
 }
 interface Pending { resolve(message: WorkerResponse): void; reject(error: Error): void }
 /** `results` are the results this stream's events delivered that no later event retired: what its end releases. */
@@ -194,6 +211,8 @@ export class ResultClient implements Disposable {
   private readonly schedule: (callback: () => void) => void
   private readonly pending = new Map<number, Pending>()
   private readonly results = new Map<string, ResultState>()
+  /** Views' states by their ids (`generation:resultId#viewId`); they go with their result. */
+  private readonly views = new Map<string, ResultState>()
   private readonly queryListeners = new Map<string, Set<(event: QueryEvent) => void>>()
   private readonly memoryListeners: Record<MemoryFeature, Set<(memory: MemoryReport) => void>> = { results: new Set(), index: new Set() }
   private readonly generationListeners = new Set<(generation: number) => void>()
@@ -254,6 +273,13 @@ export class ResultClient implements Disposable {
   open(descriptor: ResultDescriptor): ResultHandle {
     const state = this.state(descriptor)
     if (state.handle) return state.handle
+    return this.handleFor(state, () => this.release([{ generation: state.key.generation, resultId: state.key.resultId }]))
+  }
+
+  /** Views open on this client (test mode and checks). */
+  get trackedViews(): number { return this.views.size }
+
+  private handleFor<T extends ResultHandle>(state: ResultState, close: () => Promise<void>, extra?: (handle: ResultHandle) => Omit<T, keyof ResultHandle>): T {
     const listeners = new Set<() => void>()
     const shape = (o: WindowShape) => {
       const colStart = Math.max(0, Math.min(state.columns.length, o.colStart ?? 0))
@@ -299,18 +325,60 @@ export class ResultClient implements Disposable {
         if (response.type !== 'rowBytes') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
         return { first: response.firstRow, bytes: response.bytes, rowsAvailable: response.rowsAvailable, estimated: response.estimated }
       },
-      close: () => this.release([{ generation: state.key.generation, resultId: state.key.resultId }]),
+      close,
+      sort: (keys, o) => this.sort(state.base === undefined ? state : this.results.get(state.base), keys, o),
       dispose: () => {
         for (const listener of listeners) state.listeners.delete(listener)
         listeners.clear()
         // A released or lost result's windows went when it was forgotten.
-        if (this.results.get(state.id) === state) this.windows.dropResult(state.id)
+        if (this.tracked(state)) this.windows.dropResult(state.id)
         if (state.handle === handle) state.handle = undefined
       }
     }
-    state.handle = handle
-    return handle
+    const full = (extra ? Object.assign(handle, extra(handle)) : handle) as T
+    state.handle = full
+    return full
   }
+
+  /** results.view through the worker. A view built after its sort was given up is closed by the worker. */
+  private async sort(base: ResultState | undefined, keys: readonly ViewSortKey[], o: { replaces?: ResultView; signal?: AbortSignal } = {}): Promise<ResultView> {
+    if (!base) throw new ResultError('RESULT_RELEASED', released)
+    this.usable(base)
+    if (keys.length < 1 || keys.length > wire.views.maxKeys || new Set(keys.map(item => item.column)).size !== keys.length || keys.some(item => !Number.isInteger(item.column) || item.column < 0 || item.column >= base.columns.length))
+      throw new ResultError('INVALID_PARAMS', 'Each sort key needs a distinct column of the result.')
+    const replaces = o.replaces && o.replaces.base === base.handle && this.views.has(`${base.id}#${o.replaces.viewId}`) ? o.replaces.viewId : undefined
+    const sort = keys.map(item => ({ column: item.column, descending: item.descending, mode: item.mode }))
+    const response = await this.request(id => ({ type: 'view', id, key: base.key, sort, ...(replaces === undefined ? {} : { replaces }) }), o.signal)
+    if (response.type !== 'view') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
+    if (replaces !== undefined) this.endView(this.views.get(`${base.id}#${replaces}`), 'released')
+    const key: ResultKey = { ...base.key, view: response.viewId }
+    const state: ResultState = {
+      key, id: `${base.id}#${response.viewId}`, columns: base.columns, wires: base.wires, listeners: new Set(), handle: undefined, scheduled: false, base: base.id,
+      snapshot: { ...base.snapshot, rowsRead: response.rows, rowsStored: response.rows, rowsAvailable: response.rows, state: 'complete' }
+    }
+    // Released or lost while it sorted: the backend dropped the view with its result.
+    if (!this.tracked(base)) state.snapshot = { ...state.snapshot, state: base.snapshot.state }
+    else this.views.set(state.id, state)
+    const baseHandle = base.handle ?? this.handleFor(base, () => this.release([{ generation: base.key.generation, resultId: base.key.resultId }]))
+    return this.handleFor<ResultView>(state, () => this.closeView(state), () => ({ viewId: response.viewId, base: baseHandle, keys: sort, rows: response.rows, complete: response.complete, approximate: response.approximate }))
+  }
+
+  /** results.viewClose: the view's windows and pages go at once; a failure (its result already released) changes nothing. */
+  private async closeView(state: ResultState): Promise<void> {
+    if (!this.views.has(state.id)) return
+    this.endView(state, 'released')
+    try { await this.request(id => ({ type: 'viewClose', id, key: { generation: state.key.generation, resultId: state.key.resultId }, viewIds: [state.key.view!] })) }
+    catch { /* The view went with its result, or with the backend. */ }
+  }
+
+  private endView(state: ResultState | undefined, as: 'released' | 'lost'): void {
+    if (!state || this.views.get(state.id) !== state) return
+    this.views.delete(state.id)
+    this.windows.dropResult(state.id)
+    if (state.snapshot.state !== 'lost') this.publish(state, { ...state.snapshot, state: as })
+  }
+
+  private tracked(state: ResultState): boolean { return this.results.get(state.id) === state || this.views.get(state.id) === state }
 
   /** Events of one running script (from main, through the worker). */
   onQueryEvent(queryId: string, listener: (event: QueryEvent) => void): Disposable {
@@ -587,7 +655,7 @@ export class ResultClient implements Disposable {
 
   private received(message: WorkerResponse): void {
     switch (message.type) {
-      case 'window': case 'cell': case 'closed': case 'rowBytes': case 'measure': case 'stats': case 'liveUpdated': {
+      case 'window': case 'cell': case 'closed': case 'rowBytes': case 'measure': case 'stats': case 'liveUpdated': case 'view': case 'viewClosed': {
         const pending = this.pending.get(message.id)
         this.pending.delete(message.id)
         pending?.resolve(message)
@@ -672,9 +740,11 @@ export class ResultClient implements Disposable {
     for (const listener of [...this.generationListeners]) listener(generation)
   }
 
+  /** A result leaves with its views, which report what became of it. */
   private untrack(state: ResultState): void {
     if (this.results.get(state.id) === state) this.results.delete(state.id)
     this.windows.dropResult(state.id)
+    for (const view of [...this.views.values()]) if (view.base === state.id) this.endView(view, state.snapshot.state === 'lost' ? 'lost' : 'released')
   }
 
   private queryEvent(queryId: string, event: QueryEvent): void {
@@ -753,7 +823,7 @@ export class ResultClient implements Disposable {
     if (response.type !== 'window') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
     const window: RowWindow = { first: response.first, count: response.count, colStart: response.colStart, colEnd: response.colEnd, text: response.text, flags: response.flags }
     // A result released or lost meanwhile keeps nothing.
-    if (this.results.get(state.id) === state) this.windows.set(WindowCache.key(state.id, start, Math.floor(count), colStart, colEnd, maxCellChars, display), state.id, window)
+    if (this.tracked(state)) this.windows.set(WindowCache.key(state.id, start, Math.floor(count), colStart, colEnd, maxCellChars, display), state.id, window)
     return window
   }
 }

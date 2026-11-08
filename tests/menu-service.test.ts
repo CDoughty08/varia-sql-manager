@@ -539,7 +539,7 @@ describe('context menus', () => {
     const grid = new FakeElement(doc, 'div', { attributes: { 'data-output-view': 'grid', 'data-tab-id': first.id, 'data-result-index': '0' } }).append(cell)
     expect(menus.openForElement(grid.dom, { keyboard: true })).toBe(true)
     expect(level(menus)).toMatchObject({ label: 'Query output', active: 0, anchor: { kind: 'below', rect: { left: 408, top: 300, right: 480, bottom: 324 } } })
-    expect(titles(level(menus).items)).toEqual(['Copy', 'Copy with Headers', '-', 'Select All', '-', 'Save Results As…', '-', 'Show Spaces and Tabs', 'Show All White Space'])
+    expect(titles(level(menus).items)).toEqual(['Copy', 'Copy with Headers', '-', 'Select All', '-', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', '-', 'Save Results As…', '-', 'Show Spaces and Tabs', 'Show All White Space'])
     expect(doc.activeElement).toBe(grid)
     expect(grid.hasAttribute('data-menu-target')).toBe(false)
   })

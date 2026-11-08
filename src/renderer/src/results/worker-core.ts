@@ -2,7 +2,7 @@
 // from main through the results port, validates and caches them (decodePage), and answers the UI's windows and cells
 // with display text decoded only for the cells asked for. It also relays live subscriptions between the page and main
 // without decoding anything, and grants each live event's bytes back only once the page says it applied the event.
-import type { BackendStatus, ResultsCloseResult, ResultsRowBytesResult, WireKind } from '../../../shared/contracts'
+import type { BackendStatus, ResultsCloseResult, ResultsRowBytesResult, ResultsViewCloseResult, ResultsViewResult, WireKind } from '../../../shared/contracts'
 import type { PortEndResult, PortMessage, PortRequest } from '../../../shared/ipc/port-messages'
 import { decodePage, pageMemoryBytes, PageFormatError, type PageView } from '../../../shared/ipc/wire/pages'
 import { CELL_ERROR, CELL_NULL, cellFlags, cellSlice, cellText, displayText, runSlice, textRun, type TextRun } from '../../../shared/ipc/wire/cells'
@@ -53,7 +53,10 @@ interface Waiter {
  *  took that the page has not acknowledged yet; nothing more is ever granted back. */
 interface Live { readonly id: number; readonly rid: number; readonly generation: number; unacked: number; cancelled: boolean }
 
-const resultOf = (key: ResultKey): string => `${key.generation}:${key.resultId}`
+/** A view's pages are cached apart from its result's (they hold the same rows in another order). */
+const resultOf = (key: ResultKey): string => key.view === undefined ? `${key.generation}:${key.resultId}` : `${key.generation}:${key.resultId}#${key.view}`
+/** The result a cache key belongs to, without its view. */
+const baseOf = (result: string): string => { const at = result.indexOf('#'); return at < 0 ? result : result.slice(0, at) }
 
 /** A page's firstRow from its header (array(7) of uints: version, resultId, firstRow, …), or undefined when the
  *  header is not in that canonical form; decodePage validates everything properly. */
@@ -98,6 +101,10 @@ export class ResultsWorkerCore {
   private readonly closes = new Map<number, number>()
   /** results.rowBytes requests in flight: the page's id by rid. */
   private readonly sizes = new Map<number, number>()
+  /** results.view requests in flight: the page's id, the result and the view it replaces, by rid. */
+  private readonly sorts = new Map<number, { readonly id: number; readonly key: ResultKey; readonly replaces?: number; cancelled?: boolean }>()
+  /** results.viewClose requests in flight: the page's id by rid. */
+  private readonly viewCloses = new Map<number, number>()
   private readonly lives = new Map<number, Live>()
   private readonly liveIds = new Map<number, Live>()
   /** Live updates in flight: the page's id and the generation they were sent to, by rid. */
@@ -128,9 +135,13 @@ export class ResultsWorkerCore {
     if (this.port && this.port !== port) {
       this.endLives(() => true, 'PORT_CLOSED', portClosed)
       // Main drops answers meant for the old port, so row sizes asked on it would never settle.
-      for (const [rid, id] of [...this.sizes]) {
-        this.sizes.delete(rid)
+      for (const requests of [this.sizes, this.viewCloses]) for (const [rid, id] of [...requests]) {
+        requests.delete(rid)
         this.error(id, 'PORT_CLOSED', portClosed)
+      }
+      for (const [rid, sort] of [...this.sorts]) {
+        this.sorts.delete(rid)
+        this.error(sort.id, 'PORT_CLOSED', portClosed)
       }
       this.status = undefined
     }
@@ -146,6 +157,8 @@ export class ResultsWorkerCore {
       case 'cancel': return this.cancel(request.id)
       case 'close': return this.close(request.id, request.generation, request.resultIds)
       case 'rowBytes': return this.rowBytes(request)
+      case 'view': return this.view(request)
+      case 'viewClose': return this.viewClose(request)
       case 'measure': return this.measure(request)
       case 'stats': this.post({ type: 'stats', id: request.id, bytes: this.cacheBytes, pages: this.cache.size, ...this.cacheShape() }); return
       case 'live': return this.live(request)
@@ -176,7 +189,7 @@ export class ResultsWorkerCore {
   /** The next port rid, skipping those still in use (a live stream may outlive 2^31 reads). */
   private allocate(): number {
     let rid = this.nextRid
-    while (this.reads.has(rid) || this.closes.has(rid) || this.sizes.has(rid) || this.lives.has(rid) || this.updates.has(rid)) rid = rid >= 2 ** 31 - 1 ? 1 : rid + 1
+    while (this.reads.has(rid) || this.closes.has(rid) || this.sizes.has(rid) || this.sorts.has(rid) || this.viewCloses.has(rid) || this.lives.has(rid) || this.updates.has(rid)) rid = rid >= 2 ** 31 - 1 ? 1 : rid + 1
     this.nextRid = rid >= 2 ** 31 - 1 ? 1 : rid + 1
     return rid
   }
@@ -299,12 +312,18 @@ export class ResultsWorkerCore {
     const rid = this.allocate()
     const read: Read = { rid, key, result: resultOf(key), wires, firstRow, end, waiters: new Set(), cancelled: false }
     this.reads.set(rid, read)
-    this.send({ t: 'read', rid, generation: key.generation, resultId: key.resultId, firstRow, maxRows: end - firstRow, credit: this.limits.readCredit })
+    this.send({ t: 'read', rid, generation: key.generation, resultId: key.resultId, firstRow, maxRows: end - firstRow, credit: this.limits.readCredit, ...(key.view === undefined ? {} : { viewId: key.view }) })
     return read
   }
 
   /** The UI no longer needs a request; reads nobody else waits for are cancelled. */
   private cancel(id: number): void {
+    for (const [rid, sort] of this.sorts) {
+      // Main answers the cancelled sort (CANCELLED), which settles the page's request.
+      if (sort.id !== id) continue
+      sort.cancelled = true
+      return this.send({ t: 'cancel', rid })
+    }
     const live = this.liveIds.get(id)
     if (live) {
       // The stream ends with main's answer (cancelled), which also says what became of its results.
@@ -333,7 +352,7 @@ export class ResultsWorkerCore {
   }
 
   private close(id: number, generation: number, resultIds: readonly number[]): void {
-    for (const resultId of resultIds) this.drop(resultOf({ generation, resultId }))
+    for (const resultId of resultIds) this.dropAll(resultOf({ generation, resultId }))
     if (!this.port) return this.error(id, 'PORT_CLOSED', portClosed)
     const rid = this.allocate()
     this.closes.set(rid, id)
@@ -345,7 +364,27 @@ export class ResultsWorkerCore {
     if (request.key.generation !== this.generation) return this.error(request.id, 'RESULT_UNAVAILABLE', resultUnavailable)
     const rid = this.allocate()
     this.sizes.set(rid, request.id)
-    this.send({ t: 'rowBytes', rid, generation: request.key.generation, resultId: request.key.resultId, firstRow: request.firstRow, count: request.count })
+    this.send({ t: 'rowBytes', rid, generation: request.key.generation, resultId: request.key.resultId, firstRow: request.firstRow, count: request.count, ...(request.key.view === undefined ? {} : { viewId: request.key.view }) })
+  }
+
+  private view(request: Extract<WorkerRequest, { type: 'view' }>): void {
+    if (!this.port) return this.error(request.id, 'PORT_CLOSED', portClosed)
+    if (this.stale(request.key)) return this.error(request.id, 'RESULT_UNAVAILABLE', resultUnavailable)
+    const rid = this.allocate()
+    const key: ResultKey = { generation: request.key.generation, resultId: request.key.resultId }
+    this.sorts.set(rid, request.replaces === undefined ? { id: request.id, key } : { id: request.id, key, replaces: request.replaces })
+    this.send({ t: 'view', rid, generation: key.generation, resultId: key.resultId, sort: request.sort.map(item => ({ column: item.column, descending: item.descending, mode: item.mode })), ...(request.replaces === undefined ? {} : { replaces: request.replaces }) })
+  }
+
+  /** The views' pages go at once; the backend frees their order when it answers. */
+  private viewClose(request: Extract<WorkerRequest, { type: 'viewClose' }>): void {
+    const { generation, resultId } = request.key
+    for (const view of request.viewIds) this.drop(resultOf({ generation, resultId, view }))
+    if (!this.port) return this.error(request.id, 'PORT_CLOSED', portClosed)
+    if (this.stale(request.key)) return this.error(request.id, 'RESULT_UNAVAILABLE', resultUnavailable)
+    const rid = this.allocate()
+    this.viewCloses.set(rid, request.id)
+    this.send({ t: 'viewClose', rid, generation, resultId, viewIds: [...request.viewIds] })
   }
 
   private backend(generation: number, status: BackendStatus): void {
@@ -434,8 +473,8 @@ export class ResultsWorkerCore {
    *  refuse to read them again. No results.close is sent. */
   private forgetResults(generation: number, resultIds: readonly number[]): void {
     const results = new Set(resultIds.map(resultId => resultOf({ generation, resultId })))
-    for (const read of [...this.reads.values()]) if (!read.cancelled && results.has(read.result)) this.abandonRead(read, 'RESULT_RELEASED', released)
-    for (const result of results) this.drop(result)
+    for (const read of [...this.reads.values()]) if (!read.cancelled && results.has(baseOf(read.result))) this.abandonRead(read, 'RESULT_RELEASED', released)
+    for (const result of results) this.dropAll(result)
   }
 
   private page(rid: number, body: ArrayBuffer): void {
@@ -501,6 +540,22 @@ export class ResultsWorkerCore {
       this.post({ type: 'liveUpdated', id: update.id, result: result as LiveUpdateResult })
       return
     }
+    const sort = this.sorts.get(rid)
+    if (sort) {
+      this.sorts.delete(rid)
+      const view = result as ResultsViewResult
+      if (sort.replaces !== undefined) this.drop(resultOf({ ...sort.key, view: sort.replaces }))
+      // Built before the cancel reached it: nobody holds the view, so it goes (the answer is not awaited).
+      if (sort.cancelled) return this.send({ t: 'viewClose', rid: this.allocate(), generation: sort.key.generation, resultId: sort.key.resultId, viewIds: [view.viewId] })
+      this.post({ type: 'view', id: sort.id, viewId: view.viewId, rows: view.rows, complete: view.complete, approximate: view.approximate })
+      return
+    }
+    const viewClose = this.viewCloses.get(rid)
+    if (viewClose !== undefined) {
+      this.viewCloses.delete(rid)
+      this.post({ type: 'viewClosed', id: viewClose, closed: (result as ResultsViewCloseResult).closed })
+      return
+    }
     const sizes = this.sizes.get(rid)
     if (sizes !== undefined) {
       this.sizes.delete(rid)
@@ -535,6 +590,16 @@ export class ResultsWorkerCore {
     if (update) {
       this.updates.delete(rid)
       return this.error(update.id, code, message)
+    }
+    const sort = this.sorts.get(rid)
+    if (sort) {
+      this.sorts.delete(rid)
+      return this.error(sort.id, code, message)
+    }
+    const viewClose = this.viewCloses.get(rid)
+    if (viewClose !== undefined) {
+      this.viewCloses.delete(rid)
+      return this.error(viewClose, code, message)
     }
     const sizes = this.sizes.get(rid)
     if (sizes !== undefined) {
@@ -603,6 +668,12 @@ export class ResultsWorkerCore {
 
   private drop(result: string): void {
     for (const page of [...this.indexes.get(result) ?? []]) this.remove(page)
+  }
+
+  /** A result's pages and its views'. */
+  private dropAll(result: string): void {
+    this.drop(result)
+    for (const other of [...this.indexes.keys()]) if (other.startsWith(result + '#')) this.drop(other)
   }
 
   private touch(page: CachedPage): void {

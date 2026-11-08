@@ -718,7 +718,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .output-spacer { flex: 1; }
 .output-view { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
 /* The results toolbar, in the Results head after its views: tools for every grid in the run, as segmented controls. */
-.results-toolbar { display: flex; flex-shrink: 0; align-items: center; gap: 4px; min-width: 0; padding-left: 8px; border-left: 1px solid var(--varia-panel-border); }
+/* In a narrow window the toolbar gives way to the job strips and clips its last groups (each is also a palette command and
+   in the grid's menu); the clip margin keeps a focused button's ring. */
+.results-toolbar { display: flex; flex-shrink: 1; align-items: center; gap: 4px; min-width: 0; padding-left: 8px; border-left: 1px solid var(--varia-panel-border); overflow: clip; overflow-clip-margin: 2px; }
 .results-toolbar-label { display: inline-flex; align-items: center; gap: 5px; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); white-space: nowrap; }
 .results-segments { display: inline-flex; flex-shrink: 0; gap: 1px; padding: 1px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); }
 .results-segments button { height: 20px; padding: 0 8px; border-radius: var(--varia-radius-sm); color: var(--varia-panelTitle-inactiveForeground); font-size: var(--varia-size-xs); }
@@ -768,6 +770,16 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-cn { unicode-bidi: isolate; }
 .rg-ct { margin-left: 6px; unicode-bidi: isolate; font-size: var(--varia-size-xs); color: var(--varia-resultsGrid-headerDescriptionForeground); }
 .rg-ch.sel .rg-ct { color: inherit; }
+/* A header's sort button, over the header's right end on the header's own background; unsorted, only while hovered. */
+.rg-cs { position: absolute; top: 0; right: 0; display: flex; align-items: center; gap: 1px; height: 21px; padding: 0 3px; background: inherit; color: var(--varia-resultsGrid-headerDescriptionForeground); visibility: hidden; cursor: pointer; }
+.rg-ch:hover .rg-cs, .rg-cs.on { visibility: visible; }
+/* A narrow header (gridLimits.sortButtonMinWidth) keeps every click for selecting its column: only a sorted column's arrow shows. */
+.rg-ch.narrow .rg-cs { pointer-events: none; }
+.rg-ch.narrow:hover .rg-cs:not(.on) { visibility: hidden; }
+.rg-cs.on { color: var(--varia-resultsGrid-headerForeground); }
+.rg-ch.sel .rg-cs { color: inherit; }
+.rg-co { font-size: var(--varia-size-xs); }
+.rg-co:empty { display: none; }
 .rg-ch.sel { background: var(--varia-resultsGrid-headerSelectionBackground); color: var(--varia-resultsGrid-headerSelectionForeground); }
 .rg.rg-border-hover .rg-head, .rg.rg-border-hover .rg-head *, .rg.rg-resizing, .rg.rg-resizing * { cursor: col-resize; }
 .rg-rows { position: absolute; top: 0; left: 0; }
