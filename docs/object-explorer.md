@@ -383,6 +383,8 @@ object's folder with `explorer.children`, as the tree does, up to 1,024 rows. **
 linked servers included) and the tables its foreign keys point at, and what references it or points at it by a foreign key,
 at most 200 each way in name order. It is its own request because reading `sys.sql_expression_dependencies`
 takes more than VIEW DEFINITION (db_owner by default): a login refused it still sees the properties, and the tab says why. A
+reference SQL Server resolved to an object in this database shows without a server or database, however the code spelled
+them (the database in another case, or the local server's own name), so one made several ways lists once. A
 dependency in the same database of a kind Peek describes opens in the same card, beside the same row, and Back returns.
 Every tab but Definition is read the first time it is chosen, and again (or by Retry) when it is chosen after failing; the
 arrow keys move between tabs without choosing them, and Enter or Space chooses. **Top rows** (tables and views): `explorer.peekRows` runs
@@ -390,8 +392,9 @@ arrow keys move between tabs without choosing them, and Enter or Space chooses. 
 the server from `QUOTENAME` of the object's names (`Explorer/PeekRowsSql.cs`, held to its own lint). It reads READ UNCOMMITTED
 as the tree does, and only when SQL Server refuses that for a memory-optimized table (error 10794), directly or through a view,
 reads again under READ COMMITTED; `SET TEXTSIZE` has the server send only the start of a large text or binary value.
-Values show as the results grid shows them, read by its own readers, cut at 256 characters
-(a value the readers cannot read shows as NULL, as the grid shows it, with a note); the tab shows the first 100 columns.
+Values show as the results grid shows them, read by its own readers, cut at 256 characters (one fewer
+rather than split a surrogate pair) and ended with an ellipsis, whose tooltip says it was cut and that Select Top 1000 Rows
+shows more of it (a value the readers cannot read shows as NULL, as the grid shows it, with a note); the tab shows the first 100 columns.
 These few bounded values are decoded in the backend and answered as text, outside the result store and the results port.
 
 | Kind | Definition | Group | Facts |

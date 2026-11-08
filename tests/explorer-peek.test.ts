@@ -1,13 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { explorerCatalogJson, maxBand, minBand } from '../src/shared/explorer/catalog'
 import { isPeekKind, peekCatalogBlock, peekFacts, peekFormats, peekKinds, peekLimits, peekSpecs, peekTabsOf, peekTabTitle, type PeekDependenciesResult, type PeekResult, type PeekRowsResult } from '../src/shared/explorer/peek'
 import { peekParamsSchema, peekRowsParamsSchema } from '../src/shared/explorer/schema'
 import { requestSchemas } from '../src/main/validation'
 import { methodPolicies } from '../src/shared/ipc/methods'
 import { cancellableRequests } from '../src/main/backend/renderer-requests'
-import { PeekBoundary } from '../src/renderer/src/explorer/PeekCard'
+import { PeekBoundary, PeekRows } from '../src/renderer/src/explorer/PeekCard'
 import { formatPeekValue, placePeek, cardWidth } from '../src/renderer/src/explorer/peek-format'
-import { PeekService } from '../src/renderer/src/explorer/PeekService'
+import { PeekService, peekMessages } from '../src/renderer/src/explorer/PeekService'
 import type { ApiResult, ExplorerChildrenResult } from '../src/shared/contracts'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import type { ScriptingOptions } from '../src/shared/scripting/options'
@@ -244,6 +246,21 @@ describe('PeekBoundary', () => {
     expect(setState).toHaveBeenCalledWith({ failed: false })
     boundary.componentWillUnmount()
     expect(close).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('Peek top rows', () => {
+  it('ends a cut value in an ellipsis, says in its tooltip that Select Top 1000 Rows shows more of it, and gives assistive technology only the note', () => {
+    // The results grid keeps 65,535 characters and shows 512 a cell (docs/ipc.md), so it cannot promise all of a long value.
+    expect(peekMessages.cutCell).toBe('Cut at about 256 characters; Select Top 1000 Rows shows more of it.')
+    const long = 'B'.repeat(peekLimits.rowCellChars)
+    const markup = renderToStaticMarkup(createElement(PeekRows, {
+      part: { status: 'ready', value: { columns: [{ name: 'Name', type: 'nvarchar' }, { name: 'Notes', type: 'nvarchar' }], rows: [['Alice', long]], cut: [[0, 1]], elapsedMs: 1 } }
+    }))
+    expect(markup.match(/<td[^>]*>[^<]*<\/td>/g)).toEqual([
+      '<td title="Alice">Alice</td>',
+      `<td title="${long}…\n${peekMessages.cutCell}" aria-description="${peekMessages.cutCell}">${long}…</td>`
+    ])
   })
 })
 

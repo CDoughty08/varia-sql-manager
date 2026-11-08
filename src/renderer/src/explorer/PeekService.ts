@@ -69,8 +69,11 @@ export const peekMessages = {
   noMembers: 'None.',
   noDependencies: 'None found.',
   unreadCell: 'This value could not be read. The results grid shows it as NULL, with a warning.',
-  /** The second line of a cut value's tooltip, after the part kept. */
-  cutCell: `Cut at ${peekLimits.rowCellChars} characters; Select Top 1000 Rows shows all of it.`
+  /**
+   * The second line of a cut value's tooltip, after the part kept, and its accessible description. About, since a cut never
+   * splits a surrogate pair; more, not all, since the results grid has limits of its own (docs/ipc.md).
+   */
+  cutCell: `Cut at about ${peekLimits.rowCellChars} characters; Select Top 1000 Rows shows more of it.`
 } as const
 
 type ScriptReply = Awaited<ReturnType<VariaApi['scriptObjects']>>
