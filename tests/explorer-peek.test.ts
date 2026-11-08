@@ -544,7 +544,7 @@ describe('Peek tabs', () => {
     const view = { name: 'vOrders', schema: 'Sales', kind: 'view' as const }
     expect(service.canFollow(view)).toBe(true)
     expect(service.canFollow({ ...view, database: 'Other' })).toBe(false)
-    expect(service.canFollow({ ...view, database: 'Sales' })).toBe(true)
+    expect(service.canFollow({ ...view, database: 'Sales' })).toBe(false)
     expect(service.canFollow({ ...view, server: 'LINKED' })).toBe(false)
     expect(service.canFollow({ name: 'trg', schema: 'dbo' })).toBe(false)
     expect(service.canFollow({ ...view, kind: 'synonym' })).toBe(false)

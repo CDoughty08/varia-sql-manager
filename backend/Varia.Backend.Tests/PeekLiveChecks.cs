@@ -87,6 +87,9 @@ internal static class PeekLiveChecks
         finally { options.TestDelay = null; options.PeekBudget = null; }
     }
 
+    /// <summary>The name with every letter's case swapped, so it differs from the original in every letter.</summary>
+    private static string Recased(string name) => string.Concat(name.Select(c => char.IsUpper(c) ? char.ToLowerInvariant(c) : char.ToUpperInvariant(c)));
+
     public static async Task ScratchAsync(Action<bool, string> check, SqlService service, string connectionId, string database, int major, Func<string, string, Task<SqlRun>> sql,
         JsonSerializerOptions json, Func<Task<string>> memoryOptimized, Func<Task> dropMemoryOptimized)
     {
@@ -103,6 +106,10 @@ internal static class PeekLiveChecks
             + "CREATE VIEW [Peek]]'Ü].[V]]'表] AS SELECT Id, Name FROM [Peek]]'Ü].[T]]'表];\nGO\n"
             + "CREATE FUNCTION [Peek]]'Ü].[F] () RETURNS TABLE AS RETURN SELECT 1 AS one;\nGO\n"
             + "CREATE VIEW [Peek]]'Ü].[VF] AS SELECT f.one, t.Id FROM [Peek]]'Ü].[F]() AS f CROSS JOIN [" + database.Replace("]", "]]") + "].[Peek]]'Ü].[T]]'表] AS t;\nGO\n"
+            // T named both ways in one view, and with the database spelled in another case (the checks' servers compare names
+            // without case): SQL Server resolves each to T, so each lists T once with no database.
+            + "CREATE VIEW [Peek]]'Ü].[VB] AS SELECT a.Id FROM [Peek]]'Ü].[T]]'表] AS a JOIN [" + database.Replace("]", "]]") + "].[Peek]]'Ü].[T]]'表] AS b ON b.Id = a.Id;\nGO\n"
+            + "CREATE VIEW [Peek]]'Ü].[VC] AS SELECT t.Id FROM [" + Recased(database).Replace("]", "]]") + "].[Peek]]'Ü].[T]]'表] AS t;\nGO\n"
             + "CREATE TABLE [Peek]]'Ü].[Blob] (Id int NOT NULL PRIMARY KEY, B varbinary(max) NULL);\nINSERT [Peek]]'Ü].[Blob] (Id, B) VALUES (1, CONVERT(varbinary(max), REPLICATE(CONVERT(varchar(max), 'ab'), 1000000)));\nGO\n", database);
         try
         {
@@ -148,8 +155,13 @@ internal static class PeekLiveChecks
             var gone = await Dependencies(service, connectionId, Ref("view", schema, "NoSuchView"), json);
             var viewOfFunction = await Dependencies(service, connectionId, Ref("view", schema, "VF"), json);
             check(viewOfFunction is { Error: null } && viewOfFunction.Uses.Any(item => item is { Name: "F", Kind: "function", Subtype: "inline", Database: null })
-                && viewOfFunction.Uses.Any(item => item is { Name: "T]'表", Kind: "table", Subtype: null } && item.Database == database),
-                "a dependency carries the subtype the tree gives it, and a reference naming its own database is resolved to the object: " + Names(viewOfFunction.Uses));
+                && viewOfFunction.Uses.Any(item => item is { Name: "T]'表", Kind: "table", Subtype: null, Database: null, Server: null }),
+                "a dependency carries the subtype the tree gives it, and a reference naming its own database is resolved to the object, with no database: " + Names(viewOfFunction.Uses));
+            var bothWays = await Dependencies(service, connectionId, Ref("view", schema, "VB"), json);
+            var otherCase = await Dependencies(service, connectionId, Ref("view", schema, "VC"), json);
+            check(bothWays is { Error: null } && bothWays.Uses.Count(item => item.Name == "T]'表") == 1 && bothWays.Uses.Any(item => item is { Name: "T]'表", Kind: "table", Database: null })
+                && otherCase is { Error: null } && otherCase.Uses.Count == 1 && otherCase.Uses.Any(item => item is { Name: "T]'表", Kind: "table", Database: null, Server: null }),
+                "a table named both with and without its database lists once, and its database spelled in another case is resolved with no database: " + Names(bothWays.Uses) + " | " + Names(otherCase.Uses));
             check(tableUses is { Error: null } && gone is { Error.Code: "NOT_FOUND" } && tableUses.UsedBy is { } usedBy && usedBy.Any(item => item is { Name: "V]'表", Kind: "view", ForeignKey: null } && item.Schema == schema)
                 && usedBy.Any(item => item is { Name: "Child", Kind: "table", ForeignKey: true }) && tableUses.UsesTruncated is null && tableUses.UsedByTruncated is null
                 && view.Uses is { } viewUses && viewUses.Any(item => item is { Name: "T]'表", Kind: "table", Database: null, Server: null } && item.Schema == schema)
@@ -190,7 +202,7 @@ internal static class PeekLiveChecks
         finally
         {
             await sql("DROP USER IF EXISTS [peek_low];\n", database);
-            var dropped = await sql("DROP VIEW IF EXISTS [Peek]]'Ü].[VF];\nDROP FUNCTION IF EXISTS [Peek]]'Ü].[F];\nDROP TABLE IF EXISTS [Peek]]'Ü].[Blob];\nDROP VIEW IF EXISTS [Peek]]'Ü].[V]]'表];\nDROP TABLE IF EXISTS [Peek]]'Ü].[Child];\nDROP PROCEDURE IF EXISTS [Peek]]'Ü].[P]]'表];\nDROP TABLE IF EXISTS [Peek]]'Ü].[T]]'表];\nDROP SCHEMA IF EXISTS [Peek]]'Ü];\n", database);
+            var dropped = await sql("DROP VIEW IF EXISTS [Peek]]'Ü].[VC];\nDROP VIEW IF EXISTS [Peek]]'Ü].[VB];\nDROP VIEW IF EXISTS [Peek]]'Ü].[VF];\nDROP FUNCTION IF EXISTS [Peek]]'Ü].[F];\nDROP TABLE IF EXISTS [Peek]]'Ü].[Blob];\nDROP VIEW IF EXISTS [Peek]]'Ü].[V]]'表];\nDROP TABLE IF EXISTS [Peek]]'Ü].[Child];\nDROP PROCEDURE IF EXISTS [Peek]]'Ü].[P]]'表];\nDROP TABLE IF EXISTS [Peek]]'Ü].[T]]'表];\nDROP SCHEMA IF EXISTS [Peek]]'Ü];\n", database);
             check(dropped.Status == "completed", "the peek fixtures are dropped: " + dropped.Error);
         }
     }
