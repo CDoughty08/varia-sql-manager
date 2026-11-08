@@ -274,15 +274,21 @@ export const commandCatalog = {
     keybindings: [{ key: 'mod+l', when: 'editorFocus || queryBarFocus' }],
     menus: [{ menu: 'query', group: '1_execute', order: 5, mnemonic: 'e' }, { menu: 'editor.context', group: '2_execute', order: 3, mnemonic: 'd' }]
   },
+  'query.estimateSessionPlan': {
+    title: 'Display Estimated Plan in Query Session', category: 'Query', icon: 'execution-plan', keywords: ['compile', 'showplan', 'temporary', 'session'],
+    precondition: 'activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy',
+    unavailableHint: 'Connect an idle query to estimate using its SQL session. Capture resets @@ROWCOUNT and @@ERROR.',
+    menus: [{ menu: 'query', group: '1_execute', order: 6 }, { menu: 'editor.context', group: '2_execute', order: 4 }]
+  },
   'query.includeClientStatistics': {
     title: 'Include Client Statistics', category: 'Query', icon: 'graph', keywords: ['bytes', 'roundtrips', 'timing'],
     precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy', toggled: 'includeClientStatistics',
     keybindings: [{ win: 'alt+shift+s', linux: 'alt+shift+s', when: 'editorFocus || queryBarFocus' }],
-    menus: [{ menu: 'query', group: '1_execute', order: 6, mnemonic: 's' }]
+    menus: [{ menu: 'query', group: '1_execute', order: 7, mnemonic: 's' }]
   },
   'query.resetClientStatistics': {
     title: 'Reset Client Statistics', category: 'Query', icon: 'clear-all', precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy',
-    menus: [{ menu: 'query', group: '1_execute', order: 7, mnemonic: 'r' }]
+    menus: [{ menu: 'query', group: '1_execute', order: 8, mnemonic: 'r' }]
   },
   'workbench.showCommands': {
     title: 'Show All Commands', palette: false,

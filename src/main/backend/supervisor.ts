@@ -143,7 +143,8 @@ export class BackendSupervisor {
     if (local) return local.value as BackendMethods[M]['result']
     if (o.generation !== undefined && this.readyGeneration !== o.generation) throw new BackendError('RESULT_UNAVAILABLE', sentences.resultUnavailable)
     const connection = this.connection ?? await this.upcoming()
-    const sessionId = method === 'query.execute' ? idOf(params, 'sessionId') : undefined
+    const sessionId = method === 'query.execute' || method === 'plans.estimate' && (params as BackendMethods['plans.estimate']['params']).mode === 'session'
+      ? idOf(params, 'sessionId') : undefined
     if (sessionId !== undefined) {
       this.sessions.delete(sessionId)
       this.sessions.set(sessionId, connection.generation)
