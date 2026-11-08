@@ -1,5 +1,5 @@
 import type { ConnectionInfo, QueryResult, VariaApi } from '../../../shared/contracts'
-import { estimatedPlanCacheCharacters, type EstimatedPlanResult } from '../../../shared/estimated-plans'
+import { estimatedPlanCacheCharacters, type EstimatedPlanMode, type EstimatedPlanResult } from '../../../shared/estimated-plans'
 import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
 import { sessionPromptLimits, type SessionAction, type SessionEnd } from '../../../shared/sessions'
 import { defaultSettings, type SettingsValues } from '../../../shared/settings/catalog'
@@ -11,8 +11,8 @@ import { isQueryDocument, type SessionNotice } from '../documents'
 import { DocumentService } from './documents'
 import { ClientStatisticsService } from '../statistics/ClientStatisticsService'
 
-export interface RunningQuery { readonly queryId: string; readonly connectionId: string; readonly startedAt: number; readonly kind?: 'estimate' }
-export interface EstimatedPlanState { readonly requestId: string; readonly result?: EstimatedPlanResult; readonly error?: string; readonly loading?: true; readonly view?: OutputViewName }
+export interface RunningQuery { readonly queryId: string; readonly connectionId: string; readonly startedAt: number; readonly kind?: 'estimate'; readonly estimateMode?: EstimatedPlanMode }
+export interface EstimatedPlanState { readonly requestId: string; readonly mode?: EstimatedPlanMode; readonly result?: EstimatedPlanResult; readonly error?: string; readonly loading?: true; readonly view?: OutputViewName }
 /** The tab's SQL session as its execution reported it: its SPID and login, read when it opened (SSMS's status bar
  *  shows them). It belongs to the connection it ran on, so a query moved elsewhere (or a connection lost) no longer has
  *  it. Its open transaction is not kept here: it is read from the session only when the session is about to end. */
@@ -167,35 +167,42 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     return run.finally(() => { if (this.runs.get(tabId) === run) this.runs.delete(tabId) })
   }
   /** Shares only the tab's busy/cancel lifecycle. Estimates neither begin result streaming nor replace stored grids. */
-  estimate(tabId = this.documents.getSnapshot().activeId): Promise<void> {
+  estimate(tabId = this.documents.getSnapshot().activeId, mode: EstimatedPlanMode = 'isolated'): Promise<void> {
     if (!this.canExecute(tabId) || !isQueryDocument(this.documents.get(tabId))) return Promise.resolve()
-    const run = this.runEstimate(tabId)
+    const run = this.runEstimate(tabId, mode)
     this.runs.set(tabId, run)
     return run.finally(() => { if (this.runs.get(tabId) === run) this.runs.delete(tabId) })
   }
-  private async runEstimate(tabId: string): Promise<void> {
+  private async runEstimate(tabId: string, mode: EstimatedPlanMode): Promise<void> {
     const document = this.documents.get(tabId)!, connectionId = document.connectionId!
     const { sql, startLine } = this.documents.getExecuteText(tabId)
     if (!sql.trim()) return
     const requestId = crypto.randomUUID(), previous = this.getSnapshot()[tabId]
-    this.update(tabId, { ...previous, running: { queryId: requestId, connectionId, startedAt: this.now(), kind: 'estimate' }, estimated: { requestId, loading: true, view: 'plan' } })
+    this.update(tabId, { ...previous, running: { queryId: requestId, connectionId, startedAt: this.now(), kind: 'estimate', estimateMode: mode }, estimated: { requestId, mode, loading: true, view: 'plan' } })
     this.events.emit({ type: 'query.estimateStarted', tabId })
-    let result: EstimatedPlanResult | undefined, error: string | undefined
+    let result: EstimatedPlanResult | undefined, error: string | undefined, code: ErrorCode | undefined
     try {
       if (!this.api.estimatePlan) throw new Error('This SQL backend does not support estimated execution plans.')
-      const response = await this.api.estimatePlan({ connectionId, sessionId: tabId, database: document.database, sql, startLine, requestId })
+      const response = await this.api.estimatePlan({ connectionId, sessionId: tabId, database: document.database, sql, startLine, requestId, ...mode === 'session' ? { mode } : {} })
       if (response.ok) result = response.value
-      else error = response.error
+      else { error = response.error; code = response.code }
     } catch (failure) { error = errorText(failure) }
     if (this.disposed || !this.documents.get(tabId) || this.getSnapshot()[tabId]?.running?.queryId !== requestId) return
-    const next = { ...this.getSnapshot(), [tabId]: { ...this.getSnapshot()[tabId], running: undefined, estimated: { requestId, result, error, view: this.getSnapshot()[tabId].estimated?.view } } }
+    if (mode === 'session' && sessionGone.has(code)) {
+      this.sessionEnded(tabId)
+      if (code === 'SESSION_LOST') this.documents.update(tabId, { sessionNotice: 'lost' })
+    }
+    if (mode === 'session' && result?.session) {
+      this.update(tabId, { ...this.getSnapshot()[tabId], session: { connectionId, ...result.session } })
+    }
+    const next = { ...this.getSnapshot(), [tabId]: { ...this.getSnapshot()[tabId], running: undefined, estimated: { requestId, mode, result, error, view: this.getSnapshot()[tabId].estimated?.view } } }
     const size = (state: QueryState) => state.estimated?.result?.plans.reduce((sum, plan) => sum + plan.xml.length, 0) ?? 0
     let characters = Object.values(next).reduce((sum, state) => sum + size(state), 0)
     for (const [id, state] of Object.entries(next)) {
       if (characters <= estimatedPlanCacheCharacters) break
       if (id === tabId || !state.estimated?.result) continue
       characters -= size(state)
-      next[id] = { ...state, estimated: { requestId: state.estimated.requestId, view: state.estimated.view, error: 'This estimated plan was released to limit memory. Display Estimated Execution Plan again to reload it.' } }
+      next[id] = { ...state, estimated: { requestId: state.estimated.requestId, mode: state.estimated.mode, view: state.estimated.view, error: 'This estimated plan was released to limit memory. Display Estimated Execution Plan again to reload it.' } }
     }
     this.publish(next)
   }
@@ -270,7 +277,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   async confirmSessions(action: SessionAction, tabIds: readonly string[]): Promise<SessionPlan | undefined> {
     const candidates = tabIds.flatMap(id => {
       const document = this.documents.get(id), operation = this.getSnapshot()[id]?.running
-      const estimating = operation?.kind === 'estimate', running = !!operation && !estimating
+      const estimating = operation?.kind === 'estimate' && operation.estimateMode !== 'session', running = !!operation && !estimating
       // A session not read in time may hold a transaction; a query with no live connection has none to read.
       // An isolated estimate leaves the ordinary session idle: ask about its transaction before cancelling the estimate.
       return document ? [{ id, name: document.name.slice(0, sessionPromptLimits.name), running, estimating, state: !running && this.connected(id) ? mayBeOpen : nothingOpen }] : []
