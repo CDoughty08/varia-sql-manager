@@ -475,6 +475,17 @@ describe('Shortcuts page', () => {
     await press(host.querySelectorAll<HTMLElement>('tr.shortcuts-gesture')[1], { key: 'Enter', code: 'Enter' })
     expect(host.querySelector('[role="radio"][aria-checked="true"]')?.textContent).toBe('Mouse')
   })
+  it('shows the Options draft\'s multi-cursor modifier in both views, not the saved one', async () => {
+    // #214, page side: the saved setting is Alt+Click; the dialog's draft says Ctrl+Click.
+    const store = <T>(value: T) => ({ getSnapshot: () => value, subscribe: () => () => {} })
+    const workbench = { settings: store({ values: defaultSettings }), keybindings: { ...store(0), getRevision: () => 0, lookup: () => undefined } } as unknown as Workbench
+    const page = createElement(ShortcutsPage, { draft: emptyShortcutFile, stored: emptyShortcutFile, onChange: () => {}, platform: 'win32', files: service, linked: { multiCursorModifier: 'ctrlCmd' } })
+    await act(() => root.render(createElement(WorkbenchProvider, { workbench, children: page })))
+    const addCursor = () => [...host.querySelectorAll('tr')].find(item => item.textContent?.includes('Add Cursor'))?.textContent
+    expect(addCursor()).toContain('Ctrl+Click')
+    await click([...host.querySelectorAll('[role="radio"]')].find(item => item.textContent === 'Mouse'))
+    expect(addCursor()).toContain('Ctrl+Click')
+  })
   it('lists entries that no longer apply, and removes them', async () => {
     await render(file([{ command: 'file.saveAs', key: 'mod+u' }]))
     expect(host.textContent).toContain('1 shortcut no longer applies.')
