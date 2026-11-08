@@ -731,7 +731,7 @@ app.whenReady().then(async () => {
   }
   // The page and its popouts share the default session; any download there is the page's own (download-guard.ts).
   refuseDownloads(session.defaultSession)
-  if (!developmentUrl) protocol.handle(appScheme, appProtocolHandler(rendererDir, contentSecurityPolicy()))
+  if (!developmentUrl) protocol.handle(appScheme, appProtocolHandler(rendererDir, contentSecurityPolicy(), { keepServed: !app.isPackaged }))
   const root = app.getAppPath()
   // Smoke tests shorten the silence that counts as unresponsive; PING then runs often enough for a healthy backend.
   const livenessMs = testSeams ? Number(process.env.VARIA_BACKEND_LIVENESS_MS) : NaN
