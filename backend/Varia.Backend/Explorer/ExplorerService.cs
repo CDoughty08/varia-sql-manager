@@ -45,6 +45,8 @@ internal sealed class ExplorerOptions
     public TimeSpan? TestDelay { get; set; }
     /// <summary>Replaces Peek's budget from the catalogue (timeout checks).</summary>
     public TimeSpan? PeekBudget { get; set; }
+    /// <summary>Replaces User mapping's share of Peek's budget (half of it; deadline checks).</summary>
+    public TimeSpan? PeekMappingBudget { get; set; }
 }
 
 /// <summary>explorer.children: static folders straight from the catalogue (no SQL, no slot), dynamic rows from constant
@@ -114,7 +116,7 @@ internal sealed class ExplorerService : IDisposable
         var spec = ExplorerRefs.ValidatePeek(args, catalog);
         var profile = PeekProfile(args.ConnectionId);
         var limits = catalog.Peek;
-        var batch = PeekSql.Render(spec, new SqlRender(profile.Band), limits.DefinitionChars, args.Target.Parent?.Kind);
+        var batch = PeekSql.Render(spec, new SqlRender(profile.Band), limits.DefinitionChars, args.Target.Parent?.Kind, profile.Cloud);
         // One more list row than the card keeps tells it there were more.
         return RunPeekAsync(args.ConnectionId, args.RequestId, args.Target, profile, batch.Text, limits.ListRows + 1,
             async (command, values, reader, ct) =>
@@ -130,19 +132,23 @@ internal sealed class ExplorerService : IDisposable
 
     /// <summary>A login's User mapping: its user in each database it may enter (at most the catalogue's databases, in name order),
     /// each read there through the scope wrapper on the peek's own connection, whose prologue still holds. A database that fails
-    /// (dropped, offline or refused since the batch listed it) is counted as unread, as are those past the limit; a cloud
-    /// database cannot reach others, so it reads none.</summary>
-    private async Task<PeekList> MappingAsync(SqlConnection connection, ExplorerProfile profile, Values values, List<string> databases, CancellationToken token)
+    /// (dropped, offline or refused since the batch listed it) is counted as unread, as are those past the limit and those left
+    /// when its half of the budget runs out or the connection breaks, so the facts are kept; a cloud database cannot reach
+    /// others, so it reads none.</summary>
+    private async Task<PeekList> MappingAsync(SqlConnection connection, ExplorerProfile profile, Values values, PeekSql.MappingList databases, CancellationToken token)
     {
         var limits = catalog.Peek;
         var rows = new List<object?[]>();
-        var unread = 0;
         var more = false;
-        List<string> read = profile.Cloud ? [] : [.. databases.Take(limits.MappingDatabases)];
-        unread += databases.Count - read.Count;
-        foreach (var database in read)
+        List<string> read = profile.Cloud ? [] : [.. databases.Databases.Take(limits.MappingDatabases)];
+        var unread = databases.Total - read.Count;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(Options.PeekMappingBudget ?? TimeSpan.FromMilliseconds(limits.BudgetMs / 2.0));
+        for (var index = 0; index < read.Count; index++)
         {
-            if (more) { unread++; continue; }
+            var database = read[index];
+            // Past the rows the card keeps, out of time, or on a connection a severe error closed: the rest are unread.
+            if (more || deadline.IsCancellationRequested || connection.State != ConnectionState.Open) { unread += read.Count - index; break; }
             try
             {
                 await using var command = connection.CreateCommand();
@@ -152,14 +158,18 @@ internal sealed class ExplorerService : IDisposable
                 Add(command, "@stmt", SqlDbType.NVarChar, -1, PeekSql.MappingUsers);
                 Add(command, "@decl", SqlDbType.NVarChar, -1, CatalogSql.Declarations);
                 command.Parameters.AddRange(Bind(values));
-                await using var reader = await command.ExecuteReaderAsync(token);
-                while (await reader.ReadAsync(token))
+                var found = new List<object?[]>();
+                await using (var reader = await command.ExecuteReaderAsync(deadline.Token))
                 {
-                    if (rows.Count == limits.ListRows) { more = true; break; }
-                    rows.Add([database, reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1)]);
+                    while (await reader.ReadAsync(deadline.Token))
+                    {
+                        if (rows.Count + found.Count == limits.ListRows) { more = true; break; }
+                        found.Add([database, reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1)]);
+                    }
                 }
+                rows.AddRange(found);
             }
-            catch (SqlException) when (!token.IsCancellationRequested) { unread++; }
+            catch (Exception error) when (error is SqlException or InvalidOperationException or OperationCanceledException && !token.IsCancellationRequested) { unread++; }
         }
         return new(rows, more ? true : null, unread > 0 ? unread : null);
     }

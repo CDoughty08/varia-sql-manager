@@ -21,6 +21,8 @@ internal static class PeekSql
     /// optional group's columns (empty when the kind or band has none), and whether it ends with User mapping's databases.</summary>
     internal sealed record Batch(string Text, IReadOnlyList<string> Columns, IReadOnlyList<ListBatch> Lists, IReadOnlyList<string> Optional, bool Mapping);
     internal sealed record ListBatch(string Id, IReadOnlyList<string> Columns);
+    /// <summary>User mapping's databases as the batch listed them (at most @take) and how many the login may enter in all.</summary>
+    internal sealed record MappingList(List<string> Databases, int Total);
 
     private const string Tools = "LEFT JOIN sys.extended_properties AS ep ON ep.class = 1 AND ep.major_id = o.object_id AND ep.minor_id = 0 AND ep.name = N'microsoft_database_tools_support' ";
     private const string Owned = "FROM sys.all_objects AS o JOIN sys.schemas AS s ON s.schema_id = o.schema_id " + Tools;
@@ -119,7 +121,7 @@ internal static class PeekSql
             ("partitionScheme", "CASE WHEN ds.type = 'PS' THEN ds.name END"),
             ("partitions", "pr.partitions"),
             ("compression", "pr.compression")),
-            [("primaryXml", "CONVERT(bit, CASE WHEN xi.object_id IS NOT NULL AND xi.using_xml_index_id IS NULL THEN 1 ELSE 0 END)"), ("compressions", "pr.compressions")]),
+            [("primaryXml", "CONVERT(bit, CASE WHEN xi.xml_index_type = 0 THEN 1 ELSE 0 END)"), ("compressions", "pr.compressions")]),
         ["trigger"] = new("FROM sys.triggers AS o " + Tools + Modules + Assembly + ById, Own([.. TriggerFacts, ("insteadOf", "o.is_instead_of_trigger"),
             ("notForReplication", "o.is_not_for_replication")]), [("executeAsName", "dp.name")]),
         ["databaseTrigger"] = new("FROM sys.triggers AS o " + Tools + Modules + Assembly + ById, Own(TriggerFacts), [("executeAsName", "dp.name")]),
@@ -129,8 +131,8 @@ internal static class PeekSql
             + "LEFT JOIN sys.server_principals AS dp ON dp.principal_id = COALESCE(m.execute_as_principal_id, am.execute_as_principal_id) " + ById,
             Own([.. TriggerFacts, ("systemObject", "o.is_ms_shipped")]), [("executeAsName", "dp.name")]),
         // sys.master_files on the server, so an offline or restoring database has its files too (where the login may see them).
-        ["database"] = new("FROM sys.databases AS d LEFT JOIN sys.server_principals AS own ON own.sid = d.owner_sid "
-            + "OUTER APPLY (SELECT SUM(CONVERT(bigint, mf.size)) AS pages, SUM(CASE WHEN mf.type = 1 THEN CONVERT(bigint, mf.size) ELSE 0 END) AS log_pages "
+        // A cloud server has no sys.master_files: <see cref="CloudDatabaseFrom"/> replaces this FROM there.
+        ["database"] = new(DatabaseFrom + "OUTER APPLY (SELECT SUM(CONVERT(bigint, mf.size)) AS pages, SUM(CASE WHEN mf.type = 1 THEN CONVERT(bigint, mf.size) ELSE 0 END) AS log_pages "
             + "FROM sys.master_files AS mf WHERE mf.database_id = d.database_id) AS f WHERE d.database_id = @object_id", Own(
             ("status", "d.state_desc"),
             ("owner", "own.name"),
@@ -208,6 +210,14 @@ internal static class PeekSql
             + "WHERE tt.user_type_id = @object_id", Own(("memoryOptimized", "tt.is_memory_optimized")), [])
     };
 
+    private const string DatabaseFrom = "FROM sys.databases AS d LEFT JOIN sys.server_principals AS own ON own.sid = d.owner_sid ";
+    /// <summary>A database's FROM on a cloud server, which has no sys.master_files (nor another database's sys.database_files):
+    /// its sizes are unknown, so absent.</summary>
+    private const string CloudDatabaseFrom = DatabaseFrom + "CROSS JOIN (SELECT CONVERT(bigint, NULL) AS pages, CONVERT(bigint, NULL) AS log_pages) AS f WHERE d.database_id = @object_id";
+    /// <summary>The Files list on a cloud server: none, in the list's columns.</summary>
+    private const string CloudFiles = "SELECT CONVERT(sysname, NULL) AS [name], CONVERT(nvarchar(60), NULL) AS [type], CONVERT(bigint, NULL) AS [size], CONVERT(int, NULL) AS [growth], "
+        + "CONVERT(nvarchar(260), NULL) AS [path], CONVERT(bit, NULL) AS [percentGrowth], CONVERT(int, NULL) AS [maxSize] WHERE @object_id IS NULL;\n";
+
     /// <summary>The lists' statements, each at most @take rows in a fixed order, with their column aliases: the list's shown
     /// columns in catalogue order, then the helpers their words need.</summary>
     private static readonly Dictionary<string, (Func<string, string> Text, string[] Columns)> Lists = new(StringComparer.Ordinal)
@@ -226,9 +236,10 @@ internal static class PeekSql
             + "JOIN sys.server_principals AS r ON r.principal_id = rm.role_principal_id WHERE rm.member_principal_id = @object_id ORDER BY r.name;\n", ["role", "fixed"])
     };
 
-    /// <summary>User mapping's databases, in place of its list: those online that the login may enter, in name order. Only
-    /// the login's batch calls HAS_DBACCESS, as the database listings do.</summary>
-    internal const string MappingDatabases = "SELECT TOP (@take) d.name FROM sys.databases AS d WHERE d.state = 0 AND HAS_DBACCESS(d.name) = 1 ORDER BY d.name;\n";
+    /// <summary>User mapping's databases, in place of its list: those online that the login may enter, in name order, each with
+    /// how many there are in all (so those past @take are counted unread). Only the login's batch calls HAS_DBACCESS, as the
+    /// database listings do.</summary>
+    internal const string MappingDatabases = "SELECT TOP (@take) d.name, COUNT(*) OVER () AS total FROM sys.databases AS d WHERE d.state = 0 AND HAS_DBACCESS(d.name) = 1 ORDER BY d.name;\n";
 
     /// <summary>The login's user in one database (run there through <see cref="CatalogSql.ModuleCall"/>): the database principal
     /// whose SID is the login's, found by its name in sys.server_principals, which every database sees.</summary>
@@ -237,14 +248,14 @@ internal static class PeekSql
         + "AND dp.type IN ('S', 'U', 'G', 'C', 'K', 'E', 'X') ORDER BY dp.name;\n";
 
     /// <summary>The optional groups' statements: an index's usage, which sys.dm_db_index_usage_stats keeps from the server's start
-    /// and only a login with VIEW SERVER STATE may read. A refusal (229, 297 or 300) answers one refused column instead of
+    /// and only a login with VIEW SERVER STATE may read. A refusal (229, 262, 297 or 300) answers one refused column instead of
     /// failing the batch; any other error is raised again.</summary>
     private static readonly Dictionary<string, (string Text, string[] Columns)> Optional = new(StringComparer.Ordinal)
     {
         ["index"] = ("BEGIN TRY\nSELECT COALESCE(us.user_seeks, 0) AS [userSeeks], COALESCE(us.user_scans, 0) AS [userScans], COALESCE(us.user_lookups, 0) AS [userLookups], "
             + "COALESCE(us.user_updates, 0) AS [userUpdates], us.last_user_seek AS [lastSeek], us.last_user_scan AS [lastScan], us.last_user_lookup AS [lastLookup], "
             + "us.last_user_update AS [lastUpdate] FROM sys.indexes AS i LEFT JOIN sys.dm_db_index_usage_stats AS us ON us.database_id = DB_ID() AND us.object_id = i.object_id "
-            + "AND us.index_id = i.index_id WHERE i.object_id = @object_id AND i.index_id = @index_id;\nEND TRY\nBEGIN CATCH\nIF ERROR_NUMBER() NOT IN (229, 297, 300) THROW;\n"
+            + "AND us.index_id = i.index_id WHERE i.object_id = @object_id AND i.index_id = @index_id;\nEND TRY\nBEGIN CATCH\nIF ERROR_NUMBER() NOT IN (229, 262, 297, 300) THROW;\n"
             + "SELECT CONVERT(bit, 1) AS [" + Refused + "];\nEND CATCH;\n",
             ["userSeeks", "userScans", "userLookups", "userUpdates", "lastSeek", "lastScan", "lastLookup", "lastUpdate"])
     };
@@ -321,13 +332,15 @@ internal static class PeekSql
         + "AND bo.name = PARSENAME(sy.base_object_name, 1) AND (bs.name = PARSENAME(sy.base_object_name, 2) OR PARSENAME(sy.base_object_name, 2) IS NULL AND bs.schema_id = 1) "
         + "ORDER BY bo.object_id) AS ro LEFT JOIN sys.schemas AS rs ON rs.schema_id = ro.schema_id WHERE sy.object_id = @object_id";
 
-    /// <summary>What uses a type (the lookup's user_type_id): code that names it (class 6, a type), and the objects with columns
-    /// or parameters of it, but not a table type's own table object.</summary>
+    /// <summary>What uses a type (the lookup's user_type_id): code that names it (class 6, a type), the objects with columns or
+    /// parameters of it, and the table types with columns of it (by the table type's names, not its table object's).</summary>
     private const string TypeUsedByRows = "SELECT CONVERT(sysname, NULL) AS server_name, CONVERT(sysname, NULL) AS database_name, s.name AS schema_name, o.name AS entity_name, o.object_id AS id, "
         + "CONVERT(bit, 0) AS via FROM sys.sql_expression_dependencies AS d JOIN sys.all_objects AS o ON o.object_id = d.referencing_id JOIN sys.schemas AS s ON s.schema_id = o.schema_id "
         + "WHERE d.referenced_class = 6 AND d.referenced_id = @object_id AND d.referencing_class = 1 "
         + "UNION SELECT NULL, NULL, s.name, o.name, o.object_id, CONVERT(bit, 0) FROM sys.all_columns AS c JOIN sys.all_objects AS o ON o.object_id = c.object_id "
         + "JOIN sys.schemas AS s ON s.schema_id = o.schema_id WHERE c.user_type_id = @object_id AND o.type <> 'TT' "
+        + "UNION SELECT NULL, NULL, s.name, tt.name, tt.type_table_object_id, CONVERT(bit, 0) FROM sys.all_columns AS c JOIN sys.table_types AS tt ON tt.type_table_object_id = c.object_id "
+        + "JOIN sys.schemas AS s ON s.schema_id = tt.schema_id WHERE c.user_type_id = @object_id "
         + "UNION SELECT NULL, NULL, s.name, o.name, o.object_id, CONVERT(bit, 0) FROM sys.all_parameters AS pa JOIN sys.all_objects AS o ON o.object_id = pa.object_id "
         + "JOIN sys.schemas AS s ON s.schema_id = o.schema_id WHERE pa.user_type_id = @object_id";
 
@@ -356,9 +369,9 @@ internal static class PeekSql
     /// EXECUTE AS principal name, the parts of a type's words, and a module kind's text.</summary>
     public static IReadOnlyList<string> Extras(PeekKindSpec spec) => [.. Kinds[spec.Kind].Helpers.Select(helper => helper.Column), .. spec.Module ? new[] { "definition" } : []];
 
-    /// <summary>The kind's batch for the band (and an index's or trigger's parent kind). Facts newer than the band are left out of
-    /// the text and the reply.</summary>
-    public static Batch Render(PeekKindSpec spec, SqlRender render, int definitionChars, string? parentKind = null)
+    /// <summary>The kind's batch for the band (and an index's or trigger's parent kind), on a cloud server or not. Facts newer than
+    /// the band are left out of the text and the reply.</summary>
+    public static Batch Render(PeekKindSpec spec, SqlRender render, int definitionChars, string? parentKind = null, bool cloud = false)
     {
         if (!Kinds.TryGetValue(spec.Kind, out var sql)) throw new InvalidOperationException("Peek has no batch for " + spec.Kind + ".");
         var facts = spec.FactsFor(render.Band);
@@ -370,14 +383,14 @@ internal static class PeekSql
         if (spec.Module) columns.Add(("definition", "LEFT(m.definition, " + (definitionChars + 1).ToString(CultureInfo.InvariantCulture) + ")"));
         var text = new StringBuilder(Lookup(spec.Kind, parentKind)).Append("SELECT ");
         text.AppendJoin(", ", columns.Select(column => column.Expression + " AS [" + column.Column + "]"));
-        text.Append(' ').Append(sql.From).Append(";\n");
+        text.Append(' ').Append(cloud && spec.Kind == "database" ? CloudDatabaseFrom : sql.From).Append(";\n");
         var lists = new List<ListBatch>();
         var mapping = false;
         foreach (var list in spec.ListSpecs)
         {
             if (list.Id == "userMapping") { text.Append(MappingDatabases); mapping = true; continue; }
             if (!Lists.TryGetValue(list.Id, out var statement)) throw new InvalidOperationException("Peek has no statement for the list " + list.Id + ".");
-            text.Append(statement.Text(spec.Kind));
+            text.Append(cloud && list.Id == "files" ? CloudFiles : statement.Text(spec.Kind));
             lists.Add(new(list.Id, statement.Columns));
         }
         IReadOnlyList<string> optional = [];
@@ -393,7 +406,7 @@ internal static class PeekSql
     /// <summary>The rest of a peek's batch after the lookup's row: the fact row as PeekResult carries it (each fact by its format,
     /// the codes SSMS words, the module text cut to the catalogue's limit), each list up to the catalogue's rows, User mapping's
     /// databases (returned apart for the service to read), and the optional group, or its refusal. Null when the row is gone.</summary>
-    public static async Task<(PeekResult Result, List<string> MappingDatabases)?> ReadAsync(SqlDataReader reader, PeekKindSpec spec, Batch batch, int band, CatalogPeek limits, CancellationToken token)
+    public static async Task<(PeekResult Result, MappingList Mapping)?> ReadAsync(SqlDataReader reader, PeekKindSpec spec, Batch batch, int band, CatalogPeek limits, CancellationToken token)
     {
         if (!await reader.ReadAsync(token)) return null;
         var raw = Raw(reader, batch.Columns);
@@ -422,15 +435,23 @@ internal static class PeekSql
             lists![list.Id] = new(rows, more ? true : null);
         }
         var databases = new List<string>();
+        var total = 0;
         if (batch.Mapping)
         {
             if (!await reader.NextResultAsync(token)) throw new InvalidOperationException("Peek's batch ended before User mapping's databases.");
-            while (await reader.ReadAsync(token)) databases.Add(reader.GetString(0));
+            while (await reader.ReadAsync(token))
+            {
+                databases.Add(reader.GetString(0));
+                total = reader.GetInt32(1);
+            }
         }
         List<string>? refused = null;
         if (batch.Optional.Count > 0)
         {
-            if (!await reader.NextResultAsync(token) || !await reader.ReadAsync(token)) throw new InvalidOperationException("Peek's batch ended before its optional group.");
+            // A statement that fails in TRY after sending its columns leaves an empty result before CATCH's row.
+            var found = false;
+            while (!found && await reader.NextResultAsync(token)) found = await reader.ReadAsync(token);
+            if (!found) throw new InvalidOperationException("Peek's batch ended before its optional group.");
             if (reader.FieldCount == 1 && reader.GetName(0) == Refused) refused = [spec.OptionalGroup ?? throw new InvalidOperationException("Peek's " + spec.Kind + " names no optional group.")];
             else
             {
@@ -438,7 +459,7 @@ internal static class PeekSql
                 foreach (var fact in bandFacts.Where(fact => fact.Optional)) facts[fact.Id] = Value(fact, optional);
             }
         }
-        return (new(facts, 0, definition, cut, Lists: lists, Refused: refused), databases);
+        return (new(facts, 0, definition, cut, Lists: lists, Refused: refused), new(databases, Math.Max(total, databases.Count)));
     }
 
     private static Dictionary<string, object?> Raw(SqlDataReader reader, IReadOnlyList<string> columns)
@@ -536,6 +557,7 @@ internal static class PeekSql
         "FN" or "IF" or "TF" or "FS" or "FT" or "AF" => "function",
         "SN" => "synonym",
         "SO" => "sequence",
+        "TT" => "tableType",
         _ => null
     };
 

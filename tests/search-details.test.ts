@@ -5,7 +5,10 @@ import type { ObjectSearchHit } from '../src/shared/explorer/search'
 import type { ScriptingOptions } from '../src/shared/scripting/options'
 import { PeekService } from '../src/renderer/src/explorer/PeekService'
 import { detailsDrag, detailsKey, scriptable, searchDetailsLimits, SearchDetailsService } from '../src/renderer/src/search/SearchDetailsService'
-import { hitKindSpec, hitProperties, matchedLine, scrollKey } from '../src/renderer/src/search/SearchDetails'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { peekSpecs } from '../src/shared/explorer/peek'
+import { hitKindSpec, hitProperties, matchedLine, Properties, scrollKey } from '../src/renderer/src/search/SearchDetails'
 
 const ok = <T>(value: T): ApiResult<T> => ({ ok: true, value })
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -102,6 +105,19 @@ describe('Search Objects details pane', () => {
     settle()
     expect(service.getSnapshot().documents.tab?.definition).toEqual({ status: 'none' })
     expect(api.scriptObjects).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows only the facts of a hit\'s subtype, and says why a refused group is missing', () => {
+    const render = (hit: ObjectSearchHit, kind: 'type' | 'index', facts: Record<string, string | number | boolean | null>, refused?: string[]) =>
+      renderToStaticMarkup(createElement(Properties, { details: { id: 1, key: 'k', connectionId, hit, kind, facts: { status: 'ready', value: facts }, definition: { status: 'none' }, ...(refused ? { refused } : {}) } }))
+    const alias: ObjectSearchHit = { object: { kind: 'type', database: 'Sales', schema: 'dbo', name: 'Phone' }, folder: 'userDefinedDataTypes', label: 'dbo.Phone', subtype: 'alias' }
+    const markup = render(alias, 'type', { schema: 'dbo', baseType: 'nvarchar(20)', assembly: null, className: null })
+    expect(markup).toContain('nvarchar(20)')
+    expect(markup).not.toContain('Assembly')
+    const index: ObjectSearchHit = { object: { kind: 'index', database: 'Sales', parent: { kind: 'table', schema: 'dbo', name: 'Orders' }, name: 'IX' }, folder: 'indexes', label: 'dbo.Orders.IX', subtype: 'nonclustered' }
+    const usage = peekSpecs.index.groups.find(group => group.id === 'usage')!
+    expect(render(index, 'index', { indexType: 'Nonclustered' }, ['usage'])).toContain(usage.refused)
+    expect(render(index, 'index', { indexType: 'Nonclustered', userSeeks: 3 })).not.toContain(usage.refused)
   })
 
   it('reads a trigger\'s facts and text through Peek, as the tree peeks it', async () => {

@@ -141,6 +141,9 @@ internal sealed class ExplorerCatalog
                 if (columns.Any(item => item.Since is not null || item.Optional)) throw new InvalidOperationException("Peek's list " + kind.Kind + "." + list.Id + " has a banded or optional column.");
                 lists.Add(new(list.Id, [.. columns.Select(item => new PeekFactSpec(item.Id, item.Format, null))]));
             }
+            // The batch reads User mapping's databases after every other list (PeekSql.ReadAsync).
+            if (lists.FindIndex(list => list.Id == "userMapping") is var mapping and >= 0 && mapping != lists.Count - 1)
+                throw new InvalidOperationException("Peek's " + kind.Kind + " lists User mapping before another list.");
             if (!specs.TryAdd(kind.Kind, new(kind.Kind, kind.Definition, [.. facts.Select(fact => new PeekFactSpec(fact.Id, fact.Format, fact.Since, fact.Optional))], kind.Rows, kind.Dependencies, lists, kind.OptionalGroup)))
                 throw new InvalidOperationException("Peek names " + kind.Kind + " twice.");
         }

@@ -1,7 +1,8 @@
 import type { ApiResult, ExplorerError, ExplorerNode, VariaApi } from '../../../shared/contracts'
 import { isPeekKind, peekHas, peekLimits, peekSpecs, peekTabsOf, type PeekDependency, type PeekKind, type PeekResult, type PeekRowsResult, type PeekTab } from '../../../shared/explorer/peek.ts'
-import { kindSpecs } from '../../../shared/explorer/catalog.ts'
+import { kindSpecs, type NodeSubtype } from '../../../shared/explorer/catalog.ts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
+import { scriptMenuState } from '../../../shared/scripting/catalog.ts'
 import type { ScriptingOptions } from '../../../shared/scripting/options.ts'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
@@ -47,7 +48,8 @@ export interface OpenPeek {
 }
 export interface PeekSnapshot { readonly open?: OpenPeek }
 /** What a read describes: a table, view, procedure or function on a connection. */
-export interface PeekTarget { readonly connectionId: string; readonly object: ObjectRef; readonly kind: PeekKind }
+/** What a read peeks; `subtype` (the tree's) says whether Script As can write a scripted kind's definition. */
+export interface PeekTarget { readonly connectionId: string; readonly object: ObjectRef; readonly kind: PeekKind; readonly subtype?: NodeSubtype }
 /** A read's parts as they arrive. */
 export type PeekChange = Partial<{ readonly facts: PeekPart<PeekResult['facts']>; readonly definition: PeekPart<PeekDefinition>; readonly lists: PeekResult['lists']; readonly refused: PeekResult['refused'] }>
 /**
@@ -274,7 +276,7 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
     // Rows the row's card does not own (a followed dependency) still anchor at that row.
     const rowId = carry.back?.length ? carry.back[0]!.node.id : node.id
     this.publish({ open: { id, rowId, node, kind, source, facts: { status: 'loading' }, definition: { status: 'loading' }, tab, back: carry.back ?? [] } })
-    this.begin({ connectionId: node.connectionId, object: node.ref.object, kind }, fresh, requests, () => !this.disposed && this.getSnapshot().open?.id === id, change => {
+    this.begin({ connectionId: node.connectionId, object: node.ref.object, kind, ...(node.subtype === undefined ? {} : { subtype: node.subtype }) }, fresh, requests, () => !this.disposed && this.getSnapshot().open?.id === id, change => {
       const open = this.getSnapshot().open
       if (open && open.id === id) this.publish({ open: { ...open, ...change } })
     })
@@ -300,7 +302,9 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
    */
   private begin(target: PeekTarget, fresh: boolean, requests: Requests, current: () => boolean, update: (change: PeekChange) => void): void {
     const { connectionId, object, kind } = target
-    const key = peekSpecs[kind].definition === 'script' ? scriptKey(connectionId, object) : undefined
+    // A scripted kind Script As cannot write (an index of a table type, a dropped ledger table) has no definition to show, as a
+    // module without text has none: it is not asked for one, which it would refuse.
+    const key = peekSpecs[kind].definition === 'script' && scriptable(target) ? scriptKey(connectionId, object) : undefined
     const cached = key === undefined || fresh ? undefined : this.kept(key)
     const peekId = this.newId()
     requests.peek = peekId
@@ -350,7 +354,8 @@ export class PeekService extends SnapshotStore<PeekSnapshot> {
         if (key !== undefined && cached) startScript(key)
         return
       }
-      const value = result.value, modified = typeof value.facts.modified === 'string' ? value.facts.modified : undefined
+      // A login's modified time misses its role memberships and CONNECT permission, which its script holds: it is never kept.
+      const value = result.value, modified = kind !== 'login' && typeof value.facts.modified === 'string' ? value.facts.modified : undefined
       tell({ facts: { status: 'ready', value: value.facts }, ...(value.lists ? { lists: value.lists } : {}), ...(value.refused ? { refused: value.refused } : {}),
         ...(key === undefined ? { definition: { status: 'ready', value: value.definition === undefined ? {} : { text: value.definition, ...(value.definitionTruncated ? { truncated: true } : {}) } } } : {}) })
       if (key === undefined) return
@@ -489,6 +494,10 @@ type PartValue<K extends TabPart> = NonNullable<OpenPeek[K]> extends PeekPart<in
 const sameObject = (a: ExplorerMenuNode, b: ExplorerMenuNode) => a.ref.type === 'object' && b.ref.type === 'object' && a.kind === b.kind
   && a.ref.object.database === b.ref.object.database && a.ref.object.schema === b.ref.object.schema && a.ref.object.name === b.ref.object.name
   && a.ref.object.parent?.kind === b.ref.object.parent?.kind && a.ref.object.parent?.schema === b.ref.object.parent?.schema && a.ref.object.parent?.name === b.ref.object.parent?.name
+/** Whether Script As writes CREATE for the target, as its menu would offer it. */
+const scriptable = (target: PeekTarget) => scriptMenuState({ kind: target.kind, ...(target.subtype === undefined ? {} : { subtype: target.subtype }),
+  ...(target.object.parent ? { parentKind: target.object.parent.kind } : {}) }).verbs.create === 'enabled'
+
 /** A scripted object's place in the cache: its connection, its kind and its names (a child's with its parent's). */
 const scriptKey = (connectionId: string, object: ObjectRef) =>
   JSON.stringify([connectionId, object.kind, object.database ?? null, object.schema ?? null, object.parent?.kind ?? null, object.parent?.schema ?? null, object.parent?.name ?? null, object.name ?? null])

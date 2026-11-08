@@ -62,6 +62,8 @@ export interface SearchDetails {
   readonly hit: ObjectSearchHit
   readonly kind?: PeekKind
   readonly facts?: PeekPart<PeekResult['facts']>
+  /** The Peek groups the login was refused (index usage), which come with the facts. */
+  readonly refused?: PeekResult['refused']
   readonly definition: DefinitionPart
   readonly columns?: PeekPart<readonly DetailsColumn[]>
   /** Its server was lost: whatever had not arrived says so, and the hit is read again when the server comes back. */
@@ -214,7 +216,7 @@ export class SearchDetailsService extends SnapshotStore<SearchDetailsSnapshot> i
 
   private readPeek(documentId: string, details: SearchDetails, kind: PeekKind, fresh: boolean): void {
     const reads = this.readsOf(documentId)
-    reads.peek = this.options.peek.read({ connectionId: details.connectionId, object: details.hit.object, kind }, fresh, change => this.update(documentId, details.id, change))
+    reads.peek = this.options.peek.read({ connectionId: details.connectionId, object: details.hit.object, kind, ...(details.hit.subtype === undefined ? {} : { subtype: details.hit.subtype }) }, fresh, change => this.update(documentId, details.id, change))
   }
 
   private readScript(documentId: string, details: SearchDetails): void {

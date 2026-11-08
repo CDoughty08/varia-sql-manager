@@ -300,7 +300,7 @@ internal static class PeekLiveChecks
             + "CREATE TRIGGER " + s + ".[TR]]'表] ON " + s + ".[T]]'表] AFTER INSERT, UPDATE AS SET NOCOUNT ON; SELECT COUNT(*) FROM " + s + ".[UsesS];\nGO\n"
             + "CREATE TRIGGER [DTR]]'表] ON DATABASE FOR CREATE_TABLE, DROP_TABLE AS SET NOCOUNT ON;\nGO\nDISABLE TRIGGER [DTR]]'表] ON DATABASE;\nGO\n"
             + "CREATE SYNONYM " + s + ".[SY]]'表] FOR " + s + ".[T]]'表];\nCREATE SYNONYM " + s + ".[SYR] FOR [Remote]]Srv].[Db].[dbo].[X];\nGO\n"
-            + "CREATE TYPE " + s + ".[AT]]'表] FROM nvarchar(20) NOT NULL;\nCREATE TYPE " + s + ".[TT]]'表] AS TABLE (Id int NOT NULL PRIMARY KEY, Name nvarchar(10) NULL);\nGO\n"
+            + "CREATE TYPE " + s + ".[AT]]'表] FROM nvarchar(20) NOT NULL;\nGO\nCREATE TYPE " + s + ".[TT]]'表] AS TABLE (Id int NOT NULL PRIMARY KEY, Name nvarchar(10) NULL, Phone " + s + ".[AT]]'表] NULL);\nGO\n"
             + "CREATE PROCEDURE " + s + ".[UsesTypes] @a " + s + ".[AT]]'表], @t " + s + ".[TT]]'表] READONLY AS SELECT 1;\nGO\n"
             + "SELECT NEXT VALUE FOR " + s + ".[S]]'表];\nGO\n", database);
         // The scratch login: random password (never printed), a server role, CONNECT SQL denied, and a hostile-named user here.
@@ -380,8 +380,10 @@ internal static class PeekLiveChecks
             var alias = await Peek(service, connectionId, Own("type", "AT]'表"), json);
             var aliasUses = await Dependencies(service, connectionId, Own("type", "AT]'表"), json);
             check(alias is { Error: null } && alias.Facts["schema"] as string == schema && alias.Facts["baseType"] as string == "nvarchar(20)" && alias.Facts["allowNulls"] is false
-                && alias.Facts["maxLength"] is 40L && alias.Facts["default"] is null && aliasUses is { Error: null, Uses.Count: 0 } && aliasUses.UsedBy.Any(item => item is { Name: "UsesTypes", Kind: "procedure" }),
-                "a hostile-named alias type peeks with its base type and nullability, uses nothing, and is used by the procedure that takes it: " + Facts(alias));
+                && alias.Facts["maxLength"] is 40L && alias.Facts["default"] is null && aliasUses is { Error: null, Uses.Count: 0 } && aliasUses.UsedBy.Any(item => item is { Name: "UsesTypes", Kind: "procedure" })
+                && aliasUses.UsedBy.Any(item => item is { Name: "TT]'表", Kind: "tableType" } && item.Schema == schema) && !aliasUses.UsedBy.Any(item => item.Name.StartsWith("TT_", StringComparison.Ordinal)),
+                "a hostile-named alias type peeks with its base type and nullability, uses nothing, and is used by the procedure that takes it and the table type with a column of it: "
+                + Facts(alias) + " " + string.Join(", ", aliasUses.UsedBy.Select(item => item.Name)));
             var tableType = await Peek(service, connectionId, Own("tableType", "TT]'表"), json);
             var tableTypeUses = await Dependencies(service, connectionId, Own("tableType", "TT]'表"), json);
             check(tableType is { Error: null } && tableType.Facts["memoryOptimized"] is false && tableType.Facts["schema"] as string == schema
@@ -406,6 +408,14 @@ internal static class PeekLiveChecks
                 && map.Rows.Count(row => row[0] as string == database) == 1,
                 "a scratch login peeks with its type, status, server role and its hostile-named user in the scratch database, read without LOGINPROPERTY: " + Facts(peekLogin) + " "
                 + JsonSerializer.Serialize(roles) + " " + JsonSerializer.Serialize(mapping?.Rows.Where(row => row[0] as string == database)));
+            // Out of User mapping's time: every database it would read is unread, and the facts and roles are kept.
+            service.Explorer.Options.PeekMappingBudget = TimeSpan.Zero;
+            PeekResult lateLogin;
+            try { lateLogin = await Peek(service, connectionId, new ObjectRefDto("login", null, null, login), json); }
+            finally { service.Explorer.Options.PeekMappingBudget = null; }
+            check(lateLogin is { Error: null } && lateLogin.Facts["disabled"] is true && lateLogin.Lists?.GetValueOrDefault("serverRoles")?.Rows.Count > 0
+                && lateLogin.Lists?.GetValueOrDefault("userMapping") is { Rows.Count: 0, Unread: > 0 },
+                "a login whose User mapping runs out of time keeps its facts and counts the databases unread: " + JsonSerializer.Serialize(lateLogin.Lists?.GetValueOrDefault("userMapping")?.Unread));
             var missingLogin = await Peek(service, connectionId, new ObjectRefDto("login", null, null, login + "_gone"), json);
             var missingDatabase = await Peek(service, connectionId, new ObjectRefDto("database", null, null, database + "_gone"), json);
             check(missingLogin is { Error.Code: "NOT_FOUND" } && missingDatabase is { Error.Code: "NOT_FOUND" }, "a missing login and a missing database are NOT_FOUND values");

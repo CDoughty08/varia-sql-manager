@@ -99,6 +99,7 @@ internal static partial class PeekChecks
             ("a list column with a band", json => Kind(json, "index")["lists"]!.AsArray()[0]!["columns"]!.AsArray()[0]!["since"] = 15),
             ("a list column of an unknown format", json => Kind(json, "login")["lists"]!.AsArray()[0]!["columns"]!.AsArray()[0]!["format"] = "money"),
             ("a repeated list", json => Kind(json, "login")["lists"]!.AsArray()[1]!["id"] = "serverRoles"),
+            ("User mapping before another list", json => { var lists = Kind(json, "login")["lists"]!.AsArray(); var mapping = lists[1]!; lists.RemoveAt(1); lists.Insert(0, mapping); }),
             ("no list rows", json => json["peek"]!["listRows"] = 0),
             ("a kind twice", json => Kind(json, "view")["kind"] = "table"),
             ("a definition budget of zero", json => json["peek"]!["definitionChars"] = 0),
@@ -123,12 +124,16 @@ internal static partial class PeekChecks
         var peek = ExplorerCatalog.Current.Peek;
         var problems = new List<string>();
         var renders = 0;
+        foreach (var cloud in new[] { false, true })
         foreach (var (spec, parent) in Variants(peek))
             for (var band = ExplorerCatalog.MinBand; band <= ExplorerCatalog.MaxBand; band++)
             {
                 var render = new SqlRender(band);
-                var batch = PeekSql.Render(spec, render, peek.DefinitionChars, parent);
-                var name = spec.Kind + (parent is null ? "" : " of a " + parent) + " " + band;
+                var batch = PeekSql.Render(spec, render, peek.DefinitionChars, parent, cloud);
+                var name = spec.Kind + (parent is null ? "" : " of a " + parent) + " " + band + (cloud ? " (cloud)" : "");
+                // A cloud server has no sys.master_files; its database reads no files.
+                if (cloud && batch.Text.Contains("master_files", StringComparison.Ordinal)) problems.Add(name + ": it reads sys.master_files");
+                var noFiles = cloud && spec.Kind == "database" ? 1 : 0;
                 renders++;
                 // Only the login's batch lists the databases it may enter, as the tree's database listings do.
                 problems.AddRange(CatalogSql.Lint(batch.Text, render, list: false, mayCheckAccess: spec.Kind == "login").Select(problem => name + ": " + problem));
@@ -146,20 +151,27 @@ internal static partial class PeekChecks
                     || batch.Lists.Zip(lists).Any(pair => !pair.First.Columns.Take(pair.Second.Columns.Count).SequenceEqual(pair.Second.Columns.Select(column => column.Id))))
                     problems.Add(name + ": its lists are not the catalogue's");
                 if (batch.Mapping != batch.Text.Contains(PeekSql.MappingDatabases, StringComparison.Ordinal)) problems.Add(name + ": User mapping's databases");
-                if (batch.Lists.Count + (batch.Mapping ? 1 : 0) > 0 && System.Text.RegularExpressions.Regex.Matches(batch.Text, @"SELECT TOP \(@take\) ").Count != batch.Lists.Count + (batch.Mapping ? 1 : 0))
+                if (batch.Lists.Count + (batch.Mapping ? 1 : 0) > 0 && System.Text.RegularExpressions.Regex.Matches(batch.Text, @"SELECT TOP \(@take\) ").Count != batch.Lists.Count + (batch.Mapping ? 1 : 0) - noFiles)
                     problems.Add(name + ": a list without TOP (@take)");
             }
-        check(renders == 102 && problems.Count == 0, "every peek kind (an index and a trigger below each parent kind) renders for bands 12-17, passes the lint, and reads the catalogue's facts in order "
+        check(renders == 204 && problems.Count == 0, "every peek kind (an index and a trigger below each parent kind) renders for bands 12-17, on a box and a cloud server, passes the lint, and reads the catalogue's facts in order "
             + "as their ids, then its helpers, its lists and its optional group (" + renders + " renders" + (problems.Count > 0 ? "; first problem: " + problems[0] : ")"));
         var mappingProblems = CatalogSql.Lint(PeekSql.MappingUsers, new SqlRender(ExplorerCatalog.MinBand), list: false, mayCheckAccess: false);
         check(mappingProblems.Count == 0 && PeekSql.MappingUsers.Contains("sp.name = @object_name", StringComparison.Ordinal) && !PeekSql.MappingUsers.Contains("sql_logins", StringComparison.Ordinal),
             "User mapping's statement in each database passes the lint and finds the login's user by its SID, through the login's name: " + string.Join(", ", mappingProblems));
         var index = PeekSql.Render(peek.Kinds["index"], new SqlRender(17), peek.DefinitionChars, "table");
         var usage = index.Text[index.Text.IndexOf("BEGIN TRY", StringComparison.Ordinal)..];
-        check(usage.Contains("sys.dm_db_index_usage_stats", StringComparison.Ordinal) && usage.Contains("IF ERROR_NUMBER() NOT IN (229, 297, 300) THROW;", StringComparison.Ordinal)
+        check(usage.Contains("sys.dm_db_index_usage_stats", StringComparison.Ordinal) && usage.Contains("IF ERROR_NUMBER() NOT IN (229, 262, 297, 300) THROW;", StringComparison.Ordinal)
             && index.Text.IndexOf("sys.dm_db_index_usage_stats", StringComparison.Ordinal) > index.Text.IndexOf("FROM sys.index_columns", StringComparison.Ordinal)
             && !PeekSql.Render(peek.Kinds["index"], new SqlRender(14), peek.DefinitionChars, "view").Text.Contains("optimize_for_sequential_key", StringComparison.Ordinal),
             "an index's usage is read last, inside TRY…CATCH that answers a refusal and raises any other error, and its band 15 option is left out below it");
+        // A selective XML index also has no using index; only xml_index_type says which is primary. User mapping counts every
+        // database the login may enter, past the batch's TOP, and a table type that uses a type is listed by its own names.
+        var type = PeekSql.Dependencies("type", new SqlRender(17));
+        check(index.Text.Contains("xi.xml_index_type = 0", StringComparison.Ordinal) && !index.Text.Contains("using_xml_index_id", StringComparison.Ordinal)
+            && PeekSql.MappingDatabases.Contains("COUNT(*) OVER () AS total", StringComparison.Ordinal)
+            && type.Contains("tt.name, tt.type_table_object_id", StringComparison.Ordinal) && PeekSql.KindOf("TT") == "tableType",
+            "a primary XML index is told by its type, User mapping counts every database, and a table type is a type's user by its own names");
         var refusedLookup = false;
         try { PeekSql.Render(peek.Kinds["trigger"], new SqlRender(17), peek.DefinitionChars, "tableType"); } catch (InvalidOperationException) { refusedLookup = true; }
         check(refusedLookup, "Peek finds no trigger below a table type");

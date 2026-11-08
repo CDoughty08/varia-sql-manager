@@ -325,6 +325,17 @@ describe('PeekService script cache', () => {
     expect(definition()).toBe('CREATE TABLE [dbo].[Customer]')
     expect(api.scriptObjects).toHaveBeenCalledTimes(1)
   })
+  it('never keeps a login\'s script, whose role memberships and CONNECT permission its modified time misses', async () => {
+    const { service, api, facts, script, definition } = setup()
+    service.peek(node('login', 1, 'app'), 'keyboard')
+    facts(0, '2024-01-02T03:04:05')
+    script(0, 'CREATE LOGIN [app]')
+    await flush()
+    expect(definition()).toBe('CREATE LOGIN [app]')
+    service.close()
+    service.peek(node('login', 1, 'app'), 'keyboard')
+    expect(api.scriptObjects).toHaveBeenCalledTimes(2)
+  })
   it('scripts the table again when it changed, when its facts fail, and on Refresh', async () => {
     const { service, facts, script, definition, scriptsSent } = setup()
     service.peek(node('table', 1), 'menu')
@@ -729,5 +740,14 @@ describe('Peek kinds beyond modules', () => {
     service.peek(index('Returns'), 'keyboard')
     expect(api.explorerPeek).toHaveBeenCalledTimes(2)
     expect(api.scriptObjects).toHaveBeenCalledTimes(2)
+    // An index of a table type: Script As cannot write it, so it is not asked, and the card says there is no definition.
+    const typed: ExplorerMenuNode = { id: 5, connectionId, kind: 'index', subtype: 'nonclustered', label: 'IX', lost: false,
+      ref: { type: 'object', object: { kind: 'index', database: 'Sales', parent: { kind: 'tableType', schema: 'dbo', name: 'Lines' }, name: 'IX' } } }
+    service.peek(typed, 'keyboard')
+    expect(api.explorerPeek).toHaveBeenCalledTimes(3)
+    expect(api.scriptObjects).toHaveBeenCalledTimes(2)
+    peeks[2]!(ok({ facts: { indexType: 'Nonclustered' }, elapsedMs: 1 }))
+    await flush()
+    expect(service.getSnapshot().open?.definition).toEqual({ status: 'ready', value: {} })
   })
 })
