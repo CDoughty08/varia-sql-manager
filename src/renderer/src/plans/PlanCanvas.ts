@@ -9,7 +9,7 @@ import { observeIntersection, observeResize, windowOf, windows } from '../core/w
 import { uiFontFamily } from '../fonts'
 import { SpatialIndex, fit, intersects, viewport, zoomAt, type Camera, type PlanLayout, type PlacedNode, type PlacedEdge, type Rect } from './geometry'
 import { LabelPool } from './labels'
-import { operatorIcon, rowFlow } from './presentation'
+import { operatorIcon, rowFlow, rowFlowMetrics } from './presentation'
 
 export interface CanvasColors { background: string; card: string; text: string; muted: string; border: string; accent: string; warning: string }
 export interface HoveredOperator { id: string; anchor: Rect }
@@ -314,21 +314,26 @@ export class PlanCanvas {
         label('section:' + statement.id, this.fitLabel(heading, section.width - 20, this.mutedStyle), section.x + 10, section.y + 7, true)
       }
     }
-    for (const edge of this.edgeIndex.query(area)) {
+    const showFlowLabels = this.options.rowFlow && this.camera.scale >= 0.75
+    // Labels extend above the edge. Broaden only the candidate query, then cull each label itself.
+    const edgeArea = showFlowLabels ? { ...area, height: area.height + 18 } : area
+    for (const edge of this.edgeIndex.query(edgeArea)) {
       const [start, next] = edge.points
       if (!start || !next) continue
       this.edges.moveTo(start.x, start.y)
       for (const point of edge.points.slice(1)) this.edges.lineTo(point.x, point.y)
       const node = edge.statement === undefined || edge.index === undefined ? undefined : this.options.statements[edge.statement]?.nodes[edge.index]
-      const flow = node ? rowFlow(node, (this.options.statements[edge.statement!] as { partial?: boolean }).partial) : undefined
+      const partial = (this.options.statements[edge.statement!] as { partial?: boolean } | undefined)?.partial
+      const flow = node ? rowFlowMetrics(node, partial) : undefined
       const color = flow?.kind === 'partial' ? colors.warning : colors.muted
       this.edges.stroke({ color, width: this.options.rowFlow ? flow?.width ?? 1.5 : 1.5, alpha: flow?.kind === 'estimated' ? 0.65 : 1 })
       const angle = Math.atan2(next.y - start.y, next.x - start.x), dx = Math.cos(angle), dy = Math.sin(angle)
       this.edges.moveTo(start.x + dx * 6 - dy * 4, start.y + dy * 6 + dx * 4).lineTo(start.x, start.y)
         .lineTo(start.x + dx * 6 + dy * 4, start.y + dy * 6 - dx * 4).stroke({ color, width: 1.5 })
-      if (this.options.rowFlow && flow && this.camera.scale >= 0.75) {
+      if (showFlowLabels && node) {
         const end = edge.points.at(-1)!
-        label('flow:' + edge.childId, this.fitLabel(flow.label, 106, this.mutedStyle), end.x - 108, end.y - 18, true)
+        const bounds = { x: end.x - 108, y: end.y - 18, width: 106, height: typeScale.sm.line }
+        if (intersects(bounds, area)) label('flow:' + edge.childId, this.fitLabel(rowFlow(node, partial).label, bounds.width, this.mutedStyle), bounds.x, bounds.y, true)
       }
     }
     for (const placed of this.index.query(area)) {

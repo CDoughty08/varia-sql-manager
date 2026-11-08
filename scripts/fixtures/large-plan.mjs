@@ -5,7 +5,7 @@ import { documentTabs, planCanvas, planViewer } from './ui.mjs'
 
 export async function checkLargePlan({ application, page, profile, expect }) {
   const path = join(profile, 'wide-2000.sqlplan')
-  const inputs = Array.from({ length: 1999 }, (_, index) => `<RelOp NodeId="${index + 1}" PhysicalOp="Constant Scan" LogicalOp="Constant Scan" EstimateRows="1"><ConstantScan /></RelOp>`).join('')
+  const inputs = Array.from({ length: 1999 }, (_, index) => `<RelOp NodeId="${index + 1}" PhysicalOp="Constant Scan" LogicalOp="Constant Scan" EstimateRows="${index + 1}"><ConstantScan /></RelOp>`).join('')
   await writeFile(path, `<ShowPlanXML xmlns="http://schemas.microsoft.com/sqlserver/2004/07/showplan" Version="1.6"><BatchSequence><Batch><Statements><StmtSimple StatementId="1" StatementType="SELECT" StatementText="Wide plan layout check"><QueryPlan><RelOp NodeId="0" PhysicalOp="Concatenation" LogicalOp="Concatenation"><Concat>${inputs}</Concat></RelOp></QueryPlan></StmtSimple></Statements></Batch></BatchSequence></ShowPlanXML>`)
   await application.evaluate(({ dialog }, path) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] }) }, path)
   await page.keyboard.press('Control+O')

@@ -16,12 +16,17 @@ export function operatorIcon(operator: string, logical = ''): SvgIconId {
   return 'execution-plan'
 }
 
-export function rowFlow(node: PlanNode, partial = false): { kind: 'actual' | 'estimated' | 'partial' | 'unavailable'; label: string; width: number } {
+export function rowFlowMetrics(node: PlanNode, partial = false): { kind: 'actual' | 'estimated' | 'partial' | 'unavailable'; value: number | null; total: number | undefined; width: number } {
   const total = estimatedTotalRows(node), estimate = total ?? node.estimatedRows
   const value = partial ? node.actualRows : node.actualRows ?? estimate
   const kind = partial ? 'partial' : node.actualRows !== null ? 'actual' : node.executions !== null || node.cpuMs !== null || node.elapsedMs !== null ? 'unavailable' : estimate !== null ? 'estimated' : 'unavailable'
+  return { kind, value, total, width: kind === 'unavailable' || value === null ? 1 : Math.min(6, 1 + Math.log10(1 + value)) }
+}
+
+export function rowFlow(node: PlanNode, partial = false): { kind: 'actual' | 'estimated' | 'partial' | 'unavailable'; label: string; width: number } {
+  const { kind, value, total, width } = rowFlowMetrics(node, partial)
   const label = kind === 'partial' ? `Live partial ${formatPlanMetric(value)}` : kind === 'actual' ? `Actual ${formatPlanMetric(value)}` : kind === 'estimated' ? `Est. ${formatPlanMetric(value)}` : 'Rows unavailable'
-  return { kind, label: label + (kind === 'unavailable' ? '' : kind === 'estimated' && total === undefined ? ' rows/exec' : ' rows'), width: kind === 'unavailable' || value === null ? 1 : Math.min(6, 1 + Math.log10(1 + value)) }
+  return { kind, label: label + (kind === 'unavailable' ? '' : kind === 'estimated' && total === undefined ? ' rows/exec' : ' rows'), width }
 }
 
 /** Keep models intact. Only the layout projection hides descendants; search and outline still find every operator. */
