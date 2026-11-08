@@ -90,13 +90,13 @@ internal static class PeekLiveChecks
     /// <summary>The name with every letter's case swapped, so it differs from the original in every letter.</summary>
     private static string Recased(string name) => string.Concat(name.Select(c => char.IsUpper(c) ? char.ToLowerInvariant(c) : char.ToUpperInvariant(c)));
 
-    public static async Task ScratchAsync(Action<bool, string> check, SqlService service, string connectionId, string database, int major, Func<string, string, Task<SqlRun>> sql,
-        JsonSerializerOptions json, Func<Task<string>> memoryOptimized, Func<Task> dropMemoryOptimized)
+    /// <summary>Makes ScratchAsync's hostile-named fixtures. Those that rest on how the server is set up are made apart from the
+    /// main batch, and only where a probe shows the server can make them: once a batch fails its later fixtures never run, and
+    /// the checks after it fail with misleading messages. VC names T with the database spelled in another case, which CREATE
+    /// VIEW resolves at once (it fails where database names compare by case); PL names T through @@SERVERNAME, which is NULL
+    /// on a server whose local name was dropped, and EXEC of a NULL text succeeds without making anything.</summary>
+    internal static async Task<(SqlRun Created, bool Caseless, bool Named)> CreateFixturesAsync(string database, Func<string, string, Task<SqlRun>> sql)
     {
-        try { await MemoryOptimizedAsync(check, service, connectionId, sql, json, memoryOptimized); }
-        finally { await dropMemoryOptimized(); }
-        // Hostile names, dropped afterwards so the fixture checks that follow see the database as the fixtures made it.
-        const string schema = "Peek]'Ü";
         var created = await sql("CREATE SCHEMA [Peek]]'Ü];\nGO\n"
             + "CREATE TABLE [Peek]]'Ü].[T]]'表] (Id int NOT NULL CONSTRAINT PK_PeekT PRIMARY KEY CLUSTERED, Name nvarchar(50) NULL, Notes nvarchar(max) NULL) WITH (DATA_COMPRESSION = PAGE);\n"
             + "CREATE INDEX IX_PeekT_Name ON [Peek]]'Ü].[T]]'表] (Name);\n"
@@ -108,19 +108,39 @@ internal static class PeekLiveChecks
             + "CREATE VIEW [Peek]]'Ü].[VF] AS SELECT f.one, t.Id FROM [Peek]]'Ü].[F]() AS f CROSS JOIN [" + database.Replace("]", "]]") + "].[Peek]]'Ü].[T]]'表] AS t;\nGO\n"
             // T named both ways in one view: SQL Server resolves each to T, so it lists T once with no database.
             + "CREATE VIEW [Peek]]'Ü].[VB] AS SELECT a.Id FROM [Peek]]'Ü].[T]]'表] AS a JOIN [" + database.Replace("]", "]]") + "].[Peek]]'Ü].[T]]'表] AS b ON b.Id = a.Id;\nGO\n"
+            + "CREATE TABLE [Peek]]'Ü].[Blob] (Id int NOT NULL PRIMARY KEY, B varbinary(max) NULL);\nINSERT [Peek]]'Ü].[Blob] (Id, B) VALUES (1, CONVERT(varbinary(max), REPLICATE(CONVERT(varchar(max), 'ab'), 1000000)));\nGO\n", database);
+        var caseless = (await sql("SELECT CASE WHEN DB_ID(N'" + Recased(database).Replace("'", "''") + "') = DB_ID(N'" + database.Replace("'", "''") + "') THEN 1 ELSE 0 END;", "master")).Scalar == "1";
+        var named = (await sql("SELECT CASE WHEN @@SERVERNAME IS NULL THEN 0 ELSE 1 END;", "master")).Scalar == "1";
+        if (created.Status != "completed") return (created, caseless, named);
+        if (caseless)
+        {
+            var recased = await sql("CREATE VIEW [Peek]]'Ü].[VC] AS SELECT t.Id FROM [" + Recased(database).Replace("]", "]]") + "].[Peek]]'Ü].[T]]'表] AS t;\n", database);
+            if (recased.Status != "completed") return (recased, caseless, named);
+        }
+        if (named)
+        {
             // T named through the local server's own name (built on the server, which alone knows @@SERVERNAME): resolved too,
             // so it lists with no server and no database.
-            + "DECLARE @loopback nvarchar(max) = N'CREATE PROCEDURE [Peek]]''Ü].[PL] AS SELECT Id FROM ' + QUOTENAME(@@SERVERNAME) + N'.' + QUOTENAME(DB_NAME()) + N'.[Peek]]''Ü].[T]]''表];';\n"
-            + "EXEC (@loopback);\nGO\n"
-            + "CREATE TABLE [Peek]]'Ü].[Blob] (Id int NOT NULL PRIMARY KEY, B varbinary(max) NULL);\nINSERT [Peek]]'Ü].[Blob] (Id, B) VALUES (1, CONVERT(varbinary(max), REPLICATE(CONVERT(varchar(max), 'ab'), 1000000)));\nGO\n", database);
-        // T named with the database spelled in another case, made apart from the fixture batch: CREATE VIEW resolves names at
-        // once, so on a server that compares database names by case it would fail and stop the batch's later fixtures.
-        var caseless = (await sql("SELECT CASE WHEN DB_ID(N'" + Recased(database) + "') = DB_ID(N'" + database + "') THEN 1 ELSE 0 END;", "master")).Scalar == "1";
-        var recased = caseless ? await sql("CREATE VIEW [Peek]]'Ü].[VC] AS SELECT t.Id FROM [" + Recased(database).Replace("]", "]]") + "].[Peek]]'Ü].[T]]'表] AS t;\n", database) : null;
+            var loopback = await sql("DECLARE @loopback nvarchar(max) = N'CREATE PROCEDURE [Peek]]''Ü].[PL] AS SELECT Id FROM ' + QUOTENAME(@@SERVERNAME) + N'.' + QUOTENAME(DB_NAME()) + N'.[Peek]]''Ü].[T]]''表];';\n"
+                + "EXEC (@loopback);\n", database);
+            if (loopback.Status != "completed") return (loopback, caseless, named);
+        }
+        return (created, caseless, named);
+    }
+
+    public static async Task ScratchAsync(Action<bool, string> check, SqlService service, string connectionId, string database, int major, Func<string, string, Task<SqlRun>> sql,
+        JsonSerializerOptions json, Func<Task<string>> memoryOptimized, Func<Task> dropMemoryOptimized)
+    {
+        try { await MemoryOptimizedAsync(check, service, connectionId, sql, json, memoryOptimized); }
+        finally { await dropMemoryOptimized(); }
+        // Hostile names, dropped afterwards so the fixture checks that follow see the database as the fixtures made it.
+        const string schema = "Peek]'Ü";
+        var (created, caseless, named) = await CreateFixturesAsync(database, sql);
         if (!caseless) Console.WriteLine("Peek's database-name case check skipped: this server compares database names case-sensitively.");
+        if (!named) Console.WriteLine("Peek's local server name check skipped: this server has no local name (@@SERVERNAME is NULL).");
         try
         {
-            check(created.Status == "completed" && recased is null or { Status: "completed" }, "the peek fixtures are created: " + (created.Error ?? recased?.Error));
+            check(created.Status == "completed", "the peek fixtures are created: " + created.Error);
             ObjectRefDto Ref(string kind, string owner, string name) => new(kind, database, owner, name);
             var table = await Peek(service, connectionId, Ref("table", schema, "T]'表"), json);
             var facts = table.Facts;
@@ -165,11 +185,14 @@ internal static class PeekLiveChecks
                 && viewOfFunction.Uses.Any(item => item is { Name: "T]'表", Kind: "table", Subtype: null, Database: null, Server: null }),
                 "a dependency carries the subtype the tree gives it, and a reference naming its own database is resolved to the object, with no database: " + Names(viewOfFunction.Uses));
             var bothWays = await Dependencies(service, connectionId, Ref("view", schema, "VB"), json);
-            var loopback = await Dependencies(service, connectionId, Ref("procedure", schema, "PL"), json);
-            check(bothWays is { Error: null } && bothWays.Uses.Count(item => item.Name == "T]'表") == 1 && bothWays.Uses.Any(item => item is { Name: "T]'表", Kind: "table", Database: null })
-                && loopback is { Error: null } && loopback.Uses.Count == 1 && loopback.Uses.Any(item => item is { Name: "T]'表", Kind: "table", Database: null, Server: null }),
-                "a table named both with and without its database lists once, and one named through the local server's own name is resolved with no server or database: "
-                + Names(bothWays.Uses) + " | " + Names(loopback.Uses));
+            check(bothWays is { Error: null } && bothWays.Uses.Count(item => item.Name == "T]'表") == 1 && bothWays.Uses.Any(item => item is { Name: "T]'表", Kind: "table", Database: null }),
+                "a table named both with and without its database lists once: " + Names(bothWays.Uses));
+            if (named)
+            {
+                var loopback = await Dependencies(service, connectionId, Ref("procedure", schema, "PL"), json);
+                check(loopback is { Error: null } && loopback.Uses.Count == 1 && loopback.Uses.Any(item => item is { Name: "T]'表", Kind: "table", Database: null, Server: null }),
+                    "a table named through the local server's own name is resolved with no server or database: " + (loopback.Error?.Message ?? Names(loopback.Uses)));
+            }
             if (caseless)
             {
                 // Followed as the page follows a dependency: in its own database, or the one it was listed in when it names none.
