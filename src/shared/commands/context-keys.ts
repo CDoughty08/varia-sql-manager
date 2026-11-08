@@ -112,6 +112,8 @@ export const contextKeys = {
   editorLineNumbers: { type: 'boolean', scope: 'state', description: 'Line numbers show in the query editor.' },
   resultsWhitespaceSpaces: { type: 'boolean', scope: 'state', description: 'The results grid marks spaces and tabs (Show Spaces and Tabs in Results).' },
   resultsWhitespaceAll: { type: 'boolean', scope: 'state', description: 'The results grid marks every white space character, line breaks included (Show All White Space in Results).' },
+  resultsSortTextChars: { type: 'boolean', scope: 'state', description: 'Sorted results grids order text columns by their length in characters (Sort Text by Length in Characters).' },
+  resultsSortTextBytes: { type: 'boolean', scope: 'state', description: 'Sorted results grids order text and binary columns by their length in bytes (Sort Text by Length in Bytes).' },
   hasBookmarks: { type: 'boolean', scope: 'state', description: 'An open document has a bookmark.' },
   activeDocumentHasBookmarks: { type: 'boolean', scope: 'state', description: 'The active document has a bookmark.' },
   anyDocumentDirty: { type: 'boolean', scope: 'state', description: 'Some open document has unsaved changes.' },

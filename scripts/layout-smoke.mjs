@@ -352,6 +352,25 @@ try {
   await expect(page.getByRole('dialog').getByRole('status')).toContainText('Default layout restored.')
   await done()
   console.log('Layout checks: Dock at a side never lands in a floating window, and a floating panel docks through its ⋯ menu.')
+  // A window-level release or interrupted workspace drag must restore the nested editor's pointer input.
+  for (const signal of ['pointerup', 'pointercancel', 'blur', 'Escape', 'missed-release']) {
+    const before = [await x('explorer'), await x('editor')]
+    await aimGuide(paneTab(page, 'explorer'), 'editor', 'right')
+    await expect(page.locator(part.editorArea)).toHaveCSS('pointer-events', 'none')
+    const box = await page.locator(part.activeDockingGuideCell).boundingBox()
+    if (signal === 'Escape') await page.keyboard.press('Escape')
+    else await page.evaluate(({ signal, x, y }) => {
+      if (signal === 'blur') window.dispatchEvent(new Event('blur'))
+      else window.dispatchEvent(new PointerEvent(signal === 'missed-release' ? 'pointermove' : signal, { pointerId: 1, clientX: x, clientY: y, buttons: 0 }))
+    }, { signal, x: box.x + box.width / 2, y: box.y + box.height / 2 })
+    await expect(page.locator(part.editorArea)).toHaveCSS('pointer-events', 'auto')
+    await expect(page.locator(part.dockingGuides).filter({ visible: true })).toHaveCount(0)
+    await page.mouse.up()
+    await expect(page.locator('.dv-drop-target-dropzone').filter({ visible: true })).toHaveCount(0)
+    if (signal === 'pointerup') await expect.poll(async () => await x('explorer') > await x('editor')).toBe(true)
+    else expect([await x('explorer'), await x('editor')]).toEqual(before)
+  }
+  console.log('Layout checks: window releases, pointer cancellation, blur, Escape, and missed releases restore editor input without a later click.')
   // Closing every panel is a valid, persisted layout; Window can recover each one.
   for (const id of ['explorer', ...outputPaneIds, 'editor']) {
     await closePaneButton(page, id).click()

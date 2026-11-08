@@ -59,6 +59,9 @@ export interface GestureDescriptor {
   readonly locked?: string
   /** Commands that do the same from the keyboard (a key, or a context menu that Shift+F10 opens). Required for `pointerCommand`. */
   readonly keyboard?: readonly CommandId[]
+  /** A control the gesture's press lands on, which takes the press for itself (a header's sort button): gestures with different
+   *  places never start on one press. Undefined is the scope's surface. */
+  readonly place?: string
 }
 
 const fixedNotYet = 'Only modifier gestures can be remapped in this version; F2 renames a focused tab.'
@@ -78,6 +81,11 @@ export const gestureCatalog = {
     title: 'Context Menu Click', description: 'Control+click is a right-click on macOS: it opens the context menu and keeps a selected block.',
     kind: 'fixed', scope: 'resultsGrid', alsoIn: ['tableDesigner'], action: 'click', target: 'a cell or header', modifiers: ['ctrl'], platforms: ['darwin'],
     locked: 'macOS treats Control+click as a right-click.'
+  },
+  'grid.addSortKey': {
+    title: 'Add Sort Column', description: 'Adds the column to the grid\'s sort after the columns it already sorts by, or changes its direction there.',
+    kind: 'modifier', scope: 'resultsGrid', place: 'sortButton', action: 'click', target: 'a column header\'s sort button', modifiers: ['shift'],
+    choices: [['shift'], ['mod']], keyboard: ['output.thenSortAscending', 'output.thenSortDescending']
   },
   'grid.fitColumn': {
     title: 'Fit Column', description: 'Fits a column to its widest loaded value.',

@@ -1,6 +1,7 @@
 import type { Platform } from '../../../shared/commands/keybindings'
 import type { ResultDescriptor } from '../../../shared/contracts'
 import { liveTones, type LiveTone } from '../../../shared/live/catalog'
+import { codiconClass } from '../../../shared/icons'
 import { nextFrame } from '../core/frame'
 import { gesturesFor } from '../core/gestures'
 import { observeResize, windowOf, windows } from '../core/windows'
@@ -52,7 +53,13 @@ interface RowSlot {
 }
 /** A pooled column header: the name, then the SQL type (`type`, in muted small text and hidden from screen readers, which read it in the tooltip). Each is
  *  in its own bidi isolate (.rg-cn, .rg-ct), so a name with an unterminated override cannot reorder the type after it. */
-interface HeaderSlot { readonly el: HTMLDivElement; readonly text: Text; readonly type: Text; column: number; sel: boolean; shown: boolean; left: number; width: number }
+interface HeaderSlot {
+  readonly el: HTMLDivElement; readonly text: Text; readonly type: Text; column: number; sel: boolean; shown: boolean; left: number; width: number
+  /** The sort button (grids with `onSort`): its glyph, its place among several keys, and what it shows now ('' unsorted). */
+  readonly sort?: { readonly el: HTMLSpanElement; readonly glyph: HTMLSpanElement; readonly order: Text; state: string }
+}
+/** A sorted column as its header shows it: its place among the sort's keys and its direction. */
+export interface HeaderSortKey { readonly column: number; readonly descending: boolean }
 interface Drag { readonly pointerId: number; readonly x0: number; readonly y0: number; x: number; y: number; dragging: boolean; readonly hit: GridHit; readonly modifiers: boolean }
 /** A column border being dragged: the width follows the pointer once a frame, and Escape puts `width0` back. */
 interface Resize { readonly pointerId: number; readonly column: number; readonly x0: number; readonly width0: number; readonly wasUserSized: boolean; x: number; applied: number }
@@ -101,6 +108,10 @@ export interface GridViewOptions {
   onViewport?(viewport: GridViewport): void
   /** What a screen reader hears for a toned row's active cell ("blocked"); nothing when it returns undefined. */
   toneLabel?(tone: LiveTone): string | undefined
+  /** The columns the grid is sorted by, in order; their headers show it. */
+  readonly sort?: readonly HeaderSortKey[]
+  /** A header's sort button was clicked (`add`: grid.addSortKey's modifier was held); without it headers have none. */
+  onSort?(column: number, add: boolean): void
 }
 
 /**
@@ -160,6 +171,8 @@ export class GridView {
   private types: readonly string[]
   private showTypes: boolean
   private whitespace: WhitespaceMode
+  /** Each sorted column's place among the keys and direction. */
+  private sortKeys: ReadonlyMap<number, { readonly at: number; readonly descending: boolean }>
   private rowHeader = 0
   private width = -1
   private spacerHeight = -1
@@ -225,6 +238,7 @@ export class GridView {
     this.types = o.descriptor.columns.map(sqlTypeLabel)
     this.showTypes = o.showTypes ?? true
     this.whitespace = o.whitespace ?? 'none'
+    this.sortKeys = sortMap(o.sort)
     this.capOverride = o.stats?.scrollCap
     this.cap = this.capOverride ?? scrollCap(windowOf(o.root).devicePixelRatio)
     // Widths belong to the grid's saved state; they are allocated on first mount, from the declared types.
@@ -313,8 +327,12 @@ export class GridView {
     this.setStatus({})
     this.schedule()
   }
-  update(o: { resultCount: number; showTypes?: boolean; whitespace?: WhitespaceMode }): void {
+  update(o: { resultCount: number; showTypes?: boolean; whitespace?: WhitespaceMode; sort?: readonly HeaderSortKey[] }): void {
     const showTypes = o.showTypes ?? this.showTypes, whitespace = o.whitespace ?? this.whitespace
+    if ('sort' in o) {
+      const sortKeys = sortMap(o.sort)
+      if (!sameSortMap(sortKeys, this.sortKeys)) { this.sortKeys = sortKeys; this.schedule() }
+    }
     if (o.resultCount === this.resultCount && showTypes === this.showTypes && whitespace === this.whitespace) return
     this.resultCount = o.resultCount
     // Each cell compares its mode with this one as it paints, and writes its value again.
@@ -599,6 +617,14 @@ export class GridView {
   private pointerDown(event: PointerEvent): void {
     const press = pressButton(event, this.o.platform)
     if (!press) return
+    // A press on a header's sort button sorts; it selects nothing and starts no drag.
+    const button = press === 'primary' && this.o.onSort ? (event.target as Element | null)?.closest?.('.rg-cs') : null
+    const column = button ? this.slots.get(button.parentElement!)?.header?.column ?? -1 : -1
+    if (column >= 0) {
+      event.preventDefault()
+      this.o.onSort!(column, this.gestures.matches('grid.addSortKey', event))
+      return
+    }
     this.syncPointerFrame()
     const point = this.point(event)
     if (!point.inside) return
@@ -853,8 +879,22 @@ export class GridView {
         typeEl.setAttribute('aria-hidden', 'true')
         typeEl.append(type)
         el.append(nameEl, typeEl)
+        let sort: HeaderSlot['sort']
+        if (this.o.onSort) {
+          // Hidden from screen readers: the header's aria-sort says how it is sorted, and the menu's Sort commands sort it.
+          const button = doc.createElement('span'), glyph = doc.createElement('span'), orderEl = doc.createElement('span'), order = doc.createTextNode('')
+          button.className = 'rg-cs'
+          button.setAttribute('aria-hidden', 'true')
+          glyph.className = codiconClass('arrow-up')
+          orderEl.className = 'rg-co'
+          orderEl.append(order)
+          button.append(glyph, orderEl)
+          el.append(button)
+          sort = { el: button, glyph, order, state: '' }
+          button.title = 'Sort ascending'
+        }
         this.head.append(el)
-        const header: HeaderSlot = { el, text, type, column: -1, sel: false, shown: false, left: Number.NaN, width: -1 }
+        const header: HeaderSlot = { el, text, type, column: -1, sel: false, shown: false, left: Number.NaN, width: -1, ...sort ? { sort } : {} }
         this.slots.set(el, { header })
         this.headerSlots.push(header)
       }
@@ -1240,14 +1280,34 @@ export class GridView {
         }
         const left = this.rowHeader + this.layout.xOf(column), width = this.layout.width(column)
         if (left !== header.left) { header.left = left; header.el.style.left = left + 'px' }
-        if (width !== header.width) { header.width = width; header.el.style.width = width + 'px' }
+        if (width !== header.width) {
+          header.width = width
+          header.el.style.width = width + 'px'
+          if (header.sort) header.el.classList.toggle('narrow', width < g.sortButtonMinWidth)
+        }
       }
       if (!header.shown) { header.shown = true; header.el.style.display = '' }
       let sel = false
       for (const item of ranges) if (column >= item.left && column <= item.right) { sel = true; break }
       if (sel !== header.sel) { header.sel = sel; header.el.classList.toggle('sel', sel) }
+      if (header.sort) this.paintSort(header, header.sort, column)
     }
     for (const header of this.headerSlots) if (!used.has(header) && header.shown) { header.shown = false; header.column = -1; header.el.style.display = 'none'; header.el.removeAttribute('aria-colindex') }
+  }
+
+  /** A header's sort button: the direction's arrow, its place when the grid sorts by several columns, and aria-sort on the
+   *  first key's header (ARIA allows one at a time). Unsorted, the button shows only while the header is hovered. */
+  private paintSort(header: HeaderSlot, sort: NonNullable<HeaderSlot['sort']>, column: number): void {
+    const key = this.sortKeys.get(column)
+    const state = key ? `${key.at}:${key.descending ? 1 : 0}:${this.sortKeys.size}` : ''
+    if (state === sort.state) return
+    sort.state = state
+    sort.el.classList.toggle('on', !!key)
+    sort.glyph.className = codiconClass(key?.descending ? 'arrow-down' : 'arrow-up')
+    sort.order.nodeValue = key && this.sortKeys.size > 1 ? String(key.at + 1) : ''
+    sort.el.title = !key ? 'Sort ascending' : key.descending ? 'Clear sort' : 'Sort descending'
+    if (key && key.at === 0) header.el.setAttribute('aria-sort', key.descending ? 'descending' : 'ascending')
+    else header.el.removeAttribute('aria-sort')
   }
 
   /** What a column's header needs for its text: the name, and the gap and type after it when types are shown. */
@@ -1303,3 +1363,8 @@ function fontMeasure(fresh = false): { charWidth: number; header: (text: string)
   const type = (text: string) => { context.font = `${typeScale.xs.size}px ${uiFontFamily}`; return context.measureText(text).width }
   return { charWidth: measuredCharWidth, header, type }
 }
+
+const sortMap = (keys: readonly HeaderSortKey[] = []): ReadonlyMap<number, { readonly at: number; readonly descending: boolean }> =>
+  new Map(keys.map((key, at) => [key.column, { at, descending: key.descending }]))
+const sameSortMap = (a: ReadonlyMap<number, { readonly at: number; readonly descending: boolean }>, b: ReadonlyMap<number, { readonly at: number; readonly descending: boolean }>) =>
+  a.size === b.size && [...a].every(([column, key]) => b.get(column)?.at === key.at && b.get(column)?.descending === key.descending)

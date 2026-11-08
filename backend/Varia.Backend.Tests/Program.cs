@@ -274,6 +274,7 @@ if (liveGroup is null)
         ("ClientStatistics", Sync(() => ClientStatisticsChecks.Run(Check))),
         ("Entra", () => EntraChecks.RunAsync(Check)),
         ("Store", Sync(() => StoreChecks.Run(Check))),
+        ("View", Sync(() => ViewChecks.Run(Check))),
         ("CellLength", Sync(() => CellLengthChecks.Run(Check))),
         ("Text", () => TextChecks.RunAsync(Check)),
         ("Explorer", () => ExplorerChecks.RunAsync(Check)),

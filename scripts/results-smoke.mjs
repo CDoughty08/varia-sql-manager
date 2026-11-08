@@ -1390,7 +1390,7 @@ try {
   await page.keyboard.press('Shift+F10')
   const outputMenu = page.getByRole('menu', { name: 'Query output', exact: true })
   await expect(outputMenu).toBeVisible()
-  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Select All', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space'])
+  expect(await menuItemNames(outputMenu)).toEqual(['Copy', 'Copy with Headers', 'Select All', 'Sort Ascending', 'Sort Descending', 'Then Sort Ascending', 'Then Sort Descending', 'Clear Sort', 'Save Results As…', 'Show Spaces and Tabs', 'Show All White Space'])
   await page.keyboard.press('Escape')
   // Shift+F10 right after a click opens at the cell just clicked, though the grid paints it as active only on its next
   // frame: below it (or above, when there is no room), from its left edge (or to its right edge, near the window's).
@@ -1490,6 +1490,53 @@ try {
   await expect(grid().locator(gridPart.whitespaceMark)).toHaveCount(0)
   expect(await cellText(5, 2)).toBe('tab line quote"\\')
   console.log('Results checks: White space marks spaces, tabs, line breaks and a BOM, from the toolbar and the grid\'s menu, while Copy and the cell\'s name keep the value.')
+
+  // 14c. Sorting: a header's sort button sorts ascending, then descending, and Shift+click adds a key; the header says
+  // so with aria-sort and the button with its arrow and place. A narrow header keeps its clicks for selecting the column,
+  // and the grid's menu sorts it. Copy follows the order shown; Clear Sort shows the rows as SQL Server sent them.
+  const sortButton = name => header(name).locator(gridPart.sortButton)
+  const menuSort = async (column, name) => {
+    await cell(0, column).click({ button: 'right' })
+    await outputMenu.getByRole('menuitem', { name: new RegExp(`^${name}`) }).click()
+  }
+  await header('clipped').hover()
+  await sortButton('clipped').click()
+  await expect(header('clipped')).toHaveAttribute('aria-sort', 'ascending')
+  await expect(cell(0, 0)).toHaveText('0')
+  await sortButton('clipped').click()
+  await expect(header('clipped')).toHaveAttribute('aria-sort', 'descending')
+  // Text order, not row order: the stored prefixes "truncated pre" first (rows 1, 5, …), then "complete 8" down to
+  // "complete 0", ties in row order (rows past the pane are not drawn).
+  await expect(cell(0, 0)).toHaveText('1')
+  await expect(cell(5, 0)).toHaveText('8')
+  await expect(cell(6, 0)).toHaveText('7')
+  // The button took the presses: the selection is still the one cell White space left selected.
+  await expect(grid().locator(gridPart.selectedCell)).toHaveCount(1)
+  await cell(0, 0).click()
+  await setClipboard('')
+  await page.keyboard.press('Control+C')
+  await expect.poll(clipboard).toBe('1')
+  // "id" is too narrow for the button: a click on it selects the column even where a wide header's button would be.
+  const narrowBox = await header('id').boundingBox()
+  await page.mouse.click(narrowBox.x + narrowBox.width - 12, narrowBox.y + narrowBox.height / 2)
+  await expect(grid().locator(gridPart.selectedColumnHeader)).toHaveAttribute('aria-colindex', '2')
+  await expect(header('clipped')).toHaveAttribute('aria-sort', 'descending')
+  // NULL sorts lowest; Shift+click adds "clipped" after "maybe", numbered on both buttons.
+  await menuSort(1, 'Sort Ascending')
+  await expect(header('maybe')).toHaveAttribute('aria-sort', 'ascending')
+  await expect(header('clipped')).not.toHaveAttribute('aria-sort', /./)
+  await expect(cell(0, 1)).toHaveText('NULL')
+  await header('clipped').hover()
+  await sortButton('clipped').click({ modifiers: ['Shift'] })
+  await expect(sortButton('clipped').locator(gridPart.sortOrder)).toHaveText('2')
+  await expect(sortButton('maybe').locator(gridPart.sortOrder)).toHaveText('1')
+  await expect(header('maybe')).toHaveAttribute('aria-sort', 'ascending')
+  await menuSort(0, 'Clear Sort')
+  await expect(header('maybe')).not.toHaveAttribute('aria-sort', /./)
+  await expect(grid().locator(gridPart.sortedButton)).toHaveCount(0)
+  await expect(cell(0, 0)).toHaveText('0')
+  await expect(cell(5, 0)).toHaveText('5')
+  console.log('Results checks: header sort buttons sort ascending, descending and by a further key, narrow headers keep selecting, the menu sorts, Copy follows the order, and Clear Sort restores it.')
 
   // 15. Panes and tabs: F6 goes to the results and back; Ctrl+R hides and shows them keeping scroll, selection and a
   // resized column; a tab switch restores all three.

@@ -184,7 +184,7 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
     const shut = collapsed.has(index)
     items.push(<div key={`item-${setKey(entry.descriptor)}`} className="rs-item" data-collapsed={shut || undefined} style={{ top: layout.offsets[index], height: layout.heights[index] }}>
       {!bare && <ResultCaption tabId={tabId} entry={entry} collapsed={shut} totalBatches={tab.totalBatches} onToggle={toggle} />}
-      {!shut && mounted.has(index) && <ResultGrid tabId={tabId} entry={entry} count={count} focused={index === Math.min(focused, count - 1)} budget={tab.summary?.budget} onFocus={focus} onWide={wide} />}
+      {!shut && mounted.has(index) && <ResultGrid tabId={tabId} entry={entry} count={count} focused={index === Math.min(focused, count - 1)} budget={tab.summary?.budget} sort={tab.sorts.get(index)} onFocus={focus} onWide={wide} />}
     </div>)
     if (index < count - 1) {
       const top = layout.offsets[index] + layout.heights[index]

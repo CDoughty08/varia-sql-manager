@@ -279,6 +279,69 @@ describe('results worker core', () => {
     expect(posted.at(-1)).toMatchObject({ type: 'error', id: 73, code: 'PORT_CLOSED' })
   })
 
+  it('sorts through main, caches a view\'s pages apart from its result\'s, and reads and sizes rows by view position', () => {
+    const { core, sent, posted, window, reads, serve, answer } = fixture()
+    const sort = [{ column: 0, descending: true, mode: 'value' as const }]
+    core.handle({ type: 'view', id: 80, key, sort })
+    expect(sent.at(-1)).toEqual({ t: 'view', rid: 1, generation: 1, resultId: 5, sort })
+    core.receive({ t: 'end', rid: 1, ok: true, result: { viewId: 3, rows: 64, complete: true, approximate: false } })
+    expect(posted.at(-1)).toEqual({ type: 'view', id: 80, viewId: 3, rows: 64, complete: true, approximate: false })
+    // The result's own rows, then the view's: the same row numbers, read separately.
+    window(0, 10)
+    serve(reads()[0].rid)
+    expect(core.cachedPages).toBe(1)
+    const viewed = window(0, 10, { key: { ...key, view: 3 } })
+    expect(reads().at(-1)).toMatchObject({ resultId: 5, firstRow: 0, viewId: 3 })
+    serve(reads().at(-1)!.rid)
+    expect(answer(viewed)?.type).toBe('window')
+    expect(core.cachedPages).toBe(2)
+    core.handle({ type: 'rowBytes', id: 81, key: { ...key, view: 3 }, firstRow: 0, count: 2 })
+    expect(sent.at(-1)).toMatchObject({ t: 'rowBytes', resultId: 5, viewId: 3 })
+    // A replacing view drops the replaced one's pages once it is built.
+    core.handle({ type: 'view', id: 82, key, sort, replaces: 3 })
+    const rid = (sent.at(-1) as { rid: number }).rid
+    expect(sent.at(-1)).toMatchObject({ t: 'view', replaces: 3 })
+    expect(core.cachedPages).toBe(2)
+    core.receive({ t: 'end', rid, ok: true, result: { viewId: 4, rows: 64, complete: true, approximate: true } })
+    expect(core.cachedPages).toBe(1)
+    // Closing a result drops its views' pages too.
+    window(0, 10, { key: { ...key, view: 4 } })
+    serve(reads().at(-1)!.rid)
+    expect(core.cachedPages).toBe(2)
+    core.handle({ type: 'close', id: 83, generation: 1, resultIds: [5] })
+    expect(core.cachedPages).toBe(0)
+  })
+
+  it('closes views, relays sort failures, and closes a view built after the page gave up its sort', () => {
+    const { core, sent, posted } = fixture()
+    const sort = [{ column: 1, descending: false, mode: 'chars' as const }]
+    core.handle({ type: 'viewClose', id: 90, key, viewIds: [3, 4] })
+    expect(sent.at(-1)).toEqual({ t: 'viewClose', rid: 1, generation: 1, resultId: 5, viewIds: [3, 4] })
+    core.receive({ t: 'end', rid: 1, ok: true, result: { closed: 2 } })
+    expect(posted.at(-1)).toEqual({ type: 'viewClosed', id: 90, closed: 2 })
+    core.handle({ type: 'view', id: 91, key, sort })
+    core.receive({ t: 'end', rid: 2, ok: false, code: 'TOO_LARGE', message: 'There is not enough result memory.' })
+    expect(posted.at(-1)).toMatchObject({ type: 'error', id: 91, code: 'TOO_LARGE' })
+    core.handle({ type: 'view', id: 92, key, sort })
+    core.handle({ type: 'cancel', id: 92 })
+    expect(sent.at(-1)).toEqual({ t: 'cancel', rid: 3 })
+    const before = posted.length
+    core.receive({ t: 'end', rid: 3, ok: true, result: { viewId: 7, rows: 1, complete: true, approximate: false } })
+    expect(posted.length).toBe(before)
+    expect(sent.at(-1)).toMatchObject({ t: 'viewClose', resultId: 5, viewIds: [7] })
+    // That close's rid stays taken until main answers it, and its answer goes to nobody.
+    const orphan = (sent.at(-1) as { rid: number }).rid
+    core.handle({ type: 'rowBytes', id: 95, key, firstRow: 0, count: 1 })
+    expect((sent.at(-1) as { rid: number }).rid).not.toBe(orphan)
+    core.receive({ t: 'end', rid: orphan, ok: true, result: { closed: 1 } })
+    expect(posted.length).toBe(before)
+    core.handle({ type: 'view', id: 93, key: { ...key, generation: 2 }, sort })
+    expect(posted.at(-1)).toMatchObject({ type: 'error', id: 93, code: 'RESULT_UNAVAILABLE' })
+    core.handle({ type: 'view', id: 94, key, sort })
+    core.attach({ postMessage: () => {} })
+    expect(posted.at(-1)).toMatchObject({ type: 'error', id: 94, code: 'PORT_CLOSED' })
+  })
+
   it('formats a whole XML or JSON value in the worker, but never a stored prefix, a NULL, a read error, or malformed text', () => {
     const documentWires: WireKind[] = ['text']
     const values: PageCell[] = ['<a><b>1</b><b>x</b></a>', '{"a":[1,2.50,{"b":null}]}', { value: '<a><b>', truncated: true }, null, { error: true }, '<a><b></a>', 'x'.repeat(70_000)]

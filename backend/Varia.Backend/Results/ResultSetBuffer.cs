@@ -277,6 +277,13 @@ internal sealed class ResultSetBuffer
         }
     }
 
+    /// <summary>Every sealed page so far, in order (rows 0 to RowsAvailable - 1): what a view sorts. Pages are immutable, so
+    /// the list stays valid while more are sealed.</summary>
+    public StoredPage[] SealedSnapshot()
+    {
+        lock (gate) return [.. pages];
+    }
+
     /// <summary>The bytes (sum of DATALENGTH) of up to <paramref name="count"/> rows from <paramref name="firstRow"/>, as far
     /// as sealed pages hold them; fewer, or none, past the rows available.</summary>
     public long[] RowBytes(long firstRow, int count, List<long>? estimated = null)

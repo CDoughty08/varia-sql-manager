@@ -130,8 +130,8 @@ const longTasks = () => page.evaluate(() => {
 const renderedRows = () => explorerTree(page).getByRole('treeitem').count()
 /** Rendered rows that show inside the tree's scrolled view. */
 const rowsInView = () => page.evaluate(() => {
-  const tree = document.querySelector('[data-explorer-tree]'), box = tree.getBoundingClientRect()
-  return [...tree.querySelectorAll('[role="treeitem"]')].filter(row => { const rect = row.getBoundingClientRect(); return rect.bottom > box.top && rect.top < box.bottom }).length
+  const tree = document.querySelector('[data-explorer-tree]'), box = tree.getBoundingClientRect(), style = getComputedStyle(tree)
+  return [...tree.querySelectorAll('[role="treeitem"]')].filter(row => { const rect = row.getBoundingClientRect(); return rect.bottom > box.top + parseFloat(style.scrollPaddingTop) && rect.top < box.top + tree.clientHeight - parseFloat(style.scrollPaddingBottom) }).length
 })
 const liveRegion = () => page.locator('[data-explorer-tree] + [role="status"]')
 /** The enabled toolbar buttons' names, in order, and the focused one's. */
@@ -143,8 +143,8 @@ const idle = (timeout = 30000) => expect(tree()).toHaveAttribute('aria-busy', 'f
 const activeInView = () => page.evaluate(() => {
   const tree = document.querySelector('[data-explorer-tree]'), row = document.getElementById(tree.getAttribute('aria-activedescendant') ?? '')
   if (!row) return false
-  const box = tree.getBoundingClientRect(), rect = row.getBoundingClientRect()
-  return rect.top >= box.top - 1 && rect.bottom <= box.bottom + 1
+  const box = tree.getBoundingClientRect(), rect = row.getBoundingClientRect(), style = getComputedStyle(tree)
+  return rect.top >= box.top + parseFloat(style.scrollPaddingTop) - 1 && rect.bottom <= box.top + tree.clientHeight - parseFloat(style.scrollPaddingBottom) + 1
 })
 /** The labels of the rendered children of the row at `path`, in order. */
 const childLabels = (...path) => page.evaluate(({ path, part }) => {
@@ -1638,12 +1638,106 @@ try {
   })
   await expandExplorerPath(page, 'pin-c', 'Databases', 'AppData', 'Tables')
   await idle()
+  // Pinning must never move the native viewport, change the thumb's range, or reverse a content row's motion. Sample
+  // individual pixels in both directions, including the old 30 px threshold and the first overflow transition.
+  const scrollGeometry = () => tree().evaluate(async element => {
+    await new Promise(resolve => requestAnimationFrame(resolve))
+    const box = element.getBoundingClientRect(), row = element.ownerDocument.getElementById(element.getAttribute('aria-activedescendant'))
+    return { top: element.scrollTop, x: box.x, y: box.y, width: element.clientWidth, height: element.clientHeight, scrollHeight: element.scrollHeight,
+      gutter: element.offsetWidth - element.clientWidth, row: row.id, rowY: row.getBoundingClientRect().y }
+  })
+  const sampleScroll = async top => {
+    await tree().evaluate((element, top) => { element.scrollTop = top; element.dispatchEvent(new Event('scroll')) }, top)
+    return scrollGeometry()
+  }
+  const fixed = await sampleScroll(0)
+  const checkGeometry = sample => {
+    for (const key of ['x', 'y', 'width', 'height', 'scrollHeight', 'gutter', 'row']) expect(sample[key], `fixed scroll geometry: ${key}`).toBe(fixed[key])
+    expect(sample.rowY + sample.top).toBeCloseTo(fixed.rowY + fixed.top, 4)
+  }
+  const thirdTop = middle - 260, end = fixed.scrollHeight - fixed.height
+  const thresholds = [0, 1, 29, 30, 31, thirdTop - 60, thirdTop - 52, end - 30, end]
+  const positions = [...new Set(thresholds.flatMap(top => [top - 1, top - 0.5, top, top + 0.5, top + 1]).filter(top => top >= 0 && top <= end))].sort((a, b) => a - b)
+  for (const top of [...positions, ...positions.toReversed()]) checkGeometry(await sampleScroll(top))
+  await sampleScroll(29)
+  const scrollBox = await tree().boundingBox()
+  await page.mouse.move(scrollBox.x + 40, scrollBox.y + scrollBox.height / 2)
+  await page.mouse.wheel(0, 4)
+  await expect.poll(async () => (await scrollGeometry()).top).toBeGreaterThan(29)
+  checkGeometry(await scrollGeometry())
+  await page.mouse.wheel(0, -4)
+  await expect.poll(async () => (await scrollGeometry()).top).toBeLessThan(33)
+  checkGeometry(await scrollGeometry())
+  // The pinned overlay ends before the native gutter, so the same thumb remains under the pointer throughout a drag.
+  await sampleScroll(0)
+  expect(fixed.gutter).toBeGreaterThan(0)
+  const dragX = fixed.x + fixed.width + fixed.gutter / 2, dragY = fixed.y + fixed.gutter + 10
+  let draggedTo = 0
+  await page.mouse.move(dragX, dragY)
+  await page.mouse.down()
+  try {
+    for (const delta of [4, 8, 12, 16, 12, 8, 4, 0]) {
+      await page.mouse.move(dragX, dragY + delta)
+      const sample = await scrollGeometry()
+      draggedTo = Math.max(draggedTo, sample.top)
+      checkGeometry(sample)
+    }
+  } finally { await page.mouse.up() }
+  // Assert a real drag moved the thumb, rather than merely checking a tree that never scrolled.
+  expect(draggedTo).toBeGreaterThan(30)
   const scrollToMiddle = () => tree().evaluate((element, top) => { element.scrollTop = top }, middle)
   await scrollToMiddle()
   const upper = page.getByRole('group', { name: 'Servers above', exact: true })
   const lower = page.getByRole('group', { name: 'Servers below', exact: true })
   await expect(upper.getByRole('button', { name: /^Jump to/ })).toHaveCount(2)
   await expect(lower.getByRole('button', { name: /^Jump to/ })).toHaveCount(2)
+  for (const band of [upper, lower]) {
+    const box = await band.boundingBox()
+    expect(box.x + box.width).toBeLessThanOrEqual(fixed.x + fixed.width)
+    expect(box.y + box.height).toBeLessThanOrEqual(fixed.y + fixed.height)
+  }
+  const beforePinnedWheel = await scrollGeometry()
+  await upper.getByRole('button', { name: /^Jump to pin-c/ }).hover()
+  await page.mouse.wheel(0, 4)
+  await expect.poll(async () => (await scrollGeometry()).top).toBeGreaterThan(beforePinnedWheel.top)
+  checkGeometry(await scrollGeometry())
+  await scrollToMiddle()
+  await page.screenshot({ path: resolve('artifacts', 'explorer-pins-stacked.png') })
+  const setPins = async (top, bottom) => {
+    const result = await page.evaluate(({ top, bottom }) => window.varia.updateSettings({ 'objectExplorer.pinnedServerHeadersTop': top, 'objectExplorer.pinnedServerHeadersBottom': bottom }), { top, bottom })
+    expect(result.ok).toBe(true)
+  }
+  await setPins(0, 0)
+  await expect(upper).toHaveCount(0)
+  await expect(lower).toHaveCount(0)
+  checkGeometry(await scrollGeometry())
+  await setPins(2, 2)
+  await expect(upper.getByRole('button', { name: /^Jump to/ })).toHaveCount(2)
+  await expect(lower.getByRole('button', { name: /^Jump to/ })).toHaveCount(2)
+  checkGeometry(await scrollGeometry())
+  // Four pending servers used to leave a partial third shortcut above "2 more below" if a wheel step or scrollbar
+  // drag stopped mid-rollover. Check the actual button rectangles, not only which shortcuts are in the DOM.
+  await tree().evaluate(element => { element.parentElement.style.flex = 'none'; element.parentElement.style.height = '300px' })
+  await expect.poll(() => tree().evaluate(element => element.clientHeight)).toBe(300)
+  const bottomRollover = thirdTop + 30 - 300 + 64
+  for (const top of [bottomRollover - 11, bottomRollover, bottomRollover + 11, bottomRollover, bottomRollover - 11]) {
+    await sampleScroll(top)
+    await expect(lower.getByRole('button', { name: /^Jump to/ })).toHaveCount(2)
+    await expect(lower.getByRole('button', { name: /2 more below/ })).toBeVisible()
+    const shape = await lower.evaluate(band => {
+      const box = band.getBoundingClientRect()
+      return { height: box.height, buttons: [...band.querySelectorAll('button')].map(button => {
+        const row = button.getBoundingClientRect()
+        return { top: row.top - box.top, height: row.height, bottom: row.bottom - box.top }
+      }) }
+    })
+    expect(shape).toEqual({ height: 82, buttons: [{ top: 0, height: 30, bottom: 30 }, { top: 30, height: 30, bottom: 60 }, { top: 60, height: 22, bottom: 82 }] })
+    expect(await tree().evaluate(element => element.clientHeight)).toBe(300)
+  }
+  await lower.screenshot({ path: resolve('artifacts', 'explorer-pins-bottom-whole-rows.png') })
+  await tree().evaluate(element => { element.parentElement.style.removeProperty('flex'); element.parentElement.style.removeProperty('height') })
+  await expect.poll(() => tree().evaluate(element => element.clientHeight)).toBe(fixed.height)
+  await scrollToMiddle()
   const moreAbove = upper.getByRole('button', { name: /1 more above/ })
   const aboveMenu = menu('More servers above')
   const openAbove = async () => {
@@ -1706,7 +1800,29 @@ try {
   await application.evaluate(() => { globalThis.variaStub.holdTablePages = false; globalThis.variaStub.release() })
   await idle()
   expect(await tree().evaluate(element => element.scrollTop)).toBe(0)
-  console.log('Object Explorer checks: pinned bands, overflow focus recovery, and following a query through streamed pages until the user scrolls.')
+  // Resize the pane with both settings at their maximum: the compact overflow bands still leave a full row usable,
+  // and Page Down, End and Home reveal the selected real row rather than leaving it underneath an overlay.
+  await setPins(10, 10)
+  await tree().evaluate(element => { element.parentElement.style.flex = 'none'; element.parentElement.style.height = '100px' })
+  await expect.poll(() => tree().evaluate(element => element.clientHeight)).toBe(100)
+  await sampleScroll(middle)
+  const compact = await tree().evaluate(element => {
+    const style = getComputedStyle(element)
+    return { height: element.clientHeight, visible: element.clientHeight - parseFloat(style.scrollPaddingTop) - parseFloat(style.scrollPaddingBottom) }
+  })
+  expect(compact.visible).toBeGreaterThanOrEqual(30)
+  await expect(upper.getByRole('button', { name: /more above/ })).toBeVisible()
+  await expect(lower.getByRole('button', { name: /more below/ })).toBeVisible()
+  await tree().focus()
+  for (const key of ['End', 'Home', 'PageDown', 'PageUp']) {
+    await press(key)
+    await expect.poll(activeInView).toBe(true)
+  }
+  await tree().evaluate(element => { element.parentElement.style.removeProperty('flex'); element.parentElement.style.removeProperty('height') })
+  await expect.poll(() => tree().evaluate(element => element.clientHeight)).toBe(fixed.height)
+  await setPins(2, 2)
+  await sampleScroll(0)
+  console.log('Object Explorer checks: continuous pinning in both directions, fixed geometry with wheel and native scrollbar dragging, overflow focus recovery, and following a query through streamed pages until the user scrolls.')
 
   // 14. A real server: a scratch database's table and columns, and F5 after DDL in a query.
   if (process.env.VARIA_TEST_SQL_SERVER && process.env.VARIA_TEST_SQL_SCRATCH === '1') {

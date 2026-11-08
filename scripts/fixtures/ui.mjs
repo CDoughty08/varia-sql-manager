@@ -280,6 +280,10 @@ export const gridPart = {
   /** White space marks (results toolbar › White space), drawn only and hidden from screen readers; a badge names one character (CR, LF, NBSP…). */
   whitespaceMark: '.rg-ws',
   whitespaceBadge: '.rg-wsb',
+  /** A header's sort button and its place among several keys, hidden from screen readers (the header's aria-sort says it). */
+  sortButton: '.rg-cs',
+  sortedButton: '.rg-cs.on',
+  sortOrder: '.rg-co',
   borderHover: '.rg-border-hover',
   /** A live grid's row tones (LiveGrid), drawn with no ARIA of their own: the active cell's label names the tone. */
   toneError: '.tone-error',

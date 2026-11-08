@@ -277,12 +277,16 @@ describe('IPC validation', () => {
       { jobId: 'x' }, { generation: 0 }, { resultId: 2 ** 32 }, { headers: 'yes' }, { parts: [] }, { parts: Array.from({ length: 65 }, () => part) }, { extra: 1 },
       { parts: [{ ...part, rows: [[5, 4]] }] }, { parts: [{ ...part, rows: [[0, 9], [9, 12]] }] }, { parts: [{ ...part, rows: [[10, 12], [0, 2]] }] },
       { parts: [{ ...part, rows: [[0, Number.MAX_SAFE_INTEGER + 1]] }] }, { parts: [{ ...part, columns: [[0, 4096]] }] }, { parts: [{ ...part, columns: [] }] },
-      { parts: [{ ...part, rows: Array.from({ length: 65 }, (_, i) => [2 * i, 2 * i]) }] }, { parts: [{ ...part, rows: [[0.5, 1]] }] }, { parts: [{ ...part, extra: 1 }] }
+      { parts: [{ ...part, rows: Array.from({ length: 65 }, (_, i) => [2 * i, 2 * i]) }] }, { parts: [{ ...part, rows: [[0.5, 1]] }] }, { parts: [{ ...part, extra: 1 }] },
+      // A sorted grid's view (results.view) is a backend id: a positive u32.
+      { viewId: 0 }, { viewId: 2 ** 32 }, { viewId: 1.5 }, { viewId: '3' }
     ]) expect(resultsCopyRequestSchema.safeParse({ ...copy, ...patch }).success, JSON.stringify(patch).slice(0, 80)).toBe(false)
+    expect(resultsCopyRequestSchema.parse({ ...copy, viewId: 3 })).toEqual({ ...copy, viewId: 3 })
     const save = { jobId: crypto.randomUUID(), generation: 1, resultId: 7, format: 'csv', suggestedName: 'Query1-Result1' }
     expect(resultsSaveRequestSchema.parse(save)).toEqual(save)
     expect(resultsSaveRequestSchema.safeParse({ ...save, format: undefined }).success).toBe(true)
-    for (const patch of [{ format: 'xlsx' }, { suggestedName: '' }, { suggestedName: 'x'.repeat(129) }, { path: '/tmp/x.csv' }, { generation: 2 ** 31 }])
+    expect(resultsSaveRequestSchema.parse({ ...save, viewId: 3 })).toEqual({ ...save, viewId: 3 })
+    for (const patch of [{ format: 'xlsx' }, { suggestedName: '' }, { suggestedName: 'x'.repeat(129) }, { path: '/tmp/x.csv' }, { generation: 2 ** 31 }, { viewId: 0 }, { viewId: -1 }])
       expect(resultsSaveRequestSchema.safeParse({ ...save, ...patch }).success, JSON.stringify(patch)).toBe(false)
     expect(jobProgressSchema.safeParse({ type: 'job.progress', rowsDone: 1, rowsTotal: 2, bytes: 3 }).success).toBe(true)
     expect(jobProgressSchema.safeParse({ type: 'job.progress', rowsDone: -1, rowsTotal: 2, bytes: 3 }).success).toBe(false)

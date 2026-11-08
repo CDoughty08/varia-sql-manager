@@ -28,5 +28,11 @@ export const queryResultsSettings = [
     values: [{ value: 'none', label: 'Off' }, { value: 'spaces', label: 'Spaces and tabs' }, { value: 'all', label: 'All white space' }], default: 'none',
     keywords: ['whitespace', 'white space', 'spaces', 'tabs', 'line breaks', 'crlf', 'nbsp', 'invisible'],
     description: 'Spaces show as a raised dot (·) and tabs as an arrow (→) in the results grid. All white space also names line breaks (CR, LF, CRLF) and the invisible characters that make values look alike: no-break and zero-width spaces, BOM and the other Unicode spaces. The marks are only drawn: Copy and Save Results As write the values as they are. The results toolbar changes this too.'
+  },
+  {
+    key: 'queryResults.grid.sortText', page: 'queryResults.sqlServer.grid', label: 'Sort text columns by', type: 'enum', varia: true,
+    values: [{ value: 'value', label: 'Value' }, { value: 'chars', label: 'Length in characters' }, { value: 'bytes', label: 'Length in bytes' }], default: 'value',
+    keywords: ['sort', 'order', 'length', 'len', 'datalength', 'characters', 'bytes', 'text'],
+    description: 'How a sorted results grid orders its text and binary columns. Value sorts as ORDER BY would, by the column\'s collation, with NULL first ascending. Length in characters counts every character, spaces included; length in bytes sorts by DATALENGTH. Other columns always sort by value. The results toolbar changes this too, and sorted grids sort again.'
   }
 ] as const satisfies readonly SettingDef[]

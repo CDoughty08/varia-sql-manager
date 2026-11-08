@@ -1,12 +1,13 @@
 // Messages between the UI thread (ResultClient) and the results worker. The worker also owns the results port to main
 // (src/shared/ipc/port-messages.ts).
-import type { BackendStatus, QueryEvent, WireKind } from '../../../shared/contracts'
+import type { BackendStatus, QueryEvent, ViewSortKey, WireKind } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport } from '../../../shared/ipc/port-messages'
 import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
 
-/** A result is named by its backend generation and its id within that generation. */
-export interface ResultKey { readonly generation: number; readonly resultId: number }
+/** A result is named by its backend generation and its id within that generation; `view` names one of its sorted views
+ *  (results.view), whose rows are read by view position. */
+export interface ResultKey { readonly generation: number; readonly resultId: number; readonly view?: number }
 
 /** Cell flags in a window: NULL, truncated where the backend stored it (a prefix), read error, over the window's text
  *  budget, and cut at the window's maxCellChars. */
@@ -58,6 +59,10 @@ export type WorkerRequest =
   /** Row sizes (results.rowBytes), relayed to main as they are. */
   | { readonly type: 'rowBytes'; readonly id: number; readonly key: ResultKey; readonly firstRow: number; readonly count: number }
   | { readonly type: 'stats'; readonly id: number }
+  /** A sorted view of `key`'s result (results.view); `cancel` with the same id stops the sort. `replaces` names a view it
+   *  supersedes, whose pages go once it is built. */
+  | { readonly type: 'view'; readonly id: number; readonly key: ResultKey; readonly sort: readonly ViewSortKey[]; readonly replaces?: number }
+  | { readonly type: 'viewClose'; readonly id: number; readonly key: ResultKey; readonly viewIds: readonly number[] }
   /** A live subscription (docs/ipc.md, Live subscriptions); `cancel` with the same id ends it. */
   | { readonly type: 'live'; readonly id: number; readonly params: LiveSubscribeParams }
   /** A change to the running subscription whose request id is `live`. */
@@ -76,6 +81,8 @@ export type WorkerResponse =
   | { readonly type: 'closed'; readonly id: number; readonly closed: number; readonly usedBytes: number }
   | { readonly type: 'rowBytes'; readonly id: number; readonly firstRow: number; readonly bytes: readonly number[]; readonly rowsAvailable: number; readonly estimated: readonly number[] }
   | { readonly type: 'stats'; readonly id: number; readonly bytes: number; readonly pages: number; readonly wireBytes: number; readonly columns: number }
+  | { readonly type: 'view'; readonly id: number; readonly viewId: number; readonly rows: number; readonly complete: boolean; readonly approximate: boolean }
+  | { readonly type: 'viewClosed'; readonly id: number; readonly closed: number }
   | { readonly type: 'error'; readonly id: number; readonly code: ErrorCode; readonly message: string }
   | { readonly type: 'query'; readonly queryId: string; readonly event: QueryEvent }
   | ({ readonly type: 'memory'; readonly feature: MemoryFeature } & MemoryReport)

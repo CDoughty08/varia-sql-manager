@@ -12,7 +12,7 @@ import { focusLost } from './ExplorerErrorBoundary'
 import ExplorerPinnedBand from './ExplorerPinnedBand'
 import ExplorerRow, { PinnedServerRow, type RowActions } from './ExplorerRow'
 import { rowStatus } from './ExplorerStatusService'
-import { layoutWindow, pinnedServerBands, renderedIndices, revealScroll, rowIndex, RowKind, rowLayout, swallowedKey, treeKey, treeKeyOf, TypeAheadBuffer, typeAhead, type TreeAction, type VisibleRows } from './tree-model'
+import { layoutWindow, pinnedServerBands, renderedIndices, revealPinnedScroll, rowIndex, RowKind, rowLayout, swallowedKey, treeKey, treeKeyOf, TypeAheadBuffer, typeAhead, type TreeAction, type VisibleRows } from './tree-model'
 
 const { rowHeight } = explorerLimits
 /** The live region speaks the latest announcement once things settle, as a screen reader cannot keep up with every page. */
@@ -42,9 +42,7 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
   const focusedPin = useRef<Element | undefined>(undefined)
   const followed = useRef<FollowedQuery | undefined>(undefined)
   const releaseFollow = useCallback(() => { if (followed.current) followed.current.anchor = undefined }, [])
-  const [view, setView] = useState({ top: 0, height: 0 })
-  /** Commit a jump after the bands at its destination have reserved their space. */
-  const scrollTo = useRef<number | undefined>(undefined)
+  const [view, setView] = useState({ top: 0, height: 0, width: 0, scrollbar: 0 })
   const [announcement, setAnnouncement] = useState<Announcement | undefined>(undefined)
   // A sentence from before this tree mounted (a server since removed, or before a Reload) is not news.
   const heard = useRef(snapshot.announcement?.id)
@@ -71,23 +69,24 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
   const bands = pinnedServerBands(layout, view.top, view.height, topLimit, bottomLimit)
 
   const measure = useCallback(() => {
-    const tree = element.current, outer = frame.current
-    if (!tree || !outer || scrollTo.current !== undefined) return
-    const top = tree.scrollTop, height = outer.clientHeight
-    setView(current => current.top === top && current.height === height ? current : { top, height })
+    const tree = element.current
+    if (!tree) return
+    const top = tree.scrollTop, height = tree.clientHeight, width = tree.clientWidth, scrollbar = tree.offsetHeight - height
+    setView(current => current.top === top && current.height === height && current.width === width && current.scrollbar === scrollbar ? current : { top, height, width, scrollbar })
   }, [])
   const scrollPinnedBand = useCallback((event: WheelEvent) => {
     const tree = element.current
     if (!tree || (event.target as Element).closest?.('.explorer-pin-menu') || gestures.matches('global.wheelZoom', event) || !event.deltaY) return
     event.preventDefault()
-    const unit = event.deltaMode === 1 ? rowHeight : event.deltaMode === 2 ? tree.clientHeight : 1
+    const unit = event.deltaMode === 1 ? rowHeight : event.deltaMode === 2 ? pinnedServerBands(latest.current.layout, tree.scrollTop, tree.clientHeight, topLimit, bottomLimit).height : 1
     tree.scrollTop += event.deltaY * unit
-  }, [gestures])
+  }, [gestures, topLimit, bottomLimit])
 
-  // Scrolling and resizing re-window on the next frame (or soon after, when frames are throttled).
+  // Scroll events already run once per painted frame. Commit before that paint so the overlay and native rows move
+  // together, including during a scrollbar drag. Resize observers defer their updates out of layout.
   useLayoutEffect(() => {
-    const tree = element.current, outer = frame.current
-    if (!tree || !outer) return
+    const tree = element.current
+    if (!tree) return
     let pending = false
     const schedule = () => {
       if (pending) return
@@ -96,18 +95,18 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
       requestFrame(flush)
       setTimeout(flush, 50)
     }
+    const scrolled = () => flushSync(measure)
     measure()
-    tree.addEventListener('scroll', schedule, { passive: true })
-    const observer = observeResize(outer, schedule)
-    return () => { pending = false; tree.removeEventListener('scroll', schedule); observer.dispose() }
+    tree.addEventListener('scroll', scrolled, { passive: true })
+    const observer = observeResize(tree, schedule)
+    return () => { pending = false; tree.removeEventListener('scroll', scrolled); observer.dispose() }
   }, [measure])
   useLayoutEffect(() => {
     const tree = element.current
     if (!tree) return
-    if (scrollTo.current === view.top) { scrollTo.current = undefined; tree.scrollTop = view.top }
-    // The browser can clamp scrollTop after a collapse, resize, or change to the band heights.
-    if (tree.scrollTop !== view.top || frame.current?.clientHeight !== view.height) measure()
-  }, [bands.height, layout.total, measure, view])
+    // A collapse or resize can clamp the native offset or change which scrollbars are present.
+    measure()
+  }, [layout.total, measure, view])
   useLayoutEffect(() => {
     if (!focusedPin.current || focusedPin.current.isConnected) return
     focusedPin.current = undefined
@@ -126,18 +125,14 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
 
   /** Scrolls row `index` of `rows` into view; rows published since the last render are laid out on the spot. */
   const ensureVisible = useCallback((rows: VisibleRows, index: number, alignTop = false) => {
-    const tree = element.current, height = frame.current?.clientHeight ?? 0
+    const tree = element.current, height = tree?.clientHeight ?? 0
     if (!tree || !height || index < 0) return
     const at = latest.current.rows === rows ? latest.current.layout : rowLayout(rows)
-    const scrollbar = tree.offsetHeight - tree.clientHeight
-    const body = (top: number) => Math.max(0, pinnedServerBands(at, top, height, topLimit, bottomLimit).height - scrollbar)
-    const top = tree.scrollTop, nearest = revealScroll(at, index, top, Math.min(tree.clientHeight, body(top)))
-    if (nearest === undefined) return
-    const destination = alignTop || revealScroll(at, index, nearest, body(nearest)) !== undefined ? at.top(index) : nearest
-    if (destination === top) return
-    scrollTo.current = destination
-    setView({ top: destination, height })
-  }, [bottomLimit, topLimit])
+    const destination = revealPinnedScroll(at, index, tree.scrollTop, height, topLimit, bottomLimit, alignTop)
+    if (destination === undefined) return
+    tree.scrollTop = destination
+    measure()
+  }, [bottomLimit, topLimit, measure])
 
   useLayoutEffect(() => {
     const tree = element.current
@@ -145,7 +140,7 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     return menuTargets.registerReveal(tree, item => {
       releaseFollow()
       const { rows } = latest.current
-      // Commit the destination's bands before MenuService reads the row's screen rectangle.
+      // Commit the destination's overlay before MenuService reads the row's screen rectangle.
       flushSync(() => {
         measure()
         ensureVisible(rows, rowIndex(rows, Number(item.getAttribute('data-row-id'))))
@@ -268,7 +263,7 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
         const node = index >= 0 ? current.nodes[index] : undefined
         // Enter on a lost server reconnects it, as its button does.
         if (key === 'enter' && node?.lost) { run('connection.reconnect', node.id); return }
-        act(treeKey(current, index, key, Math.max(1, Math.floor((element.current?.clientHeight ?? 0) / rowHeight))), current)
+        act(treeKey(current, index, key, Math.max(1, Math.floor(bands.height / rowHeight))), current)
         return
       }
       if (event.key === 'Escape' && typing.value) { typing.clear(); markTypeAhead(); event.preventDefault(); return }
@@ -299,14 +294,14 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
 
   const accents = useMemo(() => new Map(servers.map(server => [server.id, server.color])), [servers])
   const environments = useMemo(() => new Map(servers.map(server => [server.id, server.options.environment])), [servers])
-  const indices = renderedIndices(layoutWindow(view.top, bands.height, layout), selectedIndex)
+  const indices = renderedIndices(layoutWindow(view.top, view.height, layout), selectedIndex)
   const active = selected !== undefined && selectedIndex >= 0 ? `oe-${selected}` : undefined
   const pinned = (edge: 'top' | 'bottom') => {
-    const { headers, overflow, height } = bands[edge]
+    const { height } = bands[edge]
     if (!height) return null
-    return <ExplorerPinnedBand edge={edge} headers={headers} overflow={overflow} onWheel={scrollPinnedBand} renderServer={(index, menu) => {
+    return <ExplorerPinnedBand edge={edge} band={bands[edge]} onWheel={scrollPinnedBand} renderServer={(index, menu, top) => {
       const node = rows.nodes[index]!
-      return <PinnedServerRow key={node.id} node={node} edge={edge} current={edge === 'top' && bands.current === index} menu={menu}
+      return <PinnedServerRow key={node.id} node={node} edge={edge} current={edge === 'top' && bands.current === index} menu={menu} top={top}
         active={node.connectionId === activeConnectionId} color={accents.get(node.connectionId)} environment={environments.get(node.connectionId)}
         status={rowStatus(statuses.get(node.connectionId), node)} jump={() => {
           actions.select(node.id)
@@ -315,14 +310,14 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
         }} />
     }} />
   }
-  return <div ref={frame} className="explorer-tree-frame" style={{ '--explorer-tree-height': `${bands.height}px` } as CSSProperties}
+  return <div ref={frame} className="explorer-tree-frame" style={{ '--explorer-tree-height': `${bands.height}px`, '--explorer-tree-width': `${view.width}px`, '--explorer-scrollbar-height': `${view.scrollbar}px` } as CSSProperties}
     onPointerDownCapture={releaseFollow} onWheelCapture={releaseFollow} onKeyDownCapture={releaseFollow}
     onFocusCapture={event => { focusedPin.current = event.target.closest('.explorer-pin-band') ? event.target : undefined }}
     onBlurCapture={event => {
       if (event.relatedTarget && event.relatedTarget !== event.currentTarget.ownerDocument.body) focusedPin.current = undefined
     }}>
     {pinned('top')}
-    <div ref={element} className="explorer-tree" role="tree" aria-label="Object Explorer" tabIndex={0} data-explorer-tree data-pane-focus aria-activedescendant={active}
+    <div ref={element} className="explorer-tree" style={{ scrollPaddingTop: bands.top.height, scrollPaddingBottom: bands.bottom.height }} role="tree" aria-label="Object Explorer" tabIndex={0} data-explorer-tree data-pane-focus aria-activedescendant={active}
       aria-busy={explorerLoading} onKeyDown={onKeyDown} onCopy={onCopy}>
       <div className="explorer-spacer" style={{ height: layout.total }}>
         {indices.map(index => {

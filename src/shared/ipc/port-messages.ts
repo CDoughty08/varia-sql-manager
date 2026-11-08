@@ -2,7 +2,7 @@
 // requests are validated with portRequestSchema; backend payloads main forwards are validated with the schemas below.
 import { z } from 'zod'
 import { clientStatisticsSchema } from '../client-statistics'
-import type { BackendStatus, MemoryOrder, QueryEvent, ResultsCloseResult, ResultsReadResult, ResultsRowBytesResult } from '../contracts'
+import type { BackendStatus, MemoryOrder, QueryEvent, ResultsCloseResult, ResultsReadResult, ResultsRowBytesResult, ResultsViewCloseResult, ResultsViewResult } from '../contracts'
 import { maxQueryPlanDocuments } from '../plans'
 import { liveSubscribeParamsSchema, liveUpdateParamsSchema, testLiveSubscribeParamsSchema, testLiveUpdateParamsSchema, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../live/schema'
 import { backendDescriptorSchema } from './descriptors'
@@ -14,14 +14,18 @@ const u31 = z.number().int().min(1).max(2 ** 31 - 1)
 const u32 = z.number().int().min(1).max(0xffffffff)
 const count = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
 const generation = u31
+export const viewSortKeySchema = z.object({ column: z.number().int().min(0).max(limits.page.maxColumns - 1), descending: z.boolean(), mode: z.enum(['value', 'chars', 'bytes']) }).strict()
 
 /** The port schema around a set of live schemas (buildLiveSchemas): the shipped ones, or a test catalogue's. */
 export const buildPortRequestSchema = (live: { subscribe: z.ZodType<LiveSubscribeParams>; update: z.ZodType<LiveUpdateParams> }) => z.discriminatedUnion('t', [
-  z.object({ t: z.literal('read'), rid: u31, generation, resultId: u32, firstRow: count, maxRows: z.number().int().min(1).max(65_536), credit: z.number().int().min(limits.credit.min).max(limits.credit.max) }).strict(),
+  z.object({ t: z.literal('read'), rid: u31, generation, resultId: u32, firstRow: count, maxRows: z.number().int().min(1).max(65_536), credit: z.number().int().min(limits.credit.min).max(limits.credit.max), viewId: u32.optional() }).strict(),
   z.object({ t: z.literal('credit'), rid: u31, bytes: z.number().int().min(1).max(limits.credit.max) }).strict(),
   z.object({ t: z.literal('cancel'), rid: u31 }).strict(),
   z.object({ t: z.literal('close'), rid: u31, generation, resultIds: z.array(u32).min(1).max(1024) }).strict(),
-  z.object({ t: z.literal('rowBytes'), rid: u31, generation, resultId: u32, firstRow: count, count: z.number().int().min(1).max(limits.rowSizes.maxRows) }).strict(),
+  z.object({ t: z.literal('rowBytes'), rid: u31, generation, resultId: u32, firstRow: count, count: z.number().int().min(1).max(limits.rowSizes.maxRows), viewId: u32.optional() }).strict(),
+  // Views (results.view): a result's rows sorted in the backend, read with `read` and `rowBytes` by viewId.
+  z.object({ t: z.literal('view'), rid: u31, generation, resultId: u32, sort: z.array(viewSortKeySchema).min(1).max(limits.views.maxKeys), replaces: u32.optional() }).strict(),
+  z.object({ t: z.literal('viewClose'), rid: u31, generation, resultId: u32, viewIds: z.array(u32).min(1).max(limits.views.maxClose) }).strict(),
   // Live subscriptions (docs/ipc.md): a stream acknowledged with `credit`, ended with `cancel`, changed with liveUpdate.
   z.object({ t: z.literal('live'), rid: u31, generation, params: live.subscribe }).strict(),
   z.object({ t: z.literal('liveUpdate'), rid: u31, generation, params: live.update }).strict()
@@ -47,7 +51,10 @@ export type PortMessage =
   | { t: 'live'; rid: number; bytes: number; event: LiveEvent }
 /** A results.rowBytes answer as the backend sends it; main also checks it answers the range asked before forwarding it. */
 export const rowBytesResultSchema = z.object({ firstRow: count, bytes: z.array(count).max(limits.rowSizes.maxRows), rowsAvailable: count, estimated: z.array(count).max(limits.rowSizes.maxRows) }).strict()
-export type PortEndResult = ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | LiveEnd | LiveUpdateResult
+/** A results.view answer as the backend sends it. */
+export const viewResultSchema = z.object({ viewId: u32, rows: count, complete: z.boolean(), approximate: z.boolean() }).strict()
+export const viewCloseResultSchema = z.object({ closed: z.number().int().min(0).max(limits.views.maxClose) }).strict()
+export type PortEndResult = ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | ResultsViewResult | ResultsViewCloseResult | LiveEnd | LiveUpdateResult
 
 const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'server', 'print', 'error']) }).strict()
 const session = { spid: z.number().int().min(0).max(32767), login: z.string().max(128).optional() }

@@ -328,6 +328,12 @@ output.context, for a results grid with selected cells
   ---
   Select &All  ⌘A  ++++
   ---
+  S&ort Ascending  ++++
+  Sort &Descending  ++++
+  &Then Sort Ascending  ++++
+  Then &Sort Descending  ++++
+  Clea&r Sort  ----
+  ---
   Sa&ve Results As…  ⌘S  ----
   ---
   Show S&paces and Tabs [ ]  ++++
@@ -337,6 +343,12 @@ output.context, for a results grid without
   Copy with &Headers  ⇧⌘C  ----
   ---
   Select &All  ⌘A  ++++
+  ---
+  S&ort Ascending  ----
+  Sort &Descending  ----
+  &Then Sort Ascending  ----
+  Then &Sort Descending  ----
+  Clea&r Sort  ----
   ---
   Sa&ve Results As…  ⌘S  ----
   ---

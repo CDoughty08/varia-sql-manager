@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (250)
+## Commands (257)
 
 ### File
 
@@ -141,6 +141,13 @@ keys it uses are listed below.
 | Close Results | `output.closeResults` | — | — | — | `hasResults && !queryRunning` | — |
 | Show Spaces and Tabs in Results | `output.showSpaces` | — | — | — | Always; checked when `resultsWhitespaceSpaces` | Query Output context menu › Show Spaces and Tabs |
 | Show All White Space in Results | `output.showAllWhitespace` | — | — | — | Always; checked when `resultsWhitespaceAll` | Query Output context menu › Show All White Space |
+| Sort Ascending (not in the palette) | `output.sortAscending` | — | — | — | Always | Query Output context menu › Sort Ascending |
+| Sort Descending (not in the palette) | `output.sortDescending` | — | — | — | Always | Query Output context menu › Sort Descending |
+| Then Sort Ascending (not in the palette) | `output.thenSortAscending` | — | — | — | Always | Query Output context menu › Then Sort Ascending |
+| Then Sort Descending (not in the palette) | `output.thenSortDescending` | — | — | — | Always | Query Output context menu › Then Sort Descending |
+| Clear Sort (not in the palette) | `output.clearSort` | — | — | — | Always | Query Output context menu › Clear Sort |
+| Sort Text by Length in Characters | `output.sortTextByChars` | — | — | — | Always; checked when `resultsSortTextChars` | — |
+| Sort Text by Length in Bytes | `output.sortTextByBytes` | — | — | — | Always; checked when `resultsSortTextBytes` | — |
 | Open Value in New Tab (not in the palette) | `output.openValue` | — | — | — | Always | — |
 
 ### Connection
@@ -767,6 +774,11 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | `1_copy` | **C**opy | `output.copy` | Always |
 | `1_copy` | Copy with **H**eaders | `output.copyWithHeaders` | `outputView == 'grid'` |
 | `2_select` | Select **A**ll | `output.selectAll` | Always |
+| `2_sort` | S**o**rt Ascending | `output.sortAscending` | `outputView == 'grid'` |
+| `2_sort` | Sort **D**escending | `output.sortDescending` | `outputView == 'grid'` |
+| `2_sort` | **T**hen Sort Ascending | `output.thenSortAscending` | `outputView == 'grid'` |
+| `2_sort` | Then **S**ort Descending | `output.thenSortDescending` | `outputView == 'grid'` |
+| `2_sort` | Clea**r** Sort | `output.clearSort` | `outputView == 'grid'` |
 | `3_save` | Sa**v**e Results As… | `output.saveResultsAs` | `outputView == 'grid'` |
 | `4_view` | Show S**p**aces and Tabs | `output.showSpaces` | `outputView == 'grid'` |
 | `4_view` | Show All **W**hite Space | `output.showAllWhitespace` | `outputView == 'grid'` |
@@ -840,7 +852,7 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
 | `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
 
-## Context keys (140)
+## Context keys (142)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -923,6 +935,8 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `editorLineNumbers` | boolean | state | Line numbers show in the query editor. |
 | `resultsWhitespaceSpaces` | boolean | state | The results grid marks spaces and tabs (Show Spaces and Tabs in Results). |
 | `resultsWhitespaceAll` | boolean | state | The results grid marks every white space character, line breaks included (Show All White Space in Results). |
+| `resultsSortTextChars` | boolean | state | Sorted results grids order text columns by their length in characters (Sort Text by Length in Characters). |
+| `resultsSortTextBytes` | boolean | state | Sorted results grids order text and binary columns by their length in bytes (Sort Text by Length in Bytes). |
 | `hasBookmarks` | boolean | state | An open document has a bookmark. |
 | `activeDocumentHasBookmarks` | boolean | state | The active document has a bookmark. |
 | `anyDocumentDirty` | boolean | state | Some open document has unsaved changes. |

@@ -71,8 +71,8 @@ async function settledInView(row) {
     }
   })
   await row.evaluate(element => new Promise(resolve => {
-    const tree = element.closest('[role="tree"]'), box = element.getBoundingClientRect(), view = tree?.getBoundingClientRect()
-    if (!tree || (box.top >= view.top && box.bottom <= view.bottom)) { resolve(); return }
+    const tree = element.closest('[role="tree"]'), box = element.getBoundingClientRect(), view = tree?.getBoundingClientRect(), style = tree && getComputedStyle(tree)
+    if (!tree || (box.top >= view.top + parseFloat(style.scrollPaddingTop) && box.bottom <= view.top + tree.clientHeight - parseFloat(style.scrollPaddingBottom))) { resolve(); return }
     tree.addEventListener('scroll', () => requestAnimationFrame(() => resolve()), { once: true })
     setTimeout(resolve, 3000)
     element.scrollIntoView({ block: 'center' })

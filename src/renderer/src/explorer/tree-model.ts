@@ -220,18 +220,22 @@ export function rowLayout(rows: Pick<VisibleRows, 'count' | 'levels'>, rowHeight
 
 const pinnedOverflowHeight = explorerLimits.rowHeight
 
-interface PinnedBand {
+export interface PinnedBand {
   readonly headers: readonly number[]
+  /** Header offsets within the overlay, including a header sliding into or out of a full stack. */
+  readonly offsets: readonly number[]
   readonly overflow: readonly number[]
+  readonly overflowHeight: number
   readonly height: number
 }
-const emptyBand: PinnedBand = { headers: [], overflow: [], height: 0 }
+const emptyBand: PinnedBand = { headers: [], offsets: [], overflow: [], overflowHeight: 0, height: 0 }
 
-/** Server indices above and below the real scroll window, nearest ones shown at each edge in tree order. */
+/** Overlays leave the native scroll viewport unchanged. Both edges find the nearest headers in scroll order. */
 export function pinnedServerBands(layout: RowLayout, scrollTop: number, viewport: number, topLimit: number, bottomLimit: number) {
   const { serverIndices: servers } = layout, headerHeight = explorerLimits.serverRowHeight
-  // Each enabled edge leaves space for the tree even at the maximum setting or in a short pane.
-  const budget = Math.floor(viewport / (topLimit && bottomLimit ? 3 : 2))
+  // Even a very short pane must leave enough unobscured space to reveal a whole server row.
+  const edges = Number(topLimit > 0) + Number(bottomLimit > 0)
+  const budget = Math.max(0, Math.min(Math.floor(viewport / (edges + 1)), Math.floor((viewport - headerHeight) / Math.max(1, edges))))
   const fit = (count: number, limit: number) => {
     if (!limit || budget < pinnedOverflowHeight) return { shown: 0, height: 0 }
     const slots = Math.min(limit, Math.floor(budget / headerHeight))
@@ -240,25 +244,56 @@ export function pinnedServerBands(layout: RowLayout, scrollTop: number, viewport
     return { shown, height: shown * headerHeight + (count > shown ? pinnedOverflowHeight : 0) }
   }
 
-  let passed = 0
-  while (passed < servers.length && layout.top(servers[passed]) + headerHeight <= scrollTop) passed++
-  const upper = fit(passed, topLimit)
-  const top: PinnedBand = upper.height ? {
-    headers: servers.slice(passed - upper.shown, passed), overflow: servers.slice(0, passed - upper.shown), height: upper.height
-  } : emptyBand
-  const current = passed > 0 && (passed === servers.length || layout.top(servers[passed]) > scrollTop) ? servers[passed - 1] : undefined
-
-  const end = scrollTop + viewport - top.height
-  let firstBelow = servers.length, lower = fit(0, bottomLimit)
-  // A new row in the bottom band can push another header below the tree. Resolve that before reserving the space.
-  while (bottomLimit && budget >= pinnedOverflowHeight && firstBelow > passed && layout.top(servers[firstBelow - 1]) >= end - lower.height) {
-    firstBelow--
-    lower = fit(servers.length - firstBelow, bottomLimit)
+  const edge = (indices: readonly number[], distance: (index: number) => number, limit: number, wholeHeaders = false): PinnedBand => {
+    if (!limit || budget < pinnedOverflowHeight) return emptyBand
+    let count = 0
+    while (count < indices.length && distance(indices[count]) < fit(count, limit).height) count++
+    if (!count) return emptyBand
+    const next = fit(count, limit), previous = fit(count - 1, limit)
+    const overflow = indices.slice(0, count - next.shown)
+    if (!next.shown) {
+      const height = Math.min(pinnedOverflowHeight, Math.max(0, -distance(indices[0])))
+      return { headers: [], offsets: [], overflow, overflowHeight: height, height }
+    }
+    const incoming = distance(indices[count - 1]), travel = previous.height - (next.height - headerHeight)
+    // When the top stack rolls over, the incoming header pushes its predecessors towards the overflow row at scroll
+    // speed. Keep the outgoing header until it is completely covered, rather than replacing the entire stack at once.
+    if (!wholeHeaders && previous.shown && travel > 0 && incoming > next.height - headerHeight) {
+      const moved = previous.height - incoming, start = previous.height - previous.shown * headerHeight
+      const headers = indices.slice(count - 1 - previous.shown, count)
+      const offsets = headers.map((_, index) => start + index * headerHeight - moved)
+      const overflowHeight = previous.height > previous.shown * headerHeight ? pinnedOverflowHeight : pinnedOverflowHeight * moved / travel
+      return { headers, offsets, overflow, overflowHeight, height: incoming + headerHeight }
+    }
+    const headers = indices.slice(count - next.shown, count), overflowHeight = overflow.length ? pinnedOverflowHeight : 0
+    return { headers, offsets: headers.map((_, index) => overflowHeight + index * headerHeight), overflow, overflowHeight, height: next.height }
   }
-  const bottom: PinnedBand = lower.height ? {
-    headers: servers.slice(firstBelow, firstBelow + lower.shown), overflow: servers.slice(firstBelow + lower.shown), height: lower.height
-  } : emptyBand
-  return { top, bottom, current, height: viewport - top.height - bottom.height }
+  const top = edge(servers, index => layout.top(index) - scrollTop, topLimit)
+  // Bottom shortcuts keep whole slots above the overflow row, including when scrolling stops mid-rollover. Sliding
+  // an outgoing header here would grow the band past its limit and leave a sliver of a third server above the menu.
+  const lower = edge([...servers].reverse(), index => scrollTop + viewport - layout.top(index) - headerHeight, bottomLimit, true)
+  const bottom: PinnedBand = { ...lower, headers: [...lower.headers].reverse(), offsets: [...lower.offsets].reverse().map(offset => lower.height - offset - headerHeight), overflow: [...lower.overflow].reverse() }
+  const current = top.headers.at(-1) ?? top.overflow.at(-1)
+  return { top, bottom, current, height: Math.max(0, viewport - top.height - bottom.height) }
+}
+
+/** Reveal a real row in the unobscured part of a fixed viewport, including the bands at the destination. */
+export function revealPinnedScroll(layout: RowLayout, index: number, scrollTop: number, viewport: number, topLimit: number, bottomLimit: number, alignTop = false): number | undefined {
+  if (index < 0 || index >= layout.count || viewport <= 0) return undefined
+  const top = layout.top(index), bottom = top + layout.height(index)
+  const bands = pinnedServerBands(layout, scrollTop, viewport, topLimit, bottomLimit)
+  if (top >= scrollTop + bands.top.height && bottom <= scrollTop + viewport - bands.bottom.height) return undefined
+  // Visible edges are monotone even while headers push through a full stack. Find their boundary without iterating
+  // between band configurations, which can oscillate when the target row is itself a server header.
+  let low = 0, high = Math.max(0, layout.total - viewport)
+  const above = alignTop || top < scrollTop + bands.top.height
+  while (low < high) {
+    const middle = above ? Math.ceil((low + high) / 2) : Math.floor((low + high) / 2)
+    const at = pinnedServerBands(layout, middle, viewport, topLimit, bottomLimit)
+    if (above ? middle + at.top.height <= top : middle + viewport - at.bottom.height < bottom) low = middle + (above ? 0 : 1)
+    else high = middle - (above ? 1 : 0)
+  }
+  return low === scrollTop ? undefined : low
 }
 
 /** The rows to render, `[first, end)`: the viewport plus `overscan` rows on each side. */
