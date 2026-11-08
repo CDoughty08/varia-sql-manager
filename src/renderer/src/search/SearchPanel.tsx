@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type Ref } from 'react'
 import { folderSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
-import { childrenLeftOut, objectSearchLimits, searchKindBadge, type ObjectIndexStatus, type ObjectSearchHit, type SearchKind } from '../../../shared/explorer/search.ts'
+import { childrenLeftOut, objectSearchLimits, searchKindBadge, type DefinitionMatch, type ObjectIndexStatus, type ObjectSearchHit, type SearchKind } from '../../../shared/explorer/search.ts'
 import { onUnexpectedError } from '../core/errors'
 import { useConnectionAccent, useServiceSelector, useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
@@ -66,6 +66,14 @@ export function searchHitPath(hit: ObjectSearchHit): string {
     return labels.join(' › ')
   }
   return `${hit.object.database} › ${folderSpecs[hit.folder].label}`
+}
+
+/** The note after a definition match for the matches past it: "+N more", "+N+ more" when the count is only a lower bound (it
+ * stopped at the 999 counted, or a search past its budget stopped counting), and "more not counted" when it stopped at the first. */
+export function moreMatches(definition: DefinitionMatch): string | undefined {
+  const atLeast = definition.uncounted === true || definition.matches >= 999
+  if (definition.matches > 1) return `+${numbers.format(definition.matches - 1)}${atLeast ? '+' : ''} more`
+  return definition.uncounted === true ? 'more not counted' : undefined
 }
 
 /** What the index holds, for the summary line. */
@@ -359,7 +367,7 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
         {hit.definition && <span className="object-search-line">
           <span className="object-search-line-number">{hit.definition.line}:</span>
           {hit.definition.before && '…'}<Marked text={hit.definition.preview} range={hit.definition.range} />{hit.definition.after && '…'}
-          {hit.definition.matches > 1 && <span className="object-search-more"> (+{numbers.format(hit.definition.matches - 1)}{hit.definition.matches >= 999 ? '+' : ''} more)</span>}
+          {moreMatches(hit.definition) && <span className="object-search-more"> ({moreMatches(hit.definition)})</span>}
         </span>}
       </div>
     </li>

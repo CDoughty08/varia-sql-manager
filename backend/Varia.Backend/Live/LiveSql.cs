@@ -138,11 +138,16 @@ internal static partial class LiveSql
     /// ones never crowd a long run out of a new window;</item>
     /// <item>the open ones the window holds (@open, an xml list of ids) as they are now;</item>
     /// <item>the server's time;</item>
-    /// <item>the open tiles' counts (Running, Pending) over every operation the login may see, whatever the scope;</item>
-    /// <item>when <paramref name="counts"/>, each final tile's count over its hours, also whatever the scope.</item>
+    /// <item>the open tiles' counts (Running, Pending) over every operation the login may see, whatever the scope, from @openFrom
+    /// up (below it every operation has ended, and an ended one never opens again), with the lowest id there that is still open
+    /// and the highest id the login sees (the catalog's high-water mark, which the window settles on);</item>
+    /// <item>when <paramref name="counts"/>, each final tile's count over its hours, also whatever the scope, from @countFrom up
+    /// (below it every operation was created before the hours began, and they only move on), with the lowest id created within
+    /// them.</item>
     /// </list>
-    /// An execution and a validation share their id with their operation. Durations are the server's, to its own time while an
-    /// operation runs. Times stay datetimeoffset.</summary>
+    /// The watermarks (SsisOperationsWatermarks) keep the tiles' reads a range of the clustered key above them however many
+    /// operations the catalog keeps; a baseline binds them 0. An execution and a validation share their id with their operation.
+    /// Durations are the server's, to its own time while an operation runs. Times stay datetimeoffset.</summary>
     public static string Operations(bool counts, bool baseline)
     {
         var tiles = SsisCatalog.Current.OperationTiles;
@@ -156,13 +161,14 @@ internal static partial class LiveSql
         text += "SELECT o.operation_id, o.status, o.start_time, o.end_time, o.stopped_by_name, DATEDIFF_BIG(millisecond, o.start_time, ISNULL(o.end_time, SYSDATETIMEOFFSET())) AS duration_ms\n"
             + "FROM [catalog].[operations] AS o WHERE o.operation_id IN (SELECT r.i.value('.', 'bigint') FROM @open.nodes('/i') AS r(i));\n"
             + "SELECT SYSDATETIMEOFFSET() AS server_now;\n"
-            + "SELECT " + string.Join(", ", open.Select(CountOf)) + " FROM [catalog].[operations] AS o WHERE o.status IN (" + string.Join(", ", open.SelectMany(tile => tile.Statuses).Order()) + ");";
+            + "SELECT " + string.Join(", ", open.Select(CountOf)) + ", MIN(CASE WHEN o.status IN (" + OpenStatuses + ") THEN o.operation_id END) AS lowest_open, MAX(o.operation_id) AS newest_id\n"
+            + "FROM [catalog].[operations] AS o WHERE o.operation_id >= @openFrom;";
         if (!counts) return text;
         // The catalogue gives every final tile the same hours, so one read counts them all.
         var final = tiles.Where(tile => tile.LastHours is not null).ToList();
         var hours = final.Select(tile => tile.LastHours!.Value).Distinct().Single();
-        return text + "\nSELECT " + string.Join(", ", final.Select(CountOf)) + " FROM [catalog].[operations] AS o\n"
-            + "WHERE o.created_time >= DATEADD(hour, -" + hours.ToString(System.Globalization.CultureInfo.InvariantCulture) + ", SYSDATETIMEOFFSET());";
+        return text + "\nSELECT " + string.Join(", ", final.Select(CountOf)) + ", MIN(o.operation_id) AS lowest_recent FROM [catalog].[operations] AS o\n"
+            + "WHERE o.operation_id >= @countFrom AND o.created_time >= DATEADD(hour, -" + hours.ToString(System.Globalization.CultureInfo.InvariantCulture) + ", SYSDATETIMEOFFSET());";
     }
 
     public const string DatabasesProbe = "explorer.databases";

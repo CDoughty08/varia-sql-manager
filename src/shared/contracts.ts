@@ -424,7 +424,13 @@ export interface SaveSqlFile { fileId?: string; name: string; content: string; s
 export interface ShortcutsSnapshot { file: ShortcutFile; revision: number }
 /** `salvaged`: main set part or all of the file aside on reading it (the original is kept beside it) and `notice` says so,
  *  in fixed words; `notice` also explains a file from a newer version, which is applied as empty and never written. */
-export interface ShortcutsLoad extends ShortcutsSnapshot { salvaged: boolean; notice?: string }
+export interface ShortcutsLoad extends ShortcutsSnapshot {
+  salvaged: boolean
+  notice?: string
+  /** Comes with `notice`: which notice it is. Main repeats a notice on every get until a save, across revisions, so the
+   *  page shows each id once. */
+  noticeId?: number
+}
 export interface ShortcutsSaved { revision: number }
 /** A file chosen in main's open dialog, read and validated but not saved; `problems` lists what was left out, in fixed words. */
 export type ShortcutsImport = { cancelled: true } | { file: ShortcutFile; problems: readonly string[] }

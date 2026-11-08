@@ -33,7 +33,8 @@ const breadcrumb = (page: SettingPage) => pagePath(page.id).map(node => node.tit
 function pageSection(page: SettingPage): string {
   const defs = settingDefs.filter(def => def.page === page.id)
   const intro = [page.description, page.provider === 'theme' ? 'Its first row is a note: Color theme: View › Theme (stored in `appearance.json`).' : '',
-    page.layout === 'propertyGrid' ? 'A property grid: True/False lists, values that differ from their default in bold.' : ''].filter(Boolean).join(' ')
+    page.layout === 'propertyGrid' ? 'A property grid: True/False lists, values that differ from their default in bold.' : '',
+    page.layout === 'shortcuts' ? 'Not settings: a table of the shortcuts of every command above an inspector, with mouse gestures beside them. They are stored in `shortcuts.json`, not `settings.json` (docs/commands.md lists the defaults).' : ''].filter(Boolean).join(' ')
   const rows = defs.map(def => [code(def.key), def.label, typeText(def), valueText(def, def.default), def.ssmsDefault === undefined ? '' : valueText(def, def.ssmsDefault),
     def.platforms ? def.platforms.join(', ') : 'All', applies[def.applies ?? 'immediately'], notes(def)])
   return [`### ${breadcrumb(page)}`, intro, rows.length ? table(['Setting key', 'Label', 'Type and bounds', 'Default', 'SSMS default', 'Platforms', 'Applies', 'What it changes'], rows) : '_No settings yet._']

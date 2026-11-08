@@ -326,9 +326,15 @@ jobs:
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           command -v xvfb-run || { sudo apt-get update && sudo apt-get install -y xvfb; }
+      - name: Publish the ReadyToRun backend
+        # As package.yml publishes it for a release, so the node bench can check it is precompiled and time its start.
+        timeout-minutes: 5
+        run: dotnet publish backend/Varia.Backend/Varia.Backend.csproj -c Release -r linux-x64 --self-contained true -p:RestoreLockedMode=true -o artifacts/bench-backend
       - name: IPC benchmarks
         # Floors are enforced on Linux only; the table goes to the job summary.
         timeout-minutes: 15
+        env:
+          VARIA_BENCH_BACKEND: artifacts/bench-backend/Varia.Backend
         run: |
           npm run bench
           xvfb-run -a -s "-screen 0 1600x1000x24" npm run bench:e2e -- --live

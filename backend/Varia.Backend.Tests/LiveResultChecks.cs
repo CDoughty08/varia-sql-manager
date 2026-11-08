@@ -519,21 +519,25 @@ internal static class LiveResultChecks
         check(document.Status == "completed" && row[0].Text!.Length == ColumnPlan.DocumentCap && row[0].Text!.StartsWith("<a>yyy") && (row[0].Flags & PageReader.Truncated) != 0
             && row[1].Text == "7" && document.ResultSets[0].TruncatedCells == 1 && documentAllocated < 32L * 1024 * 1024,
             "a 200 MB xml value (100,000,000 characters) is streamed to its 2,097,152-character prefix, marked truncated (" + Allocated(documentAllocated, documentMs) + ")");
-        // XmlReader holds a whole attribute before returning its element, so a feed stops it 8 MiB past the last output.
+        // XmlReader holds a whole attribute before returning its element, so a feed stops it 8 MiB past the last output; the
+        // cut keeps the value's first characters, the element's start tag as SQL Server sent it.
+        static string Prefix(string start) => (start + new string('y', ColumnPlan.DocumentCap))[..ColumnPlan.DocumentCap];
+        static string Head(string? text) => text is null ? "null" : text[..Math.Min(text.Length, 24)] + " (" + text.Length + " characters)";
         (document, documentAllocated, documentMs) = await Allocating("DECLARE @x xml = CAST('<r><a b=\"' + REPLICATE(CAST('y' AS varchar(max)), 100000000) + '\"/></r>' AS xml);"
             + " SELECT @x AS doc, 7 AS after;");
         row = CellsOf(store, document.ResultSets[0])[0];
-        check(document.Status == "completed" && row[0].Text == "<r" && (row[0].Flags & PageReader.Truncated) != 0 && row[1].Text == "7" && documentAllocated < 64L * 1024 * 1024,
-            "an xml value with a 100,000,000-character attribute is cut before that element, marked truncated (" + Allocated(documentAllocated, documentMs) + "): " + row[0].Text);
+        check(document.Status == "completed" && row[0].Text == Prefix("<r><a b=\"") && (row[0].Flags & PageReader.Truncated) != 0 && row[1].Text == "7" && documentAllocated < 64L * 1024 * 1024,
+            "an xml value with a 100,000,000-character attribute is cut inside that element, keeping its first characters, marked truncated (" + Allocated(documentAllocated, documentMs) + "): " + Head(row[0].Text));
         // The window counts every byte since the output last grew, so a start tag is cut when its attributes pass it together,
-        // and what is kept is only what the writer had written: an unclosed parent start tag, text before it, or nothing.
+        // whether it holds the root, follows a parent's start tag or follows text.
         static string Ys(int count) => "REPLICATE(CAST('y' AS varchar(max)), " + count + ")";
         (document, documentAllocated, documentMs) = await Allocating("SELECT CAST('<r><a b=\"' + " + Ys(1500000) + " + '\" c=\"' + " + Ys(1500000) + " + '\" d=\"' + " + Ys(1500000) + " + '\"/></r>' AS xml),"
             + " CAST('<a b=\"' + " + Ys(5000000) + " + '\"/>' AS xml), CAST('<r>hello<a b=\"' + " + Ys(5000000) + " + '\"/></r>' AS xml), 7 AS after;");
         row = CellsOf(store, document.ResultSets[0])[0];
-        check(document.Status == "completed" && row.Select(cell => cell.Text).SequenceEqual(["<r", "", "<r>hello", "7"]) && row.Take(3).All(cell => (cell.Flags & PageReader.Truncated) != 0)
-            && document.ResultSets[0].TruncatedCells == 3, "xml start tags whose attributes pass the window together, or that hold the root or follow text, keep only what was written before them: "
-            + string.Join(" | ", row.Select(cell => cell.Text)));
+        check(document.Status == "completed" && row.Select(cell => cell.Text).SequenceEqual([Prefix("<r><a b=\"" + new string('y', 1500000) + "\" c=\""), Prefix("<a b=\""), Prefix("<r>hello<a b=\""), "7"])
+            && row.Take(3).All(cell => (cell.Flags & PageReader.Truncated) != 0) && document.ResultSets[0].TruncatedCells == 3,
+            "xml start tags whose attributes pass the window together, or that hold the root or follow text, keep the value's first characters: "
+            + string.Join(" | ", row.Select(cell => Head(cell.Text))));
         // The largest node read whole sits just inside the window: XmlReader grows its buffer to hold it, about 50 MB in all.
         (document, documentAllocated, documentMs) = await Allocating("SELECT CAST('<r><!--' + " + Ys(4194000) + " + '--></r>' AS xml) AS doc;");
         row = CellsOf(store, document.ResultSets[0])[0];

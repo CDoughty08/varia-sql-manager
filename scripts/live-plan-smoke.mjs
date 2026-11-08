@@ -3,6 +3,7 @@ import { electron, expect, within } from './fixtures/smoke.mjs'
 import { connectLive } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { checkLargePlan } from './fixtures/large-plan.mjs'
+import { checkCaptureRecovery } from './fixtures/capture-recovery.mjs'
 import { backendReady, outputStatus, outputView, planCanvas, planViewer, queryBarButton } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
@@ -21,7 +22,9 @@ let step = 'startup'
 const watchdog = setTimeout(() => { console.error(`Live Plan timed out during ${step}.`); application.process()?.kill('SIGKILL'); process.exit(1) }, 180_000)
 async function sql(text) {
   const editor = page.locator('.monaco-editor [role="textbox"]')
-  await editor.focus(); await page.keyboard.press('Control+A'); await page.keyboard.insertText(text)
+  // Use ordinary paste: Monaco can auto-close quotes around Playwright's Input.insertText on Windows.
+  await application.evaluate(({ clipboard }, sql) => clipboard.writeText(sql), text)
+  await editor.focus(); await page.keyboard.press('Control+A'); await page.keyboard.press('Control+V')
   await page.keyboard.press('F5')
 }
 try {
@@ -101,6 +104,8 @@ try {
   await expect(planViewer(page).getByRole('button', { name: 'Actual', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect(planViewer(page).getByRole('combobox', { name: 'Plan statement' }).getByRole('option')).toHaveCount(1)
   expect(errors).toEqual([])
+  step = 'backend loss and collector recovery'
+  await checkCaptureRecovery({ application, page, expect, run: sql, aggregate })
   step = 'large saved plan'
   await checkLargePlan({ application, page, profile, expect })
   expect(errors).toEqual([])

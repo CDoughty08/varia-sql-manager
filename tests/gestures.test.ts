@@ -37,7 +37,8 @@ describe('gesture catalogue', () => {
           expect(new Set(labels).size, `${id} on ${platform}`).toBe(labels.length)
           if (gesture.darwin) expect(gesture.darwin.choices?.length ?? choices.length, `${id}: macOS offers as many choices, in the same order`).toBe(gesture.choices.length)
         }
-        if (gesture.action === 'click' || gesture.action === 'doubleClick') expect(gestureChoices(id, 'darwin')!.some(choice => physicalModifiers(choice, 'darwin').includes('ctrl')), id).toBe(false)
+        // A Control-drag opens the menu on the press, too.
+        if (gesture.action === 'click' || gesture.action === 'doubleClick' || gesture.action === 'drag') expect(gestureChoices(id, 'darwin')!.some(choice => physicalModifiers(choice, 'darwin').includes('ctrl')), id).toBe(false)
       }
       for (const command of gesture.keyboard ?? []) expect(isCommandId(command), `${id}: ${command}`).toBe(true)
     }
@@ -77,7 +78,7 @@ describe('gesture labels', () => {
   })
   it('builds the tooltips that mention a gesture from the catalogue', () => {
     expect(paneTabTitle(new GestureService('win32'))).toBe('Drag to dock; Ctrl-drag to float; Ctrl-double-click to toggle docking')
-    expect(paneTabTitle(new GestureService('darwin'))).toBe('Drag to dock; Control-drag to float; Command-double-click to toggle docking')
+    expect(paneTabTitle(new GestureService('darwin'))).toBe('Drag to dock; Command-drag to float; Command-double-click to toggle docking')
     expect(popoutTabTitle(new GestureService('linux'))).toBe('Drag onto the main window to dock it there; Ctrl-double-click to move it back')
     // A remap reaches the tooltip.
     const remapped = new GestureService('win32')
@@ -103,7 +104,8 @@ describe('GestureService', () => {
       'grid.fitColumn': () => true,
       'global.wheelZoom': event => !!event.ctrlKey,
       'explorer.peekHover': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
-      'dock.floatWhileDragging': event => !!event.ctrlKey,
+      // macOS: ⌘, since Control+press is a right-click there (the tab's menu opened instead of the drag starting).
+      'dock.floatWhileDragging': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
       'dock.dragFloatingTitleBar': event => !!event.shiftKey,
       // Except on macOS, where Control+double-click never arrived (Control+click is a right-click): ⌘ instead.
       'dock.toggleFloat': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
@@ -120,8 +122,8 @@ describe('GestureService', () => {
   })
   it('follows a remap, turns a gesture off, and tracks its modifier key mid-drag', () => {
     const service = new GestureService('darwin')
-    expect(service.isModifierKey('dock.floatWhileDragging', 'Control')).toBe(true)
-    expect(service.isModifierKey('dock.floatWhileDragging', 'Meta')).toBe(false)
+    expect(service.isModifierKey('dock.floatWhileDragging', 'Meta')).toBe(true)
+    expect(service.isModifierKey('dock.floatWhileDragging', 'Control')).toBe(false)
     expect(service.isModifierKey('explorer.peekHover', 'Meta')).toBe(true)
     service.setModifiers(new Map([['dock.floatWhileDragging', ['alt']], ['explorer.peekHover', null]]))
     expect(service.matches('dock.floatWhileDragging', { altKey: true })).toBe(true)

@@ -2,10 +2,11 @@ import { chromium, expect } from '@playwright/test'
 import { spawn, spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { getCurrentFuseWire } from '@electron/fuses'
 import { backendReady } from './fixtures/ui.mjs'
+import { asarProblems, isReadyToRun, readAsar, readyToRunAssemblies } from './packaged-contents.mjs'
 
 const { fuseMismatches, fuseTarget } = createRequire(import.meta.url)('../build/fuses.cjs')
 const executablePath = process.env.VARIA_PACKAGED_EXECUTABLE
@@ -18,6 +19,17 @@ if (!executable.endsWith('.AppImage')) {
   const wrong = fuseMismatches(await getCurrentFuseWire(fuseTarget(executable)))
   if (wrong.length) throw new Error(`Packaged fuses not applied: ${wrong.join(', ')}`)
 }
+
+// Every package is bundled into out/: no node_modules in the archive, and main and preload load only Electron and node: modules.
+const resources = process.platform === 'darwin' ? resolve(dirname(executable), '../Resources') : resolve(dirname(executable), 'resources')
+const asar = resolve(resources, 'app.asar')
+const contents = readAsar(asar)
+if (!contents.has('out/main/index.js')) throw new Error(`${asar} does not hold out/main/index.js.`)
+const problems = asarProblems(contents)
+if (problems.length) throw new Error(`Packaged app.asar: ${problems.join('; ')}`)
+// The backend is published ReadyToRun.
+const interpreted = readyToRunAssemblies.filter(name => !isReadyToRun(resolve(resources, 'backend', name)))
+if (interpreted.length) throw new Error(`Packaged backend assemblies are not ReadyToRun: ${interpreted.join(', ')}`)
 
 // VARIA_PACKAGED_PROFILE=<dir> runs it on its own profile instead of the user's (a local run). With --inspect fused off, Playwright's Electron launcher cannot attach to main; connect to Chromium's debugging port.
 const server = createServer()

@@ -76,6 +76,18 @@ try {
   expect(await page.evaluate(() => window.varia.databases(crypto.randomUUID()))).toEqual({ ok: false, error: 'Connect to a SQL Server first.', code: 'NOT_CONNECTED' })
   expect(await page.evaluate(() => ({ node: typeof window.require, process: typeof window.process, invoke: typeof window.varia.invoke, port: typeof window.varia.port, postMessage: typeof window.varia.postMessage }))).toEqual({ node: 'undefined', process: 'undefined', invoke: 'undefined', port: 'undefined', postMessage: 'undefined' })
   expect(await application.evaluate(({ app }) => app.commandLine.hasSwitch('no-sandbox'))).toBe(process.platform === 'linux' && !launchOptions.chromiumSandbox)
+  // A download the page starts (here a click on an <a download> it made) is cancelled before Chromium's save flow writes anything.
+  await application.evaluate(({ session }) => {
+    globalThis.__variaDownloads = []
+    session.defaultSession.on('will-download', event => { globalThis.__variaDownloads.push(event.defaultPrevented) })
+  })
+  await page.evaluate(() => {
+    const link = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob(['probe'])), download: 'varia-download-probe.txt' })
+    document.body.append(link)
+    link.click()
+    link.remove()
+  })
+  await expect.poll(() => application.evaluate(() => globalThis.__variaDownloads)).toEqual([true])
   // The page is app://varia/, never file:, so its script cannot read local files: not this suite's own profile, not main's
   // bundle by traversal. Its own assets still load, with a JavaScript type for module scripts and workers.
   expect(page.url()).toBe('app://varia/index.html')

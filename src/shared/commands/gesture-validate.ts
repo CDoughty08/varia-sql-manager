@@ -58,7 +58,7 @@ export function validateGestures(platform: Platform, choices: ReadonlyMap<Gestur
     if (platform === 'linux' && held.includes('alt')) {
       problems.push({ id, severity: 'warning', code: 'linuxAlt', message: 'Many Linux desktops move the window on Alt+drag or Alt+click before Varia sees it. You can still choose it.' })
     }
-    if (platform === 'darwin' && held.includes('ctrl') && gesture.action !== 'drag') {
+    if (platform === 'darwin' && held.includes('ctrl')) {
       problems.push({ id, severity: 'warning', code: 'macControlClick', message: 'macOS treats Control+click as a right-click, so this gesture opens the context menu instead.' })
     }
   }

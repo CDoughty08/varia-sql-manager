@@ -26,15 +26,6 @@
     "bench:grid": "node scripts/grid-bench.mjs",
     "package": "electron-builder --publish never"
   },
-  "dependencies": {
-    "dockview-react": "8.4.1",
-    "elkjs": "0.12.1",
-    "monaco-editor": "0.57.0",
-    "pixi.js": "8.22.0",
-    "react": "19.3.0",
-    "react-dom": "19.3.0",
-    "zod": "4.6.7"
-  },
   "overrides": {
     "dompurify": "3.4.17"
   },
@@ -46,12 +37,19 @@
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "5.2.0",
+    "dockview-react": "8.4.1",
     "electron": "44.10.2",
     "electron-builder": "26.18.1",
     "electron-vite": "5.0.0",
+    "elkjs": "0.12.1",
     "happy-dom": "21.0.4",
+    "monaco-editor": "0.57.0",
+    "pixi.js": "8.22.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
     "typescript": "7.0.2",
     "vite": "7.3.7",
-    "vitest": "5.0.3"
+    "vitest": "5.0.3",
+    "zod": "4.6.7"
   }
 }

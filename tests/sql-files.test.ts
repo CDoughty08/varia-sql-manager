@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { chmod, chown, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve, sep } from 'node:path'
-import { fileCheckLimits, fileKinds, isReadOnly, saveDocument, saveFileSchema, SqlFileStore, type SavePrompts } from '../src/main/sql-files'
+import { fileCheckLimits, fileKinds, isReadOnly, protectedLinkRefused, saveDocument, saveFileSchema, SqlFileStore, type SavePrompts } from '../src/main/sql-files'
 
 let directory: string
 beforeEach(async () => {
@@ -210,7 +210,7 @@ describe('SQL file encodings and save hardening', () => {
   })
   it('saves a file whose volume cannot resolve links, as some RAM disks and virtual drives cannot on Windows', async () => {
     const realpathFails = async (path: string) => { if (path.endsWith('.sql')) throw Object.assign(new Error(`EISDIR: illegal operation on a directory, realpath '${path}'`), { code: 'EISDIR' }); return path }
-    const store = new SqlFileStore({ realpath: realpathFails })
+    const store = new SqlFileStore({ platform: 'win32', realpath: realpathFails })
     const path = join(directory, 'ram.sql')
     await writeFile(path, 'SELECT 1')
     const opened = await store.read(path)
@@ -288,11 +288,86 @@ describe('SQL file encodings and save hardening', () => {
     await expect(store.save('SELECT 3', other.id, target)).rejects.toThrow('link.sql is open in another query tab')
     expect(await readFile(target, 'utf8')).toBe('SELECT 1')
   })
+  it('refuses to save through another user\'s link in a shared sticky folder, as Linux\'s protected_symlinks would', async () => {
+    expect(protectedLinkRefused({ mode: 0o41777, uid: 0 }, { mode: 0o120777, uid: 2000 }, 1000)).toBe(true)
+    // The follower's own link, the folder owner's link, and a folder that is not both sticky and world-writable are followed.
+    expect(protectedLinkRefused({ mode: 0o41777, uid: 0 }, { mode: 0o120777, uid: 1000 }, 1000)).toBe(false)
+    expect(protectedLinkRefused({ mode: 0o41777, uid: 2000 }, { mode: 0o120777, uid: 2000 }, 1000)).toBe(false)
+    expect(protectedLinkRefused({ mode: 0o40777, uid: 0 }, { mode: 0o120777, uid: 2000 }, 1000)).toBe(false)
+    expect(protectedLinkRefused({ mode: 0o41775, uid: 0 }, { mode: 0o120777, uid: 2000 }, 1000)).toBe(false)
+    // A stand-in for /tmp/link.sql that another user made (links of other owners need root to make): the save writes nothing.
+    const link = join(directory, 'link.sql'), target = join(directory, 'target.sql')
+    await writeFile(link, 'SELECT 1')
+    await writeFile(target, 'SELECT 1')
+    const facts = (linkOwner: number) => ({
+      platform: 'linux' as const, uid: 1000, folderStat: async () => ({ mode: 0o41777, uid: 0 }),
+      lstat: async (path: string) => path === link ? { mode: 0o120777, uid: linkOwner, isSymbolicLink: () => true } : lstat(path),
+      readlink: async (path: string) => { if (path !== link) throw new Error(`not a link: ${path}`); return 'target.sql' }
+    })
+    const store = new SqlFileStore(facts(2000))
+    const opened = await store.read(link)
+    await expect(store.save('SELECT 2', opened.id)).rejects.toThrow('link.sql goes through a symbolic link another user made in a shared folder')
+    await expect(new SqlFileStore(facts(2000)).save('SELECT 2', undefined, link)).rejects.toThrow('another user made')
+    await expect(store.readOnly(opened.id)).rejects.toThrow('another user made')
+    expect(await readFile(link, 'utf8')).toBe('SELECT 1')
+    expect(await readFile(target, 'utf8')).toBe('SELECT 1')
+    // Windows has no such rule; the user's own link saves to its target and stays.
+    expect((await new SqlFileStore({ ...facts(2000), platform: 'win32' }).save('SELECT 3', undefined, link)).path).toBe(link)
+    const own = new SqlFileStore(facts(1000))
+    await own.save('SELECT 4', (await own.read(link)).id)
+    expect(await readFile(target, 'utf8')).toBe('SELECT 4')
+  })
+  it('refuses another user\'s link at a folder component too, as the kernel checks every link it follows', async () => {
+    // A stand-in for /tmp/shared -> the saver's project folder, made by another user: shared/q.sql is not itself a link.
+    const shared = join(directory, 'shared'), project = join(directory, 'project')
+    await mkdir(shared)
+    await mkdir(project)
+    await writeFile(join(project, 'q.sql'), 'SELECT 1')
+    const store = new SqlFileStore({
+      platform: 'linux', uid: 1000, folderStat: async () => ({ mode: 0o41777, uid: 0 }),
+      lstat: async (path: string) => path === shared ? { mode: 0o120777, uid: 2000, isSymbolicLink: () => true } : lstat(path),
+      readlink: async (path: string) => { if (path !== shared) throw new Error(`not a link: ${path}`); return project }
+    })
+    await expect(store.save('SELECT 2', undefined, join(shared, 'q.sql'))).rejects.toThrow('q.sql goes through a symbolic link another user made')
+    await expect(store.save('SELECT 2', undefined, join(shared, 'new.sql'))).rejects.toThrow('another user made')
+    expect(await readFile(join(project, 'q.sql'), 'utf8')).toBe('SELECT 1')
+    expect(await readdir(shared)).toEqual([])
+    expect(await readdir(project)).toEqual(['q.sql'])
+  })
+  it('resolves chained and relative links, folder components included, to where realpath would', async ({ skip }) => {
+    await mkdir(join(directory, 'real', 'deep'), { recursive: true })
+    const target = join(directory, 'real', 'deep', 'q.sql')
+    await writeFile(target, 'SELECT 1')
+    try {
+      await symlink(join('real', 'deep'), join(directory, 'dir-link'), 'dir')
+      await symlink(join('..', 'dir-link', 'q.sql'), join(directory, 'real', 'hop.sql'), 'file')
+    } catch { skip() }
+    const store = new SqlFileStore({ platform: 'linux', uid: 1000 })
+    await store.save('SELECT 2', undefined, join(directory, 'real', 'hop.sql'))
+    expect(await readFile(target, 'utf8')).toBe('SELECT 2')
+    expect((await lstat(join(directory, 'real', 'hop.sql'))).isSymbolicLink()).toBe(true)
+    await store.save('SELECT 3', undefined, join(directory, 'dir-link', 'new.sql'))
+    expect(await readFile(join(directory, 'real', 'deep', 'new.sql'), 'utf8')).toBe('SELECT 3')
+  })
+  it('fails closed when it cannot look at a component of the path', async () => {
+    // Linux refuses lstat through a protected link with EACCES; the walk must not read that as "no link here".
+    const path = join(directory, 'hidden.sql')
+    const store = new SqlFileStore({
+      platform: 'linux', uid: 1000, folderStat: async () => ({ mode: 0o40755, uid: 1000 }),
+      lstat: async (candidate: string) => {
+        if (candidate === path) throw Object.assign(new Error(`EACCES: permission denied, lstat '${candidate}'`), { code: 'EACCES' })
+        return lstat(candidate)
+      }
+    })
+    await expect(store.save('SELECT 1', undefined, path)).rejects.toThrow('EACCES')
+    expect(await readdir(directory)).toEqual([])
+  })
   it('compares the files paths resolve to, wherever links can be made', async () => {
     // A stand-in for a link (Windows makes symbolic links only for administrators or in Developer Mode): realpath maps
     // alias.sql to real.sql, as it would through a link.
     const target = join(directory, 'real.sql'), alias = join(directory, 'alias.sql')
-    const store = new SqlFileStore({ realpath: async path => path === alias ? target : path })
+    // Windows' rules: POSIX resolves links itself (`resolveCheckingLinks`), not through realpath.
+    const store = new SqlFileStore({ platform: 'win32', realpath: async path => path === alias ? target : path })
     await writeFile(target, 'SELECT 1')
     await writeFile(alias, 'SELECT 1')
     const real = await store.read(target)
@@ -300,6 +375,66 @@ describe('SQL file encodings and save hardening', () => {
     const other = await store.save('SELECT 2', undefined, join(directory, 'other.sql'))
     await expect(store.save('SELECT 3', other.id, alias)).rejects.toThrow('real.sql is open in another query tab')
     expect(await readFile(target, 'utf8')).toBe('SELECT 1')
+  })
+  it('resolves each path once in a burst of opens, as a 64-tab restore makes, and again in the next burst', async () => {
+    const calls: string[] = []
+    let aliasTarget = join(directory, 'tab0.sql')
+    const alias = join(directory, 'alias.sql')
+    const store = new SqlFileStore({ realpath: async path => { calls.push(path); return path === alias ? aliasTarget : path } })
+    const paths = Array.from({ length: 64 }, (_, index) => join(directory, `tab${index}.sql`))
+    for (const path of [...paths, alias]) await writeFile(path, 'SELECT 1')
+    const restore = store.targets()
+    const registered = []
+    for (const path of paths) registered.push(await store.register(path, 'sql', undefined, restore))
+    expect(new Set(registered.map(file => file?.id)).size).toBe(64)
+    // One resolution per file, not one per registered file per open (2,016 for register's two lookups at 64 tabs).
+    expect(calls.length).toBeLessThanOrEqual(64)
+    expect(await store.read(alias, { targets: restore })).toMatchObject({ id: registered[0]?.id })
+    // A later burst resolves again, so a link retargeted since is seen.
+    aliasTarget = paths[1]
+    calls.length = 0
+    expect(await store.read(alias, { targets: store.targets() })).toMatchObject({ id: registered[1]?.id })
+    expect(calls).toContain(paths[0])
+  })
+  it('registers a file and a link to it once when one Open dialog selection reads both at the same time', async () => {
+    const target = join(directory, 'real.sql'), alias = join(directory, 'alias.sql')
+    // A slow volume: every resolution takes a while, so both reads look for an owner before either has registered.
+    const store = new SqlFileStore({ realpath: async path => { await new Promise(done => setTimeout(done, 20)); return path === alias ? target : path } })
+    await writeFile(target, 'SELECT 1')
+    await writeFile(alias, 'SELECT 1')
+    // Another tab is open, so each read resolves paths before it can tell it owns none.
+    await writeFile(join(directory, 'open.sql'), 'SELECT 0')
+    await store.read(join(directory, 'open.sql'))
+    const targets = store.targets()
+    const [real, viaAlias, again] = await Promise.all([store.read(target, { targets }), store.read(alias, { targets }), store.read(target, { targets })])
+    expect(viaAlias.id).toBe(real.id)
+    expect(again.id).toBe(real.id)
+    // One registration: a Save As onto either path from another query is refused.
+    const other = await store.save('SELECT 2', undefined, join(directory, 'other.sql'))
+    await expect(store.save('SELECT 3', other.id, alias)).rejects.toThrow('is open in another query tab')
+    // A failed read does not stall the next one.
+    await expect(store.read(join(directory, 'missing.sql'))).rejects.toThrow()
+    expect((await store.read(target)).id).toBe(real.id)
+  })
+  // The restore that #163 names, the Open dialog and the files handed to main (arguments, a second instance, a drop) each
+  // share one cache across their burst; a per-file cache would bring back n² resolutions with every check above green.
+  it('shares one target cache across every open of a burst in main', async () => {
+    const main = await readFile('src/main/index.ts', 'utf8')
+    const body = (start: string) => { const from = main.indexOf(start); expect(from, start).toBeGreaterThan(-1); return main.slice(from, main.indexOf('\n}', from)) }
+    const restore = main.slice(main.indexOf("handle('varia:session-take'"), main.indexOf("handle('varia:session-restored'"))
+    expect(restore.match(/files\.targets\(\)/g)).toHaveLength(1)
+    expect(restore.indexOf('files.targets()')).toBeLessThan(restore.indexOf('for (const [index, document]'))
+    expect(restore).toContain('reopenDocument(document, targets)')
+    const reopen = body('async function reopenDocument(')
+    expect(reopen).toMatch(/files\.register\([^)]*, targets\)/)
+    expect(reopen).toMatch(/files\.read\(path, \{[^}]*\btargets\b[^}]*\}\)/)
+    const launch = body('async function openPaths(')
+    expect(launch.indexOf('files.targets()')).toBeGreaterThan(-1)
+    expect(launch.indexOf('files.targets()')).toBeLessThan(launch.indexOf('for (const path'))
+    expect(launch).toContain('openPath(path, targets)')
+    expect(body('async function openPath(')).toContain('files.read(path, { targets })')
+    const dialog = main.slice(main.indexOf("title: 'Open SQL query'"), main.indexOf('return opened', main.indexOf("title: 'Open SQL query'")))
+    expect(dialog).toMatch(/const targets = files\.targets\(\), opened = await Promise\.all\(selected\.filePaths\.map\(path => files\.read\(path, \{ targets \}\)\)\)/)
   })
 })
 

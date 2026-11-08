@@ -7,23 +7,21 @@ using Microsoft.Data.SqlClient;
 namespace Varia.Backend.Plans;
 
 /// <summary>Collects completed plans through a separate connection. The executing session receives only the user's SQL.</summary>
-internal sealed class ActualPlanCapture(SqlConnection observer, bool databaseScoped)
+internal sealed class ActualPlanCapture(SqlConnection observer, bool databaseScoped, string? recoveryName = null)
 {
     private const string PlanEvent = ActualPlanSql.PlanEvent;
     private const string BatchEvent = ActualPlanSql.BatchEvent;
     private const int MaxTargetCharacters = 4 * 1024 * 1024;
     private static readonly XName AggregateName = PlanParser.ShowplanName.Namespace + "Aggregate";
-    // Database-scoped sessions (Azure SQL Database) end by MAX_DURATION and are never swept, so a random name serves them.
-    private string name = ActualPlanSql.NameFor(Guid.NewGuid());
+    private string name = "";
     private readonly List<(int Batch, int Iteration)> submitted = [];
     private bool attempted;
     public bool Started { get; private set; }
 
-    /// <summary>Creates and starts the session; returns why capture is unavailable, or after it started, a notice that the
-    /// sweep of sessions left by earlier captures failed; otherwise null.</summary>
     public async Task<string?> StartAsync(int spid, Guid clientId, int major, int timeout, CancellationToken token)
     {
         if (clientId == Guid.Empty) return "This connection does not expose an identifier for actual plan capture.";
+        if (spid is < 1 or > 32767) return "This connection does not expose a session for actual plan capture.";
 
         // Check every privilege before creating a session, including the one needed to remove it.
         await using var command = observer.CreateCommand();
@@ -33,40 +31,39 @@ internal sealed class ActualPlanCapture(SqlConnection observer, bool databaseSco
             return "Actual plan capture requires permission to create, start, read and drop Extended Events sessions.";
 
         command.Parameters.Add("@spid", SqlDbType.Int).Value = spid;
-        if (!databaseScoped)
+        string? notice = null;
+        if (databaseScoped)
         {
-            command.CommandText = ActualPlanSql.NameQuery;
-            if (await command.ExecuteScalarAsync(token) is not string named || !ActualPlanSql.IsName(named))
-                return "Actual plan capture could not identify the connection it observes.";
-            name = named;
+            // No database-scoped sweep: preserve capture's existing privileges without requiring broader connection visibility.
+            name = "VariaActual_" + Guid.NewGuid().ToString("N");
         }
-        var duration = major >= 17 || databaseScoped ? (timeout > 0 ? timeout + 15 : 86_400) : (int?)null;
+        else
+        {
+            command.CommandText = """
+                SELECT (SELECT connection_id FROM sys.dm_exec_connections WHERE session_id=@spid AND parent_connection_id IS NULL),
+                    (SELECT connection_id FROM sys.dm_exec_connections WHERE session_id=@@SPID AND parent_connection_id IS NULL);
+                """;
+            await using (var reader = await command.ExecuteReaderAsync(token))
+            {
+                if (!await reader.ReadAsync(token) || reader.IsDBNull(0) || reader.IsDBNull(1)
+                    || reader.GetGuid(0) == Guid.Empty || reader.GetGuid(1) == Guid.Empty)
+                    return "The connections do not expose physical identifiers for actual plan capture.";
+                // ClientConnectionId identifies XE events; DMV connection_id identifies liveness. Record the physical
+                // roots, not MARS request connections that can disappear while their owning session remains open.
+                name = ActualPlanRecovery.Name(clientId, reader.GetGuid(0), reader.GetGuid(1));
+            }
+            notice = await ActualPlanRecovery.RecoverAsync(observer, token, recoveryName);
+        }
+        // A disconnected session's SPID can be reused. The predicate always matches the physical connection too.
+        command.CommandText = ActualPlanSql.Create(databaseScoped, major >= 17 || databaseScoped);
         command.Parameters.Add("@name", SqlDbType.NVarChar, 128).Value = name;
-        command.CommandText = ActualPlanSql.Create(name, databaseScoped, spid, clientId, duration);
+        command.Parameters.Add("@client", SqlDbType.UniqueIdentifier).Value = clientId;
+        command.Parameters.Add("@duration", SqlDbType.Int).Value = timeout > 0 ? (int)Math.Min((long)timeout + 15, int.MaxValue) : 86_400;
         attempted = true;
         await command.ExecuteNonQueryAsync(token);
         Started = true;
-        return databaseScoped ? null : await SweepAsync(command, token);
+        return notice;
     }
-
-    /// <summary>Drops sessions that earlier captures left when their backend died (<see cref="ActualPlanSql.Sweep"/>), once this
-    /// capture has started, within what is left of its start's budget. A failure only costs a notice.</summary>
-    private async Task<string?> SweepAsync(SqlCommand command, CancellationToken token)
-    {
-        try
-        {
-            command.Parameters.Add("@own", SqlDbType.NVarChar, 128).Value = name;
-            command.CommandText = ActualPlanSql.Sweep;
-            await using var reader = await command.ExecuteReaderAsync(token);
-            return await reader.ReadAsync(token) && reader.GetInt32(1) == 0 ? null : SweepNotice;
-        }
-        catch (Exception error) when (error is SqlException or InvalidOperationException or OperationCanceledException or IOException)
-        {
-            return SweepNotice;
-        }
-    }
-
-    internal const string SweepNotice = "Actual plan capture could not remove Extended Events sessions that earlier captures left behind.";
 
     public void BatchSubmitted(int batch, int iteration) => submitted.Add((batch, iteration));
 
@@ -133,7 +130,8 @@ internal sealed class ActualPlanCapture(SqlConnection observer, bool databaseSco
                 }
                 await using var command = observer.CreateCommand();
                 command.CommandTimeout = 0;
-                command.CommandText = ActualPlanSql.Drop(name, databaseScoped);
+                command.CommandText = ActualPlanSql.Drop(databaseScoped);
+                command.Parameters.Add("@name", SqlDbType.NVarChar, 128).Value = name;
                 await command.ExecuteNonQueryAsync(token);
             }
         }

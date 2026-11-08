@@ -13,6 +13,11 @@ import type { QueryPlanState } from './QueryPlansService'
 import { completedPlanView, planTopology, queryPlanStatements } from './live-model'
 
 interface Content { statements: SourceStatement[]; notices: string[]; layout?: PlanLayout; error?: string; empty?: boolean }
+/** Optional host control for paired views. Remote updates do not emit selection/camera events. */
+export interface PlanNavigation {
+  selected?: string; statement?: string; camera?: Camera
+  select?(id: string): void; selectStatement?(id: string): void; cameraChanged?(camera: Camera): void
+}
 const message = (error: unknown) => error instanceof Error ? error.message : 'The execution plan could not be opened.'
 
 export function findOperators(statements: readonly PlanStatement[], query: string, warningsOnly: boolean): { node: PlanNode; statement: number }[] {
@@ -22,7 +27,8 @@ export function findOperators(statements: readonly PlanStatement[], query: strin
 }
 
 /** One shared world, a virtual operator outline and a text inspector. No statement owns a nested graph scroller. */
-export default function PlanViewer({ sources, identity, scope = identity, visible = true, openDocument, live }: { sources: readonly PlanSource[]; identity: string; scope?: string; visible?: boolean; openDocument?(sourceKey: string): void; live?: QueryPlanState }) {
+export default function PlanViewer({ sources, identity, scope = identity, visible = true, openDocument, live, prepared, navigation, marks, compact = false, transient = false }: { sources: readonly PlanSource[]; identity: string; scope?: string; visible?: boolean; openDocument?(sourceKey: string): void; live?: QueryPlanState;
+  prepared?: Pick<Content, 'statements' | 'notices'>; navigation?: PlanNavigation; marks?: ReadonlyMap<string, string>; compact?: boolean; transient?: boolean }) {
   const { theme, planPreparation, resultClient, documents } = useWorkbench()
   const [generation, setGeneration] = useState(resultClient.backendGeneration)
   useEffect(() => {
@@ -52,7 +58,7 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
   const [outline, setOutline] = useState(true)
   const [gpuFailed, setGpuFailed] = useState(false)
   const [retry, setRetry] = useState(0)
-  const [inspector, setInspector] = useState(true)
+  const [inspector, setInspector] = useState(!compact)
   const [zoom, setZoom] = useState(saved?.camera?.scale ?? 1)
   const [hovered, setHovered] = useState<HoveredOperator>()
   const viewer = useRef<HTMLElement>(null)
@@ -77,6 +83,8 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
   const graphActive = active && canvasOnScreen
   const [scroll, setScroll] = useState(0), [height, setHeight] = useState(400)
   const camera = useRef<Camera | undefined>(saved?.camera)
+  const navigationRef = useRef(navigation)
+  navigationRef.current = navigation
   const selection = useRef<(id: string) => void>(() => {})
   const latest = useRef({ selected, statement, xmlSource, query })
   latest.current = { selected, statement, xmlSource, query }
@@ -86,9 +94,10 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
   const sourceKey = useMemo(() => JSON.stringify(sources.map(({ key, revision }) => [key, revision])), [sources])
   const labelId = useId()
   useEffect(() => () => {
-    if (scope === identity || documents.get(scope)) planPreparation.rememberView(scope, identity, { ...latest.current, camera: camera.current })
-  }, [identity, scope, planPreparation, documents])
+    if (!transient && (scope === identity || documents.get(scope))) planPreparation.rememberView(scope, identity, { ...latest.current, camera: camera.current })
+  }, [identity, scope, planPreparation, documents, transient])
   useEffect(() => {
+    if (prepared) { setParsed({ ...prepared, empty: !prepared.statements.length }); return }
     if (!active) return
     const stop = new AbortController()
     const input = sourceRef.current, previous = preparedSources.current
@@ -100,7 +109,7 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
       value => { if (!stop.signal.aborted) { preparedSources.current = { generation, sources: input }; setParsed({ ...value, empty: !value.statements.length }) } },
       error => { if (!stop.signal.aborted) setParsed({ statements: [], notices: [], error: message(error) }) })
     return () => stop.abort()
-  }, [identity, scope, sourceKey, retry, active, generation, planPreparation])
+  }, [identity, scope, sourceKey, retry, active, generation, planPreparation, prepared])
   useEffect(() => {
     if (!graphActive) return
     const cached = planPreparation.layout(scope, topology)
@@ -146,7 +155,7 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
       if (disposed) return
       canvas.current = new PlanCanvas({ root: element, statements: statementsRef.current, layout, colors: paletteRef.current, camera: camera.current,
         select: id => selection.current(id), hover: setHovered,
-        cameraChanged: value => { camera.current = value; setZoom(current => current === value.scale ? current : value.scale) }, failed: () => setGpuFailed(true) })
+        cameraChanged: value => { camera.current = value; setZoom(current => current === value.scale ? current : value.scale); navigationRef.current?.cameraChanged?.(value) }, failed: () => setGpuFailed(true) })
       canvas.current.select(latest.current.selected)
     }).catch(() => { if (!disposed) setGpuFailed(true) })
     return () => { disposed = true; canvas.current?.dispose(); canvas.current = undefined }
@@ -154,6 +163,17 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
   useEffect(() => { canvas.current?.update(content.statements) }, [content.statements])
   useEffect(() => { canvas.current?.colors(palette) }, [palette])
   useEffect(() => { canvas.current?.select(selected, true) }, [selected])
+  useEffect(() => { if (navigation?.selected !== undefined) setSelected(navigation.selected) }, [navigation?.selected])
+  useEffect(() => {
+    if (navigation?.statement === undefined) return
+    const entry = statements.find(entry => entry.id === navigation.statement)
+    if (entry) setStatement({ id: entry.id, sourceKey: entry.sourceKey })
+  }, [navigation?.statement, statements])
+  useEffect(() => {
+    const value = navigation?.camera
+    if (!value) return
+    camera.current = value; setZoom(value.scale); canvas.current?.restoreCamera(value)
+  }, [navigation?.camera, content.layout])
   useLayoutEffect(() => {
     const element = tree.current
     if (!element) return
@@ -174,6 +194,7 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
   const rowHeight = 32, first = Math.max(0, Math.floor(scroll / rowHeight) - 3), last = Math.min(shown.length, Math.ceil((scroll + height) / rowHeight) + 3)
   const choose = (id: string) => {
     setSelected(id)
+    navigationRef.current?.select?.(id)
     const match = allNodes.get(id)
     if (match) {
       const { id, sourceKey } = content.statements[match.statement]
@@ -206,6 +227,7 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
     setStatement({ id, sourceKey: content.statements[index].sourceKey })
     setXmlSource(undefined)
     setSelected('')
+    navigationRef.current?.selectStatement?.(id)
     setScroll(0)
     if (tree.current) tree.current.scrollTop = 0
     canvas.current?.fit(index)
@@ -255,8 +277,8 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
           aria-activedescendant={shown.slice(first, last).some(match => match.node.id === selected) ? labelId + selected : undefined}>
           <div style={{ height: shown.length * rowHeight, position: 'relative' }}>{shown.slice(first, last).map(({ node }, offset) => <div key={node.id} id={labelId + node.id}
             role="treeitem" aria-selected={selected === node.id} aria-level={1} aria-setsize={shown.length} aria-posinset={first + offset + 1}
-            className="plan-operator-item" style={{ top: (first + offset) * rowHeight, height: rowHeight }} onClick={() => { choose(node.id); tree.current?.focus() }} title={[node.physicalOp, node.object, ...node.warnings].filter(Boolean).join(' · ')}>
-            <span>{node.physicalOp}{ranking !== 'plan' ? ` · ${ranking === 'rows' ? discrepancyLabel(node) : formatPlanMetric(rankingValue(node, ranking)) + ' ms'}` : ''}</span><small>{node.warnings.length ? 'Warning · ' : ''}{node.object || `Node ${node.nodeId}`}</small>
+            className="plan-operator-item" data-comparison-change={marks?.has(node.id) && marks.get(node.id) !== 'Paired' || undefined} style={{ top: (first + offset) * rowHeight, height: rowHeight }} onClick={() => { choose(node.id); tree.current?.focus() }} title={[node.physicalOp, node.object, ...node.warnings].filter(Boolean).join(' · ')}>
+            <span>{node.physicalOp}{ranking !== 'plan' ? ` · ${ranking === 'rows' ? discrepancyLabel(node) : formatPlanMetric(rankingValue(node, ranking)) + ' ms'}` : ''}</span><small>{marks?.get(node.id) ? `${marks.get(node.id)} · ` : ''}{node.warnings.length ? 'Warning · ' : ''}{node.object || `Node ${node.nodeId}`}</small>
           </div>)}</div>
         </div>
       </aside>}

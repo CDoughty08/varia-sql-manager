@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { gestureChoiceTexts } from '../src/shared/commands/gesture-choices'
 import { emptyShortcutFile, parseShortcutText, readShortcutFile, shortcutFileSchema, shortcutFileText, shortcutLimits, type ShortcutFile, type ShortcutReadResult } from '../src/shared/commands/shortcut-schema'
 
 const read = (raw: unknown, options?: Parameters<typeof readShortcutFile>[1]) => {
@@ -127,7 +128,7 @@ describe('shortcuts.json', () => {
     expect(parsed.ok && parsed.problems).toEqual([])
     expect(shortcutFileText(fileWith(shortcutLimits.unknown, 260))).toBeUndefined()
   })
-  it('refuses a file under the limit that would be over it once its records move to unknown', () => {
+  it('salvages a file under the limit that would be over it once its records move to unknown (#237)', () => {
     // Each member this build does not know is kept wrapped as { name: value }, two bytes more than it took.
     const count = 250, length = Math.floor(shortcutLimits.fileBytes / count) - 20
     const members: Record<string, string> = Object.fromEntries(Array.from({ length: count }, (_, index) => [`m${index}`, 'x'.repeat(length)]))
@@ -138,6 +139,86 @@ describe('shortcuts.json', () => {
     const text = JSON.stringify(v1(members))
     expect(Buffer.byteLength(text)).toBe(shortcutLimits.fileBytes - 50)
     const result = parseShortcutText(text)
-    expect(result.ok ? 'ok' : result.error).toBe('size')
+    if (!result.ok) throw new Error(result.error)
+    // The records this read moved go, last first, until the file fits; it loads (salvaged) instead of being reset.
+    expect(result.file.unknown.length).toBeLessThan(count)
+    expect(result.file.unknown.length).toBeGreaterThan(count - 10)
+    expect(result.file.unknown[0]).toEqual({ m0: members.m0 })
+    expect(result.problems.at(-1)).toMatch(/^A member this build does not know was dropped: keeping it would make the file larger than 128 KiB\.$/)
+    expect(Buffer.byteLength(shortcutFileText(result.file) ?? '')).toBeGreaterThan(0)
+    expect(Buffer.byteLength(shortcutFileText(result.file)!)).toBeLessThanOrEqual(shortcutLimits.fileBytes)
+  })
+})
+
+describe('shortcuts file records kept for later', () => {
+  const options = { gestures: gestureChoiceTexts }
+  const v1 = (extra: Record<string, unknown>) => ({ version: 1, scheme: 'default', bindings: [], gestures: {}, unknown: [], ...extra })
+  it('moves a gesture choice and a binding back from unknown once this build understands them (#239)', () => {
+    const kept = { command: 'future.command', key: 'ctrl+alt+q' }
+    const result = readShortcutFile(v1({
+      bindings: [{ command: 'query.execute', key: 'ctrl+e' }],
+      unknown: [{ gesture: 'grid.addToSelection', choice: 'alt' }, kept, { command: 'file.new', key: 'mod+shift+f9' }, { gesture: 'grid.addToSelection', choice: 'shift' }]
+    }), options)
+    if (!result.ok) throw new Error(result.error)
+    expect(result.problems).toEqual([])
+    expect(result.file.gestures).toEqual({ 'grid.addToSelection': 'alt' })
+    // Restored bindings follow the file's own, in their order; what is still not understood stays verbatim, in order.
+    expect(result.file.bindings).toEqual([{ command: 'query.execute', key: 'ctrl+e' }, { command: 'file.new', key: 'mod+shift+f9' }])
+    expect(result.file.unknown).toEqual([kept, { gesture: 'grid.addToSelection', choice: 'shift' }])
+  })
+  it("keeps the file's own gesture setting over one kept in unknown", () => {
+    const result = readShortcutFile(v1({ gestures: { 'grid.addToSelection': 'mod' }, unknown: [{ gesture: 'grid.addToSelection', choice: 'alt' }] }), options)
+    if (!result.ok) throw new Error(result.error)
+    expect(result.file.gestures).toEqual({ 'grid.addToSelection': 'mod' })
+    expect(result.file.unknown).toEqual([])
+  })
+  it('keeps an unoffered gesture choice in gestures when unknown is full, rather than dropping it (#239)', () => {
+    const full = Array.from({ length: shortcutLimits.unknown }, (_, index) => ({ kept: index }))
+    const result = readShortcutFile(v1({ gestures: { 'grid.addToSelection': 'shift' }, unknown: full }), options)
+    if (!result.ok) throw new Error(result.error)
+    expect(result.problems).toEqual([])
+    expect(result.file.gestures).toEqual({ 'grid.addToSelection': 'shift' })
+    expect(result.file.unknown).toHaveLength(shortcutLimits.unknown)
+  })
+  it("keeps the bindings of a file a few bytes under the limit whose gesture moves to unknown (#237)", () => {
+    // The issue's file: ten bindings, unknown records filling it to just under the limit, and a choice this build lacks.
+    const bindings = Array.from({ length: 10 }, (_, index) => ({ command: 'query.execute', key: `ctrl+shift+f${index + 1}` }))
+    const filler = (index: number, length: number) => ({ filler: index, text: 'x'.repeat(length) })
+    const base = v1({ bindings, gestures: { 'explorer.peekHover': 'hyper' }, unknown: Array.from({ length: 131 }, (_, index) => filler(index, 900)) })
+    // Spread the rest over the records, so the text ends 10 bytes under the limit and each record stays under 1 KiB.
+    const records = base.unknown as { text: string }[], spare = shortcutLimits.fileBytes - 10 - Buffer.byteLength(JSON.stringify(base))
+    records.forEach((record, index) => { record.text += 'x'.repeat(Math.floor(spare / records.length) + (index < spare % records.length ? 1 : 0)) })
+    const text = JSON.stringify(base)
+    expect(Buffer.byteLength(text)).toBe(shortcutLimits.fileBytes - 10)
+    const result = parseShortcutText(text, options)
+    if (!result.ok) throw new Error(result.error)
+    expect(result.file.bindings).toEqual(bindings)
+    expect(shortcutFileText(result.file)).toBeDefined()
+  })
+})
+
+describe('shortcuts file size', () => {
+  it('counts the indented size exactly as JSON.stringify writes it', () => {
+    const samples: ShortcutFile[] = [
+      emptyShortcutFile,
+      { ...emptyShortcutFile, bindings: [{ command: 'query.execute', key: 'ctrl+e', scope: 'global' }], gestures: { 'grid.addToSelection': 'alt' } },
+      { ...emptyShortcutFile, unknown: [[], {}, [[[1, 'é', null, true]]], { a: { b: [] }, 'ü"\\': 'q' }, 'text'] }
+    ]
+    for (const file of samples) {
+      const text = shortcutFileText(file)
+      expect(text).toBe(JSON.stringify(file, null, 2) + '\n')
+    }
+  })
+  it('never builds the indented text of a deeply nested file that cannot fit indented (#240)', () => {
+    // 127 records nested about 500 arrays deep: each is under 1 KiB compact but indents to half a megabyte.
+    const nested = (depth: number): unknown => depth ? [nested(depth - 1)] : 0
+    const file: ShortcutFile = { ...emptyShortcutFile, unknown: Array.from({ length: 127 }, () => nested(500)) }
+    expect(Buffer.byteLength(JSON.stringify(file))).toBeLessThan(shortcutLimits.fileBytes)
+    const stringify = vi.spyOn(JSON, 'stringify')
+    try {
+      const text = shortcutFileText(file)
+      expect(text).toBe(JSON.stringify(file))
+      expect(stringify.mock.calls.filter(call => call[2] !== undefined)).toEqual([])
+    } finally { stringify.mockRestore() }
   })
 })
