@@ -233,6 +233,19 @@ describe('BackendSupervisor restarts', () => {
     expect(backends[1].requests.map(request => request.method)).toEqual(['system.health'])
     expect(backends[2].requests.map(request => [request.generation, request.method])).toEqual([[3, 'databases.list']])
   })
+  it('tracks a session opened by session estimation through backend restart without tracking isolated estimates', async () => {
+    const { value, advance } = simulated()
+    const connection = await value.request('connections.connect', options)
+    const args = { connectionId: connection.id, sessionId: 'estimate-tab', requestId: 'estimate-request', database: 'master', sql: 'SELECT 1' }
+    await value.request('plans.estimate', { ...args, mode: 'session' })
+    await value.request('plans.estimate', { ...args, sessionId: 'isolated-tab' })
+    await value.restart('manual')
+    await advance(0)
+    expect(await failure(value.request('query.session.state', { sessionId: 'estimate-tab' }))).toMatchObject({ code: 'SESSION_LOST' })
+    await expect(value.request('query.session.close', { sessionId: 'estimate-tab' })).resolves.toEqual({ closed: false })
+    // An isolated request never claimed a query session in the retired generation.
+    await expect(value.request('query.session.state', { sessionId: 'isolated-tab' })).resolves.toEqual({ method: 'query.session.state' })
+  })
   it('restarts on request: the old generation closes and its sessions are answered locally', async () => {
     const { value, advance, backends, states } = simulated()
     const connection = await value.request('connections.connect', options)
