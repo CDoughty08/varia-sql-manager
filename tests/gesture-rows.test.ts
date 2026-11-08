@@ -8,7 +8,7 @@ import MouseView from '../src/renderer/src/settings/shortcuts/MouseView'
 // The view reads the linked editor setting and command keys from the workbench, which server rendering has no store for.
 vi.mock('../src/renderer/src/core/WorkbenchContext', async original => ({
   ...await original<object>(),
-  useWorkbench: () => ({ settings: {}, keybindings: { lookup: () => ({ parts: ['F2'], aria: 'F2' }) } }),
+  useWorkbench: () => ({ settings: {}, keybindings: { lookup: () => ({ parts: ['F2'], aria: 'F2' }), getRevision: () => 0, subscribe: () => () => {} } }),
   useServiceSelector: () => 'ctrlCmd'
 }))
 

@@ -155,54 +155,6 @@ export function gestureOptions(id: GestureId, platform: Platform): readonly Gest
   return gestureCanTurnOff(id) ? [...choices, null] : choices
 }
 
-/**
- * A choice as `shortcuts.json` stores it (`gestures: { "dock.floatWhileDragging": "alt" }`): `off`, `none` for no
- * modifier, or the modifiers in catalogue order joined in camel case (`ctrlShift`). Tokens are platform-neutral: `mod` is
- * Ctrl or ⌘ wherever the file is read.
- */
-export function gestureToken(choice: GestureChoice): string {
-  if (choice === null) return 'off'
-  const held = gestureModifiers.filter(modifier => choice.includes(modifier))
-  return held.length ? held.map((modifier, index) => index ? modifier[0].toUpperCase() + modifier.slice(1) : modifier).join('') : 'none'
-}
-/** Reads a stored token back; undefined for anything `gestureToken` would not write. */
-export function parseGestureToken(token: string): GestureChoice | undefined {
-  if (token === 'off') return null
-  if (token === 'none') return []
-  const parts = token.split(/(?=[A-Z])/).map(part => part.toLowerCase())
-  if (!parts.every(part => (gestureModifiers as readonly string[]).includes(part))) return undefined
-  const choice = parts as GestureModifier[]
-  return gestureToken(choice) === token ? choice : undefined
-}
-/** Every token each gesture may store, on any platform, for `readShortcutFile`'s `gestures` option. */
-export function gestureChoiceTokens(): ReadonlyMap<string, readonly string[]> {
-  const platforms: readonly Platform[] = ['win32', 'linux', 'darwin']
-  return new Map(gestureIds.filter(id => gestureDescriptor(id).choices).map(id => [id, [...new Set(platforms.flatMap(platform => gestureOptions(id, platform).map(gestureToken)))]]))
-}
-/**
- * The file's gesture choices that apply on `platform`, for `GestureService.setModifiers`: unknown ids, unreadable tokens
- * and choices the gesture does not offer here (a macOS-only ⌘ read on Windows) are left out, so those keep their defaults.
- */
-export function gestureOverrides(stored: Readonly<Record<string, string>>, platform: Platform): Map<GestureId, GestureChoice> {
-  const overrides = new Map<GestureId, GestureChoice>()
-  for (const [id, token] of Object.entries(stored)) {
-    if (!isGestureId(id)) continue
-    const choice = parseGestureToken(token)
-    if (choice !== undefined && gestureOptions(id, platform).some(option => sameChoice(option, choice))) overrides.set(id, choice)
-  }
-  return overrides
-}
-/**
- * The file's gestures with `id` set to `choice`, or back to its default when `choice` is undefined or is the platform's
- * default (the file keeps only changes). Other entries, including ones this build does not know, are kept.
- */
-export function withGestureChoice(stored: Readonly<Record<string, string>>, id: GestureId, choice: GestureChoice | undefined, platform: Platform): Record<string, string> {
-  const next: Record<string, string> = { ...stored }
-  delete next[id]
-  if (choice !== undefined && !sameChoice(choice, gestureDefault(id, platform))) next[id] = gestureToken(choice)
-  return next
-}
-
 /** The modifier an event field reports, after `mod` is resolved for the platform. */
 export type PhysicalModifier = 'ctrl' | 'alt' | 'shift' | 'meta'
 const physicalOrder: readonly PhysicalModifier[] = ['ctrl', 'shift', 'alt', 'meta']

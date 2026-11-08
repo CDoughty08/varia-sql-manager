@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
+import { gestureIds, gestureOptions, type GestureChoice, type GestureId } from '../src/shared/commands/gestures'
 import {
-  gestureChoiceTokens, gestureIds, gestureOptions, gestureOverrides, gestureToken, parseGestureToken, withGestureChoice, type GestureChoice, type GestureId
-} from '../src/shared/commands/gestures'
+  gestureChoiceFromText as parseGestureToken, gestureChoiceText as gestureToken, gestureChoiceTexts, gestureOverrides, withGestureChoice
+} from '../src/shared/commands/gesture-choices'
 import { gestureErrors, validateGestures } from '../src/shared/commands/gesture-validate'
 import { platforms } from '../src/shared/commands/keybindings'
 import { readShortcutFile } from '../src/shared/commands/shortcut-schema'
@@ -15,7 +16,7 @@ describe('gesture choice tokens', () => {
     for (const token of ['shiftCtrl', 'Ctrl', 'ctrlCtrl', 'hyper', '', 'ctrl+shift']) expect(parseGestureToken(token), token).toBeUndefined()
   })
   it('match what the shortcuts file accepts, so no offered choice is moved to unknown', () => {
-    const tokens = gestureChoiceTokens()
+    const tokens = gestureChoiceTexts
     for (const id of gestureIds) for (const platform of platforms) for (const choice of gestureOptions(id, platform)) expect(tokens.get(id), id).toContain(gestureToken(choice))
     const read = readShortcutFile({ version: 1, gestures: { 'dock.floatWhileDragging': 'alt', 'dock.toggleFloat': 'meta', 'popout.returnToMain': 'off', 'grid.fitColumn': 'ctrl' } }, { gestures: tokens })
     expect(read.ok && read.file.gestures).toEqual({ 'dock.floatWhileDragging': 'alt', 'dock.toggleFloat': 'meta' })

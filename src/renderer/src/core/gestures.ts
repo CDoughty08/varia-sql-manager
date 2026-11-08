@@ -1,7 +1,8 @@
 import {
-  gestureAvailable, gestureDefault, gestureDescriptor, gestureLabel, gestureOptions, gestureOverrides, gesturePhrase, physicalModifiers, sameChoice,
+  gestureAvailable, gestureDefault, gestureDescriptor, gestureLabel, gestureOptions, gesturePhrase, physicalModifiers, sameChoice,
   type GestureChoice, type GestureId, type GestureModifiers, type PhysicalModifier
 } from '../../../shared/commands/gestures'
+import { gestureOverrides } from '../../../shared/commands/gesture-choices'
 import type { Platform } from '../../../shared/commands/keybindings'
 import { SnapshotStore } from './store'
 

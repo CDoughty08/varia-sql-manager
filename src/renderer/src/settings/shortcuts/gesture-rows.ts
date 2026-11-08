@@ -1,8 +1,9 @@
 import { commandDescriptor, type CommandId } from '../../../../shared/commands/catalog'
 import {
-  gestureAvailable, gestureDefault, gestureDescriptor, gestureIds, gestureLabel, gestureOptions, gestureOverrides, gestureScopes, gestureToken, modifiersLabel,
-  sameChoice, withGestureChoice, type GestureChoice, type GestureId, type GestureKind, type GestureModifiers, type PointerAction
+  gestureAvailable, gestureDefault, gestureDescriptor, gestureIds, gestureLabel, gestureOptions, gestureScopes, modifiersLabel,
+  sameChoice, type GestureChoice, type GestureId, type GestureKind, type GestureModifiers, type PointerAction
 } from '../../../../shared/commands/gestures'
+import { gestureChoiceText as gestureToken, gestureOverrides, withGestureChoice } from '../../../../shared/commands/gesture-choices'
 import { validateGestures, type GestureProblem } from '../../../../shared/commands/gesture-validate'
 import type { Platform } from '../../../../shared/commands/keybindings'
 import type { ShortcutFile } from '../../../../shared/commands/shortcut-schema'
