@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { ApiResult, BackendState, OpenedFiles, RecentFile, ResultsJobProgress, RpcMethod, RpcMethods, VariaApi } from '../shared/contracts'
+import type { ApiResult, BackendState, OpenedFiles, RecentFile, ResultsJobProgress, RpcMethod, RpcMethods, ShortcutsSnapshot, VariaApi } from '../shared/contracts'
 import type { ConnectContext } from '../shared/connections'
 import type { CommandId } from '../shared/commands/catalog'
 import type { ContextMenuCommand } from '../shared/commands/menus'
@@ -93,6 +93,17 @@ const api: VariaApi = {
     const listener = (_event: Electron.IpcRendererEvent, state: SettingsState) => callback(state)
     ipcRenderer.on('varia:settings-changed', listener)
     return () => { ipcRenderer.removeListener('varia:settings-changed', listener) }
+  },
+  shortcuts: {
+    get: () => ipcRenderer.invoke('varia:shortcuts-get'),
+    save: (file, baseRevision) => ipcRenderer.invoke('varia:shortcuts-save', { file, baseRevision }),
+    importFile: () => ipcRenderer.invoke('varia:shortcuts-import'),
+    exportFile: file => ipcRenderer.invoke('varia:shortcuts-export', { file }),
+    onChanged: callback => {
+      const listener = (_event: Electron.IpcRendererEvent, snapshot: ShortcutsSnapshot) => callback(snapshot)
+      ipcRenderer.on('varia:shortcuts-changed', listener)
+      return () => { ipcRenderer.removeListener('varia:shortcuts-changed', listener) }
+    }
   },
   execute: options => request('query.execute', options),
   cancel: queryId => request('query.cancel', { queryId }),

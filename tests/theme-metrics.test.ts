@@ -5,7 +5,7 @@ import { gridLimits } from '../src/renderer/src/grid/constants'
 import { explorerLimits } from '../src/shared/explorer/catalog'
 import { defaultSettings } from '../src/shared/settings/catalog'
 import {
-  defaultDensity, densities, densityUse, glyphSizes, glyphUse, minimumFontSize, motion, radii, reducedMotion, renderMetricDocs, shadows, spaceScale, typeScale, typeScalePending, windowControls,
+  defaultDensity, densities, densityUse, glyphConditions, glyphSizes, glyphUse, minimumFontSize, motion, radii, reducedMotion, renderMetricDocs, shadows, spaceScale, typeScale, typeScalePending, windowControls,
   type DensityMetrics, type GlyphSizeName, type TypeStepName
 } from '../src/shared/theme/metrics'
 import { cssRules, stylesheetRules, type CssRule } from './fixtures/css-rules'
@@ -96,6 +96,11 @@ describe('metric tokens', () => {
     for (const name of Object.keys(glyphSizes) as GlyphSizeName[]) {
       const sized = all.filter(({ property, value }) => property === 'font-size' && value === `var(--varia-glyph-${name})`).map(({ selector }) => selector)
       expect([...new Set(sized)].sort(), name).toEqual([...glyphUse[name]].sort())
+    }
+    for (const [selector, condition] of Object.entries(glyphConditions)) {
+      expect(Object.values(glyphUse).flat()).toContain(selector)
+      expect(all.filter(entry => entry.selector === selector && entry.property === 'font-size').map(entry => entry.at)).toEqual([[`@container (max-width: ${condition.maxWidth}px)`]])
+      expect(all.some(entry => entry.selector === condition.container && entry.property === 'container-type' && entry.value === 'inline-size')).toBe(true)
     }
     // Monaco's codicon.css sizes every codicon with `.codicon[class*='codicon-']`; styles.css loads after it, so a rule
     // that may reach a codicon needs at least that rank (theme-smoke checks the computed sizes). `.icon` is only ever an svg.

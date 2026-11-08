@@ -43,9 +43,14 @@ export function queryContribution({ commands, queries, documents, connections, t
     }),
     commands.register('query.cancel', { run: () => queries.cancel() }),
     commands.register('query.estimatePlan', { when: () => queries.canExecute(), run: () => queries.estimate() }),
+    commands.register('query.estimateSessionPlan', { when: () => queries.canExecute(), run: () => queries.estimate(undefined, 'session') }),
     commands.register('query.includeActualPlan', { run: () => {
       const tab = documents.active
       if (tab && isQueryDocument(tab)) documents.update(tab.id, { includeActualPlan: !tab.includeActualPlan })
+    } }),
+    commands.register('query.includeLivePlan', { run: () => {
+      const tab = documents.get(documents.getSnapshot().activeId)
+      if (tab && isQueryDocument(tab)) documents.update(tab.id, { includeLivePlan: !tab.includeLivePlan })
     } }),
     commands.register('query.includeClientStatistics', { run: () => {
       const tab = documents.active

@@ -35,6 +35,9 @@ import { prepare as prepareConnection, settle as settleConnection, type Settled 
 import { connectionLibrary } from './connection-library'
 import { clearEntraPrompt, clearEntraTokenCache } from './entra'
 import { SettingsStore } from './settings-store'
+import { ShortcutStore, shortcutHandlers } from './shortcut-store'
+import { effectiveRules } from '../shared/commands/effective'
+import { toPlatform } from '../shared/commands/keybindings'
 import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
 import { encodeSession, SessionStore, sessionWriteSchema, type SessionInput, type SessionRecord, type SessionRecordDocument } from './session-store'
 import { sessionLimits, type ReloadPins, type RestoredDocument, type RestoredSession, type SessionWrite } from '../shared/files/session'
@@ -172,6 +175,10 @@ function lossDetailsFor(generation: number, restores?: 'pins' | 'session') {
   const values = settings.current()
   return lossDetails({ enabled: values['environment.autoRecover.enabled'], minutes: values['environment.autoRecover.intervalMinutes'], saved: recovery.hasRecords(generation) }, restores)
 }
+// Tools › Options › Environment › Shortcuts. Only main reads and writes the file; menus read current() (empty until the first load).
+const shortcuts = new ShortcutStore(join(app.getPath('userData'), 'shortcuts.json'))
+/** The effective rules main's menus show: the catalogue ⊕ scheme ⊕ the user's file, as the renderer computes them. */
+const shortcutRules = () => effectiveRules(toPlatform(process.platform), shortcuts.current()).rules
 /** A command's title with its setting filled in (Select Top <n> Rows), from validated settings only. */
 const menuTitle = (id: CommandId, title: string) => commandTitle(id, settings.current(), title)
 // The palette's theme picker shows themes before one is chosen; the window chrome follows the shown theme.
@@ -189,7 +196,7 @@ let rendererUnresponsive = false
 const menuStyle = menuStyleFor(process.platform, process.env)
 const contextMenus = new ContextMenuPopups<BrowserWindow>({
   style: menuStyle, platform: process.platform, userCanAct: () => !!mainWindow?.isFocused() || userActivation.recent() || !!popouts.focused(), build: template => Menu.buildFromTemplate(template),
-  title: (id, title) => menuTitle(id, title)
+  title: (id, title) => menuTitle(id, title), rules: shortcutRules
 })
 // Files named on the command line, from a second instance, by macOS (open-file) or by a drop, until the page takes them.
 const launchFiles = new LaunchQueue()
@@ -468,7 +475,7 @@ const menuActions: ApplicationMenuActions = {
 // The renderer owns enablement and checkboxes; it sends them on varia:menu-state and every rebuild re-applies them.
 const menuBridge = new NativeMenuBridge({
   build: () => Menu.buildFromTemplate(applicationMenuTemplate({
-    theme: appearance.state, title: menuTitle, recentFiles: recentFilesMenuModel(recent.list(settings.current()['environment.recentFiles.count']), process.platform)
+    theme: appearance.state, title: menuTitle, recentFiles: recentFilesMenuModel(recent.list(settings.current()['environment.recentFiles.count']), process.platform), rules: shortcutRules()
   }, menuActions, process.platform)),
   install: menu => Menu.setApplicationMenu(menu)
 })
@@ -737,6 +744,12 @@ app.whenReady().then(async () => {
     // Items shown in recently used file lists may have changed.
     publishRecentFiles()
   })
+  // The menus show the user's keys once the file is read; a failed read leaves the catalogue's, and the page reports it.
+  void shortcuts.load().then(() => buildMenu(), () => {})
+  shortcuts.onDidChange(snapshot => {
+    buildMenu()
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:shortcuts-changed', snapshot)
+  })
   void recent.load()
   recent.onDidChange(() => { buildMenu(); publishRecentFiles() })
   startUpdater(loaded)
@@ -829,6 +842,21 @@ app.whenReady().then(async () => {
   handle('varia:connections-environment', value => library.setEnvironment(value))
   handle('varia:settings-get', () => settings.load({ showsWarning: true }))
   handle('varia:settings-update', value => settings.update(value))
+  // Import and export take no path from the page: main opens the dialogs and uses only the paths they return.
+  const shortcutIpc = shortcutHandlers(shortcuts, {
+    chooseImport: async () => {
+      const selection = await pageDialog(window => dialog.showOpenDialog(window, { title: 'Import shortcuts', filters: [{ name: 'Varia shortcuts', extensions: ['json'] }], properties: ['openFile'] }), { canceled: true, filePaths: [] })
+      return selection.canceled ? undefined : selection.filePaths[0]
+    },
+    chooseExport: async () => {
+      const selection = await pageDialog(window => dialog.showSaveDialog(window, { title: 'Export shortcuts', defaultPath: join(app.getPath('documents'), 'shortcuts.varia-shortcuts.json'), filters: [{ name: 'Varia shortcuts', extensions: ['json'] }], properties: ['showOverwriteConfirmation', 'createDirectory'] }), { canceled: true, filePath: '' })
+      return selection.canceled || !selection.filePath ? undefined : selection.filePath
+    }
+  })
+  handle('varia:shortcuts-get', shortcutIpc.get)
+  handle('varia:shortcuts-save', shortcutIpc.save)
+  handle('varia:shortcuts-import', shortcutIpc.importFile)
+  handle('varia:shortcuts-export', shortcutIpc.exportFile)
   handle('varia:layouts-load', () => layouts.load())
   handle('varia:layouts-save', value => layouts.save(value))
   handle('varia:layout-import', async () => {

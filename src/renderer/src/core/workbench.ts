@@ -21,6 +21,7 @@ import { ResultClient } from '../results/ResultClient'
 import { ResultsService } from '../results/ResultsService'
 import { MemoryUsageService } from '../results/memory'
 import { documentOwner, documentPage, eitherHidden, LiveService, mainWindowPage } from '../live/LiveService'
+import { QueryPlansService } from '../plans/QueryPlansService'
 import { ActivityMonitorService } from '../activity/ActivityMonitorService'
 import { activityContribution } from '../contributions/activity'
 import { searchContribution } from '../contributions/search'
@@ -76,6 +77,7 @@ import { DatabasePropertiesService } from '../properties/DatabasePropertiesServi
 import { NewDatabaseService } from '../new-database/NewDatabaseService'
 import { RestoreService } from '../restore/RestoreService'
 import { SsisOperationsService } from '../ssis/SsisOperationsService'
+import { SearchDetailsService } from '../search/SearchDetailsService'
 import { ObjectSearchService } from '../search/ObjectSearchService'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
@@ -124,6 +126,7 @@ export interface Workbench extends Disposable {
   readonly indexMemory: MemoryUsageService
   /** Live views (Activity Monitor, SSIS monitoring): their subscriptions, pauses while hidden, and history. */
   readonly live: LiveService
+  readonly queryPlans: QueryPlansService
   /** Test mode only: the grids' frame times and counters (`window.__variaGrid`). */
   readonly gridStats?: GridStats
   readonly files: FileService
@@ -194,6 +197,8 @@ export interface Workbench extends Disposable {
   readonly operations: SsisOperationsService
   /** Search Objects: each connected server's object index (built in the backend) and the Search Objects tabs. */
   readonly objectSearch: ObjectSearchService
+  /** The Search Objects tabs' details pane: the selected hit's properties and definition. */
+  readonly searchDetails: SearchDetailsService
   readonly theme: ThemeService
   /** Toasts for work that finished out of sight, such as a save whose query is not the active document. */
   readonly notifications: NotificationService
@@ -257,6 +262,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const ssisTree = new SsisTreeProbe({ explorer, live, settings, events, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe, popout: () => panes.location('explorer') === 'window' } })
   const gridStats = api.testMode ? new GridStats() : undefined
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
+  const queryPlans = new QueryPlansService(live, documents, queries, panes, results)
   const files = new FileService(documents, queries, api, {
     autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'],
     // Hot exit keeps a query's server name (never a login or connection string), so it keeps its database when it connects there again.
@@ -341,6 +347,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     api, documents, connections, settings,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-object-search="${CSS.escape(id)}"] [data-object-search-focus]`)?.focus())
   })
+  const searchDetails = new SearchDetailsService({ api, peek, connections, searches: objectSearch, scriptingOptions })
   const context = new ContextKeyService({
     platform,
     settings,
@@ -426,6 +433,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     resultMemory,
     indexMemory,
     live,
+    queryPlans,
     ...gridStats ? { gridStats } : {},
     files,
     recentFiles,
@@ -463,6 +471,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     activity,
     operations,
     objectSearch,
+    searchDetails,
     theme,
     notifications,
     updates,
@@ -485,12 +494,15 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       context.dispose()
       files.dispose()
       recentFiles.dispose()
+      queryPlans.dispose()
       queries.dispose()
       results.dispose()
       resultMemory.dispose()
       indexMemory.dispose()
       actionProgress.dispose()
       // Before the live views: its documents' views and stops are cancelled while the service still runs them.
+      // Before Search Objects and Peek, whose reads its details pane shares.
+      searchDetails.dispose()
       objectSearch.dispose()
       operations.dispose()
       // Before the live views: each monitor disposes its own; then the client, while the port is still there.

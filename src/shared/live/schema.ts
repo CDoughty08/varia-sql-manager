@@ -4,6 +4,7 @@
 // frame. The schemas are built from a catalogue, so tests can check the rules against shapes the shipped catalogue does
 // not have yet (several sources, multi-table probes).
 import { z } from 'zod'
+import { livePlanFrameSchema, type LivePlanFrame } from '../plans'
 import type { BackendResultDescriptor, ResultDescriptor } from '../contracts'
 import { backendDescriptorSchema } from '../ipc/descriptors'
 import { errorCodes, limits, type ErrorCode } from '../ipc/wire/protocol'
@@ -25,6 +26,7 @@ export type LiveStart = z.infer<typeof liveStartSchema>
 
 /** Per-source `args`: what a source needs beyond its probes. Each member is bounded; unknown members are refused. */
 export const liveArgsSchemas = {
+  'query.plan': z.object({ queryId: z.uuid() }).strict(),
   // Test controls: the snapshot's row count, a sampling period below the 1 s minimum so tests run fast, a sample count
   // after which the source ends (sourceEnded, its last tables kept), a probe error value every n-th sample, and the log's
   // messages per sample, lowest level shown, late messages and start.
@@ -127,6 +129,7 @@ export interface LiveSnapshotSample<D = BackendResultDescriptor> {
 /** `restarted`: the table started again (a new filter or args), and `retired` names every segment it had. */
 export interface LiveAppendSample<D = BackendResultDescriptor> { table: number; descriptor: D; segment: number; rolledFrom?: number; retired?: number[]; restarted?: true }
 export interface LiveSample<D = BackendResultDescriptor> {
+  plan?: LivePlanFrame
   probe: LiveProbeId
   costMs: number
   effectiveIntervalMs: number
@@ -313,7 +316,8 @@ export function buildLiveSchemas(catalog: LiveCatalogShape, o: { test: boolean }
     metrics: z.array(z.number().nullable()).min(1).max(L.series).optional(),
     tables: z.array(snapshotSample).min(1).max(L.tablesPerProbe).optional(),
     append: z.array(appendSample).min(1).max(L.appendPerProbe).optional(),
-    status: z.array(status).min(1).max(L.statuses).optional()
+    status: z.array(status).min(1).max(L.statuses).optional(),
+    plan: livePlanFrameSchema.optional()
   }).strict()
 
   /** What every sample may hold according to its probe's catalogue entry. */
@@ -323,6 +327,7 @@ export function buildLiveSchemas(catalog: LiveCatalogShape, o: { test: boolean }
     samples.forEach((item, index) => {
       const spec = catalog.probes[item.probe]
       const issue = (message: string) => ctx.addIssue({ code: 'custom', message, path: ['samples', index] })
+      if (item.plan && item.probe !== 'query.plan.operators') issue('Only the query plan probe carries operator data.')
       if (item.metrics !== undefined && item.metrics.length !== (spec.series?.length ?? 0)) issue('Metrics follow the probe\'s series.')
       for (const [entries, mode] of [[item.tables ?? [], 'snapshot'], [item.append ?? [], 'append']] as const) {
         const indexes = entries.map(entry => entry.table)

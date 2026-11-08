@@ -150,7 +150,9 @@ pages, limits, error codes, display formats, benchmarks).
   New string inputs need max lengths in both zod and C#. A request is written to at most one backend generation and is
   never re-sent.
 - Preferences are written atomically (`src/main/json-file.ts`) (`settings.json`, `appearance.json`, `connections.json`,
-  `workspace-layouts.json`, `saved-passwords.json` (0600)); unreadable files are quarantined, never overwritten.
+  `workspace-layouts.json`, `saved-passwords.json` (0600), `shortcuts.json` (`src/main/shortcut-store.ts`: re-read before every
+  write, a revision that refuses a stale save with `STALE`, damaged entries salvaged, unknown records kept verbatim)); unreadable
+  files are quarantined, never overwritten.
 - Failures are values: IPC returns `{ ok: false, error }`, and the UI stays responsive.
 - Commands and keybindings are declared only in `src/shared/commands/catalog.ts`. `KeybindingService`
   (`src/renderer/src/core/keybindings.ts`) is the only key listener and routes keys to an open menu first; main handles
@@ -352,11 +354,11 @@ pages, limits, error codes, display formats, benchmarks).
   commits (never squash or rebase), so stacked branches need no rebase; imperative commit subjects.
 - CI (`.github/workflows/ci.yml`) runs on every PR, drafts included (any base branch, so stacked PRs are tested), every
   push to main and manual runs; the repository is public, so its minutes cost nothing, but GitHub runs only 20 of its jobs
-  at once (5 on macOS), so a PR runs at most 11 and no job repeats another's work. Every job starts at once and builds
+  at once (5 on macOS), so a PR runs at most 12 and no job repeats another's work. Every job starts at once and builds
   what it needs, so one failure hides nothing and the run takes as long as its longest job: `npm run check` on Linux,
   Windows and macOS; the live .NET checks on Linux in three groups (`--live-group k/3`, each against its own SQL Server
-  service; the first also runs `tests/*-live.test.ts` and Kerberos); the smoke suites in two shards on Linux (sandboxed,
-  under xvfb, with SQL Server) and Windows (`scripts/smoke-shards.mjs`, which splits `test:smoke` by each platform's times
+  service; the first also runs `tests/*-live.test.ts` and Kerberos); the smoke suites in three shards on Linux (sandboxed,
+  under xvfb, with SQL Server) and two on Windows (`scripts/smoke-shards.mjs`, which splits `test:smoke` by each platform's times
   in its `suiteSeconds`); and the Linux benchmarks (floors enforced). Report-only work runs on main pushes only: the
   Windows and macOS benchmarks, and Linux's 1024x768 repeats of the scripting and results suites (Windows runners' own
   display is 1024x768). macOS skips the smoke tests until they cover its window chrome. `tests/ci-workflow.test.ts` holds
