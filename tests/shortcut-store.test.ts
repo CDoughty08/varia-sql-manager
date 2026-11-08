@@ -128,6 +128,35 @@ describe('shortcuts file', () => {
     expect(await shortcuts.load()).toEqual({ file: remap, revision: 2, salvaged: false })
   })
 
+  it('announces the first successful read after a failed one, so main rebuilds its menus', async () => {
+    await mkdir(path())
+    const shortcuts = store(), events: ShortcutsSnapshot[] = []
+    shortcuts.onDidChange(snapshot => events.push(snapshot))
+    await expect(shortcuts.load()).rejects.toThrow(shortcutSentences.unreadable)
+    await rm(path(), { recursive: true })
+    await writeFile(path(), JSON.stringify(remap))
+    expect(await shortcuts.load()).toMatchObject({ file: remap, revision: 1 })
+    expect(events).toEqual([{ file: remap, revision: 1 }])
+    // Later loads of the same content announce nothing.
+    await shortcuts.load()
+    expect(events).toHaveLength(1)
+  })
+
+  it("keeps the notice when a save's own re-read set part of a hand edit aside", async () => {
+    const shortcuts = store()
+    await shortcuts.load()
+    await shortcuts.save(remap, 1)
+    // A hand edit that keeps the same readable entries and adds a damaged one: no new revision, so the save goes ahead.
+    await writeFile(path(), JSON.stringify({ ...remap, bindings: [...remap.bindings, 42] }))
+    const next = withBindings([{ command: 'query.execute', key: 'ctrl+shift+e' }])
+    expect(await shortcuts.save(next, 2)).toEqual({ revision: 3 })
+    expect(await quarantined()).toHaveLength(1)
+    expect(await shortcuts.load()).toEqual({ file: next, revision: 3, salvaged: true, notice: salvageNotice })
+    // A later save clears it.
+    await shortcuts.save(remap, 3)
+    expect(await shortcuts.load()).toMatchObject({ salvaged: false })
+  })
+
   it('leaves a newer version\'s file alone and refuses to write over it', async () => {
     const newer = JSON.stringify({ version: 2, bindings: [] })
     await writeFile(path(), newer)

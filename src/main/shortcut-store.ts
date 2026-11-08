@@ -64,6 +64,8 @@ export class ShortcutStore {
   /** Since the last load that set something aside, until a save: the page shows the notice while this holds. */
   private notice?: string
   private newer = false
+  /** A read failed before any succeeded: the first one that does is announced, since main's menus still show the catalogue's keys. */
+  private readFailed = false
   private listeners = new Set<(snapshot: ShortcutsSnapshot) => void>()
   constructor(private readonly path: string) {}
 
@@ -101,14 +103,15 @@ export class ShortcutStore {
   async save(value: unknown, baseRevision: number): Promise<ShortcutsSaved> {
     const file = shortcutFileSchema.parse(value) as ShortcutFile
     return this.serial(async () => {
-      await this.refresh(true)
+      const setAside = await this.refresh(true)
       if (this.newer) throw new Error(shortcutSentences.newer)
       if (baseRevision !== this.revision) throw new BackendError('STALE', shortcutSentences.stale)
       if (canonical(file) !== canonical(this.file)) {
         await writeJsonAtomic(this.path, file, shortcutLimits.fileBytes, shortcutSentences.tooLarge)
         this.file = file
         this.revision++
-        this.notice = undefined
+        // A notice this save's own re-read raised stays: the page has not shown it yet.
+        if (!setAside) this.notice = undefined
         this.emit()
       }
       return { revision: this.revision }
@@ -117,29 +120,37 @@ export class ShortcutStore {
 
   /**
    * Reads the file again. When it differs from what the store knows, it becomes the next revision; `notify` (a save's
-   * re-read) announces it, since the page holds the old content. A first load starts at revision 1.
+   * re-read) announces it, since the page holds the old content. A first load starts at revision 1. Resolves to whether
+   * this read set part or all of the file aside.
    */
-  private async refresh(notify: boolean): Promise<void> {
+  private async refresh(notify: boolean): Promise<boolean> {
     let read: Read
-    try { read = await readStored(this.path) } catch { throw new Error(shortcutSentences.unreadable) }
+    try { read = await readStored(this.path) } catch { if (!this.loaded) this.readFailed = true; throw new Error(shortcutSentences.unreadable) }
     let next: ShortcutFile
     this.newer = read.kind === 'newer'
     if (read.kind === 'missing' || read.kind === 'newer') next = emptyShortcutFile
     else if (read.kind === 'ok') next = read.file
     else {
       next = read.kind === 'salvage' ? read.file : emptyShortcutFile
-      try { await quarantine(this.path) } catch { throw new Error(shortcutSentences.unreadable) }
+      try { await quarantine(this.path) } catch { if (!this.loaded) this.readFailed = true; throw new Error(shortcutSentences.unreadable) }
       this.notice = read.kind === 'salvage' ? salvageNotice : resetNotice(read.reason)
       // The original is kept beside it; a failed write back leaves the file missing, which reads as empty.
       await writeJsonAtomic(this.path, next, shortcutLimits.fileBytes, shortcutSentences.tooLarge).catch(() => {})
     }
+    const setAside = read.kind === 'salvage' || read.kind === 'reset'
     const first = !this.loaded
     this.loaded = true
-    if (first) { this.file = next; this.revision = 1; return }
-    if (canonical(next) === canonical(this.file)) return
+    if (first) {
+      this.file = next
+      this.revision = 1
+      if (this.readFailed) { this.readFailed = false; this.emit() }
+      return setAside
+    }
+    if (canonical(next) === canonical(this.file)) return setAside
     this.file = next
     this.revision++
     if (notify) this.emit()
+    return setAside
   }
 }
 
