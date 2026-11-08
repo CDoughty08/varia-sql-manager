@@ -221,7 +221,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
       {leader && tab?.jobNotice && <div className="job-strip job-notice">{tab.jobNotice}</div>}
       <PaneMenuButton pane={pane} />
     </div>
-    {pane === 'plan' && estimated ? <div ref={viewRef} className="output-view" role="tabpanel" id={panelId} aria-labelledby={tabIds[pane]}><EstimatedPlans state={estimated} /></div>
+    {pane === 'plan' && estimated ? <div ref={viewRef} className="output-view" role="tabpanel" id={panelId} aria-labelledby={tabIds[pane]}>{visible.plan && <EstimatedPlans state={estimated} tabId={tabId} visible={visible.plan} />}</div>
       : pane === 'statistics' ? <div ref={viewRef} className="output-view" role="tabpanel" id={panelId} aria-labelledby={views.length ? tabIds[pane] : undefined} aria-label={views.length ? undefined : 'Client Statistics'}><ClientStatisticsPane tabId={tabId} /></div>
       : !tab ? <EmptyState className="output-empty" icon={emptyIcons[pane]} title={emptyTitles[pane]} detail={!query ? 'Query results appear here for query tabs.' : hint ?? (connected ? 'Execute a query to view results and messages.' : 'Connect this query to a server to execute it.')} />
       : <div ref={viewRef} className="output-view" role="tabpanel" id={panelId} aria-labelledby={tabIds[pane]}>
@@ -230,7 +230,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
             : hasSets ? <ResultsStack key={tab.queryId} tabId={tabId} tab={tab} />
             : <EmptyState className="output-empty" icon="table" detail={tab.status === 'running' ? 'Result sets appear here as the query returns them.' : 'The query returned no result sets.'} />}
           {showStrip && <MessagesStrip tabId={tabId} tab={tab} fits={stripFits} maxHeight={stripMax} />}
-        </> : pane === 'plan' ? plans.length > 0 || livePlan ? <ResultPlans tabId={tabId} queryId={tab.queryId} plans={plans} order={tab.summary?.planOrder} live={livePlan} />
+        </> : pane === 'plan' ? plans.length > 0 || livePlan ? visible.plan && <ResultPlans tabId={tabId} queryId={tab.queryId} plans={plans} visible={visible.plan} order={tab.summary?.planOrder} live={livePlan} />
           : <EmptyState className="output-empty" icon="execution-plan" detail="A plan appears here when the query returns one, as SET SHOWPLAN_XML ON and SET STATISTICS XML ON do." />
           : <MessagesView tabId={tabId} tab={tab} />}
       </div>}

@@ -22,6 +22,7 @@ import { ResultsService } from '../results/ResultsService'
 import { MemoryUsageService } from '../results/memory'
 import { documentOwner, documentPage, eitherHidden, LiveService, mainWindowPage } from '../live/LiveService'
 import { QueryPlansService } from '../plans/QueryPlansService'
+import { PlanPreparationCache } from '../plans/preparation'
 import { ActivityMonitorService } from '../activity/ActivityMonitorService'
 import { activityContribution } from '../contributions/activity'
 import { searchContribution } from '../contributions/search'
@@ -126,6 +127,7 @@ export interface Workbench extends Disposable {
   /** Live views (Activity Monitor, SSIS monitoring): their subscriptions, pauses while hidden, and history. */
   readonly live: LiveService
   readonly queryPlans: QueryPlansService
+  readonly planPreparation: PlanPreparationCache
   /** Test mode only: the grids' frame times and counters (`window.__variaGrid`). */
   readonly gridStats?: GridStats
   readonly files: FileService
@@ -258,6 +260,13 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const gridStats = api.testMode ? new GridStats() : undefined
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
   const queryPlans = new QueryPlansService(live, documents, queries, panes, results)
+  const planPreparation = new PlanPreparationCache()
+  const planReleases = resultClient.onRelease(keys => planPreparation.release(keys))
+  const planGenerations = resultClient.onGeneration(() => planPreparation.clear())
+  const planEvents = events.subscribe(event => {
+    if (event.type === 'documents.closed') planPreparation.close(event.tabId)
+    if (event.type === 'query.started') planPreparation.forgetScope(event.tabId)
+  })
   const files = new FileService(documents, queries, api, {
     autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'],
     // Hot exit keeps a query's server name (never a login or connection string), so it keeps its database when it connects there again.
@@ -427,6 +436,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     indexMemory,
     live,
     queryPlans,
+    planPreparation,
     ...gridStats ? { gridStats } : {},
     files,
     recentFiles,
@@ -487,6 +497,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       files.dispose()
       recentFiles.dispose()
       queryPlans.dispose()
+      planReleases.dispose(); planGenerations.dispose(); planEvents.dispose(); planPreparation.dispose()
       queries.dispose()
       results.dispose()
       resultMemory.dispose()
