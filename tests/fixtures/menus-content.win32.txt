@@ -112,6 +112,7 @@ Query
   E&xecute  F5  ++--
   &Cancel Executing Query  Alt+Pause  --+-
   &Include Actual Execution Plan  Ctrl+M [ ]  ++--
+  Display &Estimated Execution Plan  Ctrl+L  -+--
   Include Client &Statistics  Shift+Alt+S [ ]  ++--
   &Reset Client Statistics  ++--
 Tools

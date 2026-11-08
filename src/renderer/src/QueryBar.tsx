@@ -65,6 +65,16 @@ export function ActualPlanToggle({ classic = false }: { classic?: boolean }) {
   </button>
 }
 
+export function EstimatedPlanButton({ classic = false }: { classic?: boolean }) {
+  const { commands } = useWorkbench()
+  const id = 'query.estimatePlan', enabled = useCommandEnabled(id), key = useKeybindingLabel(id)
+  return <button type="button" className={classic ? undefined : 'query-bar-action estimated-plan-button'} aria-label="Display Estimated Execution Plan"
+    aria-keyshortcuts={key?.aria} disabled={!enabled} title={withKey('Display Estimated Execution Plan', key)}
+    onPointerDown={keepFocus} onClick={() => void commands.execute(id, undefined, 'toolbar')}>
+    <Icon name="execution-plan" /><span className="query-bar-label">Estimated Plan</span>
+  </button>
+}
+
 /**
  * The query document's own bar holds Execute, Cancel, Actual Plan and the connection pickers. One tab stop enters the
  * toolbar, then the arrow keys, Home and End move between enabled controls. Pickers keep Up and Down and open with
@@ -115,16 +125,19 @@ export default function QueryBar() {
   }
   const tag = environmentTag(environment)
   return <div className="query-bar" role="toolbar" aria-label="SQL Editor" data-query-bar="" ref={bar} onKeyDown={onKeyDown} onFocus={onFocus} onBlur={onBlur}>
-    <button type="button" className="query-bar-action execute primary" aria-label="Execute" aria-keyshortcuts={keys.execute?.aria} disabled={!canExecute}
-      title={model.connection?.lost ? lostHint : withKey('Execute', keys.execute)} onPointerDown={keepFocus} onClick={() => void commands.execute('query.execute', undefined, 'toolbar')}>
-      <Icon name="play" /><span className="query-bar-label">Execute</span>{keys.execute && <kbd aria-hidden="true">{keys.execute.text}</kbd>}
-    </button>
-    <button type="button" className="query-bar-action" aria-label="Cancel" aria-keyshortcuts={keys.cancel?.aria} disabled={!canCancel} title={withKey('Cancel Executing Query', keys.cancel)}
-      onPointerDown={keepFocus} onClick={() => void commands.execute('query.cancel', undefined, 'toolbar')}>
-      <Icon name="debug-stop" /><span className="query-bar-label">Cancel</span>
-    </button>
-    <ActualPlanToggle />
-    <ClientStatisticsToggle />
+    <div className="query-bar-actions">
+      <button type="button" className="query-bar-action execute primary" aria-label="Execute" aria-keyshortcuts={keys.execute?.aria} disabled={!canExecute}
+        title={model.connection?.lost ? lostHint : withKey('Execute', keys.execute)} onPointerDown={keepFocus} onClick={() => void commands.execute('query.execute', undefined, 'toolbar')}>
+        <Icon name="play" /><span className="query-bar-label">Execute</span>{keys.execute && <kbd aria-hidden="true">{keys.execute.text}</kbd>}
+      </button>
+      <button type="button" className="query-bar-action" aria-label="Cancel" aria-keyshortcuts={keys.cancel?.aria} disabled={!canCancel} title={withKey('Cancel Executing Query', keys.cancel)}
+        onPointerDown={keepFocus} onClick={() => void commands.execute('query.cancel', undefined, 'toolbar')}>
+        <Icon name="debug-stop" /><span className="query-bar-label">Cancel</span>
+      </button>
+      <ActualPlanToggle />
+      <EstimatedPlanButton />
+      <ClientStatisticsToggle />
+    </div>
     <div className="query-connection" role="group" aria-label="Connection" data-lost={model.connection?.lost || undefined}>
       {accent && <span className="connection-swatch" style={{ background: accent }} aria-hidden="true" />}
       {tag && <span className="query-bar-environment"><span className="visually-hidden">Environment: </span><EnvironmentTag environment={environment} place="query" about={model.serverName} /></span>}

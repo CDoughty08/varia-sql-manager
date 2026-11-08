@@ -18,6 +18,7 @@ const connectRequest = <M extends 'connections.connect' | 'connections.databases
 
 const api: VariaApi = {
   parsePlan: xml => request('plans.parse', { xml }),
+  estimatePlan: params => request('plans.estimate', params),
   platform: process.platform,
   setMenuState: state => { ipcRenderer.send('varia:menu-state', state) },
   runRole: (role, reloadPins) => ipcRenderer.invoke('varia:run-role', reloadPins ? { role, ...reloadPins } : role),

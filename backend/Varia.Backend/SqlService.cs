@@ -20,12 +20,12 @@ using Varia.Backend.Ssis;
 
 namespace Varia.Backend;
 
-internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScriptingHost, IActionHost, ISsisHost, ILiveHost, IActivityHost, IObjectSearchHost
+internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IScriptingHost, IActionHost, ISsisHost, ILiveHost, IActivityHost, IObjectSearchHost
 {
     /// <summary>Announced in HELLO; main refuses a backend that lacks any method it may call (a stale build).</summary>
     public static readonly string[] MethodNames =
     [
-        "plans.parse",
+        "plans.parse", "plans.estimate",
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
@@ -293,7 +293,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// copies and exports take one of 16 result slots.</summary>
     public RequestLane LaneOf(string method) => method switch
     {
-        "query.execute" => RequestLane.Query,
+        "query.execute" or "plans.estimate" => RequestLane.Query,
         "results.read" or "results.copy" or "results.export" => RequestLane.Results,
         "explorer.children" or "explorer.peek" or "explorer.peekDependencies" or "explorer.peekRows" or "explorer.index" or "explorer.search" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
@@ -342,6 +342,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "tables.columns" => await ColumnsAsync(Read<TableArgs>(parameters, json), Token(context)),
         "query.execute" => await ExecuteAsync(Read<QueryArgs>(parameters, json), context),
         "plans.parse" => PlanParser.Read(Read<PlanParseArgs>(parameters, json), Token(context)),
+        "plans.estimate" => await EstimateAsync(Read<EstimatedPlanArgs>(parameters, json), context),
         "query.cancel" => Cancel(Read<CancelArgs>(parameters, json)),
         "query.session.close" => await CloseSessionAsync(Read<SessionArgs>(parameters, json), Token(context)),
         "query.session.state" => await SessionStateAsync(Read<SessionStateArgs>(parameters, json), Token(context)),
