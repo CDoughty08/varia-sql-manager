@@ -155,9 +155,11 @@ export class ShortcutsService extends SnapshotStore<ShortcutsSnapshot> implement
     if (!parsed.success || typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0) return false
     const newer = revision > current.revision || (revision === current.revision && !current.loaded && extra.loaded === true)
     if (!newer) {
-      // An answer for the revision held is main's current word on it (a notice a save's re-read kept arrives so, after
-      // its push). An older one is late: a save or push overtook it, and its notice may be one main has since cleared.
-      const fresh = revision === current.revision && extra.loaded
+      // An answer for the revision held is main's current word on it: a get's notice (one a save's re-read kept arrives
+      // so, after its push), or a save's reply clearing the notice (main pushes the saved file before it replies, so the
+      // reply is never newer). An older answer is late: a save or push overtook it, and its notice may be one main has
+      // since cleared.
+      const fresh = revision === current.revision && (extra.loaded === true || 'notice' in extra)
       if (fresh && (!current.loaded || extra.salvaged !== current.salvaged || extra.notice !== current.notice)) this.publish({ ...current, ...extra })
       else if (!fresh && extra.loaded && !current.loaded) this.publish({ ...current, loaded: true })
       return true

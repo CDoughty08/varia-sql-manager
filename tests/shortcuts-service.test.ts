@@ -185,6 +185,19 @@ describe('shortcuts service reporting and pushes', () => {
     expect(service.snapshot().salvaged).toBe(false)
     expect(service.snapshot().notice).toBeUndefined()
   })
+  it("clears the notice on a save whose push arrives before main's reply, as main sends them", async () => {
+    const { api: main, push } = api()
+    main.save = vi.fn(async (file: ShortcutFile, base: number) => {
+      push({ file, revision: base + 1 })
+      return { ok: true as const, value: { revision: base + 1 } }
+    })
+    const service = new ShortcutsService({ api: main, platform: 'win32' })
+    await service.load()
+    expect(service.snapshot()).toMatchObject({ salvaged: true, notice: 'Some shortcuts were set aside.' })
+    expect(await service.save(emptyShortcutFile, 3)).toEqual({ ok: true, value: { revision: 4 } })
+    expect(service.snapshot()).toMatchObject({ revision: 4, file: emptyShortcutFile, salvaged: false })
+    expect(service.snapshot().notice).toBeUndefined()
+  })
   it('keeps the file object and rules for a push of the same content', async () => {
     const { api: main, push } = api(), { setRules, ...bound } = targets()
     const service = new ShortcutsService({ api: main, platform: 'win32', ...bound })
