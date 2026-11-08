@@ -5,6 +5,7 @@ import { resetNotice, salvageNotice, shortcutHandlers, shortcutSentences, Shortc
 import { emptyShortcutFile, shortcutLimits, type ShortcutFile } from '../src/shared/commands/shortcut-schema'
 import type { ShortcutsSnapshot } from '../src/shared/contracts'
 import { BackendError } from '../src/main/backend/errors'
+import { heavyTimeout, meterWork } from './fixtures/work-meter'
 
 // Writes fail, with the system's kind of message (it names the path), while `failWrites` is set.
 let failWrites = false
@@ -210,16 +211,21 @@ describe('shortcuts requests from the page', () => {
   it('refuses a list over its limit before checking its entries', async () => {
     const shortcuts = store()
     await shortcuts.load()
-    const huge = { ...emptyShortcutFile, bindings: Array.from({ length: 200_000 }, () => ({ command: 'query.execute', key: 'ctrl+e' })) }
-    const started = performance.now()
-    expect((await failure(shortcuts.save(huge, 1)) as Error).message).toBe(shortcutSentences.overLimit)
-    expect(performance.now() - started).toBeLessThan(200)
+    // Counts the entries read, not a clock: refusing at the length reads none of the 200,000.
+    let reads = 0
+    const entries = Array.from({ length: 200_000 }, () => ({ command: 'query.execute', key: 'ctrl+e' }))
+    const bindings = new Proxy(entries, { get: (target, key, receiver) => { if (typeof key === 'string' && /^\d+$/.test(key)) reads++; return Reflect.get(target, key, receiver) } })
+    const huge = { ...emptyShortcutFile, bindings }
+    const { result, work } = await meterWork(() => failure(shortcuts.save(huge, 1)))
+    expect((result as unknown as Error).message).toBe(shortcutSentences.overLimit)
+    expect(reads).toBeLessThan(1000)
+    expect(work.elements).toBeLessThan(10_000)
     const handlers = shortcutHandlers(store(), { chooseImport: async () => undefined, chooseExport: async () => join(directory, 'never.json') })
     for (const file of [huge, { ...emptyShortcutFile, unknown: Array.from({ length: shortcutLimits.unknown + 1 }, () => 1) }, { ...emptyShortcutFile, gestures: Object.fromEntries(Array.from({ length: shortcutLimits.gestures + 1 }, (_, index) => [`g${index}`, 'alt'])) }]) {
       expect((await failure(handlers.exportFile({ file })) as Error).message).toBe(shortcutSentences.overLimit)
     }
     expect(await readdir(directory)).toEqual([])
-  })
+  }, heavyTimeout)
 
   it('keeps only plain JSON values, so a cloned buffer or map cannot hide from the limits', async () => {
     // Structured clone (IPC) carries these; each looks like {} to the size checks.

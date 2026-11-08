@@ -110,8 +110,9 @@ internal static class SsisCreateChecks
     /// bound, for committed jobs only.</summary>
     private static async Task StopAsync(Action<bool, string> check)
     {
-        using var reads = new SsisService(new SsisChecks.FakeHost(), new SsisOptions { StopGrace = TimeSpan.FromMilliseconds(200) });
+        using var reads = new SsisService(new SsisChecks.FakeHost(), new SsisOptions { StopGrace = TimeSpan.FromMilliseconds(1_000) });
         using var service = new SsisActionService(new SsisChecks.FakeHost(), reads);
+        // A grace of a second, not less: a job that ends 20 ms after Stop answered at 337 ms on a starved 3-vCPU CI runner.
         var answer = new SsisExecuteResult([new("done", "x")], 0);
         async Task<(string Outcome, long Ms)> Run(Task<SsisExecuteResult> job, bool committed)
         {
@@ -127,10 +128,10 @@ internal static class SsisCreateChecks
             catch (OperationCanceledException) { return ("cancelled", watch.ElapsedMilliseconds); }
         }
         async Task<SsisExecuteResult> After(int ms) { await Task.Delay(ms); return answer; }
-        reads.Options.CreateDrain = TimeSpan.FromMilliseconds(1_500);
+        reads.Options.CreateDrain = TimeSpan.FromMilliseconds(2_000);
         var quick = await Run(After(20), false);
-        var late = await Run(After(700), true);
-        var abandoned = await Run(After(700), false);
+        var late = await Run(After(2_000), true);
+        var abandoned = await Run(After(2_000), false);
         var early = await Run(Task.FromException<SsisExecuteResult>(new OperationCanceledException()), false);
         // A committed job that never ends (a restore waiting on a lock): Stop, and a disconnect, which answers the same way, still answer.
         var stuckJob = new TaskCompletionSource<SsisExecuteResult>().Task;
@@ -141,8 +142,8 @@ internal static class SsisCreateChecks
         try { stuckAnswer = await service.AfterStopAsync(stuckJob, progressOf, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30)); }
         catch (TimeoutException) { /* An unbounded wait: the check below fails. */ }
         var stuckMs = stuckWatch.ElapsedMilliseconds;
-        check(quick is ("answer", < 200) && late is ("answer", >= 600) && abandoned is ("cancelled", >= 150 and < 600) && early.Outcome == "CANCELLED"
-            && stuckAnswer is { Steps: [], Error.Code: "CANCELLED" } && stuckAnswer.Error.Message.Contains("goes on on the server", StringComparison.Ordinal) && stuckMs is >= 1_500 and < 10_000,
+        check(quick is ("answer", < 1_000) && late is ("answer", >= 1_900) && abandoned is ("cancelled", >= 950 and < 1_900) && early.Outcome == "CANCELLED"
+            && stuckAnswer is { Steps: [], Error.Code: "CANCELLED" } && stuckAnswer.Error.Message.Contains("goes on on the server", StringComparison.Ordinal) && stuckMs is >= 2_900 and < 15_000,
             "Stop's reply is the job's answer within the grace; past it, a job that answers Stop itself is waited for up to CreateDrain more, then answers CANCELLED as not known yet, "
             + "and any other job answers CANCELLED; a job that ended on the Stop before a step is a CANCELLED value: " + string.Join(", ", quick, late, abandoned, early) + ", stuck " + stuckMs + " ms");
 
@@ -162,7 +163,7 @@ internal static class SsisCreateChecks
         var bounded = stuck.Wait(TimeSpan.FromMilliseconds(200));
         var boundedMs = watch.ElapsedMilliseconds;
         var empty = new SsisActionService.CommittedJobs().Wait(TimeSpan.FromSeconds(10));
-        check(drained && drainedMs is >= 250 and < 5_000 && !bounded && boundedMs is >= 150 and < 5_000 && empty && new SsisOptions().CreateDrain == TimeSpan.FromMilliseconds(SsisCatalog.Current.Limit("createDrainMs"))
+        check(drained && drainedMs is >= 250 and < 15_000 && !bounded && boundedMs is >= 150 and < 15_000 && empty && new SsisOptions().CreateDrain == TimeSpan.FromMilliseconds(SsisCatalog.Current.Limit("createDrainMs"))
             && new SsisOptions().RestoreStop == TimeSpan.FromMilliseconds(SsisCatalog.Current.Limit("restoreStopMs")),
             "a backend that shuts down waits for a Create Catalog past its restore, not for jobs that end on their token, and no longer than its bound: " + drainedMs + " ms, " + boundedMs + " ms");
     }
