@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { preparePlan } from '../src/main/plan-request'
 import { validateRequest, validateResult } from '../src/main/validation'
 import { maxQueryPlanDocuments, planLimits, type PlanStatement, type PlanNode } from '../src/shared/plans'
-import { SpatialIndex, fit, intersects, union, viewport, zoomAt } from '../src/renderer/src/plans/geometry'
+import { card, SpatialIndex, fit, intersects, union, viewport, zoomAt } from '../src/renderer/src/plans/geometry'
 import { layoutPlans } from '../src/renderer/src/plans/layout'
 import { findOperators } from '../src/renderer/src/plans/PlanViewer'
 import { recoveryWriteSchema } from '../src/main/recovery-store'
@@ -100,7 +100,7 @@ describe('execution plans', () => {
     expect(layout.nodes).toHaveLength(4)
     expect(layout.edges).toHaveLength(2)
     expect(layout.edges.every(edge => edge.points.length >= 2)).toBe(true)
-    expect(layout.bounds.width).toBeLessThan(430)
+    expect(layout.bounds.width).toBe(2 * card.width + card.layerGap + 2 * card.padding)
     expect(layout.bounds.height).toBeLessThan(300)
     expect(intersects(layout.statements[0], layout.statements[1])).toBe(false)
     expect(layout.nodes.find(node => node.id === 'b')!.x).toBeGreaterThan(layout.nodes.find(node => node.id === 'a')!.x)

@@ -5,7 +5,7 @@ import EmptyState from '../kit/EmptyState'
 import PlanViewer from './PlanViewer'
 
 export default function EstimatedPlans({ state, tabId, visible }: { state: EstimatedPlanState; tabId: string; visible: boolean }) {
-  const { documents, queries } = useWorkbench()
+  const { documents, queries, planPreparation } = useWorkbench()
   const sources = useMemo(() => state.result?.plans.map((plan, index) => ({
     key: `${state.requestId}:${index}`, label: `Estimated plan ${index + 1} · Batch ${plan.batchNumber}, repetition ${plan.iteration}`,
     batchLabel: `Estimated · Batch ${plan.batchNumber}${plan.iteration > 1 ? `, repetition ${plan.iteration}` : ''}`,
@@ -24,9 +24,9 @@ export default function EstimatedPlans({ state, tabId, visible }: { state: Estim
     {state.loading ? <EmptyState icon="loading" detail="Compiling estimated execution plans…" />
       : state.error ? <div role="alert"><EmptyState icon="error" title="Estimated plan unavailable" detail={state.error} /></div>
       : !sources.length ? <EmptyState icon="execution-plan" detail="SQL Server returned no estimated plan for this selection. Some statements do not produce a plan; temporary objects created by the selection are not created during estimation." />
-      : <PlanViewer key={state.requestId} sources={sources} identity={'estimated:' + state.requestId} scope={tabId} visible={visible} openDocument={key => {
+      : <PlanViewer key={state.requestId} sources={sources} identity={'estimated:' + state.requestId} scope={tabId} visible={visible} openDocument={(key, target) => {
         const index = sources.findIndex(source => source.key === key), plan = state.result?.plans[index]
-        if (plan) { documents.openText({ name: `Estimated Plan ${index + 1}.sqlplan`, text: plan.xml, kind: 'sqlplan' }); documents.focusActive() }
+        if (plan) { const doc = documents.openText({ name: `Estimated Plan ${index + 1}.sqlplan`, text: plan.xml, kind: 'sqlplan' }); if (target) planPreparation.requestXml(doc.id, { ...target, revision: undefined }); documents.focusActive() }
       }} />}
   </div>
 }

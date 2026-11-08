@@ -4,10 +4,11 @@ import { planLimits, type PlanDocument } from '../../../shared/plans'
 import type { Disposable } from '../core/types'
 import type { Camera, PlanLayout } from './geometry'
 import { parseSourceXml, PlanInputBudgetError, PlanSourceParseError, type PlanSource, type SourceStatement } from './sources'
+import type { PlanXmlTarget } from './navigation'
 
 export const preparationLimits = { entries: 64, nodes: 20_000, units: 16 * 1024 * 1024, layouts: 32, layoutNodes: 20_000, layoutUnits: 4 * 1024 * 1024 } as const
 export interface PreparedSource { document: PlanDocument; characters: number }
-export interface SavedPlanView { camera?: Camera; selected: string; statement?: Pick<SourceStatement, 'id' | 'sourceKey'>; xmlSource?: string; query: string }
+export interface SavedPlanView { camera?: Camera; selected: string; statement?: Pick<SourceStatement, 'id' | 'sourceKey'>; xmlSource?: string; query: string; collapsed?: string[] }
 interface Cached<T> { scope: string; value: T; nodes: number; units: number; results: string[] }
 const resultKey = (key: ResultKey) => `${key.generation}:${key.resultId}`
 const abort = () => new DOMException('Plan preparation was cancelled.', 'AbortError')
@@ -47,6 +48,7 @@ export class PlanPreparationCache implements Disposable {
   private readonly pending = new Map<string, Pending>()
   private readonly producers = new Set<Pending>()
   private readonly views = new Map<string, { scope: string; view: SavedPlanView }>()
+  private readonly xmlTargets = new Map<string, PlanXmlTarget>()
   private readonly documents = new Map<string, Disposable>()
   private disposed = false
   epoch = 0
@@ -111,6 +113,11 @@ export class PlanPreparationCache implements Disposable {
       results: sources.flatMap(source => source.result ? [resultKey(source.result)] : []) })
   }
   view(identity: string): SavedPlanView | undefined { return this.views.get(identity)?.view }
+  requestXml(documentId: string, target: PlanXmlTarget): void {
+    this.xmlTargets.delete(documentId); this.xmlTargets.set(documentId, { ...target })
+    if (this.xmlTargets.size > 64) this.xmlTargets.delete(this.xmlTargets.keys().next().value!)
+  }
+  takeXml(documentId: string): PlanXmlTarget | undefined { const target = this.xmlTargets.get(documentId); this.xmlTargets.delete(documentId); return target }
   rememberView(scope: string, identity: string, view: SavedPlanView): void {
     if (this.disposed) return
     this.views.delete(identity); this.views.set(identity, { scope, view })
@@ -125,6 +132,7 @@ export class PlanPreparationCache implements Disposable {
     for (const [key, entry] of this.pending) if (entry.scope === scope) { this.pending.delete(key); entry.stop.abort() }
   }
   close(scope: string): void {
+    this.xmlTargets.delete(scope)
     this.forgetScope(scope)
     this.documents.get(scope)?.dispose(); this.documents.delete(scope)
     for (const [key, entry] of this.views) if (entry.scope === scope) this.views.delete(key)
@@ -142,5 +150,5 @@ export class PlanPreparationCache implements Disposable {
     this.pending.clear()
   }
   get stats() { return { parsed: this.parsed.stats, layouts: this.layouts.stats, pending: this.producers.size } }
-  dispose(): void { this.disposed = true; this.clear(); this.views.clear(); for (const watcher of this.documents.values()) watcher.dispose(); this.documents.clear() }
+  dispose(): void { this.disposed = true; this.clear(); this.views.clear(); this.xmlTargets.clear(); for (const watcher of this.documents.values()) watcher.dispose(); this.documents.clear() }
 }

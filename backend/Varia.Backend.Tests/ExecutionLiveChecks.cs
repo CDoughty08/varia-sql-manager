@@ -362,33 +362,36 @@ internal static class ExecutionLiveChecks
     }
 
     /// <summary>Single-GUID names, including main's earlier query-connection naming scheme, cannot prove observer
-    /// ownership. Preserve them rather than deleting a collector while its observer may still be finishing a read.</summary>
+    /// ownership. Recovery removes one only when it is a stopped (or day-old) collector; sessions of any other shape
+    /// stay, even when stopped.</summary>
     private static async Task PreservesSingleGuidCollectors(Action<bool, string> check, Func<string, string?, string, bool, int, string?, bool, int, int, Task<QueryResult>> run,
         Results.ResultStore store, string queryWithPlan, Func<string, Task<object>> close)
     {
         var keeper = Guid.NewGuid().ToString();
         var setup = Guid.NewGuid().ToString();
-        var own = await run("SELECT CONVERT(nchar(36), connection_id) FROM sys.dm_exec_connections WHERE session_id = @@SPID;", keeper, "master", false, 30, null, false, 1000, 10);
-        var live = "VariaActual_" + Guid.Parse(LiveResultChecks.RowsOf(store, own.ResultSets[0])[0][0]!).ToString("N").ToUpperInvariant();
-        var orphan = "VariaActual_" + Guid.NewGuid().ToString("N").ToUpperInvariant();
-        var legacy = "VariaActual_" + Guid.NewGuid().ToString("N");
-        string[] names = [orphan, live, legacy];
         static string Create(string name) => "CREATE EVENT SESSION [" + name + "] ON SERVER ADD EVENT sqlserver.sql_batch_starting(SET collect_batch_text=(0) WHERE ([sqlserver].[session_id]=(0)));\n";
-        var listed = "SELECT name FROM sys.server_event_sessions WHERE name IN (" + string.Join(", ", names.Select(name => "N'" + name + "'")) + ") ORDER BY name;";
+        var names = new List<string>();
+        // Inside the try, so a failed setup query still closes the keeper and setup tabs.
         try
         {
+            var own = await run("SELECT CONVERT(nchar(36), connection_id) FROM sys.dm_exec_connections WHERE session_id = @@SPID;", keeper, "master", false, 30, null, false, 1000, 10);
+            var live = "VariaActual_" + Guid.Parse(LiveResultChecks.RowsOf(store, own.ResultSets[0])[0][0]!).ToString("N").ToUpperInvariant();
+            var orphan = "VariaActual_" + Guid.NewGuid().ToString("N").ToUpperInvariant();
+            var legacy = "VariaActual_" + Guid.NewGuid().ToString("N");
+            names.AddRange([orphan, live, legacy]);
+            var listed = "SELECT name FROM sys.server_event_sessions WHERE name IN (" + string.Join(", ", names.Select(name => "N'" + name + "'")) + ") ORDER BY name;";
             var made = await run(string.Concat(names.Select(Create)), setup, "master", false, 30, null, false, 1000, 10);
             var captured = await run(queryWithPlan, null, "master", false, 30, null, true, 1000, 10);
             var left = await run(listed, setup, "master", false, 30, null, false, 1000, 10);
             var kept = LiveResultChecks.RowsOf(store, left.ResultSets[0]).Select(row => row[0]).ToList();
             check(made.Status == "completed" && captured.Status == "completed" && captured.PlanSets is [{ RowsStored: 1 }]
                 && kept.Order(StringComparer.Ordinal).SequenceEqual(names.Order(StringComparer.Ordinal)),
-                "an actual plan capture preserves single-GUID collectors whose observer ownership cannot be proved: "
+                "an actual plan capture preserves stopped single-GUID sessions that are not collector-shaped: "
                 + made.Status + ", " + captured.Status + ", left " + kept.Count + " of 3 (" + string.Join(" | ", LiveResultChecks.Texts(captured)) + ")");
         }
         finally
         {
-            await run(string.Concat(names.Select(name => "IF EXISTS (SELECT 1 FROM sys.server_event_sessions WHERE name = N'" + name + "') DROP EVENT SESSION [" + name + "] ON SERVER;\n")),
+            if (names.Count > 0) await run(string.Concat(names.Select(name => "IF EXISTS (SELECT 1 FROM sys.server_event_sessions WHERE name = N'" + name + "') DROP EVENT SESSION [" + name + "] ON SERVER;\n")),
                 setup, "master", false, 30, null, false, 1000, 10);
             await close(setup);
             await close(keeper);
