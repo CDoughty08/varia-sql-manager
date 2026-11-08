@@ -225,5 +225,29 @@ export function mergeImport(draft: ShortcutFile, incoming: ShortcutFile, platfor
   const unknown = [...next.unknown, ...incoming.unknown.filter(record => !next.unknown.some(own => entryKey(own) === entryKey(record)))]
   return { ...next, scheme: incoming.scheme, gestures: { ...next.gestures, ...incoming.gestures }, unknown }
 }
-/** Replace: the file as it is, instead of the user's entries. */
-export const replaceImport = (_draft: ShortcutFile, incoming: ShortcutFile): ShortcutFile => incoming
+/**
+ * Replace: the file's entries instead of the user's. Records this version cannot read (a newer build's) are not the
+ * user's to lose by importing, so the draft's stay beside the file's.
+ */
+export const replaceImport = (draft: ShortcutFile, incoming: ShortcutFile): ShortcutFile => ({
+  ...incoming, unknown: [...incoming.unknown, ...draft.unknown.filter(record => !incoming.unknown.some(own => entryKey(own) === entryKey(record)))]
+})
+
+/**
+ * The Options dialog's shortcut edit: the stored file and revision it started from, and the draft. `replace` is set once
+ * the user has been told another window saved first and chose OK again, so the next save replaces the newer file.
+ */
+export interface ShortcutEdit { readonly base: { readonly file: ShortcutFile; readonly revision: number }; readonly draft: ShortcutFile; readonly replace?: boolean }
+export const startShortcutEdit = (stored: { readonly file: ShortcutFile; readonly revision: number }): ShortcutEdit => ({ base: { file: stored.file, revision: stored.revision }, draft: stored.file })
+/**
+ * An untouched draft follows the stored file (another window's save, a hand edit, a load that finished late); an edited
+ * one keeps the revision it started from, so main refuses its save as STALE instead of overwriting the newer file.
+ */
+export function followStored(edit: ShortcutEdit, stored: { readonly file: ShortcutFile; readonly revision: number }): ShortcutEdit {
+  if (stored.revision === edit.base.revision && stored.file === edit.base.file) return edit
+  return sameShortcuts(edit.draft, edit.base.file) ? startShortcutEdit(stored) : edit
+}
+/** The file OK saves, or undefined when the draft has no changes. */
+export const shortcutsToSave = (edit: ShortcutEdit): ShortcutFile | undefined => sameShortcuts(edit.draft, edit.base.file) ? undefined : edit.draft
+/** The revision a save starts from: the edit's own, or, once the user chose to replace a newer file, the latest. */
+export const saveRevision = (edit: ShortcutEdit, latest: number): number => edit.replace ? latest : edit.base.revision

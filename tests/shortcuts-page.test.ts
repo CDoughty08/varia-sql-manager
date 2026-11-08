@@ -10,7 +10,8 @@ import { commitOptions } from '../src/renderer/src/settings/options-form'
 import type { CaptureSource } from '../src/renderer/src/settings/shortcuts/CaptureField'
 import ShortcutsPage from '../src/renderer/src/settings/shortcuts/ShortcutsPage'
 import {
-  assignShortcut, commandRows, importSummary, mergeImport, removeRule, resetAll, resetAllCounts, resetCommand, restoreRule, stagedChanges, storedKey, verdictFor
+  assignShortcut, commandRows, followStored, importSummary, mergeImport, removeRule, replaceImport, resetAll, resetAllCounts, resetCommand, restoreRule, saveRevision, shortcutsToSave,
+  stagedChanges, startShortcutEdit, storedKey, verdictFor
 } from '../src/renderer/src/settings/shortcuts/shortcut-draft'
 
 const file = (bindings: ShortcutFile['bindings'], extra: Partial<ShortcutFile> = {}): ShortcutFile => ({ ...emptyShortcutFile, bindings, ...extra })
@@ -84,6 +85,14 @@ describe('Shortcuts draft', () => {
     expect(merged.unknown).toEqual(incoming.unknown)
     expect(effectiveRules('win32', merged).problems).toEqual([])
   })
+  it('keeps records this version cannot read when an import replaces the user\'s entries', () => {
+    const future = { command: 'query.fromTheFuture', key: 'f9' }
+    const draft = file([{ command: 'file.saveAs', key: 'mod+shift+e' }], { unknown: [future] })
+    const incoming = file([{ command: 'file.closeAll', key: 'mod+shift+q' }], { unknown: [{ gesture: 'later' }, future] })
+    const replaced = replaceImport(draft, incoming)
+    expect(replaced.bindings).toEqual(incoming.bindings)
+    expect(replaced.unknown).toEqual([{ gesture: 'later' }, future])
+  })
 })
 
 describe('Options OK', () => {
@@ -105,19 +114,37 @@ describe('Options OK', () => {
     expect(await commitOptions(targets(log, { settings: new Error('Disk full.') }), { 'textEditor.sql.tabSize': 2 } as never, emptyShortcutFile)).toEqual({ ok: false, stage: 'settings', message: 'Disk full.' })
     expect(log).toEqual(['settings'])
     const stale = await commitOptions(targets([], { shortcuts: { error: 'Stale.', code: 'STALE' } }), { 'textEditor.sql.tabSize': 2 } as never, emptyShortcutFile)
-    expect(stale).toEqual({ ok: false, stage: 'shortcuts', message: 'Your other settings were saved, but shortcuts were not: they changed in another window. Your changes are still here; choose OK to try again.' })
+    expect(stale).toEqual({ ok: false, stage: 'shortcuts', stale: true, message: 'Your other settings were saved, but shortcuts were not: they changed in another window. Choose OK again to replace them with yours, or Cancel to keep the other window\'s.' })
     const failed = await commitOptions(targets([], { shortcuts: { error: 'The file is read-only.' } }), {} as never, emptyShortcutFile)
     expect(failed).toEqual({ ok: false, stage: 'shortcuts', message: 'Shortcuts were not saved: The file is read-only. Your changes are still here; choose OK to try again.' })
   })
-  it('keeps the draft through a STALE save of the fake service, and saves it on the next try', async () => {
+  it('never lets an edited draft overwrite another window\'s save unless the user chooses to replace it', async () => {
     const service = createFakeShortcutsService()
+    let edit = startShortcutEdit(service.getSnapshot())
+    edit = { ...edit, draft: file([{ command: 'file.saveAs', key: 'mod+shift+e' }]) }
+    // Another window saves while the dialog is open; main pushes it and the service follows, but the edit keeps its base.
+    const theirs = file([{ command: 'file.closeAll', key: 'mod+shift+q' }])
+    service.changeElsewhere(theirs)
+    edit = followStored(edit, service.getSnapshot())
+    expect(edit.base.revision).toBe(0)
+    const commit = () => commitOptions({ update: async () => {}, saveShortcuts: next => service.save(next, saveRevision(edit, service.getSnapshot().revision)) }, {} as never, shortcutsToSave(edit))
+    const first = await commit()
+    expect(first).toMatchObject({ ok: false, stale: true })
+    expect(service.stored().file).toBe(theirs)
+    // The message offers OK again to replace them: only then does the save start from the newer revision.
+    edit = { ...edit, replace: true }
+    expect(await commit()).toEqual({ ok: true })
+    expect(service.stored().file).toEqual(edit.draft)
+  })
+  it('lets an untouched draft follow the stored file, so OK saves nothing and stages nothing', () => {
+    const service = createFakeShortcutsService({ file: file([{ command: 'file.saveAs', key: 'mod+shift+e' }]), revision: 3 })
+    const edit = startShortcutEdit(service.getSnapshot())
+    expect(shortcutsToSave(edit)).toBeUndefined()
     service.changeElsewhere(file([{ command: 'file.closeAll', key: 'mod+shift+q' }]))
-    const draft = file([{ command: 'file.saveAs', key: 'mod+shift+e' }])
-    service.failNextSave('The shortcuts changed in another window.', 'STALE')
-    const first = await commitOptions({ update: async () => {}, saveShortcuts: next => service.save(next) }, {} as never, draft)
-    expect(first.ok).toBe(false)
-    expect(await commitOptions({ update: async () => {}, saveShortcuts: next => service.save(next) }, {} as never, draft)).toEqual({ ok: true })
-    expect(service.stored().file).toEqual(draft)
+    const followed = followStored(edit, service.getSnapshot())
+    expect([followed.base.revision, followed.draft]).toEqual([4, service.getSnapshot().file])
+    expect(shortcutsToSave(followed)).toBeUndefined()
+    expect(followStored(followed, service.getSnapshot())).toBe(followed)
   })
 })
 

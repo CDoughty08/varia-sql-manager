@@ -165,14 +165,15 @@ export class ShortcutsService extends SnapshotStore<ShortcutsSnapshot> implement
     return true
   }
   /**
-   * Saves `file` through main, from the revision held, and applies it once main answers. A file that changed since
-   * (another window saved) fails with code `STALE`; the snapshot then follows main's push.
+   * Saves `file` through main, from `baseRevision` (by default the revision held; the Options dialog passes the one its
+   * draft started from), and applies it once main answers. A file that changed since (another window saved) fails with
+   * code `STALE`; the snapshot then follows main's push.
    */
-  async save(file: ShortcutFile): Promise<ApiResult<{ revision: number }>> {
+  async save(file: ShortcutFile, baseRevision = this.getSnapshot().revision): Promise<ApiResult<{ revision: number }>> {
     const parsed = shortcutFileSchema.safeParse(file)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? 'The shortcuts are not valid.' }
     try {
-      const result = await this.options.api.save(file, this.getSnapshot().revision)
+      const result = await this.options.api.save(file, baseRevision)
       if (!result.ok) return result
       if (typeof result.value?.revision !== 'number') return { ok: false, error: 'Main sent an answer this version does not support.' }
       this.accept({ file, revision: result.value.revision })

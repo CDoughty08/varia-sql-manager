@@ -13,7 +13,7 @@ import { useShortcuts, useShortcutsSnapshot } from '../core/ShortcutsContext'
 import type { ShortcutFile } from '../../../shared/commands/shortcut-schema'
 import type { CaptureSource } from './shortcuts/CaptureField'
 import ShortcutsPage from './shortcuts/ShortcutsPage'
-import { sameShortcuts, stagedChanges } from './shortcuts/shortcut-draft'
+import { followStored, saveRevision, shortcutsToSave, stagedChanges, startShortcutEdit, type ShortcutEdit } from './shortcuts/shortcut-draft'
 
 const shortcutsPage = 'environment.shortcuts'
 /** Fonts and Colors names the display item its rows are for, as SSMS's "Show settings for" list does (fixed for now). */
@@ -57,8 +57,13 @@ export default function OptionsDialog({ page: requested }: { page?: string }) {
   // The Shortcuts page's edits: a second draft, saved after the settings by OK.
   const shortcuts = useShortcuts()
   const shortcutsState = useShortcutsSnapshot()
-  const [shortcutDraft, setShortcutDraft] = useState<ShortcutFile>(() => shortcuts.getSnapshot().file)
-  const staged = stagedChanges(shortcutDraft, shortcutsState.file)
+  const [shortcutEdit, setShortcutEdit] = useState<ShortcutEdit>(() => startShortcutEdit(shortcuts.getSnapshot()))
+  const shortcutDraft = shortcutEdit.draft
+  const setShortcutDraft = (draft: ShortcutFile) => setShortcutEdit(edit => ({ ...edit, draft }))
+  // Main re-reads the file on every get, so opening the dialog sees a hand edit before the user starts editing.
+  useEffect(() => { void shortcuts.reload() }, [shortcuts])
+  useEffect(() => { setShortcutEdit(edit => followStored(edit, shortcutsState)) }, [shortcutsState])
+  const staged = stagedChanges(shortcutDraft, shortcutEdit.base.file)
   // KeybindingService.capture routes every key but Tab to the capture box while it records, so it stays the only key listener.
   const capture = useMemo<CaptureSource>(() => (onChord, options) => keybindings.capture(onChord, options), [keybindings])
   const [page, setPage] = useState(() => firstPage(requested && pageById(requested) ? requested : 'environment.general'))
@@ -127,14 +132,16 @@ export default function OptionsDialog({ page: requested }: { page?: string }) {
     }
     setErrors(new Map())
     const patch = patchFrom(settings.getSnapshot().values, result.values)
-    const shortcutFile = sameShortcuts(shortcutDraft, shortcuts.getSnapshot().file) ? undefined : shortcutDraft
+    const shortcutFile = shortcutsToSave(shortcutEdit)
     if (!Object.keys(patch).length && !shortcutFile) { close(); return }
     // Settings first, then shortcuts; a failure keeps the dialog open on the page that failed, with its draft.
     const asking = settings.dialog.getSnapshot()
     setSaving(true); setError('')
-    const saved = await commitOptions({ update: next => settings.update(next), saveShortcuts: file => shortcuts.save(file) }, patch, shortcutFile)
+    const saved = await commitOptions({ update: next => settings.update(next), saveShortcuts: file => shortcuts.save(file, saveRevision(shortcutEdit, shortcuts.getSnapshot().revision)) }, patch, shortcutFile)
     if (!saved.ok) {
       setError(saved.message); setSaving(false)
+      // The message offers OK again to replace the other window's shortcuts; only that choice may overwrite them.
+      if (saved.stale) setShortcutEdit(edit => ({ ...edit, replace: true }))
       if (saved.stage === 'shortcuts' && page !== shortcutsPage) showPage(shortcutsPage)
       return
     }
@@ -210,7 +217,7 @@ export default function OptionsDialog({ page: requested }: { page?: string }) {
         {/* A form page's own note (Fonts and Colors: where colors come from) stays above its rows. */}
         {form.page.layout === 'form' && form.page.description && <p className="options-note">{highlight(form.page.description)}</p>}
         {form.page.layout === 'shortcuts'
-          ? <ShortcutsPage draft={shortcutDraft} stored={shortcutsState.file} platform={platform} files={shortcuts} capture={capture}
+          ? <ShortcutsPage draft={shortcutDraft} stored={shortcutEdit.base.file} platform={platform} files={shortcuts} capture={capture}
             salvaged={shortcutsState.salvaged ? shortcutsState.notice ?? '' : undefined} onChange={next => { setShortcutDraft(next); setError('') }} />
           : form.page.layout === 'propertyGrid'
             ? <PropertyGrid label={form.page.title} groups={form.groups.map(group => ({ ...group, rows: group.rows.map(settingGridRow) }))} idPrefix="setting-" focused={focused} errors={errors} onFocusRow={key => setFocused(key)} onChange={(key, text) => change(key as SettingKey, text)} renderLabel={highlight} />
