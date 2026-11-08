@@ -4,7 +4,7 @@
 // without decoding anything, and grants each live event's bytes back only once the page says it applied the event.
 import type { BackendStatus, ResultsCloseResult, ResultsRowBytesResult, WireKind } from '../../../shared/contracts'
 import type { PortEndResult, PortMessage, PortRequest } from '../../../shared/ipc/port-messages'
-import { decodePage, PageFormatError, type PageView } from '../../../shared/ipc/wire/pages'
+import { decodePage, pageMemoryBytes, PageFormatError, type PageView } from '../../../shared/ipc/wire/pages'
 import { CELL_ERROR, CELL_NULL, cellFlags, cellSlice, cellText, displayText, runSlice, textRun, type TextRun } from '../../../shared/ipc/wire/cells'
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveUpdateResult } from '../../../shared/live/schema'
@@ -78,7 +78,8 @@ function pageFirstRow(body: ArrayBuffer): number | undefined {
 }
 
 /**
- * Pages are cached per (generation, resultId, firstRow) in an LRU bounded at 64 MiB and 512 pages; pages that a pending
+ * Pages are cached per (generation, resultId, firstRow) in an LRU bounded at 64 MiB and 512 pages, each charged its bytes
+ * plus its column views (pageMemoryBytes); pages that a pending
  * window still needs are never evicted, so once those alone pass 64 MiB, windows that already have rows answer with
  * them (a shorter window, as when rows are not sealed yet). Missing rows are fetched with one read per contiguous gap
  * (4 MiB of credit); rows a read in flight will bring are not read again, and a read nobody waits for any more is
@@ -456,7 +457,7 @@ export class ResultsWorkerCore {
       this.abandonRead(read, 'PAGE_INVALID', detail)
       return
     }
-    this.store(read, view, body.byteLength)
+    this.store(read, view, pageMemoryBytes(view))
     this.send({ t: 'credit', rid, bytes: body.byteLength })
     if (this.cacheBytes > this.limits.cacheBytes) this.shorten()
   }

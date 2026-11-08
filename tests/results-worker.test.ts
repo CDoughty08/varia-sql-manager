@@ -3,7 +3,7 @@ import { ResultsWorkerCore, type WorkerLimits } from '../src/renderer/src/result
 import type { WorkerResponse } from '../src/renderer/src/results/worker-protocol'
 import type { WireKind } from '../src/shared/contracts'
 import type { PortRequest } from '../src/shared/ipc/port-messages'
-import { encodePage, type PageCell } from '../src/shared/ipc/wire/pages'
+import { columnViewBytes, encodePage, type PageCell } from '../src/shared/ipc/wire/pages'
 
 const wires: WireKind[] = ['text', 'text', 'binary']
 const key = { generation: 1, resultId: 5 }
@@ -145,7 +145,7 @@ describe('results worker core', () => {
   })
 
   it('answers a window whose pages outgrow the cache with the rows it has, instead of holding them all', () => {
-    const pageBytes = page(64, 64).byteLength
+    const pageBytes = page(64, 64).byteLength + wires.length * columnViewBytes
     const { window, serve, core, reads, sent, answer } = fixture({ cacheBytes: Math.floor(pageBytes * 2.5) })
     const id = window(0, 640)
     serve(reads()[0].rid)
@@ -157,6 +157,36 @@ describe('results worker core', () => {
     const next = window(192, 448)
     expect(reads().at(-1)).toMatchObject({ firstRow: 192 })
     expect(answer(next)).toBeUndefined()
+  })
+
+  it('charges each cached page its column views as well as its bytes, so wide pages are evicted sooner', () => {
+    // 1,024 columns of one-row pages: about 12 KiB on the wire each, but 320 KiB of column views.
+    const wide: WireKind[] = Array.from({ length: 1024 }, () => 'text')
+    const widePage = (firstRow: number): ArrayBuffer => {
+      const bytes = encodePage({ resultId: 5, firstRow, columns: wide.map(wire => ({ wire })), rows: [wide.map((_, column) => String(firstRow + column))] })
+      return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+    }
+    const wireBytes = widePage(0).byteLength
+    const charged = wireBytes + wide.length * columnViewBytes
+    expect(charged).toBeGreaterThan(wireBytes * 10)
+    // Room for ten pages by their wire bytes alone, but only two by what they hold.
+    const posted: WorkerResponse[] = []
+    const sent: PortRequest[] = []
+    const core = new ResultsWorkerCore({ post: message => { posted.push(message) }, limits: { cacheBytes: Math.floor(charged * 2.5) } })
+    core.attach({ postMessage: message => { sent.push(message as PortRequest) } })
+    core.receive({ t: 'backend', generation: 1, status: 'ready' })
+    for (let row = 0; row < 3; row++) {
+      core.handle({ type: 'window', id: row + 1, key, wires: wide, first: row, count: 1, colStart: 0, colEnd: 4, maxCellChars: 1024, textBudget: 1_000_000 })
+      const read = sent.filter((request): request is Extract<PortRequest, { t: 'read' }> => request.t === 'read').at(-1)!
+      expect(read.firstRow).toBe(row)
+      core.receive({ t: 'page', rid: read.rid, seq: 1, body: widePage(row) })
+      core.receive({ t: 'end', rid: read.rid, ok: true, result: { nextRow: row + 1, rowsAvailable: 3, complete: row === 2, pages: 1, rows: 1 } })
+      expect(posted.find(message => 'id' in message && message.id === row + 1)?.type).toBe('window')
+    }
+    expect(core.cachedPages).toBe(2)
+    expect(core.cachedBytes).toBe(charged * 2)
+    core.handle({ type: 'stats', id: 99 })
+    expect(posted.at(-1)).toEqual({ type: 'stats', id: 99, bytes: charged * 2, pages: 2 })
   })
 
   it('waits for rows a read in flight brings instead of reading them again, and decodes a repeated page once', () => {

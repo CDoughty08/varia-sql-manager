@@ -309,6 +309,7 @@ try {
   jumpLongTasks.push(...wide.long)
   record('grid.x1.jumpFrameP95Ms', percentile(wide.stats.frames, 95), 'ms', `${wide.stats.frames.length} frames over 60 jumps, max ${Math.max(...wide.stats.frames).toFixed(1)} ms`)
   record('grid.x1.jumpTaskP95Ms', percentile(wide.tasks, 95), 'ms', `main-thread task time per jump over 60 jumps, median ${percentile(wide.tasks, 50).toFixed(1)} ms, max ${Math.max(...wide.tasks).toFixed(1)} ms`)
+  record('grid.x1.cache.workerMiB', wide.stats.client.workerBytes / 1048576, 'MiB', `${wide.stats.client.workerPages} pages of 300 columns after 60 jumps, each charged its bytes and column views`)
   record('grid.x1.elements', wide.stats.nodes, 'elements', `1 grid of 300 columns, ${view.width} × ${view.height} window`)
   await jump(0, 0)
   await segment('300 columns: across')

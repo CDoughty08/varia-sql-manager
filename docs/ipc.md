@@ -1952,7 +1952,8 @@ validated live event with its EVENT body's length, which the worker grants back 
 stream and an update end with `end` (`result`: the live end or the update answer).
 
 **The worker** (`worker-core.ts`) keeps an LRU of decoded pages keyed by generation, result and first row (64 MiB or 512
-pages; pages a pending window needs are never evicted, so once those alone pass 64 MiB, windows that already have rows
+pages, each page charged its bytes plus 320 bytes per column for its decoded column views, so a wide page of few rows
+counts what it holds; pages a pending window needs are never evicted, so once those alone pass 64 MiB, windows that already have rows
 answer with them, as a shorter window), reads each missing contiguous range once with 4 MiB of credit, waits for rows a
 read in flight will bring instead of reading them again, cancels a read nobody waits for, and grants credit after
 caching each page (a page that arrives twice, the boundary page of two adjacent reads, is credited without being
@@ -2508,6 +2509,7 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | Grid: DOM elements, 8 / 300 / 300 bit columns | ≤ 1,500 / 4,000 / 4,000 | same | 535 / 931 / 1,811 | 535 / 931 / 1,811 |
 | Grid: UI window cache after a sweep and 300 jumps, windows / text | ≤ 256 / 16 Mi units | same | 256 / 5.8 Mi | 256 / 5.8 Mi |
 | Grid: worker page cache after the same | ≤ 64 MiB | same | 64 MiB | 64 MiB |
+| Grid: worker page cache after 60 jumps over 5,000 rows of 300 columns (bytes and column views) | ≤ 64 MiB | same | 33.8 MiB, 79 pages (Windows, 24 CPUs) | not measured |
 | Grid: renderer heap growth, Ctrl+End then Ctrl+Home over 1,000,000 rows | ≤ 80 MB | ≤ 150 MB | 0.1 MB | 0.1 MB |
 | Grid: UI long tasks over 50 ms in the measured segments / the longest | 0 / ≤ 50 ms | reported / ≤ 250 ms | 32 / 101 ms | 18 / 70 ms |
 | Grid, live: Ctrl+A, Ctrl+C of 100,000 × 8 rows → clipboard (16.7 MB) | ≤ 1.5 s | ≤ 6 s | 0.57 – 0.81 s | 0.61 s |
