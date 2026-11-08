@@ -13,8 +13,11 @@ if (!executablePath) throw new Error('VARIA_PACKAGED_EXECUTABLE must name the pa
 const executable = resolve(executablePath)
 
 // The packaged executable carries build/fuses.cjs's fuses: no file: privileges, no Node mode, NODE_OPTIONS or --inspect.
-const wrong = fuseMismatches(await getCurrentFuseWire(fuseTarget(executable)))
-if (wrong.length) throw new Error(`Packaged fuses not applied: ${wrong.join(', ')}`)
+// An AppImage's executable sits compressed in its squashfs; appimage-check.mjs inspect reads its fuses after extracting it.
+if (!executable.endsWith('.AppImage')) {
+  const wrong = fuseMismatches(await getCurrentFuseWire(fuseTarget(executable)))
+  if (wrong.length) throw new Error(`Packaged fuses not applied: ${wrong.join(', ')}`)
+}
 
 // VARIA_PACKAGED_PROFILE=<dir> runs it on its own profile instead of the user's (a local run). With --inspect fused off, Playwright's Electron launcher cannot attach to main; connect to Chromium's debugging port.
 const server = createServer()

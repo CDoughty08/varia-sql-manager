@@ -714,6 +714,8 @@ app.whenReady().then(async () => {
   if (!primaryInstance) return
   const refusal = sandboxRefusal({ packaged: app.isPackaged, platform: process.platform, noSandbox: app.commandLine.hasSwitch('no-sandbox') })
   if (refusal) {
+    // Also on stderr: after ready, Linux's error box waits for the user, and scripts/appimage-check.mjs reads this line.
+    console.error(refusal)
     dialog.showErrorBox('Varia cannot start', refusal)
     app.exit(1)
     return
