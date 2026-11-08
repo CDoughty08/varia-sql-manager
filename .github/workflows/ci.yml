@@ -138,14 +138,14 @@ jobs:
           npx vitest run tests/kerberos-live.test.ts
 
   smoke-linux:
-    name: Smoke (Linux ${{ matrix.shard }}/2)
+    name: Smoke (Linux ${{ matrix.shard }}/3)
     if: github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'
     strategy:
       fail-fast: false
       matrix:
         # scripts/smoke-shards.mjs splits test:smoke by each platform's measured times; the count here is the one in its command
         # below, and tests/ci-workflow.test.ts keeps every shard within its budget.
-        shard: [1, 2]
+        shard: [1, 2, 3]
     runs-on: ubuntu-24.04
     # Room for every timed step below (tests/ci-workflow.test.ts) plus the setup before them.
     timeout-minutes: 60
@@ -197,7 +197,7 @@ jobs:
           command -v xvfb-run || { sudo apt-get update && sudo apt-get install -y xvfb; }
       - name: Electron smoke tests
         timeout-minutes: 25
-        run: xvfb-run -a -s "-screen 0 1600x1000x24" node scripts/smoke-shards.mjs ${{ matrix.shard }}/2
+        run: xvfb-run -a -s "-screen 0 1600x1000x24" node scripts/smoke-shards.mjs ${{ matrix.shard }}/3
       - name: Scripting smoke test on a 1024x768 display
         # Windows runners have a 1024x768 display, and Script As dialogs and nested submenus must fit it everywhere. The Windows
         # shards run this suite at that size on every pull request, so Linux repeats it on main only. After a smoke failure

@@ -47,6 +47,10 @@ export function queryContribution({ commands, queries, documents, connections, t
       const tab = documents.active
       if (tab && isQueryDocument(tab)) documents.update(tab.id, { includeActualPlan: !tab.includeActualPlan })
     } }),
+    commands.register('query.includeLivePlan', { run: () => {
+      const tab = documents.get(documents.getSnapshot().activeId)
+      if (tab && isQueryDocument(tab)) documents.update(tab.id, { includeLivePlan: !tab.includeLivePlan })
+    } }),
     commands.register('query.includeClientStatistics', { run: () => {
       const tab = documents.active
       if (tab && isQueryDocument(tab)) {

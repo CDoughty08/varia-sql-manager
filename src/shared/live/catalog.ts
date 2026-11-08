@@ -123,15 +123,19 @@ export const defaultBatchRows = 5000
 /** The Operations window's settle window: its ids, like an append table's, are assigned before their rows commit. */
 const operationsSettle = defaultSettle
 
-export const liveSourceIds = ['debug.synthetic', 'activity', 'explorer', 'ssis.catalog', 'ssis.operations'] as const
+export const liveSourceIds = ['debug.synthetic', 'activity', 'explorer', 'ssis.catalog', 'ssis.operations', 'query.plan'] as const
 export type LiveSourceId = typeof liveSourceIds[number]
 export const liveProbeIds = [
   'debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'debug.synthetic.grid', 'debug.synthetic.log', 'debug.synthetic.wide', ...activityLiveProbes,
-  'explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability', 'ssis.catalogProbe', 'ssis.operations.list'
+  'explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability', 'ssis.catalogProbe', 'ssis.operations.list', 'query.plan.operators'
 ] as const
 export type LiveProbeId = typeof liveProbeIds[number]
 
 export const liveSources: { readonly [S in LiveSourceId]: LiveSourceSpec } = {
+  'query.plan': {
+    id: 'query.plan', label: 'Live Execution Plan', scope: 'server', testOnly: false, probes: ['query.plan.operators'], hidden: 'pause',
+    description: 'Transient operator statistics for a query executed in Varia. Args: queryId. Reads sys.dm_exec_query_statistics_xml on a separate observer, at most once a second, only after the previous frame is acknowledged. Hidden views pause. The query session and batch repetition must still match.'
+  },
   'debug.synthetic': {
     id: 'debug.synthetic', label: 'Synthetic', scope: 'none', testOnly: true, probes: ['debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'debug.synthetic.grid', 'debug.synthetic.log', 'debug.synthetic.wide'],
     description: 'Generated values for protocol, renderer and smoke tests. It runs no SQL, so any connection id is accepted; a disconnect of that id still ends it.'
@@ -200,6 +204,11 @@ function activityLiveEntries(): { readonly [P in ActivityLiveProbe]: LiveProbeSp
 }
 
 export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
+  'query.plan.operators': {
+    id: 'query.plan.operators', source: 'query.plan', label: 'Live operators', intervalMs: { default: 1000, min: 1000, max: 60_000 },
+    status: ['phase'], minGapMs: 1000,
+    description: 'One bounded plan topology followed by counter samples. Final actual plans use the query result capture.'
+  },
   'debug.synthetic.metrics': {
     id: 'debug.synthetic.metrics', source: 'debug.synthetic', label: 'Synthetic metrics', intervalMs: anyInterval,
     description: 'Three series: the sample number, a wave between 0 and 100, and a rate that follows it.',

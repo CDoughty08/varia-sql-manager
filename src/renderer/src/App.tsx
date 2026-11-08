@@ -112,7 +112,7 @@ export default function App() {
   /** The output view the active query shows, whose panel revealing the output shows. */
   const activeOutputView = useStableCallback(() => {
     const tabId = documents.getSnapshot().activeId
-    return outputViewOf(workbench.results.getSnapshot()[tabId], workbench.queries.getSnapshot()[tabId]?.estimated)
+    return outputViewOf(workbench.results.getSnapshot()[tabId], workbench.queries.getSnapshot()[tabId]?.estimated, !!workbench.queryPlans.getSnapshot()[tabId])
   })
   const disconnectServer = useStableCallback((id: string) => disconnect(id))
   // Stable for the app's lifetime; it reaches the dock workspace through its ref.

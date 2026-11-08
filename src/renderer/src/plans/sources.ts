@@ -9,8 +9,8 @@ export function orderPlanEntries<T extends { descriptor: Pick<ResultDescriptor, 
     || a.iteration - b.iteration || (rank.get(a.resultId) ?? last) - (rank.get(b.resultId) ?? last))
 }
 
-export interface PlanSource { key: string; revision?: number; label: string; batchLabel?: string; read(signal: AbortSignal): Promise<string> }
-export type SourceStatement = PlanStatement & { sourceKey: string; batchLabel?: string }
+export interface PlanSource { key: string; revision?: number; label: string; batchLabel?: string; batchNumber?: number; iteration?: number; read(signal: AbortSignal): Promise<string> }
+export type SourceStatement = PlanStatement & { sourceKey: string; batchLabel?: string; batchNumber?: number; iteration?: number; partial?: boolean }
 /** Treat a failed/truncated source separately so an earlier valid plan in the same run remains usable. */
 export async function loadPlanSources(sources: readonly PlanSource[], parse: (xml: string) => Promise<ApiResult<PlanDocument>>, signal: AbortSignal): Promise<{ statements: SourceStatement[]; notices: string[] }> {
   const statements: SourceStatement[] = [], notices: string[] = [], errors: string[] = []
@@ -33,7 +33,7 @@ export async function loadPlanSources(sources: readonly PlanSource[], parse: (xm
       operators += count
       for (const entry of result.value.statements) {
         const prefix = source.key + ':'
-        statements.push({ ...entry, sourceKey: source.key, batchLabel: source.batchLabel, id: prefix + entry.id,
+        statements.push({ ...entry, sourceKey: source.key, batchLabel: source.batchLabel, batchNumber: source.batchNumber, iteration: source.iteration, id: prefix + entry.id,
           nodes: entry.nodes.map(node => ({ ...node, id: prefix + node.id, parentId: node.parentId ? prefix + node.parentId : null })) })
       }
       for (const notice of result.value.notices) if (!notices.includes(notice) && notices.length < 7) notices.push(notice)
