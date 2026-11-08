@@ -718,6 +718,18 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .plan-viewer { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; background: var(--varia-panel-background); color: var(--varia-foreground); font-size: var(--varia-size-sm); }
 .estimated-plans { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .estimated-plans > .plan-viewer { flex: 1; min-height: 0; }
+.retained-plans { display: flex; flex: 1; flex-direction: column; height: 100%; min-height: 0; min-width: 0; }
+.retained-plan-controls { display: flex; flex: 0 0 auto; align-items: center; flex-wrap: wrap; gap: 4px; padding: 4px 8px; }
+.retained-plan-controls label { display: flex; align-items: center; gap: 4px; flex: 1 1 260px; min-width: 0; }
+.retained-plan-controls select { flex: 1; min-width: 0; width: 100%; }
+.retained-plan-controls button { padding: 4px 8px; font-size: var(--varia-size-xs); }
+.retained-plan-budget, .retained-plan-notice { flex: 0 0 auto; padding: 4px 8px; font-size: var(--varia-size-xs); }
+.retained-plan-notice { color: var(--varia-warningForeground); }
+.retained-plan-metadata { flex: 0 0 auto; max-height: 40%; overflow: auto; padding: 4px 8px; border-block: 1px solid var(--varia-panel-border); font-size: var(--varia-size-xs); overflow-wrap: anywhere; }
+.retained-plan-metadata summary { cursor: pointer; }
+.retained-plan-metadata dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 8px; }
+.retained-plan-metadata dd { margin: 0; }
+.retained-plan-metadata pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .estimated-plan-context { flex: 0 0 auto; padding: 6px 8px; font-size: var(--varia-size-xs); border-bottom: 1px solid var(--varia-panel-border); }
 .plan-document-tools, .plan-tools { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--varia-panel-border); }
 .plan-tools button, .plan-document-tools button { padding: 4px 8px; font-size: var(--varia-size-xs); }

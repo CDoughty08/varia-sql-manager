@@ -12,6 +12,8 @@ import type { DocumentService, TextDocument } from '../services/documents'
 import type { ResultClient, ResultHandle } from './ResultClient'
 import type { ResultKey } from './worker-protocol'
 import { completionSentence, formatCount, plural } from './status'
+import { retainedPlanLimits, type PlanExecutionContext, type RetainedPlansService, type SnapshotSource } from '../plans/RetainedPlansService'
+import { orderPlanEntries } from '../plans/sources'
 
 export type RunStatus = 'running' | QueryStatus | 'lost' | 'closed'
 /** One result set of the run; `index` is its position in the stack (the grid's `data-result-index`). */
@@ -68,7 +70,7 @@ export interface TabViewState { stackScrollTop: number; weights?: number[]; focu
 /** A mounted grid, for the commands that act on it. */
 export interface GridController { selectAll(): void; repaint(): void }
 /** How a run ended: the summary, or main's failure (`code` BACKEND_LOST when the backend stopped), plus a notice to show first. */
-export interface RunEnd { summary?: QueryResult; error?: string; code?: ErrorCode; notice?: string }
+export interface RunEnd { summary?: QueryResult; error?: string; code?: ErrorCode; notice?: string; planContext?: PlanExecutionContext }
 /** Open Value in New Tab's outcome: whether a document opened, and what the banner says (a failure, or that it opened unformatted). */
 export interface OpenedValue { readonly opened: boolean; readonly message?: string }
 
@@ -104,6 +106,7 @@ interface Run {
   subscription?: Disposable
   endedAt?: number
   closedFrom?: Exclude<RunStatus, 'running' | 'closed'>
+  retaining?: Promise<void>
 }
 interface RunningJob { job: ResultJob; readonly tabId: string; timer?: unknown }
 
@@ -154,6 +157,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private readonly events: EventBus
   private readonly api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'>
   private readonly documents: Pick<DocumentService, 'openText'> | undefined
+  private readonly retainedPlans?: RetainedPlansService
   /** The last number each value tab name used (XML_F52E2B61-…3.xml), for the window's lifetime. */
   private readonly valueNumbers = new Map<string, number>()
   private readonly frame: (callback: () => void) => void
@@ -185,13 +189,14 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
 
   constructor(o: {
     client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary' | 'release' | 'onGeneration'>; api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'>; events: EventBus
-    documents?: Pick<DocumentService, 'openText'>; frame?: (callback: () => void) => void; timers?: Timers; now?: () => number; newId?: () => string
+    documents?: Pick<DocumentService, 'openText'>; frame?: (callback: () => void) => void; timers?: Timers; now?: () => number; newId?: () => string; retainedPlans?: RetainedPlansService
   }) {
     super({})
     this.client = o.client
     this.events = o.events
     this.api = o.api
     this.documents = o.documents
+    this.retainedPlans = o.retainedPlans
     this.frame = o.frame ?? (callback => requestFrame(callback))
     this.timers = o.timers ?? browserTimers
     this.now = o.now ?? (() => Date.now())
@@ -227,7 +232,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
 
   /** The run ended. The summary settles every set (opening any whose events were dropped) and replaces the streamed
    *  messages when they differ; events that arrive later are ignored. */
-  finish(tabId: string, queryId: string, end: RunEnd): void {
+  finish(tabId: string, queryId: string, end: RunEnd): void | Promise<void> {
     const run = this.runs.get(tabId)
     // The tab closed before its run ended: nothing will show or close the sets the summary describes, so they go now.
     if (!run && end.summary && !this.disposed) {
@@ -267,7 +272,38 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     // A run with sets stays on Results even when it failed: the strip under the grids shows its errors beside them.
     if (!run.manualView) run.view = run.sets.length ? 'results' : run.status === 'completed' && run.planSets.length ? 'plan' : 'messages'
     this.announce(tabId, completionSentence(run.status, run.sets.length, this.totalRows(run)))
+    if (end.planContext && this.retainedPlans) {
+      const sources: SnapshotSource[] = []
+      let available = 0
+      for (const entry of orderPlanEntries([...run.planSets, ...run.sets.filter(set => set.descriptor.kind === 'executionPlan')], summary?.planOrder)) {
+        const { descriptor, handle } = entry
+        const snapshot = handle.getSnapshot()
+        if (snapshot.state !== 'complete') continue
+        available += snapshot.rowsAvailable
+        for (let row = 0; row < snapshot.rowsAvailable && sources.length < retainedPlanLimits.documentsPerRun; row++) {
+          sources.push({ key: `${descriptor.generation}:${descriptor.resultId}:${row}`, label: `${entry.capturedPlan ? 'Actual plan' : 'SQL-returned plan'} ${entry.index + 1}, row ${row + 1}`,
+            captureType: entry.capturedPlan ? 'actual' : 'query-returned', batchNumber: descriptor.batchNumber, iteration: descriptor.iteration,
+            generation: descriptor.generation, resultId: descriptor.resultId, row, incomplete: snapshot.incomplete,
+            read: async signal => {
+              const value = await handle.getCell(row, 0, { signal })
+              if (value.error || value.isNull) throw new Error('The original plan XML is unavailable.')
+              return value
+            } })
+        }
+      }
+      const context = end.planContext, history = this.retainedPlans, endedAt = run.endedAt
+      // Install ownership before capture publishes: a subscriber may close/reset output synchronously.
+      let copied!: () => void, failed!: (error: unknown) => void
+      run.retaining = new Promise<void>((resolve, reject) => { copied = resolve; failed = reject })
+      void history.capture(context, {
+        status: summary?.status ?? (end.code === 'BACKEND_LOST' ? 'lost' : 'failed'), endedAt,
+        completedAt: summary?.completedAt, elapsedMs: summary?.elapsedMs, database: summary?.database,
+        spid: summary?.spid, login: summary?.login, completedBatches: summary?.completedBatches, totalBatches: summary?.totalBatches,
+        error: summary?.error?.message ?? end.error
+      }, sources, Math.max(0, available - sources.length)).then(copied, failed)
+    }
     this.publishNow(tabId)
+    return run.retaining
   }
 
   /** The tab closed: its results are released and forgotten (a running save still finishes its file). */
@@ -634,8 +670,13 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const sets = [...run.sets, ...run.planSets]
     if (sets.length === 0) return
     const keys: ResultKey[] = sets.map(set => set.handle.key)
-    void this.client.release(keys).catch(() => {})
-    for (const set of sets) set.handle.dispose()
+    const release = () => {
+      void this.client.release(keys).catch(() => {})
+      for (const set of sets) set.handle.dispose()
+    }
+    // Close Results/tab may race a bounded XML copy. The copy owns this temporary lease; history owns no handles.
+    if (run.retaining) void run.retaining.then(release, release)
+    else release()
   }
 
   private disposeRun(tabId: string): void {

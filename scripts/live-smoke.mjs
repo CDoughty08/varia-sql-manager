@@ -6,7 +6,7 @@
 // stands in for minimizing. Last, Object Explorer's status chips: the fake backend's explorer source, steered by
 // explorer-status.json in the control directory, puts state chips on a server and a database row, which follow a change
 // on the next samples without reloading the tree; the view pauses with a hidden window, and F5 samples it at once.
-import { electron, expect } from './fixtures/smoke.mjs'
+import { electron, expect, within } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { liveProbes } from '../src/shared/live/catalog.ts'
@@ -271,7 +271,7 @@ try {
 } finally {
   clearTimeout(watchdog)
   await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) }).catch(() => {})
-  await Promise.race([app.close(), sleep(15000).then(() => app.process()?.kill())]).catch(() => {})
+  await within(app.close(), 15000, () => app.process()?.kill()).catch(() => {})
   await rm(profile, { recursive: true, force: true }).catch(() => {})
   await rm(control, { recursive: true, force: true }).catch(() => {})
 }

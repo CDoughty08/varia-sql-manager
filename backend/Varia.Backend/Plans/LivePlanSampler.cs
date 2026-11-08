@@ -88,13 +88,16 @@ internal sealed class LivePlanSampler(ILiveHost host, LiveGates gates, string co
                 if (xml.Length + length > MaxXml) return Error("NOT_SUPPORTED", "This live plan exceeds the 1,048,576-character sampling limit. Captured actual plans remain available after execution.");
                 xml.Append(buffer, 0, length);
             }
-            var document = PlanParser.Parse(new StringReader(xml.ToString()), budget.Token);
+            var document = PlanParser.Parse(new StringReader(xml.ToString()), budget.Token, includeDiagnostics: false);
             if (!ReferenceEquals(target, host.QueryPlan(connectionId, args.QueryId))) return Phase("waiting");
             var nodes = document.Statements.SelectMany(s => s.Nodes).ToList();
             if (nodes.Count > MaxNodes) return Error("NOT_SUPPORTED", "Live Plan supports up to 2,000 operators. Captured actual plans remain available after execution.");
             // Per-thread raw properties would become stale in counter-only frames. Live exposes current aggregate
             // counters; captured actual XML retains the full thread details at completion.
-            foreach (var node in nodes) node.Properties.RemoveAll(p => p.Name.StartsWith("RunTimeCountersPerThread", StringComparison.Ordinal));
+            foreach (var node in nodes)
+            {
+                node.Properties.RemoveAll(p => p.Name.StartsWith("RunTimeCountersPerThread", StringComparison.Ordinal) || p.Name.Contains("Spill", StringComparison.Ordinal));
+            }
             var signature = Signature(target, document);
             var changed = signature != topology;
             var counters = nodes.Select(n => new LivePlanCounter(n.Id, n.ActualRows, n.ElapsedMs, n.CpuMs, n.Executions)).ToList();

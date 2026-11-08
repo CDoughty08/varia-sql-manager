@@ -222,6 +222,14 @@ describe('file commands', () => {
     // Its session was read once it finished (only the queries the prompt did not cover are read again).
     expect(queries.mayHaveTransaction.mock.calls).toEqual([[late.id], [clean.id]])
   })
+  it('saves retained XML with the execution-plan file kind, bypassing editor chunk filling and SQL file limits', async () => {
+    const { api, files, documents } = fixture()
+    const xml = '<ShowPlanXML>' + ' '.repeat(5_000_001) + '</ShowPlanXML>'
+    await files.saveCopy('Actual Plan.sqlplan', xml, 'sqlplan')
+    expect(api.saveSqlFile).toHaveBeenCalledWith({ name: 'Actual Plan.sqlplan', content: xml, kind: 'sqlplan', saveAs: true })
+    expect(api.releaseSqlFile).toHaveBeenCalledWith('file-id')
+    expect(documents.getSnapshot().documents).toHaveLength(1)
+  })
   it('saves a copy to a file the user picks without opening it, and saves nothing on Cancel', async () => {
     const { documents, api, files } = fixture()
     await files.saveCopy('dbo.Orders.sql', 'CREATE TABLE dbo.Orders (Id int);')
