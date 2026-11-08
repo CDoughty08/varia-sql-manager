@@ -487,16 +487,17 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .mouse-view { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .mouse-view th, .mouse-view td { padding: 3px 8px; text-align: left; vertical-align: top; font-weight: normal; overflow-wrap: anywhere; }
 .mouse-view thead th { position: sticky; top: 0; z-index: 1; background: var(--varia-editorWidget-background); color: var(--varia-descriptionForeground); border-bottom: 1px solid var(--varia-dialog-separatorBackground); }
-.mouse-col-gesture { width: 40%; }
-.mouse-col-binding { width: 28%; }
-.mouse-col-where { width: 18%; }
-.mouse-col-source { width: 14%; }
+.mouse-col-gesture { width: 26%; }
+.mouse-col-binding { width: 46%; }
+.mouse-col-where { width: 16%; }
+.mouse-col-source { width: 12%; }
 .mouse-group th { padding-top: 8px; font-weight: 600; color: var(--varia-settings-headerForeground); }
-.mouse-gesture { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; }
+/* Inside the row header, not on it: a flex th leaves table layout. */
+.mouse-gesture { display: inline-flex; align-items: baseline; gap: 6px; }
 .mouse-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; align-self: center; }
 .mouse-dot[data-on] { background: var(--varia-focusBorder); }
-.mouse-id, .mouse-reason, .mouse-keyboard { font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
-.mouse-reason, .mouse-keyboard, .mouse-problems { flex-basis: 100%; padding-left: 12px; }
+.mouse-details { display: flex; flex-direction: column; gap: 2px; margin-top: 2px; }
+.mouse-about, .mouse-reason, .mouse-keyboard { font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
 .mouse-problems { display: flex; flex-direction: column; gap: 2px; }
 .mouse-problem { display: flex; align-items: baseline; gap: 4px; font-size: var(--varia-size-xs); }
 .mouse-problem[data-severity="error"] { color: var(--varia-errorForeground); }
@@ -506,7 +507,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .mouse-action { color: var(--varia-descriptionForeground); }
 .mouse-source { display: inline-flex; align-items: center; gap: 4px; }
 .mouse-source[data-source="user"] { font-weight: 600; }
-.mouse-source[data-source="fixed"], .mouse-source[data-source="setting"] { color: var(--varia-descriptionForeground); }
+.mouse-source[data-source="builtin"], .mouse-source[data-source="setting"] { color: var(--varia-descriptionForeground); }
 .mouse-reset { margin-left: 4px; padding: 0 2px; }
 .mouse-link { padding: 0; border: 0; color: var(--varia-list-highlightForeground); text-decoration: underline; }
 .mouse-empty { margin: 8px 10px; color: var(--varia-descriptionForeground); }
