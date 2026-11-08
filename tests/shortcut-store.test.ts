@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { resetNotice, salvageNotice, shortcutHandlers, shortcutSentences, ShortcutStore, type ShortcutDialogs } from '../src/main/shortcut-store'
@@ -6,12 +6,20 @@ import { emptyShortcutFile, shortcutLimits, type ShortcutFile } from '../src/sha
 import type { ShortcutsSnapshot } from '../src/shared/contracts'
 import { BackendError } from '../src/main/backend/errors'
 
+// Writes fail, with the system's kind of message (it names the path), while `failWrites` is set.
+let failWrites = false
+vi.mock('../src/main/json-file', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/main/json-file')>()
+  return { ...actual, writeJsonAtomic: (...args: Parameters<typeof actual.writeJsonAtomic>) => failWrites ? Promise.reject(new Error(`EACCES: permission denied, open '${args[0]}'`)) : actual.writeJsonAtomic(...args) }
+})
+
 let directory: string
 beforeEach(async () => {
   await mkdir('artifacts', { recursive: true })
   directory = await mkdtemp(join(resolve('artifacts'), 'shortcuts-test-'))
 })
 afterEach(async () => {
+  failWrites = false
   expect(directory.startsWith(resolve('artifacts') + sep)).toBe(true)
   await rm(directory, { recursive: true, force: true })
 })
@@ -195,6 +203,41 @@ describe('shortcuts file', () => {
     const results = await Promise.allSettled([shortcuts.save(remap, 1), shortcuts.save(withBindings([{ command: 'query.execute', key: 'ctrl+shift+e' }]), 1)])
     expect(results.map(result => result.status)).toEqual(['fulfilled', 'rejected'])
     expect(await onDisk()).toEqual(remap)
+  })
+})
+
+describe('shortcuts requests from the page', () => {
+  it('refuses a list over its limit before checking its entries', async () => {
+    const shortcuts = store()
+    await shortcuts.load()
+    const huge = { ...emptyShortcutFile, bindings: Array.from({ length: 200_000 }, () => ({ command: 'query.execute', key: 'ctrl+e' })) }
+    const started = performance.now()
+    expect((await failure(shortcuts.save(huge, 1)) as Error).message).toBe(shortcutSentences.overLimit)
+    expect(performance.now() - started).toBeLessThan(200)
+    const handlers = shortcutHandlers(store(), { chooseImport: async () => undefined, chooseExport: async () => join(directory, 'never.json') })
+    for (const file of [huge, { ...emptyShortcutFile, unknown: Array.from({ length: shortcutLimits.unknown + 1 }, () => 1) }, { ...emptyShortcutFile, gestures: Object.fromEntries(Array.from({ length: shortcutLimits.gestures + 1 }, (_, index) => [`g${index}`, 'alt'])) }]) {
+      expect((await failure(handlers.exportFile({ file })) as Error).message).toBe(shortcutSentences.overLimit)
+    }
+    expect(await readdir(directory)).toEqual([])
+  })
+
+  it('answers a failed write with a fixed sentence that names no path', async () => {
+    // A folder where the export goes makes the real write fail; a mocked failure stands in for a denied save.
+    const taken = join(directory, 'taken.json')
+    await mkdir(taken)
+    const handlers = shortcutHandlers(store(), { chooseImport: async () => undefined, chooseExport: async () => taken })
+    const exported = await failure(handlers.exportFile({ file: remap })) as Error
+    expect(exported.message).toBe(shortcutSentences.exportFailed)
+    const shortcuts = store()
+    await shortcuts.load()
+    failWrites = true
+    const saved = await failure(shortcuts.save(remap, 1)) as Error
+    expect(saved.message).toBe(shortcutSentences.saveFailed)
+    const failedExport = await failure(shortcutHandlers(store(), { chooseImport: async () => undefined, chooseExport: async () => join(directory, 'export.json') }).exportFile({ file: remap })) as Error
+    expect(failedExport.message).toBe(shortcutSentences.exportFailed)
+    failWrites = false
+    // Nothing changed: the same revision still saves.
+    expect(await shortcuts.save(remap, 1)).toEqual({ revision: 2 })
   })
 })
 
