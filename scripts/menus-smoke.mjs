@@ -539,7 +539,7 @@ try {
   await selectToken.click({ button: 'right', force: true })
   const editorMenu = menu('Query editor')
   await expect(editorMenu).toBeVisible()
-  expect(await menuItemNames(editorMenu)).toEqual(['Insert Snippet…', 'Surround With…', 'Connection', 'Execute', 'Cancel Executing Query', 'Cut', 'Copy', 'Paste', 'Command Palette…'])
+  expect(await menuItemNames(editorMenu)).toEqual(['Insert Snippet…', 'Surround With…', 'Connection', 'Execute', 'Cancel Executing Query', 'Display Estimated Execution Plan', 'Cut', 'Copy', 'Paste', 'Command Palette…'])
   // The query is not connected: Execute connects it first; nothing is running to cancel.
   await expect(editorMenu.getByRole('menuitem', { name: 'Execute', exact: true })).not.toHaveAttribute('aria-disabled', 'true')
   await expect(editorMenu.getByRole('menuitem', { name: 'Cancel Executing Query', exact: true })).toHaveAttribute('aria-disabled', 'true')

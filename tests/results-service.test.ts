@@ -31,6 +31,16 @@ function fixture() {
 }
 
 describe('results service', () => {
+  it('reports an output choice even before the tab has an ordinary result run', () => {
+    const { service, events, client } = fixture()
+    const choices: unknown[] = []
+    events.subscribe(event => { if (event.type === 'query.outputSelected') choices.push(event) })
+    service.setView('estimate-only', 'messages')
+    expect(choices).toEqual([{ type: 'query.outputSelected', tabId: 'estimate-only', view: 'messages' }])
+    expect(service.getSnapshot()).toEqual({})
+    expect(client.open).not.toHaveBeenCalled()
+    service.dispose()
+  })
   it('opens each set as the backend announces it, in order, and publishes at most once a frame', () => {
     const { client, service, published, flush, tab } = fixture()
     service.begin('t1', 'q1')

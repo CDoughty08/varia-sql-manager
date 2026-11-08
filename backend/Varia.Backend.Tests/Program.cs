@@ -264,6 +264,7 @@ if (liveGroup is null)
         ("ConnectionFailure.Identity", () => ConnectionFailureChecks.IdentityAsync(Check)),
         ("Session", Sync(() => SessionChecks.Run(Check))),
         ("Plan", Sync(() => PlanChecks.Run(Check))),
+        ("EstimatedPlan", Sync(() => EstimatedPlanChecks.Run(Check))),
         ("ClientStatistics", Sync(() => ClientStatisticsChecks.Run(Check))),
         ("Entra", () => EntraChecks.RunAsync(Check)),
         ("Store", Sync(() => StoreChecks.Run(Check))),
@@ -711,6 +712,7 @@ try
     await Suite("LiveTableData", () => LiveTableDataChecks.RunAsync(Check, service, Live, json));
     await Suite("ExplorerStatus", () => ExplorerStatusLiveChecks.RunAsync(Check, service, info, Live, json));
     await Suite("Execution", () => ExecutionLiveChecks.RunAsync(Check, service, info, json));
+    await Suite("EstimatedPlans", () => EstimatedPlanChecks.RunAsync(Check, service, info, json));
     await Suite("Transaction", () => TransactionLiveChecks.RunAsync(Check, service, info, json));
     await Suite("LiveResult", () => LiveResultChecks.RunAsync(Check, service, info, Live("master"), json));
     await Suite("ClientStatistics", () => ClientStatisticsChecks.RunAsync(Check, service, info, json));

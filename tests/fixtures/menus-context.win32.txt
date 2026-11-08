@@ -14,6 +14,7 @@ editor.context, for the query editor
   ---
   E&xecute  F5  ++--
   Ca&ncel Executing Query  Alt+Pause  --+-
+  &Display Estimated Execution Plan  Ctrl+L  -+--
   ---
   Cu&t  Ctrl+X  ++++
   &Copy  Ctrl+C  ++++

@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest'
+// @vitest-environment happy-dom
+// The runtime checks below load the real Monaco, which needs a DOM; the drift checks only read files.
+import { beforeAll, describe, expect, it } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { commandDescriptor } from '../src/shared/commands/catalog'
+import { loadMonaco, loadMonacoFor, monacoKeyRows, omittedContextKeys, renderMonacoKeys, reviewedImports, type LoadedMonaco } from './fixtures/monaco-runtime'
+import { monacoKeyRules, monacoRuleWhen } from '../src/shared/commands/monaco-keys.generated'
 import { bridgeRules, defaultRules, nativeChordPrefixes, parseKeySpec, platforms, reservedReason, workbenchRules, type Platform } from '../src/shared/commands/keybindings'
 
 /**
@@ -10,21 +14,6 @@ import { bridgeRules, defaultRules, nativeChordPrefixes, parseKeySpec, platforms
  * modules the renderer loads and fails when a workbench key collides without a reviewed reason.
  */
 const monacoRoot = join('node_modules', 'monaco-editor', 'esm', 'vs')
-// The Monaco modules start.tsx imports. Adding a contrib changes Monaco's keys, so it must be reviewed here.
-const reviewedImports = [
-  'monaco-editor/editor/editor.api.js',
-  'monaco-editor/languages/definitions/sql/register.js',
-  'monaco-editor/languages/definitions/xml/register.js',
-  'monaco-editor/editor/contrib/find/browser/findController.js',
-  'monaco-editor/editor/contrib/clipboard/browser/clipboard.js',
-  'monaco-editor/editor/contrib/contextmenu/browser/contextmenu.js',
-  'monaco-editor/editor/contrib/comment/browser/comment.js',
-  'monaco-editor/editor/contrib/snippet/browser/snippetController2.js',
-  'monaco-editor/editor/contrib/bracketMatching/browser/bracketMatching.js',
-  'monaco-editor/editor/contrib/wordOperations/browser/wordOperations.js',
-  'monaco-editor/editor/contrib/hover/browser/hoverContribution.js',
-  'monaco-editor/features/codicon/register.js'
-]
 /** Workbench keys Monaco also binds, each with the reason the workbench may have it. Unused entries fail the test. */
 const monacoShadowAllowlist: Readonly<Record<string, string>> = {
   'mod+enter': 'query.execute owns it in the editor, as addAction did (⌘↩ is replace-all in the macOS find widget)',
@@ -165,5 +154,193 @@ describe('Monaco keybinding drift', () => {
       expect(workbenchRules(defaultRules(platform)).get(chord)?.map(rule => rule.command), platform).toEqual(['view.toggleResultsPane'])
       expect(chordsByPlatform.get(platform)!.has(platform === 'darwin' ? 'shift+meta+r' : 'ctrl+shift+r'), platform).toBe(false)
     }
+  })
+})
+
+/**
+ * Lane H (remapping Monaco's own keys) rests on these: Monaco 0.57's public `editor.addKeybindingRules` adds rules at
+ * runtime, its Disposable takes exactly them away again, and a `-command` rule unbinds a default. Each check resolves
+ * keys through Monaco's real StandaloneKeybindingService, as a key press in the editor would.
+ */
+describe('Monaco runtime keybinding rules', () => {
+  let loaded: LoadedMonaco
+  beforeAll(async () => { loaded = await loadMonaco() }, 60000)
+
+  /** The command Monaco would run for `keybinding` (one chord) with `context` keys set, or undefined. */
+  function press(keybinding: number, context: Readonly<Record<string, boolean>>): string | undefined {
+    const { services, internals } = loaded
+    const [chord] = internals.decodeKeybinding(keybinding, internals.os)!.chords
+    const node = document.createElement('div'), scoped = services.contextKey.createScoped(node)
+    try {
+      for (const [key, value] of Object.entries(context)) scoped.createKey(key, value)
+      const result = services.keybinding.softDispatch({ ...chord }, node)
+      return result.kind === 2 ? result.commandId : undefined
+    } finally { scoped.dispose() }
+  }
+  /** Every key Monaco currently binds to `command`, as labels in its own format. */
+  const keysOf = (command: string): string[] => (loaded.services.keybinding.getKeybindings() as { command: string; resolvedKeybinding?: { getUserSettingsLabel(): string } }[])
+    .filter(item => item.command === command && item.resolvedKeybinding).map(item => item.resolvedKeybinding!.getUserSettingsLabel()).sort()
+  const editor = { editorFocus: true, editorTextFocus: true, textInputFocus: true }
+
+  it('starts from the defaults', () => {
+    const { KeyMod, KeyCode } = loaded.monaco
+    expect(press(KeyMod.CtrlCmd | KeyCode.KeyF, editor)).toBe('actions.find')
+    expect(press(KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyJ, editor)).toBeUndefined()
+    // The checks below add Ctrl/⌘+Alt+J, so it must be free on every platform (⌘⌥F, say, is Replace on macOS).
+    for (const platform of platforms) {
+      const free = platform === 'darwin' ? 'alt+meta+j' : 'ctrl+alt+j'
+      expect(monacoKeyRules.some(rule => rule.keys[platform].some(chords => chords.join(' ') === free)), platform).toBe(false)
+    }
+    expect(keysOf('cancelSelection')).toEqual(['escape', 'shift+escape'])
+  })
+
+  it('adds a rule and disposing it restores the default', () => {
+    const { KeyMod, KeyCode, editor: api } = loaded.monaco, before = keysOf('actions.find')
+    const added = api.addKeybindingRules([{ keybinding: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyJ, command: 'actions.find', when: 'editorFocus' }])
+    expect(press(KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyJ, editor)).toBe('actions.find')
+    expect(press(KeyMod.CtrlCmd | KeyCode.KeyF, editor)).toBe('actions.find')
+    expect(keysOf('actions.find')).toHaveLength(before.length + 1)
+    added.dispose()
+    expect(press(KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyJ, editor)).toBeUndefined()
+    expect(keysOf('actions.find')).toEqual(before)
+    // A second dispose is harmless.
+    added.dispose()
+    expect(keysOf('actions.find')).toEqual(before)
+  })
+
+  it("a `-command` rule with no key unbinds all of a default's keys until it is disposed", () => {
+    const { KeyMod, KeyCode, editor: api } = loaded.monaco, before = keysOf('actions.find')
+    // keybinding 0 decodes to no key: a removal of every key the command has.
+    const removed = api.addKeybindingRules([{ keybinding: 0, command: '-actions.find' }])
+    expect(press(KeyMod.CtrlCmd | KeyCode.KeyF, editor)).toBeUndefined()
+    expect(keysOf('actions.find')).toEqual([])
+    removed.dispose()
+    expect(press(KeyMod.CtrlCmd | KeyCode.KeyF, editor)).toBe('actions.find')
+    expect(keysOf('actions.find')).toEqual(before)
+  })
+
+  it('a `-command` rule with a key unbinds only that key', () => {
+    const { KeyMod, KeyCode, editor: api } = loaded.monaco
+    const removed = api.addKeybindingRules([{ keybinding: KeyMod.Shift | KeyCode.Escape, command: '-cancelSelection' }])
+    expect(keysOf('cancelSelection')).toEqual(['escape'])
+    expect(press(KeyMod.Shift | KeyCode.Escape, { ...editor, editorHasSelection: true })).toBeUndefined()
+    expect(press(KeyCode.Escape, { ...editor, editorHasSelection: true })).toBe('cancelSelection')
+    removed.dispose()
+    expect(keysOf('cancelSelection')).toEqual(['escape', 'shift+escape'])
+  })
+
+  it('a remap is one call (remove the default, add the new key) and one dispose undoes both', () => {
+    const { KeyMod, KeyCode, editor: api } = loaded.monaco
+    const remap = api.addKeybindingRules([
+      { keybinding: KeyMod.CtrlCmd | KeyCode.KeyF, command: '-actions.find' },
+      { keybinding: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyJ, command: 'actions.find', when: 'editorFocus || editorIsOpen' }
+    ])
+    expect(press(KeyMod.CtrlCmd | KeyCode.KeyF, editor)).toBeUndefined()
+    expect(press(KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyJ, editor)).toBe('actions.find')
+    remap.dispose()
+    expect(press(KeyMod.CtrlCmd | KeyCode.KeyF, editor)).toBe('actions.find')
+    expect(press(KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyJ, editor)).toBeUndefined()
+  })
+
+  it("a removal matches a default only when its `when` is absent or implied by the default's", () => {
+    const { KeyMod, KeyCode, editor: api } = loaded.monaco
+    // actions.find's default is `editorFocus || editorIsOpen`: a narrower removal clause leaves it bound, so lane H must
+    // remove with no `when` or with the default's own clause (monacoKeyRules has it).
+    const narrower = api.addKeybindingRules([{ keybinding: KeyMod.CtrlCmd | KeyCode.KeyF, command: '-actions.find', when: 'editorTextFocus' }])
+    expect(press(KeyMod.CtrlCmd | KeyCode.KeyF, editor)).toBe('actions.find')
+    narrower.dispose()
+    const exact = api.addKeybindingRules([{ keybinding: KeyMod.CtrlCmd | KeyCode.KeyF, command: '-actions.find', when: monacoRuleWhen(monacoKeyRules.find(rule => rule.command === 'actions.find')!, 'win32') }])
+    expect(press(KeyMod.CtrlCmd | KeyCode.KeyF, editor)).toBeUndefined()
+    exact.dispose()
+    expect(press(KeyMod.CtrlCmd | KeyCode.KeyF, editor)).toBe('actions.find')
+  })
+
+  it("disposing registrations out of order removes only each one's own rules", () => {
+    const { KeyMod, KeyCode, editor: api } = loaded.monaco
+    const first = api.addKeybindingRules([{ keybinding: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyJ, command: 'actions.find', when: 'editorFocus' }])
+    const second = api.addKeybindingRules([{ keybinding: KeyMod.CtrlCmd | KeyCode.KeyF, command: '-actions.find' }])
+    first.dispose()
+    expect(press(KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyJ, editor)).toBeUndefined()
+    expect(press(KeyMod.CtrlCmd | KeyCode.KeyF, editor)).toBeUndefined()
+    second.dispose()
+    expect(press(KeyMod.CtrlCmd | KeyCode.KeyF, editor)).toBe('actions.find')
+  })
+
+  it('a rule for another command on a default key wins over the default while it lasts', () => {
+    const { KeyMod, KeyCode, editor: api } = loaded.monaco
+    const command = api.registerCommand('varia.test.find', () => undefined)
+    const shadow = api.addKeybindingRules([{ keybinding: KeyMod.CtrlCmd | KeyCode.KeyF, command: 'varia.test.find', when: 'editorTextFocus' }])
+    expect(press(KeyMod.CtrlCmd | KeyCode.KeyF, editor)).toBe('varia.test.find')
+    // Outside its `when` the default still answers.
+    expect(press(KeyMod.CtrlCmd | KeyCode.KeyF, { editorFocus: true })).toBe('actions.find')
+    shadow.dispose()
+    command.dispose()
+    expect(press(KeyMod.CtrlCmd | KeyCode.KeyF, editor)).toBe('actions.find')
+  })
+
+  it('removes and restores a two-part default chord', () => {
+    const { KeyMod, KeyCode, editor: api } = loaded.monaco
+    const chord = KeyMod.chord(KeyMod.CtrlCmd | KeyCode.KeyK, KeyMod.CtrlCmd | KeyCode.KeyC), before = keysOf('editor.action.addCommentLine')
+    expect(before).toHaveLength(1)
+    const removed = api.addKeybindingRules([{ keybinding: chord, command: '-editor.action.addCommentLine' }])
+    expect(keysOf('editor.action.addCommentLine')).toEqual([])
+    removed.dispose()
+    expect(keysOf('editor.action.addCommentLine')).toEqual(before)
+  })
+})
+
+// Regenerate after a Monaco upgrade or a change to start.tsx's Monaco imports: npx vitest run tests/monaco-keybindings.test.ts -u
+describe('generated Monaco key table', () => {
+  let loaded: LoadedMonaco, loads: Record<Platform, LoadedMonaco>
+  beforeAll(async () => {
+    loaded = await loadMonaco()
+    // One at a time: each load fakes process.platform while Monaco's modules evaluate.
+    loads = {} as Record<Platform, LoadedMonaco>
+    for (const platform of platforms) loads[platform] = await loadMonacoFor(platform)
+  }, 120000)
+
+  it('keeps src/shared/commands/monaco-keys.generated.ts in sync with the installed Monaco', async () => {
+    await expect(renderMonacoKeys(monacoKeyRows(loads))).toMatchFileSnapshot('../src/shared/commands/monaco-keys.generated.ts')
+  })
+  it('lists the editor keys the Shortcuts page shows as Editor rows', () => {
+    const key = (command: string, platform: Platform) => monacoKeyRules.filter(rule => rule.command === command).flatMap(rule => rule.keys[platform].map(chords => chords.join(' ')))
+    expect(key('actions.find', 'win32')).toEqual(['ctrl+f'])
+    expect(key('actions.find', 'darwin')).toEqual(['meta+f'])
+    expect(key('editor.action.startFindReplaceAction', 'win32')).toEqual(['ctrl+h'])
+    expect(key('editor.action.startFindReplaceAction', 'darwin')).toEqual(['alt+meta+f'])
+    expect(key('editor.action.addCommentLine', 'linux')).toEqual(['ctrl+k ctrl+c'])
+    expect(key('cursorColumnSelectLeft', 'linux')).toEqual([])
+    expect(monacoKeyRules.find(rule => rule.command === 'actions.find')).toMatchObject({ title: 'Find', when: 'editorFocus || editorIsOpen' })
+    expect(monacoKeyRules.find(rule => rule.command === 'cursorEnd')?.args).toEqual({ sticky: false })
+  })
+  it("records each platform's clause where Monaco folds the OS into it", () => {
+    // wordOperations guards its keys with !(accessibilityModeEnabled && isWindows), which Monaco folds as it loads.
+    const rule = monacoKeyRules.find(rule => rule.command === 'cursorWordLeft')!
+    expect(platforms.map(platform => monacoRuleWhen(rule, platform))).toEqual(['textInputFocus && !accessibilityModeEnabled', 'textInputFocus', 'textInputFocus'])
+    expect([loads.win32.internals.os, loads.linux.internals.os, loads.darwin.internals.os]).toEqual([1, 3, 2])
+  })
+  it('loads Monaco as the sandboxed renderer does, on its web branch', () => {
+    for (const platform of platforms) expect(loads[platform].internals, platform).toMatchObject({ isWeb: true, isNative: false })
+    expect(loaded.internals).toMatchObject({ isWeb: true, isNative: false })
+    // In a browser Monaco binds no Cut, Copy or Paste keys (the page's own roles take them), so lane H must not list them.
+    for (const command of ['editor.action.clipboardCutAction', 'editor.action.clipboardCopyAction', 'editor.action.clipboardPasteAction']) {
+      for (const platform of platforms) expect(loads[platform].rules.some(rule => rule.id === command), `${command} on ${platform}`).toBe(false)
+      expect(monacoKeyRules.some(rule => rule.command === command), command).toBe(false)
+    }
+  })
+  it('leaves out keys for widgets Varia never opens and keys inside Monaco widgets', () => {
+    const commands = new Set(monacoKeyRules.map(rule => rule.command))
+    for (const command of ['quickInput.accept', 'acceptSelectedCodeAction', 'editor.action.scrollUpHover', 'editor.action.revealDefinition', 'goToNextReference', 'jumpToNextSnippetPlaceholder', 'history.showNext']) {
+      expect(loaded.rules.some(rule => rule.id === command), `Monaco still registers ${command}`).toBe(true)
+      expect(commands.has(command), command).toBe(false)
+    }
+    // Every omitted context key names one that some Monaco rule uses, so the list cannot go stale.
+    const clauses = loaded.rules.map(rule => rule.when?.serialize() ?? '')
+    for (const key of Object.keys(omittedContextKeys)) expect(clauses.some(clause => clause.split(/ \|\| | && /).includes(key)), key).toBe(true)
+  })
+  it.each(platforms)('agrees with the source parser on %s', platform => {
+    // The parser over-reports (platform blocks apply everywhere), so every generated key must be among its chords.
+    const parsed = chordsByPlatform.get(platform)!
+    for (const rule of monacoKeyRules) for (const chords of rule.keys[platform]) expect(parsed.has(chords.join(' ')), `${rule.command} ${chords.join(' ')}`).toBe(true)
   })
 })

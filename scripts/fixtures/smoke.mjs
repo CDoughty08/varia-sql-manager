@@ -1,5 +1,8 @@
 import { execFileSync } from 'node:child_process'
 import { _electron, expect as baseExpect } from '@playwright/test'
+import { ignoreCrashedTargetReplies } from './playwright-races.mjs'
+
+ignoreCrashedTargetReplies()
 
 /**
  * Windows runners can take seconds to open, flush, or replace a new file while antivirus and indexer scans hold it, and

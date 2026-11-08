@@ -317,8 +317,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     return state
   }
 
-  /** The user picked Results, Messages or Execution plan: automatic switching stops until the next run. */
+  /** The user picked an output pane: automatic switching stops until the next run. */
   setView(tabId: string, view: OutputViewName): void {
+    // An isolated estimate may own the output before this tab has ordinary results.
+    this.events.emit({ type: 'query.outputSelected', tabId, view })
     const run = this.runs.get(tabId)
     if (!run || (run.view === view && run.manualView)) return
     run.view = view
