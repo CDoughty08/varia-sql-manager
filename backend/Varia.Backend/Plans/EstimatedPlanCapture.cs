@@ -4,25 +4,37 @@ using Microsoft.Data.SqlClient;
 
 namespace Varia.Backend.Plans;
 
-internal sealed record EstimatedPlanArgs(string ConnectionId, string SessionId, string RequestId, string Database, string Sql, int StartLine = 1);
+internal sealed record EstimatedPlanArgs(string ConnectionId, string SessionId, string RequestId, string Database, string Sql, int StartLine = 1, string Mode = "isolated");
 internal sealed record EstimatedPlanXml(string Xml, int BatchNumber, int Iteration);
-internal sealed record EstimatedPlanResult(List<EstimatedPlanXml> Plans, string Database);
+internal sealed record EstimatedPlanSession(int Spid, string? Login);
+internal sealed record EstimatedPlanResult(List<EstimatedPlanXml> Plans, string Database, EstimatedPlanSession? Session = null);
 
-/// <summary>Only called with a fresh, unpooled, non-reconnecting connection. Never borrows or resets a query session.
-/// SHOWPLAN changes (including USE and SET) must not contaminate the user's transaction or a later execution.</summary>
+internal sealed class EstimatedPlanCleanupException(Exception inner) : Exception("Estimated plan capture cleanup failed.", inner);
+
+/// <summary>The caller owns the physical connection, or holds the query session gate until cleanup completes.
+/// A borrowed session must be closed if cleanup cannot be confirmed.</summary>
 internal static class EstimatedPlanCapture
 {
     internal const int MaxDocuments = 64;
     internal const int MaxCharacters = 2_097_152;
     internal static readonly TimeSpan Budget = TimeSpan.FromSeconds(30);
 
-    public static async Task<EstimatedPlanResult> ReadAsync(SqlConnection connection, List<EstimatedPlanScript.Batch> batches, int startLine, CancellationToken token)
+    public static async Task<EstimatedPlanResult> ReadAsync(SqlConnection connection, List<EstimatedPlanScript.Batch> batches, int startLine, CancellationToken token,
+        string? sessionDatabase = null, Func<string, Exception?>? fault = null)
     {
         var plans = new List<EstimatedPlanXml>();
         var characters = 0;
-        await Run(SqlService.SessionPrologue, token);
+        var originalDatabase = connection.Database;
+        // Do not reset any existing capture/NOEXEC/PARSEONLY/FMTONLY state. A constant SELECT must really execute before
+        // we can safely take over SHOWPLAN. It does not open an implicit transaction or inspect user data.
+        (int Options, int TextSize)? options = sessionDatabase is null ? null : await Options(token);
+        if (sessionDatabase is null) await Run(SqlService.SessionPrologue, token);
         try
         {
+            // SHOWPLAN is nvarchar(max), so the user's TEXTSIZE would otherwise silently truncate XML on the server.
+            if (options is not null) await Run("SET TEXTSIZE 2147483647", token);
+            if (sessionDatabase is not null && connection.Database != sessionDatabase)
+                await connection.ChangeDatabaseAsync(sessionDatabase, token);
             // Alone in its own batch, on a connection whose compile options no submitted SQL has touched.
             await Run("SET SHOWPLAN_XML ON", token);
             for (var b = 0; b < batches.Count; b++)
@@ -47,7 +59,7 @@ internal static class EstimatedPlanCapture
                     token.ThrowIfCancellationRequested();
                     try
                     {
-                        // Cancel bounds TextReader reads too, which do not accept a cancellation token.
+                        // Attention also interrupts the reader's tokenless result transitions and provider reads.
                         await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, CancellationToken.None);
                         try
                         {
@@ -79,6 +91,7 @@ internal static class EstimatedPlanCapture
                     }
                     catch (SqlException error) when (!token.IsCancellationRequested)
                     {
+                        if (sessionDatabase is not null && SqlService.IsSessionLost(error, connection.State)) throw;
                         var line = startLine + batch.Source.StartLine + Math.Max(1, error.LineNumber) - 2;
                         var message = $"Estimated plan, batch {b + 1}, repetition {iteration}, line {line}: {error.Message}";
                         throw new RequestException("SQL_ERROR", message.Length > 16_384 ? message[..16_384] : message);
@@ -86,22 +99,49 @@ internal static class EstimatedPlanCapture
                     finally { if (token.IsCancellationRequested) Cancel(command); }
                 }
             }
+            token.ThrowIfCancellationRequested();
             return new(plans, connection.Database);
         }
         finally
         {
-            // Never use the cancelled acquisition token for cleanup. Disposal by the caller ends the physical session
-            // even if attention, transport failure or the server prevents OFF from completing.
+            // Never use the cancelled acquisition token for cleanup. A borrowed connection can be reused only after OFF,
+            // an executing sentinel, and context restoration succeed. Failed cleanup must win over any acquisition error.
             if (connection.State == ConnectionState.Open)
             {
                 using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-                try { await Run("SET SHOWPLAN_XML OFF", cleanup.Token); }
-                catch (Exception error) when (error is SqlException or InvalidOperationException or OperationCanceledException or IOException) { }
+                try
+                {
+                    await Run("SET SHOWPLAN_XML OFF", cleanup.Token);
+                    if (options is { } prior)
+                    {
+                        await Options(cleanup.Token);
+                        await Run("SET QUOTED_IDENTIFIER " + ((prior.Options & 256) != 0 ? "ON" : "OFF") + "; SET TEXTSIZE "
+                            + prior.TextSize.ToString(System.Globalization.CultureInfo.InvariantCulture), cleanup.Token);
+                        if (connection.Database != originalDatabase) await connection.ChangeDatabaseAsync(originalDatabase, cleanup.Token);
+                    }
+                }
+                catch (Exception error)
+                { if (sessionDatabase is not null) throw new EstimatedPlanCleanupException(error); }
             }
+            else if (sessionDatabase is not null) throw new EstimatedPlanCleanupException(new IOException("The SQL connection closed during estimation."));
+        }
+
+        async Task<(int Options, int TextSize)> Options(CancellationToken cancellation)
+        {
+            const string sql = "SELECT @@OPTIONS AS [__varia_estimate_options], @@TEXTSIZE;";
+            if (fault?.Invoke(sql) is { } error) throw error;
+            await using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            command.CommandTimeout = 0;
+            await using var reader = await command.ExecuteReaderAsync(cancellation);
+            if (reader.FieldCount == 2 && reader.GetName(0) == "__varia_estimate_options" && reader.GetFieldType(0) == typeof(int) && reader.GetFieldType(1) == typeof(int)
+                && await reader.ReadAsync(cancellation)) return (reader.GetInt32(0), reader.GetInt32(1));
+            throw new RequestException("SQL_ERROR", "The query session's capture, NOEXEC, PARSEONLY or FMTONLY options prevent session-aware estimation. Turn them off explicitly, or use an isolated estimate. Existing capture options were left unchanged.");
         }
 
         async Task Run(string sql, CancellationToken cancellation)
         {
+            if (fault?.Invoke(sql) is { } error) throw error;
             await using var command = connection.CreateCommand();
             command.CommandText = sql;
             command.CommandTimeout = 0;

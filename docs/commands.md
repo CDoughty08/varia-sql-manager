@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (247)
+## Commands (248)
 
 ### File
 
@@ -127,6 +127,7 @@ keys it uses are listed below.
 | Include Actual Execution Plan | `query.includeActualPlan` | Ctrl+M (`editorFocus \|\| queryBarFocus`) | Ctrl+M (`editorFocus \|\| queryBarFocus`) | — | `activeDocumentIsQuery && !queryRunning && !documentBusy`; checked when `includeActualPlan` | Query › Include Actual Execution Plan |
 | Include Live Execution Plan | `query.includeLivePlan` | — | — | — | `activeDocumentIsQuery && !queryRunning && !documentBusy`; checked when `includeLivePlan` | Query › Include Live Execution Plan |
 | Display Estimated Execution Plan | `query.estimatePlan` | Ctrl+L (`editorFocus \|\| queryBarFocus`) | Ctrl+L (`editorFocus \|\| queryBarFocus`) | ⌘L (`editorFocus \|\| queryBarFocus`) | `activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy` | Query › Display Estimated Execution Plan; Editor context menu › Display Estimated Execution Plan |
+| Display Estimated Plan in Query Session | `query.estimateSessionPlan` | — | — | — | `activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy` | Query › Display Estimated Plan in Query Session; Editor context menu › Display Estimated Plan in Query Session |
 | Include Client Statistics | `query.includeClientStatistics` | Shift+Alt+S (`editorFocus \|\| queryBarFocus`) | Shift+Alt+S (`editorFocus \|\| queryBarFocus`) | — | `activeDocumentIsQuery && !queryRunning && !documentBusy`; checked when `includeClientStatistics` | Query › Include Client Statistics |
 | Reset Client Statistics | `query.resetClientStatistics` | — | — | — | `activeDocumentIsQuery && !queryRunning && !documentBusy` | Query › Reset Client Statistics |
 | Change Connection… | `query.changeConnection` | — | — | — | `hasActiveDocument && activeDocumentIsQuery && !queryRunning && !documentBusy` | Query › Connection › Change Connection… |
@@ -480,6 +481,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_execute` | **I**nclude Actual Execution Plan | `query.includeActualPlan` | Always |
 | `1_execute` | Include **L**ive Execution Plan | `query.includeLivePlan` | Always |
 | `1_execute` | Display **E**stimated Execution Plan | `query.estimatePlan` | Always |
+| `1_execute` | Display Estimated **P**lan in Query Session | `query.estimateSessionPlan` | Always |
 | `1_execute` | Include Client **S**tatistics | `query.includeClientStatistics` | Always |
 | `1_execute` | **R**eset Client Statistics | `query.resetClientStatistics` | Always |
 
@@ -547,6 +549,7 @@ Right-click the query editor, or press Shift+F10 or the context-menu key in it. 
 | `2_execute` | E**x**ecute | `query.execute` | Always |
 | `2_execute` | Ca**n**cel Executing Query | `query.cancel` | Always |
 | `2_execute` | **D**isplay Estimated Execution Plan | `query.estimatePlan` | Always |
+| `2_execute` | Display **E**stimated Plan in Query Session | `query.estimateSessionPlan` | Always |
 | `3_clipboard` | Cu**t** | `edit.cut` | Always |
 | `3_clipboard` | **C**opy | `edit.copy` | Always |
 | `3_clipboard` | **P**aste | `edit.paste` | Always |
