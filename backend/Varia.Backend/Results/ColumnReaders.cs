@@ -630,7 +630,8 @@ internal sealed class ColumnPlan
     }
 
     /// <summary>Appends the cell <paramref name="cells"/> serialised. When the feed <paramref name="starved"/> before the cap,
-    /// the text before the node it cut is kept, marked truncated.</summary>
+    /// what was kept (short of the cap only when the cut node's start was not, see <see cref="XmlCellWriter.Write"/>) is
+    /// stored, marked truncated.</summary>
     private bool StoreXml(XmlCellWriter cells, bool starved, int cap, PageBuilder builder)
     {
         if (!starved || cells.Full) return Text(cells.Text, cap, builder);
