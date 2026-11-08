@@ -17,6 +17,12 @@ internal static class EstimatedPlanChecks
         var harmless = EstimatedPlanScript.Parse("SELECT 'SET SHOWPLAN_XML OFF', N'GO', 'it''s safe'; -- SET SHOWPLAN_XML OFF\n/* SET SHOWPLAN_XML OFF */\nGO 2\nUSE [temp]]db];\nGO\nSELECT 2 OPTION(USE HINT('DISABLE_PARAMETER_SNIFFING'));", 5);
         check(harmless.Count == 3 && harmless[0].Source.RepeatCount == 2 && harmless[1].Database == "temp]db", "estimated guard handles literals, GO repetitions, nested comments and quoted USE");
         check(EstimatedPlanScript.Parse("USE \"tempdb\";", 1)[0].Database == "tempdb", "quoted USE database decodes without concatenating SQL");
+        foreach (var option in new[] { "OFFSETS", "FIPS_FLAGGER" })
+        {
+            try { EstimatedPlanScript.Parse("SET " + option + " OFF", 1, sessionAware: true); check(false, "session parse-time guard " + option); }
+            catch (RequestException error) { check(error.Code == "INVALID_SCRIPT", "session parse-time guard refuses " + option); }
+            check(EstimatedPlanScript.Parse("SET " + option + " OFF", 1).Count == 1, "isolated parsing behavior remains unchanged for " + option);
+        }
         foreach (var database in new[] { "HINT", "PLAN" })
             check(EstimatedPlanScript.Parse("USE " + database + ";", 1)[0].Database == database, "standalone USE is a database switch even when named " + database);
         foreach (var sql in new[] { "USE tempdb; SELECT 1", "SELECT 1; USE master", "SELECT 1; USE HINT;", "SELECT 1; USE PLAN;", "USE master; USE tempdb", "SELECT 1\nGO 0", "SELECT 1\n:r x", "SELECT 'unterminated" })

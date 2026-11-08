@@ -5,6 +5,9 @@ import { buildMenuModel, contextCommandIds, contextMenuIds, type ContextMenuId, 
 import { menuStyleArgument, menuStyleFor, menuStyleFromArgv } from '../src/shared/menu-style'
 import { ContextMenuPopups, contextMenuTemplate, type PopupMenu, type PopupWindow } from '../src/main/context-menu'
 import { commandTitle, defaultSettings } from '../src/shared/settings/catalog'
+import { effectiveRules } from '../src/shared/commands/effective'
+import { defaultRules } from '../src/shared/commands/keybindings'
+import { emptyShortcutFile } from '../src/shared/commands/shortcut-schema'
 
 const request = (menu: ContextMenuId, change: Partial<ContextMenuRequest> = {}): ContextMenuRequest =>
   ({ token: 1, menu, x: 0, y: 0, visible: [...contextCommandIds(menu)], disabled: [], checked: [], ...change })
@@ -35,7 +38,7 @@ describe('native context menu template', () => {
       // SSMS's query window menu starts with the snippet pickers; their chords cannot be accelerators.
       'Insert Snippet… (click)', 'Surround With… (click)', '---',
       'Connection >', '  Connect… (click)', '  Disconnect (click)', '  Disconnect All Queries (click)', '  Reconnect… (click)', '  ---', '  Change Connection… (click)', '  Environment… (click)', '---',
-      'Execute (click, F5, disabled)', 'Cancel Executing Query (click)', 'Display Estimated Execution Plan (click, Cmd+L)', '---', 'Cut (role cut, Cmd+X, disabled)', 'Copy (role copy, Cmd+C)', 'Paste (role paste, Cmd+V)', '---',
+      'Execute (click, F5, disabled)', 'Cancel Executing Query (click)', 'Display Estimated Execution Plan (click, Cmd+L)', 'Display Estimated Plan in Query Session (click)', '---', 'Cut (role cut, Cmd+X, disabled)', 'Copy (role copy, Cmd+C)', 'Paste (role paste, Cmd+V)', '---',
       'Command Palette… (click, Cmd+Shift+P)'
     ])
     const all = (items: readonly MenuItemConstructorOptions[]): MenuItemConstructorOptions[] => items.flatMap(item => [item, ...Array.isArray(item.submenu) ? all(item.submenu) : []])
@@ -73,6 +76,21 @@ describe('native context menu template', () => {
     const popups = new ContextMenuPopups<PopupWindow>({ style: 'native', platform: 'darwin', userCanAct: () => true, build: template => { built.push(template); return { popup: ({ callback }) => callback(), closePopup: () => {} } }, title })
     const window: PopupWindow = { isDestroyed: () => false, getContentBounds: () => ({ width: 100, height: 100 }), webContents: { getZoomFactor: () => 1, send: () => {} } }
     return popups.show(request('explorer.context', { visible: ['explorer.selectTopRows'] }), window).then(() => expect(built[0][0].label).toBe('Select Top 50 Rows'))
+  })
+  it("shows the user's keys from main's effective rules, read each time a menu opens", async () => {
+    const file = { ...emptyShortcutFile, bindings: [{ command: 'query.execute' as const, key: 'mod+shift+j' }] }
+    expect(effectiveRules('darwin', file).problems).toEqual([])
+    const execute = (rules?: Parameters<typeof contextMenuTemplate>[5]) => find(contextMenuTemplate(request('editor.context'), 'darwin', () => {}, undefined, undefined, rules), 'query.execute@editor.context')?.accelerator
+    expect(execute()).toBe('F5')
+    expect(execute(effectiveRules('darwin', file).rules)).toBe('Cmd+Shift+J')
+    let rules = defaultRules('darwin')
+    const built: MenuItemConstructorOptions[][] = []
+    const popups = new ContextMenuPopups<PopupWindow>({ style: 'native', platform: 'darwin', userCanAct: () => true, build: template => { built.push(template); return { popup: ({ callback }) => callback(), closePopup: () => {} } }, rules: () => rules })
+    const window: PopupWindow = { isDestroyed: () => false, getContentBounds: () => ({ width: 100, height: 100 }), webContents: { getZoomFactor: () => 1, send: () => {} } }
+    await popups.show(request('editor.context'), window)
+    rules = effectiveRules('darwin', file).rules
+    await popups.show(request('editor.context'), window)
+    expect(built.map(template => find(template, 'query.execute@editor.context')?.accelerator)).toEqual(['F5', 'Cmd+Shift+J'])
   })
   it('sends a chosen command\'s id, and keeps native item ids', () => {
     const send = vi.fn<(id: CommandId) => void>()

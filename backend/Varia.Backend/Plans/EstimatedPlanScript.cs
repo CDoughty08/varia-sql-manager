@@ -10,14 +10,19 @@ internal static class EstimatedPlanScript
     internal sealed record Batch(SqlBatch Source, string? Database);
     private sealed record Token(string Value, bool Word, bool Identifier = false);
 
-    public static List<Batch> Parse(string sql, int startLine)
+    public static List<Batch> Parse(string sql, int startLine, bool sessionAware = false)
     {
         return SqlScript.Parse(sql, startLine).Select(batch =>
         {
             var tokens = Tokens(batch.Sql);
             foreach (var token in tokens)
+            {
                 if ((token.Word || token.Identifier) && CaptureOptions.Contains(token.Value))
                     throw Invalid(batch, "Remove SHOWPLAN, NOEXEC, PARSEONLY and FMTONLY options before requesting an estimated plan.");
+                if (sessionAware && (token.Word || token.Identifier) && (token.Value.Equals("OFFSETS", StringComparison.OrdinalIgnoreCase)
+                    || token.Value.Equals("FIPS_FLAGGER", StringComparison.OrdinalIgnoreCase)))
+                    throw Invalid(batch, "Remove OFFSETS and FIPS_FLAGGER parse-time options, or use an isolated estimate.");
+            }
             bool Is(int index, string text) => index < tokens.Count && tokens[index].Word && tokens[index].Value.Equals(text, StringComparison.OrdinalIgnoreCase);
             var uses = Enumerable.Range(0, tokens.Count).Where(i => Is(i, "USE")
                 && !(i > 0 && (tokens[i - 1].Value is "(" or ",") && (Is(i + 1, "HINT") || Is(i + 1, "PLAN")))).ToArray();
