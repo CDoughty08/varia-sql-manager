@@ -137,18 +137,43 @@ internal static class SearchLiveChecks
         }
 
         // A budget the system objects alone fill: every database read stops at its first record, and the build still ends ready,
-        // with the database skipped as TOO_LARGE. This proves that path against a real server only; that the stopped read cancels
-        // its batch rather than draining it is SearchCostChecks.Reads' check (a scratch database is too small for a drain to show
-        // in the build's time).
+        // with the database skipped as TOO_LARGE. That the stopped read cancels its batch rather than draining it is the check
+        // after this one, against the same server.
         using (var tight = new ObjectSearchService(service, new ObjectIndexLimits { MemoryBytes = 64 * 1024, NamesReserveBytes = 0 }))
         {
             var small = await tight.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), CancellationToken.None);
             check(small.Status.State == "ready" && small.Status.Skipped.Any(skip => skip.Database == database && skip.Code == "TOO_LARGE"),
                 "a database past the memory budget stops its read, is skipped as TOO_LARGE, and the build ends ready (" + small.ElapsedMs + " ms)");
         }
+        // A stopped index read cancels its batch on the server, through the same ReadBatchAsync every index read takes: a batch of
+        // 40 MB of rows stopped at its first row never reaches the statement after them. Without the cancel (the control), closing
+        // the reader drains every row and the statement runs, so the check bites. Neither depends on timing or load.
+        check(!await RanToEnd(service, connectionId, cancel: true), "a stopped index read cancels its batch on a real server, so the rest of it is never sent");
+        check(await RanToEnd(service, connectionId, cancel: false), "a reader closed short of its end without a cancel drains the batch on a real server");
         await sql("DROP TYPE [srch].[FindList]; DROP TABLE [srch].[" + hostile.Replace("]", "]]") + "]; DROP TABLE [srch].[Priced]; DROP PROCEDURE [srch].[usp_Param];"
             + " ALTER TABLE [srch].[Rates] SET (SYSTEM_VERSIONING = OFF); DROP TABLE [srch].[Rates]; DROP TABLE [srch].[Rates_Archive]; DROP TABLE [srch].[Person];"
             + " DROP USER [srch_user]; DROP ROLE [srch_role]; DROP SCHEMA [srch];", database);
+    }
+
+    /// <summary>Reads the first of many large rows on the index's pool and stops, cancelling the batch (as an index read does) or
+    /// not; whether the statement after the rows then ran, which only a drained batch reaches.</summary>
+    private static async Task<bool> RanToEnd(SqlService service, string connectionId, bool cancel)
+    {
+        var host = (IObjectSearchHost)service;
+        await using var connection = host.Connection(connectionId, null);
+        await host.OpenAsync(connection, CancellationToken.None);
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandTimeout = 0;
+            command.CommandText = "SELECT TOP (5000) CONVERT(nvarchar(4000), REPLICATE(N'x', 4000)) AS value FROM sys.all_columns AS a CROSS JOIN sys.all_columns AS b;"
+                + " EXEC sys.sp_set_session_context N'varia_drained', 1;";
+            Func<System.Data.Common.DbDataReader, Task<string?>> first = async rows => { await rows.ReadAsync(); return null; };
+            if (cancel) await ObjectSearchService.ReadBatchAsync<string>(command, first, _ => { }, CancellationToken.None);
+            else await ObjectSearchService.ReadThenStopAsync<string>(async () => await command.ExecuteReaderAsync(System.Data.CommandBehavior.SequentialAccess), first, () => { }, _ => { });
+        }
+        await using var probe = connection.CreateCommand();
+        probe.CommandText = "SELECT CONVERT(int, SESSION_CONTEXT(N'varia_drained'));";
+        return await probe.ExecuteScalarAsync() is int;
     }
 
 }

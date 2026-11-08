@@ -296,11 +296,25 @@ internal static class SearchChecks
             new("procedure", "storedProcedures", "dbo", "p2", Definition: matches)
         ], 0, 3, 0));
         result = Search(counted, "needle", limits: roomy);
-        check(!result.Partial && result.Hits.Count == 3 && result.Hits.All(hit => hit.Definition?.Matches == 50), "within its budget a search counts every definition match");
-        result = Search(counted, "needle", limits: new ObjectIndexLimits { SearchBudget = TimeSpan.Zero });
-        check(result is { Partial: true, Total: 3, Hits: [{ Label: "dbo.needle_named", Definition: null }, { Definition: { Matches: 1, Column: 1 } }, { Definition.Matches: 1 }] },
-            "past its budget a search builds the hits left from what the scan found, counting no more matches, and answers partial: "
+        check(!result.Partial && result.Hits.Count == 3 && result.Hits.All(hit => hit.Definition is { Matches: 50, Uncounted: null }), "within its budget a search counts every definition match");
+        var late = new ObjectIndexLimits { SearchBudget = TimeSpan.Zero };
+        result = Search(counted, "needle", limits: late);
+        check(result is { Partial: true, Total: 3, Hits: [{ Label: "dbo.needle_named", Definition: null }, { Definition: { Matches: 1, Column: 1, Uncounted: true } }, { Definition: { Matches: 1, Uncounted: true } }] },
+            "past its budget a search builds the hits left from what the scan found, counting no more matches (each count marked a lower bound), and answers partial: "
             + string.Join(", ", result.Hits.Select(hit => hit.Label + ":" + hit.Definition?.Matches)) + ", partial " + result.Partial);
+        // Past the budget, a hit with nothing left to search is complete: names only, a definition whose one match the scan found
+        // at its end, or no definition at all. Lateness alone must not mark such an answer partial.
+        result = Search(counted, "needle", definitions: false, limits: late);
+        check(result is { Partial: false, Total: 1, Hits: [{ Label: "dbo.needle_named", Definition: null }] }, "past its budget a names-only search with nothing left out is not partial");
+        var complete = new ConnectionIndex(new IndexBudget(1 << 20));
+        complete.Put(new DatabaseIndex("Done", [
+            new("table", "tables", "dbo", "needle_table"),
+            new("procedure", "storedProcedures", "dbo", "p_tail", Definition: "SELECT 1 -- needle")
+        ], 0, 1, 0));
+        result = Search(complete, "needle", limits: late);
+        check(result is { Partial: false, Total: 2 } && result.Hits.Any(hit => hit.Definition is { Matches: 1, Uncounted: null }),
+            "past its budget a search whose hits had nothing left to search answers complete: partial " + result.Partial);
+        complete.Dispose();
         stopped = false;
         try { Search(counted, "needle", limits: roomy, token: cancelled.Token); }
         catch (OperationCanceledException) { stopped = true; }

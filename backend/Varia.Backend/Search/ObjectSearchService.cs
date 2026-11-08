@@ -266,6 +266,12 @@ internal sealed class ObjectSearchService : IDisposable
         return null;
     }
 
+    /// <summary>Runs <paramref name="command"/>'s batch with sequential access through <see cref="ReadThenStopAsync"/>, cancelling
+    /// it on the server when the read stops early. Every index read goes through here, so the live checks prove on a real server
+    /// that a stopped read leaves the rest of its batch unsent.</summary>
+    internal static Task<T?> ReadBatchAsync<T>(SqlCommand command, Func<DbDataReader, Task<T?>> read, Action<T> keep, CancellationToken token) where T : class =>
+        ReadThenStopAsync(async () => await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, token), read, () => TryCancel(command), keep);
+
     private static void TryCancel(SqlCommand command)
     {
         try { command.Cancel(); } catch (Exception error) when (error is InvalidOperationException or SqlException) { /* Best effort: the reader then drains. */ }
@@ -321,8 +327,8 @@ internal sealed class ObjectSearchService : IDisposable
                 command.Parameters.Add(new SqlParameter("@db", SqlDbType.NVarChar, 128) { Value = database });
                 command.Parameters.Add(new SqlParameter("@stmt", SqlDbType.NVarChar, -1) { Value = batch });
             }
-            var index = await ReadThenStopAsync(async () => await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, budgetSource.Token),
-                rows => reader.ReadAsync(rows, definitions, budgetSource.Token, children), () => TryCancel(command), state.Index.Put);
+            var index = await ReadBatchAsync(command,
+                rows => reader.ReadAsync(rows, definitions, budgetSource.Token, children), state.Index.Put, budgetSource.Token);
             if (index is null) return new(database, "TOO_LARGE", "The database does not fit in the index's memory (" + Size + " across every connection).");
             return null;
         }
@@ -371,8 +377,8 @@ internal sealed class ObjectSearchService : IDisposable
             await using var command = connection.CreateCommand();
             command.CommandTimeout = 0;
             command.CommandText = ObjectSearchSql.Prologue + ObjectSearchSql.Server(box, definitions);
-            var index = await ReadThenStopAsync(async () => await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, budgetSource.Token),
-                rows => reader.ReadServerAsync(rows, box, definitions, Actions.ActionsCatalog.Current.Logins, budgetSource.Token), () => TryCancel(command), state.Index.PutServer);
+            var index = await ReadBatchAsync(command,
+                rows => reader.ReadServerAsync(rows, box, definitions, Actions.ActionsCatalog.Current.Logins, budgetSource.Token), state.Index.PutServer, budgetSource.Token);
             if (index is null) return new(ServerScope, "TOO_LARGE", "The server's objects do not fit in the index's memory (" + Size + " across every connection).");
             return null;
         }
@@ -826,7 +832,10 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     private (string Text, bool Longer) Repeated(DbDataReader reader, int ordinal)
     {
         var most = Math.Min(RepeatChars, buffer.Length - 1);
-        var read = (int)reader.GetChars(ordinal, 0, buffer, 0, most + 1);
+        // As ReadText, read until the value ends or one character past the longest repeat: a provider may answer a GetChars call
+        // short of what it asked, and a short read taken as the value's end would match a held prefix of a longer text.
+        var read = 0;
+        for (int got; read <= most && (got = (int)reader.GetChars(ordinal, read, buffer, read, most + 1 - read)) > 0;) read += got;
         if (read <= 0) return ("", false);
         if (read <= most && held.GetAlternateLookup<ReadOnlySpan<char>>().TryGetValue(buffer.AsSpan(0, read), out var copy))
         {

@@ -68,13 +68,15 @@ internal static class SearchCostChecks
         public int Drained;
         public int CharReads;
         public long CharsRead;
+        /// <summary>When above 0, the most characters one GetChars call answers: DbDataReader does not promise a full read.</summary>
+        public int Chunk;
 
         public override long GetChars(int ordinal, long dataOffset, char[]? buffer, int bufferOffset, int length)
         {
             // As SqlClient serves a string column; DataTableReader's own reads only char[] columns.
             CharReads++;
             var value = inner.GetString(ordinal);
-            var count = (int)Math.Max(0, Math.Min(length, value.Length - dataOffset));
+            var count = (int)Math.Max(0, Math.Min(Chunk > 0 ? Math.Min(length, Chunk) : length, value.Length - dataOffset));
             CharsRead += count;
             if (buffer is not null) value.CopyTo((int)dataOffset, buffer, bufferOffset, count);
             return count;
@@ -203,6 +205,20 @@ internal static class SearchCostChecks
         check(index is { Modules: 5, Cut: 0 } && tight.Limit - tight.Used < reserve && first == repeat
             && index.Objects.All(item => ReferenceEquals(item.Definition, first)),
             $"below the names' reserve a repeated short definition the read holds is still kept ({index?.Modules} kept, {index?.Cut} cut, {tight.Limit - tight.Used} bytes free)");
+
+        // A provider that answers each GetChars short: a held repeat is still found across reads, and a longer text that starts
+        // with one (a computed column's ((0))+[a]) is never taken for it at a chunk's end.
+        tight = new IndexBudget(measure.Used + reserve - 2000);
+        var chunked = Procedures(3, guides, repeat);
+        chunked.Chunk = 2;
+        index = await new DatabaseReader("Sales", new ObjectIndexLimits { NamesReserveBytes = reserve }, new StringPool(tight)).ReadAsync(chunked, true, CancellationToken.None, children: false);
+        check(index is { Modules: 5, Cut: 0 }, $"short reads still find a repeated definition the read holds ({index?.Modules} kept, {index?.Cut} cut)");
+        tight = new IndexBudget(measure.Used + reserve - 2000);
+        var prefixed = Procedures(3, guides, repeat + "+[a]");
+        prefixed.Chunk = repeat.Length;
+        index = await new DatabaseReader("Sales", new ObjectIndexLimits { NamesReserveBytes = reserve }, new StringPool(tight)).ReadAsync(prefixed, true, CancellationToken.None, children: false);
+        check(index is { Modules: 2, Cut: 3 } && index.Objects.Where(item => item.Kind == "procedure").All(item => item.Definition is null),
+            $"a short read ending on a held repeat's length does not take a longer definition for it ({index?.Modules} kept, {index?.Cut} cut)");
     }
 
     private static async Task FanOut(Action<bool, string> check)

@@ -170,8 +170,10 @@ The same search runs in two places, with the same options and results:
     takes the worst one's place, so approximate hits never push out exact ones; every other hit past them is only counted.
     Labels are built only for the candidates kept, and hits (previews, match counts, dates) only for the ones answered.
     The budget and Stop bound that building too, since counting a definition's matches can read it many times: once the
-    budget has passed the result is partial, a definition hit shows the match the scan found with only the matches counted
-    so far, and a name hit left to build shows no definition match.
+    budget has passed, a definition hit shows the match the scan found with only the matches counted so far (marked
+    `uncounted`, shown as "+N+ more", or "more not counted" after the first), and a name hit left to build shows no
+    definition match. Only a search the budget left out this way makes the result partial: a late hit with nothing left to
+    search (names only, or no definition) is as complete as an early one.
 - **Scope.** Search names and definitions (All), names only, or definitions only.
 - **Object types.** Chips narrow a search to kinds of object: Tables, Views, Columns, Procedures, Functions, Parameters,
   Triggers, Keys and indexes, Schemas, Types, Security and Other. Several can be on at once, and All types turns them all off.
