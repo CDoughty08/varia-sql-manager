@@ -922,12 +922,13 @@ lost.
   unsupported server, and incomplete capture are reported in Messages. The observer needs lightweight plan profiling
   and permission to create, enable, read and drop its event session. SQL Server 2025 and Azure SQL Database also set
   a maximum collector duration. If a process exits abruptly before cleanup, a collector's connection ID filter prevents
-  a later session that reuses the SPID from being captured. A server-scoped collector is named `VariaActual_` and its
-  query connection's `sys.dm_exec_connections.connection_id` (32 uppercase hexadecimal digits), so once it has started, each
-  capture drops up to 16 collectors of that form whose connection is gone (left by a backend that died; before SQL Server
-  2025 nothing else ends them), building each DROP on the server from `QUOTENAME` within the capture's 5 s start budget;
-  a failed sweep is a message, never a failed capture. Collectors that older builds named with a random GUID are left
-  alone, since one may still be capturing. Its SQL lives in `Plans/ActualPlanSql.cs`, held to `ActualPlanSql.Lint`.
+  a later session that reuses the SPID from being captured. A server-scoped collector's name records its client event GUID
+  and both query/observer physical server connection IDs. A later capture checks up to 16 candidates within a one-second
+  slice of its 5 s setup budget. Recovery requires both connections to be absent and the ownership/predicate shape to
+  match; it rechecks the definition and liveness immediately before server-quoted DROP. Database-scoped and older
+  single-GUID collectors are not swept because their observer ownership cannot be proved. SQL in `Plans/ActualPlanSql.cs`
+  binds values as typed parameters and quotes identifiers on the server; offline builder checks and real hostile-name
+  round trips cover that boundary. See [collector recovery](plan-capture-hardening.md) for limits and validation.
   When `SET STATISTICS XML` also returned the same execution, Varia keeps the complete SQL-returned plan and pairs it with
   one observer event in the same batch and repetition. The optional `planOrder` lists matched and retained observer result
   IDs in event order so the canvas can interleave both sources within a batch. Across batches it uses batch and repetition.
