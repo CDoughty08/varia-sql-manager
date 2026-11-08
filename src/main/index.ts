@@ -22,7 +22,7 @@ import { cancellableRequests, connectionRequestLimits, RendererRequests } from '
 import { dialogQueue } from './dialog-queue'
 import { saveDefaultPath } from './file-names'
 import { connectionCancelSchema, validateRequest, validateResult } from './validation'
-import { SqlFileStore, fileKinds, reloadPromptSchema, saveDocument, saveFileSchema } from './sql-files'
+import { SqlFileStore, fileKinds, reloadPromptSchema, saveDocument, saveFileSchema, type TargetCache } from './sql-files'
 import { openRecentEntry, RecentFilesStore, systemRecentDocuments } from './recent-files-store'
 import { deliverLaunchFiles as deliverWaiting, droppedPathsSchema, fileArguments, LaunchQueue, maxLaunchFiles, secondInstanceSchema, type SecondInstanceData } from './launch-files'
 import { recentFilesMenuModel } from '../shared/files/recent'
@@ -329,20 +329,20 @@ function openError(error: unknown): string {
  * skipped without a word, and each opened file put first in Recent Files. What fails is reported as "name: reason".
  */
 async function openPaths(paths: readonly string[]): Promise<OpenedFiles> {
-  const opened: OpenSqlFile[] = [], errors: string[] = []
+  const opened: OpenSqlFile[] = [], errors: string[] = [], targets = files.targets()
   for (const path of paths.slice(0, maxLaunchFiles)) {
     try {
-      const file = await openPath(path)
+      const file = await openPath(path, targets)
       if (file) opened.push(file)
     } catch (error) { errors.push(openFailure(path, error)) }
   }
   return { files: opened, errors }
 }
 /** One file main was handed, read as Open reads it and put first in Recent Files; undefined for a folder. */
-async function openPath(path: string): Promise<OpenSqlFile | undefined> {
+async function openPath(path: string, targets: TargetCache = files.targets()): Promise<OpenSqlFile | undefined> {
   if (!isAbsolute(path)) throw new Error('The path is not absolute.')
   if ((await stat(path)).isDirectory()) return undefined
-  const file = await files.read(path)
+  const file = await files.read(path, { targets })
   void recent.add(file.path).catch(() => {})
   return file
 }
@@ -369,15 +369,15 @@ function pendingReload(): boolean {
 }
 
 /** Reopens a kept tab. A clean file reads from disk again, and a dirty tab has its saved text even if the file is gone. */
-async function reopenDocument(document: SessionRecordDocument): Promise<RestoredDocument> {
+async function reopenDocument(document: SessionRecordDocument, targets: TargetCache): Promise<RestoredDocument> {
   const { path, text, fileSha256, ...rest } = document
   if (text !== undefined) {
-    const file = path ? await files.register(path, document.kind, { baseSha256: fileSha256 }) : undefined
+    const file = path ? await files.register(path, document.kind, { baseSha256: fileSha256 }, targets) : undefined
     return { ...rest, text, ...file ? { file } : {} }
   }
   if (!path) throw new Error(`${document.name} could not be reopened.`)
   try {
-    const file = await files.read(path, { kind: document.kind })
+    const file = await files.read(path, { kind: document.kind, targets })
     return { ...rest, eol: file.eol, text: file.content, dirty: false, file: { id: file.id, name: file.name, path: file.path, encoding: file.encoding, ...file.codePage ? { codePage: file.codePage } : {}, readOnly: file.readOnly } }
   } catch (error) { throw new Error(`${basename(path)} could not be reopened: ${openError(error)}`.slice(0, 600)) }
 }
@@ -990,7 +990,7 @@ app.whenReady().then(async () => {
     const selected = await pageDialog(window => dialog.showOpenDialog(window, { title: 'Open SQL query', filters: [{ name: 'SQL files', extensions: ['sql'] }, ...fileKinds.sqlplan.filters, { name: 'Text files', extensions: ['txt'] }], properties: ['openFile', 'multiSelections'] }), { canceled: true, filePaths: [] })
     if (selected.canceled) return []
     if (selected.filePaths.length > maxLaunchFiles) throw new Error(`Select at most ${maxLaunchFiles} files at a time.`)
-    const opened = await Promise.all(selected.filePaths.map(path => files.read(path)))
+    const targets = files.targets(), opened = await Promise.all(selected.filePaths.map(path => files.read(path, { targets })))
     for (const file of opened) void recent.add(file.path).catch(() => {})
     return opened
   })
@@ -1065,9 +1065,10 @@ app.whenReady().then(async () => {
     }
     const documents: RestoredDocument[] = [], problems: string[] = [], places = new Map<number, number>()
     let activeIndex = -1
+    const targets = files.targets()
     for (const [index, document] of (record?.documents ?? []).entries()) {
       if (generation !== rendererGeneration) break
-      const restored = await reopenDocument(document).catch(error => { problems.push(error instanceof Error ? error.message : 'A query could not be reopened.'); return undefined })
+      const restored = await reopenDocument(document, targets).catch(error => { problems.push(error instanceof Error ? error.message : 'A query could not be reopened.'); return undefined })
       if (generation !== rendererGeneration) break
       if (!restored) continue
       if (index === record?.activeIndex) activeIndex = documents.length

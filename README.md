@@ -94,7 +94,7 @@ Release builds package and smoke-test every push to main, and pull requests that
 
 ## Architecture
 
-The Electron application uses React, TypeScript, Monaco, and Dockview. A .NET sidecar handles SQL connections and management through Microsoft.Data.SqlClient and SQL Management Objects (SMO). The processes communicate over a MessagePack-based protocol; see the [IPC reference](docs/ipc.md).
+The Electron application uses React, TypeScript, Monaco, and Dockview. electron-vite bundles every npm package into the app, so `package.json` lists them all under devDependencies and the package holds no `node_modules`, but those devDependencies ship: zod, React, Monaco (with its DOMPurify), Dockview, PixiJS and elkjs run in every copy, so audit dependencies without `--omit=dev` and treat their advisories as production ones. A .NET sidecar handles SQL connections and management through Microsoft.Data.SqlClient and SQL Management Objects (SMO). The processes communicate over a MessagePack-based protocol; see the [IPC reference](docs/ipc.md).
 
 The workbench page is treated as untrusted: it runs sandboxed with context isolation, no Node.js integration and a strict Content Security Policy, and reaches the system only through a small preload API whose every call main verifies. Built pages load from Varia's own `app://varia/` origin, never a `file:` URL, so page script cannot read local files. Packaged builds set Electron's fuses (`build/fuses.cjs`): `file:` pages get no extra privileges, the executable cannot run as Node.js or honour `NODE_OPTIONS` and `--inspect`, and the application loads only from its integrity-checked `app.asar`.
 

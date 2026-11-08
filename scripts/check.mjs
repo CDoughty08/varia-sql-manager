@@ -22,7 +22,8 @@ export const needsBackend = readdirSync('tests').filter(name => name === 'backen
 
 export const steps = {
   'Type check': 'npx tsc --noEmit',
-  'electron-vite build': 'npx electron-vite build',
+  // Then main and preload must load nothing but Electron and Node's own modules (scripts/packaged-contents.mjs).
+  'electron-vite build': 'npx electron-vite build && node scripts/packaged-contents.mjs',
   vitest: `npx vitest run ${needsBackend.map(file => `--exclude ${file}`).join(' ')}`,
   'Release build (.NET)': 'dotnet build backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release --nologo -v q',
   'Offline .NET checks': 'dotnet run --no-build --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release',
