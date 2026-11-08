@@ -1,6 +1,7 @@
 {
   "comment": "IPC and results grid benchmark targets and floors (docs/ipc.md, Benchmarks). scripts/check-bench.mjs --enforce fails when a measured value is worse than its floor; CI enforces floors on Linux only. Floors sit at about half of what a shared container measured with only 2 CPUs (as a private repository's Linux runner has), or at the grid's own bounds, so slow runners never fail them; a null floor is reported only. Megabytes are 10^6 bytes. A metric's harness is its first segment (node, e2e, grid); a live metric is required only when that harness ran --live.",
   "metrics": {
+    "node.plan.comparisonP95Ms": { "title": "Plan: compare two 10,000-operator inputs, unique/ambiguous, p95", "unit": "ms", "better": "lower", "target": 200, "floor": 2000 },
     "node.plan.wideLayoutP95Ms": { "title": "Plan: ordered layout, 2,000 operators with 1,999 inputs, p95", "unit": "ms", "better": "lower", "target": 20, "floor": 500 },
     "node.plan.largeLayoutP95Ms": { "title": "Plan: ordered layout, 10,000 operators in a four-way tree, p95", "unit": "ms", "better": "lower", "target": 75, "floor": 1000 },
     "node.plan.cachedLayoutP95Ms": { "title": "Plan: cached layout retrieval, 10,000 operators, p95", "unit": "ms", "better": "lower", "target": 5, "floor": 50 },

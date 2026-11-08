@@ -2468,6 +2468,7 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | Plan ordered layout: 2,000 operators, 1,999 ordered inputs, p95 | ≤ 20 ms | ≤ 500 ms | 2.8 – 4.1 ms (Windows, 24 CPUs) | not measured |
 | Plan ordered layout: 10,000 operators, four-way tree, p95 | ≤ 75 ms | ≤ 1,000 ms | 9.9 – 12 ms (Windows, 24 CPUs) | not measured |
 | Plan cached layout lookup: 10,000 operators, p95 | ≤ 5 ms | ≤ 50 ms | 0.92 – 1.08 ms (Windows, 24 CPUs) | not measured |
+| Plan comparison: two 10,000-operator inputs, unique/ambiguous, worst p95 (worker transport excluded) | ≤ 200 ms | ≤ 2,000 ms | 27–167 ms (Windows, 24 CPUs, varying concurrent load) | not measured |
 | Chart draw: 7,200 samples × 6 series bucketed and stroked at 1,600 px | ≥ 1,000 ops/s | ≥ 100 ops/s | 770 – 780 ops/s (Windows, 24 CPUs) | not measured |
 | Renderer invoke → backend → renderer, p50 / p99 | ≤ 1 / 5 ms | p50 ≤ 5 ms | 0.4 / 1.2 – 1.6 ms | 0.4 / 2 ms |
 | Live tick round trip in the app, acknowledgement → next tick at the page, p50 / p99 | ≤ 2 / 10 ms | p50 ≤ 10 ms | 0.7 / 2.8 – 4 ms (Windows, 24 CPUs) | not measured |
