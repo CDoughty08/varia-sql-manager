@@ -62,33 +62,65 @@ export const platformSeconds = (platform = process.platform) => suiteSeconds[pla
 export const suiteLimitSeconds = (suite, platform = process.platform) => Math.max(300, 4 * (platformSeconds(platform)[suite] ?? 75))
 
 /**
- * Runs one suite, killing its whole process tree if it runs past `limitMs`. Killing only the suite's node process (what
- * spawnSync's timeout did) left its Electron app and backend running beside the shard's later suites, holding the clipboard
- * on Windows and SQL sessions on Linux: on Windows Electron runs under cmd.exe, a grandchild, and the fixture kills it only
- * from its exit handler, which SIGKILL skips. Windows: taskkill /T /F on the suite's tree. POSIX: the suite leads its own
- * process group, which gets SIGTERM first, so Playwright's handlers can end the browser's own group, then SIGKILL after
- * `graceMs`.
+ * Every process under `root` (POSIX), read from ps: Playwright starts Electron with `detached`, so the app leads its own
+ * process group, beyond the reach of a kill of the suite's group.
  */
-export function runSuite(suite, limitMs, { graceMs = 5000, stdio = 'inherit', args = [] } = {}) {
+function descendants(root) {
+  let table
+  try { table = execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8' }) } catch { return [] }
+  const children = new Map()
+  for (const line of table.split('\n')) {
+    const [pid, ppid] = line.trim().split(/\s+/).map(Number)
+    if (pid > 0 && ppid > 0) children.set(ppid, [...(children.get(ppid) ?? []), pid])
+  }
+  const found = [], queue = [root]
+  while (queue.length) for (const pid of children.get(queue.shift()) ?? []) { found.push(pid); queue.push(pid) }
+  return found
+}
+
+/** SIGKILL for each pid and the group it leads, if it leads one (a group's id is its leader's pid, never reused while it lives). */
+function killAll(pids) {
+  for (const pid of pids) for (const target of [-pid, pid]) { try { process.kill(target, 'SIGKILL') } catch { /* Already gone, or leads no group. */ } }
+}
+
+/**
+ * Runs one suite, killing its whole process tree if it runs past `limitMs` or `signal` aborts. Killing only the suite's
+ * node process (what spawnSync's timeout did) left its Electron app and backend running beside the shard's later suites,
+ * holding the clipboard on Windows and SQL sessions on Linux: on Windows Electron runs under cmd.exe, a grandchild, and the
+ * fixture kills it only from its exit handler, which SIGKILL skips. Windows: taskkill /T /F on the suite's tree. POSIX: the
+ * suite leads its own process group, which gets SIGINT first, since Playwright's SIGINT handler closes the app and then
+ * exits, and its exit handler kills the app's own group (its SIGTERM handler only starts a close, which a wedged main never
+ * finishes). After `graceMs`, or once the suite has gone, every process the suite started, read before the SIGINT and again
+ * then, gets SIGKILL with any group it leads, and so does the suite's group.
+ */
+export function runSuite(suite, limitMs, { graceMs = 5000, stdio = 'inherit', args = [], signal } = {}) {
   return new Promise(resolve => {
     const posix = process.platform !== 'win32'
     const child = spawn(process.execPath, [suite, ...args], { stdio, detached: posix })
-    let timedOut = false, grace
-    const timer = setTimeout(() => {
-      timedOut = true
+    let timedOut = false, interrupted = false, stopping = false, grace, seen = []
+    const finish = () => killAll([...new Set([child.pid, ...seen])])
+    const stop = () => {
+      if (stopping || child.exitCode !== null || child.signalCode !== null) return
+      stopping = true
       if (!posix) {
         try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* Already gone. */ }
         return
       }
-      try { process.kill(-child.pid, 'SIGTERM') } catch { /* Already gone. */ }
-      grace = setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL') } catch { /* Already gone. */ } }, graceMs)
-    }, limitMs)
-    child.once('error', error => { clearTimeout(timer); resolve({ status: null, signal: null, timedOut, error }) })
-    child.once('exit', (status, signal) => {
-      clearTimeout(timer)
-      // The suite has gone; on POSIX anything it left in its group still gets the SIGKILL after the grace period.
-      if (posix && timedOut && grace) { clearTimeout(grace); try { process.kill(-child.pid, 'SIGKILL') } catch { /* Already gone. */ } }
-      resolve({ status, signal, timedOut })
+      seen = descendants(child.pid)
+      try { process.kill(-child.pid, 'SIGINT') } catch { /* Already gone. */ }
+      grace = setTimeout(() => { seen = [...seen, ...descendants(child.pid)]; finish() }, graceMs)
+    }
+    const timer = setTimeout(() => { timedOut = true; stop() }, limitMs)
+    const abort = () => { interrupted = true; stop() }
+    if (signal?.aborted) abort()
+    else signal?.addEventListener('abort', abort, { once: true })
+    const settle = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort) }
+    child.once('error', error => { settle(); resolve({ status: null, signal: null, timedOut, interrupted, error }) })
+    child.once('exit', (status, exitSignal) => {
+      settle()
+      // The suite has gone; on POSIX whatever it started, reparented now, still gets the SIGKILL.
+      if (posix && stopping) { clearTimeout(grace); finish() }
+      resolve({ status, signal: exitSignal, timedOut, interrupted })
     })
   })
 }
@@ -114,16 +146,25 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   }
   const suites = shardSuites(smokeSuites(), count)[shard - 1], results = []
   console.log(`Smoke shard ${shard}/${count}: ${suites.join(', ')}`)
+  // A suite leads its own process group on POSIX, out of the terminal's reach, so Ctrl+C or a SIGTERM stops it here, tree and
+  // all, before the shard ends.
+  const interrupt = new AbortController()
+  for (const name of ['SIGINT', 'SIGTERM']) process.on(name, () => interrupt.abort())
   for (const suite of suites) {
+    if (interrupt.signal.aborted) break
     const started = Date.now()
     if (process.env.GITHUB_ACTIONS) console.log(`::group::${suite}`)
     const limit = suiteLimitSeconds(suite)
-    const { status, signal, timedOut } = await runSuite(suite, limit * 1000)
+    const { status, signal, timedOut } = await runSuite(suite, limit * 1000, { signal: interrupt.signal })
     if (process.env.GITHUB_ACTIONS) console.log('::endgroup::')
     results.push({ suite, ok: status === 0, seconds: Math.round((Date.now() - started) / 1000), code: timedOut ? `timed out at ${limit} s` : signal ?? status })
     if (timedOut) console.error(`${suite} ran past its ${limit} s limit and was killed; the shard's later suites still run.`)
     else if (status !== 0) console.error(`${suite} failed (${signal ?? `exit ${status}`}).`)
   }
   console.log(results.map(({ suite, ok, seconds, code }) => `${ok ? 'passed' : `FAILED (${code})`} ${String(seconds).padStart(4)} s  ${suite}`).join('\n'))
+  if (interrupt.signal.aborted) {
+    console.error('Interrupted: the running suite was stopped with its app, and the shard\'s later suites did not run.')
+    process.exit(130)
+  }
   if (results.some(result => !result.ok)) process.exitCode = 1
 }

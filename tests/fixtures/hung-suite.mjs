@@ -8,7 +8,12 @@ if (process.argv[2] === '--exit') process.exit(Number(process.argv[3]))
 // No double quotes or > in the code, so cmd.exe passes it through one quoted argument.
 const code = "require('fs').writeFileSync(process.env.HUNG_SUITE_PID_FILE,String(process.pid));setInterval(function(){},1000)"
 const env = { ...process.env, HUNG_SUITE_PID_FILE: process.argv[2] }
-// Windows runs Electron under cmd.exe, so there the grandchild sits under a shell, as Electron does.
+// Windows runs Electron under cmd.exe, so there the grandchild sits under a shell, as Electron does. POSIX: Playwright starts
+// Electron detached, leading its own process group, which a kill of the suite's group never reaches; and a wedged app's
+// close never finishes, so the suite ignores the signals Playwright's handlers would answer with a close.
 if (process.platform === 'win32') spawn(`"${process.execPath}" -e "${code}"`, { stdio: 'ignore', shell: true, env })
-else spawn(process.execPath, ['-e', code], { stdio: 'ignore', env })
+else {
+  spawn(process.execPath, ['-e', code], { stdio: 'ignore', env, detached: true })
+  for (const name of ['SIGINT', 'SIGTERM']) process.on(name, () => {})
+}
 setInterval(() => {}, 1000)

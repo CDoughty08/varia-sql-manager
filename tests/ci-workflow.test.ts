@@ -128,10 +128,13 @@ describe('CI workflow', () => {
     const audit = check.steps.filter(step => /\bnpm audit\b/.test(step.run))
     expect(audit).toHaveLength(1)
     expect(audit[0].run.trim()).toBe('npm audit --audit-level=high')
-    expect(audit[0].if).toBe("matrix.os == 'ubuntu-24.04'")
+    // After the check and whatever its outcome: a failed audit ahead of it skipped Linux's type check, vitest and build.
+    expect(audit[0].if).toBe("matrix.os == 'ubuntu-24.04' && !cancelled()")
     expect(audit[0].timeout).toBeGreaterThan(0)
     const at = (pattern: RegExp) => check.steps.findIndex(step => pattern.test(step.run))
-    expect(at(/^npm ci\b/)).toBeLessThan(at(/\bnpm audit\b/))
+    expect(at(/^npm ci\b/)).toBeLessThan(at(/\bnpm run check\b/))
+    expect(at(/\bnpm run check\b/)).toBeLessThan(at(/\bnpm audit\b/))
+    expect(check.steps[at(/\bnpm run check\b/)].if).toBeUndefined()
   })
   it('type-checks on Linux in every run, and states its job count truly', () => {
     const yaml = readFileSync('.github/workflows/ci.yml', 'utf8')
