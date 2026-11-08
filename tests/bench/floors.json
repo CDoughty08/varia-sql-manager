@@ -63,6 +63,7 @@
     "grid.cache.uiWindows": { "title": "Grid: UI window cache after a sweep and 300 jumps over 1,000,000 rows", "unit": "windows", "better": "lower", "target": 256, "floor": 256 },
     "grid.cache.uiMiUnits": { "title": "Grid: UI window cache text after the same", "unit": "Mi units", "better": "lower", "target": 16, "floor": 16 },
     "grid.cache.workerMiB": { "title": "Grid: results worker page cache after the same", "unit": "MiB", "better": "lower", "target": 64, "floor": 64 },
+    "grid.x1.cache.viewBytesPerColumn": { "title": "Grid: results worker page cache, bytes charged beyond page bytes per cached column, after 60 jumps over 5,000 rows of 300 columns", "unit": "bytes", "better": "higher", "target": 320, "floor": 320 },
     "grid.heapGrowthMb": { "title": "Grid: renderer heap growth after Ctrl+End then Ctrl+Home, 1,000,000 rows", "unit": "MB", "better": "lower", "target": 80, "floor": 150 },
     "grid.longTasks": { "title": "Grid: UI long tasks over 50 ms in every measured segment", "unit": "tasks", "better": "lower", "target": 0, "floor": null },
     "grid.longTaskMaxMs": { "title": "Grid: the longest UI long task in those segments", "unit": "ms", "better": "lower", "target": 50, "floor": 250 },

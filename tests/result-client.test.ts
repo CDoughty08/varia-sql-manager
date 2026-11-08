@@ -5,7 +5,7 @@ import type { WorkerRequest, WorkerResponse } from '../src/renderer/src/results/
 import type { ApiResult, QueryResult, ResultDescriptor } from '../src/shared/contracts'
 import type { PortMessage, PortRequest } from '../src/shared/ipc/port-messages'
 import type { LiveEvent, LiveSubscribeParams } from '../src/shared/live/schema'
-import { encodePage } from '../src/shared/ipc/wire/pages'
+import { columnViewBytes, encodePage } from '../src/shared/ipc/wire/pages'
 import { manualTimers } from './fixtures/workbench'
 
 const descriptor = (patch: Partial<ResultDescriptor> = {}): ResultDescriptor => ({
@@ -430,7 +430,7 @@ describe('ResultClient', () => {
     await window
     const stats = client.stats()
     await settle()
-    expect(await stats).toEqual({ workerBytes: worker().core.cachedBytes, workerPages: 3, uiWindows: 1, uiUnits: 4, inflight: 0 })
+    expect(await stats).toEqual({ workerBytes: worker().core.cachedBytes, workerPages: 3, workerWireBytes: worker().core.cachedBytes - 3 * columnViewBytes, workerColumns: 3, uiWindows: 1, uiUnits: 4, inflight: 0 })
   })
 
   it('answers an empty row range itself and refuses a malformed one before it reaches the port', async () => {
