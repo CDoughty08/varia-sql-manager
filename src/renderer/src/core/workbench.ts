@@ -19,6 +19,7 @@ import { TargetService } from '../services/targets'
 import { BackendStateService } from '../services/backend'
 import { ResultClient } from '../results/ResultClient'
 import { ResultsService } from '../results/ResultsService'
+import { ResultsSearchService } from '../results/search'
 import { MemoryUsageService } from '../results/memory'
 import { documentOwner, documentPage, eitherHidden, LiveService, mainWindowPage } from '../live/LiveService'
 import { QueryPlansService } from '../plans/QueryPlansService'
@@ -123,6 +124,8 @@ export interface Workbench extends Disposable {
   readonly resultClient: ResultClient
   /** Each query tab's results: its result sets, Messages, view state, and copy jobs. */
   readonly results: ResultsService
+  /** Search in results: each tab's search box, its matches (found in the backend) and column-name matches. */
+  readonly resultsSearch: ResultsSearchService
   /** What the backend holds for results, for the status bar. */
   readonly resultMemory: MemoryUsageService
   readonly indexMemory: MemoryUsageService
@@ -259,6 +262,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const results = new ResultsService({ client: resultClient, api, events, documents, retainedPlans, frame: callback => { frame(callback) }, sortText: () => settings.get('queryResults.grid.sortText'),
     // Sorted grids follow Sort text by as it changes, from the toolbar, the palette or Options.
     onSortTextChange: listener => settings.subscribe(listener) })
+  const resultsSearch = new ResultsSearchService({ results })
   const resultMemory = new MemoryUsageService(resultClient, 'results', events)
   const indexMemory = new MemoryUsageService(resultClient, 'index')
   // The backend caps live views per server it reaches; a typed name is the closest this side knows.
@@ -444,6 +448,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     backend,
     resultClient,
     results,
+    resultsSearch,
     resultMemory,
     indexMemory,
     live,
@@ -514,6 +519,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       retainedPlans.dispose()
       planReleases.dispose(); planGenerations.dispose(); planEvents.dispose(); planPreparation.dispose()
       queries.dispose()
+      resultsSearch.dispose()
       results.dispose()
       resultMemory.dispose()
       indexMemory.dispose()

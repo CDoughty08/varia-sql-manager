@@ -215,7 +215,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
         {/* The badges are drawn; the names say what they mean ("!" alone is not spoken). */}
         {views.map(view => <button key={view} {...tabProps(view)} aria-label={labels[view]}>{viewNames[view]}{badges[view]}</button>)}
       </div>
-      {showTools && <ResultsToolbar />}
+      {showTools && <ResultsToolbar tabId={tabId} />}
       {pane === 'plan' && <button type="button" aria-pressed={historyOpen} onClick={() => setHistoryOpen(value => !value)}>Plan history ({history.entries.length})</button>}
       {pane === 'plan' && estimated ? <span className="output-status">Estimated{estimated.loading ? ' · Compiling…' : estimated.error ? ' · Unavailable' : ''}</span>
         : leader && tab ? <RunSummaryView tab={tab} now={now} /> : <span className="output-spacer" />}

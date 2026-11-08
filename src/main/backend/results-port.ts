@@ -1,5 +1,5 @@
-import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult } from '../../shared/contracts'
-import { portRequestSchema, rowBytesResultSchema, testPortRequestSchema, viewCloseResultSchema, viewResultSchema, type MemoryFeature, type MemoryReport, type PortMessage, type PortRequest } from '../../shared/ipc/port-messages'
+import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult } from '../../shared/contracts'
+import { portRequestSchema, rowBytesResultSchema, searchResultSchema, testPortRequestSchema, viewCloseResultSchema, viewResultSchema, type MemoryFeature, type MemoryReport, type PortMessage, type PortRequest } from '../../shared/ipc/port-messages'
 import { liveDescriptors, liveRetired, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../../shared/live/schema'
 import { cancelReasons, limits as wire, type CancelReason, type ErrorCode } from '../../shared/ipc/wire/protocol'
 import type { StreamSink } from './connection'
@@ -30,6 +30,8 @@ export interface ResultsBackend {
   /** A sort may take seconds: the worker's cancel (a newer sort, or the view no longer wanted) stops it. */
   view(generation: number, params: ResultsViewParams): { readonly done: Promise<ResultsViewResult>; cancel(reason: CancelReason): void }
   viewClose(generation: number, params: ResultsViewCloseParams): Promise<ResultsViewCloseResult>
+  /** A search reads every stored row: the worker's cancel (a newer search, or the text cleared) stops it. */
+  search(generation: number, params: ResultsSearchParams): { readonly done: Promise<ResultsSearchResult>; cancel(reason: CancelReason): void }
   live(generation: number, params: LiveSubscribeParams, onLive: (event: LiveEvent, bytes: number) => void, credit: number): LiveStreamHandle
   liveUpdate(generation: number, params: LiveUpdateParams): Promise<LiveUpdateResult>
 }
@@ -83,6 +85,8 @@ export class ResultsPortHost {
   private updating = 0
   /** results.view requests in flight, by rid, so the worker's cancel reaches them. */
   private readonly sorting = new Map<number, { cancel(reason: CancelReason): void }>()
+  /** results.search requests in flight, by rid, likewise. */
+  private readonly searching = new Map<number, { cancel(reason: CancelReason): void }>()
   private invalid = 0
   private opens: number[] = []
 
@@ -234,11 +238,13 @@ export class ResultsPortHost {
       case 'cancel':
         (this.streams.get(request.rid) ?? this.lives.get(request.rid))?.handle?.cancel(cancelReasons.user)
         this.sorting.get(request.rid)?.cancel(cancelReasons.user)
+        this.searching.get(request.rid)?.cancel(cancelReasons.user)
         return
       case 'close': return this.closeResults(request)
       case 'rowBytes': return this.rowBytes(request)
       case 'view': return this.view(request)
       case 'viewClose': return this.viewClose(request)
+      case 'search': return this.search(request)
       case 'live': return this.live(request)
       case 'liveUpdate': return this.liveUpdate(request)
     }
@@ -251,9 +257,9 @@ export class ResultsPortHost {
     return total
   }
 
-  /** Requests counted against the 64 outstanding: reads, closes, sorts, row sizes and live updates (live streams have their
-   *  own cap). */
-  private busy(): number { return this.streams.size + this.closing + this.updating + this.sorting.size }
+  /** Requests counted against the 64 outstanding: reads, closes, sorts, searches, row sizes and live updates (live streams
+   *  have their own cap). */
+  private busy(): number { return this.streams.size + this.closing + this.updating + this.sorting.size + this.searching.size }
 
   private read(request: Extract<PortRequest, { t: 'read' }>): void {
     const { rid } = request
@@ -501,6 +507,33 @@ export class ResultsPortHost {
     })
   }
 
+  /** A search of a result this renderer owns (through one of its views, which the backend checks belongs to it). Its answer
+   *  is checked before the renderer sees it: matches in row then column order, inside the rows searched and on the side of
+   *  `fromRow` asked, and a count that holds them. */
+  private search(request: Extract<PortRequest, { t: 'search' }>): void {
+    const { rid } = request
+    if (this.searching.has(rid)) return this.end(rid, 'INVALID_REQUEST', 'The results request was invalid.')
+    if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
+    if (!this.current(request.generation, request.resultId)) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
+    const port = this.port
+    const params: ResultsSearchParams = { resultId: request.resultId, text: request.text, fromRow: request.fromRow, maxMatches: request.maxMatches }
+    if (request.backward) params.backward = true
+    if (request.viewId !== undefined) params.viewId = request.viewId
+    const search = this.backend.search(request.generation, params)
+    this.searching.set(rid, search)
+    search.done.then(result => {
+      if (this.port !== port || this.searching.get(rid) !== search) return
+      this.searching.delete(rid)
+      const parsed = searchResultSchema.safeParse(result)
+      if (!parsed.success || !searchAnswers(parsed.data, params)) return this.end(rid, 'BACKEND_ERROR', 'The results could not be searched.')
+      this.post({ t: 'end', rid, ok: true, result: parsed.data })
+    }, error => {
+      if (this.port !== port || this.searching.get(rid) !== search) return
+      this.searching.delete(rid)
+      this.fail(rid, error)
+    })
+  }
+
   /** The request names the current, ready generation and a result this renderer owns. */
   private current(generation: number, resultId: number): boolean {
     return generation === this.generation && this.backend.readyGeneration() === generation && this.owned.has(resultId)
@@ -518,6 +551,19 @@ export class ResultsPortHost {
     if (!this.port) return
     try { this.port.postMessage(message) } catch { /* The port closed concurrently. */ }
   }
+}
+
+/** A search answer fits its request: as many columns as rows, matches strictly in (row, column) order and in the rows
+ *  searched, after `fromRow` (or before it, backward), and no more than `total` counts with those before them. */
+export function searchAnswers(answer: ResultsSearchResult, request: Pick<ResultsSearchParams, 'fromRow' | 'maxMatches' | 'backward'>): boolean {
+  const { matchRows: rows, matchColumns: columns } = answer
+  if (rows.length !== columns.length || answer.first + rows.length > answer.total || rows.length > request.maxMatches + wire.page.maxColumns) return false
+  for (let k = 0; k < rows.length; k++) {
+    const row = rows[k]
+    if (row >= answer.rows || (request.backward ? row >= request.fromRow : row < request.fromRow)) return false
+    if (k > 0 && (row < rows[k - 1] || (row === rows[k - 1] && columns[k] <= columns[k - 1]))) return false
+  }
+  return true
 }
 
 /** The supervisor as a results backend: reads are bound to their generation, and credit and cancellation reach a
@@ -542,6 +588,11 @@ export function supervisorResults(supervisor: BackendSupervisor): ResultsBackend
       return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
     },
     viewClose: (generation, params) => supervisor.request('results.viewClose', params, { generation }),
+    search: (generation, params) => {
+      let id = 0
+      const done = supervisor.request('results.search', params, { generation, onSent: sent => { id = sent } })
+      return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
+    },
     live: (generation, params, onLive, credit) => {
       let id = 0
       const done = supervisor.request('live.subscribe', params, { generation, credit, onLive, onSent: sent => { id = sent } })

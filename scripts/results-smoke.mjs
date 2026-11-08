@@ -873,7 +873,11 @@ try {
   await page.keyboard.press('Control+S')
   await expect(jobProgress(page)).toContainText(/^Saving held\.csv… \d+% \([\d,]+ of 5,000 rows\)/)
   // The strip's progress is visual only: the pane's live region says how the save ended, once.
-  await expect(outputToolbar(page).locator('[role="status"], [aria-live]')).toHaveCount(0)
+  await expect(jobProgress(page).locator('[role="status"], [aria-live]')).toHaveCount(0)
+  await expect(jobProgress(page)).not.toHaveAttribute('aria-live', /.*/)
+  // The toolbar's only live region is the search count, silent while it is empty.
+  await expect(outputToolbar(page).locator('[role="status"], [aria-live]')).toHaveCount(1)
+  await expect(resultsToolbar(page).getByRole('status')).toHaveText('')
   await expect.poll(async () => (await files()).some(name => name.endsWith('.tmp'))).toBe(true)
   await page.screenshot({ path: resolve('artifacts', 'results-saving.png') })
   await page.keyboard.press('Escape')
@@ -1537,6 +1541,62 @@ try {
   await expect(cell(0, 0)).toHaveText('0')
   await expect(cell(5, 0)).toHaveText('5')
   console.log('Results checks: header sort buttons sort ascending, descending and by a further key, narrow headers keep selecting, the menu sorts, Copy follows the order, and Clear Sort restores it.')
+
+  // 14d. Search in results: Ctrl+F in a grid puts the focus in the toolbar's search box; the backend finds the cells
+  // (results.search) and the grid marks them, the active one outlined. Enter, Shift+Enter and F3 step through them, a
+  // sort searches again through its order, Columns matches column names, and Escape clears it all.
+  const searchBox = resultsToolbar(page).getByRole('textbox', { name: 'Search results', exact: true })
+  const searchCount = resultsToolbar(page).getByRole('status')
+  const searchMode = name => resultsToolbar(page).getByRole('group', { name: 'Search in', exact: true }).getByRole('button', { name, exact: true })
+  // Pooled slots out of view keep their last classes while hidden, so only shown marks count.
+  const marked = selector => grid().locator(selector).filter({ visible: true })
+  const currentMatch = marked(gridPart.searchCurrent)
+  // A step's reveal may still scroll the grid as its menu opens, and a scroll closes menus: open it again until it stays.
+  const searchSort = (column, name) => expect(async () => {
+    await cell(0, column).click({ button: 'right' })
+    await outputMenu.getByRole('menuitem', { name: new RegExp(`^${name}`) }).click({ timeout: 2_000 })
+  }).toPass({ timeout: 30_000 })
+  await cell(0, 0).click()
+  await page.keyboard.press('Control+F')
+  await expect(searchBox).toBeFocused()
+  // "complete 10" to "complete 19" in "clipped", but for rows 13 and 17, stored as "truncated pre".
+  await page.keyboard.type('COMPLETE 1')
+  await expect(searchCount).toHaveText('1 of 8')
+  await expect(currentMatch).toHaveText('complete 10')
+  await expect(currentMatch).toHaveAttribute('aria-colindex', '5')
+  await page.keyboard.press('Enter')
+  await expect(searchCount).toHaveText('2 of 8')
+  await expect(currentMatch).toHaveText('complete 11')
+  await expect(marked(gridPart.searchMatch)).not.toHaveCount(0)
+  await page.keyboard.press('Shift+Enter')
+  await expect(searchCount).toHaveText('1 of 8')
+  await cell(0, 0).click()
+  await page.keyboard.press('F3')
+  await expect(searchCount).toHaveText('2 of 8')
+  await expect(currentMatch).toHaveText('complete 11')
+  // Sorted descending, the matches follow the text order ("complete 19" first); the active one keeps its place.
+  await searchSort(3, 'Sort Descending')
+  await expect(header('clipped')).toHaveAttribute('aria-sort', 'descending')
+  await expect(currentMatch).toHaveText('complete 18')
+  await expect(searchCount).toHaveText('2 of 8')
+  await searchSort(0, 'Clear Sort')
+  await expect(currentMatch).toHaveText('complete 11')
+  // Columns: id, unicode, clipped and failed hold an "i"; the others fade.
+  await searchMode('Columns').click()
+  await expect(searchMode('Columns')).toHaveAttribute('aria-pressed', 'true')
+  const columnBox = resultsToolbar(page).getByRole('textbox', { name: 'Search column names', exact: true })
+  await columnBox.fill('I')
+  await expect(searchCount).toHaveText('4 of 7 columns')
+  await expect(marked(gridPart.searchColumn)).toHaveCount(4)
+  await expect(marked(gridPart.searchDimmedHeader)).toHaveCount(3)
+  await expect(marked(gridPart.searchMatch)).toHaveCount(0)
+  await columnBox.press('Escape')
+  await expect(columnBox).toHaveValue('')
+  await expect(searchCount).toHaveText('')
+  await expect(marked(gridPart.searchColumn)).toHaveCount(0)
+  await expect(marked(gridPart.searchDimmedHeader)).toHaveCount(0)
+  await searchMode('Data').click()
+  console.log('Results checks: Ctrl+F searches every grid in the backend, Enter, Shift+Enter and F3 step through the marked matches, a sort searches again in its order, Columns matches column names, and Escape clears it.')
 
   // 15. Panes and tabs: F6 goes to the results and back; Ctrl+R hides and shows them keeping scroll, selection and a
   // resized column; a tab switch restores all three.

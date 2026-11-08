@@ -26,7 +26,7 @@ const baseName = (name: string) => name.replace(/\.[^.]*$/, '') || 'Results'
  * focus (Ctrl+C, Ctrl+Shift+C, Ctrl+S, Edit › Copy); Save Results As from the palette acts on the grid that last had
  * focus. Open Value opens the XML, JSON or plan cell a click or Enter names, else the focused grid's active cell.
  */
-export function outputContribution({ commands, results, menuTargets, documents, settings }: Pick<Workbench, 'commands' | 'results' | 'menuTargets' | 'documents' | 'settings'>, api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
+export function outputContribution({ commands, results, menuTargets, documents, settings, resultsSearch }: Pick<Workbench, 'commands' | 'results' | 'menuTargets' | 'documents' | 'settings' | 'resultsSearch'>, api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
   const showWhitespace = (mode: 'spaces' | 'all') =>
     settings.choose('queryResults.grid.whitespace', settings.getSnapshot().values['queryResults.grid.whitespace'] === mode ? 'none' : mode)
   const targetOf = (args?: CommandArgs) => outputOf(args) ?? (args?.target ? undefined : focusedOutput(menuTargets))
@@ -65,7 +65,20 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     when: (args?: CommandArgs) => !!sortTarget(args),
     run: (args?: CommandArgs) => { const at = sortTarget(args); if (at) results.sortBy(at.tabId, at.index, at.column, direction, add) }
   })
+  /** The tab search in results acts on: the focused output's, else the active query's. */
+  const searchTab = (args?: CommandArgs) => targetOf(args)?.tabId ?? documents.getSnapshot().activeId
   const registrations = [
+    commands.register('output.find', {
+      run: args => {
+        const tabId = searchTab(args)
+        if (!tabId || !results.getSnapshot()[tabId]?.sets.length) return
+        // The box is in the Results view's toolbar.
+        results.setView(tabId, 'results')
+        resultsSearch.focus(tabId)
+      }
+    }),
+    commands.register('output.findNext', { run: args => { const tabId = searchTab(args); if (tabId) resultsSearch.step(tabId, 1) } }),
+    commands.register('output.findPrevious', { run: args => { const tabId = searchTab(args); if (tabId) resultsSearch.step(tabId, -1) } }),
     commands.register('output.sortAscending', sortCommand('ascending', false)),
     commands.register('output.sortDescending', sortCommand('descending', false)),
     commands.register('output.thenSortAscending', sortCommand('ascending', true)),

@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react'
 import { nextFrame } from '../core/frame'
 import { observeResize } from '../core/windows'
-import { useWorkbench } from '../core/WorkbenchContext'
+import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import { setKey, type ResultSetEntry, type TabResults } from '../results/ResultsService'
 import { formatCount, plural } from '../results/status'
@@ -76,8 +76,9 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
  * view state.
  */
 export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabResults }) {
-  const { results } = useWorkbench()
+  const { results, resultsSearch } = useWorkbench()
   const view = results.viewState(tabId)
+  const search = useServiceSnapshot(resultsSearch)[tabId]
   const sets = tab.sets, count = sets.length
   const stackRef = useRef<HTMLDivElement>(null)
   const [paneHeight, setPaneHeight] = useState(0)
@@ -144,6 +145,17 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
     view.collapsed = next
     setCollapsedState(next)
   }, [view])
+  // Search in results: the grid holding the active match opens and scrolls into view, which mounts it; the grid then
+  // scrolls the match itself into view (ResultGrid).
+  const revealSeq = search?.reveal ?? 0, revealIndex = search?.revealIndex ?? -1
+  useEffect(() => {
+    const element = stackRef.current
+    if (!element || revealIndex < 0 || revealIndex >= count || !resultsSearch.pendingReveal(tabId, revealIndex)) return
+    if (collapsed.has(revealIndex)) toggle(revealIndex)
+    const top = layout.offsets[revealIndex], bottom = top + layout.heights[revealIndex]
+    if (top < element.scrollTop) element.scrollTop = top
+    else if (bottom > element.scrollTop + element.clientHeight) element.scrollTop = Math.max(top, bottom - element.clientHeight)
+  }, [revealSeq, revealIndex])
   const splitterDown = (index: number, event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
     event.preventDefault()

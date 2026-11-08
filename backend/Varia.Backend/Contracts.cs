@@ -95,6 +95,15 @@ internal sealed record ResultsViewArgs(uint ResultId, ViewSortArgs[] Sort, uint?
 internal sealed record ResultsViewResult(uint ViewId, long Rows, bool Complete, bool Approximate);
 internal sealed record ResultsViewCloseArgs(uint ResultId, uint[] ViewIds);
 internal sealed record ResultsViewCloseResult(int Closed);
+/// <summary>results.search: the cells whose grid text contains Text (1 to 1,024 characters), searched through ViewId's order
+/// when it is given (rows are then view positions). It returns up to MaxMatches (1 to 10,000) of them in whole rows: from
+/// FromRow on, or with Backward the last ones before FromRow.</summary>
+internal sealed record ResultsSearchArgs(uint ResultId, string Text, long FromRow, int MaxMatches, bool Backward = false, uint? ViewId = null);
+/// <summary>Rows is how many rows were searched (the rows sealed so far, or the view's); Total counts every match among them;
+/// MatchRows[k] and MatchColumns[k] are the run's matches in row then column order, First the matches before the run's
+/// first (when it is empty, those before FromRow). Complete says the rows searched were all the result's; Approximate that
+/// a truncated value was searched by its stored prefix.</summary>
+internal sealed record ResultsSearchResult(long Rows, long Total, long First, long[] MatchRows, int[] MatchColumns, bool Complete, bool Approximate);
 /// <summary>results.rowBytes: Bytes[k] is row FirstRow + k's sum of DATALENGTH over its cells (NULL counts 0; xml and json
 /// as their text, some sql_variant base types estimated: docs/ipc.md, Cell lengths and row sizes); it stops at the rows sealed
 /// so far. Estimated lists, in order, the rows of the range whose sum includes an estimate.</summary>

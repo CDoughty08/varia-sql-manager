@@ -22,6 +22,9 @@ export const limits = {
   /** results.view: sort keys a view takes, views one results.viewClose names (ViewSorter.MaxKeys and
    *  SqlService.MaxViewIds in C#), and views a result keeps (ResultStore.MaxViewsPerResult). */
   views: { maxKeys: 16, maxClose: 64, perResult: 8 },
+  /** results.search: the longest search text in UTF-16 code units and the most matches one answer holds before finishing
+   *  its last row (ResultSearcher.MaxText and MaxMatches in C#). */
+  search: { maxText: 1024, maxMatches: 10_000 },
   /** Stored cell caps: characters for text, bytes for binary. */
   cell: { text: 65_535, document: 2_097_152, vector: 65_535, binary: 32_766 },
   maxResultSets: { min: 1, max: 1000, default: 10 },

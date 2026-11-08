@@ -20,6 +20,7 @@ export interface FakeHandle extends ResultHandle {
   readonly dispose: ReturnType<typeof vi.fn<() => void>>
   readonly getCell: ReturnType<typeof vi.fn<ResultHandle['getCell']>>
   readonly sort: ReturnType<typeof vi.fn<ResultHandle['sort']>>
+  readonly search: ReturnType<typeof vi.fn<ResultHandle['search']>>
 }
 
 /**
@@ -52,6 +53,7 @@ export function fakeResultClient() {
         rowBytes: async first => ({ first, bytes: [], rowsAvailable: 0, estimated: [] }),
         close: vi.fn(async () => { handle.snapshot = { ...handle.snapshot, state: 'released' } }),
         sort: vi.fn<ResultHandle['sort']>(async () => { throw new Error('Sorting is not faked.') }),
+        search: vi.fn<ResultHandle['search']>(async () => ({ rows: 0, total: 0, first: 0, matchRows: [], matchColumns: [], complete: true, approximate: false })),
         dispose: vi.fn()
       }
       settle(handle, value, false)

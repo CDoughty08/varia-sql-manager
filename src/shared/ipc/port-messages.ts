@@ -2,7 +2,7 @@
 // requests are validated with portRequestSchema; backend payloads main forwards are validated with the schemas below.
 import { z } from 'zod'
 import { clientStatisticsSchema } from '../client-statistics'
-import type { BackendStatus, MemoryOrder, QueryEvent, ResultsCloseResult, ResultsReadResult, ResultsRowBytesResult, ResultsViewCloseResult, ResultsViewResult } from '../contracts'
+import type { BackendStatus, MemoryOrder, QueryEvent, ResultsCloseResult, ResultsReadResult, ResultsRowBytesResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult } from '../contracts'
 import { maxQueryPlanDocuments } from '../plans'
 import { liveSubscribeParamsSchema, liveUpdateParamsSchema, testLiveSubscribeParamsSchema, testLiveUpdateParamsSchema, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../live/schema'
 import { backendDescriptorSchema } from './descriptors'
@@ -26,6 +26,11 @@ export const buildPortRequestSchema = (live: { subscribe: z.ZodType<LiveSubscrib
   // Views (results.view): a result's rows sorted in the backend, read with `read` and `rowBytes` by viewId.
   z.object({ t: z.literal('view'), rid: u31, generation, resultId: u32, sort: z.array(viewSortKeySchema).min(1).max(limits.views.maxKeys), replaces: u32.optional() }).strict(),
   z.object({ t: z.literal('viewClose'), rid: u31, generation, resultId: u32, viewIds: z.array(u32).min(1).max(limits.views.maxClose) }).strict(),
+  // Search (results.search): the cells containing a text, through a view when one is named; `cancel` stops it.
+  z.object({
+    t: z.literal('search'), rid: u31, generation, resultId: u32, text: z.string().min(1).max(limits.search.maxText), fromRow: count,
+    maxMatches: z.number().int().min(1).max(limits.search.maxMatches), backward: z.boolean().optional(), viewId: u32.optional()
+  }).strict(),
   // Live subscriptions (docs/ipc.md): a stream acknowledged with `credit`, ended with `cancel`, changed with liveUpdate.
   z.object({ t: z.literal('live'), rid: u31, generation, params: live.subscribe }).strict(),
   z.object({ t: z.literal('liveUpdate'), rid: u31, generation, params: live.update }).strict()
@@ -54,7 +59,14 @@ export const rowBytesResultSchema = z.object({ firstRow: count, bytes: z.array(c
 /** A results.view answer as the backend sends it. */
 export const viewResultSchema = z.object({ viewId: u32, rows: count, complete: z.boolean(), approximate: z.boolean() }).strict()
 export const viewCloseResultSchema = z.object({ closed: z.number().int().min(0).max(limits.views.maxClose) }).strict()
-export type PortEndResult = ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | ResultsViewResult | ResultsViewCloseResult | LiveEnd | LiveUpdateResult
+/** A results.search answer as the backend sends it: a run of at most maxMatches plus one row's columns. Main also checks
+ *  its matches are in order and inside the rows searched before forwarding it. */
+const maxRun = limits.search.maxMatches + limits.page.maxColumns
+export const searchResultSchema = z.object({
+  rows: count, total: count, first: count, matchRows: z.array(count).max(maxRun), matchColumns: z.array(z.number().int().min(0).max(limits.page.maxColumns - 1)).max(maxRun),
+  complete: z.boolean(), approximate: z.boolean()
+}).strict()
+export type PortEndResult = ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | ResultsViewResult | ResultsViewCloseResult | ResultsSearchResult | LiveEnd | LiveUpdateResult
 
 const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'server', 'print', 'error']) }).strict()
 const session = { spid: z.number().int().min(0).max(32767), login: z.string().max(128).optional() }

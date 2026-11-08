@@ -15,6 +15,7 @@ import { registerGridAnchor } from './anchor'
 import { gridLimits as g } from './constants'
 import { GridData, portBusy } from './data'
 import { gridKeyAction, pageStep } from './keyboard'
+import { cellKey, type GridMarks } from './marks'
 import { ColumnLayout, hitTest, rowHeaderWidth, visibleRange, type VisibleRange } from './layout'
 import { fitWidth, initialWidth, measureCharWidth, sqlTypeLabel, typeHintChars } from './measure'
 import { freshRing, ringStep, rotation, slotOf, type RowRing } from './ring'
@@ -27,9 +28,13 @@ import { whitespaceRuns, type WhitespaceMode } from './whitespace'
 import { displayText } from '../../../shared/ipc/wire/cells'
 
 // A cell's look is one of 128 class strings, picked by these bits.
-const NULL = 1, TRUNC = 2, ERR = 4, LINK = 8, SEL = 16, ACT = 32, LOAD = 64
-const classes = Array.from({ length: 128 }, (_, bits) => 'rg-c' + (bits & NULL ? ' is-null' : '') + (bits & TRUNC ? ' is-trunc' : '') + (bits & ERR ? ' is-err' : '')
-  + (bits & LINK ? ' is-link' : '') + (bits & SEL ? ' is-sel' : '') + (bits & ACT ? ' is-act' : '') + (bits & LOAD ? ' is-load' : ''))
+// HIT, CUR and DIM are search in results' marks (marks.ts): a matched cell, the active match, a column the search leaves out.
+const NULL = 1, TRUNC = 2, ERR = 4, LINK = 8, SEL = 16, ACT = 32, LOAD = 64, HIT = 128, CUR = 256, DIM = 512
+const classes = Array.from({ length: 1024 }, (_, bits) => 'rg-c' + (bits & NULL ? ' is-null' : '') + (bits & TRUNC ? ' is-trunc' : '') + (bits & ERR ? ' is-err' : '')
+  + (bits & LINK ? ' is-link' : '') + (bits & SEL ? ' is-sel' : '') + (bits & ACT ? ' is-act' : '') + (bits & LOAD ? ' is-load' : '')
+  + (bits & HIT ? ' is-hit' : '') + (bits & CUR ? ' is-cur' : '') + (bits & DIM ? ' is-dim' : ''))
+/** A header's search mark: 0 none, 1 matched, 2 the active match, 3 dimmed. */
+const headerMarks = ['', 'hit', 'cur', 'dim'] as const
 const truncatedAt: Record<string, string> = { binary: '32,766 bytes', document: '2,097,152 characters', text: '65,535 characters' }
 // A row's look is one class string too: odd or even, and its tone (none, or one of liveTones); the row number's likewise.
 const toneIndex = new Map<string, number>(liveTones.map((tone, index) => [tone, index + 1]))
@@ -54,7 +59,7 @@ interface RowSlot {
 /** A pooled column header: the name, then the SQL type (`type`, in muted small text and hidden from screen readers, which read it in the tooltip). Each is
  *  in its own bidi isolate (.rg-cn, .rg-ct), so a name with an unterminated override cannot reorder the type after it. */
 interface HeaderSlot {
-  readonly el: HTMLDivElement; readonly text: Text; readonly type: Text; column: number; sel: boolean; shown: boolean; left: number; width: number
+  readonly el: HTMLDivElement; readonly text: Text; readonly type: Text; column: number; sel: boolean; mark: number; shown: boolean; left: number; width: number
   /** The sort button (grids with `onSort`): its glyph, its place among several keys, and what it shows now ('' unsorted). */
   readonly sort?: { readonly el: HTMLSpanElement; readonly glyph: HTMLSpanElement; readonly order: Text; state: string }
 }
@@ -145,6 +150,8 @@ export class GridView {
   private readonly tone: number
   /** Rows a live revision lists as departed: muted, whatever their tone column says. */
   private muted: ReadonlySet<number> = new Set()
+  /** Search in results' marks, while the tab has a search. */
+  private searchMarks: GridMarks | undefined
   private links: Uint8Array
   private readonly gid = nextGridId++
   private readonly slots = new WeakMap<Element, { row?: RowSlot; cell?: CellSlot; header?: HeaderSlot }>()
@@ -345,6 +352,26 @@ export class GridView {
     this.schedule()
   }
   invalidate(): void { this.schedule() }
+  /** Search in results' marks for this grid (undefined: none). Cells marks name by row are drawn only while the grid shows
+   *  the rows they number (`marks.handle`). */
+  setMarks(marks: GridMarks | undefined): void {
+    if (marks === this.searchMarks) return
+    this.searchMarks = marks
+    this.schedule()
+  }
+  /** Scrolls the active match into view: its cell, or in columns mode its column at the rows in view. False when the marks
+   *  number rows this grid does not show (a sort it has not swapped to yet). */
+  revealMark(): boolean {
+    const marks = this.searchMarks
+    if (marks?.current && marks.handle === this.handle) { this.reveal(marks.current.row, marks.current.column); return true }
+    if (marks?.currentColumn !== undefined && marks.currentColumn < this.columns) {
+      const rows = this.rows()
+      const row = Math.min(Math.max(0, rows - 1), this.viewport?.firstRow ?? this.o.state.selection?.active.row ?? 0)
+      this.reveal(row, marks.currentColumn)
+      return true
+    }
+    return false
+  }
 
   /**
    * Shows another result with the same columns in place of this one (a live table's next revision or segment): widths and
@@ -894,7 +921,7 @@ export class GridView {
           button.title = 'Sort ascending'
         }
         this.head.append(el)
-        const header: HeaderSlot = { el, text, type, column: -1, sel: false, shown: false, left: Number.NaN, width: -1, ...sort ? { sort } : {} }
+        const header: HeaderSlot = { el, text, type, column: -1, sel: false, mark: 0, shown: false, left: Number.NaN, width: -1, ...sort ? { sort } : {} }
         this.slots.set(el, { header })
         this.headerSlots.push(header)
       }
@@ -1106,7 +1133,7 @@ export class GridView {
       // A cell whose rows are still being read says so: an empty name reads as "blank", and the value that follows is a
       // name change some screen readers do not read for the active cell.
       const toned = this.o.toneLabel && active ? this.activeTone(active.row) : undefined
-      const label = bits & LOAD ? 'Loading' : displayText(activeCell.value) + (bits & ERR ? ', could not be read' : bits & NULL ? ', null value' : '') + (bits & TRUNC ? ', truncated' : '') + (bits & LINK ? ', link, press Enter to open' : '') + (toned ? ', ' + toned : '')
+      const label = bits & LOAD ? 'Loading' : displayText(activeCell.value) + (bits & ERR ? ', could not be read' : bits & NULL ? ', null value' : '') + (bits & TRUNC ? ', truncated' : '') + (bits & LINK ? ', link, press Enter to open' : '') + (bits & HIT ? ', search match' : '') + (toned ? ', ' + toned : '')
       if (label !== activeCell.label) { activeCell.label = label; activeCell.el.setAttribute('aria-label', label) }
     }
   }
@@ -1208,6 +1235,11 @@ export class GridView {
     }
     if (covered(ranges, row, column)) bits |= SEL
     if (active && active.row === row && active.column === column) bits |= ACT
+    const marks = this.searchMarks
+    if (marks) {
+      if (marks.cells && marks.handle === this.handle && marks.cells.has(cellKey(row, column))) bits |= marks.current && marks.current.row === row && marks.current.column === column ? HIT | CUR : HIT
+      if (marks.columns && !marks.columns[column]) bits |= DIM
+    }
     if (bits !== cell.bits) {
       if ((bits ^ cell.bits) & SEL) cell.el.setAttribute('aria-selected', bits & SEL ? 'true' : 'false')
       cell.bits = bits
@@ -1290,6 +1322,12 @@ export class GridView {
       let sel = false
       for (const item of ranges) if (column >= item.left && column <= item.right) { sel = true; break }
       if (sel !== header.sel) { header.sel = sel; header.el.classList.toggle('sel', sel) }
+      const columns = this.searchMarks?.columns, mark = !columns ? 0 : !columns[column] ? 3 : this.searchMarks!.currentColumn === column ? 2 : 1
+      if (mark !== header.mark) {
+        if (header.mark) header.el.classList.remove(headerMarks[header.mark])
+        if (mark) header.el.classList.add(headerMarks[mark])
+        header.mark = mark
+      }
       if (header.sort) this.paintSort(header, header.sort, column)
     }
     for (const header of this.headerSlots) if (!used.has(header) && header.shown) { header.shown = false; header.column = -1; header.el.style.display = 'none'; header.el.removeAttribute('aria-colindex') }

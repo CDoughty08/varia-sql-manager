@@ -29,7 +29,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
-        "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.peekRows", "explorer.index", "explorer.search", "results.copy", "results.export",
+        "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.search", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.peekRows", "explorer.index", "explorer.search", "results.copy", "results.export",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
         "ssis.describe", "ssis.execute", "ssis.catalogSetup"
@@ -297,7 +297,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     public RequestLane LaneOf(string method) => method switch
     {
         "query.execute" or "plans.estimate" => RequestLane.Query,
-        "results.read" or "results.copy" or "results.export" or "results.view" => RequestLane.Results,
+        "results.read" or "results.copy" or "results.export" or "results.view" or "results.search" => RequestLane.Results,
         "explorer.children" or "explorer.peek" or "explorer.peekDependencies" or "explorer.peekRows" or "explorer.index" or "explorer.search" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
         "ssis.describe" or "ssis.execute" or "ssis.catalogSetup" => RequestLane.Ssis,
@@ -354,6 +354,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "results.rowBytes" => RowBytes(Read<ResultsRowBytesArgs>(parameters, json)),
         "results.view" => await ViewAsync(Read<ResultsViewArgs>(parameters, json), Token(context)),
         "results.viewClose" => CloseViews(Read<ResultsViewCloseArgs>(parameters, json)),
+        "results.search" => await SearchAsync(Read<ResultsSearchArgs>(parameters, json), Token(context)),
         "results.copy" => await jobs.CopyAsync(Read<ResultsCopyArgs>(parameters, json), context),
         "results.export" => await jobs.ExportAsync(Read<ResultsExportArgs>(parameters, json), context),
         "explorer.children" => await explorer.ChildrenAsync(Read<ExplorerChildrenArgs>(parameters, json), Token(context)),
@@ -1548,6 +1549,23 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         store.Return(set.Budget, working);
         var view = store.AddView(set, sorted.Order, keys, sorted.Approximate, complete, kept, args.Replaces);
         return new ResultsViewResult(view.ViewId, view.Rows, view.Complete, view.Approximate);
+    }
+
+    /// <summary>results.search: finds the cells containing a text (ResultSearcher) off the frame loop, over the rows sealed now
+    /// or a view's; what it holds is a run of at most 10,000 matches and one row's, so it reserves nothing.</summary>
+    private async Task<ResultsSearchResult> SearchAsync(ResultsSearchArgs args, CancellationToken token)
+    {
+        if (args.ResultId == 0 || args.Text is not { Length: >= 1 and <= ResultSearcher.MaxText } || args.FromRow is < 0 or > MaxSafeInteger
+            || args.MaxMatches is < 1 or > ResultSearcher.MaxMatches || args.ViewId == 0)
+            throw new RequestException("INVALID_PARAMS", "A search needs 1 to 1,024 characters of text and 1 to 10,000 matches from a row of the result.");
+        var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
+        var complete = view?.Complete ?? set.IsComplete;
+        var pages = set.SealedSnapshot();
+        var found = await Task.Run(() => ResultSearcher.Search(set, pages, view, args.Text, args.FromRow, args.Backward, args.MaxMatches, token), token);
+        if (set.IsReleased) throw Unavailable(args.ResultId);
+        if (view is not null && !store.HasView(view)) throw ViewClosed();
+        return new ResultsSearchResult(found.Searched, found.Total, found.First, found.Rows, found.Columns, complete, found.Approximate);
     }
 
     private ResultsViewCloseResult CloseViews(ResultsViewCloseArgs args)
