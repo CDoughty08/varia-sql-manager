@@ -19,6 +19,7 @@ on:
       - backend/Varia.Backend/Varia.Backend.csproj
       - src/main/app-protocol.ts
       - scripts/packaged-smoke.mjs
+      - scripts/asar-contents.mjs
       - scripts/portable-smoke.mjs
       - scripts/windows-installer-smoke.ps1
       - scripts/update-manifest.mjs
