@@ -10,7 +10,8 @@ pages, limits, error codes, display formats, benchmarks).
 
 - `npm ci`: install. Use `npm install <pkg>` only to change dependencies, and commit `package-lock.json`.
 - `npm run dev`: Debug backend build, then electron-vite with renderer hot reload. Restart after C# changes.
-- `npm run check`: typecheck, Release .NET checks, vitest, production build. Run before every commit.
+- `npm run check`: typecheck, Release .NET checks, vitest, production build, as concurrent lanes (`scripts/check.mjs`, which
+  prints each lane's seconds). Run before every commit.
 - `npm run test:smoke`: the Electron suites listed in package.json's `test:smoke`. Needs the Release backend and `out/`
   from `npm run check` (or just those, from `npm run build:smoke`). `node scripts/smoke-shards.mjs 2/2`: one CI shard.
   The fixture launches the hidden smoke window with `--disable-frame-rate-limit`: Chromium otherwise draws it at one
@@ -31,8 +32,8 @@ pages, limits, error codes, display formats, benchmarks).
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 1624 offline
-  checks; how many depends on the server version and authentication (2382 against a local SQL Server 2025 in Mixed Mode, which
+  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its about 1650 offline
+  checks (a few are platform-specific); how many depends on the server version and authentication (2382 against a local SQL Server 2025 in Mixed Mode, which
   adds the low-privilege login checks, with Windows authentication and `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer, Script As and object action
   scratch-database checks (the last in their own `VariaScratch_…_act` database) and the script goldens in `tests/fixtures/scripting/`; `VARIA_UPDATE_SCRIPT_GOLDENS=1`
   rewrites the goldens whose manifest source is `varia`),
@@ -332,7 +333,10 @@ pages, limits, error codes, display formats, benchmarks).
   metric needs a `tests/bench/floors.json` entry (`tests/bench-floors.test.ts` checks both lists) and a row in
   docs/ipc.md. Floors must stay well below what slow shared CI runners measure.
 - Every behaviour change or bug fix comes with a check that would have caught it.
-- Keep CI fast. Each smoke shard and live group has a time budget (`shardBudgetSeconds` in `scripts/smoke-shards.mjs`,
+- Keep CI fast: docs/ci.md holds the measurements, the plan and the rules (queueing for the 20 shared runners sets most of a
+  run's wall time, so a job removed beats a step trimmed); measure with `node scripts/ci-timings.mjs`. Race a close or exit only
+  through `within()` (`tests/idle-waits.test.ts`), settle tests without `setTimeout` loops, fail offline connections with
+  `Unreachable.Source`, and find .NET waits with `VARIA_TEST_SLOW_MS=500`. Each smoke shard and live group has a time budget (`shardBudgetSeconds` in `scripts/smoke-shards.mjs`,
   `LiveGroups.BudgetSeconds`, both 360 s); exceeding it fails `tests/ci-workflow.test.ts` or the offline .NET checks.
   A new smoke suite needs its seconds on Linux and Windows in `suiteSeconds`, and a new live .NET suite runs through
   `Suite(...)` in `Program.cs` with an entry in `LiveGroups.Suites`. Copy times from CI's logs: each shard's summary and
@@ -358,6 +362,9 @@ pages, limits, error codes, display formats, benchmarks).
   Windows and macOS benchmarks, and Linux's 1024x768 repeats of the scripting and results suites (Windows runners' own
   display is 1024x768). macOS skips the smoke tests until they cover its window chrome. `tests/ci-workflow.test.ts` holds
   this layout.
+  Release builds (`release.yml`, through `package.yml`) package main pushes, tags and manual runs, and a pull request only when
+  it changes what packaging reads (its `paths`); Intel macOS packages only for tags and manual runs, and installers upload only
+  then (`tests/release-workflow.test.ts`). Every workflow a pull request triggers cancels its superseded runs.
   `sql-matrix.yml` (manual runs only) repeats the .NET checks against SQL Server 2017, 2019, 2022 and 2025.
 - No license has been chosen; do not add one.
 

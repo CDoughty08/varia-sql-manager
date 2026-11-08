@@ -693,7 +693,7 @@ internal static class ExplorerChecks
         {
             Interlocked.Increment(ref Connections);
             Hold?.Wait();
-            return new SqlConnection("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false");
+            return new SqlConnection("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false");
         }
         /// <summary>Replaces the open, as SqlService's does for a Kerberos token failure.</summary>
         public Func<SqlConnection, CancellationToken, Task>? Opening { get; set; }

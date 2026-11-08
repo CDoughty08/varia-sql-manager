@@ -7,7 +7,7 @@
 // covers the long-run registry: a window close refused and a reload prompt naming the run while Create Catalog runs.
 import { access, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { electron, expect } from './smoke.mjs'
+import { electron, expect, within } from './smoke.mjs'
 import { actionsStubData, installActionsStub } from './actions-stub.mjs'
 import { expandExplorerPath, explorerRow, revealExplorerRow } from './explorer-tree.mjs'
 import { anyResultGrid, backendReady, editorTextbox, errorBanner, gridCell, lostServerRows, outputStatus, queryServer, toolbarButton } from './ui.mjs'
@@ -119,7 +119,7 @@ async function launch(launchOptions, name) {
   await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
   const cleanup = async () => {
-    await Promise.race([application.close(), wait(10000)]).catch(() => {})
+    await within(application.close(), 10000).catch(() => {})
     child.kill()
     await rm(profile, { recursive: true, force: true }).catch(() => {})
     await rm(control, { recursive: true, force: true }).catch(() => {})

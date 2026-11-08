@@ -38,7 +38,7 @@ try {
   if (!health.ok) throw new Error(`Portable backend health failed at ${page.url()}: ${JSON.stringify(health)}`)
   expect(health.value).toMatchObject({ protocolVersion: 2, smoVersion: expect.stringMatching(/^\d+\./) })
   await page.close()
-  const exited = await Promise.race([new Promise(resolveExit => child.once('exit', () => resolveExit(true))), delay(30000).then(() => false)])
+  const exited = await Promise.race([new Promise(resolveExit => child.once('exit', () => resolveExit(true))), delay(30000, false, { ref: false })])
   if (!exited && child.exitCode === null) throw new Error('Portable launcher did not exit after closing the app.')
 } finally {
   await browser?.close().catch(() => {})

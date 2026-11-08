@@ -8,6 +8,17 @@ import { _electron, expect as baseExpect } from '@playwright/test'
  */
 export const expect = baseExpect.configure({ timeout: process.platform === 'win32' ? 15000 : 5000 })
 
+/**
+ * Settles as `promise` does or, after `ms`, with `onTimeout()`'s value (or its throw), and clears its timer either way.
+ * Race app.close() or an exit only through this: a bare setTimeout or timers/promises delay in a Promise.race stays
+ * pending after the app closes and keeps the suite's process alive for its full length (10 to 30 s a suite).
+ */
+export function within(promise, ms, onTimeout = () => undefined) {
+  let timer
+  const timeout = new Promise((resolve, reject) => { timer = setTimeout(() => { try { resolve(onTimeout()) } catch (error) { reject(error) } }, ms) })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+}
+
 const slowMs = 500
 export const frameRateSwitch = '--disable-frame-rate-limit'
 

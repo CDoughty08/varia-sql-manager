@@ -144,7 +144,7 @@ internal static class ServerFilesChecks
         public int Opened => Volatile.Read(ref opened);
         public void Release() => released.TrySetResult();
         public ServerProfile Profile(string connectionId) => Box2022;
-        public SqlConnection Connection(string connectionId) => new("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false");
+        public SqlConnection Connection(string connectionId) => new("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false");
         public async Task OpenAsync(SqlConnection connection, CancellationToken token)
         {
             Interlocked.Increment(ref opened);
@@ -169,7 +169,7 @@ internal static class ServerFilesChecks
         public SqlConnection Connection(string connectionId)
         {
             Interlocked.Increment(ref Connections);
-            return new SqlConnection("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false");
+            return new SqlConnection("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false");
         }
         public Task OpenAsync(SqlConnection connection, CancellationToken token) => connection.OpenAsync(token);
         public bool ClearPoolsFor(string connectionId, string database) => true;

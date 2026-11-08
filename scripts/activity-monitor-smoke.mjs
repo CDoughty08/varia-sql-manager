@@ -8,7 +8,7 @@
 // Reconnect brings it back; Shift+Esc and closing the tab end its subscription. Screenshots in Dark and Light. With
 // VARIA_TEST_SQL_SERVER set, a second run on the Release backend opens the monitor on that server: the real overview
 // probe fills the tiles, and Pause stops it.
-import { electron, expect } from './fixtures/smoke.mjs'
+import { electron, expect, within } from './fixtures/smoke.mjs'
 import {
   activityBanner, backendReady, bannerGlyph, documentActions, documentContent, documentFrame, documentTabs, documentTitle, explorerTree, livePill, staleBadge, tileCaptions, toolbarButton
 } from './fixtures/ui.mjs'
@@ -428,7 +428,7 @@ try {
 } finally {
   clearTimeout(watchdog)
   await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) }).catch(() => {})
-  await Promise.race([app.close(), sleep(15000).then(() => app.process()?.kill())]).catch(() => {})
+  await within(app.close(), 15000, () => app.process()?.kill()).catch(() => {})
   await rm(profile, { recursive: true, force: true }).catch(() => {})
   await rm(control, { recursive: true, force: true }).catch(() => {})
 }

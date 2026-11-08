@@ -9,7 +9,7 @@
 // page cannot hold it.
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { electron, expect } from './smoke.mjs'
+import { electron, expect, within } from './smoke.mjs'
 import { explorerRow } from './explorer-tree.mjs'
 import { crashRendererAndAwaitLoss } from './dialog-lifecycle.mjs'
 import { activeDocumentName, anyResultGrid, backendReady, banner, closeDocumentButton, documentTabs, executingMark, explorerToolbar, queryServer, querySession, toolbarButton } from './ui.mjs'
@@ -73,7 +73,7 @@ async function launch(launchOptions, name) {
     await expect(dialog).toHaveCount(0)
   }
   const cleanup = async () => {
-    await Promise.race([application.close(), wait(10000)]).catch(() => {})
+    await within(application.close(), 10000).catch(() => {})
     child.kill()
     await rm(profile, { recursive: true, force: true }).catch(() => {})
     await rm(control, { recursive: true, force: true }).catch(() => {})

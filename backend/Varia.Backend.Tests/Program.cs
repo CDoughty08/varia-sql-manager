@@ -17,8 +17,17 @@ if (args is [ConnectionFailureChecks.IdentityArgument])
 
 var passed = 0;
 var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+// VARIA_TEST_SLOW_MS=<ms> prints each check reached more than that long after the previous one (to stderr), to find the
+// waits that make the run slow (docs/ci.md).
+var slowMs = int.TryParse(Environment.GetEnvironmentVariable("VARIA_TEST_SLOW_MS"), out var slow) && slow > 0 ? slow : 0;
+var sinceCheck = System.Diagnostics.Stopwatch.StartNew();
 void Check(bool condition, string name)
 {
+    if (slowMs > 0)
+    {
+        if (sinceCheck.ElapsedMilliseconds > slowMs) Console.Error.WriteLine("Slow check (" + sinceCheck.ElapsedMilliseconds + " ms since the previous one): " + (name.Length > 120 ? name[..120] : name));
+        sinceCheck.Restart();
+    }
     if (!condition) throw new Exception("FAIL: " + name);
     passed++;
 }

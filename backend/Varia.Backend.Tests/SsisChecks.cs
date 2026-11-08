@@ -189,14 +189,14 @@ internal static class SsisChecks
         public int ActionConnections;
         public string? ActionCatalog;
         public ServerProfile Profile(string connectionId) => new(major, major + ".0.1.1", edition, "sa", false, true, false, ExplorerCatalog.MinBand, linux);
-        public SqlConnection SsisConnection(string connectionId, string catalogDatabase) => new("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false;Initial Catalog=" + catalogDatabase);
+        public SqlConnection SsisConnection(string connectionId, string catalogDatabase) => new("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false;Initial Catalog=" + catalogDatabase);
         public SqlConnection SsisActionConnection(string connectionId, string catalogDatabase)
         {
             Interlocked.Increment(ref ActionConnections);
             ActionCatalog = catalogDatabase;
-            return new("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false;Initial Catalog=" + catalogDatabase);
+            return new("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false;Initial Catalog=" + catalogDatabase);
         }
-        public SqlConnection SsisServerConnection(string connectionId) => new("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false");
+        public SqlConnection SsisServerConnection(string connectionId) => new("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false");
         public async Task OpenAsync(SqlConnection connection, CancellationToken token)
         {
             Interlocked.Increment(ref Opens);
@@ -305,8 +305,8 @@ internal static class SsisChecks
     {
         public int Explorer, Ssis;
         public ServerProfile Profile(string connectionId) => new(major, null, 3, "sa", false, true, false);
-        public SqlConnection Connection(string connectionId, string? database) { Interlocked.Increment(ref Explorer); return new("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false"); }
-        public SqlConnection SsisConnection(string connectionId) { Interlocked.Increment(ref Ssis); return new("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false"); }
+        public SqlConnection Connection(string connectionId, string? database) { Interlocked.Increment(ref Explorer); return new("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false"); }
+        public SqlConnection SsisConnection(string connectionId) { Interlocked.Increment(ref Ssis); return new("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false"); }
         public string SsisCatalog => "SSISDB";
         public Task OpenAsync(SqlConnection connection, CancellationToken token) => throw new RequestException("AUTH_KERBEROS", "The Kerberos ticket has expired.");
     }

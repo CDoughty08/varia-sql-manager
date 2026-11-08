@@ -45,7 +45,7 @@ internal static class SeamChecks
         public SqlConnection Connection(string connectionId)
         {
             Interlocked.Increment(ref Connections);
-            return new SqlConnection("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false");
+            return new SqlConnection("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false");
         }
         public Task OpenAsync(SqlConnection connection, CancellationToken token) => connection.OpenAsync(token);
         public bool ClearPoolsFor(string connectionId, string database) => false;
@@ -235,7 +235,7 @@ internal static class SeamChecks
     /// server-scope pool's database (Object Explorer's with no database) shows where each connection's pools open.</summary>
     private static void FreeDatabase(Action<bool, string> check)
     {
-        static string Settings(string? database) => "Data Source=tcp:127.0.0.1,1;" + (database is null ? "" : "Initial Catalog=" + database + ";") + "Encrypt=false;Application Name=Varia";
+        static string Settings(string? database) => "Data Source=" + Unreachable.Source + ";" + (database is null ? "" : "Initial Catalog=" + database + ";") + "Encrypt=false;Application Name=Varia";
         static ServerProfile On(string server, bool contained = false) => Box2022 with { ServerName = server, Contained = contained };
         static string ServerScope(SqlService service, string id)
         {
@@ -320,7 +320,7 @@ internal static class SeamChecks
     private static async Task RunnerAsync(Action<bool, string> check)
     {
         using var service = new ActionService(new Host(3));
-        await using var connection = new SqlConnection("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false");
+        await using var connection = new SqlConnection("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false");
         var ran = new List<string>();
         RunStep Step(string title, Exception? fails = null, StepKind kind = StepKind.Main, int? undoes = null, Func<IReadOnlyList<string>, bool>? when = null) =>
             new(title, _ => { ran.Add(title); return fails is null ? Task.CompletedTask : Task.FromException(fails); }, kind, undoes, when);

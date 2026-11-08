@@ -32,7 +32,7 @@ internal static class ActionProgressChecks
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public bool IgnoreStop { get; init; }
         public ServerProfile Profile(string connectionId) => Box2022;
-        public SqlConnection Connection(string connectionId) => new("Application Name=" + connectionId + ";Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false");
+        public SqlConnection Connection(string connectionId) => new("Application Name=" + connectionId + ";Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false");
         public async Task OpenAsync(SqlConnection connection, CancellationToken token)
         {
             Opened.Enqueue(new SqlConnectionStringBuilder(connection.ConnectionString).ApplicationName);
@@ -161,7 +161,7 @@ internal static class ActionProgressChecks
     private static async Task RunnerAsync(Action<bool, string> check)
     {
         using var service = new ActionService(new HeldHost());
-        await using var connection = new SqlConnection("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false");
+        await using var connection = new SqlConnection("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false");
         var events = new List<string>();
         var progress = new ActionProgress(value => events.Add(Short(value)), TimeSpan.Zero);
         RunStep Step(string title, params int[] percents) => new(title, _ =>

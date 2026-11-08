@@ -12,8 +12,8 @@ let dir: string
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'varia-update-manifest-')) })
 afterEach(async () => { await rm(dir, { recursive: true, force: true }) })
 
-// The release job's expected files (release.yml's Check release assets), with $version filled in.
-const releaseNames = (version: string) => [...new Set([...readFileSync('.github/workflows/release.yml', 'utf8').matchAll(/"dist\/(Varia-SQL-Manager-\$version-[^"]+)"/g)].map(match => match[1]!.replace('$version', version)))]
+// The packaging job's expected files (package.yml's Check release assets), with $version filled in.
+const releaseNames = (version: string) => [...new Set([...readFileSync('.github/workflows/package.yml', 'utf8').matchAll(/"dist\/(Varia-SQL-Manager-\$version-[^"]+)"/g)].map(match => match[1]!.replace('$version', version)))]
 
 describe('update manifest', () => {
   it('recognises every file the release job packages', () => {
