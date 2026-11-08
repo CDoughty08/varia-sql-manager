@@ -24,7 +24,7 @@ Execution outcome is independent of document completeness. A completed statement
 - A query remains reserved until its bounded XML copy settles: the next F5 cannot cause backend `BeginQuery` to release XML before it is copied. Closing results or the query tab during a copy releases its handles after the copy settles; late completion does not recreate the closed tab/results. Closing a tab before its execution has completed abandons its still-running output as before and creates no new history acquisition.
 - Backend loss during copying preserves entries already copied; unread sources fail with a history notice. Source failures are isolated, so later readable documents can still be retained. The deadline settles acquisition even if a reader fails to acknowledge cancellation. Clear/dispose invalidates pending reads; delayed responses cannot repopulate cleared history.
 
-The history reports the most recent retention issue; it is not an audit log of every skipped source. Entry/memory limits may retain only part of an execution's documents. Snapshot history is independent of any viewer preparation/caching feature and does not implement structural or visual comparison.
+The history reports the most recent retention issue; it is not an audit log of every skipped source. Entry/memory limits may retain only part of an execution's documents. Snapshot history is independent of viewer preparation/caching. **Compare plans** compares two frozen retained snapshots or open saved-plan documents; see [Plan comparison](plan-comparison.md) for matching, deltas, provenance and lifecycle limits.
 
 ## Validation
 

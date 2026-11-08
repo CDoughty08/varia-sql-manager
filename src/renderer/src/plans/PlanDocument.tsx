@@ -53,7 +53,7 @@ export default function PlanDocument({ documentId, source, onSource }: { documen
         onSource(true)
       }}>XML source</button>
     </div>
-    {!source && <PlanViewer key={documentId} sources={sources} identity={'document:' + documentId} scope={documentId} navigation={navigation}
+    {!source && <PlanViewer key={documentId} sources={sources} identity={'document:' + documentId} scope={documentId} xmlNavigation={navigation}
       navigateXml={target => { preserveXml.current = false; sourceEntry.current = undefined; setXmlTarget(target); onSource(true) }} />}
   </>
 }

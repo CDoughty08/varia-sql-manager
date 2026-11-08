@@ -4,6 +4,8 @@
 
 [Retained Plans](docs/retained-plans.md) keeps bounded in-memory XML history with pinning, original execution/SQL context, reopening and explicit `.sqlplan`/XML saving. Open **Window › Execution Plan › Plan history**; snapshots survive re-execution, closed results/tabs and backend loss until this workbench window closes.
 
+[Plan Comparison](docs/plan-comparison.md) pairs two retained snapshots or saved-plan documents, highlights structural/property changes and compares available counters, estimates, parameters, grants and warnings. Open **Plan history › Compare plans** for linked or independent side-by-side views; inputs are frozen until compared again.
+
 Varia is a cross-platform desktop workbench for Microsoft SQL Server. It combines a SQL editor, query results, and database management tools in one application. It is under active development.
 
 ## Features

@@ -140,15 +140,21 @@ export class PlanCanvas {
     if (!this.frame && this.ready && !this.disposed && this.visible && !this.ownerDocument.hidden) this.frame = this.owner.requestAnimationFrame(() => { this.frame = 0; this.draw() })
   }
   /** Public camera hook for linked viewers. Values are copied and invalid cameras are ignored. */
-  setCamera(camera: Camera): void {
+  setCamera(camera: Camera, notify = true): void {
     if (![camera.x, camera.y, camera.scale].every(Number.isFinite) || camera.scale <= 0) return
     if (this.camera.x === camera.x && this.camera.y === camera.y && this.camera.scale === camera.scale) return
     this.dismissHover()
     this.camera = { ...camera, scale: Math.max(0.00001, Math.min(3, camera.scale)) }
-    this.options.cameraChanged({ ...this.camera })
+    if (notify) this.options.cameraChanged({ ...this.camera })
     this.invalidate()
   }
   getCamera(): Camera { return { ...this.camera } }
+  /** Apply a linked viewer's camera without echoing it back to the host or fitting over it during initialization. */
+  restoreCamera(camera: Camera): void {
+    if (![camera.x, camera.y, camera.scale].every(Number.isFinite) || camera.scale <= 0) return
+    this.options.camera = { ...camera, scale: Math.max(0.00001, Math.min(3, camera.scale)) }
+    this.setCamera(this.options.camera, false)
+  }
   pan(x: number, y: number): void { this.setCamera({ ...this.camera, x: this.camera.x + x, y: this.camera.y + y }) }
   navigateMinimap(x: number, y: number): void {
     const bounds = this.options.layout.bounds

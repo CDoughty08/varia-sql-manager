@@ -24,6 +24,28 @@ vi.mock('../src/renderer/src/core/windows', () => ({ observeResize: () => ({ dis
   windowOf: () => window, windows: { onDidAdopt: () => ({ dispose() {} }) } }))
 import { PlanCanvas } from '../src/renderer/src/plans/PlanCanvas'
 
+it('restores a linked camera during initialization without emitting camera changes', async () => {
+  const root = document.createElement('div'), changed = vi.fn(), frames = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1)
+  const canvas = new PlanCanvas({ root, statements: [], layout: layoutPlans([largePlan(2)]),
+    colors: { background: '#000000', card: '#000000', text: '#ffffff', muted: '#aaaaaa', border: '#777777', accent: '#8888ff', warning: '#ffff00' },
+    select() {}, cameraChanged: changed, hover() {}, failed: () => { throw new Error('Canvas initialization failed') } })
+  try {
+    // Even a remote camera equal to the initial camera must prevent the default Fit.
+    canvas.restoreCamera({ x: 0, y: 0, scale: 1 })
+    await Promise.resolve()
+    expect(canvas.getCamera()).toEqual({ x: 0, y: 0, scale: 1 })
+    const remote = { x: 80, y: -20, scale: 0.7 }
+    canvas.restoreCamera(remote)
+    remote.x = 100
+    expect(canvas.getCamera()).toEqual({ x: 80, y: -20, scale: 0.7 })
+    canvas.restoreCamera({ x: NaN, y: 0, scale: 1 })
+    expect(canvas.getCamera()).toEqual({ x: 80, y: -20, scale: 0.7 })
+    expect(changed).not.toHaveBeenCalled()
+    canvas.pan(10, 20)
+    expect(changed).toHaveBeenCalledExactlyOnceWith({ x: 90, y: 0, scale: 0.7 })
+  } finally { canvas.dispose(); frames.mockRestore() }
+})
+
 it('allocates and measures row-flow labels only for visible label bounds, including counter updates', async () => {
   const input = largePlan(10_000, 'wide'), layout = layoutPlans([input]), root = document.createElement('div')
   Object.defineProperty(root, 'clientWidth', { value: 600 }); Object.defineProperty(root, 'clientHeight', { value: 400 })

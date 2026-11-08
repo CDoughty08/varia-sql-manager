@@ -20,11 +20,17 @@ export interface PlanViewerHandle { getCamera(): Camera | undefined; setCamera(c
 export interface PlanViewerProps {
   sources: readonly PlanSource[]; identity: string; scope?: string; visible?: boolean; live?: QueryPlanState
   openDocument?(sourceKey: string, target?: PlanXmlTarget): void
-  navigateXml?(target: PlanXmlTarget): void; navigation?: PlanXmlTarget
+  navigateXml?(target: PlanXmlTarget): void; xmlNavigation?: PlanXmlTarget
   controllerRef?: Ref<PlanViewerHandle>; onSelectionChanged?(id: string): void; onCameraChanged?(camera: Camera): void
+  prepared?: Pick<Content, 'statements' | 'notices'>; navigation?: PlanNavigation; marks?: ReadonlyMap<string, string>; compact?: boolean; transient?: boolean
 }
 
 interface Content { statements: SourceStatement[]; notices: string[]; layout?: PlanLayout; error?: string; empty?: boolean }
+/** Optional host control for paired views. Remote updates do not emit selection/camera events. */
+export interface PlanNavigation {
+  selected?: string; statement?: string; camera?: Camera
+  select?(id: string): void; selectStatement?(id: string): void; cameraChanged?(camera: Camera): void
+}
 const message = (error: unknown) => error instanceof Error ? error.message : 'The execution plan could not be opened.'
 
 export function findOperators(statements: readonly PlanStatement[], query: string, warningsOnly: boolean): { node: PlanNode; statement: number }[] {
@@ -34,7 +40,8 @@ export function findOperators(statements: readonly PlanStatement[], query: strin
 }
 
 /** One shared world, a virtual operator outline and a text inspector. No statement owns a nested graph scroller. */
-export default function PlanViewer({ sources, identity, scope = identity, visible = true, openDocument, live, controllerRef, onSelectionChanged, onCameraChanged, navigateXml, navigation }: PlanViewerProps) {
+export default function PlanViewer({ sources, identity, scope = identity, visible = true, openDocument, live, controllerRef, onSelectionChanged, onCameraChanged, navigateXml, xmlNavigation,
+  prepared, navigation, marks, compact = false, transient = false }: PlanViewerProps) {
   const { theme, planPreparation, resultClient, documents, settings } = useWorkbench()
   const preferences = useServiceSnapshot(settings).values
   const [generation, setGeneration] = useState(resultClient.backendGeneration)
@@ -76,7 +83,8 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
   const [query, setQuery] = useState(saved?.query ?? '')
   const [warningsOnly, setWarningsOnly] = useState(false)
   const [ranking, setRanking] = useState<OperatorRanking>('plan')
-  const outline = preferences['queryResults.plan.outline'], inspector = preferences['queryResults.plan.properties']
+  const [compactInspector, setCompactInspector] = useState(false)
+  const outline = preferences['queryResults.plan.outline'], inspector = compact ? compactInspector : preferences['queryResults.plan.properties']
   const minimap = preferences['queryResults.plan.minimap'], flow = preferences['queryResults.plan.rowFlow']
   const [outlineWidth, setOutlineWidth] = useState(preferences['queryResults.plan.outlineWidth'])
   const [propertiesWidth, setPropertiesWidth] = useState(preferences['queryResults.plan.propertiesWidth'])
@@ -115,6 +123,8 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
   const outlineScroll = useRef(scroll)
   outlineScroll.current = scroll
   const camera = useRef<Camera | undefined>(saved?.camera)
+  const navigationRef = useRef(navigation)
+  navigationRef.current = navigation
   const selection = useRef<(id: string) => void>(() => {})
   const revealPending = useRef(false)
   const latest = useRef({ selected, statement, xmlSource, query, collapsed: [...collapsed] })
@@ -131,9 +141,10 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
   const sourceKey = useMemo(() => JSON.stringify(sources.map(({ key, revision }) => [key, revision])), [sources])
   const labelId = useId()
   useEffect(() => () => {
-    if (scope === identity || documents.get(scope)) planPreparation.rememberView(scope, identity, { ...latest.current, camera: camera.current })
-  }, [identity, scope, planPreparation, documents])
+    if (!transient && (scope === identity || documents.get(scope))) planPreparation.rememberView(scope, identity, { ...latest.current, camera: camera.current })
+  }, [identity, scope, planPreparation, documents, transient])
   useEffect(() => {
+    if (prepared) { setParsed({ ...prepared, empty: !prepared.statements.length }); return }
     if (!active) return
     const stop = new AbortController()
     const input = sourceRef.current, previous = preparedSources.current
@@ -145,7 +156,7 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
       value => { if (!stop.signal.aborted) { preparedSources.current = { generation, sources: input }; setParsed({ ...value, empty: !value.statements.length }) } },
       error => { if (!stop.signal.aborted) setParsed({ statements: [], notices: [], error: message(error) }) })
     return () => stop.abort()
-  }, [identity, scope, sourceKey, retry, active, generation, planPreparation])
+  }, [identity, scope, sourceKey, retry, active, generation, planPreparation, prepared])
   useEffect(() => {
     if (!graphActive) return
     const cached = planPreparation.layout(scope, topology)
@@ -192,7 +203,7 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
       canvas.current = new PlanCanvas({ root: element, statements: statementsRef.current, layout, colors: paletteRef.current, camera: camera.current,
         select: id => selection.current(id), hover: setHovered,
         minimap, rowFlow: flow, collapsed,
-        cameraChanged: value => { camera.current = value; setZoom(current => current === value.scale ? current : value.scale); events.current.onCameraChanged?.(value) }, failed: () => setGpuFailed(true) })
+        cameraChanged: value => { camera.current = value; setZoom(current => current === value.scale ? current : value.scale); events.current.onCameraChanged?.(value); navigationRef.current?.cameraChanged?.(value) }, failed: () => setGpuFailed(true) })
       canvas.current.select(latest.current.selected, revealPending.current)
       revealPending.current = false
     }).catch(() => { if (!disposed) setGpuFailed(true) })
@@ -202,6 +213,17 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
   useEffect(() => { canvas.current?.colors(palette) }, [palette])
   useEffect(() => { canvas.current?.preferences(minimap, flow, collapsed) }, [minimap, flow, collapsed])
   useEffect(() => { canvas.current?.select(selected, true) }, [selected])
+  useEffect(() => { if (navigation?.selected !== undefined) setSelected(navigation.selected) }, [navigation?.selected])
+  useEffect(() => {
+    if (navigation?.statement === undefined) return
+    const entry = statements.find(entry => entry.id === navigation.statement)
+    if (entry) setStatement({ id: entry.id, sourceKey: entry.sourceKey })
+  }, [navigation?.statement, statements])
+  useEffect(() => {
+    const value = navigation?.camera
+    if (!value) return
+    camera.current = value; setZoom(value.scale); canvas.current?.restoreCamera(value)
+  }, [navigation?.camera, content.layout])
   useLayoutEffect(() => {
     const element = tree.current
     if (!element) return
@@ -237,6 +259,7 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
     setSelected(id)
     if (changed) events.current.onSelectionChanged?.(id)
     canvas.current?.select(id, true)
+    navigationRef.current?.select?.(id)
     const match = allNodes.get(id)
     if (match) {
       const { id, sourceKey } = content.statements[match.statement]
@@ -251,11 +274,11 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
   }
   selection.current = choose
   useEffect(() => {
-    if (!navigation) return
-    const statement = statementsRef.current.find(s => s.sourceStatementIndex === navigation.statement)
-    const node = statement?.nodes[navigation.operator ?? 0]
-    if (node && (navigation.nodeId === undefined || navigation.nodeId === node.nodeId)) selection.current(node.id)
-  }, [navigation, fullTopology])
+    if (!xmlNavigation) return
+    const statement = statementsRef.current.find(s => s.sourceStatementIndex === xmlNavigation.statement)
+    const node = statement?.nodes[xmlNavigation.operator ?? 0]
+    if (node && (xmlNavigation.nodeId === undefined || xmlNavigation.nodeId === node.nodeId)) selection.current(node.id)
+  }, [xmlNavigation, fullTopology])
   const toggleBranch = (id: string) => {
     if (!branches.has(id)) return
     // A collapsed branch owns the selection, so properties never point into an invisible subtree.
@@ -290,6 +313,7 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
     setXmlSource(undefined)
     setSelected('')
     if (selected) events.current.onSelectionChanged?.('')
+    navigationRef.current?.selectStatement?.(id)
     setScroll(0)
     if (tree.current) tree.current.scrollTop = 0
     canvas.current?.fit(index)
@@ -312,7 +336,7 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
         <span className="plan-tools-fact">{live.running ? 'Query running' : 'Query ended'}</span>
       </>}
       <button type="button" aria-pressed={outline} onClick={() => void settings.toggle('queryResults.plan.outline')}>Outline</button>
-      <button type="button" aria-pressed={inspector} onClick={() => void settings.toggle('queryResults.plan.properties')}>Properties</button>
+      <button type="button" aria-pressed={inspector} onClick={() => { if (compact) setCompactInspector(value => !value); else void settings.toggle('queryResults.plan.properties') }}>Properties</button>
       <button type="button" aria-pressed={minimap} onClick={() => void settings.toggle('queryResults.plan.minimap')}>Minimap</button>
       <button type="button" aria-pressed={flow} aria-description="Edge width uses logarithmic row counts. Actual is measured, Est. is estimated, Live partial is incomplete, and unavailable is unknown. Estimates without execution counts are per execution." onClick={() => void settings.toggle('queryResults.plan.rowFlow')}>Row flow</button>
       <button type="button" disabled={!selectedNode || !branches.has(selected)} onClick={() => toggleBranch(selected)}>{collapsed.has(selected) ? 'Expand inputs' : 'Collapse inputs'}</button>
@@ -349,8 +373,8 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
           aria-activedescendant={shown.slice(first, last).some(match => match.node.id === selected) ? labelId + selected : undefined}>
           <div style={{ height: shown.length * rowHeight, position: 'relative' }}>{shown.slice(first, last).map(({ node }, offset) => <div key={node.id} id={labelId + node.id}
             role="treeitem" aria-selected={selected === node.id} aria-expanded={branches.has(node.id) ? !collapsed.has(node.id) : undefined} aria-level={1} aria-setsize={shown.length} aria-posinset={first + offset + 1}
-            className="plan-operator-item" style={{ top: (first + offset) * rowHeight, height: rowHeight }} onClick={() => { choose(node.id); tree.current?.focus() }} title={[node.physicalOp, node.object, ...node.warnings].filter(Boolean).join(' · ')}>
-            <span><Icon name={operatorIcon(node.physicalOp, node.logicalOp)} />{node.physicalOp}{collapsed.has(node.id) ? ' · Inputs collapsed' : ''}{ranking !== 'plan' ? ` · ${ranking === 'rows' ? discrepancyLabel(node) : formatPlanMetric(rankingValue(node, ranking)) + ' ms'}` : ''}</span><small>{node.warnings.length ? 'Warning · ' : ''}{node.object || `Node ${node.nodeId}`} · {rowFlow(node, content.statements[allNodes.get(node.id)!.statement].partial).label}</small>
+            className="plan-operator-item" data-comparison-change={marks?.has(node.id) && marks.get(node.id) !== 'Paired' || undefined} style={{ top: (first + offset) * rowHeight, height: rowHeight }} onClick={() => { choose(node.id); tree.current?.focus() }} title={[node.physicalOp, node.object, ...node.warnings].filter(Boolean).join(' · ')}>
+            <span><Icon name={operatorIcon(node.physicalOp, node.logicalOp)} />{node.physicalOp}{collapsed.has(node.id) ? ' · Inputs collapsed' : ''}{ranking !== 'plan' ? ` · ${ranking === 'rows' ? discrepancyLabel(node) : formatPlanMetric(rankingValue(node, ranking)) + ' ms'}` : ''}</span><small>{marks?.get(node.id) ? `${marks.get(node.id)} · ` : ''}{node.warnings.length ? 'Warning · ' : ''}{node.object || `Node ${node.nodeId}`} · {rowFlow(node, content.statements[allNodes.get(node.id)!.statement].partial).label}</small>
           </div>)}</div>
         </div>
       </aside>

@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
-import PlanViewer, { type PlanViewerHandle } from '../src/renderer/src/plans/PlanViewer'
+import PlanViewer, { type PlanViewerHandle, type PlanViewerProps } from '../src/renderer/src/plans/PlanViewer'
 import { PlanPreparationCache } from '../src/renderer/src/plans/preparation'
 import { layoutPlans, type LayoutStatement } from '../src/renderer/src/plans/layout'
 import type { QueryPlanState } from '../src/renderer/src/plans/QueryPlansService'
@@ -13,12 +13,12 @@ import { resolveBuiltin } from '../src/shared/theme/resolve'
 import { defaultSettings, type BooleanSettingKey } from '../src/shared/settings/catalog'
 import type { PlanDocument } from '../src/shared/plans'
 
-const mocks = vi.hoisted(() => ({ canvas: vi.fn(), update: vi.fn(), dispose: vi.fn(), worker: vi.fn(),
+const mocks = vi.hoisted(() => ({ canvas: vi.fn(), update: vi.fn(), dispose: vi.fn(), worker: vi.fn(), restore: vi.fn(),
   viewerVisibility: undefined as ((visible: boolean) => void) | undefined, canvasVisibility: undefined as ((visible: boolean) => void) | undefined,
   observe: undefined as ((visible: boolean, canvasVisible?: boolean) => void) | undefined }))
 vi.mock('../src/renderer/src/plans/PlanCanvas', () => ({ PlanCanvas: class {
   constructor(options: unknown) { mocks.canvas(options) }
-  select() {} preferences() {} update = mocks.update; colors() {} dispose = mocks.dispose
+  select() {} preferences() {} update = mocks.update; colors() {} dispose = mocks.dispose; restoreCamera = mocks.restore
 } }))
 vi.mock('../src/renderer/src/core/windows', () => ({
   observeIntersection: (element: Element, callback: (entries: { isIntersecting: boolean }[]) => void) => {
@@ -55,9 +55,9 @@ vi.stubGlobal('Worker', class {
 const input: PlanSource = { key: 'document', revision: 1, label: 'Plan', read: vi.fn(async () => '<ShowPlanXML/>') }
 const controller = createRef<PlanViewerHandle>()
 const selectedEvents: string[] = []
-async function render(sources: PlanSource[] | null, visible = true, live?: QueryPlanState) {
+async function render(sources: PlanSource[] | null, visible = true, live?: QueryPlanState, props: Partial<PlanViewerProps> = {}) {
   await act(async () => root.render(createElement(WorkbenchProvider, { workbench, children: sources ? createElement(PlanViewer, { sources, identity: 'doc', scope: 'doc', visible, live, controllerRef: controller,
-    onSelectionChanged: id => { selectedEvents.push(id); controller.current?.selectOperator(id) } }) : null })))
+    onSelectionChanged: id => { selectedEvents.push(id); controller.current?.selectOperator(id) }, ...props }) : null })))
 }
 afterEach(async () => { await act(async () => root.unmount()); cache.dispose(); host.remove(); vi.unstubAllGlobals() })
 
@@ -169,6 +169,37 @@ it('does no hidden preparation, reuses parsed plans and layout on remount, and p
   expect(mocks.canvas.mock.lastCall?.[0].layout.nodes).toHaveLength(1)
   await render(null)
   nodes.pop(); cache.clear()
+  // Frozen comparison inputs keep their host controls and annotations alongside the canvas UX.
+  const comparisonNode = { ...nodes[0], id: 'comparison:n' }
+  const prepared = { statements: [{ ...model.statements[0], id: 'comparison:s', sourceKey: 'document', nodes: [comparisonNode] }], notices: [] }
+  const remoteCamera = { x: 80, y: -20, scale: 0.7 }, localCamera = { x: 10, y: 30, scale: 0.9 }
+  const paired = { selected: comparisonNode.id, camera: remoteCamera, select: vi.fn(), cameraChanged: vi.fn() }
+  const comparisonProps = { prepared, compact: true, transient: true, navigation: paired, marks: new Map([[comparisonNode.id, 'Properties changed']]) }
+  const parseCount = parse.mock.calls.length
+  await render([input], true, undefined, comparisonProps)
+  await act(async () => mocks.observe?.(true))
+  expect(parse).toHaveBeenCalledTimes(parseCount)
+  expect(controller.current?.getSelectedOperator()).toBe(comparisonNode.id)
+  expect(mocks.canvas.mock.lastCall?.[0].camera).toEqual(remoteCamera)
+  expect(paired.select).not.toHaveBeenCalled()
+  expect(paired.cameraChanged).not.toHaveBeenCalled()
+  expect(host.querySelector('[role="treeitem"]')?.getAttribute('data-comparison-change')).toBe('true')
+  expect(host.querySelector('[role="treeitem"]')?.textContent).toContain('Properties changed')
+  expect(host.querySelector<HTMLElement>('[aria-label="Plan properties"]')?.hidden).toBe(true)
+  const globalInspector = settings.values['queryResults.plan.properties']
+  await act(async () => button('Properties').click())
+  expect(host.querySelector<HTMLElement>('[aria-label="Plan properties"]')?.hidden).toBe(false)
+  expect(settings.values['queryResults.plan.properties']).toBe(globalInspector)
+  await act(async () => host.querySelector<HTMLElement>('[role="treeitem"]')!.click())
+  expect(paired.select).toHaveBeenCalledExactlyOnceWith(comparisonNode.id)
+  await act(async () => mocks.canvas.mock.lastCall?.[0].cameraChanged(localCamera))
+  expect(paired.cameraChanged).toHaveBeenCalledExactlyOnceWith(localCamera)
+  await render([input], true, undefined, { ...comparisonProps, navigation: { ...paired, selected: '', camera: localCamera } })
+  expect(controller.current?.getSelectedOperator()).toBe('')
+  expect(mocks.restore).toHaveBeenLastCalledWith(localCamera)
+  expect(paired.cameraChanged).toHaveBeenCalledTimes(1)
+  await render(null)
+  cache.clear()
   vi.stubGlobal('Worker', class { constructor() { throw new Error('Worker creation refused') } })
   await render([input])
   await act(async () => mocks.observe?.(true))

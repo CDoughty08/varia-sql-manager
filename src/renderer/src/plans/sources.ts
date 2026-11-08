@@ -11,7 +11,7 @@ export function orderPlanEntries<T extends { descriptor: Pick<ResultDescriptor, 
 }
 
 export interface PlanSource { key: string; revision?: number; result?: ResultKey; label: string; batchLabel?: string; batchNumber?: number; iteration?: number; read(signal: AbortSignal): Promise<string> }
-export type SourceStatement = PlanStatement & { sourceKey: string; sourceStatementIndex?: number; sourceRevision?: number; batchLabel?: string; batchNumber?: number; iteration?: number; partial?: boolean }
+export type SourceStatement = PlanStatement & { sourceKey: string; sourceStatementIndex?: number; sourceRevision?: number; batchLabel?: string; batchNumber?: number; iteration?: number; partial?: boolean; captureLabel?: string }
 export class PlanInputBudgetError extends Error {
   constructor() { super('The combined input budget was exceeded. Remaining plan documents were not loaded.') }
 }
