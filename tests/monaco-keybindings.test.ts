@@ -29,6 +29,10 @@ const monacoShadowAllowlist: Readonly<Record<string, string>> = {
   'ctrl+g': 'Go To Line, as in SSMS (Windows and Linux); Monaco binds ⌘G (next match) only on macOS',
   'f4': "The table designer's Properties (designerFocus): its grid is outside the editor, so Monaco's next reference keeps F4 in editor text",
   'alt+f12': "Peek in Object Explorer's tree only (activePanel == 'explorer' && !inputFocus && !searchHitsFocus), as VS Code's Peek Definition; Monaco's peek keeps Alt+F12 in editor text",
+  'space': "Peek on Space in Object Explorer's tree only (explorerFocus && !textInputFocus && !explorerTypeAhead); Monaco's widgets keep Space in editor text",
+  'mod+c': "Copy in a results grid only (outputGridFocus): the grid is outside the editor, so Monaco's clipboard keeps the key in editor text",
+  'mod+a': "Select All in a results grid or Messages only (outputGridFocus || messagesFocus), both outside the editor; Monaco's Select All keeps the key in editor text",
+  'cmd+e': "Search Options in the Options dialog only (optionsDialogFocus, a modal key); Monaco's find with selection keeps ⌘E in editor text",
   'shift+escape': "Close Activity Monitor (activityMonitorFocus), SSMS's key: the monitor is outside the editor, so Monaco's Shift+Escape (closing a widget, leaving a snippet) keeps it in editor text"
 }
 

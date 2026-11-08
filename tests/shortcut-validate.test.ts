@@ -84,6 +84,8 @@ describe('validateShortcut', () => {
     expect(expectRefused('locked', { command: 'edit.copy', key: 'f9' }).message).toBe('The clipboard keys stay with the system.')
     expect(expectRefused('locked', { command: 'window.close', key: 'f9' }).message).toBe('Quit stays with the system.')
     expect(expectRefused('locked', { command: 'edit.find', key: 'f9' }).message).toBe('The editor or the browser handles this key, so it cannot be changed yet.')
+    // A dialog's own key: a user shortcut would have no scope for it and run over every other dialog.
+    expect(expectRefused('locked', { command: 'options.focusSearch', key: 'mod+shift+e' }).message).toBe('Search Options works only in the Options dialog, so its key stays with the dialog.')
     for (const key of ['', '   ', 'ctrl', 'ctrl+', 'ctrl+nope', 'a b c', 'ctrl+ctrl+a']) expectRefused('parse', { command: 'file.new', key })
     expectRefused('chord', { command: 'file.new', key: 'mod+k mod+j' })
     expectRefused('chord', { command: 'file.new', key: 'mod+j mod+k', scope: 'queryEditor' })

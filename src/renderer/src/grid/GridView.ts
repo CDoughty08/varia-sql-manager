@@ -80,8 +80,13 @@ export interface GridViewOptions {
   /** How cells show spaces, tabs and line breaks (queryResults.grid.whitespace); `none` by default. */
   readonly whitespace?: WhitespaceMode
   onSelection(selection: GridSelection): void
-  /** Ctrl+C, and Edit › Copy (the copy event): runs Copy. */
+  /** Edit › Copy (the copy event), and a live grid's Ctrl+C: runs Copy. */
   onCopy(): void
+  /**
+   * The grid serves Ctrl+A and Ctrl+C (⌘ on macOS) itself: a live grid's. A results grid leaves them to the catalogue's
+   * output.selectAll and output.copy, which KeybindingService dispatches, so they can be remapped.
+   */
+  readonly clipboardKeys?: boolean
   /** Escape outside a drag or resize: cancels the tab's copy or save; false when there was none. */
   onEscape(): boolean
   onStatus(status: GridStatus): void
@@ -264,7 +269,7 @@ export class GridView {
   /** A key from the shell's onKeyDown; true when the grid handled it (and the caller prevents its default). */
   key(event: KeyboardEvent): boolean {
     if (this.disposed || event.isComposing || event.altKey) return false
-    const action = gridKeyAction(event, this.o.platform)
+    const action = gridKeyAction(event, this.o.platform, !!this.o.clipboardKeys)
     if (!action) return false
     try {
       switch (action.type) {
