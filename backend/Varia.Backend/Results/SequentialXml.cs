@@ -53,7 +53,12 @@ internal static class SequentialXml
 /// instruction before returning it, so once <see cref="Window"/> characters pass with no new output, this reports the end of
 /// the text instead: such a node's text is cut, and XmlReader holds no more than that window of it. It decodes the stream
 /// itself (SQL Server sends xml as UTF-16 without a byte order mark), so an XmlReader over it builds no decoder or byte
-/// buffer of its own. One feed serves a column plan's cells in turn (<see cref="Reset"/>).</summary>
+/// buffer of its own. One feed serves a column plan's cells in turn (<see cref="Reset"/>).
+/// <para>So that a cut value still shows the start of the node it cut, as the first characters of the whole value would, the
+/// feed keeps the raw text from the first '&lt;' XmlReader has not yet returned a node for, up to <see cref="Keep"/>
+/// characters (<see cref="Tail"/>). Every markup node starts with a '&lt;', and only a comment, processing instruction or
+/// CDATA section holds more (a start tag's attribute values cannot), so counting them (<see cref="Returned"/>) finds it;
+/// text and whitespace hold none.</para></summary>
 internal sealed class XmlFeed(Func<int> output) : TextReader
 {
     /// <summary>4,194,304 characters (8 MiB of UTF-16), twice the document cap, so any node that would still fit in a stored
@@ -68,11 +73,42 @@ internal sealed class XmlFeed(Func<int> output) : TextReader
     private int seen;
     // A read can end inside a character: its first byte waits here for the next read.
     private int pending = -1;
+    // The tail: raw text from the '<' numbered tailOrdinal (counting from 1 in this cell), at tail[tailStart..+tailLength].
+    // Kept up to 16 Ki characters between cells; a larger one goes when the cell ends, outside the result budget otherwise.
+    private const int KeptTail = 16 * 1024;
+    private char[] tail = [];
+    private int tailStart;
+    private int tailLength;
+    private long tailOrdinal;
+    // The tail reached Keep and stopped growing: the '<' after its retained part may be lost.
+    private bool clipped;
+    // A '<' XmlReader has not returned was not kept: no tail until every '<' handed out is returned.
+    private bool lost;
+    private long lessThans;
+    private long markup;
 
     /// <summary>Bytes read from the cell's stream since <see cref="Reset"/>.</summary>
     public long Consumed => consumed;
     /// <summary>The feed stopped, so the value is cut before the node XmlReader was reading.</summary>
     public bool Starved { get; private set; }
+
+    /// <summary>The most raw characters <see cref="Tail"/> keeps (0, the default, keeps none).</summary>
+    public int Keep { get; set; }
+
+    /// <summary>The raw text of the node XmlReader was reading when the feed starved, from its '&lt;' and at most
+    /// <see cref="Keep"/> characters of it, or empty when that start was not kept (a node with no '&lt;' of its own, or one
+    /// within XmlReader's look-ahead of a kept node that already reached <see cref="Keep"/>).</summary>
+    public ReadOnlySpan<char> Tail
+    {
+        get
+        {
+            Trim();
+            return lost ? [] : tail.AsSpan(tailStart, tailLength);
+        }
+    }
+
+    /// <summary>XmlReader returned a node holding <paramref name="count"/> '&lt;' characters of the raw text.</summary>
+    public void Returned(int count) => markup += count;
 
     /// <summary>Feeds the next cell from <paramref name="stream"/> with a fresh window, counting output from what it is now.</summary>
     public void Reset(Stream stream)
@@ -82,6 +118,10 @@ internal sealed class XmlFeed(Func<int> output) : TextReader
         pending = -1;
         seen = output();
         Starved = false;
+        tailStart = tailLength = 0;
+        tailOrdinal = lessThans = markup = 0;
+        clipped = lost = false;
+        if (tail.Length > KeptTail) tail = [];
     }
 
     public override int Read(char[] buffer, int index, int count) => Read(buffer.AsSpan(index, count));
@@ -129,14 +169,68 @@ internal sealed class XmlFeed(Func<int> output) : TextReader
             if (BitConverter.IsLittleEndian) MemoryMarshal.Cast<byte, char>(bytes.AsSpan(0, 2 * count)).CopyTo(buffer);
             else for (var i = 0; i < count; i++) buffer[i] = (char)BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(2 * i));
             produced += count;
+            if (Keep > 0) Capture(buffer[..count]);
             return count;
         }
+    }
+
+    /// <summary>Drops the tail's start while XmlReader has returned the node it begins.</summary>
+    private void Trim()
+    {
+        if (lost && markup >= lessThans) lost = false;
+        while (tailLength > 0 && tailOrdinal <= markup)
+        {
+            var next = tail.AsSpan(tailStart + 1, tailLength - 1).IndexOf('<');
+            if (next < 0)
+            {
+                tailLength = 0;
+                // A '<' that is still to be returned lies past what a clipped tail kept.
+                lost = clipped && lessThans > markup;
+                clipped = false;
+                break;
+            }
+            tailStart += next + 1;
+            tailLength -= next + 1;
+            tailOrdinal++;
+        }
+        if (tailLength == 0) tailStart = 0;
+    }
+
+    private void Capture(ReadOnlySpan<char> text)
+    {
+        Trim();
+        var count = text.Count('<');
+        if (lost || count == 0 && tailLength == 0)
+        {
+            lessThans += count;
+            return;
+        }
+        if (tailLength == 0)
+        {
+            // Every '<' handed out before was returned, so the first one here is the next node's.
+            var first = text.IndexOf('<');
+            text = text[first..];
+            tailOrdinal = lessThans + 1;
+        }
+        lessThans += count;
+        if (clipped) return;
+        var take = Math.Min(text.Length, Keep - tailLength);
+        if (take < text.Length) clipped = true;
+        if (take <= 0) return;
+        if (tailStart + tailLength + take > tail.Length)
+        {
+            if (tailLength + take > tail.Length) Array.Resize(ref tail, Math.Min(Keep, Math.Max(tailLength + take, Math.Max(tail.Length * 2, 4096))));
+            tail.AsSpan(tailStart, tailLength).CopyTo(tail);
+            tailStart = 0;
+        }
+        text[..take].CopyTo(tail.AsSpan(tailStart + tailLength));
+        tailLength += take;
     }
 }
 
 /// <summary>A NameTable shared by a column plan's xml cells, so that each cell's XmlReader does not build one of its own. The
-/// names it holds come from the data, which can be hostile, so it counts what it adds, and the plan replaces it between cells
-/// once it holds more than <see cref="MaxNames"/> names or <see cref="MaxChars"/> characters (<see cref="Overgrown"/>).</summary>
+/// names it holds come from the data, which can be hostile, so it counts what it adds, and the plan drops it as soon as the
+/// cell that grew it past <see cref="MaxNames"/> names or <see cref="MaxChars"/> characters ends (<see cref="Overgrown"/>).</summary>
 internal sealed class BoundedNameTable : NameTable
 {
     public const int MaxNames = 4096;
@@ -192,7 +286,14 @@ internal sealed class XmlCellWriter
     internal int NameTables { get; private set; }
 
     /// <summary>Starts the next cell, keeping at most <paramref name="limit"/> characters of it.</summary>
-    public void Reset(int limit) => sink.Reset(limit);
+    public void Reset(int limit)
+    {
+        sink.Reset(limit);
+        Feed.Keep = limit;
+    }
+
+    /// <summary>The NameTable the writer holds for the next cell, if any (the offline checks look for its release).</summary>
+    internal BoundedNameTable? CurrentNames => names;
 
     /// <summary>An XmlReader over <see cref="Feed"/> with the settings SqlClient's own uses and the shared, bounded NameTable;
     /// it leaves the feed open, so the rest of a long value can be read past without parsing it.</summary>
@@ -208,24 +309,41 @@ internal sealed class XmlCellWriter
     }
 
     /// <summary>Serialises <paramref name="xml"/> node by node until it ends or the sink is full. Returns whether
-    /// <paramref name="feed"/> starved, which cuts the value before the node XmlReader was reading.</summary>
+    /// <paramref name="feed"/> starved, which cuts the value inside the node XmlReader was reading: what was written before
+    /// it is kept, the parent's start tag closed, and then the node's own raw text from the feed (<see cref="XmlFeed.Tail"/>)
+    /// up to the limit, as the first characters of the whole value would show it.</summary>
     public bool Write(XmlReader xml, XmlFeed? feed, CancellationToken token)
     {
         var writer = this.writer ??= Create();
         var depth = 0;
         var clean = false;
+        // The last node written was a start tag whose '>' the writer holds until the element's content begins.
+        var open = false;
         try
         {
             while (!sink.Full && xml.Read())
             {
                 token.ThrowIfCancellationRequested();
-                switch (xml.NodeType)
+                var type = xml.NodeType;
+                // Counted before anything more is read, so the feed's tail starts at the next node's '<'.
+                feed?.Returned(type switch
+                {
+                    XmlNodeType.Element or XmlNodeType.EndElement => 1,
+                    XmlNodeType.Comment or XmlNodeType.ProcessingInstruction or XmlNodeType.CDATA or XmlNodeType.XmlDeclaration => 1 + xml.Value.AsSpan().Count('<'),
+                    _ => 0
+                });
+                open = false;
+                switch (type)
                 {
                     case XmlNodeType.Element:
                         writer.WriteStartElement(xml.Prefix, xml.LocalName, xml.NamespaceURI);
                         writer.WriteAttributes(xml, true);
                         if (xml.IsEmptyElement) writer.WriteEndElement();
-                        else depth++;
+                        else
+                        {
+                            depth++;
+                            open = true;
+                        }
                         break;
                     case XmlNodeType.Text:
                         int read;
@@ -256,9 +374,22 @@ internal sealed class XmlCellWriter
             // Never closed: closing ends open elements, which would only add text past a full sink. A writer left inside an
             // element (or failed) is dropped, and the next cell builds a fresh one.
             if (!clean) this.writer = null;
+            // A table a hostile cell grew past its cap goes with the cell, not when the next xml cell opens a reader.
+            if (names?.Overgrown == true)
+            {
+                names = null;
+                input = null;
+            }
         }
         if (!sink.Full) writer.Flush();
-        return feed?.Starved == true;
+        if (feed?.Starved != true) return false;
+        if (!sink.Full)
+        {
+            // Written past the writer, which is dropped: the parent's '>', then the cut node as the stream had it.
+            if (open) sink.Write('>');
+            sink.Write(feed.Tail);
+        }
+        return true;
     }
 
     private XmlWriter Create()

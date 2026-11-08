@@ -674,6 +674,67 @@ internal static class TextChecks
         catch (System.Xml.XmlException) { return "!error"; }
     }
 
+    /// <summary>A weak reference to the NameTable <paramref name="cells"/> holds, taken before it reads one more cell (not
+    /// inlined, so no local keeps the table alive).</summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static WeakReference Grown(XmlCellWriter cells, MemoryStream stream, string xml)
+    {
+        var table = new WeakReference(cells.CurrentNames);
+        Cell(cells, stream, xml);
+        return table;
+    }
+
+    /// <summary>A node too long for the feed's window (a start tag with all its attributes, a comment or a processing
+    /// instruction) cuts the value inside it, which keeps the first characters of the whole value, as SSMS shows a truncated
+    /// one: what was written before the node, the parent's start tag closed, then the node's raw text up to the limit.</summary>
+    private static void XmlCuts(Action<bool, string> check)
+    {
+        const int Limit = 2_097_153;
+        var stream = new MemoryStream();
+        var cells = new XmlCellWriter();
+        var huge = new string('v', 5 * 1024 * 1024);
+        (string Xml, string Start)[] cases =
+        [
+            ("<r a=\"1\"><c x=\"" + huge + "\"/></r>", "<r a=\"1\"><c x=\""),
+            ("<r>hello<c x=\"" + huge + "\"/></r>", "<r>hello<c x=\""),
+            ("<r x=\"" + huge + "\"/>", "<r x=\""),
+            ("<r><!-- a<b " + huge + " --></r>", "<r><!-- a<b "),
+            ("<?pi a<b " + huge + "?><r/>", "<?pi a<b "),
+            ("<r><!--<<--><![CDATA[<]]><?p <?><c/>  <c x=\"" + huge + "\"/></r>", "<r><!--<<--><![CDATA[<]]><?p <?><c />  <c x=\""),
+            (string.Concat(Enumerable.Repeat("<n/>", 5000)) + "<r><n>t</n><c x=\"" + huge + "\"/></r>", string.Concat(Enumerable.Repeat("<n />", 5000)) + "<r><n>t</n><c x=\""),
+        ];
+        var wrong = new List<string>();
+        foreach (var (xml, start) in cases)
+        {
+            var expected = (start + huge)[..Limit];
+            var text = Cut(cells, stream, xml, Limit);
+            if (text != expected) wrong.Add(start + " -> " + (text is null ? "not cut" : text[..Math.Min(text.Length, start.Length + 8)] + " (" + text.Length + " characters)"));
+            // The next cell reads as through a fresh writer.
+            if (Cell(cells, stream, "<a b=\"1\">x</a>") != "<a b=\"1\">x</a>") wrong.Add(start + ": the next cell");
+        }
+        check(wrong.Count == 0, "an xml node too long for the feed cuts the value inside it, keeping the value's first " + Limit + " characters: " + string.Join("; ", wrong));
+
+        // A start tag read whole but longer than the feed keeps (character references shrink it below the limit) loses the
+        // next node's start: the cut keeps what was written, with the parent's start tag closed.
+        var shrunk = string.Concat(Enumerable.Repeat("&#x41;", 600_000));
+        var lost = Cut(cells, stream, "<r><a x=\"" + shrunk + "\"><b y=\"" + huge + "\"/></a></r>", Limit);
+        check(lost == "<r><a x=\"" + new string('A', 600_000) + "\">", "a cut whose node start the feed could not keep ends with the parent's start tag closed (" + lost?.Length + " characters)");
+    }
+
+    /// <summary>The text of an xml cell the feed starved, or null when it was not cut.</summary>
+    private static string? Cut(XmlCellWriter cells, MemoryStream stream, string xml, int limit)
+    {
+        stream.SetLength(Encoding.Unicode.GetByteCount(xml));
+        Encoding.Unicode.GetBytes(xml, 0, xml.Length, stream.GetBuffer(), 0);
+        stream.Position = 0;
+        cells.Reset(limit);
+        cells.Feed.Reset(stream);
+        using var reader = cells.OpenReader();
+        var starved = cells.Write(reader, cells.Feed, default);
+        cells.Feed.Reset(Stream.Null);
+        return starved ? cells.Text.ToString() : null;
+    }
+
     /// <summary>A column plan reuses its xml writer, reader settings and NameTable across cells: each cell must still read
     /// exactly as it would through fresh ones, the writer is rebuilt only after a cell that did not end cleanly, the shared
     /// NameTable is replaced once hostile names grow it past its cap, and a small cell allocates little.</summary>
@@ -722,6 +783,21 @@ internal static class TextChecks
             Cell(hostile, stream, names.Append("</r>").ToString());
         }
         check(hostile.NameTables >= 4, "the NameTable that xml cells share is replaced once hostile names grow it past " + BoundedNameTable.MaxNames + " names (" + hostile.NameTables + " tables for 20,000 names)");
+
+        // A table one cell grew past its cap goes as that cell ends, not when the next xml cell opens a reader: when it was
+        // the column's last xml value, it would stay alive outside the result budget for the rest of the set.
+        var large = new MemoryStream();
+        var last = new XmlCellWriter();
+        Cell(last, large, "<a b=\"1\">x</a>");
+        var kept = last.CurrentNames is not null;
+        names.Clear().Append("<r>");
+        for (var n = 0; n < BoundedNameTable.MaxNames + 100; n++) names.Append("<g").Append(n).Append("/>");
+        var table = Grown(last, large, names.Append("</r>").ToString());
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        check(kept && last.CurrentNames is null && !table.IsAlive, "a NameTable a hostile xml cell grew past its cap is released as soon as that cell ends");
+        XmlCuts(check);
 
         var small = new XmlCellWriter();
         for (var i = 0; i < 100; i++) Cell(small, stream, "<a b=\"1\">x</a>");
