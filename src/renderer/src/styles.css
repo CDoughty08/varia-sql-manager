@@ -558,7 +558,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .query-bar-actions { gap: 0; }
   .query-bar-action { padding: 0; min-width: var(--varia-space-4); }
   .query-bar-action .codicon { font-size: var(--varia-glyph-sm); }
-  .query-connection { gap: 0; }
+  .query-connection { gap: 0; padding: 0; }
+  .query-bar-environment .status-pill.small { padding: 0 var(--varia-space-0); }
   .query-connection-divider, .query-connection .connection-swatch { display: none; }
 }
 @container (min-width: 300px) {
