@@ -210,7 +210,7 @@ describe('SQL file encodings and save hardening', () => {
   })
   it('saves a file whose volume cannot resolve links, as some RAM disks and virtual drives cannot on Windows', async () => {
     const realpathFails = async (path: string) => { if (path.endsWith('.sql')) throw Object.assign(new Error(`EISDIR: illegal operation on a directory, realpath '${path}'`), { code: 'EISDIR' }); return path }
-    const store = new SqlFileStore({ realpath: realpathFails })
+    const store = new SqlFileStore({ platform: 'win32', realpath: realpathFails })
     const path = join(directory, 'ram.sql')
     await writeFile(path, 'SELECT 1')
     const opened = await store.read(path)
@@ -296,29 +296,78 @@ describe('SQL file encodings and save hardening', () => {
     expect(protectedLinkRefused({ mode: 0o40777, uid: 0 }, { mode: 0o120777, uid: 2000 }, 1000)).toBe(false)
     expect(protectedLinkRefused({ mode: 0o41775, uid: 0 }, { mode: 0o120777, uid: 2000 }, 1000)).toBe(false)
     // A stand-in for /tmp/link.sql that another user made (links of other owners need root to make): the save writes nothing.
-    const link = join(directory, 'link.sql')
+    const link = join(directory, 'link.sql'), target = join(directory, 'target.sql')
     await writeFile(link, 'SELECT 1')
+    await writeFile(target, 'SELECT 1')
     const facts = (linkOwner: number) => ({
       platform: 'linux' as const, uid: 1000, folderStat: async () => ({ mode: 0o41777, uid: 0 }),
-      lstat: async (path: string) => path === link ? { mode: 0o120777, uid: linkOwner, isSymbolicLink: () => true } : lstat(path)
+      lstat: async (path: string) => path === link ? { mode: 0o120777, uid: linkOwner, isSymbolicLink: () => true } : lstat(path),
+      readlink: async (path: string) => { if (path !== link) throw new Error(`not a link: ${path}`); return 'target.sql' }
     })
     const store = new SqlFileStore(facts(2000))
     const opened = await store.read(link)
-    await expect(store.save('SELECT 2', opened.id)).rejects.toThrow('link.sql is a symbolic link another user made in a shared folder')
+    await expect(store.save('SELECT 2', opened.id)).rejects.toThrow('link.sql goes through a symbolic link another user made in a shared folder')
     await expect(new SqlFileStore(facts(2000)).save('SELECT 2', undefined, link)).rejects.toThrow('another user made')
     await expect(store.readOnly(opened.id)).rejects.toThrow('another user made')
     expect(await readFile(link, 'utf8')).toBe('SELECT 1')
-    // Windows has no such rule; the user's own link saves.
+    expect(await readFile(target, 'utf8')).toBe('SELECT 1')
+    // Windows has no such rule; the user's own link saves to its target and stays.
     expect((await new SqlFileStore({ ...facts(2000), platform: 'win32' }).save('SELECT 3', undefined, link)).path).toBe(link)
     const own = new SqlFileStore(facts(1000))
     await own.save('SELECT 4', (await own.read(link)).id)
-    expect(await readFile(link, 'utf8')).toBe('SELECT 4')
+    expect(await readFile(target, 'utf8')).toBe('SELECT 4')
+  })
+  it('refuses another user\'s link at a folder component too, as the kernel checks every link it follows', async () => {
+    // A stand-in for /tmp/shared -> the saver's project folder, made by another user: shared/q.sql is not itself a link.
+    const shared = join(directory, 'shared'), project = join(directory, 'project')
+    await mkdir(shared)
+    await mkdir(project)
+    await writeFile(join(project, 'q.sql'), 'SELECT 1')
+    const store = new SqlFileStore({
+      platform: 'linux', uid: 1000, folderStat: async () => ({ mode: 0o41777, uid: 0 }),
+      lstat: async (path: string) => path === shared ? { mode: 0o120777, uid: 2000, isSymbolicLink: () => true } : lstat(path),
+      readlink: async (path: string) => { if (path !== shared) throw new Error(`not a link: ${path}`); return project }
+    })
+    await expect(store.save('SELECT 2', undefined, join(shared, 'q.sql'))).rejects.toThrow('q.sql goes through a symbolic link another user made')
+    await expect(store.save('SELECT 2', undefined, join(shared, 'new.sql'))).rejects.toThrow('another user made')
+    expect(await readFile(join(project, 'q.sql'), 'utf8')).toBe('SELECT 1')
+    expect(await readdir(shared)).toEqual([])
+    expect(await readdir(project)).toEqual(['q.sql'])
+  })
+  it('resolves chained and relative links, folder components included, to where realpath would', async ({ skip }) => {
+    await mkdir(join(directory, 'real', 'deep'), { recursive: true })
+    const target = join(directory, 'real', 'deep', 'q.sql')
+    await writeFile(target, 'SELECT 1')
+    try {
+      await symlink(join('real', 'deep'), join(directory, 'dir-link'), 'dir')
+      await symlink(join('..', 'dir-link', 'q.sql'), join(directory, 'real', 'hop.sql'), 'file')
+    } catch { skip() }
+    const store = new SqlFileStore({ platform: 'linux', uid: 1000 })
+    await store.save('SELECT 2', undefined, join(directory, 'real', 'hop.sql'))
+    expect(await readFile(target, 'utf8')).toBe('SELECT 2')
+    expect((await lstat(join(directory, 'real', 'hop.sql'))).isSymbolicLink()).toBe(true)
+    await store.save('SELECT 3', undefined, join(directory, 'dir-link', 'new.sql'))
+    expect(await readFile(join(directory, 'real', 'deep', 'new.sql'), 'utf8')).toBe('SELECT 3')
+  })
+  it('fails closed when it cannot look at a component of the path', async () => {
+    // Linux refuses lstat through a protected link with EACCES; the walk must not read that as "no link here".
+    const path = join(directory, 'hidden.sql')
+    const store = new SqlFileStore({
+      platform: 'linux', uid: 1000, folderStat: async () => ({ mode: 0o40755, uid: 1000 }),
+      lstat: async (candidate: string) => {
+        if (candidate === path) throw Object.assign(new Error(`EACCES: permission denied, lstat '${candidate}'`), { code: 'EACCES' })
+        return lstat(candidate)
+      }
+    })
+    await expect(store.save('SELECT 1', undefined, path)).rejects.toThrow('EACCES')
+    expect(await readdir(directory)).toEqual([])
   })
   it('compares the files paths resolve to, wherever links can be made', async () => {
     // A stand-in for a link (Windows makes symbolic links only for administrators or in Developer Mode): realpath maps
     // alias.sql to real.sql, as it would through a link.
     const target = join(directory, 'real.sql'), alias = join(directory, 'alias.sql')
-    const store = new SqlFileStore({ realpath: async path => path === alias ? target : path })
+    // Windows' rules: POSIX resolves links itself (`resolveCheckingLinks`), not through realpath.
+    const store = new SqlFileStore({ platform: 'win32', realpath: async path => path === alias ? target : path })
     await writeFile(target, 'SELECT 1')
     await writeFile(alias, 'SELECT 1')
     const real = await store.read(target)

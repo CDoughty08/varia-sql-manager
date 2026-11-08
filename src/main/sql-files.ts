@@ -1,6 +1,6 @@
 import { constants } from 'node:fs'
 import { access, chmod, lstat, open, readlink, realpath, rm, stat } from 'node:fs/promises'
-import { basename, dirname, extname, join, resolve } from 'node:path'
+import { basename, dirname, extname, join, parse, resolve, sep } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { documentKinds, type DocumentKind, type FileChange, type FileEncoding, type OpenSqlFile, type SaveSqlFile, type SqlFile } from '../shared/contracts'
@@ -117,6 +117,8 @@ export interface SqlFileStoreOptions {
   /** Looks at a path without following a link, and at a link's folder; tests give a link and its folder other owners. */
   readonly lstat?: (path: string) => Promise<LinkFacts>
   readonly folderStat?: (path: string) => Promise<OwnerFacts>
+  /** Reads a link's text; tests let a regular file stand in for a link. */
+  readonly readlink?: (path: string) => Promise<string>
   /** The saving user's id on POSIX (`process.getuid`); tests stand in for another user. */
   readonly uid?: number
   /** Looks at a registered file for a change check; tests make it slow, as a network share can be. */
@@ -348,11 +350,13 @@ export class SqlFileStore {
   clear(): void { this.files.clear(); this.stamps.clear(); this.conflicts.clear() }
   private get platform(): NodeJS.Platform { return this.options.platform ?? process.platform }
   /**
-   * Where a save writes: a symbolic link's target, so the link stays a link; the path itself for a new file. A link the
-   * kernel would not let the user follow (`protectedLinkRefused`) is refused.
+   * Where a save writes: a symbolic link's target, so the link stays a link; the path itself for a new file. On POSIX the
+   * path is resolved here (`resolveCheckingLinks`) rather than by realpath, which follows links through readlink and so
+   * escapes the kernel's fs.protected_symlinks rule.
    */
   private async writeTarget(path: string): Promise<string> {
-    await this.refuseProtectedLinks(path)
+    const uid = this.options.uid ?? process.getuid?.()
+    if (this.platform !== 'win32' && uid !== undefined) return this.resolveCheckingLinks(path, uid)
     try { return await (this.options.realpath ?? realpath)(path) }
     catch (error) {
       if (missing(error)) return path
@@ -361,21 +365,41 @@ export class SqlFileStore {
       throw error
     }
   }
-  /** Follows the links at `path` itself, one by one, refusing one in a shared sticky folder that another user owns. */
-  private async refuseProtectedLinks(path: string): Promise<void> {
-    const uid = this.options.uid ?? process.getuid?.()
-    if (this.platform === 'win32' || uid === undefined) return
-    let current = path
-    for (let hop = 0; hop < maxLinkHops; hop++) {
-      let link: LinkFacts
-      try { link = await (this.options.lstat ?? lstat)(current) } catch { return }
-      if (!link.isSymbolicLink()) return
-      const folder = dirname(current)
-      if (protectedLinkRefused(await (this.options.folderStat ?? stat)(folder), link, uid)) {
-        throw new Error(`${basename(path)} is a symbolic link another user made in a shared folder. Varia SQL Manager does not save through it; use Save As to choose another file.`)
+  /**
+   * Resolves `path` component by component as realpath does, but refuses every link, at any component, that Linux's
+   * fs.protected_symlinks would not let `uid` follow (`protectedLinkRefused`, judged against the real folder holding the
+   * link). It fails closed: a component it cannot look at is an error, unless it is missing, when it and the rest of the
+   * path are a new file. Its result is the write target, so no unchecked resolution runs after the check.
+   */
+  private async resolveCheckingLinks(path: string, uid: number): Promise<string> {
+    const lookAt = this.options.lstat ?? lstat
+    const linkText = this.options.readlink ?? ((link: string) => readlink(link))
+    const parts = (text: string) => text.split(sep).filter(part => part !== '' && part !== '.')
+    const absolute = resolve(path)
+    let resolved = parse(absolute).root
+    let rest = parts(absolute.slice(resolved.length))
+    let hops = 0
+    while (rest.length > 0) {
+      const part = rest.shift() as string
+      if (part === '..') { resolved = dirname(resolved); continue }
+      const candidate = join(resolved, part)
+      let facts: LinkFacts
+      try { facts = await lookAt(candidate) }
+      catch (error) {
+        if (missing(error)) return join(candidate, ...rest)
+        throw error
       }
-      try { current = resolve(folder, await readlink(current)) } catch { return }
+      if (!facts.isSymbolicLink()) { resolved = candidate; continue }
+      if (++hops > maxLinkHops) throw new Error(`${basename(path)} goes through too many symbolic links.`)
+      if (protectedLinkRefused(await (this.options.folderStat ?? stat)(resolved), facts, uid)) {
+        throw new Error(`${basename(path)} goes through a symbolic link another user made in a shared folder. Varia SQL Manager does not save through it; use Save As to choose another file.`)
+      }
+      const target = await linkText(candidate)
+      const root = parse(target).root
+      if (root !== '') resolved = root
+      rest = [...parts(target.slice(root.length)), ...rest]
     }
+    return resolved
   }
   /**
    * The registration, other than `except`, of the file at `path`: the same path (in any case on Windows), or the same
