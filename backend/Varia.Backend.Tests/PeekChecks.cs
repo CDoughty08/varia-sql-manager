@@ -27,6 +27,39 @@ internal static partial class PeekChecks
         RowsSql(check);
         Words(check);
         await RequestsAsync(check);
+        await LiveFixturesAsync(check);
+    }
+
+    /// <summary>The live Peek checks' fixtures against fake servers, since every CI server compares database names without case
+    /// and has a local name: one that compares by case (a CREATE VIEW naming the database in another case fails its batch) and
+    /// whose @@SERVERNAME is NULL makes every fixture but VC and PL, and never sends either; one that can make both gets each
+    /// in a script of its own, so neither can stop the main batch.</summary>
+    private static async Task LiveFixturesAsync(Action<bool, string> check)
+    {
+        const string database = "VariaScratch_20261108000000_abcdef12";
+        const string recased = "vARIAsCRATCH_20261108000000_ABCDEF12";
+        foreach (var (caseless, named) in new[] { (false, false), (true, true) })
+        {
+            var sent = new List<(string Script, string Database)>();
+            Task<SqlRun> Fake(string script, string db)
+            {
+                sent.Add((script, db));
+                string? scalar = script.Contains("DB_ID(", StringComparison.Ordinal) ? (caseless ? "1" : "0")
+                    : script.Contains("@@SERVERNAME IS NULL", StringComparison.Ordinal) ? (named ? "1" : "0") : null;
+                var failed = !caseless && db == database && script.Contains("[" + recased + "]", StringComparison.Ordinal);
+                return Task.FromResult(new SqlRun(failed ? "failed" : "completed", failed ? "Database '" + recased + "' does not exist." : null,
+                    scalar is null ? [] : [[[scalar]]]));
+            }
+            var (created, probedCaseless, probedNamed) = await PeekLiveChecks.CreateFixturesAsync(database, Fake);
+            var made = sent.Where(item => item.Database == database).Select(item => item.Script).ToList();
+            var view = made.Where(script => script.Contains("[" + recased + "]", StringComparison.Ordinal)).ToList();
+            var loopback = made.Where(script => script.Contains("@@SERVERNAME", StringComparison.Ordinal)).ToList();
+            bool Alone(List<string> scripts) => scripts is [var only] && !only.Contains("\nGO\n", StringComparison.Ordinal) && !only.Contains("[Blob]", StringComparison.Ordinal);
+            check(created.Status == "completed" && probedCaseless == caseless && probedNamed == named && made.Any(script => script.Contains("CREATE TABLE [Peek]]'Ü].[Blob]", StringComparison.Ordinal))
+                && (caseless ? Alone(view) : view.Count == 0) && (named ? Alone(loopback) : loopback.Count == 0),
+                "Peek's live fixtures on a server that " + (caseless ? "compares database names without case and has a local name" : "compares database names by case and has no local name")
+                + " are made, with " + (caseless ? "VC and PL each in a script of its own" : "neither VC nor PL attempted") + ": " + created.Error);
+        }
     }
 
     private static void Catalog(Action<bool, string> check)
