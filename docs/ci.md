@@ -65,6 +65,39 @@ After these changes, a PR push that does not touch packaging runs 11 jobs (12 si
 jobs, 89 runner-min, 3 macOS). That is about a quarter fewer jobs and 30% fewer runner-minutes. Since queueing dominates,
 expect most of that to show up as wall time on busy days.
 
+### Measured on CI after the change (2026-11-08)
+
+One green run of PR #166's head (CI run 42440066461, commit a699ed39), against the baseline medians above. One run is a single
+sample: re-measure with `node scripts/ci-timings.mjs` once a few PRs have run on this layout.
+
+| Per PR push | Before (median of 25) | After (1 run) |
+| --- | --- | --- |
+| Jobs | 15 (11 CI, 4 packaging) | 12 CI, no packaging for a PR that does not touch packaging |
+| Runner-min | 89 | **64.5** (Linux 40.1, Windows 20.1, macOS 4.3): 28% fewer |
+| macOS jobs, runner-min | 3, 18 | **1, 4.3** |
+| Longest job | 10.0 min | 8.2 min (Smoke Windows) |
+| Wall time | 25.4 min | 25.9 min: jobs queued up to 20 min for runners, so the gain is slots freed for other runs |
+
+The 12 jobs include main's third Linux smoke shard and its 64 s Live Plan suite, both added while this PR was open. This PR
+changes `release.yml`, so it also packaged (3 jobs, 9.8 runner-min: win 4.3, osx-arm64 3.8, linux 1.6 min, against 6.0, 4.0
+and 2.4 before, without the typecheck).
+
+| Job (minutes) | Before | After |
+| --- | --- | --- |
+| Check ubuntu, Windows, macOS | 4.0, 5.3, 4.7 | 3.3, 3.7, 4.3 |
+| Smoke Linux | 8.1, 8.3 (2 shards) | 5.3, 5.8, 5.9 (3 shards) |
+| Smoke Windows | 8.1, 10.0 | 8.2, 8.2 |
+| Live groups | 5.5 to 5.9 | 4.9, 5.5, 6.0 |
+| Bench Linux | 4.0 | 3.3 |
+
+`npm run check` in CI took 168 s (ubuntu), 165 s (Windows) and 213 s (macOS), against 165 to 253 s. Its critical path is now
+the vitest chain: vitest took 132 to 163 s there, against 57 to 114 s before, because it shares the 3 or 4 vCPUs with the
+.NET chain (Release build 33 to 50 s, then the offline checks in lanes, 31 to 52 s). Speeding up vitest under that contention
+is the next gain in Check. Locally: 32.9 s on 24 cores (136.7 s before), 54 to 70 s with `VARIA_CHECK_CPUS=4`.
+
+Not measured yet: cancelling superseded main runs and the daily desktop benchmarks (estimated above) show only in main's
+history; check them with `node scripts/ci-timings.mjs --branch main` after a week.
+
 ## What is left, in order
 
 Savings are corrected figures from an adversarial review of each proposal against CI logs. "Owner" marks changes that
