@@ -277,6 +277,12 @@ try {
   await page.waitForTimeout(1100)
   await press('s', 'Server Objects')
   await press('s', 'server-b')
+  // A space inside a type-ahead name types (explorerTypeAhead) rather than running Peek's Space.
+  await page.waitForTimeout(1100)
+  await press('Home', 'server-a')
+  await page.keyboard.type('server o')
+  await expect.poll(async () => (await active())?.label).toBe('Server Objects')
+  await expect(page.getByRole('dialog', { name: /^Peek/ })).toHaveCount(0)
   expect((await stubCalls()).some(params => isFolder(params, 'serverSecurity'))).toBe(false)
   await select('server-a', 'Databases')
   await press('*', 'Databases')

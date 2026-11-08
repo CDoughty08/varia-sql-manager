@@ -157,6 +157,15 @@ try {
   expect(await treeNames()).toEqual(['Query Execution', '  SQL Server', '    General'])
   await expect(heading()).toHaveText('Query Execution › SQL Server › General')
   await expect(optionsForm(dialog()).locator('mark')).toHaveText('time-out')
+  // The key is the catalogue's options.focusSearch, a modal key: from a page's field it focuses the box and selects its
+  // text, and Shift with it does nothing.
+  await field('Execution time-out').focus()
+  await page.keyboard.press(mac ? 'Meta+Shift+e' : 'Control+Shift+e')
+  await expect(field('Execution time-out')).toBeFocused()
+  await page.keyboard.press(searchKey)
+  await expect(search()).toBeFocused()
+  expect(await search().evaluate(input => [input.selectionStart, input.selectionEnd])).toEqual([0, 'time-out'.length])
+  await page.keyboard.press('End')
   await page.keyboard.type('zzz')
   await expect(dialog().getByText('No settings match.', { exact: true })).toBeVisible()
   await page.keyboard.press('Escape')

@@ -105,7 +105,8 @@ describe('keys on a result in Object Explorer\'s search', () => {
       const rules = defaultRules(platform).filter(rule => ['explorer.delete', 'explorer.rename', 'explorer.properties', 'explorer.peek'].includes(rule.command))
       expect(rules.length, platform).toBeGreaterThan(0)
       for (const rule of rules) {
-        expect(evaluateWhen(rule.when!, contextRecord(platform, { activePanel: 'explorer' })), `${platform} ${rule.command}`).toBe(true)
+        // The tree itself: Space's Peek also needs explorerFocus, which a result (outside the tree) never has.
+        expect(evaluateWhen(rule.when!, contextRecord(platform, { activePanel: 'explorer', explorerFocus: true })), `${platform} ${rule.command}`).toBe(true)
         expect(evaluateWhen(rule.when!, contextRecord(platform, { activePanel: 'explorer', searchHitsFocus: true })), `${platform} ${rule.command}`).toBe(false)
       }
     }
