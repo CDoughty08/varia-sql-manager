@@ -3,12 +3,13 @@ import { folderSpecs, kindSpecs, type FolderId } from '../../../shared/explorer/
 import { displayText } from '../../../shared/explorer/refs.ts'
 import { childrenLeftOut, objectSearchLimits, type ObjectIndexStatus, type ObjectSearchHit } from '../../../shared/explorer/search.ts'
 import { onUnexpectedError } from '../core/errors'
-import { useServiceSelector, useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
+import { useConnectionAccent, useServiceSelector, useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import ExplorerIcon from '../explorer/ExplorerIcon'
 import Icon from '../Icon'
 import EmptyState from '../kit/EmptyState'
 import { useMenuTarget } from '../menus/useMenuTarget'
-import { hitKey, type IndexEntry, type SearchQueryState } from './ObjectSearchService'
+import EnvironmentTag from '../EnvironmentTag'
+import { hitServer, serverGroups, serverHitKey, type IndexEntry, type SearchDocumentState, type SearchQueryState, type ServerGroup } from './ObjectSearchService'
 import { isCopyKey, revealHit, searchHitTarget } from './hit-actions'
 import SearchFilters from './SearchFilters'
 import PaneSearchFilters from './PaneSearchFilters'
@@ -83,6 +84,57 @@ export function indexSummary(entry: IndexEntry | undefined, status: ObjectIndexS
   return `Index: ${count(status.objects, 'object')}${modules} in ${count(status.indexed, 'database')}${skipped}`
 }
 
+/** What every server's index holds, for an All servers search's index line. */
+export function allIndexesSummary(entries: readonly IndexEntry[]): string {
+  if (!entries.length) return 'No server has an index yet.'
+  const building = entries.filter(entry => entry.requestId).length
+  const objects = entries.reduce((sum, entry) => sum + (entry.status?.objects ?? entry.objects), 0)
+  return `Indexes: ${count(objects, 'object')} on ${count(entries.length, 'server')}${building ? ` · ${numbers.format(building)} indexing` : ''}`
+}
+
+/** A group's own note, beside its server's name: its results, or what kept them back. */
+export function groupNote(group: ServerGroup, entry: IndexEntry | undefined): string {
+  if (group.error) return group.error
+  const result = group.result
+  if (result?.problem) return result.problem
+  const results = result ? `${count(result.total, 'result')}${result.total > result.hits.length ? `, showing ${numbers.format(result.hits.length)}` : ''}` : ''
+  return [results, entry?.requestId ? `indexing ${numbers.format(entry.done)} of ${numbers.format(entry.total)}` : ''].filter(Boolean).join(' · ')
+}
+
+/**
+ * An All servers search's summary: the servers searched, the results in all, the slowest server's time, and what is not in it
+ * yet: servers still indexing, servers that failed, and servers that have disconnected since the last search.
+ */
+export function allServersSummary(document: SearchDocumentState, indexes: Readonly<Record<string, IndexEntry>>): string {
+  const groups = serverGroups(document), result = document.result
+  const parts = [count(groups.length, 'server'), count(result?.total ?? 0, 'result'), `${numbers.format(result?.elapsedMs ?? 0)} ms`]
+  for (const group of groups) {
+    const entry = indexes[group.connectionId]
+    if (entry?.requestId) parts.push(`${group.label} still indexing (${numbers.format(entry.done)} of ${count(entry.total, 'database')})`)
+    if (group.error) parts.push(`${group.label} could not be searched`)
+  }
+  if (result?.partial) parts.push('a search stopped early; narrow it to see everything')
+  for (const label of document.left ?? []) parts.push(`${label} disconnected`)
+  return parts.join(' · ')
+}
+
+/** An All servers group's header: a button that collapses or expands it, with the server's colour, name, environment and note. */
+function GroupHead({ group, color, environment, note, expanded, controls, onToggle }: {
+  readonly group: ServerGroup; readonly color: string | undefined; readonly environment: string | undefined; readonly note: string
+  readonly expanded: boolean; readonly controls: string; readonly onToggle: () => void
+}) {
+  const accent = useConnectionAccent(color)
+  return <h3 className="object-search-group-head">
+    <button type="button" aria-expanded={expanded} aria-controls={expanded ? controls : undefined} onClick={onToggle} title={expanded ? 'Collapse' : 'Expand'}>
+      <Icon name={expanded ? 'chevron-down' : 'chevron-right'} />
+      <span className="object-search-group-accent" style={accent ? { background: accent } : undefined} />
+      <bdi className="object-search-group-name">{group.label}</bdi>
+      <EnvironmentTag environment={environment} place="list" about={group.label} />
+      {note && <span className={`object-search-group-note${group.error || group.result?.problem ? ' error' : ''}`}>{note}</span>}
+    </button>
+  </h3>
+}
+
 export interface SearchPanelProps {
   /** The search's id in ObjectSearchService: a tab's document id, or `explorerSearchId`. */
   readonly searchId: string
@@ -110,7 +162,7 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   const detailsShare = useServiceSelector(searchDetails, details => layout === 'tab' ? details.size : undefined)
   const body = useRef<HTMLDivElement>(null)
   const root = useRef<HTMLDivElement>(null)
-  const list = useRef<HTMLUListElement>(null)
+  const list = useRef<HTMLElement>(null)
   const state = snapshot.documents[searchId]
   // The selected hit (the one Enter or the arrows reached) stays in view in the list.
   const current = state?.current
@@ -121,34 +173,40 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   // the hit's own selection keys, not the tree's.
   const menuTarget = useMenuTarget<HTMLElement>(element => {
     const document = objectSearch.getSnapshot().documents[searchId], index = Number(element.getAttribute('data-index')), hit = document?.result?.hits[index]
-    if (!document || !hit) return null
+    const server = document && hitServer(document, index)
+    if (!document || !hit || !server) return null
     objectSearch.pick(searchId, index)
-    return searchHitTarget(explorer, document.connectionId, searchId, index, hit, layout === 'pane')
+    return searchHitTarget(explorer, server, searchId, index, hit, layout === 'pane')
   })
   const focusInput = () => root.current?.querySelector<HTMLElement>('[data-object-search-focus]')?.focus()
   // The selected hit's identity: the list scrolls to the selection only when another hit is selected, so a search run again that
   // keeps the selection (at whatever index) leaves the list where the user scrolled it, focused or not.
   const selectedHit = current === undefined ? undefined : state?.result?.hits[current]
-  const selectedKey = selectedHit && hitKey(selectedHit)
+  const selectedServer = state && current !== undefined ? hitServer(state, current) : undefined
+  const selectedKey = selectedHit && serverHitKey(selectedServer ?? '', selectedHit)
   const shownKey = useRef<string | undefined>(undefined)
   useLayoutEffect(() => {
-    const hits = list.current, rows = hits?.querySelectorAll<HTMLElement>('[data-hit]')
+    const hits = list.current, rows = [...hits?.querySelectorAll<HTMLElement>('[data-hit]') ?? []]
+    // Rows are found by their hit's index: a collapsed group (All servers) leaves its hits out of the list.
+    const rowOf = (index: number | undefined) => index === undefined ? undefined : rows.find(row => Number(row.dataset.index) === index)
     const focused = !!hits && hits.contains(hits.ownerDocument.activeElement)
-    if (current !== undefined && selectedKey !== shownKey.current) rows?.[current]?.scrollIntoView({ block: 'nearest' })
+    if (current !== undefined && selectedKey !== shownKey.current) rowOf(current)?.scrollIntoView({ block: 'nearest' })
     shownKey.current = selectedKey
     if (!focusInList.current || focused) return
-    const row = rows?.[current ?? 0]
+    const row = rowOf(current) ?? rows[0]
     if (row) row.focus()
     else { focusInList.current = false; focusInput() }
-  }, [current, selectedKey, state?.result])
-  // The tab's details pane follows the selection (and reads it once the selection settles); Object Explorer's band has none.
+  }, [current, selectedKey, state?.result, state?.collapsed])
+  // The tab's details pane follows the selection (and reads it once the selection settles), on the hit's own server; Object
+  // Explorer's band has none.
   useEffect(() => {
-    if (layout === 'tab' && state) searchDetails.show(searchId, state.connectionId, selectedHit)
-  }, [layout, searchId, state?.connectionId, selectedHit, detailsHidden])
+    if (layout === 'tab' && state) searchDetails.show(searchId, selectedServer ?? state.connectionId, selectedHit)
+  }, [layout, searchId, state?.connectionId, selectedServer, selectedHit, detailsHidden])
   if (!state) return null
-  const entry = snapshot.indexes[state.connectionId]
-  const result = state.result
   const pane = layout === 'pane'
+  const spanning = !!state.allServers && !pane
+  const entry = spanning ? undefined : snapshot.indexes[state.connectionId]
+  const result = state.result
   const set = (patch: Partial<SearchQueryState>) => objectSearch.setQuery(searchId, patch)
   const toggle = (key: 'caseSensitive' | 'wholeWord' | 'regex' | 'fuzzy', label: string, icon: 'case-sensitive' | 'whole-word' | 'regex' | 'fuzzy-match', title = label) => {
     // Fuzzy Match keeps its setting while Regex is on, but cannot apply.
@@ -168,7 +226,7 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
     // so Enter again goes on to the next one. The tab's Enter searches at once; its hits reveal with Enter or a double-click.
     if (event.key === 'Enter' && state.text.trim() && pane) void objectSearch.step(searchId, event.shiftKey ? -1 : 1).then(hit => { if (hit) reveal(hit) }, onUnexpectedError)
     else if (event.key === 'Enter' && state.text.trim()) void objectSearch.search(searchId)
-    else if (event.key === 'ArrowDown' && rows().length) (rows()[current ?? 0] ?? rows()[0])?.focus()
+    else if (event.key === 'ArrowDown' && rows().length) (rows().find(row => Number(row.dataset.index) === current) ?? rows()[0])?.focus()
     else if (event.key === 'Escape' && state.text) set({ text: '' })
     else if (onLeave && (event.key === 'Escape' || event.key === 'ArrowDown' || event.key === 'Enter')) onLeave()
     else return
@@ -178,7 +236,7 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   /** The list is one tab stop on the selected hit; the arrows, Page keys, Home and End move the selection and focus with it,
    *  Enter reveals the selected hit (focus stays here), ↑ on the first hit and Escape return to the box. Ctrl+C (⌘C) copies its
    *  name: the key is the clipboard's, so the catalogue's rule only labels it (`native`) and the list runs it. */
-  const onListKey = (event: KeyboardEvent<HTMLUListElement>) => {
+  const onListKey = (event: KeyboardEvent<HTMLElement>) => {
     const all = rows(), at = all.findIndex(row => row === event.target)
     if (at < 0) return
     if (isCopyKey(event, platform)) { copyName(event); return }
@@ -190,32 +248,34 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
       event.preventDefault()
       event.stopPropagation()
       if (event.key === 'Escape') focusInput()
-      else open(at)
+      else open(Number(all[at]!.dataset.index))
       return
     }
     if (next === undefined) return
     event.preventDefault()
     if (next < 0) { focusInput(); return }
-    const index = Math.min(next, all.length - 1)
-    objectSearch.pick(searchId, index)
-    all[index]?.focus()
+    const row = all[Math.min(next, all.length - 1)]
+    if (!row) return
+    objectSearch.pick(searchId, Number(row.dataset.index))
+    row.focus()
   }
-  const reveal = (hit: ObjectSearchHit) => revealHit(workbench, state.connectionId, hit, pane)
-  /** Selects a hit and reveals it. */
+  const reveal = (hit: ObjectSearchHit, server = state.connectionId) => revealHit(workbench, server, hit, pane)
+  /** Selects a hit and reveals it, on its own server. */
   const open = (index: number) => {
-    const hit = result?.hits[index]
-    if (!hit) return
+    const hit = result?.hits[index], server = hitServer(state, index)
+    if (!hit || !server) return
     objectSearch.pick(searchId, index)
-    reveal(hit)
+    reveal(hit, server)
   }
   const asked = !!(result && state.asked?.text)
   const summary = state.requestId ? 'Searching…'
     : state.error ? state.error
     : result?.problem ? result.problem
+    : spanning && result && asked ? allServersSummary(state, snapshot.indexes)
     : result && asked ? `${count(result.total, 'result')}${result.total > result.hits.length ? `, showing the first ${numbers.format(result.hits.length)}` : ''}${result.partial ? ' (the search stopped early; narrow it to see everything)' : ''} · ${numbers.format(result.elapsedMs)} ms`
     : ''
   const index = entry?.status ?? result?.index
-  const indexText = indexSummary(entry, index)
+  const indexText = spanning ? allIndexesSummary(Object.values(snapshot.indexes)) : indexSummary(entry, index)
   // Progress and incomplete indexes stay visible; the healthy index's detail is available from the information button.
   const indexNotice = !!entry?.requestId || !!entry?.error || !index || index.state !== 'ready' || !!index.skipped.length || !index.definitions
   const paneSummary = result && asked && !state.requestId && !state.error && !result.problem && !result.partial
@@ -281,40 +341,66 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
     event.stopPropagation()
     objectSearch.setPaneSize(next)
   }
+  // All servers: one group per server, its header a button that collapses it; a collapsed group's hits leave the list.
+  const groups = spanning ? serverGroups(state) : []
+  const collapsed = new Set(spanning ? state.collapsed ?? [] : [])
+  const shown = spanning ? groups.filter(group => !collapsed.has(group.connectionId)).flatMap(group => group.hits.map((_hit, offset) => group.start + offset)) : undefined
+  // One tab stop for the hits: the selected one, or the first shown when the selection is in a collapsed group.
+  const tabStop = shown ? (current !== undefined && shown.includes(current) ? current : shown[0]) : current ?? 0
+  const hitRow = (hit: ObjectSearchHit, index: number, server: string) => {
+    const spec = kindSpecs[hit.object.kind]
+    const path = searchHitPath(hit)
+    // A click selects; in the tab only a double-click (or Enter) reveals, so a click never takes focus away from the list.
+    // Each hit is an option, the tab stop on the selected one, which a screen reader announces as selected.
+    return <li key={serverHitKey(server, hit)} role="presentation" className="object-search-hit">
+      <div ref={menuTarget} role="option" className="object-search-open" data-hit data-index={index} tabIndex={index === tabStop ? 0 : -1} aria-selected={index === current}
+        title={`Reveal in Object Explorer: ${displayText(hit.label)}`} onClick={() => { if (pane) open(index); else objectSearch.pick(searchId, index) }} onDoubleClick={pane ? undefined : () => open(index)}>
+        <ExplorerIcon name={(hit.subtype && spec.subtypeIcons?.[hit.subtype]) || spec.icon} />
+        <span className="object-search-name"><Marked text={hit.label} range={hit.range} approximate={hit.approximate} /></span>
+        <span className="object-search-path">{displayText(path)}</span>
+        {hit.definition && <span className="object-search-line">
+          <span className="object-search-line-number">{hit.definition.line}:</span>
+          {hit.definition.before && '…'}<Marked text={hit.definition.preview} range={hit.definition.range} />{hit.definition.after && '…'}
+          {hit.definition.matches > 1 && <span className="object-search-more"> (+{numbers.format(hit.definition.matches - 1)}{hit.definition.matches >= 999 ? '+' : ''} more)</span>}
+        </span>}
+      </div>
+    </li>
+  }
+  const listEvents = {
+    onKeyDown: onListKey,
+    onCopy: (event: { target: EventTarget; preventDefault(): void }) => { if (rows().some(row => row.contains(event.target as Node))) copyName(event) },
+    onFocus: () => { focusInList.current = true; objectSearch.listFocused(searchId, true) },
+    onBlur: (event: { relatedTarget: EventTarget | null; currentTarget: HTMLElement; target: EventTarget }) => {
+      const next = event.relatedTarget
+      if (next && event.currentTarget.contains(next as Node)) return
+      // A hit a new answer removes may blur as it goes; focus that leaves with its element is still the list's, for the
+      // effect above to hand on.
+      const left = event.target as Node
+      queueMicrotask(() => { if (left.isConnected) { focusInList.current = false; objectSearch.listFocused(searchId, false) } })
+    }
+  }
+  const connectionList = workbench.connections.getSnapshot()
   const hitsView = asked && !result!.problem && result!.hits.length === 0 && !state.requestId
-    ? <EmptyState icon="search" title="No objects match" detail={entry?.requestId ? 'The index is still being built; results update when it finishes.' : `Try another spelling, turn off Match Case or Whole Word, or search names and definitions${state.types.length ? ' of every type' : ''}.`} />
-    : <ul ref={list} role="listbox" data-search-hits className="object-search-hits" aria-label={pane ? 'Search results' : 'Results'} onKeyDown={onListKey}
-      onCopy={event => { if (rows().some(row => row.contains(event.target as Node))) copyName(event) }}
-      onFocus={() => { focusInList.current = true; objectSearch.listFocused(searchId, true) }}
-      onBlur={event => {
-        const next = event.relatedTarget
-        if (next && event.currentTarget.contains(next as Node)) return
-        // A hit a new answer removes may blur as it goes; focus that leaves with its element is still the list's, for the
-        // effect above to hand on.
-        const left = event.target
-        queueMicrotask(() => { if (left.isConnected) { focusInList.current = false; objectSearch.listFocused(searchId, false) } })
-      }}>
-      {result?.hits.map((hit, index) => {
-        const spec = kindSpecs[hit.object.kind]
-        const path = searchHitPath(hit)
-        const key = hitKey(hit)
-        // A click selects; in the tab only a double-click (or Enter) reveals, so a click never takes focus away from the list.
-        // Each hit is an option, the tab stop on the selected one, which a screen reader announces as selected.
-        return <li key={key} role="presentation" className="object-search-hit">
-          <div ref={menuTarget} role="option" className="object-search-open" data-hit data-index={index} tabIndex={index === (current ?? 0) ? 0 : -1} aria-selected={index === current}
-            title={`Reveal in Object Explorer: ${displayText(hit.label)}`} onClick={() => { if (pane) open(index); else objectSearch.pick(searchId, index) }} onDoubleClick={pane ? undefined : () => open(index)}>
-            <ExplorerIcon name={(hit.subtype && spec.subtypeIcons?.[hit.subtype]) || spec.icon} />
-            <span className="object-search-name"><Marked text={hit.label} range={hit.range} approximate={hit.approximate} /></span>
-            <span className="object-search-path">{displayText(path)}</span>
-            {hit.definition && <span className="object-search-line">
-              <span className="object-search-line-number">{hit.definition.line}:</span>
-              {hit.definition.before && '…'}<Marked text={hit.definition.preview} range={hit.definition.range} />{hit.definition.after && '…'}
-              {hit.definition.matches > 1 && <span className="object-search-more"> (+{numbers.format(hit.definition.matches - 1)}{hit.definition.matches >= 999 ? '+' : ''} more)</span>}
-            </span>}
-          </div>
-        </li>
-      })}
-    </ul>
+    ? <EmptyState icon="search" title="No objects match" detail={(spanning ? Object.values(snapshot.indexes).some(item => item.requestId) : entry?.requestId) ? 'The index is still being built; results update when it finishes.' : `Try another spelling, turn off Match Case or Whole Word, or search names and definitions${state.types.length ? ' of every type' : ''}.`} />
+    : spanning
+      // Each server's hits are a list of their own, named by the server, below a header that collapses it; the arrows walk
+      // every shown hit, across the groups.
+      ? <div ref={element => { list.current = element }} data-search-hits className="object-search-hits object-search-groups" {...listEvents}>
+        {groups.map(group => {
+          const connection = connectionList.find(item => item.id === group.connectionId)
+          const expanded = !collapsed.has(group.connectionId), controls = `${searchId}-group-${group.connectionId}`
+          return <section key={group.connectionId} className="object-search-group">
+            <GroupHead group={group} color={connection?.color} environment={connection?.options.environment} note={groupNote(group, snapshot.indexes[group.connectionId])}
+              expanded={expanded} controls={controls} onToggle={() => objectSearch.toggleGroup(searchId, group.connectionId)} />
+            {expanded && group.hits.length > 0 && <ul id={controls} role="listbox" className="object-search-group-hits" aria-label={`Results on ${group.label}`}>
+              {group.hits.map((hit, offset) => hitRow(hit, group.start + offset, group.connectionId))}
+            </ul>}
+          </section>
+        })}
+      </div>
+      : <ul ref={element => { list.current = element }} role="listbox" data-search-hits className="object-search-hits" aria-label={pane ? 'Search results' : 'Results'} {...listEvents}>
+        {result?.hits.map((hit, index) => hitRow(hit, index, state.connectionId))}
+      </ul>
   return <div ref={root} className={`object-search object-search-${layout}`} data-sized={sized ? '' : undefined} style={sized ? { height: `${snapshot.paneSize! * 100}%` } : undefined}>
     <div className="object-search-query">
       <div className="object-search-field" role="search">

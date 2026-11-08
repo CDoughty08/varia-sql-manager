@@ -22,7 +22,7 @@ The same search runs in two places, with the same options and results:
   concise, with index counts, result limits and timing under Search and index details. Index progress, errors and
   incomplete indexes remain visible. Escape or a click outside dismisses a popover; Escape returns focus to its button.
 - **The Search Objects tab** (View › Search Objects…, a server or database node's menu, or the palette), with a server picker
-  when more than one server is connected. Its hits are one tab stop on the selected hit: a click selects a hit, ↑ ↓,
+  when more than one server is connected, which can also search *All servers* (see *All servers* below). Its hits are one tab stop on the selected hit: a click selects a hit, ↑ ↓,
   Page Up, Page Down (to the last hit in view first, then a page on), Home and End move the selection, and a double-click or Enter reveals the hit in Object Explorer, which
   shows without taking focus, so the keys go on walking the hits. ↑ on the first hit, and Escape, return to the box.
   Beside the hits, behind a sash, is the *details pane* (below them when the tab is narrower than 760 px): see
@@ -209,6 +209,23 @@ The same search runs in two places, with the same options and results:
   Script to New Query, Refresh (which never takes a kept script) and Hide are in its header; the Details pane button
   beside the result count hides and shows it in every tab. A hidden pane reads nothing; a new hit, a closed tab, a hidden
   pane or a lost server cancels the tab's reads. Object Explorer's own search has no details pane.
+
+### All servers
+
+- **Where.** The tab's server picker offers *All servers*; only the tab has it, as Object Explorer's box searches the
+  server of the tree's selection. Search Objects from the palette, View or the toolbar opens on All servers when more
+  than one server is connected; from a server's or database's menu it opens on that server. The tab then belongs to
+  no server, and Rebuild Search Index rebuilds every server's index.
+- **How.** The renderer sends one `explorer.search` per connected server at once, each on that server's own index, and
+  shows the answers together once every server has answered (`ObjectSearchService`, `searchAll`). Each server's limit is
+  its own, so a large server cannot crowd the others out. Every server gets an index if it has none; a server that
+  connects joins the search, and one that disconnects drops out, named in the summary. No backend method changes.
+- **Results.** Each server's hits are a list of their own, named "Results on *server*", below a header that collapses
+  it: the server's colour, name, environment tag (the red PROD tag for Production) and its results or why it has none
+  (indexing, an error, a problem with the query on that server). The arrows, Page keys, Home and End walk every shown
+  hit across the groups, one tab stop for all of them. A hit's Reveal, menu, Copy and details pane act on its own
+  server. The summary gives the servers, the results in all, the slowest server's time, the servers still indexing, the
+  ones that could not be searched, and the ones that disconnected.
 
 ## Protocol
 

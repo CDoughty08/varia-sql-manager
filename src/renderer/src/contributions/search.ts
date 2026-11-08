@@ -11,9 +11,9 @@ const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error
 
 /**
  * Search Objects' commands. Search Objects opens a tab on the server whose Object Explorer menu runs it (a database's menu
- * narrows nothing yet: the tab searches the whole server), else the active document's server, else the selected node's,
- * else the one live connection or the one picked from several. Rebuild Search Index rebuilds that server's index; Stop
- * Indexing stops every running build. A result's Reveal and Copy commands act on the result its menu was opened for, else the
+ * narrows nothing yet: the tab searches the whole server); from anywhere else it searches all servers when several are
+ * connected, else the one. Rebuild Search Index rebuilds the index of the server its menu or tab is on (every server, from an
+ * All servers tab), else the active document's or the selected node's, else the one picked; Stop Indexing stops every running build. A result's Reveal and Copy commands act on the result its menu was opened for, else the
  * selected result of the list that has focus, on a live server.
  */
 export function searchContribution(workbench: Pick<Workbench, 'commands' | 'objectSearch' | 'documents' | 'connections' | 'explorer' | 'quickInput'>, api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
@@ -58,9 +58,21 @@ export function searchContribution(workbench: Pick<Workbench, 'commands' | 'obje
     copy('search.copySchemaName', names => names.schema),
     copy('search.copyQualifiedName', names => names.qualified),
     copy('search.copyBracketedName', names => names.bracketed),
-    commands.register('explorer.searchObjects', { run: withServer('Select a server to search', id => { objectSearch.open(id) }) }),
+    commands.register('explorer.searchObjects', {
+      run: args => {
+        const node = explorerNodeOf(args), choices = connections.live()
+        if (node || choices.length < 2) { withServer('Select a server to search', id => { objectSearch.open(id) })(args); return }
+        try { objectSearch.open(undefined, undefined, true) } catch (error) { commands.reportError(error instanceof Error ? error.message : 'Search Objects could not open.') }
+      }
+    }),
     commands.register('explorer.focusSearch', { run: () => { void commands.execute('window.explorer', undefined, 'toolbar'); objectSearch.focusPane() } }),
-    commands.register('explorer.rebuildIndex', { run: withServer('Select a server to index', id => objectSearch.build(id)) }),
+    commands.register('explorer.rebuildIndex', {
+      run: args => {
+        const tab = objectSearch.getSnapshot().documents[documents.getSnapshot().activeId]
+        if (!explorerNodeOf(args) && tab?.allServers) { for (const connection of connections.live()) objectSearch.build(connection.id); return }
+        withServer('Select a server to index', id => objectSearch.build(id))(args)
+      }
+    }),
     commands.register('explorer.stopIndexing', {
       when: () => Object.values(objectSearch.getSnapshot().indexes).some(entry => entry.requestId),
       run: () => objectSearch.stopAll()

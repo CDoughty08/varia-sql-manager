@@ -2041,6 +2041,16 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-search-summary:empty { display: none; }
 .object-search-hits { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 0 0 var(--varia-space-2); list-style: none; }
 .object-search-hit { display: flex; align-items: start; gap: var(--varia-space-1); padding: 0 var(--varia-space-3) 0 var(--varia-space-2); }
+/* All servers: a group per server, its header a disclosure button with the server's colour, name, environment tag and note. */
+.object-search-group-head { margin: 0; font: inherit; }
+.object-search-group-head button { display: flex; align-items: center; gap: var(--varia-space-1); width: 100%; min-height: var(--varia-row); padding: 0 var(--varia-space-3) 0 var(--varia-space-1); color: inherit; background: transparent; border: 0; text-align: start; font-size: var(--varia-size-sm); font-weight: 600; cursor: pointer; }
+.object-search-group-head button:hover { background: var(--varia-list-hoverBackground); }
+.object-search-group-head button:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: -2px; }
+.object-search-group-accent { flex: none; align-self: stretch; width: var(--varia-space-0); margin: var(--varia-space-1) 0; border-radius: var(--varia-radius-pill); }
+.object-search-group-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.object-search-group-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: normal; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.object-search-group-note.error { color: var(--varia-errorForeground); }
+.object-search-group-hits { margin: 0; padding: 0; list-style: none; }
 .object-search-hit:hover { background: var(--varia-list-hoverBackground); }
 .object-search-hit:has(> [aria-selected="true"]) { color: var(--varia-list-inactiveSelectionForeground); background: var(--varia-list-inactiveSelectionBackground); }
 .object-search-hit:has(> [aria-selected="true"]:focus) { color: var(--varia-list-activeSelectionForeground); background: var(--varia-list-activeSelectionBackground); }
