@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { planParseSchema, planDocumentSchema } from '../shared/plans'
+import { estimatedPlanRequestSchema, estimatedPlanResultSchema } from '../shared/estimated-plans'
 import type { RpcMethod } from '../shared/contracts'
 import { connectionOptionsSchema } from '../shared/connections'
 import { limits } from '../shared/ipc/wire/protocol'
@@ -18,6 +19,7 @@ const connectionId = z.uuid()
 const database = name
 export const requestSchemas = {
   'plans.parse': planParseSchema,
+  'plans.estimate': estimatedPlanRequestSchema,
   'system.health': z.object({}).strict(),
   'connections.connect': connectionOptionsSchema,
   'connections.databases': connectionOptionsSchema,
@@ -58,6 +60,7 @@ const principal = z.string().min(1).max(256).regex(/^[^\p{Cc}\p{Cf}]+$/u)
 /** Answers main checks before the renderer sees them: the backend is trusted, but these come from native code. */
 export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
   'plans.parse': planDocumentSchema,
+  'plans.estimate': estimatedPlanResultSchema,
   'connections.identity': z.object({ principal: principal.optional() }).strict(),
   // Steps carry SQL Server's text and names: bounded here as in C# (ActionSteps.Bound).
   'actions.execute': actionExecuteResultSchema

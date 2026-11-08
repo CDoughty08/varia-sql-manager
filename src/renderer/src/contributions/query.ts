@@ -42,6 +42,7 @@ export function queryContribution({ commands, queries, documents, connections, t
       run: () => { if (queries.canExecute()) return queries.execute(); if (connectsFirst()) events.emit({ type: 'query.connectRequested', tabId: documents.active!.id }) }
     }),
     commands.register('query.cancel', { run: () => queries.cancel() }),
+    commands.register('query.estimatePlan', { when: () => queries.canExecute(), run: () => queries.estimate() }),
     commands.register('query.includeActualPlan', { run: () => {
       const tab = documents.active
       if (tab && isQueryDocument(tab)) documents.update(tab.id, { includeActualPlan: !tab.includeActualPlan })

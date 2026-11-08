@@ -517,12 +517,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .query-status-server { flex-shrink: 1000000; }
 .query-status-login { flex-shrink: 1000; }
 .query-status-database { flex-shrink: 1; }
-/* A query's own bar: Execute, Cancel, Actual Plan, Live Plan and Client Statistics, then the connection pill. A narrow
+/* A query's own bar: Execute, Cancel, Actual Plan, Live Plan, Estimated Plan and Client Statistics, then the connection pill. A narrow
    editor drops button words and key hints, then the lists give up width, then a long environment label is cut
    short, and the pill never wraps. Its own size keeps the tag's 12em as wide as elsewhere. */
 .query-bar { display: flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-bar); padding: 0 var(--varia-space-2); flex-shrink: 0; min-width: 0; overflow: hidden; container-type: inline-size; font-size: var(--varia-size-sm); background: var(--varia-editor-background); border-bottom: 1px solid var(--varia-editorGroup-border); }
 /* Activating a sibling editor group must leave its controls under the pointer. */
 .query-bar-spacer { flex: 0 0 var(--varia-bar); }
+.query-bar-actions { display: flex; align-items: center; flex-shrink: 0; gap: var(--varia-space-1); }
 .query-bar-action { display: inline-flex; align-items: center; gap: 6px; height: var(--varia-control); padding: 0 10px; flex-shrink: 0; }
 .query-bar-action.execute kbd { color: inherit; border-color: currentColor; }
 .query-bar .actual-plan-toggle[aria-pressed="true"], .toolbar .actual-plan-toggle[aria-pressed="true"] {
@@ -542,20 +543,25 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
    shrink weight has them give way, down to their minimum, before the environment tag. */
 .query-connection select { flex: 0 1000 auto; min-width: 64px; max-width: 220px; height: 100%; padding: 0 2px; background: var(--varia-input-background); border: 0; text-overflow: ellipsis; }
 .query-connection select:focus-visible { outline-offset: 0; }
-@container (max-width: 700px) {
+@container (max-width: 960px) {
   .query-bar-action.execute kbd { display: none; }
-  .query-bar-action.actual-plan-toggle .query-bar-label { display: none; }
+  .query-bar-action.actual-plan-toggle .query-bar-label, .query-bar-action.estimated-plan-button .query-bar-label { display: none; }
 }
-@container (max-width: 520px) {
+@container (max-width: 500px) {
   .query-bar-label { display: none; }
-  .query-bar-action { padding: 0 var(--varia-space-0); min-width: var(--varia-space-5); }
+  .query-bar-action { padding: 0 2px; }
   .query-connection { gap: var(--varia-space-0); padding-left: var(--varia-space-1); }
-  .query-connection-icon, .query-connection-divider { display: none; }
+  /* Reserve compact space for the environment label and both selectors. */
+  .query-connection-icon { display: none; }
 }
 @container (max-width: 400px) {
+  .query-bar-actions { gap: 0; }
   .query-bar-action { padding: 0; min-width: var(--varia-space-4); }
+  .query-bar-action .codicon { font-size: var(--varia-glyph-sm); }
+  .query-connection { gap: 0; }
+  .query-connection-divider, .query-connection .connection-swatch { display: none; }
 }
-@container (min-width: 310px) {
+@container (min-width: 300px) {
   .query-bar-environment:has(.environment-tag:not([data-custom])) { flex-shrink: 0; }
 }
 @media (forced-colors: active) { .query-connection .connection-swatch { forced-color-adjust: none; } .query-connection { border-color: CanvasText; } }
@@ -709,6 +715,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .messages-strip .messages { flex: 1 1 auto; padding: 2px 20px 8px; }
 /* A batch has one canvas and one camera. Only the independent outline and properties can scroll. */
 .plan-viewer { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; background: var(--varia-panel-background); color: var(--varia-foreground); font-size: var(--varia-size-sm); }
+.estimated-plans { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.estimated-plans > .plan-viewer { flex: 1; min-height: 0; }
+.estimated-plan-context { flex: 0 0 auto; padding: 6px 8px; font-size: var(--varia-size-xs); border-bottom: 1px solid var(--varia-panel-border); }
 .plan-document-tools, .plan-tools { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--varia-panel-border); }
 .plan-tools button, .plan-document-tools button { padding: 4px 8px; font-size: var(--varia-size-xs); }
 .plan-tools label { display: flex; align-items: center; gap: 4px; }

@@ -33,6 +33,13 @@ function fixture() {
 }
 
 describe('query plan lifecycle', () => {
+  it('does not open live sampling for an estimate that retains the preceding execution identity', () => {
+    const f = fixture()
+    f.queries.set({ [f.tab.id]: { livePlan: { queryId: 'old-run', connectionId: 'connection' }, running: { queryId: 'estimate', connectionId: 'connection', startedAt: 1, kind: 'estimate' } } })
+    expect(f.handles).toHaveLength(0)
+    expect(f.service.getSnapshot()[f.tab.id]).toBeUndefined()
+    f.service.dispose(); f.documents.dispose(); f.panes.dispose()
+  })
   it('reports a completed script with batch errors as completed, rather than stopped', () => {
     const f = fixture()
     f.queries.set(f.running('run'))

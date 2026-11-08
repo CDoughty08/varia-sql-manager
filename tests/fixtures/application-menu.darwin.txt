@@ -117,6 +117,7 @@
   {"id":"query.cancel","label":"Cancel Executing Query","registerAccelerator":false,"type":"normal","click":[["command","query.cancel"]]}
   {"id":"query.includeActualPlan","label":"Include Actual Execution Plan","registerAccelerator":false,"type":"checkbox","click":[["command","query.includeActualPlan"]],"checkedAfterClick":false}
   {"id":"query.includeLivePlan","label":"Include Live Execution Plan","registerAccelerator":false,"type":"checkbox","click":[["command","query.includeLivePlan"]],"checkedAfterClick":false}
+  {"accelerator":"Cmd+L","id":"query.estimatePlan","label":"Display Estimated Execution Plan","registerAccelerator":false,"type":"normal","click":[["command","query.estimatePlan"]]}
   {"id":"query.includeClientStatistics","label":"Include Client Statistics","registerAccelerator":false,"type":"checkbox","click":[["command","query.includeClientStatistics"]],"checkedAfterClick":false}
   {"id":"query.resetClientStatistics","label":"Reset Client Statistics","registerAccelerator":false,"type":"normal","click":[["command","query.resetClientStatistics"]]}
 {"id":"menu.tools","label":"Tools"}

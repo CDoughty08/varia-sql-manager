@@ -47,7 +47,7 @@ export class QueryPlansService extends SnapshotStore<Readonly<Record<string, Que
       if (!this.documents.get(tab) || query?.livePlan?.queryId !== state.queryId || this.results.getSnapshot()[tab]?.status === 'closed') {
         this.end(tab)
         const next = { ...this.getSnapshot() }; delete next[tab]; this.publish(next)
-      } else if (!query.running && state.running) {
+      } else if (query.running?.queryId !== state.queryId && state.running) {
         this.end(tab)
         const status = query.summary?.status
         const outcome = query.error ? query.error + ' Retained live statistics are partial.' : status === 'completed' || status === 'completedWithErrors'
@@ -58,7 +58,7 @@ export class QueryPlansService extends SnapshotStore<Readonly<Record<string, Que
       }
     }
     for (const [tab, query] of Object.entries(this.queries.getSnapshot())) {
-      if (!query.running || !query.livePlan || this.getSnapshot()[tab] || this.results.getSnapshot()[tab]?.status === 'closed') continue
+      if (!query.running || !query.livePlan || query.running.queryId !== query.livePlan.queryId || this.getSnapshot()[tab] || this.results.getSnapshot()[tab]?.status === 'closed') continue
       const { queryId, connectionId } = query.livePlan
       this.set(tab, { queryId, model: emptyLivePlan, running: true, note: 'Waiting for a profiled statement. Short statements may complete between samples.' })
       const handle = this.live.open({ source: 'query.plan', connectionId, args: { queryId }, probes: [{ probe: 'query.plan.operators', intervalMs: 1000 }] }, {

@@ -221,6 +221,7 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `databases.list` | invoke | unary | metadata | 45 s |
 | `tables.columns` | invoke | unary | metadata | 45 s; the backend also stops its own query after 30 s. Tables and views, read through `QUOTENAME(@db) + '.sys.sp_executesql'` so no pooled connection stays in the database |
 | `plans.parse` | invoke | unary | metadata | 15 s; parses Showplan data only, without a SQL connection. Main compresses raw XML before the 4 MiB request boundary; see Execution plan viewer below |
+| `plans.estimate` | invoke | unary | query | 35 s; fixed 30 s isolated compilation budget, two acquisitions, 64 documents / 2,097,152 total XML characters; cancelled by `query.cancel(requestId)`. No query events or execution summary fields. See [estimated plans](estimated-plans.md) |
 | `query.execute` | invoke, events on the port | unary with EVENTs | query | none; backstop `timeoutSeconds + 30` s |
 | `query.cancel` | invoke | unary | control | 10 s |
 | `query.session.close` | invoke | unary | control | 10 s, 60 s with `transaction: 'commit'`; answered locally `{ closed: false }` for a session of an ended generation |

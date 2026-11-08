@@ -166,10 +166,8 @@ describe('query bar', () => {
     const value = (selector: string, property: string, at: string[] = []) => rules.find(rule => rule.selector === selector && rule.at.join(' ') === at.join(' ') && rule.declarations.some(item => item.property === property))
       ?.declarations.find(item => item.property === property)?.value
     expect([value('.query-bar', 'container-type'), value('.query-bar', 'overflow'), value('.query-connection', 'margin-left')]).toEqual(['inline-size', 'hidden', 'auto'])
-    expect(value('.query-bar-label', 'display', ['@container (max-width: 520px)'])).toBe('none')
-    expect(value('.query-bar-action', 'min-width', ['@container (max-width: 520px)'])).toBe('var(--varia-space-5)')
-    expect(value('.query-connection-icon, .query-connection-divider', 'display', ['@container (max-width: 520px)'])).toBe('none')
-    expect(value('.query-bar-action.execute kbd', 'display', ['@container (max-width: 700px)'])).toBe('none')
+    expect(value('.query-bar-label', 'display', ['@container (max-width: 500px)'])).toBe('none')
+    expect(value('.query-bar-action.execute kbd', 'display', ['@container (max-width: 960px)'])).toBe('none')
     // The bar sets its own size, so the tag's 12em is as wide as on the status bar; the tag shrinks inside its wrapper
     // rather than running under the server list, and the lists give way first, by weight, down to their minimum.
     expect(value('.query-bar', 'font-size')).toBe('var(--varia-size-sm)')

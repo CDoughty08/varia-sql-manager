@@ -110,7 +110,10 @@ export default function App() {
   const statusBar = shell.queryStatusBar ? queryStatus : null
 
   /** The output view the active query shows, whose panel revealing the output shows. */
-  const activeOutputView = useStableCallback(() => outputViewOf(workbench.results.getSnapshot()[documents.getSnapshot().activeId]))
+  const activeOutputView = useStableCallback(() => {
+    const tabId = documents.getSnapshot().activeId
+    return outputViewOf(workbench.results.getSnapshot()[tabId], workbench.queries.getSnapshot()[tabId]?.estimated, !!workbench.queryPlans.getSnapshot()[tabId])
+  })
   const disconnectServer = useStableCallback((id: string) => disconnect(id))
   // Stable for the app's lifetime; it reaches the dock workspace through its ref.
   const shellHost = useMemo<ShellHost>(() => ({
@@ -163,6 +166,7 @@ export default function App() {
     const subscription = workbench.events.subscribe(event => {
       // As in SSMS, executing shows the results (even when Ctrl+R hid them); background tabs must not steal the editor.
       if ((event.type === 'query.started' || event.type === 'query.finished') && event.tabId === documents.getSnapshot().activeId) workspaceRef.current?.revealOutput(activeOutputView())
+      if (event.type === 'query.estimateStarted' && event.tabId === documents.getSnapshot().activeId) workspaceRef.current?.revealOutput('plan')
       if (event.type === 'documents.activated' || event.type === 'documents.closed') workspaceRef.current?.reveal('editor')
       // Execute on a query with no connection: connect first, as SSMS does, then run it.
       if (event.type === 'query.connectRequested') { setReconnecting(undefined); setPendingExecute(event.tabId); setPendingMonitor(false); setShowConnect(true) }
