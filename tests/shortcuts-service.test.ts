@@ -336,4 +336,20 @@ describe('shortcuts service revisions', () => {
     expect(service.snapshot()).toMatchObject({ revision: 4, file: remap, salvaged: true, notice: 'Some shortcuts were set aside.' })
     expect(reported).toEqual(['Some shortcuts were set aside.'])
   })
+  it("shows each notice main names once, even across revisions after a valid hand edit (#236)", async () => {
+    let answer = { file: emptyShortcutFile, revision: 1, salvaged: true, notice: 'Some shortcuts were set aside.', noticeId: 1 }
+    const get = vi.fn(async () => ({ ok: true as const, value: answer }))
+    const service = new ShortcutsService({ api: api({ get }).api, platform: 'win32' })
+    const reported: string[] = []
+    service.setReporter(message => { reported.push(message) })
+    await service.load()
+    // The file was fixed by hand: a new revision, but main's notice is the same one.
+    answer = { ...answer, file: remap, revision: 2 }
+    await service.reload()
+    expect(reported).toEqual(['Some shortcuts were set aside.'])
+    // A new damaged edit raises a new notice in the same words.
+    answer = { ...answer, revision: 3, noticeId: 2 }
+    await service.reload()
+    expect(reported).toEqual(['Some shortcuts were set aside.', 'Some shortcuts were set aside.'])
+  })
 })
