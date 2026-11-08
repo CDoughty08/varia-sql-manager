@@ -104,9 +104,12 @@ internal static class PeekSql
     /// the tables its foreign keys point at: server, database, schema, name, the object's id when it is in this database, and
     /// whether a foreign key makes the link. A reference SQL Server resolved takes the object's current names and no server or
     /// database: referenced_id is set only for this database's objects, and referenced_database_name keeps the code's spelling,
-    /// so dropping it lets a reference that names this database in another case be followed, and merges one made both ways.</summary>
-    private const string UsesRows = "SELECT CASE WHEN ro.object_id IS NULL THEN d.referenced_server_name END AS server_name, "
-        + "CASE WHEN ro.object_id IS NULL THEN d.referenced_database_name END AS database_name, COALESCE(rs.name, d.referenced_schema_name) AS schema_name, "
+    /// so dropping it lets a reference that names this database in another case be followed, and merges one made both ways. A
+    /// four-part name through the local server's own name resolves too, so it loses that server, which is harmless: SQL Server
+    /// runs it locally. The test is referenced_id, not the object's row, which sys.all_objects hides from a login that may not
+    /// see the object: such a reference keeps the code's schema and name but still loses its server and database.</summary>
+    private const string UsesRows = "SELECT CASE WHEN d.referenced_id IS NULL THEN d.referenced_server_name END AS server_name, "
+        + "CASE WHEN d.referenced_id IS NULL THEN d.referenced_database_name END AS database_name, COALESCE(rs.name, d.referenced_schema_name) AS schema_name, "
         + "COALESCE(ro.name, d.referenced_entity_name) AS entity_name, ro.object_id AS id, CONVERT(bit, 0) AS via "
         + "FROM sys.sql_expression_dependencies AS d LEFT JOIN sys.all_objects AS ro ON ro.object_id = d.referenced_id LEFT JOIN sys.schemas AS rs ON rs.schema_id = ro.schema_id "
         + "WHERE d.referencing_id = @object_id AND d.referencing_class = 1 AND d.referenced_class = 1 AND d.referenced_entity_name IS NOT NULL "
