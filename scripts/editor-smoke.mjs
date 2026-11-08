@@ -170,13 +170,24 @@ try {
   await page.keyboard.press('Control+Shift+PageUp')
   await expect.poll(pair).toEqual([secondTab, firstTab])
   expect(await activeDocumentName(page)).toBe(secondTab)
+  const releaseTab = async () => {
+    // Input can arrive before the deferred cleanup, while Dockview still needs the resolver to commit its drop.
+    await page.evaluate(() => document.addEventListener('pointerup', event => {
+      document.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, buttons: 0 }))
+      document.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Control' }))
+    }, { capture: true, once: true }))
+    await page.mouse.up()
+    await expect(page.locator(part.dockingGuides).filter({ visible: true })).toHaveCount(0)
+    await expect(page.locator(part.dockingPreview).filter({ visible: true })).toHaveCount(0)
+    await expect(page.locator('.dv-drop-target-dropzone').filter({ visible: true })).toHaveCount(0)
+  }
   /** Drags with the pointer (Dockview's pointer strategy), in steps so its drag starts and its targets follow. */
   const drag = async (from, to) => {
     const start = await from.boundingBox(), x = start.x + start.width / 2, y = start.y + start.height / 2
     await page.mouse.move(x, y)
     await page.mouse.down()
     for (let step = 1; step <= 10; step++) await page.mouse.move(x + (to.x - x) * step / 10, y + (to.y - y) * step / 10)
-    await page.mouse.up()
+    await releaseTab()
   }
   const targetBox = await documentTab(page, secondTab).boundingBox()
   await drag(documentTab(page, firstTab), { x: targetBox.x + 4, y: targetBox.y + targetBox.height / 2 })
@@ -259,18 +270,52 @@ try {
   const guide = await page.locator('[data-guide-position="right"][data-guide-scope="panel"]').boundingBox()
   await page.mouse.move(guide.x + guide.width / 2, guide.y + guide.height / 2, { steps: 3 })
   await expect(page.locator(part.activeDockingGuideCell)).toHaveAttribute('data-guide-position', 'right')
-  await page.mouse.up()
+  await expect(page.locator(part.dockingPreview)).toBeVisible()
+  await releaseTab()
   await expect(editorGroups(page)).toHaveCount(2)
   expect(await groupNames(1)).toEqual([secondTab])
   await page.keyboard.press('Alt+w')
   await menu('Window').getByRole('menuitem', { name: 'Join All Editor Groups', exact: true }).click()
   await expect(editorGroups(page)).toHaveCount(1)
   await expect.poll(pair).toEqual([firstTab, secondTab])
+  // Moving a query onto another split's tab strip also clears the compass after release.
+  await textbox().focus()
+  await page.keyboard.press('Control+\\')
+  await expect(editorGroups(page)).toHaveCount(2)
+  const otherStrip = await documentTab(page, firstTab).boundingBox()
+  await drag(documentTab(page, secondTab), { x: otherStrip.x + 4, y: otherStrip.y + otherStrip.height / 2 })
+  await expect(editorGroups(page)).toHaveCount(1)
+  await expect.poll(() => activeDocumentName(page)).toBe(secondTab)
   // Float from the tab's menu: the query floats over the editor area in a group of its own; Dock puts it back.
   await documentTab(page, secondTab).click({ button: 'right' })
   await menu('Query tab').getByRole('menuitem', { name: 'Float', exact: true }).click()
   await expect(floatingEditorGroups(page)).toHaveCount(1)
   await expect(editorGroupTabs(floatingEditorGroups(page))).toHaveCount(1)
+  // The dragged float covers the destination's compass. Its content must not steal the drop from the shown target.
+  const destinationGroup = editorGroups(page).filter({ has: documentTab(page, firstTab) })
+  const destinationBox = await destinationGroup.boundingBox(), titlebar = page.locator('.dv-resize-container').filter({ has: documentTab(page, secondTab) }).locator('.dv-floating-titlebar')
+  const floatingHeader = await titlebar.boundingBox()
+  await page.mouse.move(floatingHeader.x + 20, floatingHeader.y + floatingHeader.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(destinationBox.x + destinationBox.width / 2 - 100, destinationBox.y + destinationBox.height / 2 - 120, { steps: 6 })
+  await releaseTab()
+  const overlappingTab = await documentTab(page, secondTab).boundingBox()
+  await page.mouse.move(overlappingTab.x + 20, overlappingTab.y + overlappingTab.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(destinationBox.x + destinationBox.width / 2, destinationBox.y + destinationBox.height / 2, { steps: 8 })
+  await expect(page.locator(part.activeDockingGuideCell)).toHaveAttribute('data-guide-position', 'center')
+  const floatingBox = await floatingEditorGroups(page).boundingBox()
+  expect(destinationBox.x + destinationBox.width / 2).toBeGreaterThan(floatingBox.x)
+  expect(destinationBox.x + destinationBox.width / 2).toBeLessThan(floatingBox.x + floatingBox.width)
+  expect(destinationBox.y + destinationBox.height / 2).toBeGreaterThan(floatingBox.y)
+  expect(destinationBox.y + destinationBox.height / 2).toBeLessThan(floatingBox.y + floatingBox.height)
+  await releaseTab()
+  await expect(floatingEditorGroups(page)).toHaveCount(0)
+  await expect(editorGroups(page)).toHaveCount(1)
+  await expect.poll(pair).toEqual([firstTab, secondTab])
+  await documentTab(page, secondTab).click({ button: 'right' })
+  await menu('Query tab').getByRole('menuitem', { name: 'Float', exact: true }).click()
+  await expect(floatingEditorGroups(page)).toHaveCount(1)
   await documentTab(page, secondTab).click({ button: 'right' })
   await expect(menu('Query tab').getByRole('menuitem', { name: 'Float', exact: true })).toHaveCount(0)
   await menu('Query tab').getByRole('menuitem', { name: 'Dock', exact: true }).click()
@@ -443,7 +488,7 @@ try {
     return label
   })
   expect(renamed).toBe('After sections')
-  console.log('Editor checks: Split Editor Right, focus between groups, Move Editor into Previous Group, a drag onto the compass, Join All Editor Groups, Float and Dock, a close showing its own group\'s next tab, tab keys, Delete on a focused tab (the shown one or not) while File › Close Query closes the shown one, every query floating, and the 16-group cap under a Shift-drag.')
+  console.log('Editor checks: Split Editor Right, focus between groups, Move Editor into Previous Group, compass drops and moves between split tab strips clear both guides and highlights, Join All Editor Groups, Float and Dock, a close showing its own group\'s next tab, tab keys, Delete on a focused tab (the shown one or not) while File › Close Query closes the shown one, every query floating, and the 16-group cap under a Shift-drag.')
 
   // A plan panel moves with its Graph / XML choice and edits, while its group borrows the same Monaco editor as a query.
   const planName = 'multiple.sqlplan'
