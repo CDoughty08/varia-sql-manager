@@ -504,6 +504,8 @@ export const explorerSearchCurrent = page => page.locator(part.explorerSearch).g
 export const objectSearchBox = page => page.locator(part.objectSearchTab).getByRole('textbox', { name: 'Search objects', exact: true })
 /** The Search Objects tab's server picker (shown with several servers): a server, or All servers. */
 export const objectSearchServer = page => page.locator(part.objectSearchTab).getByRole('combobox', { name: 'Server', exact: true })
+/** The server picker's options while it is open (its listbox, named Server too): each named by its server, environment and results. */
+export const objectSearchServerOptions = page => page.locator(part.objectSearchTab).getByRole('listbox', { name: 'Server', exact: true }).getByRole('option')
 /** An All servers search's hits on one server: a list of their own, named by the server. */
 export const objectSearchGroup = (page, server) => page.locator(part.objectSearchTab).getByRole('listbox', { name: `Results on ${server}`, exact: true })
 export const objectSearchHits = page => page.locator(part.objectSearchTab).getByRole('listbox', { name: 'Results', exact: true }).getByRole('option')

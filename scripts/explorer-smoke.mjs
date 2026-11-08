@@ -7,7 +7,7 @@ import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.
 import {
   activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
   explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, searchHitApproximate, explorerSublabel, explorerToolbar, itemCount,
-  menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, outputView, paneMenuButton, part, popoutDockButton, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
+  menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, popoutDockButton, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
 } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
@@ -1028,8 +1028,13 @@ try {
     await quickInput(page).getByRole('option', { name: /^Object Explorer: Search Objects…/ }).click()
     await expect(objectSearchBox(page)).toBeFocused()
     // With two servers connected the palette's tab searches all servers; these checks walk one server's hits.
-    await expect(objectSearchServer(page)).toHaveValue('*')
-    await objectSearchServer(page).selectOption({ label: 'server-a' })
+    // The server picker is a themed combobox: a click opens its listbox, and a click on a server chooses it.
+    await expect(objectSearchServer(page)).toContainText('All servers')
+    await objectSearchServer(page).click()
+    await expect(objectSearchServer(page)).toHaveAttribute('aria-expanded', 'true')
+    await objectSearchServerOptions(page).filter({ hasText: 'server-a' }).click()
+    await expect(objectSearchServer(page)).toHaveAttribute('aria-expanded', 'false')
+    await expect(objectSearchServer(page)).toContainText('server-a')
     await objectSearchBox(page).focus()
     await page.keyboard.type('table')
     const tabHits = objectSearchHits(page)
@@ -1205,27 +1210,70 @@ try {
     console.log('Object Explorer checks: the Search Objects details pane follows the selection with properties, a definition or script, and columns, and hides and shows.')
     // All servers: one search per server, each server's hits a list of its own below a header that collapses it; the arrows
     // walk across the groups, and a hit reveals on its own server.
-    await objectSearchServer(page).selectOption({ label: 'All servers (2)' })
+    // The picker from the keyboard: Home opens it on All servers, Enter chooses it, and focus stays on the combobox.
+    await objectSearchServer(page).focus()
+    await page.keyboard.press('Home')
+    await expect(objectSearchServer(page)).toHaveAttribute('aria-expanded', 'true')
+    await expect(objectSearchServerOptions(page).first()).toHaveAttribute('data-active', '')
+    await page.keyboard.press('Enter')
+    await expect(objectSearchServer(page)).toHaveAttribute('aria-expanded', 'false')
+    await expect(objectSearchServer(page)).toBeFocused()
     await expect(objectSearchGroup(page, 'server-a').getByRole('option')).toHaveCount(2)
     await expect(objectSearchGroup(page, 'server-b').getByRole('option')).toHaveCount(2)
     await expect(page.locator(part.objectSearchTab).getByRole('status')).toContainText('2 servers · 4 results')
+    // Each option shows its results for the search, read from the answers already in; ↓ walks them and Escape closes unchosen.
+    await page.keyboard.press('ArrowDown')
+    await expect(objectSearchServerOptions(page)).toHaveCount(3)
+    await expect(objectSearchServerOptions(page).nth(0)).toHaveAccessibleName('All servers, 4 results')
+    await expect(objectSearchServerOptions(page).nth(1)).toHaveAccessibleName(/^server-a, .*2 results$/)
+    await expect(objectSearchServerOptions(page).nth(2)).toHaveAccessibleName(/^server-b, .*2 results$/)
+    await page.keyboard.press('ArrowDown')
+    await expect(objectSearchServerOptions(page).nth(1)).toHaveAttribute('data-active', '')
+    await page.screenshot({ path: resolve('artifacts', 'explorer-search-server-picker.png') })
+    await page.keyboard.press('Escape')
+    await expect(objectSearchServer(page)).toHaveAttribute('aria-expanded', 'false')
+    await expect(objectSearchServer(page)).toContainText('All servers')
     await selectRevealed('server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders')
+    // The arrows walk the group headers too, as a tree grid's rows: ↓ from a's last hit reaches b's header, then b's first hit.
+    const groupHead = page.locator(part.objectSearchTab).getByRole('button', { name: /^server-a/ })
+    const groupHeadB = page.locator(part.objectSearchTab).getByRole('button', { name: /^server-b/ })
     await objectSearchGroup(page, 'server-a').getByRole('option').nth(1).click()
+    await page.keyboard.press('ArrowDown')
+    await expect(groupHeadB).toBeFocused()
     await page.keyboard.press('ArrowDown')
     await expect(objectSearchGroup(page, 'server-b').getByRole('option').first()).toBeFocused()
     await page.keyboard.press('Enter')
     await expect(await explorerRow(page, 'server-b', 'Databases', 'AppData', 'Tables', 'dbo.table1')).toHaveAttribute('aria-selected', 'true')
     await expect(objectSearchGroup(page, 'server-b').getByRole('option').first()).toBeFocused()
-    const groupHead = page.locator(part.objectSearchTab).getByRole('button', { name: /^server-a/ })
+    // ↑ on a group's first hit reaches its header, ← on a hit its own header, and ← and → on a header collapse and expand it. A
+    // group that collapses on the selected hit hands the selection to the next shown hit.
+    await page.keyboard.press('ArrowUp')
+    await expect(groupHeadB).toBeFocused()
+    await page.keyboard.press('ArrowUp')
+    await expect(objectSearchGroup(page, 'server-a').getByRole('option').nth(1)).toBeFocused()
+    await expect(objectSearchGroup(page, 'server-a').getByRole('option').nth(1)).toHaveAttribute('aria-selected', 'true')
+    await page.keyboard.press('ArrowLeft')
+    await expect(groupHead).toBeFocused()
     await expect(groupHead).toHaveAttribute('aria-expanded', 'true')
-    await groupHead.click()
+    // The list's one tab stop roves to the focused header, off the selected hit below it, so Tab leaves the list from here.
+    await expect(groupHead).toHaveAttribute('tabindex', '0')
+    await expect(objectSearchGroup(page, 'server-a').getByRole('option').nth(1)).toHaveAttribute('tabindex', '-1')
+    await page.keyboard.press('ArrowLeft')
     await expect(groupHead).toHaveAttribute('aria-expanded', 'false')
+    await expect(groupHead).toBeFocused()
     await expect(objectSearchGroup(page, 'server-a')).toHaveCount(0)
     await expect(objectSearchGroup(page, 'server-b').getByRole('option')).toHaveCount(2)
+    await expect(objectSearchGroup(page, 'server-b').getByRole('option').first()).toHaveAttribute('aria-selected', 'true')
     await page.screenshot({ path: resolve('artifacts', 'explorer-search-all-servers.png') })
-    await groupHead.click()
+    await page.keyboard.press('ArrowRight')
+    await expect(groupHead).toHaveAttribute('aria-expanded', 'true')
     await expect(objectSearchGroup(page, 'server-a').getByRole('option')).toHaveCount(2)
-    await objectSearchServer(page).selectOption({ label: 'server-a' })
+    await page.keyboard.press('ArrowRight')
+    await expect(objectSearchGroup(page, 'server-a').getByRole('option').first()).toBeFocused()
+    // The tab stop moves back to the hit that has focus: the header leaves the tab order.
+    await expect(groupHead).toHaveAttribute('tabindex', '-1')
+    await objectSearchServer(page).click()
+    await objectSearchServerOptions(page).filter({ hasText: 'server-a' }).click()
     await expect(tabHits).toHaveCount(2)
     console.log('Object Explorer checks: an All servers search groups each server\'s hits under a header that collapses them, walks them with the arrows, and reveals a hit on its own server.')
     // Forced colors drop the selection's fill, so the selected hit keeps an outline once focus leaves the list.

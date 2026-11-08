@@ -231,18 +231,32 @@ The same search runs in two places, with the same options and results:
   server of the tree's selection. Search Objects from the palette, View or the toolbar opens on All servers when more
   than one server is connected; from a server's or database's menu it opens on that server. The tab then belongs to
   no server, and Rebuild Search Index rebuilds every server's index.
+- **The picker.** A themed select-only combobox (`ServerPicker`; WAI-ARIA's pattern, its listbox in Chromium's top layer
+  and drawn with the menus' theme keys): each server shows its connection colour (or `connection.default`), its
+  environment tag and its result count for the current search, and *All servers* its total, all read from the answers
+  the tab already has, with no request of its own; a server still searching shows "…". Focus stays on the combobox: ↓, ↑,
+  Enter, Space and Alt+↓ open it, Home and End open it on the first or last option, letters type ahead (one letter again
+  cycles), Enter, Space and Alt+↑ choose, Tab chooses and moves on, and Escape or a click outside closes it unchosen.
 - **How.** The renderer sends one `explorer.search` per connected server at once, each on that server's own index, and
-  shows the answers together once every server has answered (`ObjectSearchService`, `searchAll`). Each server's limit is
-  its own, so a large server cannot crowd the others out. Every server gets an index if it has none; a server that
-  connects joins the search, and one that disconnects drops out, named in the summary. No backend method changes.
+  shows each server's group as its answer lands (`ObjectSearchService`, `searchAll`), in Object Explorer's order, so a
+  slow server holds back only its own group, marked "searching…", and the selection stays on its server's hit. Each
+  server's limit is its own, so a large server cannot crowd the others out. Every server gets an index if it has none.
+  When a server's build ends, or a server connects, only that server is asked again and its answer merged in (until it
+  lands its group keeps its answer to the same query), within the search still on its way if there is one, so N builds
+  ending or N servers connecting cost N requests, not N per server; a server that disconnects drops out, named in the
+  summary, and when none is left no group is still marked searching. No backend method changes.
 - **Results.** Each server's hits are a list of their own, named "Results on *server*", below a header that collapses
   it: the server's colour, name, environment tag (the red PROD tag for Production) and its results or why it has none
   (indexing, an error, a problem with the query on that server), with "… *n* more" below a group the result cap
   cut short. Every hit (on one server too) starts with its kind's badge, a letter on a tone (T tables, V views, P
-  procedures and triggers, F functions, C columns; `searchKind.*` theme keys), and ends with its path. The arrows, Page keys, Home and End walk every shown
-  hit across the groups, one tab stop for all of them. A hit's Reveal, menu, Copy and details pane act on its own
-  server. The summary gives the servers, the results in all, the slowest server's time, the servers still indexing, the
-  ones that could not be searched, and the ones that disconnected.
+  procedures and triggers, F functions, C columns; `searchKind.*` theme keys; "?" for a kind this build does not know, whose details show it as an Object and which cannot be revealed), and ends with its path. The list is one tab
+  stop, which roves to a header while it has focus (so Tab from anywhere leaves the list), walked as a tree grid: ↑ and ↓ move through the headers and every shown hit (↑ on a group's first hit reaches its
+  header), ← on a hit goes to its header, ← and → on a header collapse and expand it (→ on an expanded header goes to its
+  first hit), and Page keys, Home and End walk the hits. A group that collapses on the selected hit hands the selection to
+  the next shown hit, so the copy keys and the details pane never act on a hidden one. A hit's Reveal, menu, Copy and details pane act on its own
+  server. The summary gives the servers, the results in all, the slowest server's time, the servers still searching or indexing, the
+  ones that could not be searched, and the ones that disconnected. The index line counts every server's index and names
+  each server whose index leaves objects out (databases skipped, names only, no index, or a failed build).
 
 ## Protocol
 

@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { maxQueryPlanDocuments } from '../../../shared/plans'
 import { limits } from '../../../shared/ipc/wire/protocol'
 import type { ResultSetEntry } from '../results/ResultsService'
@@ -11,7 +11,9 @@ import type { QueryPlanState } from './QueryPlansService'
 const maxXmlSources = limits.maxResultSets.max + maxQueryPlanDocuments
 
 export default function ResultPlans({ queryId, tabId, plans, order, live, visible }: { queryId: string; tabId: string; plans: readonly ResultSetEntry[]; order?: readonly number[]; live?: QueryPlanState; visible: boolean }) {
-  const { commands } = useWorkbench()
+  const { commands, documents, planPreparation } = useWorkbench()
+  const navigating = useRef<AbortController | undefined>(undefined)
+  useEffect(() => () => navigating.current?.abort(), [])
   const key = plans.map(entry => `${entry.descriptor.generation}:${entry.descriptor.resultId}:${entry.index}:${entry.handle.getSnapshot().rowsAvailable}:${entry.handle.getSnapshot().state}`).join('|')
   const sources = useMemo(() => {
     const sources: (PlanSource & { entry: ResultSetEntry; row: number })[] = []
@@ -36,8 +38,16 @@ export default function ResultPlans({ queryId, tabId, plans, order, live, visibl
     }
     return sources
   }, [key, order])
-  return <PlanViewer key={queryId} sources={sources} identity={'query:' + queryId} scope={tabId} visible={visible} live={live} openDocument={key => {
+  return <PlanViewer key={queryId} sources={sources} identity={'query:' + queryId} scope={tabId} visible={visible} live={live} openDocument={(key, target) => {
     const source = sources.find(source => source.key === key)
-    if (source) void commands.execute('output.openValue', { tabId, cell: { resultIndex: source.entry.index, row: source.row, column: 0, capturedPlan: source.entry.capturedPlan } }, 'toolbar')
+    if (source && target) {
+      if (navigating.current) return
+      const stop = new AbortController(); navigating.current = stop
+      void source.read(stop.signal).then(text => {
+        if (stop.signal.aborted) return
+        const doc = documents.openText({ name: 'Execution Plan.sqlplan', text, kind: 'sqlplan' }); planPreparation.requestXml(doc.id, { ...target, revision: undefined }); documents.focusActive()
+      }).catch(error => { if (!stop.signal.aborted) commands.reportError(error instanceof Error ? error.message : 'The plan XML is unavailable.') })
+        .finally(() => { if (navigating.current === stop) navigating.current = undefined })
+    } else if (source) void commands.execute('output.openValue', { tabId, cell: { resultIndex: source.entry.index, row: source.row, column: 0, capturedPlan: source.entry.capturedPlan } }, 'toolbar')
   }} />
 }

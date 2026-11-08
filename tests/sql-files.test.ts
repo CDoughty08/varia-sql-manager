@@ -376,6 +376,9 @@ describe('SQL file encodings and save hardening', () => {
     await expect(store.save('SELECT 3', other.id, alias)).rejects.toThrow('real.sql is open in another query tab')
     expect(await readFile(target, 'utf8')).toBe('SELECT 1')
   })
+  // The two checks below map alias.sql to another file through an injected realpath. On Windows that is the resolution;
+  // on POSIX it names the walk's target (`identity`), as macOS's realpath gives a path its case on disk. #284's walk
+  // dropped realpath from POSIX entirely, so both failed on Linux and macOS, and only Windows passed.
   it('resolves each path once in a burst of opens, as a 64-tab restore makes, and again in the next burst', async () => {
     const calls: string[] = []
     let aliasTarget = join(directory, 'tab0.sql')
@@ -415,6 +418,100 @@ describe('SQL file encodings and save hardening', () => {
     // A failed read does not stall the next one.
     await expect(store.read(join(directory, 'missing.sql'))).rejects.toThrow()
     expect((await store.read(target)).id).toBe(real.id)
+  })
+  it('names one file by its realpath on POSIX after the walk, so macOS\'s other case of a path finds its tab', async () => {
+    // A stand-in for a case-insensitive APFS volume: realpath gives each spelling the case on disk, as Darwin's does.
+    const real = join(directory, 'Q', 'Report.sql'), other = join(directory, 'q', 'report.sql')
+    const folded = (path: string) => path.toLowerCase() === real.toLowerCase() ? real : path
+    await mkdir(dirname(real))
+    await writeFile(real, 'SELECT 1')
+    // On a case-sensitive file system the other spelling is another file with the same text.
+    await mkdir(dirname(other), { recursive: true })
+    await writeFile(other, 'SELECT 1')
+    const store = new SqlFileStore({ platform: 'darwin', uid: 1000, realpath: async path => folded(path) })
+    const first = await store.read(real)
+    const elsewhere = await store.save('SELECT 2', undefined, join(directory, 'elsewhere.sql'))
+    expect(await store.read(other)).toMatchObject({ id: first.id, path: real, name: 'Report.sql' })
+    await expect(store.save('SELECT 3', elsewhere.id, other)).rejects.toThrow('Report.sql is open in another query tab')
+    // And the other way round: the spelling opened first owns the file.
+    store.release(first.id)
+    const viaOther = await store.read(other)
+    expect(await store.read(real)).toMatchObject({ id: viaOther.id, path: other })
+    expect(await readFile(real, 'utf8')).toBe('SELECT 1')
+  })
+  it('opens two spellings of one file on a case-insensitive volume as one tab, whatever the platform', async ({ skip }) => {
+    const real = join(directory, 'Q', 'Report.sql'), other = join(directory, 'q', 'report.sql')
+    await mkdir(dirname(real))
+    await writeFile(real, 'SELECT 1')
+    // macOS's and Windows' default volumes; Linux's are case-sensitive and covered by the stand-in above.
+    if (!await stat(other).then(() => true, () => false)) skip()
+    const store = new SqlFileStore()
+    const first = await store.read(real)
+    const elsewhere = await store.save('SELECT 2', undefined, join(directory, 'elsewhere.sql'))
+    expect(await store.read(other)).toMatchObject({ id: first.id, path: real })
+    await expect(store.save('SELECT 3', elsewhere.id, other)).rejects.toThrow('Report.sql is open in another query tab')
+    expect(await readFile(real, 'utf8')).toBe('SELECT 1')
+  })
+  it('opens a file reached through a link at a folder component, as macOS\'s /var is one, as one tab', async ({ skip }) => {
+    // var -> private/var, as macOS's /var (os.tmpdir() is under /var/folders): two spellings of one file.
+    const real = join(directory, 'private', 'var', 'folders', 'q.sql'), viaLink = join(directory, 'var', 'folders', 'q.sql')
+    await mkdir(dirname(real), { recursive: true })
+    await writeFile(real, 'SELECT 1')
+    try { await symlink(join('private', 'var'), join(directory, 'var'), 'dir') } catch { skip() }
+    const store = new SqlFileStore()
+    const first = await store.read(viaLink)
+    const elsewhere = await store.save('SELECT 2', undefined, join(directory, 'elsewhere.sql'))
+    expect(await store.read(real)).toMatchObject({ id: first.id, path: viaLink })
+    await expect(store.save('SELECT 3', elsewhere.id, real)).rejects.toThrow('q.sql is open in another query tab')
+    store.release(first.id)
+    const direct = await store.read(real)
+    expect(await store.read(viaLink)).toMatchObject({ id: direct.id, path: real })
+    await expect(store.save('SELECT 3', elsewhere.id, viaLink)).rejects.toThrow('q.sql is open in another query tab')
+    expect(await readFile(real, 'utf8')).toBe('SELECT 1')
+  })
+  it('replaces a dangling link that stands in for one, wherever links can be made', async () => {
+    // Stand-ins for gone.sql -> gone/q.sql and kept.sql -> kept/q.sql, with gone/ missing and kept/ empty.
+    await mkdir(join(directory, 'kept'))
+    const noFolder = join(directory, 'gone.sql'), noFile = join(directory, 'kept.sql')
+    const links = new Map([[noFolder, join('gone', 'q.sql')], [noFile, join('kept', 'q.sql')]])
+    const store = new SqlFileStore({
+      platform: 'linux', uid: 1000, folderStat: async () => ({ mode: 0o40755, uid: 1000 }),
+      lstat: async (path: string) => links.has(path) ? { mode: 0o120777, uid: 1000, isSymbolicLink: () => true } : lstat(path),
+      readlink: async (path: string) => { const text = links.get(path); if (!text) throw new Error(`not a link: ${path}`); return text }
+    })
+    for (const link of links.keys()) {
+      const saved = await store.save('SELECT 1', undefined, link)
+      expect(saved).toMatchObject({ path: link })
+      expect(await readFile(link, 'utf8')).toBe('SELECT 1')
+      expect(await store.readOnly(saved.id)).toBe(false)
+    }
+    expect(await readdir(join(directory, 'kept'))).toEqual([])
+    expect((await readdir(directory)).sort()).toEqual(['gone.sql', 'kept', 'kept.sql'])
+  })
+  it('replaces a dangling link with the saved file, as before the walk, whether or not its target\'s folder exists', async ({ skip }) => {
+    await mkdir(join(directory, 'kept'))
+    const noFolder = join(directory, 'gone.sql'), noFile = join(directory, 'kept.sql'), chained = join(directory, 'chained.sql')
+    try {
+      await symlink(join('gone', 'q.sql'), noFolder, 'file')
+      await symlink(join('kept', 'q.sql'), noFile, 'file')
+      // chained.sql -> kept.sql -> kept/q.sql: the link the path names is replaced, not the one it leads to.
+      await symlink('kept.sql', chained, 'file')
+    } catch { skip() }
+    const store = new SqlFileStore({ platform: 'linux', uid: process.getuid?.() ?? 1000 })
+    await store.save('SELECT 1', undefined, chained)
+    expect((await lstat(chained)).isSymbolicLink()).toBe(false)
+    expect(await readFile(chained, 'utf8')).toBe('SELECT 1')
+    expect((await lstat(noFile)).isSymbolicLink()).toBe(true)
+    for (const link of [noFolder, noFile]) {
+      const saved = await store.save('SELECT 2', undefined, link)
+      expect(saved).toMatchObject({ path: link })
+      expect((await lstat(link)).isSymbolicLink()).toBe(false)
+      expect(await readFile(link, 'utf8')).toBe('SELECT 2')
+      expect(await store.readOnly(saved.id)).toBe(false)
+    }
+    // Nothing is written where the links pointed.
+    expect(await readdir(join(directory, 'kept'))).toEqual([])
+    expect((await readdir(directory)).sort()).toEqual(['chained.sql', 'gone.sql', 'kept', 'kept.sql'])
   })
   // The restore that #163 names, the Open dialog and the files handed to main (arguments, a second instance, a drop) each
   // share one cache across their burst; a per-file cache would bring back n² resolutions with every check above green.
