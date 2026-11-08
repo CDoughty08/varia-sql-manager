@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import { connectLive } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
+import { checkCanvasUx } from './fixtures/plan-canvas-ux.mjs'
 import { backendReady, planCanvas, planViewer, queryBarButton, documentTabs, outputView } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -179,6 +180,8 @@ try {
       await page.getByRole('group', { name: 'Execution plan document views' }).getByRole('button', { name: 'XML source', exact: true }).click()
       await expect(page.getByRole('code')).toContainText('ShowPlanXML')
       await page.screenshot({ path: resolve('artifacts', 'plan-diagnostics-source.png') })
+      await page.getByRole('button', { name: 'Graph', exact: true }).click()
+      await checkCanvasUx({ application, page, expect })
     }
     await close()
     console.log(`Estimated plan Electron checks passed (${live ? 'SQL Server' : 'fake backend'}).`)
