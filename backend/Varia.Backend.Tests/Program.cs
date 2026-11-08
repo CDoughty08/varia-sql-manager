@@ -252,6 +252,7 @@ if (liveGroup is null)
     await ConnectionFailureChecks.IdentityAsync(Check);
     SessionChecks.Run(Check);
     PlanChecks.Run(Check);
+    ActualPlanRecoveryChecks.Run(Check);
     EstimatedPlanChecks.Run(Check);
     ClientStatisticsChecks.Run(Check);
     await EntraChecks.RunAsync(Check);

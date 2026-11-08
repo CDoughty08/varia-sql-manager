@@ -19,6 +19,7 @@ internal static class ExecutionLiveChecks
 
     public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json)
     {
+        await ActualPlanRecoveryChecks.RunAsync(check, service, info, json);
         await PlanDiagnosticLiveChecks.RunAsync(check, service, info, json);
         await LivePlanLiveChecks.RunAsync(check, service, info, json);
         var store = service.Results;
@@ -97,6 +98,13 @@ internal static class ExecutionLiveChecks
             var afterWithCapture = await Run(BranchOnRows);
             check(Texts(beforeWithCapture).Contains("two") && Texts(afterWithCapture).Contains("two"),
                 "capture setup and collection preserve cross-execution @@ROWCOUNT");
+            const string BranchOnError = "IF @@ERROR = 8134 PRINT 'divide preserved'; ELSE PRINT 'error changed';";
+            await Run("SELECT 1/0;");
+            var errorBeforeCapture = await Run(BranchOnError, includeActualPlan: true);
+            await Run("SELECT 1/0;", includeActualPlan: true);
+            var errorAfterCapture = await Run(BranchOnError);
+            check(Texts(errorBeforeCapture).Contains("divide preserved") && Texts(errorAfterCapture).Contains("divide preserved"),
+                "capture setup, recovery and collection preserve cross-execution @@ERROR");
 
             var zeroUpdate = await Run("UPDATE #capture_rowcount SET n = 1 WHERE n = -1;", includeActualPlan: true);
             check(zeroUpdate.PlanSets is [{ RowsStored: 1 }, ..] && zeroUpdate.RecordsAffected == 0 && Texts(zeroUpdate).SequenceEqual(["(0 rows affected)"]),

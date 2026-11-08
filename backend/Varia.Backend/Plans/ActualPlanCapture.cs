@@ -7,15 +7,14 @@ using Microsoft.Data.SqlClient;
 namespace Varia.Backend.Plans;
 
 /// <summary>Collects completed plans through a separate connection. The executing session receives only the user's SQL.</summary>
-internal sealed class ActualPlanCapture(SqlConnection observer, bool databaseScoped)
+internal sealed class ActualPlanCapture(SqlConnection observer, bool databaseScoped, string? recoveryName = null)
 {
     private const string PlanEvent = "query_post_execution_plan_profile";
     private const string BatchEvent = "sql_batch_starting";
     private const int MaxTargetCharacters = 4 * 1024 * 1024;
     private static readonly XName AggregateName = PlanParser.ShowplanName.Namespace + "Aggregate";
-    private readonly string name = "VariaActual_" + Guid.NewGuid().ToString("N");
+    private string name = "";
     private readonly List<(int Batch, int Iteration)> submitted = [];
-    private string Scope => databaseScoped ? "DATABASE" : "SERVER";
     private string Dmv => databaseScoped ? "dm_xe_database_session" : "dm_xe_session";
     private bool attempted;
     public bool Started { get; private set; }
@@ -23,6 +22,7 @@ internal sealed class ActualPlanCapture(SqlConnection observer, bool databaseSco
     public async Task<string?> StartAsync(int spid, Guid clientId, int major, int timeout, CancellationToken token)
     {
         if (clientId == Guid.Empty) return "This connection does not expose an identifier for actual plan capture.";
+        if (spid is < 1 or > 32767) return "This connection does not expose a session for actual plan capture.";
 
         // Check every privilege before creating a session, including the one needed to remove it.
         var permissionScope = databaseScoped ? "DB_NAME(), 'DATABASE'" : "NULL, NULL";
@@ -44,23 +44,39 @@ internal sealed class ActualPlanCapture(SqlConnection observer, bool databaseSco
         if (await command.ExecuteScalarAsync(token) is not 1)
             return "Actual plan capture requires permission to create, start, read and drop Extended Events sessions.";
 
-        // A disconnected session's SPID can be reused. Match the physical connection ID as well so an abandoned
-        // collector cannot read plans from any other connection.
-        var predicate = FormattableString.Invariant($"[sqlserver].[session_id]=({spid}) AND [package0].[equal_guid]([sqlserver].[client_connection_id],'{clientId:D}')");
-        var duration = major >= 17 || databaseScoped
-            ? FormattableString.Invariant($", MAX_DURATION = {(timeout > 0 ? timeout + 15 : 86_400)} SECONDS") : "";
-        command.CommandText = $"""
-            CREATE EVENT SESSION [{name}] ON {Scope}
-                ADD EVENT sqlserver.{BatchEvent}(SET collect_batch_text=(0) ACTION(package0.event_sequence) WHERE ({predicate})),
-                ADD EVENT sqlserver.{PlanEvent}(ACTION(package0.event_sequence) WHERE ({predicate} AND [sqlserver].[is_system]=(0)))
-                ADD TARGET package0.ring_buffer(SET max_memory=(4096), max_events_limit=(2048))
-                WITH (MAX_MEMORY=4096 KB, MAX_EVENT_SIZE=4096 KB, MAX_DISPATCH_LATENCY=1 SECONDS, STARTUP_STATE=OFF{duration});
-            ALTER EVENT SESSION [{name}] ON {Scope} STATE=START;
-            """;
+        command.Parameters.Add("@spid", SqlDbType.Int).Value = spid;
+        string? notice = null;
+        if (databaseScoped)
+        {
+            // No database-scoped sweep: preserve capture's existing privileges without requiring broader connection visibility.
+            name = "VariaActual_" + Guid.NewGuid().ToString("N");
+        }
+        else
+        {
+            command.CommandText = """
+                SELECT (SELECT connection_id FROM sys.dm_exec_connections WHERE session_id=@spid AND parent_connection_id IS NULL),
+                    (SELECT connection_id FROM sys.dm_exec_connections WHERE session_id=@@SPID AND parent_connection_id IS NULL);
+                """;
+            await using (var reader = await command.ExecuteReaderAsync(token))
+            {
+                if (!await reader.ReadAsync(token) || reader.IsDBNull(0) || reader.IsDBNull(1)
+                    || reader.GetGuid(0) == Guid.Empty || reader.GetGuid(1) == Guid.Empty)
+                    return "The connections do not expose physical identifiers for actual plan capture.";
+                // ClientConnectionId identifies XE events; DMV connection_id identifies liveness. Record the physical
+                // roots, not MARS request connections that can disappear while their owning session remains open.
+                name = ActualPlanRecovery.Name(clientId, reader.GetGuid(0), reader.GetGuid(1));
+            }
+            notice = await ActualPlanRecovery.RecoverAsync(observer, token, recoveryName);
+        }
+        // A disconnected session's SPID can be reused. The predicate always matches the physical connection too.
+        command.CommandText = ActualPlanSql.Create(databaseScoped, major >= 17 || databaseScoped);
+        command.Parameters.Add("@name", SqlDbType.NVarChar, 128).Value = name;
+        command.Parameters.Add("@client", SqlDbType.UniqueIdentifier).Value = clientId;
+        command.Parameters.Add("@duration", SqlDbType.Int).Value = timeout > 0 ? (int)Math.Min((long)timeout + 15, int.MaxValue) : 86_400;
         attempted = true;
         await command.ExecuteNonQueryAsync(token);
         Started = true;
-        return null;
+        return notice;
     }
 
     public void BatchSubmitted(int batch, int iteration) => submitted.Add((batch, iteration));
@@ -132,7 +148,8 @@ internal sealed class ActualPlanCapture(SqlConnection observer, bool databaseSco
                 }
                 await using var command = observer.CreateCommand();
                 command.CommandTimeout = 0;
-                command.CommandText = $"DROP EVENT SESSION [{name}] ON {Scope};";
+                command.CommandText = ActualPlanSql.Drop(databaseScoped);
+                command.Parameters.Add("@name", SqlDbType.NVarChar, 128).Value = name;
                 await command.ExecuteNonQueryAsync(token);
             }
         }

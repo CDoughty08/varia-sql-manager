@@ -1,0 +1,77 @@
+namespace Varia.Backend.Plans;
+
+/// <summary>Collector DDL has only fixed scope/event keywords. Identifiers are quoted by SQL Server; all values are parameters.</summary>
+internal static class ActualPlanSql
+{
+    internal const int RecoveryLimit = 16;
+    internal static string Create(bool databaseScoped, bool duration) => $$"""
+        DECLARE @predicate nvarchar(3000) = N'[sqlserver].[session_id]=(' + CONVERT(nvarchar(11),@spid)
+            + N') AND [package0].[equal_guid]([sqlserver].[client_connection_id],''' + CONVERT(nvarchar(36),@client) + N''')';
+        DECLARE @sql nvarchar(max) = N'CREATE EVENT SESSION ' + QUOTENAME(@name) + N' ON {{Scope(databaseScoped)}}
+            ADD EVENT sqlserver.sql_batch_starting(SET collect_batch_text=(0) ACTION(package0.event_sequence) WHERE (' + @predicate + N')),
+            ADD EVENT sqlserver.query_post_execution_plan_profile(ACTION(package0.event_sequence) WHERE (' + @predicate + N' AND [sqlserver].[is_system]=(0)))
+            ADD TARGET package0.ring_buffer(SET max_memory=(4096), max_events_limit=(2048))
+            WITH (MAX_MEMORY=4096 KB, MAX_EVENT_SIZE=4096 KB, MAX_DISPATCH_LATENCY=1 SECONDS, STARTUP_STATE=OFF{{(duration ? ", MAX_DURATION = ' + CONVERT(nvarchar(11),@duration) + N' SECONDS" : "")}});
+            ALTER EVENT SESSION ' + QUOTENAME(@name) + N' ON {{Scope(databaseScoped)}} STATE=START;';
+        EXEC sys.sp_executesql @sql;
+        """;
+
+    internal static string Drop(bool databaseScoped) => $$"""
+        DECLARE @sql nvarchar(max) = N'DROP EVENT SESSION ' + QUOTENAME(@name) + N' ON {{Scope(databaseScoped)}};';
+        EXEC sys.sp_executesql @sql;
+        """;
+
+    private static string Scope(bool databaseScoped) => databaseScoped ? "DATABASE" : "SERVER";
+
+    // Database-scoped connection DMVs cannot prove absence after USE moves a live query to a different database.
+    // Recovery is deliberately server-scoped; database collectors retain MAX_DURATION and their normal cleanup.
+    private const string Shape = """
+        s.startup_state=0
+        AND (SELECT COUNT(*) FROM sys.server_event_session_events e WHERE e.event_session_id=s.event_session_id)=2
+        AND b.package=N'sqlserver' AND p.package=N'sqlserver'
+        AND (SELECT COUNT(*) FROM sys.server_event_session_actions a WHERE a.event_session_id=s.event_session_id)=2
+        AND (SELECT COUNT(*) FROM sys.server_event_session_actions a WHERE a.event_session_id=s.event_session_id
+            AND a.package=N'package0' AND a.name=N'event_sequence' AND a.event_id IN (b.event_id,p.event_id))=2
+        AND (SELECT COUNT(*) FROM sys.server_event_session_targets t WHERE t.event_session_id=s.event_session_id)=1
+        AND EXISTS (SELECT 1 FROM sys.server_event_session_targets t WHERE t.event_session_id=s.event_session_id
+            AND t.package=N'package0' AND t.name=N'ring_buffer')
+        """;
+
+    private const string Events = """
+        FROM sys.server_event_sessions s
+        JOIN sys.server_event_session_events b ON b.event_session_id=s.event_session_id AND b.name=N'sql_batch_starting'
+        JOIN sys.server_event_session_events p ON p.event_session_id=s.event_session_id AND p.name=N'query_post_execution_plan_profile'
+        """;
+
+    internal static readonly string Candidates = $$"""
+        SELECT TOP ({{RecoveryLimit + 1}}) s.event_session_id,s.name,b.predicate_xml,p.predicate_xml,b.predicate,p.predicate
+        {{Events}}
+        CROSS APPLY (SELECT TRY_CONVERT(uniqueidentifier, SUBSTRING(s.name,13,8)+N'-'+SUBSTRING(s.name,21,4)+N'-'
+            +SUBSTRING(s.name,25,4)+N'-'+SUBSTRING(s.name,29,4)+N'-'+SUBSTRING(s.name,33,12)) AS client,
+            TRY_CONVERT(uniqueidentifier, SUBSTRING(s.name,46,8)+N'-'+SUBSTRING(s.name,54,4)+N'-'
+            +SUBSTRING(s.name,58,4)+N'-'+SUBSTRING(s.name,62,4)+N'-'+SUBSTRING(s.name,66,12)) AS target,
+            TRY_CONVERT(uniqueidentifier, SUBSTRING(s.name,79,8)+N'-'+SUBSTRING(s.name,87,4)+N'-'
+            +SUBSTRING(s.name,91,4)+N'-'+SUBSTRING(s.name,95,4)+N'-'+SUBSTRING(s.name,99,12)) AS owner) ids
+        WHERE s.name COLLATE Latin1_General_100_BIN2 LIKE N'VariaActual[_]%'
+            AND (@onlyName IS NULL OR s.name=@onlyName)
+            AND DATALENGTH(s.name)=220 AND SUBSTRING(s.name,45,1)=N'_' AND SUBSTRING(s.name,78,1)=N'_'
+            AND ids.client IS NOT NULL AND ids.target IS NOT NULL AND ids.owner IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM sys.dm_exec_connections c
+                WHERE c.connection_id IN (ids.target,ids.owner) OR c.parent_connection_id IN (ids.target,ids.owner))
+            AND {{Shape}}
+        ORDER BY s.event_session_id;
+        """;
+
+    // Recheck the exact definition and both physical connections immediately before each drop. A concurrent sweep
+    // may already have removed it; an administrator may have replaced/modified it. Neither case authorizes a drop.
+    internal static readonly string DropAbandoned = $$"""
+        IF EXISTS (SELECT 1 {{Events}}
+            WHERE s.event_session_id=@id AND s.name=@name AND b.predicate=@batch AND p.predicate=@plan
+                AND {{Shape}}
+                AND NOT EXISTS (SELECT 1 FROM sys.dm_exec_connections c
+                    WHERE c.connection_id IN (@target,@owner) OR c.parent_connection_id IN (@target,@owner)))
+        BEGIN
+            {{Drop(false)}}
+        END;
+        """;
+}
