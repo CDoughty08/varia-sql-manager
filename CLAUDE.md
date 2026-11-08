@@ -150,7 +150,9 @@ pages, limits, error codes, display formats, benchmarks).
   New string inputs need max lengths in both zod and C#. A request is written to at most one backend generation and is
   never re-sent.
 - Preferences are written atomically (`src/main/json-file.ts`) (`settings.json`, `appearance.json`, `connections.json`,
-  `workspace-layouts.json`, `saved-passwords.json` (0600)); unreadable files are quarantined, never overwritten.
+  `workspace-layouts.json`, `saved-passwords.json` (0600), `shortcuts.json` (`src/main/shortcut-store.ts`: re-read before every
+  write, a revision that refuses a stale save with `STALE`, damaged entries salvaged, unknown records kept verbatim)); unreadable
+  files are quarantined, never overwritten.
 - Failures are values: IPC returns `{ ok: false, error }`, and the UI stays responsive.
 - Commands and keybindings are declared only in `src/shared/commands/catalog.ts`. `KeybindingService`
   (`src/renderer/src/core/keybindings.ts`) is the only key listener and routes keys to an open menu first; main handles
@@ -158,6 +160,9 @@ pages, limits, error codes, display formats, benchmarks).
   menus and the palette run it through `varia:run-role`. Two-part chords that Varia owns are `bridge` keybindings,
   registered with Monaco from the catalogue by `registerEditorBridge`; Monaco dispatches them. After catalogue changes,
   regenerate `docs/commands.md` with `npx vitest run tests/commands-docs.test.ts -u`.
+  User shortcuts reach the renderer only through `ShortcutsService` (`src/renderer/src/core/ShortcutsService.ts`), which
+  hands `effectiveRules` to `KeybindingService.setRules` (labels, menus, the palette and the editor bridge follow) and the
+  file's gestures to `GestureService.setModifiers`; the Shortcuts page records keys only through `KeybindingService.capture`.
   Monaco's own default keys (the modules `start.tsx` imports, all three platforms) are generated into
   `src/shared/commands/monaco-keys.generated.ts` from the installed Monaco by `tests/fixtures/monaco-runtime.ts`; after a Monaco
   upgrade or a change to those imports, regenerate it with `npx vitest run tests/monaco-keybindings.test.ts -u`.

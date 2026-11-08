@@ -8,6 +8,8 @@ const plan = { xml: '<ShowPlanXML/>', batchNumber: 2, iteration: 1 }
 describe('bounded estimated plan contract', () => {
   it('has a unary path with a fixed deadline independent of ordinary execution options', () => {
     expect(validateRequest('plans.estimate', request)).toEqual(request)
+    for (const mode of ['isolated', 'session']) expect(validateRequest('plans.estimate', { ...request, mode })).toEqual({ ...request, mode })
+    expect(() => validateRequest('plans.estimate', { ...request, mode: 'auto' })).toThrow('Invalid request')
     expect(methodPolicies['plans.estimate']).toMatchObject({ kind: 'unary', lane: 'query' })
     expect(deadlineFor('plans.estimate', request).deadlineMs).toBe(estimatedPlanLimits.deadlineMs)
     for (const extra of [{ includeActualPlan: true }, { timeoutSeconds: 0 }, { maxResultSets: 10 }])
@@ -16,6 +18,7 @@ describe('bounded estimated plan contract', () => {
   })
   it('bounds the combined XML response as well as individual documents and refuses summary/event fields', () => {
     expect(validateResult('plans.estimate', { plans: [plan], database: 'master' })).toEqual({ plans: [plan], database: 'master' })
+    expect(validateResult('plans.estimate', { plans: [plan], database: 'master', session: { spid: 51, login: 'reader' } })).toMatchObject({ session: { spid: 51 } })
     for (const plans of [Array(65).fill(plan), [{ ...plan, xml: 'x'.repeat(estimatedPlanLimits.characters + 1) }],
       [{ ...plan, xml: 'x'.repeat(estimatedPlanLimits.characters) }, plan]])
       expect(() => validateResult('plans.estimate', { plans, database: 'master' })).toThrow()

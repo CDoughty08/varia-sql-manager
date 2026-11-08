@@ -91,6 +91,8 @@ export const errorCodes = [
   'BACKEND_LOST', 'BACKEND_UNAVAILABLE', 'CONNECTION_LOST', 'RESULT_UNAVAILABLE', 'TOO_MANY_REQUESTS', 'STREAM_PROTOCOL', 'PORT_CLOSED',
   // Main: a second Save Results As in the same window.
   'JOB_BUSY',
+  // Main: a shortcuts save based on a revision that is no longer current.
+  'STALE',
   // Renderer.
   'PAGE_INVALID', 'RESULT_DECODER_FAILED'
 ] as const

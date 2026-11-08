@@ -62,7 +62,7 @@ export function applyLivePlan(previous: LivePlanModel, frame: LivePlanFrame): Li
 
 /** Runtime changes never restart layout or recreate Pixi. */
 export function planTopology(statements: readonly SourceStatement[]): string {
-  return statements.map(s => s.id + ':' + s.nodes.map(n => n.id + '>' + n.parentId).join(',')).join('|')
+  return JSON.stringify(statements.map(s => [s.id, s.nodes.map(n => [n.id, n.parentId])]))
 }
 
 export function completedPlanStatements(live: readonly SourceStatement[], actual: readonly SourceStatement[]): SourceStatement[] {

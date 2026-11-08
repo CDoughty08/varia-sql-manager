@@ -1,6 +1,6 @@
 import type { MenuItemConstructorOptions } from 'electron'
 import type { CommandId } from '../shared/commands/catalog'
-import { primaryRule, toAccelerator, toPlatform } from '../shared/commands/keybindings'
+import { defaultRules, primaryRule, toAccelerator, toPlatform, type ResolvedRule } from '../shared/commands/keybindings'
 import { buildMenuModel, contextMenuRequestSchema, pruneMenu, submenuTitle, type ContextMenuRequest, type MenuEntry, type MenuId } from '../shared/commands/menus'
 import type { MenuStyle } from '../shared/menu-style'
 
@@ -8,11 +8,14 @@ import type { MenuStyle } from '../shared/menu-style'
  * A native context menu for a request the renderer resolved: the catalogue's menu with only the `visible` commands,
  * without submenus left empty or stray separators. Labels and keys are the catalogue's (the placement's title, else
  * the platform's, else the command's, with a setting filled in by `title`; the Script submenu's from its title key),
- * never the renderer's. A submenu whose items are all disabled is disabled. Role-backed commands are Electron's roles, which act on the focused element;
+ * never the renderer's. Keys are the primary keys of `rules`: the effective rules main computes from its own ShortcutStore
+ * (the catalogue's when left out), never keys the renderer names. A submenu whose items are all disabled is disabled. Role-backed commands are Electron's roles, which act on the focused element;
  * every other item sends its command id back through `send`.
  */
 export function contextMenuTemplate(request: ContextMenuRequest, platform: NodeJS.Platform, send: (id: CommandId) => void,
-  model: (menu: MenuId) => readonly MenuEntry[] = menu => buildMenuModel(menu, toPlatform(platform)), title: (id: CommandId, title: string) => string = (_id, title) => title): MenuItemConstructorOptions[] {
+  menuModel?: (menu: MenuId) => readonly MenuEntry[], title: (id: CommandId, title: string) => string = (_id, title) => title,
+  rules: readonly ResolvedRule[] = defaultRules(toPlatform(platform))): MenuItemConstructorOptions[] {
+  const model = menuModel ?? ((menu: MenuId) => buildMenuModel(menu, toPlatform(platform), rules))
   const visible = new Set<CommandId>(request.visible), disabled = new Set<CommandId>(request.disabled), checked = new Set<CommandId>(request.checked)
   // Windows and Linux read `&` as an access key; macOS shows labels as they are.
   const label = (title: string) => platform === 'darwin' ? title : title.replaceAll('&', '&&')
@@ -23,7 +26,7 @@ export function contextMenuTemplate(request: ContextMenuRequest, platform: NodeJ
       const submenu = items(model(entry.id), depth + 1)
       return { id: entry.nativeId, label: label(submenuTitle(entry, { explorerScriptTitle: request.scriptAsTitle })), submenu, enabled: submenu.some(item => item.type !== 'separator' && item.enabled !== false) }
     }
-    const { id } = entry, rule = primaryRule(id, toPlatform(platform)), accelerator = rule && toAccelerator(rule.chords, toPlatform(platform))
+    const { id } = entry, rule = primaryRule(id, toPlatform(platform), rules), accelerator = rule && toAccelerator(rule.chords, toPlatform(platform))
     // An open popup handles its own keys, so every key can show; nothing registers outside the menu.
     const keys = accelerator ? { accelerator, registerAccelerator: false } : {}
     if (entry.role) return { id: entry.nativeId, label: label(title(id, entry.title)), role: entry.role, enabled: !disabled.has(id), accelerator: accelerator ?? '', registerAccelerator: false }
@@ -61,6 +64,8 @@ export class ContextMenuPopups<W extends PopupWindow> {
     readonly style: MenuStyle; readonly platform: NodeJS.Platform; userCanAct(): boolean; build(template: MenuItemConstructorOptions[]): PopupMenu<W>
     /** A command's title with its setting filled in, from main's validated settings. */
     title?(id: CommandId, title: string): string
+    /** The effective rules when the menu opens, from main's own ShortcutStore; the catalogue's when left out. */
+    rules?(): readonly ResolvedRule[]
   }) {}
 
   async show(value: unknown, window: W): Promise<void> {
@@ -70,7 +75,7 @@ export class ContextMenuPopups<W extends PopupWindow> {
     this.close()
     const menu = this.options.build(contextMenuTemplate(request, this.options.platform, id => {
       if (!window.isDestroyed()) window.webContents.send('varia:context-menu-command', { token: request.token, id })
-    }, undefined, this.options.title))
+    }, undefined, this.options.title, this.options.rules?.()))
     // Requests are in CSS pixels; the popup takes window pixels, inside the window.
     const bounds = window.getContentBounds(), zoom = window.webContents.getZoomFactor()
     const at = (value: number, size: number) => Math.max(0, Math.min(size - 1, Math.round(value * zoom)))

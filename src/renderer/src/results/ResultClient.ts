@@ -197,6 +197,7 @@ export class ResultClient implements Disposable {
   private readonly queryListeners = new Map<string, Set<(event: QueryEvent) => void>>()
   private readonly memoryListeners: Record<MemoryFeature, Set<(memory: MemoryReport) => void>> = { results: new Set(), index: new Set() }
   private readonly generationListeners = new Set<(generation: number) => void>()
+  private readonly releaseListeners = new Set<(keys: readonly ResultKey[]) => void>()
   private readonly lives = new Map<number, LiveState>()
   /** Result ids to close, by generation, until the port is attached (or main has room for the request again). */
   private readonly closeQueue = new Map<number, Set<number>>()
@@ -330,6 +331,10 @@ export class ResultClient implements Disposable {
     this.generationListeners.add(listener)
     return { dispose: () => { this.generationListeners.delete(listener) } }
   }
+  onRelease(listener: (keys: readonly ResultKey[]) => void): Disposable {
+    this.releaseListeners.add(listener)
+    return { dispose: () => { this.releaseListeners.delete(listener) } }
+  }
 
   /** The summary's descriptors are final; events for the script that arrive later change nothing. */
   applySummary(summary: QueryResult): void {
@@ -341,6 +346,7 @@ export class ResultClient implements Disposable {
    *  client's, and this client forgets them (handles still report them released). While the results port is down the
    *  ids wait, and are closed once a port is attached. */
   release(keys: readonly ResultKey[]): Promise<void> {
+    for (const listener of this.releaseListeners) listener(keys)
     let queued = this.queuedCloses
     for (const key of keys) {
       const state = this.results.get(keyOf(key))
@@ -461,6 +467,7 @@ export class ResultClient implements Disposable {
     this.queryListeners.clear()
     for (const listeners of Object.values(this.memoryListeners)) listeners.clear()
     this.generationListeners.clear()
+    this.releaseListeners.clear()
     this.windows.clear()
   }
 

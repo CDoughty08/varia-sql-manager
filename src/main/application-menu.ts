@@ -1,6 +1,6 @@
 import type { MenuItemConstructorOptions } from 'electron'
 import type { CommandId } from '../shared/commands/catalog'
-import { defaultRules, toAccelerator, toPlatform, type Platform } from '../shared/commands/keybindings'
+import { defaultRules, toAccelerator, toPlatform, type Platform, type ResolvedRule } from '../shared/commands/keybindings'
 import { applicationMenus, buildMenuModel, menuMayShowChords, pruneMenu, type MenuEntry, type MenuId } from '../shared/commands/menus'
 import { themeMenuModel, type ThemeMenuItem } from '../shared/theme/menu'
 import { recentFilesMenuModel, type RecentMenuItem } from '../shared/files/recent'
@@ -12,6 +12,8 @@ export interface ApplicationMenuModel {
   title?(id: CommandId, title: string): string
   /** File › Recent Files' items (`recentFilesMenuModel`); No Recent Files when left out. */
   recentFiles?: readonly RecentMenuItem[]
+  /** The effective rules (`effectiveRules(platform, file).rules`, from main's own ShortcutStore); the catalogue's when left out. */
+  rules?: readonly ResolvedRule[]
 }
 export interface ApplicationMenuActions {
   command(id: CommandId): void
@@ -67,17 +69,17 @@ function recentItems(items: readonly RecentMenuItem[], actions: ApplicationMenuA
  */
 const macHandlerRoles: Readonly<Partial<Record<CommandId, string>>> = { 'edit.delete': 'delete:', 'edit.selectAll': 'selectAll:' }
 /** A role command's further keys (Zoom In's Ctrl+Shift+=): an item has one accelerator, so hidden copies carry the rest. */
-const extraAccelerators = (id: CommandId, platform: Platform): string[] => defaultRules(platform)
+const extraAccelerators = (id: CommandId, platform: Platform, rules: readonly ResolvedRule[]): string[] => rules
   .filter(rule => rule.command === id && rule.chords.length === 1 && menuMayShowChords(rule.chords, platform)).slice(1)
   .flatMap(rule => toAccelerator(rule.chords, platform) ?? [])
 
-function commandItems(entry: Extract<MenuEntry, { kind: 'command' }>, actions: ApplicationMenuActions, platform: NodeJS.Platform, title: string): MenuItemConstructorOptions[] {
+function commandItems(entry: Extract<MenuEntry, { kind: 'command' }>, actions: ApplicationMenuActions, platform: NodeJS.Platform, title: string, rules: readonly ResolvedRule[]): MenuItemConstructorOptions[] {
   const { id, toggle, role } = entry
   const nativeAction = platform === 'darwin' ? macHandlerRoles[id] : undefined
-  // Electron performs a role natively. Its accelerator is always the catalogue's, or none: Electron's own defaults would
+  // Electron performs a role natively. Its accelerator is always the effective rules', or none: Electron's own defaults would
   // give Reload Ctrl+R and ⌘R, which toggle the results pane.
   if (role && !nativeAction) {
-    const hidden = extraAccelerators(id, toPlatform(platform)).map((accelerator): MenuItemConstructorOptions =>
+    const hidden = extraAccelerators(id, toPlatform(platform), rules).map((accelerator): MenuItemConstructorOptions =>
       ({ role, accelerator, visible: false, ...(platform === 'darwin' ? { acceleratorWorksWhenHidden: true } : {}) }))
     return [{ id: entry.nativeId, label: title, role, accelerator: entry.accelerator ?? '' }, ...hidden]
   }
@@ -94,12 +96,13 @@ function commandItems(entry: Extract<MenuEntry, { kind: 'command' }>, actions: A
 }
 
 function menuItems(menu: MenuId, model: ApplicationMenuModel, actions: ApplicationMenuActions, platform: NodeJS.Platform): MenuItemConstructorOptions[] {
-  const entries = (id: MenuId) => buildMenuModel(id, toPlatform(platform))
+  const rules = model.rules ?? defaultRules(toPlatform(platform))
+  const entries = (id: MenuId) => buildMenuModel(id, toPlatform(platform), rules)
   // Menubar placements have no `when`, so pruning only leaves out submenus with nothing in them.
   return pruneMenu(entries(menu), () => true, entries).flatMap((entry): MenuItemConstructorOptions[] => {
     if (entry.kind === 'separator') return [{ type: 'separator' }]
     if (entry.kind === 'role') return [{ role: entry.role }]
-    if (entry.kind === 'command') return commandItems(entry, actions, platform, model.title?.(entry.id, entry.title) ?? entry.title)
+    if (entry.kind === 'command') return commandItems(entry, actions, platform, model.title?.(entry.id, entry.title) ?? entry.title, rules)
     const commands = menuItems(entry.id, model, actions, platform)
     const dynamic = entry.dynamic === 'theme' ? themeItems(themeMenuModel(model.theme), actions, platform) : entry.dynamic === 'recentFiles' ? recentItems(model.recentFiles ?? recentFilesMenuModel([], platform), actions, platform) : []
     return [{ id: entry.nativeId, label: entry.title, submenu: [...commands, ...(commands.length && dynamic.length ? [{ type: 'separator' as const }] : []), ...dynamic] }]

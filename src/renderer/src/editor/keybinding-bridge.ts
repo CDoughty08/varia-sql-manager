@@ -61,3 +61,35 @@ export function registerEditorBridge(monaco: BridgeMonaco, commands: Pick<Comman
   }
   return { dispose: () => registrations.splice(0).forEach(registration => registration.dispose()) }
 }
+
+/** Where the bridge reads its rules: `KeybindingService`, whose rules the Shortcuts page replaces. */
+export interface BridgeRuleSource {
+  getRules(): readonly ResolvedRule[]
+  subscribe(listener: () => void): () => void
+}
+const bridgeKey = (rules: readonly ResolvedRule[]) => rules.map(rule => `${rule.command}\n${rule.chords.join(' ')}`).join('\n\n')
+
+/**
+ * `registerEditorBridge` for the bridge rules among `source`'s, registered again whenever they change. The old
+ * registration goes first (Monaco would keep both chords otherwise); when the new one fails, the previous rules are
+ * registered again and the failure is reported, so the editor never loses its chords to a bad remap.
+ */
+export function followEditorBridge(monaco: BridgeMonaco, commands: Pick<CommandService, 'execute'>, platform: Platform, source: BridgeRuleSource, report: (error: unknown) => void): Disposable {
+  let rules = bridgeRules(platform, source.getRules()), key = bridgeKey(rules)
+  let current: Disposable | undefined = registerEditorBridge(monaco, commands, platform, rules)
+  const unsubscribe = source.subscribe(() => {
+    const next = bridgeRules(platform, source.getRules()), nextKey = bridgeKey(next)
+    if (nextKey === key) return
+    current?.dispose()
+    current = undefined
+    try {
+      current = registerEditorBridge(monaco, commands, platform, next)
+      rules = next
+      key = nextKey
+    } catch (error) {
+      report(error)
+      try { current = registerEditorBridge(monaco, commands, platform, rules) } catch (again) { report(again) }
+    }
+  })
+  return { dispose: () => { unsubscribe(); current?.dispose(); current = undefined } }
+}
