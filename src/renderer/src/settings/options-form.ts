@@ -6,6 +6,8 @@ import {
 } from '../../../shared/settings/catalog'
 import { valueSchema, type SettingsPatch } from '../../../shared/settings/schema'
 import type { GridRow } from './PropertyGrid'
+import type { ApiResult } from '../../../shared/contracts'
+import type { ShortcutFile } from '../../../shared/commands/shortcut-schema'
 
 /** The dialog's edits across every page: typed values, or the text of an integer field that is not a whole number yet. */
 export type OptionsDraft = Readonly<Record<SettingKey, boolean | number | string>>
@@ -125,3 +127,34 @@ export function rowNotes(def: SettingDef): string[] {
   return [def.applies === 'nextExecution' ? 'Applies to the next execution.' : def.applies === 'newConnections' ? 'Applies to new connections.' : '', def.varia ? 'Not in SSMS.' : ''].filter(Boolean)
 }
 export const draftFrom = (values: SettingsValues): OptionsDraft => ({ ...defaultSettings, ...values })
+
+/** What OK writes to, in order: settings first, then shortcuts (`SettingsService.update`, `ShortcutsService.save`). */
+export interface OptionsTargets {
+  update(patch: SettingsPatch): Promise<void>
+  saveShortcuts(file: ShortcutFile): Promise<ApiResult<{ readonly revision: number }>>
+}
+/** `stale`: another window saved shortcuts after the dialog's draft started, so main refused to overwrite them. */
+export type CommitResult = { readonly ok: true } | { readonly ok: false; readonly stage: 'settings' | 'shortcuts'; readonly message: string; readonly stale?: true }
+const failureText = (error: unknown, fallback: string) => error instanceof Error && error.message ? error.message : fallback
+/**
+ * OK's two writes: the settings patch (when it has any), then the shortcuts draft (when it differs from main's file).
+ * The first failure stops it and says what was saved, so the dialog stays open on the page that failed with its draft
+ * kept, and OK can try again.
+ */
+export async function commitOptions(targets: OptionsTargets, patch: SettingsPatch, shortcuts: ShortcutFile | undefined): Promise<CommitResult> {
+  const settingsChanged = Object.keys(patch).length > 0
+  if (settingsChanged) {
+    try { await targets.update(patch) } catch (error) { return { ok: false, stage: 'settings', message: failureText(error, 'The options could not be saved.') } }
+  }
+  if (!shortcuts) return { ok: true }
+  let reason: string
+  const saved = settingsChanged ? 'Your other settings were saved, but shortcuts were not' : 'Shortcuts were not saved'
+  try {
+    const result = await targets.saveShortcuts(shortcuts)
+    if (result.ok) return { ok: true }
+    // Another window saved first: say so, and make replacing its shortcuts the user's choice rather than a silent retry.
+    if ((result as { readonly code?: string }).code === 'STALE') return { ok: false, stage: 'shortcuts', stale: true, message: `${saved}: they changed in another window. Choose OK again to replace them with yours, or Cancel to keep the other window's.` }
+    reason = result.error.replace(/\.$/, '')
+  } catch (error) { reason = failureText(error, 'they could not be written').replace(/\.$/, '') }
+  return { ok: false, stage: 'shortcuts', message: `${saved}: ${reason}. Your changes are still here; choose OK to try again.` }
+}
