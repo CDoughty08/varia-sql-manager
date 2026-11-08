@@ -15,23 +15,25 @@ const executablePath = process.env.VARIA_PACKAGED_EXECUTABLE
 if (!executablePath) throw new Error('VARIA_PACKAGED_EXECUTABLE must name the packaged application executable.')
 const executable = resolve(executablePath)
 
-// The packaged executable carries build/fuses.cjs's fuses: no file: privileges, no Node mode, NODE_OPTIONS or --inspect.
-// An AppImage's executable sits compressed in its squashfs; appimage-check.mjs inspect reads its fuses after extracting it.
-if (!executable.endsWith('.AppImage')) {
+// An AppImage's executable and resources sit compressed in its squashfs: appimage-check.mjs inspect reads its fuses after
+// extracting it, and the same build's linux-unpacked run checks the archive and backend below. Here it is only launched.
+const appImage = executable.endsWith('.AppImage')
+if (!appImage) {
+  // The packaged executable carries build/fuses.cjs's fuses: no file: privileges, no Node mode, NODE_OPTIONS or --inspect.
   const wrong = fuseMismatches(await getCurrentFuseWire(fuseTarget(executable)))
   if (wrong.length) throw new Error(`Packaged fuses not applied: ${wrong.join(', ')}`)
-}
 
-// Every package is bundled into out/: no node_modules in the archive, and main and preload load only Electron and node: modules.
-const resources = process.platform === 'darwin' ? resolve(dirname(executable), '../Resources') : resolve(dirname(executable), 'resources')
-const asar = resolve(resources, 'app.asar')
-const contents = readAsar(asar)
-if (!contents.has('out/main/index.js')) throw new Error(`${asar} does not hold out/main/index.js.`)
-const problems = asarProblems(contents)
-if (problems.length) throw new Error(`Packaged app.asar: ${problems.join('; ')}`)
-// The backend is published ReadyToRun.
-const interpreted = readyToRunAssemblies.filter(name => !isReadyToRun(resolve(resources, 'backend', name)))
-if (interpreted.length) throw new Error(`Packaged backend assemblies are not ReadyToRun: ${interpreted.join(', ')}`)
+  // Every package is bundled into out/: no node_modules in the archive, and main and preload load only Electron and node: modules.
+  const resources = process.platform === 'darwin' ? resolve(dirname(executable), '../Resources') : resolve(dirname(executable), 'resources')
+  const asar = resolve(resources, 'app.asar')
+  const contents = readAsar(asar)
+  if (!contents.has('out/main/index.js')) throw new Error(`${asar} does not hold out/main/index.js.`)
+  const problems = asarProblems(contents)
+  if (problems.length) throw new Error(`Packaged app.asar: ${problems.join('; ')}`)
+  // The backend is published ReadyToRun.
+  const interpreted = readyToRunAssemblies.filter(name => !isReadyToRun(resolve(resources, 'backend', name)))
+  if (interpreted.length) throw new Error(`Packaged backend assemblies are not ReadyToRun: ${interpreted.join(', ')}`)
+}
 
 // With --inspect fused off, Playwright's Electron launcher cannot attach to main; connect to Chromium's debugging port. A
 // packaged build keeps that port only with VARIA_PACKAGED_SMOKE=1 and a profile other than the user's (sandbox-guard.ts):

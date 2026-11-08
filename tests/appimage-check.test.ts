@@ -61,6 +61,14 @@ describe('AppImage check', () => {
     const smoke = steps.find(candidate => candidate.startsWith('name: Smoke test AppImage'))
     expect(smoke).toMatch(/APPIMAGE_EXTRACT_AND_RUN: '1'/)
     expect(smoke).toMatch(/VARIA_PACKAGED_EXECUTABLE: dist\/Varia-SQL-Manager-.*\.AppImage|VARIA_PACKAGED_EXECUTABLE=.*\.AppImage/)
+    // Its resources sit in the squashfs, not beside it: the smoke script only launches it (the step failed reading dist/resources/app.asar).
+    const script = readFileSync('scripts/packaged-smoke.mjs', 'utf8')
+    const skipped = script.slice(script.indexOf('if (!appImage) {'), script.indexOf('\n}\n', script.indexOf('if (!appImage) {')))
+    expect(script).toContain("const appImage = executable.endsWith('.AppImage')")
+    for (const read of ['getCurrentFuseWire(', 'readAsar(', 'isReadyToRun(']) {
+      expect(skipped, read).toContain(read)
+      expect(script.split(read).length, read).toBe(2)
+    }
     // The refusal launch restricts unprivileged user namespaces only for itself.
     const refusal = steps.find(candidate => candidate.includes('scripts/appimage-check.mjs refusal'))!
     expect(refusal).toMatch(/kernel\.apparmor_restrict_unprivileged_userns=1[\s\S]*kernel\.apparmor_restrict_unprivileged_userns=0/)
