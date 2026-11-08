@@ -92,7 +92,7 @@ import { domFocusAdapter } from './focus'
 import { InputModeService } from './input-mode'
 import { KeybindingService } from './keybindings'
 import { gesturesFor, type GestureService } from './gestures'
-import { ShortcutsService, shortcutsApiOf } from './ShortcutsService'
+import { ShortcutsService } from './ShortcutsService'
 import { MenuStatePublisher } from './menu-state'
 import { focusHeld, focusWhenDrawn, modalOpen } from './modal'
 import { nextFrame as frame } from './frame'
@@ -234,7 +234,7 @@ function editorCaret(documents: DocumentService, monaco: typeof Monaco) {
 export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: ThemeService, settings: SettingsService, shortcuts?: ShortcutsService): Workbench {
   const platform = toPlatform(api.platform)
   // Normally loaded before the workbench (start.tsx), so the first key already follows the user's shortcuts.
-  const userShortcuts = shortcuts ?? new ShortcutsService({ api: shortcutsApiOf(api), platform })
+  const userShortcuts = shortcuts ?? new ShortcutsService({ api: api.shortcuts, platform })
   const events = new EventBus(), connections = new ConnectionService(), editorOptions = new EditorOptionsService(settings), shellOptions = new ShellOptionsService(settings), panes = new PaneService()
   // Group by Schema follows its setting (the toolbar button and the palette flip it).
   const groupBySchema = { get: () => settings.get('objectExplorer.groupBySchema'), subscribe: settings.subscribe }

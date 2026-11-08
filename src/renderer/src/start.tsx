@@ -20,7 +20,7 @@ import App from './App'
 import { createWorkbench } from './core/workbench'
 import { registerJson } from './languages/json'
 import { WorkbenchProvider } from './core/WorkbenchContext'
-import { ShortcutsService, shortcutsApiOf } from './core/ShortcutsService'
+import { ShortcutsService } from './core/ShortcutsService'
 import { toPlatform } from '../../shared/commands/keybindings'
 import { domThemeTarget, ThemeService } from './services/theme'
 import { SettingsService } from './settings/SettingsService'
@@ -44,7 +44,7 @@ export async function start(root: Root): Promise<void> {
   // them; none waits for main longer than its timeout.
   const [theme, settings, shortcuts] = await Promise.all([
     ThemeService.create(window.varia, domThemeTarget(monaco)), SettingsService.create(window.varia),
-    ShortcutsService.create({ api: shortcutsApiOf(window.varia), platform: toPlatform(window.varia.platform) })
+    ShortcutsService.create({ api: window.varia.shortcuts, platform: toPlatform(window.varia.platform) })
   ])
   const workbench = createWorkbench(window.varia, monaco, theme, settings, shortcuts)
   // Smoke tests drive the results API directly (backend-smoke.mjs), read the grids' counters (results-smoke.mjs), save

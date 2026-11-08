@@ -5,7 +5,7 @@ import { defaultRules } from '../src/shared/commands/keybindings'
 import { emptyShortcutFile, readShortcutFile, type ShortcutFile } from '../src/shared/commands/shortcut-schema'
 import { GestureService } from '../src/renderer/src/core/gestures'
 import { KeybindingService } from '../src/renderer/src/core/keybindings'
-import { ShortcutsService, shortcutsApiOf, type ShortcutsApi } from '../src/renderer/src/core/ShortcutsService'
+import { ShortcutsService, type ShortcutsApi } from '../src/renderer/src/core/ShortcutsService'
 import { createFakeShortcutsService } from '../src/renderer/src/core/ShortcutsService.fake'
 
 const remap: ShortcutFile = { ...emptyShortcutFile, bindings: [{ command: 'file.new', key: 'mod+n', remove: true }, { command: 'file.new', key: 'mod+shift+f9' }], gestures: { 'explorer.peekHover': 'shift' } }
@@ -110,13 +110,6 @@ describe('shortcuts service', () => {
     expect(service.snapshot().revision).toBe(0)
     expect(setRules).toHaveBeenCalledOnce()
   })
-  it('runs on the catalogue in a build whose preload has no shortcuts yet', async () => {
-    const fallback = shortcutsApiOf({})
-    expect(await fallback.get()).toEqual({ ok: true, value: { file: emptyShortcutFile, revision: 0, salvaged: false } })
-    expect(await fallback.save(emptyShortcutFile, 0)).toMatchObject({ ok: false })
-    const real = api().api
-    expect(shortcutsApiOf({ shortcuts: real })).toBe(real)
-  })
 })
 
 describe('fake shortcuts service', () => {
@@ -217,5 +210,36 @@ describe('shortcuts service bound as the workbench binds it', () => {
     binding.dispose()
     fake.changeElsewhere(emptyShortcutFile)
     expect(keybindings.lookup('file.new')?.text).toBe('Ctrl+Shift+F9')
+  })
+})
+
+describe('shortcuts service reload', () => {
+  it('reads main again on reload, where load shares its first successful read', async () => {
+    let revision = 1
+    const get = vi.fn(async () => ({ ok: true as const, value: { file: revision > 1 ? remap : emptyShortcutFile, revision, salvaged: false } }))
+    const service = new ShortcutsService({ api: api({ get }).api, platform: 'win32' })
+    await service.load()
+    revision = 2
+    await service.load()
+    expect([get.mock.calls.length, service.snapshot().revision]).toEqual([1, 1])
+    expect(await service.reload()).toBe(true)
+    expect(get).toHaveBeenCalledTimes(2)
+    expect(service.snapshot()).toMatchObject({ revision: 2, file: remap })
+  })
+})
+
+describe('shortcuts service reload reports', () => {
+  it("shows main's notice once across reloads, and says the loaded shortcuts stay when a reload fails", async () => {
+    let fail = false
+    const get = vi.fn(async () => fail ? { ok: false as const, error: 'Busy.' } : { ok: true as const, value: { file: remap, revision: 1, salvaged: true, notice: 'Some shortcuts were set aside.' } })
+    const service = new ShortcutsService({ api: api({ get }).api, platform: 'win32' })
+    const reported: string[] = []
+    service.setReporter(message => { reported.push(message) })
+    await service.load()
+    await service.reload()
+    fail = true
+    await service.reload()
+    expect(reported).toEqual(['Some shortcuts were set aside.', 'Your shortcuts could not be read again, so the ones already loaded stay: Busy.'])
+    expect(service.snapshot()).toMatchObject({ revision: 1, file: remap })
   })
 })
