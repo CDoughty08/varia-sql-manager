@@ -2,7 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { activeMenuItem, backendReady, dockShell, documentTabs, editorText as editorTextOf, movePane, openMenus, paneTab, part, searchBox, statusBar, themeNotice, toolbar, queryBarButton, queryDatabase, queryServer, toolbarButton } from './fixtures/ui.mjs'
-import { glyphSizes, glyphUse } from '../src/shared/theme/metrics.ts'
+import { glyphConditions, glyphSizes, glyphUse } from '../src/shared/theme/metrics.ts'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'theme-profile-'))
@@ -179,11 +179,20 @@ try {
   await page.emulateMedia({ forcedColors: null })
   expect(forcedTab[0]).toBe(forcedTab[1])
   // Every glyph size rule wins over Monaco's codicon.css (16px/1 codicon), so each icon glyphUse names is drawn at its size.
-  const glyphs = await page.evaluate(use => Object.fromEntries(Object.entries(use).flatMap(([name, selectors]) => selectors.map(selector => {
+  const glyphs = await page.evaluate(({ use, conditions }) => Object.fromEntries(Object.entries(use).flatMap(([name, selectors]) => selectors.map(selector => {
     // A probe that matches the selector (class compounds joined by descendant or child combinators): Icon.tsx draws a
     // codicon as a span with the codicon classes, and Varia's own icons as an svg.icon.
     const compounds = selector.split(/\s*>\s*|\s+/)
     let parent = document.body, root
+    const condition = conditions[selector]
+    if (condition) {
+      root = document.body.appendChild(document.createElement('div'))
+      root.className = condition.container.slice(1)
+      // Container queries use the content box, independent of the query bar's padding and border.
+      root.style.boxSizing = 'content-box'
+      root.style.width = `${condition.maxWidth}px`
+      parent = root
+    }
     compounds.forEach((compound, index) => {
       const classes = compound.split('.').filter(Boolean), svg = classes.includes('icon'), last = index === compounds.length - 1
       const element = parent.appendChild(svg ? document.createElementNS('http://www.w3.org/2000/svg', 'svg') : document.createElement('span'))
@@ -191,11 +200,18 @@ try {
       root ??= element
       parent = element
     })
-    const size = getComputedStyle(parent).fontSize
+    const sizes = [getComputedStyle(parent).fontSize]
+    if (condition) {
+      root.style.width = `${condition.maxWidth + 1}px`
+      sizes.push(getComputedStyle(parent).fontSize)
+    }
     root.remove()
-    return [selector, `${name} ${size}`]
-  }))), glyphUse)
-  expect(glyphs).toEqual(Object.fromEntries(Object.entries(glyphUse).flatMap(([name, selectors]) => selectors.map(selector => [selector, `${name} ${glyphSizes[name].px}px`]))))
+    return [selector, `${name} ${sizes.join('/')}`]
+  }))), { use: glyphUse, conditions: glyphConditions })
+  expect(glyphs).toEqual(Object.fromEntries(Object.entries(glyphUse).flatMap(([name, selectors]) => selectors.map(selector => {
+    const condition = glyphConditions[selector]
+    return [selector, `${name} ${glyphSizes[name].px}px` + (condition ? `/${glyphSizes[condition.outside].px}px` : '')]
+  }))))
   console.log('Theme checks: the font stacks are the ones drawn, the editor has no ligatures, and icons sit on the 16 px grid.')
 
   // Floating groups live outside .dock-workbench; they used to fall back to Dockview's own grey.

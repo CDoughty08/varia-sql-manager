@@ -21,6 +21,14 @@ internal static class PlanChecks
         check(scan.Properties.Any(property => property.Name == "RunTimeCountersPerThread[Thread=1].ActualRows" && property.Value == "40")
             && scan.Properties.Any(property => property.Name == "RunTimeCountersPerThread[Thread=2].ActualRows" && property.Value == "60"), "raw thread properties retain their thread identity");
         check(scan.Object == "[Sales].[dbo].[Orders].[IX_Status]" && scan.Warnings.Contains("PlanAffectingConvert") && plan.Statements[0].Warnings.Any(warning => warning.Contains("72.4")), "objects, conversion warnings and missing indexes");
+        var target = new LivePlanTarget(1, Guid.Empty, "master", 1, 1);
+        var signature = LivePlanSampler.Signature(target, plan);
+        scan.ActualRows++;
+        check(LivePlanSampler.Signature(target, plan) == signature, "live runtime counters do not resend a plan document");
+        scan.Properties.Add(new("Const.ConstValue", "2"));
+        check(LivePlanSampler.Signature(target, plan) != signature, "changed literal expressions resend topology even when live SQL text is omitted");
+        scan.Properties.RemoveAt(scan.Properties.Count - 1);
+        scan.ActualRows--;
         check(scan.Properties.Any(property => property.Value.Contains("完了")), "Unicode scalar expressions remain data");
         check(plan.Statements[1].Nodes[0] is { PhysicalOp: "Future SQL Operator", ActualRows: null } && plan.Statements[1].Nodes[0].Id != root.Id, "unknown operators and duplicate source node ids across statements");
         check(plan.Statements[1].Nodes[0].Properties.Any(property => property.Name == "FutureOperator.NewProperty"), "unknown operator properties preserved");

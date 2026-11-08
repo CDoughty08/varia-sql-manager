@@ -922,7 +922,9 @@ async function environmentLabels() {
     const box = bar.getBoundingClientRect(), pill = bar.querySelector('[role="group"]').getBoundingClientRect()
     const tag = bar.querySelector(`${part.environmentTag} ${part.statusPill}`), label = tag.querySelector(part.statusPillLabel), edge = tag.getBoundingClientRect().right
     const [server, database] = [...bar.querySelectorAll('select')].map(list => list.getBoundingClientRect())
-    return { clear: edge <= server.left + 0.5, inside: pill.left >= box.left - 0.5 && pill.right <= box.right + 0.5, lists: server.width >= 63.5 && database.width >= 63.5 && database.right <= pill.right + 0.5, cut: label.scrollWidth > label.clientWidth }
+    const fit = { clear: edge <= server.left + 0.5, inside: pill.left >= box.left - 0.5 && pill.right <= box.right + 0.5, lists: server.width >= 63.5 && database.width >= 63.5 && database.right <= pill.right + 0.5, cut: label.scrollWidth > label.clientWidth }
+    if (!fit.clear || !fit.inside || !fit.lists) return { ...fit, bounds: { width: box.width, pill: pill.width, tag: tag.getBoundingClientRect().width, server: server.width, database: database.width, overflow: database.right - pill.right } }
+    return fit
   }, part)
   const serverMenu = async row => {
     await explorerLabel(row).click({ button: 'right' })
@@ -961,9 +963,9 @@ async function environmentLabels() {
   expect(look).toEqual({ color: true, fill: true, accent: true, inside: true, whole: true })
   // The tag is no control, so the query bar's server list, which its keys reach, describes the environment.
   await expect(queryServer(page)).toHaveAttribute('aria-description', 'Production environment')
-  // Every compact layout keeps PROD whole beside both lists and the five query actions, including Linux font metrics.
+  // Every compact layout keeps PROD whole beside both lists and all six query actions, including Linux font metrics.
   let widen
-  for (const width of [760, 600, 500, 400, 330, 320]) {
+  for (const width of [860, 780, 760, 600, 500, 400, 330, 320]) {
     widen = await narrowBar(width)
     expect(await barFit(), `${width} px query bar`).toEqual({ clear: true, inside: true, lists: true, cut: false })
     await widen()
@@ -1003,10 +1005,15 @@ async function environmentLabels() {
   await expect(labelling).toHaveCount(0)
   await shows('STAGING', 'info')
   await expect.poll(saved).toBe('Staging')
-  // The longer preset must also stay whole beside the two lists at the smallest supported bar width.
-  widen = await narrowBar(320)
-  expect(await barFit(), '320 px query bar with Staging').toEqual({ clear: true, inside: true, lists: true, cut: false })
-  await widen()
+  // The longer preset must stay whole beside the two lists, including fonts wider than the Windows default.
+  for (const family of ['', 'Verdana, sans-serif', 'Arial Black, sans-serif']) {
+    await queryBar(page).evaluate((bar, family) => { bar.style.fontFamily = family }, family)
+    try {
+      widen = await narrowBar(320)
+      expect(await barFit(), `320 px query bar with Staging (${family || 'default font'})`).toEqual({ clear: true, inside: true, lists: true, cut: false })
+      await widen()
+    } finally { await queryBar(page).evaluate((bar, family) => { bar.style.fontFamily = family }, originalFamily) }
+  }
   // (4) The history row shows it, choosing the entry fills it in, and another server drops it with the name and colour.
   dialog = await open()
   // Opened once, Custom Properties stays open for this window's later dialogs.

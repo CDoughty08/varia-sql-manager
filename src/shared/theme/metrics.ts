@@ -81,12 +81,16 @@ export type GlyphSizeName = keyof typeof glyphSizes
 export const glyphUse: Readonly<Record<GlyphSizeName, readonly string[]>> = {
   badge: ['.oe-icon .oe-badge'],
   sm: [
-    '.tab-close .codicon', '.tab-pin .codicon', '.tab-select .tab-readonly', '.tab-select .tab-running', '.connection-save-actions .codicon', '.query-status-state .codicon', '.output-status .codicon', '.memory-indicator .codicon', '.update-status .codicon', '.oe-active > .codicon',
+    '.tab-close .codicon', '.tab-pin .codicon', '.tab-select .tab-readonly', '.tab-select .tab-running', '.connection-save-actions .codicon', '.query-status-state .codicon', '.output-status .codicon', '.query-bar-action .codicon', '.memory-indicator .codicon', '.update-status .codicon', '.oe-active > .codicon',
     '.editor-status .codicon', '.index-status .codicon', '.status-pill > .codicon', '.status-pill > .icon', '.chip > .codicon', '.chip > .icon', '.live-pill > .codicon', '.stale-badge > .codicon',
     '.tile-caption > .codicon'
   ],
   md: ['.icon'],
   lg: []
+}
+/** Glyph overrides that apply only inside a narrow size container; outside it the normal toolbar grid applies. */
+export const glyphConditions: Readonly<Record<string, { readonly container: string; readonly maxWidth: number; readonly outside: GlyphSizeName }>> = {
+  '.query-bar-action .codicon': { container: '.query-bar', maxWidth: 400, outside: 'md' }
 }
 
 /** `--varia-<name>`, in px: the thickness of indicators that are neither text nor icons. */
@@ -218,7 +222,10 @@ export function renderMetricDocs(): string {
     'Icons ([the registry](../icons.md)) are drawn on a 16 px grid, the codicon font\'s own size. Varia\'s SVG icons are 1em square, so a rule sizes either kind with `font-size`.',
     '',
     table(['Token', 'px', 'Use', 'Sized with it'], (Object.keys(glyphSizes) as GlyphSizeName[]).map(name => [`\`--varia-glyph-${name}\``, glyphSizes[name].px, glyphSizes[name].use,
-      glyphUse[name].map(selector => `\`${selector}\``).join(', ')])),
+      glyphUse[name].map(selector => {
+        const condition = glyphConditions[selector]
+        return `\`${selector}\`` + (condition ? ` (inside \`${condition.container}\` at ${condition.maxWidth} px or less; ${condition.outside} otherwise)` : '')
+      }).join(', ')])),
     '',
     '## Indicators',
     '',

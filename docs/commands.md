@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (246)
+## Commands (247)
 
 ### File
 
@@ -125,6 +125,7 @@ keys it uses are listed below.
 | Execute | `query.execute` | F5 (`editorFocus \|\| queryBarFocus`), Ctrl+Enter (`editorFocus \|\| queryBarFocus`), Ctrl+E (`editorFocus \|\| queryBarFocus`) | F5 (`editorFocus \|\| queryBarFocus`), Ctrl+Enter (`editorFocus \|\| queryBarFocus`), Ctrl+E (`editorFocus \|\| queryBarFocus`) | F5 (`editorFocus \|\| queryBarFocus`), ⌘↩ (`editorFocus \|\| queryBarFocus`) | `activeDocumentIsQuery && !queryRunning && !documentBusy && (activeDocumentConnected \|\| (backendReady && !activeConnectionLost))` | Query › Execute; Editor context menu › Execute |
 | Cancel Executing Query | `query.cancel` | Alt+Pause | Alt+Pause | — | `queryRunning` | Query › Cancel Executing Query; Editor context menu › Cancel Executing Query |
 | Include Actual Execution Plan | `query.includeActualPlan` | Ctrl+M (`editorFocus \|\| queryBarFocus`) | Ctrl+M (`editorFocus \|\| queryBarFocus`) | — | `activeDocumentIsQuery && !queryRunning && !documentBusy`; checked when `includeActualPlan` | Query › Include Actual Execution Plan |
+| Include Live Execution Plan | `query.includeLivePlan` | — | — | — | `activeDocumentIsQuery && !queryRunning && !documentBusy`; checked when `includeLivePlan` | Query › Include Live Execution Plan |
 | Display Estimated Execution Plan | `query.estimatePlan` | Ctrl+L (`editorFocus \|\| queryBarFocus`) | Ctrl+L (`editorFocus \|\| queryBarFocus`) | ⌘L (`editorFocus \|\| queryBarFocus`) | `activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy` | Query › Display Estimated Execution Plan; Editor context menu › Display Estimated Execution Plan |
 | Include Client Statistics | `query.includeClientStatistics` | Shift+Alt+S (`editorFocus \|\| queryBarFocus`) | Shift+Alt+S (`editorFocus \|\| queryBarFocus`) | — | `activeDocumentIsQuery && !queryRunning && !documentBusy`; checked when `includeClientStatistics` | Query › Include Client Statistics |
 | Reset Client Statistics | `query.resetClientStatistics` | — | — | — | `activeDocumentIsQuery && !queryRunning && !documentBusy` | Query › Reset Client Statistics |
@@ -477,6 +478,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_execute` | E**x**ecute | `query.execute` | Always |
 | `1_execute` | **C**ancel Executing Query | `query.cancel` | Always |
 | `1_execute` | **I**nclude Actual Execution Plan | `query.includeActualPlan` | Always |
+| `1_execute` | Include **L**ive Execution Plan | `query.includeLivePlan` | Always |
 | `1_execute` | Display **E**stimated Execution Plan | `query.estimatePlan` | Always |
 | `1_execute` | Include Client **S**tatistics | `query.includeClientStatistics` | Always |
 | `1_execute` | **R**eset Client Statistics | `query.resetClientStatistics` | Always |
@@ -833,7 +835,7 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema` |
 | `2_brackets` | **B**racketed Name | `search.copyBracketedName` | Always |
 
-## Context keys (136)
+## Context keys (137)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -902,6 +904,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `activeConnectionLost` | boolean | state | The active query's connection was lost when the SQL backend restarted. |
 | `queryRunning` | boolean | state | The active query is running. |
 | `includeActualPlan` | boolean | state | The active query will capture actual execution plans. |
+| `includeLivePlan` | boolean | state | The active query will show live execution plans. |
 | `includeClientStatistics` | boolean | state | The active query will collect client statistics. |
 | `hasResults` | boolean | state | The active query has result sets, and they were not closed (Close Results) or lost with a run the SQL backend stopped. |
 | `anyDocumentConnected` | boolean | state | Some open query's server is connected. |

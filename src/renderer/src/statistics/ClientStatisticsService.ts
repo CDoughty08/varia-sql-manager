@@ -10,6 +10,7 @@ export interface StatisticsRun {
   readonly database: string
   readonly server?: string
   readonly actualPlan: boolean
+  readonly livePlan?: boolean
   readonly status: QueryResult['status'] | 'running' | 'unavailable'
   readonly sample?: ClientStatisticsSample
 }
@@ -17,11 +18,11 @@ export interface StatisticsRun {
 export class ClientStatisticsService extends SnapshotStore<Readonly<Record<string, readonly StatisticsRun[]>>> {
   private scopes = new Map<string, { key: string; scope: number; sequence: number }>()
   constructor() { super({}) }
-  begin(tabId: string, queryId: string, connectionId: string, database: string, actualPlan: boolean, server?: string): void {
-    const key = JSON.stringify([connectionId, database, actualPlan]), previous = this.scopes.get(tabId)
+  begin(tabId: string, queryId: string, connectionId: string, database: string, actualPlan: boolean, server?: string, livePlan = false): void {
+    const key = JSON.stringify([connectionId, database, actualPlan, livePlan]), previous = this.scopes.get(tabId)
     const context = { key, scope: previous ? previous.scope + (previous.key === key ? 0 : 1) : 1, sequence: (previous?.sequence ?? 0) + 1 }
     this.scopes.set(tabId, context)
-    const run: StatisticsRun = { queryId, sequence: context.sequence, scope: context.scope, database, server, actualPlan, status: 'running' }
+    const run: StatisticsRun = { queryId, sequence: context.sequence, scope: context.scope, database, server, actualPlan, livePlan, status: 'running' }
     this.publish({ ...this.getSnapshot(), [tabId]: [...this.getSnapshot()[tabId] ?? [], run].slice(-clientStatisticsHistoryLimit) })
   }
   finish(tabId: string, queryId: string, summary?: QueryResult): void {

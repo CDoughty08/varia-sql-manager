@@ -8,13 +8,21 @@ const number = z.number().finite().nonnegative().nullable().default(null)
 export const planNodeSchema = z.object({
   id: z.string().max(64), parentId: z.string().max(64).nullable().default(null), nodeId: z.string().max(64), physicalOp: text, logicalOp: text, object: text,
   estimatedRows: number, estimatedCost: number, actualRows: number, elapsedMs: number, cpuMs: number, executions: number,
-  warnings: z.array(text).max(32), properties: z.array(z.object({ name: text, value: text }).strict()).max(planLimits.properties)
+  warnings: z.array(text).max(32), properties: z.array(z.object({ name: text, value: text }).strict()).max(planLimits.properties), liveActivity: z.boolean().optional()
 }).strict()
 export const planStatementSchema = z.object({
-  id: z.string().max(64), text, type: text, estimatedCost: number, warnings: z.array(text).max(32), nodes: z.array(planNodeSchema).max(planLimits.nodes)
+  id: z.string().max(64), statementId: z.string().max(64).optional(), queryHash: z.string().max(64).optional(), text, type: text, estimatedCost: number, warnings: z.array(text).max(32), nodes: z.array(planNodeSchema).max(planLimits.nodes)
 }).strict()
 export const planDocumentSchema = z.object({ version: text, build: text, statements: z.array(planStatementSchema).max(planLimits.statements), notices: z.array(text).max(8) }).strict()
 export const planParseSchema = z.object({ xml: z.string().min(1).max(planLimits.characters) }).strict()
 export type PlanDocument = z.infer<typeof planDocumentSchema>
 export type PlanStatement = z.infer<typeof planStatementSchema>
 export type PlanNode = z.infer<typeof planNodeSchema>
+
+/** Only topology changes carry a document. Counter frames are bounded and replace the previous sample. */
+export const livePlanFrameSchema = z.object({
+  batch: z.number().int().min(1).max(100_000), iteration: z.number().int().min(1).max(100_000),
+  revision: z.number().int().nonnegative(), document: planDocumentSchema.optional(),
+  counters: z.array(z.object({ id: z.string().max(64), rows: number, elapsedMs: number, cpuMs: number, executions: number }).strict()).max(planLimits.nodes)
+}).strict()
+export type LivePlanFrame = z.infer<typeof livePlanFrameSchema>
