@@ -670,7 +670,9 @@ try {
   await expect(peekCard.getByRole('tabpanel')).toContainText('1 value could not be read and show as NULL.')
   // A cut value ends in an ellipsis, and its tooltip says it was cut; a whole one's is just the value.
   const cutValue = topRows.getByRole('cell', { name: `${'B'.repeat(256)}…`, exact: true })
-  await expect(cutValue).toHaveAttribute('title', `${'B'.repeat(256)}…\nCut at 256 characters; Select Top 1000 Rows shows all of it.`)
+  await expect(cutValue).toHaveAttribute('title', `${'B'.repeat(256)}…\nCut at about 256 characters; Select Top 1000 Rows shows more of it.`)
+  // Screen readers hear the value once, as the cell's name, and only the note as its description.
+  await expect(cutValue).toHaveAccessibleDescription('Cut at about 256 characters; Select Top 1000 Rows shows more of it.')
   await expect(topRows.getByRole('cell', { name: 'Alice', exact: true })).toHaveAttribute('title', 'Alice')
   expect((await stubCalls('explorer.peekRows')).at(-1).target).toMatchObject({ kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' })
   await page.keyboard.press('Escape')

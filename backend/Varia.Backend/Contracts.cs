@@ -185,8 +185,10 @@ internal sealed record ObjectIndexResult(ObjectIndexStatus Status, long ElapsedM
 internal sealed record ObjectSearchArgs(string ConnectionId, string RequestId, string Text, bool? CaseSensitive = null, bool? WholeWord = null, bool? Regex = null, string? In = null,
     List<string>? Kinds = null, string? Database = null, int? Limit = null, string? Match = null);
 /// <summary>A definition's first match: its line and column (1-based), part of its line with the match's [start, length] in it,
-/// whether the line goes on before or after the part, the matches counted (at most 999), and whether the definition was cut.</summary>
-internal sealed record DefinitionMatch(int Line, int Column, string Preview, int[] Range, bool Before, bool After, int Matches, bool Cut);
+/// whether the line goes on before or after the part, the matches counted (at most 999), and whether the definition was cut.
+/// Uncounted (true or absent): the search's budget ran out before the count reached the definition's end, so Matches is only
+/// a lower bound.</summary>
+internal sealed record DefinitionMatch(int Line, int Column, string Preview, int[] Range, bool Before, bool After, int Matches, bool Cut, bool? Uncounted = null);
 /// <summary>One object found: Range is the name match's [start, length] in Label; Modified is server local time; Subtype is its
 /// node's where the index knows it; ParentFolder is the folder that lists a child's parent (Tables › Graph Tables, say); Via is
 /// the table (in its database, in Folder) that shows a history table, or a history table's parent, as its history row;

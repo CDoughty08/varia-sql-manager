@@ -1,4 +1,4 @@
-import { chmod, mkdir, rm } from 'node:fs/promises'
+import { chmod, mkdir, readdir, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { documentKinds, type DocumentKind } from '../shared/contracts'
@@ -40,6 +40,9 @@ export type SessionInput = Omit<SessionWrite, 'documents'> & { readonly document
 /** Why a write was refused at the cap; a fixed sentence, as the banner shows it. */
 export const sessionCapMessage = 'The open queries are too large to keep for the next start (64 MB in all).'
 const posix = process.platform !== 'win32'
+/** What a quarantine of either file leaves (`json-file.ts`'s `quarantine`), and a write a crash interrupted (`writeBytesAtomic`'s temporary file). */
+const leftover = /^((session|previous)\.json\.invalid-[0-9a-f-]{36}\.json|\.varia-[0-9a-f-]{36}\.tmp)$/i
+const dayMs = 86_400_000
 
 export interface SessionStoreOptions { readonly now?: () => Date; readonly totalBytes?: number }
 
@@ -138,6 +141,30 @@ export class SessionStore {
       await rm(this.current, { force: true })
       await rm(this.previous, { force: true })
       this.kept = undefined
+    })
+  }
+
+  /**
+   * Deletes the copies of query text the folder would otherwise keep for ever: quarantined files older than `keepDays`
+   * (Keep AutoRecover information for, as AutoRecover's own purge) and interrupted writes, which are always leftovers since
+   * no write runs alongside this. `session.json` and `previous.json` stay. It waits for the setting, and deletes nothing
+   * when settings could not be read.
+   */
+  purge(keepDays: Promise<number>): Promise<void> {
+    return this.serial(async () => {
+      let days: number
+      try { days = await keepDays } catch { return }
+      if (!Number.isSafeInteger(days) || days < 1) return
+      let names: string[]
+      try { names = await readdir(this.dir) } catch { return }
+      const cutoff = (this.options.now?.() ?? new Date()).getTime() - days * dayMs
+      for (const file of names) {
+        if (!leftover.test(file)) continue
+        try {
+          const info = await stat(join(this.dir, file))
+          if (info.isFile() && (file.startsWith('.varia-') || info.mtimeMs < cutoff)) await rm(join(this.dir, file), { force: true })
+        } catch { /* Removed meanwhile, or locked: the next start tries again. */ }
+      }
     })
   }
 

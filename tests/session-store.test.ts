@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { SessionStore, sessionCapMessage, sessionWriteSchema, type SessionInput } from '../src/main/session-store'
@@ -121,6 +121,31 @@ describe('the hot exit session store', () => {
     await writeFile(join(folder, 'session.json'), JSON.stringify({ version: 1, savedAt: '2026-11-04T09:00:00.000Z', activeIndex: 0, documents: [{ name: 'a.sql', kind: 'sql', eol: 'lf', dirty: true }] }))
     expect(await new SessionStore(folder).take(true)).toBeUndefined()
     expect((await files()).filter(name => name === 'session.json')).toEqual([])
+  })
+
+  it('purges quarantined sessions by Keep AutoRecover information for and interrupted writes always, keeping both sessions', async () => {
+    const day = 86_400_000, now = Date.now()
+    await mkdir(folder, { recursive: true })
+    const old = `session.json.invalid-${randomUUID()}.json`, oldPrevious = `previous.json.invalid-${randomUUID()}.json`, recent = `session.json.invalid-${randomUUID()}.json`
+    const interrupted = `.varia-${randomUUID()}.tmp`
+    for (const name of [old, oldPrevious, recent, interrupted, 'session.json', 'previous.json', 'notes.txt']) await writeFile(join(folder, name), 'SELECT 1')
+    for (const name of [old, oldPrevious, 'session.json', 'previous.json', 'notes.txt']) await utimes(join(folder, name), new Date(now - 30 * day), new Date(now - 30 * day))
+    await utimes(join(folder, recent), new Date(now - 3 * day), new Date(now - 3 * day))
+    const store = new SessionStore(folder, { now: () => new Date(now) })
+    await store.purge(Promise.reject(new Error('settings.json could not be read')))
+    expect(await files()).toHaveLength(7)
+    await store.purge(Promise.resolve(7))
+    expect(await files()).toEqual(['notes.txt', 'previous.json', recent, 'session.json'].sort())
+    await store.purge(Promise.resolve(2))
+    expect(await files()).toEqual(['notes.txt', 'previous.json', 'session.json'])
+    // A missing folder is nothing to purge.
+    await rm(folder, { recursive: true })
+    await store.purge(Promise.resolve(1))
+  })
+
+  it('purges the folder at startup, by the same retention as AutoRecover', async () => {
+    const main = await readFile('src/main/index.ts', 'utf8')
+    expect(main).toContain('void openSession.purge(retentionDays(settings))')
   })
 
   it('validates what the page sends: bounded names, kinds, ids and counts, and text unless a clean file reopens it', () => {

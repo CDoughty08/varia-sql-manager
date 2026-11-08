@@ -471,13 +471,16 @@ export const ssisLimits = {
   serverPath: 1_024,
   /** The Operations view (the ssis.operations live source): the most operations its window holds, how many it holds unless
    *  told otherwise, the open ones one tick reads again, the longest window in hours (a year, the catalog's longest
-   *  retention), and how often it counts the last 24 hours by status. */
+   *  retention), how often it counts the last 24 hours by status, and how often its counts read every operation again rather than
+   *  from their watermarks (an operation the login was just allowed to read, or one whose commit outlasted the settle window,
+   *  sits below them). */
   operationsRows: 10_000,
   operationsDefaultRows: 1_000,
   operationsRefresh: 256,
   operationsWindowHours: 8_760,
   operationsDefaultWindowHours: 24,
-  operationsCountMs: 30_000
+  operationsCountMs: 30_000,
+  operationsRebaseMs: 300_000
 } as const
 
 // Compact sorted-key JSON, as in explorerCatalogJson(), so each entry diffs as one line.

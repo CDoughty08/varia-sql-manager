@@ -51,7 +51,8 @@ export interface GestureDescriptor {
   readonly choices?: readonly GestureModifiers[]
   /**
    * macOS's own default and choices, where the others' would not work there: Control+click is a right-click on macOS,
-   * so a Control+double-click opens the context menu and never arrives as a double-click.
+   * so a Control+double-click opens the context menu and never arrives as a double-click, and a Control-drag opens it
+   * instead of starting.
    */
   readonly darwin?: { readonly modifiers: GestureModifiers; readonly choices?: readonly GestureModifiers[] }
   /** Why the gesture cannot be remapped; every gesture without `choices` has one. */
@@ -102,7 +103,8 @@ export const gestureCatalog = {
   'dock.floatWhileDragging': {
     title: 'Float While Dragging', description: 'Holding the modifier while dragging a tab floats it instead of docking it on a guide.',
     kind: 'modifier', scope: 'panels', action: 'drag', target: 'a tab', modifiers: ['ctrl'],
-    choices: [['ctrl'], ['alt']], keyboard: ['pane.float', 'editor.float']
+    // macOS: Control+press is a right-click there, so the tab's menu would open instead of the drag starting.
+    choices: [['ctrl'], ['alt']], darwin: { modifiers: ['meta'], choices: [['meta'], ['alt']] }, keyboard: ['pane.float', 'editor.float']
   },
   'dock.dragFloatingTitleBar': {
     title: 'Drag Floating Panel', description: 'Shift-dragging a floating panel\'s title bar hands the drag to Dockview instead of Varia\'s docking guides.',

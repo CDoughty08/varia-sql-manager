@@ -6,6 +6,11 @@
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <!-- The release RIDs (release.yml), so packages.lock.json covers their publish and package.yml restores it locked. -->
+    <RuntimeIdentifiers>win-x64;linux-x64;osx-arm64;osx-x64</RuntimeIdentifiers>
+    <!-- Release packages precompile Varia and its packages, which are otherwise JIT-compiled on every launch and first
+         connect, execute and Script As. Only a RID-specific publish: builds and checks stay IL. -->
+    <PublishReadyToRun Condition="'$(RuntimeIdentifier)' != ''">true</PublishReadyToRun>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Azure.Identity" Version="1.21.0" />

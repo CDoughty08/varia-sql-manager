@@ -65,9 +65,9 @@ describe('gesture validation', () => {
     expect(validateGestures('win32', alt)).toEqual([])
     // Hovering presses nothing, so no window manager starts a move.
     expect(validateGestures('linux', new Map<GestureId, GestureChoice>([['explorer.peekHover', ['alt']]]))).toEqual([])
-    // macOS: Control+double-click is a right-click (a file from another build could ask for it); Control-drag still works.
+    // macOS: Control+press is a right-click, for a double-click or a drag alike (a map from elsewhere could ask for it).
     expect(validateGestures('darwin', new Map<GestureId, GestureChoice>([['dock.toggleFloat', ['ctrl']]])).map(problem => problem.code)).toEqual(['macControlClick'])
-    expect(validateGestures('darwin', new Map<GestureId, GestureChoice>([['dock.floatWhileDragging', ['ctrl']]]))).toEqual([])
+    expect(validateGestures('darwin', new Map<GestureId, GestureChoice>([['dock.floatWhileDragging', ['ctrl']]])).map(problem => problem.code)).toEqual(['macControlClick'])
   })
 })
 

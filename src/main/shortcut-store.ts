@@ -36,8 +36,9 @@ const canonical = (file: ShortcutFile) => JSON.stringify(file)
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
 /**
- * The strict file from the renderer, as plain JSON values. Its counts are checked first: zod checks every element (each key parsed on every
- * platform) before an array's maximum, so a page that sent a huge list would hold main for seconds before the refusal.
+ * The strict file from the renderer, as plain JSON values. Its counts are checked first, so a page over a limit gets the
+ * one fixed sentence rather than zod's issues (the schema also refuses an oversized list or gesture map before parsing
+ * its elements: zod caps arrays itself, and `boundedRecord` the map).
  */
 function parseFile(value: unknown): ShortcutFile {
   if (isRecord(value)) {
@@ -47,7 +48,12 @@ function parseFile(value: unknown): ShortcutFile {
   }
   // IPC is a structured clone, which also carries ArrayBuffers, Maps and Dates: each serializes to a few bytes of JSON, so
   // the limits never saw them. Only what JSON carries is kept, which is exactly what the file will hold.
-  return JSON.parse(JSON.stringify(shortcutFileSchema.parse(value))) as ShortcutFile
+  const plain: unknown = JSON.parse(JSON.stringify(shortcutFileSchema.parse(value)))
+  // Then it is read as the next re-read will read it (a gesture choice the catalogue does not offer moves to `unknown`,
+  // a record there that this build understands moves back), so saving what main holds is never a change, or a STALE.
+  const read = readShortcutFile(plain, readOptions)
+  if (!read.ok) throw new Error(read.error === 'size' ? shortcutSentences.tooLarge : shortcutSentences.overLimit)
+  return read.file
 }
 /**
  * Writes `file` to `path` in `shortcutFileText`'s form, the one reads measure; a failure is a fixed sentence, since the
@@ -91,6 +97,11 @@ export class ShortcutStore {
   private loaded = false
   /** Since the last load that set something aside, until a save: the page shows the notice while this holds. */
   private notice?: string
+  /** Names each notice main raises (a set-aside, or a newer version's file), so the page shows each once: main repeats a
+   *  notice on every load until a save, in fixed words, across revisions (a valid hand edit after a salvage keeps it). */
+  private noticeId = 0
+  private newerNoticeId = 0
+  private noticeCounter = 0
   private newer = false
   /** A read failed before any succeeded: the first one that does is announced, since main's menus still show the catalogue's keys. */
   private readFailed = false
@@ -123,23 +134,27 @@ export class ShortcutStore {
     return this.serial(async () => {
       await this.refresh(this.loaded)
       const notice = this.notice ?? (this.newer ? shortcutSentences.newer : undefined)
-      return { ...this.snapshot(), salvaged: this.notice !== undefined, ...(notice ? { notice } : {}) }
+      const noticeId = this.notice !== undefined ? this.noticeId : this.newerNoticeId
+      return { ...this.snapshot(), salvaged: this.notice !== undefined, ...(notice ? { notice, noticeId } : {}) }
     })
   }
 
-  /** Writes `file` (strict) when the store's revision is still `baseRevision`; resolves to the new revision. */
+  /**
+   * Writes `file` (strict) when the store's revision is still `baseRevision`; resolves to the new revision. A save whose
+   * own re-read set a hand edit aside is refused with `STALE` even when what remains equals what the page holds: the save
+   * reply has no notice, and `STALE` makes the page read again, which shows it.
+   */
   async save(value: unknown, baseRevision: number): Promise<ShortcutsSaved> {
     const file = parseFile(value)
     return this.serial(async () => {
       const setAside = await this.refresh(true)
       if (this.newer) throw new Error(shortcutSentences.newer)
-      if (baseRevision !== this.revision) throw new BackendError('STALE', shortcutSentences.stale)
+      if (setAside || baseRevision !== this.revision) throw new BackendError('STALE', shortcutSentences.stale)
       if (canonical(file) !== canonical(this.file)) {
         await writeFile(this.path, file, shortcutSentences.saveFailed)
         this.file = file
         this.revision++
-        // A notice this save's own re-read raised stays: the page has not shown it yet.
-        if (!setAside) this.notice = undefined
+        this.notice = undefined
         this.emit()
       }
       return { revision: this.revision }
@@ -155,6 +170,7 @@ export class ShortcutStore {
     let read: Read
     try { read = await readStored(this.path) } catch { if (!this.loaded) this.readFailed = true; throw new Error(shortcutSentences.unreadable) }
     let next: ShortcutFile
+    if (read.kind === 'newer' && !this.newer) this.newerNoticeId = ++this.noticeCounter
     this.newer = read.kind === 'newer'
     if (read.kind === 'missing' || read.kind === 'newer') next = emptyShortcutFile
     else if (read.kind === 'ok') next = read.file
@@ -162,6 +178,7 @@ export class ShortcutStore {
       next = read.kind === 'salvage' ? read.file : emptyShortcutFile
       try { await quarantine(this.path) } catch { if (!this.loaded) this.readFailed = true; throw new Error(shortcutSentences.unreadable) }
       this.notice = read.kind === 'salvage' ? salvageNotice : resetNotice(read.reason)
+      this.noticeId = ++this.noticeCounter
       // The original is kept beside it; a failed write back leaves the file missing, which reads as empty.
       await writeFile(this.path, next, shortcutSentences.saveFailed).catch(() => {})
     }

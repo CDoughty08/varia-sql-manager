@@ -27,7 +27,7 @@ describe('gesture rows', () => {
     const toggle = gestureRows(draft(), 'darwin', '').find(row => row.id === 'dock.toggleFloat')!
     expect([toggle.label, toggle.options.map(option => option.label), toggle.keyboard]).toEqual(['⌘ Double-click', ['⌘', '⌥', '⇧', 'None'], ['pane.float', 'pane.dock']])
     const fit = rows.find(row => row.id === 'grid.fitColumn')!
-    expect([fit.source, fit.options, fit.locked]).toEqual(['fixed', [], 'Double-clicking a column border fits it, as in SSMS.'])
+    expect([fit.source, fit.options, fit.locked]).toEqual(['builtin', [], 'Double-clicking a column border fits it, as in SSMS.'])
     const rename = rows.find(row => row.id === 'documentTabs.rename')!
     expect([rename.kind, rename.options, rename.locked]).toEqual(['pointerCommand', [], expect.stringContaining('F2 renames')])
     // The linked editor setting shows only where the Mouse view passes its value, never in the All view's gesture rows.
@@ -64,6 +64,43 @@ describe('gesture rows', () => {
   })
 })
 
+describe('gesture rows follow the page', () => {
+  it('read search tokens as the Shortcuts page does: prefixes, scopes, and unknown tokens filter nothing', () => {
+    const file = draft({ 'dock.floatWhileDragging': 'alt', 'explorer.peekHover': 'off' })
+    const all = gestureRows(file, 'win32', '').length
+    for (const query of ['@kind:', '@kind:m', '@kind:mo', '@kind:mouse', '@conflict', '@whatever:x']) expect(gestureRows(file, 'win32', query), query).toHaveLength(all)
+    expect(gestureRows(file, 'win32', '@kind:k')).toEqual([])
+    expect(ids(gestureRows(file, 'win32', '@source:u'))).toEqual(['explorer.peekHover', 'dock.floatWhileDragging'])
+    expect(ids(gestureRows(file, 'win32', '@scope:grid'))).toEqual(['grid.addToSelection', 'grid.extendSelection', 'grid.fitColumn'])
+    expect(ids(gestureRows(file, 'win32', '@unbound'))).toEqual(['explorer.peekHover'])
+    expect(ids(gestureRows(file, 'win32', '@command:pane.dock'))).toEqual(['dock.toggleFloat'])
+    // Problems: Alt on Linux warns.
+    expect(ids(gestureRows(file, 'linux', '@conflicts'))).toEqual(['dock.floatWhileDragging'])
+  })
+  it('call every locked row built-in, as the All view does', () => {
+    const rows = gestureRows(draft(), 'win32', '')
+    expect(rows.filter(row => row.locked).map(row => row.source)).toEqual(rows.filter(row => row.locked).map(() => 'builtin'))
+    expect(rows.find(row => row.id === 'documentTabs.rename')?.source).toBe('builtin')
+    expect(ids(gestureRows(draft(), 'win32', '@source:built'))).toContain('documentTabs.rename')
+    expect(ids(gestureRows(draft(), 'win32', '@source:fixed'))).toContain('documentTabs.rename')
+  })
+  it('show a choice only another platform offers as a change that Reset removes', () => {
+    // ⌘ is macOS's own choice for Toggle Docking; a hand-edited file can carry it to Windows.
+    const file = draft({ 'dock.toggleFloat': 'meta' })
+    const row = gestureRows(file, 'win32', '').find(entry => entry.id === 'dock.toggleFloat')!
+    expect(row).toMatchObject({ label: 'Ctrl+Double-click', currentToken: 'ctrl', changed: true, otherPlatform: true })
+    expect(setGesture(file, 'dock.toggleFloat', undefined, 'win32').gestures).toEqual({})
+    // On macOS it is the default, which the file never needs: it applies, and nothing is flagged.
+    expect(gestureRows(file, 'darwin', '').find(entry => entry.id === 'dock.toggleFloat')).not.toHaveProperty('otherPlatform')
+  })
+  it('label keyboard paths from the draft, so a key changed on the page shows before OK', () => {
+    const peek = (file: ShortcutFile) => gestureRows(file, 'win32', '').find(row => row.id === 'explorer.peekHover')!.keys
+    expect(peek(draft())).toEqual([{ command: 'explorer.peek', label: expect.objectContaining({ text: 'Alt+F12' }) }])
+    const remapped: ShortcutFile = { ...draft(), bindings: [{ command: 'explorer.peek', key: 'alt+f12', remove: true }, { command: 'explorer.peek', key: 'ctrl+shift+f12' }] }
+    expect(peek(remapped)[0].label?.text).toBe('Ctrl+Shift+F12')
+  })
+})
+
 describe('MouseView', () => {
   const render = (props: Partial<Parameters<typeof MouseView>[0]> = {}) =>
     renderToStaticMarkup(createElement(MouseView, { draft: draft(), onChange: () => {}, platform: 'linux', search: '', ...props }))
@@ -79,7 +116,19 @@ describe('MouseView', () => {
     expect(html).not.toContain('aria-label="Rename Tab: modifier"')
     // The linked setting shows its saved value and opens its page.
     expect(html).toContain('Ctrl+Click · <button type="button" class="mouse-link">Text Editor › General</button>')
-    expect(html).toContain('Keyboard: Float <span class="keybinding"')
+    expect(html).toContain('Keyboard: Peek <span class="keybinding" role="img" aria-label="Alt+F12">')
+    // Float has no key of its own (its context menu reaches it): the title alone.
+    expect(html).toContain('<span class="mouse-keyboard">Keyboard: Float, Float Editor</span>')
+  })
+  it('keeps the row header to the title and reads the details with the dropdown', () => {
+    const html = render()
+    expect(html).toContain('<th scope="row"><span class="mouse-gesture"><span class="mouse-dot" aria-hidden="true"></span><span class="mouse-title">Peek on Hover</span></span></th>')
+    expect(html).toContain('aria-describedby="mouse-explorer-peekHover-about"')
+    expect(html).toContain('<span class="mouse-about" id="mouse-explorer-peekHover-about">Peeks a table')
+  })
+  it("shows the Options dialog's draft value of the linked setting when it is given", () => {
+    // The mocked saved setting is Ctrl+Click; the page's draft says Alt+Click.
+    expect(render({ multiCursorModifier: 'alt' })).toContain('<span class="mouse-binding-text">Alt+Click · Text Editor › General</span>')
   })
   it('says when nothing matches the search', () => {
     expect(render({ search: 'no such gesture' })).toBe('<p class="mouse-empty" role="status">No gestures match.</p>')
