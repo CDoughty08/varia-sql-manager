@@ -206,25 +206,65 @@ internal static class SsisOperationsChecks
 
         // The tiles' watermarks: the open count reads from the lowest open id, the 24-hour count from the lowest id created within
         // them, neither past the settled id (an id above it may still commit), and a baseline or a clock gone back reads from 0.
-        var marks = new SsisOperationsWatermarks();
+        var countMs = SsisCatalog.Current.Limit("operationsCountMs");
+        var rebaseMs = SsisCatalog.Current.Limit("operationsRebaseMs");
+        var marks = new SsisOperationsWatermarks(countMs, rebaseMs);
         var start = (marks.OpenFrom, marks.CountFrom);
         var back0 = marks.Opened(null, 0, Now);
         var empty0 = marks.OpenFrom;
         marks.Opened(40, 90, Now.AddSeconds(2));
-        marks.Counted(70, 90);
+        marks.Counted(70, 90, 0);
         var low = (marks.OpenFrom, marks.CountFrom);
         marks.Opened(null, 120, Now.AddSeconds(4));
-        marks.Counted(null, 120);
+        marks.Counted(null, 120, 0);
         var none = (marks.OpenFrom, marks.CountFrom);
         marks.Opened(130, 120, Now.AddSeconds(6));
-        marks.Counted(150, 120);
+        marks.Counted(150, 120, 0);
         var capped = (marks.OpenFrom, marks.CountFrom);
         var back = marks.Opened(null, 200, Now.AddSeconds(5));
         var afterBack = (marks.OpenFrom, marks.CountFrom);
         marks.Reset();
-        check(start == (0, 0) && !back0 && empty0 == 1 && low == (40, 70) && none == (121, 121) && capped == (121, 121) && back && afterBack == (201, 0) && (marks.OpenFrom, marks.CountFrom) == (0, 0),
+        check(rebaseMs >= 10 * countMs && start == (0, 0) && !back0 && empty0 == 1 && low == (40, 70) && none == (121, 121) && capped == (121, 121) && back && afterBack == (201, 0)
+            && (marks.OpenFrom, marks.CountFrom) == (0, 0),
             "the tiles' watermarks follow the lowest open id and the lowest id of the 24 hours, never pass the settled id plus one, and read from 0 after a baseline, "
             + "the 24-hour one also after the server's clock goes back: " + low + " " + none + " " + capped + " " + afterBack);
+
+        // When a sample counts the 24 hours, on the reader's own clock (Environment.TickCount64, so a large positive value): the
+        // first sample and every countMs, and the sample after the server's clock goes back, from 0. A clock gone back once must
+        // not stop the counts for good (a sentinel of long.MinValue made `at - countedAt` wrap negative), and every rebaseMs one
+        // sample reads both counts from 0: rows below a watermark may become visible (a login newly allowed to read a folder, a
+        // commit that outlasted the settle window).
+        var t = 5_000_000_000L;
+        var timed = new SsisOperationsWatermarks(countMs, rebaseMs);
+        var firstCounts = timed.Begin(t);
+        timed.Counted(70, 90, t);
+        timed.Opened(40, 90, Now);
+        var quiet = timed.Begin(t + countMs - 1);
+        timed.Opened(40, 90, Now.AddSeconds(2));
+        var due = timed.Begin(t + countMs);
+        timed.Counted(70, 90, t + countMs);
+        var steadyMarks = (timed.OpenFrom, timed.CountFrom);
+        var wentBack = timed.Opened(40, 90, Now.AddSeconds(1));
+        var afterClock = timed.Begin(t + countMs + 1);
+        var fromZero = timed.CountFrom;
+        timed.Counted(70, 90, t + countMs + 1);
+        timed.Opened(40, 90, Now.AddSeconds(3));
+        var settledAgain = timed.Begin(t + countMs + 2);
+        var later = timed.Begin(t + 2 * countMs + 1);
+        timed.Counted(70, 90, t + 2 * countMs + 1);
+        timed.Opened(40, 90, Now.AddSeconds(5));
+        var beforeRebase = (Counts: timed.Begin(t + rebaseMs - 1), timed.OpenFrom, timed.CountFrom);
+        timed.Counted(70, 90, t + rebaseMs - 1);
+        timed.Opened(40, 90, Now.AddSeconds(6));
+        // Due 1 ms after the last count, the rebase counts the 24 hours again too.
+        var rebase = (Counts: timed.Begin(t + rebaseMs), timed.OpenFrom, timed.CountFrom);
+        timed.Counted(70, 90, t + rebaseMs);
+        timed.Opened(40, 90, Now.AddSeconds(7));
+        var afterRebase = (Counts: timed.Begin(t + rebaseMs + 1), timed.OpenFrom, timed.CountFrom);
+        check(firstCounts && !quiet && due && steadyMarks == (40, 70) && wentBack && afterClock && fromZero == 0 && !settledAgain && later
+            && beforeRebase == (true, 40, 70) && rebase == (true, 0, 0) && afterRebase == (false, 40, 70),
+            "the 24-hour counts are read on the first sample and every " + countMs + " ms, at once from 0 after the server's clock goes back and on schedule after that, and every "
+            + rebaseMs + " ms one sample reads both counts from 0: " + string.Join(" ", firstCounts, quiet, due, wentBack, afterClock, settledAgain, later, beforeRebase, rebase, afterRebase));
 
         // More open operations than one sample reads again: they take turns, newest first, and every one is read within a few samples.
         var many = New();

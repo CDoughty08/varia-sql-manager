@@ -222,6 +222,7 @@ internal static class SsisOperationsLiveChecks
 
             await BudgetAsync(check, views, info, Exec);
             await WatermarksAsync(check, Exec);
+            await ReaderAsync(check, service, info, db, Exec);
             await MissingAsync(check, service, views, info, db);
             await AccessAsync(check, service, views, json, db, Exec, sql, connect, scratch);
         }
@@ -294,17 +295,92 @@ internal static class SsisOperationsLiveChecks
         try
         {
             await Aged();
+            // Each watermark sits below the newest Above operations, so the counts read a range that holds rows, not an empty seek.
+            const int Above = 50;
             var smallTop = await Top();
-            var small = (Open: await Reads(openCount, smallTop + 1), Day: await Reads(dayCount, smallTop + 1), Full: await Reads(openCount, 0));
+            var small = (Open: await Reads(openCount, smallTop - Above + 1), Day: await Reads(dayCount, smallTop - Above + 1), Full: await Reads(openCount, 0));
             await Aged();
             await Aged();
             var largeTop = await Top();
-            var large = (Open: await Reads(openCount, largeTop + 1), Day: await Reads(dayCount, largeTop + 1), Full: await Reads(openCount, 0));
-            check(large.Open <= small.Open + 2 && large.Day <= small.Day + 2 && large.Full > small.Full + 50 && large.Full > 10 * Math.Max(large.Open, large.Day),
-                "the tiles' counts read only above their watermarks: with " + 3 * Rows + " ended operations below them instead of " + Rows + ", the open and 24-hour counts read "
+            var large = (Open: await Reads(openCount, largeTop - Above + 1), Day: await Reads(dayCount, largeTop - Above + 1), Full: await Reads(openCount, 0));
+            check(small.Open > 0 && small.Day > 0 && large.Open <= small.Open + 2 && large.Day <= small.Day + 2 && large.Full > small.Full + 50 && large.Full > 10 * Math.Max(large.Open, large.Day),
+                "the tiles' counts read only above their watermarks (" + Above + " operations above each): with " + 3 * Rows + " ended operations below them instead of " + Rows + ", the open and 24-hour counts read "
                 + small.Open + " → " + large.Open + " and " + small.Day + " → " + large.Day + " pages, while the open count from 0 reads " + small.Full + " → " + large.Full);
         }
         finally { await exec("DELETE FROM [catalog].[operations] WHERE operation_id > " + first.ToString(CultureInfo.InvariantCulture) + " AND object_name = N'VariaOpsAged';", null); }
+    }
+
+    /// <summary>The reader's own wiring of the watermarks, sample after sample on a clock the check moves: once the high-water mark
+    /// settles, the open count reads from the lowest open id and the 24-hour count from the lowest id of the 24 hours (what the
+    /// catalog says they are), and the tiles still equal a direct count. An open operation that appears below the open watermark
+    /// (as when the login is allowed to read a folder) is left out until the rebase, when the counts read from 0 again and find it.
+    /// Every operation the earlier checks left open is ended meanwhile, so the watermark can rise, and restored after.</summary>
+    private static async Task ReaderAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, string db, Func<string, string?, Task<SqlRun>> exec)
+    {
+        const string Name = "VariaOpsReader";
+        static string Insert(int status, string? id = null) => "INSERT INTO [catalog].[operations] (" + (id is null ? "" : "operation_id, ")
+            + "operation_type, created_time, object_type, object_name, status, start_time, end_time, caller_sid, caller_name)\n"
+            + "VALUES (" + (id is null ? "" : id + ", ") + "200, SYSDATETIMEOFFSET(), 20, N'" + Name + "', " + status.ToString(CultureInfo.InvariantCulture)
+            + ", SYSDATETIMEOFFSET(), " + (status == 2 ? "NULL" : "SYSDATETIMEOFFSET()") + ", SUSER_SID(), SUSER_SNAME());\n";
+        var catalog = SsisCatalog.Current;
+        var host = (ILiveHost)service;
+        var first = long.Parse((await exec("SELECT ISNULL(MAX(operation_id), 0) FROM [catalog].[operations];", null)).Scalar!, CultureInfo.InvariantCulture);
+        var reopen = (await exec("SELECT operation_id, status FROM [catalog].[operations] WHERE status IN (1, 2, 5, 8);", null)).Sets[0];
+        try
+        {
+            await exec("UPDATE [catalog].[operations] SET status = 7 WHERE status IN (1, 2, 5, 8);", null);
+            // A gap (a row deleted) below one running operation, and ended ones above it.
+            var ids = (await exec(Insert(7) + "DECLARE @gap bigint = SCOPE_IDENTITY();\n" + Insert(2) + "DECLARE @open bigint = SCOPE_IDENTITY();\n"
+                + string.Concat(Enumerable.Repeat(Insert(7), 20)) + "DELETE FROM [catalog].[operations] WHERE operation_id = @gap;\nSELECT @gap, @open;", null)).Sets[0][0];
+            var (gap, open) = (ids[0]!, long.Parse(ids[1]!, CultureInfo.InvariantCulture));
+            async Task<(double[] Tiles, long LowestRecent)> Direct()
+            {
+                var row = (await exec("SELECT COUNT_BIG(CASE WHEN status = 2 THEN 1 END), COUNT_BIG(CASE WHEN status = 5 THEN 1 END),\n"
+                    + "    COUNT_BIG(CASE WHEN status IN (4, 6) AND created_time >= DATEADD(hour, -24, SYSDATETIMEOFFSET()) THEN 1 END),\n"
+                    + "    COUNT_BIG(CASE WHEN status IN (7, 9) AND created_time >= DATEADD(hour, -24, SYSDATETIMEOFFSET()) THEN 1 END),\n"
+                    + "    COUNT_BIG(CASE WHEN status = 3 AND created_time >= DATEADD(hour, -24, SYSDATETIMEOFFSET()) THEN 1 END),\n"
+                    + "    MIN(CASE WHEN created_time >= DATEADD(hour, -24, SYSDATETIMEOFFSET()) THEN operation_id END) FROM [catalog].[operations];", null)).Sets[0][0];
+                return ([.. row.Take(5).Select(value => double.Parse(value!, CultureInfo.InvariantCulture))], long.Parse(row[5]!, CultureInfo.InvariantCulture));
+            }
+            var clock = 1_000_000_000L;
+            var reader = new SsisOperationsReader(catalog, null, () => db, ignoreLinux: true, clock: () => clock);
+            var prologue = LiveSql.Prologue("ssisdb", false);
+            await using var connection = host.PoolConnection(info.Id, db, " - Integration Services");
+            await host.OpenAsync(connection, CancellationToken.None);
+            await reader.SessionAsync(connection, prologue, "VIEW SERVER STATE", CancellationToken.None);
+            async Task<double?[]> Sample(long stepMs)
+            {
+                clock += stepMs;
+                // The item names the probe only for test text, which this check passes none of.
+                return (await reader.ReadAsync(connection, prologue, null!, null, CancellationToken.None)).Raw!.Values;
+            }
+            // A baseline, then samples half the count interval apart: the high-water mark settles and the 24 hours are counted after it.
+            var countMs = catalog.Limit("operationsCountMs");
+            var rebaseMs = catalog.Limit("operationsRebaseMs");
+            await Sample(0);
+            double?[] values = [];
+            for (var i = 0; i < 4; i++) values = await Sample(countMs / 2);
+            var marks = (reader.Watermarks.OpenFrom, reader.Watermarks.CountFrom);
+            var (tiles, lowestRecent) = await Direct();
+            check(marks == (open, Math.Min(lowestRecent, reader.Window.SettledId + 1)) && reader.Window.SettledId >= open && values.Select(value => value ?? -1).SequenceEqual(tiles),
+                "the reader moves the open watermark to the lowest open id and the 24-hour one to the lowest id of the 24 hours once the high-water mark settles, and its tiles "
+                + "still equal a direct count: " + marks + " against " + open + ", " + lowestRecent + " (settled " + reader.Window.SettledId + "); " + string.Join(",", values) + " against " + string.Join(",", tiles));
+
+            // An operation that turns up running below the open watermark, then the rebase.
+            await exec("SET IDENTITY_INSERT [catalog].[operations] ON;\n" + Insert(2, gap) + "SET IDENTITY_INSERT [catalog].[operations] OFF;", null);
+            var (withGap, _) = await Direct();
+            var hidden = await Sample(countMs / 2);
+            var rebased = await Sample(rebaseMs - 5 * (countMs / 2));
+            check(hidden[0] == withGap[0] - 1 && rebased[0] == withGap[0] && reader.Watermarks.OpenFrom == long.Parse(gap, CultureInfo.InvariantCulture),
+                "an operation that appears running below the open watermark is left out of Running until the rebase every " + rebaseMs + " ms reads from 0 and counts it: "
+                + hidden[0] + " then " + rebased[0] + " against " + withGap[0] + ", open watermark " + reader.Watermarks.OpenFrom + " (the operation " + gap + ")");
+        }
+        finally
+        {
+            await exec("DELETE FROM [catalog].[operations] WHERE operation_id > " + first.ToString(CultureInfo.InvariantCulture) + " AND object_name = N'" + Name + "';\n"
+                + string.Concat(reopen.Select(row => "UPDATE [catalog].[operations] SET status = " + int.Parse(row[1]!, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture)
+                    + " WHERE operation_id = " + long.Parse(row[0]!, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture) + ";\n")), null);
+        }
     }
 
     /// <summary>A catalog that does not exist ends the view: there is nothing to wait for.</summary>

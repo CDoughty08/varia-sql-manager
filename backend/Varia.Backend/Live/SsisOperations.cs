@@ -244,11 +244,17 @@ internal sealed class SsisOperationsWindow(SsisCatalog catalog, LiveSettleJson s
 /// operation has ended (an ended one never opens again); below <see cref="CountFrom"/> every operation was created before the
 /// 24 hours began (created times never change, and the hours only move on while the server's clock does). Neither passes the
 /// settled id plus one: an id above it may still commit, open and new. Both are 0 after a baseline (new args, a lost
-/// connection), and the 24-hour one also when the server's clock goes back, since the hours then reach rows it skipped. Pure:
-/// the checks drive it without SQL Server.</summary>
-internal sealed class SsisOperationsWatermarks
+/// connection), and the 24-hour one also when the server's clock goes back, since the hours then reach rows it skipped.
+/// Both also assume the rows below them never change, which a login newly allowed to read a folder, or a commit that outlasts
+/// the settle window, breaks: every <c>rebaseMs</c> one sample reads both counts from 0 again. It also says when a sample
+/// counts the 24 hours (every <c>countMs</c>, and at once after a baseline, a rebase or a clock gone back). Pure: the checks
+/// drive it without SQL Server.</summary>
+internal sealed class SsisOperationsWatermarks(long countMs, long rebaseMs)
 {
     private DateTimeOffset lastNow = DateTimeOffset.MinValue;
+    // Null: the next sample counts the 24 hours, or reads both counts from 0. Never a sentinel: `at - long.MinValue` wraps.
+    private long? countedAt;
+    private long? rebasedAt;
 
     public long OpenFrom { get; private set; }
     public long CountFrom { get; private set; }
@@ -258,38 +264,61 @@ internal sealed class SsisOperationsWatermarks
         OpenFrom = 0;
         CountFrom = 0;
         lastNow = DateTimeOffset.MinValue;
+        countedAt = null;
+        rebasedAt = null;
+    }
+
+    /// <summary>Before a sample at <paramref name="at"/> (a monotonic ms clock): reads both counts from 0 when a rebase is due,
+    /// and says whether this sample counts the 24 hours.</summary>
+    public bool Begin(long at)
+    {
+        if (rebasedAt is not { } rebased || at - rebased >= rebaseMs)
+        {
+            OpenFrom = 0;
+            CountFrom = 0;
+            rebasedAt = at;
+            countedAt = null;
+        }
+        return countedAt is not { } counted || at - counted >= countMs;
     }
 
     /// <summary>After a sample: the lowest open id its open count found (null for none) and the settled id once it merged.
-    /// Whether the server's clock went back since the last sample, so the 24-hour counts must read from the start.</summary>
+    /// Whether the server's clock went back since the last sample, so the next sample counts the 24 hours from the start.</summary>
     public bool Opened(long? lowestOpen, long settled, DateTimeOffset serverNow)
     {
         OpenFrom = Math.Min(lowestOpen ?? long.MaxValue, settled + 1);
         var back = serverNow < lastNow;
         lastNow = serverNow;
-        if (back) CountFrom = 0;
+        if (back)
+        {
+            CountFrom = 0;
+            countedAt = null;
+        }
         return back;
     }
 
-    /// <summary>After a sample that counted the 24 hours: the lowest id created within them (null for none).</summary>
-    public void Counted(long? lowestRecent, long settled) => CountFrom = Math.Min(lowestRecent ?? long.MaxValue, settled + 1);
+    /// <summary>After a sample at <paramref name="at"/> that counted the 24 hours: the lowest id created within them (null for none).</summary>
+    public void Counted(long? lowestRecent, long settled, long at)
+    {
+        CountFrom = Math.Min(lowestRecent ?? long.MaxValue, settled + 1);
+        countedAt = at;
+    }
 }
 
 /// <summary>ssis.operations (D-ssis 5.3) on SqlSampler's connection in the catalog's database: one batch a sample
 /// (LiveSql.Operations) for the window (SsisOperationsWindow), the server's time and the running and pending counts, and every
-/// operationsCountMs the 24-hour counts, which samples in between repeat. The counts ignore the filters and the limit, and read from their watermarks (SsisOperationsWatermarks). The session probe reads whether the catalog's
+/// operationsCountMs the 24-hour counts, which samples in between repeat. The counts ignore the filters and the limit, and read from their watermarks (SsisOperationsWatermarks; every operationsRebaseMs from 0). The session probe reads whether the catalog's
 /// database has READ_COMMITTED_SNAPSHOT on, which picks the prologue (owner decision 4). New args and a lost connection read
 /// the window again and reset the watermarks. It never writes and never logs names or values.</summary>
 internal sealed class SsisOperationsReader(SsisCatalog catalog, SsisOperationsLiveArgs? args, Func<string> catalogDatabase, bool ignoreLinux = false, Func<long>? clock = null) : ILiveSqlReader
 {
     private readonly Lock gate = new();
     private readonly SsisOperationsWindow window = new(catalog, SsisOperationsWindow.CatalogueSettle);
-    private readonly SsisOperationsWatermarks watermarks = new();
+    private readonly SsisOperationsWatermarks watermarks = new(catalog.Limit("operationsCountMs"), catalog.Limit("operationsRebaseMs"));
     private readonly Func<long> now = clock ?? (() => Environment.TickCount64);
     private SsisOperationsFilter pending = SsisOperationsFilter.Of(args, catalog);
     private bool changed = true;
     private string? prologue;
-    private long countedAt = long.MinValue;
     private double?[] counts = [];
 
     public string? Prologue => prologue;
@@ -342,7 +371,7 @@ internal sealed class SsisOperationsReader(SsisCatalog catalog, SsisOperationsLi
         var baseline = window.NeedsBaseline;
         if (baseline) watermarks.Reset();
         var at = now();
-        var count = baseline || at - countedAt >= catalog.Limit("operationsCountMs");
+        var count = watermarks.Begin(at);
         long[] open = baseline ? [] : window.OpenIds(catalog.Limit("operationsRefresh"));
         await using var command = connection.CreateCommand();
         command.CommandTimeout = 0;
@@ -386,14 +415,13 @@ internal sealed class SsisOperationsReader(SsisCatalog catalog, SsisOperationsLi
                 for (var i = 0; i < tiles.Count; i++) if (tiles[i].LastHours is not null) fresh[i] = Long(reader, column++);
                 lowestRecent = Long(reader, column);
                 counts = fresh;
-                countedAt = at;
             }
         }
         if (baseline) window.Baseline(read, serverNow, at, highWater);
         else window.Merge(read, open, updates, serverNow, at, highWater);
-        if (count) watermarks.Counted(lowestRecent, window.SettledId);
+        if (count) watermarks.Counted(lowestRecent, window.SettledId, at);
         // A clock gone back reaches 24-hour rows below the watermark: the next sample counts them all again.
-        if (watermarks.Opened(lowestOpen, window.SettledId, serverNow)) countedAt = long.MinValue;
+        watermarks.Opened(lowestOpen, window.SettledId, serverNow);
         // The final tiles repeat their last count between reads.
         for (var i = 0; i < tiles.Count; i++) if (tiles[i].LastHours is not null) values[i] = i < counts.Length ? counts[i] : null;
         var raw = new LiveRawSample(null, null, values, new double?[values.Length]);
