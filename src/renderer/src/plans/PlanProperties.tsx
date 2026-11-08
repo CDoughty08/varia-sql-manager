@@ -31,8 +31,8 @@ export function PlanProperties({ statement, node, liveRunning }: { statement?: S
       <Details title="Statement warning details" items={data?.warnings} />
       <details><summary>Parameters ({data?.parameters.length ?? 0})</summary>{data?.parameters.length ? data.parameters.map((parameter, index) => <div key={index} className="plan-diagnostic-detail"><strong>{parameter.name || 'Unavailable'}</strong><Facts values={[
         ['Data type', parameter.dataType], ['Compiled value', parameter.compiledValue === '' ? '(empty)' : parameter.compiledValue ?? 'Unavailable'], ['Runtime value', parameter.runtimeValue === '' ? '(empty)' : parameter.runtimeValue ?? 'Unavailable']
-      ]} /></div>) : <p>Parameter values unavailable in this XML.</p>}</details>
-      <details><summary>Memory grant</summary>{data?.memoryGrant.length ? <><p className="plan-diagnostic-note">Memory amounts are KiB; GrantWaitTime is milliseconds. Other attributes retain their XML names and values.</p><Attributes properties={data.memoryGrant} /></> : <p>{statement.partial ? 'Grant details require captured actual XML.' : 'Unavailable in this XML.'}</p>}</details>
+      ]} /></div>) : <p>Parameter values unavailable in this view.</p>}</details>
+      <details><summary>Memory grant</summary>{data?.memoryGrant.length ? <><p className="plan-diagnostic-note">Memory amounts are KiB; GrantWaitTime is milliseconds. Other attributes retain their XML names and values.</p><Attributes properties={data.memoryGrant} /></> : <p>{statement.partial ? 'Grant details require captured actual XML.' : 'Unavailable in this view.'}</p>}</details>
       <details><summary>Missing indexes ({data?.missingIndexes.length ?? 0})</summary>{data?.missingIndexes.length ? <>
         <p className="plan-diagnostic-note">Optimizer suggestions and estimated impact; assess against the workload before creating an index.</p>
         {data.missingIndexes.map((index, position) => <div key={position} className="plan-diagnostic-detail"><strong>{[index.database, index.schema, index.table].filter(Boolean).join('.')}</strong><Facts values={[
@@ -53,8 +53,8 @@ export function PlanProperties({ statement, node, liveRunning }: { statement?: S
       {statement?.partial && <p className="plan-diagnostic-note">Live totals are partial. Thread, spill and grant details require captured actual XML.</p>}
       <details><summary>Predicates ({diagnostic?.predicates.filter(p => p.columns.length || p.expressions.length).length ?? 0})</summary>{diagnostic?.predicates.filter(p => p.columns.length || p.expressions.length).map((predicate, index) => <div key={index} className="plan-diagnostic-detail"><strong>{predicate.kind}</strong><Facts values={[
         ['Comparison', predicate.comparison], ['Columns', predicate.columns.join(', ')], ['Expressions', predicate.expressions.join('; ')]
-      ]} /></div>)}{!diagnostic?.predicates.some(p => p.columns.length || p.expressions.length) && <p>Unavailable in this XML.</p>}</details>
-      <details><summary>Output columns ({diagnostic?.outputColumns.length ?? 0})</summary>{diagnostic?.outputColumns.length ? <ul>{diagnostic.outputColumns.map((column, index) => <li key={index}>{column || 'Unavailable'}</li>)}</ul> : <p>Unavailable in this XML.</p>}</details>
+      ]} /></div>)}{!diagnostic?.predicates.some(p => p.columns.length || p.expressions.length) && <p>Unavailable in this view.</p>}</details>
+      <details><summary>Output columns ({diagnostic?.outputColumns.length ?? 0})</summary>{diagnostic?.outputColumns.length ? <ul>{diagnostic.outputColumns.map((column, index) => <li key={index}>{column || 'Unavailable'}</li>)}</ul> : <p>Unavailable in this view.</p>}</details>
       {node.warnings.map((warning, index) => <p className="plan-warning" key={index}>{warning}</p>)}
       <Details title="Operator warning details" items={diagnostic?.warnings} />
       <Details title="Spill details" items={diagnostic?.spills} />
@@ -62,7 +62,7 @@ export function PlanProperties({ statement, node, liveRunning }: { statement?: S
         <p className="plan-diagnostic-note">Each entry contains SQL Server's cumulative counters across its executions. Entries are preserved separately, even with repeated thread IDs. Thread 0 can be a coordinator. Detail retention is bounded; aggregates use all entries. Missing values are unavailable.</p>
         {diagnostic?.threads.length ? diagnostic.threads.map((thread, index) => <details key={index}><summary>Thread {amount(thread.thread)} · entry {index + 1}</summary><Facts values={[
           ['Rows', amount(thread.rows)], ['Rows read', amount(thread.rowsRead)], ['Executions', amount(thread.executions)], ['CPU (ms)', amount(thread.cpuMs)], ['Elapsed (ms)', amount(thread.elapsedMs)], ['Actual execution mode', thread.executionMode]
-        ]} /><Attributes properties={thread.properties} /></details>) : <p>{diagnostic?.runtimeDetailsAvailable === false ? 'Per-thread details require captured actual XML.' : 'Unavailable in this XML.'}</p>}
+        ]} /><Attributes properties={thread.properties} /></details>) : <p>{diagnostic?.runtimeDetailsAvailable === false ? 'Per-thread details require captured actual XML.' : 'Unavailable in this view.'}</p>}
       </details>
       <details><summary>Operator properties</summary><Attributes properties={node.properties} /></details>
     </> : <p>Select an operator to inspect its properties.</p>}

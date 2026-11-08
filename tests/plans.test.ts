@@ -1,6 +1,5 @@
 import { readFileSync } from 'node:fs'
 import { gunzipSync } from 'node:zlib'
-import ELK from 'elkjs/lib/elk.bundled.js'
 import { describe, expect, it } from 'vitest'
 import { preparePlan } from '../src/main/plan-request'
 import { validateRequest, validateResult } from '../src/main/validation'
@@ -96,9 +95,8 @@ describe('execution plans', () => {
     expect(union([]).width).toBe(1)
   })
   it('lays out multiple statements in one non-overlapping world with roots left of inputs', async () => {
-    const elk = new ELK({ algorithms: ['layered'] })
     const statements = [statement('s1', [node('a'), node('b', 'a'), node('c', 'a')]), statement('s2', [node('d')])]
-    const layout = await layoutPlans(statements, graph => elk.layout(graph))
+    const layout = layoutPlans(statements)
     expect(layout.nodes).toHaveLength(4)
     expect(layout.edges).toHaveLength(2)
     expect(layout.edges.every(edge => edge.points.length >= 2)).toBe(true)

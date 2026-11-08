@@ -26,7 +26,7 @@ internal sealed class PlanNode
     public double? Executions { get; set; }
     public List<string> Warnings { get; } = [];
     public List<PlanProperty> Properties { get; } = [];
-    // Live's counter-only frames cannot refresh detailed records. Omit the complete object in live topology replies.
+    // Live frames cannot refresh details; optional payloads also yield when the reply budget needs the legacy graph.
     [JsonIgnore] public OperatorDiagnostics Diagnostics { get; } = new();
     [JsonPropertyName("diagnostics"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public OperatorDiagnostics? DiagnosticPayload => Diagnostics.RuntimeDetailsAvailable ? Diagnostics : null;
@@ -42,7 +42,7 @@ internal sealed class PlanStatement
     public List<string> Warnings { get; } = [];
     public List<PlanNode> Nodes { get; } = [];
     [JsonIgnore] public StatementDiagnostics Diagnostics { get; } = new();
-    internal bool IncludeDiagnostics { get; init; } = true;
+    internal bool IncludeDiagnostics { get; set; } = true;
     [JsonPropertyName("diagnostics"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StatementDiagnostics? DiagnosticPayload => IncludeDiagnostics ? Diagnostics : null;
 }
@@ -195,7 +195,18 @@ internal static class PlanParser
             if (!found) throw new RequestException("INVALID_PARAMS", "This document is not SQL Server Showplan XML.");
             if (includeDiagnostics) PlanDiagnostics.ApplyTextBudget(statements, (value, cap) => Bound(value, cap), token);
             var result = new PlanDocument(version, build, statements, omitted ? ["Some plan text, properties or diagnostic details were shortened to stay within the viewer's budgets. The XML source is unchanged."] : []);
-            if (JsonSerializer.SerializeToUtf8Bytes(result).Length > ReplyBytes) throw Limit();
+            if (JsonSerializer.SerializeToUtf8Bytes(result).Length > ReplyBytes)
+            {
+                if (!includeDiagnostics) throw Limit();
+                foreach (var entry in statements)
+                {
+                    entry.IncludeDiagnostics = false;
+                    foreach (var operation in entry.Nodes) operation.Diagnostics.RuntimeDetailsAvailable = false;
+                }
+                result.Notices.Clear();
+                result.Notices.Add("Some plan text, properties or diagnostics were omitted to fit the reply budget. The XML source is unchanged.");
+                if (JsonSerializer.SerializeToUtf8Bytes(result).Length > ReplyBytes) throw Limit();
+            }
             return result;
         }
         catch (XmlException) { throw new RequestException("INVALID_PARAMS", "The execution plan XML is invalid or exceeds the viewer's XML limit. DTDs and external entities are not allowed."); }

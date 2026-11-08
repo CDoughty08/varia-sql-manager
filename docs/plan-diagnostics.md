@@ -46,6 +46,8 @@ runtime aggregates still process every entry after detail truncation. The origin
 Legacy raw fields take text-budget priority so adding details cannot alter identity-bearing scalar properties.
 Diagnostic text is staged under a separate bounded 1 Mi-character allowance, then trimmed to the unused portion of
 the existing output text budget. A parameter value omitted entirely by that budget is unavailable, not an empty value.
+If the detailed payload would exceed the existing reply cap, the optional diagnostic objects are omitted with a notice
+before rejecting a graph that fits without them. Legacy operator fields, counters and identities take priority.
 
 Live sampling retains the existing bounded topology/counter protocol and does not send per-thread diagnostic objects
 or spill/grant details, which would become stale on subsequent counter-only samples. Live CPU/elapsed rankings use

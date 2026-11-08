@@ -127,5 +127,13 @@ internal static class PlanChecks
         PlanDiagnostics.ApplyTextBudget([exhausted], (_, _) => "", default);
         check(exhausted.Diagnostics.Parameters is [{ CompiledValue: null, RuntimeValue: null }, { CompiledValue: "", RuntimeValue: "" }],
             "budget-omitted parameter values are unavailable while genuinely empty values remain available");
+        var shortAttributes = string.Join(' ', "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".Select(letter => letter + "=\"\""));
+        var nearReplyLimit = Open + "<StmtSimple><QueryPlan>" + string.Concat(Enumerable.Repeat("<RelOp PhysicalOp=\"x\"><X " + shortAttributes + "/></RelOp>", 6500))
+            + string.Concat(Enumerable.Repeat("<RelOp PhysicalOp=\"Index Scan\"><Object Table=\"[" + new string('t', 126) + "]\"/></RelOp>", 3500)) + "</QueryPlan></StmtSimple>" + Close;
+        var legacyReply = PlanParser.Parse(new StringReader(nearReplyLimit), includeDiagnostics: false);
+        var diagnosticReply = Parse(nearReplyLimit);
+        check(diagnosticReply.Statements[0].Nodes.Count == legacyReply.Statements[0].Nodes.Count
+            && diagnosticReply.Statements[0].Nodes.All(n => n.DiagnosticPayload is null) && diagnosticReply.Notices.Any(n => n.Contains("reply budget")),
+            "optional diagnostics yield to a legacy graph at the existing reply budget");
     }
 }

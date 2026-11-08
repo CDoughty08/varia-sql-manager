@@ -2,6 +2,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { connectLive } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
+import { checkLargePlan } from './fixtures/large-plan.mjs'
 import { backendReady, outputStatus, outputView, planCanvas, planViewer, queryBarButton } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
@@ -98,6 +99,8 @@ try {
   await expect(page.locator('[data-estimated-plan]')).toHaveCount(0)
   await expect(planViewer(page).getByRole('button', { name: 'Actual', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect(planViewer(page).getByRole('combobox', { name: 'Plan statement' }).getByRole('option')).toHaveCount(1)
+  expect(errors).toEqual([])
+  await checkLargePlan({ application, page, profile, expect })
   expect(errors).toEqual([])
   console.log('Live Plan: changing real operator rows; stable Pixi canvas, zoom and selection through actual capture; cancelled partial plan and GO repetitions.')
 } catch (error) {
