@@ -14,6 +14,9 @@ internal sealed record IndexedObject(string Kind, string Folder, string? Schema,
 {
     /// <summary>What the results show and a name search with a dot matches: schema.name, or the parent's for a child.</summary>
     public string Label => Schema is not null ? Schema + "." + Name : ParentName is not null ? ParentSchema + "." + ParentName + "." + Name : Name;
+
+    /// <summary><see cref="Label"/>'s length, without building it: a search reads it for every name it scans.</summary>
+    public int LabelLength => Schema is not null ? Schema.Length + 1 + Name.Length : ParentName is not null ? (ParentSchema?.Length ?? 0) + ParentName.Length + 2 + Name.Length : Name.Length;
 }
 
 /// <summary>One database's objects as one read of its catalog left them; replaced whole by the next read.</summary>
@@ -273,9 +276,12 @@ internal sealed class SearchMatcher
         _ => "unexpected " + error
     };
 
-    /// <summary>Whether a plain search's longest literal run is in one of these names (always, for a regular expression).</summary>
-    public bool Might(string value, string? other) =>
-        hint.Length == 0 || value.Contains(hint, comparison) || (other is not null && other.Contains(hint, comparison));
+    /// <summary>Whether a plain search's longest literal run is in the object's qualified name or its database (always, for a
+    /// regular expression). The run has no dot, so it lies within one part: the parts are tested without building the name.</summary>
+    public bool Might(IndexedObject item, string? database) =>
+        hint.Length == 0 || Has(item.Name) || Has(item.Schema) || Has(item.ParentSchema) || Has(item.ParentName) || Has(database);
+
+    private bool Has(string? value) => value is not null && value.Contains(hint, comparison);
 
     /// <summary>The first match at or after <paramref name="start"/>.</summary>
     public bool Find(string value, int start, out int index, out int length)
@@ -319,12 +325,17 @@ internal sealed record SearchQuery(string Text, bool CaseSensitive, bool WholeWo
 /// (which name no database) only by a search of the whole server.</summary>
 internal static class IndexSearch
 {
+    /// <summary>A hit as the scan finds it, before its result is built: its rank, the object and where its name matched (From is
+    /// -1 when only its definition did, whose first match it then carries). The scan keeps at most the candidate cap of these;
+    /// labels are built only for the kept ones, and results (match counts, previews, dates) only for the best `limit`.</summary>
+    private readonly record struct Candidate(int Rank, int Score, string? Database, IndexedObject Item, int From, int Length, bool Approximate, int DefinitionAt, int DefinitionLength);
+
     public static ObjectSearchResult Run(ConnectionIndex index, SearchQuery query, SearchMatcher matcher, ObjectIndexLimits limits, ObjectIndexStatus status, CancellationToken token)
     {
         var watch = Stopwatch.StartNew();
         // The candidates, worst first: past the cap a better hit takes the worst one's place, so approximate or definition hits
-        // scanned early never push out an exact one scanned later.
-        var found = new PriorityQueue<(int Rank, int Score, bool System, ObjectSearchHit Hit), (int Rank, int Score, bool System)>(Comparer<(int Rank, int Score, bool System)>.Create((a, b) => b.CompareTo(a)));
+        // scanned early never push out an exact one scanned later. Every other hit past the cap is only counted.
+        var found = new PriorityQueue<Candidate, (int Rank, int Score, bool System)>(Comparer<(int Rank, int Score, bool System)>.Create((a, b) => b.CompareTo(a)));
         var fuzzy = query.Fuzzy && query.Names && !query.Regex ? FuzzyName.Create(query.Text, query.WholeWord) : null;
         var total = 0;
         var scanned = 0;
@@ -349,79 +360,99 @@ internal static class IndexSearch
                     if (watch.Elapsed > limits.SearchBudget) { partial = true; goto done; }
                 }
                 if (query.Kinds is not null && !query.Kinds.Contains(item.Kind)) continue;
-                var hit = Match(name, item, query, matcher, fuzzy, limits, dotted, out var rank, out var score);
-                if (hit is null) continue;
+                if (!Match(name, item, query, matcher, fuzzy, dotted, out var candidate)) continue;
                 total++;
-                if (found.Count < limits.Candidates) found.Enqueue((rank, score, item.System, hit), (rank, score, item.System));
+                var key = (candidate.Rank, candidate.Score, item.System);
+                if (found.Count < limits.Candidates) found.Enqueue(candidate, key);
                 else
                 {
                     partial = true;
-                    if (found.TryPeek(out _, out var worst) && (rank, score, item.System).CompareTo(worst) < 0) found.DequeueEnqueue((rank, score, item.System, hit), (rank, score, item.System));
+                    if (found.TryPeek(out _, out var worst) && key.CompareTo(worst) < 0) found.DequeueEnqueue(candidate, key);
                 }
             }
         }
     done:
-        var hits = found.UnorderedItems.Select(value => value.Element).OrderBy(value => value.Rank).ThenBy(value => value.Score).ThenBy(value => value.System).ThenBy(value => value.Hit.Object.Database ?? "", StringComparer.OrdinalIgnoreCase)
-            .ThenBy(value => value.Hit.Label, StringComparer.OrdinalIgnoreCase).ThenBy(value => value.Hit.Label, StringComparer.Ordinal)
-            .Take(query.Limit).Select(value => value.Hit).ToList();
+        var hits = found.UnorderedItems.Select(value => (Candidate: value.Element, Label: value.Element.Item.Label))
+            .OrderBy(value => value.Candidate.Rank).ThenBy(value => value.Candidate.Score).ThenBy(value => value.Candidate.Item.System)
+            .ThenBy(value => value.Candidate.Database ?? "", StringComparer.OrdinalIgnoreCase)
+            .ThenBy(value => value.Label, StringComparer.OrdinalIgnoreCase).ThenBy(value => value.Label, StringComparer.Ordinal)
+            .Take(query.Limit).Select(value => Build(value.Candidate, value.Label, query, matcher, limits)).ToList();
         return new(hits, total, partial, watch.ElapsedMilliseconds, status);
     }
 
     /// <summary>The rank of a hit only its definition matched.</summary>
     internal const int DefinitionRank = 6;
 
-    private static ObjectSearchHit? Match(string? database, IndexedObject item, SearchQuery query, SearchMatcher matcher, FuzzyName? fuzzy, ObjectIndexLimits limits, bool dotted,
-        out int rank, out int score)
+    /// <summary>Whether <paramref name="item"/> is a hit, with its rank and name range. Builds nothing for a name that matches
+    /// without a dot; a definition is searched here only when the name did not match (the rank needs it), and a name hit's
+    /// definition match waits for <see cref="Build"/>.</summary>
+    private static bool Match(string? database, IndexedObject item, SearchQuery query, SearchMatcher matcher, FuzzyName? fuzzy, bool dotted, out Candidate candidate)
     {
-        rank = DefinitionRank;
-        score = 0;
+        var rank = DefinitionRank;
+        var score = 0;
         var approximate = false;
-        var label = item.Label;
-        int[]? range = null;
+        var from = -1;
+        var span = 0;
         if (query.Names)
         {
-            var offset = label.Length - item.Name.Length;
+            var offset = item.LabelLength - item.Name.Length;
             if (matcher.Find(item.Name, 0, out var at, out var length))
             {
-                range = [offset + at, length];
+                (from, span) = (offset + at, length);
                 rank = length == item.Name.Length ? 0 : at == 0 ? 1 : 2;
             }
             else if (dotted && query.Regex)
             {
-                if (matcher.Find(label, 0, out at, out length)) (range, rank) = ([at, length], 2);
+                if (matcher.Find(item.Label, 0, out at, out length)) (from, span, rank) = (at, length, 2);
             }
-            else if (dotted)
+            else if (dotted && matcher.Might(item, database))
             {
                 // A plain search with a dot matches the qualified name between dots, so a dot marks where a part starts or
                 // ends: .Sales finds the schema Sales and everything in it, Sales. too, and AppData.dbo.Orders the table in
                 // that database. Only the label's part of the match is marked.
+                var label = item.Label;
                 var prefix = database is null ? 1 : database.Length + 2;
-                if (matcher.Might(label, database) && matcher.Find(database is null ? "." + label + "." : "." + database + "." + label + ".", 0, out at, out length))
+                if (matcher.Find(database is null ? "." + label + "." : "." + database + "." + label + ".", 0, out at, out length))
                 {
                     var start = Math.Clamp(at - prefix, 0, label.Length);
                     var end = Math.Clamp(at + length - prefix, 0, label.Length);
-                    range = [start, end - start];
+                    (from, span) = (start, end - start);
                     rank = end == start ? 2 : start == 0 && end == label.Length ? 0 : start == 0 ? 1 : 2;
                 }
             }
-            if (range is null && fuzzy is not null && fuzzy.Match(item.Name, item.Schema ?? item.ParentSchema, item.ParentName, out var tier, out var cost, out var from, out var span))
+            if (from < 0 && fuzzy is not null && fuzzy.Match(item.Name, item.Schema ?? item.ParentSchema, item.ParentName, out var tier, out var cost, out var word, out var width))
             {
-                range = [label.Length - item.Name.Length + from, span];
+                (from, span) = (offset + word, width);
                 (rank, score, approximate) = (3 + (int)tier, cost, true);
             }
         }
+        var definitionAt = -1;
+        var definitionLength = 0;
+        if (from < 0 && !(query.Definitions && item.Definition is { } text && matcher.Find(text, 0, out definitionAt, out definitionLength)))
+        {
+            candidate = default;
+            return false;
+        }
+        candidate = new(rank, score, database, item, from, span, approximate, definitionAt, definitionLength);
+        return true;
+    }
+
+    /// <summary>The result of a hit the search answers: its definition's match count and preview, its ref and its date.</summary>
+    private static ObjectSearchHit Build(Candidate hit, string label, SearchQuery query, SearchMatcher matcher, ObjectIndexLimits limits)
+    {
+        var item = hit.Item;
         DefinitionMatch? definition = null;
-        if (query.Definitions && item.Definition is { } text && matcher.Find(text, 0, out var first, out var size))
+        var (first, size) = (hit.DefinitionAt, hit.DefinitionLength);
+        if (query.Definitions && item.Definition is { } text && (first >= 0 || matcher.Find(text, 0, out first, out size)))
         {
             var count = 1;
             for (var next = first + Math.Max(1, size); count < limits.MatchesCounted && next <= text.Length && matcher.Find(text, next, out var again, out var width); count++)
                 next = again + Math.Max(1, width);
             definition = Preview(text, first, size, count, limits.PreviewChars, item.DefinitionCut);
         }
-        if (range is null && definition is null) return null;
-        var value = new ObjectRefDto(item.Kind, database, item.Schema, item.Name, item.ParentName is null ? null : new ParentRefDto(item.ParentKind!, item.ParentSchema!, item.ParentName));
-        return new(value, item.Folder, label, range, item.Modified?.ToString("yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture), definition, item.Subtype, item.ParentFolder,
-            item.Via is { } via ? new ViaRefDto(via.Schema!, via.Name, via.Folder) : null, approximate ? true : null);
+        var value = new ObjectRefDto(item.Kind, hit.Database, item.Schema, item.Name, item.ParentName is null ? null : new ParentRefDto(item.ParentKind!, item.ParentSchema!, item.ParentName));
+        return new(value, item.Folder, label, hit.From < 0 ? null : [hit.From, hit.Length], item.Modified?.ToString("yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture),
+            definition, item.Subtype, item.ParentFolder, item.Via is { } via ? new ViaRefDto(via.Schema!, via.Name, via.Folder) : null, hit.Approximate ? true : null);
     }
 
     /// <summary>The match's line (1-based) and column, and up to <paramref name="chars"/> characters of that line around it.</summary>

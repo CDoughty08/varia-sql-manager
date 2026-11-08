@@ -6,6 +6,7 @@ import { FuseV1Options, FuseVersion } from '@electron/fuses'
 const require = createRequire(import.meta.url)
 const { fuses, fuseConfig, fuseMismatches, fuseTarget } = require('../build/fuses.cjs')
 const afterPack = require('../build/after-pack.cjs')
+const { nsisTemplateProblem, nsisTemplatePath } = require('../build/nsis-check.cjs')
 
 describe('Electron fuses', () => {
   it('turn off file: privileges, Node mode, NODE_OPTIONS and --inspect, and load only the checked app.asar', () => {
@@ -22,17 +23,25 @@ describe('Electron fuses', () => {
     expect(fuseConfig('darwin').resetAdHocDarwinSignature).toBe(true)
   })
 
-  it('are flipped by electron-builder\'s afterPack hook, after the NSIS backport', async () => {
+  it('are flipped by electron-builder\'s afterPack hook, after the NSIS template check', async () => {
     expect(readFileSync('electron-builder.yml', 'utf8')).toMatch(/^afterPack: build\/after-pack\.cjs$/m)
     // The app must be packed into app.asar for OnlyLoadAppFromAsar: nothing turns asar off.
     expect(readFileSync('electron-builder.yml', 'utf8')).not.toMatch(/^\s*asar:\s*false/m)
-    // The NSIS backport patches electron-builder's installed template on Windows, so only the others run here.
-    for (const platform of ['linux', 'darwin']) {
+    for (const platform of ['win32', 'linux', 'darwin']) {
       const addElectronFuses = vi.fn(async () => {})
       const context = { electronPlatformName: platform, packager: { addElectronFuses } }
       await afterPack(context)
       expect(addElectronFuses).toHaveBeenCalledWith(context, fuseConfig(platform))
     }
+  })
+
+  it('build installers only from a per-user NSIS template with the bounded path copy (electron-builder #9769)', () => {
+    const installed = readFileSync(nsisTemplatePath(), 'utf8')
+    expect(nsisTemplateProblem(installed)).toBeNull()
+    // app-builder-lib 26.8.1's unbounded copy, which intermittently crashed the installer at startup.
+    const unbounded = installed.replace(/^.*lstrcpynW.*$/m, "        System::Call '*$2(&w${NSIS_MAX_STRLEN} .s)'")
+    expect(nsisTemplateProblem(unbounded)).toMatch(/without a bound/)
+    expect(nsisTemplateProblem(installed.replace(/^.*lstrcpynW.*$/m, ''))).toMatch(/template changed/)
   })
 
   it('are read back from a packaged executable by name', () => {

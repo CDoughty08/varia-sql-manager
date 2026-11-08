@@ -60,7 +60,7 @@ export interface SettingPage {
   readonly id: string
   readonly title: string
   readonly parent?: string
-  readonly layout?: 'form' | 'propertyGrid' | 'keyboard'
+  readonly layout?: 'form' | 'propertyGrid' | 'shortcuts'
   readonly provider?: 'theme'
   /** Shown in the description pane while no row is focused, and in docs/settings.md. */
   readonly description?: string

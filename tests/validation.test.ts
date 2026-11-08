@@ -331,4 +331,13 @@ describe('IPC validation', () => {
     expect(connectionCancelSchema.safeParse({ requestIds: ids(16) }).success).toBe(true)
     for (const value of [{ requestIds: [] }, { requestIds: ids(17) }, { requestIds: ['stop'] }, { requestIds: ids(1), all: true }, ids(1)]) expect(connectionCancelSchema.safeParse(value).success, JSON.stringify(value).slice(0, 40)).toBe(false)
   })
+  it('rejects an oversized array at its bound without one issue per element (GHSA-mrhx-c7xc-m3w5)', () => {
+    const oversized = connectionCancelSchema.safeParse({ requestIds: Array.from({ length: 2000 }, () => null) })
+    expect(oversized.success).toBe(false)
+    expect(oversized.error?.issues).toEqual([expect.objectContaining({ code: 'too_big', path: ['requestIds'], maximum: 16 })])
+    // Within the bound, each invalid element is still reported.
+    const invalid = connectionCancelSchema.safeParse({ requestIds: [crypto.randomUUID(), null, 'stop'] })
+    expect(invalid.success).toBe(false)
+    expect(invalid.error?.issues.map(issue => issue.path)).toEqual([['requestIds', 1], ['requestIds', 2]])
+  })
 })
