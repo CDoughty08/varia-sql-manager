@@ -30,12 +30,12 @@ import { legacyCodePage } from './text-encoding'
 import { LayoutStore } from './layout-store'
 import { ConnectionStore } from './connection-store'
 import { SavedPasswordStore } from './saved-passwords'
-import { safeStorageCipher, testCipher } from './secret-cipher'
+import { lockedCipher, safeStorageCipher, testCipher } from './secret-cipher'
 import { prepare as prepareConnection, settle as settleConnection, type Settled } from './connection-requests'
 import { connectionLibrary } from './connection-library'
 import { clearEntraPrompt, clearEntraTokenCache } from './entra'
 import { SettingsStore } from './settings-store'
-import { sandboxRefusal, stripRemoteDebugging } from './sandbox-guard'
+import { packagedSmokeVariable, sandboxRefusal, smokeDebuggingProfile, stripRemoteDebugging } from './sandbox-guard'
 import { refuseDownloads } from './download-guard'
 import { ShortcutStore, shortcutHandlers } from './shortcut-store'
 import { effectiveRules } from '../shared/commands/effective'
@@ -79,8 +79,10 @@ import { Updater } from './updater'
 import { applyUpdate, installTargetFor, removeReplacedPortable, testUpdateTarget, type InstallTarget } from './update-install'
 import { assetUrl, releasesPageUrl, updateErrors, updateFeedUrl, type InstallKind } from '../shared/updates'
 
-// First, before Chromium reads its command line for the DevTools handler: a packaged build never opens a debugging port.
-const remoteDebugging = stripRemoteDebugging(app.commandLine, app.isPackaged)
+// First, before Chromium reads its command line for the DevTools handler: a packaged build never opens a debugging port,
+// except for its own smoke tests on a throwaway profile, where it decrypts no saved password (sandbox-guard.ts).
+const smokeProfile = smokeDebuggingProfile({ packaged: app.isPackaged, env: process.env, commandLine: app.commandLine, defaultProfile: join(app.getPath('appData'), app.getName()), platform: process.platform })
+const remoteDebugging = stripRemoteDebugging(app.commandLine, app.isPackaged, smokeProfile)
 const here = dirname(fileURLToPath(import.meta.url))
 const rendererDir = join(here, '../renderer')
 const developmentUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined
@@ -160,6 +162,10 @@ let updateTarget: InstallTarget | undefined
 const testUpdateFeed = testSeams && /^http:\/\/127\.0\.0\.1:\d{1,5}\/$/.test(process.env.VARIA_TEST_UPDATE_FEED ?? '') ? process.env.VARIA_TEST_UPDATE_FEED : undefined
 // Tests use their own profile so layout checks never modify the user's workspace preferences.
 if (process.env.VARIA_SMOKE_TEST === '1' && process.env.VARIA_TEST_USER_DATA) app.setPath('userData', process.env.VARIA_TEST_USER_DATA)
+if (smokeProfile) {
+  app.setPath('userData', smokeProfile)
+  console.error(`Remote debugging is on for a packaged smoke run (${packagedSmokeVariable}=1) on its own profile; saved passwords are locked.`)
+}
 // Tools › Options. Constructing it reads nothing; code that acts on a value awaits load(), and current() is for menu titles.
 const settings = new SettingsStore(join(app.getPath('userData'), 'settings.json'), join(app.getPath('userData'), 'scripting-options.json'))
 // File › Recent Files. macOS's Dock menu follows it, except in smoke runs, which must not add to the user's.
@@ -792,7 +798,7 @@ app.whenReady().then(async () => {
   layouts = new LayoutStore(join(app.getPath('userData'), 'workspace-layouts.json'))
   const connectionStore = new ConnectionStore(join(app.getPath('userData'), 'connections.json'))
   // Remember password: OS-protected ciphertext beside connections.json, read and decrypted only here (saved-passwords.ts).
-  const secretCipher = testSeams && process.env.VARIA_TEST_SAFE_STORAGE === 'test' ? testCipher() : safeStorageCipher(safeStorage, process.platform)
+  const secretCipher = smokeProfile ? lockedCipher() : testSeams && process.env.VARIA_TEST_SAFE_STORAGE === 'test' ? testCipher() : safeStorageCipher(safeStorage, process.platform)
   const savedPasswords = new SavedPasswordStore(join(app.getPath('userData'), 'saved-passwords.json'), secretCipher)
   const library = connectionLibrary({ connections: connectionStore, savedPasswords })
   // The window's first paint uses the chosen theme; initialize() gives up waiting after 1.5 s and applies late results live.

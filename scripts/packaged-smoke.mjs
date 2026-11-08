@@ -1,8 +1,10 @@
 import { chromium, expect } from '@playwright/test'
 import { spawn, spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { createServer } from 'node:net'
-import { dirname, resolve } from 'node:path'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { getCurrentFuseWire } from '@electron/fuses'
 import { backendReady } from './fixtures/ui.mjs'
@@ -31,14 +33,18 @@ if (problems.length) throw new Error(`Packaged app.asar: ${problems.join('; ')}`
 const interpreted = readyToRunAssemblies.filter(name => !isReadyToRun(resolve(resources, 'backend', name)))
 if (interpreted.length) throw new Error(`Packaged backend assemblies are not ReadyToRun: ${interpreted.join(', ')}`)
 
-// VARIA_PACKAGED_PROFILE=<dir> runs it on its own profile instead of the user's (a local run). With --inspect fused off, Playwright's Electron launcher cannot attach to main; connect to Chromium's debugging port.
+// With --inspect fused off, Playwright's Electron launcher cannot attach to main; connect to Chromium's debugging port. A
+// packaged build keeps that port only with VARIA_PACKAGED_SMOKE=1 and a profile other than the user's (sandbox-guard.ts):
+// VARIA_PACKAGED_PROFILE=<dir>, or a fresh temporary one.
 const server = createServer()
 await new Promise((resolveListen, reject) => server.once('error', reject).listen(0, '127.0.0.1', resolveListen))
 const port = server.address().port
 await new Promise(resolveClose => server.close(resolveClose))
-const env = { ...process.env }
+const env = { ...process.env, VARIA_PACKAGED_SMOKE: '1' }
 delete env.ELECTRON_RUN_AS_NODE
-const args = [`--remote-debugging-port=${port}`, ...(process.env.VARIA_PACKAGED_PROFILE ? [`--user-data-dir=${resolve(process.env.VARIA_PACKAGED_PROFILE)}`] : []), ...(process.getuid?.() === 0 ? ['--no-sandbox'] : [])]
+const temporaryProfile = process.env.VARIA_PACKAGED_PROFILE ? undefined : mkdtempSync(join(tmpdir(), 'varia-packaged-smoke-'))
+const profile = temporaryProfile ?? resolve(process.env.VARIA_PACKAGED_PROFILE)
+const args = [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, ...(process.getuid?.() === 0 ? ['--no-sandbox'] : [])]
 const child = spawn(executable, args, { env, stdio: 'ignore' })
 let browser
 try {
@@ -73,4 +79,5 @@ try {
     if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
     else child.kill('SIGKILL')
   }
+  if (temporaryProfile) rmSync(temporaryProfile, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 })
 }

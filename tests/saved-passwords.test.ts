@@ -331,7 +331,7 @@ describe('secret storage lint', () => {
       if (file === main) {
         expect(named, name).toHaveLength(2)
         expect(text).toMatch(/^import \{[^}]*\bsafeStorage\b[^}]*\} from 'electron'$/m)
-        expect(text).toContain("const secretCipher = testSeams && process.env.VARIA_TEST_SAFE_STORAGE === 'test' ? testCipher() : safeStorageCipher(safeStorage, process.platform)")
+        expect(text).toContain("const secretCipher = smokeProfile ? lockedCipher() : testSeams && process.env.VARIA_TEST_SAFE_STORAGE === 'test' ? testCipher() : safeStorageCipher(safeStorage, process.platform)")
       } else expect(named, name).toEqual([])
       expect(text, name).not.toMatch(/safeStorage\./)
     }
