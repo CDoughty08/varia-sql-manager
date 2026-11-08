@@ -11,7 +11,20 @@ ignoreCrashedTargetReplies()
  */
 export const expect = baseExpect.configure({ timeout: process.platform === 'win32' ? 15000 : 5000 })
 
+/**
+ * Settles as `promise` does or, after `ms`, with `onTimeout()`'s value (or its throw), and clears its timer either way.
+ * Race app.close() or an exit only through this: a bare setTimeout or timers/promises delay in a Promise.race stays
+ * pending after the app closes and keeps the suite's process alive for its full length (10 to 30 s a suite).
+ */
+export function within(promise, ms, onTimeout = () => undefined) {
+  let timer
+  const timeout = new Promise((resolve, reject) => { timer = setTimeout(() => { try { resolve(onTimeout()) } catch (error) { reject(error) } }, ms) })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+}
+
 const slowMs = 500
+/** How long app.close() may take before the fixture kills the app; a healthy close takes a few seconds, even on Windows runners. */
+export const closeMs = 45_000
 export const frameRateSwitch = '--disable-frame-rate-limit'
 
 /** Records main's file opens, flushes, and renames that take `slowMs` or longer, or fail other than as missing or taken. */
@@ -55,6 +68,22 @@ async function reportFileOperations(application) {
 const running = new Set()
 const killTree = pid => { try { execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* Already gone. */ } }
 if (process.platform === 'win32') process.on('exit', () => { for (const pid of running) killTree(pid) })
+
+/**
+ * Closes the app within `ms`. A close that never finished (a prompt nobody answers, a wedged main) used to hang its suite to
+ * the job's 25 minute timeout, hiding the error that sent the suite to its finally block. Past `ms` this kills the app,
+ * fails the suite through the exit code, and returns without throwing, so that error still propagates and prints.
+ */
+export async function boundedClose(application, close, ms = closeMs) {
+  const closing = Promise.resolve().then(close)
+  let hung = false
+  await within(closing, ms, () => { hung = true })
+  if (!hung) return
+  closing.catch(() => {})
+  console.error(`The app did not close within ${ms / 1000} s: killed it, and the suite fails. Its own error, if any, follows.`)
+  application.process()?.kill('SIGKILL')
+  process.exitCode = 1
+}
 
 /** Emulates reduced motion in every window, and has firstWindow() return a window only once it applies there. */
 function reduceMotion(application) {
@@ -112,7 +141,7 @@ export const electron = {
     if (!motion) reduceMotion(application)
     const close = application.close.bind(application)
     const profile = await startProfile(application)
-    application.close = async () => { await reportFileOperations(application); await profile?.(); return close() }
+    application.close = async () => { await reportFileOperations(application); await profile?.(); await boundedClose(application, close) }
     return application
   }
 }

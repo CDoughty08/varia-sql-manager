@@ -3,7 +3,7 @@
 // Save Results As, XML, JSON and plan values in their own tabs, Messages, lifecycle, the memory indicator, the grid's
 // menu, styling, panes and tabs. Then, with VARIA_TEST_SQL_SERVER set, part B repeats the essentials against that
 // server through the Release backend. No assertion depends on absolute pixel sizes.
-import { electron, expect } from './fixtures/smoke.mjs'
+import { electron, expect, within } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
@@ -1794,7 +1794,7 @@ try {
   // of 100,000 rows matches the server's rows; a FOR XML PATH value opens in its own tab; and a SQL error sits between
   // the messages printed around it.
   if (process.env.VARIA_TEST_SQL_SERVER) {
-    await Promise.race([application.close(), new Promise(resolve => setTimeout(resolve, 10000))]).catch(() => {})
+    await within(application.close(), 10000).catch(() => {})
     child?.kill()
     const liveProfile = await mkdtemp(resolve('artifacts', 'results-live-profile-')), liveSaves = await mkdtemp(resolve('artifacts', 'results-live-save-'))
     cleanups.push(() => rm(liveProfile, { recursive: true, force: true }), () => rm(liveSaves, { recursive: true, force: true }))
@@ -1971,7 +1971,7 @@ try {
   throw error
 } finally {
   clearTimeout(watchdog)
-  await Promise.race([application.close(), new Promise(resolve => setTimeout(resolve, 10000))]).catch(() => {})
+  await within(application.close(), 10000).catch(() => {})
   child?.kill()
   await rm(profile, { recursive: true, force: true }).catch(() => {})
   await rm(control, { recursive: true, force: true }).catch(() => {})

@@ -106,13 +106,15 @@ internal static class ServerFilesChecks
     {
         var host = new StuckHost();
         using var service = new ActionService(host);
-        service.Options.BrowseBudget = TimeSpan.FromMilliseconds(400);
+        // A listing's job must reach its open within the budget, which starts with the request; a starved CI runner can start
+        // the job's Task.Run hundreds of milliseconds late, and a job cancelled before its gate never opens.
+        service.Options.BrowseBudget = TimeSpan.FromMilliseconds(1000);
         service.Options.GateWait = TimeSpan.FromSeconds(5);
         var servers = Enumerable.Range(0, service.Options.ReadTotal).Select(_ => Guid.NewGuid().ToString()).ToList();
         ActionDescribeArgs Listing(string connectionId) => new(connectionId, Guid.NewGuid().ToString(), "serverFiles", Server, new("backup", "\\\\unreachable\\share\\"));
         var stuck = servers.Select(server => service.DescribeAsync(Listing(server), CancellationToken.None)).ToList();
         var watch = Stopwatch.StartNew();
-        while (host.Held < servers.Count && watch.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(10);
+        while (host.Held < servers.Count && watch.Elapsed < TimeSpan.FromSeconds(15)) await Task.Delay(10);
         var timedOut = await Task.WhenAll(stuck);
         var second = await service.DescribeAsync(Listing(servers[0]), CancellationToken.None);
         host.Blocking = false;
@@ -126,7 +128,7 @@ internal static class ServerFilesChecks
         var heldWhile = host.Held;
         host.Release();
         watch.Restart();
-        while (service.ActiveJobs > 0 && watch.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(10);
+        while (service.ActiveJobs > 0 && watch.Elapsed < TimeSpan.FromSeconds(15)) await Task.Delay(10);
         check(timedOut.All(result => result.Error?.Code == "TIMEOUT") && heldWhile == servers.Count && second.Error?.Code == "TIMEOUT" && host.Opened == servers.Count + 2
             && sameServer == "CONNECTION_LOST" && otherServer == "CONNECTION_LOST" && service.ActiveJobs == 0 && service.RunningCount == 0,
             "listings stuck past their budget hold only the picker's own gate: a second listing on that server waits for it, and describes on that server and others still open (their unreachable fake answers CONNECTION_LOST, not BUSY): "
@@ -144,7 +146,7 @@ internal static class ServerFilesChecks
         public int Opened => Volatile.Read(ref opened);
         public void Release() => released.TrySetResult();
         public ServerProfile Profile(string connectionId) => Box2022;
-        public SqlConnection Connection(string connectionId) => new("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false");
+        public SqlConnection Connection(string connectionId) => new("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false");
         public async Task OpenAsync(SqlConnection connection, CancellationToken token)
         {
             Interlocked.Increment(ref opened);
@@ -169,7 +171,7 @@ internal static class ServerFilesChecks
         public SqlConnection Connection(string connectionId)
         {
             Interlocked.Increment(ref Connections);
-            return new SqlConnection("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false");
+            return new SqlConnection("Data Source=" + Unreachable.Source + ";Connect Timeout=1;Pooling=false;Encrypt=false");
         }
         public Task OpenAsync(SqlConnection connection, CancellationToken token) => connection.OpenAsync(token);
         public bool ClearPoolsFor(string connectionId, string database) => true;

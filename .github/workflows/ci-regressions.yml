@@ -55,7 +55,7 @@ jobs:
           global-json-file: global.json
           cache: true
           cache-dependency-path: backend/Varia.Backend/packages.lock.json
-      - run: npm ci
+      - run: npm ci --no-audit --no-fund
       - name: Type check, offline .NET checks, vitest, production build
         id: check
         run: npm run check
