@@ -45,7 +45,9 @@ default. While it is off, pinned tabs still reopen, and a close asks about unsav
 ## Storage
 
 `<userData>/Session/session.json` (`src/main/session-store.ts`): 0700 folder and 0600 file on POSIX, atomic writes,
-strict zod schemas on both the request and the file, invalid files quarantined. The next start takes it and renames it
+strict zod schemas on both the request and the file, invalid files quarantined. Each start deletes quarantined files
+older than Keep AutoRecover information for, as AutoRecover's own purge does, and every interrupted write's temporary
+file; with settings unreadable it deletes nothing. The next start takes it and renames it
 `previous.json`, kept until that run closes. A new session replaces both, or a close with nothing to reopen deletes both. A run that
 crashes after restoring leaves `previous.json`, and the next process's first page reopens it again, while AutoRecover
 offers what changed since in its Recover dialog: a restore never loses text. A renderer crash after the restore is the

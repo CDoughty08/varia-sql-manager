@@ -1,6 +1,6 @@
 import { constants } from 'node:fs'
-import { access, chmod, lstat, open, realpath, rm, stat } from 'node:fs/promises'
-import { basename, dirname, extname, join, resolve } from 'node:path'
+import { access, chmod, lstat, open, readlink, realpath, rm, stat } from 'node:fs/promises'
+import { basename, dirname, extname, join, parse, resolve, sep } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { documentKinds, type DocumentKind, type FileChange, type FileEncoding, type OpenSqlFile, type SaveSqlFile, type SqlFile } from '../shared/contracts'
@@ -90,6 +90,21 @@ export const fileCheckLimits = { concurrency: 2, timeoutMs: 2000 } as const
 /** The largest file any document kind saves: a change check hashes up to this, so a large saved value is not misread. */
 const maxStampBytes = Math.max(...Object.values(fileKinds).map(kind => kind.maxBytes))
 
+interface OwnerFacts { readonly mode: number; readonly uid: number }
+interface LinkFacts extends OwnerFacts { isSymbolicLink(): boolean }
+/** Links a save follows at most, as Linux's own limit (MAXSYMLINKS). */
+const maxLinkHops = 40
+
+/**
+ * Whether Linux's fs.protected_symlinks would refuse `uid` to follow `link` in `folder`: a world-writable sticky folder
+ * (/tmp) where the link belongs neither to the follower nor to the folder's owner. Varia resolves a link before it saves,
+ * and writes beside the target, so it must refuse what the kernel would: otherwise another user's link in /tmp would
+ * point a save at any file the saver may write.
+ */
+export function protectedLinkRefused(folder: OwnerFacts, link: OwnerFacts, uid: number): boolean {
+  return (folder.mode & 0o1002) === 0o1002 && link.uid !== uid && link.uid !== folder.uid
+}
+
 export interface SqlFileStoreOptions {
   /** The ANSI code page's WHATWG label for files that are neither UTF-8 nor UTF-16 (`legacyCodePage`); read when needed. */
   readonly legacyLabel?: () => string
@@ -99,6 +114,13 @@ export interface SqlFileStoreOptions {
   readonly replace?: typeof replaceFile
   /** Resolves symbolic links; tests make it fail as it does on some volumes. */
   readonly realpath?: (path: string) => Promise<string>
+  /** Looks at a path without following a link, and at a link's folder; tests give a link and its folder other owners. */
+  readonly lstat?: (path: string) => Promise<LinkFacts>
+  readonly folderStat?: (path: string) => Promise<OwnerFacts>
+  /** Reads a link's text; tests let a regular file stand in for a link. */
+  readonly readlink?: (path: string) => Promise<string>
+  /** The saving user's id on POSIX (`process.getuid`); tests stand in for another user. */
+  readonly uid?: number
   /** Looks at a registered file for a change check; tests make it slow, as a network share can be. */
   readonly stat?: (path: string) => Promise<{ isFile(): boolean; size: number; mtimeMs: number }>
 }
@@ -327,8 +349,14 @@ export class SqlFileStore {
   release(fileId: string): void { this.files.delete(fileId); this.stamps.delete(fileId); this.conflicts.delete(fileId) }
   clear(): void { this.files.clear(); this.stamps.clear(); this.conflicts.clear() }
   private get platform(): NodeJS.Platform { return this.options.platform ?? process.platform }
-  /** Where a save writes: a symbolic link's target, so the link stays a link; the path itself for a new file. */
+  /**
+   * Where a save writes: a symbolic link's target, so the link stays a link; the path itself for a new file. On POSIX the
+   * path is resolved here (`resolveCheckingLinks`) rather than by realpath, which follows links through readlink and so
+   * escapes the kernel's fs.protected_symlinks rule.
+   */
   private async writeTarget(path: string): Promise<string> {
+    const uid = this.options.uid ?? process.getuid?.()
+    if (this.platform !== 'win32' && uid !== undefined) return this.resolveCheckingLinks(path, uid)
     try { return await (this.options.realpath ?? realpath)(path) }
     catch (error) {
       if (missing(error)) return path
@@ -336,6 +364,42 @@ export class SqlFileStore {
       if (!(await lstat(path)).isSymbolicLink()) return path
       throw error
     }
+  }
+  /**
+   * Resolves `path` component by component as realpath does, but refuses every link, at any component, that Linux's
+   * fs.protected_symlinks would not let `uid` follow (`protectedLinkRefused`, judged against the real folder holding the
+   * link). It fails closed: a component it cannot look at is an error, unless it is missing, when it and the rest of the
+   * path are a new file. Its result is the write target, so no unchecked resolution runs after the check.
+   */
+  private async resolveCheckingLinks(path: string, uid: number): Promise<string> {
+    const lookAt = this.options.lstat ?? lstat
+    const linkText = this.options.readlink ?? ((link: string) => readlink(link))
+    const parts = (text: string) => text.split(sep).filter(part => part !== '' && part !== '.')
+    const absolute = resolve(path)
+    let resolved = parse(absolute).root
+    let rest = parts(absolute.slice(resolved.length))
+    let hops = 0
+    while (rest.length > 0) {
+      const part = rest.shift() as string
+      if (part === '..') { resolved = dirname(resolved); continue }
+      const candidate = join(resolved, part)
+      let facts: LinkFacts
+      try { facts = await lookAt(candidate) }
+      catch (error) {
+        if (missing(error)) return join(candidate, ...rest)
+        throw error
+      }
+      if (!facts.isSymbolicLink()) { resolved = candidate; continue }
+      if (++hops > maxLinkHops) throw new Error(`${basename(path)} goes through too many symbolic links.`)
+      if (protectedLinkRefused(await (this.options.folderStat ?? stat)(resolved), facts, uid)) {
+        throw new Error(`${basename(path)} goes through a symbolic link another user made in a shared folder. Varia SQL Manager does not save through it; use Save As to choose another file.`)
+      }
+      const target = await linkText(candidate)
+      const root = parse(target).root
+      if (root !== '') resolved = root
+      rest = [...parts(target.slice(root.length)), ...rest]
+    }
+    return resolved
   }
   /**
    * The registration, other than `except`, of the file at `path`: the same path (in any case on Windows), or the same

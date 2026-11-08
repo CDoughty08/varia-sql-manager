@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { isCommandId, type CommandId } from './catalog'
 import { KeySpecError, parseKeySpec, platforms, type Platform } from './keybindings'
 import { scopeIds, type ScopeId } from './scopes'
+import { boundedRecord } from '../zod-bounds'
 
 /**
  * The user's shortcuts file, `<userData>/shortcuts.json`, which only main reads and writes. Bindings are additions and
@@ -72,7 +73,7 @@ export const shortcutFileSchema = z.strictObject({
   version: z.literal(shortcutFileVersion),
   scheme: z.string().regex(/^[a-z][A-Za-z0-9]*$/).max(shortcutLimits.scheme),
   bindings: z.array(shortcutBindingSchema).max(shortcutLimits.bindings),
-  gestures: z.record(z.string().regex(gestureIdPattern).refine(isGestureIdText, 'not a gesture id'), z.string().regex(gestureChoicePattern)).refine(value => Object.keys(value).length <= shortcutLimits.gestures, `at most ${shortcutLimits.gestures} gestures`),
+  gestures: boundedRecord(z.record(z.string().regex(gestureIdPattern).refine(isGestureIdText, 'not a gesture id'), z.string().regex(gestureChoicePattern)), shortcutLimits.gestures, `at most ${shortcutLimits.gestures} gestures`),
   unknown: z.array(unknownRecordSchema).max(shortcutLimits.unknown)
 })
 
