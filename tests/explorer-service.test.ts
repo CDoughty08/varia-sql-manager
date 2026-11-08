@@ -13,7 +13,7 @@ import { actionContextValues, actionMenuState } from '../src/shared/actions/cata
 import { ssisVerbContextValues, ssisVerbMenuState } from '../src/shared/ssis/catalog'
 import { rowIndex, RowKind, rowKindOf, syntheticId, treeKey } from '../src/renderer/src/explorer/tree-model'
 import { connectionInfo, connectionOptions } from './fixtures/workbench'
-import { meterWork } from './fixtures/work-meter'
+import { heavyTimeout, meterWork } from './fixtures/work-meter'
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
 const uuid = (n: number) => `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`
@@ -1092,7 +1092,7 @@ describe('ExplorerService: reconcile', () => {
     expect(f.explorer.node(tables)!.children).toHaveLength(99_001)
     expect(f.explorer.node(tables)!.children!.at(-1)!.label).toBe('dbo.Extra')
     expect(f.explorer.getSnapshot().announcement?.text).toBe('Tables: 1 added, 1 removed')
-  })
+  }, heavyTimeout)
   it('reconciles 99,000 leaves with bounded work while 300 loads wait on another server', async () => {
     const f = fixture()
     f.state.tables = Array.from({ length: 300 }, (_, index) => `dbo.Wait${index}`)
@@ -1118,7 +1118,7 @@ describe('ExplorerService: reconcile', () => {
     expect(f.explorer.node(tables)!.children).toHaveLength(99_001)
     expect(f.explorer.getSnapshot().announcement?.text).toBe('Tables: 1 added, 1 removed')
     expect(f.explorer.context.getSnapshot().explorerLoading).toBe(true)
-  })
+  }, heavyTimeout)
 })
 
 describe('ExplorerService: seek', () => {
@@ -1811,7 +1811,7 @@ describe('ExplorerService: memory and speed', () => {
       expect(table.get(root)).toBeUndefined()
       expect(table.size).toBe(4)
     } finally { table.delete = remove }
-  })
+  }, heavyTimeout)
 })
 
 describe('ExplorerService: lifecycle', () => {

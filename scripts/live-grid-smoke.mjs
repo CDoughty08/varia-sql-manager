@@ -5,7 +5,7 @@
 // samples saves the newest revision; the sort hook reorders the next revision; an append log follows its tail, counts the
 // rows that arrive while it is scrolled up, opens where it was when mounted again over its kept state, and jumps back to
 // the tail; a view that stops says its rows are gone, as Copy does; a killed backend's grid says it lost its rows.
-import { electron, expect } from './fixtures/smoke.mjs'
+import { electron, expect, within } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { gridPart, gridTones, liveGrid, liveGridFrame, liveGridNewRows, liveGridOverlay, liveGridSelector, liveGridStrip, backendReady } from './fixtures/ui.mjs'
@@ -201,6 +201,6 @@ try {
 } finally {
   clearTimeout(watchdog)
   await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) }).catch(() => {})
-  await Promise.race([app.close(), new Promise(done => setTimeout(done, 15000)).then(() => app.process()?.kill())]).catch(() => {})
+  await within(app.close(), 15000, () => app.process()?.kill()).catch(() => {})
   await rm(profile, { recursive: true, force: true }).catch(() => {})
 }

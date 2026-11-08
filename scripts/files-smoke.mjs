@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import electronPath from 'electron'
 import { codePageName, legacyCodePage } from '../src/main/text-encoding.ts'
-import { activeDocument, backendReady, banner as bannerOf, caretStatus, documentTabs, encodingStatus, inputModeStatus, lineEndingStatus, outputStatus, part, queryBarButton, queryFact, queryFacts, queryStatus, readOnlyMark, readOnlyStatus, selectOpenDocument, statusBar, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocument, backendReady, banner as bannerOf, caretStatus, documentTabs, encodingStatus, inputModeStatus, lineEndingStatus, outputStatus, part, queryBarButton, queryFact, queryFacts, queryStatus, readOnlyMark, readOnlyStatus, documentTab, selectOpenDocument, statusBar, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'files-profile-'))
@@ -50,6 +50,18 @@ const saveDialogs = () => application.evaluate(() => globalThis.variaFiles.saveD
 const textbox = () => page.locator('.monaco-editor [role="textbox"]')
 const tabs = () => documentTabs(page).getByRole('tab')
 const activeTab = () => activeDocument(page)
+/**
+ * Closes the active file `name` with Ctrl+W (⌘W) and waits for its tab to go. The file task that opened it keeps the
+ * workbench busy for a moment after its tab is active, and Close does nothing then; the close is a file task too, and
+ * until it ends the tab still shows. So a later check that an open activated `name` again would pass on the stale tab
+ * (an open main hands over waits for the close), and the next Ctrl+W would close whichever query was active after it.
+ */
+async function closeActiveFile(name) {
+  await expect(activeTab()).toHaveAttribute('aria-label', name)
+  await expect(toolbarButton(page, 'Open')).toBeEnabled()
+  await page.keyboard.press(mac ? 'Meta+W' : 'Control+W')
+  await expect(documentTab(page, name)).toHaveCount(0)
+}
 const queryBar = () => queryStatus(page)
 const banner = () => bannerOf(page)
 const bytes = async path => [...await readFile(path)]
@@ -82,7 +94,7 @@ try {
   await expect(tabs()).toHaveCount(2)
   await expect(activeTab()).toHaveAttribute('aria-label', 'launched.sql')
   await expect(page.locator('.monaco-editor .view-lines')).toContainText('SELECT 42')
-  await page.keyboard.press(mac ? 'Meta+W' : 'Control+W')
+  await closeActiveFile('launched.sql')
   await expect(tabs()).toHaveCount(1)
   console.log('Files checks: a file named on the command line opens once the workbench is ready.')
 
@@ -392,14 +404,14 @@ try {
     const recentMenu = page.getByRole('menu', { name: 'Recent Files', exact: true })
     await expect(recentMenu.getByRole('menuitem').first()).toContainText('second.sql')
     await recentMenu.getByRole('menuitem', { name: /launched\.sql/ }).click({ force: true })
-    await expect(activeTab()).toHaveAttribute('aria-label', 'launched.sql')
-    await page.keyboard.press('Control+W')
+    await closeActiveFile('launched.sql')
   }
   // The native menu (macOS's menu bar) opens an entry through main.
   const launchedItem = (await nativeRecent()).find(item => item.label.endsWith('launched.sql'))
   await application.evaluate(({ Menu }, id) => Menu.getApplicationMenu().getMenuItemById(id).click(), launchedItem.id)
-  await expect(activeTab()).toHaveAttribute('aria-label', 'launched.sql')
-  await page.keyboard.press(mac ? 'Meta+W' : 'Control+W')
+  await closeActiveFile('launched.sql')
+  // Neither close took another query with it.
+  await expect(documentTab(page, 'second.sql')).toHaveCount(1)
   await expect.poll(async () => (await nativeRecent())[0].label).toMatch(/launched\.sql$/)
   // A deleted entry: Remove takes it off the list.
   await rm(launched)

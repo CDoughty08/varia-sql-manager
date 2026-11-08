@@ -23,10 +23,19 @@ if (args is [SearchBench.Argument])
 
 var passed = 0;
 var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+// VARIA_TEST_SLOW_MS=<ms> prints each check reached more than that long after the previous one (to stderr), to find the
+// waits that make the run slow (docs/ci.md).
+var slowMs = int.TryParse(Environment.GetEnvironmentVariable("VARIA_TEST_SLOW_MS"), out var slow) && slow > 0 ? slow : 0;
+var sinceCheck = System.Diagnostics.Stopwatch.StartNew();
 void Check(bool condition, string name)
 {
+    if (slowMs > 0)
+    {
+        if (sinceCheck.ElapsedMilliseconds > slowMs) Console.Error.WriteLine("Slow check (" + sinceCheck.ElapsedMilliseconds + " ms since the previous one): " + (name.Length > 120 ? name[..120] : name));
+        sinceCheck.Restart();
+    }
     if (!condition) throw new Exception("FAIL: " + name);
-    passed++;
+    Interlocked.Increment(ref passed);
 }
 // CI's live jobs (`--live-group k/n`) run only their share of the live suites (LiveGroups), and no offline checks: Check (ubuntu) runs those.
 var liveGroup = LiveGroups.Parse(args);
@@ -248,47 +257,57 @@ if (liveGroup is null)
     catch (RequestException error) { Check(error.Code == "INVALID_PARAMS", "backend rejects invalid advanced ranges"); }
     try { ConnectionSettings.Build(settings with { Advanced = new(ColumnEncryption: true, SecureEnclaves: true, AttestationProtocol: "HGS") }); throw new Exception("Missing attestation URL accepted"); }
     catch (RequestException error) { Check(error.Code == "INVALID_PARAMS", "HGS requires an attestation URL"); }
-    ProtocolChecks.Run(Check);
-    PageChecks.Run(Check);
-    HostChecks.Run(Check);
-    await LiveChecks.RunAsync(Check);
-    await LiveSchedulerChecks.RunAsync(Check);
-    await LiveTableChecks.RunAsync(Check);
-    await ConnectionFailureChecks.RunAsync(Check);
-    await ConnectionFailureChecks.IdentityAsync(Check);
-    SessionChecks.Run(Check);
-    PlanChecks.Run(Check);
-    EstimatedPlanChecks.Run(Check);
-    ClientStatisticsChecks.Run(Check);
-    await EntraChecks.RunAsync(Check);
-    StoreChecks.Run(Check);
-    CellLengthChecks.Run(Check);
-    await TextChecks.RunAsync(Check);
-    await ExplorerChecks.RunAsync(Check);
-    await PeekChecks.RunAsync(Check);
-    SearchChecks.Run(Check);
-    await ScriptingChecks.RunAsync(Check);
-    await ActionChecks.RunAsync(Check);
-    await ServerFilesChecks.RunAsync(Check);
-    await SeamChecks.RunAsync(Check);
-    await ActionProgressChecks.RunAsync(Check);
-    await AttachChecks.RunAsync(Check);
-    await RestoreChecks.RunAsync(Check);
-    await LoginChecks.RunAsync(Check);
-    await LoginActionChecks.RunAsync(Check);
-    await LoginDeleteChecks.RunAsync(Check);
-    await UnlockChecks.RunAsync(Check);
-    LoginPropertiesChecks.Run(Check);
-    SecurablesChecks.Run(Check);
-    await LoginKindsChecks.RunAsync(Check);
-    DatabasePropertiesChecks.Run(Check);
-    DesignerChecks.Run(Check);
-    NewDatabaseChecks.Run(Check);
-    await SsisChecks.RunAsync(Check);
-    ActivityChecks.Run(Check);
-    ActivitySourceChecks.Run(Check);
-    await ActivityActionChecks.RunAsync(Check, json);
-    SsisOperationsChecks.Run(Check);
+    // The offline suites, timed (OfflineSuites: weights, lanes and the suites that must run alone).
+    static Func<Task> Sync(Action run) => () => { run(); return Task.CompletedTask; };
+    (string Name, Func<Task> Run)[] offlineSuites = [
+        ("Protocol", Sync(() => ProtocolChecks.Run(Check))),
+        ("Page", Sync(() => PageChecks.Run(Check))),
+        ("Host", Sync(() => HostChecks.Run(Check))),
+        ("Live", () => LiveChecks.RunAsync(Check)),
+        ("LiveScheduler", () => LiveSchedulerChecks.RunAsync(Check)),
+        ("LiveTable", () => LiveTableChecks.RunAsync(Check)),
+        ("ConnectionFailure", () => ConnectionFailureChecks.RunAsync(Check)),
+        ("ConnectionFailure.Identity", () => ConnectionFailureChecks.IdentityAsync(Check)),
+        ("Session", Sync(() => SessionChecks.Run(Check))),
+        ("Plan", Sync(() => PlanChecks.Run(Check))),
+        ("EstimatedPlan", Sync(() => EstimatedPlanChecks.Run(Check))),
+        ("ClientStatistics", Sync(() => ClientStatisticsChecks.Run(Check))),
+        ("Entra", () => EntraChecks.RunAsync(Check)),
+        ("Store", Sync(() => StoreChecks.Run(Check))),
+        ("CellLength", Sync(() => CellLengthChecks.Run(Check))),
+        ("Text", () => TextChecks.RunAsync(Check)),
+        ("Explorer", () => ExplorerChecks.RunAsync(Check)),
+        ("Peek", () => PeekChecks.RunAsync(Check)),
+        ("Search", Sync(() => SearchChecks.Run(Check))),
+        ("Scripting", () => ScriptingChecks.RunAsync(Check)),
+        ("Action", () => ActionChecks.RunAsync(Check)),
+        ("ServerFiles", () => ServerFilesChecks.RunAsync(Check)),
+        ("Seam", () => SeamChecks.RunAsync(Check)),
+        ("ActionProgress", () => ActionProgressChecks.RunAsync(Check)),
+        ("Attach", () => AttachChecks.RunAsync(Check)),
+        ("Restore", () => RestoreChecks.RunAsync(Check)),
+        ("Login", () => LoginChecks.RunAsync(Check)),
+        ("LoginAction", () => LoginActionChecks.RunAsync(Check)),
+        ("LoginDelete", () => LoginDeleteChecks.RunAsync(Check)),
+        ("Unlock", () => UnlockChecks.RunAsync(Check)),
+        ("LoginProperties", Sync(() => LoginPropertiesChecks.Run(Check))),
+        ("Securables", Sync(() => SecurablesChecks.Run(Check))),
+        ("LoginKinds", () => LoginKindsChecks.RunAsync(Check)),
+        ("DatabaseProperties", Sync(() => DatabasePropertiesChecks.Run(Check))),
+        ("Designer", Sync(() => DesignerChecks.Run(Check))),
+        ("NewDatabase", Sync(() => NewDatabaseChecks.Run(Check))),
+        ("Ssis", () => SsisChecks.RunAsync(Check)),
+        ("Activity", Sync(() => ActivityChecks.Run(Check))),
+        ("ActivitySource", Sync(() => ActivitySourceChecks.Run(Check))),
+        ("ActivityAction", () => ActivityActionChecks.RunAsync(Check, json)),
+        ("SsisOperations", Sync(() => SsisOperationsChecks.Run(Check)))
+    ];
+    var suiteNames = offlineSuites.Select(suite => suite.Name).ToArray();
+    Check(suiteNames.Distinct().Count() == suiteNames.Length && OfflineSuites.Alone.All(suiteNames.Contains) && OfflineSuites.Weights.Keys.All(suiteNames.Contains)
+        && Enumerable.Range(1, 8).All(lanes => OfflineSuites.Assign(suiteNames, lanes) is var assigned && assigned.Length == lanes && assigned.SelectMany(lane => lane).Order(StringComparer.Ordinal).SequenceEqual(suiteNames.Order(StringComparer.Ordinal)))
+        && OfflineSuites.Assign(["Host", "Explorer", "LiveScheduler", "Page"], 2) is [["Host", "Page"], ["Explorer", "LiveScheduler"]],
+        "the offline suites have unique names, the ones that must run alone and the weighted ones all exist, and every lane count puts each suite in exactly one lane, longest first onto the lightest lane");
+    await OfflineSuites.RunAsync(offlineSuites, serial: slowMs > 0);
     using (var offline = new SqlService())
     {
         try { await offline.DispatchAsync("tables.columns", JsonSerializer.SerializeToElement(new TableArgs(Guid.NewGuid().ToString(), "master", "dbo", new string('x', 129)), json), json); throw new Exception("Overlong table name accepted"); }
