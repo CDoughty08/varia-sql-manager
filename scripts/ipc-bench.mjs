@@ -183,6 +183,31 @@ FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b;`
     record('e2e.live.rowsPerSecond', set.rowsRead / (ingest.elapsedMs / 1000), 'rows/s', `${set.rowsRead.toLocaleString('en-US')} rows stored in ${ingest.elapsedMs} ms (backend), ${Math.round(ingest.invokeMs)} ms end to end`)
     if (ingest.firstWindowMs !== undefined) record('e2e.live.firstWindowMs', ingest.firstWindowMs, 'ms', 'first 100-row window after resultSet.opened')
 
+    // Small xml cells, each parsed and serialised as SqlClient's GetChars would (ColumnPlan's xml reader): the per-cell cost
+    // that a reused writer and NameTable cut (#159). The server builds each value from a cheap cross join.
+    step = 'live xml ingest'
+    const xmlSelect = top => `SELECT TOP (${top}) a.object_id AS id,
+  CAST(N'<o id="' + CONVERT(nvarchar(12), a.object_id) + N'" n="' + CONVERT(nvarchar(12), b.object_id) + N'"><t>Lorem ipsum dolor sit amet</t><u/></o>' AS xml) AS doc
+FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b;`
+    const xml = await page.evaluate(async ({ options, warmUp, sql }) => {
+      const connected = await window.varia.connect(options)
+      if (!connected.ok) throw new Error(connected.error)
+      const sessionId = crypto.randomUUID()
+      const run = async text => {
+        const result = await window.varia.execute({ connectionId: connected.value.id, sessionId, database: 'master', sql: text, queryId: crypto.randomUUID(), maxRows: 0, timeoutSeconds: 600, maxResultSets: 10 })
+        if (!result.ok) throw new Error(result.error)
+        for (const descriptor of result.value.resultSets) await window.__variaResults.open(descriptor).close()
+        return result.value
+      }
+      await run(warmUp)
+      const summary = await run(sql)
+      await window.varia.closeQuerySession(sessionId)
+      await window.varia.disconnect(connected.value.id)
+      return { status: summary.status, error: summary.error?.message, sets: summary.resultSets.map(set => ({ rowsRead: set.rowsRead, rowsStored: set.rowsStored })), elapsedMs: summary.elapsedMs }
+    }, { options, warmUp: xmlSelect(20000), sql: xmlSelect(200000) })
+    if (xml.status !== 'completed' || xml.sets[0]?.rowsStored !== 200000) throw new Error('Live xml ingest incomplete: ' + JSON.stringify(xml))
+    record('e2e.live.xmlCellsPerSecond', xml.sets[0].rowsRead / (xml.elapsedMs / 1000), 'cells/s', `${xml.sets[0].rowsRead.toLocaleString('en-US')} rows with a small xml cell stored in ${xml.elapsedMs} ms (backend)`)
+
     // A small script in a warm tab, end to end: the execution floor. Nothing runs in the session after the script (its
     // transaction is read only when it is about to end), so this is one round trip.
     step = 'live small execute'

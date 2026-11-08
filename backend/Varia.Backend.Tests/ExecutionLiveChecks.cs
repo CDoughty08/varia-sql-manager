@@ -169,6 +169,8 @@ internal static class ExecutionLiveChecks
                 && afterNoExec.PlanSets is null && afterNoExec.ResultSets is [{ Kind: "rows" }],
                 "a captured run that leaves NOEXEC on does not leak plan result sets into later grids");
 
+            if (Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SCRATCH") == "1") await SweepsOrphans(check, Run, store, QueryWithPlan, tab => Call("query.session.close", new SessionArgs(tab)));
+
             // A session that never opened did not close: no "session closed" note, and the tab's next execution opens one.
             var missingTab = Guid.NewGuid().ToString();
             var missing = await Run("SELECT 1;", missingTab, database: "VariaDatabaseThatDoesNotExist");
@@ -349,5 +351,40 @@ internal static class ExecutionLiveChecks
                 "lines starting with :: run as T-SQL: " + (colons.Error?.Message ?? colons.Status));
         }
         finally { await Call("query.session.close", new SessionArgs(session)); }
+    }
+
+    /// <summary>A capture's start drops the Extended Events sessions that captures left when their backend died (scratch only:
+    /// it creates server-level sessions, dropped in finally): one named for a connection that is gone goes, while one named
+    /// for a live connection, and one an older build named with a random GUID, stay.</summary>
+    private static async Task SweepsOrphans(Action<bool, string> check, Func<string, string?, string, bool, int, string?, bool, int, int, Task<QueryResult>> run,
+        Results.ResultStore store, string queryWithPlan, Func<string, Task<object>> close)
+    {
+        var keeper = Guid.NewGuid().ToString();
+        var setup = Guid.NewGuid().ToString();
+        var own = await run("SELECT CONVERT(nchar(36), connection_id) FROM sys.dm_exec_connections WHERE session_id = @@SPID;", keeper, "master", false, 30, null, false, 1000, 10);
+        var live = Plans.ActualPlanSql.NameFor(Guid.Parse(LiveResultChecks.RowsOf(store, own.ResultSets[0])[0][0]!));
+        var orphan = Plans.ActualPlanSql.NameFor(Guid.NewGuid());
+        var legacy = Plans.ActualPlanSql.Prefix + Guid.NewGuid().ToString("N");
+        string[] names = [orphan, live, legacy];
+        static string Create(string name) => "CREATE EVENT SESSION [" + name + "] ON SERVER ADD EVENT sqlserver.sql_batch_starting(SET collect_batch_text=(0) WHERE ([sqlserver].[session_id]=(0)));\n";
+        var listed = "SELECT name FROM sys.server_event_sessions WHERE name IN (" + string.Join(", ", names.Select(name => "N'" + name + "'")) + ") ORDER BY name;";
+        try
+        {
+            var made = await run(string.Concat(names.Select(Create)), setup, "master", false, 30, null, false, 1000, 10);
+            var captured = await run(queryWithPlan, null, "master", false, 30, null, true, 1000, 10);
+            var left = await run(listed, setup, "master", false, 30, null, false, 1000, 10);
+            var kept = LiveResultChecks.RowsOf(store, left.ResultSets[0]).Select(row => row[0]).ToList();
+            check(made.Status == "completed" && captured.Status == "completed" && captured.PlanSets is [{ RowsStored: 1 }]
+                && kept.Order(StringComparer.Ordinal).SequenceEqual(new[] { live, legacy }.Order(StringComparer.Ordinal)),
+                "an actual plan capture drops a session an earlier capture left for a closed connection, and keeps a live connection's and an older build's: "
+                + made.Status + ", " + captured.Status + ", left " + kept.Count + " of 3 (" + string.Join(" | ", LiveResultChecks.Texts(captured)) + ")");
+        }
+        finally
+        {
+            await run(string.Concat(names.Select(name => "IF EXISTS (SELECT 1 FROM sys.server_event_sessions WHERE name = N'" + name + "') DROP EVENT SESSION [" + name + "] ON SERVER;\n")),
+                setup, "master", false, 30, null, false, 1000, 10);
+            await close(setup);
+            await close(keeper);
+        }
     }
 }

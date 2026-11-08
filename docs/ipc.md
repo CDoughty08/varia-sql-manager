@@ -922,7 +922,12 @@ lost.
   unsupported server, and incomplete capture are reported in Messages. The observer needs lightweight plan profiling
   and permission to create, enable, read and drop its event session. SQL Server 2025 and Azure SQL Database also set
   a maximum collector duration. If a process exits abruptly before cleanup, a collector's connection ID filter prevents
-  a later session that reuses the SPID from being captured.
+  a later session that reuses the SPID from being captured. A server-scoped collector is named `VariaActual_` and its
+  query connection's `sys.dm_exec_connections.connection_id` (32 uppercase hexadecimal digits), so once it has started, each
+  capture drops up to 16 collectors of that form whose connection is gone (left by a backend that died; before SQL Server
+  2025 nothing else ends them), building each DROP on the server from `QUOTENAME` within the capture's 5 s start budget;
+  a failed sweep is a message, never a failed capture. Collectors that older builds named with a random GUID are left
+  alone, since one may still be capturing. Its SQL lives in `Plans/ActualPlanSql.cs`, held to `ActualPlanSql.Lint`.
   When `SET STATISTICS XML` also returned the same execution, Varia keeps the complete SQL-returned plan and pairs it with
   one observer event in the same batch and repetition. The optional `planOrder` lists matched and retained observer result
   IDs in event order so the canvas can interleave both sources within a batch. Across batches it uses batch and repetition.
@@ -2435,7 +2440,8 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 - **The e2e run** reads every row through `window.__variaResults` in the built app (four windows in flight), watching
   the UI thread for long tasks and animation-frame gaps, and times 500 live ticks of the real backend's `debug.synthetic`
   source through `ResultClient.live` as the node pipeline does; `--live` stores a million W1-like rows from SQL Server with
-  `maxRows: 0`, and times 200 executions of `SELECT 1` in a warm tab.
+  `maxRows: 0`, then 200,000 rows that each hold a small xml value (parsed and serialised cell by cell, as SqlClient's
+  GetChars would), and times 200 executions of `SELECT 1` in a warm tab.
 - **The grid run** (`scripts/grid-bench.mjs`) drives the built app in a 1600 × 1000 window (or the screen, if smaller)
   on the fake backend's synthetic sets: the first data cell painted after `resultSet.opened`, the UI thread's busy share
   while a million rows stream, `GridView.frame()` times from `window.__variaGrid` while the wheel scrolls a million rows
@@ -2477,6 +2483,7 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | UI long tasks over 50 ms during W1 | 0 | ≤ 2 | 0 | 0 |
 | Largest animation-frame gap during W1 | ≤ 50 ms | ≤ 300 ms | 17 – 33 ms | 133 ms |
 | Live: 1,000,000 W1-like rows ingested and stored | ≥ 300,000 rows/s | ≥ 75,000 rows/s | 280,000 – 298,000 rows/s | 280,000 rows/s |
+| Live: 200,000 rows with a small xml cell ingested and stored | ≥ 200,000 cells/s | ≥ 25,000 cells/s | 156,000 cells/s (Windows, 24 CPUs, local SQL Server 2025) | not measured |
 | Live: first 100-row window after `resultSet.opened` | ≤ 50 ms | ≤ 250 ms | 45 – 103 ms | 102 ms |
 | Live: `SELECT 1` in a warm tab, end to end, p50 | ≤ 5 ms | ≤ 50 ms | 0.6 ms, p99 1.3 ms (Windows, 24 CPUs, local SQL Server; 0.7 ms when every execution was followed by a session probe) | not measured |
 | Grid: `resultSet.opened` → first data cell painted, median of 5 | ≤ 50 ms | ≤ 250 ms | 56 ms | 57 ms |
