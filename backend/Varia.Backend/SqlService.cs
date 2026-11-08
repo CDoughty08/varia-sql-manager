@@ -1024,35 +1024,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             var connection = session.Connection;
             connection.FireInfoMessageEventOnUserErrors = false;
             connection.InfoMessage += onInfo;
-            if (connection.State != System.Data.ConnectionState.Open)
-            {
-                if (session.HasOpened) throw new RequestException("SESSION_LOST", "The SQL session was lost. This script was not executed. Execute again to open a new session; previous SET options, temporary objects, and open transactions are gone.");
-                // A Kerberos or Entra failure answers the request (AUTH_KERBEROS, AUTH_ENTRA), as SESSION_LOST does: no batch was sent.
-                await Open(connection, token);
-                try
-                {
-                    await using var prologue = connection.CreateCommand();
-                    prologue.CommandText = Prologue + " " + LoginSql;
-                    prologue.CommandTimeout = 0;
-                    await using var reader = await prologue.ExecuteReaderAsync(token);
-                    if (await reader.ReadAsync(token))
-                    {
-                        session.Login = reader.FieldCount >= 1 && !reader.IsDBNull(0) ? reader.GetString(0) : null;
-                        session.ServerConnectionId = reader.FieldCount >= 2 && !reader.IsDBNull(1) ? reader.GetGuid(1) : null;
-                    }
-                    // The SPID comes with the login acknowledgement: no round trip, and it never changes, since idle
-                    // connection recovery is off for query sessions.
-                    session.Spid = connection.ServerProcessId;
-                }
-                catch
-                {
-                    // A session without SSMS's settings must not run a script later; closing it makes the next execution open
-                    // a new one.
-                    connection.Close();
-                    throw;
-                }
-                session.HasOpened = true;
-            }
+            await OpenSessionAsync(session, token);
             if (session.Spid is { } openedSpid) events.SessionOpened(openedSpid, session.Login);
             // ChangeDatabase must still throw for a missing database, so user errors become events only for script batches.
             if (!string.Equals(connection.Database, args.Database, StringComparison.Ordinal))
@@ -1821,6 +1793,40 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         session?.Close();
         // The session's results stay until the renderer closes them (results.close) or its next query replaces them.
         return new { Closed = removed };
+    }
+
+    private async Task OpenSessionAsync(QuerySession session, CancellationToken token)
+    {
+        var connection = session.Connection;
+        if (connection.State != System.Data.ConnectionState.Open)
+        {
+            if (session.HasOpened) throw new RequestException("SESSION_LOST", "The SQL session was lost. This script was not executed. Execute again to open a new session; previous SET options, temporary objects, and open transactions are gone.");
+            // A Kerberos or Entra failure answers the request (AUTH_KERBEROS, AUTH_ENTRA), as SESSION_LOST does: no batch was sent.
+            await Open(connection, token);
+            try
+            {
+                await using var prologue = connection.CreateCommand();
+                prologue.CommandText = Prologue + " " + LoginSql;
+                prologue.CommandTimeout = 0;
+                await using var reader = await prologue.ExecuteReaderAsync(token);
+                if (await reader.ReadAsync(token))
+                {
+                    session.Login = reader.FieldCount >= 1 && !reader.IsDBNull(0) ? reader.GetString(0) : null;
+                    session.ServerConnectionId = reader.FieldCount >= 2 && !reader.IsDBNull(1) ? reader.GetGuid(1) : null;
+                }
+                // The SPID comes with the login acknowledgement: no round trip, and it never changes, since idle
+                // connection recovery is off for query sessions.
+                session.Spid = connection.ServerProcessId;
+            }
+            catch
+            {
+                // A session without SSMS's settings must not run a script later; closing it makes the next execution open
+                // a new one.
+                connection.Close();
+                throw;
+            }
+            session.HasOpened = true;
+        }
     }
 
     private QuerySession Session(QueryArgs args)
