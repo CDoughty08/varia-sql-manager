@@ -9,59 +9,64 @@ namespace Varia.Backend.Plans;
 /// <summary>Collects completed plans through a separate connection. The executing session receives only the user's SQL.</summary>
 internal sealed class ActualPlanCapture(SqlConnection observer, bool databaseScoped)
 {
-    private const string PlanEvent = "query_post_execution_plan_profile";
-    private const string BatchEvent = "sql_batch_starting";
+    private const string PlanEvent = ActualPlanSql.PlanEvent;
+    private const string BatchEvent = ActualPlanSql.BatchEvent;
     private const int MaxTargetCharacters = 4 * 1024 * 1024;
     private static readonly XName AggregateName = PlanParser.ShowplanName.Namespace + "Aggregate";
-    private readonly string name = "VariaActual_" + Guid.NewGuid().ToString("N");
+    // Database-scoped sessions (Azure SQL Database) end by MAX_DURATION and are never swept, so a random name serves them.
+    private string name = ActualPlanSql.NameFor(Guid.NewGuid());
     private readonly List<(int Batch, int Iteration)> submitted = [];
-    private string Scope => databaseScoped ? "DATABASE" : "SERVER";
-    private string Dmv => databaseScoped ? "dm_xe_database_session" : "dm_xe_session";
     private bool attempted;
     public bool Started { get; private set; }
 
+    /// <summary>Creates and starts the session; returns why capture is unavailable, or after it started, a notice that the
+    /// sweep of sessions left by earlier captures failed; otherwise null.</summary>
     public async Task<string?> StartAsync(int spid, Guid clientId, int major, int timeout, CancellationToken token)
     {
         if (clientId == Guid.Empty) return "This connection does not expose an identifier for actual plan capture.";
 
         // Check every privilege before creating a session, including the one needed to remove it.
-        var permissionScope = databaseScoped ? "DB_NAME(), 'DATABASE'" : "NULL, NULL";
-        var eventScope = databaseScoped ? "DATABASE " : "";
-        string Permission(string permission) => $"HAS_PERMS_BY_NAME({permissionScope}, '{permission}')";
-        var administer = Permission($"ALTER ANY {eventScope}EVENT SESSION");
-        var create = Permission($"CREATE ANY {eventScope}EVENT SESSION");
-        var enable = Permission($"ALTER ANY {eventScope}EVENT SESSION ENABLE");
-        var drop = Permission($"DROP ANY {eventScope}EVENT SESSION");
-        // A granular DENY overrides the parent grant. Use the parent only on engines without granular permissions.
-        var manage = $"(({create}=1 AND {enable}=1 AND {drop}=1) OR ({drop} IS NULL AND {administer}=1))";
-        var performance = Permission("VIEW SERVER PERFORMANCE STATE");
-        var inspect = databaseScoped ? $"{Permission("VIEW DATABASE STATE")}=1"
-            : $"({performance}=1 OR ({performance} IS NULL AND {Permission("VIEW SERVER STATE")}=1))";
-
         await using var command = observer.CreateCommand();
         command.CommandTimeout = 0;
-        command.CommandText = $"SELECT CASE WHEN {manage} AND {inspect} THEN 1 ELSE 0 END;";
+        command.CommandText = ActualPlanSql.Permissions(databaseScoped);
         if (await command.ExecuteScalarAsync(token) is not 1)
             return "Actual plan capture requires permission to create, start, read and drop Extended Events sessions.";
 
-        // A disconnected session's SPID can be reused. Match the physical connection ID as well so an abandoned
-        // collector cannot read plans from any other connection.
-        var predicate = FormattableString.Invariant($"[sqlserver].[session_id]=({spid}) AND [package0].[equal_guid]([sqlserver].[client_connection_id],'{clientId:D}')");
-        var duration = major >= 17 || databaseScoped
-            ? FormattableString.Invariant($", MAX_DURATION = {(timeout > 0 ? timeout + 15 : 86_400)} SECONDS") : "";
-        command.CommandText = $"""
-            CREATE EVENT SESSION [{name}] ON {Scope}
-                ADD EVENT sqlserver.{BatchEvent}(SET collect_batch_text=(0) ACTION(package0.event_sequence) WHERE ({predicate})),
-                ADD EVENT sqlserver.{PlanEvent}(ACTION(package0.event_sequence) WHERE ({predicate} AND [sqlserver].[is_system]=(0)))
-                ADD TARGET package0.ring_buffer(SET max_memory=(4096), max_events_limit=(2048))
-                WITH (MAX_MEMORY=4096 KB, MAX_EVENT_SIZE=4096 KB, MAX_DISPATCH_LATENCY=1 SECONDS, STARTUP_STATE=OFF{duration});
-            ALTER EVENT SESSION [{name}] ON {Scope} STATE=START;
-            """;
+        command.Parameters.Add("@spid", SqlDbType.Int).Value = spid;
+        if (!databaseScoped)
+        {
+            command.CommandText = ActualPlanSql.NameQuery;
+            if (await command.ExecuteScalarAsync(token) is not string named || !ActualPlanSql.IsName(named))
+                return "Actual plan capture could not identify the connection it observes.";
+            name = named;
+        }
+        var duration = major >= 17 || databaseScoped ? (timeout > 0 ? timeout + 15 : 86_400) : (int?)null;
+        command.Parameters.Add("@name", SqlDbType.NVarChar, 128).Value = name;
+        command.CommandText = ActualPlanSql.Create(name, databaseScoped, spid, clientId, duration);
         attempted = true;
         await command.ExecuteNonQueryAsync(token);
         Started = true;
-        return null;
+        return databaseScoped ? null : await SweepAsync(command, token);
     }
+
+    /// <summary>Drops sessions that earlier captures left when their backend died (<see cref="ActualPlanSql.Sweep"/>), once this
+    /// capture has started, within what is left of its start's budget. A failure only costs a notice.</summary>
+    private async Task<string?> SweepAsync(SqlCommand command, CancellationToken token)
+    {
+        try
+        {
+            command.Parameters.Add("@own", SqlDbType.NVarChar, 128).Value = name;
+            command.CommandText = ActualPlanSql.Sweep;
+            await using var reader = await command.ExecuteReaderAsync(token);
+            return await reader.ReadAsync(token) && reader.GetInt32(1) == 0 ? null : SweepNotice;
+        }
+        catch (Exception error) when (error is SqlException or InvalidOperationException or OperationCanceledException or IOException)
+        {
+            return SweepNotice;
+        }
+    }
+
+    internal const string SweepNotice = "Actual plan capture could not remove Extended Events sessions that earlier captures left behind.";
 
     public void BatchSubmitted(int batch, int iteration) => submitted.Add((batch, iteration));
 
@@ -69,11 +74,7 @@ internal sealed class ActualPlanCapture(SqlConnection observer, bool databaseSco
     {
         await using var command = observer.CreateCommand();
         command.CommandTimeout = 0;
-        command.CommandText = $"""
-            SELECT CONVERT(bigint,s.dropped_event_count), CONVERT(bigint,s.dropped_buffer_count), t.target_data
-            FROM sys.{Dmv}s AS s JOIN sys.{Dmv}_targets AS t ON s.address=t.event_session_address
-            WHERE s.name=@name AND t.target_name=N'ring_buffer';
-            """;
+        command.CommandText = ActualPlanSql.Read(databaseScoped);
         command.Parameters.Add("@name", SqlDbType.NVarChar, 128).Value = name;
         // XmlReader's underlying TextReader reads do not take a token. Bound those reads with a SQL attention.
         using var cancel = token.Register(() =>
@@ -132,7 +133,7 @@ internal sealed class ActualPlanCapture(SqlConnection observer, bool databaseSco
                 }
                 await using var command = observer.CreateCommand();
                 command.CommandTimeout = 0;
-                command.CommandText = $"DROP EVENT SESSION [{name}] ON {Scope};";
+                command.CommandText = ActualPlanSql.Drop(name, databaseScoped);
                 await command.ExecuteNonQueryAsync(token);
             }
         }
