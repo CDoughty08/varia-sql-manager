@@ -3,406 +3,130 @@
 SSMS-style SQL Server workbench. Electron 44 + React 19 + Monaco 0.57 + Dockview renderer; a .NET 10 sidecar
 (Microsoft.Data.SqlClient 7.1, SMO 181) speaks length-prefixed MessagePack frames (protocol v2) over stdio. It is not a
 VS Code fork.
-README.md documents user-facing behaviour, limits, and the protocol; docs/ipc.md is the protocol v2 reference (frames,
-pages, limits, error codes, display formats, benchmarks).
+
+Where the detail lives:
+- docs/architecture.md: the full architecture invariants this file summarises. Read the area's bullet before changing it.
+- docs/testing.md: test environment variables, live and scratch checks, smoke-test hooks, testing rules.
+- docs/ci.md: CI layout, measurements and the rules that keep it lean.
+- docs/ipc.md: protocol v2 (frames, pages, limits, error codes, benchmarks). README.md: user-facing behaviour.
+- Each area's generated page (below) and hand-written page in docs/.
+
+Keep this file stable: no check counts, timings or other numbers that change from PR to PR. A new rule goes in
+docs/architecture.md or docs/testing.md; add a line here only when an agent would break something without it.
 
 ## Commands
 
 - `npm ci`: install. Use `npm install <pkg>` only to change dependencies, and commit `package-lock.json`.
 - `npm run dev`: Debug backend build, then electron-vite with renderer hot reload. Restart after C# changes.
-- `npm run check`: typecheck, Release .NET checks, vitest, production build, as concurrent lanes (`scripts/check.mjs`, which
-  prints each lane's seconds): every lane at once with 8 or more CPUs, otherwise (CI's runners) two chains side by side, so
-  time-bounded tests are not starved (`VARIA_CHECK_CPUS=<n>` tries either; `VARIA_CHECK_SKIP=typecheck`, as CI's Windows and
-  macOS jobs set, leaves out tsc, which Linux's job runs). A stopped check prints its running lanes' output. Run before every commit.
-- `npm run test:smoke`: the Electron suites listed in package.json's `test:smoke`. Needs the Release backend and `out/`
-  from `npm run check` (or just those, from `npm run build:smoke`). `node scripts/smoke-shards.mjs 2/2`: one CI shard.
-  The fixture launches the hidden smoke window with `--disable-frame-rate-limit`: Chromium otherwise draws it at one
-  frame a second, and every Playwright press waits for frames. Set `VARIA_SMOKE_PROFILE=<dir>` to save a Playwright trace
-  of each launch there (it holds the environment, so never upload one from a run with secrets).
-  Headless Linux: `xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke`.
-- `npm run test:electron`: `check` followed by `test:smoke`.
-- `npm run backend:test`: only the .NET checks. `dotnet run --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj
-  --configuration Release -- --live-group 1/3`: one CI live group (no offline checks; needs `VARIA_TEST_SQL_SERVER`). `npx vitest run tests/<name>.test.ts`: one vitest file
-  (`backend-sidecar.test.ts` starts the Release backend, so build it first with `npm run check` or `npm run backend:test`).
-- `npm run bench` (node harness, Release backend), `npm run bench:e2e [-- --live]` and `npm run bench:grid [-- --live]`
-  (Electron, need `out/`): the IPC and results grid benchmarks, not part of `check`. `node scripts/check-bench.mjs
-  [--enforce]` compares them with `tests/bench/floors.json`; CI enforces floors on Linux only.
+- `npm run check`: typecheck, Release .NET checks, vitest and production build as concurrent lanes (`scripts/check.mjs`).
+  Run before every commit.
+- `npm run test:smoke`: the Electron suites (needs the Release backend and `out/` from `npm run check`, or
+  `npm run build:smoke`). Headless Linux: `xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke`.
+  `npm run test:electron` runs `check` then `test:smoke`.
+- `npm run backend:test`: only the .NET checks. Add `-- --live-group k/3` to `dotnet run --project
+  backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release` for one CI live group.
+- `npx vitest run tests/<name>.test.ts`: one vitest file (`backend-sidecar.test.ts` needs the Release backend built).
+- `npm run bench`, `npm run bench:e2e`, `npm run bench:grid`: benchmarks, not part of `check`;
+  `node scripts/check-bench.mjs` compares them with `tests/bench/floors.json`.
 
 ## Environment
 
-- Node.js 24+ and the .NET 10 SDK (`global.json`, latest feature band). In cloud sessions `.claude/hooks/session-start.sh`
-  installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
-  puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
-- Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its about 1650 offline
-  checks (a few are platform-specific); how many depends on the server version and authentication (2382 against a local SQL Server 2025 in Mixed Mode, which
-  adds the low-privilege login checks, with Windows authentication and `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer, Script As and object action
-  scratch-database checks (the last in their own `VariaScratch_…_act` database) and the script goldens in `tests/fixtures/scripting/`; `VARIA_UPDATE_SCRIPT_GOLDENS=1`
-  rewrites the goldens whose manifest source is `varia`),
-  and `connections-smoke.mjs` connects for real. Never print the password. `VARIA_TEST_SQL_SCRATCH=1` (set by CI and the
-  session hook) also lets live tests create and drop a uniquely named, marked `varia_scratch_…` database
-  (`tests/explorer-live.test.ts`, for graph and temporal tables); without it those checks are skipped.
-  Run live suites one at a time where you can. Runs that share one server tolerate each other's scratch objects and
-  load: the Object Explorer walk skips every scratch database (`ScratchDatabase.IsScratchName`), the injection matrix
-  leaves scratch-named server principals out of its inventory, the huge- and xml-value cancel checks bound the cancel
-  by `LiveResultChecks.CancelBound` (twice a reference the run just measured, at least 5 s) and also require the
-  cancelled script to leave rows unread (`LiveResultChecks.StoppedEarly`), which no load can fake, and those value timings
-  are measured once more when they miss their bound (`LiveResultChecks.OnceMore`). A new live check that walks shared
-  server state or times work against a fixed bound needs the same care.
-- Microsoft Entra ID needs a tenant, so its live checks run only on request: `VARIA_TEST_ENTRA_SERVER`,
-  `VARIA_TEST_ENTRA_SP_CLIENT_ID` and `VARIA_TEST_ENTRA_SP_SECRET` (a service principal with a user in the Azure SQL
-  database `VARIA_TEST_ENTRA_DATABASE` names) run the Service Principal checks, and `VARIA_TEST_ENTRA_DEFAULT=1` adds Entra Default after `az login`. Never
-  print the secret. Without them the offline checks cover Entra through a fake token source.
-- SSIS: `VARIA_TEST_SQL_SCRATCH=1` also builds the fake SSIS catalog (`VariaScratch_…_ssis`, from
-  `tests/fixtures/ssisdb/`) and, where Integration Services is installed, runs Create Catalog's dry run (the catalog
-  backup restored by Varia's own steps as `VariaScratch_…_ssiscc`, no server-level changes); `VARIA_TEST_SSIS=1` adds the drift check of the real `SSISDB` (and its tree probe, read only) and of the Integration Services
-  catalog backup (restored as `VariaScratch_…_ssisref`) against `manifest.json`, which `VARIA_UPDATE_SSIS_MANIFEST=1`
-  rewrites (then regenerate `schema.sql` with `npx vitest run tests/ssisdb-fixtures.test.ts -u`). These checks never
-  create, alter or drop `SSISDB`; only the opt-in Create Catalog check (`VARIA_TEST_SSIS_CREATE=1`, PR S9a) creates and
-  drops it, on a server whose owner allows it and only when the server has no `SSISDB`: it never drops a catalog it did
-  not create. docs/integration-services.md records what is verified.
-- Cloud sessions: the hook starts the `varia-sql` Docker container (SQL Server 2022, `sa`, localhost:1433) and exports
-  those variables when it is ready. If Docker is unavailable, live checks are skipped rather than failing.
-- Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory and write screenshots to `artifacts/`. Every
-  `electron.launch` passes `chromiumSandbox` so Linux runs keep Chromium's sandbox (Playwright would add
-  `--no-sandbox`); only root, as in cloud sessions, runs without it. Only in unpackaged smoke runs, main also honours
-  `VARIA_TEST_BACKEND=<mode>` (runs `tests/fixtures/backend.mjs` under the absolute `VARIA_TEST_NODE`; `workbench` takes
-  cues from `VARIA_TEST_BACKEND_DIR`), `VARIA_TEST_HOT_EXIT=0` (the smoke fixture's default: no hot exit, so close prompts stay; docs/hot-exit.md), `VARIA_BACKEND_LIVENESS_MS`, `VARIA_TEST_SAFE_STORAGE=test` (a reversible test
-  cipher), `globalThis.__variaTest` (kill, pid, state, states, synthesize, and the renderer hooks rendererLosses,
-  holdNextRenderer and releaseHolders), the renderer's test mode (`window.__variaResults`, `window.__variaGrid`,
-  `window.__variaRecovery.flush()`, which saves AutoRecover's copies at once, `window.__variaLive`, which opens views on
-  the synthetic live source, stands in for a hidden window and mounts a `LiveGridPane` over one (`mountGrid`, `grid`,
-  `sortGrid`, `saveGrid`, `unmountGrid`), and `window.__variaTestShellFault()`, which makes the
-  workbench's next render throw), and passes the backend `VARIA_BACKEND_TEST_HOOKS` (synthetic results)
-  and `VARIA_RESULT_BUDGET_BYTES`. Suites import `electron` and `expect` from `scripts/fixtures/smoke.mjs`: assertions
-  wait 15 s on Windows, whose runners can take seconds to write a file, and closing the app logs main's file operations
-  that took 500 ms or more. A close that has not finished in 45 s kills the app and fails the suite without hiding its own
-  error (`boundedClose`), and `smoke-shards.mjs` kills a suite past four times its weight (at least 5 min), so one hang
-  cannot run its shard to the job's timeout.
+- Node.js 24+ and the .NET 10 SDK (`global.json`). Cloud sessions: `.claude/hooks/session-start.sh` installs both, builds
+  the backend and starts a SQL Server container.
+- Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set (with `VARIA_TEST_SQL_USER`/`VARIA_TEST_SQL_PASSWORD` for SQL
+  authentication); `VARIA_TEST_SQL_SCRATCH=1` lets them create marked scratch databases. Entra and SSIS checks are opt-in.
+  docs/testing.md lists every variable. Never print passwords or secrets.
 
-## Architecture invariants
+## Architecture invariants (summary; full rules in docs/architecture.md)
 
-- The renderer is untrusted: context isolation, sandbox, no Node integration, CSP, blocked navigation and popups.
-  It reaches the system only through `window.varia` (`src/preload/index.ts`); never expose generic IPC or shell APIs,
-  and never disable the Chromium sandbox. Main verifies every IPC sender (`trusted()` in `src/main/index.ts`, which
-  accepts only `app://varia/index.html` in built apps). Built pages load only from the privileged `app://varia/` scheme
-  (`src/main/app-protocol.ts`: files under `out/renderer` alone, traversal refused), never `file:`, whose origin reaches
-  every local file. Packaged builds set the Electron fuses in `build/fuses.cjs` (flipped in afterPack, read back by
-  `scripts/packaged-smoke.mjs`): no `file:` privileges, RunAsNode, `NODE_OPTIONS` or `--inspect`; asar only, integrity
-  checked.
-  The only window the page may open is a popout (`src/main/popout-windows.ts`, docs/popout-windows.md): a same-origin
-  `about:blank` child named `varia-popout-<uuid>` with exact bounds on a display, explicit preferences (no preload,
-  sandboxed, isolated), no popups or navigation of its own, closed with the page. Its content is the page's DOM through
-  React portals, so it sends no IPC, and `trusted()` still accepts only the main window's main frame.
-- A backend method must be added in all five places: `RpcMethods` in `src/shared/contracts.ts`, a strict zod schema in
-  `requestSchemas` (`src/main/validation.ts`), a `methodPolicies` entry (`src/shared/ipc/methods.ts`), a preload method,
-  and a `SqlService.DispatchAsync` case plus its `MethodNames` entry, with its record in `backend/Varia.Backend/Contracts.cs`.
-  Unknown methods and unknown members are rejected on both sides; main refuses a backend whose HELLO lacks a method.
-- Backend stdout carries protocol v2 frames only (`Console.Out` goes to stderr). Never log SQL text, credentials, or
-  connection strings. Passwords never reach disk in clear: not `connections.json`, process arguments, the environment,
-  logs, traces or previews. A password the user chose to remember is stored only as Electron `safeStorage` ciphertext
-  (async API only, in `src/main/secret-cipher.ts`) in `saved-passwords.json` (atomic, 0600, quarantined if unreadable),
-  keyed by its history entry's id and bound to its server, login and TLS settings by a hash beside it and a check inside
-  the ciphertext. Only main reads that file or decrypts; the renderer learns only which entries have one, and main injects
-  it into `connections.connect`/`.databases` only for a matching binding. Remember password is disabled where
-  safeStorage is unavailable, Linux's backend is `basic_text`/`unknown`, or its keyring cannot be reached (Electron's
-  fallback key, tag `v10`; only `v11`/`v12` count, not yet confirmed on a Linux desktop, so any other tag disables it).
-  Microsoft Entra tokens stay in the backend's memory for its lifetime (MSAL and Azure.Identity through Varia's own
-  `SqlAuthenticationProvider`, `backend/Varia.Backend/Entra/`): never on disk, in logs or messages, and never sent to
-  main or the renderer. Only connect and Load databases open a browser sign-in, under the request's token
-  (Stop); sign-in hosts and token resources the server names are allowlisted. New Login's password lives only in `ObjectDialogService`'s secret slot (`setSecret`, never the snapshot), travels only in the sensitive `actions.execute`, reaches SQL only as one parameter read inside a constant batch, is scrubbed from replies, and Script writes `<password>` instead.
-- Query rows stay in backend memory (never on disk) under the result budget. Main forwards DATA pages undecoded, as
-  exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). Peek's Top rows are no
-  exception: Select Top Rows' script with N = 10 through `query.execute`, in a session and results entry of the Peek's own
-  (`PeekService`), released when its card or tab closes, moves on or refreshes, and on backend loss. Results-port
-  messages from the renderer are validated with `portRequestSchema`, ownership, and the current generation.
-- The grid renders cells only through `GridView` pools, and text only through `nodeValue` (`tests/grid-lint.test.ts`
-  forbids HTML sinks under `grid/`, `results/`, `designer/` and `live/`); no React per row or cell, and frames stay
-  O(visible cells).
-  Live tables show through `LiveGrid` (`src/renderer/src/live/`), which swaps each revision into its `GridView`; a table's row
-  tone column (catalogue `role: 'tone'`, its last) is hidden by the grid and left out of Copy and Save (`ResultJobs`).
-- Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never
-  leave main except to the backend.
-- Results are released on re-execute, tab close, Close Results and backend loss; jobs lease them.
-- Periodic data (Activity Monitor, SSIS monitoring, Object Explorer status) flows only through the results port's
-  `live.subscribe` and `live.update`: the backend schedules, the renderer never polls with timers, and at most one live
-  EVENT per subscription is unacknowledged (`creditedEvents`; main counts it against the stream's credit). The results
-  worker relays live events undecoded and grants an event's bytes back only once the page has applied it and called the
-  stream's `ack` (`ResultClient.live`), never more than the stream's events took. Sources and
-  probes live only in `src/shared/live/catalog.ts`; after changing it, regenerate `docs/live.md` and the backend's embedded
-  `Live/live-catalog.json` with `npx vitest run tests/live-catalog.test.ts -u`. Writes are never probes. Test-only sources
-  (`debug.synthetic`) pass only main's test schemas (unpackaged smoke runs) and a backend with its test hooks. Probe SQL is
-  constant text per probe and band in `Live/LiveSql.cs`, or for the Activity Monitor in `Activity/ActivitySql.cs`, run statement
-  by statement through `ActivityReader`, where a statement the login may not run fails alone (each offline lint refuses metadata built-ins, temporary tables,
-  writes, DDL, transactions, waits, dynamic SQL and TOP without ORDER BY); it runs on its scope's own pool (" - Activity
-  Monitor" for server DMVs, " - Integration Services" in the catalog's database for SSISDB) with the scope's prologue
-  (READ UNCOMMITTED, or READ COMMITTED for an SSISDB with RCSI; LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW), under the live
-  gates and one budget per probe (an `ActivityReader` probe's statements share it), and its failures are values that back
-  off.
-  Views open live data only through `LiveService` (`src/renderer/src/live/`), which pauses hidden views, ends dormant
-  ones and follows Reconnect; badges and summaries read `LiveService.peek` and never subscribe by themselves. Charts draw
-  only through `ChartView` (`live/ChartView.ts`): a canvas read from the probe's ring, at most one draw a frame and none
-  while off screen or hidden, at most two vertices a pixel column, colors only from the theme (its `charts.*` keys and the surface the chart sits on,
-  `chartSurfaces` in `src/shared/theme/charts.ts`) or, under forced colors, the system colors as the DOM resolves them. Object
-  Explorer's status chips are `background` views (`ExplorerStatusService`, one per connected server and login, owned by
-  the pane, sampling in master): at most 8 a window, in slots no other view wants, given up to views the user opens when
-  the window's slots are taken or the backend refuses them `BUSY` on that server; they never reload the tree.
-  Job progress EVENTs (`results.export`, `actions.execute`, `explorer.index`) are droppable, per-request and not periodic data.
-- UI result caches are 256 windows and 16 Mi units; the worker cache is 64 MiB.
-- Bound every input and output: 4 MiB request and 16 MiB response bodies, 1M-character scripts, 256 pending requests
-  per backend generation, a deadline per method (`methodPolicies`), credit for result streams (16 MiB per stream, 64 MiB
-  per port), and explicit truncation of results and messages.
-  New string inputs need max lengths in both zod and C#. A request is written to at most one backend generation and is
-  never re-sent.
-- Preferences are written atomically (`src/main/json-file.ts`) (`settings.json`, `appearance.json`, `connections.json`,
-  `workspace-layouts.json`, `saved-passwords.json` (0600), `shortcuts.json` (`src/main/shortcut-store.ts`: re-read before every
-  write, a revision that refuses a stale save with `STALE`, damaged entries salvaged, unknown records kept verbatim)); unreadable
-  files are quarantined, never overwritten.
+Security boundary:
+- The renderer is untrusted: context isolation, sandbox, no Node integration, CSP, no navigation or popups (except
+  popouts, `src/main/popout-windows.ts`). It reaches the system only through `window.varia` (`src/preload/index.ts`); never
+  expose generic IPC or shell APIs, and never disable the Chromium sandbox. Main verifies every IPC sender (`trusted()`).
+  Built pages load only from `app://varia/`, never `file:`. Packaged builds keep the Electron fuses in `build/fuses.cjs`.
+- A backend method is added in all five places: `RpcMethods` (`src/shared/contracts.ts`), a strict zod schema
+  (`src/main/validation.ts`), `methodPolicies` (`src/shared/ipc/methods.ts`), a preload method, and a
+  `SqlService.DispatchAsync` case with its `MethodNames` entry and record in `backend/Varia.Backend/Contracts.cs`.
+- Backend stdout carries protocol frames only. Never log SQL text, names, values, credentials or connection strings.
+  Passwords never reach disk in clear; remembered ones are only `safeStorage` ciphertext that only main reads. Entra tokens
+  stay in backend memory.
+- Bound every input and output (request, response, script and pending-request limits, per-method deadlines, stream
+  credit, explicit truncation). New string inputs need max lengths in both zod and C#. A request is never re-sent.
 - Failures are values: IPC returns `{ ok: false, error }`, and the UI stays responsive.
-- Commands and keybindings are declared only in `src/shared/commands/catalog.ts`. `KeybindingService`
-  (`src/renderer/src/core/keybindings.ts`) is the only key listener and routes keys to an open menu first; main handles
-  no keys (`tests/keyboard-lint.test.ts`). Electron roles are commands (`role`): native menus show the role, and custom
-  menus and the palette run it through `varia:run-role`. Two-part chords that Varia owns are `bridge` keybindings,
-  registered with Monaco from the catalogue by `registerEditorBridge`; Monaco dispatches them. After catalogue changes,
-  regenerate `docs/commands.md` with `npx vitest run tests/commands-docs.test.ts -u`.
-  User shortcuts reach the renderer only through `ShortcutsService` (`src/renderer/src/core/ShortcutsService.ts`), which
-  hands `effectiveRules` to `KeybindingService.setRules` (labels, menus, the palette and the editor bridge follow) and the
-  file's gestures to `GestureService.setModifiers`; the Shortcuts page records keys only through `KeybindingService.capture`.
-  Monaco's own default keys (the modules `start.tsx` imports, all three platforms) are generated into
-  `src/shared/commands/monaco-keys.generated.ts` from the installed Monaco by `tests/fixtures/monaco-runtime.ts`; after a Monaco
-  upgrade or a change to those imports, regenerate it with `npx vitest run tests/monaco-keybindings.test.ts -u`.
-  Mouse gestures (modifier behaviours, pointer commands, fixed gestures) are declared only in `src/shared/commands/gestures.ts`;
-  handlers read pointer modifiers only through `GestureService` (`src/renderer/src/core/gestures.ts`, `tests/gesture-lint.test.ts`),
-  every pointer command has a keyboard path, and tooltips that name a gesture take its words from the service. After
-  changing it, regenerate `docs/gestures.md` with `npx vitest run tests/gestures.test.ts -u`.
-- Menus are declared only in `src/shared/commands` (placements in `catalog.ts`, submenus in `menus.ts`) plus the theme
-  provider (`src/shared/theme/menu.ts`). Windows/Linux render them in `src/renderer/src/menus`; macOS renders them
-  natively from ids. Main's application menu takes only command-id sets from the renderer (`menuStateSchema`) and sends
-  back a bare id; it is the macOS menu bar and stays hidden elsewhere, where it still serves Electron's role keys. macOS
-  context menus (`src/main/context-menu.ts`) open only in the focused window or within 1 s of input there, and send
-  back a token and an id. Menu targets
-  (`src/renderer/src/menus/targets.ts`, registered with `useMenuTarget`) never cross IPC. `MenuService` is the only
-  `contextmenu` listener, and only `.menu-layer` reaches z-index 30000.
-- The page reads the clipboard only through the Paste role, which main runs only within 1 s of a click, key press or tap
-  in the focused window (`UserActivation` in `src/main/window-roles.ts`). An idle or background page cannot read it, but
-  main cannot tell which input chose Paste, so a page script can read it while the user types or clicks. On Linux,
-  Chromium pastes the PRIMARY selection on a middle-click (into any editable, and as a readable `paste` event wherever
-  the click lands) with no role or gate: in each window the page cancels every middle-button release event
-  (pointerup and mouseup, since a cancelled pointerdown leaves no mouseup) and every middle-button pointermove (how a
-  chorded press or release comes) and hides any `paste` from every other listener while the middle button is held or in a release's
-  task (`blockPrimaryPaste`, `src/renderer/src/core/primary-selection.ts`). Monaco's `selectionClipboard` is off only so
-  a middle-drag selects a column as on other platforms: standalone Monaco has no selection clipboard.
-- Object Explorer structure lives only in `src/shared/explorer/catalog.ts` (folders, kinds, icons, filters, version
-  gates, the kinds that carry live status chips, whose words are in `status.ts`); after changing it, regenerate `docs/object-explorer.md` and the backend's embedded
-  `Explorer/explorer-catalog.json` with `npx vitest run tests/explorer-catalog.test.ts -u`. Explorer SQL is constant
-  text per query, band and filter shape, with values as parameters and database names only through `QUOTENAME`; no
-  metadata built-ins; `READ UNCOMMITTED` and `LOCK_TIMEOUT 5000` on the explorer pool. The offline `CatalogSql` lint
-  renders and checks every variant.
-- Search Objects' index (`backend/Varia.Backend/Search/`, docs/object-search.md) lives only in backend memory, one per
-  connection, never on disk, and is dropped on disconnect; its limits are `objectSearchLimits` in
-  `src/shared/explorer/search.ts`, mirrored in C# (`tests/object-search.test.ts`), with everything it holds (records, names
-  and definitions, by `IndexMemory`'s estimates) under one 512 MiB budget for all connections (`IndexBudget`); names and
-  definitions are held once across connections in a reference-counted `StringPool`. It reads on its own pool (" - Object Search", the explorer's prologue) from
-  `ObjectSearchSql`'s constant batch, run in each database only through `QUOTENAME(@db).sys.sp_executesql` and linted by
-  `CatalogSql.Lint`, and the server's own objects from `ObjectSearchSql.Server` on the server's connection; it indexes every
-  kind Object Explorer lists but the SSIS Catalog's, and definitions come from `sys.sql_modules` (and constraint, computed column,
-  plan guide and server trigger text). It indexes Microsoft-shipped objects too; the resource
-  database's (negative ids, from `sys.all_objects` and `sys.all_sql_modules`) are read once per build and shared across
-  connections by fingerprint in `ResourceCatalog`, which interns their definitions. Object Explorer's search box and the
-  Search Objects tab are one search (`SearchPanel`, `ObjectSearchService`); the tree has no filter of loaded rows. Regex runs only `NonBacktracking` with a match timeout, and
-  a database the build cannot read is a skipped value. Never log names, definitions or search text.
-- Script As verbs, titles, URN types and preflight ids live only in `src/shared/scripting/catalog.ts`, and scripting
-  options only in `options.ts`; after changing them, regenerate `docs/scripting.md` and the backend's embedded
-  `Scripting/scripting-catalog.json` with `npx vitest run tests/scripting-catalog.test.ts -u`. Scripting uses its own
-  pool (`READ COMMITTED`, `LOCK_TIMEOUT 10000`, database context restored before pooling), runs SMO only through
-  `ScriptPipeline` with a fresh `Server` per job and prefetch limited to one object's own children, applies
-  `HeaderGuard` to every SMO script with headers, leaves out SMO's comments for unresolved references (they hold names
-  unescaped) and refuses any other SMO comment batch a name breaks, caps output at 4,000,000 characters, never executes
-  DDL, and never logs scripts, names or options.
-- Object actions (Select Top 1000 Rows, Rename, Delete, Properties, Restore Database, a login's Disable and Enable, and folder actions such as Databases › Attach), their dialogs, pages and database options live only
-  in `src/shared/actions/catalog.ts`, `database.ts` and `logins.ts` (login subtypes, protected-principal rules and limits); after changing them, regenerate `docs/object-actions.md` and the
-  backend's embedded `Actions/actions-catalog.json` with `npx vitest run tests/object-actions-catalog.test.ts -u`. DDL runs
-  only in `ActionService` (and, for the SSIS Catalog's server verbs, in `SsisActionService`; see the SSIS bullet): on its own unpooled connection (the application name plus " - Object Actions", never retried),
-  never the explorer or scripting pool; with statements only from constant templates in `ActionSql`, `Actions/DatabaseAlter`
-  and `Designer/DesignerSql`, all checked by `ActionSql.LintExecutable` (its template form for `ActionSql`, its builder
-  forms for the others), New Database's `Actions/CreateDatabaseSql`, checked by its own `Lint` (file names and paths as
-  N'' literals quoted on the server, under a binary collation) with the designer form's OPENJSON rules
-  (`Actions/JsonBuilderLint`: number or `nvarchar(max)` columns, text only inside `QUOTENAME`), `Actions/AttachSql`
-  (Attach's builder and its `DBCC CHECKPRIMARYFILE (@mdf, n)` reads, checked by `AttachSql.Lint`, with paths only in one
-  JSON parameter that the server quotes), for RESTORE and BACKUP, which take no `QUOTENAME`d text, `Actions/RestoreSql`
-  binding only variables (`RestoreSql.LintMedia`), and, for logins, `Actions/LoginSql`, checked by its own `LoginSql.LintExecutable`,
-  which `ActionSql.Lint` chains (the password only as `@password` behind a NULL guard, through a binary-collation REPLACE,
-  never in a literal), where names, the database a batch runs in included, go in as parameters through server-side
-  `QUOTENAME`, numbers only through `CONVERT` of range-checked parameters, keywords only from the embedded catalogue, and
-  collations only as `sys.fn_helpcollations()` names them (live checks prove the server builds what Script Action shows
-  for hostile names, and that Database Properties' script equals SMO's capture of SSMS's sequence); after a preflight in
-  the same connection; waiting for locks as SSMS does (`LOCK_TIMEOUT -1`), so every DDL path needs a Stop (the dialog's,
-  or the status bar's for a rename and a login's Disable and Enable), whose reply waits for SQL Server and lists the steps completed; and never logging
-  names, SQL or values. Varia undoes only its own partial changes and drops only a RESTORING database its own restore created
-  (`ActionSql.DropRestoring`, identity checked in the batch), never one that existed. Script never runs anything. Describe and script reads use `LOCK_TIMEOUT 10000`
-  (the loginFacts describe, whose facts only advise, under READ UNCOMMITTED). Every lint refuses `LOGINPROPERTY` (it takes its own locks whatever
-  the isolation level) and any read of a password hash (`CatalogSql.SecretUses`). The test-only dry
-  run is an internal C# method, never a request field. Action statements run through a reader (`ActionService.ReadAllAsync`),
-  never `ExecuteNonQuery` (`tests/action-reader-lint.test.ts`), whose info messages SqlClient holds until the statement ends, and a Stop
-  reaches the statement only through `ActionService.StatementStop` (SqlClient's own cancel from another thread waits while a statement
-  streams info messages), the job's token cancelled off the frame loop; a long action (the catalogue's `long`)
-  takes the long gate (per Varia connection, like the others) and reports message 3211 as droppable `action.progress` EVENTs
-  that main relays only to the requesting window (`varia:actions-progress`), and a closing backend stops it and waits for
-  its cleanup (`DrainCommitted`; main's `drainMs`, `actionDrainMs`).
-- Table Designer types, properties, commands and limits live only in `src/shared/designer/catalog.ts`; after changing it,
-  regenerate `docs/table-designer.md` and the backend's embedded `Designer/designer-catalog.json` with
-  `npx vitest run tests/table-designer-catalog.test.ts -u`. Designer DDL runs only through `actions.execute`'s `createTable`,
-  in one transaction: the backend re-validates the design (`TableDesignValidator`), sends it as one JSON parameter, and
-  constant builder batches (`DesignerSql.Builder`, linted by `ActionSql.LintExecutable`'s designer form) have SQL Server
-  shred it with OPENJSON and compose each statement from `QUOTENAME`d names, `CONVERT`ed typed numbers and type keywords
-  from a constant table generated from the catalogue; a live dry run proves the server builds exactly
-  `DesignerSql.Statements` for hostile names. The design lives in the renderer (`TableDesignerService`, a
-  `CustomDocumentProvider` tab with no Monaco model), never reaches AutoRecover, and saves outside the document task.
-- Activity Monitor structure (probes, panes, tables and columns, tiles, view chips, wait categories, limits) lives only in
-  `src/shared/activity/catalog.ts`; after changing it, regenerate `docs/activity-monitor.md` and the backend's embedded
-  `Activity/activity-catalog.json` with `npx vitest run tests/activity-catalog.test.ts -u`. Its SQL is constant text per probe,
-  statement, band and capability in `Activity/ActivitySql.cs`: DMVs (joined to `sys.databases` and `sys.master_files` for
-  names), values as parameters, text sizes and caps from the catalogue's limits, no metadata built-ins, temp tables,
-  `sys.sysprocesses` or `dm_tran_locks`, every TOP ordered (only the capability probe asks what the login may do); the offline
-  lint renders and checks every variant. Its live probes are built from this catalogue (`src/shared/live/catalog.ts`), and
-  their column ids are unique within a probe (`liveColumnId`). Filters run in backend memory over a sample (`ActivityFilter`,
-  sent as the source's args), never in SQL. A session is one of Varia's pools (hidden by default) only when its id is one
-  Varia's own pooled or Object Actions connections were given as they opened (`ILiveHost.OwnSessions`), never by the
-  process id, host name and program name a client claims at login alone; `VariaSessions.Protected` (the ledger's ids or
-  those claims) is the wider set a refusal can use, since SqlClient's reconnect can move a held pool connection to an id
-  the ledger lacks. The session actions (`Activity/SessionActions.cs`)
-  have the only exemptions: `activity.details` reads `dm_tran_locks` only on request, on the monitor's pool under the live
-  gates; `activity.kill` runs on the object actions' unpooled, never-retried connection, one guarded batch per session that
-  checks the session's identity (login time, host process id), refuses its own, system and this backend's pool sessions (of every connection, whatever its Application Name), and
-  only then runs a dynamic KILL built on the server from an int parameter. Neither logs session ids, logins, hosts or SQL.
-- SSIS Catalog semantics (code tables, `ssis.describe` views, `ssis.execute` verbs, Object Explorer verbs and their commands,
-  documents, error codes, features, limits) live only in `src/shared/ssis/catalog.ts`; its tree kinds and folders are Object
-  Explorer's catalogue. After changing it, regenerate
-  the generated part of `docs/integration-services.md` (below its marker line; the part above is hand-written) and the
-  backend's embedded `Ssis/ssis-catalog.json` with `npx vitest run tests/ssis-catalog.test.ts -u`. SSISDB is read on the
-  SSIS read pool (and by a write's preflight in its own connection) (the application name plus " - Integration Services", Initial Catalog the catalog's database), never
-  the explorer pool, from `SsisSql`'s constant text and the explorer's SSIS listings, both linted by `SsisSql.Lint`
-  (values as parameters, no metadata built-ins, no `datetime` conversions, no dynamic SQL, no writes, never
-  `SYNCHRONIZED`); tree listings run `READ UNCOMMITTED`, describes `READ UNCOMMITTED` (`READ COMMITTED` when SSISDB has
-  RCSI), both with `LOCK_TIMEOUT 5000`, the profile's role checks with 1000. The SSIS pool keeps idle connections in SSISDB
-  until disconnect. SSISDB changes only in `SsisActionService` (`ssis.execute`, sensitive): on its own unpooled connection
-  (the application name plus " - Integration Services Actions", Initial Catalog the catalog's database, never retried), never
-  a pool; after a preflight in the same connection (READ COMMITTED, `LOCK_TIMEOUT 10000`, 25 s); with steps only from
-  `SsisSql.WriteTemplates`, each calling only its verb's catalog procedures (`SsisSql.LintWrite`), values as parameters, no
-  outer transaction; waiting for locks as SSMS does (`LOCK_TIMEOUT -1`) until Stop, whose reply waits for SQL Server and
-  lists the steps completed (`AnswersStop`); a verb SSISDB refuses to SQL Server logins answers `WINDOWS_AUTH_REQUIRED` on a
-  box server before connecting. The catalog's database name comes only from the internal `SsisOptions.CatalogDatabase`
-  (SSISDB, or the checks' fake catalog), never a request field; there is no 32-bit runtime option anywhere. The
-  catalogue's server verbs (scope `server`; Create Catalog) are the second DDL path: the same connection rules but in
-  `master`, with commands only from `SsisCreateSql` (`ServerCommands(verb)`, every one checked by `SsisCreateSql.Lint`:
-  values as parameters, dynamic SQL only where SQL Server takes a literal, built from `QUOTENAME` or the server's quote
-  escape `REPLACE(… COLLATE Latin1_General_BIN2, N'''', N'''''')`), the database name from the catalogue (or the internal
-  `SsisOptions.CreateScratch` of the dry run), never a request field; Stop cancels any statement but the restore (whose
-  reply waits for it to end), and a Stop or failure after the restore removes exactly what the request made, waiting at
-  most 30 s per lock. Never log names, values, SQL or messages.
-- Updates live in `src/shared/updates.ts` (feed, manifest schema, states, failure words); only main fetches (its own
-  in-memory session, `net` through the system proxy and certificate store), verifies size and SHA-512 against the
-  release's `varia-update.json` (written by `scripts/update-manifest.mjs` in the release job), and installs, only after
-  Restart to Update's quit has closed the windows and stopped the backend (`src/main/update-install.ts`). The page gets
-  only `UpdateState` and asks with argument-free calls; it never names a URL or path. docs/updates.md describes it.
-- Settings live only in `src/shared/settings/` (pages in `pages.ts`, definitions per area, aggregated by `catalog.ts`;
-  the Scripting page's entries come from `src/shared/scripting/options.ts`), with defaults, bounds, platforms and zod
-  schemas built from the definitions. Only main reads and writes `settings.json` (`SettingsStore`: overrides only, read
-  before every write, atomic writes, invalid files quarantined); the renderer receives validated values through
-  `SettingsService` and changes them only with `updateSettings` patches. After changing the catalogue, regenerate
-  `docs/settings.md` with `npx vitest run tests/settings-catalog.test.ts -u`.
-- Colours live only in `src/shared/theme/`. CSS and TSX use `var(--varia-*)`; `tests/theme-css.test.ts` enforces this.
-  Theme files are untrusted: only main reads them, and the renderer applies only the validated map main sends.
-- Sizes, radii, shadows and motion are metric tokens in `src/shared/theme/metrics.ts`, not theme keys, mirrored on
-  `:root` in `styles.css`. `tests/theme-metrics.test.ts` rejects literals outside them (font sizes in renderer code too),
-  keeps text at 11 px or more, lets only hover fills fade, and stops every animation under reduced motion, Monaco's codicon
-  spinners included; regenerate `docs/themes/metrics.md` with
-  `npx vitest run tests/theme-metrics.test.ts -u`.
-- Icons live only in `src/shared/icons.ts` (codicons and Varia's own SVGs, by id); catalogues name icons by those ids and
-  the renderer draws them only through `Icon.tsx`, or `codiconClass` where an element or Monaco takes a class
-  (`tests/icons.test.ts` forbids other codicon classes, inline SVGs and text glyphs in the renderer). Fonts are fixed in
-  `src/renderer/src/fonts.ts`. After changing the registry, regenerate `docs/icons.md` with
-  `npx vitest run tests/icons.test.ts -u`.
+
+Results and live data:
+- Query rows stay in backend memory under the result budget, never on disk. DATA pages pass through main undecoded; only
+  the results worker decodes them. Results are released on re-execute, tab close, Close Results and backend loss.
+- The grid renders only through `GridView` pools and text only through `nodeValue` (`tests/grid-lint.test.ts`); no React
+  per row or cell. Copy and Save text is formatted only by `ResultTextWriter`.
+- Periodic data flows only through `live.subscribe`/`live.update` with the backend scheduling; the renderer never polls with
+  timers. Views open live data only through `LiveService`; charts draw only through `ChartView`.
+
+SQL the backend runs:
+- Every SQL path uses constant text with values as parameters and names only through server-side `QUOTENAME`, checked by
+  its offline lint, on its own pool or connection with a fixed prologue. Paths: Object Explorer (`CatalogSql`), Search
+  Objects, Script As (`ScriptPipeline`, never executes DDL), live probes (`LiveSql`, `ActivitySql`), object actions and
+  Table Designer (`ActionService`, the only DDL path besides `SsisActionService`), session actions, SSIS. Read the area's
+  bullet in docs/architecture.md before touching any of them.
+
+UI structure (each is the single source; tests enforce it):
+- Commands and keybindings: `src/shared/commands/catalog.ts`; `KeybindingService` is the only key listener, and main
+  handles no keys. User shortcuts only through `ShortcutsService`. Mouse gestures: `src/shared/commands/gestures.ts` via
+  `GestureService`.
+- Menus: `src/shared/commands` and `src/shared/theme/menu.ts`; `MenuService` is the only `contextmenu` listener.
+- Settings: `src/shared/settings/`; only main reads and writes `settings.json`.
+- Colours: `src/shared/theme/` via `var(--varia-*)`; metrics: `src/shared/theme/metrics.ts`; icons: `src/shared/icons.ts`
+  drawn through `Icon.tsx`.
+- Preferences files are written atomically (`src/main/json-file.ts`); unreadable files are quarantined, never overwritten.
+
+## Generated files
+
+After changing a catalogue, regenerate its outputs with the matching command and commit them:
+
+| Change | Regenerate with |
+| --- | --- |
+| `src/shared/commands/catalog.ts` | `npx vitest run tests/commands-docs.test.ts -u` |
+| `src/shared/commands/gestures.ts` | `npx vitest run tests/gestures.test.ts -u` |
+| Monaco upgrade or `start.tsx` imports | `npx vitest run tests/monaco-keybindings.test.ts -u` |
+| `src/shared/live/catalog.ts` | `npx vitest run tests/live-catalog.test.ts -u` |
+| `src/shared/explorer/catalog.ts` | `npx vitest run tests/explorer-catalog.test.ts -u` |
+| `src/shared/scripting/catalog.ts`, `options.ts` | `npx vitest run tests/scripting-catalog.test.ts -u` |
+| `src/shared/actions/` | `npx vitest run tests/object-actions-catalog.test.ts -u` |
+| `src/shared/designer/catalog.ts` | `npx vitest run tests/table-designer-catalog.test.ts -u` |
+| `src/shared/activity/catalog.ts` | `npx vitest run tests/activity-catalog.test.ts -u` |
+| `src/shared/ssis/catalog.ts` | `npx vitest run tests/ssis-catalog.test.ts -u` |
+| `src/shared/settings/` | `npx vitest run tests/settings-catalog.test.ts -u` |
+| `src/shared/theme/metrics.ts` | `npx vitest run tests/theme-metrics.test.ts -u` |
+| `src/shared/icons.ts` | `npx vitest run tests/icons.test.ts -u` |
 
 ## Testing expectations
 
-- vitest: `tests/*.test.ts`, fixtures in `tests/fixtures/`.
-- .NET: `backend/Varia.Backend.Tests/Program.cs`, a console program of `Check(condition, name)` calls. Offline checks come
-  first, their suites in concurrent lanes (`OfflineSuites.cs`: six by default, `VARIA_TEST_OFFLINE_LANES=<n>`; one when
-  `VARIA_TEST_SLOW_MS` is set): a new offline suite goes in Program.cs's `offlineSuites` list, with its measured seconds in
-  `OfflineSuites.Weights` if over 0.3 s, and runs in `OfflineSuites.Alone` if it changes process-wide state (the console,
-  environment variables, a static override, GC measurements); live checks follow and create only session-local temporary objects. They create databases (and logins) only
-  when `VARIA_TEST_SQL_SCRATCH=1`; scratch objects are uniquely named, marked, and dropped in `finally`
-  (`ScratchDatabase.cs` also sweeps stale `VariaScratch_` ones by name and age). `InjectionMatrix.cs` (scratch only)
-  scripts objects named to break out of SMO's comments, strings, brackets and lines with every DDL verb and runs each
-  script in a rolled-back transaction, which must change only what its verb implies; keep it when changing scripting.
-- UI behaviour: `scripts/*-smoke.mjs` drive the real app through Playwright's Electron API. Suites and the Electron benches
-  find surfaces by ARIA role and accessible name through `scripts/fixtures/ui.mjs`, the only place that names Varia's
-  classes (for parts with no role); `tests/smoke-selectors.test.ts` enforces it, so markup changes update ui.mjs, keeping
-  the roles and names stable.
-- Performance: `tests/bench/*.bench.ts`, `scripts/ipc-bench.mjs` and `scripts/grid-bench.mjs` only measure; a new
-  metric needs a `tests/bench/floors.json` entry (`tests/bench-floors.test.ts` checks both lists) and a row in
-  docs/ipc.md. Floors must stay well below what slow shared CI runners measure.
 - Every behaviour change or bug fix comes with a check that would have caught it.
-- Keep CI fast: docs/ci.md holds the measurements, the plan and the rules (queueing for the 20 shared runners sets most of a
-  run's wall time, so a job removed beats a step trimmed); measure with `node scripts/ci-timings.mjs`. Race a close or exit only
-  through `within()` (`tests/idle-waits.test.ts`), settle tests without `setTimeout` loops, fail offline connections with
-  `Unreachable.Source`, and find .NET waits with `VARIA_TEST_SLOW_MS=500`. Each smoke shard and live group has a time budget (`shardBudgetSeconds` in `scripts/smoke-shards.mjs`,
-  `LiveGroups.BudgetSeconds`, both 360 s); exceeding it fails `tests/ci-workflow.test.ts` or the offline .NET checks.
-  A bound on a wait that returns as soon as its condition holds costs nothing when it passes: make it generous (CI's 3 and
-  4 vCPU runners stall for seconds), and keep tight bounds for what the check means to time. Two timers that race (a budget
-  that must outlast a delay or a second call) need about a second between them. A CancellationTokenSource timer cancels from the thread pool, so a Stop that must land before CPU-bound work ends comes from a dedicated thread. Before pushing an offline .NET timing check,
-  run `node scripts/offline-stress.mjs` (five copies of the offline checks pinned to three CPUs, as starved as CI's).
-  A new smoke suite needs its seconds on Linux and Windows in `suiteSeconds`, and a new live .NET suite runs through
-  `Suite(...)` in `Program.cs` with an entry in `LiveGroups.Suites`. Copy times from CI's logs: each shard's summary and
-  each `Live suite name: n s` line. Before you add a smoke suite, check whether an existing suite's launch can take the
-  checks: each Electron launch costs seconds. Split any suite over about 90 s. Wait on conditions, never fixed sleeps or
-  `WAITFOR` delays longer than the behaviour needs. Put report-only measurements in the benchmarks, not the checks. A
-  live vitest file is named `*-live.test.ts`, so CI's live job runs it.
+- vitest: `tests/*.test.ts`. .NET: `backend/Varia.Backend.Tests/`, `Check(condition, name)` calls; a new offline suite
+  goes in Program.cs's `offlineSuites`, a new live suite through `Suite(...)` with an entry in `LiveGroups.Suites`.
+- Smoke suites (`scripts/*-smoke.mjs`) find surfaces by ARIA role and name through `scripts/fixtures/ui.mjs`, the only
+  place that names Varia's classes.
+- Keep CI fast (docs/ci.md): wait on conditions, never fixed sleeps or `setTimeout` loops; make waits that return early
+  generous; run `node scripts/offline-stress.mjs` before pushing an offline .NET timing check; record a new smoke or live
+  suite's CI seconds in its table. docs/testing.md has the full rules.
 
 ## Conventions
 
 - TypeScript: no semicolons, single quotes, 2-space indent, long lines. C#: 4-space indent, nullable enabled, warnings
-  as errors. LF line endings (`.editorconfig`, `.gitattributes`). Comments explain why, sparingly.
+  as errors. LF line endings. Comments explain why, sparingly.
 - One `claude/<topic>` branch per PR, off `main` or, for a stacked PR, off the branch it builds on. Merge with merge
-  commits (never squash or rebase), so stacked branches need no rebase; imperative commit subjects.
-- CI (`.github/workflows/ci.yml`) runs on every PR, drafts included (any base branch, so stacked PRs are tested), every
-  push to main and manual runs (a newer push cancels the older run of its PR, or of main; manual runs always finish); the
-  repository is public, so its minutes cost nothing, but GitHub runs only 20 of its jobs
-  at once (5 on macOS), so a PR runs at most 12 and no job repeats another's work. Every job starts at once and builds
-  what it needs, so one failure hides nothing and the run takes as long as its longest job: `npm run check` on Linux,
-  Windows and macOS; the live .NET checks on Linux in three groups (`--live-group k/3`, each against its own SQL Server
-  service; the first also runs `tests/*-live.test.ts` and Kerberos); the smoke suites in three shards on Linux (sandboxed,
-  under xvfb, with SQL Server) and two on Windows (`scripts/smoke-shards.mjs`, which splits `test:smoke` by each platform's times
-  in its `suiteSeconds`); and the Linux benchmarks (floors enforced). Report-only work stays off PRs: Linux's 1024x768
-  repeats of the scripting and results suites (Windows runners' own display is 1024x768) run on main pushes, and the
-  Windows and macOS benchmarks run daily and by hand (`bench-desktop.yml`). macOS skips the smoke tests until they cover its window chrome. `tests/ci-workflow.test.ts` holds
-  this layout.
-  Release builds (`release.yml`, through `package.yml`) package main pushes, tags and manual runs, and a pull request only when
-  it changes what packaging reads (its `paths`); Intel macOS packages only for tags, manual runs and a weekly scheduled run on
-  main (Intel alone), and installers upload only for tags and manual runs (`tests/release-workflow.test.ts`). A pull request
-  over 300 changed files may skip Release builds (GitHub reads only its first 300 for `paths`): run them by hand then. Every workflow a pull request triggers cancels its superseded runs.
-  `sql-matrix.yml` (manual runs only) repeats the .NET checks against SQL Server 2017, 2019, 2022 and 2025.
+  commits (never squash or rebase); imperative commit subjects.
+- CI (`.github/workflows/ci.yml`) runs on every PR; its layout is pinned by `tests/ci-workflow.test.ts` and
+  `tests/release-workflow.test.ts` and described in docs/ci.md.
 - No license has been chosen; do not add one.
 
 ## Product direction (agreed with the owner)
 
-- Goal: SSMS 2022-level polish plus a VS Code-style F1 command palette. Core first (connections, databases, objects);
-  SSIS, replication, and credentials later. Windows, Linux, and macOS are all first-class. Never freeze or crash;
-  handle error states cleanly.
-- Roadmap: PR0 CI/test foundations, PR1 theme tokens, PR2 command registry + F1 palette, PR3 context menus,
-  PR4 Object Explorer v2 (backend node provider, virtualized keyboard tree), PR5 scripting (Script As), PR6 binary
-  IPC v2, PR7 streaming virtualized results grid.
-- IPC v2: length-prefixed MessagePack frames (control and row pages), server push and streams with credit-based
-  backpressure, MessagePort with transferable ArrayBuffers to the renderer.
-- Results stay in memory under a backend memory budget with explicit truncation. No spill to disk.
-- Menus: custom-rendered themed menus (title bar and context menus) on Windows/Linux; native global menu bar and native
-  context menus on macOS.
-- SQL Server 2016-2025. Authentication: SQL and Integrated (Windows SSPI; Kerberos on Linux/macOS) first, Microsoft
-  Entra ID next.
-- Visuals: the modern Calm Pro design language (graphite neutrals, one iris accent, Compact density by default and
-  Comfortable as an option), not SSMS's look; SSMS's features, behaviours, names and keys stay the parity target. Dense
-  Power's environment and status indicators are in (the red Production tag on connections, live Object Explorer status
-  chips), showing only what a probe produces. Icons are codicons (bundled with Monaco) plus custom SVGs; Microsoft's SSMS
-  icons cannot be reused. Themes: Dark and Light (plus follow System), customizable through a standardized palette
-  system like VS Code or opencode.
+- Goal: SSMS 2022-level polish plus a VS Code-style F1 command palette. Windows, Linux and macOS are all first-class.
+  Never freeze or crash; handle error states cleanly. SQL Server 2016-2025; SQL, Integrated (Kerberos off Windows) and
+  Microsoft Entra ID authentication.
+- Results stay in memory under a backend budget with explicit truncation; no spill to disk.
+- Menus: custom-rendered themed menus on Windows/Linux; native menu bar and context menus on macOS.
+- Visuals: the modern Calm Pro design language (graphite neutrals, one iris accent, Compact density by default), not
+  SSMS's look; SSMS's features, behaviours, names and keys stay the parity target. Icons are codicons plus custom SVGs;
+  Microsoft's SSMS icons cannot be reused. Themes: Dark, Light and System, customizable through the palette system.

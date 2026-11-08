@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { shardBudgetSeconds, shardSuites, smokeSuites, suiteSeconds } from '../scripts/smoke-shards.mjs'
 
-// CI's own contract (CLAUDE.md, Conventions): every job starts at once, so one run reports every suite it reaches, the
+// CI's own contract (docs/ci.md, Layout): every job starts at once, so one run reports every suite it reaches, the
 // smoke suites run in shards that cover test:smoke exactly and stay within their time budget, and every pull request runs
 // every platform in few enough jobs that two runs fit GitHub's concurrency for a public repository. The workflow is plain
 // YAML in a fixed layout, so its jobs and steps are read by indentation.

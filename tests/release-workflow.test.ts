@@ -57,9 +57,9 @@ describe('Release builds', () => {
   })
   // What the docs say about packaging must match the workflow: the weekly Intel run, and the paths filter's 300-file limit.
   it('documents the weekly Intel run and the paths filter\'s 300-file limit', () => {
-    const claude = readFileSync('CLAUDE.md', 'utf8').replace(/\n\s*/g, ' '), ci = readFileSync('docs/ci.md', 'utf8').replace(/\n\s*/g, ' ')
-    expect(claude).toContain('Intel macOS packages only for tags, manual runs and a weekly scheduled run on main')
-    for (const [name, doc] of [['release.yml', release.replace(/\n# /g, ' ')], ['CLAUDE.md', claude], ['docs/ci.md', ci]]) expect(doc, name).toMatch(/first 300/)
+    const ci = readFileSync('docs/ci.md', 'utf8').replace(/\n\s*/g, ' ')
+    expect(ci).toContain('Intel macOS packages only for tags, manual runs and a weekly scheduled run on main')
+    for (const [name, doc] of [['release.yml', release.replace(/\n# /g, ' ')], ['docs/ci.md', ci]]) expect(doc, name).toMatch(/first 300/)
     // Unreachable.Source is a malformed pipe address on purpose (a well-formed missing pipe crashed offline-stress copies).
     for (const file of ['docs/ci.md', 'backend/Varia.Backend.Tests/Unreachable.cs', 'tests/idle-waits.test.ts']) expect(readFileSync(file, 'utf8'), file).not.toMatch(/missing named pipe/)
   })
