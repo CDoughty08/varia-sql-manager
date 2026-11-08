@@ -844,7 +844,7 @@ try {
   // A database's name, quoted. Right-click selected it, and focus went back to the tree.
   await expandExplorerPath(page, 'server-a', 'Databases')
   const appData = await openExplorerRowMenu('server-a', 'Databases', 'AppData')
-  expect(await labels()).toEqual(['New Database…', 'New Query', 'Search Objects…', 'Script Database as', 'Tasks', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
+  expect(await labels()).toEqual(['New Database…', 'New Query', 'Search Objects…', 'Peek', 'Script Database as', 'Tasks', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await explorerMenu.getByRole('menuitem', { name: 'Copy Name', exact: true }).click()
   await expect.poll(clipboard).toBe('[AppData]')
   await expect(tree).toBeFocused()
@@ -964,7 +964,7 @@ try {
   await openExplorerRowMenu('server-a', 'Security', 'Logins', 'sa')
   // The fixture's sa is disabled, so it offers Enable in place of Disable (D4b), as a SQL Server login Unlock… (D4d), and Delete
   // follows Rename as in SSMS (D4c); Properties, last, opens Login Properties (D2c).
-  expect(await labels()).toEqual(['New Login…', 'Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
+  expect(await labels()).toEqual(['New Login…', 'Peek', 'Script Login as', 'Copy Name', 'Enable', 'Unlock…', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await explorerMenu.getByRole('menuitem', { name: 'Copy Name', exact: true }).click()
   await expect.poll(clipboard).toBe('[sa]')
   await openExplorerRowMenu('server-a')
