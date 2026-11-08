@@ -15,7 +15,7 @@ from Microsoft's documentation, so Varia keeps its own.
   - AutoRecover (`environment.autoRecover`)
   - Documents (`environment.documents`)
   - Fonts and Colors (`environment.fontsAndColors`)
-  - Keyboard (`environment.keyboard`)
+  - Shortcuts (`environment.shortcuts`)
   - Product Updates (`environment.productUpdates`)
   - Live Data (`environment.liveData`)
   - Object Explorer (`environment.objectExplorer`)
@@ -81,9 +81,9 @@ Colors come from the color theme (View › Theme).
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `environment.fonts.editorFontSize` | Size | Integer 8–72 px | 13 px | 10 pt Consolas (SSMS 18–20; SSMS 22 not verified) | All | At once | The query editor's font size, in CSS pixels. |
 
-### Environment › Keyboard
+### Environment › Shortcuts
 
-Shortcuts follow SSMS's defaults and cannot be changed yet. The command palette (F1) shows each command's shortcut.
+Keyboard and mouse shortcuts: SSMS's defaults, your changes, and the scope each works in. Changes apply when you choose OK. Not settings: a table of the shortcuts of every command above an inspector, with mouse gestures beside them. They are stored in `shortcuts.json`, not `settings.json` (docs/commands.md lists the defaults).
 
 _No settings yet._
 

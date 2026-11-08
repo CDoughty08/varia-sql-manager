@@ -269,7 +269,7 @@ if (liveGroup is null)
         ("ConnectionFailure", () => ConnectionFailureChecks.RunAsync(Check)),
         ("ConnectionFailure.Identity", () => ConnectionFailureChecks.IdentityAsync(Check)),
         ("Session", Sync(() => SessionChecks.Run(Check))),
-        ("Plan", Sync(() => PlanChecks.Run(Check))),
+        ("Plan", Sync(() => { PlanChecks.Run(Check); ActualPlanRecoveryChecks.Run(Check); })),
         ("EstimatedPlan", Sync(() => EstimatedPlanChecks.Run(Check))),
         ("ClientStatistics", Sync(() => ClientStatisticsChecks.Run(Check))),
         ("Entra", () => EntraChecks.RunAsync(Check)),

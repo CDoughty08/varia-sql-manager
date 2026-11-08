@@ -7,7 +7,9 @@ export const normalizeQuery = (text: string): string => text.slice(0, settingsLi
 const has = (text: string, query: string) => text.replace(/\s+/g, ' ').toLowerCase().includes(query)
 /** Rows a page shows that are not settings, and the words they answer to. */
 const providerTerms: Readonly<Record<string, readonly string[]>> = { theme: ['Color theme', 'View › Theme', 'dark', 'light'] }
-const layoutTerms: Readonly<Record<string, readonly string[]>> = { keyboard: ['keyboard', 'shortcut', 'keys'] }
+/** The Shortcuts page's own words: SSMS names it Keyboard, and it has mouse gestures too. */
+export const shortcutsSearchTerms: readonly string[] = ['Keyboard and mouse shortcuts', 'keyboard', 'keys', 'keybinding', 'shortcut', 'mapping', 'mouse', 'gesture', 'chord', 'hotkey', 'keymap']
+const layoutTerms: Readonly<Record<string, readonly string[]>> = { shortcuts: shortcutsSearchTerms }
 
 export const settingMatches = (def: SettingDef, query: string): boolean =>
   [def.label, def.description, ...def.keywords ?? []].some(text => has(text, query))

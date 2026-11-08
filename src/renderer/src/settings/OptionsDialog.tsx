@@ -4,13 +4,18 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import { trapFocus } from '../trap-focus'
 import {
-  ancestorIds, draftFrom, firstPage, pageForm, patchFrom, resetPage, rowNotes, setDraftValue, settingGridRow, treeRows, validateDraft, type OptionsDraft, type RowGroup, type SettingRow
+  ancestorIds, commitOptions, draftFrom, firstPage, pageForm, patchFrom, resetPage, rowNotes, setDraftValue, settingGridRow, treeRows, validateDraft, type OptionsDraft, type RowGroup, type SettingRow
 } from './options-form'
 import PropertyGrid, { controlId } from './PropertyGrid'
 import { highlightParts, searchPages } from './search'
 import { focusToReturn, returnFocusTo } from '../core/focus'
+import { useShortcuts, useShortcutsSnapshot } from '../core/ShortcutsContext'
+import type { ShortcutFile } from '../../../shared/commands/shortcut-schema'
+import type { CaptureSource } from './shortcuts/CaptureField'
+import ShortcutsPage from './shortcuts/ShortcutsPage'
+import { followStored, saveRevision, shortcutsToSave, stagedChanges, startShortcutEdit, type ShortcutEdit } from './shortcuts/shortcut-draft'
 
-const errorText = (error: unknown) => error instanceof Error && error.message ? error.message : 'The options could not be saved.'
+const shortcutsPage = 'environment.shortcuts'
 /** Fonts and Colors names the display item its rows are for, as SSMS's "Show settings for" list does (fixed for now). */
 const groupHeading = (pageId: string, label: string) => pageId === 'environment.fontsAndColors' ? `Show settings for: ${label}` : label
 
@@ -46,9 +51,21 @@ function FormRow({ row, error, focused, label, onFocus, onChange }: RowProps) {
  * from what main stored; Cancel and Escape discard them, and focus returns to where it was.
  */
 export default function OptionsDialog({ page: requested }: { page?: string }) {
-  const { settings, platform } = useWorkbench()
+  const { settings, platform, keybindings } = useWorkbench()
   const { values } = useServiceSnapshot(settings)
   const [draft, setDraft] = useState<OptionsDraft>(() => draftFrom(values))
+  // The Shortcuts page's edits: a second draft, saved after the settings by OK.
+  const shortcuts = useShortcuts()
+  const shortcutsState = useShortcutsSnapshot()
+  const [shortcutEdit, setShortcutEdit] = useState<ShortcutEdit>(() => startShortcutEdit(shortcuts.getSnapshot()))
+  const shortcutDraft = shortcutEdit.draft
+  const setShortcutDraft = (draft: ShortcutFile) => setShortcutEdit(edit => ({ ...edit, draft }))
+  // Main re-reads the file on every get, so opening the dialog sees a hand edit before the user starts editing.
+  useEffect(() => { void shortcuts.reload() }, [shortcuts])
+  useEffect(() => { setShortcutEdit(edit => followStored(edit, shortcutsState)) }, [shortcutsState])
+  const staged = stagedChanges(shortcutDraft, shortcutEdit.base.file)
+  // KeybindingService.capture routes every key but Tab to the capture box while it records, so it stays the only key listener.
+  const capture = useMemo<CaptureSource>(() => (onChord, options) => keybindings.capture(onChord, options), [keybindings])
   const [page, setPage] = useState(() => firstPage(requested && pageById(requested) ? requested : 'environment.general'))
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set(ancestorIds(page)))
   const [treeFocus, setTreeFocus] = useState(page)
@@ -115,11 +132,23 @@ export default function OptionsDialog({ page: requested }: { page?: string }) {
     }
     setErrors(new Map())
     const patch = patchFrom(settings.getSnapshot().values, result.values)
-    if (!Object.keys(patch).length) { close(); return }
+    const shortcutFile = shortcutsToSave(shortcutEdit)
+    if (!Object.keys(patch).length && !shortcutFile) { close(); return }
+    // Settings first, then shortcuts; a failure keeps the dialog open on the page that failed, with its draft.
+    const asking = settings.dialog.getSnapshot()
     setSaving(true); setError('')
-    try {
-      if (await settings.saveDialog(patch)) restoreFocus()
-    } catch (failure) { setError(errorText(failure)); setSaving(false) }
+    const saved = await commitOptions({ update: next => settings.update(next), saveShortcuts: file => shortcuts.save(file, saveRevision(shortcutEdit, shortcuts.getSnapshot().revision)) }, patch, shortcutFile)
+    if (!saved.ok) {
+      setError(saved.message); setSaving(false)
+      // The message offers OK again to replace the other window's shortcuts; only that choice may overwrite them.
+      if (saved.stale) setShortcutEdit(edit => ({ ...edit, replace: true }))
+      if (saved.stage === 'shortcuts' && page !== shortcutsPage) showPage(shortcutsPage)
+      return
+    }
+    // A dialog that closed, or was opened again, while the saves were on their way is left as it is.
+    if (settings.dialog.getSnapshot() !== asking) return
+    settings.closeDialog()
+    restoreFocus()
   }
   const treeKeyDown = (event: KeyboardEvent<HTMLUListElement>) => {
     const index = rows.findIndex(row => row.page.id === focusId), row = rows[index]
@@ -186,16 +215,21 @@ export default function OptionsDialog({ page: requested }: { page?: string }) {
         <h3 className="options-heading">{pagePath(form.page.id).map(node => node.title).join(' › ')}</h3>
         {form.provider === 'theme' && <p className="options-note">{highlight('Color theme')}: View › Theme</p>}
         {/* A form page's own note (Fonts and Colors: where colors come from) stays above its rows. */}
-        {form.page.layout !== 'propertyGrid' && form.page.description && <p className="options-note">{highlight(form.page.description)}</p>}
-        {form.page.layout === 'propertyGrid'
-          ? <PropertyGrid label={form.page.title} groups={form.groups.map(group => ({ ...group, rows: group.rows.map(settingGridRow) }))} idPrefix="setting-" focused={focused} errors={errors} onFocusRow={key => setFocused(key)} onChange={(key, text) => change(key as SettingKey, text)} renderLabel={highlight} />
-          : <div className="options-form">{groups(form.groups)}</div>}
+        {form.page.layout === 'form' && form.page.description && <p className="options-note">{highlight(form.page.description)}</p>}
+        {form.page.layout === 'shortcuts'
+          ? <ShortcutsPage draft={shortcutDraft} stored={shortcutEdit.base.file} platform={platform} files={shortcuts} capture={capture}
+            salvaged={shortcutsState.salvaged ? shortcutsState.notice ?? '' : undefined} onChange={next => { setShortcutDraft(next); setError('') }} />
+          : form.page.layout === 'propertyGrid'
+            ? <PropertyGrid label={form.page.title} groups={form.groups.map(group => ({ ...group, rows: group.rows.map(settingGridRow) }))} idPrefix="setting-" focused={focused} errors={errors} onFocusRow={key => setFocused(key)} onChange={(key, text) => change(key as SettingKey, text)} renderLabel={highlight} />
+            : <div className="options-form">{groups(form.groups)}</div>}
       </div>
     </div>
-    <div className="options-description"><strong>{described.title}</strong>{described.text && <p>{described.text}</p>}{described.notes.map(note => <p key={note}>{note}</p>)}</div>
+    {/* The Shortcuts page's inspector describes what is selected there. */}
+    {form.page.layout !== 'shortcuts' && <div className="options-description"><strong>{described.title}</strong>{described.text && <p>{described.text}</p>}{described.notes.map(note => <p key={note}>{note}</p>)}</div>}
     {error && <p className="connect-error options-error" role="alert">{error}</p>}
     <div className="connection-footer">
-      <button type="button" onClick={() => { setDraft(current => resetPage(current, page, platform)); setErrors(new Map()); setError('') }}>Reset to Defaults</button><span />
+      {form.page.layout !== 'shortcuts' && <button type="button" onClick={() => { setDraft(current => resetPage(current, page, platform)); setErrors(new Map()); setError('') }}>Reset to Defaults</button>}
+      <span className="options-staged">{staged > 0 && <><span className="shortcuts-dot" aria-hidden="true" />{staged === 1 ? '1 shortcut change' : `${staged} shortcut changes`} staged · applied on OK</>}</span>
       <button className="primary" type="submit" disabled={saving}>OK</button><button type="button" disabled={saving} onClick={close}>Cancel</button>
     </div>
   </form></div>
