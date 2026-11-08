@@ -913,6 +913,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         // The error that ended the script, which can end the session before managed SNI's asynchronous close updates its state.
         SqlException? ended = null;
         var messages = new QueryMessages(events.Message);
+        // Made once, not per row: a lambda that captures allocates a delegate each time it is evaluated.
+        Action<string> warn = text => messages.Add(text);
         var sets = new List<ResultSetBuffer>();
         var plans = new List<ResultDescriptor>();
         ActualPlanCapture? capture = null;
@@ -1181,7 +1183,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                                         if (builder is null) continue;
                                         skipped = false;
                                         int truncatedCells;
-                                        try { truncatedCells = plan!.ReadRow(reader, builder, text => messages.Add(text), token); }
+                                        try { truncatedCells = plan!.ReadRow(reader, builder, warn, token); }
                                         catch { currentSet.AbortRow(); throw; }
                                         var sealedBefore = currentSet.SealedPages;
                                         if (currentSet.TryCommitRow(truncatedCells)) storedRows++;

@@ -81,8 +81,20 @@ internal sealed class PageBuilder
     /// <summary>What the open row adds to the lengths sidecar: its uint32 and its sparse entries (and a large row's entry).</summary>
     public long OpenRowLengthBytes => next < 0 ? 0 : 4L + (long)PageLengths.CellBytes * openCells + (rowData >= uint.MaxValue ? PageLengths.LargeBytes : 0);
     /// <summary>Bytes held by the builder's buffers, for memory accounting.</summary>
-    public long WorkingBytes => columns.Sum(column => (long)column.Data.Length + 4L * column.Offsets.Length + (column.Nulls?.Length ?? 0) + (column.Truncated?.Length ?? 0) + (column.Errors?.Length ?? 0))
-        + 4L * rowLengths.Length + (long)PageLengths.CellBytes * cells.Capacity + (long)PageLengths.LargeBytes * large.Capacity;
+    public long WorkingBytes
+    {
+        get
+        {
+            // Every committed row reads it (ResultSetBuffer.TryCommitRow), so it sums in a plain loop: no enumerator or closure a row.
+            var total = 4L * rowLengths.Length + (long)PageLengths.CellBytes * cells.Capacity + (long)PageLengths.LargeBytes * large.Capacity;
+            for (var i = 0; i < columns.Length; i++)
+            {
+                var column = columns[i];
+                total += (long)column.Data.Length + 4L * column.Offsets.Length + (column.Nulls?.Length ?? 0) + (column.Truncated?.Length ?? 0) + (column.Errors?.Length ?? 0);
+            }
+            return total;
+        }
+    }
 
     public void BeginRow()
     {
