@@ -10,7 +10,7 @@ import { layoutPlans, type LayoutStatement } from '../src/renderer/src/plans/lay
 import type { QueryPlanState } from '../src/renderer/src/plans/QueryPlansService'
 import type { PlanSource } from '../src/renderer/src/plans/sources'
 import { resolveBuiltin } from '../src/shared/theme/resolve'
-import { defaultSettings } from '../src/shared/settings/catalog'
+import { defaultSettings, type BooleanSettingKey } from '../src/shared/settings/catalog'
 import type { PlanDocument } from '../src/shared/plans'
 
 const mocks = vi.hoisted(() => ({ canvas: vi.fn(), update: vi.fn(), dispose: vi.fn(), worker: vi.fn(),
@@ -35,10 +35,12 @@ document.body.append(host)
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 let generation: ((value: number) => void) | undefined
 const workbench = { planPreparation: cache, theme: { getSnapshot: () => theme, subscribe: () => () => {} },
-  settings: { getSnapshot: () => settings, subscribe: () => () => {} },
+  settings: { getSnapshot: () => settings, subscribe: (listener: () => void) => { settingsListeners.add(listener); return () => settingsListeners.delete(listener) },
+    toggle: (key: BooleanSettingKey) => { settings = { values: { ...settings.values, [key]: !settings.values[key] } }; for (const listener of settingsListeners) listener() } },
   resultClient: { backendGeneration: 1, onGeneration: (listener: typeof generation) => { generation = listener; return { dispose() {} } } } } as unknown as Workbench
 const theme = { active: resolveBuiltin('dark') }
-const settings = { values: defaultSettings }
+let settings = { values: { ...defaultSettings } }
+const settingsListeners = new Set<() => void>()
 const model: PlanDocument = { version: '', build: '', notices: [], statements: [{ id: 's', type: 'SELECT', text: '', estimatedCost: null, warnings: [], nodes: [
   { id: 'n', parentId: null, nodeId: '0', physicalOp: 'Scan', logicalOp: 'Scan', object: '', estimatedRows: 1, estimatedCost: null, actualRows: null, elapsedMs: null, cpuMs: null, executions: null, warnings: [], properties: [] }
 ] }] }
@@ -147,6 +149,16 @@ it('does no hidden preparation, reuses parsed plans and layout on remount, and p
   expect(controller.current?.getSelectedOperator()).toBe('document:n')
   await act(async () => controller.current?.selectOperator('document:child'))
   expect(host.querySelector('[role="treeitem"]')?.getAttribute('aria-expanded')).toBe('true')
+  // A display:none outline reports zero scroll; reopening it must use the saved visible offset.
+  const outlineTree = host.querySelector<HTMLElement>('[role="tree"]')!
+  let actualScroll = 0
+  Object.defineProperty(outlineTree, 'clientHeight', { get: () => settings.values['queryResults.plan.outline'] ? 16 : 0 })
+  Object.defineProperty(outlineTree, 'scrollTop', { get: () => settings.values['queryResults.plan.outline'] ? actualScroll : 0, set: value => { actualScroll = value as number } })
+  await act(async () => { outlineTree.scrollTop = 32; outlineTree.dispatchEvent(new Event('scroll', { bubbles: true })) })
+  await act(async () => button('Outline').click())
+  await act(async () => outlineTree.dispatchEvent(new Event('scroll', { bubbles: true })))
+  await act(async () => button('Outline').click())
+  expect(outlineTree.scrollTop).toBe(32)
   await act(async () => button('Collapse inputs').click()) // leaf selection cannot collapse
   await act(async () => host.querySelector<HTMLElement>('[role="treeitem"]')!.click())
   await act(async () => button('Collapse inputs').click())

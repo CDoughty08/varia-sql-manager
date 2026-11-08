@@ -1,7 +1,7 @@
 // Popout windows (docs/popout-windows.md): a panel moves into an OS window of its own by its menu and by dragging its tab
 // past the window's edge, works there (the grid's keys and copy, its context menu, the palette, the theme), docks back by
 // its menu, its window's button, a drop on the main window and closing its window, and comes back after a restart.
-import { electron, expect } from './fixtures/smoke.mjs'
+import { electron, expect, within } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
@@ -265,7 +265,7 @@ try {
   // After a failure the query is still unsaved: its prompt would hold the close open, so it is answered (Don't Save), and a
   // close that still hangs is cut short rather than waiting out CI's own limit.
   await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) }).catch(() => {})
-  const closed = await Promise.race([application.close().then(() => true, () => true), new Promise(done => setTimeout(() => done(false), 20000).unref())])
+  const closed = await within(application.close().then(() => true, () => true), 20000, () => false)
   if (!closed) application.process()?.kill()
   clearTimeout(watchdog)
   await rm(profile, { recursive: true, force: true })

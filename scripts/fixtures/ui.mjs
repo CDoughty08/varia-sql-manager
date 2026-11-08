@@ -502,6 +502,10 @@ export const explorerSearchHits = page => page.locator(part.explorerSearch).getB
 export const explorerSearchCurrent = page => page.locator(part.explorerSearch).getByRole('listbox', { name: 'Search results', exact: true }).getByRole('option', { selected: true })
 /** The Search Objects tab's box, its hits (the options of its results list), and the selected hit. */
 export const objectSearchBox = page => page.locator(part.objectSearchTab).getByRole('textbox', { name: 'Search objects', exact: true })
+/** The Search Objects tab's server picker (shown with several servers): a server, or All servers. */
+export const objectSearchServer = page => page.locator(part.objectSearchTab).getByRole('combobox', { name: 'Server', exact: true })
+/** An All servers search's hits on one server: a list of their own, named by the server. */
+export const objectSearchGroup = (page, server) => page.locator(part.objectSearchTab).getByRole('listbox', { name: `Results on ${server}`, exact: true })
 export const objectSearchHits = page => page.locator(part.objectSearchTab).getByRole('listbox', { name: 'Results', exact: true }).getByRole('option')
 export const objectSearchSelected = page => page.locator(part.objectSearchTab).getByRole('listbox', { name: 'Results', exact: true }).getByRole('option', { selected: true })
 export const explorerSearchSplitter = page => page.locator(part.explorerSearch).getByRole('separator', { name: 'Resize search results', exact: true })

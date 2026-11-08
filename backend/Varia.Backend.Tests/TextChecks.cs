@@ -491,8 +491,9 @@ internal static class TextChecks
         catch (System.Xml.XmlException) { cancelledThrows = false; }
         check(!ColumnPlan.ReadPastXml(broken, chunk, default) && ColumnPlan.ReadPastXml(wellFormed, chunk, default) && cancelledThrows,
             "reading past the rest of an xml value after its cell is stored stops at a parse failure instead of failing the cell, and a Stop still ends the read, even where the value parses as cut short");
-        var bytes = new byte[3 * XmlFeed.Window];
-        var buffer = new byte[4096];
+        // The feed counts characters: 2 bytes each, as SQL Server sends xml.
+        var bytes = new byte[2 * 3 * XmlFeed.Window];
+        var buffer = new char[4096];
         long Drain(XmlFeed feed)
         {
             long total = 0;
@@ -506,17 +507,24 @@ internal static class TextChecks
         var growing = new XmlFeed(() => ++output);
         growing.Reset(new MemoryStream(bytes));
         var whole = Drain(growing);
-        check(cutAt == XmlFeed.Window && silent.Starved && whole == bytes.Length && !growing.Starved,
-            "the xml feed stops after " + cutAt + " bytes without output, and never while output grows (" + whole + " bytes)");
+        check(cutAt == XmlFeed.Window && silent.Starved && whole == bytes.Length / 2 && growing.Consumed == bytes.Length && !growing.Starved,
+            "the xml feed stops after " + cutAt + " characters without output, and never while output grows (" + whole + " characters)");
         // A column plan feeds every xml cell through one feed, so a cell that starved it must not cut the next one short.
-        silent.Reset(new MemoryStream(bytes, 0, 100));
+        silent.Reset(new MemoryStream(bytes, 0, 200));
         var next = Drain(silent);
         var stuck = 7;
         var reused = new XmlFeed(() => stuck);
         reused.Reset(new MemoryStream(bytes));
         var unchanged = Drain(reused);
         check(next == 100 && !silent.Starved && unchanged == XmlFeed.Window && reused.Starved,
-            "a reset feed starts a fresh window for the next cell (" + next + " bytes) and counts output from what it was at the reset (" + unchanged + " bytes)");
+            "a reset feed starts a fresh window for the next cell (" + next + " characters) and counts output from what it was at the reset (" + unchanged + " characters)");
+        // It decodes UTF-16 itself, so a stream that returns one byte at a time (ending reads inside characters and inside a
+        // surrogate pair) still reads as the text it holds.
+        const string Mixed = "<r a=\"é\">\U0001F600 €</r>";
+        var trickle = new XmlFeed(() => 0);
+        trickle.Reset(new OneByteStream(Encoding.Unicode.GetBytes(Mixed)));
+        check(trickle.ReadToEnd() == Mixed && trickle.Consumed == 2 * Mixed.Length, "the xml feed decodes UTF-16 across reads that end inside a character");
+        XmlCellWriters(check);
         var fallbacks = Enum.GetValues<CellCodec>().SelectMany(codec => new[] { (codec, WireKind.Text), (codec, WireKind.Binary) })
             .Select(pair => (pair.codec, pair.Item2, Fallback: ColumnPlan.FallbackOf(pair.codec, pair.Item2, true))).ToList();
         check(fallbacks.All(item => item.Fallback is CellCodec.LongText or CellCodec.Xml or CellCodec.Json or CellCodec.Stream) && ColumnPlan.FallbackOf(CellCodec.Xml, WireKind.Text, true) == CellCodec.Xml
@@ -641,5 +649,87 @@ internal static class TextChecks
         public void Advance(int count) { }
         public Memory<byte> GetMemory(int sizeHint = 0) => buffer;
         public Span<byte> GetSpan(int sizeHint = 0) => buffer;
+    }
+
+    private sealed class OneByteStream(byte[] bytes) : MemoryStream(bytes)
+    {
+        public override int Read(byte[] buffer, int offset, int count) => base.Read(buffer, offset, Math.Min(count, 1));
+    }
+
+    /// <summary>One xml cell through a column plan's <see cref="XmlCellWriter"/>, from its UTF-16 bytes as SQL Server sends
+    /// them; a parse failure reads as "!error", a starved feed as "!starved".</summary>
+    private static string Cell(XmlCellWriter cells, MemoryStream stream, string xml, int limit = 2_097_153)
+    {
+        // SetLength first: growing a MemoryStream clears the bytes it grows into.
+        stream.SetLength(Encoding.Unicode.GetByteCount(xml));
+        Encoding.Unicode.GetBytes(xml, 0, xml.Length, stream.GetBuffer(), 0);
+        stream.Position = 0;
+        cells.Reset(limit);
+        cells.Feed.Reset(stream);
+        try
+        {
+            using var reader = cells.OpenReader();
+            return cells.Write(reader, cells.Feed, default) ? "!starved" : cells.Text.ToString();
+        }
+        catch (System.Xml.XmlException) { return "!error"; }
+    }
+
+    /// <summary>A column plan reuses its xml writer, reader settings and NameTable across cells: each cell must still read
+    /// exactly as it would through fresh ones, the writer is rebuilt only after a cell that did not end cleanly, the shared
+    /// NameTable is replaced once hostile names grow it past its cap, and a small cell allocates little.</summary>
+    private static void XmlCellWriters(Action<bool, string> check)
+    {
+        const int Whole = 2_097_153;
+        (string Xml, int Limit)[] corpus =
+        [
+            ("<a b=\"1\">x</a>", Whole), ("<p:a xmlns:p=\"u1\"><p:b c=\"2\"/></p:a>", Whole), ("<p:a xmlns:p=\"u2\"/>", Whole), ("<a xmlns=\"d\"><b/></a>", Whole),
+            ("<b/>", Whole), ("text only", Whole), ("<?pi data?><r/>", Whole), ("<!--c--><r><![CDATA[x<y]]></r>", Whole), ("<?xml version=\"1.0\"?><r/>", Whole),
+            ("  <r> </r>", Whole), ("<a>&lt;&amp;&#x1F600;</a>", Whole), ("<a/><b/>tail", Whole), ("<a><b></a>", Whole),
+            ("<a><b>" + new string('t', 300) + "</b></a>", 40), ("<a><b>" + new string('t', 20_000) + "</b></a>", 40), ("<r xml:space=\"preserve\">  </r>", Whole), ("<a>x</a>", Whole)
+        ];
+        var stream = new MemoryStream(new byte[1 << 16], 0, 1 << 16, true, true);
+        var shared = new XmlCellWriter();
+        var mismatches = new List<string>();
+        for (var round = 0; round < 2; round++)
+            foreach (var (xml, limit) in corpus)
+            {
+                var fresh = Cell(new XmlCellWriter(), stream, xml, limit);
+                var again = Cell(shared, stream, xml, limit);
+                if (fresh != again) mismatches.Add(xml + " -> " + again + " (fresh: " + fresh + ")");
+            }
+        check(mismatches.Count == 0 && Cell(new XmlCellWriter(), stream, "<p:a xmlns:p=\"u1\"><p:b c=\"2\"/></p:a>") == "<p:a xmlns:p=\"u1\"><p:b c=\"2\" /></p:a>",
+            "xml cells read through a reused writer and NameTable as through fresh ones, after cut, malformed and declared cells: " + string.Join("; ", mismatches));
+
+        var steady = new XmlCellWriter();
+        for (var i = 0; i < 1000; i++) Cell(steady, stream, "<a b=\"1\">x</a>");
+        var afterCut = new XmlCellWriter();
+        // Cut past the writer's own buffer, so the sink fills inside <b>; a short cut ends the document in that buffer first.
+        Cell(afterCut, stream, "<a><b>" + new string('t', 20_000) + "</b></a>", 40);
+        Cell(afterCut, stream, "<a/>");
+        Cell(afterCut, stream, "<a><b></a>");
+        Cell(afterCut, stream, "<a/>");
+        check(steady.Writers == 1 && steady.NameTables == 1 && afterCut.Writers == 3,
+            "a column plan builds one xml writer and NameTable for its cells, and a fresh writer only after a cut or failed cell (" + steady.Writers + ", " + steady.NameTables + ", " + afterCut.Writers + ")");
+
+        // Every cell names new elements: the shared table is replaced between cells once it passes its cap, so it never holds
+        // much more than the cap plus one cell's names.
+        var hostile = new XmlCellWriter();
+        var names = new StringBuilder();
+        for (var cell = 0; cell < 40; cell++)
+        {
+            names.Clear().Append("<r>");
+            for (var n = 0; n < 500; n++) names.Append("<n").Append(cell).Append('_').Append(n).Append("/>");
+            Cell(hostile, stream, names.Append("</r>").ToString());
+        }
+        check(hostile.NameTables >= 4, "the NameTable that xml cells share is replaced once hostile names grow it past " + BoundedNameTable.MaxNames + " names (" + hostile.NameTables + " tables for 20,000 names)");
+
+        var small = new XmlCellWriter();
+        for (var i = 0; i < 100; i++) Cell(small, stream, "<a b=\"1\">x</a>");
+        const int Cells = 10_000;
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < Cells; i++) Cell(small, stream, "<a b=\"1\">x</a>");
+        var perCell = (GC.GetAllocatedBytesForCurrentThread() - before) / Cells;
+        // About 28 KB with a fresh writer, reader buffers and NameTable per cell; each cell still builds its own XmlReader.
+        check(perCell < 14 * 1024, "a small xml cell allocates under 14 KB through a column plan's xml writer (" + perCell + " bytes)");
     }
 }

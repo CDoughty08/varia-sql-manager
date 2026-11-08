@@ -181,8 +181,8 @@ internal static class SsisActionChecks
         var host = new SsisChecks.FakeHost { Hold = new SemaphoreSlim(0) };
         using var reads = new SsisService(host, new SsisOptions { GateWait = TimeSpan.FromMilliseconds(300) });
         using var service = new SsisActionService(host, reads);
-        var watch = Stopwatch.StartNew();
-        async Task Until(Func<bool> done) { while (!done() && watch.ElapsedMilliseconds < 10_000) await Task.Delay(10); }
+        // Each wait gets its own generous deadline: it returns once its condition holds, and a starved CI runner stalls for seconds.
+        async Task Until(Func<bool> done) { var deadline = Environment.TickCount64 + 15_000; while (!done() && Environment.TickCount64 < deadline) await Task.Delay(10); }
         async Task<string> Code(Task<SsisExecuteResult> request)
         {
             try { return (await request).Error?.Code ?? "ok"; }

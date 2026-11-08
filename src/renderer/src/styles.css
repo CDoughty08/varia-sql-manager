@@ -198,7 +198,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-search-pane .object-search-options { gap: var(--varia-space-2); }
 .object-search-pane .object-search-hit { padding: 0 var(--varia-space-1); }
 .object-search-pane .object-search-open { grid-template-columns: auto minmax(0, 1fr); }
-.object-search-pane .object-search-path { grid-column: 2; }
+.object-search-pane .object-search-path { grid-column: 2; max-width: none; text-align: start; }
 .object-search-pane .empty-state { flex: none; padding: var(--varia-space-2) var(--varia-space-3); }
 /*
  * The footer: how fresh the selection's listing is, then the connected servers. It is one line as tall as the stale
@@ -2068,13 +2068,35 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-search-summary:empty { display: none; }
 .object-search-hits { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 0 0 var(--varia-space-2); list-style: none; }
 .object-search-hit { display: flex; align-items: start; gap: var(--varia-space-1); padding: 0 var(--varia-space-3) 0 var(--varia-space-2); }
+/* All servers: a group per server, its header a disclosure button with the server's colour, name, environment tag and note. */
+.object-search-group-head { position: sticky; top: 0; z-index: 1; margin: 0; font: inherit; background: var(--varia-editor-background); border-top: 1px solid var(--varia-sideBarSectionHeader-border); }
+.object-search-group-head button { display: flex; align-items: center; gap: var(--varia-space-2); width: 100%; min-height: var(--varia-row); padding: var(--varia-space-1) var(--varia-space-3) var(--varia-space-0) var(--varia-space-1); color: var(--varia-objectExplorer-countForeground); background: transparent; border: 0; border-radius: 0; text-align: start; font-size: var(--varia-size-xs); font-weight: normal; cursor: pointer; }
+.object-search-group-head button:hover { background: var(--varia-list-hoverBackground); }
+.object-search-group-head button:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: -2px; }
+.object-search-group-head .icon { margin-inline-end: calc(-1 * var(--varia-space-1)); color: var(--varia-objectExplorer-chevronForeground); }
+.object-search-group-dot { flex: none; width: var(--varia-space-2); height: var(--varia-space-2); border-radius: var(--varia-radius-pill); }
+.object-search-group-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-objectExplorer-sublabelForeground); font-weight: 600; }
+.object-search-group-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-objectExplorer-countForeground); }
+.object-search-group-note.error { color: var(--varia-errorForeground); }
+.object-search-group-hits { margin: 0; padding: 0; list-style: none; }
+.object-search-group-more { margin: 0; padding: var(--varia-space-0) var(--varia-space-3) var(--varia-space-1) calc(var(--varia-space-2) + var(--varia-space-1) + var(--varia-glyph-md) + var(--varia-space-2)); color: var(--varia-objectExplorer-countForeground); font-size: var(--varia-size-xs); }
 .object-search-hit:hover { background: var(--varia-list-hoverBackground); }
 .object-search-hit:has(> [aria-selected="true"]) { color: var(--varia-list-inactiveSelectionForeground); background: var(--varia-list-inactiveSelectionBackground); }
 .object-search-hit:has(> [aria-selected="true"]:focus) { color: var(--varia-list-activeSelectionForeground); background: var(--varia-list-activeSelectionBackground); }
-.object-search-open { flex: 1; min-width: 0; display: grid; grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr); column-gap: var(--varia-space-2); align-items: center; padding: var(--varia-space-1); text-align: start; color: inherit; background: transparent; border: 0; border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); cursor: pointer; }
+.object-search-open { flex: 1; min-width: 0; display: grid; grid-template-columns: var(--varia-glyph-md) minmax(0, 1fr) auto; column-gap: var(--varia-space-2); align-items: center; padding: var(--varia-space-1); text-align: start; color: inherit; background: transparent; border: 0; border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); cursor: pointer; }
 .object-search-open:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: -2px; }
+.object-search-kind { display: grid; place-items: center; width: var(--varia-glyph-md); height: var(--varia-glyph-md); border-radius: var(--varia-radius-sm); color: var(--varia-searchKind-foreground); font: 700 var(--varia-size-xs)/var(--varia-line-xs) var(--varia-font-mono); }
+.object-search-kind[data-tone="table"] { background: var(--varia-searchKind-tableBackground); }
+.object-search-kind[data-tone="view"] { background: var(--varia-searchKind-viewBackground); }
+.object-search-kind[data-tone="procedure"] { background: var(--varia-searchKind-procedureBackground); }
+.object-search-kind[data-tone="function"] { background: var(--varia-searchKind-functionBackground); }
+.object-search-kind[data-tone="column"] { background: var(--varia-searchKind-columnBackground); }
+.object-search-kind[data-tone="key"] { background: var(--varia-searchKind-keyBackground); }
+.object-search-kind[data-tone="security"] { background: var(--varia-searchKind-securityBackground); }
+.object-search-kind[data-tone="database"] { background: var(--varia-searchKind-databaseBackground); }
+.object-search-kind[data-tone="other"] { background: var(--varia-searchKind-otherBackground); }
 .object-search-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.object-search-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.object-search-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 50cqw; text-align: end; color: var(--varia-objectExplorer-countForeground); font-size: var(--varia-size-xs); }
 .object-search-line { grid-column: 2 / -1; overflow: hidden; text-overflow: ellipsis; white-space: pre; font: var(--varia-size-xs) var(--varia-font-mono); color: var(--varia-descriptionForeground); }
 .object-search-line-number { margin-inline-end: var(--varia-space-1); }
 .object-search-more { font-family: var(--varia-font-ui); }

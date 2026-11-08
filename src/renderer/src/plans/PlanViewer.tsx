@@ -21,7 +21,6 @@ export interface PlanViewerProps {
   sources: readonly PlanSource[]; identity: string; scope?: string; visible?: boolean; live?: QueryPlanState
   openDocument?(sourceKey: string, target?: PlanXmlTarget): void
   navigateXml?(target: PlanXmlTarget): void; navigation?: PlanXmlTarget
-  onXmlTargetChanged?(target: PlanXmlTarget | undefined): void
   controllerRef?: Ref<PlanViewerHandle>; onSelectionChanged?(id: string): void; onCameraChanged?(camera: Camera): void
 }
 
@@ -35,7 +34,7 @@ export function findOperators(statements: readonly PlanStatement[], query: strin
 }
 
 /** One shared world, a virtual operator outline and a text inspector. No statement owns a nested graph scroller. */
-export default function PlanViewer({ sources, identity, scope = identity, visible = true, openDocument, live, controllerRef, onSelectionChanged, onCameraChanged, navigateXml, navigation, onXmlTargetChanged }: PlanViewerProps) {
+export default function PlanViewer({ sources, identity, scope = identity, visible = true, openDocument, live, controllerRef, onSelectionChanged, onCameraChanged, navigateXml, navigation }: PlanViewerProps) {
   const { theme, planPreparation, resultClient, documents, settings } = useWorkbench()
   const preferences = useServiceSnapshot(settings).values
   const [generation, setGeneration] = useState(resultClient.backendGeneration)
@@ -113,6 +112,8 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
   const active = visible && onScreen
   const graphActive = active && canvasOnScreen
   const [scroll, setScroll] = useState(0), [height, setHeight] = useState(400)
+  const outlineScroll = useRef(scroll)
+  outlineScroll.current = scroll
   const camera = useRef<Camera | undefined>(saved?.camera)
   const selection = useRef<(id: string) => void>(() => {})
   const revealPending = useRef(false)
@@ -204,10 +205,15 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
   useLayoutEffect(() => {
     const element = tree.current
     if (!element) return
-    // The outline is recreated when shown again, while its virtual offset survives.
-    element.scrollTop = scroll
-    setScroll(element.scrollTop)
-    const observer = observeResize(element, () => setHeight(element.clientHeight))
+    // Hidden DOM can report scrollTop = 0. Restore the logical offset only once its viewport is visible.
+    const restore = () => {
+      if (!element.clientHeight) return
+      element.scrollTop = outlineScroll.current
+      outlineScroll.current = element.scrollTop
+      setScroll(element.scrollTop); setHeight(element.clientHeight)
+    }
+    restore()
+    const observer = observeResize(element, restore)
     return () => observer.dispose()
   }, [outline, topology])
   const matches = useMemo(() => findOperators(content.statements, query, warningsOnly), [content.statements, query, warningsOnly])
@@ -292,9 +298,6 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
   const selectedSource = sources.find(source => source.key === preferredSource)
   const xmlTarget: PlanXmlTarget | undefined = current?.sourceStatementIndex === undefined || !sources.some(source => source.key === current.sourceKey) ? undefined
     : { statement: current.sourceStatementIndex, revision: current.sourceRevision, ...selectedNode ? { operator: current.nodes.indexOf(selectedNode), nodeId: selectedNode.nodeId } : {} }
-  const xmlTargetChanged = useRef(onXmlTargetChanged)
-  xmlTargetChanged.current = onXmlTargetChanged
-  useEffect(() => { xmlTargetChanged.current?.(xmlTarget) }, [xmlTarget?.statement, xmlTarget?.operator, xmlTarget?.nodeId, xmlTarget?.revision])
   const warnings = useMemo(() => [...allNodes.values()].filter(({ node }) => node.warnings.length).length, [allNodes])
   return <section ref={viewer} className="plan-viewer" aria-label="Execution plan viewer" onKeyDownCapture={event => {
     if (event.key !== 'Escape' || !hovered) return
@@ -340,7 +343,9 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
           <select className="plan-ranking" aria-label="Operator ranking" aria-description="Descending available values, including measured zero. CPU sums threads; elapsed is the maximum thread in milliseconds. Operator times may overlap. Row discrepancy compares total rows to all estimated executions. Live totals are partial." value={ranking} onChange={event => { setRanking(event.target.value as OperatorRanking); setScroll(0); if (tree.current) tree.current.scrollTop = 0 }}>
             <option value="plan">Plan order</option><option value="cpu">CPU · summed threads</option><option value="elapsed">Elapsed · max thread</option><option value="rows">Row-estimate discrepancy</option>
           </select></div>
-        <div className="plan-operator-tree" ref={tree} role="tree" aria-label="Plan operators" aria-description="Lists all operators, including inputs collapsed in the graph. Selecting an operator reveals its ancestors. Left collapses graph inputs; Right expands them." tabIndex={0} onKeyDown={navigate} onScroll={event => setScroll(event.currentTarget.scrollTop)}
+        <div className="plan-operator-tree" ref={tree} role="tree" aria-label="Plan operators" aria-description="Lists all operators, including inputs collapsed in the graph. Selecting an operator reveals its ancestors. Left collapses graph inputs; Right expands them." tabIndex={0} onKeyDown={navigate} onScroll={event => {
+          if (event.currentTarget.clientHeight) { outlineScroll.current = event.currentTarget.scrollTop; setScroll(outlineScroll.current) }
+        }}
           aria-activedescendant={shown.slice(first, last).some(match => match.node.id === selected) ? labelId + selected : undefined}>
           <div style={{ height: shown.length * rowHeight, position: 'relative' }}>{shown.slice(first, last).map(({ node }, offset) => <div key={node.id} id={labelId + node.id}
             role="treeitem" aria-selected={selected === node.id} aria-expanded={branches.has(node.id) ? !collapsed.has(node.id) : undefined} aria-level={1} aria-setsize={shown.length} aria-posinset={first + offset + 1}

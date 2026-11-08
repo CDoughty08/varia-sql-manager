@@ -18,6 +18,7 @@ internal static class PageChecks
         DisplayFormats(check);
         GoldenPages(check);
         Builder(check);
+        WorkingBytes(check);
         Throughput();
     }
 
@@ -162,6 +163,24 @@ internal static class PageChecks
         try { action(); }
         catch (InvalidOperationException) { return true; }
         return false;
+    }
+
+    /// <summary>ResultSetBuffer.TryCommitRow reads WorkingBytes for every committed row, so it must cost no allocation
+    /// (a LINQ sum made an enumerator and a closure a row) and still count every buffer the builder holds.</summary>
+    private static void WorkingBytes(Action<bool, string> check)
+    {
+        var wires = Enumerable.Repeat(WireKind.Text, 64).ToArray();
+        var builder = new PageBuilder(1, wires);
+        var start = builder.WorkingBytes;
+        builder.BeginRow();
+        for (var i = 0; i < wires.Length; i++) builder.AppendText(new string('w', 100));
+        builder.CommitRow();
+        var grown = builder.WorkingBytes;
+        long sum = 0;
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 10_000; i++) sum += builder.WorkingBytes;
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        check(allocated == 0 && sum == 10_000 * grown && grown > start, "a page builder's working bytes are summed per row without allocating (" + allocated + " bytes for 10,000 reads)");
     }
 
     private static void Builder(Action<bool, string> check)

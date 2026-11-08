@@ -40,6 +40,10 @@ export async function checkCanvasUx({ application, page, expect }) {
   await expect(selected()).toContainText('Index Seek')
   await viewer.getByRole('searchbox', { name: 'Find plan operators' }).fill('')
   await expect(viewer.getByRole('treeitem').filter({ hasText: 'Sort' })).toHaveAttribute('aria-expanded', 'true')
+  // XML still has Sort's caret from Go to XML. A view-only round trip must keep Index Seek selected.
+  await page.getByRole('button', { name: 'XML source', exact: true }).click()
+  await page.getByRole('button', { name: 'Graph', exact: true }).click()
+  await expect(selected()).toContainText('Index Seek')
   await button('Statement SQL').click()
   await expect(viewer.getByRole('region', { name: 'Statement SQL from plan' })).toContainText('SELECT Amount FROM dbo.Orders')
   await button('Back to graph').click()

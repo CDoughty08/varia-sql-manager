@@ -36,5 +36,22 @@ it('waits for a new XML document to finish filling before mapping the caret back
     expect(text.slice(range!.startColumn - 1)).toMatch(/^<RelOp NodeId="1"/)
     await act(async () => graph.click())
     expect(captured.viewer.mock.lastCall?.[0].navigation).toMatchObject({ statement: 0, operator: 1, nodeId: '1' })
+    // Ordinary view switches leave XML's selection/scroll and graph's selection independent.
+    const xml = host.querySelectorAll<HTMLButtonElement>('button')[1]
+    select.mockClear()
+    await act(async () => xml.click())
+    expect(select).not.toHaveBeenCalled()
+    await act(async () => graph.click())
+    expect(captured.viewer.mock.lastCall?.[0].navigation).toBeUndefined()
+    // Moving the XML caret still intentionally navigates the graph.
+    await act(async () => xml.click())
+    range = undefined; position = { lineNumber: 1, column: text.indexOf('<RelOp NodeId="0"') + 2 }
+    await act(async () => graph.click())
+    expect(captured.viewer.mock.lastCall?.[0].navigation).toMatchObject({ statement: 0, operator: 0, nodeId: '0' })
+    // Explicit navigation targets XML even when the graph was already prepared.
+    await act(async () => captured.viewer.mock.lastCall?.[0].navigateXml({ statement: 0, operator: 1, nodeId: '1' }))
+    expect(select).toHaveBeenCalledOnce()
+    await act(async () => graph.click())
+    expect(captured.viewer.mock.lastCall?.[0].navigation).toMatchObject({ statement: 0, operator: 1, nodeId: '1' })
   } finally { await act(async () => root.unmount()); host.remove(); vi.useRealTimers() }
 })

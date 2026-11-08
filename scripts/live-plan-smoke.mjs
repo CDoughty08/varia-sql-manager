@@ -1,5 +1,5 @@
 // Real Electron + SQL Server through the normal query toolbar and output tabs. Uses an isolated app profile.
-import { electron, expect } from './fixtures/smoke.mjs'
+import { electron, expect, within } from './fixtures/smoke.mjs'
 import { connectLive } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { checkLargePlan } from './fixtures/large-plan.mjs'
@@ -128,9 +128,7 @@ try {
   throw error
 } finally {
   // A failed assertion can leave SQL running. Close may be refused by Keep Running; never hide the failure behind teardown.
-  let closeTimer
-  const closed = await Promise.race([application.close().then(() => true), new Promise(resolve => { closeTimer = setTimeout(() => resolve(false), 10_000) })]).catch(() => false)
-  clearTimeout(closeTimer)
+  const closed = await within(application.close().then(() => true), 10_000, () => false).catch(() => false)
   if (!closed) { console.error('Live Plan: app shutdown did not complete.'); application.process()?.kill('SIGKILL'); process.exitCode = 1 }
   clearTimeout(watchdog)
   await rm(profile, { recursive: true, force: true }).catch(() => {})

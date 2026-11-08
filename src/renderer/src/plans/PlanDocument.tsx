@@ -9,9 +9,16 @@ export default function PlanDocument({ documentId, source, onSource }: { documen
   const model = documents.getModel(documentId)
   const [xmlTarget, setXmlTarget] = useState(() => planPreparation.takeXml(documentId))
   const [navigation, setNavigation] = useState<PlanXmlTarget>()
-  const graphTarget = useRef<PlanXmlTarget | undefined>(undefined)
+  const sourceEntry = useRef<{ offset: number; revision: number } | undefined>(undefined)
+  const preserveXml = useRef(false)
+  const xmlPosition = () => {
+    const editor = documents.editorOf(documentId), selection = editor?.getSelection()
+    const position = selection && !selection.isEmpty() ? { lineNumber: selection.startLineNumber, column: selection.startColumn } : editor?.getPosition()
+    return model && position ? { offset: model.getOffsetAt(position), revision: model.getVersionId() } : undefined
+  }
   const [version, setVersion] = useState<number | undefined>(() => documents.isFilling(documentId) ? undefined : model?.getVersionId() ?? 0)
   useEffect(() => { if (xmlTarget) onSource(true) }, [])
+  useEffect(() => { if (source && preserveXml.current && !sourceEntry.current) sourceEntry.current = xmlPosition() }, [source])
   useLayoutEffect(() => {
     if (!source || !xmlTarget || !model || version === undefined || documents.isFilling(documentId) || xmlTarget.revision !== undefined && xmlTarget.revision !== model.getVersionId()) return
     const location = locateXml(model.getValue(), xmlTarget), editor = documents.editorOf(documentId)
@@ -33,15 +40,20 @@ export default function PlanDocument({ documentId, source, onSource }: { documen
     <div className="plan-document-tools" role="group" aria-label="Execution plan document views">
       <button type="button" aria-pressed={!source} disabled={version === undefined || documents.isFilling(documentId)} onClick={() => {
         if (source && model) {
-          const editor = documents.editorOf(documentId), selection = editor?.getSelection()
-          const position = selection && !selection.isEmpty() ? { lineNumber: selection.startLineNumber, column: selection.startColumn } : editor?.getPosition()
-          setNavigation(position ? targetAtXmlOffset(model.getValue(), model.getOffsetAt(position)) : undefined)
+          const position = xmlPosition(), previous = preserveXml.current ? sourceEntry.current : undefined
+          // A view switch preserves independent editor and graph positions. Moving the XML caret,
+          // editing XML, or explicitly navigating to XML supplies a new graph target.
+          const moved = !previous || position?.offset !== previous.offset || position?.revision !== previous.revision
+          setNavigation(moved && position ? targetAtXmlOffset(model.getValue(), position.offset) : undefined)
         }
         if (!documents.isFilling(documentId)) setVersion(model?.getVersionId() ?? 0); onSource(false)
       }}>Graph</button>
-      <button type="button" aria-pressed={source} onClick={() => { if (!source) setXmlTarget(graphTarget.current); onSource(true) }}>XML source</button>
+      <button type="button" aria-pressed={source} onClick={() => {
+        if (!source) { preserveXml.current = true; sourceEntry.current = xmlPosition() }
+        onSource(true)
+      }}>XML source</button>
     </div>
-    {!source && <PlanViewer key={documentId} sources={sources} identity={'document:' + documentId} scope={documentId} navigation={navigation} onXmlTargetChanged={target => { graphTarget.current = target }}
-      navigateXml={target => { setXmlTarget(target); onSource(true) }} />}
+    {!source && <PlanViewer key={documentId} sources={sources} identity={'document:' + documentId} scope={documentId} navigation={navigation}
+      navigateXml={target => { preserveXml.current = false; sourceEntry.current = undefined; setXmlTarget(target); onSource(true) }} />}
   </>
 }

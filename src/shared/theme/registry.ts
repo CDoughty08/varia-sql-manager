@@ -109,7 +109,17 @@ const groups = {
     'objectExplorer.actionForeground': ['X', '$textTertiary', 'Object Explorer toolbar icons.', 'css'],
     'objectExplorer.connectedIndicator': ['X', '$success', 'Dot at the end of a connected server\'s row.', 'css'],
     'objectExplorer.connectionErrorIndicator': ['X', '@errorForeground', 'Ring at the end of a server\'s row while its connection fails to load.', 'css'],
-    'objectExplorer.disconnectedIndicator': ['X', '$textMuted', 'Ring at the end of a server\'s row once its connection was lost with the SQL backend.', 'css']
+    'objectExplorer.disconnectedIndicator': ['X', '$textMuted', 'Ring at the end of a server\'s row once its connection was lost with the SQL backend.', 'css'],
+    'searchKind.foreground': ['X', '$canvas', 'Letters on the kind badges of Search Objects results (T, V, P, F).', 'css'],
+    'searchKind.tableBackground': ['X', '$blue', 'Kind badge of tables in Search Objects results.', 'css'],
+    'searchKind.viewBackground': ['X', '$green', 'Kind badge of views in Search Objects results.', 'css'],
+    'searchKind.procedureBackground': ['X', '$purple', 'Kind badge of procedures and triggers in Search Objects results.', 'css'],
+    'searchKind.functionBackground': ['X', '$orange', 'Kind badge of functions in Search Objects results.', 'css'],
+    'searchKind.columnBackground': ['X', '$iconMuted', 'Kind badge of columns and parameters in Search Objects results.', 'css'],
+    'searchKind.keyBackground': ['X', '$neutral', 'Kind badge of keys, constraints, indexes and statistics in Search Objects results.', 'css'],
+    'searchKind.securityBackground': ['X', '$yellow', 'Kind badge of logins, users, roles and other security objects in Search Objects results.', 'css'],
+    'searchKind.databaseBackground': ['X', '$iconFolder', 'Kind badge of databases and schemas in Search Objects results.', 'css'],
+    'searchKind.otherBackground': ['X', '$neutral', 'Kind badge of every other kind in Search Objects results.', 'css']
   },
   'Dock and docking compass': {
     'editorGroupHeader.tabsBackground': ['V', '$chrome', 'Tab strip of dock groups, including floating groups.', 'css'],
