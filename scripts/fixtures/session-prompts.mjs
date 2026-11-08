@@ -60,7 +60,9 @@ async function launch(launchOptions, name) {
   await mockPrompts(application)
   const run = async sql => {
     // F5 does nothing while the query's connection is still being changed (its documents are busy); a query without a
-    // server opens Connect instead, so only a connected one waits for Execute.
+    // server opens Connect instead, so only a connected one waits for Execute. The server box is disabled while that change
+    // runs and shows the old value until it ends, so wait for it first: reading '' mid-change skipped the Execute wait.
+    await expect(queryServer(page)).toBeEnabled()
     if (await queryServer(page).inputValue()) await expect(queryBarButton(page, 'Execute')).toBeEnabled()
     await page.locator('.monaco-editor [role="textbox"]').focus()
     await page.keyboard.press('Control+A')

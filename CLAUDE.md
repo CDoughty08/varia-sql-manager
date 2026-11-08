@@ -12,7 +12,8 @@ pages, limits, error codes, display formats, benchmarks).
 - `npm run dev`: Debug backend build, then electron-vite with renderer hot reload. Restart after C# changes.
 - `npm run check`: typecheck, Release .NET checks, vitest, production build, as concurrent lanes (`scripts/check.mjs`, which
   prints each lane's seconds): every lane at once with 8 or more CPUs, otherwise (CI's runners) two chains side by side, so
-  time-bounded tests are not starved (`VARIA_CHECK_CPUS=<n>` tries either). Run before every commit.
+  time-bounded tests are not starved (`VARIA_CHECK_CPUS=<n>` tries either; `VARIA_CHECK_SKIP=typecheck`, as CI's Windows and
+  macOS jobs set, leaves out tsc, which Linux's job runs). A stopped check prints its running lanes' output. Run before every commit.
 - `npm run test:smoke`: the Electron suites listed in package.json's `test:smoke`. Needs the Release backend and `out/`
   from `npm run check` (or just those, from `npm run build:smoke`). `node scripts/smoke-shards.mjs 2/2`: one CI shard.
   The fixture launches the hidden smoke window with `--disable-frame-rate-limit`: Chromium otherwise draws it at one
@@ -75,7 +76,9 @@ pages, limits, error codes, display formats, benchmarks).
   workbench's next render throw), and passes the backend `VARIA_BACKEND_TEST_HOOKS` (synthetic results)
   and `VARIA_RESULT_BUDGET_BYTES`. Suites import `electron` and `expect` from `scripts/fixtures/smoke.mjs`: assertions
   wait 15 s on Windows, whose runners can take seconds to write a file, and closing the app logs main's file operations
-  that took 500 ms or more.
+  that took 500 ms or more. A close that has not finished in 45 s kills the app and fails the suite without hiding its own
+  error (`boundedClose`), and `smoke-shards.mjs` kills a suite past four times its weight (at least 5 min), so one hang
+  cannot run its shard to the job's timeout.
 
 ## Architecture invariants
 

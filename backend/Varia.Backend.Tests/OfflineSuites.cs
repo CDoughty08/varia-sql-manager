@@ -14,11 +14,12 @@ static class OfflineSuites
     public static readonly string[] Alone = ["Entra", "Store", "Scripting"];
 
     // Measured seconds per suite, from a serial run's 'Offline suite' lines (VARIA_TEST_OFFLINE_LANES=1, Windows, 2026-11-08, after the timing checks were hardened for starved runners);
-    // suites under 0.3 s are left out and count as 0.1 s. Refresh it when a suite moves by more than a second.
+    // suites under 0.3 s are left out and count as 0.1 s. Refresh it when a suite moves by more than a second. Text is CPU-bound,
+    // so it carries its contended CI time (9.6 to 20 s, 2.3 s alone): weighed alone it padded the slowest lane on every OS.
     public static readonly Dictionary<string, double> Weights = new()
     {
         ["Host"] = 12.5, ["Ssis"] = 7.7, ["Explorer"] = 7.1, ["ActivityAction"] = 6.2, ["LiveScheduler"] = 5.5, ["Restore"] = 5.1,
-        ["Live"] = 4.4, ["ServerFiles"] = 4.2, ["LiveTable"] = 3.7, ["Store"] = 3.0, ["Entra"] = 2.4, ["Text"] = 2.3,
+        ["Live"] = 4.4, ["ServerFiles"] = 4.2, ["LiveTable"] = 3.7, ["Store"] = 3.0, ["Entra"] = 2.4, ["Text"] = 12.0,
         ["Login"] = 2.2, ["Peek"] = 2.2, ["Seam"] = 2.2, ["ActionProgress"] = 1.8, ["Action"] = 1.7, ["Scripting"] = 1.6,
         ["LoginDelete"] = 0.8, ["Unlock"] = 0.7, ["LoginAction"] = 0.7, ["Page"] = 0.4, ["ActivitySource"] = 0.4,
     };

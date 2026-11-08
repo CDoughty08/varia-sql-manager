@@ -256,7 +256,7 @@ internal static class ActionProgressChecks
         var jobEnded = run.IsCompleted || await Task.WhenAny(run, Task.Delay(15_000)) == run;
         stuck.Release.TrySetResult();
         await Task.WhenAll(stuckRun, shortRun, run);
-        check(gaveUp && waited is >= 250 and < 10_000 && drained && drainedMs is >= 250 and < 15_000 && jobEnded,
+        check(gaveUp && waited is >= 250 and < 5_000 && drained && drainedMs is >= 250 and < 15_000 && jobEnded,
             $"after CancelAll a shutdown waits for each long job (not the others) up to its Stop wait plus cleanup budget, and returns once they ended: gave up after {waited} ms, drained in {drainedMs} ms");
     }
 }

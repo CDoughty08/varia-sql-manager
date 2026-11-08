@@ -22,13 +22,13 @@ describe('Release builds', () => {
     }
   })
   it('packages every main push, tag and manual run, and a pull request only when it changes what packaging reads', () => {
-    expect(triggers(release)).toMatch(/\n {2}push:\n {4}branches: \[main\]\n {4}tags: \['v\*'\]\n {2}workflow_dispatch:/)
+    expect(triggers(release)).toMatch(/\n {2}push:\n {4}branches: \[main\]\n {4}tags: \['v\*'\]\n {2}schedule:\n {4}- cron: '[^']+'\n {2}workflow_dispatch:/)
     // Everything electron-builder, the fuses and the packaged smoke tests read, and nothing every pull request touches:
     // the smoke selectors (scripts/fixtures/ui.mjs) and main's index changed in a third of recent pull requests.
     for (const path of ['.github/workflows/release.yml', '.github/workflows/package.yml', 'electron-builder.yml', 'build/**', 'package-lock.json', 'scripts/packaged-smoke.mjs', 'scripts/portable-smoke.mjs', 'scripts/windows-installer-smoke.ps1', 'scripts/update-manifest.mjs']) expect(releasePaths).toContain(path)
     for (const path of releasePaths) expect(path, path).not.toMatch(/^(src\/\*\*|src\/main\/index\.ts|scripts\/fixtures|package\.json|tests\/)/)
   })
-  it('adds at most three jobs and one macOS job to a pull request push, and packages Intel macOS only for tags and manual runs', () => {
+  it('adds at most three jobs and one macOS job to a pull request push, and packages Intel macOS only for tags, manual runs and weekly', () => {
     const matrix = release.slice(release.indexOf('  build:\n'), release.indexOf('  build-intel:\n'))
     const runners = [...matrix.matchAll(/- runner: (\S+)/g)].map(match => match[1])
     expect(runners.length).toBeLessThanOrEqual(3)
@@ -36,11 +36,20 @@ describe('Release builds', () => {
     expect(runners).not.toContain('macos-15-intel')
     const intel = release.slice(release.indexOf('  build-intel:\n'), release.indexOf('  release:\n'))
     expect(intel).toMatch(/runner: macos-15-intel/)
-    expect(intel).toMatch(/\n {4}if: startsWith\(github\.ref, 'refs\/tags\/'\) \|\| github\.event_name == 'workflow_dispatch'\n/)
+    // Weekly, so an x64-only break (an Electron or runner image change) shows before the tag it would block; the other
+    // packages, which every main push builds, skip that run.
+    expect(intel).toMatch(/\n {4}if: startsWith\(github\.ref, 'refs\/tags\/'\) \|\| github\.event_name == 'workflow_dispatch' \|\| github\.event_name == 'schedule'\n/)
+    expect(matrix).toMatch(/\n {4}if: github\.event_name != 'schedule'\n/)
     expect(release).toMatch(/needs: \[build, build-intel\]/)
   })
   it('keeps the packaged checks, and leaves out the work CI already did or nobody uses', () => {
-    for (const step of ['scripts/packaged-smoke.mjs', 'scripts/portable-smoke.mjs', 'windows-installer-smoke.ps1', 'scripts/update-manifest.mjs dist', 'Check release assets']) expect(pack).toContain(step)
+    // Each packaged check runs on every packaging run: a condition on the ref or the event would quietly drop it before tags.
+    const steps = pack.slice(pack.indexOf('\n    steps:\n')).split(/\n {6}- /).slice(1)
+    for (const marker of ['scripts/packaged-smoke.mjs', 'scripts/portable-smoke.mjs', 'windows-installer-smoke.ps1', 'scripts/update-manifest.mjs dist', 'Check release assets', 'Package application', 'Publish self-contained backend']) {
+      const step = steps.find(candidate => candidate.includes(marker))
+      expect(step, marker).toBeDefined()
+      expect(/\n {8}if: (.*)/.exec(step!)?.[1] ?? '', marker).not.toMatch(/github\.ref|github\.event_name/)
+    }
     expect(pack).toMatch(/- name: Type check\n {8}if: startsWith\(github\.ref, 'refs\/tags\/'\)\n/)
     expect(pack).toMatch(/- name: Upload release assets\n {8}if: startsWith\(github\.ref, 'refs\/tags\/'\) \|\| github\.event_name == 'workflow_dispatch'\n/)
   })

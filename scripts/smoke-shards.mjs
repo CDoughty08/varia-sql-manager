@@ -52,6 +52,13 @@ export const shardBudgetSeconds = 360
 /** This machine's weights: Windows's on Windows, Linux's elsewhere. */
 export const platformSeconds = (platform = process.platform) => suiteSeconds[platform === 'win32' ? 'windows' : 'linux']
 
+/**
+ * The most one suite may run before the shard kills it: four times its weight, at least five minutes. A hung suite used to run
+ * to the job's 25 minute timeout and take every later suite in its shard with it (seven Linux runs on 2026-11-08). The
+ * fixture's bounded app.close() catches most hangs first; this is the backstop for a suite stuck anywhere else.
+ */
+export const suiteLimitSeconds = (suite, platform = process.platform) => Math.max(300, 4 * (platformSeconds(platform)[suite] ?? 75))
+
 /** Splits `suites` into `count` shards of similar time (longest first, each to the lightest shard), each in suite order. */
 export function shardSuites(suites, count, seconds = platformSeconds()) {
   const shards = Array.from({ length: count }, () => ({ total: 0, suites: new Set() }))
@@ -76,10 +83,13 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   for (const suite of suites) {
     const started = Date.now()
     if (process.env.GITHUB_ACTIONS) console.log(`::group::${suite}`)
-    const { status, signal } = spawnSync(process.execPath, [suite], { stdio: 'inherit' })
+    const limit = suiteLimitSeconds(suite)
+    const { status, signal, error } = spawnSync(process.execPath, [suite], { stdio: 'inherit', timeout: limit * 1000, killSignal: 'SIGKILL' })
     if (process.env.GITHUB_ACTIONS) console.log('::endgroup::')
-    results.push({ suite, ok: status === 0, seconds: Math.round((Date.now() - started) / 1000), code: signal ?? status })
-    if (status !== 0) console.error(`${suite} failed (${signal ?? `exit ${status}`}).`)
+    const timedOut = error?.code === 'ETIMEDOUT'
+    results.push({ suite, ok: status === 0, seconds: Math.round((Date.now() - started) / 1000), code: timedOut ? `timed out at ${limit} s` : signal ?? status })
+    if (timedOut) console.error(`${suite} ran past its ${limit} s limit and was killed; the shard's later suites still run.`)
+    else if (status !== 0) console.error(`${suite} failed (${signal ?? `exit ${status}`}).`)
   }
   console.log(results.map(({ suite, ok, seconds, code }) => `${ok ? 'passed' : `FAILED (${code})`} ${String(seconds).padStart(4)} s  ${suite}`).join('\n'))
   if (results.some(result => !result.ok)) process.exitCode = 1

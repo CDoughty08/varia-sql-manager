@@ -92,17 +92,19 @@ internal static class HostChecks
             check(secret?.Header.Id == 61 && Body(secret.Value).GetProperty("result").GetProperty("value").GetString() == "s3cret" && host.Dispatcher.AskedSensitive.Contains("test.secret"),
                 "the host asks the dispatcher whether a request is sensitive before it parses the frame, and still answers it");
 
-            // The answer must come before the handler's own end, not on time: a starved CI runner fires the 100 ms timer up to
-            // a second late, so the handler outlasts the deadline by 2.4 s and the bound sits 500 ms short of its end.
+            // The answer comes at the deadline, before the handler's own end. A starved CI runner fires the 100 ms timer late, so
+            // the bound leaves 900 ms; CancelAfter never fires early, so a deadline rounded to whole seconds still fails it.
             var watch = Stopwatch.StartNew();
             host.Request(3, "test.slow", new { ms = 2500 }, deadline: 100);
             var timedOut = host.Next(FrameKind.Response);
             var elapsed = watch.ElapsedMilliseconds;
-            check(timedOut?.Header.Id == 3 && ErrorCode(timedOut.Value) == "TIMEOUT" && elapsed is >= 90 and < 2000 && host.Dispatcher.Completed == 0,
+            check(timedOut?.Header.Id == 3 && ErrorCode(timedOut.Value) == "TIMEOUT" && elapsed is >= 90 and < 1000 && host.Dispatcher.Completed == 0,
                 "a deadline answers TIMEOUT at 100 ms, before the handler ends, while the handler keeps running (" + elapsed + " ms)");
             check(Body(timedOut!.Value).GetProperty("error").GetProperty("message").GetString() == "The operation exceeded its time limit of 1 seconds.", "TIMEOUT names the deadline");
             SpinWait.SpinUntil(() => host.Dispatcher.Completed == 1, 15000);
-            check(host.Dispatcher.Completed == 1 && host.Next(FrameKind.Response, 300) is null, "the late result of a timed-out request is discarded: exactly one RESPONSE per id");
+            var stray = host.Next(FrameKind.Response, 300);
+            check(host.Dispatcher.Completed == 1 && stray is null, "the late result of a timed-out request is discarded: exactly one RESPONSE per id (completed "
+                + host.Dispatcher.Completed + (stray is { } late ? ", a RESPONSE for " + late.Header.Id + " " + (ErrorCode(late) ?? "ok") : "") + ")");
 
             host.Send(FrameKind.Request, 4, 0, new byte[ProtocolLimits.RequestBody + 1]);
             host.Request(5, "test.echo", new { b = true });
@@ -209,10 +211,13 @@ internal static class HostChecks
             host.Dispatcher.DrainFor = TimeSpan.FromMilliseconds(400);
             var closing = Stopwatch.StartNew();
             host.CloseInput();
-            // Shutdown waits for Dispose's pool task only DrainTimeout, then exits and leaves it running: on a starved CI runner
-            // that task can start after the exit, so wait for it rather than read Disposed at once.
+            // Shutdown waits for Dispose's pool task only DrainTimeout (1.5 s), then exits and leaves it running: on a starved CI
+            // runner that task can start after the exit. So either Dispose ran before the exit, or the exit came at least about
+            // DrainTimeout after the drain, having waited for it; Dispose moved after the exit does neither.
             var exited = host.Exited.Wait(15000);
-            check(exited && host.Exits.TryPeek(out var code) && code == 0 && host.Dispatcher.CancelAllCalls == 1 && SpinWait.SpinUntil(() => host.Dispatcher.Disposed, 15000)
+            var disposedEventually = SpinWait.SpinUntil(() => host.Dispatcher.Disposed, 15000);
+            var disposeOrdered = host.Dispatcher.DisposedOrder < host.ExitOrder || host.ExitAt - host.Dispatcher.DrainEndedAt >= 1400;
+            check(exited && host.Exits.TryPeek(out var code) && code == 0 && host.Dispatcher.CancelAllCalls == 1 && disposedEventually && disposeOrdered
                 && host.Dispatcher.DrainCalls == 1 && !host.Dispatcher.DisposedBeforeDrain && closing.ElapsedMilliseconds >= 400,
                 "stdin EOF cancels everything, waits for the work that must not end half done (a Create Catalog past its restore), then disposes the service and exits 0 ("
                 + closing.ElapsedMilliseconds + " ms)");
@@ -524,8 +529,12 @@ internal sealed class StubDispatcher : IRequestDispatcher
         if (Disposed) DisposedBeforeDrain = true;
         Thread.Sleep(DrainFor);
         Interlocked.Increment(ref DrainCalls);
+        DrainEndedAt = Environment.TickCount64;
     }
-    public void Dispose() => Disposed = true;
+    /// <summary>When DrainCommitted returned (Environment.TickCount64), and Dispose's place in HostHarness.Order, to prove
+    /// their order against the exit.</summary>
+    public long DrainEndedAt, DisposedOrder;
+    public void Dispose() { DisposedOrder = Interlocked.Increment(ref HostHarness.Order); Disposed = true; }
 }
 
 /// <summary>SqlService plus test.summary: a summary budget taken at once and answered only when the check says so, as a
@@ -572,7 +581,7 @@ internal sealed class HostHarness : IDisposable
         hostOutput = new AnonymousPipeClientStream(PipeDirection.Out, fromHost.ClientSafePipeHandle);
         if (valve && output is null) Valve = new ValveStream(hostOutput);
         Host = new ProtocolHost(hostInput, output ?? Valve ?? (Stream)hostOutput, () => { Dispatcher.Created = true; return dispatcher?.Invoke() ?? Dispatcher; }, HostChecks.Json,
-            (options ?? new HostOptions()) with { Exit = code => { Exits.Enqueue(code); Exited.Set(); }, Diagnostic = _ => { } });
+            (options ?? new HostOptions()) with { Exit = code => { ExitAt = Environment.TickCount64; ExitOrder = Interlocked.Increment(ref Order); Exits.Enqueue(code); Exited.Set(); }, Diagnostic = _ => { } });
         hostThread = new Thread(() => Host.Run()) { IsBackground = true, Name = "test-host" };
         hostThread.Start();
         if (output is null) new Thread(ReadFrames) { IsBackground = true }.Start();
@@ -583,6 +592,10 @@ internal sealed class HostHarness : IDisposable
     public StubDispatcher Dispatcher { get; } = new();
     public ConcurrentQueue<int> Exits { get; } = new();
     public ManualResetEventSlim Exited { get; } = new();
+    /// <summary>When the host called Exit (Environment.TickCount64), and its place in Order.</summary>
+    public long ExitAt, ExitOrder;
+    /// <summary>A sequence shared by Exit and StubDispatcher.Dispose, finer than any clock.</summary>
+    public static long Order;
 
     private void ReadFrames()
     {

@@ -49,7 +49,7 @@ try {
   await page.close()
   // macOS keeps an app running with no windows; elsewhere closing the last window quits.
   if (process.platform !== 'darwin') {
-    const exited = await Promise.race([new Promise(resolveExit => child.once('exit', () => resolveExit(true))), delay(30000, false, { ref: false })])
+    const exited = child.exitCode !== null || child.signalCode !== null || await Promise.race([new Promise(resolveExit => child.once('exit', () => resolveExit(true))), delay(30000, false, { ref: false })])
     if (!exited && child.exitCode === null) throw new Error('Packaged application did not exit after closing its window.')
   }
 } finally {

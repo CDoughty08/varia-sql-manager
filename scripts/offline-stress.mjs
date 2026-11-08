@@ -30,8 +30,16 @@ const command = () => {
 }
 if (process.platform !== 'win32' && !taskset) console.log(`Cannot pin here: ${copies} copies share all ${availableParallelism()} CPUs.`)
 
+// Without --live-group the checks run every live suite when these are set: five copies at once against one server, killed at
+// the deadline before their finally blocks drop their scratch databases and logins. The copies run offline only.
+const offlineEnv = (env = process.env) => {
+  const copy = { ...env, DOTNET_PROCESSOR_COUNT: String(cpus) }
+  for (const name of Object.keys(copy)) if (/^VARIA_TEST_(SQL|ENTRA|SSIS)/.test(name)) delete copy[name]
+  return copy
+}
+
 const run = () => new Promise(done => {
-  const [file, argv] = command(), child = spawn(file, argv, { env: { ...process.env, DOTNET_PROCESSOR_COUNT: String(cpus) }, stdio: ['ignore', 'pipe', 'pipe'] })
+  const [file, argv] = command(), child = spawn(file, argv, { env: offlineEnv(), stdio: ['ignore', 'pipe', 'pipe'] })
   if (process.platform === 'win32') spawnSync('powershell', ['-NoProfile', '-Command', `(Get-Process -Id ${child.pid}).ProcessorAffinity = ${2 ** cpus - 1}`])
   let output = ''
   child.stdout.on('data', chunk => { output += chunk })
@@ -43,7 +51,10 @@ const run = () => new Promise(done => {
     const finished = new Set([...output.matchAll(/^Offline suite ([\w.]+): /gm)].map(match => match[1]))
     const unfinished = suites.filter(name => !finished.has(name))
     if (hung) return done({ code: 'hung', summary: '', failures: [`HUNG after ${deadline / 1000} s; suites that never finished: ${unfinished.join(', ')}`] })
-    const failures = output.split('\n').filter(line => line.includes('FAIL:') || line.startsWith('Unhandled exception')).map(line => line.trim().slice(0, 400))
+    const lines = output.split('\n'), crash = lines.findIndex(line => line.startsWith('Unhandled exception'))
+    // A crash shows its first frames in Varia's own code, which name the check that threw.
+    const frames = crash < 0 ? [] : lines.slice(crash + 1).filter(line => /^\s+at Varia\./.test(line)).slice(0, 6)
+    const failures = [...lines.filter(line => line.includes('FAIL:') || line.startsWith('Unhandled exception')), ...frames].map(line => line.trim().slice(0, 400))
     // An exit without a FAIL line is a crash: show where it stopped.
     if (code !== 0 && !failures.length) failures.push(`exit ${code}; suites that never finished: ${unfinished.join(', ')}`, ...output.trimEnd().split('\n').slice(-12).map(line => line.trim().slice(0, 300)))
     done({ code, summary: /Offline suites: .*/.exec(output)?.[0] ?? '', failures })

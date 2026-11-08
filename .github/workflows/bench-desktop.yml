@@ -27,7 +27,7 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    # Room for every timed step below plus the setup before them.
+    # Room for every timed step below (tests/ci-workflow.test.ts) plus the setup before them.
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7

@@ -53,7 +53,7 @@ jobs:
         run: |
           node -e "const v = require('./package.json').version; if (process.env.RELEASE_TAG !== 'v' + v) throw new Error('Tag must match package.json version: v' + v)"
       - run: npm ci --no-audit --no-fund
-      # CI typechecks every pull request and main commit on all three platforms; a tag is the one build CI never saw.
+      # CI typechecks every pull request and main commit (on Linux, where it is strictest); a tag is the one build CI never saw.
       - name: Type check
         if: startsWith(github.ref, 'refs/tags/')
         run: npm run typecheck

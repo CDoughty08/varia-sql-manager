@@ -355,6 +355,10 @@ export async function longRunRefusals(launchOptions) {
 }
 
 const onWindows = process.platform === 'win32'
+// The holder's spawn races Chromium's renderer launch, and a loaded 4 vCPU Windows runner sometimes lost three in a row
+// (menus-smoke on main and two branches, 2026-11). A lost race costs only a crash and a reload, and every check still needs
+// one watchdog-only loss, so Windows tries more often.
+const raceAttempts = onWindows ? 8 : 3
 const rendererLosses = application => application.evaluate(() => globalThis.__variaTest.rendererLosses)
 const windowIdsOf = application => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(window => window.id))
 // A renderer only the watchdog saw go never answers, so each script gets a second.
@@ -441,7 +445,7 @@ export async function rendererWatchdog(launchOptions) {
       // The spawn races Chromium's launch; it has always won on Windows so far, but a lost race (Chromium sees the crash
       // itself) is tried again rather than taken for a pass. Without the watchdog a won race gets no prompt at all.
       let unseen = false
-      for (let attempt = 1; attempt <= 3 && !unseen; attempt++) {
+      for (let attempt = 1; attempt <= raceAttempts && !unseen; attempt++) {
         // Chromium sees this crash; the reload after it launches the renderer the holder takes.
         await application.evaluate((_electron, kind) => globalThis.__variaTest.holdNextRenderer(kind), holder)
         await crashAndAwaitLoss(application, `setup ${holder} attempt ${attempt}`)
@@ -474,7 +478,7 @@ export async function rendererWatchdog(launchOptions) {
     child.once('exit', () => { exited = true })
     await mockDialogs(application, join(profile, 'watchdog'), ['Workbench stopped'])
     let closed = false
-    for (let attempt = 1; attempt <= 3 && !closed; attempt++) {
+    for (let attempt = 1; attempt <= raceAttempts && !closed; attempt++) {
       await crashToHolder(application, 'process')
       const source = await crashHeldRenderer(application)
       if (onWindows && source !== 'watchdog') {
@@ -495,7 +499,7 @@ export async function rendererWatchdog(launchOptions) {
   // A quit the page could not finish (its Unsaved query prompt was open when its renderer went) goes to the next page,
   // in the new window too: that page has nothing unsaved, so the app exits. The prompt the lost page asked for closes.
   let handedOver = false
-  for (let attempt = 1; attempt <= 3 && !handedOver; attempt++) {
+  for (let attempt = 1; attempt <= raceAttempts && !handedOver; attempt++) {
     const quitRun = await launch(launchOptions, 'watchdog-quit')
     try {
       const { application, child, profile, errors } = quitRun

@@ -287,7 +287,7 @@ internal static class EntraChecks
         var watch = Stopwatch.StartNew();
         try { await provider.AcquireTokenAsync(Parameters(SqlAuthenticationMethod.ActiveDirectoryDefault, id, timeout: 1)); }
         catch (EntraProviderException) { }
-        check(watch.ElapsedMilliseconds < 15_000 && service.Attempts.Take(id) is EntraFailure { Message: EntraFailures.Messages.TokenTimedOut }, "a non-interactive type is bounded by the connect timeout");
+        check(watch.ElapsedMilliseconds < 8_000 && service.Attempts.Take(id) is EntraFailure { Message: EntraFailures.Messages.TokenTimedOut }, "a non-interactive type is bounded by the connect timeout");
         fake = new FakeSource { Other = (_, _, _) => throw new MsalServiceException("invalid_client", "AADSTS7000215: Invalid client secret provided.") };
         service.Source = fake;
         id = Guid.NewGuid();

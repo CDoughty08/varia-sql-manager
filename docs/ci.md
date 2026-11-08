@@ -53,7 +53,7 @@ the previous one, about 64 s of the 75.6 s. The waits:
 | `npm run build:smoke` builds the Release backend and electron-vite side by side | Estimate: 8 to 20 s per smoke and bench job (5 a push) |
 | Smoke suites race `close()` through `within()` (`scripts/fixtures/smoke.mjs`), which clears its timer. `tests/idle-waits.test.ts` holds the rule. | updates-smoke 34.2 s to **7.0 s**, live-smoke 39.0 s to **24.1 s** (local). About 123 s of idle timers per OS per run, about **4 runner-min a PR push**. The packaged and portable smoke tests, and both Electron benches, had the same leak. |
 | The offline .NET checks fail their connections on a missing named pipe on Windows instead of `tcp:127.0.0.1,1` (`Unreachable.cs`) | Windows offline run 75.6 s to **65.6 s** |
-| Release builds: packages main pushes, tags, manual runs, and only pull requests that touch packaging inputs. Superseded runs are cancelled. Intel macOS packages only for tags and manual runs. A typecheck runs only for tags. Installers upload only for tags and manual runs. `tests/release-workflow.test.ts` holds the layout. | About 21 runner-min, 13 of them macOS, and 4 jobs removed from about 9 in 10 PR pushes. A packaging PR runs 3 jobs (1 macOS) instead of 4 (2 macOS). |
+| Release builds: packages main pushes, tags, manual runs, and only pull requests that touch packaging inputs. Superseded runs are cancelled. Intel macOS packages only for tags, manual runs and a weekly run on main. A typecheck runs only for tags. Installers upload only for tags and manual runs. `tests/release-workflow.test.ts` holds the layout. | About 21 runner-min, 13 of them macOS, and 4 jobs removed from about 9 in 10 PR pushes. A packaging PR runs 3 jobs (1 macOS) instead of 4 (2 macOS). |
 | Live groups 2 and 3 skip setup-node and `npm ci` | About 20 runner-s a push |
 | `npm ci --no-audit --no-fund` | Cleaner logs. About 1 s a job, unmeasured. |
 | `VARIA_TEST_SLOW_MS=<ms>` prints each offline or live .NET check reached later than that after the previous one (offline suites then run in one lane) | A tool for finding waits |
@@ -98,6 +98,38 @@ is the next gain in Check. Locally: 32.9 s on 24 cores (136.7 s before), 54 to 7
 Not measured yet: cancelling superseded main runs and the daily desktop benchmarks (estimated above) show only in main's
 history; check them with `node scripts/ci-timings.mjs --branch main` after a week.
 
+### Second review (2026-11-08): coverage kept, chains balanced, hangs bounded
+
+An adversarial review of the change against `b610758f` and CI logs found these, now fixed (estimates from a replay of that
+run's lane times; re-measure on the next CI run):
+
+- **Check chains rebalanced.** The two-chain layout ran the electron-vite build after vitest, the longest lane, while the
+  .NET chain idled 24 to 69 s. It now runs after the .NET chain, and Text's weight (2.3 s alone, 9.6 to 20 s contended on
+  CI, where it padded the Explorer lane) is 12. Estimated Check: ubuntu 168 to about 163 s, Windows 165 to about 138 s,
+  macOS 213 to about 178 s.
+- **tsc only on Linux** (`VARIA_CHECK_SKIP=typecheck` on Windows and macOS). It reads only sources and installed types, and
+  Linux's case-sensitive paths are the strictest. About 6 s off Windows and 13 to 15 s off macOS's critical chain.
+- **Hangs report themselves.** A smoke suite whose `app.close()` never finished (live-plan-smoke after a failed assertion)
+  ran Smoke (Linux 3/3) to its 25 minute timeout seven times, printing nothing. The fixture now kills an app that has not
+  closed in 45 s and fails the suite with its own error shown (`boundedClose`), and `smoke-shards.mjs` kills a suite past
+  four times its weight (at least 5 min), so the shard's later suites still run. A `npm run check` stopped by the step
+  timeout prints what its running lanes held, where it used to lose the hung lane's output.
+- **Coverage restored or pinned.** The Host shutdown check proves again that Dispose comes before the exit (by sequence, or
+  by the exit waiting out DrainTimeout for a starved Dispose); three timing bounds widened for starved runners were tightened
+  back to what their regressions need (Host's deadline < 1 s, Entra's connect bound < 8 s, DrainLong < 5 s). Tests now pin
+  package.yml's packaged checks against ref or event conditions, bench-desktop.yml's steps and timeouts, the check's wide and
+  build layouts, ci.yml's stated job count, and fixtures that start the Release backend.
+- **Intel macOS weekly.** osx-x64 packages every Monday on main (Intel only, about 9 macOS runner-min a week), so an x64-only
+  break shows before the tag it would block.
+- **Smaller fixes.** offline-stress.mjs strips the SQL and Entra variables, so its copies never run the live suites against a
+  shared server; packaged and portable smoke check whether the app already exited before waiting for its exit (Node ended
+  with 13 otherwise).
+
+Flaky failures on other pull requests and main in the week before (92 failed jobs in 56 runs): most were real regressions
+their branches fixed, or flakes main had already fixed. Fixed here: files-smoke's Ctrl+W racing a file task (it closed the
+wrong query), menus-smoke's renderer watchdog losing its holder race three times on Windows (now up to eight tries there),
+and session prompts pressing F5 during a connection change.
+
 ## What is left, in order
 
 Savings are corrected figures from an adversarial review of each proposal against CI logs. "Owner" marks changes that
@@ -128,8 +160,21 @@ cancel superseded main runs, now done).
    `tests/fixtures/work-meter.ts`, required by `tests/idle-waits.test.ts` for every test of 50,000 rows or more), which
    stops the false failures but not the minutes: explorer-service.test.ts is about 33 s of Windows's vitest lane. Their
    work bounds come from the meter, not the size, so a smaller input (10,000 rows) may prove the same bound.
+8. **Run the offline lanes on dedicated threads** (S). Synchronous suites block a pool thread each for their whole run, so
+   async timing checks wait on a starved pool, not only a busy CPU. `TaskCreationOptions.LongRunning` lanes (or a raised
+   `ThreadPool.SetMinThreads`) may let some widened bounds tighten again; measure with `scripts/offline-stress.mjs`.
+9. **Share one sidecar across backend-sidecar's stateless tests** (S, unmeasured). It spawns a backend per test (42 times,
+   about 0.5 s each); the pre-connection validation tests could share one, about 9 s of the .NET chain's tail.
+10. **Non-isolated vitest for read-only catalogue and lint tests** (M, trial first). About 9 to 11 s off the vitest chain,
+   but module state leaking between files can weaken coverage silently: trial with `sequence.shuffle` on an allowlist guarded
+   against mocks, timers, globals and `process.env`.
 
 Considered and rejected (do not re-propose without new numbers):
+
+- **A well-formed named pipe in `Unreachable.Source`.** Its single backslash makes SqlClient refuse the address before any
+  open (SNI error 25). With two, every fake's open enters the Named Pipes provider and SqlClient's throttle of non-pooled
+  opens: under `offline-stress.mjs`, 5 to 7 of 15 copies crashed with "Timeout attempting to open the connection", against
+  none. The checks assert only that the failure is retryable, which both forms are.
 
 - **One shard per OS, or three.** One shard makes 12 to 13 min jobs (smoke becomes the critical path). Three shards add
   about 1.5 runner-min and one slot per OS per push.

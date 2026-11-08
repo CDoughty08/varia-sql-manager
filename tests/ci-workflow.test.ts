@@ -113,5 +113,22 @@ describe('CI workflow', () => {
     const desktop = readFileSync('.github/workflows/bench-desktop.yml', 'utf8'), on = desktop.slice(desktop.indexOf('\non:'), desktop.indexOf('\nconcurrency:'))
     expect(on).toMatch(/\n {2}schedule:\n {4}- cron: '[^']+'\n {2}workflow_dispatch:\n?$/)
     expect(desktop).toContain('os: [windows-latest, macos-latest]')
+    // The daily run reports nothing if it loses a benchmark, or if its job's limit ends it before a step's own.
+    for (const [name, job] of jobs('.github/workflows/bench-desktop.yml')) {
+      const steps = job.steps.reduce((total, step) => total + (step.timeout ?? 0), 0)
+      expect(steps, name).toBeGreaterThan(0)
+      expect(job.timeout, name).toBeGreaterThan(steps)
+      expect(job.steps.find(step => step.run.trim() === 'npm run build:smoke')?.id, name).toBe('build')
+      for (const command of ['npm run bench', 'npm run bench:e2e', 'npm run bench:grid', 'scripts/check-bench.mjs']) expect(job.steps.some(step => step.run.includes(command)), command).toBe(true)
+    }
+  })
+  it('type-checks on Linux in every run, and states its job count truly', () => {
+    const yaml = readFileSync('.github/workflows/ci.yml', 'utf8')
+    // Windows and macOS skip tsc: it reads only sources and installed types, and Linux's case-sensitive paths are strictest.
+    expect(yaml).toContain("VARIA_CHECK_SKIP: ${{ matrix.os != 'ubuntu-24.04' && 'typecheck' || '' }}")
+    expect(workflow.get('check')!.matrix.get('os')!.split(', ')).toContain('ubuntu-24.04')
+    const size = (job: Job) => [...job.matrix.values()].reduce((product, axis) => product * axis.split(',').length, 1)
+    const count = own.filter(([, job]) => job.if === runAlways).reduce((sum, [, job]) => sum + size(job), 0)
+    expect(yaml).toContain(`runs ${count} jobs:`)
   })
 })
