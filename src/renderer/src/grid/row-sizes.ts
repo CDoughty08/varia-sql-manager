@@ -12,7 +12,7 @@ interface Block { readonly bytes: readonly number[]; readonly estimated: Readonl
 /**
  * The row-size bar's data for one handle: each row's bytes (results.rowBytes, by view position through a view), read in
  * blocks of 256 only for the rows in view, at most 64 blocks kept (least recently used go), and the largest row of the
- * whole result (or view) from a profile of no columns (results.profile), asked again when the set completes. Until that
+ * whole result (or view) from a profile of no columns (results.profile), asked once the set completes. Until that
  * arrives, and while a row read is larger, the largest row read scales the bars. Nothing here is per row in the DOM:
  * GridView asks for the rows it paints.
  */
@@ -22,7 +22,7 @@ export class RowSizes {
   /** Blocks whose read failed, by when: not asked again for a while, so a refusal never repeats every frame. */
   private readonly failed = new Map<number, number>()
   private readonly abort = new AbortController()
-  private profiled: 'none' | 'open' | 'complete' = 'none'
+  private profiled = false
   private profileMax = 0
   private readMax = 0
   private disposed = false
@@ -37,8 +37,9 @@ export class RowSizes {
     if (this.disposed) return
     const snapshot = this.handle.getSnapshot()
     if (snapshot.state === 'released' || snapshot.state === 'lost' || snapshot.rowsAvailable <= 0) return
-    const state = snapshot.state === 'complete' ? 'complete' : 'open'
-    if (this.profiled === 'none' || (state === 'complete' && this.profiled === 'open')) this.profile(state)
+    // The largest row of the whole set is asked for once it is complete: profiling a set still streaming would scan its
+    // rows again for every page, and compete with the reads that paint its first rows.
+    if (!this.profiled && snapshot.state === 'complete') this.profile()
     const end = Math.min(last, snapshot.rowsAvailable - 1)
     for (let block = Math.floor(Math.max(0, first) / rowSizeLimits.blockRows); block * rowSizeLimits.blockRows <= end; block++) {
       const held = this.blocks.get(block)
@@ -92,8 +93,8 @@ export class RowSizes {
     })
   }
 
-  private profile(state: 'open' | 'complete'): void {
-    this.profiled = state
+  private profile(): void {
+    this.profiled = true
     this.handle.profile([], this.abort.signal).then(result => {
       if (this.disposed) return
       this.profileMax = result.rowBytes?.max ?? 0

@@ -1418,6 +1418,8 @@ try {
   await settled()
   const show = name => resultsToolbar(page).getByRole('group', { name: 'Show', exact: true }).getByRole('button', { name, exact: true })
   await expect(show('Profile')).toHaveAttribute('aria-pressed', 'false')
+  // The toolbar fits the output pane at the window's size (the runners' 1024 px included): nothing in it is clipped.
+  expect(await resultsToolbar(page).evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
   await show('Profile').click()
   await expect(columnProfile(page)).toBeVisible()
   await expect(show('Profile')).toHaveAttribute('aria-pressed', 'true')

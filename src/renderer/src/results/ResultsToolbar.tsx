@@ -58,11 +58,12 @@ export default function ResultsToolbar() {
   return <div className="results-toolbar" role="toolbar" aria-label="Results tools" onKeyDown={keyDown}>
     {group('White space', 'whitespace', whitespaceChoices, whitespace, true)}
     {group('Sort text by', 'symbol-ruler', sortTextChoices, sortText, false)}
+    {/* Icons only: with the two segmented groups the toolbar must still fit the output pane of a 1024 px window. */}
     <div className="results-segments" role="group" aria-label="Show">
-      <button type="button" aria-pressed={profile} tabIndex={-1} title="Column profile: NULLs, distinct values, lowest and highest, lengths and a histogram for each column"
-        onClick={() => void commands.execute('output.toggleColumnProfile', undefined, 'toolbar')}><Icon name="graph" />Profile</button>
-      <button type="button" aria-pressed={rowSize} tabIndex={-1} title="Row size: a bar behind each row number; hover it for the exact bytes"
-        onClick={() => void commands.execute('output.toggleRowSize', undefined, 'toolbar')}><Icon name="list-flat" />Row size</button>
+      <button type="button" className="results-icon-toggle" aria-label="Profile" aria-pressed={profile} tabIndex={-1} title="Column profile: NULLs, distinct values, lowest and highest, lengths and a histogram for each column"
+        onClick={() => void commands.execute('output.toggleColumnProfile', undefined, 'toolbar')}><Icon name="graph" /></button>
+      <button type="button" className="results-icon-toggle" aria-label="Row size" aria-pressed={rowSize} tabIndex={-1} title="Row size: a bar behind each row number; hover it for the exact bytes"
+        onClick={() => void commands.execute('output.toggleRowSize', undefined, 'toolbar')}><Icon name="list-flat" /></button>
     </div>
   </div>
 }

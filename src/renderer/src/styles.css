@@ -732,6 +732,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .results-segments { display: inline-flex; flex-shrink: 0; gap: 1px; padding: 1px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); }
 .results-segments button { height: 20px; padding: 0 8px; border-radius: var(--varia-radius-sm); color: var(--varia-panelTitle-inactiveForeground); font-size: var(--varia-size-xs); }
 .results-segments button { display: inline-flex; align-items: center; gap: 4px; }
+.results-segments button.results-icon-toggle { padding: 0 4px; }
 .results-segments button[aria-pressed="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-panelTitle-activeForeground); font-weight: 600; transition: none; }
 @media (forced-colors: active) { .results-segments button[aria-pressed="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; } }
 .job-strip { display: flex; min-width: 0; align-items: center; gap: 6px; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); white-space: nowrap; }

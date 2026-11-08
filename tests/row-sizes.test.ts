@@ -50,7 +50,7 @@ describe('row sizes', () => {
     expect(profiles).toHaveLength(1)
   })
 
-  it('profiles a loading set again once it completes, and rereads a block read short', async () => {
+  it('profiles a loading set only once it completes, and rereads a block read short', async () => {
     const { sizes, reads, profiles, answer, settle, snapshot } = fixture(100, 'open')
     sizes.ensure(0, 50)
     answer(0, () => 10)
@@ -59,10 +59,11 @@ describe('row sizes', () => {
     snapshot.rowsAvailable = 300
     sizes.ensure(0, 50)
     expect(reads.map(read => read.first)).toEqual([0, 0])
-    expect(profiles).toHaveLength(1)
+    expect(profiles).toHaveLength(0)
     snapshot.state = 'complete'
     sizes.ensure(0, 50)
-    expect(profiles).toHaveLength(2)
+    sizes.ensure(0, 50)
+    expect(profiles).toHaveLength(1)
   })
 
   it('waits before asking again for a block whose read failed, and keeps at most 64 blocks', async () => {

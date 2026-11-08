@@ -523,7 +523,12 @@ function buildView(result, sort) {
 const cellValue = cell => cell !== null && typeof cell === 'object' && !(cell instanceof Uint8Array) ? (cell.error ? null : cell.value) : cell
 const cellBytes = cell => { const value = cellValue(cell); return value === null || value === undefined ? 0 : value instanceof Uint8Array ? value.length : Buffer.byteLength(String(value)) }
 const rowBytesOf = (source, row) => source.rowAt(row).reduce((sum, cell) => sum + cellBytes(cell), 0)
-const lengthsOf = values => values.length ? { min: Math.min(...values), max: Math.max(...values), average: values.reduce((a, b) => a + b, 0) / values.length, exact: true } : undefined
+const lengthsOf = values => {
+  if (!values.length) return undefined
+  let min = Infinity, max = -Infinity, sum = 0
+  for (const value of values) { if (value < min) min = value; if (value > max) max = value; sum += value }
+  return { min, max, average: sum / values.length, exact: true }
+}
 function histogramOf(basis, values) {
   if (!values.length) return undefined
   const low = Math.min(...values), high = Math.max(...values), counts = new Array(20).fill(0)
@@ -531,10 +536,16 @@ function histogramOf(basis, values) {
   return { basis, low, high, counts }
 }
 function profileOf(source, columns) {
-  const rows = available(source), all = Array.from({ length: rows }, (_, row) => source.rowAt(row))
+  // Each row is read once: its bytes, and its cells when columns are asked for (the row-size bar asks for none).
+  const rows = available(source), all = columns.length ? [] : undefined, bytes = new Array(rows)
+  for (let row = 0; row < rows; row++) {
+    const cells = source.rowAt(row)
+    bytes[row] = cells.reduce((sum, cell) => sum + cellBytes(cell), 0)
+    all?.push(cells)
+  }
   const show = value => value instanceof Uint8Array ? '0x' + Buffer.from(value).toString('hex').toUpperCase() : String(value).slice(0, 256)
   return {
-    rows, complete: source.sealed ?? source.complete, ...rows ? { rowBytes: lengthsOf(all.map((_, row) => rowBytesOf(source, row))) } : {},
+    rows, complete: source.sealed ?? source.complete, ...rows ? { rowBytes: lengthsOf(bytes) } : {},
     columns: columns.map(column => {
       const numeric = numericTypes.has(source.columns[column].dataType), binary = source.columns[column].wire === 'binary'
       const values = all.map(row => cellValue(row[column])).filter(value => value !== null && value !== undefined)
