@@ -22,7 +22,10 @@ export const shortcutSentences = {
   importNotFile: 'The chosen file could not be read as a file.',
   importInvalid: 'The chosen file is not a Varia shortcuts file.',
   importNewer: 'The chosen file was saved by a newer version of Varia.',
-  importSize: `The chosen file is larger than ${shortcutLimits.fileBytes / 1024} KiB.`
+  importSize: `The chosen file is larger than ${shortcutLimits.fileBytes / 1024} KiB.`,
+  saveFailed: 'Shortcuts could not be saved: the file could not be written.',
+  exportFailed: 'The shortcuts could not be exported: the file could not be written.',
+  overLimit: 'The shortcuts are over their limits.'
 } as const
 const invalidWords: Record<JsonInvalidReason | 'values', string> = { size: `larger than ${shortcutLimits.fileBytes / 1024} KiB`, encoding: 'not UTF-8', json: 'not valid JSON', values: 'not a shortcuts file' }
 /** The notice for a file the store had to set aside. */
@@ -30,6 +33,27 @@ export const resetNotice = (reason: JsonInvalidReason | 'values') => `Shortcuts 
 export const salvageNotice = 'Some shortcuts could not be read and were left out; the original file was kept.'
 
 const canonical = (file: ShortcutFile) => JSON.stringify(file)
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
+/**
+ * The strict file from the renderer, as plain JSON values. Its counts are checked first: zod checks every element (each key parsed on every
+ * platform) before an array's maximum, so a page that sent a huge list would hold main for seconds before the refusal.
+ */
+function parseFile(value: unknown): ShortcutFile {
+  if (isRecord(value)) {
+    const over = (list: unknown, max: number) => Array.isArray(list) && list.length > max
+    if (over(value.bindings, shortcutLimits.bindings) || over(value.unknown, shortcutLimits.unknown) ||
+      (isRecord(value.gestures) && Object.keys(value.gestures).length > shortcutLimits.gestures)) throw new Error(shortcutSentences.overLimit)
+  }
+  // IPC is a structured clone, which also carries ArrayBuffers, Maps and Dates: each serializes to a few bytes of JSON, so
+  // the limits never saw them. Only what JSON carries is kept, which is exactly what the file will hold.
+  return JSON.parse(JSON.stringify(shortcutFileSchema.parse(value))) as ShortcutFile
+}
+/** Writes `file` to `path`; a failure is a fixed sentence, since the system's message names the path (and the user). */
+async function writeFile(path: string, file: ShortcutFile, failed: string): Promise<void> {
+  try { await writeJsonAtomic(path, file, shortcutLimits.fileBytes, shortcutSentences.tooLarge) }
+  catch (error) { throw new Error(error instanceof Error && error.message === shortcutSentences.tooLarge ? shortcutSentences.tooLarge : failed) }
+}
 type Read = { kind: 'missing' } | { kind: 'ok'; file: ShortcutFile } | { kind: 'salvage'; file: ShortcutFile } | { kind: 'reset'; reason: JsonInvalidReason | 'values' } | { kind: 'newer' }
 
 /** Reads shortcuts.json: file-system failures throw (so nothing is ever written over a file the store could not read). */
@@ -64,6 +88,8 @@ export class ShortcutStore {
   /** Since the last load that set something aside, until a save: the page shows the notice while this holds. */
   private notice?: string
   private newer = false
+  /** A read failed before any succeeded: the first one that does is announced, since main's menus still show the catalogue's keys. */
+  private readFailed = false
   private listeners = new Set<(snapshot: ShortcutsSnapshot) => void>()
   constructor(private readonly path: string) {}
 
@@ -99,16 +125,17 @@ export class ShortcutStore {
 
   /** Writes `file` (strict) when the store's revision is still `baseRevision`; resolves to the new revision. */
   async save(value: unknown, baseRevision: number): Promise<ShortcutsSaved> {
-    const file = shortcutFileSchema.parse(value) as ShortcutFile
+    const file = parseFile(value)
     return this.serial(async () => {
-      await this.refresh(true)
+      const setAside = await this.refresh(true)
       if (this.newer) throw new Error(shortcutSentences.newer)
       if (baseRevision !== this.revision) throw new BackendError('STALE', shortcutSentences.stale)
       if (canonical(file) !== canonical(this.file)) {
-        await writeJsonAtomic(this.path, file, shortcutLimits.fileBytes, shortcutSentences.tooLarge)
+        await writeFile(this.path, file, shortcutSentences.saveFailed)
         this.file = file
         this.revision++
-        this.notice = undefined
+        // A notice this save's own re-read raised stays: the page has not shown it yet.
+        if (!setAside) this.notice = undefined
         this.emit()
       }
       return { revision: this.revision }
@@ -117,29 +144,37 @@ export class ShortcutStore {
 
   /**
    * Reads the file again. When it differs from what the store knows, it becomes the next revision; `notify` (a save's
-   * re-read) announces it, since the page holds the old content. A first load starts at revision 1.
+   * re-read) announces it, since the page holds the old content. A first load starts at revision 1. Resolves to whether
+   * this read set part or all of the file aside.
    */
-  private async refresh(notify: boolean): Promise<void> {
+  private async refresh(notify: boolean): Promise<boolean> {
     let read: Read
-    try { read = await readStored(this.path) } catch { throw new Error(shortcutSentences.unreadable) }
+    try { read = await readStored(this.path) } catch { if (!this.loaded) this.readFailed = true; throw new Error(shortcutSentences.unreadable) }
     let next: ShortcutFile
     this.newer = read.kind === 'newer'
     if (read.kind === 'missing' || read.kind === 'newer') next = emptyShortcutFile
     else if (read.kind === 'ok') next = read.file
     else {
       next = read.kind === 'salvage' ? read.file : emptyShortcutFile
-      try { await quarantine(this.path) } catch { throw new Error(shortcutSentences.unreadable) }
+      try { await quarantine(this.path) } catch { if (!this.loaded) this.readFailed = true; throw new Error(shortcutSentences.unreadable) }
       this.notice = read.kind === 'salvage' ? salvageNotice : resetNotice(read.reason)
       // The original is kept beside it; a failed write back leaves the file missing, which reads as empty.
       await writeJsonAtomic(this.path, next, shortcutLimits.fileBytes, shortcutSentences.tooLarge).catch(() => {})
     }
+    const setAside = read.kind === 'salvage' || read.kind === 'reset'
     const first = !this.loaded
     this.loaded = true
-    if (first) { this.file = next; this.revision = 1; return }
-    if (canonical(next) === canonical(this.file)) return
+    if (first) {
+      this.file = next
+      this.revision = 1
+      if (this.readFailed) { this.readFailed = false; this.emit() }
+      return setAside
+    }
+    if (canonical(next) === canonical(this.file)) return setAside
     this.file = next
     this.revision++
     if (notify) this.emit()
+    return setAside
   }
 }
 
@@ -183,10 +218,10 @@ export function shortcutHandlers(store: ShortcutStore, dialogs: ShortcutDialogs)
       return path === undefined ? { cancelled: true } : importShortcuts(path)
     },
     exportFile: async (value: unknown): Promise<ShortcutsExport> => {
-      const file = shortcutFileSchema.parse(exportRequestSchema.parse(value).file)
+      const file = parseFile(exportRequestSchema.parse(value).file)
       const path = await dialogs.chooseExport()
       if (path === undefined) return { cancelled: true }
-      await writeJsonAtomic(path, file, shortcutLimits.fileBytes, shortcutSentences.tooLarge)
+      await writeFile(path, file, shortcutSentences.exportFailed)
       return { cancelled: false }
     }
   }
