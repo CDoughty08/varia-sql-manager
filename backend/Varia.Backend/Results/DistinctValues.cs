@@ -39,7 +39,7 @@ internal static partial class ViewSorter
         var rows = (int)total;
         var source = new PageSource(pages, set.Wires.Count);
         var approximate = false;
-        var key = Build(set, source, new ViewKey(column, false, SortMode.Value), rows, token, ref approximate);
+        var key = Build(set, source, new ViewKey(column, false, SortMode.Value), null, rows, token, ref approximate);
         var looked = view?.Order.Length ?? rows;
         var values = new int[looked];
         var count = 0;
@@ -69,7 +69,7 @@ internal static partial class ViewSorter
             }
         }
         // Ties fall back to the base row, so each run of equal values starts with the lowest row holding it.
-        if (count > 1) Array.Sort(values, 0, count, new Comparer([key], token));
+        if (count > 1) Array.Sort(values, 0, count, new Comparer([key], null, token));
         var matcher = search is null ? null : ResultSearcher.MatcherFor(set.Columns[column], set.Wires[column], search);
         var scratch = new ResultSearcher.Scratch();
         var groups = new List<(int Row, long Count, bool Kept)>();

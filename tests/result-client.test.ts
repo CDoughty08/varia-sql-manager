@@ -481,7 +481,7 @@ describe('ResultClient', () => {
     const sorting = handle.sort([{ column: 0, descending: true, mode: 'value' }])
     await settle()
     const sort = worker().fromWorker.findLast(item => item.t === 'view')!
-    worker().toWorker({ t: 'end', rid: sort.rid, ok: true, result: { viewId: 2, rows: 10, complete: true, approximate: false } })
+    worker().toWorker({ t: 'end', rid: sort.rid, ok: true, result: { viewId: 2, rows: 10, baseRows: 10, complete: true, approximate: false } })
     const view = await sorting
     const viewed = view.distinct(0, { order: 'value', maxValues: 5, search: 'b' })
     expect(await answer({ ...result, distinct: 1, values: [result.values[1]] })).toMatchObject({ t: 'distinct', resultId: 3, column: 0, order: 'value', maxValues: 5, search: 'b', viewId: 2 })
