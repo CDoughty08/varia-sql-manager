@@ -1,5 +1,5 @@
 import { electron, expect } from './fixtures/smoke.mjs'
-import { activeDocumentName, backendReady, documentTab, editorGroupForDocument, editorGroups, editorText, editorTextbox, floatingEditorGroups, movePane, popoutDockButton, popoutTabs, queryDatabase, queryServer, toolbarButton } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, documentTab, editorGroupForDocument, editorGroups, editorText, editorTextbox, floatingEditorGroups, movePane, popoutDockButton, popoutTabs, queryDatabase, queryServer, suggestionOption, toolbarButton } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
@@ -40,8 +40,7 @@ async function setText(target, scope, value) {
 async function suggestAndAccept(target = page, scope = target, label = 'Customer') {
   await setText(target, scope, 'Cus')
   await target.keyboard.press('Control+Space')
-  const list = target.getByRole('listbox', { name: 'Suggest', exact: true })
-  await expect(list.getByRole('listitem', { name: new RegExp(`^${label}(?:,|$)`) })).toBeVisible()
+  await expect(suggestionOption(target, label)).toBeVisible()
   await target.keyboard.press('Tab')
   await expect.poll(() => text(scope)).toBe(label)
 }

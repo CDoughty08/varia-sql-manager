@@ -423,6 +423,11 @@ export const executingMark = scope => scope.getByRole('img', { name: 'Executing'
 export const kindIcon = (tab, kind) => tab.getByRole('img', { name: kind, exact: true })
 export const editorTextbox = page => page.locator('.monaco-editor [role="textbox"]')
 export const editorText = page => page.locator('.monaco-editor .view-lines').innerText()
+/** Monaco uses listitem on Windows and option elsewhere for its Suggest entries. */
+export const suggestionOption = (scope, label) => {
+  const name = new RegExp('^' + label.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&') + '(?:,|$)')
+  return scope.getByRole('listbox', { name: 'Suggest', exact: true }).getByRole(process.platform === 'win32' ? 'listitem' : 'option', { name })
+}
 /** The text of the active editor group's editor, where several groups each show a query. */
 export const activeGroupEditorText = page => page.locator(part.activeEditorGroup).locator('.monaco-editor .view-lines').innerText()
 

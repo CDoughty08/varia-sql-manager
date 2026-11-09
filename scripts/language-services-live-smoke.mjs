@@ -1,5 +1,5 @@
 import { electron, expect } from './fixtures/smoke.mjs'
-import { activeDocumentName, backendReady, documentTab, editorGroupForDocument, editorGroups, editorText, editorTextbox, floatingEditorGroups, movePane, popoutDockButton, popoutTabs, queryDatabase, queryServer, toolbarButton } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, documentTab, editorGroupForDocument, editorGroups, editorText, editorTextbox, floatingEditorGroups, movePane, popoutDockButton, popoutTabs, queryDatabase, queryServer, suggestionOption, toolbarButton } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
@@ -47,7 +47,7 @@ async function suggest(target, scope, { prefix, suffix, label }) {
   await target.keyboard.insertText(prefix + suffix)
   await caret(target, prefix.length)
   await target.keyboard.press('Control+Space')
-  await expect(target.getByRole('listbox', { name: 'Suggest', exact: true }).getByRole('listitem', { name: new RegExp(`^${label}(?:,|$)`) })).toBeVisible({ timeout: 60000 })
+  await expect(suggestionOption(target, label)).toBeVisible({ timeout: 60000 })
   await target.keyboard.press('Tab')
   const accepted = prefix.slice(0, prefix.lastIndexOf('.') + 1) + label + suffix
   await expect.poll(async () => (await editorText(scope)).replaceAll('\u00a0', ' ')).toBe(accepted)
