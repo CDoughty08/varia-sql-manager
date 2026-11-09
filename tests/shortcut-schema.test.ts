@@ -217,22 +217,48 @@ describe('shortcuts file records kept for later', () => {
     expect(room.file.gestures).toEqual({ ...fewer, [restorable[0].gesture]: 'ctrl' })
     expect(room.file.unknown).toEqual([{ kept: 1 }, restorable[1]])
   })
-  it('keeps a restored gesture over a record this read moved when an unoffered own choice takes its place (#314)', () => {
+  it('settles a restored gesture and an unoffered own choice together, so reading what it wrote changes nothing (#314)', () => {
     const ids = Array.from({ length: shortcutLimits.gestures + 6 }, (_, index) => `test.gesture${index}`)
     const many = { gestures: new Map(ids.map(id => [id, ['alt', 'ctrl']] as const)) }
-    // One place short of the cap, plus an own choice this build does not offer, which goes live once `unknown` is full.
+    // One place short of the cap, plus an own choice this build does not offer, which goes live only when `unknown` is full.
     const own: Record<string, string> = Object.fromEntries(ids.slice(0, shortcutLimits.gestures - 1).map(id => [id, 'alt']))
-    own[ids[shortcutLimits.gestures - 1]] = 'zzz'
+    const unoffered = ids[shortcutLimits.gestures - 1]
+    own[unoffered] = 'zzz'
     const restorable = { gesture: ids[shortcutLimits.gestures + 1], choice: 'ctrl' }
     const others = Array.from({ length: shortcutLimits.unknown - 1 }, (_, index) => ({ kept: index }))
     const foreign = { command: 'future.x', key: 'f9' }
     const raw = v1({ bindings: [foreign], gestures: own, unknown: [others[0], restorable, ...others.slice(1)] })
     const result = readShortcutFile(raw, many)
     if (!result.ok) throw new Error(result.error)
-    // The record the file kept goes back to its place; the binding this read moved there is what the cap drops.
-    expect(result.file.unknown).toEqual(raw.unknown)
-    expect(result.file.gestures).toEqual(own)
+    // The restored gesture takes the last place and the unoffered choice the last record; the foreign binding, moved after
+    // both, is what the cap drops. Before, the binding took the record first, the unoffered choice stayed live, and reading
+    // the written file again swapped them, so a save on the salvaged revision was STALE.
+    const { [unoffered]: _, ...live } = own
+    expect(result.file.gestures).toEqual({ ...live, [restorable.gesture]: 'ctrl' })
+    expect(result.file.unknown).toEqual([...others, { gesture: unoffered, choice: 'zzz' }])
     expect(result.problems).toEqual([`Shortcut 1 was dropped: the file keeps at most ${shortcutLimits.unknown} unknown records.`])
+    const again = readShortcutFile(JSON.parse(JSON.stringify(result.file)), many)
+    expect(again).toEqual({ ok: true, file: result.file, problems: [] })
+  })
+  it('reads its own output back unchanged around the unknown and gesture caps (#314)', () => {
+    const ids = Array.from({ length: shortcutLimits.gestures + 6 }, (_, index) => `test.gesture${index}`)
+    const many = { gestures: new Map(ids.map(id => [id, ['alt', 'ctrl']] as const)) }
+    // Vary how full each cap is, how many own choices are unoffered and how many gestures wait in `unknown`.
+    for (const ownCount of [shortcutLimits.gestures - 3, shortcutLimits.gestures - 1, shortcutLimits.gestures])
+      for (const unofferedCount of [0, 1, 2, 3])
+        for (const restorableCount of [1, 2, 3])
+          for (const otherCount of [shortcutLimits.unknown - 4, shortcutLimits.unknown - 2, shortcutLimits.unknown - 1, shortcutLimits.unknown])
+            for (const foreignCount of [0, 1, 2]) {
+              const own: Record<string, string> = Object.fromEntries(ids.slice(0, ownCount - unofferedCount).map(id => [id, 'alt']))
+              ids.slice(ownCount - unofferedCount, ownCount).forEach(id => { own[id] = 'zzz' })
+              const restorable = ids.slice(shortcutLimits.gestures + 1, shortcutLimits.gestures + 1 + restorableCount).map(gesture => ({ gesture, choice: 'ctrl' }))
+              const others = Array.from({ length: otherCount }, (_, index) => ({ kept: index }))
+              const bindings = Array.from({ length: foreignCount }, (_, index) => ({ command: `future.x${index}`, key: 'f9' }))
+              const first = readShortcutFile(v1({ bindings, gestures: own, unknown: [...restorable, ...others] }), many)
+              if (!first.ok) throw new Error(first.error)
+              const again = readShortcutFile(JSON.parse(JSON.stringify(first.file)), many)
+              expect(again, `${ownCount}/${unofferedCount}/${restorableCount}/${otherCount}/${foreignCount}`).toEqual({ ok: true, file: first.file, problems: [] })
+            }
   })
   it("keeps the bindings of a file a few bytes under the limit whose gesture moves to unknown (#237)", () => {
     // The issue's file: ten bindings, unknown records filling it to just under the limit, and a choice this build lacks.
