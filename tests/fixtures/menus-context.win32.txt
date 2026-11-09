@@ -38,6 +38,9 @@ documentTab.context, for a saved query's tab
   Move &Right  Ctrl+Shift+PageDown  ----
   Re&name Tab…  F2  ++++
   ---
+  Increase Tab Stack &Height  ----
+  Decrease &Tab Stack Height  ----
+  ---
   Spl&it Right  Ctrl+\  ----
   Split Do&wn  Ctrl+K Ctrl+\  ----
   Move to Ne&xt Group  Ctrl+Alt+Right  ----
@@ -58,6 +61,9 @@ documentTab.context, for an unsaved query's tab
   Mov&e Left  Ctrl+Shift+PageUp  ++++
   Move &Right  Ctrl+Shift+PageDown  ++++
   Re&name Tab…  F2  ++++
+  ---
+  Increase Tab Stack &Height  ----
+  Decrease &Tab Stack Height  ----
   ---
   Spl&it Right  Ctrl+\  ----
   Split Do&wn  Ctrl+K Ctrl+\  ----

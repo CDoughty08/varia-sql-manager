@@ -26,7 +26,12 @@ describe('gesture rows', () => {
     expect(rows.find(row => row.id === 'connections.connect')).toMatchObject({ scopeTitle: 'Connect Dialog', kind: 'fixed', options: [] })
     expect(rows.find(row => row.id === 'documentTabs.rows')).toMatchObject({
       scopeTitle: 'Document Tabs', kind: 'fixed', label: 'Ctrl+Wheel', source: 'builtin', options: [],
-      locked: expect.stringContaining('row buttons')
+      locked: expect.stringContaining('Increase Tab Stack Height and Decrease Tab Stack Height in the tab menu and command palette'),
+      keyboard: ['editor.increaseTabRows', 'editor.decreaseTabRows']
+    })
+    expect(rows.find(row => row.id === 'documentTabs.scroll')).toMatchObject({
+      scopeTitle: 'Document Tabs', kind: 'fixed', label: 'Wheel', source: 'builtin', options: [],
+      locked: expect.stringContaining('Arrow keys, Home and End')
     })
     // macOS's Control+click is a right-click there only.
     expect(ids(rows)).not.toContain('grid.secondaryClick')

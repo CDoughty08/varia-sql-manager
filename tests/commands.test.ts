@@ -191,6 +191,52 @@ describe('command execution', () => {
     expect(editorOptions.getSnapshot().wordWrap).toBe(true)
     expect(commands.isToggled('editor.toggleWordWrap')).toBe(true)
   })
+  it('changes the active tab shelf from the palette and disables stack commands after its layout goes', async () => {
+    const { commands, documents, editorGroups } = fixture(), adjust = vi.fn()
+    const pinned = documents.create('pinned.sql', '', 'master'), query = documents.create('query.sql', '', 'master')
+    documents.setPinned(pinned.id, true)
+    editorGroups.update({ groups: [{ id: 'g1', documents: [pinned.id, query.id], active: query.id, floating: false }], activeGroup: 'g1' })
+    expect(commands.isEnabled('editor.increaseTabRows')).toBe(false)
+    const registration = editorGroups.registerTabRows('g1', adjust)
+    await commands.execute('editor.increaseTabRows', undefined, 'palette')
+    expect(adjust).toHaveBeenLastCalledWith(false, 1)
+    documents.activate(pinned.id)
+    await commands.execute('editor.decreaseTabRows', undefined, 'palette')
+    expect(adjust).toHaveBeenLastCalledWith(true, -1)
+    registration.dispose()
+    expect(commands.isEnabled('editor.increaseTabRows')).toBe(false)
+    await commands.execute('editor.increaseTabRows', undefined, 'palette')
+    expect(adjust).toHaveBeenCalledTimes(2)
+  })
+  it('changes an inactive context tab stack in its own group and checks each direction against that stack', async () => {
+    const { commands, documents, editorGroups } = fixture()
+    const pinned = documents.create('pinned.sql', '', 'master'), query = documents.create('query.sql', '', 'master')
+    documents.setPinned(pinned.id, true)
+    editorGroups.update({ groups: [
+      { id: 'queries', documents: [query.id], active: query.id, floating: false },
+      { id: 'pins', documents: [pinned.id], active: pinned.id, floating: true }
+    ], activeGroup: 'queries' })
+    let pinnedRows = 1
+    const queryAdjust = vi.fn(), pinnedAdjust = vi.fn((_pinned: boolean, delta: 1 | -1) => { pinnedRows += delta })
+    editorGroups.registerTabRows('queries', queryAdjust, (_pinned, delta) => delta < 0)
+    editorGroups.registerTabRows('pins', pinnedAdjust, (_pinned, delta) => delta > 0 ? pinnedRows < 3 : pinnedRows > 1)
+    const target = { tabId: pinned.id }
+    expect(documents.active?.id).toBe(query.id)
+    expect(commands.isEnabled('editor.increaseTabRows')).toBe(false)
+    expect(commands.isEnabled('editor.increaseTabRows', target)).toBe(true)
+    expect(commands.isEnabled('editor.decreaseTabRows', target)).toBe(false)
+    await expect(commands.execute('editor.increaseTabRows', target, 'menu')).resolves.toBe(true)
+    expect(pinnedAdjust).toHaveBeenLastCalledWith(true, 1)
+    expect(pinnedRows).toBe(2)
+    expect(commands.isEnabled('editor.decreaseTabRows', target)).toBe(true)
+    await expect(commands.execute('editor.decreaseTabRows', target, 'keybinding')).resolves.toBe(true)
+    expect(pinnedAdjust).toHaveBeenLastCalledWith(true, -1)
+    await expect(commands.execute('editor.increaseTabRows', undefined, 'palette')).resolves.toBe(false)
+    await expect(commands.execute('editor.decreaseTabRows', undefined, 'palette')).resolves.toBe(true)
+    expect(queryAdjust).toHaveBeenCalledExactlyOnceWith(false, -1)
+    expect(documents.active?.id).toBe(query.id)
+    expect(commands.isEnabled('editor.increaseTabRows', { tabId: 'gone' })).toBe(false)
+  })
   it('keeps query cycling in tab focus across groups and wraps in both directions', async () => {
     const { commands, documents, editorGroups } = fixture()
     const tabs = [documents.create('a.sql', '', 'master'), documents.create('b.sql', '', 'master'), documents.create('c.sql', '', 'master')]

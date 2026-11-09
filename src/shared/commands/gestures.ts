@@ -141,10 +141,16 @@ export const gestureCatalog = {
     kind: 'pointerCommand', scope: 'popouts', action: 'doubleClick', target: 'a popout tab', modifiers: ['ctrl'],
     choices: [['ctrl'], ['alt'], ['shift'], []], darwin: { modifiers: ['meta'], choices: [['meta'], ['alt'], ['shift'], []] }, keyboard: ['pane.moveToMainWindow']
   },
+  'documentTabs.scroll': {
+    title: 'Scroll Tabs', description: 'Scrolls one-row shelves horizontally, or an expanded tab header vertically when its rows extend beyond the editor group.',
+    kind: 'fixed', scope: 'documentTabs', action: 'wheel', target: 'a tab shelf', modifiers: [],
+    locked: 'Wheel input scrolls tabs horizontally or vertically through an expanded header. Arrow keys, Home and End on a focused tab also reach every tab.'
+  },
   'documentTabs.rows': {
     title: 'Change Tab Rows', description: 'Scrolling down adds rows to the pinned or unpinned shelf under the pointer, and scrolling up removes rows from that shelf alone.',
     kind: 'fixed', scope: 'documentTabs', action: 'wheel', target: 'a tab shelf', modifiers: ['ctrl'],
-    locked: 'Control+wheel changes shelf rows, and the row buttons provide the same action from the keyboard.'
+    locked: 'Control+wheel changes shelf rows. Increase Tab Stack Height and Decrease Tab Stack Height in the tab menu and command palette provide the same action from the keyboard.',
+    keyboard: ['editor.increaseTabRows', 'editor.decreaseTabRows']
   },
   'documentTabs.rename': {
     title: 'Rename Tab', description: 'Opens the rename box on a query tab.',

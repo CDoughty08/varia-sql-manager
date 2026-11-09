@@ -1,4 +1,4 @@
-import type { EditorGroupsLayout } from '../../../shared/editor-groups'
+import type { EditorGroupNode, EditorGroupsLayout, EditorTabRows } from '../../../shared/editor-groups'
 import { editorGroupLimits } from '../../../shared/editor-groups'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
@@ -48,6 +48,8 @@ export function neighbour(snapshot: EditorGroupSnapshot, group: string, delta: 1
  */
 export class EditorGroupService extends SnapshotStore<EditorGroupSnapshot> implements Disposable {
   private host?: EditorGroupHost
+  private readonly tabRows = new Map<string, { adjust(pinned: boolean, delta: 1 | -1): void; canAdjust?(pinned: boolean, delta: 1 | -1): boolean }>()
+  private readonly savedTabRows = new Map<string, EditorTabRows>()
   /** A layout to restore once the editor area is there, with how to name each place's document. */
   private pending?: { layout: EditorGroupsLayout; id: (place: number) => string | undefined }
   constructor(private readonly documents: Pick<DocumentService, 'getSnapshot' | 'move' | 'get'>) { super({ groups: [], activeGroup: '' }) }
@@ -75,6 +77,42 @@ export class EditorGroupService extends SnapshotStore<EditorGroupSnapshot> imple
   }
   groupOf(id: string): EditorGroupInfo | undefined { return groupOf(this.view(), id) }
   get count(): number { return this.view().groups.length }
+
+  /** The group's tab layout supplies the keyboard equivalent of Control+wheel. */
+  registerTabRows(group: string, adjust: (pinned: boolean, delta: 1 | -1) => void, canAdjust?: (pinned: boolean, delta: 1 | -1) => boolean): Disposable {
+    const control = { adjust, canAdjust }
+    this.tabRows.set(group, control)
+    return { dispose: () => { if (this.tabRows.get(group) === control) this.tabRows.delete(group) } }
+  }
+  canChangeTabRows(id: string, delta?: 1 | -1): boolean {
+    const group = this.groupOf(id), document = this.documents.get(id), control = group && this.tabRows.get(group.id)
+    return !!document && !!control && (delta === undefined || !control.canAdjust || control.canAdjust(!!document.pinned, delta))
+  }
+  /** Changes only the shelf holding the requested document, in its own editor group. */
+  changeTabRows(id: string, delta: 1 | -1): void {
+    const group = this.groupOf(id), document = this.documents.get(id)
+    if (group && document) this.tabRows.get(group.id)?.adjust(!!document.pinned, delta)
+  }
+
+  getTabRows(group: string): EditorTabRows { return this.savedTabRows.get(group) ?? { pinned: 1, unpinned: 1 } }
+  /** Keeps the requested heights, including when fewer rows currently fit the tabs. */
+  setTabRows(group: string, rows: EditorTabRows): void {
+    const next = normalizedTabRows(rows), previous = this.getTabRows(group)
+    if (previous.pinned === next.pinned && previous.unpinned === next.unpinned) return
+    if (next.pinned === 1 && next.unpinned === 1) this.savedTabRows.delete(group)
+    else this.savedTabRows.set(group, next)
+    this.publish({ ...this.getSnapshot() })
+  }
+  /** Restored group ids may replace existing ones; replace their preferences before the layout mounts them. */
+  restoreTabRows(groups: ReadonlyMap<string, EditorTabRows>): void {
+    this.savedTabRows.clear()
+    for (const [group, rows] of groups) {
+      const next = normalizedTabRows(rows)
+      if (next.pinned !== 1 || next.unpinned !== 1) this.savedTabRows.set(group, next)
+    }
+    this.publish({ ...this.getSnapshot() })
+  }
+  forgetTabRows(group: string): void { this.savedTabRows.delete(group) }
 
   /** Whether the document can move `delta` tabs along its group's strip. */
   canMoveInGroup(id: string, delta: 1 | -1): boolean {
@@ -153,19 +191,33 @@ export class EditorGroupService extends SnapshotStore<EditorGroupSnapshot> imple
   /** Join All Editor Groups. */
   join(): void { if (this.host && this.count > 1) this.host.join() }
 
-  /** The groups as hot exit keeps them, or undefined when there is one group (the documents' order says it all). */
+  /** The groups as hot exit keeps them; an ordinary single group needs only the documents' order. */
   capture(place: (id: string) => number | undefined): EditorGroupsLayout | undefined {
-    if (!this.host || this.count < 2) return undefined
-    return this.host.capture(place)
+    const layout = this.host?.capture(place)
+    if (!layout) return undefined
+    let groups = 0, hasRows = false
+    const visit = (node: EditorGroupNode) => {
+      if (node.type === 'branch') { node.children.forEach(visit); return }
+      groups++
+      if (node.tabRows && (node.tabRows.pinned !== 1 || node.tabRows.unpinned !== 1)) hasRows = true
+    }
+    visit(layout.root)
+    for (const floating of layout.floating ?? []) visit(floating.root)
+    return groups > 1 || hasRows || layout.floating?.length ? layout : undefined
   }
   /** Arranges the reopened documents as hot exit kept them, now or once the editor area is there. */
   restore(layout: EditorGroupsLayout, id: (place: number) => string | undefined): void {
     if (this.host) this.host.restore(layout, id)
     else this.pending = { layout, id }
   }
-  dispose(): void { this.host = undefined; this.pending = undefined; this.clearListeners() }
+  dispose(): void { this.host = undefined; this.pending = undefined; this.tabRows.clear(); this.savedTabRows.clear(); this.clearListeners() }
 }
 
 function sameGroup(a: EditorGroupInfo, b: EditorGroupInfo): boolean {
   return a.id === b.id && a.active === b.active && a.floating === b.floating && a.documents.length === b.documents.length && a.documents.every((id, index) => id === b.documents[index])
+}
+
+function normalizedTabRows(rows: EditorTabRows): EditorTabRows {
+  const normalize = (value: number) => Number.isSafeInteger(value) && value > 0 ? value : 1
+  return { pinned: normalize(rows.pinned), unpinned: normalize(rows.unpinned) }
 }

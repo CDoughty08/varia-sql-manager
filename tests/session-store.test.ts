@@ -30,6 +30,18 @@ const tabs: SessionInput = {
 }
 
 describe('the hot exit session store', () => {
+  it('keeps a single group’s requested shelf heights through the disk session checkpoint', async () => {
+    const groups = {
+      root: { type: 'branch' as const, children: [{ type: 'leaf' as const, views: [0], active: 0, tabRows: { pinned: 3, unpinned: 80 } }] },
+      orientation: 'HORIZONTAL' as const, width: 800, height: 600, activeGroup: 0
+    }
+    const store = new SessionStore(folder)
+    await store.write(sessionWriteSchema.parse({ activeIndex: 0, documents: [tabs.documents[0]], groups }), 1)
+    const stored = JSON.parse(await readFile(join(folder, 'session.json'), 'utf8'))
+    expect(stored.groups.root.children[0].tabRows).toEqual({ pinned: 3, unpinned: 80 })
+    expect((await new SessionStore(folder).take(true))?.groups).toEqual(groups)
+  })
+
   it('round-trips a plan larger than the SQL file limit without widening the limit for queries', async () => {
     const plan = { name: 'big.sqlplan', kind: 'sqlplan', eol: 'lf', dirty: true, pinned: true, text: 'x'.repeat(maxSqlFileBytes + 1) } as const
     const session = { activeIndex: 0, documents: [plan] }
