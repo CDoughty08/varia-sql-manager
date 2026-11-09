@@ -1512,11 +1512,22 @@ try {
   await pivoting.getByRole('button', { name: 'Close Pivot', exact: true }).click()
   await expect(pivotPanel(page)).toHaveCount(0)
   await expect(show('Pivot')).toHaveAttribute('aria-pressed', 'false')
-  // Running again releases the pivot with the run's other results; the filters below start from one grid.
+  // A pivot past its bounds is refused, not shown in part: 300 ids as column groups say so in the panel, which keeps the
+  // draft, and add no result. Running again releases the pivot with the run's other results.
+  await run('-- varia-fake: sets=W1*300')
+  await settled()
+  await expect(anyResultGrid(page)).toHaveCount(1)
+  await show('Pivot').click()
+  await expect(pivoting.getByRole('button', { name: 'Remove row group active', exact: true })).toBeVisible()
+  await pivoting.getByRole('combobox', { name: 'Column group', exact: true }).selectOption({ label: 'id' })
+  await pivoting.getByRole('button', { name: 'Build Pivot', exact: true }).click()
+  await expect(pivoting.getByRole('status')).toContainText('The column group has 300 distinct values, and a pivot can have at most 256 column groups.')
+  await expect(anyResultGrid(page)).toHaveCount(1)
+  await pivoting.getByRole('button', { name: 'Close Pivot', exact: true }).click()
   await run('-- varia-fake: sets=W1*100')
   await settled()
   await expect(anyResultGrid(page)).toHaveCount(1)
-  console.log('Results checks: Pivot groups the rows of a grid by a column in the backend and adds the counts and maxima as a new result, offering Sum only for numeric columns.')
+  console.log('Results checks: Pivot groups the rows of a grid by a column in the backend and adds the counts and maxima as a new result, offering Sum only for numeric columns and refusing a pivot past its bounds in the panel.')
 
   // 13c. Filters: the grid menu's Filter submenu filters by the selected cells' values, without NULL, between the lowest and
   // highest selected value and to duplicates; the caption counts the rows kept and lists each filter, named by its values,

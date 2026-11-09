@@ -54,12 +54,13 @@ describe('pivot helpers', () => {
     expect(draftSpec({ rows: [1], column: 0, values: [{ aggregate: 'sum', column: 2 }] })).toEqual({ rows: [1], column: 0, values: [{ aggregate: 'sum', column: 2 }] })
   })
 
-  it('says what a pivot read, how many groups it found, and which it left out', () => {
-    const info = { source: 0, viewed: false, rows: 1200, rowGroups: 3, rowGroupsShown: 3, columnGroups: 4, columnGroupsShown: 4, approximate: false }
+  it('says what a pivot read, how many groups it has, and when long values were grouped by a prefix', () => {
+    const info = { source: 0, sourceLabel: 'Result 1', viewed: false, rows: 1200, rowGroups: 3, columnGroups: 4, approximate: false }
     expect(pivotText(info)).toBe('Pivot of Result 1: 1,200 rows in 3 row groups × 4 column groups.')
-    expect(pivotText({ ...info, source: 1, viewed: true, rows: 1, rowGroups: 1, rowGroupsShown: 1, columnGroups: 0, columnGroupsShown: 0 })).toBe('Pivot of Result 2 (as sorted and filtered): 1 row in 1 row group.')
-    expect(pivotText({ ...info, rowGroups: 200_000, rowGroupsShown: 100_000, columnGroups: 300, columnGroupsShown: 256, approximate: true }))
-      .toBe('Pivot of Result 1: 1,200 rows in 200,000 row groups × 300 column groups. Only the first 256 column groups are shown; each Total still counts every row. Only the first 100,000 row groups are shown. Long values were grouped by the part these results keep.')
+    expect(pivotText({ ...info, source: 1, sourceLabel: 'Result 2', viewed: true, rows: 1, rowGroups: 1, columnGroups: 0 })).toBe('Pivot of Result 2 (as sorted and filtered): 1 row in 1 row group.')
+    expect(pivotText({ ...info, sourceLabel: 'Pivot of Result 1', rows: 2 })).toBe('Pivot of Pivot of Result 1: 2 rows in 3 row groups × 4 column groups.')
+    expect(pivotText({ ...info, rowGroups: 100_000, columnGroups: 256, approximate: true }))
+      .toBe('Pivot of Result 1: 1,200 rows in 100,000 row groups × 256 column groups. Long values were grouped by the part these results keep.')
   })
 })
 
@@ -79,7 +80,7 @@ describe('PivotService', () => {
     const sets = results.getSnapshot().t1.sets
     expect(sets).toHaveLength(3)
     expect(sets[2]).toMatchObject({ index: 2, label: 'Pivot of Result 2', descriptor: { kind: 'pivot', resultId: 802 } })
-    expect(pivot.getSnapshot().info.get(setKey(sets[2].descriptor))).toEqual({ source: 1, viewed: false, rows: 3, rowGroups: 2, rowGroupsShown: 2, columnGroups: 0, columnGroupsShown: 0, approximate: false })
+    expect(pivot.getSnapshot().info.get(setKey(sets[2].descriptor))).toEqual({ source: 1, sourceLabel: 'Result 2', viewed: false, rows: 3, rowGroups: 2, columnGroups: 0, approximate: false })
     expect(pivot.getSnapshot().tabs.t1.running).toBe(false)
     // A pivot can be pivoted again; closing the panel keeps its draft for the next open on the same set.
     expect(pivot.canPivot('t1', 2)).toBe(true)
@@ -89,7 +90,7 @@ describe('PivotService', () => {
     expect(pivot.getSnapshot().tabs.t1.draft.rows).toEqual([0])
   })
 
-  it("pivots nothing while the query runs, shows why a pivot failed, and starts a new run's panel on its first set", async () => {
+  it("pivots nothing while the query runs, shows why a pivot failed, and keeps a new run's panel on its set", async () => {
     const { results, pivot, run } = fixture()
     run(2, { finish: false })
     expect(pivot.canPivot('t1', 0)).toBe(false)
@@ -104,7 +105,10 @@ describe('PivotService', () => {
     pivot.setDraft('t1', { rows: [1], values: [{ aggregate: 'count' }] })
     expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()
     run(2, { queryId: 'q3' })
-    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: true, source: 0, draft: { rows: [1] }, running: false })
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ open: true, source: 1, draft: { rows: [1] }, running: false })
+    // A run without that set starts the panel on its first set.
+    run(1, { queryId: 'q4' })
+    expect(pivot.getSnapshot().tabs.t1).toMatchObject({ source: 0, draft: { rows: [1] } })
     // A closed tab forgets its panel.
     results.release('t1')
     expect(pivot.getSnapshot().tabs.t1).toBeUndefined()
@@ -125,7 +129,7 @@ describe('PivotService', () => {
     expect(pivot.canPivot('t1', 0)).toBe(false)
     run(1, { queryId: 'q2', finish: false })
     expect(signal?.aborted).toBe(true)
-    answer({ descriptor: descriptor(990, { index: 1, kind: 'pivot' }), rows: 1, rowGroups: 1, rowGroupsShown: 1, columnGroups: 0, columnGroupsShown: 0, approximate: false })
+    answer({ descriptor: descriptor(990, { index: 1, kind: 'pivot' }), rows: 1, rowGroups: 1, columnGroups: 0, approximate: false })
     await pivoting
     expect(client.released()).toContain(990)
     expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()

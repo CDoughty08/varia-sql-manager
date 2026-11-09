@@ -120,9 +120,13 @@ internal static class PivotChecks
         var store = new ResultStore(1L << 30, 1L << 29);
         var set = Source(store);
         var (model, pivot) = Pivot(store, set, new PivotSpec([0], 1, [Rows()]));
-        check(Names(pivot) == "Region,NULL,2024,2025,Total" && model.ColumnGroups == 3 && model.ColumnGroupsShown == 3,
+        check(Names(pivot) == "Region,NULL,2024,2025,Total" && model.ColumnGroups == 3,
             "column groups name their columns by value, NULL first, then Total: " + Names(pivot));
         check(string.Join(";", Text(pivot)) == "NULL|0|0|1|1;East|0|2|1|3;West|1|1|0|2", "each cell counts its rows and the total counts the row group's: " + string.Join(";", Text(pivot)));
+        List<string> clashing = ["NULL", "NULL", "Total", "x", "x", "X", "(blank)", "Total"];
+        PivotOutput.Distinguish(clashing, total: true);
+        check(string.Join(",", clashing) == "NULL,NULL (2),Total (2),x,x (2),X (3),(blank),Total",
+            "column groups get distinct names: the NULL group and Total keep theirs, and a text 'NULL' or 'Total' or values sharing a prefix are numbered: " + string.Join(",", clashing));
         var (_, two) = Pivot(store, set, new PivotSpec([], 1, [Rows(), new(PivotAggregate.Sum, 2)]));
         check(Names(two) == "NULL · Count of rows,NULL · Sum of Amount,2024 · Count of rows,2024 · Sum of Amount,2025 · Count of rows,2025 · Sum of Amount,Total · Count of rows,Total · Sum of Amount"
             && string.Join(";", Text(two)) == "1|NULL|3|11.75|2|6.25|6|18.00",
@@ -173,32 +177,53 @@ internal static class PivotChecks
         var avg = ResultPivoter.Build(set, set.SealedSnapshot(), null, new PivotSpec([], -1, [new(PivotAggregate.Avg, 1)]), CancellationToken.None, _ => true);
         check(PivotOutput.Rescale(2.5m, 2).ToString(CultureInfo.InvariantCulture) == "2.50" && PivotOutput.Rescale(2.555m, 2).ToString(CultureInfo.InvariantCulture) == "2.56"
             && avg.Figures[0].Counts[0] == 6, "a figure is shown at its type's scale, rounded half away from zero");
+        ResultColumn[] big = [new("g", "int", "text"), new("b", "bigint", "text")];
+        var (_, wide) = Pivot(store, Source(store, [["1", "9000000000000000000"], ["1", "9000000000000000000"], ["2", "-9223372036854775808"]], big), new PivotSpec([0], -1, [new(PivotAggregate.Sum, 1)]));
+        check(string.Join(";", Text(wide)) == "1|ERR;2|-9223372036854775808" && wide.Columns[1].DataType == "bigint",
+            "an integer sum past bigint's range is an error cell, as SQL Server's SUM overflows: " + string.Join(";", Text(wide)));
         check(ResultPivoter.IsNumeric(Sales[2], WireKind.Text) && ResultPivoter.IsNumeric(Sales[3], WireKind.Text) && !ResultPivoter.IsNumeric(Sales[0], WireKind.Text)
             && !ResultPivoter.IsNumeric(Sales[5], WireKind.Text) && !ResultPivoter.IsNumeric(new ResultColumn("b", "varbinary(4)", "binary"), WireKind.Binary),
             "only exact and approximate numerics (not bit, text or binary) can be summed or averaged");
     }
 
-    /// <summary>Past the column groups a pivot shows (256, fewer when its values would pass a page's 4,096 columns) and the
-    /// figures it keeps (4,000,000), the first groups are shown and the model says how many there were; a truncated column
-    /// group still counts in its row's total.</summary>
+    /// <summary>A pivot past its column groups (256, fewer when its values would pass a page's 4,096 columns), its row groups
+    /// (100,000) or its figures (4,000,000) is refused once its groups are known, before any figure is reserved, with a message
+    /// that says which bound and how many; one at the bounds is built whole.</summary>
     private static void Limits(Action<bool, string> check)
     {
         var store = new ResultStore(1L << 30, 1L << 29);
         ResultColumn[] columns = [new("g", "int", "text"), new("c", "int", "text")];
-        var rows = Enumerable.Range(0, 1000).Select(i => new string?[] { i.ToString(CultureInfo.InvariantCulture), (i % 300).ToString(CultureInfo.InvariantCulture) }).ToArray();
-        var set = Source(store, rows, columns);
-        var (one, pivot) = Pivot(store, set, new PivotSpec([0], 1, [Rows()]));
-        check(one is { RowGroups: 1000, RowGroupsShown: 1000, ColumnGroups: 300, ColumnGroupsShown: ResultPivoter.MaxColumnGroups } && pivot.Columns.Count == 1 + 256 + 1
-            && Text(pivot)[299].EndsWith("|1", StringComparison.Ordinal) && Text(pivot)[299].Split('|').Skip(1).SkipLast(1).All(cell => cell == "0"),
-            "past 256 column groups the first are shown, and a row in a column group not shown still counts in its total");
-        var sixteen = Enumerable.Repeat(Rows(), ResultPivoter.MaxValues).ToArray();
-        var (wide, widePivot) = Pivot(store, set, new PivotSpec([0], 1, sixteen));
-        check(wide is { ColumnGroupsShown: 254, RowGroupsShown: 980, RowGroups: 1000 } && widePivot.Columns.Count == 1 + 255 * 16 && widePivot.Columns.Count <= PageBuilder.MaxColumns
-            && Text(widePivot).Count == 980,
-            $"16 values keep the columns within a page's and the figures within {ResultPivoter.MaxCells:N0}, truncating row groups: {wide.ColumnGroupsShown} {wide.RowGroupsShown}");
+        ResultSetBuffer Rows(int count, int groups) => Source(store, [.. Enumerable.Range(0, count).Select(i => new string?[] { i.ToString(CultureInfo.InvariantCulture), (i % groups).ToString(CultureInfo.InvariantCulture) })], columns);
+        (string? Code, string? Message, long Asked) Refusal(ResultSetBuffer set, PivotSpec spec)
+        {
+            long asked = -1;
+            try { ResultPivoter.Build(set, set.SealedSnapshot(), null, spec, CancellationToken.None, bytes => { asked = bytes; return true; }); return (null, null, asked); }
+            catch (RequestException error) { return (error.Code, error.Message, asked); }
+        }
+        var sixteen = Enumerable.Repeat(PivotChecks.Rows(), ResultPivoter.MaxValues).ToArray();
+
+        var wide = Refusal(Rows(1000, 300), new PivotSpec([0], 1, [PivotChecks.Rows()]));
+        check(wide is { Code: "INVALID_PARAMS", Asked: -1 } && wide.Message == "The column group has 300 distinct values, and a pivot can have at most 256 column groups. Choose a column with fewer values, or move it to Rows.",
+            "past 256 column groups the pivot is refused before any figure is reserved: " + wide.Message);
+        var (full, fullPivot) = Pivot(store, Rows(1000, 256), new PivotSpec([0], 1, [PivotChecks.Rows()]));
+        check(full is { RowGroups: 1000, ColumnGroups: 256 } && fullPivot.Columns.Count == 1 + 256 + 1 && Text(fullPivot).Count == 1000 && Text(fullPivot)[999].EndsWith("|1", StringComparison.Ordinal),
+            "256 column groups are built whole, each row group with its total");
+        var paged = Refusal(Rows(980, 256), new PivotSpec([0], 1, sixteen));
+        check(ResultPivoter.ColumnGroupLimit(new PivotSpec([0], 1, sixteen)) == 254 && paged.Message == "The column group has 256 distinct values, and a pivot can have at most 254 column groups with 16 values. Choose a column with fewer values, or move it to Rows.",
+            "16 values lower the column groups to what a page's 4,096 columns hold: " + paged.Message);
+        var (widest, widestPivot) = Pivot(store, Rows(980, 254), new PivotSpec([0], 1, sixteen));
+        check(widest is { RowGroups: 980, ColumnGroups: 254 } && widestPivot.Columns.Count == 1 + 255 * 16 && widestPivot.Columns.Count <= PageBuilder.MaxColumns && Text(widestPivot).Count == 980,
+            $"16 values of 254 column groups fill a page's columns and stay within {ResultPivoter.MaxCells:N0} figures");
+        var cells = Refusal(Rows(1000, 254), new PivotSpec([0], 1, sixteen));
+        check(cells is { Code: "INVALID_PARAMS", Asked: -1 } && cells.Message == "This pivot would have 4,080,000 figures, and a pivot can have at most 4,000,000. Use fewer values, row groups or column groups.",
+            "past 4,000,000 figures the pivot is refused: " + cells.Message);
+        var tall = Refusal(Rows(ResultPivoter.MaxRowGroups + 1, 2), new PivotSpec([0], -1, [PivotChecks.Rows()]));
+        check(tall is { Code: "INVALID_PARAMS", Asked: -1 } && tall.Message == "The row groups make 100,001 rows, and a pivot can have at most 100,000. Group by fewer columns, or filter the rows first.",
+            "past 100,000 row groups the pivot is refused: " + tall.Message);
+        var source = Rows(980, 254);
         long asked = -1;
         string? refused = null;
-        try { ResultPivoter.Build(set, set.SealedSnapshot(), null, new PivotSpec([0], 1, sixteen), CancellationToken.None, bytes => { asked = bytes; return false; }); }
+        try { ResultPivoter.Build(source, source.SealedSnapshot(), null, new PivotSpec([0], 1, sixteen), CancellationToken.None, bytes => { asked = bytes; return false; }); }
         catch (PivotTooLargeException) { refused = "TOO_LARGE"; }
         check(refused == "TOO_LARGE" && asked == 980L * 255 * 8 * 16, "the figures are asked of the budget once the groups are known, and a refusal stops the pivot: " + asked);
     }
@@ -261,7 +286,7 @@ internal static class PivotChecks
         var before = store.UsedBytes;
         var pivot = Call<ResultsPivotResult>("results.pivot", new { resultId = set.ResultId, rows = new[] { 0 }, column = 1, values = new object[] { new { aggregate = "sum", column = 2 } } });
         var stored = store.Find(pivot.Descriptor.ResultId);
-        check(SqlService.MethodNames.Contains("results.pivot") && pivot.Descriptor is { Kind: "pivot", State: "complete", RowsStored: 3 } && pivot is { Rows: 6, RowGroups: 3, RowGroupsShown: 3, ColumnGroups: 3, ColumnGroupsShown: 3, Approximate: false }
+        check(SqlService.MethodNames.Contains("results.pivot") && pivot.Descriptor is { Kind: "pivot", State: "complete", RowsStored: 3 } && pivot is { Rows: 6, RowGroups: 3, ColumnGroups: 3, Approximate: false }
             && stored is not null && ReferenceEquals(stored.Budget, set.Budget) && store.UsedBytes > before && string.Join(";", Text(stored)) == "NULL|NULL|NULL|2.00|2.00;East|NULL|10.75|4.25|15.00;West|NULL|1.00|NULL|1.00",
             "results.pivot stores the pivot as a complete result of the same query: " + (stored is null ? "" : string.Join(";", Text(stored))));
         var filtered = Call<ResultsViewResult>("results.view", new { resultId = set.ResultId, sort = Array.Empty<object>(), filters = new object[] { new { op = "in", column = 0, rows = new[] { 2 } } } });
@@ -290,5 +315,42 @@ internal static class PivotChecks
         check(store.Find(viewed.Descriptor.ResultId) is null, "results.close releases a pivot");
         store.BeginQuery(set.Budget.SessionId);
         check(store.Find(pivot.Descriptor.ResultId) is null && store.UsedBytes <= before, "a pivot is released with its query's other results, and with it all it charged");
+        // Only a query's rows or another pivot: a diff is refused.
+        var diff = store.Open(set.Budget, 1, 1, 1, "diff", Sales, [.. Sales.Select(_ => WireKind.Text)])!;
+        diff.Complete();
+        check(Code(new { resultId = diff.ResultId, rows = new[] { 0 }, values = new object[] { new { aggregate = "count" } } }) == "INVALID_PARAMS", "a diff cannot be pivoted");
+        // A query whose results were cut short stores nothing more: the refusal says why, not that memory ran out.
+        string? Message(object args)
+        {
+            try { Call<object>("results.pivot", args); return null; }
+            catch (RequestException error) { return error.Code + ": " + error.Message; }
+        }
+        var limited = Source(store);
+        limited.Budget.Stop(TruncationReason.RowLimit);
+        check(Message(new { resultId = limited.ResultId, rows = new[] { 0 }, values = new object[] { new { aggregate = "count" } } })
+            == "TOO_LARGE: This query stored as many rows as its limit allows, so it cannot store a pivot. Raise the limit or return fewer rows, then run it again.",
+            "a pivot of a query stopped at its row limit says so");
+        Partial(check);
+    }
+
+    /// <summary>A pivot whose rows run out of the query's budget part-way is refused and released, never kept in part.</summary>
+    private static void Partial(Action<bool, string> check)
+    {
+        ResultColumn[] columns = [new("g", "int", "text"), new("t", "nvarchar(100)", "text")];
+        var rows = Enumerable.Range(0, 20_000).Select(i => new string?[] { i.ToString(CultureInfo.InvariantCulture), new string('x', 90) + i.ToString(CultureInfo.InvariantCulture) }).ToArray();
+        // The source's bytes, measured in a roomy store; the tight one leaves room for the grouping and about half the pivot.
+        var roomy = new ResultStore(1L << 30, 1L << 29);
+        Source(roomy, rows, columns);
+        var source = roomy.UsedBytes;
+        var spec = new PivotSpec([0], -1, [new(PivotAggregate.Max, 1)]);
+        var grouping = ResultPivoter.WorkingBytes(rows.Length, ResultPivoter.KeyColumns(spec)) + 4L * rows.Length;
+        var store = new ResultStore(1L << 30, source + grouping + source / 2);
+        using var service = new SqlService(store);
+        var set = Source(store, rows, columns);
+        var used = store.UsedBytes;
+        string? code = null;
+        try { service.DispatchAsync("results.pivot", JsonSerializer.SerializeToElement(new { resultId = set.ResultId, rows = new[] { 0 }, values = new object[] { new { aggregate = "max", column = 1 } } }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult(); }
+        catch (RequestException error) { code = error.Code; }
+        check(code == "TOO_LARGE" && store.UsedBytes == used, $"a pivot cut short by the budget is refused and releases what it stored: {code} {store.UsedBytes - used}");
     }
 }

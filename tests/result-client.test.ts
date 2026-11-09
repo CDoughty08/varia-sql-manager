@@ -339,7 +339,7 @@ describe('ResultClient', () => {
     ]) await expect(handle.pivot(spec)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     expect(worker().fromWorker.length).toBe(pivotBefore)
     const pivoting = view.pivot({ rows: [], column: 0, values: [{ aggregate: 'max', column: 0 }] })
-    const pivotAnswer = { descriptor: descriptor({ resultId: 11, kind: 'pivot' }), rows: 10, rowGroups: 2, rowGroupsShown: 2, columnGroups: 3, columnGroupsShown: 3, approximate: false }
+    const pivotAnswer = { descriptor: descriptor({ resultId: 11, kind: 'pivot' }), rows: 10, rowGroups: 2, columnGroups: 3, approximate: false }
     expect(await answer('pivot', pivotAnswer)).toMatchObject({ t: 'pivot', generation: 1, resultId: 3, rows: [], column: 0, values: [{ aggregate: 'max', column: 0 }], viewId: 2 })
     expect(await pivoting).toEqual(pivotAnswer)
     // A pivot given up whose answer comes anyway is closed.

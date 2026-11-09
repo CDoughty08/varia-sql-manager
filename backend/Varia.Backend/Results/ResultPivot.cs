@@ -16,9 +16,9 @@ internal sealed record PivotSpec(int[] Rows, int Column, PivotValue[] Values);
 /// <summary>The pivot ran out of the memory its result's query budget had room for.</summary>
 internal sealed class PivotTooLargeException : Exception;
 
-/// <summary>Groups and aggregates, ready to write: each kept row group's and column group's first row (by the source's row
-/// order), and each value's per-cell figures. Cell (g, c) is g * (ColumnGroupsShown + 1) + c; c = ColumnGroupsShown is the
-/// row group's total over all its rows (the only cell without a column group).</summary>
+/// <summary>Groups and aggregates, ready to write: each row group's and column group's first row (by the source's row
+/// order), and each value's per-cell figures. Cell (g, c) is g * (ColumnGroups + 1) + c; c = ColumnGroups is the row group's
+/// total over all its rows (the only cell without a column group).</summary>
 internal sealed class PivotModel
 {
     public required long Rows { get; init; }
@@ -28,8 +28,6 @@ internal sealed class PivotModel
     public required int[] ColumnReps { get; init; }
     public required PivotFigures[] Figures { get; init; }
     public required bool Approximate { get; init; }
-    public int RowGroupsShown => RowReps.Length;
-    public int ColumnGroupsShown => ColumnReps.Length;
     public int Stride => ColumnReps.Length + 1;
 }
 
@@ -65,9 +63,10 @@ internal sealed class PivotFigures(PivotValue value, int cells, bool exact)
 /// apply): rows grouped by the row-group columns' values, columns by the column-group column's, as GROUP BY groups them.
 /// Values are equal by the sort's comparison (<see cref="ViewSorter"/>): a column's collation decides which texts are equal,
 /// exact numerics compare as numbers, and NULL is a group of its own. Groups come in ascending order, NULL first. Bounds:
-/// <see cref="MaxRowGroups"/> row groups, <see cref="MaxColumnGroups"/> column groups and <see cref="MaxCells"/> figures; past
-/// them the first groups are kept and the answer says how many there were. Its keys and figures are charged to the
-/// result's query budget while it runs.</summary>
+/// <see cref="MaxRowGroups"/> row groups, <see cref="MaxColumnGroups"/> column groups (fewer when its columns would pass a
+/// page's) and <see cref="MaxCells"/> figures; a pivot past any of them is refused (INVALID_PARAMS) once its groups are known,
+/// never shown in part: a summary missing groups would mislead. Its keys and figures are charged to the result's query
+/// budget while it runs.</summary>
 internal static class ResultPivoter
 {
     public const int MaxRowFields = 8, MaxValues = 16, MaxRowGroups = 100_000, MaxColumnGroups = 256, MaxCells = 4_000_000;
@@ -127,26 +126,24 @@ internal static class ResultPivoter
         if (spec.Column >= 0) (columnOf, columnReps) = Group([KeyOf(spec.Column)], positions, rows, scratch, token, all: false);
         else (columnOf, columnReps) = ([], []);
 
-        // Output columns stay within a page's: the row-group columns, then each column group's values and the totals.
-        var values = spec.Values.Length;
-        var columnsShown = Math.Min(columnReps.Count, Math.Min(MaxColumnGroups, (PageBuilder.MaxColumns - spec.Rows.Length) / values - 1));
-        var stride = columnsShown + 1;
-        var rowsShown = Math.Min(rowReps.Count, Math.Min(MaxRowGroups, MaxCells / (stride * values)));
-        var cells = rowsShown * stride;
+        var columnGroups = columnReps.Count;
+        Limit(spec, rowReps.Count, columnGroups);
+        var stride = columnGroups + 1;
+        var cells = rowReps.Count * stride;
         long bytes = 0;
         foreach (var value in spec.Values) bytes += PivotFigures.CellBytes(value.Aggregate) * cells;
         if (!reserve(bytes)) throw new PivotTooLargeException();
 
         var figures = spec.Values.Select(value => new PivotFigures(value, cells, value.Column >= 0 && ViewSorter.KindOf(set.Columns[value.Column], set.Wires[value.Column]) == ViewSorter.Kind.Exact)).ToArray();
-        // A group past those shown keeps no figures; a column group past them counts only in its row group's total.
+        // A row outside the view (no row group) counts nowhere; every other row counts in its cell and its row group's total.
         int CellOf(int row, out int total)
         {
             var g = groupOf[row];
-            if (g < 0 || g >= rowsShown) { total = -1; return -1; }
-            total = g * stride + columnsShown;
+            if (g < 0) { total = -1; return -1; }
+            total = g * stride + columnGroups;
             if (columnOf.Length == 0) return -1;
             var c = columnOf[row];
-            return c >= 0 && c < columnsShown ? g * stride + c : -1;
+            return c >= 0 ? g * stride + c : -1;
         }
         var extremes = figures.Where(item => item.Value.Aggregate is PivotAggregate.Min or PivotAggregate.Max).Select(item => (Figures: item, Key: KeyOf(item.Value.Column))).ToArray();
         var counter = 0;
@@ -197,12 +194,34 @@ internal static class ResultPivoter
         foreach (var item in figures)
             if (item.Value.Aggregate == PivotAggregate.CountDistinct) Distinct(item, KeyOf(item.Value.Column), positions, scratch, CellOf, token);
 
-        var columnShown = columnReps.Count > columnsShown ? columnReps.GetRange(0, columnsShown) : columnReps;
         return new PivotModel
         {
-            Rows = positions.Length, RowGroups = rowReps.Count, RowReps = [.. rowReps.Take(rowsShown)], ColumnGroups = columnReps.Count, ColumnReps = [.. columnShown],
+            Rows = positions.Length, RowGroups = rowReps.Count, RowReps = [.. rowReps], ColumnGroups = columnGroups, ColumnReps = [.. columnReps],
             Figures = figures, Approximate = approximate
         };
+    }
+
+    /// <summary>The most column groups a pivot of <paramref name="spec"/> can have: 256, fewer when the row-group columns,
+    /// each column group's values and the totals would pass a page's 4,096 columns.</summary>
+    public static int ColumnGroupLimit(PivotSpec spec) => Math.Min(MaxColumnGroups, (PageBuilder.MaxColumns - spec.Rows.Length) / spec.Values.Length - 1);
+
+    /// <summary>Refuses a pivot past its bounds, saying which and how to bring it within them. The messages name no column
+    /// or value (the renderer knows which fields it asked for).</summary>
+    private static void Limit(PivotSpec spec, long rowGroups, long columnGroups)
+    {
+        var invariant = CultureInfo.InvariantCulture;
+        var columnLimit = ColumnGroupLimit(spec);
+        if (columnGroups > columnLimit)
+            throw new RequestException("INVALID_PARAMS", string.Format(invariant,
+                "The column group has {0:N0} distinct values, and a pivot can have at most {1:N0} column groups{2}. Choose a column with fewer values, or move it to Rows.",
+                columnGroups, columnLimit, columnLimit < MaxColumnGroups ? string.Format(invariant, " with {0} values", spec.Values.Length) : ""));
+        if (rowGroups > MaxRowGroups)
+            throw new RequestException("INVALID_PARAMS", string.Format(invariant,
+                "The row groups make {0:N0} rows, and a pivot can have at most {1:N0}. Group by fewer columns, or filter the rows first.", rowGroups, MaxRowGroups));
+        var cells = rowGroups * (columnGroups + 1) * spec.Values.Length;
+        if (cells > MaxCells)
+            throw new RequestException("INVALID_PARAMS", string.Format(invariant,
+                "This pivot would have {0:N0} figures, and a pivot can have at most {1:N0}. Use fewer values, row groups or column groups.", cells, MaxCells));
     }
 
     /// <summary>Each position's group by the keys' values (equal values, NULL equal to NULL, as GROUP BY), numbered in
@@ -356,6 +375,7 @@ internal static class PivotOutput
         var groups = model.ColumnReps.Select(row => GroupName(source, access, spec.Column, row)).ToList();
         if (spec.Column >= 0) groups.Add("Total");
         else groups.Add("");
+        Distinguish(groups, spec.Column >= 0);
         foreach (var group in groups)
         {
             foreach (var value in spec.Values)
@@ -371,6 +391,26 @@ internal static class PivotOutput
         return (columns, wires, lengths);
     }
 
+    /// <summary>Makes the column groups' names distinct, so no two columns share a header (and a JSON save no key): the NULL
+    /// group keeps "NULL" and Total keeps "Total"; a text value of the same name, or values that share their first 128
+    /// characters, are numbered " (2)", " (3)" in group order.</summary>
+    internal static void Distinguish(List<string> groups, bool total)
+    {
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (total) used.Add(groups[^1]);
+        // The NULL group (first when present, as groups sort NULL first) keeps its name over a text 'NULL'.
+        for (var i = 0; i < groups.Count - (total ? 1 : 0); i++)
+        {
+            var name = groups[i];
+            if (!used.Add(name))
+            {
+                var n = 2;
+                while (!used.Add(name + " (" + n.ToString(CultureInfo.InvariantCulture) + ")")) n++;
+                groups[i] = name + " (" + n.ToString(CultureInfo.InvariantCulture) + ")";
+            }
+        }
+    }
+
     /// <summary>Writes a row per row group shown into <paramref name="set"/> (opened with <see cref="Shape"/>), then
     /// completes it.</summary>
     public static void Write(ResultSetBuffer set, ResultSetBuffer source, StoredPage[] pages, PivotSpec spec, PivotModel model, CancellationToken token)
@@ -378,7 +418,7 @@ internal static class PivotOutput
         var access = new RowAccess(pages, source.Wires.Count);
         try
         {
-            for (var g = 0; g < model.RowGroupsShown; g++)
+            for (var g = 0; g < model.RowReps.Length; g++)
             {
                 if ((g & 1023) == 1023) token.ThrowIfCancellationRequested();
                 set.CountRow();
@@ -428,6 +468,8 @@ internal static class PivotOutput
             shown = value.Aggregate == PivotAggregate.Avg ? Rescale(Math.Round(total / count, Math.Max(scale, 6), MidpointRounding.AwayFromZero), Math.Max(scale, 6)) : Rescale(total, scale);
         }
         catch (OverflowException) { builder.AppendNull(error: true); return 0; }
+        // An integer sum is a bigint, as SQL Server's SUM of bigint: past its range it overflows as SQL Server's would.
+        if (value.Aggregate == PivotAggregate.Sum && scale == 0 && (shown > long.MaxValue || shown < long.MinValue)) { builder.AppendNull(error: true); return 0; }
         builder.EndFormatted(CellFormat.WriteDecimal(builder.BeginFormatted(), shown));
         return 0;
     }

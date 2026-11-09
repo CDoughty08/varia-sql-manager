@@ -76,7 +76,7 @@ export function fakeResultClient() {
             generation: value.generation, index: value.index, kind: 'pivot', rowsRead: 2, rowsStored: 2, rowsAvailable: 2, state: 'complete',
             columns: [...spec.rows.map(column => value.columns[column]), { name: 'Count of rows', dataType: 'bigint', wire: 'text', nullable: false }] as ResultColumn[]
           }),
-          rows: 3, rowGroups: 2, rowGroupsShown: 2, columnGroups: 0, columnGroupsShown: 0, approximate: false
+          rows: 3, rowGroups: 2, columnGroups: 0, approximate: false
         })),
         search: vi.fn<ResultHandle['search']>(async () => ({ rows: 0, total: 0, first: 0, matchRows: [], matchColumns: [], complete: true, approximate: false })),
         profile: vi.fn<ResultHandle['profile']>(async columns => ({ rows: handle.snapshot.rowsAvailable, complete: handle.snapshot.state === 'complete', columns: columns.map(column => ({ column, values: 0, nulls: 0, distinct: 0, distinctExact: true, approximate: false })) })),

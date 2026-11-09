@@ -129,8 +129,9 @@ export const profileResultSchema = z.object({
 }).strict()
 /** A results.pivot answer as the backend sends it (its descriptor without the generation, which main adds). */
 export const pivotResultSchema = z.object({
-  descriptor: backendDescriptorSchema.extend({ kind: z.literal('pivot') }), rows: count, rowGroups: count, rowGroupsShown: count, columnGroups: count, columnGroupsShown: count, approximate: z.boolean()
-}).strict().refine(result => result.rowGroupsShown <= Math.min(result.rowGroups, limits.pivot.maxRowGroups) && result.columnGroupsShown <= Math.min(result.columnGroups, limits.pivot.maxColumnGroups), 'Shown groups are among the groups.')
+  descriptor: backendDescriptorSchema.extend({ kind: z.literal('pivot') }), rows: count, rowGroups: z.number().int().min(0).max(limits.pivot.maxRowGroups),
+  columnGroups: z.number().int().min(0).max(limits.pivot.maxColumnGroups), approximate: z.boolean()
+}).strict().refine(result => result.descriptor.rowsStored === result.rowGroups, 'A pivot stores a row per row group.')
 export type PortEndResult = ResultsPivotResult | ResultsDiffResult | ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | ResultsViewResult | ResultsViewCloseResult | ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsSearchResult | ResultsProfileResult | LiveEnd | LiveUpdateResult
 
 const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'server', 'print', 'error']), line: z.number().int().min(1).max(2_147_483_647).optional() }).strict()

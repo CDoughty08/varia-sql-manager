@@ -1828,8 +1828,19 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (args.ResultId == 0 || args.ViewId == 0 || args.Rows is not { Length: <= ResultPivoter.MaxRowFields } || args.Values is not { Length: >= 1 and <= ResultPivoter.MaxValues })
             throw new RequestException("INVALID_PARAMS", "A pivot takes up to 8 row columns and 1 to 16 values.");
         var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);
+        // Only a query's rows or another pivot: a diff's or a live table's columns are not data to summarise.
+        if (set.Kind is not ("rows" or "pivot")) throw new RequestException("INVALID_PARAMS", "Only a query's results or another pivot can be pivoted.");
         var spec = PivotSpecOf(args, set);
         if (!set.IsComplete) throw new RequestException("RESULT_OPEN", "Pivot the results after they finish loading.");
+        // A query whose results were cut short stores nothing more, whatever memory is free: say why rather than blame memory.
+        switch (set.Budget.Stopped)
+        {
+            case TruncationReason.None: break;
+            case TruncationReason.RowLimit:
+                throw new RequestException("TOO_LARGE", "This query stored as many rows as its limit allows, so it cannot store a pivot. Raise the limit or return fewer rows, then run it again.");
+            default:
+                throw new RequestException("TOO_LARGE", "This query's results filled its result memory, so it cannot store a pivot. Close other results or return fewer rows, then run it again.");
+        }
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         var pages = set.SealedSnapshot();
         long rows = 0;
@@ -1861,7 +1872,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             try
             {
                 await Task.Run(() => PivotOutput.Write(pivot, set, pages, spec, model, token), token);
-                var answer = new ResultsPivotResult(pivot.Describe(), model.Rows, model.RowGroups, model.RowGroupsShown, model.ColumnGroups, model.ColumnGroupsShown, model.Approximate);
+                // A pivot is never kept in part: rows the budget refused would leave groups out of the summary.
+                if (pivot.Describe().RowsStored < model.RowGroups) throw new RequestException("TOO_LARGE", tooLarge);
+                var answer = new ResultsPivotResult(pivot.Describe(), model.Rows, model.RowGroups, model.ColumnGroups, model.Approximate);
                 // Main owns the pivot only once it has the answer: one not sent goes at once.
                 if (context is not null) context.Unsent = context.Dropped = Release;
                 return answer;

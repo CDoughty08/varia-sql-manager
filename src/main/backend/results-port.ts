@@ -689,8 +689,10 @@ export class ResultsPortHost {
       const close = () => { if (stored !== undefined) void this.backend.close(generation, [stored]).catch(() => undefined) }
       if (this.port !== port || this.sorting.get(rid) !== pivot) return close()
       this.sorting.delete(rid)
-      // The pivot's columns: its row columns, then at least one value's.
-      if (!parsed.success || parsed.data.descriptor.columns.length < request.rows.length + request.values.length) {
+      // The pivot's columns: its row columns, then each column group's values and each value's total; its figures within the bound.
+      const values = request.values.length, stride = request.column === undefined ? 1 : (parsed.success ? parsed.data.columnGroups : 0) + 1
+      if (!parsed.success || (request.column === undefined && parsed.data.columnGroups !== 0) || parsed.data.descriptor.columns.length !== request.rows.length + stride * values
+        || parsed.data.rowGroups * stride * values > wire.pivot.maxCells) {
         close()
         return this.end(rid, 'BACKEND_ERROR', 'The results could not be pivoted.')
       }

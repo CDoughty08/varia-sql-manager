@@ -89,7 +89,7 @@ export default function PivotPanel({ tabId, tab }: { tabId: string; tab: TabResu
           <option value="">(None)</option>
           {usable.filter(column => !draft.rows.includes(column)).map(column => <option key={column} value={column}>{nameOf(columns[column])}</option>)}
         </select>
-        {draft.column !== undefined && <div className="pivot-hint">A column per distinct value (up to {formatCount(wire.pivot.maxColumnGroups)}), then a Total.</div>}
+        {draft.column !== undefined && <div className="pivot-hint">A column per distinct value, then a Total. A column with more than {formatCount(wire.pivot.maxColumnGroups)} values is refused.</div>}
       </section>
       <section className="pivot-section" aria-labelledby={ids + 'values'}>
         <h3 id={ids + 'values'}>Values</h3>

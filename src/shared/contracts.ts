@@ -288,10 +288,10 @@ export interface PivotValueSpec { aggregate: PivotAggregate; column?: number }
  *  `limits.pivot.maxRowFields` distinct `rows` columns and an optional `column` column (not one of them), and stores 1 to
  *  `limits.pivot.maxValues` `values` of each group as a new result of the query. SUM and AVG take only numeric columns. */
 export interface ResultsPivotParams { resultId: number; rows: number[]; column?: number; values: PivotValueSpec[]; viewId?: number }
-/** `descriptor` is the pivot's result (kind `pivot`); `rows` the source rows pivoted; `rowGroups` and `columnGroups` the
- *  distinct groups there were, of which the first `rowGroupsShown` and `columnGroupsShown` are shown; `approximate` that a
- *  value grouped or compared was a long value's stored prefix. */
-export interface ResultsPivotResult { descriptor: ResultDescriptor; rows: number; rowGroups: number; rowGroupsShown: number; columnGroups: number; columnGroupsShown: number; approximate: boolean }
+/** results.pivot's answer: the pivot stored as a new result of the source's query (`descriptor`, kind 'pivot'), the source
+ *  rows it read, how many row groups and column groups it has (every one shown: a pivot past `limits.pivot` is refused), and
+ *  whether a truncated value's stored prefix was grouped or compared. */
+export interface ResultsPivotResult { descriptor: ResultDescriptor; rows: number; rowGroups: number; columnGroups: number; approximate: boolean }
 /** results.search: the cells whose grid text contains `text` (1 to `limits.search.maxText` characters), through `viewId`'s
  *  order when given (rows are then view positions). Up to `maxMatches` of them come back in whole rows: from `fromRow` on,
  *  or with `backward` the last ones before `fromRow`. Text columns compare by their collation; others ignore case. */

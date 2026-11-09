@@ -93,12 +93,13 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     let error: string | undefined
     try {
       const result = await handle.pivot(draftSpec(this.fit(tabId, state.source, state.draft)), { signal: abort.signal })
-      const label = `Pivot of ${entry.label ?? `Result ${entry.index + 1}`}`
+      const sourceLabel = entry.label ?? `Result ${entry.index + 1}`
+      const label = `Pivot of ${sourceLabel}`
       // Only the run that holds the set takes the pivot; otherwise (a re-run, a closed tab) it is released.
       if (this.results.addSet(tabId, result.descriptor, label, [setKey(entry.descriptor)]) === undefined) return
       const info: PivotInfo = {
-        source: entry.index, viewed: !!sort?.view, rows: result.rows, rowGroups: result.rowGroups, rowGroupsShown: result.rowGroupsShown,
-        columnGroups: result.columnGroups, columnGroupsShown: result.columnGroupsShown, approximate: result.approximate
+        source: entry.index, sourceLabel, viewed: !!sort?.view, rows: result.rows, rowGroups: result.rowGroups,
+        columnGroups: result.columnGroups, approximate: result.approximate
       }
       const snapshot = this.getSnapshot()
       this.publish({ tabs: snapshot.tabs, info: new Map([...this.shown(snapshot.info), [setKey(result.descriptor), info]]) })
@@ -147,12 +148,21 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     let tabs: Record<string, PivotTab> | undefined
     for (const [tabId, tab] of Object.entries(current.tabs)) {
       const run = snapshot[tabId]
-      if (run && this.runs.get(tabId) === run.queryId) continue
-      tabs ??= { ...current.tabs }
-      if (!run) { delete tabs[tabId]; this.runs.delete(tabId); continue }
-      this.runs.set(tabId, run.queryId)
-      // The draft stays as it was (a re-run of the same query pivots the same way); it is fitted to the set when it runs.
-      tabs[tabId] = { open: tab.open, source: 0, draft: tab.draft, running: false }
+      if (!run) { tabs ??= { ...current.tabs }; delete tabs[tabId]; this.runs.delete(tabId); continue }
+      let next = tab
+      // A new run keeps the draft (a re-run of the same query pivots the same way) and the set it pivots; the draft is fitted
+      // to the set when it runs.
+      if (this.runs.get(tabId) !== run.queryId) {
+        this.runs.set(tabId, run.queryId)
+        next = { open: tab.open, source: tab.source, draft: tab.draft, running: false }
+      }
+      // Once the run has ended without that set (or it is a diff), the panel moves to the first set it can pivot.
+      const entry = run.sets[next.source]
+      if (run.status !== 'running' && (!entry || entry.descriptor.kind === 'diff')) {
+        const first = run.sets.findIndex(item => item.descriptor.kind === 'rows' || item.descriptor.kind === 'pivot')
+        if (first >= 0 && first !== next.source) next = { ...next, source: first }
+      }
+      if (next !== tab) { tabs ??= { ...current.tabs }; tabs[tabId] = next }
     }
     if (tabs) this.publish({ tabs, info: this.shown(current.info) })
   }

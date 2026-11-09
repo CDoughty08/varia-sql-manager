@@ -68,24 +68,22 @@ export function draftSpec(draft: PivotDraft): PivotSpec {
 export interface PivotInfo {
   /** The pivoted set's place in the run. */
   readonly source: number
+  /** The pivoted set's name, as its caption shows it ("Result 2", "Pivot of Result 1"). */
+  readonly sourceLabel: string
   /** The grid's sort or filters applied (the pivot read its view). */
   readonly viewed: boolean
   readonly rows: number
   readonly rowGroups: number
-  readonly rowGroupsShown: number
   readonly columnGroups: number
-  readonly columnGroupsShown: number
   readonly approximate: boolean
 }
 
-/** The strip: what was pivoted, how many groups, which were left out, and whether long values were grouped by a prefix. */
+/** The strip: what was pivoted, how many groups, and whether long values were grouped by a prefix. */
 export function pivotText(info: PivotInfo): string {
   const groups = info.columnGroups > 0
     ? `${formatCount(info.rowGroups)} ${plural(info.rowGroups, 'row group')} × ${formatCount(info.columnGroups)} ${plural(info.columnGroups, 'column group')}`
     : `${formatCount(info.rowGroups)} ${plural(info.rowGroups, 'row group')}`
-  const parts = [`Pivot of Result ${info.source + 1}${info.viewed ? ' (as sorted and filtered)' : ''}: ${formatCount(info.rows)} ${plural(info.rows, 'row')} in ${groups}.`]
-  if (info.columnGroupsShown < info.columnGroups) parts.push(`Only the first ${formatCount(info.columnGroupsShown)} column groups are shown; each Total still counts every row.`)
-  if (info.rowGroupsShown < info.rowGroups) parts.push(`Only the first ${formatCount(info.rowGroupsShown)} row groups are shown.`)
+  const parts = [`Pivot of ${info.sourceLabel}${info.viewed ? ' (as sorted and filtered)' : ''}: ${formatCount(info.rows)} ${plural(info.rows, 'row')} in ${groups}.`]
   if (info.approximate) parts.push('Long values were grouped by the part these results keep.')
   return parts.join(' ')
 }

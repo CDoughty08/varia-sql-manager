@@ -689,8 +689,10 @@ function buildPivot(source, { rows: rowColumns, column: groupColumn, values }) {
     return { keys, first, index: new Map(keys.map((key, at) => [key, at])) }
   }
   const rowGroups = groupsOf(rowColumns)
+  const columnLimit = Math.min(256, Math.floor((4096 - rowColumns.length) / values.length) - 1)
   if (rowColumns.length === 0 && rowGroups.keys.length === 0) { rowGroups.keys.push('[]'); rowGroups.index.set('[]', 0) }
   const columnGroups = groupColumn === undefined ? { keys: [], first: new Map(), index: new Map() } : groupsOf([groupColumn])
+  if (columnGroups.keys.length > columnLimit) return { error: `The column group has ${columnGroups.keys.length.toLocaleString('en-US')} distinct values, and a pivot can have at most ${columnLimit} column groups. Choose a column with fewer values, or move it to Rows.` }
   const width = columnGroups.keys.length + 1
   const cells = Array.from({ length: rowGroups.keys.length * width }, () => values.map(() => []))
   for (let row = 0; row < rows; row++) {
@@ -723,8 +725,7 @@ function buildPivot(source, { rows: rowColumns, column: groupColumn, values }) {
     return [...rowColumns.map(at => source.rowAt(first)[at]), ...cellsOf.flat()]
   })
   return {
-    set: { columns, rows: out, kind: 'pivot' }, rows, rowGroups: rowGroups.keys.length, rowGroupsShown: rowGroups.keys.length,
-    columnGroups: columnGroups.keys.length, columnGroupsShown: columnGroups.keys.length, approximate: false
+    set: { columns, rows: out, kind: 'pivot' }, rows, rowGroups: rowGroups.keys.length, columnGroups: columnGroups.keys.length, approximate: false
   }
 }
 // results.search: the cells of a result (or a view's positions) whose display text contains the text, ignoring case;
@@ -1443,7 +1444,9 @@ async function workbench(id, method, params, credit) {
       if (!source) return
       const result = stored.get(params.resultId)
       if (!result.complete) return fail(id, 'RESULT_OPEN', 'Pivot this result after it finishes loading.')
-      const { set, ...counts } = buildPivot(source, params)
+      const built = buildPivot(source, params)
+      if (built.error) return fail(id, 'INVALID_PARAMS', built.error)
+      const { set, ...counts } = built
       return respond(id, { descriptor: describe(storeResult(set, result.index)), ...counts })
     }
     case 'results.search': {

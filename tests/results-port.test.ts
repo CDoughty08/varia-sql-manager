@@ -511,7 +511,7 @@ describe('ResultsPortHost', () => {
       resultId, index: 1, batchNumber: 1, iteration: 1, kind: 'pivot', columns: Array.from({ length: columns }, () => ({ name: 'c', dataType: 'bigint', wire: 'text', nullable: true })),
       rowsRead: 2, rowsStored: 2, rowsAvailable: 2, bytesStored: 10, truncatedCells: 0, state: 'complete', incomplete: false
     })
-    const answer = (resultId: number) => ({ descriptor: pivotDescriptor(resultId), rows: 5, rowGroups: 2, rowGroupsShown: 2, columnGroups: 0, columnGroupsShown: 0, approximate: false })
+    const answer = (resultId: number) => ({ descriptor: pivotDescriptor(resultId), rows: 5, rowGroups: 2, columnGroups: 0, approximate: false })
     const ask = { generation: 1, resultId: 7, rows: [0], values: [{ aggregate: 'count' }] }
     port().send({ t: 'pivot', rid: 1, ...ask, column: 1, viewId: 3, values: [{ aggregate: 'sum', column: 2 }] })
     port().send({ t: 'pivot', rid: 2, ...ask, resultId: 8 })
@@ -535,7 +535,7 @@ describe('ResultsPortHost', () => {
     port().send({ t: 'pivot', rid: 12, ...ask })
     pivots[2].resolve({ ...answer(32), descriptor: { ...pivotDescriptor(32), kind: 'rows' } })
     port().send({ t: 'pivot', rid: 13, ...ask })
-    pivots[3].resolve({ ...answer(33), rowGroupsShown: 3 })
+    pivots[3].resolve({ ...answer(33), rowGroups: 3 })
     await settle()
     expect(codes(port()).slice(-3)).toEqual([[11, 'BACKEND_ERROR'], [12, 'BACKEND_ERROR'], [13, 'BACKEND_ERROR']])
     for (const resultId of [31, 32, 33]) {
