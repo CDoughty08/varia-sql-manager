@@ -4,6 +4,10 @@ import { displayText } from '../../../shared/explorer/refs.ts'
 
 /** The card's room: as wide and tall as this where the window allows, and this far from the pane and the window's edges. */
 export const cardWidth = 880, cardHeight = 480, gap = 8
+
+/** An object's name as Peek's header and a promoted tab show it: its schema and name, a child's (an index, a trigger) below its parent's. */
+export const peekObjectName = (object: { readonly schema?: string; readonly name?: string; readonly parent?: { readonly schema?: string; readonly name?: string } }): string =>
+  displayText([object.parent?.schema, object.parent?.name, object.schema, object.name].filter(part => part !== undefined).join('.'))
 const numbers = new Intl.NumberFormat('en-US')
 const megabytes = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const words = (code: string) => code.charAt(0) + code.slice(1).toLowerCase().replaceAll('_', ' ')

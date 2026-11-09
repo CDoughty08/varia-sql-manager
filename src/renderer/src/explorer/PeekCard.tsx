@@ -12,7 +12,7 @@ import ResultsStack from '../grid/ResultsStack'
 import Icon from '../Icon'
 import { useKeybindingsRevision } from '../core/useCommand'
 import ExplorerIcon from './ExplorerIcon'
-import { formatPeekValue, placePeek } from './peek-format'
+import { formatPeekValue, peekObjectName, placePeek } from './peek-format'
 import { peekMessages, type OpenPeek, type PeekDependencies, type PeekMembers, type PeekPart, type PeekRows, type PeekView } from './PeekService'
 
 /** Lines of a definition that are coloured; longer text shows the rest plain, so a huge module never stalls the card. */
@@ -232,12 +232,11 @@ function panel(open: OpenPeek): ReactNode {
 
 /** An Object Explorer node's display name for Peek's header: its schema and name, a child's (an index, a trigger) below its parent's. */
 export function peekName(open: OpenPeek): string {
-  const object = open.node.ref.type === 'object' ? open.node.ref.object : undefined
-  return object ? displayText([object.parent?.schema, object.parent?.name, object.schema, object.name].filter(part => part !== undefined).join('.')) : ''
+  return open.node.ref.type === 'object' ? peekObjectName(open.node.ref.object) : ''
 }
 
 /**
- * Peek's body, the card's and a promoted tab's alike: the tabs (Definition, Columns or Parameters, Dependencies, Top rows) on
+ * Peek's body, the card's and a promoted tab's alike: the kind's tabs (Definition, Columns or Parameters, Dependencies, Top rows, its lists) on
  * the left, with Copy and Script to New Query over the definition, and the properties on the right. `beforeScript` runs before
  * Script to New Query (the card closes itself first). `idPrefix` keeps each body's tab ids its own.
  */

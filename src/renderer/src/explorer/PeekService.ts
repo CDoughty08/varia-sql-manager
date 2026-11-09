@@ -492,8 +492,8 @@ export class PeekView extends SnapshotStore<PeekSnapshot> {
       case 'dependencies': return peekHas(open.kind, 'dependencies') ? this.loadPart(open, 'dependencies', requestId => this.reads.api.explorerPeekDependencies({ connectionId, requestId, target }),
         value => ({ uses: value.uses, usesTruncated: !!value.usesTruncated, usedBy: value.usedBy, usedByTruncated: !!value.usedByTruncated })) : undefined
       case 'rows': return peekHas(open.kind, 'rows') ? this.loadRows(open) : undefined
-      // The kind's lists came with the facts.
-      default: return undefined
+      // The kind's lists come with the facts: when those failed, choosing the tab (or its Retry) reads the object again.
+      default: return open.facts.status === 'error' ? this.load(open.node, open.kind, open.source, false, { back: open.back, tab: open.tab }) : undefined
     }
   }
 

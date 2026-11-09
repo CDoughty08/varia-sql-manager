@@ -721,19 +721,30 @@ describe('Peek kinds beyond modules', () => {
     // A tab the kind lacks is not chosen.
     service.selectTab('dependencies')
     expect(service.getSnapshot().open?.tab).toBe('indexColumns')
+    // A list's Retry after the facts failed reads the object again, on the same tab.
+    service.refresh()
+    expect(api.explorerPeek).toHaveBeenCalledTimes(2)
+    peeks[1]!(ok({ facts: {}, elapsedMs: 1, error: { code: 'TIMEOUT', message: 'Too slow.', retryable: true } }))
+    await flush()
+    expect(service.getSnapshot().open).toMatchObject({ tab: 'indexColumns', facts: { status: 'error' } })
+    service.selectTab('indexColumns')
+    expect(api.explorerPeek).toHaveBeenCalledTimes(3)
+    peeks[2]!(ok({ facts: { indexType: 'Nonclustered' }, lists: { indexColumns: { rows: [] } }, elapsedMs: 1 }))
+    await flush()
+    expect(service.getSnapshot().open).toMatchObject({ tab: 'indexColumns', facts: { status: 'ready' } })
     // The same index name below another table is another object: it reads and scripts again.
     service.peek(index('Orders'), 'keyboard')
-    expect(api.explorerPeek).toHaveBeenCalledTimes(1)
+    expect(api.explorerPeek).toHaveBeenCalledTimes(3)
     service.peek(index('Returns'), 'keyboard')
-    expect(api.explorerPeek).toHaveBeenCalledTimes(2)
-    expect(api.scriptObjects).toHaveBeenCalledTimes(2)
+    expect(api.explorerPeek).toHaveBeenCalledTimes(4)
     // An index of a table type: Script As cannot write it, so it is not asked, and the card says there is no definition.
     const typed: ExplorerMenuNode = { id: 5, connectionId, kind: 'index', subtype: 'nonclustered', label: 'IX', lost: false,
       ref: { type: 'object', object: { kind: 'index', database: 'Sales', parent: { kind: 'tableType', schema: 'dbo', name: 'Lines' }, name: 'IX' } } }
+    const scripts = api.scriptObjects.mock.calls.length
     service.peek(typed, 'keyboard')
-    expect(api.explorerPeek).toHaveBeenCalledTimes(3)
-    expect(api.scriptObjects).toHaveBeenCalledTimes(2)
-    peeks[2]!(ok({ facts: { indexType: 'Nonclustered' }, elapsedMs: 1 }))
+    expect(api.explorerPeek).toHaveBeenCalledTimes(5)
+    expect(api.scriptObjects).toHaveBeenCalledTimes(scripts)
+    peeks[4]!(ok({ facts: { indexType: 'Nonclustered' }, elapsedMs: 1 }))
     await flush()
     expect(service.getSnapshot().open?.definition).toEqual({ status: 'ready', value: {} })
   })
