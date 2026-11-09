@@ -208,6 +208,22 @@ describe('editor group tab shelves', () => {
     expect(view.shelves().map(shelf => shelf.rows)).toEqual([1, 1])
   })
 
+  it.each([false, true])('keeps the inactive shelf\'s focused tab visible when its stack shrinks to one row (pinned: %s)', pinned => {
+    const view = fixture(12, 12), active = pinned ? 'q1' : 'p1', focused = pinned ? 'p12' : 'q12'
+    view.activate(active)
+    view.layout.setRows(pinned, 4)
+    const node = view.nodes.get(focused)!
+    node.focus({ preventScroll: true })
+    for (const rows of [3, 2, 1]) {
+      view.layout.setRows(pinned, rows)
+      expect(view.shelf(pinned).rows).toBe(rows)
+      expect(document.activeElement).toBe(node)
+      expect(view.group.activePanel.id).toBe(active)
+    }
+    expect(parseFloat(node.style.left)).toBeGreaterThanOrEqual(0)
+    expect(parseFloat(node.style.left) + parseFloat(node.style.width)).toBeLessThanOrEqual(view.size.width)
+  })
+
   it.each([false, true])('reveals a partially clipped tab after its pointer press ends (already active: %s)', async alreadyActive => {
     const view = fixture(0, 32), source = view.nodes.get('q3')!
     if (alreadyActive) {

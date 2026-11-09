@@ -12,7 +12,7 @@ import { useCommandEnabled } from '../core/useCommand'
 import type { GestureEvent } from '../core/gestures'
 import ExplorerIcon, { type BadgeName } from './ExplorerIcon'
 import type { RowStatus } from './ExplorerStatusService'
-import { RowKind, type TreeNode } from './tree-model'
+import { RowKind, type TreeAction, type TreeNode } from './tree-model'
 
 const numbers = new Intl.NumberFormat('en-US')
 
@@ -20,6 +20,11 @@ const numbers = new Intl.NumberFormat('en-US')
 /** A row's click, for Open Peek as Tab's gesture: not on the twistie, and not a double-click's second click (Ctrl+double-click opens one tab). */
 export function rowClick(actions: Pick<RowActions, 'click'>, rowId: number, event: GestureEvent & { readonly detail: number; readonly target: EventTarget | null }): void {
   if (event.detail <= 1 && !(event.target as Element | null)?.closest?.('.oe-twistie')) actions.click(rowId, event)
+}
+
+/** Recovery buttons expose the synthetic row's Enter action while the tree keeps its single keyboard stop. */
+export function recoveryLabel(action: TreeAction): string | undefined {
+  return action.type === 'retry' ? 'Retry' : action.type === 'continue' ? 'Continue loading' : action.type === 'filter' ? 'Filter…' : undefined
 }
 
 export interface RowActions {
@@ -69,6 +74,7 @@ export interface RowProps {
   readonly renaming?: boolean
   /** Live status (ExplorerStatusService): chips at the row's end; for a database, its state in place of the listing's. */
   readonly status?: RowStatus
+  readonly recovery?: { readonly label: string; run(): void }
 }
 
 const statusWords = { disabled: ', disabled', unavailable: ', unavailable', noAccess: ', no access', readOnly: '' } as const
@@ -250,7 +256,7 @@ export function PinnedServerRow({ node, edge, current, active, color, environmen
 }
 
 /** One windowed row of the tree: a node, or a loading, error, progress, stopped, capped, or paused row. */
-function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed, text, selected, draggable, active, color, environment, actions, menuTarget, renaming, status }: RowProps) {
+function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed, text, selected, draggable, active, color, environment, actions, menuTarget, renaming, status, recovery }: RowProps) {
   const style = { transform: `translateY(${top}px)` }
   const indent = <span className="oe-indent" style={{ width: (level - 1) * explorerLimits.indent }} />
   const select = (event: MouseEvent) => { if (!(event.target as Element).closest('.oe-twistie')) actions.select(rowId) }
@@ -262,6 +268,8 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
     return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId} className={'explorer-row synthetic' + tone} aria-level={level} aria-selected={selected}
       aria-disabled={inert || undefined} aria-label={text} title={text} style={style} onMouseDown={select}>
       {indent}<span className="oe-twistie" /><span className="oe-icon" aria-hidden="true"><Icon name={icon} /></span><bdi className="oe-text">{text}</bdi>
+      {!inert && recovery && <button type="button" className="oe-recovery-action" tabIndex={-1} title={`${recovery.label} (Enter)`}
+        onMouseDown={event => { event.preventDefault(); event.stopPropagation(); actions.select(rowId) }} onClick={() => { actions.select(rowId); recovery.run() }}>{recovery.label}</button>}
     </div>
   }
   // A database the live status covers shows its state from the chips; any other row keeps the list's.

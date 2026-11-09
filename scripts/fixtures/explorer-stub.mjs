@@ -113,7 +113,7 @@ export function installExplorerStub({ ipcMain }, { statics }) {
   const indexStatus = definitions => ({ state: 'ready', databases: 2, indexed: 2, objects: searchObjects.length, modules: definitions ? 1 : 0, cut: 0, skipped: [], definitions, builtAt: '2026-11-03T12:00:00Z' })
   // Fuzzy Match stands in as a subsequence: a name holding the text's letters in order, but not the text, is approximate.
   const approximately = (name, text) => { let at = 0; for (const c of name.toLowerCase()) if (c === text[at]?.toLowerCase()) at++; return at === text.length }
-  function search({ text, caseSensitive, wholeWord, regex, in: scope = 'all', kinds, match: mode }) {
+  function search({ text, caseSensitive, wholeWord, regex, in: scope = 'all', kinds, match: mode, database }) {
     let pattern
     try { pattern = new RegExp(regex ? text : text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), caseSensitive ? 'gm' : 'gim') }
     catch { return { hits: [], total: 0, partial: false, elapsedMs: 0, index: indexStatus(true), problem: 'The regular expression is not valid.' } }
@@ -124,7 +124,7 @@ export function installExplorerStub({ ipcMain }, { statics }) {
       }
     }
     const hits = searchObjects.flatMap(({ definition, ...item }) => {
-      if ((kinds && !kinds.includes(item.object.kind)) || stub.searchHidden.includes(item.object.name)) return []
+      if ((database !== undefined && item.object.database !== database) || (kinds && !kinds.includes(item.object.kind)) || stub.searchHidden.includes(item.object.name)) return []
       const name = scope !== 'definitions' ? find(item.object.name) : undefined
       const body = scope !== 'names' && definition ? find(definition) : undefined
       if (!name && !body && mode === 'fuzzy' && !regex && scope !== 'definitions' && approximately(item.object.name, text))

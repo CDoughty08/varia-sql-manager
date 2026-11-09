@@ -25,6 +25,7 @@ export type GestureKind = 'modifier' | 'pointerCommand' | 'fixed'
 export const gestureScopes = {
   global: 'Global',
   resultsGrid: 'Results Grid',
+  messages: 'Query Messages',
   tableDesigner: 'Table Designer',
   objectExplorer: 'Object Explorer',
   panels: 'Panels and Editor Tabs',
@@ -91,7 +92,7 @@ export const gestureCatalog = {
   'grid.fitColumn': {
     title: 'Fit Column', description: 'Fits a column to its widest loaded value.',
     kind: 'fixed', scope: 'resultsGrid', action: 'doubleClick', target: 'a column border', modifiers: [],
-    locked: 'Double-clicking a column border fits it, as in SSMS.'
+    locked: 'Double-clicking a column border fits it, as in SSMS; Fit Column in the grid menu also works from the keyboard.', keyboard: ['output.fitColumn']
   },
   'global.wheelZoom': {
     title: 'Zoom', description: 'Zooms the window, except over a document tab shelf where Control+wheel changes its row count.',
@@ -101,7 +102,7 @@ export const gestureCatalog = {
   'connections.connect': {
     title: 'Connect to Saved Connection', description: 'Connects to the saved connection in the Connect dialog.',
     kind: 'fixed', scope: 'connectionDialog', action: 'doubleClick', target: 'a saved connection', modifiers: [],
-    locked: 'Double-clicking submits the Connect dialog; the Connect button also works from the keyboard.'
+    locked: 'Double-clicking submits the Connect dialog; Enter on a focused saved connection also connects, while Space selects it for editing.'
   },
   'explorer.peekHover': {
     title: 'Peek on Hover', description: 'Peeks the object (a table, procedure, index, login and so on) while the pointer rests on its row.',
@@ -155,6 +156,16 @@ export const gestureCatalog = {
     title: 'Rename Tab', description: 'Opens the rename box on a query tab.',
     kind: 'pointerCommand', scope: 'documentTabs', action: 'doubleClick', target: 'a query tab', modifiers: [],
     locked: fixedNotYet, keyboard: ['document.rename']
+  },
+  'documentTabs.newQuery': {
+    title: 'New Query in Group', description: 'Creates a query in the editor group whose empty tab strip is double-clicked.',
+    kind: 'fixed', scope: 'documentTabs', place: 'emptyTabStrip', action: 'doubleClick', target: 'empty query tab strip space', modifiers: [], keyboard: ['file.new'],
+    locked: 'Double-clicking empty tab strip space creates a query; the New Query button and command provide the keyboard path.'
+  },
+  'messages.revealError': {
+    title: 'Go to Error Line', description: 'Reveals an SQL error\'s line in the query that produced it, while its text is unchanged.',
+    kind: 'fixed', scope: 'messages', action: 'doubleClick', target: 'a query error', modifiers: [],
+    locked: 'Double-clicking an error reveals its source; its Go to line button also works from the keyboard.'
   }
 } as const satisfies Record<string, GestureDescriptor>
 

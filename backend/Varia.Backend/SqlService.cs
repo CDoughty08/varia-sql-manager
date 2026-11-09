@@ -958,6 +958,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         (int Batch, int Iteration)? firstError = null;
         // Errors InfoMessage delivered, so the exception that may carry them again does not repeat them in Messages.
         var delivered = new Queue<(int Number, byte State, int Line, string Message)>();
+        int? SourceLine(SqlError item) => batchNumber > 0 && batchNumber <= batches.Count && batches[batchNumber - 1].SourceLinesSafe
+            ? QueryMessages.ScriptLine(args.StartLine, batches[batchNumber - 1].StartLine, item.LineNumber, item.Procedure) : null;
         // SSMS's two-line form: the line is absolute within the script (or the selection), or the procedure's own.
         string Describe(SqlError item)
         {
@@ -980,12 +982,12 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                     delivered.Enqueue((error.Number, error.State, error.LineNumber, error.Message));
                     if (delivered.Count > 20) delivered.Dequeue();
                 }
-                Raise(Describe(error));
+                Raise(Describe(error), SourceLine(error));
             }
         };
-        void Raise(string text)
+        void Raise(string text, int? line = null)
         {
-            messages.Add(text, MessageKind.Error);
+            messages.Add(text, MessageKind.Error, line);
             lock (errors)
             {
                 raised++;
@@ -1009,7 +1011,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         {
             foreach (SqlError item in error.Errors)
                 if (item.Class <= 10) { if (!IsContextChange(item)) messages.Add(item.Message, InformationalKind(item)); }
-                else if (!Delivered(item)) Raise(Describe(item));
+                else if (!Delivered(item)) Raise(Describe(item), SourceLine(item));
             if (!error.Errors.Cast<SqlError>().Any(item => item.Class > 10)) Raise(error.Message);
         }
         // The error that stopped execution comes first, then those SQL Server reported while the script continued.
@@ -1282,7 +1284,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             // in order, except errors InfoMessage already reported.
             foreach (SqlError item in error.Errors)
                 if (item.Class <= 10) { if (!IsContextChange(item)) messages.Add(item.Message, InformationalKind(item)); }
-                else if (status == "failed" && !Delivered(item)) messages.Add(Describe(item), MessageKind.Error);
+                else if (status == "failed" && !Delivered(item)) messages.Add(Describe(item), MessageKind.Error, SourceLine(item));
             var details = error.Errors.Cast<SqlError>().Where(item => item.Class > 10).Select(Describe).ToList();
             if (details.Count == 0)
             {
@@ -1722,20 +1724,29 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             var set = store.Open(left.Budget, right.Index, right.BatchNumber, right.Iteration, "diff", UnifiedDiff.Columns(right, model), UnifiedDiff.Wires(right, model),
                 lengths: UnifiedDiff.Lengths(right, model))
                 ?? throw new RequestException("TOO_LARGE", "There is not enough result memory to show the differences. Close other results and try again.");
-            try { await Task.Run(() => UnifiedDiff.Write(set, left, leftPages, right, rightPages, model, args.Context, token), token); }
+            void Release()
+            {
+                if (store.Release([set.ResultId]) > 0) ReportMemory();
+            }
+            try
+            {
+                await Task.Run(() => UnifiedDiff.Write(set, left, leftPages, right, rightPages, model, args.Context, token), token);
+                var (same, changed, added, removed, soft) = model.Counts();
+                var paired = model.Pairs;
+                string[] OneSided(IReadOnlyList<ResultColumn> columns, Func<(int Left, int Right), int> side) =>
+                    [.. columns.Select((column, index) => (column, index)).Where(item => !ResultTextWriter.Hidden(item.column) && !paired.Any(pair => side(pair) == item.index))
+                        .Take(MaxDiffColumnNames).Select(item => item.column.Name)];
+                var answer = new ResultsDiffResult(set.Describe(), model.KeyPair < 0 ? null : right.Columns[paired[model.KeyPair].Right].Name, same, changed, added, removed, soft,
+                    model.Approximate, OneSided(left.Columns, pair => pair.Left), OneSided(right.Columns, pair => pair.Right));
+                // Main owns the diff only once it has the answer: one not sent goes at once.
+                if (context is not null) context.Unsent = context.Dropped = Release;
+                return answer;
+            }
             catch
             {
-                store.Release(set.ResultId);
+                Release();
                 throw;
             }
-            if (context is not null) context.Unsent = context.Dropped = () => store.Release([set.ResultId]);
-            var (same, changed, added, removed, soft) = model.Counts();
-            var paired = model.Pairs;
-            string[] OneSided(IReadOnlyList<ResultColumn> columns, Func<(int Left, int Right), int> side) =>
-                [.. columns.Select((column, index) => (column, index)).Where(item => !ResultTextWriter.Hidden(item.column) && !paired.Any(pair => side(pair) == item.index))
-                    .Take(MaxDiffColumnNames).Select(item => item.column.Name)];
-            return new ResultsDiffResult(set.Describe(), model.KeyPair < 0 ? null : right.Columns[paired[model.KeyPair].Right].Name, same, changed, added, removed, soft,
-                model.Approximate, OneSided(left.Columns, pair => pair.Left), OneSided(right.Columns, pair => pair.Right));
         }
         finally { store.Return(left.Budget, working + cellBytes); }
     }

@@ -10,6 +10,10 @@ export interface Disposable { dispose(): void }
 export interface CommandContext {
   /** The tab a tab-strip button acts on. */
   readonly tabId?: string
+  /** New Query's explicit editor group, from that group's header or empty strip. */
+  readonly editorGroup?: string
+  /** A Messages entry and its execution, captured before another run can replace it. */
+  readonly message?: { readonly index: number; readonly queryId: string; readonly line: number }
   /** A File › Recent Files item: the opaque id main gave its path, which is all main accepts to open it. */
   readonly recentFile?: string
   /** The choice of a View › Theme item. */

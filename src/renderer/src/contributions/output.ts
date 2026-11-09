@@ -3,7 +3,8 @@ import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { resolveBlocks } from '../grid/selection'
 import { outputOf, type MenuTargetService, type OutputTarget } from '../menus/targets'
-import { windows } from '../core/windows'
+import { requestFrame, windows } from '../core/windows'
+import { focusHeld } from '../core/modal'
 
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 
@@ -26,7 +27,7 @@ const baseName = (name: string) => name.replace(/\.[^.]*$/, '') || 'Results'
  * focus (Ctrl+C, Ctrl+Shift+C, Ctrl+S, Edit › Copy); Save Results As from the palette acts on the grid that last had
  * focus. Open Value opens the XML, JSON or plan cell a click or Enter names, else the focused grid's active cell.
  */
-export function outputContribution({ commands, results, menuTargets, documents, settings, resultsSearch }: Pick<Workbench, 'commands' | 'results' | 'menuTargets' | 'documents' | 'settings' | 'resultsSearch'>, api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
+export function outputContribution({ commands, results, menuTargets, documents, settings, resultsSearch, panes }: Pick<Workbench, 'commands' | 'results' | 'menuTargets' | 'documents' | 'settings' | 'resultsSearch' | 'panes'>, api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
   const showWhitespace = (mode: 'spaces' | 'all') =>
     settings.choose('queryResults.grid.whitespace', settings.getSnapshot().values['queryResults.grid.whitespace'] === mode ? 'none' : mode)
   const targetOf = (args?: CommandArgs) => outputOf(args) ?? (args?.target ? undefined : focusedOutput(menuTargets))
@@ -35,7 +36,8 @@ export function outputContribution({ commands, results, menuTargets, documents, 
     if (target?.view !== 'grid') return undefined
     const set = results.getSnapshot()[target.tabId]?.sets[target.resultIndex]
     const state = set?.handle.getSnapshot()
-    return set && state && state.state !== 'lost' && state.state !== 'released' ? { set, rows: state.rowsAvailable, columns: set.descriptor.columns.length } : undefined
+    const current = !target.result || (set?.descriptor.generation === target.result.generation && set.descriptor.resultId === target.result.resultId)
+    return set && current && state && state.state !== 'lost' && state.state !== 'released' ? { set, rows: state.rowsAvailable, columns: set.descriptor.columns.length } : undefined
   }
   const valueCell = (args?: CommandArgs) => {
     let cell: (NonNullable<CommandArgs['cell']> & { tabId: string }) | undefined
@@ -55,11 +57,13 @@ export function outputContribution({ commands, results, menuTargets, documents, 
   }
   const showSortText = (mode: 'chars' | 'bytes') =>
     settings.choose('queryResults.grid.sortText', settings.getSnapshot().values['queryResults.grid.sortText'] === mode ? 'value' : mode)
-  /** The column a sort command acts on: the menu's (a right-press on a header selects its column), else the active cell's. */
+  /** The column captured by the menu, else the focused grid's active cell. */
   const sortTarget = (args?: CommandArgs) => {
     const target = targetOf(args), shown = grid(target)
     const active = shown && results.selection(target!.tabId, target!.resultIndex)?.active
-    return shown && active && active.column < shown.columns ? { tabId: target!.tabId, index: target!.resultIndex, column: active.column } : undefined
+    const column = target?.column ?? active?.column
+    return shown && column !== undefined && Number.isInteger(column) && column >= 0 && column < shown.columns && shown.set.descriptor.columns[column].role !== 'tone'
+      ? { tabId: target!.tabId, index: target!.resultIndex, column } : undefined
   }
   const sortCommand = (direction: 'ascending' | 'descending', add: boolean) => ({
     when: (args?: CommandArgs) => !!sortTarget(args),
@@ -67,6 +71,12 @@ export function outputContribution({ commands, results, menuTargets, documents, 
   })
   /** The tab search in results acts on: the focused output's, else the active query's. */
   const searchTab = (args?: CommandArgs) => targetOf(args)?.tabId ?? documents.getSnapshot().activeId
+  const closeTab = (args?: CommandArgs) => {
+    const target = outputOf(args) ?? (args?.tabId || args?.target ? undefined : focusedOutput(menuTargets))
+    if (args?.target && !target) return undefined
+    if (target?.view === 'grid' && !grid(target)) return undefined
+    return target?.tabId ?? args?.tabId ?? documents.getSnapshot().activeId
+  }
   /** F3 in a grid moves its active cell to the match as well; from the search box or the editor it only scrolls. */
   const fromGrid = (args?: CommandArgs) => targetOf(args)?.view === 'grid'
   const registrations = [
@@ -108,6 +118,17 @@ export function outputContribution({ commands, results, menuTargets, documents, 
         if (failure) commands.reportError(failure)
       }
     }),
+    commands.register('output.copyColumnName', {
+      when: args => !!sortTarget(args),
+      run: async args => {
+        const at = sortTarget(args)
+        if (at) unwrap(await api.writeClipboardText(results.getSnapshot()[at.tabId].sets[at.index].descriptor.columns[at.column].name))
+      }
+    }),
+    commands.register('output.fitColumn', {
+      when: args => { const at = sortTarget(args); return !!at && results.canFitColumn(at.tabId, at.index, at.column) },
+      run: args => { const at = sortTarget(args); if (at) results.fitColumn(at.tabId, at.index, at.column) }
+    }),
     commands.register('output.saveResultsAs', {
       run: async args => {
         const target = targetOf(args), tabId = target?.tabId ?? documents.getSnapshot().activeId
@@ -131,15 +152,34 @@ export function outputContribution({ commands, results, menuTargets, documents, 
       }
     }),
     commands.register('output.closeResults', {
-      run: () => {
-        const tabId = documents.getSnapshot().activeId
+      when: args => { const tabId = closeTab(args); return !!tabId && !!results.context.getSnapshot()[tabId] && results.getSnapshot()[tabId]?.status !== 'running' },
+      run: args => {
+        const tabId = closeTab(args)
         if (!tabId) return
-        // Closing unmounts the grids and Messages, which would drop focus held in them to <body>, and selects the Results
-        // tab, which stays (saying the results were closed): focus in the view or on its tabs moves there first. Focus
-        // anywhere else stays put.
-        const view = typeof document === 'undefined' ? null : windows.activeElement()?.closest('.output-view, .output-toolbar [role="tablist"]')
-        view?.closest('.output-panel')?.querySelector<HTMLElement>('[role="tab"][data-output-tab="results"]')?.focus({ preventScroll: true })
+        // The grid and its tools unmount. Leave focus on the surviving Results tab in their own window; closing another
+        // query's contextual results leaves focus in the current query alone.
+        const active = windows.activeElement(), panel = active?.closest('.output-panel')
+        const ownPanel = panel?.getAttribute('data-tab-id') === tabId ? panel : undefined
+        const before = ownPanel?.querySelector<HTMLElement>('[role="tab"][data-output-tab="results"]')
+        before?.focus({ preventScroll: true })
         results.closeResults(tabId)
+        if (ownPanel && ownPanel.getAttribute('data-output-panel') !== 'results') {
+          const doc = ownPanel.ownerDocument, queryId = results.getSnapshot()[tabId]?.queryId
+          let moved = false
+          const input = () => { moved = true }, events = ['pointerdown', 'focusin'] as const
+          for (const event of events) doc.addEventListener(event, input, true)
+          panes.select('results')
+          // Messages' copy of the Results tab leaves when its panel switches. Focus the surviving tab after that render,
+          // provided the same output still owns focus; a later editor, menu, dialog or execution takes precedence.
+          requestFrame(() => {
+            for (const event of events) doc.removeEventListener(event, input, true)
+            const focused = doc.activeElement, run = results.getSnapshot()[tabId]
+            if (moved || focusHeld() || windows.activeDocument() !== doc || !run || run.queryId !== queryId || run.status !== 'closed'
+              || focused && focused !== doc.body && focused !== before && focused !== active) return
+            const target = doc.querySelector<HTMLElement>('[data-output-panel="results"] [data-output-tab="results"]')
+            if (target?.closest('[data-tab-id]')?.getAttribute('data-tab-id') === tabId && target.checkVisibility()) target.focus({ preventScroll: true })
+          })
+        }
       }
     }),
     commands.register('output.selectAll', {

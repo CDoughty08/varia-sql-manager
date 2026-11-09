@@ -444,6 +444,34 @@ function fakeTimers() {
   return { timers, pending, fire }
 }
 describe('menu state publisher', () => {
+  it('publishes closed-query availability even when the computed context keys stay unchanged', async () => {
+    const { commands, context, documents } = fixture()
+    const inactive = documents.create('a.sql', '', 'master')
+    documents.create('b.sql', '', 'master')
+    const active = documents.create('c.sql', '', 'master')
+    const before = context.getState(), availability: boolean[] = []
+    const unsubscribe = context.subscribe(() => availability.push(commands.isEnabled('file.reopenClosed')))
+    const { timers, pending, fire } = fakeTimers(), send = vi.fn()
+    const publisher = new MenuStatePublisher({ commands, context, send, timers })
+    cleanups.push(() => { unsubscribe(); publisher.dispose() })
+    publisher.start()
+    expect(send.mock.lastCall![0].disabled).toContain('file.reopenClosed')
+    // Three clean query tabs become two, and the same clean query stays active: none of the computed keys changes.
+    await documents.close(inactive.id)
+    expect(documents.active?.id).toBe(active.id)
+    expect(context.getState()).toEqual(before)
+    expect(availability.at(-1)).toBe(true)
+    expect(pending.size).toBe(1)
+    fire()
+    expect(send.mock.lastCall![0].disabled).not.toContain('file.reopenClosed')
+    await commands.execute('file.reopenClosed', undefined, 'keybinding')
+    expect(context.getState()).toEqual(before)
+    expect(availability.at(-1)).toBe(false)
+    expect(pending.size).toBe(1)
+    fire()
+    expect(send.mock.lastCall![0].disabled).toContain('file.reopenClosed')
+    expect(send).toHaveBeenCalledTimes(3)
+  })
   it('sends at once, then coalesces changes and sends only differences', () => {
     const { commands, context, documents, connections } = fixture()
     const { timers, pending, fire } = fakeTimers(), send = vi.fn()

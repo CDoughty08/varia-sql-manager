@@ -8,7 +8,7 @@ matches; a gesture matches when all of its modifiers are held. "Modifier" gestur
 pointing; "Command" gestures run a command that the keyboard also reaches; "Fixed" gestures belong to the platform,
 Chromium, or a library and cannot be remapped. "Choices" are the modifiers the Shortcuts page will offer.
 
-## Gestures (17)
+## Gestures (19)
 
 ### Global
 
@@ -24,7 +24,13 @@ Chromium, or a library and cannot be remapped. "Choices" are the modifiers the S
 | Extend Selection (also Table Designer) | `grid.extendSelection` | Extends the selection from the active cell to the pressed one. | Fixed | Shift+Click a cell or header | Shift+Click a cell or header | ⇧ Click a cell or header | Locked: Shift extends a selection everywhere, as in SSMS and the operating system. | — |
 | Context Menu Click (also Table Designer) | `grid.secondaryClick` | Control+click is a right-click on macOS: it opens the context menu and keeps a selected block. | Fixed | — | — | ⌃ Click a cell or header | Locked: macOS treats Control+click as a right-click. | — |
 | Add Sort Column | `grid.addSortKey` | Adds the column to the grid's sort after the columns it already sorts by, or changes its direction there. | Modifier | Shift+Click a column header's sort button | Shift+Click a column header's sort button | ⇧ Click a column header's sort button | Choose: Shift / ⇧, Ctrl / ⌘, Off | Then Sort Ascending (`output.thenSortAscending`), Then Sort Descending (`output.thenSortDescending`) |
-| Fit Column | `grid.fitColumn` | Fits a column to its widest loaded value. | Fixed | Double-click a column border | Double-click a column border | Double-click a column border | Locked: Double-clicking a column border fits it, as in SSMS. | — |
+| Fit Column | `grid.fitColumn` | Fits a column to its widest loaded value. | Fixed | Double-click a column border | Double-click a column border | Double-click a column border | Locked: Double-clicking a column border fits it, as in SSMS; Fit Column in the grid menu also works from the keyboard. | Fit Column (`output.fitColumn`) |
+
+### Query Messages
+
+| Gesture | Id | What it does | Kind | Windows | Linux | macOS | Choices or lock | Keyboard |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Go to Error Line | `messages.revealError` | Reveals an SQL error's line in the query that produced it, while its text is unchanged. | Fixed | Double-click a query error | Double-click a query error | Double-click a query error | Locked: Double-clicking an error reveals its source; its Go to line button also works from the keyboard. | — |
 
 ### Object Explorer
 
@@ -55,9 +61,10 @@ Chromium, or a library and cannot be remapped. "Choices" are the modifiers the S
 | Scroll Tabs | `documentTabs.scroll` | Scrolls one-row shelves horizontally, or an expanded tab header vertically when its rows extend beyond the editor group. | Fixed | Wheel a tab shelf | Wheel a tab shelf | Wheel a tab shelf | Locked: Wheel input scrolls tabs horizontally or vertically through an expanded header. Arrow keys, Home and End on a focused tab also reach every tab. | — |
 | Change Tab Rows | `documentTabs.rows` | Scrolling down adds rows to the pinned or unpinned shelf under the pointer, and scrolling up removes rows from that shelf alone. | Fixed | Ctrl+Wheel a tab shelf | Ctrl+Wheel a tab shelf | ⌃ Wheel a tab shelf | Locked: Control+wheel changes shelf rows. Increase Tab Stack Height and Decrease Tab Stack Height in the tab menu and command palette provide the same action from the keyboard. | Increase Tab Stack Height (`editor.increaseTabRows`), Decrease Tab Stack Height (`editor.decreaseTabRows`) |
 | Rename Tab | `documentTabs.rename` | Opens the rename box on a query tab. | Command | Double-click a query tab | Double-click a query tab | Double-click a query tab | Locked: Only modifier gestures can be remapped in this version; F2 renames a focused tab. | Rename Tab… (`document.rename`) |
+| New Query in Group | `documentTabs.newQuery` | Creates a query in the editor group whose empty tab strip is double-clicked. | Fixed | Double-click empty query tab strip space | Double-click empty query tab strip space | Double-click empty query tab strip space | Locked: Double-clicking empty tab strip space creates a query; the New Query button and command provide the keyboard path. | New Query (`file.new`) |
 
 ### Connect Dialog
 
 | Gesture | Id | What it does | Kind | Windows | Linux | macOS | Choices or lock | Keyboard |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Connect to Saved Connection | `connections.connect` | Connects to the saved connection in the Connect dialog. | Fixed | Double-click a saved connection | Double-click a saved connection | Double-click a saved connection | Locked: Double-clicking submits the Connect dialog; the Connect button also works from the keyboard. | — |
+| Connect to Saved Connection | `connections.connect` | Connects to the saved connection in the Connect dialog. | Fixed | Double-click a saved connection | Double-click a saved connection | Double-click a saved connection | Locked: Double-clicking submits the Connect dialog; Enter on a focused saved connection also connects, while Space selects it for editing. | — |

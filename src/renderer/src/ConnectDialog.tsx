@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { flushSync } from 'react-dom'
 import type { AdvancedConnectionOptions, ApiResult, ConnectionInfo, ConnectionOptions, DatabaseInfo, DiscoveredServer, ErrorDetails } from '../../shared/contracts'
 import type { ErrorCode } from '../../shared/ipc/wire/protocol'
 import { advancedDefaults, advancedToStore, canRememberPassword, connectionDefaults, connectionKey, credentialBinding, rememberedProfile, type ConnectionLibrary, type ConnectionLibraryView, type ConnectionProfile, type SecretStorageState } from '../../shared/connections'
@@ -246,7 +247,14 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
     update({ server, ...patch, ...(inherited ? { displayName: '', color: undefined, environment: undefined } : {}) })
   }
   function update(patch: Partial<ConnectionOptions>) { setOptions(current => ({ ...current, ...patch })); setError(''); setNotice('') }
-  function choose(profile: ConnectionProfile) { environmentOwner.current = null; setSelectedId(profile.id); setOptions({ ...profile.options, password: '' }); labelServer.current = profile.options.displayName || profile.options.color || profile.options.environment ? profile.options.server : null; setError(''); setNotice('') }
+  function choose(profile: ConnectionProfile) {
+    const chosen = { ...profile.options, password: '' }
+    environmentOwner.current = null; setSelectedId(profile.id); setOptions(chosen)
+    // Enter selects and submits in one event; remembered credentials must follow the row before the form submits.
+    setRemember(!!rememberedProfile(library.profiles, savedIds, chosen, profile.id))
+    labelServer.current = profile.options.displayName || profile.options.color || profile.options.environment ? profile.options.server : null
+    setError(''); setNotice('')
+  }
   async function browse(next: 'local' | 'network') {
     const request = ++browseRequest.current
     setBrowseBusy(true); setServers([]); setBrowseNote('')
@@ -367,8 +375,16 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   const advancedNote = advancedSummary(options.advanced)
   const passwordShown = usesPassword(options.authentication)
   function profileRows(profiles: ConnectionProfile[], empty: string) {
+    const keyDown = (event: KeyboardEvent<HTMLButtonElement>, profile: ConnectionProfile) => {
+      if (event.key !== 'Enter' || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || event.nativeEvent.isComposing) return
+      event.preventDefault()
+      if (locked || event.repeat) return
+      // The row reached with the arrows may not be selected yet. Commit it before submitting through the usual validation.
+      flushSync(() => choose(profile))
+      connectButton.current?.click()
+    }
     return profiles.length ? profiles.map(profile => <div key={profile.id} className={'connection-list-row' + (selectedId === profile.id ? ' selected' : '')}>
-      <button type="button" className="connection-choice" disabled={locked} onClick={() => choose(profile)} onDoubleClick={event => { if (gestures.matches('connections.connect', event)) connectButton.current?.click() }} title={rowTitle(profile.options)}><span className="connection-swatch" style={{ backgroundColor: theme.accent(profile.options.color) ?? 'var(--varia-connection-default)' }} /><Icon name="server" /><span><span className="connection-choice-title"><strong>{profile.options.displayName || profile.options.server}</strong><EnvironmentTag environment={profile.options.environment} place="list" /></span><small>{profile.options.displayName ? profile.options.server + ' · ' : ''}{profile.options.database || '<default>'} · {showsIdentity(profile.options.authentication) ? identityOf(profile.options.authentication) : profile.options.username ?? ''}</small></span></button>
+      <button type="button" className="connection-choice" disabled={locked} onClick={() => choose(profile)} onKeyDown={event => keyDown(event, profile)} onDoubleClick={event => { if (gestures.matches('connections.connect', event)) connectButton.current?.click() }} title={rowTitle(profile.options)}><span className="connection-swatch" style={{ backgroundColor: theme.accent(profile.options.color) ?? 'var(--varia-connection-default)' }} /><Icon name="server" /><span><span className="connection-choice-title"><strong>{profile.options.displayName || profile.options.server}</strong><EnvironmentTag environment={profile.options.environment} place="list" /></span><small>{profile.options.displayName ? profile.options.server + ' · ' : ''}{profile.options.database || '<default>'} · {showsIdentity(profile.options.authentication) ? identityOf(profile.options.authentication) : profile.options.username ?? ''}</small></span></button>
       <button type="button" className="icon-button favorite-button" aria-label={`${profile.favorite ? 'Unfavorite' : 'Favorite'} ${profile.options.displayName || profile.options.server}`} title={profile.favorite ? 'Remove from favorites' : 'Add to favorites'} disabled={locked} onClick={() => void saveProfile(!profile.favorite, undefined, profile)}><Icon name={profile.favorite ? 'star-full' : 'star-empty'} /></button>
       <button type="button" className="icon-button" aria-label={`Remove saved ${profile.options.displayName || profile.options.server}`} title="Remove saved connection" disabled={locked} onClick={() => void remove(profile)}><Icon name="close" /></button>
     </div>) : <p className="connection-empty">{empty}</p>
@@ -387,6 +403,8 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   }
   function trap(event: KeyboardEvent<HTMLFormElement>) {
     if (advanced) return
+    // Connect moves focus to Stop. A held Enter must not turn its next repeat into a cancellation there.
+    if (event.key === 'Enter' && event.repeat) { event.preventDefault(); return }
     // While connecting, Escape is Stop, as the footer's button is.
     if (event.key === 'Escape' && busy) { event.preventDefault(); event.stopPropagation(); stop() }
     else if (event.key === 'Escape' && !locked) { event.preventDefault(); event.stopPropagation(); onClose() }

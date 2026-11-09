@@ -2,7 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { activeDocumentName, backendReady, closeDocumentButton, documentTab, documentTabFullyShown, documentTabs, editorGroups, editorGroupTabs, editorTextbox, floatingEditorGroups, menubar, part, partiallyVisibleDocumentTab, pinDocumentButton, planCanvas, planViewer, quickInput, quickInputActive, selectOpenDocument, tabNameBox, tabShelf, tabShelfRows, tabStackFeedback, tabStackScrollTop, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, caretStatus, closeDocumentButton, documentTab, documentTabFullyShown, documentTabs, editorGroups, editorGroupTabs, editorTextbox, emptyQueryStripPoint, floatingEditorGroups, inputModeStatus, menubar, newQueryInGroupButton, part, partiallyVisibleDocumentTab, pinDocumentButton, planCanvas, planViewer, queryBarButton, queryScope, queryServer, quickInput, quickInputActive, selectOpenDocument, tabNameBox, tabShelf, tabShelfRows, tabStackFeedback, tabStackScrollTop, unsavedMark } from './fixtures/ui.mjs'
 
 // SSMS's editing commands in the real query editor, over the fake backend (no SQL Server): Comment and Uncomment
 // Selection, Make Uppercase and Lowercase, Increase and Decrease Line Indent from Edit › Advanced, Go To Line, Bookmarks
@@ -126,6 +126,56 @@ try {
   await expect(goTo).toHaveCount(0)
   await expect(textbox()).toBeFocused()
   console.log('Editor checks: Ctrl+G goes to a line; the dialog refuses one past the end, and Escape returns to the editor.')
+
+  // Execution scope follows the primary selection, while the position and mode status reuse the editor commands.
+  await page.keyboard.press('Control+A')
+  await expect(queryBarButton(page, 'Execute selection')).toBeVisible()
+  await expect(queryScope(page)).toHaveText('Lines 1–3')
+  await page.keyboard.press('ArrowRight')
+  await expect(queryBarButton(page, 'Execute')).toBeVisible()
+  await expect(queryScope(page)).toHaveText('Entire query')
+  await caretStatus(page).click()
+  await expect(goTo).toBeVisible()
+  await page.keyboard.press('Escape')
+  await inputModeStatus(page).click()
+  await expect(inputModeStatus(page)).toHaveText('OVR')
+  await expect(textbox()).toBeFocused()
+  await inputModeStatus(page).click()
+  await expect(inputModeStatus(page)).toHaveText('INS')
+
+  // A group-local plus creates and focuses its query; a closed query returns as an unsaved disconnected copy.
+  const beforeQol = await activeDocumentName(page)
+  await newQueryInGroupButton(editorGroups(page).first()).click()
+  const closedQol = await activeDocumentName(page)
+  expect(closedQol).not.toBe(beforeQol)
+  await expect(textbox()).toBeFocused()
+  await page.keyboard.insertText('one\ntwo')
+  await page.keyboard.press('Home')
+  await page.keyboard.press('ArrowRight')
+  await application.evaluate(({ dialog }) => {
+    globalThis.__editorQolMessageBox = dialog.showMessageBox
+    dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false })
+  })
+  await page.keyboard.press('Control+W')
+  await expect.poll(() => activeDocumentName(page)).toBe(beforeQol)
+  await page.keyboard.press('Control+Shift+T')
+  await expect.poll(() => activeDocumentName(page)).toBe(closedQol)
+  await expect(unsavedMark(documentTab(page, closedQol))).toBeVisible()
+  await expect(queryServer(page)).toHaveValue('')
+  await expect(caretStatus(page)).toHaveText('Ln 2Col 2Ch 2')
+  await page.keyboard.insertText('X')
+  await expect.poll(editorText).toBe('one\ntXwo')
+  await page.keyboard.press('Control+W')
+  await expect.poll(() => activeDocumentName(page)).toBe(beforeQol)
+  const emptyStrip = await emptyQueryStripPoint(editorGroups(page).first())
+  expect(emptyStrip, 'a blank tab-strip target').not.toBeNull()
+  await page.mouse.dblclick(emptyStrip.x, emptyStrip.y)
+  await expect.poll(() => activeDocumentName(page)).not.toBe(beforeQol)
+  await expect(textbox()).toBeFocused()
+  await page.keyboard.press('Control+W')
+  await expect.poll(() => activeDocumentName(page)).toBe(beforeQol)
+  await application.evaluate(({ dialog }) => { dialog.showMessageBox = globalThis.__editorQolMessageBox; delete globalThis.__editorQolMessageBox })
+  console.log('Editor checks: execution scope, clickable line and mode status, group New Query, blank-strip double-click and safe Reopen Closed Query.')
 
   // 5. Bookmarks: Ctrl+K Ctrl+K on lines 1 and 3 shows two glyphs; Ctrl+K Ctrl+N goes to the next, wrapping around, then
   // on to another query's; Ctrl+K Ctrl+L clears them all, and Next Bookmark is then disabled.

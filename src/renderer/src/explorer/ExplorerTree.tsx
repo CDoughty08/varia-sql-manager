@@ -10,7 +10,7 @@ import { explorerDragType, maxDropText } from './drop'
 import type { Announcement } from './ExplorerService'
 import { focusLost } from './ExplorerErrorBoundary'
 import ExplorerPinnedBand from './ExplorerPinnedBand'
-import ExplorerRow, { PinnedServerRow, type RowActions } from './ExplorerRow'
+import ExplorerRow, { PinnedServerRow, recoveryLabel, type RowActions } from './ExplorerRow'
 import { rowStatus } from './ExplorerStatusService'
 import { layoutWindow, pinnedServerBands, renderedIndices, revealPinnedScroll, rowIndex, RowKind, rowLayout, swallowedKey, treeKey, treeKeyOf, TypeAheadBuffer, typeAhead, type TreeAction, type VisibleRows } from './tree-model'
 
@@ -225,11 +225,11 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
       run('explorer.openPeekTab', rowId)
     }
   }), [explorer, run, activate, objectActions, peek, gestures])
-  // Rows are menu targets: right-click has selected the row; Shift+F10 asks for the active descendant's menu.
+  // Rows are menu targets: right-click has selected the row; its menu returns focus to the tree, including from inner actions.
   const rowTarget = useMenuTarget<HTMLDivElement>(row => {
     const node = explorer.menuNode(Number(row.getAttribute('data-row-id')))
     return node ? { kind: 'explorer', node } : null
-  })
+  }, () => element.current ?? undefined)
 
   /** Acts on `current`, the rows the action was worked out from. */
   const act = (action: TreeAction, current: VisibleRows) => {
@@ -322,11 +322,14 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
       <div className="explorer-spacer" style={{ height: layout.total }}>
         {indices.map(index => {
           const rowId = rows.ids[index], kind = rows.kinds[index] as RowKind, node = rows.nodes[index]
+          const recovery = kind === RowKind.Node ? undefined : treeKey(rows, index, 'enter', 1)
+          const label = recovery && recoveryLabel(recovery)
           return <ExplorerRow key={rowId} rowId={rowId} kind={kind} top={layout.top(index)} level={rows.levels[index]} posinset={rows.posinset[index]} setsize={rows.setsize[index]}
             node={node} rev={node?.rev ?? 0} text={kind === RowKind.Node ? '' : explorer.rowText(rowId)} selected={rowId === selected} draggable={kind === RowKind.Node && explorer.canInsert(rowId)}
             active={!!node && node.parent === 0 && node.connectionId === activeConnectionId} color={node?.parent === 0 ? accents.get(node.connectionId) : undefined} environment={node?.parent === 0 ? environments.get(node.connectionId) : undefined}
             actions={actions} menuTarget={rowTarget} renaming={renaming !== undefined && rowId === renaming}
-            status={kind === RowKind.Node && node ? rowStatus(statuses.get(node.connectionId), node) : undefined} />
+            status={kind === RowKind.Node && node ? rowStatus(statuses.get(node.connectionId), node) : undefined}
+            recovery={label && recovery ? { label, run: () => act(recovery, rows) } : undefined} />
         })}
       </div>
     </div>

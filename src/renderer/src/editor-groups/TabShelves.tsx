@@ -165,7 +165,7 @@ export class TabShelfLayout {
       if (rows === 1 && !this.frozen && reveal !== this.reveal.get(isPinned)) {
         const previous = JSON.parse(this.reveal.get(isPinned) ?? '[]') as (string | number | null)[]
         const selected = previous[1] !== localPriorities[1] ? localPriorities[1] : previous[2] !== localPriorities[2] || previous[6] !== focusedIndex ? localPriorities[2] : localPriorities[1]
-        const target = section.find(tab => tab.id === priorities[0]) ?? section.find(tab => tab.id === selected) ?? section.find(tab => tab.id === this.group.activePanel?.id)
+        const target = section.find(tab => tab.id === priorities[0]) ?? section.find(tab => tab.id === selected) ?? section.find(tab => tab.id === this.group.activePanel?.id) ?? section.find(tab => tab.id === focused)
         const index = target ? section.indexOf(target) : -1
         if (index >= 0) offset = Math.max(index * cellWidth + cellWidth - width, Math.min(offset, index * cellWidth))
       }

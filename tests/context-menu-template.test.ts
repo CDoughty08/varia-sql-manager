@@ -46,7 +46,7 @@ describe('native context menu template', () => {
     // Role items keep the catalogue's key or none, never Electron's default.
     expect(find(editor, 'edit.copy@editor.context')).toMatchObject({ role: 'copy', accelerator: 'Cmd+C' })
     expect(describeTemplate(contextMenuTemplate(request('documentTab.context', { disabled: ['file.copyPath', 'file.revealInFolder'] }), 'darwin', () => {}))).toEqual([
-      'Save (click, Cmd+S)', 'Save As… (click, Cmd+Shift+S)', '---', 'Close (click, Cmd+W)', 'Close All But This (click)', 'Close All (click)', '---',
+      'Save (click, Cmd+S)', 'Save As… (click, Cmd+Shift+S)', '---', 'Close (click, Cmd+W)', 'Close All But This (click)', 'Close All (click)', 'Reopen Closed Query (click, Cmd+Shift+T)', '---',
       'Copy Full Path (click, disabled)', 'Reveal in Finder (click, disabled)', '---', 'Move Left (click, Ctrl+Shift+PageUp)', 'Move Right (click, Ctrl+Shift+PageDown)', 'Rename Tab… (click, F2)',
       '---', 'Increase Tab Stack Height (click)', 'Decrease Tab Stack Height (click)',
       '---', 'Split Right (click, Cmd+\\)', 'Split Down (click)', 'Move to Next Group (click, Cmd+Ctrl+Right)', 'Move to Previous Group (click, Cmd+Ctrl+Left)', 'Float (click)', 'Dock (click)'

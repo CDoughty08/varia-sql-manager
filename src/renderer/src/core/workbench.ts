@@ -56,6 +56,7 @@ import { windowContribution } from '../contributions/window'
 import { menusContribution } from '../contributions/menus'
 import { explorerContribution } from '../contributions/explorer'
 import { outputContribution } from '../contributions/output'
+import { messagesContribution } from '../contributions/messages'
 import { highlightsContribution } from '../contributions/highlights'
 import { compareContribution } from '../contributions/compare'
 import { scriptingContribution } from '../contributions/scripting'
@@ -260,7 +261,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const notifications = new NotificationService()
   const updates = new UpdateService(api)
   const documents = new DocumentService((text, uri, language) => monaco.editor.createModel(text, language, monaco.Uri.parse(uri)), api, events, callback => { frame(callback) },
-    { ...settingsDocumentOptions(() => settings.getSnapshot().values), newLineEnding: platformLineEnding(platform) })
+    { ...settingsDocumentOptions(() => settings.getSnapshot().values), newLineEnding: platformLineEnding(platform), server: id => connections.get(id)?.server })
   const editorStatus = new EditorStatusService(callback => { frame(callback) }), inputMode = new InputModeService()
   const refreshDocuments = settings.subscribe(() => documents.refreshOptions())
   const bookmarks = new BookmarkService(documents, events), editorDialogs = new EditorDialogs(), tabRename = new TabRenameService(documents)
@@ -607,6 +608,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     menusContribution(workbench),
     explorerContribution(workbench, api),
     outputContribution(workbench, api),
+    messagesContribution(workbench),
     highlightsContribution(workbench),
     compareContribution(workbench),
     paletteContribution(workbench),

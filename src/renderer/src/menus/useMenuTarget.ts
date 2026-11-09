@@ -7,9 +7,9 @@ import type { MenuTarget } from './targets'
  * always sees the latest render's state. The callback's identity is stable; one callback can serve a list of elements,
  * because the provider receives the element.
  */
-export function useMenuTarget<T extends Element>(provider: (element: T) => MenuTarget | null): RefCallback<T> {
+export function useMenuTarget<T extends Element>(provider: (element: T) => MenuTarget | null, focus?: () => HTMLElement | undefined): RefCallback<T> {
   const { menuTargets } = useWorkbench()
-  const latest = useRef(provider)
-  latest.current = provider
-  return useCallback((element: T | null) => { if (element) menuTargets.register(element, registered => latest.current(registered as T)) }, [menuTargets])
+  const latest = useRef({ provider, focus })
+  latest.current = { provider, focus }
+  return useCallback((element: T | null) => { if (element) menuTargets.register(element, registered => latest.current.provider(registered as T), () => latest.current.focus?.()) }, [menuTargets])
 }

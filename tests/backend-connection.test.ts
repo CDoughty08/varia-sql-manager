@@ -265,7 +265,9 @@ describe('BackendConnection streams', () => {
     const connection = fake('echo')
     const pages: { seq: number; body: ArrayBuffer }[] = []
     const { id, done } = connection.send('system.health', { pages: 4, bytes: 40 * 1024 } as never, { deadlineMs: 0, credit: 64 * 1024, stream: { data: (seq, body) => pages.push({ seq, body }) } })
-    await expect.poll(() => pages.length).toBe(2)
+    // Queue the stream before HELLO, but observe its credit independently of the fixture's process startup time.
+    await connection.ready
+    await expect.poll(() => pages.length, { timeout: 5000 }).toBe(2)
     await new Promise(settle => setTimeout(settle, 100))
     expect(pages).toHaveLength(2)
     connection.credit(id, 64 * 1024)

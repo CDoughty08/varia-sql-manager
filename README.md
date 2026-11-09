@@ -16,7 +16,7 @@ Varia is a cross-platform desktop workbench for Microsoft SQL Server. It combine
 - Search every object on a server by name or inside definitions, with Match Case, Whole Word, regular expressions and filters by object type.
 - View, copy, and export query results as CSV, tab-delimited text, or JSON. The results toolbar's **White space** shows spaces and tabs, or every white space character (line breaks, no-break and zero-width spaces), without changing what is copied or saved.
 - Sort a results grid in memory, without running the query again: a column header's sort button sorts ascending, then descending, then back to SQL Server's order, Shift+click adds further columns, and the grid's menu has Sort Ascending, Sort Descending, Then Sort and Clear Sort. Text sorts by the column's collation, NULL first, or, with the results toolbar's **Sort text by**, by length in characters or bytes. Copy and Save Results As follow the order shown.
-- Highlight rows of a results grid in yellow, green, blue, purple or red from the grid menu's **Highlight** submenu, or with Ctrl+Shift+H in the last colour picked. A highlight follows its row by a unique key column Varia finds in the results (or the whole row when there is none, compared by each column's collation) through sorting and through running the query again in the same tab. When a re-run no longer returns the key column, the grid says so and **Clear All Highlights** starts again. Highlights are kept only while the tab is open.
+- Highlight rows of a results grid in yellow, green, blue, purple or red from the grid menu's **Highlight** submenu, or with Ctrl+Shift+H in the last colour picked. A highlight follows its row by a unique key column Varia finds in the results (or the whole row when there is none, compared by each column's collation) through sorting and through running the query again in the same tab. When a re-run no longer returns the key column (or returns several columns of that name, none where it was), the grid says so and **Clear All Highlights** starts again. Highlights are kept only while the tab is open.
 - Compare two results of one query: **Compare with Previous Result** in a results grid's menu adds a unified, git-style diff of that result against the one before it, as another result: each changed row as its old row (−) and its new one (+) with the changed values marked, added and removed rows, and one unchanged row of context around each change, with each row's number in both results. Rows are matched by a key column unique in both (or by whole rows), and text compares by its collation, so values differing only in case or trailing spaces are underlined rather than changed; **Compare with Previous Result (Exact Text)** in the command palette compares every character. A column whose type or collation changed between the two results still compares (by the earlier result's rules); one that holds binary in one and text in the other is listed as not compared. When long values were compared by the part Varia keeps, the strip says so.
 - Search every results grid of a run from the results toolbar (Ctrl+F in a grid): the matching cells are found in memory, without running the query again, and marked, Enter and Shift+Enter (or F3 and Shift+F3 in a grid) step through them in the order each grid shows, and text compares by its column's collation. **Columns** searches column names instead, fading the columns that do not match.
 - Profile a result's columns: the results toolbar's **Profile** (or **Column Profile** on the grid's menu) opens a panel with each column's NULLs, distinct values (exact up to 16,384, then estimated; equal under the column's collation), lowest and highest values, lengths in characters and bytes, and a histogram, computed in the backend over the rows the grid shows. **Row size** draws a bar behind each row number for the row's size (the sum of DATALENGTH over its columns); hover it for the bytes.
@@ -27,6 +27,8 @@ Varia is a cross-platform desktop workbench for Microsoft SQL Server. It combine
 Varia targets SQL Server 2016 through 2025 and runs on Windows, Linux, and macOS. Some features require specific server versions or permissions; see the [documentation](#documentation) for details.
 
 ## Getting started
+
+See the [changelog](CHANGELOG.md) for release highlights and upgrade notes.
 
 Download a build from [GitHub Releases](https://github.com/CDoughty08/varia-sql-manager/releases): the Windows x64 Setup or Portable executable, Linux x64 AppImage, or macOS DMG or ZIP for Apple Silicon or Intel. These builds include the .NET backend and do not require the SDK. They are currently unsigned; macOS builds are also not notarized, so the operating system may warn or block them. On Linux, the AppImage requires FUSE and an available desktop/keyring for encrypted remembered passwords.
 
@@ -57,6 +59,19 @@ On Ubuntu 24.04 and later, AppArmor may block the unprivileged user namespaces n
 1. Select **Connect**, enter a server and database, and choose an authentication method.
 2. Open a new query, write SQL, and select **Execute** or press **F5**. A selection runs instead of the full document.
 3. Inspect the results and messages, or browse and script objects in Object Explorer.
+
+The Execute button says **Execute selection** with its line range when text is selected; **Entire query** means the
+whole document will run. Click the status bar's **Ln/Col** to go to a line, or **INS/OVR** to switch insert/overtype mode.
+Each editor group's **+**, or a double-click on empty tab-strip space, opens a query in that group. **Reopen Closed Query**
+(Ctrl+Shift+T; Cmd+Shift+T on macOS) restores a bounded, in-memory unsaved copy without its old connection or saved-file
+association; see [editor groups](docs/editor-groups.md).
+
+In Connect, single-click or Space selects a saved connection for editing; Enter or double-click connects. Object
+Explorer's recovery rows offer **Retry**, **Continue loading**, and **Filter** actions. Search Objects opened from a
+database starts with that database's visible, removable scope.
+
+The [result grid tools](docs/results-tools.md) include **Copy Column Name**, keyboard-accessible **Fit Column**, and
+**Close Results** beside the results. Located SQL errors offer **Go to line** while the source text is unchanged.
 
 Certificate validation is enabled by default. For a trusted server with a self-signed certificate, enable **Trust server certificate** in the connection dialog. On Linux and macOS, Windows authentication requires the system Kerberos library, a valid ticket from `kinit`, and a server name or SPN configured for Kerberos. Entra Integrated authentication is available on Windows only. Remembered passwords are encrypted using the operating system's credential storage; on Linux this requires an available keyring.
 
@@ -95,7 +110,7 @@ To run optional live tests, set `VARIA_TEST_SQL_SERVER` and, for SQL authenticat
 
 ## Creating a release
 
-Release builds package and smoke-test every push to main, and pull requests that change packaging (docs/ci.md). To get installers without a release, run the **Release builds** Actions workflow manually: its installers are available as workflow artifacts for seven days. After merging the desired changes, update the version in `package.json` and `package-lock.json` together, then push a matching tag (for example, `v0.1.0` for version `0.1.0`). The tag triggers all platform builds; once they and their packaged-app smoke checks pass, the workflow publishes a GitHub Release with the installers, the update manifest (`varia-update.json`, which installed copies check) and GitHub-generated release notes. A version with a prerelease suffix (such as `v0.2.0-beta.1`) is published as a prerelease. Existing releases are not overwritten: resolve or remove an existing release before rerunning its release job.
+Release builds package and smoke-test every push to main, and pull requests that change packaging (docs/ci.md). To get installers without a release, run the **Release builds** Actions workflow manually: its installers are available as workflow artifacts for seven days. Prepare a release by updating `package.json` and `package-lock.json` together and recording the changes in [CHANGELOG.md](CHANGELOG.md). After merging those changes, push a matching tag (for example, `v0.7.0` for version `0.7.0`). The tag triggers all platform builds; once they and their packaged-app smoke checks pass, the workflow publishes a GitHub Release with the installers, the update manifest (`varia-update.json`, which installed copies check) and GitHub-generated release notes. Prepend the changelog's release highlights to the published notes. A version with a prerelease suffix (such as `v0.7.0-beta.1`) is published as a prerelease. Existing releases are not overwritten: resolve or remove an existing release before rerunning its release job.
 
 ## Architecture
 
