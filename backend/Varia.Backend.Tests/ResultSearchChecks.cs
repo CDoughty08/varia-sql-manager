@@ -252,6 +252,11 @@ internal static class ResultSearchChecks
         var longSet = Build(store, [new("doc", "nvarchar", "text")], Enumerable.Range(0, 4).Select(_ => new object?[] { new string('x', ResultSearcher.CheckEvery) }));
         ResultSearcher.Search(longSet, longSet.SealedSnapshot(), null, "zz", 0, false, 10, CancellationToken.None, () => { longCalls++; return false; });
         check(calls >= 8 && longCalls >= 4, "a search of wide or long-valued rows reaches a checkpoint at least once per row (" + calls + ", " + longCalls + ")");
+        // A long text costs per cell compared: 1,000 one-letter cells against 1,024 characters are over 16 checkpoints of work.
+        var shortCalls = 0;
+        var shortSet = Build(store, [new("c", "varchar", "text")], Enumerable.Range(0, 1000).Select(_ => new object?[] { "a" }));
+        ResultSearcher.Search(shortSet, shortSet.SealedSnapshot(), null, new string('z', ResultSearcher.MaxText), 0, false, 10, CancellationToken.None, () => { shortCalls++; return false; });
+        check(shortCalls >= 10, "a long search text counts toward the work between checkpoints for every cell it is compared with (" + shortCalls + ")");
     }
 
     /// <summary>Parsed page layouts are bounded: one in base order, LayoutCacheBytes through a view (#351).</summary>

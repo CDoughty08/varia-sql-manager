@@ -83,8 +83,8 @@ export class ResultsPortHost {
   /** Live streams by subscription id: a second subscribe with the same id is refused. */
   private readonly subscriptions = new Map<string, number>()
   private readonly schema: typeof portRequestSchema
-  /** Result ids the current generation holds for this renderer, oldest first. */
-  /** Owned results by id, with their column count when a descriptor named it (search answers are bounded by it). */
+  /** Result ids the current generation holds for this renderer, oldest first, with their column count when a descriptor
+   *  named it (search answers are bounded by it). */
   private readonly owned = new Map<number, number | undefined>()
   private readonly latestMemory = new Map<MemoryFeature, Extract<PortMessage, { t: 'memory' }>>()
   private port: PortMainLike | undefined

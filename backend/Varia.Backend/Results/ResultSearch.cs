@@ -27,7 +27,8 @@ internal static class ResultSearcher
     public const int MaxMatches = 10_000;
     /// <summary>The longest search text, in UTF-16 code units (limits.search.maxText).</summary>
     public const int MaxText = 1024;
-    /// <summary>Work between checkpoints: each cell compared counts CellWork plus its bytes.</summary>
+    /// <summary>Work between checkpoints: each cell compared counts CellWork, its bytes and the text's length (a compare
+    /// prepares the text each call, so a long text costs per cell even against short cells).</summary>
     internal const int CheckEvery = 1 << 16;
     private const int CellWork = 16;
     /// <summary>The most parsed page layouts (44 bytes per column each) a search through a view keeps at once.</summary>
@@ -57,6 +58,7 @@ internal static class ResultSearcher
         var approximate = false;
         var scratch = new Scratch();
         long work = 0;
+        var cellWork = CellWork + text.Length;
         for (long position = 0; position < rows; position++)
         {
             if (work <= 0)
@@ -75,7 +77,7 @@ internal static class ResultSearcher
                 if (matchers[c] is not { } matcher || page.IsNull(c, local)) continue;
                 var truncated = page.IsTruncated(c, local);
                 var cell = page.Span(c, local);
-                work -= CellWork + cell.Length;
+                work -= cellWork + cell.Length;
                 if (matcher.Matches(cell, scratch)) found.Add(c);
                 else if (truncated) approximate = true;
             }
