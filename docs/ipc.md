@@ -1342,7 +1342,8 @@ itself by view position.
   (case and trailing spaces under a CI collation) and `2` equals `2.0` in a float column; a truncated value compares by
   its stored prefix (`approximate`).
 - **Memory.** A sort holds 8 to 16 bytes per row and key while it runs (a filter, per column it compares, and 16 bytes a row
-  for the rows it keeps, a selection's rows or duplicates' groups), and a view keeps 4 bytes a row it shows, all charged
+  for the rows it keeps, a selection's rows or duplicates' groups; a `value` sort key on a filtered column is that filter's
+  key and is charged once, and other sort keys are built over only the rows the filters kept), and a view keeps 4 bytes a row it shows, all charged
   to the result's query budget (`TOO_LARGE` past it); what building needed is returned at once, the order when the view is closed,
   replaced, or its result released.
 - **Reading through a view.** `results.read`, `results.rowBytes`, `results.copy` and `results.export` take `viewId`;

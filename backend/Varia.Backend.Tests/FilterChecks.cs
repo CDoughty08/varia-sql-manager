@@ -36,6 +36,7 @@ internal static class FilterChecks
     {
         Filtering(check);
         Duplicates(check);
+        SharedKeys(check);
         Limits(check);
         HostRequests(check);
     }
@@ -130,6 +131,45 @@ internal static class FilterChecks
         check(sortedDups == "5,4,2,1,0", "a sort orders duplicate rows like any others");
     }
 
+    /// <summary>A Value sort key on a filtered column is the filter's key, and sort keys are built over only the rows the
+    /// filters kept: either way the view is the sorted rows the filters keep, in either direction, and the filters resolve as
+    /// they do alone (they compare ascending whatever the sort's direction).</summary>
+    private static void SharedKeys(Action<bool, string> check)
+    {
+        var store = new ResultStore(1L << 30, 1L << 29);
+        var small = Fill(store, Rows);
+        // Over two pages (4,096 rows each): long values share their 8-byte prefixes, so ties read the stored cells again.
+        var big = Fill(store, [.. Enumerable.Range(0, 10_000).Select(i => new string?[]
+        {
+            i.ToString(System.Globalization.CultureInfo.InvariantCulture), i % 17 == 0 ? null : $"name-prefix-{i % 13:D2}", $"code-prefix-{i % 11:D2}", i % 5 == 4 ? "2.0" : (i % 5).ToString(System.Globalization.CultureInfo.InvariantCulture)
+        })]);
+        (ResultSetBuffer Set, string Name, int Column, int Other, ViewFilter[] Filters)[] cases =
+        [
+            (small, "a collated column", 1, 0, [Named(FilterOp.In, 1, [0]), Named(FilterOp.NotIn, 1, [1], nulls: true), Named(FilterOp.Between, 1, [0, 1]), Dups(1)]),
+            (small, "a float column", 3, 1, [Named(FilterOp.In, 3, [1]), Named(FilterOp.NotIn, 3, [0], nulls: true), Named(FilterOp.Between, 3, [0, 1]), Dups(3)]),
+            (big, "a collated column over two pages", 1, 2, [Named(FilterOp.In, 1, [1, 2, 3]), Named(FilterOp.NotIn, 1, [1, 2], nulls: true), Named(FilterOp.Between, 1, [3, 8]), Dups(1, 3)]),
+            (big, "a _BIN2 column over two pages", 2, 1, [Named(FilterOp.In, 2, [1, 2]), Named(FilterOp.NotIn, 2, [1]), Named(FilterOp.Between, 2, [3, 8]), Dups(2)])
+        ];
+        foreach (var (set, name, column, other, filters) in cases)
+        {
+            foreach (var filter in filters)
+            {
+                var (alone, aloneResolved) = Build(set, [], filter);
+                var keptRows = alone.ToHashSet();
+                foreach (var descending in new[] { true, false })
+                {
+                    ViewKey[] keys = [new ViewKey(column, descending, SortMode.Value), new ViewKey(other, !descending, SortMode.Value), new ViewKey(0, false, SortMode.Value)];
+                    var expected = Build(set, keys).Order.Where(keptRows.Contains);
+                    var (order, resolved) = Build(set, keys, filter);
+                    check(order.SequenceEqual(expected) && (resolved[0].Rows ?? []).SequenceEqual(aloneResolved[0].Rows ?? []) && resolved[0].Nulls == aloneResolved[0].Nulls,
+                        $"{filter.Op} on {name} sorted {(descending ? "descending" : "ascending")} by it is the sorted rows the filter keeps, resolved as alone");
+                }
+            }
+        }
+        check(ViewSorter.KeyCount([new ViewKey(1, true, SortMode.Value), new ViewKey(2, false, SortMode.Chars), new ViewKey(3, false, SortMode.Value)], [Named(FilterOp.In, 1, [0]), Dups(1, 2)]) == 4,
+            "a view's keys count a Value sort key on a filtered column once, and a Chars key on one again");
+    }
+
     private static void Limits(Action<bool, string> check)
     {
         var store = new ResultStore(1L << 30, 1L << 29);
@@ -187,6 +227,16 @@ internal static class FilterChecks
             "more than 16 filters are refused");
         check(Code(Ask(11, new { resultId = id, sort = Array.Empty<object>(), filters = new object[] { new { op = "in", column = 0, cells = new { viewId = 999_999u, ranges = new[] { new long[] { 0, 1 } } } } } })) == "VIEW_NOT_FOUND",
             "cells of a closed view answer VIEW_NOT_FOUND");
+        // Room for one key of the sort and filter on column 0, not two: a Value key on the filtered column fits, a Chars key does not.
+        var set = store.Find(id)!;
+        var once = ViewSorter.WorkingBytes(1000, 1) + ViewSorter.FilterBytes * 1000 + 4 * 1000 + ResultStore.ViewOverhead;
+        var filler = Math.Min(store.QueryBytes, set.Budget.MaxBytes) - set.Budget.UsedBytes - once;
+        check(store.TryReserve(set.Budget, filler, false, out _), "the budget check reserves all but one shared key's room");
+        object Shared(string mode) => new { resultId = id, sort = new[] { new { column = 0, descending = true, mode } }, filters = new object[] { new { op = "in", column = 0, rows = new[] { 7, 8 } } } };
+        check(Code(Ask(40, Shared("chars"))) == "TOO_LARGE", "a sort key in another mode on a filtered column needs a key of its own");
+        var shared = Ask(41, Shared("value"));
+        check(Code(shared) is null && shared.GetProperty("result").GetProperty("rows").GetInt64() == 2, "the budget counts a Value sort key on a filtered column once");
+        store.Return(set.Budget, filler);
         check(Code(Ask(12, new { resultId = id, sort = Array.Empty<object>(), filters = new object[] { new { op = "in", column = 0, rows = new[] { 1 }, extra = true } } })) is not null,
             "a filter with an unknown member is refused");
     }
