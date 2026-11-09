@@ -163,7 +163,7 @@ type ActivityLiveProbe = typeof activityLiveProbes[number]
 const activityDescriptions: { readonly [P in ActivityLiveProbe]: string } = {
   'activity.overview': 'The server at a glance, in seven statements: SQL Server\'s CPU (its schedulers\' non-preemptive time) and scheduler delay, waiting tasks (wait time less signal wait of every type that is not benign), database I/O and its latency (moved only by databases read in both samples, so one dropped or closed takes only its own counts with it), batch requests, compilations and re-compilations, blocked sessions and the longest block, active requests, user sessions and logins, runnable tasks per scheduler and the work queue, memory grants, page life expectancy, deadlocks and lock waits. Rates use the server\'s own clock (ms_ticks), and a restart starts them again; a statement the login may not run leaves only its own series null.',
   'activity.sessions': 'Processes (one row per session, its MARS requests folded), the blocking chains as rows (built in the backend from task waits, each session once) and Active Expensive Queries, from one sample. Rates are per session and per request between samples, keyed by login time and each request\'s id and start time, so a reused id never gives a rate across two sessions and a MARS session\'s requests never stand in for each other. Varia\'s own sessions are marked, and system sessions and Varia\'s pools are hidden unless the filter shows them. Without server state, Processes shows only the monitor\'s own session and the other two tables report PERMISSION_DENIED without running SQL. Its two series follow the Details flyout\'s session (focusSession).',
-  'activity.resources': 'Resource Waits (by category and by type) and Data File I/O, declared now so the frame shapes are fixed.'
+  'activity.resources': 'Resource Waits (by category and by type) and Data File I/O, from one sample. Wait rates are per wait type between samples over the server\'s own clock (ms_ticks), rolled up to Query Store\'s categories plus Varia\'s benign list (Unknown shown, never dropped), with a 1-minute mean per category; a first sample, a restart or cleared statistics have no rate. File rates are per file, keyed by database and file id, with read, write and response latency, toned by the files filter\'s latency thresholds. Names fall back to ids without VIEW ANY DEFINITION. Its series are each category\'s wait time less signal wait, and the signal wait of every type, per second.'
 }
 
 /** The Activity Monitor's probes as live entries, built from its catalogue (src/shared/activity/catalog.ts), so the two never
@@ -182,7 +182,9 @@ function activityLiveEntries(): { readonly [P in ActivityLiveProbe]: LiveProbeSp
     const tables = spec.tables.map((table): LiveTableSpec => {
       const table$ = tableSpecs[table]
       return {
-        id: table, mode: 'snapshot', columns: table$.columns.map(item => ({ id: liveColumnId(table, item.id), name: item.caption, dataType: liveColumnTypes[item.type] })),
+        // A table that tones its rows ends with the tone column, which the backend fills (NULL until it sets one).
+        id: table, mode: 'snapshot',
+        columns: [...table$.columns.map(item => ({ id: liveColumnId(table, item.id), name: item.caption, dataType: liveColumnTypes[item.type] })), ...table$.tones?.length ? [{ ...toneColumn, id: liveColumnId(table, 'tone') }] : []],
         key: table$.key.map(item => liveColumnId(table, item)), rowCap: table$.rowCap,
         ...table$.departedLinger ? { departed: true } : {},
         ...table$.facetColumns?.length ? { facets: table$.facetColumns.map(item => liveColumnId(table, item)) } : {}

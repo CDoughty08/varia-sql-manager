@@ -3,7 +3,7 @@ import {
   activityBands, activityEditions, activityIntervalDefaults, activityIntervalsSeconds, activityLimits, activityLiveProbes, activityLoadGuard, activityPanes, activityPoolSuffix, activityProbes, activitySource,
   activityStatuses, activityTables, benignCategories, benignWaits, blockerLabels, liveColumnId, liveColumnPrefixes, pendingProbes,
   chartWindowsMinutes, defaultChartWindowMinutes, defaultPanes, detailsSections, detailsTexts, killOutcomes, maxExpandedTiles, paneSpecs, pendingPaneNote, pendingPanes, probeSeries, probeSpecs, rankChips, rowTones, seriesSpecs, sessionToggles, tableSpecs, tileSpecs, unavailableMessage, variaSessionKinds,
-  viewChipNotes, viewChips, viewChipTitles, waitCategories, waitExceptions, waitsChartSeries, waitToggles, type ColumnSpec, type ThresholdSpec
+  viewChipNotes, viewChips, viewChipTitles, fileLatencyDefaults, fileViewNotes, fileViews, fileViewTitles, waitCategories, waitExceptions, waitsChartSeries, waitToggles, type ColumnSpec, type ThresholdSpec
 } from './catalog.ts'
 
 /** The results grid's copy keys the Differences section cites; tests/activity-catalog.test.ts checks them against the commands catalogue. */
@@ -81,7 +81,9 @@ const limitNotes: Readonly<Record<keyof typeof activityLimits, string>> = {
   cancelIds: 'Details reads one cancel may name',
   cancelTombstones: 'Cancelled Details ids main remembers, so a read cancelled before it was sent is refused',
   cancelTombstoneMs: 'Milliseconds main remembers them',
-  sessionId: 'The largest session id'
+  sessionId: 'The largest session id',
+  fileLatencyMs: 'The largest latency threshold a files filter may carry (`activityMonitor.fileLatency*`)',
+  waitAverageMs: 'Milliseconds of samples the 1-Minute Average of Resource Waits spans'
 }
 
 function columnsTable(columns: readonly ColumnSpec[]): string {
@@ -281,6 +283,11 @@ export function renderActivityMonitorDocs(): string {
     `Column value filters (Alt+Down on a header) offer (All), (Blanks), (Non-blanks) and each value with its count for ${tableSpecs.sessions.facetColumns!.map(column => tableSpecs.sessions.columns.find(spec => spec.id === column)!.caption).join(', ')}.`,
     'Several values in one column match any of them; filters on several columns must all match.',
     `Resource Waits has ${waitToggles.hideBenign.title} (${waitToggles.hideBenign.default ? 'on' : 'off'} by default), which leaves out benign wait types and the ${benignLabels} category.`,
+    '',
+    table(['Data File I/O chip', 'Id', 'Shows'], fileViews.map(view => [fileViewTitles[view], code(view), fileViewNotes[view]])),
+    '',
+    `Data File I/O tones a row warning when its read or write latency reaches ${fileLatencyDefaults.warning} ms and error from ${fileLatencyDefaults.error} ms; the files filter carries the`,
+    `\`activityMonitor.fileLatency*\` settings in their place (1 to ${number(activityLimits.fileLatencyMs)} ms).`,
     '',
     `Recent Expensive Queries ranks by ${Object.values(rankChips).map(chip => chip.title).join(', ')}, re-sorted from the last sample without new SQL.`,
     '',

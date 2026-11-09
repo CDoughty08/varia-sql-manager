@@ -166,6 +166,10 @@ describe('activity monitor catalogue', () => {
     expect([ok({ table: 'waitTypes', hideBenign: false }), ok({ table: 'waitCategories', hideBenign: true }), ok({ table: 'sessions', hideBenign: true }), ok({ table: 'files', hideBenign: false })])
       .toEqual([true, true, false, false])
     expect(waitToggles.hideBenign).toMatchObject({ tables: ['waitCategories', 'waitTypes'], default: true })
+    // Data File I/O's chip and latency thresholds: its table only, a known chip, thresholds within the settings' bounds.
+    expect([ok({ table: 'files', fileView: 'overThreshold', latencyWarningMs: 1, latencyErrorMs: activityLimits.fileLatencyMs }), ok({ table: 'files', fileView: 'log' }),
+      ok({ table: 'files', fileView: 'big' }), ok({ table: 'sessions', fileView: 'log' }), ok({ table: 'waitTypes', latencyWarningMs: 20 }), ok({ table: 'files', latencyWarningMs: 0 }),
+      ok({ table: 'files', latencyErrorMs: activityLimits.fileLatencyMs + 1 }), ok({ table: 'files', latencyWarningMs: 2.5 })]).toEqual([true, true, false, false, false, false, false, false])
     for (const bad of [
       { table: 'files', view: 'all' }, { table: 'waitTypes', showSystem: true }, { table: 'sessions', view: 'sleeping' }, { table: 'nope' }, { table: 'sessions', extra: 1 },
       { table: 'sessions', text: 'x'.repeat(activityLimits.filterText + 1) }, { table: 'sessions', columnFilters: [{ column: 'sessionId', values: ['1'] }] },
