@@ -16,8 +16,12 @@ export function editorContribution({ commands, documents, editorOptions, editorG
   const step = (delta: 1 | -1) => {
     const { documents: list, activeId } = documents.getSnapshot()
     if (list.length < 2) return
-    const index = Math.max(0, list.findIndex(document => document.id === activeId))
-    documents.activate(list[(index + delta + list.length) % list.length].id)
+    const index = Math.max(0, list.findIndex(document => document.id === activeId)), next = list[(index + delta + list.length) % list.length].id
+    // From a focused tab, focus follows to the next query's tab: the old tab may now be outside its shelf's shown rows, and
+    // Close or Rename pressed next would act on it.
+    const fromTab = editorGroups.focusedDocument() !== undefined
+    documents.activate(next)
+    if (fromTab) editorGroups.focusTab(next)
   }
   // The query tab menu, or a key pressed on a focused tab, names its tab (`tabId`); otherwise the active document. The moved
   // tab stays the one shown, in its own group.

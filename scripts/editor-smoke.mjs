@@ -2,7 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { activeDocumentName, backendReady, closeDocumentButton, documentTab, documentTabs, editorGroups, editorGroupTabs, floatingEditorGroups, menubar, part, pinDocumentButton, planCanvas, planViewer, quickInput, quickInputActive, selectOpenDocument, tabShelf, tabShelfControls, tabShelfRows, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, closeDocumentButton, documentTab, documentTabs, editorGroups, editorGroupTabs, floatingEditorGroups, menubar, part, pinDocumentButton, planCanvas, planViewer, quickInput, quickInputActive, selectOpenDocument, tabNameBox, tabShelf, tabShelfControls, tabShelfRows, unsavedMark } from './fixtures/ui.mjs'
 
 // SSMS's editing commands in the real query editor, over the fake backend (no SQL Server): Comment and Uncomment
 // Selection, Make Uppercase and Lowercase, Increase and Decrease Line Indent from Edit › Advanced, Go To Line, Bookmarks
@@ -316,6 +316,47 @@ try {
   }
   await expect.poll(pair).toEqual([firstTab, secondTab])
   console.log('Editor checks: tabs reorder by keys and dragging, pinned and query shelves stack independently with Ctrl+scroll, overflow and End reach hidden tabs, and editor groups keep independent row counts.')
+  // Keyboard focus on tabs across a split, on CI's compact size: F2 renames a clean query whose tab moved into a new group
+  // (#364), and Ctrl+Tab from a focused tab takes focus to the next query's tab, shown in its strip, so Ctrl+W closes that
+  // one (#363).
+  const focusSize = await page.evaluate(() => [innerWidth, innerHeight])
+  await resizeContent(application, page, 1024, 720)
+  const clean = []
+  for (let opened = 0; opened < 4; opened++) {
+    await page.keyboard.press('Control+N')
+    await expect.poll(async () => (await order()).length).toBe(opened + 3)
+    clean.push(await activeDocumentName(page))
+  }
+  await textbox().focus()
+  await page.keyboard.press('Control+Backslash')
+  await expect(editorGroups(page)).toHaveCount(2)
+  expect(await groupNames(1)).toEqual([clean[3]])
+  await documentTab(page, clean[3]).focus()
+  await page.keyboard.press('F2')
+  await expect(tabNameBox(page)).toBeFocused()
+  await expect(tabNameBox(page)).toHaveValue(clean[3])
+  await page.keyboard.press('Escape')
+  await expect(documentTab(page, clean[3])).toBeFocused()
+  await selectOpenDocument(page, clean[0])
+  await documentTab(page, clean[0]).focus()
+  await expect.poll(() => activeDocumentName(page)).toBe(clean[0])
+  await expect(documentTab(page, clean[0])).toBeFocused()
+  await page.keyboard.press('Control+Tab')
+  await expect.poll(() => activeDocumentName(page)).toBe(clean[1])
+  await expect(documentTab(page, clean[1])).toBeFocused()
+  const inStrip = name => documentTab(page, name).evaluate(tab => { const box = tab.getBoundingClientRect(), view = tab.closest('[role="tablist"]').getBoundingClientRect(); return getComputedStyle(tab).opacity !== '0' && box.left >= view.left - 1 && box.right <= view.right + 1 && box.top >= view.top - 1 && box.bottom <= view.bottom + 1 })
+  expect(await inStrip(clean[1])).toBe(true)
+  await page.keyboard.press('Control+W')
+  await expect(documentTab(page, clean[1])).toHaveCount(0)
+  await expect(documentTab(page, clean[0])).toHaveCount(1)
+  for (const name of [clean[0], clean[2], clean[3]]) {
+    await selectOpenDocument(page, name)
+    await closeDocumentButton(page, name).click()
+  }
+  await expect(editorGroups(page)).toHaveCount(1)
+  await expect.poll(pair).toEqual([firstTab, secondTab])
+  await resizeContent(application, page, ...focusSize)
+  console.log('Editor checks: F2 renames a clean query moved into a new group, and Ctrl+Tab from a focused tab moves focus to the next shown tab, which Ctrl+W closes.')
   // Editor groups: Split Editor Right (Ctrl+\) moves the active query into a new group on the right, with its own strip
   // and editor; Ctrl+K Ctrl+Left and Right focus the groups; Move Editor into Previous Group (Ctrl+Alt+Left) joins them
   // again, and the empty group goes.

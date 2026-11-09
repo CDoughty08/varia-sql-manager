@@ -95,7 +95,7 @@ function service() {
     move: vi.fn((id: string, index: number) => { documents.list.splice(documents.list.indexOf(id), 1); documents.list.splice(index, 0, id); return true }),
     get: () => undefined
   }
-  const host: EditorGroupHost = { move: vi.fn(), focusGroup: vi.fn(), join: vi.fn(), capture: vi.fn(() => layout(split(leaf([0]), leaf([1])))), restore: vi.fn(), focusedDocument: vi.fn(() => 'c') }
+  const host: EditorGroupHost = { move: vi.fn(), focusGroup: vi.fn(), join: vi.fn(), capture: vi.fn(() => layout(split(leaf([0]), leaf([1])))), restore: vi.fn(), focusedDocument: vi.fn(() => 'c'), focusTab: vi.fn() }
   return { groups: new EditorGroupService(docs), docs, documents, host }
 }
 const twoGroups: EditorGroupSnapshot = { groups: [{ id: 'g1', documents: ['a', 'b'], active: 'b', floating: false }, { id: 'g2', documents: ['c'], active: 'c', floating: false }], activeGroup: 'g1' }

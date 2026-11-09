@@ -598,6 +598,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     queries,
     files,
     recentFiles,
+    editorGroups,
     recovery,
     recoveryTimers,
     targets,

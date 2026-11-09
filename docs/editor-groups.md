@@ -14,7 +14,11 @@ its own Monaco editor, and groups split side by side, stack, or float over the e
   before Dockview's own). Keys pressed on a focused tab (Delete, Ctrl+W, F2, Split Editor, the moves) act on that tab,
   shown or not: KeybindingService passes the focused tab as the command's `tabId` (`keyArgs`) to the query tab menu's commands
   alone (`actsOnTab`, `EditorGroupService.focusedDocument`); other keys, such as F5, follow the shown document. Menus and the palette act on the shown document, even when a closing menu put
-  focus back on another tab.
+  focus back on another tab. Ctrl+Tab and Ctrl+Shift+Tab pressed on a focused tab take focus to the newly shown
+  document's tab (`EditorGroupService.focusTab`), so the next tab key acts on a tab in view, not one a shelf has hidden.
+  Dockview builds a new tab element when a panel moves between groups and moves the same React header into it; the header
+  re-marks that element (`data-document-tab`, tooltip, description) on Dockview's layout and group changes
+  (`editor-groups/tab-host.ts`), which F2's `documentTabFocus` key needs.
   Each group is a region named "Editor group: " and its shown document's name, apart from the document's own regions.
 - One view per document: a document is in exactly one group. Split Editor moves the document into a new group, so a
   group must keep another tab to split. Two views of one model (VS Code's split of the same file) are follow-up work.

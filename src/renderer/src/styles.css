@@ -1773,6 +1773,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* Beside the active query's glyph (.oe-active and the gap before it), so the two together keep to that 40%. */
 .explorer-row.active-connection .environment-tag[data-place="explorer"] { max-width: min(40cqw - var(--varia-glyph-sm) - var(--varia-space-1), 12em); }
 .environment-tag[data-place="tab"] { max-width: 10em; }
+/* A custom label gives way beside the tab's name, so the live SID and the tab's buttons keep their room in a shelf cell. */
+.environment-tag[data-place="tab"][data-custom] { flex: 0 1 auto; }
 .environment-tag[data-place="tab"], .environment-tag[data-place="list"] { margin-left: 6px; }
 .environment-tag[data-place="list"] { vertical-align: middle; }
 .query-status-environment { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; margin-right: 10px; }
