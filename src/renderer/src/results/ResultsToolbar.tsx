@@ -37,8 +37,9 @@ function ResultsSearchBox({ tabId }: { tabId: string }) {
   const search = useServiceSnapshot(resultsSearch)[tabId] ?? resultsSearch.of(tabId)
   const inputRef = useRef<HTMLInputElement>(null)
   const focus = search.focus
-  // Find in Results (Ctrl+F in a grid) puts the focus here with the text selected, so typing replaces it.
-  useEffect(() => { if (focus > 0) { inputRef.current?.focus(); inputRef.current?.select() } }, [focus])
+  // Find in Results (Ctrl+F in a grid) puts the focus here with the text selected, so typing replaces it; once, even when
+  // the box is shown only after it (the Messages view), and not again each time the box is shown.
+  useEffect(() => { if (resultsSearch.takeFocus(tabId)) { inputRef.current?.focus(); inputRef.current?.select() } }, [focus, resultsSearch, tabId])
   const keyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter' && !event.altKey && !event.ctrlKey && !event.metaKey) { event.preventDefault(); resultsSearch.step(tabId, event.shiftKey ? -1 : 1) }
     else if (event.key === 'Escape' && search.text) { event.preventDefault(); event.stopPropagation(); resultsSearch.clear(tabId) }

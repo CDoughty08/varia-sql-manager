@@ -152,6 +152,8 @@ export class GridView {
   private muted: ReadonlySet<number> = new Set()
   /** Search in results' marks, while the tab has a search. */
   private searchMarks: GridMarks | undefined
+  /** A search match revealed in this grid, to bring into view in the panes around it (the results stack) once painted. */
+  private outerReveal: { readonly row: number; readonly column: number; frames: number } | undefined
   private links: Uint8Array
   private readonly gid = nextGridId++
   private readonly slots = new WeakMap<Element, { row?: RowSlot; cell?: CellSlot; header?: HeaderSlot }>()
@@ -363,7 +365,11 @@ export class GridView {
    *  number rows this grid does not show (a sort it has not swapped to yet). */
   revealMark(): boolean {
     const marks = this.searchMarks
-    if (marks?.current && marks.handle === this.handle) { this.reveal(marks.current.row, marks.current.column); return true }
+    if (marks?.current && marks.handle === this.handle) {
+      this.reveal(marks.current.row, marks.current.column)
+      this.outerReveal = { row: marks.current.row, column: marks.current.column, frames: 10 }
+      return true
+    }
     if (marks?.currentColumn !== undefined && marks.currentColumn < this.columns) {
       const rows = this.rows()
       const row = Math.min(Math.max(0, rows - 1), this.viewport?.firstRow ?? this.o.state.selection?.active.row ?? 0)
@@ -474,6 +480,24 @@ export class GridView {
     this.schedule()
   }
 
+  /** A grid sized to its rows has nothing to scroll: its match may be below the stack's fold, so the painted cell is
+   *  brought into view in its scrolling ancestors and its own scroller, as little as it takes. A grid the stack has just
+   *  built has no size for its first frames and paints nothing: the reveal waits a few frames for its cell. */
+  private revealOuter(): void {
+    const target = this.outerReveal
+    if (!target) return
+    for (const slot of this.rowSlots) {
+      if (!slot.shown || slot.row !== target.row) continue
+      const cell = slot.cells.find(cell => cell.shown && cell.column === target.column)
+      if (!cell) break
+      this.outerReveal = undefined
+      cell.el.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+      return
+    }
+    if (--target.frames <= 0) this.outerReveal = undefined
+    else this.schedule()
+  }
+
   private schedule(): void {
     if (this.cancelFrame || this.disposed || this.stopped) return
     this.cancelFrame = nextFrame(() => {
@@ -487,6 +511,7 @@ export class GridView {
     const started = performance.now()
     try {
       this.render()
+      this.revealOuter()
       this.failures = 0
     } catch (error) {
       this.o.onError(error)
@@ -958,6 +983,11 @@ export class GridView {
   }
 
   private render(): void {
+    // A horizontal scroll bar that appears as columns widen shrinks the client box without resizing the scroller, and
+    // ResizeObserver does not report it: a stale height hid the last row under the bar and undid scrolling to it. Read
+    // in the frame's read phase, with the offsets below.
+    this.viewportWidth = this.scroller.clientWidth
+    this.viewportHeight = this.scroller.clientHeight
     const width = this.viewportWidth, height = this.viewportHeight
     // A hidden pane (Ctrl+R) or a background tab has no size: nothing to paint until it is shown.
     if (width <= 0 || height <= 0) return

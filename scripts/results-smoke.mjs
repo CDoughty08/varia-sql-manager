@@ -1619,6 +1619,21 @@ try {
   await expect(marked(gridPart.searchDimmedHeader)).toHaveCount(0)
   await searchMode('Data').click()
   expect(await clear()).toBe(true)
+  // A run from the editor keeps the focus there, though the box took it for Ctrl+F before and is shown again.
+  await run('-- varia-fake: sets=N1*20,N1*20,N1*20')
+  await expect(cell(0, 1)).toBeVisible()
+  await expect(textbox()).toBeFocused()
+  // Several grids: Shift+Enter from the first match wraps to the last, in the last grid, which the stack scrolls into
+  // view with the match in it, though the grid was built already below the fold.
+  await searchBox.click()
+  await page.keyboard.type('COMPLETE 1')
+  await expect(searchCount).toHaveText('1 of 24')
+  await page.keyboard.press('Shift+Enter')
+  await expect(searchCount).toHaveText('24 of 24')
+  const lastMatch = grid(2).locator(gridPart.searchCurrent).filter({ visible: true })
+  await expect(lastMatch).toHaveText('complete 19')
+  await expect(lastMatch).toBeInViewport({ ratio: 1 })
+  await searchBox.press('Escape')
   await resize(...fullSize)
   await enlargeOutput(page)
   console.log('Results checks: Ctrl+F searches every grid in the backend, Enter, Shift+Enter and F3 step through the marked matches, a sort searches again in its order, Columns matches column names, and Escape clears it.')

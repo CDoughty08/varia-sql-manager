@@ -146,6 +146,10 @@ export class ResultsPortHost {
     this.subscriptions.clear()
     for (const sort of this.sorting.values()) sort.cancel(cancelReasons.consumerGone)
     this.sorting.clear()
+    // A search's answer is dropped once its port is gone, so it is stopped here: left in the map it would count as busy
+    // for good and refuse its rid in the next page.
+    for (const search of this.searching.values()) search.cancel(cancelReasons.consumerGone)
+    this.searching.clear()
     this.closing = 0
     this.updating = 0
     try { port?.close() } catch { /* Already closed. */ }

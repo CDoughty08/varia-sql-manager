@@ -387,6 +387,23 @@ describe('ResultsPortHost', () => {
     await settle()
     expect(codes(port()).at(-1)).toEqual([11, 'CANCELLED'])
   })
+  it("stops a page's searches when its port closes, so the next page's searches are neither refused nor answered by them", async () => {
+    const { host, port, frame, searches } = fixture()
+    host.own([descriptor(7)])
+    const ask = { generation: 1, resultId: 7, text: 'abc', fromRow: 0, maxMatches: 100 }
+    port().send({ t: 'search', rid: 1, ...ask })
+    const old = port()
+    host.reset()
+    expect(searches[0].cancels).toEqual([cancelReasons.consumerGone])
+    host.open(frame)
+    expect(port()).not.toBe(old)
+    port().send({ t: 'search', rid: 1, ...ask })
+    expect(searches).toHaveLength(2)
+    searches[0].resolve({ rows: 10, total: 1, first: 0, matchRows: [1], matchColumns: [0], complete: true, approximate: false })
+    searches[1].resolve({ rows: 10, total: 2, first: 0, matchRows: [2, 3], matchColumns: [0, 0], complete: true, approximate: false })
+    await settle()
+    expect(port().ends()).toEqual([{ t: 'end', rid: 1, ok: true, result: { rows: 10, total: 2, first: 0, matchRows: [2, 3], matchColumns: [0, 0], complete: true, approximate: false } }])
+  })
   it('forwards a search answer only when its matches are in order, inside the rows searched and on the side of the row asked', async () => {
     const { host, port, searches } = fixture()
     host.own([descriptor(7)])

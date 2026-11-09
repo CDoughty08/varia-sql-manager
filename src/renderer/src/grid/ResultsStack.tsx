@@ -146,16 +146,23 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
     setCollapsedState(next)
   }, [view])
   // Search in results: the grid holding the active match opens and scrolls into view, which mounts it; the grid then
-  // scrolls the match itself into view (ResultGrid).
+  // scrolls the match itself into view (ResultGrid). Layout effects run before the grid's effect takes the reveal, so the
+  // stack still sees it pending; a collapsed grid opens first and scrolls once its new layout is in.
   const revealSeq = search?.reveal ?? 0, revealIndex = search?.revealIndex ?? -1
-  useEffect(() => {
-    const element = stackRef.current
-    if (!element || revealIndex < 0 || revealIndex >= count || !resultsSearch.pendingReveal(tabId, revealIndex)) return
+  const stackReveal = useRef(-1)
+  useLayoutEffect(() => {
+    if (revealIndex < 0 || revealIndex >= count || !resultsSearch.pendingReveal(tabId, revealIndex)) return
     if (collapsed.has(revealIndex)) toggle(revealIndex)
-    const top = layout.offsets[revealIndex], bottom = top + layout.heights[revealIndex]
+    stackReveal.current = revealIndex
+  }, [revealSeq, revealIndex])
+  useLayoutEffect(() => {
+    const element = stackRef.current, index = stackReveal.current
+    if (!element || index < 0 || index >= layout.offsets.length || collapsed.has(index)) return
+    stackReveal.current = -1
+    const top = layout.offsets[index], bottom = top + layout.heights[index]
     if (top < element.scrollTop) element.scrollTop = top
     else if (bottom > element.scrollTop + element.clientHeight) element.scrollTop = Math.max(top, bottom - element.clientHeight)
-  }, [revealSeq, revealIndex])
+  }, [revealSeq, revealIndex, layout, collapsed])
   const splitterDown = (index: number, event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
     event.preventDefault()

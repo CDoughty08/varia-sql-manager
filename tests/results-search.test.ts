@@ -175,6 +175,14 @@ describe('ResultsSearchService', () => {
     expect(search().marks.get(0)?.cells?.size).toBe(3)
     await answerAll()
     expect(search()).toMatchObject({ current: 1, reveal })
+    // A step while it searches again moves the active match; the end keeps that place and shows it in the new matches.
+    sorts.set(0, { keys: [], view: { ...view, viewId: 10 } as never, sorting: false, approximate: false, stale: false })
+    show(sets)
+    service.step('t1', 1)
+    const stepped = search().reveal
+    await answerAll()
+    expect(search().current).toBe(2)
+    expect(search().reveal).toBe(stepped + 1)
     // A newer text aborts what runs.
     service.setText('t1', 'y', true)
     const first = searches[0]
@@ -217,7 +225,11 @@ describe('ResultsSearchService', () => {
     service.revealed('t1')
     expect(service.pendingReveal('t1', 1)).toBe(false)
     const focus = search().focus
+    expect(service.takeFocus('t1')).toBe(false)
     service.focus('t1')
     expect(search().focus).toBe(focus + 1)
+    // The box takes it once: a box shown again later (a new run's results) leaves the focus where it is.
+    expect(service.takeFocus('t1')).toBe(true)
+    expect(service.takeFocus('t1')).toBe(false)
   })
 })

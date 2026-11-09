@@ -74,6 +74,8 @@ interface TabState {
   /** The reveal a grid has carried out. */
   revealed?: number
   focus: number
+  /** A focus asked for that no search box has taken yet. */
+  focusPending?: boolean
   published?: TabSearch
 }
 
@@ -147,7 +149,16 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
   focus(tabId: string): void {
     const tab = this.state(tabId)
     tab.focus++
+    tab.focusPending = true
     this.publishTab(tabId, tab)
+  }
+  /** Whether the tab's search box should take the focus now: once per focus asked for, so a box shown again later (a run
+   *  that brings new results, a switch back from Messages) leaves the focus where it is. */
+  takeFocus(tabId: string): boolean {
+    const tab = this.tabs.get(tabId)
+    if (!tab?.focusPending) return false
+    tab.focusPending = false
+    return true
   }
 
   dispose(): void {
@@ -242,7 +253,8 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
       return
     }
     // A search again keeps showing the last matches until the new ones are all in; a new one shows each grid's as it comes.
-    const keep = fresh ? -1 : tab.current
+    // Steps taken while it runs move the active match among the last matches; it keeps that place, shown again at the end.
+    const steps = tab.reveal
     const grids: GridRun[] = []
     if (fresh) { tab.grids = grids; tab.current = -1 }
     tab.status = 'searching'
@@ -270,7 +282,10 @@ export class ResultsSearchService extends SnapshotStore<Readonly<Record<string, 
       tab.abort = undefined
       tab.grids = grids
       const total = this.total(tab)
-      if (!fresh) tab.current = total === 0 ? -1 : Math.max(0, Math.min(keep, total - 1))
+      if (!fresh) {
+        tab.current = total === 0 ? -1 : Math.max(0, Math.min(tab.current, total - 1))
+        if (tab.reveal !== steps && tab.current >= 0) this.reveal(tab)
+      }
       tab.status = failure && grids.length === 0 ? 'failed' : 'done'
       tab.error = failure && grids.length === 0 ? failure : undefined
       this.publishTab(tabId, tab)
