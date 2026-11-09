@@ -529,12 +529,12 @@ class EditorAreaController implements Area, EditorGroupHost {
     // Moving the editor's element blurs it: it keeps the keyboard when it had it, or when nothing has it now and the editor
     // area had it last (a menu or the palette closed onto the old panel, which a new document hid), as the single editor
     // kept it across tab switches.
-    const active = document.activeElement, keep = editor.element.contains(active) || editor.editor.instance.hasWidgetFocus() || ((!active || active === document.body) && this.focusInArea)
+    const active = document.activeElement, keep = editor.editor.contains(active) || ((!active || active === document.body) && this.focusInArea)
     if (editor.element.parentElement !== slot) slot.append(editor.element)
     editor.editor.setVisible(true)
     editor.shows = id
     this.workbench.documents.showIn(editor.editor.instance, id)
-    if (keep && this.workbench.documents.getSnapshot().activeId === id && !editor.editor.instance.hasWidgetFocus()) this.workbench.documents.focusActive()
+    if (keep && this.workbench.documents.getSnapshot().activeId === id && !editor.editor.contains(document.activeElement)) this.workbench.documents.focusActive()
     this.followStatus()
   }
   unmount(group: string, slot: HTMLElement): void {

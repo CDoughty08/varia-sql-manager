@@ -49,7 +49,7 @@ export interface SsisOperationsKeys { readonly stoppable: boolean; readonly paus
 export interface SsisOperationsContextState { readonly byDocument: Readonly<Record<string, SsisOperationsKeys>> }
 /** The parts of a DOM element and of the editor that `focusFacts` reads, so tests can pass plain objects. */
 export interface FocusElement { matches(selector: string): boolean; closest(selector: string): { getAttribute(name: string): string | null } | null }
-export interface FocusEditor<E> { getContainerDomNode(): { contains(node: E): boolean }; hasTextFocus(): boolean; hasWidgetFocus?(): boolean }
+export interface FocusEditor<E> { getContainerDomNode(): { contains(node: E): boolean }; getId?(): string; hasTextFocus(): boolean }
 
 const noFocus: FocusFacts = { editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '', outputGridFocus: false, searchHitsFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false, peekFocus: false, peekTabFocus: false,
   messagesFocus: false, explorerFocus: false, explorerTypeAhead: false, optionsDialogFocus: false }
@@ -59,7 +59,10 @@ const panels: ReadonlySet<string> = new Set(['explorer', 'editor'])
 export function focusFacts<E extends FocusElement>(element: E | null, editor: FocusEditor<E> | undefined): FocusFacts {
   if (!element) return noFocus
   const editorTextFocus = !!editor?.hasTextFocus()
-  const editorFocus = editorTextFocus || !!editor?.hasWidgetFocus?.() || !!editor?.getContainerDomNode().contains(element)
+  // Monaco defers widget blur; ownership of the browser's focused element is current when its next key arrives.
+  const editorId = editor?.getId?.()
+  const editorFocus = editorTextFocus || !!editor?.getContainerDomNode().contains(element) ||
+    !!editorId && element.closest('[data-query-editor-id]')?.getAttribute('data-query-editor-id') === editorId
   const inputFocus = !editorTextFocus && (element.matches('input, textarea, select') || !!element.closest('[contenteditable]:not([contenteditable="false"])'))
   // DockWorkspace marks each pane host, and the mark moves with floating groups.
   const pane = element.closest('[data-pane]')?.getAttribute('data-pane') ?? ''

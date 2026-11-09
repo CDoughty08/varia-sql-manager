@@ -5,7 +5,7 @@ import { editorFontFamily } from '../fonts'
 import { bindExplorerDrop } from '../explorer/drop'
 
 /** A query editor: an editor group's Monaco instance, with Tools › Options applied and Object Explorer drops bound. */
-export interface QueryEditorInstance extends Disposable { readonly instance: editor.IStandaloneCodeEditor; setVisible(visible: boolean): void }
+export interface QueryEditorInstance extends Disposable { readonly instance: editor.IStandaloneCodeEditor; contains(target: Node | null): boolean; setVisible(visible: boolean): void }
 
 /** Creates a query editor in `container`. Each editor group has one, which shows the group's active text document. */
 export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorOptions' | 'panes'>, container: HTMLElement): QueryEditorInstance {
@@ -44,6 +44,7 @@ export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorO
     // OVR (the Insert key) shows a block caret, as Visual Studio does.
     overtypeCursorStyle: 'block'
   })
+  overflow.setAttribute('data-query-editor-id', instance.getId())
   const options = workbench.editorOptions.bindEditor(instance)
   // The external host needs Monaco's current theme/high-contrast classes too, including after a new model replaces
   // its view. Observe just that view's class attribute, never the editor's changing text DOM.
@@ -65,6 +66,6 @@ export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorO
   syncVisibility()
   // Object Explorer rows dropped on the editor insert their names.
   const drop = bindExplorerDrop(instance)
-  return { instance, setVisible: value => { visible = value; syncVisibility() },
+  return { instance, contains: target => container.contains(target) || overflow.contains(target), setVisible: value => { visible = value; syncVisibility() },
     dispose: () => { visibility(); drop.dispose(); options.dispose(); model.dispose(); classes.disconnect(); instance.dispose(); overflow.remove() } }
 }

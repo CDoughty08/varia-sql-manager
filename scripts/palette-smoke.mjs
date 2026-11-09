@@ -293,8 +293,17 @@ try {
   const listed = await calls('explorer.children')
   await explorer.click()
   await expect(explorerTree(page)).toBeFocused()
-  await page.keyboard.press('F5')
+  const beforeRefresh = await calls('query.execute')
+  await textbox().focus()
+  // Dispatch in the focus turn, before Monaco's deferred widget-blur event. An event-derived editor focus flag can
+  // otherwise steal this F5 from the tree and execute SQL even though the browser already focused Object Explorer.
+  await explorerTree(page).evaluate(tree => {
+    tree.focus()
+    tree.dispatchEvent(new KeyboardEvent('keydown', { key: 'F5', code: 'F5', bubbles: true, cancelable: true }))
+    tree.dispatchEvent(new KeyboardEvent('keyup', { key: 'F5', code: 'F5', bubbles: true, cancelable: true }))
+  })
   await expect.poll(() => calls('explorer.children')).toBeGreaterThan(listed)
+  expect(await calls('query.execute')).toBe(beforeRefresh)
   const executed = await calls('query.execute')
   await textbox().focus()
   await page.keyboard.press('F5')
