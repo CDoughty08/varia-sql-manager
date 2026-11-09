@@ -5,6 +5,7 @@ import { useWorkbench } from '../core/WorkbenchContext'
 import type { Workbench } from '../core/workbench'
 import type { QueryTab } from '../documents'
 import Icon from '../Icon'
+import { afterPointer } from './pointer'
 
 const tabWidth = 232
 const controlsWidth = 106
@@ -32,6 +33,9 @@ export class TabShelfLayout {
   private signature = ''
   private frame = 0
   private disposed = false
+  private readonly visible = new Map<boolean, readonly string[]>()
+  private frozen?: ReadonlyMap<boolean, readonly string[]>
+  private readonly pointer: ReturnType<typeof afterPointer>
   private gesture?: { pinned: boolean; x: number; y: number; last: number; total: number; control?: number }
   private readonly disposables: { dispose(): void }[] = []
 
@@ -40,6 +44,7 @@ export class TabShelfLayout {
     this.header = this.list.closest<HTMLElement>('.dv-tabs-and-actions-container')!
     this.list.classList.add('query-shelves', OVERFLOW_WRAP_TABS_CLASS)
     this.header.classList.add('query-shelves-header')
+    this.pointer = afterPointer(this.list.ownerDocument.defaultView!)
     const resize = new ResizeObserver(() => this.schedule())
     resize.observe(this.list)
     resize.observe(group.element)
@@ -47,6 +52,7 @@ export class TabShelfLayout {
     const mutations = new MutationObserver(() => this.schedule())
     mutations.observe(this.list, { childList: true, subtree: true })
     group.element.addEventListener('wheel', this.wheel, { passive: false, capture: true })
+    this.list.addEventListener('pointerdown', this.freeze, true)
     this.list.addEventListener('scroll', this.resetScroll)
     this.list.addEventListener('focusin', this.refresh)
     this.disposables.push(
@@ -64,6 +70,19 @@ export class TabShelfLayout {
   }
 
   private resetScroll = () => { this.list.scrollLeft = 0; this.list.scrollTop = 0 }
+
+  private freeze = (event: PointerEvent): void => {
+    const target = event.target
+    if (this.frozen || event.button !== 0 || !(target instanceof Element) || target.closest('.tab-pin, .tab-close, .tab-rename') || !target.closest('.dv-tab')) return
+    // Dockview activates a tab on pointerdown, before its drag starts. Keep the other visible targets in place.
+    const frozen = this.frozen = new Map(this.visible)
+    // Use the shared release helper so native drop handlers finish before the next layout, including cross-group moves.
+    this.pointer.then(() => {
+      if (this.frozen !== frozen) return
+      this.frozen = undefined
+      this.refresh()
+    })
+  }
 
   readonly refresh = (): void => {
     if (this.disposed || !this.list.clientWidth) return
@@ -86,14 +105,16 @@ export class TabShelfLayout {
       const isPinned = !!section[0].pinned, key = isPinned ? 'pinned' : 'unpinned'
       const limit = Math.max(1, Math.min(Math.floor(availableRows / count), Math.ceil(section.length / columns)))
       const rows = Math.min(this.rows[key], limit), slots = columns * rows
-      const visible = section.slice(0, slots)
-      const priority = [...new Set(priorities.map(id => section.find(tab => tab.id === id)).filter(tab => tab !== undefined))].slice(0, slots)
+      const frozen = this.frozen?.get(isPinned)
+      const visible = frozen ? frozen.map(id => section.find(tab => tab.id === id)).filter(tab => tab !== undefined).slice(0, slots) : section.slice(0, slots)
+      const priority = this.frozen ? [] : [...new Set(priorities.map(id => section.find(tab => tab.id === id)).filter(tab => tab !== undefined))].slice(0, slots)
       for (const tab of priority) {
         if (visible.includes(tab)) continue
         const replace = visible.findLastIndex(candidate => !priority.includes(candidate))
         if (replace >= 0) visible[replace] = tab
       }
       const shown = new Set(visible), hidden = section.filter(tab => !shown.has(tab))
+      this.visible.set(isPinned, visible.map(tab => tab.id))
       for (const [index, tab] of section.entries()) {
         const node = nodes.get(tab.id)
         if (!node) continue
@@ -158,6 +179,8 @@ export class TabShelfLayout {
     cancelAnimationFrame(this.frame)
     this.disposables.forEach(value => value.dispose())
     this.group.element.removeEventListener('wheel', this.wheel, true)
+    this.list.removeEventListener('pointerdown', this.freeze, true)
+    this.pointer.dispose()
     this.list.removeEventListener('scroll', this.resetScroll)
     this.list.removeEventListener('focusin', this.refresh)
   }

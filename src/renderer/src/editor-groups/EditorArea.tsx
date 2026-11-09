@@ -540,6 +540,13 @@ class EditorAreaController implements Area, EditorGroupHost {
     editor.focus()
     return true
   }
+  private focusLater(): void {
+    const target = document.activeElement
+    focusWhenDrawn(requestAnimationFrame, () => {
+      const active = document.activeElement
+      if (!active || active === document.body || active === target) this.workbench.documents.focusActive()
+    })
+  }
   // EditorGroupHost: the moves commands ask for.
   move(id: string, to: EditorMove): void {
     const api = this.api, panel = api?.getPanel(id)
@@ -561,14 +568,14 @@ class EditorAreaController implements Area, EditorGroupHost {
     // The moved document stays the one shown, in its new group, and keeps the keyboard, as VS Code's moves do.
     api.getPanel(id)?.api.setActive()
     this.publish()
-    focusWhenDrawn(requestAnimationFrame, () => this.workbench.documents.focusActive())
+    this.focusLater()
   }
   focusGroup(groupId: string): void {
     const group = this.groupById(groupId)
     if (!group) return
     group.api.setActive()
     const shown = group.activePanel
-    if (shown) { shown.api.setActive(); focusWhenDrawn(requestAnimationFrame, () => this.workbench.documents.focusActive()) }
+    if (shown) { shown.api.setActive(); this.focusLater() }
   }
   join(): void {
     const api = this.api
@@ -579,7 +586,7 @@ class EditorAreaController implements Area, EditorGroupHost {
     for (const info of groups.slice(1)) for (const id of info.documents) api.getPanel(id)?.api.moveTo({ group: first, position: 'center' })
     if (active) api.getPanel(active)?.api.setActive()
     this.publish()
-    focusWhenDrawn(requestAnimationFrame, () => this.workbench.documents.focusActive())
+    this.focusLater()
   }
   focusedDocument(): string | undefined {
     const tab = document.activeElement?.closest('.dv-tab')

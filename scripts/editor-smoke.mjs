@@ -277,9 +277,15 @@ try {
   await expect.poll(() => activeDocumentName(page)).toBe(end)
   await expect(documentTab(page, end)).toBeFocused()
   await expect(documentTab(page, end)).not.toHaveAttribute('data-tab-overflow', '')
-  // Native drag reorders a pinned tab while the shelf has several rows.
-  await tabShelfControls(shelfGroup, true).getByRole('button', { name: 'More pinned rows', exact: true }).click()
   const pinnedOrder = () => shelfGroup.getByRole('tab').and(shelfGroup.locator('[data-tab-shelf="pinned"]')).evaluateAll(tabs => tabs.map(tab => tab.getAttribute('aria-label')))
+  // Starting a drag activates its source. An overflow tab promoted into the last slot must stay there as a target.
+  const singleRowOrder = await pinnedOrder(), promoted = singleRowOrder.at(-1)
+  await selectOpenDocument(page, promoted)
+  const promotedBox = await documentTab(page, promoted).boundingBox()
+  await drag(documentTab(page, singleRowOrder[0]), { x: promotedBox.x + promotedBox.width - 4, y: promotedBox.y + promotedBox.height / 2 })
+  await expect.poll(pinnedOrder).toEqual([...singleRowOrder.slice(1), singleRowOrder[0]])
+  // Native drag also reorders a pinned tab while the shelf has several rows.
+  await tabShelfControls(shelfGroup, true).getByRole('button', { name: 'More pinned rows', exact: true }).click()
   const beforeDrag = await pinnedOrder(), pinnedTarget = await documentTab(page, beforeDrag[0]).boundingBox()
   await drag(documentTab(page, beforeDrag[1]), { x: pinnedTarget.x + 4, y: pinnedTarget.y + pinnedTarget.height / 2 })
   await expect.poll(async () => (await pinnedOrder()).slice(0, 2)).toEqual([beforeDrag[1], beforeDrag[0]])

@@ -213,6 +213,59 @@ describe('editor group tab shelves', () => {
     expect(view.group.panels.map(panel => panel.id)).toEqual(view.tabs.map(tab => tab.id))
   })
 
+  it('keeps a promoted drag destination in place while the native pointer press activates the source tab', async () => {
+    const view = fixture()
+    view.activate('p6')
+    const source = view.nodes.get('p1')!, destination = view.nodes.get('p6')!
+    const targetPosition = [destination.style.left, destination.style.top]
+    expect(view.visible(true)).toEqual(['p1', 'p6'])
+    source.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 1, isPrimary: true }))
+    // Dockview activates a pressed tab before its native drag begins.
+    view.activate('p1')
+    view.documents.set([...view.tabs])
+    flushFrames()
+    expect(view.visible(true)).toEqual(['p1', 'p6'])
+    expect([destination.style.left, destination.style.top]).toEqual(targetPosition)
+    document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, pointerId: 1, isPrimary: true }))
+    // The native drop handler still sees the same target until the release event finishes.
+    expect(view.visible(true)).toEqual(['p1', 'p6'])
+    await Promise.resolve()
+    flushFrames()
+    // Chromium may run a microtask checkpoint between native pointerup listeners, before the drop has committed.
+    expect(view.visible(true)).toEqual(['p1', 'p6'])
+    await vi.waitFor(() => { flushFrames(); expect(view.visible(true)).toEqual(['p1', 'p2']) })
+    expect(view.group.panels.map(panel => panel.id)).toEqual(view.tabs.map(tab => tab.id))
+  })
+
+  it.each(['pointercancel', 'blur'])('releases the pinned drag layout after %s', async release => {
+    const view = fixture()
+    view.activate('p6')
+    view.nodes.get('p1')!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 1, isPrimary: true }))
+    view.activate('p1')
+    expect(view.visible(true)).toEqual(['p1', 'p6'])
+    if (release === 'blur') {
+      const owner = view.list.ownerDocument.defaultView!, event = new Event('blur')
+      // Match Chromium's window-blur target identity for the shared helper's window-only blur guard.
+      Object.defineProperty(event, 'target', { value: owner })
+      owner.dispatchEvent(event)
+    }
+    else document.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, pointerId: 1, isPrimary: true }))
+    await Promise.resolve()
+    flushFrames()
+    expect(view.visible(true)).toEqual(['p1', 'p6'])
+    await vi.waitFor(() => { flushFrames(); expect(view.visible(true)).toEqual(['p1', 'p2']) })
+    view.activate('p5')
+    expect(view.visible(true)).toEqual(['p1', 'p5'])
+  })
+
+  it('keeps normal selection promotion available after a secondary tab press', () => {
+    const view = fixture()
+    view.activate('p6')
+    view.nodes.get('p1')!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 2, pointerId: 1, isPrimary: true }))
+    view.activate('p1')
+    expect(view.visible(true)).toEqual(['p1', 'p2'])
+  })
+
   it('keeps a stationary wheel gesture on its original shelf until Control is released and pressed again', () => {
     const view = fixture()
     view.layout.setRows(true, 3)
