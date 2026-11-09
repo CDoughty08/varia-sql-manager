@@ -29,6 +29,7 @@ describe('Release builds', () => {
     // the smoke selectors (scripts/fixtures/ui.mjs) and main's index changed in a third of recent pull requests.
     for (const path of ['.github/workflows/release.yml', '.github/workflows/package.yml', 'electron-builder.yml', 'build/**', 'package-lock.json', 'scripts/packaged-smoke.mjs', 'scripts/packaged-contents.mjs', 'scripts/portable-smoke.mjs', 'scripts/windows-installer-smoke.ps1', 'scripts/update-manifest.mjs', 'src/main/app-protocol.ts', 'src/main/backend/spawn-spec.ts', 'src/main/update-install.ts', 'scripts/appimage-check.mjs']) expect(releasePaths).toContain(path)
     expect(releasePaths).toContain('src/main/backend/sqltools-runtime.ts')
+    expect(releasePaths).toContain('scripts/prepare-electron.mjs')
     for (const path of releasePaths) expect(path, path).not.toMatch(/^(src\/\*\*|src\/main\/index\.ts|scripts\/fixtures|package\.json|tests\/)/)
   })
   it('adds at most three jobs and one macOS job to a pull request push, and packages Intel macOS only for tags, manual runs and weekly', () => {

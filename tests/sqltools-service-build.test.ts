@@ -49,10 +49,37 @@ describe('SQL Tools Service download retries', () => {
     expect(fetch.mock.calls.map(call => call[0])).toEqual([url, alternate])
     expect(await readFile(output, 'utf8')).toBe('archive bytes')
   })
+  it('uses the pinned official asset API only after two transient release URL failures', async () => {
+    const f = await fixture(), assetId = 42
+    f.manifest.platforms[f.rid].assetId = assetId
+    const fetch = vi.fn().mockImplementationOnce(async () => new Response('unavailable', { status: 504 }))
+      .mockImplementationOnce(async () => new Response('unavailable', { status: 504 }))
+      .mockResolvedValueOnce(new Response('verified archive bytes'))
+    vi.stubGlobal('fetch', fetch)
+    const output = await prepareSqlToolsService({ ...f, downloadArchive: undefined })
+    expect(fetch.mock.calls.map(call => call[0])).toEqual([archiveUrl(f.rid, f.manifest), `${archiveUrl(f.rid, f.manifest)}?download=1`,
+      `https://api.github.com/repos/microsoft/sqltoolsservice/releases/assets/${assetId}`])
+    expect(fetch.mock.calls[2][1].headers.Accept).toBe('application/octet-stream')
+    expect(fetch.mock.calls.map(call => call[1].signal)).toEqual(Array(3).fill(fetch.mock.calls[0][1].signal))
+    expect(f.extractArchive).toHaveBeenCalledOnce()
+    expect(await sqlToolsServiceProblems(output, f.rid, f.manifest)).toEqual([])
+  })
+  it('rejects official asset API bytes that fail the unchanged archive checksum before extraction', async () => {
+    const f = await fixture()
+    f.manifest.platforms[f.rid].assetId = 42
+    const fetch = vi.fn().mockImplementationOnce(async () => new Response('unavailable', { status: 504 }))
+      .mockImplementationOnce(async () => new Response('unavailable', { status: 504 }))
+      .mockResolvedValueOnce(new Response('corrupt archive'))
+    vi.stubGlobal('fetch', fetch)
+    await expect(prepareSqlToolsService({ ...f, downloadArchive: undefined })).rejects.toThrow('SHA-256')
+    expect(fetch).toHaveBeenCalledTimes(3)
+    expect(f.extractArchive).not.toHaveBeenCalled()
+    expect(await readdir(join(f.root, 'artifacts', 'sqltools-service-downloads'))).toEqual([])
+  })
   it('refuses a terminal HTTP error without retrying', async () => {
     const output = await destination(), fetch = vi.fn().mockResolvedValue(new Response('not found', { status: 404 }))
     vi.stubGlobal('fetch', fetch)
-    await expect(downloadSqlToolsArchive(url, output)).rejects.toThrow('HTTP 404')
+    await expect(downloadSqlToolsArchive(url, output, 42)).rejects.toThrow('HTTP 404')
     expect(fetch).toHaveBeenCalledOnce()
     await expect(access(output)).rejects.toThrow()
   })
@@ -102,6 +129,7 @@ describe('bundled SQL Tools Service preparation', () => {
     expect(sqlToolsManifest.version).toBe('6.0.20261104.1')
     expect(Object.keys(sqlToolsManifest.platforms).sort()).toEqual(['linux-x64', 'osx-arm64', 'osx-x64', 'win-x64'])
     for (const [rid, artifact] of Object.entries(sqlToolsManifest.platforms)) {
+      expect(Number.isSafeInteger(artifact.assetId) && artifact.assetId! > 0).toBe(true)
       expect(artifact.sha256).toMatch(/^[a-f0-9]{64}$/)
       expect(archiveUrl(rid)).toBe(`https://github.com/microsoft/sqltoolsservice/releases/download/${sqlToolsManifest.version}/${artifact.archive}`)
       expect(artifact.archive).toBe(`Microsoft.SqlTools.ServiceLayer-${rid}-net10.0.${rid.startsWith('win-') ? 'zip' : 'tar.gz'}`)

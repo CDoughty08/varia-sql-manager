@@ -103,13 +103,16 @@ function retryableDownload(error) {
   return ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'ENOTFOUND', 'EPIPE', 'ERR_STREAM_PREMATURE_CLOSE',
     'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET'].includes(error?.code)
 }
-/** Retry only transient transport failures; both URLs serve the same official asset and preparation still checks its pin. */
-export async function downloadSqlToolsArchive(url, destination) {
+/** Retry only transient transport failures; all URLs serve the same official asset and preparation still checks its pin. */
+export async function downloadSqlToolsArchive(url, destination, assetId) {
+  if (assetId !== undefined && (!Number.isSafeInteger(assetId) || assetId <= 0)) throw new Error('The SQL Tools Service release asset ID is invalid.')
   const signal = AbortSignal.timeout(180_000), alternate = new URL(url), limit = 256 * 1024 * 1024
   alternate.searchParams.set('download', '1')
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const response = await fetch(attempt === 0 ? url : alternate.href, { signal, headers: { 'User-Agent': 'Varia-SQL-Manager-build' } })
+      const api = attempt === 2 && assetId !== undefined
+      const source = api ? `https://api.github.com/repos/microsoft/sqltoolsservice/releases/assets/${assetId}` : attempt === 0 ? url : alternate.href
+      const response = await fetch(source, { signal, headers: { 'User-Agent': 'Varia-SQL-Manager-build', ...(api ? { Accept: 'application/octet-stream' } : {}) } })
       if (!response.ok || !response.body) {
         await response.body?.cancel().catch(() => {})
         throw new DownloadError(`SQL Tools Service download failed (HTTP ${response.status}).`, response.status === 408 || response.status === 429 || response.status >= 500 && response.status <= 599)
@@ -152,7 +155,7 @@ export async function prepareSqlToolsService({ rid = hostRid(), root = projectRo
     if (!valid) {
       const partial = inside(downloads, `${archive}.${process.pid}.partial`)
       try {
-        await downloadArchive(archiveUrl(rid, manifest), partial)
+        await downloadArchive(archiveUrl(rid, manifest), partial, entry.assetId)
         if (await sha256(partial) !== entry.sha256) throw new Error('SQL Tools Service archive SHA-256 does not match the pinned release.')
         await rm(archive, { force: true }); await rename(partial, archive)
       } finally { await rm(partial, { force: true }) }

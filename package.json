@@ -11,6 +11,7 @@
   "scripts": {
     "dev": "npm run sqltools:prepare && npm run backend:build && electron-vite dev",
     "sqltools:prepare": "node scripts/prepare-sqltools-service.mjs",
+    "electron:prepare": "node scripts/prepare-electron.mjs",
     "backend:build": "dotnet build backend/Varia.Backend/Varia.Backend.csproj --configuration Debug",
     "typecheck": "tsc --noEmit",
     "build": "npm run sqltools:prepare && npm run typecheck && npm run backend:build && electron-vite build",
@@ -24,7 +25,7 @@
     "test:language:ui": "node scripts/language-services-live-smoke.mjs",
     "test:electron": "npm run check && npm run test:smoke",
     "check": "node scripts/check.mjs",
-    "build:smoke": "npm run sqltools:prepare && node scripts/check.mjs --build",
+    "build:smoke": "npm run electron:prepare -- --install && npm run sqltools:prepare && node scripts/check.mjs --build",
     "bench": "vitest run --config vitest.bench.config.ts",
     "bench:e2e": "node scripts/ipc-bench.mjs",
     "bench:grid": "node scripts/grid-bench.mjs",

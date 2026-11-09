@@ -9,18 +9,22 @@
   },
   "platforms": {
     "win-x64": {
+      "assetId": 711736643,
       "archive": "Microsoft.SqlTools.ServiceLayer-win-x64-net10.0.zip",
       "sha256": "19c7a43385437007070ce467a9613d0b3d5fe8a71ee021cda62a8863a35b9e84"
     },
     "linux-x64": {
+      "assetId": 711737757,
       "archive": "Microsoft.SqlTools.ServiceLayer-linux-x64-net10.0.tar.gz",
       "sha256": "7e31e01811548a85a31248b52641606451437d9dc26b45ffd927323baf32a209"
     },
     "osx-arm64": {
+      "assetId": 711737894,
       "archive": "Microsoft.SqlTools.ServiceLayer-osx-arm64-net10.0.tar.gz",
       "sha256": "1e16acada01186f705300abde273975665308043a74287b20f390ff806ed15e7"
     },
     "osx-x64": {
+      "assetId": 711738037,
       "archive": "Microsoft.SqlTools.ServiceLayer-osx-x64-net10.0.tar.gz",
       "sha256": "63f8371379283eb1c0e2993b932da214d9efe5eac697c06c7a7a464354b7a380"
     }

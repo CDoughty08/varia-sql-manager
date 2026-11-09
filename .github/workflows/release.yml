@@ -26,6 +26,7 @@ on:
       - scripts/packaged-smoke.mjs
       - scripts/packaged-contents.mjs
       - scripts/prepare-sqltools-service.mjs
+      - scripts/prepare-electron.mjs
       - scripts/portable-smoke.mjs
       - scripts/appimage-check.mjs
       - scripts/windows-installer-smoke.ps1

@@ -35,6 +35,9 @@ with `node scripts/ci-timings.mjs` (add `--steps` for per-step times) before and
   panel's OS popout, targeted cache refresh and docking back. It reuses that shard's server, build and display, with a
   five-minute deadline.
 
+  Smoke builds and packaging prepare Electron from its npm-pinned checksums, retrying transient official-download failures
+  within a three-attempt, three-minute budget and seeding the shared archive cache so packaging verifies checksums offline.
+
 ## Where the time goes (baseline, 2026-11-07)
 
 Measured over the 50 most recent successful runs of `ci.yml` and `release.yml` (25 each) with the method of
