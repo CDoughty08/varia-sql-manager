@@ -963,7 +963,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       if (item.named || filter.op === 'duplicates' || !('rows' in filter)) return item
       const wanted = filter.op === 'between' ? filter.rows : filter.rows.length === 1 && !filter.nulls ? filter.rows : []
       const texts = await Promise.all(wanted.map(row => valueText(set.handle, row, filter.column)))
-      return { filter, label: filterLabel(filter as ResolvedViewFilter, columns, texts), named: true }
+      const label = filterLabel(filter as ResolvedViewFilter, columns, texts)
+      // A value that could not be read is read again the next time the view is built.
+      return texts.every(text => text !== undefined) ? { filter, label, named: true } : { filter, label }
     })
     void Promise.all(named).then(filters => {
       // Only onto the same sort: a view building since has its own filters, and names them when it is built.

@@ -57,8 +57,10 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
   const save = (event: MouseEvent<HTMLButtonElement>) => {
     void commands.execute('output.saveResultsAs', { target: { kind: 'output', tabId, view: 'grid', resultIndex: entry.index, selectedText: '', element: event.currentTarget } }, 'toolbar')
   }
+  // A Remove or Clear button that goes with its filters hands focus to the caption, not the page.
+  const toggleRef = useRef<HTMLButtonElement>(null)
   return <div className="rs-caption">
-    <button type="button" className="rs-caption-toggle" aria-expanded={!collapsed} onClick={() => onToggle(entry.index)}>
+    <button ref={toggleRef} type="button" className="rs-caption-toggle" aria-expanded={!collapsed} onClick={() => onToggle(entry.index)}>
       <Icon name={collapsed ? 'chevron-right' : 'chevron-down'} /><span className="rs-caption-name">{name}</span>
     </button>
     {/* Rows change while the set streams; the grid's own label announces its counts. */}
@@ -66,9 +68,9 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
     {sort && sort.filters.length > 0 && <span className="rs-filters" role="group" aria-label={`Filters of ${name}`}>
       {sort.filters.map((item, at) => <span key={at} className="rs-filter" title={item.label}>
         <Icon name="filter" /><span className="rs-filter-text">{item.label}</span>
-        <button type="button" className="icon-button rs-filter-remove" aria-label={`Remove filter ${item.label}`} title="Remove filter" onClick={() => results.removeFilter(tabId, entry.index, at)}><Icon name="close" /></button>
+        <button type="button" className="icon-button rs-filter-remove" aria-label={`Remove filter ${item.label}`} title="Remove filter" onClick={() => { if (at === sort.filters.length - 1) toggleRef.current?.focus(); results.removeFilter(tabId, entry.index, at) }}><Icon name="close" /></button>
       </span>)}
-      {sort.filters.length > 1 && <button type="button" className="rs-filters-clear" onClick={() => results.clearFilters(tabId, entry.index)}>Clear filters</button>}
+      {sort.filters.length > 1 && <button type="button" className="rs-filters-clear" onClick={() => { toggleRef.current?.focus(); results.clearFilters(tabId, entry.index) }}>Clear filters</button>}
     </span>}
     {batch && <span className="rs-caption-batch">{batch}</span>}
     {held && <button type="button" className="icon-button rs-caption-save" aria-label={`Save ${name} As…`} title={`Save ${name} As…`} onClick={save}><Icon name="save-as" /></button>}

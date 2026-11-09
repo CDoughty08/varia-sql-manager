@@ -1527,6 +1527,8 @@ try {
   await page.screenshot({ path: resolve('artifacts', 'results-filters.png') })
   await filterList.getByRole('button', { name: 'Clear filters', exact: true }).click()
   await expect(filterList).toHaveCount(0)
+  // The focused button went with the filters: focus is on the result's caption, not lost to the page.
+  await expect(outputPane(page).getByRole('button', { name: 'Result 1', exact: true })).toBeFocused()
   await expect(caption).toContainText('100 rows')
   await expect(caption).not.toContainText(' of ')
   await idInView()

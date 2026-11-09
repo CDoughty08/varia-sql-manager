@@ -1099,6 +1099,26 @@ describe('results service filters', () => {
     expect(service.sortOf('t1', 0)?.filters).toHaveLength(2)
   })
 
+  it('reads a filter\'s value again on the next build when it could not be read', async () => {
+    const { service, handle, select } = filtered()
+    const read = handle.getWindow
+    handle.getWindow = vi.fn(async () => { throw new Error('busy') })
+    select([{ top: 2, bottom: 2, left: 1, right: 1 }])
+    const resolved = [{ op: 'in' as const, column: 1, rows: [2], nulls: false }]
+    handle.sort.mockResolvedValueOnce(resolvedView(handle, 1, resolved))
+    service.filterSelection('t1', 0, 'in')
+    await settle()
+    await settle()
+    expect(service.sortOf('t1', 0)?.filters[0]).toMatchObject({ label: '(No column name) in (1 value)' })
+    expect(service.sortOf('t1', 0)?.filters[0]?.named).toBeUndefined()
+    handle.getWindow = read
+    handle.sort.mockResolvedValueOnce(resolvedView(handle, 2, resolved))
+    service.sortBy('t1', 0, 0, 'ascending')
+    await settle()
+    await settle()
+    expect(service.sortOf('t1', 0)?.filters[0]).toMatchObject({ label: "(No column name) = 'v2'", named: true })
+  })
+
   it('names filters by their values, counts and NULL', () => {
     const columns: ResultColumn[] = [{ name: 'Id', dataType: 'int', wire: 'text', nullable: false }, { name: 'Name', dataType: 'nvarchar', wire: 'text', nullable: true }]
     expect(filterLabel({ op: 'in', column: 1, rows: [3], nulls: false }, columns, ["'x'"])).toBe("Name = 'x'")
