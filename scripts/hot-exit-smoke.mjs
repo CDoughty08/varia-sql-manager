@@ -76,12 +76,8 @@ const typeInNew = async text => {
   await editorTextbox(page).focus()
   await page.keyboard.insertText(text)
 }
+// Keyboard access also reaches tabs in shelf overflow or beneath floating groups on Windows CI's small display.
 const tabMenuItem = async (tab, name) => {
-  await documentTab(page, tab).click({ button: 'right' })
-  await page.getByRole('menuitem', { name, exact: true }).click()
-}
-// From the keyboard (Shift+F10 on a focused tab): floating groups may cover a strip on a small display, as Windows CI's.
-const tabMenuKey = async (tab, name) => {
   await documentTab(page, tab).focus()
   await page.keyboard.press('Shift+F10')
   await page.getByRole('menuitem', { name, exact: true }).click()
@@ -210,7 +206,7 @@ try {
 
   // Every query floating: the grid keeps an empty group, which a quit leaves out, and a relaunch brings the floating
   // groups back as they were. The grid's last query moves into the first floating group (Move to Next Group).
-  for (const tab of ['Welcome', 'Orders report', 'Month end', 'SQLQuery4.sql']) await tabMenuKey(tab, 'Float')
+  for (const tab of ['Welcome', 'Orders report', 'Month end', 'SQLQuery4.sql']) await tabMenuItem(tab, 'Float')
   await expect(floatingEditorGroups(page)).toHaveCount(4)
   await documentTab(page, 'Totals').focus()
   await page.keyboard.press('Control+Alt+ArrowRight')

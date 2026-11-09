@@ -4,9 +4,9 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
 import {
-  activeDocument, anyResultGrid, backendReady, closeDocumentButton, documentTabs, editorText as editorTextOf, emptyState, emptyStateIcon, emptyStateTitle, errorMessages,
+  activeDocument, anyResultGrid, backendReady, closeDocumentButton, documentTab, documentTabs, editorText as editorTextOf, emptyState, emptyStateIcon, emptyStateTitle, errorMessages,
   executingMark, explorerFooter, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, primaryAction, queryBar, queryBarButton, queryConnection, queryDatabase, queryServer,
-  queryStatus, resultGrid, statusChips, toolbar, toolbarButton, unsavedMark, workspaceEmpty
+  queryStatus, resultGrid, selectOpenDocument, statusChips, toolbar, toolbarButton, unsavedMark, workspaceEmpty
 } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -298,8 +298,8 @@ try {
   await page.keyboard.press('Control+Y')
   await expect.poll(editorText).toBe(typed)
   const historyTab = await activeDocument(page).getAttribute('aria-label')
-  await documentTabs(page).getByRole('tab', { name: 'SQLQuery1.sql', exact: true }).click()
-  await documentTabs(page).getByRole('tab', { name: historyTab, exact: true }).click()
+  await selectOpenDocument(page, 'SQLQuery1.sql')
+  await selectOpenDocument(page, historyTab)
   await page.locator('.monaco-editor [role="textbox"]').focus()
   await page.keyboard.press('Control+Z')
   await expect.poll(editorText).not.toBe(typed)
@@ -404,18 +404,21 @@ try {
   await toolbarButton(page, 'New query').click()
   await typeSql('SELECT 88 AS close_me;')
   const closeTarget = await activeDocument(page).getAttribute('aria-label')
-  await documentTabs(page).getByRole('tab', { name: 'saved-as.sql', exact: true }).click()
+  await selectOpenDocument(page, 'saved-as.sql')
+  // Keep the inactive close target reachable at the compact CI size without selecting it before its close prompt.
+  if (await documentTab(page, closeTarget).getAttribute('data-tab-overflow') !== null)
+    await documentTabs(page).getByRole('button', { name: 'More query rows', exact: true }).click()
   await dialogs({ holdConfirm: true, closeResponse: 1 })
   await closeDocumentButton(page, closeTarget).click()
   await expect.poll(() => application.evaluate(() => typeof globalThis.variaReleaseConfirm)).toBe('function')
   expect(await application.evaluate(() => globalThis.variaDialogs.prompts.at(-1))).toContain(closeTarget)
-  await documentTabs(page).getByRole('tab', { name: 'SQLQuery1.sql', exact: true }).click()
+  await selectOpenDocument(page, 'SQLQuery1.sql')
   await application.evaluate(() => { globalThis.variaDialogs.holdConfirm = false; globalThis.variaReleaseConfirm(); delete globalThis.variaReleaseConfirm })
   await expect(documentTabs(page).getByRole('tab', { name: closeTarget, exact: true })).toHaveCount(0)
   await expect(activeDocument(page)).toHaveAttribute('aria-label', 'SQLQuery1.sql')
   await expect(documentTabs(page).getByRole('tab', { name: 'saved-as.sql', exact: true })).toBeVisible()
   await dialogs({ closeResponse: 2 })
-  await documentTabs(page).getByRole('tab', { name: 'saved-as.sql', exact: true }).click()
+  await selectOpenDocument(page, 'saved-as.sql')
   await menu('file.close')
   await expect(documentTabs(page).getByRole('tab')).toHaveCount(1)
   const unicodePath = artifact('unicode-query.sql')
@@ -440,6 +443,7 @@ try {
   await expect(documentTabs(page).getByRole('tab')).toHaveCount(2)
   await dialogs({ closeResponse: 1 })
   for (const name of await documentTabs(page).getByRole('tab').evaluateAll(elements => elements.map(element => element.getAttribute('aria-label')))) {
+    await selectOpenDocument(page, name)
     await closeDocumentButton(page, name).click()
     await expect(documentTabs(page).getByRole('tab', { name, exact: true })).toHaveCount(0)
   }
@@ -502,7 +506,7 @@ try {
   await typeSql('SELECT 2;')
   await queryBarButton(page, /Execute/).click()
   await expect(anyResultGrid(page)).toContainText('server-b')
-  await documentTabs(page).getByRole('tab', { name: tabA, exact: true }).click()
+  await selectOpenDocument(page, tabA)
   await expect(queryServer(page)).toHaveValue(idA)
   await expect(queryDatabase(page)).toHaveValue('AppData')
   await queryBarButton(page, /Execute/).click()
@@ -523,8 +527,8 @@ try {
   await page.keyboard.press('Control+Home')
   await page.keyboard.press('ArrowDown'); await page.keyboard.press('ArrowDown')
   await page.keyboard.press('Shift+End')
-  await documentTabs(page).getByRole('tab', { name: tabB, exact: true }).click()
-  await documentTabs(page).getByRole('tab', { name: tabA, exact: true }).click()
+  await selectOpenDocument(page, tabB)
+  await selectOpenDocument(page, tabA)
   await page.locator('.monaco-editor [role="textbox"]').focus()
   await page.keyboard.press('F5')
   await expect.poll(async () => (await executions()).at(-1)?.params.sql).toBe('SELECT 20;')
@@ -819,7 +823,7 @@ try {
   await expect(queryBarButton(page, 'Cancel')).toBeEnabled()
   // A click on the bar's buttons leaves the keyboard in the query, as SSMS's toolbar does.
   expect(await page.evaluate(() => !!document.activeElement?.closest('.monaco-editor'))).toBe(true)
-  await documentTabs(page).getByRole('tab', { name: tabB, exact: true }).click()
+  await selectOpenDocument(page, tabB)
   await typeSql('WAIT_FOR_CANCEL')
   await queryBarButton(page, /Execute/).click()
   await expect(executingMark(documentTabs(page))).toHaveCount(2)
@@ -828,7 +832,7 @@ try {
   await expect(page.getByRole('contentinfo', { name: 'Status bar', exact: true })).toHaveAttribute('data-state', 'executing')
   await queryBarButton(page, 'Cancel').click()
   await expect(executingMark(documentTabs(page))).toHaveCount(1)
-  await documentTabs(page).getByRole('tab', { name: tabA, exact: true }).click()
+  await selectOpenDocument(page, tabA)
   await queryBarButton(page, 'Cancel').click()
   await expect(executingMark(documentTabs(page))).toHaveCount(0)
   // Tabs are whole pixels wide, so each tab's kind icon starts on a whole pixel, as the first one's does.
@@ -845,7 +849,7 @@ try {
   await explorerToolbar(page).getByRole('button', { name: 'Disconnect', exact: true }).click()
   await expect.poll(async () => (await explorerLines(page)).some(line => line.startsWith('1 server-b'))).toBe(false)
   await expect(queryServer(page)).toHaveValue(idA)
-  await documentTabs(page).getByRole('tab', { name: tabB, exact: true }).click()
+  await selectOpenDocument(page, tabB)
   await expect(queryServer(page)).toHaveValue('')
   // A disconnected query's Execute connects it first.
   await expect(queryBarButton(page, /Execute/)).toBeEnabled()
@@ -868,7 +872,7 @@ try {
   await page.screenshot({ path: artifact('workbench-compact.png') })
   // With a connected query's facts in the status bar, every other segment still fits whole; only the facts give way,
   // and they ellipsize. The search box shows as much of its label as fits, never a label cut short.
-  await documentTabs(page).getByRole('tab', { name: tabA, exact: true }).click()
+  await selectOpenDocument(page, tabA)
   await expect(queryStatus(page)).toContainText('server-a')
   const clipped = () => page.evaluate(part => {
     const cut = element => element.scrollWidth > element.clientWidth + 0.5

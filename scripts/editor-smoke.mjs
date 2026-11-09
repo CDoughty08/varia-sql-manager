@@ -557,8 +557,10 @@ try {
   await documentTab(page, secondTab).click({ button: 'right' })
   await menu('Query tab').getByRole('menuitem', { name: 'Float', exact: true }).click()
   await expect(floatingEditorGroups(page)).toHaveCount(1)
-  // The grid's only query does not float from the menu.
-  await documentTab(page, firstTab).click({ button: 'right' })
+  // The grid's only query does not float from the menu. A float can cover its pointer target on a compact display.
+  await documentTab(page, firstTab).focus()
+  await expect(documentTab(page, firstTab)).toBeFocused()
+  await page.keyboard.press('Shift+F10')
   await expect(menu('Query tab').getByRole('menuitem', { name: 'Float', exact: true })).toBeDisabled()
   await page.keyboard.press('Escape')
   const firstBox = await documentTab(page, firstTab).boundingBox()
