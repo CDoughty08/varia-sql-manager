@@ -48,6 +48,8 @@ export const part = {
   querySegment: '.query-status-segment',
   // Document tabs
   tabName: '.tab-name',
+  /** The tab's bounded name, environment and live-session area, before Pin and Close. */
+  tabSelect: '.tab-select',
   /** Editor groups (src/renderer/src/editor-groups/): Dockview's groups inside the query editor panel, and the active one. */
   /** The editor area in the Query editor panel: every editor group, under the active query's bar. */
   editorArea: '.editor-groups-root',

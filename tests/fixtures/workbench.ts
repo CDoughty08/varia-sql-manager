@@ -564,6 +564,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     connections,
     backend,
     editorOptions,
+    editorGroups,
     shellOptions,
     bookmarks,
     editorDialogs,
