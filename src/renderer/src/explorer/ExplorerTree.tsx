@@ -216,6 +216,13 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     peekHover: (rowId, held) => {
       if (held && gestures.matches('explorer.peekHover', held)) peek.hover(explorer.menuNode(rowId))
       else peek.cancelHover()
+    },
+    click: (rowId, event) => {
+      if (!gestures.matches('explorer.openPeekTab', event)) return
+      // Ctrl resting on the row may have opened the card already: the tab takes its place.
+      peek.cancelHover()
+      if (peek.getSnapshot().open?.source === 'hover') peek.close()
+      run('explorer.openPeekTab', rowId)
     }
   }), [explorer, run, activate, objectActions, peek, gestures])
   // Rows are menu targets: right-click has selected the row; Shift+F10 asks for the active descendant's menu.

@@ -35,9 +35,9 @@ being true.
   main or the renderer. Only connect and Load databases open a browser sign-in, under the request's token
   (Stop); sign-in hosts and token resources the server names are allowlisted. New Login's password lives only in `ObjectDialogService`'s secret slot (`setSecret`, never the snapshot), travels only in the sensitive `actions.execute`, reaches SQL only as one parameter read inside a constant batch, is scrubbed from replies, and Script writes `<password>` instead.
 - Query rows stay in backend memory (never on disk) under the result budget. Main forwards DATA pages undecoded, as
-  exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). The one exception is
-  Peek's Top rows (`explorer.peekRows`): at most 10 rows of 100 values of 256 characters, decoded in the backend and answered
-  as text over invoke, never stored. Results-port
+  exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). Peek's Top rows are no
+  exception: Select Top Rows' script with N = 10 through `query.execute`, in a session and results entry of the Peek's own
+  (`PeekService`), released when its card or tab closes, moves on or refreshes, and on backend loss. Results-port
   messages from the renderer are validated with `portRequestSchema`, ownership, and the current generation.
 - Rows are compared only in the backend: row identities for highlights (`Results/RowIdentity.cs`, `results.identify`,
   `results.findRows`) hash collation-normalized values there, and the renderer only receives positions and ids, never rows
@@ -123,11 +123,7 @@ being true.
   `Explorer/explorer-catalog.json` with `npx vitest run tests/explorer-catalog.test.ts -u`. Explorer SQL is constant
   text per query, band and filter shape, with values as parameters and database names only through `QUOTENAME`; no
   metadata built-ins; `READ UNCOMMITTED` and `LOCK_TIMEOUT 5000` on the explorer pool. The offline `CatalogSql` lint
-  renders and checks every variant. Its one dynamic statement is Peek's Top rows (`Explorer/PeekRowsSql.cs`, run only when
-  the tab is chosen): `SELECT TOP (@take) *` built on the server from `QUOTENAME` of the found object's two names, held to
-  `PeekRowsSql.Lint`, and read sequentially with the results grid's readers under a cap per value and a `SET TEXTSIZE`; it is
-  the one Explorer read that may leave READ UNCOMMITTED, retrying under READ COMMITTED only when SQL Server refuses it for a
-  memory-optimized table (error 10794).
+  renders and checks every variant.
 - Search Objects' index (`backend/Varia.Backend/Search/`, docs/object-search.md) lives only in backend memory, one per
   connection, never on disk, and is dropped on disconnect; its limits are `objectSearchLimits` in
   `src/shared/explorer/search.ts`, mirrored in C# (`tests/object-search.test.ts`), with everything it holds (records, names

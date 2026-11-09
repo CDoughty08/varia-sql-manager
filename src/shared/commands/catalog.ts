@@ -450,6 +450,23 @@ export const commandCatalog = {
     keybindings: [{ key: 'alt+f12', when: "activePanel == 'explorer' && !inputFocus && !searchHitsFocus" }, { key: 'space', when: 'explorerFocus && !textInputFocus && !explorerTypeAhead' }],
     menus: [{ menu: 'explorer.context', group: '1_query', order: 7, mnemonic: 'k', when: "(explorerNode == 'table' || explorerNode == 'view' || explorerNode == 'procedure' || explorerNode == 'function') && !explorerServerLost" }]
   },
+  // Peek promoted to a document tab, with more room: the card's object while the card is open, otherwise the selection. A
+  // Ctrl+click (⌘-click on macOS) on a row opens one too (gestures.ts, explorer.openPeekTab).
+  'explorer.openPeekTab': {
+    title: 'Open Peek as Tab', category: 'Object Explorer', icon: 'link-external', keywords: ['peek', 'definition', 'properties', 'preview', 'document', 'promote'],
+    // The open card, else the menu's or Ctrl+click's row, else the selection: the handler's own condition says which applies.
+    precondition: 'backendReady',
+    unavailableHint: 'Peek or select a table, view, stored procedure, or function.',
+    // Not in the card's grid, whose keys stay the results grid's.
+    keybindings: [{ key: 'mod+enter', when: 'peekFocus && !outputGridFocus' }, { key: 'mod+enter', when: "activePanel == 'explorer' && !inputFocus && !searchHitsFocus" }]
+  },
+  // The Peek card's or the active Peek tab's Refresh: it reads the object again, its script and its top rows included.
+  'peek.refresh': {
+    title: 'Refresh Peek', category: 'Object Explorer', icon: 'refresh',
+    // The card has no state key of its own: the handler's condition asks whether one is open.
+    precondition: 'backendReady', unavailableHint: 'Open Peek first.',
+    keybindings: [{ key: 'f5', when: 'peekFocus || peekTabFocus' }]
+  },
   'explorer.copyName': {
     title: 'Copy Name', category: 'Object Explorer', icon: 'copy', precondition: 'hasConnection', unavailableHint: 'Select an object that has a name.',
     menus: [{ menu: 'explorer.context', group: '5_copy', order: 1, mnemonic: 'a', when: "(explorerNode != 'background' && explorerNode != 'folder' && explorerNode != 'returnValue' && !explorerServerLost) || explorerFolderInsertable" }]
